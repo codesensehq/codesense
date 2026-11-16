@@ -22,6 +22,7 @@ const {
   mockAttach,
   mockOpenScratchSpace,
   mockOpenAgents,
+  mockOpenSetup,
   mockOpenForeman,
   mockForemanMail,
   mockOpenRoutines,
@@ -35,6 +36,7 @@ const {
   mockAttach: vi.fn(),
   mockOpenScratchSpace: vi.fn(),
   mockOpenAgents: vi.fn(),
+  mockOpenSetup: vi.fn(),
   mockOpenForeman: vi.fn(),
   mockForemanMail: vi.fn(() => false),
   mockOpenRoutines: vi.fn(),
@@ -45,6 +47,9 @@ const {
 
 vi.mock("@/features/scratch-space/scratch-space-virtual-tab", () => ({
   openScratchSpace: mockOpenScratchSpace,
+}));
+vi.mock("@/features/org/lib/codesense-docs-landing", () => ({
+  openCodesenseSetup: mockOpenSetup,
 }));
 vi.mock("@/features/agents/agents-virtual-tab", () => ({ openAgents: mockOpenAgents }));
 vi.mock("@/features/foreman/open-foreman", () => ({ openForeman: mockOpenForeman }));
@@ -362,6 +367,7 @@ describe("IdentityMenu — the menu", () => {
       ["identity-menu-private", () => expect(mockOpenScratchSpace).toHaveBeenCalled()],
       ["identity-menu-foreman", () => expect(mockOpenForeman).toHaveBeenCalled()],
       ["identity-menu-agents", () => expect(mockOpenAgents).toHaveBeenCalled()],
+      ["identity-menu-setup", () => expect(mockOpenSetup).toHaveBeenCalledWith({ resume: true })],
       ["identity-menu-routines", () => expect(mockOpenRoutines).toHaveBeenCalled()],
       ["identity-menu-machines", () => expect(mockOpenMachines).toHaveBeenCalled()],
       ["identity-menu-settings", () => expect(mockOpenAppSettings).toHaveBeenCalledWith("general")],

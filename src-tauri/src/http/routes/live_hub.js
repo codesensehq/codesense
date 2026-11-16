@@ -131,22 +131,38 @@
     c.subscribe('sessions',{onChange:changed}).catch(function(error){callback(null,error);});
     return function(){active=false;offInbox();c.unsubscribe('sessions',changed);};
   };
+  // A session's assistant prose as it is written, then one final message per turn, never a
+  // tool call or the model's thinking: callback({kind:'prose'|'final', turn, key, text}). A
+  // refusal (no sessions:read, another team's session, no session) comes as callback(null, error).
+  c.onSessionText = function (sessionId, callback) {
+    var active = true;
+    function heard(e) {
+      var d = e.data;
+      if (!active || e.source !== window.parent || !d || d.type !== 'codesense:session-text' || d.sessionId !== sessionId) return;
+      callback({ kind: d.kind, turn: d.turn, key: d.key, text: d.text }, null);
+    }
+    window.addEventListener('message', heard);
+    c.invoke('sessions.watchText', { sessionId: sessionId }).catch(function (error) {
+      if (!active) return;
+      active = false;
+      window.removeEventListener('message', heard);
+      callback(null, error);
+    });
+    return function () {
+      if (!active) return;
+      active = false;
+      window.removeEventListener('message', heard);
+      c.invoke('sessions.unwatchText', { sessionId: sessionId }).catch(function () {});
+    };
+  };
+  // Agent changes follow definitions and sessions; the callback takes no rows, so a sessions
+  // delta reads nothing.
   c.onAgentsChanged = function (callback) {
     function changed() { callback(); }
     c.subscribe('agentDefinitions', {onChange:changed}).catch(function(){});
-    var offSessions = c.onSessions(function (_rows, error) { if (!error) callback(); });
-    return function () { offSessions(); c.unsubscribe('agentDefinitions', changed); };
+    c.subscribe('sessions', {onChange:changed}).catch(function(){});
+    return function () { c.unsubscribe('sessions', changed); c.unsubscribe('agentDefinitions', changed); };
   };
-  ['onInboxChanged'].forEach(function (name) {
-    var legacy = c[name];
-    c[name] = function (callback) {
-      var offPing = legacy(callback);
-      // A sessions re-read changes no inbox rows; an empty `changes` says so, while a change
-      // without `changes` could be anything.
-      var offSessions = c.onSessions(function (_rows, error) { if (!error) callback({ type: 'codesense:inbox-changed', changes: [] }); });
-      return function () { offPing(); offSessions(); };
-    };
-  });
   c.sessions = function () {
     return c.invoke('sessions');
   };

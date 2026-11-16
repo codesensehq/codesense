@@ -1176,7 +1176,7 @@ export type PinResult =
       agentId: string;
       storyId: string;
       pins: AgentPin[];
-      outcome?: "pinned" | "updated" | "unpinned" | "unchanged";
+      outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
     }
   | { status: "invalid"; message: string };
 
@@ -1185,6 +1185,11 @@ export type AgentPinsOp =
   | { op: "read" }
   | { op: "pin"; messageId: number; position?: number; preview?: AgentPinPreview }
   | { op: "unpin"; messageId: number }
+  /** The Undo of an unpin: the pin comes back as it was. With `replacing`, the Undo of a
+   *  replace: that pin goes, in the same step. */
+  | { op: "restore"; messageId: number; replacing?: number }
+  /** Pin `messageId` in place of the shown pin `replaces`, in one step (at the cap). */
+  | { op: "replace"; messageId: number; replaces: number }
   | { op: "reorder"; messageIds: number[] };
 
 /** The human reads or changes an agent thread's pin list in `team`'s store. */
@@ -1193,6 +1198,9 @@ export const agentPins = (
   agentId: string,
   storyId: string | null,
   call: AgentPinsOp,
+  /** The sender of the HTML message calling, when one does: its writes stay in its
+   *  sender's own thread. Absent: the person's call. */
+  sender?: string,
 ) =>
   invoke<PinResult>("agent_pins", {
     team,
@@ -1203,6 +1211,9 @@ export const agentPins = (
     position: "position" in call ? (call.position ?? null) : null,
     messageIds: "messageIds" in call ? call.messageIds : null,
     preview: "preview" in call ? (call.preview ?? null) : null,
+    replaces: "replaces" in call ? call.replaces : null,
+    replacing: "replacing" in call ? (call.replacing ?? null) : null,
+    ...(sender ? { sender } : {}),
   });
 
 /** Prepare the `pins` live view of an agent thread for a page's subscription. */
@@ -1263,6 +1274,9 @@ export interface InboxView {
   hasMore: boolean;
   messages: InboxMessageRow[];
   humanUnread: number;
+  /** When the read named a saved agent's thread (`agentId` with `storyId`): every address of its
+   *  sessions (handles and tab session ids). */
+  threadSessions?: string[];
 }
 
 /** The team whose inbox an app command reads or answers. */
@@ -1431,6 +1445,13 @@ export interface SessionProgress {
 
 export const agentReadSessions = () => invoke<SessionListRow[]>("agent_read_sessions");
 
+/** Start hearing a session's assistant prose (the `session-text` event); counted per watcher. */
+export const sessionTextWatch = (sessionId: string) =>
+  invoke<void>("session_text_watch", { sessionId });
+/** Stop hearing a session's prose. */
+export const sessionTextUnwatch = (sessionId: string) =>
+  invoke<void>("session_text_unwatch", { sessionId });
+
 /** A saved Agent as `agent_get` returns it, with the sessions running it. */
 export interface AgentWithInstances {
   id: string;
@@ -1499,6 +1520,9 @@ export interface InboxQuery {
   before?: number;
   scope?: InboxScope;
   agentId?: string;
+  /** With `agentId`: that saved agent's thread on this story (empty: launched with none),
+   *  every session of it, ended ones included; `sessionId` then names the seat. */
+  storyId?: string;
   sessionId?: string;
   role?: string;
   /** Only messages of this kind, applied before `limit`. */
@@ -1533,6 +1557,11 @@ export interface RoleQueue {
     from: string;
     fromName: string | null;
     excerpt: string;
+    /** The messageId it answers (the card a reply is for); null for none. */
+    inReplyTo: number | null;
+    /** The message, up to 4000 characters, for an open delivery; null once acknowledged. */
+    text: string | null;
+    textTruncated: boolean;
     createdAtMs: number;
     firstClaimedAtMs: number | null;
     claimOwner: string | null;
@@ -1669,6 +1698,24 @@ export type RollupDto = {
  *  Marks nothing read, claims nothing. Refetch on `agent-inbox-changed`. */
 export const listSessionInbox = (handle: string) =>
   invoke<SessionInboxDto>("list_session_inbox", { handle });
+
+/** One saved agent + story thread's conversation (mirror of Rust `ThreadInboxDto`): the mail of
+ *  every listed session of the thread and, for a story thread, every recorded one, ended ones
+ *  included. */
+export type ThreadInboxDto = SessionInboxDto & {
+  agentId: string;
+  storyId: string;
+  /** The handles whose mail it holds. */
+  sessions: string[];
+  /** Every address it holds the mail of: the handles and the tab session ids. */
+  addresses: string[];
+};
+
+/** A saved agent + story thread's conversation, so a successor opens on its predecessor's mail.
+ *  `session`, a seat of the thread (listed and not ended), leaves out the thread's other seats.
+ *  Marks nothing read, claims nothing. Refetch on `agent-inbox-changed`. */
+export const listThreadInbox = (agentId: string, storyId: string | null, session?: string) =>
+  invoke<ThreadInboxDto>("list_thread_inbox", { agentId, storyId, session });
 
 /** Every synced team's messages and role queues, for the full-screen rollup. */
 export const listInboxRollup = (frameId?: string, page?: string) =>
@@ -3171,6 +3218,12 @@ export interface FileEntry {
 export const checkPathExists = (path: string) => invoke<boolean>("check_path_exists", { path });
 
 export const readFile = (path: string) => invoke<string>("read_file", { path });
+
+/** One raster image's bytes (base64) for a team edit's rendered diff, under the same
+ *  roots `readFile` reads. `null` with `tooLarge` past the size cap; a missing file
+ *  rejects with "not found". */
+export const readImageFile = (path: string) =>
+  invoke<{ base64: string | null; tooLarge: boolean }>("read_image_file", { path });
 
 /** SW-DX-11: one child of a `readWorkspace` directory listing. */
 export interface WorkspaceDirEntry {
@@ -4805,6 +4858,24 @@ export const sourceCommitFileRedline = (
   oldPath?: string,
 ) => invoke<FileRedline>("source_commit_file_redline", { repoPath, sha, filePath, oldPath });
 
+/** A raster file's Before | After bytes (base64) for its rendered diff. A side is
+ *  `null` when the file has none there (added, deleted) or it is past the size cap
+ *  (`tooLarge`), when the diff stays Source only. */
+export interface ImageSides {
+  before: string | null;
+  after: string | null;
+  tooLarge: boolean;
+}
+
+/** The source diff's raster sides: at the working tree (no `sha`, before at the
+ *  merge-base or `baseRef`) or at a commit (its first parent, then itself). PNG,
+ *  JPEG, GIF and WebP only; `oldPath` is set only for a rename. */
+export const sourceImageSides = (
+  repoPath: string,
+  filePath: string,
+  opts: { oldPath?: string; baseRef?: string; sha?: string } = {},
+) => invoke<ImageSides>("source_image_sides", { repoPath, filePath, ...opts });
+
 // SW-GS-19 (A3): live list of open PRs for the in-UI review panel (source of
 // truth, not the session openPrs map). Owner/repo resolved server-side.
 export const listPrsForReview = (repoPath: string) =>
@@ -5196,6 +5267,24 @@ export const sourceRemoteListFiles = (machineId: string, handle: string, limit?:
  *  dedupe). Routed via {@link sourceChangeset} — do not call directly. */
 export const sourceRemoteChangeset = (machineId: string, handle: string, baseRef?: string) =>
   invoke<PublishFile[]>("source_remote_changeset", { machineId, handle, baseRef });
+
+/** A raster file's Before | After bytes in a REMOTE source worktree, read by the machine's
+ *  Git at the working tree against the same baseline as {@link sourceRemoteFileRedline}.
+ *  A side whose bytes aren't a raster image is refused; one past the cap carries none. */
+export const sourceRemoteImageSides = (
+  machineId: string,
+  handle: string,
+  filePath: string,
+  oldPath?: string,
+  baseRef?: string,
+) =>
+  invoke<ImageSides>("source_remote_image_sides", {
+    machineId,
+    handle,
+    filePath,
+    oldPath,
+    baseRef,
+  });
 
 /** DESIGN-remote-source.md §4.1 — per-file redline for a remote worktree file,
  *  computed against the same merge-base baseline as {@link sourceRemoteChangeset}.
@@ -10402,6 +10491,22 @@ export const sessionRecord = (params: { handle: string }, frameId?: string, page
     ...(frameId !== undefined ? { frameId } : {}),
     ...(page !== undefined ? { page } : {}),
   });
+
+/** A raster file's Before | After bytes for the open-diff tab, revalidated as
+ *  {@link openDiffRead} is. */
+export const openDiffImageRead = (
+  params: import("@/features/git-sync/lib/open-diff-types").OpenDiffParams,
+  frameId?: string,
+  page?: string,
+) =>
+  invoke<import("@/features/git-sync/lib/open-diff-types").OpenDiffImageRead>(
+    "open_diff_image_read",
+    {
+      params,
+      ...(frameId ? { frameId } : {}),
+      ...(page ? { page } : {}),
+    },
+  );
 
 /** Read-only diff target, resolved afresh from a configured source slug. */
 export const openDiffRead = (

@@ -53,7 +53,7 @@ const EXTRA_MEMBERS = ["docs"];
 // Arguments the page bridge reads that a verb's argsSchema does not list yet (html-bridge.ts).
 // The node test keeps each entry a checked verb and each key one its schema lacks.
 export const BRIDGE_ARGS = {
-  inbox: ["agentId", "kind", "limit", "org", "role", "scope", "sessionId", "team"],
+  inbox: ["kind", "limit", "org", "role", "scope", "team"],
   routine: ["id"],
   openFile: ["org"],
   openWorkspace: ["operationId", "reviewPrompt"],

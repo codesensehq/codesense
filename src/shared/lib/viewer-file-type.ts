@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MIT
 export const HTML_FRAME_ALLOW = "clipboard-write";
+/** A frame that only shows a document for comparison: an opaque origin with
+ *  scripts and nothing else, so it can't reach the app or the bridge. */
+export const BASELINE_SANDBOX = "allow-scripts";
 
 /**
  * Extension-based file-type routing for the viewer.

@@ -46,7 +46,11 @@ impl InboxHost for StartupHost {
     fn display_name(&self, _: &str) -> Option<String> {
         None
     }
-    fn inbox_changed(&self) {}
+    fn inbox_changed(
+        &self,
+        _changes: &[(crate::commands::dashboard_launch::LaunchTeam, Vec<i64>)],
+    ) {
+    }
 }
 
 #[tokio::test]
@@ -202,5 +206,6 @@ pub(crate) fn session_row(
         expiring: false,
         session: Some(session.into()),
         failed: false,
+        crashed: false,
     }
 }

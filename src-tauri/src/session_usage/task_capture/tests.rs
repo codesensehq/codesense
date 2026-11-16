@@ -575,6 +575,21 @@ fn the_inputs_of_a_prepared_launch_are_its_brief_its_skills_and_its_team_content
 }
 
 #[test]
+fn a_skill_the_allowlist_turns_off_is_not_among_the_task_skills() {
+    let (_home, _root, mut launch, _) = crate::agents::product_bootstrap::tests::fixture();
+    let provided = crate::agents::provides::derive(launch.runtime, &launch.manifest).skills;
+    let off = provided.first().expect("the fixture places a skill").clone();
+    launch.launch.skill_allowlist = Some(provided[1..].to_vec());
+    let inputs = TaskInputs::from_launch(&launch, None);
+    let named: Vec<&str> = inputs.skills.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(
+        named,
+        provided[1..].iter().map(String::as_str).collect::<Vec<_>>()
+    );
+    assert!(!launch.provided_skills().contains(&off));
+}
+
+#[test]
 fn the_effective_prompt_is_the_launchs_own_or_the_agents_default() {
     let (_home, _root, mut launch, _) = crate::agents::product_bootstrap::tests::fixture();
     launch.default_prompt =

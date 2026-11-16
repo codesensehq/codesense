@@ -57,6 +57,31 @@ use crate::weft::WeftStore;
 /// Mirrored in `src/tauri/events.ts`.
 pub(crate) const AGENT_INBOX_CHANGED_EVENT: &str = "agent-inbox-changed";
 
+/// What an `agent-inbox-changed` notice names: per team, the messages it touched. An empty
+/// id list means re-read the whole team; an empty slice is a broad nudge that names no team
+/// (the human's status), which readers take to mean anything changed.
+pub(crate) type InboxChanges = [(LaunchTeam, Vec<i64>)];
+
+/// The one place `agent-inbox-changed` is emitted: `{changes:[{team, messageIds}]}`, the shape
+/// the live hub and the inbox pane read, or no payload for a broad nudge.
+pub(crate) fn emit_inbox_changed<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    changes: &InboxChanges,
+) {
+    use tauri::Emitter;
+    let payload = if changes.is_empty() {
+        serde_json::Value::Null
+    } else {
+        let named: Vec<_> = changes
+            .iter()
+            .map(|(team, ids)| serde_json::json!({"team": team, "messageIds": ids}))
+            .collect();
+        serde_json::json!({"changes": named})
+    };
+    // Fire-and-forget: a missing renderer refetches when the panel next mounts.
+    let _ = app.emit(AGENT_INBOX_CHANGED_EVENT, payload);
+}
+
 /// The registry and store side of the inbox.
 #[async_trait::async_trait]
 pub(crate) trait InboxHost: Send + Sync {
@@ -165,18 +190,20 @@ pub(crate) trait InboxHost: Send + Sync {
     fn has_handle(&self, handle: &str) -> bool;
     /// The name the session under `handle` was launched with, if any.
     fn display_name(&self, handle: &str) -> Option<String>;
-    /// Tell the viewer the inbox changed.
+    /// Tell the viewer the inbox changed. `changes` names, per team, the messages the change
+    /// touched (an empty id list is a team-wide nudge); an empty `changes` is a broad nudge
+    /// that names no team, for a change that isn't team-scoped.
     fn projected_inbox(&self, _team: &LaunchTeam) -> Option<Result<InboxView, String>> {
         None
     }
-    fn inbox_changed(&self);
+    fn inbox_changed(&self, changes: &InboxChanges);
     /// The live hub committed a projection pass: `changes` names, per team, the messages it
     /// re-read. Readers that refresh on the notice find those messages committed.
-    fn inbox_committed(&self, _changes: &[(LaunchTeam, Vec<i64>)]) {
-        self.inbox_changed();
+    fn inbox_committed(&self, changes: &InboxChanges) {
+        self.inbox_changed(changes);
     }
-    fn inbox_event(&self, _event: InboxEvent) {
-        self.inbox_changed();
+    fn inbox_event(&self, event: InboxEvent) {
+        self.inbox_changed(&event.as_inbox_changes());
     }
     /// A message was stored for the session under `handle`. The app offers its host the
     /// inbox notice and tells routines with an `inbox_idle` trigger.
@@ -230,6 +257,26 @@ pub(crate) trait InboxHost: Send + Sync {
     }
     /// The pin list of `thread` in `team`'s store changed.
     fn pins_changed(&self, _team: &LaunchTeam, _thread: &crate::weft::pins::ThreadKey) {}
+    /// The saved agent and story each of `handles` was launched with, as [`launch_thread`]
+    /// answers, in one read of the launch registry.
+    ///
+    /// [`launch_thread`]: InboxHost::launch_thread
+    async fn launch_threads(&self, handles: &[String]) -> Vec<Option<(String, Option<String>)>> {
+        let mut out = Vec::with_capacity(handles.len());
+        for handle in handles {
+            out.push(self.launch_thread(handle).await);
+        }
+        out
+    }
+    /// Every session the usage store recorded for `thread` (its saved agent, any revision,
+    /// and its story), ended ones included, oldest first; none for a no-story thread.
+    /// Default none.
+    async fn thread_sessions(
+        &self,
+        _thread: &crate::weft::pins::ThreadKey,
+    ) -> Result<Vec<crate::session_usage::agent_record::ThreadSession>, String> {
+        Ok(Vec::new())
+    }
 }
 
 /// A session as the inbox addresses and names it.
@@ -242,6 +289,19 @@ pub(crate) struct KnownSession {
     pub name: String,
     /// It runs now: not exited, and its machine is connected.
     pub running: bool,
+    /// It has ended: exited, or its agent crashed. A session on an offline machine, or stuck
+    /// at a startup prompt, has not: it is still the seat it was (see [`KnownSession::is_seat`]).
+    pub ended: bool,
+}
+
+impl KnownSession {
+    /// The seat rule a thread's reads share with the story view's agent pages: a session is a
+    /// seat of its thread while it is listed and has not ended. Two seats of one saved agent on
+    /// one story share a thread, and neither reads the other's conversation; an ended one's
+    /// mail belongs to every seat after it.
+    pub(crate) fn is_seat(&self) -> bool {
+        !self.ended
+    }
 }
 
 /// The sessions one inbox call resolves its addresses and names against.
@@ -251,6 +311,11 @@ pub(crate) struct KnownSessions(Vec<KnownSession>);
 impl KnownSessions {
     pub(crate) fn new(sessions: Vec<KnownSession>) -> Self {
         Self(sessions)
+    }
+
+    /// Every listed session, in the roster's order.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &KnownSession> {
+        self.0.iter()
     }
 
     /// The session `id` names: by its handle, else by its tab session (a running one
@@ -276,6 +341,7 @@ impl From<&crate::mcp::session_list::SessionListRow> for KnownSession {
             session: row.session.clone(),
             name: row.display_name.clone(),
             running: crate::mcp::identity_tools::is_running(row.state),
+            ended: row.state == crate::mcp::session_list::SessionState::Exited || row.crashed,
         }
     }
 }
@@ -523,6 +589,11 @@ pub(crate) struct InboxView {
     pub matched: usize,
     pub messages: Vec<InboxRow>,
     pub human_unread: u32,
+    /// When the read named a saved agent's thread (`agentId` with `storyId`): every address of
+    /// the thread's sessions it read (handles and tab session ids), so a page tells the agent's
+    /// own mail from other senders.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_sessions: Option<Vec<String>>,
 }
 
 /// How long one inbox check may take. Past it, or on a store error, the check is tried
@@ -2443,7 +2514,8 @@ async fn reserved_notice(
 pub(crate) const RESERVE_RECHECK_MARGIN_MS: u64 = 50;
 
 /// The notice reserved under `token` for `session_id` was handed to its agent's hook:
-/// what it told about is marked announced (see [`inbox::inbox_confirm_announcement`]).
+/// what it told about is marked announced and each message it told about first is marked
+/// told (see [`inbox::inbox_confirm_told`]).
 /// The reservation is looked for in the store of the handle the session is bound to,
 /// then (if the session was bound since it was offered) in its own. Idempotent; a stale or
 /// unknown token, or a session with no inbox here, confirms nothing.
@@ -2478,23 +2550,29 @@ pub(crate) async fn confirm_notice(
         }
         let (session, token) = (session_id.to_string(), token.to_string());
         let confirmed = with_store("inbox_ack", path, move |store| {
-            inbox::inbox_confirm_announcement(store, &session, &token)
+            inbox::inbox_confirm_told(store, &session, &token)
         })
         .await??;
-        if confirmed {
-            let recipient = recipient.to_string();
-            let ids = with_store(
-                "inbox_confirmed_ids",
-                tried.clone().unwrap(),
-                move |store| {
-                    Ok(inbox::inbox_announced(store)?
-                        .get(&recipient)
-                        .map(|notice| notice.through_id)
-                        .into_iter()
-                        .collect::<Vec<_>>())
-                },
-            )
-            .await??;
+        if let Some(told) = confirmed {
+            // The messages told now change their delivery; a notice that told nothing new
+            // still refreshes the recipient's mark through its newest covered message.
+            let ids = if Vec::is_empty(&told) {
+                let recipient = recipient.to_string();
+                with_store(
+                    "inbox_confirmed_ids",
+                    tried.clone().unwrap(),
+                    move |store| {
+                        Ok(inbox::inbox_announced(store)?
+                            .get(&recipient)
+                            .map(|notice| notice.through_id)
+                            .into_iter()
+                            .collect::<Vec<_>>())
+                    },
+                )
+                .await??
+            } else {
+                told
+            };
             host.inbox_event(InboxEvent::new(InboxChange::NoticeConfirmed, &team, ids));
             return Ok(true);
         }
@@ -2865,22 +2943,8 @@ impl InboxHost for AppInboxHost {
         self.launch()?.display_name(handle)
     }
 
-    fn inbox_changed(&self) {
-        use tauri::Emitter;
-        // Fire-and-forget: a missing renderer refetches when the panel next mounts.
-        let _ = self.app.emit(AGENT_INBOX_CHANGED_EVENT, ());
-    }
-
-    fn inbox_committed(&self, changes: &[(LaunchTeam, Vec<i64>)]) {
-        use tauri::Emitter;
-        let changes: Vec<_> = changes
-            .iter()
-            .map(|(team, ids)| serde_json::json!({"team": team, "messageIds": ids}))
-            .collect();
-        let _ = self.app.emit(
-            AGENT_INBOX_CHANGED_EVENT,
-            serde_json::json!({"changes": changes}),
-        );
+    fn inbox_changed(&self, changes: &InboxChanges) {
+        emit_inbox_changed(&self.app, changes);
     }
 
     fn projected_inbox(&self, team: &LaunchTeam) -> Option<Result<InboxView, String>> {
@@ -2905,6 +2969,37 @@ impl InboxHost for AppInboxHost {
             .snapshot();
         let row = Iterator::find(&mut rows.iter(), |row| row.handle == handle)?;
         registry_thread(row)
+    }
+
+    async fn launch_threads(&self, handles: &[String]) -> Vec<Option<(String, Option<String>)>> {
+        use tauri::Manager;
+        let Some(launch) = self
+            .app
+            .try_state::<super::dashboard_launch::DashboardLaunchState>()
+        else {
+            return vec![None; handles.len()];
+        };
+        let rows = super::dashboard_launch::DashboardLaunchState::snapshot(&launch);
+        handles
+            .iter()
+            .map(|handle| {
+                let row = Iterator::find(&mut rows.iter(), |row| &row.handle == handle);
+                row.and_then(registry_thread)
+            })
+            .collect()
+    }
+
+    async fn thread_sessions(
+        &self,
+        thread: &crate::weft::pins::ThreadKey,
+    ) -> Result<Vec<crate::session_usage::agent_record::ThreadSession>, String> {
+        let home = super::paths::codesense_home_dir().ok_or("no CodeSense home directory")?;
+        let (agent, story) = (thread.agent_id.clone(), thread.story_id.clone());
+        super::await_blocking("thread_sessions", move || {
+            // RI-2-ALLOW: inside the await_blocking closure, off the async runtime.
+            crate::session_usage::agent_record::thread_sessions_in(&home, &agent, &story)
+        })
+        .await
     }
 
     fn pins_changed(&self, team: &LaunchTeam, thread: &crate::weft::pins::ThreadKey) {
@@ -3143,8 +3238,10 @@ pub async fn set_human_status(
     .await?
     .map_err(|e| e.to_string())?;
     // Reuse the inbox-changed event so the viewer refetches both the status chip
-    // and anything else keyed to inbox lifecycle (cheap — no new event wire).
-    host.inbox_changed();
+    // and anything else keyed to inbox lifecycle (cheap — no new event wire). Not
+    // team-scoped, so a deliberate broad nudge: the pane ignores an empty `changes`,
+    // which would leave the human-status chip stale.
+    host.inbox_changed(&[]);
     super::agent_read_model::agent_state_changed(&host.app);
     Ok(view)
 }

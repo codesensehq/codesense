@@ -58,6 +58,13 @@ const OPEN_WORKSPACE_VERB: &str = "openWorkspace";
 // `storyId`.
 const SET_STATUS_VERB: &str = "setStatus";
 
+/// The pin verbs' args, shared by each flat verb and its `inbox.` name.
+const PIN_ARGS: &str = "{agentId: string, storyId?: string, messageId: number, position?: number, preview?: {shortName?: string, value?: string, unit?: string, status?: 'on-track'|'running'|'needs-you'|'not-updating', chart?: {kind:'segments', segments: status[], label} | {kind:'progress', percent: number, label} | {kind:'stack', parts: {label, value}[], label}, lines?: string[]}}";
+const PIN_MESSAGE_ARGS: &str = "{agentId: string, storyId?: string, messageId: number}";
+const REPLACE_PIN_ARGS: &str =
+    "{agentId: string, storyId?: string, messageId: number, replaces: number}";
+const REORDER_PINS_ARGS: &str = "{agentId: string, storyId?: string, messageIds: number[]}";
+
 /// The shipped ACTION-tier verb surface the contract
 /// documents, as a Rust source-of-truth table. Each `verb` string MUST equal a
 /// member of the TS `ACTION_VERBS`
@@ -294,7 +301,7 @@ pub(crate) const ACTION_VERB_DOCS: &[ActionVerbDoc] = &[
         verb: "sendAsHuman",
         tier: "send",
         args: "{org?: string, team?: string, to: string, text: string, contentType?: 'plain'|'markdown'|'html', onClick?: {type: 'goto-agent', agentId} | {type: 'open-file', path} | {type: 'show-message'}, attachFile?: string, replyTo?: string, summary?: string, inReplyTo?: number}",
-        purpose: "Pass both {org, team} to act in a synced team; omit both to keep the page team. Cross-team access requires inbox:read:all-teams in the Rust frame grant, included by the default open policy. Send a message AS THE HUMAN. `to` is a running session (a `sessions()` handle; the mail lands in that session's own inbox and its inbox waiter wakes it) or, failing that, a role (any role name, usually a saved Agent's id) queued in the page's team for whichever instance claims it. `contentType` defaults to markdown; `html` is sanitized in the inbox. `attachFile` is a team-content path shown as an attachment card. `replyTo` is where replies go instead of to the human, like an email Reply-To (only there): a running session's handle, `'human'`, or `'role:<agent id>'` (that role's durable queue, so the answer outlives the session that writes it). `summary` is one plain-text line (≤280 chars) shown as the message's one-line gist in the Inbox and lists; set it for html and long markdown. Resolves `{status:'sent', messageId, deliveryId?}` (`deliveryId` for a role) or `{status:'invalid', message}` (blank text, no recipient, a replyTo session that is not running, or an unknown inReplyTo). `inReplyTo` threads the reply under an existing message in this team, sends only to `to`, and marks the answered message read only if addressed to the human.",
+        purpose: "Pass both {org, team} to act in a synced team; omit both to keep the page team. Cross-team access requires inbox:read:all-teams in the Rust frame grant, included by the default open policy. Send a message AS THE HUMAN. `to` is a running session (a `sessions()` handle; the mail lands in that session's own inbox and its inbox waiter wakes it) or, failing that, a role (any role name, usually a saved Agent's id) queued in the page's team for whichever instance claims it. `contentType` defaults to markdown; `html` is sanitized in the inbox. `attachFile` is a team-content path shown as an attachment card. `replyTo` is where replies go instead of to the human, like an email Reply-To (only there): a running session's handle, `'human'`, or `'role:<agent id>'` (that role's durable queue, so the answer outlives the session that writes it). `summary` is one plain-text line (≤280 chars) shown as the message's one-line gist in the Inbox and lists; set it for html and long markdown. Resolves `{status:'sent', messageId, deliveryId?}` (`deliveryId` for a role) or `{status:'invalid', message}` (blank text, no recipient, a replyTo session that is not running, or an unknown inReplyTo). Where a message to a session stands is pushed on the `messageDelivery` topic, keyed by messageId: `queued`, then `delivered` once the session's agent was told about it (delivered means told, not read). `inReplyTo` threads the reply under an existing message in this team, sends only to `to`, and marks the answered message read only if addressed to the human.",
         deny_example: "denied: send budget",
     },
     ActionVerbDoc {
@@ -328,22 +335,71 @@ pub(crate) const ACTION_VERB_DOCS: &[ActionVerbDoc] = &[
     ActionVerbDoc {
         verb: "pin",
         tier: "metadata",
-        args: "{agentId: string, storyId?: string, messageId: number, position?: number, preview?: {shortName?: string, value?: string, unit?: string, status?: 'on-track'|'running'|'needs-you'|'not-updating', chart?: {kind:'segments', segments: status[], label} | {kind:'progress', percent: number, label} | {kind:'stack', parts: {label, value}[], label}, lines?: string[]}}",
+        args: PIN_ARGS,
         purpose: "Pin a message of the page's team into an agent thread's pin list, the strip that agent's chat overlay and full view share. The thread is the saved agent agentId plus storyId, as its session was launched (omit storyId for none). position 0 is first; omitted or past the end, it goes last; pinning a pinned message leaves it in place, and a preview replaces its preview. preview is what the folded pin shows (a short name, a headline value and unit, a status, a small chart, up to 3 key lines). A thread shows at most 3 pins. Requires inbox:write. Fires the pins topic and the agent-pins-changed event. An agent pins its own thread with the pin MCP tool. Resolves `{status:'pins', org, team, agentId, storyId, pins:[{messageId, position, pinnedBy, pinnedAtMs, preview?, previewAtMs?}], outcome:'pinned'|'updated'|'unchanged'}` or `{status:'invalid', message}` (unknown, archived or withdrawn message, a fourth pin, or a preview too large).",
         deny_example: "denied: inbox write scope",
     },
     ActionVerbDoc {
         verb: "unpin",
         tier: "metadata",
-        args: "{agentId: string, storyId?: string, messageId: number}",
-        purpose: "Take a message out of an agent thread's pin list; the pins after it move up. Requires inbox:write. Resolves the list as pin does, with outcome 'unpinned' or 'unchanged'.",
+        args: PIN_MESSAGE_ARGS,
+        purpose: "Take a message out of an agent thread's pin list; the pins after it move up. The pin is kept aside, so restorePin can undo this. Requires inbox:write. Resolves the list as pin does, with outcome 'unpinned' or 'unchanged'.",
+        deny_example: "denied: inbox write scope",
+    },
+    ActionVerbDoc {
+        verb: "restorePin",
+        tier: "metadata",
+        args: PIN_MESSAGE_ARGS,
+        purpose: "Undo an unpin: bring the message's unpinned pin back into an agent thread's pin list as it was, keeping who pinned it, when, its preview and its place (the end when the list is shorter now). With replacing (the pin a replacePin put in its place), the Undo of that replace: the replacing pin goes in the same step, if it is still there. Requires inbox:write. Resolves the list as pin does, with outcome 'restored', or 'unchanged' when it is pinned already; `{status:'invalid', message}` when it was never pinned there, its message is archived or withdrawn, or the thread already shows 3 pins.",
+        deny_example: "denied: inbox write scope",
+    },
+    ActionVerbDoc {
+        verb: "replacePin",
+        tier: "metadata",
+        args: REPLACE_PIN_ARGS,
+        purpose: "At the cap, pin a message of the page's team in place of the shown pin replaces, in one step: that pin is kept aside (restorePin with replacing undoes this) and the new pin takes its place, so nothing else moves. Requires inbox:write. Resolves the list as pin does, with outcome 'replaced'; `{status:'invalid', message}`, changing nothing, when replaces is no longer a shown pin (the list changed), the message is already pinned, or it is unknown, archived or withdrawn. An agent's pin tool still refuses a fourth pin.",
         deny_example: "denied: inbox write scope",
     },
     ActionVerbDoc {
         verb: "reorderPins",
         tier: "metadata",
-        args: "{agentId: string, storyId?: string, messageIds: number[]}",
+        args: REORDER_PINS_ARGS,
         purpose: "Put an agent thread's pins in this order. messageIds must name every live pin of the thread exactly once, else it resolves `{status:'invalid', message}` and nothing moves. Requires inbox:write. Resolves the list as pin does, with no outcome.",
+        deny_example: "denied: inbox write scope",
+    },
+    ActionVerbDoc {
+        verb: "inbox.pin",
+        tier: "metadata",
+        args: PIN_ARGS,
+        purpose: "The pin verb under its resource namespace: the same verb, with the same args, grant and result.",
+        deny_example: "denied: inbox write scope",
+    },
+    ActionVerbDoc {
+        verb: "inbox.unpin",
+        tier: "metadata",
+        args: PIN_MESSAGE_ARGS,
+        purpose: "The unpin verb under its resource namespace: the same verb, with the same args, grant and result.",
+        deny_example: "denied: inbox write scope",
+    },
+    ActionVerbDoc {
+        verb: "inbox.restorePin",
+        tier: "metadata",
+        args: PIN_MESSAGE_ARGS,
+        purpose: "The restorePin verb under its resource namespace: the same verb, with the same args, grant and result.",
+        deny_example: "denied: inbox write scope",
+    },
+    ActionVerbDoc {
+        verb: "inbox.replacePin",
+        tier: "metadata",
+        args: REPLACE_PIN_ARGS,
+        purpose: "The replacePin verb under its resource namespace: the same verb, with the same args, grant and result.",
+        deny_example: "denied: inbox write scope",
+    },
+    ActionVerbDoc {
+        verb: "inbox.reorderPins",
+        tier: "metadata",
+        args: REORDER_PINS_ARGS,
+        purpose: "The reorderPins verb under its resource namespace: the same verb, with the same args, grant and result.",
         deny_example: "denied: inbox write scope",
     },
     ActionVerbDoc {
@@ -479,11 +535,16 @@ pub(crate) const READ_VERBS: &[&str] = &[
     "roles",
     "updates",
     "humanStatus",
-    // An agent thread's pin list (saved agent + story) in the page's team.
+    // An agent thread's pin list (saved agent + story) in the page's team, and its namespaced name.
     "pins",
+    "inbox.pins",
     "watchInbox",
     "watchAgentInbox",
     "watchAgentActivity",
+    // A session's assistant prose as it is written, then one final message per turn
+    // (`codesense:session-text`), for a session of the page's own team: `onSessionText` uses them.
+    "sessions.watchText",
+    "sessions.unwatchText",
     // Routines, agent runs, worktrees and machines: the same shapes as the MCP tools
     // routine_list, routine_get, routine_runs, routine_run, list_runs, read_run,
     // list_worktrees and list_machines. The host pushes `codesense:routines-changed`,
@@ -612,23 +673,24 @@ fn sdk_section() -> Value {
             "notes_example": "A private Notes page: const {rows} = await codesense.records.list({collection:'notes'}) (pinned first, then most recent); const note = await codesense.records.read({collection:'notes', id}); keep note.body as base and save with const r = await codesense.records.write({collection:'notes', id, body, base, requestId}); when r.merged is true show r.body and highlight r.overlaps. Pin with codesense.records.setFields({collection:'notes', id, fields:{pinned:true}}). codesense.records.delete({collection:'notes', id}) is confirmable and human-only (agents can't delete notes); bring a note back with codesense.records.restore({collection:'notes', id, commit}) using a commit from records.history.",
             "ui": "Use ui:<slotId> for shared selection, folds and arrangement: subscribe then codesense.setUiState(topic, patch, requestId). Native and page share the host-owned state; writes persist separately from page-private prefs and echo requestId in the resulting delta.",
             "pins": "Subscribe to an agent thread's pin list with codesense.subscribe('pins', {agentId, storyId?, onChange}): one row per live pin {id, messageId, position, order, pinnedBy, pinnedAtMs, preview, previewAtMs, org, team, agentId, storyId} in list order, at most 3 (preview and previewAtMs are null until a preview is sent), in the page's team. Requires inbox:read:team. Pin, unpin and reorder (from a page or an agent's pin tool) arrive as deltas; a pin whose message is archived or withdrawn drops out and returns if it is restored. Read once with codesense.pins({agentId, storyId?}).",
+            "messageDelivery": "Subscribe with codesense.subscribe('messageDelivery', {onChange}) to where each message the human sent to a session stands, in the page's team (all synced teams for an all-teams page): one row per message {id, messageId, team, to, state, toldAtMs, deliveredAtMs}. state is queued until the session's agent is told about the message (CodeSense's inbox notice covering it reached the agent) or the message is read, then delivered; toldAtMs is when it was told (null when it was read before any notice); deliveredAtMs is when it was delivered: when told, else when read (null while queued). Delivered means told, not read. Messages to a role are not listed: their delivery is the inbox message's delivery. Requires the inbox read grant the inbox topic takes. Find a sendAsHuman message's row by its messageId.",
             "machineStats": "Native Machines subscription: keyed by machine id (id), snapshot plus versioned deltas through this one hub. Resource fields match machines(): load1, cpuCount, memUsedBytes, memTotalBytes, diskFreeBytes, diskTotalBytes, diskPath, sampledAt and machineStatsSupported. The host watches only with subscribers; hidden/disposed frames and closed windows release subscriptions. Samples every 30 seconds while watched, no per-view polling; runtime state only.",
-            "sessions": "codesense.onSessions(cb) is subscribe('sessions')-backed. The Rust projection is shared by native and MCP consumers. Inbox and agentList projections are available through subscribe. onAgentsChanged follows the agentDefinitions projection, including unused saved agents changed by a save, external edit or pull; agents() reads its cached summary rows. Rich agent({key}) remains a fresh canonical read of resolved startup and login state. Compatibility revisions preserve role and human-status notifications. onInboxChanged retains visible-only inbox invalidations. No per-frame session re-reads or hidden polling."
+            "sessions": "codesense.onSessions(cb) is subscribe('sessions')-backed. The Rust projection is shared by native and MCP consumers. Inbox and agentList projections are available through subscribe. onAgentsChanged follows the agentDefinitions projection, including unused saved agents changed by a save, external edit or pull; agents() reads its cached summary rows. Rich agent({key}) remains a fresh canonical read of resolved startup and login state. Compatibility revisions preserve role and human-status notifications. onInboxChanged retains visible-only inbox invalidations. onAgentsChanged fires on a definitions or sessions change and reads no sessions; a sessions delta never fires onInboxChanged, which is the inbox ping alone. No per-frame session re-reads or hidden polling."
         },
         "agents_and_inbox": {
             "role": "One read model for agents and their inboxes. Every call returns the same shape as its MCP twin (named in brackets), so a dashboard and an agent see the same data. Team-scoped calls act on the page's own team (else the active team). Reads mark nothing read and claim nothing.",
             "agent": "await codesense.agent({key}) [agent_get] → {id, scope, created_by, revision, archived, definition, revisions, resolved, instances: [sessions() rows running it]}. Rejects `not_found: …` for an unknown key.",
             "inbox": "await codesense.inbox({scope?, agentId?, sessionId?, role?, kind?, conversation?, before?, limit?}) [inbox_list] → {messages: [{messageId, conversation, from, fromName, to, toName, text, createdAtMs, inReplyTo, inReplyToTeam, toHuman, unread, primaryFile?, attachments, archivedAtMs?, delivery, onClick?, contentType?, replyTo?, replyToName?, summary?, replyTargetEnded, via?, reactions: [{emoji, count, reactors: [handle|'human']}], kind}], humanUnread, conversations: [{with, team, unread, messageCount, lastAt, lastMessageId, lastPreview}], hasMore}. Newest first, at most 500 rows initially. conversations covers all human conversation history; unread excludes archived/read mail. conversation filters by a summary with key, before is a positive message id (exclusive); ask for limit:50 to page a conversation, including replies whose roots are outside the payload. hasMore stays true until its oldest page is returned. In a cross-team view pass {org,team} per request and merge pages by team and messageId. kind: needs-you (waits on the human) | update (informational) — terminal-typed rows are update; else the sender's kind; else needs-you when it carries a replyTo naming someone other than the human, its sender or a role its sender holds; else update (kind describes mail to the human for agent views and dashboards). Pass kind to list only that kind (applied before limit). Both kinds appear as conversations in the human Inbox; all unread human mail counts in its badge. humanUnread counts both kinds. scope: to-human | to-agents | all (default to-human with no filter, all with one). agentId: a saved Agent's role inbox + its running instances' inboxes + replies; sessionId: one session's sent and received mail; role: one role queue. delivery (role messages): {state: queued|reading|accepted|done|withdrawn, pickedUpAtMs, instance, acceptedAtMs, disposition, note, withdrawnAtMs}. replyTo (when the sender set one): where replies go instead of the sender — a session handle, human, or role:<id>; replyTargetEnded: a reply would land in a session that is no longer running. summary (when the sender set one): a one-line plain-text gist — show it in list rows instead of text. Render text by contentType (markdown default) with textContent or a sanitizer, never raw innerHTML.",
             "inboxRollup": "await codesense.inboxRollup() → {messages, conversations, roles}, the list_inbox_rollup DTO. conversations carries {with, team, unread, messageCount, lastAt, lastMessageId, lastPreview} over all history per team; page older conversation mail using inbox({org,team,conversation:with,before,limit:50}). Every synced team's messages (human, session and role recipients), agent notes and role queues. Messages use {id, conversation, team: {org, team}, from, fromName, to, toName, toRole, text, contentType, createdAtMs, inReplyTo, via, replyTo, summary, unread, delivery, kind, attachments}; unlike inbox(), the id field is id, not messageId. to is a session handle or human, or null for a role queue named by toRole. unread is relative to the recipient; filter to === human for the human inbox. Ids are unique only within team: key by org, team and id. Updates also carry team: {org, team}; roles are merged by role name. Requires inbox:read:all-teams in the Rust frame grant. The default open policy grants it to every dashboard, including team panes; team-safe limits it to declared private and built-in dashboards unless explicitly overridden. Re-read on onInboxChanged for mail, onAgentsChanged for role changes, and window message codesense:agent-activity-changed for agent notes. These events cover every team. A missing capability rejects with 'denied: grant'.",
-            "roles": "await codesense.roles({role?, limit?}) [role_state] → {roles: [{role, roleName, registrations: [{instanceId, instanceName, generation, registeredAtMs, lastRenewedAtMs, expiresAtMs, live}], counts: {pending, claimed, accepted, acknowledged}, deliveries: [{deliveryId, messageId, state, from, fromName, excerpt, createdAtMs, firstClaimedAtMs, claimOwner, claimOwnerName, claimOwnerGeneration, claimExpiresAtMs, claimLapsed, receipt}], deliveriesTruncated}]}. Delivery state: pending (nobody holds it) | claimed (an instance is deciding; claimLapsed = its claim expired) | accepted (as work or no_work, not yet acknowledged) | acknowledged (finished). Open deliveries are all listed; `limit` caps acknowledged ones per role (default 20). A registration's `live` turns false at expiresAtMs.",
+            "roles": "await codesense.roles({role?, limit?}) [role_state] → {roles: [{role, roleName, registrations: [{instanceId, instanceName, generation, registeredAtMs, lastRenewedAtMs, expiresAtMs, live}], counts: {pending, claimed, accepted, acknowledged}, deliveries: [{deliveryId, messageId, state, from, fromName, excerpt, inReplyTo, text, textTruncated, createdAtMs, firstClaimedAtMs, claimOwner, claimOwnerName, claimOwnerGeneration, claimExpiresAtMs, claimLapsed, receipt}], deliveriesTruncated}]}. Delivery state: pending (nobody holds it) | claimed (an instance is deciding; claimLapsed = its claim expired) | accepted (as work or no_work, not yet acknowledged) | acknowledged (finished). Open deliveries are all listed; `limit` caps acknowledged ones per role (default 20). A registration's `live` turns false at expiresAtMs.",
             "updates": "await codesense.updates({limit?}) [list_agent_updates] → {updates: [{id, sessionId, agentName, role, text, createdAtMs}]} — agents' progress notes, newest first. These notes are available to dashboards and do not appear in the native human Inbox. Read update mail sent to the human with inbox({kind:'update'}).",
             "human_status": "await codesense.humanStatus() [get_human_status] → {status: online|away|busy|offline, note?, updatedAtMs (0 = never set)}.",
             "media_messages": "inbox() and inboxRollup() image attachments carry {kind:'image', sha256?, mime?, width?, height?, bytes?, alt, sourceUrl?, sourceHost?, state:'cached'|'pending'|'blocked'|'failed', reason?, retryable}. Render cached bytes from same-origin /media/v1/<sha256>, never from sourceUrl. Pending or retryable failed rows can call act('loadMedia', {org?,team?,messageId}) after the person taps. Blocked means remote media is off in team config; offer a source link, not a fetch. Respect OS Reduce Motion with a still first frame and explicit play/pause.",
             "html_messages": "Open an agent HTML message to the human with act('openMessage', {messageId}); do not render a live message frame inside the page. Markdown/plain conversations render in the page.",
             "human_writes": "As the human, through act(): act('sendAsHuman', {to, text, contentType?, onClick?, attachFile?, replyTo?, summary?, inReplyTo?}) (to = a session handle, else a role), act('replyAsHuman', {messageId, text, contentType?, summary?}), act('react', {messageId, emoji, remove?}), act('markRead', {messageIds}), act('markUnread', {messageIds}), act('archive', {messageIds}), act('unarchive', {messageIds, restoreUnread?}) (Undo of archive; restoreUnread = the ids that were unread before archiving), act('setHumanStatus', {status, note?}). sendAsHuman, replyAsHuman, react, markRead, markUnread, archive, unarchive and openMessage accept optional {org, team} together, subject to the Rust inbox:read:all-teams grant; use the team of the rollup row. Omit both to keep the pinned team. A partial pair or unsynced target rejects with the verb named. Under open, any dashboard may target another synced team; team-safe checks the frame's grant before any inbox I/O. See the action verbs for results.",
-            "live": "const off = codesense.onAgentsChanged(() => reread()) follows versioned agentDefinitions rows when saved definitions or running counts change, plus compatibility revisions for role registrations, queues and the human's status; codesense.onInboxChanged((change?) => …) when a message is stored, read, claimed or reacted to (change.changes, when present: [{team: {org, team}, messageIds}] names the messages the committed update re-read, only your team's when you are team-scoped; re-read just those); window message `codesense:agent-activity-changed` when an update is posted. Each returns an unsubscribe. Re-read with the calls above. Registrations and claims also lapse with time, so a queue view may re-read on a slow timer (e.g. every 30s while visible).",
+            "live": "const off = codesense.onAgentsChanged(() => reread()) follows versioned agentDefinitions rows when saved definitions or running counts change, plus compatibility revisions for role registrations, queues and the human's status; codesense.onInboxChanged((change?) => …) when a message is stored, read, claimed or reacted to, never on a sessions change, and onAgentsChanged does not follow inbox pings, so a page that shows both registers both (change.changes, when present: [{team: {org, team}, messageIds}] names the messages the committed update re-read, only your team's when you are team-scoped; re-read just those, and an empty messageIds means re-read the whole team; a change with no changes could be anything); window message `codesense:agent-activity-changed` when an update is posted. Each returns an unsubscribe. Re-read with the calls above. Registrations and claims also lapse with time, so a queue view may re-read on a slow timer (e.g. every 30s while visible).",
             "times": "Every *AtMs field is epoch milliseconds.",
-            "example": "const off = codesense.onAgentsChanged(render); render(); async function render() { const [list, {roles}, {messages}] = await Promise.all([codesense.sessions(), codesense.roles(), codesense.inbox({scope: 'to-human', limit: 20})]); /* draw with textContent */ }",
+            "example": "const offAgents = codesense.onAgentsChanged(render), offInbox = codesense.onInboxChanged(render); render(); async function render() { const [list, {roles}, {messages}] = await Promise.all([codesense.sessions(), codesense.roles(), codesense.inbox({scope: 'to-human', limit: 20})]); /* draw with textContent */ }",
             "sample": "content/examples/dashboards/agent-inbox-console.html in the CodeSense docs context repo (getting-started team) shows sessions, role queues and the human inbox live, with reply and mark-read."
         },
         "routines_runs_and_machines": {

@@ -165,6 +165,21 @@ const INVOKE_META = {
     description: "Take a message out of an agent thread's pin list; the pins after it move up.",
     examples: [{ args: { agentId: "acme/core/dev", storyId: "DEMO-1", messageId: 42 } }],
   },
+  restorePin: {
+    description:
+      "Undo an unpin: the message's unpinned pin comes back as it was (who pinned it, when, its preview and its place). With replacing, the Undo of a replacePin: the pin that took its place goes in the same step.",
+    examples: [
+      { args: { agentId: "acme/core/dev", storyId: "DEMO-1", messageId: 42 } },
+      { args: { agentId: "acme/core/dev", storyId: "DEMO-1", messageId: 42, replacing: 51 } },
+    ],
+  },
+  replacePin: {
+    description:
+      "At the cap, pin a message in place of the shown pin replaces, in one step; nothing else moves. restorePin with replacing undoes it.",
+    examples: [
+      { args: { agentId: "acme/core/dev", storyId: "DEMO-1", messageId: 51, replaces: 42 } },
+    ],
+  },
   reorderPins: {
     description:
       "Put an agent thread's pins in the given order. messageIds must name every live pin of the thread exactly once.",
@@ -280,6 +295,16 @@ const INVOKE_META = {
   watchAgentActivity: {
     description: 'Handshake — resolves `{subscribed: "codesense:agent-activity-changed"}`.',
     examples: [{ args: {}, result: { subscribed: "codesense:agent-activity-changed" } }],
+  },
+  "sessions.watchText": {
+    description:
+      "Starts a session's assistant-prose stream for this page (under `sessions:read`, a session of the page's own team only); `onSessionText(sessionId, cb)` calls it and listens for `codesense:session-text`.",
+    examples: [{ args: { sessionId: "tab-1" }, result: { watching: "tab-1" } }],
+  },
+  "sessions.unwatchText": {
+    description:
+      "Stops this page's stream of a session's prose; `onSessionText`'s unsubscribe calls it.",
+    examples: [{ args: { sessionId: "tab-1" }, result: null }],
   },
   routines: {
     description: "Every routine this user sees. Pairs with `onRoutinesChanged(cb)` for push.",
@@ -1898,14 +1923,17 @@ const EVENT_META = {
     direction: "parent-to-doc",
     payload: "N/A",
     timing: "On agent state / roster change",
-    description: "Nudge for `onAgentsChanged` / `onSessions` listeners.",
+    description:
+      "Nudge for `onAgentsChanged` / `onSessions` listeners. `onAgentsChanged` also follows sessions changes, without reading sessions.",
     example: "codesense.onAgentsChanged(() => codesense.agents().then(render));",
   },
   "codesense:inbox-changed": {
     direction: "parent-to-doc",
-    payload: "N/A",
+    payload:
+      "`{changes?: [{team: {org, team}, messageIds}]}`: the teams and messages the change touched. An empty `messageIds` means re-read the whole team; no `changes` means anything could have changed.",
     timing: "On inbox update",
-    description: "Nudge for `watchInbox` / `onInboxChanged` listeners.",
+    description:
+      "Nudge for `watchInbox` / `onInboxChanged` listeners. Inbox changes only: a sessions change never fires it.",
     example: "codesense.onInboxChanged(() => codesense.inbox({}).then(render));",
   },
   "codesense:agent-activity-changed": {
@@ -1939,6 +1967,17 @@ const EVENT_META = {
       "Nudge for `sessionRecord()` listeners. `onSessionRecordChanged(cb, sessionIds)` runs `cb` only for those sessions (and for a nudge that names none).",
     example:
       "codesense.onSessionRecordChanged(() => codesense.sessionRecord({ handle }).then(render), record.sessionIds);",
+  },
+  "codesense:session-text": {
+    direction: "parent-to-doc",
+    payload:
+      "`{sessionId, kind: 'prose'|'final', turn, key, text}`: a session's assistant prose, or the turn's one final message (the last prose after its last tool call)",
+    timing:
+      "As the session writes each prose block of a turn (no 60 s capture wait), and once when the turn stops; only to a page that watches the session",
+    description:
+      "A session's assistant prose as it is written, never a tool call or the model's thinking. `onSessionText(sessionId, cb)` starts and stops the stream.",
+    example:
+      "const off = codesense.onSessionText(sessionId, (t, error) => t && (t.kind === 'final' ? showFinal(t.text) : showProse(t.text)));",
   },
   "codesense:setup-changed": {
     direction: "parent-to-doc",
@@ -2160,7 +2199,8 @@ export function buildManifest(root = ROOT) {
   };
   const invoke = sdk.verbs.map((verb) => {
     const name = verb.name;
-    const meta = INVOKE_META[name];
+    // A pin verb's `inbox.` name is the same verb as its flat alias: one entry for both.
+    const meta = INVOKE_META[name] ?? INVOKE_META[name.replace(/^inbox\./, "")];
     const category = verbCategory(name, lanes);
     const readOnlyDocsSafe =
       lanes.READ_VERBS.includes(name) || lanes.READ_ACTION_VERBS.includes(name);

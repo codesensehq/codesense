@@ -25,6 +25,9 @@ pub(crate) const VIRTUAL_LIST_JS: &str = include_str!("dashboard_kit/virtual-lis
 /// `kit.chat`: the one chat (mount, marks, cards, pinning), bundled from `dashboard_kit/chat/*.js` by
 /// `scripts/gen-dashboard-kit-chat.mjs`. A page loads it explicitly, after `kit.js`.
 pub(crate) const CHAT_JS: &str = include_str!("dashboard_kit/chat.js");
+/// `kit.chat`'s stylesheet: the thread, status rows, composer and needs-you cards, scoped to the chat's root (`.cs-chat`).
+/// `chat.js` links it once per page unless a page mounts with `styles: false`.
+pub(crate) const CHAT_CSS: &str = include_str!("dashboard_kit/chat.css");
 /// The chat's DOM-free rules (the Queued/Delivered marks, the needs-you card parser), as an ES module: one source, no DOM and
 /// no bridge. The bundle imports it, the kit serves it to pages, and the app's TypeScript module re-exports it as its typed surface.
 pub(crate) const CHAT_CORE_JS: &str = include_str!("dashboard_kit/chat/chat-core.js");
@@ -40,6 +43,7 @@ const KIT_JS_ROUTE: &str = "/kit/v1/kit.js";
 const TOKENS_CSS_ROUTE: &str = "/kit/v1/tokens.css";
 const VIRTUAL_LIST_ROUTE: &str = "/kit/v1/virtual-list.js";
 const CHAT_ROUTE: &str = "/kit/v1/chat.js";
+const CHAT_CSS_ROUTE: &str = "/kit/v1/chat.css";
 const CHAT_CORE_ROUTE: &str = "/kit/v1/chat-core.js";
 const DTS_ROUTE: &str = "/kit/v1/codesense.d.ts";
 const EMOJI_ROUTE: &str = "/kit/v1/emoji.json";
@@ -165,6 +169,10 @@ async fn serve_chat() -> Response {
     revalidated("text/javascript; charset=utf-8", CHAT_JS)
 }
 
+async fn serve_chat_css() -> Response {
+    revalidated("text/css; charset=utf-8", CHAT_CSS)
+}
+
 async fn serve_chat_core() -> Response {
     revalidated("text/javascript; charset=utf-8", CHAT_CORE_JS)
 }
@@ -240,6 +248,7 @@ pub fn router<S: Clone + Send + Sync + 'static>() -> Router<S> {
         .route(TOKENS_CSS_ROUTE, get(serve_tokens))
         .route(VIRTUAL_LIST_ROUTE, get(serve_virtual_list))
         .route(CHAT_ROUTE, get(serve_chat))
+        .route(CHAT_CSS_ROUTE, get(serve_chat_css))
         .route(CHAT_CORE_ROUTE, get(serve_chat_core))
         .route(DTS_ROUTE, get(serve_dts))
         .route(EMOJI_ROUTE, get(serve_emoji))
@@ -330,6 +339,21 @@ mod tests {
             assert!(body.contains(needle), "{path}");
             assert!(!body.contains("</script"), "{path}");
         }
+        let resp = app
+            .clone()
+            .oneshot(
+                axum::http::Request::get(CHAT_CSS_ROUTE)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(resp.headers()[header::CONTENT_TYPE]
+            .to_str()
+            .unwrap()
+            .starts_with("text/css"));
+        assert_eq!(resp.headers()[header::CACHE_CONTROL], "no-cache");
         // The core touches neither the page nor the bridge, so the app can import it as it is.
         for word in ["document", "window", "codesense"] {
             assert!(!CHAT_CORE_JS.contains(word), "chat-core.js names {word}");

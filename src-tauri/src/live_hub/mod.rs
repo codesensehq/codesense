@@ -54,6 +54,11 @@ const FILES: u8 = 64;
 const INBOX: u8 = 2;
 const HOSTS: u8 = 4;
 const FOOTPRINT: u8 = 8;
+/// What woke a rebuild, kept apart from the dirty flags so `next_batch` flags stay exact.
+/// Activity is the churn of an agent's own state: `terminal-status-update`,
+/// `agent-state-changed` and `agents-changed`. Every other source is `CAUSE_OTHER`.
+const CAUSE_ACTIVITY: u8 = 1;
+const CAUSE_OTHER: u8 = 2;
 const DOMAIN_EVENTS: &[&str] = &[
     crate::mcp::agent_dot::TERMINAL_STATUS_EVENT,
     "sessions-waiter-changed",
@@ -92,6 +97,16 @@ fn definition_membership_event(event: &str) -> bool {
             | crate::commands::registry_local::ORG_REGISTRY_CHANGED_EVENT
             | crate::commands::scratch_use::SCRATCH_USE_CHANGED_EVENT
     )
+}
+fn event_cause(event: &str) -> u8 {
+    if matches!(
+        event,
+        crate::mcp::agent_dot::TERMINAL_STATUS_EVENT | "agent-state-changed" | "agents-changed"
+    ) {
+        CAUSE_ACTIVITY
+    } else {
+        CAUSE_OTHER
+    }
 }
 fn event_flags(event: &str) -> u8 {
     REBUILD
@@ -221,6 +236,7 @@ impl Model {
 pub struct LiveHub {
     model: Mutex<Model>,
     dirty: AtomicU8,
+    rebuild_cause: AtomicU8,
     wake: std::sync::Arc<tokio::sync::Notify>,
     run_review: std::sync::Arc<Mutex<run_review::Owner>>,
     changes: tokio::sync::watch::Sender<u64>,
@@ -308,6 +324,7 @@ impl Default for LiveHub {
         Self {
             model: Mutex::new(Model::default()),
             dirty: AtomicU8::new(0),
+            rebuild_cause: AtomicU8::new(0),
             wake: std::sync::Arc::new(tokio::sync::Notify::new()),
             run_review: Default::default(),
             changes: tokio::sync::watch::channel(0).0,
@@ -344,6 +361,12 @@ impl LiveHub {
         self.invalidate(REBUILD | HOSTS);
     }
     fn invalidate(&self, flags: u8) {
+        self.invalidate_cause(flags, CAUSE_OTHER);
+    }
+    fn invalidate_cause(&self, flags: u8, cause: u8) {
+        if flags & REBUILD != 0 {
+            self.rebuild_cause.fetch_or(cause, Ordering::Release);
+        }
         self.dirty.fetch_or(flags, Ordering::Release);
         self.wake.notify_one();
     }
@@ -353,6 +376,7 @@ impl LiveHub {
             () = self.wake.notified() => {},
             () = async { match deadline { Some(at) => tokio::time::sleep_until(at).await, None => std::future::pending().await } } => {
                 self.model.lock().unwrap().stall_deadline = None;
+                self.rebuild_cause.fetch_or(CAUSE_OTHER, Ordering::Release);
                 self.dirty.fetch_or(REBUILD | HOSTS, Ordering::Release);
             }
         }
@@ -511,8 +535,9 @@ fn listen_sources<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                     .agent_definitions
                     .note_activity();
             }
-            let flags = event_flags(event);
-            handle.state::<LiveHub>().invalidate(flags);
+            handle
+                .state::<LiveHub>()
+                .invalidate_cause(event_flags(event), event_cause(event));
         });
     }
     let handle = app.clone();
@@ -565,7 +590,9 @@ fn listen_sources<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                         },
                     );
                 }
-                handle.state::<LiveHub>().invalidate(REBUILD);
+                handle
+                    .state::<LiveHub>()
+                    .invalidate_cause(REBUILD, CAUSE_ACTIVITY);
             }
         }
     });
@@ -694,7 +721,7 @@ pub fn start(app: &tauri::AppHandle) {
         };
         let mut inbox_gate = InboxGate::default();
         loop {
-            let flags = next_updates(&handle).await;
+            let (flags, cause) = next_updates(&handle).await;
             if flags & MACHINE_STATS != 0 {
                 machine_stats::reconcile(&handle);
             }
@@ -710,7 +737,7 @@ pub fn start(app: &tauri::AppHandle) {
                 refresh_definitions(&handle).await;
             }
             if flags & REBUILD != 0 {
-                if let Err(e) = rebuild(&handle).await {
+                if let Err(e) = rebuild(&handle, cause).await {
                     log::warn!("sessions projection: {e}");
                 }
             }
@@ -721,12 +748,14 @@ pub fn start(app: &tauri::AppHandle) {
     });
 }
 
-async fn next_updates<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> u8 {
-    let flags = app.state::<LiveHub>().next_batch().await;
+async fn next_updates<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> (u8, u8) {
+    let hub = app.state::<LiveHub>();
+    let flags = hub.next_batch().await;
+    let cause = hub.rebuild_cause.swap(0, Ordering::AcqRel);
     if let Err(error) = run_review::refresh(app) {
         log::warn!("run review projection: {error}");
     }
-    flags
+    (flags, cause)
 }
 
 async fn refresh_hosts(app: &tauri::AppHandle) {
@@ -1105,7 +1134,16 @@ async fn refresh_definitions<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     }
 }
 
-async fn rebuild(app: &tauri::AppHandle) -> Result<(), String> {
+/// One rebuild, and whether only agent activity (see [`CAUSE_ACTIVITY`]) asked for it.
+fn count_rebuild(cause: u8) {
+    crate::shared::invoke_stats::metric_count("live_hub.rebuild");
+    if cause == CAUSE_ACTIVITY {
+        crate::shared::invoke_stats::metric_count("live_hub.rebuild.activity_only");
+    }
+}
+
+async fn rebuild(app: &tauri::AppHandle, cause: u8) -> Result<(), String> {
+    count_rebuild(cause);
     use crate::commands::agent_inbox::InboxHost;
     let hub = app.state::<LiveHub>();
     let live = hub.model.lock().unwrap().live_tabs();
@@ -1651,6 +1689,7 @@ pub(crate) fn unsubscribe<R: tauri::Runtime>(
     );
     drop_unwatched_pins(app, Vec::from_iter(viewed));
     app.state::<LiveHub>().invalidate(MACHINE_STATS);
+    record_projection_metrics(app);
 }
 /// The last subscriber of a pins view takes the view's refreshes with it: drop each pins view
 /// among `viewed` (topic, view key) that nothing follows any more.
@@ -1676,6 +1715,7 @@ pub(crate) fn drop_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>, owner: &
         let gone = hub.model.lock().unwrap().projections.drop_owner(owner);
         drop_unwatched_pins(app, gone);
         hub.invalidate(MACHINE_STATS);
+        record_projection_metrics(app);
     }
 }
 #[tauri::command]
@@ -1739,8 +1779,65 @@ fn publish<R: tauri::Runtime>(app: &tauri::AppHandle<R>, deltas: Vec<projection:
     publish_subscriptions(app, sent);
     for delta in deltas {
         if delta.topic != "inbox" {
-            let _ = app.emit("codesense:delta", delta);
+            // One serialization serves the byte count and the emit. The count is the
+            // delta payload only: it leaves out Tauri's event envelope.
+            match serde_json::value::to_raw_value(&delta) {
+                Ok(raw) => {
+                    crate::shared::invoke_stats::metric_add(
+                        &format!("live_hub.delta.bytes.{}", metric_topic(&delta.topic)),
+                        raw.get().len(),
+                    );
+                    let _ = app.emit("codesense:delta", raw);
+                }
+                Err(_) => {
+                    let _ = app.emit("codesense:delta", delta);
+                }
+            }
         }
+    }
+    record_projection_metrics(app);
+}
+
+/// Page-created `ui:<x>` topics share one metric name so they cannot fill the metrics map.
+fn metric_topic(topic: &str) -> &str {
+    if topic.starts_with("ui:") {
+        "ui"
+    } else {
+        topic
+    }
+}
+
+/// The retained-size gauges: delta-log entries, subscriptions, agent views and the view
+/// count per topic (the page-created `ui:` topics summed into one).
+fn projection_gauges(model: &Model) -> Vec<(String, usize)> {
+    let (entries, subscriptions, topics) = model.projections.metrics_snapshot();
+    let mut gauges = vec![
+        ("live_hub.agent_views".to_owned(), model.agent_views.len()),
+        ("live_hub.delta_log_entries".to_owned(), entries),
+        ("live_hub.subscriptions".to_owned(), subscriptions),
+    ];
+    let mut views = BTreeMap::<&str, usize>::new();
+    for (topic, count, _) in &topics {
+        *views.entry(metric_topic(topic)).or_default() += count;
+    }
+    gauges.extend(
+        views
+            .into_iter()
+            .map(|(topic, count)| (format!("live_hub.views.{topic}"), count)),
+    );
+    gauges
+}
+
+/// Sample the gauges at most once per reporting window, and record them after the model
+/// lock is released.
+fn record_projection_metrics<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    if !crate::shared::invoke_stats::gauge_window_open() {
+        return;
+    }
+    let hub = app.state::<LiveHub>();
+    let gauges = projection_gauges(&hub.model.lock().unwrap_or_else(|e| e.into_inner()));
+    for (name, value) in gauges {
+        crate::shared::invoke_stats::metric_gauge(&name, value);
     }
 }
 
@@ -1989,11 +2086,31 @@ async fn refresh_inbox_with_host<R: tauri::Runtime>(
         updates.retain(|(scope, _)| scope.as_ref().is_some_and(|key| allowed.contains(key)));
     }
     inbox.fill_session_fields(&rows);
+    // Each projected message the human sent to a session patches its delivery row.
+    let (deliveries, undelivered) = inbox.delivery_patch(&updates, &removes);
     let counts = inbox.count_rows();
     // What inbox readers show changed, whether or not an inbox view is open. Agent-list
     // deltas published below are not news to them.
     // A retired team drops its counts row, so the counts comparison covers removals too.
     let notify_legacy = had_pending || hydrated || renamed || counts != counts_before;
+    // The notice names the teams a legacy reader must re-read: the teams whose counts moved
+    // (a retired team's row is gone, so it shows only here), plus every team the projection
+    // holds after a hydration, a rename or a retry. An empty list would be a broad nudge,
+    // which no case here wants. Only a pass with no committed ids sends it.
+    let notified: Vec<(crate::commands::dashboard_launch::LaunchTeam, Vec<i64>)> =
+        if notify_legacy && committed.is_empty() {
+            let mut teams = inbox::changed_count_teams(&counts_before, &counts);
+            if had_pending || hydrated || renamed {
+                for team in inbox.held_teams() {
+                    if !teams.contains(&team) {
+                        teams.push(team);
+                    }
+                }
+            }
+            teams.into_iter().map(|team| (team, Vec::new())).collect()
+        } else {
+            Vec::new()
+        };
     updates.extend(counts);
 
     // Publish the finished projection briefly under the model lock, then drop
@@ -2004,6 +2121,12 @@ async fn refresh_inbox_with_host<R: tauri::Runtime>(
         let mut deltas = model
             .projections
             .patch_view("inbox", updates, removes, None)?;
+        deltas.extend(model.projections.patch_view(
+            inbox::DELIVERY_TOPIC,
+            deliveries,
+            undelivered,
+            None,
+        )?);
         deltas.extend(project_agent_views(&mut model)?);
         if hydrated {
             // Initial history is loaded through bounded snapshots, never arrival deltas.
@@ -2026,7 +2149,7 @@ async fn refresh_inbox_with_host<R: tauri::Runtime>(
     // Legacy readers must see the committed cache when their refresh starts.
     if committed.is_empty() {
         if notify_legacy {
-            host.inbox_changed();
+            host.inbox_changed(&notified);
         }
     } else {
         host.inbox_committed(&committed);

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { openFileInTeam } from "@/shared/lib/open-file-in-team";
+import { teamContentPage } from "@/shared/lib/team-content-page";
 import type { Org } from "@/shared/types/domain";
 
 /** The page's route: it names the session in the fragment, which the viewer replays to the page. */
@@ -10,10 +11,8 @@ export const agentPageHash = (handle: string) => `#session=${encodeURIComponent(
  * or `null` when it declares none. The app names no page of its own: a team without the setting
  * has no Full view.
  */
-export function teamAgentPage(orgs: readonly Org[], org: string, team: string): string | null {
-  const declared = orgs.find((o) => o.slug === org)?.teams.find((t) => t.name === team)?.agent_page;
-  return declared?.trim() || null;
-}
+export const teamAgentPage = (orgs: readonly Org[], org: string, team: string) =>
+  teamContentPage(orgs, org, team, "agent_page");
 
 /** Open the agent's page (`page`, a path in `team`'s content) for the session `handle`, as a pinned tab. */
 export function openAgentFullView(

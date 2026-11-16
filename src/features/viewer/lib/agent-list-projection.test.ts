@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { useManagedSessionStore } from "@/shared/stores/use-managed-session-store";
 import { useDashboardStreamStore } from "@/shared/stores/dashboard-stream-store";
+import { useAgentStateStore } from "@/shared/stores/agent-state-store";
 import packets from "../../../../tests/fixtures/effective-status-seam.json";
 import { describe, expect, it, vi } from "vitest";
 const transport = vi.hoisted(() => ({
@@ -205,4 +206,35 @@ it("receives Rust supervision outcomes into existing managed consumers and dashb
   expect(useManagedSessionStore.getState().states["scale-49"]).toBe("awaiting-answer");
   expect(receive).toHaveBeenCalledOnce();
   stop();
+});
+
+it("records provider output timestamps as the source of session activity", () => {
+  const recordOutput = vi.spyOn(useAgentStateStore.getState(), "recordOutput");
+  useAgentListProjectionStore.setState({ sessions: null });
+  useAgentListProjectionStore.setState({
+    sessions: [{ ...session("worker"), lastOutputMs: 1234 }],
+  });
+  expect(recordOutput).toHaveBeenCalledWith("sid-worker", 1234);
+  recordOutput.mockRestore();
+  useAgentListProjectionStore.setState({ sessions: null });
+});
+
+it("uses a session map when reconciling large owner snapshots", () => {
+  const rows = Array.from({ length: 220 }, (_, index) => ({
+    ...session(`worker-${index}`),
+    sessionId: `sid-${index}`,
+    id: `id-${index}`,
+    managedState: "running" as const,
+  }));
+  const previous = new Proxy(rows, {
+    get(target, key, receiver) {
+      if (key === "find") throw new Error("previous sessions must be indexed once");
+      const value = Reflect.get(target, key, receiver);
+      return key === Symbol.iterator && typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as typeof rows;
+  useAgentListProjectionStore.setState({ sessions: null });
+  useAgentListProjectionStore.setState({ sessions: previous });
+  expect(() => useAgentListProjectionStore.setState({ sessions: rows })).not.toThrow();
+  useAgentListProjectionStore.setState({ sessions: null });
 });

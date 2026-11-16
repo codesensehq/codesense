@@ -102,6 +102,7 @@ impl InboxHost for FakeInbox {
                     session: None,
                     name: h.into(),
                     running: true,
+                    ended: false,
                 })
                 .collect(),
         ))
@@ -112,7 +113,7 @@ impl InboxHost for FakeInbox {
     fn display_name(&self, handle: &str) -> Option<String> {
         Some(self.names.lock().unwrap().get(handle).cloned().unwrap_or_else(|| handle.into()))
     }
-    fn inbox_changed(&self) {
+    fn inbox_changed(&self, _changes: &[(LaunchTeam, Vec<i64>)]) {
         self.changed.fetch_add(1, Ordering::SeqCst);
     }
     fn cached_media(&self, sha: &str) -> Result<Vec<u8>, String> {

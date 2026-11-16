@@ -250,6 +250,9 @@ pub struct InboxMessage {
     /// When the sender withdrew it before any agent picked it up. A withdrawn row never
     /// reaches an agent.
     pub withdrawn_at_ms: Option<i64>,
+    /// When the recipient's agent was first told about it: a notice covering it was
+    /// confirmed by its host (see [`inbox_confirm_told`]). Told is not read; it never moves.
+    pub told_at_ms: Option<i64>,
     /// Where a role-addressed (or withdrawn) message stands. Filled by the list reads
     /// only; `None` elsewhere and for a plain message nobody withdrew.
     pub delivery: Option<InboxDelivery>,
@@ -396,7 +399,7 @@ pub struct InboxUnread {
 }
 
 const SELECT_COLUMNS: &str =
-    "SELECT id, sender, recipient, text, created_at, read_at, in_reply_to, in_reply_to_org, in_reply_to_team, primary_file, archived_at, withdrawn_at, on_click, content_type, via, reply_to, summary, kind, attachments FROM wv_inbox";
+    "SELECT id, sender, recipient, text, created_at, read_at, in_reply_to, in_reply_to_org, in_reply_to_team, primary_file, archived_at, withdrawn_at, on_click, content_type, via, reply_to, summary, kind, attachments, told_at FROM wv_inbox";
 
 fn row_to_message(r: &rusqlite::Row<'_>) -> rusqlite::Result<InboxMessage> {
     let org: Option<String> = r.get(7)?;
@@ -421,6 +424,7 @@ fn row_to_message(r: &rusqlite::Row<'_>) -> rusqlite::Result<InboxMessage> {
             .unwrap_or_default(),
         archived_at_ms: r.get(10)?,
         withdrawn_at_ms: r.get(11)?,
+        told_at_ms: r.get(19)?,
         delivery: None,
         on_click: MessageOnClick::from_stored(r.get::<_, Option<String>>(12)?),
         content_type: MessageContentType::from_stored(content_type_raw.as_deref()),
@@ -1231,33 +1235,48 @@ fn inbox_reserve_with_chat_at(
 }
 
 /// The notice reserved under `token` for `session` was handed to its agent's hook: what
-/// it told about is marked announced, never moving the mark back. The token names the
-/// reservation whatever handle the session is bound to by now. Idempotent: a token
-/// confirmed already, replaced by a newer offer (whose notice counts its mail too), or of
-/// another session, confirms nothing. Returns whether a reservation was confirmed.
-pub fn inbox_confirm_announcement(
+/// it told about is marked announced, never moving the mark back, and in the same
+/// transaction each unread message it covered is marked told (`told_at`), the first time
+/// only. The token names the reservation whatever handle the session is bound to by now.
+/// Idempotent: a token confirmed already, replaced by a newer offer (whose notice counts its
+/// mail too), or of another session, confirms nothing. `None`: nothing was confirmed; else
+/// the ids told now, ascending (empty when every covered message was told already).
+pub fn inbox_confirm_told(
     store: &WeftStore,
     session: &str,
     token: &str,
-) -> WvWriteResult<bool> {
+) -> WvWriteResult<Option<Vec<i64>>> {
     let mut conn = store.conn()?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let row: Option<i64> = tx
+    let now = now_ms();
+    let row: Option<(i64, String, i64)> = tx
         .query_row(
             "UPDATE wv_inbox_notified SET through_id = MAX(through_id, reserved_through), \
              announced_at = ?2, reserved_through = NULL, reserve_token = NULL, \
              reserved_at = NULL, reserved_by = NULL, reserved_chat = NULL \
-             WHERE reserve_token = ?1 AND session = ?3 RETURNING id",
-            params![token, now_ms(), session],
-            |r| r.get(0),
+             WHERE reserve_token = ?1 AND session = ?3 RETURNING id, recipient, through_id",
+            params![token, now, session],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()?;
-    let Some(row) = row else {
-        return Ok(false);
+    let Some((row, recipient, through)) = row else {
+        return Ok(None);
     };
     write_audit_public(&tx, ANNOUNCED, "mutate", row)?;
+    let mut told = {
+        let mut stmt = tx.prepare_cached(
+            "UPDATE wv_inbox SET told_at = ?3 WHERE recipient = ?1 AND id <= ?2 \
+             AND told_at IS NULL AND read_at IS NULL AND withdrawn_at IS NULL RETURNING id",
+        )?;
+        let rows = stmt.query_map(params![recipient, through, now], |r| r.get(0))?;
+        rows.collect::<rusqlite::Result<Vec<i64>>>()?
+    };
+    for id in &told {
+        write_audit_public(&tx, INBOX, "mutate", *id)?;
+    }
     tx.commit()?;
-    Ok(true)
+    <[i64]>::sort_unstable(&mut told);
+    Ok(Some(told))
 }
 
 /// The notice reserved under `token` will not reach its agent (its host could not take
@@ -1293,7 +1312,7 @@ fn set_reserved_by(store: &WeftStore, token: &str, by: Option<&str>) -> WvWriteR
 }
 
 /// When a recipient's agent was last told about its mail (a confirmed notice, see
-/// [`inbox_confirm_announcement`]): through which message, when (epoch ms), and the
+/// [`inbox_confirm_told`]): through which message, when (epoch ms), and the
 /// session it was told in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Announced {
@@ -1519,7 +1538,7 @@ mod tests {
     fn tell(store: &WeftStore, recipient: &str, session: &str, now: i64) -> Option<u32> {
         match inbox_reserve_announcement_at(store, recipient, session, now, RUN, false).unwrap() {
             Reservation::Offer { token, count } => {
-                assert!(inbox_confirm_announcement(store, session, &token).unwrap());
+                assert_ne!(inbox_confirm_told(store, session, &token).unwrap(), None);
                 Some(count)
             }
             Reservation::Nothing => None,
@@ -1605,7 +1624,7 @@ mod tests {
             );
         }
         // Settled: told.
-        assert!(inbox_confirm_announcement(&store, "S2", &token).unwrap());
+        assert_ne!(inbox_confirm_told(&store, "S2", &token).unwrap(), None);
         assert_eq!(tell(&store, "H2", "S2", later), None);
         // Newer mail is a new notice, under a new token, covering all of it.
         mail(&store, "H2");
@@ -1669,7 +1688,7 @@ mod tests {
             inbox_unread_for(&store, &wanted).unwrap()["H2"].announced,
             None
         );
-        assert!(inbox_confirm_announcement(&store, "S2", &token).unwrap());
+        assert_ne!(inbox_confirm_told(&store, "S2", &token).unwrap(), None);
         assert!(inbox_unread_for(&store, &wanted).unwrap()["H2"]
             .announced
             .is_some());
@@ -1696,7 +1715,7 @@ mod tests {
             inbox_reserve_announcement_at(&store, "H2", "S2", later + 1, RUN, false).unwrap(),
             Reservation::PendingUntil(later + RESERVE_TTL_MS)
         );
-        assert!(inbox_confirm_announcement(&store, "S2", &token).unwrap());
+        assert_ne!(inbox_confirm_told(&store, "S2", &token).unwrap(), None);
         assert_eq!(tell(&store, "H2", "S2", later + 1), None);
     }
 
@@ -1710,8 +1729,8 @@ mod tests {
         assert_ne!(first, second);
         assert_eq!(count, 2);
         // The replaced offer's confirm is stale: it confirms nothing.
-        assert!(!inbox_confirm_announcement(&store, "S2", &first).unwrap());
-        assert!(inbox_confirm_announcement(&store, "S2", &second).unwrap());
+        assert_eq!(inbox_confirm_told(&store, "S2", &first).unwrap(), None);
+        assert_ne!(inbox_confirm_told(&store, "S2", &second).unwrap(), None);
         assert_eq!(tell(&store, "H2", "S2", T0 + 2), None);
     }
 
@@ -1721,12 +1740,12 @@ mod tests {
         let wanted = ["H2".to_string()];
         let first = mail(&store, "H2");
         let (token, _) = offer(&store, "H2", "S2", T0);
-        assert!(inbox_confirm_announcement(&store, "S2", &token).unwrap());
-        assert!(!inbox_confirm_announcement(&store, "S2", &token).unwrap());
+        assert_ne!(inbox_confirm_told(&store, "S2", &token).unwrap(), None);
+        assert_eq!(inbox_confirm_told(&store, "S2", &token).unwrap(), None);
         let second = mail(&store, "H2");
         assert_eq!(tell(&store, "H2", "S2", T0), Some(2));
         // The first token, replayed, leaves the newer mark where it is.
-        assert!(!inbox_confirm_announcement(&store, "S2", &token).unwrap());
+        assert_eq!(inbox_confirm_told(&store, "S2", &token).unwrap(), None);
         let told = inbox_unread_for(&store, &wanted).unwrap()["H2"]
             .announced
             .clone()
@@ -1735,8 +1754,39 @@ mod tests {
         // Another session's ack confirms nothing; nor does a token never issued.
         mail(&store, "H2");
         let (third, _) = offer(&store, "H2", "S2", T0);
-        assert!(!inbox_confirm_announcement(&store, "S9", &third).unwrap());
-        assert!(!inbox_confirm_announcement(&store, "S2", "nope").unwrap());
+        assert_eq!(inbox_confirm_told(&store, "S9", &third).unwrap(), None);
+        assert_eq!(inbox_confirm_told(&store, "S2", "nope").unwrap(), None);
+    }
+
+    #[test]
+    fn confirming_a_notice_latches_told_at_on_every_covered_message_once() {
+        let (_dir, store) = open_temp();
+        let first = mail(&store, "H2");
+        let second = mail(&store, "H2");
+        let elsewhere = mail(&store, "H3");
+        let (token, _) = offer(&store, "H2", "S2", T0);
+        let newer = mail(&store, "H2");
+        let told_at = |id| inbox_get(&store, id).unwrap().unwrap().told_at_ms;
+        assert_eq!(told_at(first), None);
+        // The confirm tells what the notice covered, not mail that arrived after it.
+        assert_eq!(
+            inbox_confirm_told(&store, "S2", &token).unwrap(),
+            Some(vec![first, second])
+        );
+        let latched = told_at(first);
+        assert!(latched.is_some());
+        assert_eq!(told_at(second), latched);
+        assert_eq!((told_at(newer), told_at(elsewhere)), (None, None));
+        // A replayed confirm tells nothing.
+        assert_eq!(inbox_confirm_told(&store, "S2", &token).unwrap(), None);
+        // The next notice tells the newer message; what was told keeps its time.
+        let (token, _) = offer(&store, "H2", "S2", T0 + 1);
+        assert_eq!(
+            inbox_confirm_told(&store, "S2", &token).unwrap(),
+            Some(vec![newer])
+        );
+        assert!(told_at(newer).is_some());
+        assert_eq!((told_at(first), told_at(second)), (latched, latched));
     }
 
     #[test]

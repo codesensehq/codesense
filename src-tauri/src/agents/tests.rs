@@ -114,6 +114,7 @@ fn agent(id: &str) -> Agent {
         avatar: None,
         allow_wake: false,
         resume_after_restart: false,
+        skill_allowlist: None,
         budget_usd: None,
         revision: 0,
         archived_at: None,
@@ -315,18 +316,49 @@ fn the_bridge_tools_error_names_every_enforcing_runtime() {
 }
 
 #[test]
-fn bridge_tool_allowlist_validation_follows_the_runtime_capability() {
-    for tools in [vec![], vec!["signal_done".to_string()]] {
-        let mut definition = agent("bridge-reviewer");
+fn every_runtime_accepts_a_bridge_tool_allowlist() {
+    for runtime in AgentCli::ALL {
+        for tools in [vec![], vec!["signal_done".to_string()]] {
+            let mut definition = agent("bridge-reviewer");
+            definition.revision = 1;
+            definition.runtime = runtime;
+            definition.mcp.bridge_tools = Some(tools);
+            assert_eq!(definition.validate(), Ok(()), "{runtime}");
+        }
+    }
+}
+
+#[test]
+fn a_skill_allowlist_is_optional_and_may_be_empty() {
+    for skills in [
+        None,
+        Some(vec![]),
+        Some(vec!["bmad-build".to_string(), "pack:review".to_string()]),
+    ] {
+        let mut definition = agent("lean");
         definition.revision = 1;
-        definition.mcp.bridge_tools = Some(tools);
-        assert_eq!(
-            definition.validate(),
-            Err(ValidationError::BridgeToolsUnsupported)
-        );
-        definition.runtime = AgentCli::Codex;
+        definition.skill_allowlist = skills;
         assert_eq!(definition.validate(), Ok(()));
     }
+    let stored: Agent =
+        serde_yaml::from_str(&serde_yaml::to_string(&agent("lean")).unwrap()).unwrap();
+    assert_eq!(stored.skill_allowlist, None);
+    assert!(!serde_yaml::to_string(&agent("lean"))
+        .unwrap()
+        .contains("skill_allowlist"));
+}
+
+#[test]
+fn a_skills_key_is_not_the_allowlist_and_is_kept_unvalidated() {
+    let mut yaml = serde_yaml::to_string(&agent("persona")).unwrap();
+    yaml.push_str("skills: [triage, quick fix, triage]\n");
+    let mut stored: Agent = serde_yaml::from_str(&yaml).unwrap();
+    stored.revision = 1;
+    assert_eq!(stored.skill_allowlist, None);
+    assert!(stored.extra.contains_key("skills"));
+    assert_eq!(stored.validate(), Ok(()));
+    let written = serde_yaml::to_string(&stored).unwrap();
+    assert!(written.contains("skills:") && !written.contains("skill_allowlist"));
 }
 
 #[test]
@@ -336,6 +368,34 @@ fn every_validation_error_is_typed() {
         a.validate()
     };
     let cases: Vec<(Agent, ValidationError)> = vec![
+        (
+            Agent {
+                skill_allowlist: Some(vec!["bmad build".into()]),
+                ..agent("x")
+            },
+            ValidationError::InvalidSkill("bmad build".into()),
+        ),
+        (
+            Agent {
+                skill_allowlist: Some(vec![String::new()]),
+                ..agent("x")
+            },
+            ValidationError::InvalidSkill(String::new()),
+        ),
+        (
+            Agent {
+                skill_allowlist: Some(vec!["../x".into()]),
+                ..agent("x")
+            },
+            ValidationError::InvalidSkill("../x".into()),
+        ),
+        (
+            Agent {
+                skill_allowlist: Some(vec!["bmad-build".into(), "bmad-build".into()]),
+                ..agent("x")
+            },
+            ValidationError::DuplicateSkill("bmad-build".into()),
+        ),
         (
             Agent {
                 id: "Bad_Id".into(),

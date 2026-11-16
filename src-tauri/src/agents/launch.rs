@@ -120,9 +120,12 @@ pub struct AgentLaunch {
 }
 
 impl AgentLaunch {
-    /// The skill names this launch's startup manifest provides to its CLI.
+    /// The skill names this launch's startup manifest provides to its CLI and its
+    /// `skill_allowlist` leaves on.
     pub fn provided_skills(&self) -> Vec<String> {
-        super::provides::derive(self.runtime, &self.manifest).skills
+        super::provides::derive(self.runtime, &self.manifest)
+            .allowing(self.launch.skill_allowlist.as_deref())
+            .skills
     }
 
     /// Records the release of the CLI this launch spawns, and warns when it is outside the
@@ -339,7 +342,14 @@ fn prepare_resolved(
             .collect();
         resolved.manifest.generated = permissions::generate(&agent, agent.runtime, effective);
         resolved.manifest.generated.extend(workspace_files);
-        resolved.manifest.manifest_hash = resolved.manifest.compute_hash();
+        match &launch.skill_allowlist {
+            Some(listed) => permissions::turn_off_unlisted_manifest_skills(
+                &mut resolved.manifest,
+                agent.runtime,
+                listed,
+            ),
+            None => resolved.manifest.manifest_hash = resolved.manifest.compute_hash(),
+        }
     }
     // Checked against what this launch actually writes and starts with.
     let prompt = options
@@ -605,6 +615,21 @@ impl Drop for LaunchSettingsFile {
     }
 }
 
+/// The skills `runtime` finds in the workspace at `cwd`: each `<skills dir>/<name>/`
+/// holding a `SKILL.md`, sorted. A context worktree already holds every skill of its team.
+fn workspace_skills(cwd: &Path, runtime: AgentCli) -> Vec<String> {
+    let dir = cwd.join(&codesense_pty_core::agent_cli::descriptor(runtime).skills_dir);
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.path().join("SKILL.md").is_file())
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect();
+    names.sort();
+    names
+}
+
 /// Hand over `launch`'s generated launch settings for the launch of session
 /// `session_id` in `cwd`, the way its runtime's descriptor takes them: a per-launch
 /// settings file, or config overrides kept in the launch recipe. Merged workspace files
@@ -662,6 +687,14 @@ pub fn apply_generated(
                             &mut content,
                             cwd,
                             launch.runtime,
+                        );
+                    }
+                    if let Some(listed) = &launch.launch.skill_allowlist {
+                        let found = workspace_skills(cwd, launch.runtime);
+                        permissions::turn_off_unlisted_skills(
+                            &mut content,
+                            listed,
+                            found.iter().map(String::as_str),
                         );
                     }
                     if let Some(agent) = agent_settings(&launch.launch.args, flag)? {

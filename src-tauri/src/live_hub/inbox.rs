@@ -24,8 +24,63 @@ thread_local! {
 pub fn team_key(team: &LaunchTeam) -> String {
     super::view_key::team_key(&team.org, &team.team)
 }
+/// The teams whose count rows differ between two `count_rows` snapshots: a changed row, a new
+/// team, or a retired team whose row is gone. These are the teams a legacy reader must
+/// re-read after a pass.
+pub fn changed_count_teams(
+    before: &[(Option<String>, Value)],
+    after: &[(Option<String>, Value)],
+) -> Vec<LaunchTeam> {
+    let team_of =
+        |row: &Value| -> Option<LaunchTeam> { serde_json::from_value(row["team"].clone()).ok() };
+    let moved = after
+        .iter()
+        .filter(|(key, row)| !before.iter().any(|(k, r)| k == key && r == row))
+        .chain(
+            before
+                .iter()
+                .filter(|(key, _)| !after.iter().any(|(k, _)| k == key)),
+        )
+        .filter_map(|(_, row)| team_of(row));
+    let mut out: Vec<LaunchTeam> = Vec::new();
+    for team in moved {
+        if !out.contains(&team) {
+            out.push(team);
+        }
+    }
+    out
+}
 pub fn message_key(team: &LaunchTeam, id: i64) -> String {
     format!("message:{}/{}/{id}", team.org, team.team)
+}
+/// The `messageDelivery` topic: where each message the human sent to a session stands.
+pub const DELIVERY_TOPIC: &str = "messageDelivery";
+pub fn delivery_key(team: &LaunchTeam, id: i64) -> String {
+    format!("delivery:{}/{}/{id}", team.org, team.team)
+}
+/// The delivery row of a message the human sent to a session: `queued` until its agent
+/// is told about it (a confirmed notice) or it is read, then `delivered`, at
+/// `deliveredAtMs` (when told, else when read: mail read before any notice still has a
+/// delivered time). `None` for any other message; role mail and withdrawn mail carry their
+/// own `delivery`.
+pub fn delivery_row(team: &LaunchTeam, m: &InboxMessage) -> Option<Value> {
+    if m.from != HUMAN
+        || m.to == HUMAN
+        || Option::is_some(&m.delivery)
+        || Option::is_some(&m.role)
+        || Option::is_some(&m.via)
+    {
+        return None;
+    }
+    let delivered_at = m.told_at_ms.or(m.read_at_ms);
+    let state = if Option::is_some(&delivered_at) {
+        "delivered"
+    } else {
+        "queued"
+    };
+    Some(
+        json!({"id":delivery_key(team,m.id),"messageId":m.id,"team":team,"to":m.to,"state":state,"toldAtMs":m.told_at_ms,"deliveredAtMs":delivered_at}),
+    )
 }
 #[derive(Default, Clone)]
 struct TeamInbox {
@@ -124,6 +179,7 @@ impl ViewParts {
             conversations: self.conversations.as_ref().clone(),
             has_more: false,
             matched: 0,
+            thread_sessions: None,
         }
     }
 }
@@ -176,6 +232,13 @@ impl InboxProjection {
     pub fn contains_team(&self, team: &LaunchTeam) -> bool {
         self.teams.contains_key(&team_key(team))
     }
+    /// Every team the projection holds.
+    pub fn held_teams(&self) -> Vec<LaunchTeam> {
+        self.teams
+            .iter()
+            .map(|(_, (team, _))| team.clone())
+            .collect()
+    }
     pub fn human_unread_total(&self) -> u32 {
         self.teams
             .values()
@@ -211,6 +274,37 @@ impl InboxProjection {
                 .insert(key.clone(), (team.clone(), Arc::new(TeamInbox::default())));
         }
         &mut self.teams.get_mut(&key).unwrap().1
+    }
+    /// The `messageDelivery` patch for an inbox pass: the delivery rows of its projected
+    /// message rows, and the delivery ids of its removed messages and of projected
+    /// messages that have none.
+    pub fn delivery_patch(
+        &self,
+        updates: &[(Option<String>, Value)],
+        removes: &[String],
+    ) -> (Vec<(Option<String>, Value)>, Vec<String>) {
+        let mut gone: Vec<String> = removes
+            .iter()
+            .filter_map(|key| str::strip_prefix(key, "message:"))
+            .map(|rest| format!("delivery:{rest}"))
+            .collect();
+        let mut rows = Vec::new();
+        for (scope, row) in updates {
+            let (Some(scope), Some(id)) = (scope, Value::as_i64(&row["messageId"])) else {
+                continue;
+            };
+            let Some((team, state)) = self.teams.get(scope) else {
+                continue;
+            };
+            let Some((message, _)) = state.messages.get(&id) else {
+                continue;
+            };
+            match delivery_row(team, message) {
+                Some(row) => rows.push((Some(scope.clone()), row)),
+                None => gone.push(delivery_key(team, id)),
+            }
+        }
+        (rows, gone)
     }
     pub fn put(&mut self, team: &LaunchTeam, message: InboxMessage, kind: MessageKind) {
         let state = self.ensure_team(team);
@@ -414,9 +508,9 @@ impl InboxProjection {
             bridge.reactions = crate::weft::reactions::group_reactions(reactions);
         }
         conversation.reactions = bridge.reactions.clone();
-        let (id, created_at) = (message.id, message.created_at_ms);
+        let (id, created_at, told_at) = (message.id, message.created_at_ms, message.told_at_ms);
         self.put(team, message, kind);
-        let row = json!({"id":message_key(team,id),"rowType":"message","team":team,"messageId":id,"createdAt":created_at,"message":bridge,"conversation":conversation});
+        let row = json!({"id":message_key(team,id),"rowType":"message","team":team,"messageId":id,"createdAt":created_at,"toldAtMs":told_at,"message":bridge,"conversation":conversation});
         Arc::make_mut(self.bridge_rows.entry(team_key(team)).or_default())
             .insert(id, Arc::new(bridge));
         (Some(team_key(team)), row)
@@ -558,5 +652,32 @@ mod tests {
             assert_eq!(projection.counts(&team)["humanUnread"], 1);
         }
         assert_eq!(projection.human_unread_total(), 2);
+    }
+
+    #[test]
+    fn changed_count_teams_names_changed_new_and_retired_teams_only() {
+        let row = |team: &str, unread: u32| {
+            (
+                Some(format!("acme:{team}")),
+                json!({"id": format!("counts:acme:{team}"), "team": {"org": "acme", "team": team}, "humanUnread": unread}),
+            )
+        };
+        let named = |names: &[&str]| -> Vec<LaunchTeam> {
+            names
+                .iter()
+                .map(|team| LaunchTeam {
+                    org: "acme".into(),
+                    team: (*team).into(),
+                })
+                .collect()
+        };
+        let before = vec![row("web", 1), row("ops", 0), row("old", 2)];
+        assert!(changed_count_teams(&before, &before).is_empty());
+        // `web` changed, `old` retired and `new` arrived; `ops` didn't move.
+        let after = vec![row("web", 2), row("ops", 0), row("new", 0)];
+        assert_eq!(
+            changed_count_teams(&before, &after),
+            named(&["web", "new", "old"])
+        );
     }
 }

@@ -51,6 +51,8 @@ pub mod frontmatter_fields;
 pub mod frontmatter_validation;
 pub mod git;
 pub mod git_sync;
+pub mod session_text;
+pub mod raster_bytes;
 pub mod host_connection;
 pub mod host_connection_manager;
 pub mod install;
@@ -191,6 +193,7 @@ pub(crate) mod workspace_open;
 pub mod worktree;
 // SW-XS-3 (K6): live-session worktree attribution, moved out of `watch`.
 pub mod worktree_liveness;
+pub mod worktree_probe;
 pub mod worktree_provenance;
 // SLW-WDE-3: lazy per-inset worktree file watcher (external-change reload).
 pub mod worktree_watch;
@@ -1084,7 +1087,16 @@ pub use async_helpers::await_blocking;
 // +1 `data_read_model::setup_state` (the page's `setupState()`: orgs, teams and source repos). → 506.
 // +2 `agent_inbox::pins::agent_pins` and `agent_pins_prepare_view` (an agent thread's pin list). → 508.
 // +1 `data_read_model::session_record` (an agent's session record for a page). → 509.
-pub const EXPECTED_COMMAND_COUNT: usize = 509;
+// +3 the rendered diff's raster sides: `git_sync::source_image_sides` (the source diff),
+// `data_read_model::open_diff_image_read` (the open-diff tab) and `files::read_image_file`
+// (Unsaved team edits). → 512.
+// +2 `session_text::session_text_watch` / `session_text_unwatch` (a page hears a Claude
+// session's assistant prose as it is written). → 514.
+// +1 `remote_source::source_remote_image_sides` (a remote worktree's raster sides in the source
+// diff). → 515.
+// +1 `agent_read_model::list_thread_inbox` (a saved agent + story thread's conversation, ended
+// sessions included). → 516.
+pub const EXPECTED_COMMAND_COUNT: usize = 516;
 
 #[cfg(test)]
 mod tests {

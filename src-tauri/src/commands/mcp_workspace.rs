@@ -1930,7 +1930,7 @@ async fn spawn_and_bind(
             resolved_binary.version.as_deref(),
             &prompt_plan.launch_args,
             agent.launch.mcp_allow.clone(),
-            agent.launch.effective_bridge_tools.clone(),
+            agent.launch.recorded_bridge_tools(),
             agent.revision_label(),
             agent.manifest_hash.clone(),
             cwd,

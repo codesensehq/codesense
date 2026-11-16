@@ -27,6 +27,7 @@ vi.mock("sonner", () => ({ toast: vi.fn() }));
 
 const api = vi.hoisted(() => ({
   loadSessionInbox: vi.fn(),
+  loadThreadInbox: vi.fn(),
   loadInboxSessions: vi.fn(),
   sendAsHuman: vi.fn(),
 }));
@@ -171,6 +172,8 @@ function more(dto: SessionInboxDto, ...lines: Partial<ConversationMessage>[]): S
 
 function inbox(dto: SessionInboxDto) {
   api.loadSessionInbox.mockResolvedValue({ dto, source: "live" });
+  // The overlay reads its session's thread when it was launched on a saved agent: the same log.
+  api.loadThreadInbox.mockResolvedValue({ dto, source: "live" });
 }
 
 /** Fire the inbox-changed event the overlay listens for, as the backend would. */
@@ -251,8 +254,8 @@ describe("ChatOverlay on a long log", () => {
     fireEvent.click(jump);
     await waitFor(() => expect(atEnd(msgs)).toBe(true));
     expect(screen.queryByRole("button", { name: /Jump to latest/ })).toBeNull();
-    // Focus lands on the conversation, not the page body, as the pill goes.
-    expect(msgs).toHaveFocus();
+    // Focus lands on the conversation's newest message, not the page body, as the pill goes.
+    expect([...msgs.querySelectorAll<HTMLElement>("[data-mid]")].at(-1)).toHaveFocus();
   });
 
   it("opens 500 messages at the newest, and follows at the cap, where one arrives as the oldest leaves", async () => {

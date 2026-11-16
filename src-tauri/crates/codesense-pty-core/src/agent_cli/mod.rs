@@ -38,6 +38,7 @@ mod opencode;
 #[cfg(any(test, feature = "test-support"))]
 pub mod orion;
 pub mod output;
+pub mod prose;
 pub mod version_cache;
 
 pub use codesense_host_proto::agent_cli::{AgentCli, NativeLaunch};
@@ -115,6 +116,14 @@ pub trait AgentCliAdapter: Send + Sync {
     /// into it, opts out; its mail waits for the waiter.
     fn allows_pty_recovery(&self) -> bool {
         true
+    }
+
+    /// Whether a host enforces an agent's CodeSense bridge tool list on this CLI by
+    /// denying each left-out tool in its permission rules, which always keep the tools
+    /// every agent needs (finishing, the inbox). A CLI that takes a native enabled-tool
+    /// list instead enforces the list as written.
+    fn denies_unlisted_bridge_tools(&self) -> bool {
+        false
     }
 
     /// Whether this hook confirms a prompt wake without waiting or handing over mail.
