@@ -65,7 +65,7 @@ finding, not a model one: no model can pass this case until the rules change.
 | `foreman-claude-2026-11-16.md`   | `recover-error` | 2   | Write of the commit message refused; stopped before any pull request attempt                         |
 | `foreman-claude-2026-11-16.md`   | `recover-error` | 3   | Edit and a combined Bash command refused; stopped before any pull request attempt                    |
 
-## Notes on the runs
+## Notes on the earlier runs
 
 - `recover-error`'s first turn changed before these runs. It asked to "ship the readme fix", but the
   fixture holds no fix, so a careful agent asked which fix and never reached the pull request. It
@@ -73,8 +73,9 @@ finding, not a model one: no model can pass this case until the rules change.
 - An earlier Sonnet run was discarded, not committed: the sandbox answered `read_content_file` with
   a bare ok, so the Foreman could not read the sprint agent from `story-view.yml`.
 - Sonnet `onboard-repo` run 2 started the setup session but sent no `reply`, so the person got
-  no answer. The script grade checks only the launch; only the rubric caught it ("The Foreman
-  gave no reply").
+  no answer. Then the script grade checked only the launch, and only the rubric caught it ("The
+  Foreman gave no reply"). The floor-wide reply check now catches this, as it did in
+  `foreman-claude-2026-11-16-4.md`.
 - Rubric verdicts (the judge's, in each report's `rubric` block and "Rubric" section) never change
   a row. The rubric fails worth a look: `onboard-repo`'s reply rarely says the setup session will
   ask what it needs, and `recover-error`'s reminder reply says "I don't set timers" without offering
