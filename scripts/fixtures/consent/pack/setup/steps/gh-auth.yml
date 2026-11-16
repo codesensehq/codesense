@@ -1,0 +1,25 @@
+step_format: 1
+id: gh-auth
+title: Sign in to GitHub with gh
+summary: Lets agents read issues and open pull requests with your own login.
+needs: [gh-installed]
+probe:
+  - id: status
+    check: { tool: probe_environment, check: gh_auth, host: github.com }
+    map: { signed_in: done, signed_out: missing }
+ask:
+  text: "**Sign in to GitHub?** You sign in in your browser; I never see your password or token."
+  options:
+    - { label: Do it, act: sign-in }
+    - { label: Not now, act: none }
+act:
+  - id: sign-in
+    consent: install-or-sign-in
+    what: gh auth login --web, GitHub's own sign-in
+    where: a terminal tab on this Mac, then your browser
+    why: so agents can read issues and open pull requests as you
+    run: { cmd: "gh auth login --hostname github.com --git-protocol https --web", in: terminal_tab }
+    wait: { until: tab_exit, then: verify, timeout: 10m }
+verify: { probe: status, expect: done }
+record: { scope: machine, fields: { host: github.com }, secret: never }
+undo: Run `gh auth logout --hostname github.com`. CodeSense stored nothing.

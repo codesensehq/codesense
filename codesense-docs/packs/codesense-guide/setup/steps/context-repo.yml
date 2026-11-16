@@ -1,0 +1,74 @@
+step_format: 1
+id: context-repo
+title: Create your context repo
+summary: >-
+  A context repo is a git folder of your own where your team, product and stories live.
+  Everything the guide sets up afterwards is written there, never to the CodeSense docs.
+  Nothing is recorded until your team exists; the team's setup log then gets this step's row.
+probe:
+  - id: orgs
+    check: { tool: describe_setup }
+    pick: { "orgs[].slug": { not: codesense/docs } }
+    yields: { org: "orgs[].slug", org_root: "orgs[].orgRoot" }
+    map: { found: done, none: missing, unreadable: unknown }
+ask:
+  text: >-
+    **Create your team folder?** Your stories, products and setup log live in a context repo of
+    your own: a git folder on this Mac. I'll create it where you say, add your first team and a
+    setup log to it, switch CodeSense to it, and write nothing to the CodeSense docs. If you
+    already have a context repo, connect it instead. Nothing is committed or pushed: what I
+    add waits in that folder as changes for you to review and commit.
+  options:
+    - { label: Create it, act: create-local-organization }
+    - { label: Connect mine, act: attach-context-repository }
+    - { label: Not now, act: none }
+  free_text: true
+  recommend: create-local-organization
+inputs:
+  org_name: { pattern: "^[A-Za-z0-9][A-Za-z0-9 ._-]{0,60}$", label: Name of the context repo, shareable: true }
+  org_path: { pattern: "^/[^\\n]{1,400}$", label: A new folder for it on this Mac }
+  clone_path: { pattern: "^/[^\\n]{1,400}$", label: Your existing context repo folder }
+  team: { pattern: "^[a-z0-9][a-z0-9-]{0,38}$", label: "Your first team, a lowercase name", shareable: true }
+act:
+  - id: create-local-organization
+    consent: local-write
+    what: create a context repo, your first team and the setup log
+    where: a new folder on this Mac, with no remote, account or commit
+    why: so everything else you set up has a home that is yours
+    verb:
+      tool: create_local_organization
+      args: { displayName: "{{org_name}}", destinationPath: "{{org_path}}" }
+    then: [create-team, write-ledger-schema]
+  - id: create-team
+    consent: local-write
+    what: create your first team in that context repo and switch CodeSense to it
+    where: your context repo
+    why: so repos, products and stories are filed under it
+    verb:
+      tool: create_team
+      args: { org: "{{probe.orgs.org}}", name: "{{team}}", activate: true }
+  - id: write-ledger-schema
+    consent: local-write
+    what: add the setup log's schema to your team
+    where: your team's content folder in the context repo
+    why: so each finished step is recorded, and a new session resumes from facts
+    verb:
+      tool: create_content_file
+      args:
+        path: "{{probe.orgs.org_root}}/{{team}}/content/schema/setup-ledger.yaml"
+        content_from: guide/setup/ledger/setup-ledger.yaml
+        onCollision: fail
+  - id: attach-context-repository
+    consent: local-write
+    what: connect your existing context repo, in place
+    where: the folder you name on this Mac; nothing is copied
+    why: so your team's repos and stories show up here
+    verb:
+      tool: attach_context_repository
+      args: { clonePath: "{{clone_path}}" }
+verify: { probe: orgs, expect: done }
+record:
+  scope: team
+  fields: { created: a context repo and its first team }
+  secret: never
+undo: Detach the context repo under Repos; the folder and its history stay, and nothing was committed or pushed.

@@ -1,0 +1,82 @@
+{
+  "session": {
+    "sessionId": "fixture-session"
+  },
+  "conversation": {
+    "sessionId": "fixture-session",
+    "state": "present",
+    "turns": [
+      {
+        "index": 0,
+        "role": "user",
+        "tool_calls": [],
+        "text": "/codesense-setup"
+      },
+      {
+        "index": 1,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__describe_setup",
+            "native_id": "toolu_1",
+            "is_error": false,
+            "input": "{}",
+            "result": "{\"data\":{\"activeOrg\":\"codesense/docs\",\"activeTeam\":\"getting-started\",\"orgs\":[{\"slug\":\"codesense/docs\",\"orgRoot\":\"orgs/codesense-docs\",\"teams\":[{\"name\":\"getting-started\",\"archived\":false}]},{\"slug\":\"acme/context\",\"orgRoot\":\"orgs/acme-context\",\"teams\":[{\"name\":\"web\",\"archived\":false}]}]}}"
+          }
+        ]
+      },
+      {
+        "index": 2,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__send_message",
+            "native_id": "toolu_2",
+            "is_error": false,
+            "input": "{\"to\":\"human\",\"kind\":\"needs-you\",\"text\":\"**Name your team.**\\n\\ncard: team · local-write · add-ledger-schema=Add the setup log | none=Not now\"}",
+            "result": "{\"status\":\"sent\",\"messageId\":301}"
+          }
+        ]
+      },
+      {
+        "index": 3,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__read_messages",
+            "native_id": "toolu_3",
+            "is_error": false,
+            "input": "{}",
+            "result": "{\"messages\":[{\"messageId\":302,\"from\":\"human\",\"text\":\"Add the setup log\",\"inReplyTo\":301}]}"
+          }
+        ]
+      },
+      {
+        "index": 4,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__set_active_team",
+            "native_id": "toolu_4",
+            "is_error": false,
+            "input": "{\"org\":\"acme/context\",\"team\":\"sales\"}",
+            "result": "{\"org_slug\":\"acme/context\",\"team\":\"sales\"}"
+          }
+        ]
+      },
+      {
+        "index": 5,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "name": "mcp__codesense__create_content_file",
+            "native_id": "toolu_5",
+            "is_error": false,
+            "input": "{\"path\":\"orgs/acme-context/web/content/schema/setup-ledger.yaml\",\"content_from\":\"guide/setup/ledger/setup-ledger.yaml\",\"onCollision\":\"fail\"}",
+            "result": "{\"status\":\"ok\"}"
+          }
+        ]
+      }
+    ]
+  }
+}

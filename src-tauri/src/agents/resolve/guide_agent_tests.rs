@@ -7,10 +7,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 
-/// Phase 1: DESIGN §3.3's 24 tools plus the product step's two epic-repo verbs and the
+/// Phase 1: DESIGN §3.3's 24 tools plus the product step's two epic-repo verbs, `set_active_team` and the
 /// Foreman hand-back's `send_role_message`. The same
 /// list as `scripts/guide-pack.node-test.mjs`; a later phase edits both.
-const PHASE_1: [&str; 27] = [
+const PHASE_1: [&str; 28] = [
     "who_am_i",
     "read_messages",
     "codesense_overview",
@@ -38,6 +38,7 @@ const PHASE_1: [&str; 27] = [
     "open_workspace",
     "set_epic_repos",
     "read_epic_repos",
+    "set_active_team",
 ];
 
 /// What CodeSense allows every Claude launch before the agent's own list. Accepted for the
