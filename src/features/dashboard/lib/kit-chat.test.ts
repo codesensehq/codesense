@@ -1941,6 +1941,60 @@ describe("kit.chat onPin: the person pins a message", () => {
     expect(onPin.change.mock.calls).toEqual([["unpin", 6]]);
   });
 
+  it("draws an HTML message as its name and sender, never its markup", async () => {
+    const s = setup(
+      [lead("idle")],
+      [
+        {
+          messageId: 9,
+          from: "lead-1",
+          to: "human",
+          contentType: "html",
+          text: "<!doctype html><title>Merge board</title><p>x</p>",
+          createdAtMs: T0,
+        },
+        {
+          messageId: 10,
+          from: "lead-1",
+          to: "human",
+          contentType: "html",
+          text: "<div>no name</div>",
+          createdAtMs: T0 + 1000,
+        },
+      ],
+    );
+    mountOn(s);
+    await flush();
+    const body = (id: number) => s.el.querySelector<HTMLElement>(`.msg[data-mid="${id}"] .body`)!;
+    expect(body(9).textContent).not.toContain("<");
+    expect(body(9).dataset.html).toBe("1");
+    expect(body(9).querySelector(".html-t")!.textContent).toBe("Merge board");
+    expect(body(9).querySelector(".html-from")!.textContent).toBe("Dashboard from Story lead");
+    // No title or heading: the sender line is its name, said once.
+    expect(body(10).textContent).toBe("Dashboard from Story lead");
+  });
+
+  it("says an untitled HTML message's sender once in a page's own words too", async () => {
+    const s = setup(
+      [lead("idle")],
+      [
+        {
+          messageId: 10,
+          from: "lead-1",
+          to: "human",
+          contentType: "html",
+          text: "<div>no name</div>",
+          createdAtMs: T0,
+        },
+      ],
+    );
+    mountOn(s, { copy: { row: { htmlFrom: (who: string) => `A page from ${who}` } } });
+    await flush();
+    expect(s.el.querySelector('.msg[data-mid="10"] .body')!.textContent).toBe(
+      "A page from Story lead",
+    );
+  });
+
   it("names an HTML message by its title, not its markup, in the live region", async () => {
     const s = setup(
       [lead("idle")],
@@ -2091,6 +2145,14 @@ describe("kit.chat onPin with replace: at the cap, Pin… asks which pin to repl
       el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
     return { s, chat, onPin, row, pinOf, chooser, choices, choice, live, key, agentSets };
   }
+
+  it('a chooser with no change line and no error draws neither: no "null" text', async () => {
+    const { pinOf, chooser } = await mountReplace();
+    pinOf(5).click();
+    await flush();
+    expect(chooser()!.textContent).not.toMatch(/\bnull\b/);
+    for (const node of chooser()!.childNodes) expect(node.nodeType).toBe(Node.ELEMENT_NODE);
+  });
 
   it("Pin… at the cap isn't dimmed: it opens the chooser under the message, with every pin in list order", async () => {
     const { onPin, row, pinOf, chooser, choices, choice } = await mountReplace();

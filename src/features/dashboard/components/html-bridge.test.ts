@@ -2041,6 +2041,35 @@ describe("agents read model verbs", () => {
     expect(READ_VERBS).toContain("pins");
   });
 
+  it("a message frame's pin writes name its sender, so the engine keeps them to the sender's thread; its reads don't", async () => {
+    mockAgentPins.mockReset();
+    mockAgentPins.mockResolvedValue({ status: "pins", pins: [] });
+    const FRAME = { ...DOC, message: { org: "acme", team: "default", messageId: 9, sender: "H1" } };
+    const thread = { agentId: "acme/default/dev", storyId: "DEMO-1" };
+    await runBridgeCommand("pin", { ...thread, messageId: 7 }, FRAME);
+    expect(mockAgentPins).toHaveBeenLastCalledWith(
+      TEAM,
+      "acme/default/dev",
+      "DEMO-1",
+      { op: "pin", messageId: 7 },
+      "H1",
+    );
+    for (const [verb, args] of [
+      ["unpin", { messageId: 7 }],
+      ["restorePin", { messageId: 7 }],
+      ["replacePin", { messageId: 7, replaces: 4 }],
+      ["reorderPins", { messageIds: [7] }],
+    ] as const) {
+      await runBridgeCommand(verb, { ...thread, ...args }, FRAME);
+      expect(mockAgentPins.mock.calls.at(-1)![4]).toBe("H1");
+    }
+    await runBridgeCommand("pins", thread, FRAME);
+    expect(mockAgentPins.mock.calls.at(-1)).toHaveLength(4);
+    // A page that is not a message pins as the person.
+    await runBridgeCommand("pin", { ...thread, messageId: 8 }, DOC);
+    expect(mockAgentPins.mock.calls.at(-1)).toHaveLength(4);
+  });
+
   it("restorePin hands the engine a restore of that message in the doc's team", async () => {
     mockAgentPins.mockReset();
     mockAgentPins.mockResolvedValue({
@@ -2327,6 +2356,31 @@ describe("agents read model verbs", () => {
       /kind, if present, must be 'needs-you' or 'update'/,
     );
     expect(READ_VERBS).toContain("inbox");
+  });
+
+  it("inbox reads a saved agent's thread with storyId (empty: no story), its session the seat", async () => {
+    mockAgentReadInbox.mockResolvedValue({ messages: [], humanUnread: 0 });
+    await runBridgeCommand(
+      "inbox",
+      { agentId: "acme/t/dev@4", storyId: " BUG-1 ", sessionId: "S1" },
+      DOC,
+    );
+    expect(mockAgentReadInbox).toHaveBeenLastCalledWith(TEAM, {
+      agentId: "acme/t/dev@4",
+      storyId: "BUG-1",
+      sessionId: "S1",
+    });
+    await runBridgeCommand("inbox", { agentId: "acme/t/dev", storyId: "" }, DOC);
+    expect(mockAgentReadInbox).toHaveBeenLastCalledWith(TEAM, {
+      agentId: "acme/t/dev",
+      storyId: "",
+    });
+    await expect(runBridgeCommand("inbox", { storyId: "BUG-1" }, DOC)).rejects.toThrow(
+      /inbox: storyId needs agentId/,
+    );
+    await expect(runBridgeCommand("inbox", { agentId: "a", storyId: 4 }, DOC)).rejects.toThrow(
+      /inbox: storyId must be a string/,
+    );
   });
 
   it("validates conversation paging arguments using the inbox error style", async () => {

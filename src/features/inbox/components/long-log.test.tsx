@@ -27,6 +27,7 @@ vi.mock("sonner", () => ({ toast: vi.fn() }));
 
 const api = vi.hoisted(() => ({
   loadSessionInbox: vi.fn(),
+  loadThreadInbox: vi.fn(),
   loadInboxSessions: vi.fn(),
   sendAsHuman: vi.fn(),
 }));
@@ -171,6 +172,8 @@ function more(dto: SessionInboxDto, ...lines: Partial<ConversationMessage>[]): S
 
 function inbox(dto: SessionInboxDto) {
   api.loadSessionInbox.mockResolvedValue({ dto, source: "live" });
+  // The overlay reads its session's thread when it was launched on a saved agent: the same log.
+  api.loadThreadInbox.mockResolvedValue({ dto, source: "live" });
 }
 
 /** Fire the inbox-changed event the overlay listens for, as the backend would. */

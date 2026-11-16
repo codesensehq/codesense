@@ -5,6 +5,8 @@ import {
   useAgentListProjectionStore,
 } from "@/features/viewer/lib/agent-list-projection";
 import { activityQualifier, withActivityQualifiers } from "@/shared/lib/agent-activity-words";
+import { structurallyEqual } from "@/shared/lib/structural-equal";
+import { useEqualSelector } from "@/shared/hooks/use-equal-selector";
 import { useMachinesStore } from "@/features/machines/stores/machines-store";
 import { offlineMachineName } from "@/features/machines/lib/machine-offline";
 import {
@@ -152,11 +154,7 @@ type MarkAgentSources = Pick<AgentState, "bySession" | "exitBySession" | "stateS
   Partial<
     Pick<
       AgentState,
-      | "activityBySession"
-      | "outputAtBySession"
-      | "completionSeqBySession"
-      | "processAgentBySession"
-      | "launchBySession"
+      "activityBySession" | "completionSeqBySession" | "processAgentBySession" | "launchBySession"
     >
   >;
 
@@ -275,27 +273,15 @@ export interface ScopeMarkFacts {
   single?: SessionMarkFacts;
 }
 
-/** {@link ScopeMarkFacts} for a scope's members, as a string key: a subscriber
- *  re-renders only when the mark, a count or the single member's facts change. */
-export function selectScopeMarkKey(
+/** {@link ScopeMarkFacts} for a scope's members: the one roll-up every mark draws. A
+ *  subscriber compares it structurally, so it re-renders only when the mark, a count or
+ *  the single member's facts change. */
+export function selectScopeMarkFacts(
   s: DotSources,
   dots: AgentDots,
   agent: MarkAgentSources,
   members: readonly ScopeMember[],
   pendingAsks: PendingAsks = {},
-  outcomes: Readonly<Record<string, ManagedSessionState>> = {},
-  now = Date.now(),
-): string {
-  return JSON.stringify(selectScopeMarkFacts(s, dots, agent, members, pendingAsks, outcomes, now));
-}
-
-/** {@link ScopeMarkFacts} for a scope's members: the one roll-up every mark draws. */
-function selectScopeMarkFacts(
-  s: DotSources,
-  dots: AgentDots,
-  agent: MarkAgentSources,
-  members: readonly ScopeMember[],
-  pendingAsks: PendingAsks,
   outcomes: Readonly<Record<string, ManagedSessionState>> = {},
   now = Date.now(),
 ): ScopeMarkFacts {
@@ -365,13 +351,15 @@ export function useStoryMarks(
   teamKey: string,
   stories: readonly ScopeStory[],
 ): Readonly<Record<string, StatusMarkKind>> {
-  const key = useManagedDotSelector((s, dots, agent, { pendingAsks, states: outcomes }) =>
-    s
-      ? JSON.stringify(selectStoryMarks(s, dots, agent, teamKey, stories, pendingAsks, outcomes))
-      : "{}",
+  return useManagedDotSelector(
+    (s, dots, agent, { pendingAsks, states: outcomes }) =>
+      s ? selectStoryMarks(s, dots, agent, teamKey, stories, pendingAsks, outcomes) : NO_MARKS,
+    structurallyEqual,
   );
-  return useMemo(() => JSON.parse(key) as Record<string, StatusMarkKind>, [key]);
 }
+
+const NO_MARKS: Readonly<Record<string, StatusMarkKind>> = Object.freeze({});
+const NO_STORY_TABS: StoryTab[] = [];
 
 /** The workspaces of `stories` (each once, in story order): what an epic's mark stands for. */
 export function selectStoryWorkspaceIds(
@@ -401,18 +389,16 @@ export interface StoryTab extends ScopeMember {
 
 /** The tabs of a story's workspace (shown and Hidden), as {@link scopeMembers} reads them. */
 export function useStoryTabs(teamKey: string, story: ScopeStory): StoryTab[] {
-  const key = useViewerStore((s) => {
+  const select = useEqualSelector((s: ViewerState): StoryTab[] => {
     const ws = findStoryWorkspace(s, teamKey, story.filePath, story.storyId);
-    if (!ws) return "[]";
+    if (!ws) return NO_STORY_TABS;
     const tabs = [
       ...selectWorkspaceTabs(s, teamKey, ws.id),
       ...selectHiddenTerminalTabs(s, teamKey, ws.id),
     ];
-    return JSON.stringify(
-      tabs.map((t) => ({ sessionId: t.sessionId, exit: t.exit, name: t.name })),
-    );
-  });
-  return useMemo(() => JSON.parse(key) as StoryTab[], [key]);
+    return tabs.map((t) => ({ sessionId: t.sessionId, exit: t.exit, name: t.name }));
+  }, structurallyEqual);
+  return useViewerStore(select);
 }
 
 /** A mark over one scope, with its words: the tooltip's (with the state's age, for
@@ -446,12 +432,12 @@ function scopeMarkWords(
  * phrase changes.
  */
 export function useScopeMark(scope: DotScope): ScopeMark {
-  const key = useManagedDotSelector((s, dots, agent, { pendingAsks, states: outcomes }) =>
-    s ? selectScopeMarkKey(s, dots, agent, scopeMembers(s, scope), pendingAsks, outcomes) : "",
-  );
-  const facts = useMemo<ScopeMarkFacts>(
-    () => (key ? (JSON.parse(key) as ScopeMarkFacts) : { counts: {} }),
-    [key],
+  const facts = useManagedDotSelector(
+    (s, dots, agent, { pendingAsks, states: outcomes }) =>
+      s
+        ? selectScopeMarkFacts(s, dots, agent, scopeMembers(s, scope), pendingAsks, outcomes)
+        : NO_SCOPE_MARK,
+    structurallyEqual,
   );
   const since = facts.single?.since ?? null;
   const subscribe = useCallback(
@@ -466,8 +452,10 @@ export function useScopeMark(scope: DotScope): ScopeMark {
   return { mark: facts.mark, label, words: scopeMarkWords(facts, undefined, ", ") };
 }
 
-/** Managed outcomes and asks obey the same scalar selection as the other
- * sources: an unrelated session must not rerender this scope. */
+const NO_SCOPE_MARK: ScopeMarkFacts = { counts: {} };
+
+/** Managed outcomes and asks obey the same selection as the other sources: an
+ * unrelated session must not rerender this scope. */
 function useManagedDotSelector<T>(
   select: (
     s: ViewerState,
@@ -475,44 +463,49 @@ function useManagedDotSelector<T>(
     agent: AgentState,
     managed: ReturnType<typeof useManagedSessionStore.getState>,
   ) => T,
+  equal: (a: T, b: T) => boolean = Object.is,
 ): T {
+  const stable = useEqualSelector(select, equal);
   useManagedSessionStore((managed) => {
     const s = useViewerStore.getState?.();
     const agent = useAgentStateStore.getState();
-    return s ? select(s, selectAgentDots(agent), agent, managed) : undefined;
+    return s ? stable(s, selectAgentDots(agent), agent, managed) : undefined;
   });
   return useDotSelector((s, dots, agent) =>
-    select(s, dots, agent, useManagedSessionStore.getState()),
+    stable(s, dots, agent, useManagedSessionStore.getState()),
   );
 }
 
 /**
  * Subscribe to a value derived from the viewer store (tabs, stored status) and
- * the agent-state store (records' projected dots, seen). `select` must return a
- * scalar (or a string key): it runs as a selector on each source store, so the host
- * re-renders only when the value itself changes, whichever store moved — a
- * hook event in one tab re-renders no unrelated dot.
+ * the agent-state store (records' projected dots, seen). `select` runs as a
+ * selector on each source store, so the host re-renders only when the value
+ * itself changes, whichever store moved — a hook event in one tab re-renders no
+ * unrelated dot. A selector that builds a fresh object passes an `equal` (e.g.
+ * `structurallyEqual`); every source hook shares it, so none loops on a new object.
  */
 export function useDotSelector<T>(
   select: (s: ViewerState, dots: AgentDots, agent: AgentState) => T,
+  equal: (a: T, b: T) => boolean = Object.is,
 ): T {
+  const stable = useEqualSelector(select, equal);
   useAgentListProjectionStore(() => {
     const s = useViewerStore.getState?.();
     const agent = useAgentStateStore.getState();
-    return s ? select(s, selectAgentDots(agent), agent) : undefined;
+    return s ? stable(s, selectAgentDots(agent), agent) : undefined;
   });
   useMachinesStore(() => {
     const s = useViewerStore.getState?.();
     const agent = useAgentStateStore.getState();
-    return s ? select(s, selectAgentDots(agent), agent) : undefined;
+    return s ? stable(s, selectAgentDots(agent), agent) : undefined;
   });
   useAgentStateStore((agent) => {
     const s = useViewerStore.getState?.();
-    return s ? select(s, selectAgentDots(agent), agent) : undefined;
+    return s ? stable(s, selectAgentDots(agent), agent) : undefined;
   });
   return useViewerStore((s) => {
     const agent = useAgentStateStore.getState();
-    return select(s, selectAgentDots(agent), agent);
+    return stable(s, selectAgentDots(agent), agent);
   });
 }
 
@@ -559,7 +552,6 @@ function syncDotSince(): void {
     agent.bySession,
     agent.exitBySession,
     agent.activityBySession,
-    agent.outputAtBySession,
     agent.completionSeqBySession,
     s.progressTickBySession,
     outcomes,
@@ -819,22 +811,23 @@ export function useSessionNeedsYou(sessionId: string): boolean {
 }
 
 /**
- * Reactive {@link selectSessionsNeedingYou}. Computed inside the store
- * selectors to a string key, so the host re-renders only when the list itself
- * changes — not on every dot-start stamp or unrelated tick.
+ * Reactive {@link selectSessionsNeedingYou}. Compared structurally inside the
+ * store selectors, so the host re-renders only when the list itself changes —
+ * not on every dot-start stamp or unrelated tick.
  */
 export function useNeedsYouList(teamKey?: string | null): SessionNeedsYou[] {
   const pendingAsks = useManagedSessionStore((m) => m.pendingAsks);
   const outcomes = useManagedSessionStore((m) => m.states);
-  const key = useDotSelector((s, _dots, agent) =>
-    s
-      ? JSON.stringify(
-          selectSessionsNeedingYou(needsYouListState(s, agent, pendingAsks, outcomes), teamKey),
-        )
-      : "[]",
+  return useDotSelector(
+    (s, _dots, agent) =>
+      s
+        ? selectSessionsNeedingYou(needsYouListState(s, agent, pendingAsks, outcomes), teamKey)
+        : NO_NEEDS_YOU,
+    structurallyEqual,
   );
-  return useMemo(() => (key ? (JSON.parse(key) as SessionNeedsYou[]) : []), [key]);
 }
+
+const NO_NEEDS_YOU: SessionNeedsYou[] = [];
 
 /**
  * SW-FX-52: live agent status for ONE session. Scalar selector — a status tick

@@ -1023,7 +1023,7 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
     expect(screen.queryByTestId("source-diff-view-toggle-w1")).not.toBeInTheDocument();
   });
 
-  function openPng(sides: unknown, width = 1200) {
+  function openPng(sides: unknown, width = 1200, redlineError: string | null = null) {
     const ro = stubResizeObserver(width);
     const blob = { create: URL.createObjectURL, revoke: URL.revokeObjectURL };
     URL.createObjectURL = vi.fn(() => "blob:side");
@@ -1036,7 +1036,11 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
     });
     imageSidesMock.mockReturnValue(sides);
     stubChangeset({ files: [...FILES, { path: "art/logo.png", status: "modified" }] });
-    stubRedline({ redline: { status: "modified", binary: true, before: "", after: "" } });
+    stubRedline(
+      redlineError
+        ? { redline: null, error: redlineError }
+        : { redline: { status: "modified", binary: true, before: "", after: "" } },
+    );
     useViewerStore.setState({ sourceDiffSelectedFile: { "sid-ws": "art/logo.png" } });
     render(
       <SourceDiffOverlay
@@ -1069,6 +1073,48 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
     expect(images()).toEqual([]);
   });
 
+  it("a changed PNG whose diff read fails but whose bytes read still draws, and Side by side works", () => {
+    openPng({ imageBytes: { before: "QkVGT1JF", after: "QUZURVI=" } }, 1200, "git show failed");
+    const sideBySide = within(screen.getByTestId("source-diff-html-mode-w1")).getByRole("button", {
+      name: "Side by side",
+    });
+    expect(sideBySide).toHaveAttribute("aria-pressed", "true");
+    expect(sideBySide).toBeEnabled();
+    expect(screen.getByTestId("source-diff-side-by-side")).toBeInTheDocument();
+    expect(images()).toEqual(["Before", "After"]);
+    expect(screen.queryByText(/Couldn.t read the image/)).toBeNull();
+    fireEvent.click(
+      within(screen.getByTestId("source-diff-html-mode-w1")).getByRole("button", {
+        name: "Source",
+      }),
+    );
+    expect(screen.getByTestId("source-diff-image-source")).toHaveTextContent(
+      "An image has no text diff. Side by side compares it.",
+    );
+  });
+
+  it("a changed PNG whose diff and bytes both failed says the image failed, with Side by side disabled", () => {
+    openPng(
+      { imageState: { kind: "unavailable", reason: "Couldn’t read the image" } },
+      1200,
+      "git show failed",
+    );
+    const sideBySide = within(screen.getByTestId("source-diff-html-mode-w1")).getByRole("button", {
+      name: "Side by side",
+    });
+    expect(sideBySide).toBeDisabled();
+    expect(sideBySide).toHaveAttribute("title", "Couldn’t read the image");
+    expect(screen.getByTestId("source-diff-image-source")).toHaveTextContent(
+      "An image has no text diff. Couldn’t read the image.",
+    );
+  });
+
+  it("a changed PNG whose diff read fails while its bytes are still read says it is reading", () => {
+    openPng({ imageState: { kind: "reading" } }, 1200, "git show failed");
+    expect(screen.getByTestId("source-diff-image-status")).toHaveTextContent("Reading the image…");
+    expect(screen.queryByText(/Couldn.t read/)).toBeNull();
+  });
+
   it("a changed PNG shows one side at a time below 900 px", () => {
     openPng({ imageBytes: { before: "QkVGT1JF", after: "QUZURVI=" } }, 899);
     expect(images()).toEqual(["After"]);
@@ -1080,7 +1126,7 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
     openPng({
       imageState: {
         kind: "unavailable",
-        reason: "Images at a commit in a remote worktree aren't drawn yet",
+        reason: "Images at a commit in a remote worktree aren’t drawn yet",
       },
     });
     const sideBySide = within(screen.getByTestId("source-diff-html-mode-w1")).getByRole("button", {
@@ -1089,10 +1135,10 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
     expect(sideBySide).toBeDisabled();
     expect(sideBySide).toHaveAttribute(
       "title",
-      "Images at a commit in a remote worktree aren't drawn yet",
+      "Images at a commit in a remote worktree aren’t drawn yet",
     );
     expect(screen.getByTestId("source-diff-image-source")).toHaveTextContent(
-      "An image has no text diff. Images at a commit in a remote worktree aren't drawn yet.",
+      "An image has no text diff. Images at a commit in a remote worktree aren’t drawn yet.",
     );
     expect(screen.queryByTestId("source-diff-binary-placeholder")).toBeNull();
     expect(images()).toEqual([]);
@@ -1100,7 +1146,8 @@ describe("SourceDiffOverlay — per-file redline + two-size (AC-3/RD-8)", () => 
 
   it("a changed PNG whose bytes are still being read says so, not Binary file", () => {
     openPng({ imageState: { kind: "reading" } });
-    expect(screen.getByText("Reading the image…")).toBeInTheDocument();
+    // Shown in the skeleton and said by the image's one status node.
+    expect(screen.getAllByText("Reading the image…")).toHaveLength(2);
     expect(screen.queryByTestId("source-diff-binary-placeholder")).toBeNull();
   });
 
@@ -3564,7 +3611,7 @@ describe("SourceDiffOverlay — review round 3", () => {
     Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
     render(overlay());
     fireEvent.keyDown(shell(), { key: "c" });
-    expect(error).toHaveBeenCalledWith("Couldn't copy the path");
+    expect(error).toHaveBeenCalledWith("Couldn’t copy the path");
     error.mockRestore();
   });
 

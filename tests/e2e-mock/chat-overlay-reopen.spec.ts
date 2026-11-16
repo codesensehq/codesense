@@ -54,8 +54,8 @@ async function boot(page: Page) {
         set: (v: Internals) => {
           const orig = v.invoke.bind(v);
           v.invoke = (cmd, args) =>
-            cmd === "list_session_inbox"
-              ? Promise.resolve(make(String(args?.handle ?? "x")))
+            cmd === "list_session_inbox" || cmd === "list_thread_inbox"
+              ? Promise.resolve(make(String(args?.handle ?? args?.session ?? "x")))
               : orig(cmd, args);
           inner = v;
         },

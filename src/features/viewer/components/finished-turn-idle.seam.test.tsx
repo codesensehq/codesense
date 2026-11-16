@@ -69,6 +69,7 @@ import {
   markSessionSeen,
   resetPrunedAgentSessionsForTests,
   selectAgentDots,
+  getSessionActivityAt,
   useAgentStateStore,
 } from "@/shared/stores/agent-state-store";
 import {
@@ -237,7 +238,6 @@ beforeEach(() => {
     exitBySession: {},
     stateSince: {},
     seenAt: {},
-    outputAtBySession: {},
     completionSeqBySession: {},
     completionActivityBySession: {},
   });
@@ -992,9 +992,9 @@ describe("a finished turn reads Idle on every surface", () => {
       receiveMark("thinking");
       expectEveryMark(surfaces, "thinking");
       expect(useManagedSessionStore.getState().states[S]).toBe(outcome);
-      const activityAt = useAgentStateStore.getState().bySession[S].activityAt;
+      const activityAt = getSessionActivityAt(S);
       host({ revision: 7, turnGeneration: 3, activityAgeMs: 0 });
-      expect(useAgentStateStore.getState().bySession[S].activityAt).toBe(activityAt);
+      expect(getSessionActivityAt(S)).toBe(activityAt);
       host({ revision: 8, turnGeneration: 3, state: "needs-permission", asks: ["current"] });
       receiveMark("question");
       expectEveryMark(surfaces, "question");
@@ -1044,7 +1044,7 @@ describe("a finished turn reads Idle on every surface", () => {
       });
       if (latest === "question")
         emit("mcp:ask-user", { sessionId: S, correlationId: "new-ask", question: "Which target?" });
-      const activityAt = useAgentStateStore.getState().bySession[S].activityAt;
+      const activityAt = getSessionActivityAt(S);
       emit("mcp:agent-done", {
         sessionId: S,
         status: result,
@@ -1053,7 +1053,7 @@ describe("a finished turn reads Idle on every surface", () => {
       receiveMark(latest === "done" ? "ready" : latest);
       expectEveryMark(surfaces, latest === "done" ? "ready" : latest);
       expect(useManagedSessionStore.getState().states[S]).toBe(outcome);
-      expect(useAgentStateStore.getState().bySession[S].activityAt).toBe(activityAt);
+      expect(getSessionActivityAt(S)).toBe(activityAt);
       if (latest === "question") {
         expect(useManagedSessionStore.getState().pendingAsks["new-ask"]?.question).toBe(
           "Which target?",

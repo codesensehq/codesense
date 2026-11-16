@@ -37,6 +37,9 @@ pub(crate) const PAGE_SDK_FEATURES: &[&str] = &[
     "theme",
     "kitTokens",
     "virtualList",
+    // `inbox({agentId, storyId})` reads a saved agent's thread (with `sessionId` its seat):
+    // an app without it ignores `storyId`, so a page tests for it first.
+    "inboxThread",
 ];
 
 /// JavaScript interceptor injected into HTML responses.

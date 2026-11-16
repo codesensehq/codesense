@@ -162,23 +162,26 @@ impl PinOp {
     }
 }
 
-/// Run `op` on `thread`'s list in the store at `own`, as `by`. A session (`party`) pins
-/// only mail it sent, received or is the reply target of, or a role message, as it
-/// reacts; the person pins anything the team's inbox shows.
+/// Run `op` on `thread`'s list in the store at `own`, as `by`. A session pins only mail
+/// its thread holds: mail one of `parties` (the addresses of the thread it is a seat of,
+/// its predecessors' included) sent, received or is the reply target of, or a role
+/// message, as it reacts. The person (no `parties`) pins anything the team's inbox shows.
 async fn pins_in(
     host: &dyn InboxHost,
     own: InboxLocation,
     thread: ThreadKey,
     op: PinOp,
     by: String,
-    party: bool,
+    parties: Option<Vec<String>>,
 ) -> Result<PinResult, String> {
     let InboxLocation { team, path } = own;
     let stored = {
         let thread = thread.clone();
         with_store("pins", path, move |store| {
-            if let (true, Some(message_id)) = (party, op.pinned_message()) {
-                if !inbox::inbox_get(store, message_id)?.is_some_and(|m| is_party(&m, &by)) {
+            if let (Some(parties), Some(message_id)) = (parties, op.pinned_message()) {
+                let held = inbox::inbox_get(store, message_id)?
+                    .is_some_and(|m| parties.iter().any(|who| is_party(&m, who)));
+                if !held {
                     return Ok(Err(format!("no message {message_id}")));
                 }
             }
@@ -282,7 +285,41 @@ pub(crate) async fn pins_from_human(
         Err(error) => return Ok(PinResult::invalid(error.to_string())),
     };
     let own = team_inbox(host, team.clone()).await?;
-    pins_in(host, own, thread, op, HUMAN.to_string(), false).await
+    pins_in(host, own, thread, op, HUMAN.to_string(), None).await
+}
+
+/// A pins call from an HTML message rendered live (a message frame), as its `sender`. It
+/// reads any thread of its team, as a page does, but a write lands only in its sender's own
+/// thread (the saved agent and story the sending session was launched with), so a message
+/// an agent posts can't change another agent's pins. A sender with no saved-agent thread
+/// writes none.
+pub(crate) async fn pins_from_frame(
+    host: &dyn InboxHost,
+    team: &LaunchTeam,
+    agent_id: &str,
+    story_id: Option<&str>,
+    op: PinOp,
+    sender: &str,
+) -> Result<PinResult, String> {
+    if matches!(op, PinOp::Read) {
+        return pins_from_human(host, team, agent_id, story_id, op).await;
+    }
+    let Some((agent, story)) = host.launch_thread(sender).await else {
+        return Ok(PinResult::invalid(
+            "only a message from a session launched from a saved Agent can change pins",
+        ));
+    };
+    let asked = ThreadKey::new(agent_id, story_id);
+    let own = ThreadKey::new(&agent, story.as_deref());
+    match (asked, own) {
+        (Ok(asked), Ok(own)) if asked == own => {
+            pins_from_human(host, team, agent_id, story_id, op).await
+        }
+        (Err(error), _) => Ok(PinResult::invalid(error.to_string())),
+        _ => Ok(PinResult::invalid(
+            "a message changes pins only in its sender's thread",
+        )),
+    }
 }
 
 /// What an agent's pin call does to its message: pin it, unpin it, or bring its unpinned
@@ -341,7 +378,20 @@ pub(crate) async fn pin_request<'a>(
             preview,
         },
     };
-    pins_in(host, own, thread, op, handle, true).await
+    // The thread's mail, as its read shows it to this seat: its own and its predecessors'
+    // (by handle or tab session id), never a concurrent seat's.
+    let mut parties = crate::commands::agent_read_model::thread_addresses(
+        host,
+        &sessions,
+        &thread,
+        Some(&handle),
+    )
+    .await?
+    .addresses;
+    if !parties.contains(&handle) {
+        parties.push(handle.clone());
+    }
+    pins_in(host, own, thread, op, handle, Some(parties)).await
 }
 
 /// The person's pins verbs, one Tauri command: `op` is `read`, `pin`, `unpin`,
@@ -361,6 +411,7 @@ pub async fn agent_pins(
     preview: Option<PinPreview>,
     replaces: Option<i64>,
     replacing: Option<i64>,
+    sender: Option<String>,
 ) -> Result<PinResult, String> {
     let need_id = || message_id.ok_or_else(|| format!("{op} needs a messageId"));
     let op = match &*op {
@@ -391,14 +442,18 @@ pub async fn agent_pins(
         },
         other => return Err(format!("unknown pins op {other}")),
     };
-    pins_from_human(
-        &super::AppInboxHost { app },
-        &team.into(),
-        &agent_id,
-        story_id.as_deref(),
-        op,
-    )
-    .await
+    let host = super::AppInboxHost { app };
+    // `sender`: the caller is a message frame, whose writes stay in its sender's thread.
+    match sender {
+        Some(sender) => {
+            let team: LaunchTeam = team.into();
+            pins_from_frame(&host, &team, &agent_id, story_id.as_deref(), op, &sender).await
+        }
+        None => {
+            let team: LaunchTeam = team.into();
+            pins_from_human(&host, &team, &agent_id, story_id.as_deref(), op).await
+        }
+    }
 }
 
 /// Prepare the `pins` live view of the thread `agent_id` + `story_id` in `team` for a

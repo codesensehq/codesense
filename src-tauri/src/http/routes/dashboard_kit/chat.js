@@ -24,7 +24,7 @@
     header: { done: "Story is done", none: "not running: your next message starts it", starting: "starting…", idle: "waiting for you", needs: "needs you in its terminal", unknown: "status unknown · its machine may be offline", working: (activity) => `working · ${activity}`, failed: (reason) => `couldn't start · ${reason}`, activityNone: "activity not reported" },
     placeholder: { running: "It's working; your message waits for its next step", idle: "Reply to the story lead", needs: "It's waiting on its terminal; your message waits", unknown: "Your message waits until it's reachable", none: "Message to start the story lead", starting: "Starting the story lead; more messages wait for it", failed: "Retry, or add to your kept message", done: "This story is done" },
     mark: { stuck: "Sent · waiting on its terminal", starting: "Sent · starting the lead", held: "Held · sends when the lead joins", sent: "Sent", queued: "Queued · goes to the lead at its next step", delivered: "Delivered", kept: "Not delivered · kept" },
-    row: { starting: "Starting story lead…", slow: "Still starting (over 20 s)", joined: (model, activity) => `Story lead joined · ${model} · ${activity}`, modelNone: "model not reported yet", typing: "Story lead is typing", working: "Working…", retry: "Retry", needsTerminal: "Needs you in its terminal", unread: "Couldn't load the conversation.", loading: "Loading the conversation…", stale: (time) => `Couldn't refresh · ${time}`, to: (name) => `To ${name}` },
+    row: { htmlFrom: (who) => `Dashboard from ${who}`, starting: "Starting story lead…", slow: "Still starting (over 20 s)", joined: (model, activity) => `Story lead joined · ${model} · ${activity}`, modelNone: "model not reported yet", typing: "Story lead is typing", working: "Working…", retry: "Retry", needsTerminal: "Needs you in its terminal", unread: "Couldn't load the conversation.", loading: "Loading the conversation…", stale: (time) => `Couldn't refresh · ${time}`, to: (name) => `To ${name}` },
     failure: { send: (why) => `Couldn't send your message: ${why}.`, busy: "Couldn't start the story lead: CodeSense is at its agent limit. Try again in a moment.", denied: (why) => `Couldn't start the story lead: launching was refused (${why}).`, unavailable: (why) => `Couldn't start the story lead: no agent is available (${why}).`, timeout: "The story lead didn't start in 2 minutes.", exited: "The story lead stopped right after it started.", other: (code) => `Couldn't start the story lead: ${code}.`, reasonBusy: "CodeSense is at its agent limit", reasonTimeout: "no join in 2 minutes", reasonExited: "it stopped right after starting" },
     terminal: "Show terminal",
     terminalOff: "Show terminal · not running",
@@ -247,20 +247,23 @@
       return named === void 0 ? all : named;
     }));
   }
-  function pinTitleOf(m, sender) {
+  function htmlNameOf(m) {
     const summary = squashSpace(m && m.summary);
     if (summary) return summary;
     const text = String(m && m.text || "");
-    if (m && m.contentType === "html") {
-      const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(text);
-      if (title && plainText(title[1])) return plainText(title[1]);
-      for (const heading of text.matchAll(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi)) {
-        const name = plainText(heading[2]);
-        if (name) return name;
-      }
-      return `Dashboard from ${sender}`;
+    const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(text);
+    if (title && plainText(title[1])) return plainText(title[1]);
+    for (const heading of text.matchAll(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi)) {
+      const name = plainText(heading[2]);
+      if (name) return name;
     }
-    return pinFirstSentence(text) || `Message from ${sender}`;
+    return "";
+  }
+  function pinTitleOf(m, sender) {
+    if (m && m.contentType === "html") return htmlNameOf(m) || `Dashboard from ${sender}`;
+    const summary = squashSpace(m && m.summary);
+    if (summary) return summary;
+    return pinFirstSentence(String(m && m.text || "")) || `Message from ${sender}`;
   }
 
   // src-tauri/src/http/routes/dashboard_kit/chat/launch.js
@@ -892,6 +895,24 @@
 
   // src-tauri/src/http/routes/dashboard_kit/chat/roving.js
   var FOCUSABLE = "button, a[href], input, select, textarea, iframe, [tabindex], pre, .inbox-table-scroll";
+  var SCROLLER = "pre, .inbox-table-scroll";
+  var SCROLLER_NAME = { code: "Code", table: "Table" };
+  function scrollerNames(node, active) {
+    if (active === null) return () => {
+    };
+    const own = node.closest ? node.closest(ROW) : null;
+    const row = own ? own.dataset.mid === active ? own : null : node.querySelector(`[data-mid="${CSS.escape(active)}"]`);
+    if (!row) return () => {
+    };
+    const blocks = [...row.querySelectorAll(SCROLLER)].filter((el) => !el.hasAttribute("aria-label") && !el.hasAttribute("aria-labelledby"));
+    const scrolls = blocks.filter((el) => el.scrollWidth > el.clientWidth || el.scrollHeight > el.clientHeight);
+    return () => {
+      for (const el of scrolls) {
+        if (!el.hasAttribute("role")) el.setAttribute("role", "region");
+        el.setAttribute("aria-label", el.matches("pre") ? SCROLLER_NAME.code : SCROLLER_NAME.table);
+      }
+    };
+  }
   var HELD = "data-roving-tabindex";
   var ROW = "[data-mid]";
   function setControl(el, on) {
@@ -906,6 +927,7 @@
     }
   }
   function applyTo(node, active) {
+    const name = scrollerNames(node, active);
     const rows = node.matches(ROW) ? [node, ...node.querySelectorAll(ROW)] : node.querySelectorAll(ROW);
     for (const row of rows) {
       row.tabIndex = row.dataset.mid === active ? 0 : -1;
@@ -917,6 +939,7 @@
       const row = el.closest(ROW);
       if (row) setControl(el, row.dataset.mid === active);
     }
+    name();
   }
   function rovingThread(log) {
     let picked = null, active = null;
@@ -965,10 +988,11 @@
     };
     const onFocusIn = (event) => {
       const row = event.target.closest && event.target.closest(ROW);
-      if (row && log.contains(row) && row.dataset.mid !== active) {
+      if (!row || !log.contains(row)) return;
+      if (row.dataset.mid !== active) {
         picked = row.dataset.mid;
         refresh();
-      }
+      } else scrollerNames(row, active)();
     };
     log.addEventListener("keydown", onKeyDown);
     log.addEventListener("focusin", onFocusIn);
@@ -1150,7 +1174,7 @@
       });
       const change = open.change ? h("div", { class: "chg", tabindex: "-1", role: "status" }, open.change) : null;
       const error = open.error ? h("div", { class: "pin-note danger", role: "alert" }, h("span", {}, open.error)) : null;
-      node.replaceChildren(head, change, h("div", { class: "rows" }, ...rows), error, cancel);
+      node.replaceChildren(...[head, change, h("div", { class: "rows" }, ...rows), error, cancel].filter(Boolean));
       mark(open.current);
     }
     function after(was = false) {
@@ -1520,6 +1544,10 @@
     };
     const holds = (name, who) => String(name).trim().toLowerCase().includes(String(who).trim().toLowerCase());
     const whoLine = (info, who, meta) => info ? h("div", { class: "who" }, faceNode(info), holds(info.name, who) ? null : h("span", { class: "sr" }, `${info.name}, `), meta) : meta;
+    const htmlName = (item, who) => {
+      const from = copy.row.htmlFrom(who), name = htmlNameOf({ text: item.said || item.text, summary: item.summary });
+      return name ? [h("div", { class: "html-t" }, name), h("div", { class: "html-from" }, from)] : [from];
+    };
     const bubble = (item, side, first = true, info = null) => {
       const pin2 = item.pin ? item.pin.make() : null, who = info && info.label || item.who;
       return h(
@@ -1527,7 +1555,7 @@
         { class: `msg ${side}${pin2 && pin2.pinned ? " pinned" : ""}`, "data-mid": item.id === void 0 ? null : String(item.id), "data-run": faces ? first ? "start" : "cont" : null },
         first ? whoLine(info, who, h("div", { class: "meta" }, `${who} · ${timeLabel(item.at)}`, item.label ? h("span", { "data-row-label": "" }, ` · ${item.label}`) : null)) : null,
         pin2 ? pin2.acts : null,
-        h("div", { class: "body" }, item.contentType === "html" ? item.text : inlineNodes(item.text)),
+        item.contentType === "html" ? h("div", { class: "body", "data-html": "1" }, htmlName(item, who)) : h("div", { class: "body" }, inlineNodes(item.text)),
         item.note ? h("div", { class: "note" }, item.note) : null,
         item.mark ? h("div", { class: "mark", "data-mark": item.markKey }, item.mark) : null,
         pin2 ? pin2.tag : null,

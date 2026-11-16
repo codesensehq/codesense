@@ -230,6 +230,26 @@ pub(crate) trait InboxHost: Send + Sync {
     }
     /// The pin list of `thread` in `team`'s store changed.
     fn pins_changed(&self, _team: &LaunchTeam, _thread: &crate::weft::pins::ThreadKey) {}
+    /// The saved agent and story each of `handles` was launched with, as [`launch_thread`]
+    /// answers, in one read of the launch registry.
+    ///
+    /// [`launch_thread`]: InboxHost::launch_thread
+    async fn launch_threads(&self, handles: &[String]) -> Vec<Option<(String, Option<String>)>> {
+        let mut out = Vec::with_capacity(handles.len());
+        for handle in handles {
+            out.push(self.launch_thread(handle).await);
+        }
+        out
+    }
+    /// Every session the usage store recorded for `thread` (its saved agent, any revision,
+    /// and its story), ended ones included, oldest first; none for a no-story thread.
+    /// Default none.
+    async fn thread_sessions(
+        &self,
+        _thread: &crate::weft::pins::ThreadKey,
+    ) -> Result<Vec<crate::session_usage::agent_record::ThreadSession>, String> {
+        Ok(Vec::new())
+    }
 }
 
 /// A session as the inbox addresses and names it.
@@ -242,6 +262,19 @@ pub(crate) struct KnownSession {
     pub name: String,
     /// It runs now: not exited, and its machine is connected.
     pub running: bool,
+    /// It has ended: exited, or its agent crashed. A session on an offline machine, or stuck
+    /// at a startup prompt, has not: it is still the seat it was (see [`KnownSession::is_seat`]).
+    pub ended: bool,
+}
+
+impl KnownSession {
+    /// The seat rule a thread's reads share with the story view's agent pages: a session is a
+    /// seat of its thread while it is listed and has not ended. Two seats of one saved agent on
+    /// one story share a thread, and neither reads the other's conversation; an ended one's
+    /// mail belongs to every seat after it.
+    pub(crate) fn is_seat(&self) -> bool {
+        !self.ended
+    }
 }
 
 /// The sessions one inbox call resolves its addresses and names against.
@@ -251,6 +284,11 @@ pub(crate) struct KnownSessions(Vec<KnownSession>);
 impl KnownSessions {
     pub(crate) fn new(sessions: Vec<KnownSession>) -> Self {
         Self(sessions)
+    }
+
+    /// Every listed session, in the roster's order.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &KnownSession> {
+        self.0.iter()
     }
 
     /// The session `id` names: by its handle, else by its tab session (a running one
@@ -276,6 +314,7 @@ impl From<&crate::mcp::session_list::SessionListRow> for KnownSession {
             session: row.session.clone(),
             name: row.display_name.clone(),
             running: crate::mcp::identity_tools::is_running(row.state),
+            ended: row.state == crate::mcp::session_list::SessionState::Exited || row.crashed,
         }
     }
 }
@@ -523,6 +562,11 @@ pub(crate) struct InboxView {
     pub matched: usize,
     pub messages: Vec<InboxRow>,
     pub human_unread: u32,
+    /// When the read named a saved agent's thread (`agentId` with `storyId`): every address of
+    /// the thread's sessions it read (handles and tab session ids), so a page tells the agent's
+    /// own mail from other senders.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_sessions: Option<Vec<String>>,
 }
 
 /// How long one inbox check may take. Past it, or on a store error, the check is tried
@@ -2912,6 +2956,37 @@ impl InboxHost for AppInboxHost {
             .snapshot();
         let row = Iterator::find(&mut rows.iter(), |row| row.handle == handle)?;
         registry_thread(row)
+    }
+
+    async fn launch_threads(&self, handles: &[String]) -> Vec<Option<(String, Option<String>)>> {
+        use tauri::Manager;
+        let Some(launch) = self
+            .app
+            .try_state::<super::dashboard_launch::DashboardLaunchState>()
+        else {
+            return vec![None; handles.len()];
+        };
+        let rows = super::dashboard_launch::DashboardLaunchState::snapshot(&launch);
+        handles
+            .iter()
+            .map(|handle| {
+                let row = Iterator::find(&mut rows.iter(), |row| &row.handle == handle);
+                row.and_then(registry_thread)
+            })
+            .collect()
+    }
+
+    async fn thread_sessions(
+        &self,
+        thread: &crate::weft::pins::ThreadKey,
+    ) -> Result<Vec<crate::session_usage::agent_record::ThreadSession>, String> {
+        let home = super::paths::codesense_home_dir().ok_or("no CodeSense home directory")?;
+        let (agent, story) = (thread.agent_id.clone(), thread.story_id.clone());
+        super::await_blocking("thread_sessions", move || {
+            // RI-2-ALLOW: inside the await_blocking closure, off the async runtime.
+            crate::session_usage::agent_record::thread_sessions_in(&home, &agent, &story)
+        })
+        .await
     }
 
     fn pins_changed(&self, team: &LaunchTeam, thread: &crate::weft::pins::ThreadKey) {
