@@ -2,7 +2,7 @@
 // One needs-you card in the thread (the question, its options, and the answered state). The node is built from plain values by chat.js, which owns the state; a card changes only when its signature does.
 // meta (a card line, chat-core parseCardLine): the step, the consent class shown in the header and each button's act. A parsed card's primary option gets the primary look without the recommended mark.
 // state: open | pending (a reply waits on the host confirm) | error | answered. A parsed card shows the lead's pick first; one chat-core cannot parse shows its text and a reply box.
-import {h} from './dom.js';
+import {h,imeKey} from './dom.js';
 import {CHAT_COPY,timeLabel} from './copy.js';
 const CARD_COPY=CHAT_COPY.card;
 export function cardNode({id,text,parsed,meta=null,at,state,answer,failure,draft,onAnswer,onDraft,lead=CHAT_COPY.lead}){
@@ -20,7 +20,7 @@ export function cardNode({id,text,parsed,meta=null,at,state,answer,failure,draft
   input.value=draft||'';
   const send=()=>{const value=input.value.trim();if(value&&!busy)onAnswer(value);};
   input.addEventListener('input',()=>onDraft(input.value));
-  input.addEventListener('keydown',event=>{if((event.code==='Enter'||event.code==='NumpadEnter')&&!event.shiftKey&&!event.isComposing){event.preventDefault();send();}});
+  input.addEventListener('keydown',event=>{if((event.code==='Enter'||event.code==='NumpadEnter')&&!event.shiftKey&&!imeKey(event)){event.preventDefault();send();}});
   parts.push(h('div',{class:'reply'},input,h('button',{type:'button',class:'btn','data-reply':'1',disabled:busy?'':null,onclick:send},CARD_COPY.reply)));
  }
  if(answered)parts.push(h('div',{class:'chosen',tabindex:'-1',role:'status'},CARD_COPY.chose,' ',h('b',{},answer.text),` · ${inInbox?CARD_COPY.inbox:CARD_COPY.here} · ${timeLabel(answer.at)}`));

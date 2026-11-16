@@ -1093,7 +1093,9 @@ pub use async_helpers::await_blocking;
 // session's assistant prose as it is written). → 514.
 // +1 `remote_source::source_remote_image_sides` (a remote worktree's raster sides in the source
 // diff). → 515.
-pub const EXPECTED_COMMAND_COUNT: usize = 515;
+// +1 `agent_read_model::list_thread_inbox` (a saved agent + story thread's conversation, ended
+// sessions included). → 516.
+pub const EXPECTED_COMMAND_COUNT: usize = 516;
 
 #[cfg(test)]
 mod tests {

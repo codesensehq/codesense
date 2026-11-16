@@ -244,7 +244,8 @@ async function subscriptionView(
   }
   if (args.topic === "agentDefinitions") {
     const view = await agentDefinitionsPrepare(undefined, ctx?.frame?.frameId);
-    liveHub.seed(view);
+    // The view key names this frame: it holds the view until it goes or rekeys.
+    liveHub.seed(view, (await ctx?.liveFrame?.()) ?? undefined);
     return { viewKey: view.viewKey };
   }
   if (args.order === "status") return { order: "status" as const };
@@ -934,8 +935,8 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
   // The prepared view applies the calling frame's grant to the shared catalog.
   agents: async (_args, ctx) => {
     const view = await agentDefinitionsPrepare(undefined, ctx?.frame?.frameId);
-    liveHub.seed(view);
     const frame = await ctx?.liveFrame?.();
+    liveHub.seed(view, frame ?? undefined);
     const snapshot = frame
       ? await frame.subscribe("agentDefinitions", undefined, { viewKey: view.viewKey })
       : view;
@@ -974,6 +975,14 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
       "inbox: sessionId must be a non-empty string",
     );
     if (sessionId) query.sessionId = sessionId;
+    // A saved agent's thread (the pins' key): every listed session of the agent on the story
+    // and every recorded one, ended ones included; an empty story is the agent's no-story
+    // thread, its listed sessions only. sessionId then names the seat.
+    if (a.storyId !== undefined) {
+      if (typeof a.storyId !== "string") throw new Error("inbox: storyId must be a string");
+      if (!agentId) throw new Error("inbox: storyId needs agentId");
+      query.storyId = a.storyId.trim();
+    }
     const conversation = optionalNonEmptyString(
       a.conversation,
       "inbox: conversation must be a non-empty string",
@@ -2620,6 +2629,13 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
   // UNfilled; the capability is injected server-side (`viewer.rs`) into every live
   // render, not via this map.
 };
+// The pin verbs are registered as `inbox.<verb>` too; each runs its flat verb's handler.
+for (const verb of VERB_REGISTRY) {
+  const flat = verb.name.startsWith("inbox.") ? verb.name.slice("inbox.".length) : null;
+  if (flat && Object.prototype.hasOwnProperty.call(HTML_BRIDGE_ALLOWLIST, flat)) {
+    HTML_BRIDGE_ALLOWLIST[verb.name] = HTML_BRIDGE_ALLOWLIST[flat];
+  }
+}
 
 // Contract views derived from the native registry. Admission is owned by Rust.
 export const READ_VERBS: readonly string[] = VERB_REGISTRY.filter((v) => !v.action).map(

@@ -657,6 +657,7 @@ mod tests {
             expiring: false,
             session: Some(session.into()),
             failed: false,
+            crashed: false,
         }
     }
 

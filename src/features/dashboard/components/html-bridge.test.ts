@@ -4,6 +4,7 @@ import { readFileSync } from "fs";
 import { resolve } from "path";
 import { setDashboardLaunchController, type DashboardLaunchController } from "./dashboard-launch";
 import { liveHub } from "../lib/live-hub";
+import { VERB_REGISTRY } from "../lib/verb-registry.generated";
 import type { AgentPinsOp } from "@/tauri/commands";
 
 const mockGetDependencyStatus = vi.fn();
@@ -299,6 +300,12 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       "gotoAgent",
       "humanStatus",
       "inbox",
+      "inbox.pin",
+      "inbox.pins",
+      "inbox.reorderPins",
+      "inbox.replacePin",
+      "inbox.restorePin",
+      "inbox.unpin",
       "inboxRollup",
       "launchUnder",
       "loadMedia",
@@ -407,6 +414,18 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       /must be an object/,
     );
     expect(READ_VERBS).toContain("queryContext");
+  });
+
+  it("runs each namespaced pin verb with its flat verb's handler", () => {
+    const spaced = VERB_REGISTRY.map((verb) => verb.name).filter((name) =>
+      name.startsWith("inbox."),
+    );
+    expect(spaced.length).toBeGreaterThan(0);
+    for (const name of spaced) {
+      expect(HTML_BRIDGE_ALLOWLIST[name], name).toBe(
+        HTML_BRIDGE_ALLOWLIST[name.slice("inbox.".length)],
+      );
+    }
   });
 
   it("does NOT expose the reserved LD-2 proxyFetch yet", () => {
@@ -2308,6 +2327,31 @@ describe("agents read model verbs", () => {
       /kind, if present, must be 'needs-you' or 'update'/,
     );
     expect(READ_VERBS).toContain("inbox");
+  });
+
+  it("inbox reads a saved agent's thread with storyId (empty: no story), its session the seat", async () => {
+    mockAgentReadInbox.mockResolvedValue({ messages: [], humanUnread: 0 });
+    await runBridgeCommand(
+      "inbox",
+      { agentId: "acme/t/dev@4", storyId: " BUG-1 ", sessionId: "S1" },
+      DOC,
+    );
+    expect(mockAgentReadInbox).toHaveBeenLastCalledWith(TEAM, {
+      agentId: "acme/t/dev@4",
+      storyId: "BUG-1",
+      sessionId: "S1",
+    });
+    await runBridgeCommand("inbox", { agentId: "acme/t/dev", storyId: "" }, DOC);
+    expect(mockAgentReadInbox).toHaveBeenLastCalledWith(TEAM, {
+      agentId: "acme/t/dev",
+      storyId: "",
+    });
+    await expect(runBridgeCommand("inbox", { storyId: "BUG-1" }, DOC)).rejects.toThrow(
+      /inbox: storyId needs agentId/,
+    );
+    await expect(runBridgeCommand("inbox", { agentId: "a", storyId: 4 }, DOC)).rejects.toThrow(
+      /inbox: storyId must be a string/,
+    );
   });
 
   it("validates conversation paging arguments using the inbox error style", async () => {

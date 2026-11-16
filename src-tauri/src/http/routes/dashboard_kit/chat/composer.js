@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-// The composer: a pinned region with ids per mount (pages and tests find them by id; mount-ids.js). Enter sends, Shift+Enter is a newline; typing and focus never launch.
-import {h} from './dom.js';
+// The composer: a pinned region with ids per mount (pages and tests find them by id; mount-ids.js). It is a two-row box: the textarea, then the hint and Send on one row under it.
+// Enter sends and Shift+Enter is a newline, as the hint says; ⌘↵ (Ctrl↵) also sends, with Shift held too, but is never shown beside it. Typing and focus never launch.
+import {h,imeKey} from './dom.js';
 import {CHAT_COPY} from './copy.js';
 import {idsOf} from './mount-ids.js';
 // rows, label, hint and send are the page's own size and words (the page's); update() changes the hint and the send label as the peer comes and goes, and the input's name (label) while the page gives one.
@@ -8,7 +9,7 @@ import {idsOf} from './mount-ids.js';
 export function createComposer({ids=idsOf(1),onSend,rows='2',label=CHAT_COPY.composerLabel,hint=CHAT_COPY.hint,send:sendLabel=CHAT_COPY.send}){
  const input=h('textarea',{id:ids.input,rows,'aria-label':label,'aria-describedby':ids.hint,spellcheck:'true'});
  const send=h('button',{id:ids.send,type:'button',class:'btn primary'},sendLabel);
- const region=h('div',{id:ids.region,class:'composer'},h('div',{class:'box'},input,send),h('div',{class:'hint',id:ids.hint},hint));
+ const region=h('div',{id:ids.region,class:'composer'},h('div',{class:'box'},input,h('div',{class:'box-foot'},h('div',{class:'hint',id:ids.hint},hint),send)));
  let pending=false,disabled=false;
  const setPending=on=>{pending=on;send.disabled=on||disabled;if(on)input.setAttribute('aria-busy','true');else input.removeAttribute('aria-busy');};
  const nameInput=name=>{if(name==null)input.removeAttribute('aria-label');else input.setAttribute('aria-label',name);};
@@ -18,7 +19,7 @@ export function createComposer({ids=idsOf(1),onSend,rows='2',label=CHAT_COPY.com
   if(!held||typeof held.then!=='function'){input.value='';return;}
   setPending(true);held.then(sent=>{setPending(false);if(sent&&input.value===raw)input.value='';},()=>{setPending(false);});
  };
- input.addEventListener('keydown',event=>{if((event.code==='Enter'||event.code==='NumpadEnter')&&!event.shiftKey&&!event.isComposing){event.preventDefault();submit();}});
+ input.addEventListener('keydown',event=>{if((event.code==='Enter'||event.code==='NumpadEnter')&&(!event.shiftKey||event.metaKey||event.ctrlKey)&&!imeKey(event)){event.preventDefault();submit();}});
  send.addEventListener('click',submit);
  return {region,input,send,
   update({placeholder,disabled:off,hint:nextHint,send:nextSend,label:nextLabel}){

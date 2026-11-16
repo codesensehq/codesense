@@ -13,8 +13,10 @@
 //!
 //! Rates use two 60 s buckets (current + previous). Quiet idle writes nothing
 //! to the log: the one `invoke_rate` line per completed window is emitted only
-//! if an entry ran at ≥ 1/s or reached 4 concurrent calls, and only by a call
-//! that crosses the window boundary (no timer thread).
+//! if an entry ran at ≥ 1/s or reached 4 concurrent calls, or if an internal
+//! metric (`metric_count`, `metric_add`, `metric_gauge`) was recorded in it, and
+//! only by a call that crosses the window boundary (no timer thread). A window
+//! with a metric lists every top row, quiet or not, then the metrics after `m4`.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -77,6 +79,19 @@ struct Entry {
     in_flight: AtomicU32,
     buckets: [Mutex<BucketData>; 2],
 }
+
+#[derive(Clone, Copy)]
+struct MetricBucket {
+    epoch: u64,
+    count: u64,
+    gauge: Option<u64>,
+}
+
+const EMPTY_METRIC: MetricBucket = MetricBucket {
+    epoch: u64::MAX,
+    count: 0,
+    gauge: None,
+};
 
 impl Entry {
     fn new() -> Self {
@@ -170,6 +185,10 @@ fn fold_mcp(rows: Vec<Row>) -> Vec<Row> {
 pub struct Registry {
     maps: [RwLock<HashMap<Box<str>, Arc<Entry>>>; 3],
     reported_epoch: AtomicU64,
+    metrics: Mutex<HashMap<Box<str>, [MetricBucket; 2]>>,
+    /// Never reset, so a test's before/after reads can't straddle a window rollover.
+    #[cfg(test)]
+    lifetime: Mutex<HashMap<String, u64>>,
 }
 
 impl Default for Registry {
@@ -183,6 +202,9 @@ impl Registry {
         Registry {
             maps: Default::default(),
             reported_epoch: AtomicU64::new(0),
+            metrics: Mutex::new(HashMap::new()),
+            #[cfg(test)]
+            lifetime: Mutex::new(HashMap::new()),
         }
     }
 
@@ -217,6 +239,77 @@ impl Registry {
         let e = self.entry(kind, name);
         e.with_bucket(epoch, |b| b.count += 1);
         self.rollover(epoch)
+    }
+
+    /// Record an internal event counter. Names are code-defined and capped to
+    /// the same safe character set as invoke names.
+    pub fn metric_count_at(&self, name: &str, now: Duration) -> Option<String> {
+        self.metric_add_at(name, 1, now)
+    }
+
+    /// Add an amount to an internal event counter.
+    pub fn metric_add_at(&self, name: &str, amount: u64, now: Duration) -> Option<String> {
+        #[cfg(test)]
+        {
+            let mut lifetime = self.lifetime.lock().unwrap_or_else(|e| e.into_inner());
+            *lifetime.entry(name.to_owned()).or_default() += amount;
+        }
+        self.update_metric(name, now, |m| m.count = m.count.saturating_add(amount));
+        self.rollover(now.as_secs() / WINDOW_SECS)
+    }
+
+    /// Set an internal gauge for the current reporting window.
+    pub fn metric_gauge_at(&self, name: &str, value: u64, now: Duration) -> Option<String> {
+        self.update_metric(name, now, |m| m.gauge = Some(value));
+        self.rollover(now.as_secs() / WINDOW_SECS)
+    }
+
+    #[cfg(test)]
+    fn metric_at(&self, name: &str, epoch: u64) -> Option<MetricBucket> {
+        let metrics = self.metrics.lock().unwrap_or_else(|e| e.into_inner());
+        metrics
+            .get(name)
+            .map(|buckets| buckets[(epoch % 2) as usize])
+            .filter(|b| b.epoch == epoch)
+    }
+
+    /// The count of `name` since the registry was made, over every window.
+    #[cfg(test)]
+    fn metric_lifetime_total(&self, name: &str) -> u64 {
+        let lifetime = self.lifetime.lock().unwrap_or_else(|e| e.into_inner());
+        lifetime.get(name).copied().unwrap_or(0)
+    }
+
+    fn update_metric(&self, name: &str, now: Duration, update: impl FnOnce(&mut MetricBucket)) {
+        if name.len() > MAX_NAME_LEN || !name_is_safe(name) {
+            return;
+        }
+        let epoch = now.as_secs() / WINDOW_SECS;
+        let mut metrics = self.metrics.lock().unwrap_or_else(|e| e.into_inner());
+        // Existing keys are found without allocating one; a full map folds into OVERFLOW.
+        if !metrics.contains_key(name) {
+            let key = if metrics.len() >= MAX_NAMES_PER_KIND { OVERFLOW } else { name };
+            metrics.entry(key.into()).or_insert([EMPTY_METRIC; 2]);
+            return self.update_bucket(metrics.get_mut(key), epoch, update);
+        }
+        self.update_bucket(metrics.get_mut(name), epoch, update);
+    }
+
+    fn update_bucket(
+        &self,
+        buckets: Option<&mut [MetricBucket; 2]>,
+        epoch: u64,
+        update: impl FnOnce(&mut MetricBucket),
+    ) {
+        let Some(buckets) = buckets else { return };
+        let bucket = &mut buckets[(epoch % 2) as usize];
+        if bucket.epoch != epoch {
+            if bucket.epoch != u64::MAX && bucket.epoch > epoch {
+                return;
+            }
+            *bucket = MetricBucket { epoch, ..EMPTY_METRIC };
+        }
+        update(bucket);
     }
 
     /// Begin a timed call; the guard records in-flight and duration on drop.
@@ -290,9 +383,11 @@ impl Registry {
     /// The log line for a completed window, or `None` at quiet idle.
     pub fn report_line(&self, epoch: u64) -> Option<String> {
         let mut rows = self.window_rows(&[epoch], WINDOW_SECS as f64);
-        if !rows.iter().any(|r| {
+        let metrics = self.metric_rows(epoch);
+        let quiet_rows = !rows.iter().any(|r| {
             r.count >= LOG_MIN_PER_SEC * WINDOW_SECS || r.max_in_flight >= LOG_MIN_IN_FLIGHT
-        }) {
+        });
+        if quiet_rows && metrics.is_empty() {
             return None;
         }
         rows.truncate(LOG_TOP);
@@ -305,7 +400,54 @@ impl Registry {
                 )
             })
             .collect();
-        Some(format!("window={WINDOW_SECS}s {}", body.join("; ")))
+        let metric_counts = metrics
+            .iter()
+            .map(|(name, count, _)| (name.clone(), *count))
+            .collect::<HashMap<_, _>>();
+        let mut metric_body = metrics
+            .into_iter()
+            .map(|(name, count, gauge)| {
+                format!(
+                    "{name} count={count} rate={:.2}/s{}",
+                    count as f64 / WINDOW_SECS as f64,
+                    gauge.map(|v| format!(" value={v}")).unwrap_or_default()
+                )
+            })
+            .collect::<Vec<_>>();
+        if let Some(rebuilds) = metric_counts
+            .get("live_hub.rebuild")
+            .copied()
+            .filter(|count| *count > 0)
+        {
+            let activity_only = metric_counts
+                .get("live_hub.rebuild.activity_only")
+                .copied()
+                .unwrap_or(0);
+            metric_body.push(format!(
+                "live_hub.rebuild.activity_only_share={:.2}%",
+                100.0 * activity_only as f64 / rebuilds as f64
+            ));
+        }
+        let mut line = format!("window={WINDOW_SECS}s");
+        if !body.is_empty() {
+            line.push(' ');
+            line.push_str(&body.join("; "));
+        }
+        if !metric_body.is_empty() {
+            line.push_str(if body.is_empty() { " m4 " } else { "; m4 " });
+            line.push_str(&metric_body.join("; "));
+        }
+        Some(line)
+    }
+
+    fn metric_rows(&self, epoch: u64) -> Vec<(String, u64, Option<u64>)> {
+        let metrics = self.metrics.lock().unwrap_or_else(|e| e.into_inner());
+        let mut rows = metrics.iter().filter_map(|(name, buckets)| {
+            let bucket = buckets[(epoch % 2) as usize];
+            (bucket.epoch == epoch).then(|| (name.to_string(), bucket.count, bucket.gauge))
+        }).collect::<Vec<_>>();
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        rows
     }
 
     /// `health_ping` payload: current + previous window, top rows by count.
@@ -413,6 +555,38 @@ pub fn begin(kind: Kind, name: &str) -> Guard {
 /// from another machine: they get the aggregate `mcp:*` row only.
 pub fn snapshot_json(mcp_tool_names: bool) -> serde_json::Value {
     global().snapshot_json_at(since_start(), mcp_tool_names)
+}
+
+/// The global count of `name` since start, for tests that read before and after.
+#[cfg(test)]
+pub(crate) fn metric_total(name: &str) -> u64 {
+    global().metric_lifetime_total(name)
+}
+
+/// True once per reporting window, for the first caller in it: gauges that walk state
+/// sample then, not on every call.
+pub fn gauge_window_open() -> bool {
+    static LAST: AtomicU64 = AtomicU64::new(u64::MAX);
+    window_open(&LAST, since_start().as_secs() / WINDOW_SECS)
+}
+
+fn window_open(last: &AtomicU64, epoch: u64) -> bool {
+    last.swap(epoch, Ordering::AcqRel) != epoch
+}
+
+/// Record a low-cardinality internal event in the same sixty-second report.
+pub fn metric_count(name: &str) {
+    emit(global().metric_count_at(name, since_start()));
+}
+
+/// Add an amount to a low-cardinality internal event counter.
+pub fn metric_add(name: &str, amount: usize) {
+    emit(global().metric_add_at(name, amount as u64, since_start()));
+}
+
+/// Update a low-cardinality internal gauge in the same sixty-second report.
+pub fn metric_gauge(name: &str, value: usize) {
+    emit(global().metric_gauge_at(name, value as u64, since_start()));
 }
 
 #[cfg(test)]
@@ -642,5 +816,71 @@ mod tests {
             .unwrap()
             .iter()
             .any(|r| r["name"] == "stubbed_command_for_test"));
+    }
+
+    #[test]
+    fn m4_metrics_appear_when_recorded_and_are_absent_when_idle() {
+        let r = Registry::new();
+        assert_eq!(r.report_line(0), None);
+        r.metric_count_at("live_hub.rebuild", secs(2));
+        r.metric_gauge_at("live_hub.agent_views", 3, secs(2));
+        let line = r.report_line(0).expect("metric activity is reported");
+        assert!(line.contains("live_hub.rebuild count=1 rate=0.02/s"), "{line}");
+        assert!(line.contains("live_hub.agent_views count=0 rate=0.00/s value=3"), "{line}");
+        assert_eq!(r.report_line(1), None);
+    }
+
+    #[test]
+    fn m4_delta_bytes_accumulate_and_rebuild_share_needs_a_rebuild() {
+        let r = Registry::new();
+        assert!(r.metric_at("live_hub.delta.bytes.sessions", 0).is_none());
+        r.metric_add_at("live_hub.delta.bytes.sessions", 100, secs(1));
+        r.metric_add_at("live_hub.delta.bytes.sessions", 50, secs(2));
+        assert_eq!(r.metric_at("live_hub.delta.bytes.sessions", 0).unwrap().count, 150);
+        // No rebuild recorded: no share is printed even with other metrics present.
+        let line = r.report_line(0).unwrap();
+        assert!(!line.contains("activity_only_share"), "{line}");
+        r.metric_count_at("live_hub.rebuild", secs(3));
+        r.metric_count_at("live_hub.rebuild", secs(3));
+        r.metric_count_at("live_hub.rebuild.activity_only", secs(3));
+        let line = r.report_line(0).unwrap();
+        assert!(line.contains("live_hub.rebuild.activity_only_share=50.00%"), "{line}");
+        assert!(line.contains("live_hub.delta.bytes.sessions count=150"), "{line}");
+    }
+
+    #[test]
+    fn m4_line_has_no_empty_row_list_and_the_metric_map_folds_at_its_cap() {
+        let r = Registry::new();
+        r.metric_count_at("live_hub.rebuild", secs(70));
+        let line = r.report_line(1).unwrap();
+        assert!(line.starts_with("window=60s m4 live_hub.rebuild count=1"), "{line}");
+        assert_eq!(r.metric_at("live_hub.rebuild", 1).unwrap().epoch, 1);
+        for i in 0..(MAX_NAMES_PER_KIND + 20) {
+            r.metric_count_at(&format!("m{i}"), secs(70));
+        }
+        r.metric_count_at("late", secs(70));
+        assert!(r.metric_at("late", 1).is_none());
+        assert!(r.metric_at(OVERFLOW, 1).unwrap().count >= 21);
+        assert!(r.metrics.lock().unwrap().len() <= MAX_NAMES_PER_KIND + 1);
+    }
+
+    #[test]
+    fn the_gauge_gate_opens_once_per_window() {
+        let last = AtomicU64::new(u64::MAX);
+        assert!(window_open(&last, 5));
+        assert!(!window_open(&last, 5));
+        assert!(window_open(&last, 6));
+    }
+
+    #[test]
+    fn m4_event_metrics_change_only_after_their_event_is_recorded() {
+        let r = Registry::new();
+        assert!(r.metric_at("session_record.read", 0).is_none());
+        assert!(r.metric_at("session_text.emit", 0).is_none());
+        r.metric_count_at("session_record.read", secs(1));
+        r.metric_count_at("session_text.emit", secs(1));
+        assert_eq!(r.metric_at("session_record.read", 0).unwrap().count, 1);
+        assert_eq!(r.metric_at("session_text.emit", 0).unwrap().count, 1);
+        assert!(r.metric_at("session_record.read", 1).is_none());
     }
 }
