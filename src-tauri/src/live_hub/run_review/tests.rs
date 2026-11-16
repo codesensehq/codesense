@@ -211,6 +211,7 @@ fn durable_appends_and_revision_gaps_use_the_real_hub() {
         )
         .unwrap();
     let mut hub = TopicRegistry::default();
+    hub.hold("runEvidence", &key_for("runEvidence", "run-1"), "main");
     project(&owner, &mut hub);
     let store = SqliteOrchestrationStore::open(&binding.durable).unwrap();
     let stream = durable::durable_run_key("run-1", "SW-A");

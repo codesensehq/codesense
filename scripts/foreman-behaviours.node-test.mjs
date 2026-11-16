@@ -87,7 +87,12 @@ test("the outside-floor cases are separate from the floor's four", () => {
 });
 
 // Every case: red on the do-nothing stub, green on the good agent, and the same grade whatever
-// the replies say (wording is the rubric's, never the script's).
+// the replies say (wording is the rubric's, never the script's). A card's last `Options:` line is
+// structure the page reads, not wording, so a reworded card keeps it under some question.
+const reword = (old, text) => {
+  const options = typeof old === "string" ? (/\n\s*Options:[^\n]*$/.exec(old)?.[0] ?? "") : "";
+  return options ? `${text || "?"}${options}` : text;
+};
 for (const id of EXTRA) {
   test(`${id}: red on the do-nothing stub, green on the good agent, whatever the replies say`, async () => {
     const red = await play(stubs.doNothing, id);
@@ -104,9 +109,11 @@ for (const id of EXTRA) {
             ? state
             : {
                 ...state,
-                replies: state.replies.map((r) => ({ ...r, text })),
+                replies: state.replies.map((r) => ({ ...r, text: reword(r.text, text) })),
                 calls: state.calls.map((c) =>
-                  c.args?.text === undefined ? c : { ...c, args: { ...c.args, text } },
+                  c.args?.text === undefined
+                    ? c
+                    : { ...c, args: { ...c.args, text: reword(c.args.text, text) } },
                 ),
               };
         assert.deepEqual(grade(caseDef, reworded).failures, [], JSON.stringify(text));

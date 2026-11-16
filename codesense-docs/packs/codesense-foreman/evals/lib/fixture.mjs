@@ -205,7 +205,9 @@ Run both from the story's worktree:
 //   no_repos: list_source_repos shows no repo, even in a user team.
 //   guide: "complete" or {stop_after: n}: the scripted guide stub runs when the Foreman launches a
 //     guide-* session with a /codesense-setup prompt; it stops after n steps and sends nothing.
-const KEYS = ["git_access", "offer_card", "ledger", "guide", "no_repos", "fail_first_pr", "story_team", "no_remote", "planted_prior", "handoff", "inbox", "pre_sessions", "rename_launched"];
+//   foreman_team: "docs" (default) or "user": the team the Foreman runs in, the user team once it
+//     has re-homed. The guide hands back to that team's queue, and the Foreman claims from it.
+const KEYS = ["foreman_team", "git_access", "offer_card", "ledger", "guide", "no_repos", "fail_first_pr", "story_team", "no_remote", "planted_prior", "handoff", "inbox", "pre_sessions", "rename_launched"];
 export const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 
 // The fixture a case asks for.
@@ -272,6 +274,7 @@ export async function createFixture(options = {}) {
     noRepos: options.no_repos === true,
     ledger: options.ledger ?? [],
     guide: options.guide,
+    foremanTeam: options.foreman_team === "user" ? { org: CONFIG.team, team: CONFIG.team } : DOCS,
   };
   const root = mkdtempSync(path.join(os.tmpdir(), `foreman-eval-${process.pid}-`));
   try {
@@ -430,9 +433,11 @@ function build(root, opts) {
       ledger.push({ step, state: "done" });
     }
     if (doing.length < todo.length) return;
-    // Launched by another session, the setup skill hands back before it ends.
-    const sent = nextCall(session.id, "send_role_message", { role: HANDBACK_ROLE, text: HANDBACK_TEXT });
-    roleMessages.push({ seq: sent.seq, role: HANDBACK_ROLE, from: session.id, kind: "setup-done", claimed: false });
+    // Launched by another session, the setup skill hands back before it ends, to the team its
+    // launcher (the Foreman) runs in.
+    const team = { ...opts.foremanTeam };
+    const sent = nextCall(session.id, "send_role_message", { role: HANDBACK_ROLE, team, text: HANDBACK_TEXT });
+    roleMessages.push({ seq: sent.seq, role: HANDBACK_ROLE, team, from: session.id, kind: "setup-done", claimed: false });
     nextCall(session.id, "signal_done", { status: "success" });
   };
 
@@ -485,7 +490,9 @@ function build(root, opts) {
           : [{ org: "codesense/docs", team: "getting-started", synced: true }, { org: CONFIG.team, team: CONFIG.team, synced: true }];
       if (tool === "list_source_repos") return { repos: opts.storyTeam === "docs" || opts.noRepos ? [] : [{ org: CONFIG.team, team: CONFIG.team, repo: "acme/demo" }] };
       if (tool === "claim_role_messages") {
-        const mine = roleMessages.filter((m) => m.role === record.args.role && !m.claimed);
+        // A claim reads the caller's own team: mail sent to another team's queue stays there.
+        const here = (m) => m.team.org === opts.foremanTeam.org && m.team.team === opts.foremanTeam.team;
+        const mine = roleMessages.filter((m) => m.role === record.args.role && here(m) && !m.claimed);
         for (const m of mine) m.claimed = true;
         return { deliveries: mine.map((m, i) => ({ deliveryId: i + 1, messageId: m.seq, role: m.role, claimToken: `claim-${m.seq}`, text: HANDBACK_TEXT, from: m.from })) };
       }

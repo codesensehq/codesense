@@ -11,7 +11,7 @@ use super::*;
 /// the Foreman hand-back's `send_role_message` and the git-access and clone steps' three (a tab,
 /// its output, the clone verb). The same list as `scripts/guide-pack.node-test.mjs`; a later
 /// phase edits both.
-const PHASE_1: [&str; 31] = [
+const PHASE_1: [&str; 30] = [
     "who_am_i",
     "read_messages",
     "codesense_overview",
@@ -39,7 +39,6 @@ const PHASE_1: [&str; 31] = [
     "records_set_fields",
     "create_content_file",
     "validate_story",
-    "open_workspace",
     "set_epic_repos",
     "read_epic_repos",
     "set_active_team",

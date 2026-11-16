@@ -24,11 +24,11 @@ pub struct Page {
 pub const PAGES: &[Page] = &[
     Page {
         path: "getting-started/content/foreman/index.html",
-        sha256: "532357165a6e3af577aca6e8dcfc7b5688f294003d0ee601ffab7bc7a48c5856",
+        sha256: "3c917d340b2af2fed2234b821482203c3e8a99f7efa78c63e8ba00af0e0bf4e8",
     },
     Page {
         path: "getting-started/content/guide/index.html",
-        sha256: "f3cac1364f73772daae6bee91e533866513482214ccd0fa20864dcdcf337cacd",
+        sha256: "fb6165d2c34836f87280fe21fd3101e50f6a69d8fcfcf56d15af629e3c5e6cd8",
     },
 ];
 
@@ -74,6 +74,20 @@ pub fn grant_for(docs_root: &Path, document_path: &str) -> Option<String> {
 pub fn still_granted(bytes: &[u8]) -> bool {
     let digest = format!("{:x}", Sha256::digest(bytes));
     PAGES.iter().any(|page| page.sha256 == digest)
+}
+
+/// The setup guide's place in the docs checkout. Its pin is looked up in the page list by this
+/// path, so the guide's hash lives in one place.
+pub const GUIDE_PAGE: &str = "getting-started/content/guide/index.html";
+
+/// Whether the document is the pinned setup guide: the page list's entry for [`GUIDE_PAGE`],
+/// at its place under `docs_root`, with that entry's bytes. Read and hashed on every
+/// call. Production passes [`PAGES`].
+pub fn is_guide_page_in(pages: &[Page], docs_root: &Path, document_path: &str) -> bool {
+    pages
+        .iter()
+        .filter(|page| page.path == GUIDE_PAGE)
+        .any(|guide| grant_in(std::slice::from_ref(guide), docs_root, document_path).is_some())
 }
 
 /// The document must sit at a page's path under `docs_root`, reached through plain segments
@@ -338,5 +352,41 @@ mod tests {
     #[test]
     fn it_is_not_in_the_grantable_vocabulary() {
         assert!(!super::super::capabilities::known(CAPABILITY));
+    }
+
+    #[test]
+    fn only_the_pinned_guide_bytes_at_its_place_are_the_guide() {
+        let guide = |body: &[u8]| {
+            let hash: &'static str =
+                Box::leak(format!("{:x}", Sha256::digest(body)).into_boxed_str());
+            vec![Page {
+                path: GUIDE_PAGE,
+                sha256: hash,
+            }]
+        };
+        let (_dir, docs, _) = placed(BODY);
+        let at = docs.join(GUIDE_PAGE);
+        std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+        std::fs::write(&at, b"guide").unwrap();
+        assert!(is_guide_page_in(
+            &guide(b"guide"),
+            &docs,
+            &at.to_string_lossy()
+        ));
+        // One byte off the pin, or no guide in the page list, is not the guide.
+        assert!(!is_guide_page_in(
+            &guide(b"guid"),
+            &docs,
+            &at.to_string_lossy()
+        ));
+        assert!(!is_guide_page_in(&pages(), &docs, &at.to_string_lossy()));
+        // The Foreman page holds its own pin and is not the guide.
+        let foreman = docs.join(PAGE);
+        assert!(grant_in(&pages(), &docs, &foreman.to_string_lossy()).is_some());
+        assert!(!is_guide_page_in(
+            &pages(),
+            &docs,
+            &foreman.to_string_lossy()
+        ));
     }
 }

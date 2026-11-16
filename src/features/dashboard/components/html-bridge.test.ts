@@ -1045,6 +1045,36 @@ describe("openWorkspace team-workspace target", () => {
     expect(mockAgentLaunchOpen.mock.calls[0][0].createWorktree).toBeUndefined();
   });
 
+  // Like openLauncher, a named team must be one the page is admitted to (non-archived, and only
+  // its own team under a team-scope grant).
+  it("refuses a team the page is not admitted to, and launches into one it is", async () => {
+    mockAgentLaunchOpen.mockResolvedValue({ status: "opened", handle: "h", name: "Foreman" });
+    const into = (org: string, team: string) => ({
+      ...page,
+      target: { ...page.target, org, team },
+    });
+    await expect(runBridgeCommand("openWorkspace", into("other", "web"))).rejects.toThrow(
+      "openWorkspace: unknown or unadmitted team other:web",
+    );
+    const teamScoped = {
+      frameGrant: {
+        frameId: "f",
+        principal: "human",
+        dashboard: "foreman",
+        slot: "viewer",
+        team: { org: "acme", team: "default" },
+        scope: "team",
+      },
+    } as unknown as Parameters<typeof runBridgeCommand>[2];
+    await expect(
+      runBridgeCommand("openWorkspace", into("acme", "empty"), teamScoped),
+    ).rejects.toThrow("openWorkspace: unknown or unadmitted team acme:empty");
+    expect(mockAgentLaunchOpen).not.toHaveBeenCalled();
+    await expect(runBridgeCommand("openWorkspace", into("acme", "empty"))).resolves.toMatchObject({
+      status: "opened",
+    });
+  });
+
   it("reports a repeat launch as alreadyLive", async () => {
     mockAgentLaunchOpen.mockResolvedValue({ status: "alreadyLive", handle: "h", name: "Foreman" });
     await expect(runBridgeCommand("openWorkspace", page)).resolves.toMatchObject({

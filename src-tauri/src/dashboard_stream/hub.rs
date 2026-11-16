@@ -5,6 +5,7 @@
 //! agent-done intake) subscribe. The hub also owns the scoped read-token store.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::broadcast;
@@ -14,6 +15,8 @@ use super::{SessionStatus, StatusDelta};
 
 /// Broadcast channel depth: absorbs a burst without lagging a briefly-busy consumer.
 const CAPACITY: usize = 256;
+/// The most sessions the latest-progress and latest-done maps keep between them.
+pub(crate) const LATEST_SESSIONS: usize = 1_000;
 
 /// One item on the broadcast channel.
 #[derive(Debug, Clone)]
@@ -26,10 +29,13 @@ struct HubInner {
     tokens: ScopedCapabilityStore,
     /// Each session's latest `signal_progress`, by session id, so a read (the
     /// `list_sessions` row, a dashboard's `sessions()`) shows where it is now.
-    latest_progress: Mutex<HashMap<String, SessionProgress>>,
+    /// Each entry carries the write order it was stored in.
+    latest_progress: Mutex<HashMap<String, (SessionProgress, u64)>>,
     /// Each session's latest `signal_done` (status and summary), by session
     /// id: SW-AGR-19's resume brief says where it stood.
-    latest_done: Mutex<HashMap<String, (String, Option<String>, i64)>>,
+    latest_done: Mutex<HashMap<String, (String, Option<String>, i64, u64)>>,
+    /// The write order of the latest entry stored in either map.
+    written: AtomicU64,
 }
 
 /// A session's latest `signal_progress`: `phase` is `planning` | `dev` | `review` |
@@ -63,6 +69,7 @@ impl DashboardStreamHub {
                 tokens: ScopedCapabilityStore::default(),
                 latest_progress: Mutex::new(HashMap::new()),
                 latest_done: Mutex::new(HashMap::new()),
+                written: AtomicU64::new(0),
             }),
         }
     }
@@ -84,11 +91,21 @@ impl DashboardStreamHub {
         let Some(parsed) = SessionStatus::from_wire(status) else {
             return;
         };
-        if let Ok(mut latest) = self.inner.latest_done.lock() {
-            latest.insert(
-                session_id.to_string(),
-                (status.to_string(), summary.clone(), now_ms()),
-            );
+        let added = self.inner.latest_done.lock().is_ok_and(|mut latest| {
+            latest
+                .insert(
+                    session_id.to_string(),
+                    (
+                        status.to_string(),
+                        summary.clone(),
+                        now_ms(),
+                        self.next_seq(),
+                    ),
+                )
+                .is_none()
+        });
+        if added {
+            self.bound();
         }
         let status = parsed;
         let _ = self.inner.tx.send(StreamEvent::Session {
@@ -125,17 +142,25 @@ impl DashboardStreamHub {
         let Some(parsed) = crate::roles::Phase::from_wire(phase) else {
             return;
         };
-        if let Ok(mut latest) = self.inner.latest_progress.lock() {
-            latest.insert(
-                session_id.to_string(),
-                SessionProgress {
-                    phase: phase.to_string(),
-                    step,
-                    total,
-                    note: note.clone(),
-                    at_ms: now_ms(),
-                },
-            );
+        let added = self.inner.latest_progress.lock().is_ok_and(|mut latest| {
+            latest
+                .insert(
+                    session_id.to_string(),
+                    (
+                        SessionProgress {
+                            phase: phase.to_string(),
+                            step,
+                            total,
+                            note: note.clone(),
+                            at_ms: now_ms(),
+                        },
+                        self.next_seq(),
+                    ),
+                )
+                .is_none()
+        });
+        if added {
+            self.bound();
         }
         let phase = parsed;
         let _ = self.inner.tx.send(StreamEvent::Session {
@@ -151,13 +176,58 @@ impl DashboardStreamHub {
 }
 
 impl DashboardStreamHub {
+    fn next_seq(&self) -> u64 {
+        self.inner.written.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    /// Keep at most [`LATEST_SESSIONS`] sessions: past it, the sessions written least recently
+    /// leave both maps together, since `progress_note_for_title` compares them. Called only
+    /// when a signal adds an entry: an update to a kept session can't grow the maps.
+    fn bound(&self) {
+        let (Ok(mut progress), Ok(mut done)) = (
+            self.inner.latest_progress.lock(),
+            self.inner.latest_done.lock(),
+        ) else {
+            return;
+        };
+        if progress.len() + done.len() <= LATEST_SESSIONS {
+            return;
+        }
+        let mut last: HashMap<&str, u64> = HashMap::new();
+        for (session, (_, written)) in progress.iter() {
+            last.insert(session.as_str(), *written);
+        }
+        for (session, (_, _, _, written)) in done.iter() {
+            let at = last.entry(session.as_str()).or_default();
+            *at = (*at).max(*written);
+        }
+        if last.len() <= LATEST_SESSIONS {
+            return;
+        }
+        let mut order: Vec<_> = last.into_iter().map(|(s, at)| (at, s.to_owned())).collect();
+        order.sort_unstable();
+        let excess = order.len() - LATEST_SESSIONS;
+        for (_, session) in order.into_iter().take(excess) {
+            progress.remove(&session);
+            done.remove(&session);
+        }
+    }
+
+    #[cfg(test)]
+    fn tracked(&self) -> (usize, usize) {
+        (
+            self.inner.latest_progress.lock().unwrap().len(),
+            self.inner.latest_done.lock().unwrap().len(),
+        )
+    }
+
     /// The latest `signal_progress` of `session_id`, if it reported any.
     pub fn latest_progress(&self, session_id: &str) -> Option<SessionProgress> {
         self.inner
             .latest_progress
             .lock()
             .ok()
-            .and_then(|latest| latest.get(session_id).cloned())
+            .and_then(|latest| latest.get(session_id).map(|(progress, _)| progress.clone()))
     }
 }
 
@@ -168,7 +238,7 @@ impl DashboardStreamHub {
         self.inner.latest_done.lock().ok().and_then(|latest| {
             latest
                 .get(session_id)
-                .map(|(status, summary, _)| (status.clone(), summary.clone()))
+                .map(|(status, summary, _, _)| (status.clone(), summary.clone()))
         })
     }
 
@@ -181,7 +251,7 @@ impl DashboardStreamHub {
         let latest = self.inner.latest_done.lock().ok()?;
         if latest
             .get(session_id)
-            .is_some_and(|(_, _, at_ms)| progress.at_ms <= *at_ms)
+            .is_some_and(|(_, _, at_ms, _)| progress.at_ms <= *at_ms)
         {
             return None;
         }
@@ -215,6 +285,36 @@ mod tests {
         assert_eq!(
             hub.latest_done("s1"),
             Some(("success".into(), Some("second".into())))
+        );
+    }
+
+    #[test]
+    fn latest_maps_are_bounded() {
+        let hub = DashboardStreamHub::new();
+        // The oldest session reported both progress and a finish.
+        hub.on_session_progress("s0", "dev", None, None, Some("old".into()));
+        hub.on_session_status("s0", "success", Some("old".into()));
+        for n in 1..5_000 {
+            hub.on_session_progress(&format!("s{n}"), "dev", None, None, Some("working".into()));
+        }
+        hub.on_session_status("s4999", "success", Some("finished".into()));
+        let (progress, done) = hub.tracked();
+        assert!(progress <= LATEST_SESSIONS && done <= LATEST_SESSIONS);
+        assert_eq!(
+            hub.latest_progress("s0"),
+            None,
+            "the oldest session leaves both maps"
+        );
+        assert_eq!(hub.latest_done("s0"), None);
+        assert_eq!(
+            hub.latest_done("s4999"),
+            Some(("success".into(), Some("finished".into()))),
+            "a finished run stays readable"
+        );
+        assert_eq!(
+            hub.progress_note_for_title("s4999"),
+            None,
+            "a retained finished session keeps its note out of the title"
         );
     }
 
