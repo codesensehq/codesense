@@ -477,6 +477,28 @@ pub(crate) fn account_policy(runtime: AgentCli) -> ResolvedAccountPolicy {
     }
 }
 
+/// The names of every tool the CodeSense bridge serves.
+pub(crate) fn served_bridge_tools() -> &'static BTreeSet<String> {
+    static NAMES: std::sync::OnceLock<BTreeSet<String>> = std::sync::OnceLock::new();
+    NAMES.get_or_init(|| {
+        crate::mcp::handler::CodesenseHandler::served_tool_router()
+            .list_all()
+            .iter()
+            .map(|tool| tool.name.to_string())
+            .collect()
+    })
+}
+
+impl ResolvedLaunchProfile {
+    /// What a launch record keeps of the bridge tools: the effective list when the launch
+    /// declared one, else `None` (every tool, including those a later build serves).
+    pub(crate) fn recorded_bridge_tools(&self) -> Option<Vec<String>> {
+        self.bridge_tools
+            .as_ref()
+            .map(|_| self.effective_bridge_tools.clone())
+    }
+}
+
 /// The adapter's launch with the agent's identity, args, env, escalation, MCP scope and
 /// mode in place. An agent is always scoped, so it reaches the bridge through its
 /// projected MCP config and its allowlist is never `None`.
@@ -505,22 +527,16 @@ fn launch_profile(agent: &Agent, key: &AgentKey) -> ResolvedLaunchProfile {
             .then(|| agent.mcp.bridge_tools.clone())
             .flatten(),
         effective_bridge_tools: if projects_bridge_tool_allowlist {
-            static NAMES: std::sync::OnceLock<BTreeSet<String>> = std::sync::OnceLock::new();
-            let names = NAMES.get_or_init(|| {
-                crate::mcp::handler::CodesenseHandler::served_tool_router()
-                    .list_all()
-                    .iter()
-                    .map(|tool| tool.name.to_string())
-                    .collect()
-            });
-            names
+            let always_on = permissions::always_on_bridge_tools(agent.runtime);
+            served_bridge_tools()
                 .iter()
                 .filter(|name| {
-                    agent
-                        .mcp
-                        .bridge_tools
-                        .as_ref()
-                        .is_none_or(|tools| tools.contains(name))
+                    always_on.contains(*name)
+                        || agent
+                            .mcp
+                            .bridge_tools
+                            .as_ref()
+                            .is_none_or(|tools| tools.contains(name))
                 })
                 .cloned()
                 .collect()

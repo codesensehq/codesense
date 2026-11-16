@@ -2403,8 +2403,9 @@ const MAX_UNRESOLVED_PATHS: usize = 278;
 /// of which calls a write primitive.
 /// The metrics-db timer and the bounded, shared worktree reads add 24 more method calls in
 /// `attribution/metrics_db.rs`, `commands/worktree_probe.rs` and `commands/worktree.rs`; none
-/// reaches a sink. Set to CI's census on the merge with main.
-const MAX_UNRESOLVED_METHODS: usize = 6_525;
+/// reaches a sink. The Claude bridge tool list adds 7 more (per-launch denies in
+/// `agents/permissions.rs`, per-caller instructions in `mcp/handler.rs`), none a write.
+const MAX_UNRESOLVED_METHODS: usize = 6_532;
 
 /// X1: no unattended root reaches a write primitive; every reviewed entry is
 /// still needed; the walk still sees the app.

@@ -398,7 +398,7 @@ impl LaunchFacts {
         cli_version: Option<&str>,
         args: &[String],
         mcp_allow: Option<Vec<String>>,
-        bridge_tools: Vec<String>,
+        bridge_tools: Option<Vec<String>>,
         agent: String,
         manifest_hash: String,
         workspace: &str,
@@ -414,7 +414,7 @@ impl LaunchFacts {
             agent: Some(agent),
             manifest_hash: Some(manifest_hash),
             mcp_allow,
-            bridge_tools: Some(bridge_tools),
+            bridge_tools,
             workspace: Some(workspace.to_string()),
             // Where the CLI keeps its files unless an account relocates them.
             config_home: codesense_pty_core::agent_cli::descriptor(cli)
@@ -560,9 +560,9 @@ mod tests {
         use codesense_pty_core::agent_cli::AgentCli;
         for alias in ["--mo=second", "-msecond", "-vQmsecond"] {
             let args = vec!["--model=first".into(), alias.into()];
-            let facts = LaunchFacts::new(AgentCli::Hermes, None, &args, None, Vec::new(), "agent".into(), "manifest".into(), ".");
+            let facts = LaunchFacts::new(AgentCli::Hermes, None, &args, None, None, "agent".into(), "manifest".into(), ".");
             assert_eq!(facts.model.as_deref(), Some("second"));
-            let other = LaunchFacts::new(AgentCli::Claude, None, &args, None, Vec::new(), "agent".into(), "manifest".into(), ".");
+            let other = LaunchFacts::new(AgentCli::Claude, None, &args, None, None, "agent".into(), "manifest".into(), ".");
             assert_eq!(other.model.as_deref(), Some("first"));
         }
     }
