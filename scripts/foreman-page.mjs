@@ -11,7 +11,8 @@
 //
 // The checks, each of which fails the build:
 //   1. the vendored file's header sha256 is the hash of the rest of the file and equals `pack.yml`;
-//   2. the kit's baked-in config equals the pack's public config (no team ids, no budget keys);
+//   2. the kit's baked-in config equals the pack's public config (no team ids, no budget keys),
+//      and the config has every `foreman.*` and `timers.*` key and Foreman block entry the kit reads;
 //   3. the page is exactly the template with the vendored file inlined;
 //   4. the page's sha256 equals its `PAGES` entry in `foreman_launch.rs`, and the docs bundle ships
 //      exactly these bytes, so a docs update cannot silently drop the `foreman.launch` grant;
@@ -56,9 +57,10 @@ const FORBIDDEN_KEY = /(^|[^a-z])(point|points|envelope|budget)([^a-z]|$)|\$/i;
 const PRIVATE_TEXT = [
   [/\b[A-Z]{2,}-[A-Z]{2,}-\d+[a-z]?\b/, "a tracker story id"],
   [/\/Users\/|~\/\.codesense/, "a local path"],
-  // A team's own `design/<id>/…` files, which the kit reads at run time, are built from an id.
+  // A team's own `design/<id>/…` files, which the kit reads at run time, are built from an id,
+  // and its agent pages sit at `dashboards/agent-pages/<page>.html` in the team's content.
   [
-    /\b(?:dashboards|reviews)\/|\bdesign\/(?!\$\{)|scripts\/story-view/,
+    /\breviews\/|\bdashboards\/(?!agent-pages\/[a-z-]+\.html')|\bdesign\/(?!\$\{)|scripts\/story-view/,
     "a path in the kit's repository",
   ],
   [/sha256:[0-9a-f]{64}/, "a source file's hash"],
@@ -190,6 +192,34 @@ const keysOf = (value, prefix = "") =>
       ])
     : [];
 
+const MEMBER = /^(?:\.[A-Za-z_$][\w$]*)*/;
+const at = (value, path) =>
+  path
+    .split(".")
+    .reduce((node, key) => (node && typeof node === "object" ? node[key] : undefined), value);
+
+/**
+ * The config paths the vendored kit's Foreman page reads: every `config.foreman.…` and
+ * `config.timers.…` member chain (the timers are shared with the kit's other pages),
+ * and for each block its template mounts, the block's `title` and `empty` and every
+ * `blocks.<id>.…` chain. A computed member (`views[name]`) ends a chain. The kit bakes the config
+ * it was built with, so a key missing here is a page that reads `undefined`.
+ */
+export function configReads(body) {
+  const paths = new Set();
+  for (const match of body.matchAll(/\bconfig\.(foreman|timers)((?:\.[A-Za-z_$][\w$]*)+)/g))
+    paths.add(`${match[1]}${match[2]}`);
+  const template = /\bFOREMAN_TEMPLATE=`([^`]*)`/.exec(body)?.[1] ?? "";
+  const ids = new Set([...template.matchAll(/data-block="([a-z][a-z0-9-]*)"/g)].map((m) => m[1]));
+  for (const id of ids) paths.add(`blocks.${id}.title`).add(`blocks.${id}.empty`);
+  for (const match of body.matchAll(/\bblocks(?:\.([a-z][\w$]*)|\[(['"])([a-z][a-z0-9-]*)\2\])/g)) {
+    const id = match[1] ?? match[3];
+    const chain = MEMBER.exec(body.slice(match.index + match[0].length))[0];
+    if (ids.has(id)) paths.add(`blocks.${id}${chain}`);
+  }
+  return [...paths].sort();
+}
+
 export function pageText(vendored) {
   const { body } = parseVendored(vendored);
   if (/<\/script|<!--/i.test(body))
@@ -200,7 +230,7 @@ export function pageText(vendored) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="codesense:capabilities" content="${CAPABILITIES.join(" ")}">
-<meta name="story-view:foreman" content="">
+<meta name="story-view:foreman" content="launcher">
 <title>Foreman</title>
 </head>
 <body>
@@ -243,6 +273,11 @@ export function problems(root = ROOT, bundled = () => buildTree().get(PAGE)) {
     out.push(
       `${VENDORED}: the baked-in config differs from ${CONFIG}; rebuild the kit with that config`,
     );
+  for (const path of configReads(kit.body))
+    if (at(config, path) === undefined)
+      out.push(
+        `${CONFIG}: no "${path}", which the vendored kit reads; add it from the kit's own story-view.yml`,
+      );
   for (const key of keysOf(config))
     if (FORBIDDEN_KEY.test(key)) out.push(`${CONFIG}: "${key}" is a budget or point key`);
   // The public config's one team is the docs team the page ships in; any other team is someone's own.
