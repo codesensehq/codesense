@@ -1689,6 +1689,24 @@ export type RollupDto = {
 export const listSessionInbox = (handle: string) =>
   invoke<SessionInboxDto>("list_session_inbox", { handle });
 
+/** One saved agent + story thread's conversation (mirror of Rust `ThreadInboxDto`): the mail of
+ *  every listed session of the thread and, for a story thread, every recorded one, ended ones
+ *  included. */
+export type ThreadInboxDto = SessionInboxDto & {
+  agentId: string;
+  storyId: string;
+  /** The handles whose mail it holds. */
+  sessions: string[];
+  /** Every address it holds the mail of: the handles and the tab session ids. */
+  addresses: string[];
+};
+
+/** A saved agent + story thread's conversation, so a successor opens on its predecessor's mail.
+ *  `session`, a seat of the thread (listed and not ended), leaves out the thread's other seats.
+ *  Marks nothing read, claims nothing. Refetch on `agent-inbox-changed`. */
+export const listThreadInbox = (agentId: string, storyId: string | null, session?: string) =>
+  invoke<ThreadInboxDto>("list_thread_inbox", { agentId, storyId, session });
+
 /** Every synced team's messages and role queues, for the full-screen rollup. */
 export const listInboxRollup = (frameId?: string, page?: string) =>
   frameId || page

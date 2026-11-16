@@ -29,6 +29,7 @@ import {
 import type { AskUserRequest } from "@/shared/lib/managed-session";
 import {
   resetPrunedAgentSessionsForTests,
+  getSessionActivityAt,
   useAgentStateStore,
 } from "@/shared/stores/agent-state-store";
 import type { ActivityCompletion } from "@/tauri/commands";
@@ -116,11 +117,11 @@ describe("managed-session bridge @P1", () => {
 
     it("consumes an authoritative completion boundary without hiding an already received later turn", () => {
       laterTurn();
-      const activityAt = useAgentStateStore.getState().bySession.s1.activityAt;
+      const activityAt = getSessionActivityAt("s1");
       receiveAgentDone({ sessionId: "s1", status: "success", activityCompletion: boundary });
       expect(stateOf("s1")).toBe("done");
       expect(useAgentStateStore.getState().completionActivityBySession.s1).toEqual(boundary);
-      expect(useAgentStateStore.getState().bySession.s1.activityAt).toBe(activityAt);
+      expect(getSessionActivityAt("s1")).toBe(activityAt);
     });
 
     it.each([

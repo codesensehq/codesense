@@ -39,7 +39,7 @@ vi.mock("@/features/machines/stores/machines-store", async () => {
 const { crewsFor, memberMarksFor, useWorkspaceCrews, useWorkspaceTeamHue } =
   await import("./use-workspace-crews");
 const { BUILTIN_FACE_SOURCE } = await import("@/shared/lib/avatar-packs");
-const { useAgentStateStore, resetPrunedAgentSessionsForTests } =
+const { getSessionActivityAt, useAgentStateStore, resetPrunedAgentSessionsForTests } =
   await import("@/shared/stores/agent-state-store");
 const { useAgentListProjectionStore } = await import("@/features/viewer/lib/agent-list-projection");
 const { resetManagedSessionStoreForTests } =
@@ -179,7 +179,7 @@ describe("useWorkspaceCrews", () => {
       for (const id of ["sid-lead", "sid-a"])
         useAgentStateStore.getState().recordActivity({ ...snapshot, session: id }, Infinity);
       for (const id of ["sid-lead", "sid-a"]) projectSessionStatus(id, effectiveStatus);
-      const activityAt = useAgentStateStore.getState().bySession["sid-lead"].activityAt;
+      const activityAt = getSessionActivityAt("sid-lead");
       const { result } = renderHook(() => useWorkspaceCrews("t"));
       const originalSummary = result.current.get("ws-login")!.summary;
       for (const freshness of ["recovering", "unavailable"] as const) {
@@ -194,14 +194,14 @@ describe("useWorkspaceCrews", () => {
           mark,
           summary: `${originalSummary}, ${qualifier}`,
         });
-        expect(useAgentStateStore.getState().bySession["sid-lead"].activityAt).toBe(activityAt);
+        expect(getSessionActivityAt("sid-lead")).toBe(activityAt);
       }
       act(() => {
         for (const id of ["sid-lead", "sid-a"])
           useAgentStateStore.getState().recordActivity({ ...snapshot, session: id }, Infinity);
       });
       expect(result.current.get("ws-login")!.summary).toBe(originalSummary);
-      expect(useAgentStateStore.getState().bySession["sid-lead"].activityAt).toBe(activityAt);
+      expect(getSessionActivityAt("sid-lead")).toBe(activityAt);
     },
   );
 

@@ -382,6 +382,7 @@ fn known(handle: &str, session: &str, name: &str, running: bool) -> KnownSession
         session: Some(session.into()),
         name: name.into(),
         running,
+        ended: !running,
     }
 }
 

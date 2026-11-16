@@ -22,7 +22,8 @@ use serde::{Deserialize, Serialize};
 
 use super::agent_inbox::{
     address_name, list_messages_unbounded, send_message_replying, team_inbox, with_store,
-    AppInboxHost, InboxHost, InboxScope, InboxTeam, InboxView, KnownSessions, SendResult,
+    AppInboxHost, InboxHost, InboxScope, InboxTeam, InboxView, KnownSession, KnownSessions,
+    SendResult,
 };
 use super::await_blocking;
 use super::dashboard_launch::LaunchTeam;
@@ -1210,6 +1211,54 @@ impl StoreReads {
     }
 }
 
+/// Everything `addresses` sent and received, and what waits in the role queues they hold,
+/// across every synced team (and `also`), oldest first: the roles held and the messages.
+/// One session's conversation and one thread's share it. A view: it marks nothing read.
+async fn conversation_of(
+    host: &dyn InboxHost,
+    sessions: &KnownSessions,
+    addresses: Vec<String>,
+    also: Option<LaunchTeam>,
+) -> Result<(Vec<String>, Vec<ConversationMessage>), String> {
+    let now = chrono::Utc::now().timestamp();
+    let mut roles: Vec<String> = Vec::new();
+    let mut messages = Vec::new();
+    let mut reads = StoreReads::default();
+    for (team, path) in team_stores(host, also, false).await? {
+        let addresses = addresses.clone();
+        let read = with_store("list_session_inbox", path, move |store| {
+            let held = crate::weft::role_inbox::roles_held_by(store, &addresses, now)?;
+            let rows = crate::weft::inbox::inbox_list_for_session(store, &addresses, &held)?;
+            Ok((
+                held,
+                rows,
+                crate::weft::inbox::role_holders(store)?,
+                crate::weft::reactions::reactions_all(store)?,
+            ))
+        })
+        .await;
+        let Some((held, rows, holders, reactions)) = reads.take(read) else {
+            log::warn!(target: "inbox", "conversation of team {}:{} failed: {}", team.org, team.team, reads.last_error);
+            continue;
+        };
+        for role in held {
+            if !roles.contains(&role) {
+                roles.push(role);
+            }
+        }
+        messages.extend(rows.into_iter().map(|m| {
+            attach_reactions(
+                conversation_message(host, sessions, &holders, &team, m),
+                &reactions,
+            )
+        }));
+    }
+    reads.all_failed()?;
+    roles.sort();
+    oldest_first(&mut messages);
+    Ok((roles, messages))
+}
+
 /// [`SessionInboxDto`] for `handle` (a handle or a tab session id). A view: it marks
 /// nothing read and claims nothing. `human` is not a session: its mail is the human's
 /// inbox, not one session's conversation.
@@ -1237,50 +1286,147 @@ pub(crate) async fn session_inbox(
             addresses.push(alias);
         }
     }
-    let now = chrono::Utc::now().timestamp();
-    let mut roles: Vec<String> = Vec::new();
-    let mut messages = Vec::new();
-    let mut reads = StoreReads::default();
-    for (team, path) in team_stores(
-        host,
-        crate::commands::agent_inbox::handle_team(host, &handle).await,
-        false,
-    )
-    .await?
-    {
-        let addresses = addresses.clone();
-        let read = with_store("list_session_inbox", path, move |store| {
-            let held = crate::weft::role_inbox::roles_held_by(store, &addresses, now)?;
-            let rows = crate::weft::inbox::inbox_list_for_session(store, &addresses, &held)?;
-            Ok((
-                held,
-                rows,
-                crate::weft::inbox::role_holders(store)?,
-                crate::weft::reactions::reactions_all(store)?,
-            ))
-        })
-        .await;
-        let Some((held, rows, holders, reactions)) = reads.take(read) else {
-            log::warn!(target: "inbox", "session inbox of team {}:{} failed: {}", team.org, team.team, reads.last_error);
-            continue;
-        };
-        for role in held {
-            if !roles.contains(&role) {
-                roles.push(role);
-            }
-        }
-        messages.extend(rows.into_iter().map(|m| {
-            attach_reactions(
-                conversation_message(host, &sessions, &holders, &team, m),
-                &reactions,
-            )
-        }));
-    }
-    reads.all_failed()?;
-    roles.sort();
-    oldest_first(&mut messages);
+    let also = crate::commands::agent_inbox::handle_team(host, &handle).await;
+    let (roles, messages) = conversation_of(host, &sessions, addresses, also).await?;
     Ok(SessionInboxDto {
         handle,
+        roles,
+        messages,
+    })
+}
+
+/// `list_thread_inbox`: the conversation of one saved agent + story thread (the key its
+/// pins use): every session of it the roster lists, and for a story thread every one the
+/// usage store recorded, ended ones included, so a successor opens on its predecessor's
+/// mail.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ThreadInboxDto {
+    pub agent_id: String,
+    pub story_id: String,
+    /// The seat the read was asked for, else the thread's last listed seat (a listed session
+    /// that has not ended), else its newest recorded session; empty for a thread with none.
+    pub handle: String,
+    /// The handles whose mail the read holds.
+    pub sessions: Vec<String>,
+    /// Every address the read holds the mail of: the handles and the tab session ids (a
+    /// recorded handle the roster now gives another thread's session is read by its tab id
+    /// only), so a view can tell the thread's mail from other mail.
+    pub addresses: Vec<String>,
+    pub roles: Vec<String>,
+    pub messages: Vec<ConversationMessage>,
+}
+
+/// [`ThreadInboxDto`] for saved agent `agent_id` (any revision) and story `story_id`
+/// (empty: launched with no story). `seat`, a handle or tab session id of the thread, leaves
+/// out the thread's other seats while it is one itself ([`KnownSession::is_seat`]: listed
+/// and not ended, an offline or startup-stuck one included): two seats of one saved agent
+/// on one story share a thread, and neither is the other's conversation. A seat that has
+/// ended (exited, crashed) or is not the thread's leaves no one out. A view: it marks
+/// nothing read.
+pub(crate) async fn thread_inbox(
+    host: &dyn InboxHost,
+    agent_id: &str,
+    story_id: &str,
+    seat: Option<&str>,
+) -> Result<ThreadInboxDto, String> {
+    let thread = crate::weft::pins::ThreadKey::new(agent_id, Some(story_id))
+        .map_err(|e| e.to_string())?;
+    let sessions = InboxHost::sessions(host).await?;
+    // The roster's sessions launched on this thread, from one read of the launch registry.
+    let listed: Vec<String> = sessions.iter().map(|known| known.handle.clone()).collect();
+    let launched = host.launch_threads(&listed).await;
+    let members: Vec<KnownSession> = sessions
+        .iter()
+        .zip(launched)
+        .filter(|(_, launch)| {
+            launch.as_ref().is_some_and(|(agent, story)| {
+                Result::ok(crate::weft::pins::ThreadKey::new(agent, story.as_deref())).as_ref()
+                    == Some(&thread)
+            })
+        })
+        .map(|(known, _)| known.clone())
+        .collect();
+    // A no-story thread is its listed sessions only: nothing bounds the no-story sessions a
+    // saved agent ever launched, and a fresh one must not open on all of their mail.
+    let recorded = if str::is_empty(&thread.story_id) {
+        Vec::new()
+    } else {
+        host.thread_sessions(&thread).await?
+    };
+    let member = |handle: &str| members.iter().any(|m| m.handle == handle);
+    let own = seat
+        .and_then(|seat| KnownSessions::find(&sessions, seat))
+        .filter(|row| row.is_seat() && member(&row.handle))
+        .cloned();
+    let others: Vec<&KnownSession> = match &own {
+        Some(own) => members.iter().filter(|m| m.is_seat() && m.handle != own.handle).collect(),
+        None => Vec::new(),
+    };
+    let left_out = |id: &str| {
+        others
+            .iter()
+            .any(|m| m.handle == id || m.session.as_deref() == Some(id))
+    };
+    let mut addresses: Vec<String> = Vec::new();
+    let mut handles: Vec<String> = Vec::new();
+    let mut add = |id: &str, handle: bool| {
+        let id = id.trim();
+        if str::is_empty(id) || left_out(id) {
+            return;
+        }
+        if !addresses.iter().any(|a| a == id) {
+            addresses.push(id.to_owned());
+        }
+        if handle && !handles.iter().any(|h| h == id) {
+            handles.push(id.to_owned());
+        }
+    };
+    for row in &recorded {
+        add(&row.session_id, false);
+        // A recorded handle the roster now holds for a session of another thread is that
+        // session's address, not this thread's: its tab session id still finds the mail.
+        if let Some(handle) = row.handle.as_deref() {
+            if KnownSessions::find(&sessions, handle).is_none_or(|now| member(&now.handle)) {
+                add(handle, true);
+            }
+        }
+    }
+    for m in &members {
+        add(&m.handle, true);
+        if let Some(session) = m.session.as_deref() {
+            add(session, false);
+        }
+    }
+    let handle = own
+        .as_ref()
+        .map(|own| own.handle.clone())
+        .or_else(|| {
+            Iterator::find(&mut members.iter().rev(), |m| m.is_seat()).map(|m| m.handle.clone())
+        })
+        .or_else(|| {
+            Iterator::find(
+                &mut recorded.iter().rev().filter_map(|row| row.handle.clone()),
+                |recorded| handles.contains(recorded),
+            )
+        })
+        .or_else(|| <[String]>::last(&handles).cloned())
+        .unwrap_or_default();
+    let also = match std::string::String::as_str(&handle) {
+        "" => None,
+        handle => crate::commands::agent_inbox::handle_team(host, handle).await,
+    };
+    let (roles, messages) = if std::vec::Vec::is_empty(&addresses) {
+        (Vec::new(), Vec::new())
+    } else {
+        conversation_of(host, &sessions, addresses.clone(), also).await?
+    };
+    Ok(ThreadInboxDto {
+        agent_id: thread.agent_id,
+        story_id: thread.story_id,
+        handle,
+        sessions: handles,
+        addresses,
         roles,
         messages,
     })
@@ -1657,6 +1803,27 @@ pub async fn list_session_inbox(
     handle: String,
 ) -> Result<SessionInboxDto, String> {
     session_inbox(&AppInboxHost { app }, &handle).await
+}
+
+/// One saved agent + story thread's conversation across every synced team: the mail of
+/// every session of it, the recorded ended ones of a story thread included (a no-story
+/// thread is its listed sessions), so a successor opens on its predecessor's mail.
+/// `session`, a seat of the thread (listed and not ended), leaves out the thread's other
+/// seats. Marks nothing read, claims nothing.
+#[tauri::command]
+pub async fn list_thread_inbox(
+    app: tauri::AppHandle,
+    agent_id: String,
+    story_id: Option<String>,
+    session: Option<String>,
+) -> Result<ThreadInboxDto, String> {
+    thread_inbox(
+        &AppInboxHost { app },
+        &agent_id,
+        story_id.as_deref().unwrap_or_default(),
+        session.as_deref(),
+    )
+    .await
 }
 
 /// Every synced team's messages and role queues (the full-screen inbox rollup).

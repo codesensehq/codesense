@@ -11,6 +11,7 @@ import {
   type ViewerState,
 } from "@/shared/stores/viewer-store";
 import { buildTeamKey } from "@/shared/lib/team-key";
+import { structurallyEqual } from "@/shared/lib/structural-equal";
 import { useOrgStore } from "@/shared/stores/org-store";
 import type { AgentIdentityChoice } from "@/shared/lib/agent-identity-choice";
 
@@ -198,8 +199,7 @@ export function watchAgentListInputs(): () => void {
       state.launchBySession !== previous.launchBySession ||
       state.bySession !== previous.bySession
     ) {
-      if (JSON.stringify(sessionModels()) !== JSON.stringify(sessionModels(previous)))
-        flushMirror();
+      if (!structurallyEqual(sessionModels(), sessionModels(previous))) flushMirror();
     }
   });
   const stopFacts = useAgentListFacts.subscribe(flushMirror);

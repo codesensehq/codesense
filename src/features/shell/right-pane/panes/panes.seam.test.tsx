@@ -407,12 +407,19 @@ describe("a pane is an HTML file (seam)", () => {
           for (const cb of listeners.get(event) ?? []) cb({ payload });
         },
       );
+      // The shared ui state persists as the host's does: the hub may read it again once no
+      // frame holds its cached view.
+      let appState = "{}";
       tauriInvoke.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
         if (cmd === "list_panes") return sourceTransport.read(args ?? {});
         if (cmd === "write_dashboard_profile")
           return { ...profile, ...(args?.patch as Record<string, unknown>) };
         if (cmd === "live_hub_view_key") return "all";
-        if (cmd === "load_app_state") return "{}";
+        if (cmd === "load_app_state") return appState;
+        if (cmd === "save_app_state") {
+          appState = String(args?.state);
+          return null;
+        }
         return stubTauri(cmd, args);
       });
       await liveHub.writeUi("ui:right-pane", "all", { noteId: "alpha" });

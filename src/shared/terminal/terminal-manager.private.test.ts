@@ -5,6 +5,7 @@ import { FakeEventBus, FakeTerminalServer } from "./__test-utils__/fake-terminal
 import { RESTORE_FAILED, createTerminalManager, type TerminalManager } from "./terminal-manager";
 import {
   resetPrunedAgentSessionsForTests,
+  getSessionActivityAt,
   useAgentStateStore,
 } from "@/shared/stores/agent-state-store";
 
@@ -110,8 +111,6 @@ describe("terminal output leaves the shared agent activity clock to the host", (
       signal: { kind: "claude-hook", event: "UserPromptSubmit" },
     });
   }
-  const activityAt = (sessionId: string) =>
-    useAgentStateStore.getState().bySession[sessionId]?.activityAt;
   const mount = (sessionId: string) => {
     const slot = document.createElement("div");
     document.body.appendChild(slot);
@@ -138,11 +137,11 @@ describe("terminal output leaves the shared agent activity clock to the host", (
     });
     await vi.advanceTimersByTimeAsync(100);
     expect(text("local")).toBe("historicallive");
-    expect(activityAt("local")).toBe(original);
+    expect(getSessionActivityAt("local")).toBe(original);
 
     manager.dispose("local");
     fake.bus.emit(`pty-output-stream-${stream}`, { data: "stale", seq: 100 });
-    expect(activityAt("local")).toBe(original);
+    expect(getSessionActivityAt("local")).toBe(original);
   });
 
   it("refuses unstamped and revoked private output", async () => {
@@ -176,7 +175,7 @@ describe("terminal output leaves the shared agent activity clock to the host", (
       privateAuthorityEpoch: "501",
     });
     expect(manager.terminal("private")).toBeNull();
-    expect(activityAt("private")).toBe(original);
+    expect(getSessionActivityAt("private")).toBe(original);
   });
 });
 
