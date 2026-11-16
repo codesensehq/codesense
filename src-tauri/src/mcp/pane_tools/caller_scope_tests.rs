@@ -117,8 +117,15 @@ fn other_org_same_named_team_is_refused_and_own_manifest_aliases_follow_the_real
         "Other org report"
     );
     // A team agent reads only its own org, even where a team shares its ancestor's name.
-    // No pane of the other org is listed at all, not only the report pane.
-    assert!(panes(org, "parent", &f.scope).is_empty());
+    // Only built-ins are listed: no team or private pane of the other org shows.
+    let listed = panes(org, "parent", &f.scope);
+    assert!(!listed.is_empty());
+    assert!(
+        listed
+            .iter()
+            .all(|pane| pane.dashboard_ref.scope == panes::DashboardScope::BuiltIn),
+        "{listed:?}"
+    );
     // In the agent's own team a manifest is read, but not one aliasing another
     // team's unshared file: the real owner decides.
     f.write("child", "panes/report.html", "<title>HTML fallback</title>");
