@@ -1931,9 +1931,11 @@ pub(crate) async fn prune_worktree_locked(
 /// unknown, so the fold lives at each call site: the Worktrees panel keeps `None`
 /// (renders as neither dirty nor a false "clean"); the auto-teardown gate folds
 /// `None → true` via [`worktree_git_dirty`] (never auto-destroy on an ambiguous read).
+/// `--untracked-files=normal` is spelled out so a user's `status.showUntrackedFiles=no` cannot
+/// make untracked-only work read clean to the gate that decides whether a worktree is removed.
 pub(crate) fn worktree_git_dirty_opt(worktree: &Path) -> Option<bool> {
     let out = Command::new(git_bin())
-        .args(["status", "--porcelain"])
+        .args(["status", "--porcelain", "--untracked-files=normal"])
         .current_dir(worktree)
         .output()
         .ok()?;
@@ -1948,7 +1950,6 @@ pub(crate) fn worktree_git_dirty_opt(worktree: &Path) -> Option<bool> {
 /// be taken is not probed a second time, on the listing thread, outside the concurrency bound.
 /// A path it does not hold (a caller outside the listing) is read through the same bounded,
 /// cached probe.
-#[derive(Default)]
 pub(crate) struct FactsMap(HashMap<PathBuf, super::worktree_probe::GitFacts>);
 
 impl FactsMap {
@@ -2152,18 +2153,38 @@ fn attached_code_repo_paths(
 /// The distinct clone git-dirs behind a set of attached worktree paths: each path's owning
 /// clone via [`main_repo_of_worktree`], deduped by canonical identity (symlink-safe, so a
 /// `/private`-prefixed or symlinked duplicate isn't returned twice), with an unresolvable
-/// path skipped fail-soft. Factored out of [`discover_worktrees_in`] so the SW-WU-14 FS
-/// watcher can attach to EXACTLY the clones the scan enumerates (watch-set ≡ scan-set) —
-/// a clone can never be scanned-but-unwatched nor watched-but-unscanned.
+/// path skipped fail-soft. This is the SW-WU-14 FS watcher's set, read with the unbounded
+/// original so a slow answer is waited for rather than read as "not a clone" and left
+/// unwatched; the listing reads the same set through [`listing_clone_dirs`], bounded and kept
+/// (watch-set ≡ scan-set: both resolve the same clone for the same path).
 pub(crate) fn distinct_clone_dirs(attached_worktree_paths: &[PathBuf]) -> Vec<PathBuf> {
+    dedup_clones(
+        attached_worktree_paths
+            .iter()
+            .map(|wt_path| main_repo_of_worktree(wt_path)),
+    )
+}
+
+/// [`distinct_clone_dirs`] for the listing: each lookup is bounded and kept, and at most
+/// [`LISTING_PROBE_CONCURRENCY`] run at once, so one hung path costs one timeout, not a
+/// serial queue of them.
+fn listing_clone_dirs(attached_worktree_paths: &[PathBuf]) -> Vec<PathBuf> {
+    let found = Mutex::new(vec![None; attached_worktree_paths.len()]);
+    let indices: Vec<usize> = (0..attached_worktree_paths.len()).collect();
+    super::worktree_probe::for_each_bounded(&indices, LISTING_PROBE_CONCURRENCY, |&index| {
+        let clone = super::worktree_probe::listing_clone_of(&attached_worktree_paths[index]);
+        found.lock().unwrap_or_else(|e| e.into_inner())[index] = clone;
+    });
+    dedup_clones(found.into_inner().unwrap_or_else(|e| e.into_inner()))
+}
+
+/// The distinct clones among the resolved ones, in order (`None` = unresolvable, skipped).
+fn dedup_clones(resolved: impl IntoIterator<Item = Option<PathBuf>>) -> Vec<PathBuf> {
     use crate::content_engine::sync::WaveCoordinator;
 
     let mut clones: Vec<PathBuf> = Vec::new();
     let mut seen: HashSet<PathBuf> = HashSet::new();
-    for wt_path in attached_worktree_paths {
-        let Some(clone) = super::worktree_probe::listing_clone_of(wt_path) else {
-            continue; // AC-4: unresolvable clone — skip fail-soft.
-        };
+    for clone in resolved.into_iter().flatten() {
         if seen.insert(WaveCoordinator::normalize_target_path(&clone)) {
             clones.push(clone);
         }
@@ -2189,7 +2210,7 @@ pub(crate) fn resolve_managed_clone_dirs(
 /// are the attached `code_repo_path`s ("main + N worktrees of the same slug").
 ///
 /// 1. Dedup the attached paths to their distinct clone git-dirs via
-///    [`main_repo_of_worktree`] — normalized before the dedup insert so a symlinked /
+///    [`listing_clone_dirs`] — normalized before the dedup insert so a symlinked /
 ///    `/private`-prefixed duplicate isn't enumerated twice; a path whose clone can't be
 ///    resolved is skipped fail-soft (AC-4).
 /// 2. `git worktree list --porcelain` each clone (union), dropping the clone's own main
@@ -2209,9 +2230,9 @@ fn discover_worktrees_in(
 ) -> Vec<WorktreeInfo> {
     use crate::content_engine::sync::WaveCoordinator;
 
-    // (1) Distinct clone git-dirs (symlink-safe dedup, unresolvable skipped) — the shared
-    // resolver the SW-WU-14 watcher also uses, so watch-set ≡ scan-set.
-    let clones = distinct_clone_dirs(attached_worktree_paths);
+    // (1) Distinct clone git-dirs (symlink-safe dedup, unresolvable skipped) — the same set the
+    // SW-WU-14 watcher resolves, read bounded and kept, so watch-set ≡ scan-set.
+    let clones = listing_clone_dirs(attached_worktree_paths);
 
     // (3) Managed-surface roots, resolved ONCE (the `is_codesense_managed_target` boundary
     // in batch form), each normalized to the SAME canonical identity the discovered paths
@@ -5614,7 +5635,7 @@ detached
         let wt = PathBuf::from(&wt_path);
         let records = vec![wl2_record(&wt, "RT-6d")];
 
-        let rows = enrich_rows(records, &Liveness::Unknown, &FactsMap::default());
+        let rows = enrich_rows(records, &Liveness::Unknown, &FactsMap::empty());
         assert!(rows[0].live_cli_session);
     }
 
@@ -5764,7 +5785,7 @@ detached
     /// primitive, and an index change makes the next listing read that worktree again.
     #[tokio::test]
     async fn a_second_listing_with_nothing_changed_spawns_no_git() {
-        use super::super::worktree_probe::test_hooks::spawns_under;
+        use super::super::worktree_probe::test_hooks::{skew_clock, spawned_under, spawns_under};
         let tmp = TempDir::new().unwrap();
         let (home, ctx, slug, wt) = attached_story_worktree(&tmp, "pf1").await;
 
@@ -5792,6 +5813,23 @@ detached
         let third = list_once(&home, &ctx, &slug);
         assert!(spawns_under(tmp.path()) > after_first);
         assert!(third.rows.iter().any(|r| r.dirty == Some(true)));
+
+        // Past the worktree facts' 60 s age they are read again, but the clone lookup and the
+        // clone's worktree list have no age and are not.
+        let settled = list_once(&home, &ctx, &slug);
+        let before = spawned_under(tmp.path()).len();
+        assert_eq!(settled.rows.len(), third.rows.len());
+        assert_eq!(spawned_under(tmp.path()).len(), before);
+        skew_clock(tmp.path(), Duration::from_secs(120));
+        list_once(&home, &ctx, &slug);
+        let aged: Vec<String> = spawned_under(tmp.path())[before..].to_vec();
+        assert!(!aged.is_empty(), "aged facts are read again");
+        assert!(
+            aged.iter().all(
+                |args| args.starts_with("status") || args.starts_with("rev-parse --abbrev-ref")
+            ),
+            "only worktree facts are read again: {aged:?}"
+        );
     }
 
     /// AC 3 at listing level: a worktree whose git hangs reads as unknown and the listing returns.
@@ -5830,10 +5868,10 @@ detached
         );
     }
 
-    /// AC 5: untracked files count as dirty for the listing even when the user's config hides
-    /// them from `git status`.
+    /// AC 5: untracked files count as dirty for the listing and for the teardown gate even when
+    /// the user's config hides them from `git status`.
     #[test]
-    fn the_listing_counts_untracked_files_even_if_the_user_hides_them() {
+    fn untracked_files_read_dirty_even_if_the_user_hides_them() {
         let tmp = TempDir::new().unwrap();
         init_repo_with_commit(tmp.path());
         run_git(&["config", "status.showUntrackedFiles", "no"], tmp.path()).unwrap();
@@ -5841,8 +5879,34 @@ detached
 
         assert_eq!(
             super::super::worktree_probe::listing_facts(tmp.path()).dirty,
-            Some(true)
+            Some(true),
+            "the listing"
         );
+        assert_eq!(
+            worktree_git_dirty_opt(tmp.path()),
+            Some(true),
+            "the teardown gate"
+        );
+    }
+
+    /// The bounded, kept clone lookup the listing uses resolves the same clone set as the
+    /// unbounded one the watch uses.
+    #[test]
+    fn the_listing_and_the_watch_resolve_the_same_clones() {
+        let tmp = TempDir::new().unwrap();
+        let home = canon_home(&tmp);
+        let a = home.join("users/1234567/sources/a");
+        let b = home.join("users/1234567/sources/b");
+        crate::context_repo::test_fixtures::init_source_clone(&a, "main");
+        crate::context_repo::test_fixtures::init_source_clone(&b, "main");
+        let a1 = add_worktree(&a, "a1", &home.join("users/1234567/wt/a1"));
+        let b1 = add_worktree(&b, "b1", &home.join("users/1234567/wt/b1"));
+        let junk = home.join("not-a-repo");
+        fs::create_dir_all(&junk).unwrap();
+        let paths = [a1, b1, a.clone(), junk];
+
+        assert_eq!(listing_clone_dirs(&paths), distinct_clone_dirs(&paths));
+        assert_eq!(distinct_clone_dirs(&paths).len(), 2);
     }
 
     /// SW-XS-17 (AC-2): the only path that deletes a worktree from disk is the
@@ -9176,7 +9240,7 @@ detached
             present,
             &Default::default(),
             &Liveness::Known(Vec::new()),
-            &FactsMap::default(),
+            &FactsMap::empty(),
         );
 
         assert_eq!(rows.len(), 2);
@@ -9227,7 +9291,7 @@ detached
             present,
             &storied,
             &Liveness::Known(Vec::new()),
-            &FactsMap::default(),
+            &FactsMap::empty(),
         );
 
         assert!(

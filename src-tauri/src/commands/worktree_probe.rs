@@ -8,24 +8,27 @@
 //! git needs) through the shared spawn-and-timeout primitive, and a read that outlives its timeout
 //! is killed, its own child only, and reported as [`Git::TimedOut`].
 //!
-//! These helpers are the listing's only. The teardown gate and the run-launch branch check read
-//! git through the unbounded originals in `worktree.rs`, because a slow answer there must not
-//! read as "no branch" or "clean".
+//! These helpers are the listing's only. The teardown gate, the run-launch branch check and the
+//! clone watch set read git through the unbounded originals in `worktree.rs`, because a slow
+//! answer there must not read as "no branch", "clean" or "not a clone".
 //!
 //! [`ProbeCache`] keeps what a listing read, so a listing where nothing changed spawns no git at
 //! all. An entry is good while its stamp (the mtimes and sizes of the gitdir files that change
 //! when the answer does) is what it was; it is dropped by [`ProbeCache::invalidate`], which the
 //! existing worktree file watch calls for a changed file (an edit to a tracked file does not touch
 //! the index, so the stamp alone would miss it) and the existing clone `worktrees/` watch calls
-//! for a worktree added or removed. An entry older than [`MAX_AGE`] is read again, so a worktree
-//! no watch covers (one with no editor open) lags by at most that long. A read that timed out is
-//! never kept, and neither is one an invalidation overtook while it ran.
+//! for a worktree added or removed. The worktree facts also expire after [`MAX_AGE`], so a
+//! worktree no watch covers (one with no editor open) lags by at most that long; the clone lookup
+//! and the clones' worktree lists never expire, because their stamps cover everything that
+//! changes them. A read that timed out is never kept, and neither is one an invalidation
+//! overtook while it ran. Concurrent readers of one path share one read: the second waits for the
+//! first and takes what it kept.
 
 use crate::shared::proc_capture::{spawn_capture, CaptureRequest};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
 /// How long one probe may run before it is killed and its fact is reported as unknown.
@@ -33,7 +36,7 @@ pub(crate) const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 /// A status's output is only tested for being empty, and a worktree list is a few lines a
 /// worktree; a huge untracked tree must not fill memory.
 const MAX_OUTPUT: usize = 1024 * 1024;
-/// How long an entry is trusted without a changed stamp or a file event.
+/// How long a worktree's facts are trusted without a changed stamp or a file event.
 const MAX_AGE: Duration = Duration::from_secs(60);
 
 /// The dirty check. Untracked files count as dirty (`normal` is git's default, spelled out so a
@@ -79,7 +82,7 @@ fn binary_and_timeout(_dir: &Path) -> (String, Duration) {
 
 pub(crate) fn git_with(bin: &str, dir: &Path, args: &[&str], timeout: Duration) -> Git {
     #[cfg(test)]
-    test_hooks::record_spawn(dir);
+    test_hooks::record_spawn(dir, args);
     let mut argv = vec!["--no-optional-locks".to_owned()];
     argv.extend(args.iter().map(|arg| (*arg).to_owned()));
     let request = CaptureRequest {
@@ -256,26 +259,58 @@ struct Inner<V> {
     entries: HashMap<PathBuf, Entry<V>>,
     /// Bumped by every invalidation, so a read that started before one is not kept after it.
     generations: HashMap<PathBuf, u64>,
+    /// Paths with a read running now.
+    in_flight: HashSet<PathBuf>,
 }
 
 pub(crate) struct ProbeCache<V> {
     inner: Mutex<Inner<V>>,
+    /// Signalled whenever an in-flight read ends.
+    done: Condvar,
+    /// How long an entry is trusted; `None` trusts it until its stamp changes.
+    max_age: Option<Duration>,
 }
 
 impl<V> Default for ProbeCache<V> {
     fn default() -> Self {
+        Self::new(None)
+    }
+}
+
+/// Ends a path's in-flight read when dropped, even if the probe panics.
+struct Flight<'a, V> {
+    cache: &'a ProbeCache<V>,
+    path: PathBuf,
+}
+
+impl<V> Drop for Flight<'_, V> {
+    fn drop(&mut self) {
+        let mut inner = self.cache.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.in_flight.remove(&self.path);
+        drop(inner);
+        self.cache.done.notify_all();
+    }
+}
+
+impl<V> ProbeCache<V> {
+    pub(crate) fn new(max_age: Option<Duration>) -> Self {
         Self {
             inner: Mutex::new(Inner {
                 entries: HashMap::new(),
                 generations: HashMap::new(),
+                in_flight: HashSet::new(),
             }),
+            done: Condvar::new(),
+            max_age,
         }
     }
 }
 
 impl<V: Clone> ProbeCache<V> {
     /// The cached value for `path` while `stamp` holds, else `probe()`, which returns the value
-    /// and whether it may be kept. A path with no stamp is never kept.
+    /// and whether it may be kept. A path with no stamp is never kept. If another thread is
+    /// already reading `path`, this waits for it and takes what it kept (and reads itself only if
+    /// that read was not kept).
     pub(crate) fn get_at(
         &self,
         path: &Path,
@@ -283,25 +318,37 @@ impl<V: Clone> ProbeCache<V> {
         now: Instant,
         probe: impl FnOnce() -> (V, bool),
     ) -> V {
-        let key = cache_key(path);
-        let generation = {
-            let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let resolved = cache_key(path);
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let generation = loop {
             if let Some(stamp) = stamp {
-                if let Some(entry) = inner.entries.get(&key) {
-                    if entry.stamp == stamp && now.saturating_duration_since(entry.at) < MAX_AGE {
+                if let Some(entry) = inner.entries.get(&resolved) {
+                    let fresh = self
+                        .max_age
+                        .is_none_or(|max| now.saturating_duration_since(entry.at) < max);
+                    if entry.stamp == stamp && fresh {
                         return entry.value.clone();
                     }
                 }
             }
-            inner.generations.get(&key).copied().unwrap_or(0)
+            if !inner.in_flight.contains(&resolved) {
+                break inner.generations.get(&resolved).copied().unwrap_or(0);
+            }
+            inner = self.done.wait(inner).unwrap_or_else(|e| e.into_inner());
+        };
+        inner.in_flight.insert(resolved.clone());
+        drop(inner);
+        let flight = Flight {
+            cache: self,
+            path: resolved,
         };
         // No lock across the probe: other worktrees read while this one runs.
         let (value, keep) = probe();
         if let (true, Some(stamp)) = (keep, stamp) {
             let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            if inner.generations.get(&key).copied().unwrap_or(0) == generation {
+            if inner.generations.get(&flight.path).copied().unwrap_or(0) == generation {
                 inner.entries.insert(
-                    key,
+                    flight.path.clone(),
                     Entry {
                         stamp,
                         at: now,
@@ -313,27 +360,27 @@ impl<V: Clone> ProbeCache<V> {
         value
     }
 
-    /// Forget `key` ([`cache_key`] of a worktree top level) because something under it changed.
-    pub(crate) fn invalidate(&self, key: &Path) {
+    /// Forget a path (the [`cache_key`] of a worktree top level) because something under it
+    /// changed.
+    pub(crate) fn invalidate(&self, path: &Path) {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        inner.entries.remove(key);
-        *inner.generations.entry(key.to_path_buf()).or_default() += 1;
+        inner.entries.remove(path);
+        *inner.generations.entry(path.to_path_buf()).or_default() += 1;
     }
 
     /// Forget everything.
     pub(crate) fn invalidate_all(&self) {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let keys: Vec<PathBuf> = inner.entries.keys().cloned().collect();
-        inner.entries.clear();
-        for key in keys {
-            *inner.generations.entry(key).or_default() += 1;
+        let paths: Vec<PathBuf> = inner.entries.drain().map(|(path, _)| path).collect();
+        for path in paths {
+            *inner.generations.entry(path).or_default() += 1;
         }
     }
 }
 
 fn facts_cache() -> &'static ProbeCache<GitFacts> {
     static CACHE: OnceLock<ProbeCache<GitFacts>> = OnceLock::new();
-    CACHE.get_or_init(Default::default)
+    CACHE.get_or_init(|| ProbeCache::new(Some(MAX_AGE)))
 }
 
 fn clone_cache() -> &'static ProbeCache<Option<PathBuf>> {
@@ -346,16 +393,21 @@ fn porcelain_cache() -> &'static ProbeCache<Option<String>> {
     CACHE.get_or_init(Default::default)
 }
 
+#[cfg(not(test))]
+fn clock(_path: &Path) -> Instant {
+    Instant::now()
+}
+
 /// The listing's facts for `worktree`.
 pub(crate) fn listing_facts(worktree: &Path) -> GitFacts {
-    facts_cache().get_at(worktree, facts_stamp(worktree), Instant::now(), || {
+    facts_cache().get_at(worktree, facts_stamp(worktree), clock(worktree), || {
         probe_facts(worktree)
     })
 }
 
 /// The clone a worktree belongs to: its common git dir's parent.
 pub(crate) fn listing_clone_of(worktree: &Path) -> Option<PathBuf> {
-    clone_cache().get_at(worktree, clone_stamp(worktree), Instant::now(), || {
+    clone_cache().get_at(worktree, clone_stamp(worktree), clock(worktree), || {
         let read = git(
             worktree,
             &["rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -370,7 +422,7 @@ pub(crate) fn listing_clone_of(worktree: &Path) -> Option<PathBuf> {
 
 /// `git worktree list --porcelain` for a clone.
 pub(crate) fn listing_porcelain(clone: &Path) -> Option<String> {
-    porcelain_cache().get_at(clone, porcelain_stamp(clone), Instant::now(), || {
+    porcelain_cache().get_at(clone, porcelain_stamp(clone), clock(clone), || {
         let read = git(clone, &["worktree", "list", "--porcelain"]);
         let keep = read != Git::TimedOut;
         (read.out(), keep)
@@ -416,18 +468,48 @@ pub(crate) mod test_hooks {
         timeout: Duration,
     }
 
-    static SPAWNS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+    static SPAWNS: Mutex<Vec<(PathBuf, String)>> = Mutex::new(Vec::new());
+    static SKEWS: Mutex<Vec<(PathBuf, Duration)>> = Mutex::new(Vec::new());
     static OVERRIDES: Mutex<Vec<Override>> = Mutex::new(Vec::new());
 
-    pub(crate) fn record_spawn(dir: &Path) {
-        SPAWNS.lock().unwrap().push(cache_key(dir));
+    pub(crate) fn record_spawn(dir: &Path, args: &[&str]) {
+        SPAWNS
+            .lock()
+            .unwrap()
+            .push((cache_key(dir), args.join(" ")));
+    }
+
+    /// The git processes started in a directory under `prefix`, as their arguments.
+    pub(crate) fn spawned_under(prefix: &Path) -> Vec<String> {
+        let prefix = cache_key(prefix);
+        let spawns = SPAWNS.lock().unwrap();
+        spawns
+            .iter()
+            .filter(|(dir, _)| dir.starts_with(&prefix))
+            .map(|(_, args)| args.clone())
+            .collect()
     }
 
     /// How many git processes were started in a directory under `prefix`.
     pub(crate) fn spawns_under(prefix: &Path) -> usize {
-        let prefix = cache_key(prefix);
-        let spawns = SPAWNS.lock().unwrap();
-        spawns.iter().filter(|dir| dir.starts_with(&prefix)).count()
+        spawned_under(prefix).len()
+    }
+
+    /// Cache reads under `prefix` see the clock `by` later from now on, so a test can age
+    /// entries without waiting.
+    pub(crate) fn skew_clock(prefix: &Path, by: Duration) {
+        SKEWS.lock().unwrap().push((cache_key(prefix), by));
+    }
+
+    pub(super) fn now_for(path: &Path) -> Instant {
+        let path = cache_key(path);
+        let skews = SKEWS.lock().unwrap();
+        let by = skews
+            .iter()
+            .rev()
+            .find(|(prefix, _)| path.starts_with(prefix))
+            .map_or(Duration::ZERO, |(_, by)| *by);
+        Instant::now() + by
     }
 
     /// Probes in directories under `prefix` run `bin` with `timeout` from now on.
@@ -447,6 +529,11 @@ pub(crate) mod test_hooks {
             .find(|o| dir.starts_with(&o.prefix))
             .map(|o| (o.bin.clone(), o.timeout))
     }
+}
+
+#[cfg(test)]
+fn clock(path: &Path) -> Instant {
+    test_hooks::now_for(path)
 }
 
 #[cfg(test)]
@@ -583,7 +670,7 @@ mod tests {
     fn a_listing_with_no_changes_spawns_nothing_after_the_first() {
         let dir = tempfile::tempdir().unwrap();
         let wt = fake_worktree(dir.path());
-        let (cache, spawns, now) = (ProbeCache::default(), Cell::new(0), Instant::now());
+        let (cache, spawns, now) = (ProbeCache::new(Some(MAX_AGE)), Cell::new(0), Instant::now());
         for _ in 0..5 {
             assert_eq!(read(&cache, &wt, now, &spawns, clean()), facts(Some(false)));
         }
@@ -594,7 +681,7 @@ mod tests {
     fn an_index_change_invalidates_the_entry() {
         let dir = tempfile::tempdir().unwrap();
         let wt = fake_worktree(dir.path());
-        let (cache, spawns, now) = (ProbeCache::default(), Cell::new(0), Instant::now());
+        let (cache, spawns, now) = (ProbeCache::new(Some(MAX_AGE)), Cell::new(0), Instant::now());
         read(&cache, &wt, now, &spawns, clean());
         std::fs::write(wt.join(".git/index"), "a longer index").unwrap();
         read(&cache, &wt, now, &spawns, clean());
@@ -606,7 +693,7 @@ mod tests {
     fn a_head_change_invalidates_the_entry() {
         let dir = tempfile::tempdir().unwrap();
         let wt = fake_worktree(dir.path());
-        let (cache, spawns, now) = (ProbeCache::default(), Cell::new(0), Instant::now());
+        let (cache, spawns, now) = (ProbeCache::new(Some(MAX_AGE)), Cell::new(0), Instant::now());
         read(&cache, &wt, now, &spawns, clean());
         std::fs::write(wt.join(".git/HEAD"), "ref: refs/heads/feature/other\n").unwrap();
         read(&cache, &wt, now, &spawns, clean());
@@ -617,7 +704,7 @@ mod tests {
     fn a_file_event_invalidates_without_an_index_change() {
         let dir = tempfile::tempdir().unwrap();
         let wt = fake_worktree(dir.path());
-        let (cache, spawns, now) = (ProbeCache::default(), Cell::new(0), Instant::now());
+        let (cache, spawns, now) = (ProbeCache::new(Some(MAX_AGE)), Cell::new(0), Instant::now());
         read(&cache, &wt, now, &spawns, clean());
         cache.invalidate(&cache_key(&wt));
         read(&cache, &wt, now, &spawns, clean());
@@ -628,7 +715,7 @@ mod tests {
     fn a_file_event_under_another_worktree_keeps_the_entry() {
         let dir = tempfile::tempdir().unwrap();
         let wt = fake_worktree(dir.path());
-        let (cache, spawns, now) = (ProbeCache::default(), Cell::new(0), Instant::now());
+        let (cache, spawns, now) = (ProbeCache::new(Some(MAX_AGE)), Cell::new(0), Instant::now());
         read(&cache, &wt, now, &spawns, clean());
         cache.invalidate(&cache_key(&dir.path().join("elsewhere")));
         read(&cache, &wt, now, &spawns, clean());
@@ -639,7 +726,7 @@ mod tests {
     fn an_invalidation_during_a_read_keeps_the_stale_result_out_of_the_cache() {
         let dir = tempfile::tempdir().unwrap();
         let wt = fake_worktree(dir.path());
-        let (cache, spawns, now) = (ProbeCache::default(), Cell::new(0), Instant::now());
+        let (cache, spawns, now) = (ProbeCache::new(Some(MAX_AGE)), Cell::new(0), Instant::now());
         cache.get_at(&wt, at(&wt), now, || {
             // A file event lands while git is still reading the old state.
             cache.invalidate(&cache_key(&wt));
@@ -653,7 +740,7 @@ mod tests {
     fn an_entry_is_read_again_once_it_is_old() {
         let dir = tempfile::tempdir().unwrap();
         let wt = fake_worktree(dir.path());
-        let (cache, spawns, now) = (ProbeCache::default(), Cell::new(0), Instant::now());
+        let (cache, spawns, now) = (ProbeCache::new(Some(MAX_AGE)), Cell::new(0), Instant::now());
         read(&cache, &wt, now, &spawns, clean());
         read(
             &cache,
@@ -671,7 +758,7 @@ mod tests {
     fn a_read_that_is_not_kept_is_read_again() {
         let dir = tempfile::tempdir().unwrap();
         let wt = fake_worktree(dir.path());
-        let (cache, spawns, now) = (ProbeCache::default(), Cell::new(0), Instant::now());
+        let (cache, spawns, now) = (ProbeCache::new(Some(MAX_AGE)), Cell::new(0), Instant::now());
         for _ in 0..2 {
             read(&cache, &wt, now, &spawns, (facts(None), false));
         }
@@ -681,7 +768,7 @@ mod tests {
     #[test]
     fn a_worktree_with_no_gitdir_is_never_kept() {
         let dir = tempfile::tempdir().unwrap();
-        let (cache, spawns, now) = (ProbeCache::default(), Cell::new(0), Instant::now());
+        let (cache, spawns, now) = (ProbeCache::new(Some(MAX_AGE)), Cell::new(0), Instant::now());
         for _ in 0..2 {
             read(&cache, dir.path(), now, &spawns, clean());
         }
@@ -698,7 +785,7 @@ mod tests {
         let wt = dir.path().join("wt");
         std::fs::create_dir_all(&wt).unwrap();
         std::fs::write(wt.join(".git"), format!("gitdir: {}\n", gitdir.display())).unwrap();
-        let (cache, spawns, now) = (ProbeCache::default(), Cell::new(0), Instant::now());
+        let (cache, spawns, now) = (ProbeCache::new(Some(MAX_AGE)), Cell::new(0), Instant::now());
         read(&cache, &wt, now, &spawns, clean());
         read(&cache, &wt, now, &spawns, clean());
         std::fs::write(gitdir.join("index"), "changed index").unwrap();
@@ -731,12 +818,95 @@ mod tests {
         let wt = fake_worktree(dir.path());
         let inset = wt.join("src/deep");
         std::fs::create_dir_all(&inset).unwrap();
-        let (cache, spawns, now) = (ProbeCache::default(), Cell::new(0), Instant::now());
+        let (cache, spawns, now) = (ProbeCache::new(Some(MAX_AGE)), Cell::new(0), Instant::now());
         read(&cache, &wt, now, &spawns, clean());
         // The key the watch builds for an inset opened on a subfolder.
         cache.invalidate(&cache_key(&worktree_top(&inset)));
         read(&cache, &wt, now, &spawns, clean());
         assert_eq!(spawns.get(), 2);
+    }
+
+    #[test]
+    fn a_cache_with_no_max_age_keeps_an_entry_while_its_stamp_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        let wt = fake_worktree(dir.path());
+        let (cache, spawns, now) = (ProbeCache::new(None), Cell::new(0), Instant::now());
+        read(&cache, &wt, now, &spawns, clean());
+        read(
+            &cache,
+            &wt,
+            now + Duration::from_secs(24 * 3600),
+            &spawns,
+            clean(),
+        );
+        assert_eq!(spawns.get(), 1);
+    }
+
+    #[test]
+    fn two_concurrent_reads_of_one_path_share_one_probe() {
+        let dir = tempfile::tempdir().unwrap();
+        let wt = fake_worktree(dir.path());
+        let cache = ProbeCache::new(Some(MAX_AGE));
+        let probes = AtomicUsize::new(0);
+        let started = std::sync::atomic::AtomicBool::new(false);
+        let stamp = facts_stamp(&wt);
+        let now = Instant::now();
+        let (first, second) = std::thread::scope(|scope| {
+            let leader = scope.spawn(|| {
+                cache.get_at(&wt, stamp, now, || {
+                    probes.fetch_add(1, Ordering::SeqCst);
+                    started.store(true, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(200));
+                    clean()
+                })
+            });
+            // The second reader arrives while the first is still reading.
+            while !started.load(Ordering::SeqCst) {
+                std::thread::yield_now();
+            }
+            let follower = scope.spawn(|| {
+                cache.get_at(&wt, stamp, now, || {
+                    probes.fetch_add(1, Ordering::SeqCst);
+                    clean()
+                })
+            });
+            (leader.join().unwrap(), follower.join().unwrap())
+        });
+        assert_eq!(probes.load(Ordering::SeqCst), 1);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn a_waiter_reads_for_itself_when_the_read_it_waited_for_was_not_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let wt = fake_worktree(dir.path());
+        let cache = ProbeCache::new(Some(MAX_AGE));
+        let probes = AtomicUsize::new(0);
+        let started = std::sync::atomic::AtomicBool::new(false);
+        let stamp = facts_stamp(&wt);
+        let now = Instant::now();
+        std::thread::scope(|scope| {
+            let leader = scope.spawn(|| {
+                cache.get_at(&wt, stamp, now, || {
+                    probes.fetch_add(1, Ordering::SeqCst);
+                    started.store(true, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(100));
+                    (facts(None), false)
+                })
+            });
+            while !started.load(Ordering::SeqCst) {
+                std::thread::yield_now();
+            }
+            let follower = scope.spawn(|| {
+                cache.get_at(&wt, stamp, now, || {
+                    probes.fetch_add(1, Ordering::SeqCst);
+                    clean()
+                })
+            });
+            leader.join().unwrap();
+            follower.join().unwrap();
+        });
+        assert_eq!(probes.load(Ordering::SeqCst), 2);
     }
 
     #[test]
