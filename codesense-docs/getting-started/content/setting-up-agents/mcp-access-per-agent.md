@@ -36,8 +36,9 @@ mcp:
 
 The list uses exact, unqualified tool names: 1–128 ASCII letters, digits,
 underscores or hyphens, without duplicates, namespace prefixes or wildcards.
-Omitted or `null` allows all bridge tools; `[]` allows none. Every runtime
-enforces it: Claude, Codex, OpenCode and Hermes. Unknown names warn and grant nothing.
+Omitted or `null` allows all bridge tools; `[]` allows none (Claude keeps its
+always-on tools; see [Claude](#claude)). Every runtime enforces it: Claude, Codex,
+OpenCode and Hermes. Unknown names warn and grant nothing.
 An explicit list never automatically acquires newly introduced tools.
 
 Use `mcpBridgeTools` on `agent_create`, `agent_update` and `agent_preview`.
