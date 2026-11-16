@@ -562,6 +562,7 @@ fn frame_document_target(path: &std::path::Path, baseline: bool) -> Result<PathB
 #[tauri::command]
 pub fn release_frame(app: tauri::AppHandle, frame_id: String) {
     crate::live_hub::agent_definitions::release(&app, &frame_id);
+    crate::live_hub::drop_frame(&app, &frame_id);
     FrameStore::release(&app.state::<std::sync::Arc<FrameStore>>(), &frame_id);
 }
 

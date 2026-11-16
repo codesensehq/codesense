@@ -229,6 +229,13 @@ impl InboxProjection {
             }
         }
     }
+    /// Messages held across every team's history.
+    pub fn message_count(&self) -> usize {
+        self.teams
+            .values()
+            .map(|(_, inbox)| inbox.messages.len())
+            .sum()
+    }
     pub fn contains_team(&self, team: &LaunchTeam) -> bool {
         self.teams.contains_key(&team_key(team))
     }

@@ -105,7 +105,7 @@ type Dependencies = {
     topic: string,
     viewKey: string,
     sinceRev?: number,
-    options?: SubscriptionOptions & { subscriptionId: string },
+    options?: SubscriptionOptions & { subscriptionId: string; frameId?: string },
   ) => Promise<HubReply>;
   page?: (id: string, cursor: string) => Promise<HubSnapshot>;
   window?: (id: string, window: [number, number]) => Promise<HubDelta>;
@@ -126,6 +126,8 @@ type Dependencies = {
   unwatchText?: (sessionId: string) => Promise<void>;
 };
 type Frame = {
+  /** The id `attach` took: the frame id `release_frame` names for a page's frame. */
+  id: string;
   viewKey: string;
   grants: readonly string[];
   liveBadge: boolean;
@@ -818,6 +820,7 @@ export class LiveHub {
     const subscriptionId = (key: string) =>
       `${delivery.owner ? delivery.owner + ":" : ""}${id}:${key}`;
     const frame: Frame = {
+      id,
       viewKey,
       grants: delivery.grants ?? [],
       liveBadge: delivery.badge === "live",
@@ -1172,6 +1175,8 @@ export class LiveHub {
           {
             subscriptionId: subscription.id,
             window: subscription.window,
+            // The host drops the frame's subscriptions when the frame is released.
+            frameId: subscription.frame.id,
           },
         ),
       )

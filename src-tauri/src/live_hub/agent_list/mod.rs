@@ -253,6 +253,7 @@ mod tests {
             .unwrap();
         assert_eq!(state["teamOrder"], json!(["org:a"]));
         assert!(state["homeTeam"].is_null());
+        registry.hold("agentList", "team:org/a", "main");
         rows[1].parent_id = Some(rows[0].id.clone());
         rows[1].parent_source = Some("chosen".into());
         let deltas = views::replace(&mut registry, "team:org/a", &rows, &meta).unwrap();

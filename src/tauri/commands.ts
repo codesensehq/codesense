@@ -10212,7 +10212,7 @@ export function liveHubSubscribe(
   topic: string,
   viewKey: string,
   sinceRev?: number,
-  options?: { subscriptionId?: string; window?: [number, number] },
+  options?: { subscriptionId?: string; window?: [number, number]; frameId?: string },
 ) {
   return invoke<import("@/features/dashboard/lib/live-hub").HubReply>("live_hub_subscribe", {
     topic,
