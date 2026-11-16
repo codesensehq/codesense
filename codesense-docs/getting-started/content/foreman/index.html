@@ -9,7 +9,7 @@
 </head>
 <body>
 <script>
-// vendored story-view build kit-rev:2 sha256:ccde09ddb4c80ebdd768b5ae214959df839964af1ffc5779154e7d791845b3d8
+// vendored story-view build kit-rev:2 sha256:1eb6f4555f2662864941398e9971e5e822d632d039bf94dbf51a77c0d2fe89fd
 (function(){
 'use strict';
 const SCRIPT_SRC=document.currentScript&&document.currentScript.src||'';
@@ -1408,9 +1408,10 @@ function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFAULT_TIM
   return pinChange(item,'pin');
  }
  const threadRow=id=>thread.find(row=>row.messageId===id);
- const pinTitleOfPin=pin=>{const named=typeof onPin.title==='function'&&onPin.title(pin);if(named)return named;if(pin.preview&&pin.preview.shortName)return pin.preview.shortName;const row=threadRow(pin.messageId);return row?pinTitleOf(row,row.fromName||row.from||''):String(pin.messageId);};
+ const pinMessage=pin=>{const row=threadRow(pin.messageId);if(row)return{said:row,who:row.fromName||row.from||''};const m=pin.message;return m?{said:m,who:pinName(m.from)}:null;};
+ const pinTitleOfPin=pin=>{const named=typeof onPin.title==='function'&&onPin.title(pin);if(named)return named;if(pin.preview&&pin.preview.shortName)return pin.preview.shortName;const m=pinMessage(pin);return m?pinTitleOf(m.said,m.who):String(pin.messageId);};
  const chooserId=mid=>`${ids.status}-pin-chooser-${mid}`;
- const replacer=onPin&&onPin.replace?createPinReplace({onPin,state:pinState,live:pinLive,list:pinList,nameOf:pinName,titleOf:pinTitleOfPin,ownOf:pin=>{const row=threadRow(pin.messageId);return row&&row.contentType==='html'?'name':'quote';},idOf:chooserId,copy:pinCopy,render:()=>render(),pinNow:item=>pinChange(item,'pin')}):null;
+ const replacer=onPin&&onPin.replace?createPinReplace({onPin,state:pinState,live:pinLive,list:pinList,nameOf:pinName,titleOf:pinTitleOfPin,ownOf:pin=>{const m=pinMessage(pin);return m&&m.said.contentType==='html'?'name':'quote';},idOf:chooserId,copy:pinCopy,render:()=>render(),pinNow:item=>pinChange(item,'pin')}):null;
  function pinParts(item){
   if(!onPin||item.id===undefined||item.id===null)return null;
   const pins=pinList(),pin=pins.find(p=>p.messageId===item.id),atCap=!pin&&pins.length>=PIN_CAP,note=pinState.note&&pinState.note.mid===item.id?pinState.note:null;
@@ -3243,12 +3244,9 @@ const extrasOf=state=>{
  return {views,leads:leadEntries(value)};
 };
 const isHostedSetup=(row,config,senders)=>runsAny(row,config.foreman.guides)&&typeof row.launchedBy==='string'&&senders.includes(row.launchedBy);
-const runtimeList=runtimes=>Array.isArray(runtimes)?runtimes:Array.isArray(runtimes&&runtimes.runtimes)?runtimes.runtimes:null;
-const pick=(runtimes,config)=>{
- const list=runtimeList(runtimes)||[];
- const installed=list.some(item=>item&&(item.id||item.name||item.runtime)===config.foreman.runtime&&item.installed!==false);
- return installed?config.foreman.agents[0]:null;
-};
+const runtimeList=answer=>Array.isArray(answer&&answer.list)?answer.list:null;
+const runtimeEntry=(answer,config)=>(runtimeList(answer)||[]).find(item=>item&&item.id===config.foreman.runtime)||null;
+const pick=(answer,config)=>runtimeEntry(answer,config)?config.foreman.agents[0]:null;
 const workingCount=(rows,isOwn=()=>false)=>Array.isArray(rows)?rows.filter(row=>row&&row.state==='running'&&!isOwn(row)).length:null;
 function sessionOf(rows,config){
  const all=foremanRows(rows,config),live=liveForeman(rows,config);
@@ -3256,6 +3254,7 @@ function sessionOf(rows,config){
  return {row,live:Boolean(live)};
 }
 
+const RUNTIME_CHECK={tries:20,ms:750};
 const timersOf=config=>[
  {name:'launch-slow',ms:config.timers.slowMs},
  {name:'launch-fail',ms:config.timers.failMs},
@@ -3265,6 +3264,7 @@ const timersOf=config=>[
  {name:'stop-wait',ms:config.foreman.lifecycle.stopMs},
  {name:'busy-retry',ms:config.foreman.lifecycle.busyRetryMs},
  {name:'no-reply',ms:config.timers.noReplyMs},
+ {name:'runtime-recheck',ms:RUNTIME_CHECK.ms},
 ];
 
 const isMissingWorktree=result=>Boolean(result)&&result.status==='invalid'&&/no worktree named/i.test(String(result.message||''));
@@ -3612,18 +3612,24 @@ function recordModel(record,{handoffs=true}={}){
  const files=(Array.isArray(record.files)?record.files:[]).map(file=>({path:file.path,commits:Array.isArray(file.commits)?file.commits.length:0}));
  return {rows,files,filesNote:sentence(why('files'))};
 }
+function pinMessageOf(pin,message,nameOf=by=>String(by)){
+ if(message)return message;
+ const said=pin&&pin.message;
+ return said&&typeof said.text==='string'?{...said,messageId:pin.messageId,fromName:said.from?nameOf(said.from):''}:null;
+}
 function pinsModel(pins,thread){
  const byId=new Map((Array.isArray(thread)?thread:[]).map(row=>[row.messageId,row]));
  return [...(Array.isArray(pins)?pins:[])].sort((a,b)=>(a.position||0)-(b.position||0)).map(pin=>{
-  const message=byId.get(pin.messageId),label=(pin.preview&&pin.preview.shortName)||(message&&pinTitleOf(message,message.fromName||message.from))||COPY.agent.pins.message(pin.messageId);
-  return {messageId:pin.messageId,label,preview:pin.preview||null,inThread:Boolean(message)};
+  const inThread=byId.get(pin.messageId),message=pinMessageOf(pin,inThread),label=(pin.preview&&pin.preview.shortName)||(message&&pinTitleOf(message,message.fromName||message.from))||COPY.agent.pins.message(pin.messageId);
+  return {messageId:pin.messageId,label,preview:pin.preview||null,inThread:Boolean(inThread)};
  });
 }
 const PIN_STATUS={'on-track':'ok',running:'busy','needs-you':'needs','not-updating':'stale'};
 const squash=text=>String(text||'').replace(/\s+/g,' ').trim();
 const shown=preview=>Boolean(preview&&(preview.shortName||preview.value||preview.chart||(Array.isArray(preview.lines)&&preview.lines.length)));
-function pinCardModel(pin,message,{nameOf=by=>String(by),time=ms=>String(ms)}={}){
- const P=COPY.agent.pins,who=pin.pinnedBy==='human'?P.you:pin.pinnedBy?nameOf(pin.pinnedBy):'',when=Number.isFinite(pin.pinnedAtMs)?time(pin.pinnedAtMs):'',inThread=Boolean(message);
+function pinCardModel(pin,inThreadMessage,{nameOf=by=>String(by),time=ms=>String(ms)}={}){
+ const P=COPY.agent.pins,who=pin.pinnedBy==='human'?P.you:pin.pinnedBy?nameOf(pin.pinnedBy):'',when=Number.isFinite(pin.pinnedAtMs)?time(pin.pinnedAtMs):'',inThread=Boolean(inThreadMessage);
+ const message=pinMessageOf(pin,inThreadMessage,nameOf);
  const preview=pin.preview;
  if(shown(preview)){
   const status=PIN_STATUS[preview.status]||null,stale=status==='stale';
@@ -3642,6 +3648,13 @@ function pinCardModel(pin,message,{nameOf=by=>String(by),time=ms=>String(ms)}={}
 const keyArgs=key=>key.storyId?{agentId:key.agentId,storyId:key.storyId}:{agentId:key.agentId};
 const pinsOf=answer=>{if(answer&&answer.status==='pins')return Array.isArray(answer.pins)?answer.pins:[];throw new Error(answer&&answer.message||'invalid pins answer');};
 const pinsListOf=payload=>payload&&Array.isArray(payload.snapshot)?payload.snapshot:payload&&payload.status==='pins'&&Array.isArray(payload.pins)?payload.pins:null;
+const pinsPayloadIsThread=(payload,key)=>{
+ if(!payload||typeof payload!=='object')return true;
+ const own=threadOf(key.agentId,key.storyId);
+ if(typeof payload.viewKey==='string')return payload.viewKey.startsWith('pins:')&&payload.viewKey.endsWith(`:${own.agentId}:${own.storyId}`);
+ if(typeof payload.agentId==='string'){const said=threadOf(payload.agentId,payload.storyId);return said.agentId===own.agentId&&said.storyId===own.storyId;}
+ return true;
+};
 function createAgentBridge(cs){
  const invoke=(verb,args)=>cs.invoke(verb,args),act=actOf(cs);
  const threads=new Map();
@@ -3674,7 +3687,7 @@ function createAgentBridge(cs){
    const thread=entryOf(key);
    thread.watchers.add(onChange);
    if(!thread.off){
-    const fan=(payload,...rest)=>{const list=pinsListOf(payload);remember(thread,list);const out=list?{status:'pins',pins:list}:payload;for(const watcher of [...thread.watchers])watcher(out,...rest);};
+    const fan=(payload,...rest)=>{if(!pinsPayloadIsThread(payload,key))return;const list=pinsListOf(payload);remember(thread,list);const out=list?{status:'pins',pins:list}:payload;for(const watcher of [...thread.watchers])watcher(out,...rest);};
     thread.off=fan;
     cs.subscribe('pins',{...keyArgs(key),onChange:fan}).catch(()=>{});
    }
@@ -4498,12 +4511,12 @@ mount(el,ctx,opts={}){
   if(!items.length&&!failed&&!readFailed){el.replaceChildren(h('h2',{class:'ag-h'},PINS.h),h('p',{class:'ag-muted ag-pins-empty'},PINS.empty));return;}
   const strip=Boolean(opts.count);
   if(strip)el.setAttribute('aria-labelledby','sv-pins-h');
-  el.replaceChildren(strip?h('h2',{class:'ag-h',id:'sv-pins-h'},PINS.h,' ',h('span',{class:'ag-muted ag-pins-count'},PINS.count(items.length,PIN_CAP))):h('div',{class:'ag-pins-head'},h('h2',{class:'ag-h'},PINS.h),h('span',{class:'ag-muted ag-pins-count'},PINS.countCards(items.length,PIN_CAP))),
+  el.replaceChildren(strip?h('h2',{class:'ag-h',id:'sv-pins-h'},PINS.h,...(readFailed?[]:[' ',h('span',{class:'ag-muted ag-pins-count'},PINS.count(items.length,PIN_CAP))])):h('div',{class:'ag-pins-head'},h('h2',{class:'ag-h'},PINS.h),readFailed?null:h('span',{class:'ag-muted ag-pins-count'},PINS.countCards(items.length,PIN_CAP))),
    ...(failed?[blockAlert(`${PINS.failed} ${failed}`)]:readFailed?[blockAlert(`${PINS.read} ${readWhy}`.trim(),PINS.retry,()=>read())]:[]),
    h('ol',{class:'ag-pin-list'},...items.map((item,index)=>cardOf(item,index,items.length,ids))));
  }
  const load=newestOnly(()=>bridge.pins(key));
- const read=()=>load().then(answer=>{if(dead)return;if(answer){answered=true;pins=answer.value;failed=null;readFailed=false;paint();}},error=>{if(dead)return;answered=true;readFailed=true;readWhy=reasonOf(error);paint();});
+ const read=()=>load().then(answer=>{if(dead)return;if(answer){const recovered=readFailed;answered=true;pins=answer.value;failed=null;readFailed=false;paint();if(recovered)el.dispatchEvent(new (el.ownerDocument.defaultView.CustomEvent)('sv-pins-recovered',{bubbles:true}));}},error=>{if(dead)return;answered=true;readFailed=true;readWhy=reasonOf(error);paint();});
  el.hidden=Boolean(opts.hideEmpty);
  el.replaceChildren(...(opts.hideEmpty?[]:[h('h2',{class:'ag-h'},PINS.h),h('p',{class:'ag-pins-loading ag-muted',role:'status'},PINS.loading)]));
  const offs=[bridge.watchPins(key,payload=>{if(dead)return;const list=pushedPins(payload);if(list){load.skip();answered=true;pins=list;failed=null;readFailed=false;paint();}else read();}),typeof onThread==='function'?onThread(()=>{if(!dead)paint();}):null,
@@ -4735,7 +4748,7 @@ const metricRows=(metrics,previous=null)=>metrics.map(metric=>{
  return h('tr',{'data-metric':metric.name},h('th',{scope:'row',text:metricLabel(metric.name)}),h('td',{text:cellText(metric.cell)}),previous?h('td',{text:before?cellText(before.cell):SC.dash}):null);
 });
 const foot=model=>h('p',{class:'muted sv-sc-foot',text:SC.asOf(model.asOf,model.minN)});
-function mountScorecard(el,{source,model,render,empty,title=()=>h('h2',{class:'sec sv-sc-h',text:SC.h}),none=SC.none}){
+function mountScorecard(el,{source,model,render,empty,title=()=>h('h2',{class:'sec sv-sc-h',text:SC.h}),none=SC.none,scrollStop=false}){
  const doc=el.ownerDocument,win=doc.defaultView||{addEventListener(){},removeEventListener(){}};
  let dead=false,asked=0,last=null,release=null;
  const noteBox=h('div',{class:'sv-sc-live'}),setNote=noteRow(noteBox,SC.retry,()=>source.retry(),{key:'sc-live',cls:'muted'});
@@ -4746,6 +4759,7 @@ function mountScorecard(el,{source,model,render,empty,title=()=>h('h2',{class:'s
   const note=stale!==null?SC.stale(stale):notLive!==null?SC.notLive(notLive):'';
   head.setAttribute('tabindex','-1');head.setAttribute('data-k','sc-title');
   el.dataset.state=state;
+  if(scrollStop){if(state==='ok')el.setAttribute('tabindex','0');else el.removeAttribute('tabindex');}
   for(const node of [...el.childNodes])if(node!==noteBox)node.remove();
   noteBox.before(head,...nodes.filter(Boolean));
   setNote(note,'status');
@@ -5640,14 +5654,14 @@ mount(el,ctx,opts={}){
 };
 
 const sameKey=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
-function personPins(ctx,{bound=()=>{}}={}){
+function personPins(ctx,{bound=()=>{},needRead=false}={}){
  const {bridge,subject}=ctx;
  if(!bridge||typeof bridge.pin!=='function'||typeof bridge.restorePin!=='function'||!subject||typeof subject.current!=='function')return null;
  const listeners=new Set();
  let list=[],key=null,release=null,dead=false,started=false,asked=0;
  const set=next=>{list=Array.isArray(next)?next:[];for(const fn of listeners)fn();};
  const ready=mine=>{if(!dead&&sameKey(key,mine))bound(true);};
- const read=mine=>{const my=++asked;return (bridge.sharedPins||bridge.pins)(mine).then(answer=>{if(!dead&&my===asked&&sameKey(key,mine))set(answer);ready(mine);},()=>ready(mine));};
+ const read=mine=>{const my=++asked;return (bridge.sharedPins||bridge.pins)(mine).then(answer=>{if(!dead&&my===asked&&sameKey(key,mine))set(answer);ready(mine);},()=>{if(!needRead)ready(mine);else if(!dead&&my===asked&&sameKey(key,mine))bound(false);});};
  function follow(){
   if(!started)return;
   const row=subject.current(),next=row&&row.agent?threadOfRow(row):null;
@@ -5660,6 +5674,8 @@ function personPins(ctx,{bound=()=>{}}={}){
   read(mine);
  }
  afterFirstPaint(ctx.win,()=>{if(dead)return;started=true;follow();});
+ const doc=ctx.win&&ctx.win.document,recovered=()=>{if(!dead&&needRead&&key)read(key);};
+ if(needRead&&doc)doc.addEventListener('sv-pins-recovered',recovered);
  const stopRow=typeof subject.onRow==='function'?subject.onRow(follow):null;
  let names='';
  const offRoster=ctx.reads&&typeof ctx.reads.on==='function'?ctx.reads.on('sessions',()=>{const next=JSON.stringify(list.map(pin=>pin&&pinnerName(ctx,pin.pinnedBy)));if(next!==names){names=next;for(const fn of listeners)fn();}}):null;
@@ -5703,7 +5719,7 @@ function personPins(ctx,{bound=()=>{}}={}){
   showPins,
   name:by=>String(by),
  };
- return {onPin,stop(){dead=true;unwatch();if(typeof release==='function')release();if(typeof stopRow==='function')stopRow();if(typeof offRoster==='function')offRoster();listeners.clear();}};
+ return {onPin,stop(){dead=true;unwatch();if(needRead&&doc)doc.removeEventListener('sv-pins-recovered',recovered);if(typeof release==='function')release();if(typeof stopRow==='function')stopRow();if(typeof offRoster==='function')offRoster();listeners.clear();}};
 }
 
 const chatBlock={id:'chat',slots:['main'],needs:ctx=>isStoryLead(ctx.config,ctx.subject&&ctx.subject.row),defer:()=>true,reads:['sessions','inbox','ui:foreman','pins'],
@@ -5724,7 +5740,7 @@ mount(el,ctx){
   if(composer&&!composer.disabled)composer.focus();
   else if(msg){msg.setAttribute('tabindex','-1');msg.focus();}
  };
- const pins=personPins(ctx,{bound});
+ const pins=personPins(ctx,{bound,needRead:Boolean(ctx.pinsNeedRead)});
  if(pins)chatEl.setAttribute('data-pin-off','');
  const html=htmlOpen(ctx.bridge);
  const chat=mount(chatEl,{...options,send:memo.send,...(pins?{onPin:pins.onPin}:{}),...(html?{html}:{})});
@@ -6309,12 +6325,12 @@ const FALLBACK_COPY={
 };
 const MARKS={none:'○',ready:'✓',stale:'▲'};
 const headStatus=({presence,setupWord=null,noCli=false})=>noCli?{face:'off',word:FALLBACK_COPY.head.word,model:null}:setupWord?{...presence,face:'working',word:setupWord}:presence;
-function runtimeStatus(runtimes,config){
- const list=runtimeList(runtimes);
+function runtimeStatus(answer,config){
+ const list=runtimeList(answer);
  if(!list)return 'failed';
- if(!pick(list,config))return 'none';
- const row=list.find(item=>item&&(item.id||item.name||item.runtime)===config.foreman.runtime&&item.installed!==false);
- return row&&(row.needsUpdate===true||row.updateAvailable===true)?'stale':'ready';
+ const row=runtimeEntry(answer,config);
+ if(row)return row.needsUpdate===true||row.updateAvailable===true?'stale':'ready';
+ return answer.resolving===true?'checking':'none';
 }
 function createFallback({read,config,win=globalThis,blocked=()=>false,start=()=>{},mail=()=>{},onChange=()=>{}}){
  let status='unread',line=null,open=false,checking=false,failed=false,sent=0,applied=0;
@@ -6330,7 +6346,7 @@ function createFallback({read,config,win=globalThis,blocked=()=>false,start=()=>
     if(next==='none')open=true;
     paint();
    }
-   return {status:next,agent:next==='ready'||next==='stale'?pick(runtimeList(answer),config):null};
+   return {status:next,agent:next==='ready'||next==='stale'?pick(answer,config):null};
   });
  };
  const check=()=>{
@@ -6464,8 +6480,12 @@ function createForemanSession({cs,reads,config,win=globalThis,launches=false}){
  const launch=async prompt=>{
   if(!launches)return handOff();
   await teams();
-  const read=await fallback.read();
-  if(read.status==='failed')throw new Error(`refused: ${copy.chat.noRuntimeRead}`);
+  let read=await fallback.read();
+  for(let again=0;read.status==='checking'&&again<RUNTIME_CHECK.tries;again++){
+   await new Promise(resolve=>clock.setTimeout(resolve,RUNTIME_CHECK.ms));
+   read=await fallback.read();
+  }
+  if(read.status==='failed'||read.status==='checking')throw new Error(`refused: ${copy.chat.noRuntimeRead}`);
   const agent=read.agent;
   const found=agent&&usableOf(foremanRows(await bridge.sessions().catch(()=>[]),config));
   if(found){prepend(found.handle,true);return {handle:found.handle,promptDelivered:false};}
@@ -7427,7 +7447,7 @@ function mountAgent(root,{cs,reads,config,handle,win=window}){
  const bridge=createAgentBridge(cs),act=(verb,args)=>typeof cs.act==='function'?cs.act(verb,args):cs.invoke(verb,args);
  const row=peersOf(reads.latestSessions(),handle).find(item=>item.handle===handle)||reads.latestSessions().find(item=>item.handle===handle),key=threadOfRow(row);
  const liveHandle=()=>{const live=seatLive(reads.latestSessions(),handle);return live?live.handle:handle;};
- const controls=h('span',{class:'ctls',id:'ag-controls'}),who=h('div',{class:'ag-who'}),link=h('span',{id:'ag-story-slot'}),recordEl=h('section',{id:'ag-record','aria-label':AG.record.h}),pinsEl=h('section',{id:'ag-pins','aria-label':AG.pins.h,hidden:''}),scoreEl=h('section',{id:'ag-score','data-scorecard':'agent',role:'region','aria-label':COPY.scorecard.h,tabindex:'0'}),chatEl=h('div',{id:'ag-chat'});
+ const controls=h('span',{class:'ctls',id:'ag-controls'}),who=h('div',{class:'ag-who'}),link=h('span',{id:'ag-story-slot'}),recordEl=h('section',{id:'ag-record','aria-label':AG.record.h}),pinsEl=h('section',{id:'ag-pins','aria-label':AG.pins.h,hidden:''}),scoreEl=h('section',{id:'ag-score','data-scorecard':'agent',role:'region','aria-label':COPY.scorecard.h}),chatEl=h('div',{id:'ag-chat'});
  root.replaceChildren(
   h('header',{id:'ag-head',class:'dh'},who,h('div',{class:'dh-a'},link,controls)),
   h('div',{id:'ag-cols'},
@@ -7435,7 +7455,7 @@ function mountAgent(root,{cs,reads,config,handle,win=window}){
    h('aside',{id:'ag-side'},pinsEl,recordEl)));
  const subject={row,matches:[],pick:'',...liveSubject({reads,row})};
  const identity=identityBlock.mount(who,{subject,copy:withBlockCopy(config.blocks),kit:cs.kit,contentBase:contentBaseOf(win.location&&win.location.pathname),win,bridge},{chips:['model'],now:true});
- const memory=pageMemory(),chatCtx={copy:withBlockCopy(config.blocks),win,reads,memory,bridge,subject,chatOptions:()=>agentChatOptions({handle,key,transport:bridge.chat(key),reads,config,act,slot:controls})};
+ const memory=pageMemory(),chatCtx={pinsNeedRead:true,copy:withBlockCopy(config.blocks),win,reads,memory,bridge,subject,chatOptions:()=>agentChatOptions({handle,key,transport:bridge.chat(key),reads,config,act,slot:controls})};
  let chat=null;
  const doc=win.document;let pins=null,record=null,ready=Promise.resolve();
  const hold=()=>{
@@ -7452,7 +7472,7 @@ function mountAgent(root,{cs,reads,config,handle,win=window}){
   link.replaceChildren(path?h('button',{type:'button',class:'btn sm',id:'ag-story',onclick:()=>bridge.openFile(path)},AG.storyOpen(key.storyId)):h('span',{class:'ag-muted',id:'ag-story-id'},key.storyId));
  },()=>link.replaceChildren(h('span',{class:'ag-muted',id:'ag-story-id'},key.storyId)));
  const agentName=bareAgent(row.agent||key.agentId);
- const score=mountScorecard(scoreEl,{source:reads.scorecard(),model:card=>agentScore(card,agentName),render:revisionsView,empty:COPY.scorecard.agentNone(agentName||handle)});
+ const score=mountScorecard(scoreEl,{source:reads.scorecard(),model:card=>agentScore(card,agentName),render:revisionsView,empty:COPY.scorecard.agentNone(agentName||handle),scrollStop:true});
  reads.replay('sessions');
  return {ready,unmount(){doc.removeEventListener('visibilitychange',onVisibility);win.removeEventListener('pagehide',drop);win.removeEventListener('pageshow',hold);identity.unmount();drop();memory.end();score.unmount();}};
 }
