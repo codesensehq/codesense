@@ -147,7 +147,7 @@ pub(super) fn claude(agent: &Agent, mode: LaunchMode) -> GeneratedEntry {
 /// beats any allow, so a wildcard would also block the always-on tools. A denied tool is
 /// hidden from the model and refused if called.
 pub fn claude_bridge_tool_denies(tools: &[String]) -> Vec<String> {
-    let always_on = always_on_bridge_tools(AgentCli::Claude);
+    let always_on = denied_list_keeps();
     super::resolve::served_bridge_tools()
         .iter()
         .filter(|name| !tools.contains(name) && !always_on.contains(*name))
@@ -156,13 +156,21 @@ pub fn claude_bridge_tool_denies(tools: &[String]) -> Vec<String> {
 }
 
 /// The bridge tools a launch on `runtime` can call whatever its `bridge_tools` list says.
-/// For Claude: its required and routine allows and the tools every agent is allowed, so
-/// a list can never take away `signal_done`, `read_messages` or `reply`. Other runtimes
-/// enforce the list as written and keep none.
+/// For a CLI whose adapter denies each left-out tool (Claude): its required and routine
+/// allows and the tools every agent is allowed, so a list can never take away
+/// `signal_done`, `read_messages` or `reply`. Other runtimes enforce the list as written
+/// and keep none.
 pub fn always_on_bridge_tools(runtime: AgentCli) -> BTreeSet<String> {
-    if runtime != AgentCli::Claude {
-        return BTreeSet::new();
+    if codesense_pty_core::agent_cli::adapter(runtime).denies_unlisted_bridge_tools() {
+        denied_list_keeps()
+    } else {
+        BTreeSet::new()
     }
+}
+
+/// The bridge tools a per-tool deny list never denies: Claude's required and routine
+/// allows and the tools every agent is allowed.
+fn denied_list_keeps() -> BTreeSet<String> {
     let qualified = format!("mcp__{BRIDGE_SERVER}__");
     CLAUDE_REQUIRED_ALLOW
         .iter()
