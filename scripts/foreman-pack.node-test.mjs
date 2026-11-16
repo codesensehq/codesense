@@ -87,7 +87,7 @@ test("the agent allows exactly the Foreman's tools and refuses the rest", () => 
   assert.equal(agent.permissions.claude.defaultMode, "dontAsk", "anything not allowed is refused");
   for (const rule of allow) {
     assert.ok(
-      /^(mcp__codesense__|Bash\(|(Read|Edit|Write)\(\.\.\/foreman-)/.test(rule) ||
+      /^(mcp__codesense__|Bash\(|(Read|Edit|Write)\(\/\/\*\*\/foreman-)/.test(rule) ||
         rule === GITHUB_PR,
       rule,
     );
@@ -115,45 +115,96 @@ test("every tool the spec names is allowed or forbidden", () => {
     assert.ok(spec.includes(`\`${name}\``), `${name} is listed as unavailable`);
 });
 
-// A Claude path rule: `Tool(glob)`, the glob relative to the session's working directory.
-function ruleMatches(cwd, target, tool) {
+// Claude's file rules, as a live `claude -p` probe showed them (Claude Code 2.1.296, dontAsk, an
+// app-style `--settings` file outside cwd, 2026-11-16): `//path` is absolute, `./path` or a bare
+// path is relative to the working directory, and a `../` path never matches. An allow matches only
+// its own tool. Only `Edit(path)` denies are checked for files, and they cover every tool that
+// writes a file (Claude warns that a `Write(path)` deny "is not matched by file permission
+// checks"). `**/` matches any run of directories, none included.
+function ruleMatches(cwd, target, tool, { deny = false } = {}) {
   return (rule) => {
-    const m = /^(Edit|Write|NotebookEdit)\((.*)\)$/.exec(rule);
-    if (!m || m[1] !== tool) return false;
-    const glob = path.resolve(cwd, m[2]).replace(/[.+^${}()|[\]\\]/g, "\\$&");
-    const re = glob
+    const m = /^(Read|Edit|Write|NotebookEdit)\((.*)\)$/.exec(rule);
+    if (!m) return false;
+    if (deny ? m[1] !== "Edit" : m[1] !== tool) return false;
+    const rulePath = m[2];
+    if (rulePath.startsWith("../")) return false;
+    const abs = rulePath.startsWith("//")
+      ? rulePath.slice(1)
+      : path.join(cwd, rulePath.replace(/^\.\//, ""));
+    const re = abs
+      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+      .replace(/\*\*\//g, "\u0001")
       .replace(/\*\*/g, "\u0000")
       .replace(/\*/g, "[^/]*")
+      .replace(/\u0001/g, "(?:.*/)?")
       .replace(/\u0000/g, ".*");
     return new RegExp(`^${re}$`).test(target);
   };
 }
 const TOOLS_THAT_WRITE = ["Edit", "Write", "NotebookEdit"];
-const writeDenied = (cwd, target) =>
-  TOOLS_THAT_WRITE.every((tool) => deny.some(ruleMatches(cwd, target, tool)));
-const writeAllowed = (cwd, target) =>
-  TOOLS_THAT_WRITE.slice(0, 2).every(
-    (tool) =>
-      !deny.some(ruleMatches(cwd, target, tool)) && allow.some(ruleMatches(cwd, target, tool)),
-  );
+const denied = (cwd, target, tool) => deny.some(ruleMatches(cwd, target, tool, { deny: true }));
+const allowed = (cwd, target, tool) =>
+  !denied(cwd, target, tool) && allow.some(ruleMatches(cwd, target, tool));
+const writeDenied = (cwd, target) => TOOLS_THAT_WRITE.every((tool) => denied(cwd, target, tool));
+const writeAllowed = (cwd, target, tools = ["Edit", "Write"]) =>
+  tools.every((tool) => allowed(cwd, target, tool));
 
-test("edits are denied in the home worktree and allowed in a foreman-* worktree, in two layouts", () => {
-  for (const home of ["/work/acme-docs/home", "/work/acme-user/home"]) {
+test("the rule model matches the probe: ../ never, // absolute, ./ relative, Edit denies only", () => {
+  const cwd = "/r/home";
+  const m = (rule, target, tool, opts) => ruleMatches(cwd, target, tool, opts)(rule);
+  assert.equal(m("Edit(../foreman-*/**)", "/r/foreman-ab12/f.txt", "Edit"), false);
+  assert.equal(m("Edit(//**/foreman-*/**)", "/r/foreman-ab12/f.txt", "Edit"), true);
+  assert.equal(m("Edit(//**/foreman-*/**)", "/r/other/f.txt", "Edit"), false);
+  assert.equal(m("Edit(//r/foreman-*/**)", "/r/foreman-ab12/f.txt", "Edit"), true);
+  assert.equal(m("Write(//**/foreman-*.msg)", "/r/foreman-ab12.msg", "Write"), true);
+  assert.equal(m("Write(//**/foreman-*.msg)", "/r/other.msg", "Write"), false);
+  assert.equal(m("Edit(//**/foreman-*/**)", "/r/foreman-ab12/f.txt", "Write"), false, "own tool");
+  assert.equal(m("Edit(./**)", "/r/home/a.md", "Edit"), true);
+  const d = { deny: true };
+  assert.equal(m("Edit(//**/foreman-*/.git/**)", "/r/foreman-ab12/.git/config", "Write", d), true);
+  assert.equal(
+    m("Write(//**/foreman-*/.git/**)", "/r/foreman-ab12/.git/config", "Write", d),
+    false,
+  );
+});
+
+test("edits are denied in home and allowed in a foreman-* worktree, in three layouts", () => {
+  for (const home of ["/work/acme-docs/home", "/work/acme-user/home", "/tmp/foreman-x/home"]) {
     const sibling = path.resolve(home, "../foreman-fix-docs-9f2a");
-    assert.equal(
-      writeDenied(home, path.join(home, "README.md")),
-      true,
-      `${home} is denied outright`,
-    );
-    assert.equal(writeAllowed(home, path.join(home, "README.md")), false, `${home} is read-only`);
-    assert.equal(writeAllowed(home, path.join(home, "stories/a.md")), false);
+    for (const file of ["README.md", "stories/a.md"]) {
+      assert.equal(writeDenied(home, path.join(home, file)), true, `${home} is denied outright`);
+      assert.equal(writeAllowed(home, path.join(home, file), ["Edit"]), false);
+      assert.equal(writeAllowed(home, path.join(home, file), ["Write"]), false);
+    }
     assert.equal(
       writeAllowed(home, path.join(sibling, "stories/a.md")),
       true,
-      "a foreman-* worktree",
+      "an Edit and a Write in a foreman-* worktree",
     );
-    assert.equal(writeAllowed(home, path.resolve(home, "../other-worktree/a.md")), false);
-    assert.equal(writeAllowed(home, path.join(sibling, ".git")), false, "no git internals");
+    assert.equal(
+      writeAllowed(home, path.resolve(home, "../foreman-fix-docs-9f2a.msg"), ["Write"]),
+      true,
+      "the commit message file",
+    );
+    // The accepted width (Decisions): under a foreman-* parent, a non-foreman sibling is inside
+    // that parent, so the rule allows it; elsewhere it is refused.
+    const nested = /\/foreman-[^/]*\//.test(home);
+    for (const tool of ["Edit", "Write"]) {
+      assert.equal(writeAllowed(home, path.resolve(home, "../other/a.md"), [tool]), nested);
+      assert.equal(writeAllowed(home, path.resolve(home, "../other.msg"), [tool]), nested);
+      assert.equal(writeAllowed(home, path.join(sibling, ".git"), [tool]), false, "no .git");
+      assert.equal(writeAllowed(home, path.join(sibling, ".git/config"), [tool]), false);
+    }
+    assert.equal(writeDenied(home, path.join(sibling, ".git/config")), true, "git internals");
+  }
+});
+
+test("no file rule starts with ../ and no Write or NotebookEdit deny remains", () => {
+  for (const rule of [...allow, ...deny]) {
+    assert.ok(!/^(Read|Edit|Write|NotebookEdit)\(\.\.\//.test(rule), `${rule} never matches`);
+  }
+  for (const rule of deny) {
+    assert.ok(!/^(Write|NotebookEdit)\(/.test(rule), `${rule} is ignored for files`);
   }
 });
 
