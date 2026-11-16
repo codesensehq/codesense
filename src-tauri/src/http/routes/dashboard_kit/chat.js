@@ -1529,6 +1529,7 @@
       if (!open) return;
       htmlOpen.delete(id);
       open.closed = true;
+      if (open.shown) open.shown.disconnect();
       open.slot.remove();
       if (typeof open.release === "function") open.release();
     };
@@ -1567,19 +1568,13 @@
         }
         htmlOpen.set(item.id, open);
         const reveal = () => {
+          if (!slot.isConnected) return;
           const l = log.getBoundingClientRect(), r = slot.getBoundingClientRect(), below = r.bottom - l.bottom;
           if (below > 0) log.scrollTop += Math.min(below, r.top - l.top);
         };
-        const shown = new MutationObserver(() => {
-          if (!slot.isConnected || !slot.firstChild) return;
-          shown.disconnect();
-          reveal();
-        });
-        shown.observe(slot, { childList: true, subtree: true });
-        if (slot.firstChild) {
-          shown.disconnect();
-          reveal();
-        }
+        open.shown = new MutationObserver(reveal);
+        open.shown.observe(slot, { childList: true, subtree: true });
+        reveal();
         if (answer && typeof answer.then === "function") Promise.resolve(answer).then((release) => {
           if (!open.closed) open.release = release;
           else if (typeof release === "function") release();

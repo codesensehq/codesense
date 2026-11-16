@@ -207,7 +207,7 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
  // the thread or unmount releases it (a release that arrives after Close runs as it arrives). An open that throws leaves the bubble closed. The toggle changes the bubble in place, so a repaint
  // that changes nothing keeps an open frame, and a bubble rebuilt for another reason (a pin) is updated around its body (keepOpen): an iframe that leaves the page reloads.
  const htmlOpen=new Map();
- const htmlRelease=id=>{const open=htmlOpen.get(id);if(!open)return;htmlOpen.delete(id);open.closed=true;open.slot.remove();if(typeof open.release==='function')open.release();};
+ const htmlRelease=id=>{const open=htmlOpen.get(id);if(!open)return;htmlOpen.delete(id);open.closed=true;if(open.shown)open.shown.disconnect();open.slot.remove();if(typeof open.release==='function')open.release();};
  const keepOpen=(id,fresh)=>{
   const open=htmlOpen.get(id),old=open&&open.slot.isConnected?open.slot.closest('.msg'):null,body=old&&old.querySelector(':scope > .body'),freshBody=fresh.querySelector(':scope > .body');
   if(!body||!freshBody)return fresh;
@@ -229,11 +229,12 @@ export function mount(el,{storyId=null,leadRole=null,transport,reads,timers=DEFA
    let answer;
    try{answer=html.open({messageId:item.id,title,contentType:'html'},slot);}catch{slot.remove();return;}
    htmlOpen.set(item.id,open);
-   // What the page draws into the slot (its frame arrives later) is brought into the log's view, within the log only: Open on the newest message must not draw below the fold.
-   const reveal=()=>{const l=log.getBoundingClientRect(),r=slot.getBoundingClientRect(),below=r.bottom-l.bottom;if(below>0)log.scrollTop+=Math.min(below,r.top-l.top);};
-   const shown=new MutationObserver(()=>{if(!slot.isConnected||!slot.firstChild)return;shown.disconnect();reveal();});
-   shown.observe(slot,{childList:true,subtree:true});
-   if(slot.firstChild){shown.disconnect();reveal();}
+   // What the page draws into the slot is brought into the log's view, within the log only: Open on the newest message must not draw below the fold. A page fills the slot at
+   // once and its frame arrives later, inside what it drew, so the slot is watched while it is open (released with it).
+   const reveal=()=>{if(!slot.isConnected)return;const l=log.getBoundingClientRect(),r=slot.getBoundingClientRect(),below=r.bottom-l.bottom;if(below>0)log.scrollTop+=Math.min(below,r.top-l.top);};
+   open.shown=new MutationObserver(reveal);
+   open.shown.observe(slot,{childList:true,subtree:true});
+   reveal();
    if(answer&&typeof answer.then==='function')Promise.resolve(answer).then(release=>{if(!open.closed)open.release=release;else if(typeof release==='function')release();},()=>{});
    else open.release=answer;
    show(true);

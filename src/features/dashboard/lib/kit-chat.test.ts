@@ -2133,6 +2133,8 @@ describe("kit.chat onPin: the person pins a message", () => {
         html: {
           open: (_m: Row, slot: HTMLElement) => {
             opened = slot;
+            // Filled at once, as a page's embed does (a loading node, empty until the host answers).
+            slot.append(document.createElement("div"));
             return () => {};
           },
         },
@@ -2155,8 +2157,9 @@ describe("kit.chat onPin: the person pins a message", () => {
       toggleOf(s.el)!.click();
       const slot = opened!;
       slot.getBoundingClientRect = () => rect(480 - log.scrollTop, 720 - log.scrollTop);
-      // The page draws into the slot after Open (its frame arrives later).
-      slot.append(document.createElement("iframe"));
+      // The page fills the slot at once with its loading node; its frame arrives in it later.
+      await flush();
+      slot.firstElementChild!.append(document.createElement("iframe"));
       await flush();
       // Scrolled within the log by what was below the fold, and never past the slot's top.
       expect(log.scrollTop).toBe(220);
