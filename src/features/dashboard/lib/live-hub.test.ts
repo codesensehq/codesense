@@ -2527,10 +2527,13 @@ it.each([
   async (topic, rows, update) => {
     const local = retentionHub();
     try {
-      local.seed({ topic, viewKey: "all", rev: 1, snapshot: rows() });
+      local.seed({ topic, viewKey: "all", rev: 1, snapshot: Object.freeze(rows()) as HubRow[] });
       // The first delta after a seed builds the index.
       local.receive({ topic, viewKey: "all", rev: 2, upserts: [], removes: [] });
       const before = await local.snapshot(topic, "all");
+      // A write into the old array throws: the patch must copy it.
+      Object.freeze(before.snapshot);
+      const prior = before.snapshot.find((r) => r.id === update.id);
       const upsert = Object.freeze({ ...update }) as HubRow;
       const counted = webviewPerfCounts();
       const { sorts } = countSorts(() =>
@@ -2545,6 +2548,7 @@ it.each([
         orderedRows(topic, [...before.snapshot.filter((r) => r.id !== upsert.id), upsert]),
       );
       expect(after.snapshot.find((r) => r.id === upsert.id)).toBe(upsert);
+      expect(before.snapshot.find((r) => r.id === upsert.id)).toBe(prior);
       // The rows the update did not touch are the same objects.
       for (const row of after.snapshot)
         if (row.id !== upsert.id) expect(before.snapshot).toContain(row);
@@ -2624,7 +2628,8 @@ it("a scoped subscription applies its deltas through the same patch: no sort wit
         delta,
       );
     apply({ topic: "records", viewKey: "records:one", rev: 2, upserts: [], removes: [] });
-    const before = subscription.value!.snapshot;
+    const before = Object.freeze(subscription.value!.snapshot) as HubRow[];
+    const prior = before.find((r) => r.id === "b");
     const upsert = Object.freeze({ id: "b", handle: "b", status: "working" });
     const { sorts } = countSorts(() =>
       apply({ topic: "records", viewKey: "records:one", rev: 3, upserts: [upsert], removes: [] }),
@@ -2634,6 +2639,7 @@ it("a scoped subscription applies its deltas through the same patch: no sort wit
       orderedRows("records", [...before.filter((r) => r.id !== "b"), upsert]),
     );
     expect(subscription.value!.snapshot).not.toBe(before);
+    expect(before.find((r) => r.id === "b")).toBe(prior);
   } finally {
     local.dispose();
   }
@@ -2773,6 +2779,62 @@ it("a read that settles after the hub was disposed releases nothing the next lif
     await vi.advanceTimersByTimeAsync(0);
     for (let i = 0; i < 20; i++)
       local.seed({ topic: "messageDelivery", viewKey: `team:o/n${i}`, rev: 1, snapshot: [] });
+    expect(internals(local).views.has(key)).toBe(true);
+    stop();
+    expect(internals(local).views.has(key)).toBe(false);
+  } finally {
+    local.dispose();
+  }
+});
+
+it.each([
+  ["files", { id: "f", kind: "file", name: "b" }, [{ kind: "dir" }, { name: "0" }]],
+  [
+    "inbox",
+    { id: "m", createdAt: 5, messageId: 5 },
+    [{ rowType: "counts" }, { createdAt: 99 }, { createdAt: 5, messageId: 1 }],
+  ],
+  [
+    "inbox",
+    { id: "m", message: { createdAtMs: 5 }, messageId: 5 },
+    [{ message: { createdAtMs: 99 } }],
+  ],
+  ["records", { id: "r", order: 2 }, [{ order: 9 }, { order: 0 }]],
+  ["pins", { id: "p", order: 2 }, [{ order: 9 }]],
+] as const)("a %s row whose comparator field changes is sorted again", (topic, row, changes) => {
+  const others: HubRow[] = [
+    { id: "a", kind: "file", name: "a", createdAt: 3, messageId: 3, order: 1 },
+    { id: "z", kind: "file", name: "c", createdAt: 7, messageId: 7, order: 3 },
+  ];
+  for (const change of changes) {
+    const local = retentionHub();
+    try {
+      local.seed({ topic, viewKey: "all", rev: 1, snapshot: [...others, { ...row }] });
+      local.receive({ topic, viewKey: "all", rev: 2, upserts: [], removes: [] });
+      const moved = { ...row, ...change } as HubRow;
+      const { sorts } = countSorts(() =>
+        local.receive({ topic, viewKey: "all", rev: 3, upserts: [moved], removes: [] }),
+      );
+      expect(sorts).toBeGreaterThan(0);
+      expect(internals(local).views.get(JSON.stringify([topic, "all"]))!.snapshot).toEqual(
+        orderedRows(topic, [...others, moved]),
+      );
+    } finally {
+      local.dispose();
+    }
+  }
+});
+
+it("a frame disposed after the hub was disposed releases nothing the next lifetime holds", async () => {
+  const local = retentionHub();
+  try {
+    const key = JSON.stringify(["messageDelivery", "team:o/a"]);
+    const old = local.attach("old", "team:o/a", () => {}, true);
+    await old.subscribe("messageDelivery");
+    local.dispose();
+    const stop = local.watch("messageDelivery", "team:o/a", () => {});
+    await vi.advanceTimersByTimeAsync(0);
+    old.dispose();
     expect(internals(local).views.has(key)).toBe(true);
     stop();
     expect(internals(local).views.has(key)).toBe(false);

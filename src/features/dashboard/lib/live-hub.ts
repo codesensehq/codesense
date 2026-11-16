@@ -227,6 +227,7 @@ const inboxAt = (row: HubRow) =>
       0,
   );
 
+/** Keep in step with {@link orderKey}: a field this sorts by must be in that key. */
 export function orderedRows(topic: string, rows: HubRow[]): HubRow[] {
   if (topic === "files")
     return rows.sort(
@@ -248,7 +249,7 @@ export function orderedRows(topic: string, rows: HubRow[]): HubRow[] {
   );
 }
 
-/** What {@link orderedRows} sorts a `topic` row by besides its id. An update that keeps
+/** What {@link orderedRows} sorts a `topic` row by besides its id (keep the two in step). An update that keeps
  *  it keeps the row's place, so the view need not be sorted again. */
 export function orderKey(topic: string, row: HubRow): string {
   if (topic === "files") return `${row.kind === "dir"}\u0000${String(row.name)}`;
@@ -1424,6 +1425,9 @@ export class LiveHub {
     for (const frame of this.frames.values()) {
       if (frame.hiddenTimer) clearTimeout(frame.hiddenTimer);
       frame.disposed = true;
+      // The hub forgets every hold below, so no frame keeps a key it no longer counts.
+      frame.held.clear();
+      frame.seeded.clear();
       this.releaseText(frame);
       frame.waits.splice(0).forEach((resolve) => resolve());
     }
