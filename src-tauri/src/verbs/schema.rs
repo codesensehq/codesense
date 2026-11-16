@@ -283,7 +283,6 @@ pub fn result_schema(name: &str) -> Value {
     }
 }
 
-/// A pin's optional preview (`weft::pins::PinPreview`): what a folded pin shows.
 /// The pinned message a pin row carries: its sender, time, the first
 /// `PINNED_TEXT_MAX_CHARS` characters of its text and, when the sender set them, a content type and summary.
 fn pin_message_schema() -> Value {
@@ -294,6 +293,7 @@ fn pin_message_schema() -> Value {
     },"required":["from","createdAtMs","text"]})
 }
 
+/// A pin's optional preview (`weft::pins::PinPreview`): what a folded pin shows.
 fn pin_preview_schema() -> Value {
     let text = |max: u32| json!({"type":"string","maxLength":max});
     let status = json!({"enum":["on-track","running","needs-you","not-updating"]});
