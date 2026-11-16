@@ -1309,3 +1309,502 @@ test("recover-error: red when the pull request is attempted before the recorded 
     /before reading the recorded git-access method/,
   );
 });
+
+// ---- the Claude driver ---------------------------------------------------------------------
+// A fake `claude` stands in for the CLI: it reads the same flags, talks to the driver's MCP host
+// over HTTP, runs git from its "Bash tool" (CLAUDECODE=1, as the real one sets), and prints
+// stream-json. Each invocation plays the next turn of `scenario.json` beside it.
+
+const { claudeDriver, launchArgs, loadAgent } = await lib("claude-driver");
+const { claudeJudge } = await lib("judge");
+
+const FAKE_CLAUDE = `#!/usr/bin/env node
+const { appendFileSync, existsSync, readFileSync } = require("node:fs");
+const { spawnSync } = require("node:child_process");
+const path = require("node:path");
+const dir = __dirname;
+const argv = process.argv.slice(2);
+const flag = (name) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : undefined);
+const log = path.join(dir, "invocations.jsonl");
+const n = existsSync(log) ? readFileSync(log, "utf8").split("\\n").filter(Boolean).length : 0;
+appendFileSync(log, JSON.stringify({ argv, cwd: process.cwd(), env: { PATH: process.env.PATH, HOME: process.env.HOME, CLAUDECODE: process.env.CLAUDECODE ?? null, FOREMAN_EVAL_HOST: process.env.FOREMAN_EVAL_HOST ?? null } }) + "\\n");
+const scenario = JSON.parse(readFileSync(path.join(dir, "scenario.json"), "utf8"));
+const turn = scenario.turns[Math.min(n, scenario.turns.length - 1)];
+const out = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
+const session = flag("--session-id") ?? flag("--resume") ?? "judge";
+(async () => {
+  const mcp = flag("--mcp-config") ? JSON.parse(flag("--mcp-config")).mcpServers : {};
+  let id = 0;
+  const rpc = async (server, method, params) => {
+    const res = await fetch(mcp[server].url, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params }) });
+    return (await res.json()).result;
+  };
+  const status = {};
+  for (const name of Object.keys(mcp)) {
+    try { await rpc(name, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "fake", version: "0" } }); status[name] = "connected"; } catch { status[name] = "failed"; }
+  }
+  out({ type: "system", subtype: "init", session_id: session, mcp_servers: Object.entries({ ...status, ...(turn.mcp_status ?? {}) }).map(([name, s]) => ({ name, status: s })) });
+  for (const step of turn.steps ?? []) {
+    if (step.list) appendFileSync(path.join(dir, "answers.jsonl"), JSON.stringify((await rpc(step.list, "tools/list", {})).tools.map((t) => t.name)) + "\\n");
+    if (step.tool) {
+      const r = await rpc(step.server ?? "codesense", "tools/call", { name: step.tool, arguments: step.args ?? {} });
+      appendFileSync(path.join(dir, "answers.jsonl"), JSON.stringify(r) + "\\n");
+    }
+    if (step.bash) {
+      const r = spawnSync("sh", ["-c", step.bash], { cwd: process.cwd(), env: { ...process.env, CLAUDECODE: "1" }, encoding: "utf8" });
+      appendFileSync(path.join(dir, "answers.jsonl"), JSON.stringify({ status: r.status, stdout: r.stdout, stderr: r.stderr }) + "\\n");
+    }
+    if (step.sleep) await new Promise((r) => setTimeout(r, step.sleep));
+  }
+  if (turn.stdout !== undefined) process.stdout.write(turn.stdout);
+  if (turn.result) out({ type: "result", session_id: session, ...turn.result });
+  process.exit(turn.exit ?? 0);
+})();
+`;
+
+// A fake claude in its own dir, playing `turns` (one entry per invocation).
+function fakeClaude(t, turns) {
+  const dir = tmp(t);
+  const bin = path.join(dir, "claude");
+  writeFileSync(bin, FAKE_CLAUDE, { mode: 0o755 });
+  writeFileSync(path.join(dir, "scenario.json"), JSON.stringify({ turns }));
+  const lines = (name) =>
+    existsSync(path.join(dir, name))
+      ? readFileSync(path.join(dir, name), "utf8")
+          .split("\n")
+          .filter(Boolean)
+          .map((l) => JSON.parse(l))
+      : [];
+  return {
+    bin,
+    invocations: () => lines("invocations.jsonl"),
+    answers: () => lines("answers.jsonl"),
+  };
+}
+const ok = (cost = 0.1, extra = {}) => ({
+  result: {
+    subtype: "success",
+    is_error: false,
+    total_cost_usd: cost,
+    usage: {
+      input_tokens: 10,
+      output_tokens: 5,
+      cache_creation_input_tokens: 2,
+      cache_read_input_tokens: 3,
+    },
+    ...extra,
+  },
+});
+const reply = (text) => ({ tool: "reply", args: { text } });
+// Plays a case with the driver in a fresh fixture and returns the outcome and the state.
+async function drive(t, id, turns, options = {}, driveArgs = {}) {
+  const fake = fakeClaude(t, turns);
+  const caseDef = caseOf(id);
+  const fx = await createFixture(caseDef.fixture ?? {});
+  t.after(() => fx.teardown());
+  const driver = claudeDriver({ model: "claude-sonnet-5-5", bin: fake.bin, ...options });
+  let spent;
+  let error;
+  try {
+    spent = await driver({ caseDef, fx, ...driveArgs });
+  } catch (e) {
+    error = e;
+  }
+  return { fake, fx, spent, error, state: fx.state(), caseDef };
+}
+
+test("claude driver: launches with the agent's own prompt, permissions and model, home as cwd", async (t) => {
+  const { fake, fx, error } = await drive(t, "onboard-repo", [ok()]);
+  assert.equal(error, undefined);
+  const [{ argv, cwd, env }] = fake.invocations();
+  const agent = loadAgent();
+  const flag = (name) => argv[argv.indexOf(name) + 1];
+  assert.equal(flag("--model"), "claude-sonnet-5-5");
+  assert.equal(
+    flag("--append-system-prompt"),
+    readFileSync(new URL("../foreman.md", evals), "utf8"),
+  );
+  assert.equal(
+    flag("--setting-sources"),
+    "local",
+    "no user or project settings, hooks or CLAUDE.md",
+  );
+  assert.ok(argv.includes("--strict-mcp-config"));
+  assert.equal(flag("--add-dir"), "..");
+  const settings = JSON.parse(flag("--settings"));
+  assert.deepEqual(settings.permissions, agent.permissions.claude);
+  assert.equal(settings.env.HOME, fx.env.HOME, "the agent's shell keeps the sandbox HOME");
+  assert.equal(settings.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY, "1");
+  assert.equal(argv.at(-1), turnsOf("onboard-repo")[0]);
+  assert.equal(path.basename(cwd), "home");
+  assert.ok(env.PATH.startsWith(path.join(fx.root, "eval-bin")), "the git shim is first on PATH");
+  assert.equal(env.CLAUDECODE, null, "a nested CLI does not inherit the outer session's markers");
+  assert.deepEqual(launchArgs(agent, "claude-opus-5-5").slice(0, 2), [
+    "--model",
+    "claude-opus-5-5",
+  ]);
+});
+
+test("claude driver: every turn is played, MCP and git calls are captured in order, cost and tokens summed", async (t) => {
+  const { fake, spent, error, state, caseDef } = await drive(t, "answer-card", [
+    {
+      ...ok(0.25),
+      steps: [
+        { bash: "git fetch" },
+        { tool: "inbox_list", args: { kind: "needs-you" } },
+        { tool: "reply", args: { text: "ACME-7 asks..." } },
+      ],
+    },
+    { ...ok(0.5), steps: [reply("Answer it on the page.")] },
+  ]);
+  assert.equal(error, undefined);
+  assert.deepEqual(spent.cost_usd, 0.75);
+  assert.equal(spent.tokens, 40);
+  assert.match(spent.session, /^[0-9a-f-]{36}$/);
+  const [first, second] = fake.invocations();
+  assert.equal(first.argv[first.argv.indexOf("--session-id") + 1], spent.session);
+  assert.equal(second.argv[second.argv.indexOf("--resume") + 1], spent.session);
+  assert.deepEqual(
+    state.calls.map((c) => [c.turn, c.tool]),
+    [
+      [1, "git"],
+      [1, "inbox_list"],
+      [1, "reply"],
+      [2, "reply"],
+    ],
+  );
+  assert.deepEqual(state.calls[0].args.argv, ["fetch"]);
+  assert.deepEqual(
+    state.turns.map((x) => x.text),
+    caseDef.input.turns,
+  );
+  assert.equal(grade(caseDef, state).pass, true);
+});
+
+test("claude driver: state reads are answered from the sandbox profile, tools carry the real schemas", async (t) => {
+  const { fake, error } = await drive(t, "onboard-repo", [
+    {
+      ...ok(),
+      steps: [
+        { list: "codesense" },
+        { tool: "list_source_repos" },
+        { tool: "who_am_i" },
+        { tool: "read_content_file", args: { path: "tools/git-access.md" } },
+      ],
+    },
+  ]);
+  assert.equal(error, undefined);
+  const [names, repos, me, missing] = fake.answers();
+  for (const tool of [
+    "open_workspace",
+    "list_sessions",
+    "inbox_list",
+    "reply",
+    "run_in_terminal_tab",
+  ])
+    assert.ok(names.includes(tool), tool);
+  assert.deepEqual(JSON.parse(repos.content[0].text).repos[0].repo, "acme/demo");
+  assert.equal(JSON.parse(me.content[0].text).handle, CONFIG.self);
+  assert.equal(missing.isError, true, "a fixture error is an MCP tool error");
+  const { tools } = JSON.parse(readFileSync(new URL("lib/tool-schemas.json", evals), "utf8"));
+  const open = tools.find((x) => x.name === "open_workspace");
+  for (const arg of ["target", "agent", "initial_prompt", "launched_by", "mode"])
+    assert.ok(arg in open.inputSchema.properties, arg);
+});
+
+test("claude driver: a GitHub MCP case gets the github server, logged by its full name", async (t) => {
+  const fake = fakeClaude(t, [
+    {
+      ...ok(),
+      steps: [
+        {
+          server: "github",
+          tool: "create_pull_request",
+          args: { owner: "acme", repo: "demo", head: "foreman/x-0a1b", base: "main", title: "t" },
+        },
+      ],
+    },
+  ]);
+  const caseDef = {
+    id: "pr",
+    fixture: { git_access: "github-mcp" },
+    input: { turns: ["open it"] },
+  };
+  const fx = await createFixture(caseDef.fixture);
+  t.after(() => fx.teardown());
+  await claudeDriver({ model: "claude-sonnet-5-5", bin: fake.bin })({ caseDef, fx });
+  assert.deepEqual(
+    fx.state().calls.map((c) => c.tool),
+    ["mcp__github__create_pull_request"],
+  );
+  const [{ argv }] = fake.invocations();
+  assert.deepEqual(
+    Object.keys(JSON.parse(argv[argv.indexOf("--mcp-config") + 1]).mcpServers).sort(),
+    ["codesense", "github"],
+  );
+});
+
+test("claude driver: git from a team script, or outside the agent's shell, is not logged as the Foreman's", async (t) => {
+  const { state, error } = await drive(t, "onboard-repo", [
+    {
+      ...ok(),
+      steps: [
+        {
+          bash: "mkdir -p stories && printf 'git status >/dev/null\\n' > stories/probe.sh && sh stories/probe.sh",
+        },
+        { bash: "CLAUDECODE= git status >/dev/null" },
+        { bash: "git worktree list" },
+      ],
+    },
+  ]);
+  assert.equal(error, undefined);
+  assert.deepEqual(
+    state.calls.map((c) => c.args.argv),
+    [["worktree", "list"]],
+  );
+});
+
+const infra = (r, pattern) => {
+  assert.ok(r.error instanceof InfraError, `expected an InfraError, got ${r.error}`);
+  assert.match(r.error.message, pattern);
+};
+
+test("claude driver: a missing CLI, an API error or a dead MCP server is an InfraError with its spend", async (t) => {
+  const fx = await createFixture();
+  t.after(() => fx.teardown());
+  await assert.rejects(
+    claudeDriver({ model: "m", bin: path.join(tmp(t), "no-claude") })({
+      caseDef: caseOf("onboard-repo"),
+      fx,
+    }),
+    (e) => e instanceof InfraError && /could not start/.test(e.message),
+  );
+  const loggedOut = await drive(t, "onboard-repo", [
+    {
+      result: {
+        subtype: "success",
+        is_error: true,
+        result: "Not logged in · Please run /login",
+        total_cost_usd: 0,
+      },
+    },
+  ]);
+  infra(loggedOut, /Not logged in/);
+  const apiDown = await drive(t, "answer-card", [
+    ok(0.2),
+    { result: { subtype: "error_during_execution", is_error: true, total_cost_usd: 0.05 } },
+  ]);
+  infra(apiDown, /error_during_execution/);
+  assert.ok(Math.abs(apiDown.error.cost_usd - 0.25) < 1e-9, "spend so far rides on the error");
+  const mcpDown = await drive(t, "onboard-repo", [
+    { ...ok(), mcp_status: { codesense: "failed" } },
+  ]);
+  infra(mcpDown, /MCP server codesense failed/);
+  const noResult = await drive(t, "onboard-repo", [{ exit: 1 }]);
+  infra(noResult, /no result/);
+  const badCost = await drive(t, "onboard-repo", [ok("x")]);
+  infra(badCost, /cost/);
+});
+
+test("claude driver: the agent running out of turns is graded, not an infra error", async (t) => {
+  const r = await drive(t, "onboard-repo", [
+    { result: { subtype: "error_max_turns", is_error: true, total_cost_usd: 0.3, usage: {} } },
+  ]);
+  assert.equal(r.error, undefined);
+  assert.equal(r.spent.cost_usd, 0.3);
+  assert.equal(grade(r.caseDef, r.state).pass, false);
+});
+
+test("claude driver: a turn past its timeout is killed and is an InfraError", async (t) => {
+  const started = Date.now();
+  const r = await drive(t, "onboard-repo", [{ ...ok(), steps: [{ sleep: 20000 }] }], {
+    timeoutMs: 400,
+  });
+  infra(r, /timed out after 0\.4s/);
+  assert.ok(Date.now() - started < 10000, "did not wait for the child");
+});
+
+test("claude driver: each turn's budget is the smaller of the run cap and what the runner has left", async (t) => {
+  const { fake } = await drive(
+    t,
+    "answer-card",
+    [ok(0.5), ok(0.5)],
+    { runCapUsd: 3 },
+    { budgetLeft: 2 },
+  );
+  const caps = fake
+    .invocations()
+    .map(({ argv }) => Number(argv[argv.indexOf("--max-budget-usd") + 1]));
+  assert.deepEqual(caps, [2, 1.5]);
+  const capped = await drive(
+    t,
+    "onboard-repo",
+    [{ result: { subtype: "error_max_budget_usd", is_error: true, total_cost_usd: 1 } }],
+    {},
+    { budgetLeft: 1 },
+  );
+  infra(capped, /budget/);
+  const runaway = await drive(
+    t,
+    "onboard-repo",
+    [{ result: { subtype: "error_max_budget_usd", is_error: true, total_cost_usd: 3 } }],
+    { runCapUsd: 3 },
+  );
+  assert.equal(runaway.error, undefined, "a run that hits its own cap is graded");
+});
+
+test("runner: an infra error is retried once in a fresh fixture, and its spend counts", async (t) => {
+  let calls = 0;
+  const roots = new Set();
+  const driver = async ({ caseDef, fx }) => {
+    roots.add(fx.root);
+    if (caseDef.id === "answer-card" && (calls += 1) === 1)
+      throw Object.assign(new InfraError("api blip"), { cost_usd: 0.5 });
+    await stubs.good({ caseDef, fx });
+    return { cost_usd: 1 };
+  };
+  const { report, exitCode } = await runEval(runnerOptions(t, { driver, k: 1 }));
+  assert.equal(exitCode, 0);
+  assert.equal(report.complete, true);
+  assert.deepEqual(report.cases["answer-card"], ["pass"]);
+  assert.equal(report.cost_usd, 4.5);
+  assert.equal(roots.size, 5);
+});
+
+test("runner: a second infra error stops the run, so nothing more is spent", async (t) => {
+  const seen = [];
+  const driver = async ({ caseDef, fx }) => {
+    seen.push(caseDef.id);
+    if (caseDef.id === "onboard-repo") throw new InfraError("sandbox would not start");
+    await stubs.good({ caseDef, fx });
+    return { cost_usd: 1 };
+  };
+  const { report } = await runEval(runnerOptions(t, { driver, k: 3 }));
+  assert.deepEqual(seen, ["answer-card", "onboard-repo", "onboard-repo"]);
+  assert.deepEqual(report.cases["onboard-repo"], ["error"]);
+  assert.deepEqual(report.cases["recover-error"], []);
+  assert.equal(report.complete, false);
+  assert.match(
+    report.reason,
+    /infra error in onboard-repo run 1 \(after a retry\): sandbox would not start/,
+  );
+});
+
+test("runner: the driver is told how much budget is left", async (t) => {
+  const left = [];
+  const driver = async ({ caseDef, fx, budgetLeft }) => {
+    left.push(budgetLeft);
+    await stubs.good({ caseDef, fx });
+    return { cost_usd: 1.5 };
+  };
+  await runEval(runnerOptions(t, { driver, k: 1, budget: 10 }));
+  assert.deepEqual(left, [10, 8.5, 7, 5.5]);
+});
+
+test("runner: the judge's rubric verdicts are reported beside the script grade and never change it", async (t) => {
+  const judged = [];
+  const judge = async ({ caseDef, turns, replies }) => {
+    judged.push([caseDef.id, turns.length, replies.length]);
+    const verdicts = Object.fromEntries(caseDef.rubric.map((r) => [r.id, "fail"]));
+    return {
+      verdicts,
+      why: Object.fromEntries(caseDef.rubric.map((r) => [r.id, "it did not say so"])),
+      cost_usd: 0.25,
+    };
+  };
+  const { report, exitCode, reportPath } = await runEval(
+    runnerOptions(t, { driver: stubs.good, judge, k: 1 }),
+  );
+  assert.equal(exitCode, 0, "rubric fails leave the script grade green");
+  assert.deepEqual(report.cases["answer-card"], ["pass"]);
+  assert.deepEqual(report.rubric["answer-card"][0]["names-story"], "fail");
+  assert.equal(report.cost_usd, 1);
+  assert.deepEqual(
+    judged.find(([id]) => id === "answer-card"),
+    ["answer-card", 2, 2],
+  );
+  assert.match(
+    readFileSync(reportPath, "utf8"),
+    /## Rubric[\s\S]*answer-card run 1 names-story: it did not say so/,
+  );
+});
+
+test("runner: a judge that throws marks the rubric as error and the run goes on", async (t) => {
+  const judge = async () => {
+    throw new Error("judge down");
+  };
+  const { report, exitCode } = await runEval(runnerOptions(t, { driver: stubs.good, judge, k: 1 }));
+  assert.equal(exitCode, 0);
+  assert.equal(report.complete, true);
+  assert.deepEqual(report.rubric["onboard-repo"], [{ "says-setup-started": "error" }]);
+});
+
+test("judge: asks for each rubric item with the transcript, and reads the structured verdicts", async (t) => {
+  const caseDef = caseOf("start-sprint-lead");
+  const fake = fakeClaude(t, [
+    ok(0.03, {
+      structured_output: {
+        verdicts: [
+          { id: "says-lead-started", pass: true, why: "it says so" },
+          { id: "says-already-running", pass: false, why: "it started another" },
+        ],
+      },
+    }),
+  ]);
+  const out = await claudeJudge({ bin: fake.bin })({
+    caseDef,
+    turns: [
+      { index: 1, text: "start sprint 1" },
+      { index: 2, text: "start sprint 1" },
+    ],
+    replies: [
+      { turn: 1, text: "Started the sprint 1 lead." },
+      { turn: 2, text: "Started it again." },
+    ],
+  });
+  assert.deepEqual(out.verdicts, { "says-lead-started": "pass", "says-already-running": "fail" });
+  assert.equal(out.why["says-already-running"], "it started another");
+  assert.equal(out.cost_usd, 0.03);
+  const [{ argv }] = fake.invocations();
+  const prompt = argv.at(-1);
+  assert.match(prompt, /says-already-running/);
+  assert.match(prompt, /Started it again\./);
+  assert.equal(argv[argv.indexOf("--tools") + 1], "", "the judge gets no tools");
+  assert.ok(JSON.parse(argv[argv.indexOf("--json-schema") + 1]).properties.verdicts);
+  const missing = fakeClaude(t, [ok(0.01, { structured_output: { verdicts: [] } })]);
+  await assert.rejects(
+    claudeJudge({ bin: missing.bin })({ caseDef, turns: [], replies: [] }),
+    /no verdict for says-lead-started/,
+  );
+});
+
+test("run.sh: the claude driver is accepted and its report records the driver and model", (t) => {
+  const script = new URL("run.sh", evals).pathname;
+  const fake = fakeClaude(t, [{ exit: 1 }]);
+  const out = tmp(t);
+  const r = spawnSync(
+    "sh",
+    [
+      script,
+      "foreman-claude",
+      "--driver",
+      "claude",
+      "--model",
+      "claude-sonnet-5-5",
+      "--k",
+      "1",
+      "--out",
+      out,
+    ],
+    {
+      encoding: "utf8",
+      env: { ...process.env, FOREMAN_EVAL_CLAUDE: fake.bin },
+    },
+  );
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stdout, /incomplete \(infra error in answer-card run 1 \(after a retry\)/);
+  const [file] = readdirSync(out);
+  const front = parseReport(readFileSync(path.join(out, file), "utf8"));
+  assert.equal(front.driver, "claude");
+  assert.equal(front.model, "claude-sonnet-5-5");
+});
