@@ -129,6 +129,19 @@ test("fixture: the shim records the foreman worktrees present at each call", asy
   }
 });
 
+test("fixture: git refuses a cwd outside the sandbox", async () => {
+  const fx = await createFixture();
+  try {
+    const outside = fx.git(["status"], os.tmpdir());
+    assert.equal(outside.status, 128);
+    assert.match(outside.stderr, /outside the eval sandbox/);
+    assert.equal(fx.git(["status"]).status, 0);
+    assert.equal(fx.git(["status"], path.join(fx.root, "home")).status, 0);
+  } finally {
+    fx.teardown();
+  }
+});
+
 test("fixture: the shim logs a multi-line --body as valid JSON", async () => {
   const fx = await createFixture();
   try {

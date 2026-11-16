@@ -12,6 +12,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -300,6 +301,16 @@ function build(root, opts) {
     CODESENSE_TAB_SESSION_ID: CONFIG.self,
   };
   const git = (args, cwd = home) => spawnSync("git", args, { cwd, env, encoding: "utf8" });
+  // The agent's shell reports its real path (on macOS the temp dir sits under /private).
+  const realRoot = realpathSync(root);
+  const within = (dir) => {
+    try {
+      const real = realpathSync(dir);
+      return real === realRoot || real.startsWith(realRoot + path.sep);
+    } catch {
+      return false;
+    }
+  };
   const gitOk = (args, cwd) => {
     const r = git(args, cwd);
     if (r.status !== 0) throw new Error(`fixture git ${args.join(" ")}: ${r.stderr}`);
@@ -504,8 +515,9 @@ function build(root, opts) {
     },
     gh: (args, cwd = home) => spawnSync("gh", args, { cwd, env, encoding: "utf8" }),
     // git, gh and the team's scripts are logged as tool calls too, so graders can see what ran.
-    git(args, cwd) {
+    git(args, cwd = home) {
       nextCall("foreman", "git", { argv: args });
+      if (!within(cwd)) return { status: 128, stdout: "", stderr: `fatal: git outside the eval sandbox: ${cwd}\n` };
       return git(args, cwd);
     },
     // A script from the worktree (the team's `stories/*.sh`), run with the sandbox env.
