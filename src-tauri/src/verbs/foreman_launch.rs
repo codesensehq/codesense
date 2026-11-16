@@ -67,6 +67,20 @@ pub fn grant_for(docs_root: &Path, document_path: &str) -> Option<String> {
     grant_in(PAGES, docs_root, document_path)
 }
 
+/// The setup guide's place in the docs checkout. Its pin is looked up in the page list by this
+/// path, so the guide's hash lives in one place.
+pub const GUIDE_PAGE: &str = "getting-started/content/guide/index.html";
+
+/// Whether the document is the pinned setup guide: the page list's entry for [`GUIDE_PAGE`],
+/// at its place under `docs_root`, with that entry's bytes. Read and hashed on every
+/// call. Production passes [`PAGES`].
+pub fn is_guide_page_in(pages: &[Page], docs_root: &Path, document_path: &str) -> bool {
+    pages
+        .iter()
+        .filter(|page| page.path == GUIDE_PAGE)
+        .any(|guide| grant_in(std::slice::from_ref(guide), docs_root, document_path).is_some())
+}
+
 /// The document must sit at a page's path under `docs_root`, reached through plain segments
 /// with no link or `..` below the root (a link could alias another file, and the viewer
 /// re-resolves the path on every request), and carry that page's bytes. The path is checked
@@ -304,5 +318,41 @@ mod tests {
     #[test]
     fn it_is_not_in_the_grantable_vocabulary() {
         assert!(!super::super::capabilities::known(CAPABILITY));
+    }
+
+    #[test]
+    fn only_the_pinned_guide_bytes_at_its_place_are_the_guide() {
+        let guide = |body: &[u8]| {
+            let hash: &'static str =
+                Box::leak(format!("{:x}", Sha256::digest(body)).into_boxed_str());
+            vec![Page {
+                path: GUIDE_PAGE,
+                sha256: hash,
+            }]
+        };
+        let (_dir, docs, _) = placed(BODY);
+        let at = docs.join(GUIDE_PAGE);
+        std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+        std::fs::write(&at, b"guide").unwrap();
+        assert!(is_guide_page_in(
+            &guide(b"guide"),
+            &docs,
+            &at.to_string_lossy()
+        ));
+        // One byte off the pin, or no guide in the page list, is not the guide.
+        assert!(!is_guide_page_in(
+            &guide(b"guid"),
+            &docs,
+            &at.to_string_lossy()
+        ));
+        assert!(!is_guide_page_in(&pages(), &docs, &at.to_string_lossy()));
+        // The Foreman page holds its own pin and is not the guide.
+        let foreman = docs.join(PAGE);
+        assert!(grant_in(&pages(), &docs, &foreman.to_string_lossy()).is_some());
+        assert!(!is_guide_page_in(
+            &pages(),
+            &docs,
+            &foreman.to_string_lossy()
+        ));
     }
 }
