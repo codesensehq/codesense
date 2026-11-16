@@ -1118,6 +1118,32 @@
             "pins": {
               "items": {
                 "properties": {
+                  "message": {
+                    "properties": {
+                      "contentType": {
+                        "type": "string"
+                      },
+                      "createdAtMs": {
+                        "type": "integer"
+                      },
+                      "from": {
+                        "type": "string"
+                      },
+                      "summary": {
+                        "type": "string"
+                      },
+                      "text": {
+                        "maxLength": 2000,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "from",
+                      "createdAtMs",
+                      "text"
+                    ],
+                    "type": "object"
+                  },
                   "messageId": {
                     "type": "integer"
                   },
@@ -1367,6 +1393,32 @@
             "pins": {
               "items": {
                 "properties": {
+                  "message": {
+                    "properties": {
+                      "contentType": {
+                        "type": "string"
+                      },
+                      "createdAtMs": {
+                        "type": "integer"
+                      },
+                      "from": {
+                        "type": "string"
+                      },
+                      "summary": {
+                        "type": "string"
+                      },
+                      "text": {
+                        "maxLength": 2000,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "from",
+                      "createdAtMs",
+                      "text"
+                    ],
+                    "type": "object"
+                  },
                   "messageId": {
                     "type": "integer"
                   },
@@ -1625,6 +1677,32 @@
             "pins": {
               "items": {
                 "properties": {
+                  "message": {
+                    "properties": {
+                      "contentType": {
+                        "type": "string"
+                      },
+                      "createdAtMs": {
+                        "type": "integer"
+                      },
+                      "from": {
+                        "type": "string"
+                      },
+                      "summary": {
+                        "type": "string"
+                      },
+                      "text": {
+                        "maxLength": 2000,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "from",
+                      "createdAtMs",
+                      "text"
+                    ],
+                    "type": "object"
+                  },
                   "messageId": {
                     "type": "integer"
                   },
@@ -1886,6 +1964,32 @@
             "pins": {
               "items": {
                 "properties": {
+                  "message": {
+                    "properties": {
+                      "contentType": {
+                        "type": "string"
+                      },
+                      "createdAtMs": {
+                        "type": "integer"
+                      },
+                      "from": {
+                        "type": "string"
+                      },
+                      "summary": {
+                        "type": "string"
+                      },
+                      "text": {
+                        "maxLength": 2000,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "from",
+                      "createdAtMs",
+                      "text"
+                    ],
+                    "type": "object"
+                  },
                   "messageId": {
                     "type": "integer"
                   },
@@ -2146,6 +2250,32 @@
             "pins": {
               "items": {
                 "properties": {
+                  "message": {
+                    "properties": {
+                      "contentType": {
+                        "type": "string"
+                      },
+                      "createdAtMs": {
+                        "type": "integer"
+                      },
+                      "from": {
+                        "type": "string"
+                      },
+                      "summary": {
+                        "type": "string"
+                      },
+                      "text": {
+                        "maxLength": 2000,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "from",
+                      "createdAtMs",
+                      "text"
+                    ],
+                    "type": "object"
+                  },
                   "messageId": {
                     "type": "integer"
                   },
@@ -2401,6 +2531,32 @@
             "pins": {
               "items": {
                 "properties": {
+                  "message": {
+                    "properties": {
+                      "contentType": {
+                        "type": "string"
+                      },
+                      "createdAtMs": {
+                        "type": "integer"
+                      },
+                      "from": {
+                        "type": "string"
+                      },
+                      "summary": {
+                        "type": "string"
+                      },
+                      "text": {
+                        "maxLength": 2000,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "from",
+                      "createdAtMs",
+                      "text"
+                    ],
+                    "type": "object"
+                  },
                   "messageId": {
                     "type": "integer"
                   },
@@ -3472,6 +3628,32 @@
             "pins": {
               "items": {
                 "properties": {
+                  "message": {
+                    "properties": {
+                      "contentType": {
+                        "type": "string"
+                      },
+                      "createdAtMs": {
+                        "type": "integer"
+                      },
+                      "from": {
+                        "type": "string"
+                      },
+                      "summary": {
+                        "type": "string"
+                      },
+                      "text": {
+                        "maxLength": 2000,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "from",
+                      "createdAtMs",
+                      "text"
+                    ],
+                    "type": "object"
+                  },
                   "messageId": {
                     "type": "integer"
                   },
@@ -3721,6 +3903,32 @@
             "pins": {
               "items": {
                 "properties": {
+                  "message": {
+                    "properties": {
+                      "contentType": {
+                        "type": "string"
+                      },
+                      "createdAtMs": {
+                        "type": "integer"
+                      },
+                      "from": {
+                        "type": "string"
+                      },
+                      "summary": {
+                        "type": "string"
+                      },
+                      "text": {
+                        "maxLength": 2000,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "from",
+                      "createdAtMs",
+                      "text"
+                    ],
+                    "type": "object"
+                  },
                   "messageId": {
                     "type": "integer"
                   },
@@ -5013,6 +5221,32 @@
             "pins": {
               "items": {
                 "properties": {
+                  "message": {
+                    "properties": {
+                      "contentType": {
+                        "type": "string"
+                      },
+                      "createdAtMs": {
+                        "type": "integer"
+                      },
+                      "from": {
+                        "type": "string"
+                      },
+                      "summary": {
+                        "type": "string"
+                      },
+                      "text": {
+                        "maxLength": 2000,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "from",
+                      "createdAtMs",
+                      "text"
+                    ],
+                    "type": "object"
+                  },
                   "messageId": {
                     "type": "integer"
                   },
@@ -5274,6 +5508,32 @@
             "pins": {
               "items": {
                 "properties": {
+                  "message": {
+                    "properties": {
+                      "contentType": {
+                        "type": "string"
+                      },
+                      "createdAtMs": {
+                        "type": "integer"
+                      },
+                      "from": {
+                        "type": "string"
+                      },
+                      "summary": {
+                        "type": "string"
+                      },
+                      "text": {
+                        "maxLength": 2000,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "from",
+                      "createdAtMs",
+                      "text"
+                    ],
+                    "type": "object"
+                  },
                   "messageId": {
                     "type": "integer"
                   },
@@ -5562,6 +5822,32 @@
             "pins": {
               "items": {
                 "properties": {
+                  "message": {
+                    "properties": {
+                      "contentType": {
+                        "type": "string"
+                      },
+                      "createdAtMs": {
+                        "type": "integer"
+                      },
+                      "from": {
+                        "type": "string"
+                      },
+                      "summary": {
+                        "type": "string"
+                      },
+                      "text": {
+                        "maxLength": 2000,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "from",
+                      "createdAtMs",
+                      "text"
+                    ],
+                    "type": "object"
+                  },
                   "messageId": {
                     "type": "integer"
                   },
@@ -7482,6 +7768,32 @@
             "pins": {
               "items": {
                 "properties": {
+                  "message": {
+                    "properties": {
+                      "contentType": {
+                        "type": "string"
+                      },
+                      "createdAtMs": {
+                        "type": "integer"
+                      },
+                      "from": {
+                        "type": "string"
+                      },
+                      "summary": {
+                        "type": "string"
+                      },
+                      "text": {
+                        "maxLength": 2000,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "from",
+                      "createdAtMs",
+                      "text"
+                    ],
+                    "type": "object"
+                  },
                   "messageId": {
                     "type": "integer"
                   },

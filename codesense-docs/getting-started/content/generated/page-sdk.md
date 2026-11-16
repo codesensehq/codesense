@@ -936,6 +936,14 @@ Class: read; default grant: inbox:read:team; MCP twin: inbox_list.
       org: string;
       outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
+        message?: {
+          contentType?: string;
+          createdAtMs: number;
+          from: string;
+          summary?: string;
+          text: string;
+          [key: string]: unknown;
+        };
         messageId: number;
         pinnedAtMs: number;
         pinnedBy: string;
@@ -999,6 +1007,14 @@ Class: metadata; default grant: inbox:write; MCP twin: pin.
       org: string;
       outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
+        message?: {
+          contentType?: string;
+          createdAtMs: number;
+          from: string;
+          summary?: string;
+          text: string;
+          [key: string]: unknown;
+        };
         messageId: number;
         pinnedAtMs: number;
         pinnedBy: string;
@@ -1063,6 +1079,14 @@ Class: read; default grant: inbox:read:team; MCP twin: Agents read their pins in
       org: string;
       outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
+        message?: {
+          contentType?: string;
+          createdAtMs: number;
+          from: string;
+          summary?: string;
+          text: string;
+          [key: string]: unknown;
+        };
         messageId: number;
         pinnedAtMs: number;
         pinnedBy: string;
@@ -1128,6 +1152,14 @@ Class: metadata; default grant: inbox:write; MCP twin: The person arranges a thr
       org: string;
       outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
+        message?: {
+          contentType?: string;
+          createdAtMs: number;
+          from: string;
+          summary?: string;
+          text: string;
+          [key: string]: unknown;
+        };
         messageId: number;
         pinnedAtMs: number;
         pinnedBy: string;
@@ -1193,6 +1225,14 @@ Class: metadata; default grant: inbox:write; MCP twin: The person replaces a pin
       org: string;
       outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
+        message?: {
+          contentType?: string;
+          createdAtMs: number;
+          from: string;
+          summary?: string;
+          text: string;
+          [key: string]: unknown;
+        };
         messageId: number;
         pinnedAtMs: number;
         pinnedBy: string;
@@ -1257,6 +1297,14 @@ Class: metadata; default grant: inbox:write; MCP twin: pin.
       org: string;
       outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
+        message?: {
+          contentType?: string;
+          createdAtMs: number;
+          from: string;
+          summary?: string;
+          text: string;
+          [key: string]: unknown;
+        };
         messageId: number;
         pinnedAtMs: number;
         pinnedBy: string;
@@ -1633,6 +1681,14 @@ pin(args: {
       org: string;
       outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
+        message?: {
+          contentType?: string;
+          createdAtMs: number;
+          from: string;
+          summary?: string;
+          text: string;
+          [key: string]: unknown;
+        };
         messageId: number;
         pinnedAtMs: number;
         pinnedBy: string;
@@ -1696,6 +1752,14 @@ pins(args: {
       org: string;
       outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
+        message?: {
+          contentType?: string;
+          createdAtMs: number;
+          from: string;
+          summary?: string;
+          text: string;
+          [key: string]: unknown;
+        };
         messageId: number;
         pinnedAtMs: number;
         pinnedBy: string;
@@ -2198,6 +2262,14 @@ reorderPins(args: {
       org: string;
       outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
+        message?: {
+          contentType?: string;
+          createdAtMs: number;
+          from: string;
+          summary?: string;
+          text: string;
+          [key: string]: unknown;
+        };
         messageId: number;
         pinnedAtMs: number;
         pinnedBy: string;
@@ -2263,6 +2335,14 @@ replacePin(args: {
       org: string;
       outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
+        message?: {
+          contentType?: string;
+          createdAtMs: number;
+          from: string;
+          summary?: string;
+          text: string;
+          [key: string]: unknown;
+        };
         messageId: number;
         pinnedAtMs: number;
         pinnedBy: string;
@@ -2342,6 +2422,14 @@ restorePin(args: {
       org: string;
       outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
+        message?: {
+          contentType?: string;
+          createdAtMs: number;
+          from: string;
+          summary?: string;
+          text: string;
+          [key: string]: unknown;
+        };
         messageId: number;
         pinnedAtMs: number;
         pinnedBy: string;
@@ -2986,6 +3074,14 @@ unpin(args: {
       org: string;
       outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
+        message?: {
+          contentType?: string;
+          createdAtMs: number;
+          from: string;
+          summary?: string;
+          text: string;
+          [key: string]: unknown;
+        };
         messageId: number;
         pinnedAtMs: number;
         pinnedBy: string;

@@ -262,7 +262,7 @@ pub fn result_schema(name: &str) -> Value {
             json!({"type":"object","properties":{"active":{"type":"array","items":{"type":"string"}}},"required":["active"]})
         }
         "pins" | "pin" | "unpin" | "restorePin" | "replacePin" | "reorderPins" => {
-            let pin = json!({"type":"object","properties":{"messageId":{"type":"integer"},"position":{"type":"integer","minimum":0},"pinnedBy":{"type":"string"},"pinnedAtMs":{"type":"integer"},"preview":pin_preview_schema(),"previewAtMs":{"type":"integer"}},"required":["messageId","position","pinnedBy","pinnedAtMs"]});
+            let pin = json!({"type":"object","properties":{"messageId":{"type":"integer"},"position":{"type":"integer","minimum":0},"pinnedBy":{"type":"string"},"pinnedAtMs":{"type":"integer"},"message":pin_message_schema(),"preview":pin_preview_schema(),"previewAtMs":{"type":"integer"}},"required":["messageId","position","pinnedBy","pinnedAtMs"]});
             json!({"oneOf":[
                 {"type":"object","properties":{"status":{"const":"pins"},"org":{"type":"string"},"team":{"type":"string"},"agentId":{"type":"string"},"storyId":{"type":"string"},"pins":{"type":"array","items":pin},"outcome":{"enum":["pinned","updated","unpinned","restored","replaced","unchanged"]}},"required":["status","org","team","agentId","storyId","pins"]},
                 {"type":"object","properties":{"status":{"const":"invalid"},"message":{"type":"string"}},"required":["status","message"]}
@@ -281,6 +281,16 @@ pub fn result_schema(name: &str) -> Value {
             json!({"description":"JSON result of the existing host handler; see get_live_data_contract for its fields."})
         }
     }
+}
+
+/// The pinned message a pin row carries: its sender, time, the first
+/// `PINNED_TEXT_MAX_CHARS` characters of its text and, when the sender set them, a content type and summary.
+fn pin_message_schema() -> Value {
+    json!({"type":"object","properties":{
+        "from":{"type":"string"},"createdAtMs":{"type":"integer"},
+        "text":{"type":"string","maxLength":crate::weft::pins::PINNED_TEXT_MAX_CHARS},
+        "contentType":{"type":"string"},"summary":{"type":"string"}
+    },"required":["from","createdAtMs","text"]})
 }
 
 /// A pin's optional preview (`weft::pins::PinPreview`): what a folded pin shows.

@@ -1391,6 +1391,14 @@ declare namespace CodesenseSdk {
       org: string;
       outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
+        message?: {
+          contentType?: string;
+          createdAtMs: number;
+          from: string;
+          summary?: string;
+          text: string;
+          [key: string]: unknown;
+        };
         messageId: number;
         pinnedAtMs: number;
         pinnedBy: string;
@@ -1446,6 +1454,14 @@ declare namespace CodesenseSdk {
       org: string;
       outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
+        message?: {
+          contentType?: string;
+          createdAtMs: number;
+          from: string;
+          summary?: string;
+          text: string;
+          [key: string]: unknown;
+        };
         messageId: number;
         pinnedAtMs: number;
         pinnedBy: string;
@@ -1502,6 +1518,14 @@ declare namespace CodesenseSdk {
       org: string;
       outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
+        message?: {
+          contentType?: string;
+          createdAtMs: number;
+          from: string;
+          summary?: string;
+          text: string;
+          [key: string]: unknown;
+        };
         messageId: number;
         pinnedAtMs: number;
         pinnedBy: string;
@@ -1559,6 +1583,14 @@ declare namespace CodesenseSdk {
       org: string;
       outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
+        message?: {
+          contentType?: string;
+          createdAtMs: number;
+          from: string;
+          summary?: string;
+          text: string;
+          [key: string]: unknown;
+        };
         messageId: number;
         pinnedAtMs: number;
         pinnedBy: string;
@@ -1616,6 +1648,14 @@ declare namespace CodesenseSdk {
       org: string;
       outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
+        message?: {
+          contentType?: string;
+          createdAtMs: number;
+          from: string;
+          summary?: string;
+          text: string;
+          [key: string]: unknown;
+        };
         messageId: number;
         pinnedAtMs: number;
         pinnedBy: string;
@@ -1672,6 +1712,14 @@ declare namespace CodesenseSdk {
       org: string;
       outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
+        message?: {
+          contentType?: string;
+          createdAtMs: number;
+          from: string;
+          summary?: string;
+          text: string;
+          [key: string]: unknown;
+        };
         messageId: number;
         pinnedAtMs: number;
         pinnedBy: string;
@@ -1894,6 +1942,14 @@ declare namespace CodesenseSdk {
       org: string;
       outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
+        message?: {
+          contentType?: string;
+          createdAtMs: number;
+          from: string;
+          summary?: string;
+          text: string;
+          [key: string]: unknown;
+        };
         messageId: number;
         pinnedAtMs: number;
         pinnedBy: string;
@@ -1949,6 +2005,14 @@ declare namespace CodesenseSdk {
       org: string;
       outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
+        message?: {
+          contentType?: string;
+          createdAtMs: number;
+          from: string;
+          summary?: string;
+          text: string;
+          [key: string]: unknown;
+        };
         messageId: number;
         pinnedAtMs: number;
         pinnedBy: string;
@@ -2249,6 +2313,14 @@ declare namespace CodesenseSdk {
       org: string;
       outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
+        message?: {
+          contentType?: string;
+          createdAtMs: number;
+          from: string;
+          summary?: string;
+          text: string;
+          [key: string]: unknown;
+        };
         messageId: number;
         pinnedAtMs: number;
         pinnedBy: string;
@@ -2306,6 +2378,14 @@ declare namespace CodesenseSdk {
       org: string;
       outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
+        message?: {
+          contentType?: string;
+          createdAtMs: number;
+          from: string;
+          summary?: string;
+          text: string;
+          [key: string]: unknown;
+        };
         messageId: number;
         pinnedAtMs: number;
         pinnedBy: string;
@@ -2369,6 +2449,14 @@ declare namespace CodesenseSdk {
       org: string;
       outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
+        message?: {
+          contentType?: string;
+          createdAtMs: number;
+          from: string;
+          summary?: string;
+          text: string;
+          [key: string]: unknown;
+        };
         messageId: number;
         pinnedAtMs: number;
         pinnedBy: string;
@@ -2667,6 +2755,14 @@ declare namespace CodesenseSdk {
       org: string;
       outcome?: "pinned" | "updated" | "unpinned" | "restored" | "replaced" | "unchanged";
       pins: Array<{
+        message?: {
+          contentType?: string;
+          createdAtMs: number;
+          from: string;
+          summary?: string;
+          text: string;
+          [key: string]: unknown;
+        };
         messageId: number;
         pinnedAtMs: number;
         pinnedBy: string;
