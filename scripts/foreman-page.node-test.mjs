@@ -13,6 +13,7 @@ import { buildTree } from "./build-codesense-docs.mjs";
 import {
   CAPABILITIES,
   CONFIG,
+  CONFIG_KEYS,
   DOCS_ROOT,
   FILES,
   LAUNCH_RS,
@@ -22,6 +23,7 @@ import {
   bakedConfig,
   comments,
   configReads,
+  kitConfigKeys,
   launchPages,
   pageText,
   parseVendored,
@@ -322,4 +324,50 @@ test("a config that lacks a foreman key or block entry the vendored kit reads fa
       });
       reports(check(root), `no "${path}", which the vendored kit reads`);
     });
+});
+
+test("a config that lacks a key the kit's own config has, read through an alias or not, fails", () => {
+  // The kit reads most of its copy through a local name (`const panel=copy.blocks[…]`), which no
+  // scan of the build sees; the keys recorded from the kit's own config at --vendor catch them.
+  const recorded = JSON.parse(readFileSync(join(ROOT, CONFIG_KEYS), "utf8"));
+  for (const path of ["blocks.foreman-panel.views.waiting.reply", "blocks.chat.unavailable"])
+    assert.ok(recorded.includes(path), path);
+  for (const [drop, path] of [
+    [
+      (config) => delete config.blocks["foreman-panel"].views.waiting.reply,
+      "blocks.foreman-panel.views.waiting.reply",
+    ],
+    [(config) => delete config.blocks.chat.unavailable, "blocks.chat.unavailable"],
+    [(config) => delete config.foreman.lifecycle.leaseMs, "foreman.lifecycle.leaseMs"],
+  ])
+    scratch((change, root) => {
+      change(CONFIG, (text) => {
+        const config = parse(text);
+        drop(config);
+        return stringify(config);
+      });
+      reports(check(root), `no "${path}", which the vendored kit reads`);
+    });
+  // A missing record fails too: a vendor that wrote none would check nothing.
+  scratch((change, root) => {
+    rmSync(join(root, CONFIG_KEYS));
+    reports(check(root), `${CONFIG_KEYS}: missing`);
+  });
+});
+
+test("the recorded keys are the kit config's leaves under foreman, timers and the Foreman page's blocks", () => {
+  const kit = {
+    foreman: { lifecycle: { settleMs: 1 }, agents: ["a"] },
+    timers: { slowMs: 1 },
+    steward: { role: "x" },
+    blocks: { identity: { title: "I", roles: { lead: "L" } }, "sprint-stories": { title: "S" } },
+  };
+  const body = 'const FOREMAN_TEMPLATE=`<div data-block="identity"></div>`;';
+  assert.deepEqual(kitConfigKeys(kit, body), [
+    "blocks.identity.roles.lead",
+    "blocks.identity.title",
+    "foreman.agents",
+    "foreman.lifecycle.settleMs",
+    "timers.slowMs",
+  ]);
 });
