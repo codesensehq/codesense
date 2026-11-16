@@ -41,14 +41,14 @@ import { extensionOf, getViewerFileType, type ViewerFileType } from "./viewer-fi
  */
 
 /** Why a raster image's sides aren't drawn here: the switch's tooltip and the Source line. */
-/** Why an image the surface read nothing of won't draw: its diff's read failed, and says how. */
-export const diffFailed = (message: string) =>
-  message ? `Couldn't read the diff (${message})` : "Couldn't read the diff";
 export const IMAGE_UNAVAILABLE = {
   tooLarge: "Over the 8 MB limit for drawing here",
-  failed: "Couldn't read the image",
-  remote: "Images at a commit in a remote worktree aren't drawn yet",
+  failed: "Couldn’t read the image",
+  remote: "Images at a commit in a remote worktree aren’t drawn yet",
 } as const;
+/** Why an image the surface read nothing of won't draw: its diff's read failed, and says how. */
+export const diffFailed = (message: string) =>
+  message ? `Couldn’t read the diff (${message})` : "Couldn’t read the diff";
 
 /** Diff bodies narrower than this show one side at a time. */
 export const SIDE_BY_SIDE_MIN_WIDTH = 900;
@@ -510,10 +510,13 @@ function CodeSkeleton({
   prefix,
   label = "Loading the diff",
   shown = false,
+  announce = true,
 }: {
   prefix: string;
   label?: string;
   shown?: boolean;
+  /** Off where another node announces the state (a raster image's status). */
+  announce?: boolean;
 }) {
   return (
     <div
@@ -526,7 +529,10 @@ function CodeSkeleton({
         data-skeleton-pulse=""
         className="absolute inset-0 rounded bg-muted/40 motion-safe:animate-pulse"
       />
-      <span role="status" className={shown ? "relative text-xs text-muted-foreground" : "sr-only"}>
+      <span
+        role={announce ? "status" : undefined}
+        className={shown ? "relative text-xs text-muted-foreground" : "sr-only"}
+      >
         {label}
       </span>
     </div>
@@ -749,16 +755,13 @@ function RenderedFileDiff({
   if (mode === "source" && raster) {
     // One line for an image's Source mode, whichever surface shows it.
     body = (
-      <OverlayCenteredState
-        testId={`${prefix}-image-source`}
-        // A reason it won't draw replaces the reading state: it is announced.
-        role={cannotDraw ? "status" : undefined}
-      >
+      <OverlayCenteredState testId={`${prefix}-image-source`}>
         An image has no text diff. {cannotDraw ? `${cannotDraw}.` : "Side by side compares it."}
       </OverlayCenteredState>
     );
   } else if (reading) {
-    body = <CodeSkeleton prefix={prefix} label="Reading the image…" shown />;
+    // Shown here; said by the image's one status node, below.
+    body = <CodeSkeleton prefix={prefix} label="Reading the image…" shown announce={false} />;
   } else if (mode === "source") {
     body = (
       <SourceBody
@@ -822,8 +825,7 @@ function RenderedFileDiff({
             className="flex-none border-t border-border px-3 py-1 text-xs text-muted-foreground"
             data-testid={`${prefix}-rendered-alone`}
           >
-            Rendered on its own: linked files such as stylesheets and images aren&apos;t loaded
-            here.
+            Rendered on its own: linked files such as stylesheets and images aren’t loaded here.
           </p>
         )
       }
@@ -856,6 +858,12 @@ function RenderedFileDiff({
         )
       }
     >
+      {raster && (
+        // One status node from Reading the image… to the reason it won't draw: a screen reader hears the change, which a node mounted with its text does not say.
+        <span role="status" className="sr-only" data-testid={`${prefix}-image-status`}>
+          {reading ? "Reading the image…" : cannotDraw ? `${cannotDraw}.` : ""}
+        </span>
+      )}
       {body}
     </DiffFrame>
   );
@@ -889,9 +897,7 @@ function InlineRenderedSide({
     if (!isScene(text))
       return (
         <OverlayCenteredState testId="excalidraw-unreadable">
-          <span role="alert">
-            Couldn&apos;t read this side&apos;s drawing: it isn&apos;t valid JSON.
-          </span>
+          <span role="alert">Couldn’t read this side’s drawing: it isn’t valid JSON.</span>
         </OverlayCenteredState>
       );
     return (

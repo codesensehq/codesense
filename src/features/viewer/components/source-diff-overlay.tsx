@@ -781,14 +781,14 @@ export function SourceDiffOverlay({
   const copyPath = (path: string) => {
     const clipboard = typeof navigator !== "undefined" ? navigator.clipboard : undefined;
     if (!clipboard) {
-      toast.error("Couldn't copy the path");
+      toast.error("Couldn’t copy the path");
       return;
     }
     void clipboard.writeText(path).then(
       () => setCopied(true),
       () => {
         setCopied(false);
-        toast.error("Couldn't copy the path");
+        toast.error("Couldn’t copy the path");
       },
     );
   };
