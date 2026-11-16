@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 
+import { SESSION_RECORD_EVENTS, sessionIdsOf } from "@/features/dashboard/lib/live-hub";
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
 import { sessionRecord } from "@/tauri/commands";
 
@@ -20,15 +21,6 @@ export interface SessionRecordFacts {
   filesPartial: string | null;
   story: string | null;
 }
-
-/** The events a session record moves with, each naming its session (as the live hub reads them). */
-const RECORD_EVENTS = ["mcp:agent-progress", "mcp:agent-done", "pty-exit", "session-usage-changed"];
-
-const sessionIdsOf = (payload: unknown): string[] => {
-  const p = (payload ?? {}) as { sessionId?: unknown; session_id?: unknown; sessionIds?: unknown };
-  const ids = Array.isArray(p.sessionIds) ? p.sessionIds : [p.sessionId ?? p.session_id];
-  return ids.filter((id): id is string => typeof id === "string" && id !== "");
-};
 
 function factsOf(raw: unknown): SessionRecordFacts | null {
   if (!raw || typeof raw !== "object") return null;
@@ -100,7 +92,7 @@ export function useSessionRecord(
   useEffect(() => {
     if (!handle) return;
     void reload();
-    const offs = RECORD_EVENTS.map((event) =>
+    const offs = SESSION_RECORD_EVENTS.map((event) =>
       listen(event, ({ payload }) => {
         const ids = sessionIdsOf(payload);
         if (ids.some((id) => id === sessionId || known.current.includes(id))) void reload();
