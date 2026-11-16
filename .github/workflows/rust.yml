@@ -119,6 +119,10 @@ jobs:
     runs-on: macos-15
     # Room for a full compile of the set, most of which the dependency cache does not cover.
     timeout-minutes: 150
+    # The archive's name, from the attempt that built it: re-running only the failed shards
+    # starts a new attempt but keeps this job's output and artifact.
+    outputs:
+      archive: ${{ steps.archive-name.outputs.name }}
     permissions:
       contents: read
     defaults:
@@ -204,10 +208,13 @@ jobs:
         run: |
           git ls-files -z --others --ignored --exclude-standard -- src-tauri codesense-docs \
             | tar --null -T - -cf "$RUNNER_TEMP/test-runtime.tar"
+      - name: Name test archive
+        id: archive-name
+        run: echo "name=rust-macos-tests-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
       - name: Upload test archive
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: rust-macos-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ steps.archive-name.outputs.name }}
           path: |
             ${{ runner.temp }}/nextest-archive.tar.zst
             ${{ runner.temp }}/test-runtime.tar
@@ -296,7 +303,7 @@ jobs:
       - name: Download test archive
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: rust-macos-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ needs.rust-macos-build.outputs.archive }}
           path: ${{ runner.temp }}/rust-macos-tests
       - name: Restore test runtime files
         run: tar -xf "$RUNNER_TEMP/rust-macos-tests/test-runtime.tar"

@@ -954,6 +954,42 @@ test("Rust jobs preserve package coverage for nextest and doctests and always up
   assert.ok(test.run.includes(`--partition "slice:\${{ matrix.shard }}/${count}"`), test.run);
   assert.ok(shards.steps.some((step) => step.run?.includes("--tool cargo-nextest")));
   junitUpload(shards.steps);
+  // A re-run of only the failed shards is a new attempt; the archive keeps the build's name.
+  const name = build.steps.find((step) => step.id === "archive-name");
+  assert.match(name.run, /rust-macos-tests-\$GITHUB_RUN_ID-\$GITHUB_RUN_ATTEMPT/);
+  assert.equal(build.outputs.archive, "${{ steps.archive-name.outputs.name }}");
+  const upload = build.steps.find((step) => step.name === "Upload test archive");
+  assert.equal(upload.with.name, "${{ steps.archive-name.outputs.name }}");
+  const download = shards.steps.find((step) => step.uses?.startsWith("actions/download-artifact@"));
+  assert.equal(download.with.name, "${{ needs.rust-macos-build.outputs.archive }}");
+});
+
+// The build script's generators that write into directories it watches run before cargo; the
+// step finds them in build.rs, so a new one is picked up and none is missed.
+test("rust.yml generates every docs file build.rs writes before the first cargo command", (t) => {
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  const step = workflow.jobs["rust-macos-build"].steps.find((s) => s.name === "Generate docs data");
+  const root = path.join(directory, "..", "..");
+  const buildRs = fs.readFileSync(path.join(root, "src-tauri/build.rs"), "utf8");
+  const calls = [
+    ...buildRs.matchAll(/^\s*run_docs_generator\("\.\.\/(scripts\/[^"]+\.mjs)"\);$/gm),
+  ].map((m) => m[1]);
+  assert.ok(calls.length > 0);
+  // Every single-script call in build.rs has that exact shape (the _with_args calls write
+  // archives dated to their inputs, so they need no head start).
+  assert.equal(buildRs.match(/^\s*run_docs_generator\(/gm).length, calls.length);
+  // Run the step with node replaced by a recorder, so it lists what it would run.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-data-step-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, "node"), '#!/bin/sh\necho "$1" >> "$RAN"\n', { mode: 0o755 });
+  const ran = path.join(dir, "ran");
+  const result = spawnSync("bash", ["-e", "-c", step.run], {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, RAN: ran },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(fs.readFileSync(ran, "utf8").trim().split("\n"), calls);
 });
 
 const flakyIssues = good
