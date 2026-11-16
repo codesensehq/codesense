@@ -71,8 +71,8 @@ async function boot(page: Page) {
           v.invoke = (cmd, args) => {
             if (cmd === "plugin:event|listen" && args?.event === "agent-inbox-changed")
               handlers.push(Number(args.handler));
-            return cmd === "list_session_inbox"
-              ? Promise.resolve(make(String(args?.handle ?? "x")))
+            return cmd === "list_session_inbox" || cmd === "list_thread_inbox"
+              ? Promise.resolve(make(String(args?.handle ?? args?.session ?? "x")))
               : orig(cmd, args);
           };
           inner = v;

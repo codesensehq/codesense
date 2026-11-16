@@ -11,7 +11,7 @@ use super::*;
 fn bridge_tool_allowlist_enforcement_is_a_cli_capability() {
     assert!(desktop(AgentCli::Codex).enforces_bridge_tool_allowlist);
     assert!(desktop(AgentCli::OpenCode).enforces_bridge_tool_allowlist);
-    assert!(!desktop(AgentCli::Claude).enforces_bridge_tool_allowlist);
+    assert!(desktop(AgentCli::Claude).enforces_bridge_tool_allowlist);
 }
 
 /// The placeholder names in a session-log glob, panicking on malformed braces or names
@@ -167,6 +167,7 @@ fn a_blanket_opencode_allow_escalates_the_agent() {
         avatar: None,
         allow_wake: false,
         resume_after_restart: false,
+        skill_allowlist: None,
         budget_usd: None,
         revision: 1,
         archived_at: None,
@@ -482,6 +483,7 @@ fn each_runtime_generates_its_own_launch_settings() {
         avatar: None,
         allow_wake: false,
         resume_after_restart: false,
+        skill_allowlist: None,
         budget_usd: None,
         revision: 1,
         archived_at: None,

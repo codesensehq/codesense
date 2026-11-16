@@ -24,7 +24,7 @@
     header: { done: "Story is done", none: "not running: your next message starts it", starting: "starting…", idle: "waiting for you", needs: "needs you in its terminal", unknown: "status unknown · its machine may be offline", working: (activity) => `working · ${activity}`, failed: (reason) => `couldn't start · ${reason}`, activityNone: "activity not reported" },
     placeholder: { running: "It's working; your message waits for its next step", idle: "Reply to the story lead", needs: "It's waiting on its terminal; your message waits", unknown: "Your message waits until it's reachable", none: "Message to start the story lead", starting: "Starting the story lead; more messages wait for it", failed: "Retry, or add to your kept message", done: "This story is done" },
     mark: { stuck: "Sent · waiting on its terminal", starting: "Sent · starting the lead", held: "Held · sends when the lead joins", sent: "Sent", queued: "Queued · goes to the lead at its next step", delivered: "Delivered", kept: "Not delivered · kept" },
-    row: { starting: "Starting story lead…", slow: "Still starting (over 20 s)", joined: (model, activity) => `Story lead joined · ${model} · ${activity}`, modelNone: "model not reported yet", typing: "Story lead is typing", working: "Working…", retry: "Retry", needsTerminal: "Needs you in its terminal", unread: "Couldn't load the conversation.", loading: "Loading the conversation…", stale: (time) => `Couldn't refresh · ${time}`, to: (name) => `To ${name}` },
+    row: { htmlFrom: (who) => `Dashboard from ${who}`, htmlOpen: "Open", htmlClose: "Close", starting: "Starting story lead…", slow: "Still starting (over 20 s)", joined: (model, activity) => `Story lead joined · ${model} · ${activity}`, modelNone: "model not reported yet", typing: "Story lead is typing", working: "Working…", retry: "Retry", needsTerminal: "Needs you in its terminal", unread: "Couldn't load the conversation.", loading: "Loading the conversation…", stale: (time) => `Couldn't refresh · ${time}`, to: (name) => `To ${name}` },
     failure: { send: (why) => `Couldn't send your message: ${why}.`, busy: "Couldn't start the story lead: CodeSense is at its agent limit. Try again in a moment.", denied: (why) => `Couldn't start the story lead: launching was refused (${why}).`, unavailable: (why) => `Couldn't start the story lead: no agent is available (${why}).`, timeout: "The story lead didn't start in 2 minutes.", exited: "The story lead stopped right after it started.", other: (code) => `Couldn't start the story lead: ${code}.`, reasonBusy: "CodeSense is at its agent limit", reasonTimeout: "no join in 2 minutes", reasonExited: "it stopped right after starting" },
     terminal: "Show terminal",
     terminalOff: "Show terminal · not running",
@@ -247,20 +247,23 @@
       return named === void 0 ? all : named;
     }));
   }
-  function pinTitleOf(m, sender) {
+  function htmlNameOf(m) {
     const summary = squashSpace(m && m.summary);
     if (summary) return summary;
     const text = String(m && m.text || "");
-    if (m && m.contentType === "html") {
-      const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(text);
-      if (title && plainText(title[1])) return plainText(title[1]);
-      for (const heading of text.matchAll(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi)) {
-        const name = plainText(heading[2]);
-        if (name) return name;
-      }
-      return `Dashboard from ${sender}`;
+    const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(text);
+    if (title && plainText(title[1])) return plainText(title[1]);
+    for (const heading of text.matchAll(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi)) {
+      const name = plainText(heading[2]);
+      if (name) return name;
     }
-    return pinFirstSentence(text) || `Message from ${sender}`;
+    return "";
+  }
+  function pinTitleOf(m, sender) {
+    if (m && m.contentType === "html") return htmlNameOf(m) || `Dashboard from ${sender}`;
+    const summary = squashSpace(m && m.summary);
+    if (summary) return summary;
+    return pinFirstSentence(String(m && m.text || "")) || `Message from ${sender}`;
   }
 
   // src-tauri/src/http/routes/dashboard_kit/chat/launch.js
@@ -758,7 +761,7 @@
   // src-tauri/src/http/routes/dashboard_kit/chat/mount-ids.js
   function idsOf(n) {
     const tail = n > 1 ? `-${n}` : "";
-    return { region: `sv-composer${tail}`, input: `sv-composer-input${tail}`, send: `sv-send${tail}`, hint: `sv-composer-hint${tail}`, status: `sv-status${tail}`, term: (kind) => `sv-term-${kind}${tail}` };
+    return { region: `sv-composer${tail}`, input: `sv-composer-input${tail}`, send: `sv-send${tail}`, hint: `sv-composer-hint${tail}`, status: `sv-status${tail}`, term: (kind) => `sv-term-${kind}${tail}`, htmlSlot: (id) => `sv-html-${id}${tail}` };
   }
   var claims = /* @__PURE__ */ new WeakMap();
   function mountIds(doc, el) {
@@ -892,6 +895,24 @@
 
   // src-tauri/src/http/routes/dashboard_kit/chat/roving.js
   var FOCUSABLE = "button, a[href], input, select, textarea, iframe, [tabindex], pre, .inbox-table-scroll";
+  var SCROLLER = "pre, .inbox-table-scroll";
+  var SCROLLER_NAME = { code: "Code", table: "Table" };
+  function scrollerNames(node, active) {
+    if (active === null) return () => {
+    };
+    const own = node.closest ? node.closest(ROW) : null;
+    const row = own ? own.dataset.mid === active ? own : null : node.querySelector(`[data-mid="${CSS.escape(active)}"]`);
+    if (!row) return () => {
+    };
+    const blocks = [...row.querySelectorAll(SCROLLER)].filter((el) => !el.hasAttribute("aria-label") && !el.hasAttribute("aria-labelledby"));
+    const scrolls = blocks.filter((el) => el.scrollWidth > el.clientWidth || el.scrollHeight > el.clientHeight);
+    return () => {
+      for (const el of scrolls) {
+        if (!el.hasAttribute("role")) el.setAttribute("role", "region");
+        el.setAttribute("aria-label", el.matches("pre") ? SCROLLER_NAME.code : SCROLLER_NAME.table);
+      }
+    };
+  }
   var HELD = "data-roving-tabindex";
   var ROW = "[data-mid]";
   function setControl(el, on) {
@@ -906,6 +927,7 @@
     }
   }
   function applyTo(node, active) {
+    const name = scrollerNames(node, active);
     const rows = node.matches(ROW) ? [node, ...node.querySelectorAll(ROW)] : node.querySelectorAll(ROW);
     for (const row of rows) {
       row.tabIndex = row.dataset.mid === active ? 0 : -1;
@@ -917,6 +939,7 @@
       const row = el.closest(ROW);
       if (row) setControl(el, row.dataset.mid === active);
     }
+    name();
   }
   function rovingThread(log) {
     let picked = null, active = null;
@@ -965,10 +988,11 @@
     };
     const onFocusIn = (event) => {
       const row = event.target.closest && event.target.closest(ROW);
-      if (row && log.contains(row) && row.dataset.mid !== active) {
+      if (!row || !log.contains(row)) return;
+      if (row.dataset.mid !== active) {
         picked = row.dataset.mid;
         refresh();
-      }
+      } else scrollerNames(row, active)();
     };
     log.addEventListener("keydown", onKeyDown);
     log.addEventListener("focusin", onFocusIn);
@@ -1150,7 +1174,7 @@
       });
       const change = open.change ? h("div", { class: "chg", tabindex: "-1", role: "status" }, open.change) : null;
       const error = open.error ? h("div", { class: "pin-note danger", role: "alert" }, h("span", {}, open.error)) : null;
-      node.replaceChildren(head, change, h("div", { class: "rows" }, ...rows), error, cancel);
+      node.replaceChildren(...[head, change, h("div", { class: "rows" }, ...rows), error, cancel].filter(Boolean));
       mark(open.current);
     }
     function after(was = false) {
@@ -1328,10 +1352,11 @@
       }
     }
     for (const id of [...cache.keys()]) if (!seen.has(id)) cache.delete(id);
+    const keep = new Set(nodes);
+    for (const child of [...parent.childNodes]) if (!keep.has(child)) child.remove();
     nodes.forEach((node, index) => {
       if (parent.childNodes[index] !== node) parent.insertBefore(node, parent.childNodes[index] || null);
     });
-    while (parent.childNodes.length > nodes.length) parent.lastChild.remove();
   }
   var storyTarget = (storyId, leadRole) => ({
     rows: (sessions) => leadRowsOf(sessions, storyId, leadRole),
@@ -1341,7 +1366,7 @@
     leadName: () => CHAT_COPY.lead
   });
   var targetOf = ({ target = null, storyId = null, leadRole = null }) => target || storyTarget(storyId, leadRole);
-  function mount(el, { storyId = null, leadRole = null, transport, reads, timers = DEFAULT_TIMERS, card = (text) => text, clock = systemClock(), done = false, win = window, target: own = null, headerSlot = null, layout = {}, cards = {}, chips = [], faces = null, next = false, activity = false, copy: words = null, styles = true, onPin = null, send: sendOpt = null }) {
+  function mount(el, { storyId = null, leadRole = null, transport, reads, timers = DEFAULT_TIMERS, card = (text) => text, clock = systemClock(), done = false, win = window, target: own = null, headerSlot = null, layout = {}, cards = {}, chips = [], faces = null, next = false, activity = false, copy: words = null, styles = true, onPin = null, html = null, send: sendOpt = null }) {
     const mountSlot = mountIds(win.document, el), ids = mountSlot.ids;
     if (styles) linkChatStyles(win.document);
     const target = targetOf({ target: own, storyId, leadRole }), parseOf = cards && cards.parse || parseCard, consentOn = Boolean(cards && cards.consent), copy = words ? mergeCopy(words) : CHAT_COPY;
@@ -1520,19 +1545,87 @@
     };
     const holds = (name, who) => String(name).trim().toLowerCase().includes(String(who).trim().toLowerCase());
     const whoLine = (info, who, meta) => info ? h("div", { class: "who" }, faceNode(info), holds(info.name, who) ? null : h("span", { class: "sr" }, `${info.name}, `), meta) : meta;
+    const htmlOpen = /* @__PURE__ */ new Map();
+    const htmlRelease = (id) => {
+      const open = htmlOpen.get(id);
+      if (!open) return;
+      htmlOpen.delete(id);
+      open.closed = true;
+      if (open.shown) open.shown.disconnect();
+      open.slot.remove();
+      if (typeof open.release === "function") open.release();
+    };
+    const keepOpen = (id, fresh) => {
+      const open = htmlOpen.get(id), old = open && open.slot.isConnected ? open.slot.closest(".msg") : null, body = old && old.querySelector(":scope > .body"), freshBody = fresh.querySelector(":scope > .body");
+      if (!body || !freshBody) return fresh;
+      for (const child of [...old.childNodes]) if (child !== body) child.remove();
+      const kids = [...fresh.childNodes], at = kids.indexOf(freshBody);
+      body.before(...kids.slice(0, at));
+      body.after(...kids.slice(at + 1));
+      for (const { name } of [...old.attributes]) if (!fresh.hasAttribute(name)) old.removeAttribute(name);
+      for (const { name, value } of [...fresh.attributes]) old.setAttribute(name, value);
+      return old;
+    };
+    const htmlToggle = (item, title) => {
+      if (!html || typeof html.open !== "function") return null;
+      const slotId = ids.htmlSlot(item.id), button = h("button", { type: "button", class: "btn sm quiet html-open", "aria-controls": slotId });
+      const show = (on) => {
+        button.setAttribute("aria-expanded", on ? "true" : "false");
+        button.textContent = on ? copy.row.htmlClose : copy.row.htmlOpen;
+      };
+      button.addEventListener("click", () => {
+        if (htmlOpen.has(item.id)) {
+          htmlRelease(item.id);
+          show(false);
+          return;
+        }
+        const slot = h("div", { class: "html-slot", id: slotId }), open = { slot, release: null, closed: false };
+        button.parentNode.append(slot);
+        let answer;
+        try {
+          answer = html.open({ messageId: item.id, title, contentType: "html" }, slot);
+        } catch {
+          slot.remove();
+          return;
+        }
+        htmlOpen.set(item.id, open);
+        const reveal = () => {
+          if (!slot.isConnected) return;
+          const l = log.getBoundingClientRect(), r = slot.getBoundingClientRect(), below = r.bottom - l.bottom;
+          if (below > 0) log.scrollTop += Math.min(below, r.top - l.top);
+        };
+        open.shown = new MutationObserver(reveal);
+        open.shown.observe(slot, { childList: true, subtree: true });
+        reveal();
+        if (answer && typeof answer.then === "function") Promise.resolve(answer).then((release) => {
+          if (!open.closed) open.release = release;
+          else if (typeof release === "function") release();
+        }, () => {
+        });
+        else open.release = answer;
+        show(true);
+      });
+      show(htmlOpen.has(item.id));
+      return button;
+    };
+    const htmlName = (item, who) => {
+      const from = copy.row.htmlFrom(who), name = htmlNameOf({ text: item.said || item.text, summary: item.summary }), open = htmlOpen.get(item.id);
+      return [...name ? [h("div", { class: "html-t" }, name), h("div", { class: "html-from" }, from)] : [from], htmlToggle(item, name || from), open && !open.slot.isConnected ? open.slot : null];
+    };
     const bubble = (item, side, first = true, info = null) => {
       const pin2 = item.pin ? item.pin.make() : null, who = info && info.label || item.who;
-      return h(
+      const node = h(
         "div",
         { class: `msg ${side}${pin2 && pin2.pinned ? " pinned" : ""}`, "data-mid": item.id === void 0 ? null : String(item.id), "data-run": faces ? first ? "start" : "cont" : null },
         first ? whoLine(info, who, h("div", { class: "meta" }, `${who} · ${timeLabel(item.at)}`, item.label ? h("span", { "data-row-label": "" }, ` · ${item.label}`) : null)) : null,
         pin2 ? pin2.acts : null,
-        h("div", { class: "body" }, item.contentType === "html" ? item.text : inlineNodes(item.text)),
+        item.contentType === "html" ? h("div", { class: "body", "data-html": "1" }, htmlName(item, who)) : h("div", { class: "body" }, inlineNodes(item.text)),
         item.note ? h("div", { class: "note" }, item.note) : null,
         item.mark ? h("div", { class: "mark", "data-mark": item.markKey }, item.mark) : null,
         pin2 ? pin2.tag : null,
         pin2 ? pin2.foot : null
       );
+      return item.contentType === "html" && htmlOpen.has(item.id) ? keepOpen(item.id, node) : node;
     };
     const typing = () => h("div", { class: "msg lead typing", "data-typing": "1" }, face("working", copy.row.typing), h("span", { class: "dots", "aria-hidden": "true" }, h("i"), h("i"), h("i")), h("span", { class: "sr" }, copy.row.typing));
     const termButton = (id) => {
@@ -1765,6 +1858,7 @@
       const act = activityItem(), want = [...emptyItems(), ...threadItems(), { id: "status", node: status }, ...awaiting() ? [{ id: "typing", sig: "t", make: typing }] : []];
       const held = roving.focused();
       reconcile(log, cache, want);
+      for (const id of [...htmlOpen.keys()]) if (!cache.has("m" + id)) htmlRelease(id);
       roving.refresh(held);
       if (actFoot) reconcile(actFoot, actCache, act ? [act] : []);
       paintChips();
@@ -1886,6 +1980,7 @@
     return {
       unmount() {
         gone = true;
+        for (const id of [...htmlOpen.keys()]) htmlRelease(id);
         offs.forEach((off) => off && off());
         if (prose) prose.release();
         if (typeof releaseSlot === "function") releaseSlot();

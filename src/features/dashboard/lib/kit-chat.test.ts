@@ -1941,6 +1941,285 @@ describe("kit.chat onPin: the person pins a message", () => {
     expect(onPin.change.mock.calls).toEqual([["unpin", 6]]);
   });
 
+  it("draws an HTML message as its name and sender, never its markup", async () => {
+    const s = setup(
+      [lead("idle")],
+      [
+        {
+          messageId: 9,
+          from: "lead-1",
+          to: "human",
+          contentType: "html",
+          text: "<!doctype html><title>Merge board</title><p>x</p>",
+          createdAtMs: T0,
+        },
+        {
+          messageId: 10,
+          from: "lead-1",
+          to: "human",
+          contentType: "html",
+          text: "<div>no name</div>",
+          createdAtMs: T0 + 1000,
+        },
+      ],
+    );
+    mountOn(s);
+    await flush();
+    const body = (id: number) => s.el.querySelector<HTMLElement>(`.msg[data-mid="${id}"] .body`)!;
+    expect(body(9).textContent).not.toContain("<");
+    expect(body(9).dataset.html).toBe("1");
+    expect(body(9).querySelector(".html-t")!.textContent).toBe("Merge board");
+    expect(body(9).querySelector(".html-from")!.textContent).toBe("Dashboard from Story lead");
+    // No title or heading: the sender line is its name, said once.
+    expect(body(10).textContent).toBe("Dashboard from Story lead");
+  });
+
+  it("says an untitled HTML message's sender once in a page's own words too", async () => {
+    const s = setup(
+      [lead("idle")],
+      [
+        {
+          messageId: 10,
+          from: "lead-1",
+          to: "human",
+          contentType: "html",
+          text: "<div>no name</div>",
+          createdAtMs: T0,
+        },
+      ],
+    );
+    mountOn(s, { copy: { row: { htmlFrom: (who: string) => `A page from ${who}` } } });
+    await flush();
+    expect(s.el.querySelector('.msg[data-mid="10"] .body')!.textContent).toBe(
+      "A page from Story lead",
+    );
+  });
+
+  describe("an HTML message's Open (the page's html.open)", () => {
+    const html = {
+      messageId: 9,
+      from: "lead-1",
+      to: "human",
+      contentType: "html",
+      text: "<title>Merge board</title><p>x</p>",
+      createdAtMs: T0,
+    };
+    const toggleOf = (el: HTMLElement) =>
+      el.querySelector<HTMLButtonElement>('.msg[data-mid="9"] .html-open');
+
+    it("has no Open where the page gives no html.open", async () => {
+      const s = setup([lead("idle")], [html]);
+      mountOn(s);
+      await flush();
+      expect(toggleOf(s.el)).toBeNull();
+    });
+
+    it("opens the message into its bubble, keeps it through a repaint, and releases it on Close", async () => {
+      const release = vi.fn();
+      const open = vi.fn((_message: Row, slot: HTMLElement) => {
+        slot.append(document.createElement("iframe"));
+        return release;
+      });
+      const s = setup([lead("idle")], [html]);
+      mountOn(s, { html: { open } });
+      await flush();
+      const toggle = toggleOf(s.el)!;
+      expect(toggle.textContent).toBe("Open");
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      toggle.click();
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(open.mock.calls[0]![0]).toMatchObject({ messageId: 9, title: "Merge board" });
+      const slot = open.mock.calls[0]![1];
+      expect(s.el.querySelector('.msg[data-mid="9"]')!.contains(slot)).toBe(true);
+      expect(toggleOf(s.el)!.getAttribute("aria-expanded")).toBe("true");
+      expect(toggleOf(s.el)!.textContent).toBe("Close");
+      expect(toggleOf(s.el)!.getAttribute("aria-controls")).toBe(slot.id);
+      const frame = slot.querySelector("iframe");
+      // A repaint that changes nothing keeps the open frame where it is: no second open, no reload.
+      await s.reads.sessions();
+      await flush();
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(s.el.querySelector('.msg[data-mid="9"] iframe')).toBe(frame);
+      toggleOf(s.el)!.click();
+      expect(release).toHaveBeenCalledTimes(1);
+      expect(s.el.contains(slot)).toBe(false);
+      expect(toggleOf(s.el)!.getAttribute("aria-expanded")).toBe("false");
+    });
+
+    it("keeps an open frame in the page when pinning rebuilds the bubble, and releases it when the message leaves", async () => {
+      // An iframe that leaves the page reloads: this stand-in counts every time it leaves.
+      let left = 0;
+      if (!customElements.get("cs-test-frame"))
+        customElements.define(
+          "cs-test-frame",
+          class extends HTMLElement {
+            disconnectedCallback() {
+              (this as unknown as { onLeave?: () => void }).onLeave?.();
+            }
+          },
+        );
+      const release = vi.fn();
+      const thread: Row[] = [html];
+      const s = setup([lead("idle")], thread);
+      let pins: Pin[] = [];
+      mountOn(s, {
+        html: {
+          open: (_m: Row, slot: HTMLElement) => {
+            const frame = document.createElement("cs-test-frame") as HTMLElement & {
+              onLeave?: () => void;
+            };
+            frame.onLeave = () => left++;
+            slot.append(frame);
+            return release;
+          },
+        },
+        onPin: {
+          pins: () => pins,
+          change: async (_a: string, id: number) => (pins = [{ messageId: id, pinnedBy: "human" }]),
+        },
+      });
+      await flush();
+      toggleOf(s.el)!.click();
+      const frame = s.el.querySelector('.msg[data-mid="9"] cs-test-frame')!;
+      s.el.querySelector<HTMLButtonElement>('.msg[data-mid="9"] .pin-b')!.click();
+      await flush();
+      expect(s.el.querySelector('.msg[data-mid="9"]')!.classList.contains("pinned")).toBe(true);
+      expect(s.el.querySelector('.msg[data-mid="9"] .pin-b')!.getAttribute("aria-pressed")).toBe(
+        "true",
+      );
+      expect(s.el.querySelector('.msg[data-mid="9"] cs-test-frame')).toBe(frame);
+      expect(left).toBe(0);
+      expect(release).not.toHaveBeenCalled();
+      thread.splice(0, 1);
+      s.emit("inbox");
+      await flush();
+      expect(release).toHaveBeenCalledTimes(1);
+    });
+
+    it("releases an open that answers later, once it does, and survives an open that throws", async () => {
+      const release = vi.fn();
+      let answer: (fn: () => void) => void = () => {};
+      const s = setup([lead("idle")], [html]);
+      mountOn(s, {
+        html: {
+          open: () => new Promise<() => void>((resolve) => (answer = resolve)),
+        },
+      });
+      await flush();
+      toggleOf(s.el)!.click();
+      // Closed before the page answered: its release runs as soon as it does.
+      toggleOf(s.el)!.click();
+      answer(release);
+      await flush();
+      expect(release).toHaveBeenCalledTimes(1);
+      const t = setup([lead("idle")], [html]);
+      mountOn(t, {
+        html: {
+          open: () => {
+            throw new Error("no frame");
+          },
+        },
+      });
+      await flush();
+      toggleOf(t.el)!.click();
+      expect(t.el.querySelector('.msg[data-mid="9"] .html-slot')).toBeNull();
+      expect(toggleOf(t.el)!.getAttribute("aria-expanded")).toBe("false");
+    });
+
+    it("brings an opened message's slot into the log's view once the page draws into it", async () => {
+      const s = setup([lead("idle")], [html]);
+      let opened: HTMLElement | null = null;
+      mountOn(s, {
+        html: {
+          open: (_m: Row, slot: HTMLElement) => {
+            opened = slot;
+            // Filled at once, as a page's embed does (a loading node, empty until the host answers).
+            slot.append(document.createElement("div"));
+            return () => {};
+          },
+        },
+      });
+      await flush();
+      const log = s.el.querySelector<HTMLElement>(".log")!;
+      // jsdom has no layout: the log is 0..500, and what it holds below its fold is at 480..720.
+      const rect = (top: number, bottom: number) =>
+        ({
+          top,
+          bottom,
+          left: 0,
+          right: 100,
+          width: 100,
+          height: bottom - top,
+          x: 0,
+          y: top,
+        }) as DOMRect;
+      log.getBoundingClientRect = () => rect(0, 500);
+      toggleOf(s.el)!.click();
+      const slot = opened!;
+      slot.getBoundingClientRect = () => rect(480 - log.scrollTop, 720 - log.scrollTop);
+      // The page fills the slot at once with its loading node; its frame arrives in it later.
+      await flush();
+      slot.firstElementChild!.append(document.createElement("iframe"));
+      await flush();
+      // Scrolled within the log by what was below the fold, and never past the slot's top.
+      expect(log.scrollTop).toBe(220);
+    });
+
+    it("keeps an open message's frame in place when an earlier row leaves the thread", async () => {
+      let left = 0;
+      if (!customElements.get("cs-test-frame"))
+        customElements.define(
+          "cs-test-frame",
+          class extends HTMLElement {
+            disconnectedCallback() {
+              (this as unknown as { onLeave?: () => void }).onLeave?.();
+            }
+          },
+        );
+      const earlier = {
+        messageId: 8,
+        from: "lead-1",
+        to: "human",
+        text: "An earlier line.",
+        createdAtMs: T0 - 1000,
+      };
+      const thread: Row[] = [earlier, html];
+      const s = setup([lead("idle")], thread);
+      mountOn(s, {
+        html: {
+          open: (_m: Row, slot: HTMLElement) => {
+            const frame = document.createElement("cs-test-frame") as HTMLElement & {
+              onLeave?: () => void;
+            };
+            frame.onLeave = () => left++;
+            slot.append(frame);
+            return () => {};
+          },
+        },
+      });
+      await flush();
+      toggleOf(s.el)!.click();
+      const frame = s.el.querySelector('.msg[data-mid="9"] cs-test-frame')!;
+      thread.splice(0, 1);
+      s.emit("inbox");
+      await flush();
+      expect(s.el.querySelector('.msg[data-mid="8"]')).toBeNull();
+      // Moving an iframe reloads it: the earlier row goes, the open bubble stays where it is.
+      expect(left).toBe(0);
+      expect(s.el.querySelector('.msg[data-mid="9"] cs-test-frame')).toBe(frame);
+    });
+
+    it("releases an open message when the chat unmounts", async () => {
+      const release = vi.fn();
+      const s = setup([lead("idle")], [html]);
+      const chat = mountOn(s, { html: { open: () => release } });
+      await flush();
+      toggleOf(s.el)!.click();
+      chat.unmount();
+      expect(release).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("names an HTML message by its title, not its markup, in the live region", async () => {
     const s = setup(
       [lead("idle")],
@@ -2091,6 +2370,14 @@ describe("kit.chat onPin with replace: at the cap, Pin… asks which pin to repl
       el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
     return { s, chat, onPin, row, pinOf, chooser, choices, choice, live, key, agentSets };
   }
+
+  it('a chooser with no change line and no error draws neither: no "null" text', async () => {
+    const { pinOf, chooser } = await mountReplace();
+    pinOf(5).click();
+    await flush();
+    expect(chooser()!.textContent).not.toMatch(/\bnull\b/);
+    for (const node of chooser()!.childNodes) expect(node.nodeType).toBe(Node.ELEMENT_NODE);
+  });
 
   it("Pin… at the cap isn't dimmed: it opens the chooser under the message, with every pin in list order", async () => {
     const { onPin, row, pinOf, chooser, choices, choice } = await mountReplace();

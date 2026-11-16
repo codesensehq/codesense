@@ -1198,6 +1198,9 @@ export const agentPins = (
   agentId: string,
   storyId: string | null,
   call: AgentPinsOp,
+  /** The sender of the HTML message calling, when one does: its writes stay in its
+   *  sender's own thread. Absent: the person's call. */
+  sender?: string,
 ) =>
   invoke<PinResult>("agent_pins", {
     team,
@@ -1210,6 +1213,7 @@ export const agentPins = (
     preview: "preview" in call ? (call.preview ?? null) : null,
     replaces: "replaces" in call ? call.replaces : null,
     replacing: "replacing" in call ? (call.replacing ?? null) : null,
+    ...(sender ? { sender } : {}),
   });
 
 /** Prepare the `pins` live view of an agent thread for a page's subscription. */
@@ -1270,6 +1274,9 @@ export interface InboxView {
   hasMore: boolean;
   messages: InboxMessageRow[];
   humanUnread: number;
+  /** When the read named a saved agent's thread (`agentId` with `storyId`): every address of its
+   *  sessions (handles and tab session ids). */
+  threadSessions?: string[];
 }
 
 /** The team whose inbox an app command reads or answers. */
@@ -1513,6 +1520,9 @@ export interface InboxQuery {
   before?: number;
   scope?: InboxScope;
   agentId?: string;
+  /** With `agentId`: that saved agent's thread on this story (empty: launched with none),
+   *  every session of it, ended ones included; `sessionId` then names the seat. */
+  storyId?: string;
   sessionId?: string;
   role?: string;
   /** Only messages of this kind, applied before `limit`. */

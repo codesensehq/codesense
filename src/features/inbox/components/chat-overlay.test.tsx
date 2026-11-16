@@ -46,6 +46,7 @@ vi.mock("@/shared/lib/open-file-in-team", () => ({ openFileInTeam: openFile }));
 
 const api = vi.hoisted(() => ({
   loadSessionInbox: vi.fn(),
+  loadThreadInbox: vi.fn(),
   loadInboxSessions: vi.fn(),
   sendAsHuman: vi.fn(),
 }));
@@ -227,6 +228,10 @@ describe("ChatOverlay contrast and focus (inbox.css)", () => {
     expect(shown).toContain("opacity: 1");
     expect(shown).toContain("pointer-events: auto");
   });
+  it("sets the cap count on Pin… and a fresh pin's New at the 11 px meta floor", () => {
+    expect(ruleOf(".ibx-ov .ibx-pin-cap")).toContain("font-size: 11px");
+    expect(ruleOf(".ibx-pk-new")).toContain("font-size: 11px");
+  });
   it("draws the chooser's highlighted row's Pinned by and Replace in the full ink, which reads at AA on its accent wash", () => {
     // Muted and accent inks only just pass on the bare page: on the wash they fell to 4.36:1 and 4.25:1 in light.
     const current = ".ibx-pin-chooser .choice[data-current]";
@@ -285,6 +290,11 @@ beforeEach(() => {
     dto: { handle: LEAD, roles: [], messages: MESSAGES },
     source: "live",
   });
+  // A session launched on a saved agent and story reads its thread: by default what the session
+  // read gives for its seat, so a test that sets the session read sets what the chat shows.
+  api.loadThreadInbox.mockImplementation((key: string) =>
+    api.loadSessionInbox((JSON.parse(key) as string[])[2]),
+  );
   api.loadInboxSessions.mockResolvedValue([]);
   api.sendAsHuman.mockResolvedValue({ status: "sent", messageId: 99 });
   vi.mocked(invoke).mockImplementation(async (cmd: string) =>
@@ -1067,6 +1077,111 @@ describe("ChatOverlay: the thread is one Tab stop", () => {
     for (const block of blocks) expect(block.hasAttribute("tabindex")).toBe(false);
   });
 
+  it("names a code block or table that scrolls, which Chromium makes a Tab stop, and leaves one that fits alone", async () => {
+    const BLOCK = "pre, .inbox-table-scroll";
+    const wide = new Set<string>(["PRE"]);
+    // jsdom has no layout: the code block overflows, the table fits.
+    const width = vi
+      .spyOn(HTMLElement.prototype, "scrollWidth", "get")
+      .mockImplementation(function (this: HTMLElement) {
+        return this.matches(BLOCK) && wide.has(this.tagName) ? 400 : 0;
+      });
+    try {
+      api.loadSessionInbox.mockResolvedValue({
+        dto: {
+          handle: LEAD,
+          roles: [],
+          messages: [
+            ...MESSAGES,
+            msg(
+              9,
+              LEAD,
+              "human",
+              "Here:\n\n```\nlong line of code\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |",
+            ),
+          ],
+        },
+        source: "live",
+      });
+      await renderOverlay(420, 700);
+      const newest = rows().at(-1)!;
+      const code = newest.querySelector<HTMLElement>("pre")!;
+      const table = newest.querySelector<HTMLElement>(".inbox-table-scroll")!;
+      expect(code).toHaveAttribute("role", "region");
+      expect(code).toHaveAccessibleName("Code");
+      expect(table).not.toHaveAttribute("role");
+      expect(table).not.toHaveAttribute("aria-label");
+    } finally {
+      width.mockRestore();
+    }
+  });
+
+  it("names the active message's block once a thread drawn hidden is shown and focus comes into it", async () => {
+    let shown = false;
+    // Drawn hidden, a block measures 0 (it fits); shown, it scrolls.
+    const width = vi
+      .spyOn(HTMLElement.prototype, "scrollWidth", "get")
+      .mockImplementation(function (this: HTMLElement) {
+        return shown && this.matches("pre") ? 400 : 0;
+      });
+    try {
+      api.loadSessionInbox.mockResolvedValue({
+        dto: {
+          handle: LEAD,
+          roles: [],
+          messages: [...MESSAGES, msg(9, LEAD, "human", "Here:\n\n```\nlong line of code\n```")],
+        },
+        source: "live",
+      });
+      await renderOverlay(420, 700);
+      const newest = rows().at(-1)!;
+      const code = newest.querySelector<HTMLElement>("pre")!;
+      expect(code).not.toHaveAttribute("role");
+      shown = true;
+      act(() => newest.focus());
+      expect(code).toHaveAttribute("role", "region");
+      expect(code).toHaveAccessibleName("Code");
+    } finally {
+      width.mockRestore();
+    }
+  });
+
+  it("measures only the active message's blocks, and names an older one's when focus moves into it", async () => {
+    const BLOCK = "pre, .inbox-table-scroll";
+    const measured: Element[] = [];
+    const width = vi
+      .spyOn(HTMLElement.prototype, "scrollWidth", "get")
+      .mockImplementation(function (this: HTMLElement) {
+        if (!this.matches(BLOCK)) return 0;
+        measured.push(this);
+        return 400;
+      });
+    try {
+      api.loadSessionInbox.mockResolvedValue({
+        dto: {
+          handle: LEAD,
+          roles: [],
+          messages: [
+            msg(1, LEAD, "human", "Here:\n\n```\nlong line of code\n```"),
+            ...MESSAGES.slice(1),
+          ],
+        },
+        source: "live",
+      });
+      await renderOverlay(420, 700);
+      const older = rows()[0]!;
+      const code = older.querySelector<HTMLElement>("pre")!;
+      // An older message's block is out of the Tab order: it is neither measured nor named.
+      expect(measured).not.toContain(code);
+      expect(code).not.toHaveAttribute("role");
+      act(() => older.focus());
+      expect(code).toHaveAttribute("role", "region");
+      expect(code).toHaveAccessibleName("Code");
+    } finally {
+      width.mockRestore();
+    }
+  });
+
   it("names a grouped follow-on message by its sender and time, as the message it follows is", async () => {
     await renderOverlay(420, 700);
     const grouped = rows().filter((r) => r.classList.contains("grouped"));
@@ -1402,20 +1517,36 @@ describe("ChatOverlay: the person pins a message", () => {
       expect(screen.getByTestId("chat-overlay-pin-3")).toBeInTheDocument();
     });
 
-    it("an Undo refused because the list filled again goes away, keeps the new pin and says why", async () => {
+    it("Esc on a replace's Undo closes the note and keeps focus on the message's pin button", async () => {
+      await full();
+      fireEvent.click(pinOf(4));
+      fireEvent.click(choiceOf(3));
+      const note = await within(row(4)).findByTestId("ibx-pin-note");
+      const undo = within(note).getByRole("button", { name: "Undo" });
+      act(() => undo.focus());
+      fireEvent.keyDown(undo, { key: "Escape" });
+      expect(within(row(4)).queryByTestId("ibx-pin-note")).toBeNull();
+      await waitFor(() => expect(pinOf(4)).toHaveFocus());
+    });
+
+    it("an Undo refused because the list filled again goes away, keeps the new pin, says why and keeps focus on the message", async () => {
       await full();
       fireEvent.click(pinOf(4));
       fireEvent.click(choiceOf(3));
       const note = await within(row(4)).findByTestId("ibx-pin-note");
       // The agent takes the new pin off and fills its place: the restore would go past the cap.
       held[0] = { messageId: 5, position: 0, pinnedBy: LEAD, pinnedAtMs: NOW };
-      fireEvent.click(within(note).getByRole("button", { name: "Undo" }));
+      const undo = within(note).getByRole("button", { name: "Undo" });
+      undo.focus();
+      fireEvent.click(undo);
       await waitFor(() =>
         expect(within(row(4)).getByTestId("ibx-pin-note")).toHaveTextContent(
           "Can't undo: the list is full again.",
         ),
       );
       expect(within(row(4)).queryByRole("button", { name: "Undo" })).toBeNull();
+      // Undo left the page; focus goes back to the message's pin button, not to the page body.
+      await waitFor(() => expect(pinOf(4)).toHaveFocus());
     });
   });
 
@@ -1582,6 +1713,10 @@ describe("ChatOverlay for the Foreman", () => {
   const LIVE_MAIL = [fm(2, FOREMAN, "human", "Hello from the live Foreman.", NOW - 60_000)];
   // The Foreman page's shared UI state (`ui:foreman`): its sender set, newest first.
   let senders: string[];
+  // Its live hosted setup sessions (`setupLive`), which the page publishes there too.
+  let setupLive: string[];
+  const SETUP = "_worker/codesense/docs/getting-started/setup";
+  let setupAlive: boolean | null;
   const realWatch = liveHub.watch.bind(liveHub);
 
   // The view key the host files the page's `ui:foreman` state under: "all" under the Open
@@ -1616,6 +1751,20 @@ describe("ChatOverlay for the Foreman", () => {
           role: null,
           startedAtMs: NOW - 5 * 60_000,
         } as unknown as AgentSessionRow,
+        ...(setupAlive === null
+          ? []
+          : [
+              {
+                handle: SETUP,
+                sessionId: "sess-setup",
+                kind: "claude",
+                alive: setupAlive,
+                displayName: "Setup",
+                story: null,
+                role: null,
+                startedAtMs: NOW - 60_000,
+              } as unknown as AgentSessionRow,
+            ]),
       ],
     });
     useAgentStateStore.setState({
@@ -1632,7 +1781,7 @@ describe("ChatOverlay for the Foreman", () => {
       if (topic !== "ui:foreman") return realWatch(topic, viewKey, callback, options);
       uiWatches.push(viewKey);
       if (viewKey !== viewKeyOf()) return () => {};
-      callback({ topic, viewKey, rev: 0, snapshot: [{ id: topic, senders }] } as never);
+      callback({ topic, viewKey, rev: 0, snapshot: [{ id: topic, senders, setupLive }] } as never);
       return () => {};
     });
   }
@@ -1653,6 +1802,8 @@ describe("ChatOverlay for the Foreman", () => {
 
   beforeEach(() => {
     senders = [FOREMAN, EARLIER];
+    setupLive = [];
+    setupAlive = null;
     preset = "open";
     uiWatches.length = 0;
   });
@@ -1700,6 +1851,8 @@ describe("ChatOverlay for the Foreman", () => {
       expect.stringContaining("Hello from the live Foreman."),
     ]);
     expect(api.loadSessionInbox).toHaveBeenCalledWith(EARLIER);
+    // The Foreman merges its own sessions; it never reads a thread.
+    expect(api.loadThreadInbox).not.toHaveBeenCalled();
   });
 
   it("reads no more earlier sessions than the page keeps in its thread", async () => {
@@ -1756,6 +1909,32 @@ describe("ChatOverlay for the Foreman", () => {
       { newTab: true },
     );
     expect(openFullView).not.toHaveBeenCalled();
+  });
+
+  it("while the page's hosted setup runs, says so with Open full view, which opens the Foreman tab", async () => {
+    setupLive = [SETUP];
+    setupAlive = true;
+    foremanSetup(new Map([[FOREMAN, LIVE_MAIL]]));
+    await renderForeman();
+    const row = await screen.findByTestId("chat-overlay-setup");
+    expect(row).toHaveAttribute("role", "status");
+    expect(row).toHaveTextContent("Setup is running");
+    fireEvent.click(within(row).getByRole("button", { name: "Open full view" }));
+    expect(openFile).toHaveBeenCalledWith(
+      { ...DOCS_TEAM, path: `${DOCS_ROOT}/getting-started/content/foreman/index.html` },
+      { newTab: true },
+    );
+  });
+
+  it.each([
+    ["none is published", [] as string[], true],
+    ["the published session has ended", ["_worker/codesense/docs/getting-started/setup"], false],
+  ])("shows no setup row when %s", async (_why, live, alive) => {
+    setupLive = live;
+    setupAlive = alive;
+    foremanSetup(new Map([[FOREMAN, LIVE_MAIL]]));
+    await renderForeman();
+    expect(screen.queryByTestId("chat-overlay-setup")).toBeNull();
   });
 
   it("a send in the overlay goes to the live Foreman, shows in its thread, and is a handle the page's thread reads", async () => {
@@ -1873,5 +2052,85 @@ describe("ChatOverlay for the Foreman", () => {
     fireEvent.click(card!);
     expect(screen.queryByText("This view is no longer in the thread.")).toBeNull();
     expect(screen.getAllByText(/Lead note for the Foreman/).length).toBeGreaterThan(1);
+  });
+});
+
+describe("ChatOverlay on a successor session", () => {
+  it("reads the thread of its saved agent and story, so its predecessor's mail shows though the roster no longer lists it", async () => {
+    api.loadThreadInbox.mockResolvedValue({
+      dto: {
+        handle: LEAD,
+        agentId: "builtin/claude",
+        storyId: "BUG-142",
+        sessions: ["BUG-142#lead-old", LEAD],
+        addresses: ["sess-old", "BUG-142#lead-old", SESSION, LEAD],
+        roles: [],
+        messages: [
+          msg(1, "human", "BUG-142#lead-old", "Asked the first session"),
+          msg(2, "BUG-142#lead-old", "human", "The first session answered"),
+          // Mail the thread read found by the predecessor's tab session id.
+          msg(3, "sess-old", "human", "Sent from the first session's tab"),
+          ...MESSAGES,
+        ],
+      },
+      source: "live",
+    });
+    await renderOverlay(420, 700, "dock");
+    expect(await screen.findByText("The first session answered")).toBeInTheDocument();
+    expect(screen.getByText("Asked the first session")).toBeInTheDocument();
+    expect(screen.getByText("Sent from the first session's tab")).toBeInTheDocument();
+    expect(api.loadThreadInbox).toHaveBeenCalledWith(
+      JSON.stringify(["builtin/claude", "BUG-142", SESSION]),
+    );
+    expect(api.loadSessionInbox).not.toHaveBeenCalledWith(SESSION);
+  });
+
+  it("marks the predecessor's mail read on screen as it does the session's own, and nothing else", async () => {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 420,
+      bottom: 700,
+      width: 420,
+      height: 700,
+      toJSON: () => ({}),
+    });
+    api.loadThreadInbox.mockResolvedValue({
+      dto: {
+        handle: LEAD,
+        agentId: "builtin/claude",
+        storyId: "BUG-142",
+        sessions: ["BUG-142#lead-old", LEAD],
+        addresses: ["sess-old", "BUG-142#lead-old", SESSION, LEAD],
+        roles: [],
+        messages: [
+          msg(41, "BUG-142#lead-old", "human", "Unread from the first session", { unread: true }),
+          msg(42, "sess-old", "human", "Unread from its tab", { unread: true }),
+          msg(43, LEAD, "human", "Unread from this session", { unread: true }),
+          msg(44, "human", "BUG-142#lead-old", "Sent by you", { unread: true }),
+          ...MESSAGES,
+        ],
+      },
+      source: "live",
+    });
+    await renderOverlay(420, 700, "dock");
+    await screen.findByText("Unread from this session");
+    const read = () =>
+      vi
+        .mocked(invoke)
+        .mock.calls.filter(([cmd]) => cmd === "mark_inbox_message_read")
+        .map(([, args]) => (args as { messageId: number }).messageId)
+        .sort();
+    await waitFor(() => expect(read()).toEqual([41, 42, 43]));
+    vi.restoreAllMocks();
+  });
+
+  it("reads one session's inbox when the session was launched from no saved agent", async () => {
+    roster({ agentRevision: null, story: null });
+    await renderOverlay(420, 700, "dock");
+    await waitFor(() => expect(api.loadSessionInbox).toHaveBeenCalledWith(SESSION));
+    expect(api.loadThreadInbox).not.toHaveBeenCalled();
   });
 });

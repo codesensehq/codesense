@@ -273,7 +273,7 @@ it("a PNG past the size cap, or one the read refuses, says why, with Side by sid
       },
       "Over the 8 MB limit for drawing here",
     ],
-    [{ status: "refused", reason: "no" }, "Couldn't read the image"],
+    [{ status: "refused", reason: "no" }, "Couldn’t read the image"],
   ] as const) {
     openPng(images);
     await waitFor(() => expect(mocks.images).toHaveBeenCalled());
@@ -289,7 +289,8 @@ it("a PNG past the size cap, or one the read refuses, says why, with Side by sid
 
 it("a PNG whose bytes are still being read says so, not Binary file", async () => {
   openPng(new Promise(() => {}));
-  expect(await screen.findByText("Reading the image…")).toBeInTheDocument();
+  // Said by the image's one status node (and shown in its skeleton).
+  expect(await screen.findByTestId(/-image-status$/)).toHaveTextContent("Reading the image…");
   expect(screen.queryByText("Binary file — a text diff is unavailable.")).toBeNull();
 });
 it("a line range into a markdown file opens it as source, highlighted, without changing the default", async () => {

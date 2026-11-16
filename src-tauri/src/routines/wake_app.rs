@@ -1277,7 +1277,7 @@ async fn post_notice(app: AppHandle, notice: WakeNotice) -> Result<(), String> {
             INBOX_EVENT,
             InboxEvent::new(InboxChange::Stored, &team, [id]),
         );
-        let _ = app.emit(crate::commands::agent_inbox::AGENT_INBOX_CHANGED_EVENT, ());
+        crate::commands::agent_inbox::emit_inbox_changed(&app, &[(team, vec![id])]);
         return Ok(());
     }
     let backlink = notice.backlink();

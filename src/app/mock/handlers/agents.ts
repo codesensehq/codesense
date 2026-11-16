@@ -1493,7 +1493,7 @@ export function agentHandlers(
   (globalThis as { __mockAgents?: MockAgents }).__mockAgents = world;
   if (!team) return world.handlers;
   const list = world.handlers.dashboard_list_sessions;
-  const inbox = agentTeamInboxHandlers((event) => events.emit(event, null), {
+  const inbox = agentTeamInboxHandlers((event, payload = null) => events.emit(event, payload), {
     simulate: true,
     sessions: teamSessions,
   });
