@@ -4240,11 +4240,17 @@ async fn team_workspace_preflight_admits_the_placed_docs_team_and_refuses_anothe
     f.session("own-workspace", Some("child"));
     let principal = Principal::from(1u64);
     let docs = crate::context_repo::codesense_docs::bundle_info();
-    crate::context_repo::codesense_docs::ensure_placed(
-        &f.fixture.home,
-        &principal,
-        include_bytes!("../../../resources/codesense-docs.tar.gz"),
-    )
+    // Placement blocks on a runtime of its own, so it runs off this test's runtime.
+    let (home, owner) = (f.fixture.home.clone(), principal.clone());
+    tokio::task::spawn_blocking(move || {
+        crate::context_repo::codesense_docs::ensure_placed(
+            &home,
+            &owner,
+            include_bytes!("../../../resources/codesense-docs.tar.gz"),
+        )
+    })
+    .await
+    .unwrap()
     .unwrap();
     let scope = caller_scope::for_session(f.app.handle(), Some("own-workspace"), None).await;
     // An agent of a user org (a re-homed Foreman) opens the setup guide in the placed docs
