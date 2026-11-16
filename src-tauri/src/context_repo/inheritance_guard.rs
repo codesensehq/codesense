@@ -158,6 +158,10 @@ const OWN_TEAM_BOUNDARIES: &[(&str, usize)] = &[
     ("src-tauri/src/commands/attachments.rs", 2),
     ("src-tauri/src/commands/config_editor.rs", 3),
     ("src-tauri/src/commands/dashboard_launch.rs", 1),
+    // `setup_state_value` reports a team's declared parent team NAME (the value
+    // `describe_setup` returns), nothing read from the parent: no inherited
+    // content or paths.
+    ("src-tauri/src/commands/data_read_model.rs", 1),
     ("src-tauri/src/commands/frontmatter_editor.rs", 1),
     ("src-tauri/src/commands/paths.rs", 1),
     ("src-tauri/src/commands/pipeline_scanner/inherited.rs", 1),
