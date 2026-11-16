@@ -1,0 +1,858 @@
+[
+  {
+    "name": "the Foreman's file allows take the launch folder's parent; every other rule and key is verbatim",
+    "cwd": "/a/b/content",
+    "settings": {
+      "permissions": {
+        "defaultMode": "dontAsk",
+        "allow": [
+          "mcp__codesense__reply",
+          "Read(//{{launch_parent}}/foreman-*/**)",
+          "Edit(//{{launch_parent}}/foreman-*/**)",
+          "Write(//{{launch_parent}}/foreman-*/**)",
+          "Read(//{{launch_parent}}/foreman-*.msg)",
+          "Write(//{{launch_parent}}/foreman-*.msg)",
+          "Bash(git -C ../foreman-* status)",
+          "Edit(./**)"
+        ],
+        "deny": [
+          "Edit(./**)",
+          "Edit(//**/.git/**)",
+          "Bash(git -C * -C *)"
+        ]
+      },
+      "env": {
+        "KEEP": "{{launch_parent}}"
+      }
+    },
+    "expect": {
+      "permissions": {
+        "defaultMode": "dontAsk",
+        "allow": [
+          "mcp__codesense__reply",
+          "Read(//a/b/foreman-*/**)",
+          "Edit(//a/b/foreman-*/**)",
+          "Write(//a/b/foreman-*/**)",
+          "Read(//a/b/foreman-*.msg)",
+          "Write(//a/b/foreman-*.msg)",
+          "Bash(git -C ../foreman-* status)",
+          "Edit(./**)"
+        ],
+        "deny": [
+          "Edit(./**)",
+          "Edit(//**/.git/**)",
+          "Bash(git -C * -C *)"
+        ]
+      },
+      "env": {
+        "KEEP": "{{launch_parent}}"
+      }
+    },
+    "unexpanded": []
+  },
+  {
+    "name": "deny, ask and every file tool expand; a trailing slash on the launch folder is ignored",
+    "cwd": "/a/b/content/",
+    "settings": {
+      "permissions": {
+        "allow": [
+          "NotebookEdit(//{{launch_parent}}/n/**)",
+          "Edit(//{{launch_parent}})"
+        ],
+        "deny": [
+          "Edit(//{{launch_parent}}/foreman-*/.git/**)"
+        ],
+        "ask": [
+          "Write(//{{launch_parent}}/foreman-*/x)"
+        ]
+      }
+    },
+    "expect": {
+      "permissions": {
+        "allow": [
+          "NotebookEdit(//a/b/n/**)",
+          "Edit(//a/b)"
+        ],
+        "deny": [
+          "Edit(//a/b/foreman-*/.git/**)"
+        ],
+        "ask": [
+          "Write(//a/b/foreman-*/x)"
+        ]
+      }
+    },
+    "unexpanded": []
+  },
+  {
+    "name": "a parent of / gives //foreman-*, never ///",
+    "cwd": "/content",
+    "settings": {
+      "permissions": {
+        "allow": [
+          "Read(//{{launch_parent}}/foreman-*/**)",
+          "Edit(//{{launch_parent}}/foreman-*/**)",
+          "Write(//{{launch_parent}}/foreman-*/**)",
+          "Read(//{{launch_parent}}/foreman-*.msg)",
+          "Write(//{{launch_parent}}/foreman-*.msg)"
+        ],
+        "deny": [
+          "Edit(//{{launch_parent}}/foreman-*/.git/**)"
+        ]
+      }
+    },
+    "expect": {
+      "permissions": {
+        "allow": [
+          "Read(//foreman-*/**)",
+          "Edit(//foreman-*/**)",
+          "Write(//foreman-*/**)",
+          "Read(//foreman-*.msg)",
+          "Write(//foreman-*.msg)"
+        ],
+        "deny": [
+          "Edit(//foreman-*/.git/**)"
+        ]
+      }
+    },
+    "unexpanded": []
+  },
+  {
+    "name": "a glob character in the launch folder's own name is not in the parent",
+    "cwd": "/a/b/con*tent",
+    "settings": {
+      "permissions": {
+        "allow": [
+          "Edit(//{{launch_parent}}/foreman-*/**)"
+        ]
+      }
+    },
+    "expect": {
+      "permissions": {
+        "allow": [
+          "Edit(//a/b/foreman-*/**)"
+        ]
+      }
+    },
+    "unexpanded": []
+  },
+  {
+    "name": "the token anywhere but the whole first segment after // is unexpandable: allows dropped, denies and asks kept as written",
+    "cwd": "/a/b/content",
+    "settings": {
+      "permissions": {
+        "allow": [
+          "Edit(./**)",
+          "Bash(echo {{launch_parent}})",
+          "Read({{launch_parent}}/x)",
+          "Edit(/{{launch_parent}}/x)",
+          "Edit(//x/{{launch_parent}}/y)",
+          "Edit(//{{launch_parent}}x/y)",
+          "Edit(//{{launch_parent}}/{{launch_parent}}/z)",
+          "Grep(//{{launch_parent}}/x)",
+          "edit(//{{launch_parent}}/x)",
+          "Edit(//{{launch_parent}}/x"
+        ],
+        "deny": [
+          "Bash(echo {{launch_parent}})",
+          "Edit({{launch_parent}}/x)"
+        ],
+        "ask": [
+          "Read(//a/{{launch_parent}})"
+        ]
+      }
+    },
+    "expect": {
+      "permissions": {
+        "allow": [
+          "Edit(./**)"
+        ],
+        "deny": [
+          "Bash(echo {{launch_parent}})",
+          "Edit({{launch_parent}}/x)"
+        ],
+        "ask": [
+          "Read(//a/{{launch_parent}})"
+        ]
+      }
+    },
+    "unexpanded": [
+      {
+        "list": "allow",
+        "rule": "Bash(echo {{launch_parent}})",
+        "dropped": true,
+        "reason": "position"
+      },
+      {
+        "list": "allow",
+        "rule": "Read({{launch_parent}}/x)",
+        "dropped": true,
+        "reason": "position"
+      },
+      {
+        "list": "allow",
+        "rule": "Edit(/{{launch_parent}}/x)",
+        "dropped": true,
+        "reason": "position"
+      },
+      {
+        "list": "allow",
+        "rule": "Edit(//x/{{launch_parent}}/y)",
+        "dropped": true,
+        "reason": "position"
+      },
+      {
+        "list": "allow",
+        "rule": "Edit(//{{launch_parent}}x/y)",
+        "dropped": true,
+        "reason": "position"
+      },
+      {
+        "list": "allow",
+        "rule": "Edit(//{{launch_parent}}/{{launch_parent}}/z)",
+        "dropped": true,
+        "reason": "position"
+      },
+      {
+        "list": "allow",
+        "rule": "Grep(//{{launch_parent}}/x)",
+        "dropped": true,
+        "reason": "position"
+      },
+      {
+        "list": "allow",
+        "rule": "edit(//{{launch_parent}}/x)",
+        "dropped": true,
+        "reason": "position"
+      },
+      {
+        "list": "allow",
+        "rule": "Edit(//{{launch_parent}}/x",
+        "dropped": true,
+        "reason": "position"
+      },
+      {
+        "list": "deny",
+        "rule": "Bash(echo {{launch_parent}})",
+        "dropped": false,
+        "reason": "position"
+      },
+      {
+        "list": "deny",
+        "rule": "Edit({{launch_parent}}/x)",
+        "dropped": false,
+        "reason": "position"
+      },
+      {
+        "list": "ask",
+        "rule": "Read(//a/{{launch_parent}})",
+        "dropped": false,
+        "reason": "position"
+      }
+    ]
+  },
+  {
+    "name": "a parent holding * drops the allow and still expands the deny and ask",
+    "cwd": "/a/b*/content",
+    "settings": {
+      "permissions": {
+        "allow": [
+          "mcp__codesense__reply",
+          "Edit(//{{launch_parent}}/foreman-*/**)"
+        ],
+        "deny": [
+          "Edit(./**)",
+          "Edit(//{{launch_parent}}/foreman-*/.git/**)"
+        ],
+        "ask": [
+          "Write(//{{launch_parent}}/foreman-*/x)"
+        ]
+      }
+    },
+    "expect": {
+      "permissions": {
+        "allow": [
+          "mcp__codesense__reply"
+        ],
+        "deny": [
+          "Edit(./**)",
+          "Edit(//a/b*/foreman-*/.git/**)"
+        ],
+        "ask": [
+          "Write(//a/b*/foreman-*/x)"
+        ]
+      }
+    },
+    "unexpanded": [
+      {
+        "list": "allow",
+        "rule": "Edit(//{{launch_parent}}/foreman-*/**)",
+        "dropped": true,
+        "reason": "parent"
+      }
+    ]
+  },
+  {
+    "name": "a parent holding ? drops the allow and still expands the deny and ask",
+    "cwd": "/a/b?/content",
+    "settings": {
+      "permissions": {
+        "allow": [
+          "mcp__codesense__reply",
+          "Edit(//{{launch_parent}}/foreman-*/**)"
+        ],
+        "deny": [
+          "Edit(./**)",
+          "Edit(//{{launch_parent}}/foreman-*/.git/**)"
+        ],
+        "ask": [
+          "Write(//{{launch_parent}}/foreman-*/x)"
+        ]
+      }
+    },
+    "expect": {
+      "permissions": {
+        "allow": [
+          "mcp__codesense__reply"
+        ],
+        "deny": [
+          "Edit(./**)",
+          "Edit(//a/b?/foreman-*/.git/**)"
+        ],
+        "ask": [
+          "Write(//a/b?/foreman-*/x)"
+        ]
+      }
+    },
+    "unexpanded": [
+      {
+        "list": "allow",
+        "rule": "Edit(//{{launch_parent}}/foreman-*/**)",
+        "dropped": true,
+        "reason": "parent"
+      }
+    ]
+  },
+  {
+    "name": "a parent holding [ drops the allow and still expands the deny and ask",
+    "cwd": "/a/b[1]/content",
+    "settings": {
+      "permissions": {
+        "allow": [
+          "mcp__codesense__reply",
+          "Edit(//{{launch_parent}}/foreman-*/**)"
+        ],
+        "deny": [
+          "Edit(./**)",
+          "Edit(//{{launch_parent}}/foreman-*/.git/**)"
+        ],
+        "ask": [
+          "Write(//{{launch_parent}}/foreman-*/x)"
+        ]
+      }
+    },
+    "expect": {
+      "permissions": {
+        "allow": [
+          "mcp__codesense__reply"
+        ],
+        "deny": [
+          "Edit(./**)",
+          "Edit(//a/b[1]/foreman-*/.git/**)"
+        ],
+        "ask": [
+          "Write(//a/b[1]/foreman-*/x)"
+        ]
+      }
+    },
+    "unexpanded": [
+      {
+        "list": "allow",
+        "rule": "Edit(//{{launch_parent}}/foreman-*/**)",
+        "dropped": true,
+        "reason": "parent"
+      }
+    ]
+  },
+  {
+    "name": "a parent holding { drops the allow and still expands the deny and ask",
+    "cwd": "/a/{b}/content",
+    "settings": {
+      "permissions": {
+        "allow": [
+          "mcp__codesense__reply",
+          "Edit(//{{launch_parent}}/foreman-*/**)"
+        ],
+        "deny": [
+          "Edit(./**)",
+          "Edit(//{{launch_parent}}/foreman-*/.git/**)"
+        ],
+        "ask": [
+          "Write(//{{launch_parent}}/foreman-*/x)"
+        ]
+      }
+    },
+    "expect": {
+      "permissions": {
+        "allow": [
+          "mcp__codesense__reply"
+        ],
+        "deny": [
+          "Edit(./**)",
+          "Edit(//a/{b}/foreman-*/.git/**)"
+        ],
+        "ask": [
+          "Write(//a/{b}/foreman-*/x)"
+        ]
+      }
+    },
+    "unexpanded": [
+      {
+        "list": "allow",
+        "rule": "Edit(//{{launch_parent}}/foreman-*/**)",
+        "dropped": true,
+        "reason": "parent"
+      }
+    ]
+  },
+  {
+    "name": "a parent holding ( drops the allow and keeps the deny and ask as written",
+    "cwd": "/a/b(1)/content",
+    "settings": {
+      "permissions": {
+        "allow": [
+          "mcp__codesense__reply",
+          "Edit(//{{launch_parent}}/foreman-*/**)"
+        ],
+        "deny": [
+          "Edit(./**)",
+          "Edit(//{{launch_parent}}/foreman-*/.git/**)"
+        ],
+        "ask": [
+          "Write(//{{launch_parent}}/foreman-*/x)"
+        ]
+      }
+    },
+    "expect": {
+      "permissions": {
+        "allow": [
+          "mcp__codesense__reply"
+        ],
+        "deny": [
+          "Edit(./**)",
+          "Edit(//{{launch_parent}}/foreman-*/.git/**)"
+        ],
+        "ask": [
+          "Write(//{{launch_parent}}/foreman-*/x)"
+        ]
+      }
+    },
+    "unexpanded": [
+      {
+        "list": "allow",
+        "rule": "Edit(//{{launch_parent}}/foreman-*/**)",
+        "dropped": true,
+        "reason": "parent"
+      },
+      {
+        "list": "deny",
+        "rule": "Edit(//{{launch_parent}}/foreman-*/.git/**)",
+        "dropped": false,
+        "reason": "parent"
+      },
+      {
+        "list": "ask",
+        "rule": "Write(//{{launch_parent}}/foreman-*/x)",
+        "dropped": false,
+        "reason": "parent"
+      }
+    ]
+  },
+  {
+    "name": "a parent holding \\ drops the allow and keeps the deny and ask as written",
+    "cwd": "/a/b\\c/content",
+    "settings": {
+      "permissions": {
+        "allow": [
+          "mcp__codesense__reply",
+          "Edit(//{{launch_parent}}/foreman-*/**)"
+        ],
+        "deny": [
+          "Edit(./**)",
+          "Edit(//{{launch_parent}}/foreman-*/.git/**)"
+        ],
+        "ask": [
+          "Write(//{{launch_parent}}/foreman-*/x)"
+        ]
+      }
+    },
+    "expect": {
+      "permissions": {
+        "allow": [
+          "mcp__codesense__reply"
+        ],
+        "deny": [
+          "Edit(./**)",
+          "Edit(//{{launch_parent}}/foreman-*/.git/**)"
+        ],
+        "ask": [
+          "Write(//{{launch_parent}}/foreman-*/x)"
+        ]
+      }
+    },
+    "unexpanded": [
+      {
+        "list": "allow",
+        "rule": "Edit(//{{launch_parent}}/foreman-*/**)",
+        "dropped": true,
+        "reason": "parent"
+      },
+      {
+        "list": "deny",
+        "rule": "Edit(//{{launch_parent}}/foreman-*/.git/**)",
+        "dropped": false,
+        "reason": "parent"
+      },
+      {
+        "list": "ask",
+        "rule": "Write(//{{launch_parent}}/foreman-*/x)",
+        "dropped": false,
+        "reason": "parent"
+      }
+    ]
+  },
+  {
+    "name": "a relative launch folder is unusable",
+    "cwd": "a/b/content",
+    "settings": {
+      "permissions": {
+        "allow": [
+          "mcp__codesense__reply",
+          "Edit(//{{launch_parent}}/foreman-*/**)"
+        ],
+        "deny": [
+          "Edit(./**)",
+          "Edit(//{{launch_parent}}/foreman-*/.git/**)"
+        ],
+        "ask": [
+          "Write(//{{launch_parent}}/foreman-*/x)"
+        ]
+      }
+    },
+    "expect": {
+      "permissions": {
+        "allow": [
+          "mcp__codesense__reply"
+        ],
+        "deny": [
+          "Edit(./**)",
+          "Edit(//{{launch_parent}}/foreman-*/.git/**)"
+        ],
+        "ask": [
+          "Write(//{{launch_parent}}/foreman-*/x)"
+        ]
+      }
+    },
+    "unexpanded": [
+      {
+        "list": "allow",
+        "rule": "Edit(//{{launch_parent}}/foreman-*/**)",
+        "dropped": true,
+        "reason": "cwd"
+      },
+      {
+        "list": "deny",
+        "rule": "Edit(//{{launch_parent}}/foreman-*/.git/**)",
+        "dropped": false,
+        "reason": "cwd"
+      },
+      {
+        "list": "ask",
+        "rule": "Write(//{{launch_parent}}/foreman-*/x)",
+        "dropped": false,
+        "reason": "cwd"
+      }
+    ]
+  },
+  {
+    "name": "a launch folder with .. is unusable",
+    "cwd": "/a/b/content/..",
+    "settings": {
+      "permissions": {
+        "allow": [
+          "mcp__codesense__reply",
+          "Edit(//{{launch_parent}}/foreman-*/**)"
+        ],
+        "deny": [
+          "Edit(./**)",
+          "Edit(//{{launch_parent}}/foreman-*/.git/**)"
+        ],
+        "ask": [
+          "Write(//{{launch_parent}}/foreman-*/x)"
+        ]
+      }
+    },
+    "expect": {
+      "permissions": {
+        "allow": [
+          "mcp__codesense__reply"
+        ],
+        "deny": [
+          "Edit(./**)",
+          "Edit(//{{launch_parent}}/foreman-*/.git/**)"
+        ],
+        "ask": [
+          "Write(//{{launch_parent}}/foreman-*/x)"
+        ]
+      }
+    },
+    "unexpanded": [
+      {
+        "list": "allow",
+        "rule": "Edit(//{{launch_parent}}/foreman-*/**)",
+        "dropped": true,
+        "reason": "cwd"
+      },
+      {
+        "list": "deny",
+        "rule": "Edit(//{{launch_parent}}/foreman-*/.git/**)",
+        "dropped": false,
+        "reason": "cwd"
+      },
+      {
+        "list": "ask",
+        "rule": "Write(//{{launch_parent}}/foreman-*/x)",
+        "dropped": false,
+        "reason": "cwd"
+      }
+    ]
+  },
+  {
+    "name": "a launch folder with . is unusable",
+    "cwd": "/a/./b/content",
+    "settings": {
+      "permissions": {
+        "allow": [
+          "mcp__codesense__reply",
+          "Edit(//{{launch_parent}}/foreman-*/**)"
+        ],
+        "deny": [
+          "Edit(./**)",
+          "Edit(//{{launch_parent}}/foreman-*/.git/**)"
+        ],
+        "ask": [
+          "Write(//{{launch_parent}}/foreman-*/x)"
+        ]
+      }
+    },
+    "expect": {
+      "permissions": {
+        "allow": [
+          "mcp__codesense__reply"
+        ],
+        "deny": [
+          "Edit(./**)",
+          "Edit(//{{launch_parent}}/foreman-*/.git/**)"
+        ],
+        "ask": [
+          "Write(//{{launch_parent}}/foreman-*/x)"
+        ]
+      }
+    },
+    "unexpanded": [
+      {
+        "list": "allow",
+        "rule": "Edit(//{{launch_parent}}/foreman-*/**)",
+        "dropped": true,
+        "reason": "cwd"
+      },
+      {
+        "list": "deny",
+        "rule": "Edit(//{{launch_parent}}/foreman-*/.git/**)",
+        "dropped": false,
+        "reason": "cwd"
+      },
+      {
+        "list": "ask",
+        "rule": "Write(//{{launch_parent}}/foreman-*/x)",
+        "dropped": false,
+        "reason": "cwd"
+      }
+    ]
+  },
+  {
+    "name": "a launch folder with an empty segment is unusable",
+    "cwd": "/a//b/content",
+    "settings": {
+      "permissions": {
+        "allow": [
+          "mcp__codesense__reply",
+          "Edit(//{{launch_parent}}/foreman-*/**)"
+        ],
+        "deny": [
+          "Edit(./**)",
+          "Edit(//{{launch_parent}}/foreman-*/.git/**)"
+        ],
+        "ask": [
+          "Write(//{{launch_parent}}/foreman-*/x)"
+        ]
+      }
+    },
+    "expect": {
+      "permissions": {
+        "allow": [
+          "mcp__codesense__reply"
+        ],
+        "deny": [
+          "Edit(./**)",
+          "Edit(//{{launch_parent}}/foreman-*/.git/**)"
+        ],
+        "ask": [
+          "Write(//{{launch_parent}}/foreman-*/x)"
+        ]
+      }
+    },
+    "unexpanded": [
+      {
+        "list": "allow",
+        "rule": "Edit(//{{launch_parent}}/foreman-*/**)",
+        "dropped": true,
+        "reason": "cwd"
+      },
+      {
+        "list": "deny",
+        "rule": "Edit(//{{launch_parent}}/foreman-*/.git/**)",
+        "dropped": false,
+        "reason": "cwd"
+      },
+      {
+        "list": "ask",
+        "rule": "Write(//{{launch_parent}}/foreman-*/x)",
+        "dropped": false,
+        "reason": "cwd"
+      }
+    ]
+  },
+  {
+    "name": "the root has no parent",
+    "cwd": "/",
+    "settings": {
+      "permissions": {
+        "allow": [
+          "mcp__codesense__reply",
+          "Edit(//{{launch_parent}}/foreman-*/**)"
+        ],
+        "deny": [
+          "Edit(./**)",
+          "Edit(//{{launch_parent}}/foreman-*/.git/**)"
+        ],
+        "ask": [
+          "Write(//{{launch_parent}}/foreman-*/x)"
+        ]
+      }
+    },
+    "expect": {
+      "permissions": {
+        "allow": [
+          "mcp__codesense__reply"
+        ],
+        "deny": [
+          "Edit(./**)",
+          "Edit(//{{launch_parent}}/foreman-*/.git/**)"
+        ],
+        "ask": [
+          "Write(//{{launch_parent}}/foreman-*/x)"
+        ]
+      }
+    },
+    "unexpanded": [
+      {
+        "list": "allow",
+        "rule": "Edit(//{{launch_parent}}/foreman-*/**)",
+        "dropped": true,
+        "reason": "cwd"
+      },
+      {
+        "list": "deny",
+        "rule": "Edit(//{{launch_parent}}/foreman-*/.git/**)",
+        "dropped": false,
+        "reason": "cwd"
+      },
+      {
+        "list": "ask",
+        "rule": "Write(//{{launch_parent}}/foreman-*/x)",
+        "dropped": false,
+        "reason": "cwd"
+      }
+    ]
+  },
+  {
+    "name": "an empty launch folder is unusable",
+    "cwd": "",
+    "settings": {
+      "permissions": {
+        "allow": [
+          "mcp__codesense__reply",
+          "Edit(//{{launch_parent}}/foreman-*/**)"
+        ],
+        "deny": [
+          "Edit(./**)",
+          "Edit(//{{launch_parent}}/foreman-*/.git/**)"
+        ],
+        "ask": [
+          "Write(//{{launch_parent}}/foreman-*/x)"
+        ]
+      }
+    },
+    "expect": {
+      "permissions": {
+        "allow": [
+          "mcp__codesense__reply"
+        ],
+        "deny": [
+          "Edit(./**)",
+          "Edit(//{{launch_parent}}/foreman-*/.git/**)"
+        ],
+        "ask": [
+          "Write(//{{launch_parent}}/foreman-*/x)"
+        ]
+      }
+    },
+    "unexpanded": [
+      {
+        "list": "allow",
+        "rule": "Edit(//{{launch_parent}}/foreman-*/**)",
+        "dropped": true,
+        "reason": "cwd"
+      },
+      {
+        "list": "deny",
+        "rule": "Edit(//{{launch_parent}}/foreman-*/.git/**)",
+        "dropped": false,
+        "reason": "cwd"
+      },
+      {
+        "list": "ask",
+        "rule": "Write(//{{launch_parent}}/foreman-*/x)",
+        "dropped": false,
+        "reason": "cwd"
+      }
+    ]
+  },
+  {
+    "name": "settings without the token, or without rule lists, are unchanged",
+    "cwd": "/a/b/content",
+    "settings": {
+      "permissions": {
+        "defaultMode": "dontAsk"
+      },
+      "hooks": {}
+    },
+    "expect": {
+      "permissions": {
+        "defaultMode": "dontAsk"
+      },
+      "hooks": {}
+    },
+    "unexpanded": []
+  }
+]

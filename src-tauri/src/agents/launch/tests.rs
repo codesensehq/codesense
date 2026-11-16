@@ -1737,3 +1737,108 @@ fn without_a_skill_allowlist_a_launch_turns_no_skill_off() {
     let written = read_json(applied.settings.as_ref().unwrap().path());
     assert!(written.get("skillOverrides").is_none());
 }
+
+/// A Claude agent whose own allow and deny hold `{{launch_parent}}`, prepared headless, and
+/// a launch folder `<tmp>/ws/content`, whose parent `<tmp>/ws` the token takes.
+fn launch_parent_launch(home: &Path, id: &str) -> (AgentLaunch, std::path::PathBuf) {
+    team_content(home, &alice());
+    let key = save(
+        home,
+        &alice(),
+        claude_with(
+            id,
+            ClaudePermissions {
+                allow: vec!["Edit(//{{launch_parent}}/foreman-*/**)".into()],
+                deny: vec!["Edit(//{{launch_parent}}/foreman-*/.git/**)".into()],
+                ..ClaudePermissions::default()
+            },
+        ),
+    );
+    let launch = prep(
+        home,
+        &alice(),
+        &key,
+        PrepareOptions {
+            mode_override: Some(LaunchMode::Headless),
+            ..PrepareOptions::default()
+        },
+    );
+    let cwd = home.join("ws").join("content");
+    std::fs::create_dir_all(&cwd).unwrap();
+    (launch, cwd)
+}
+
+fn rules(written: &serde_json::Value, list: &str) -> Vec<String> {
+    written["permissions"][list]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|rule| rule.as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn launch_parent_expands_in_the_written_settings_file_only() {
+    let _home_env = crate::routines::test_support::TempHome::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let (launch, cwd) = launch_parent_launch(tmp.path(), "bounded");
+    let parent = cwd.parent().unwrap().to_str().unwrap().to_string();
+
+    let applied = apply_generated(&launch, "sess-bounded", &cwd, true).unwrap();
+    let written = read_json(applied.settings.as_ref().unwrap().path());
+    // `//` and the parent without its leading `/`: the absolute parent after one more `/`.
+    assert!(rules(&written, "allow").contains(&format!("Edit(/{parent}/foreman-*/**)")));
+    assert!(rules(&written, "deny").contains(&format!("Edit(/{parent}/foreman-*/.git/**)")));
+    assert!(!written.to_string().contains(permissions::LAUNCH_PARENT_TOKEN));
+    // The expansion works on a copy: the generated entry and its hashes keep the token.
+    let generated = launch.generated[0].content.to_string();
+    assert!(generated.contains("Edit(//{{launch_parent}}/foreman-*/**)"));
+    assert_eq!(launch.manifest_hash, launch.manifest.compute_hash());
+}
+
+#[test]
+fn launch_parent_in_an_agents_own_settings_flag_stays_literal() {
+    let _home_env = crate::routines::test_support::TempHome::new();
+    let tmp = tempfile::tempdir().unwrap();
+    team_content(tmp.path(), &alice());
+    let agent_settings =
+        r#"{"permissions":{"allow":["Read(//{{launch_parent}}/notes/**)"]}}"#.to_string();
+    let (launch, cwd) = launch_with_args(
+        tmp.path(),
+        "own-token",
+        vec!["--settings".into(), agent_settings],
+    );
+    let applied = apply_generated(&launch, "sess-own-token", &cwd, true).unwrap();
+    assert!(applied.merged_agent_settings);
+    let written = read_json(applied.settings.as_ref().unwrap().path());
+    assert!(rules(&written, "allow").contains(&"Read(//{{launch_parent}}/notes/**)".to_string()));
+}
+
+/// A relaunch rewrites the session's own settings file for its attribution hooks; the
+/// expanded rules in it are kept.
+#[test]
+fn a_claude_relaunch_keeps_the_expanded_launch_parent_rules() {
+    let _home_env = crate::routines::test_support::TempHome::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let (launch, cwd) = launch_parent_launch(tmp.path(), "relaunched");
+    let session = format!("relaunch-launch-parent-{}", uuid::Uuid::new_v4());
+    let parent = cwd.parent().unwrap().to_str().unwrap().to_string();
+    let expanded = format!("Edit(/{parent}/foreman-*/**)");
+
+    let applied = apply_generated(&launch, &session, &cwd, true).unwrap();
+    let file = applied.settings.as_ref().unwrap().path().to_path_buf();
+    assert!(rules(&read_json(&file), "allow").contains(&expanded));
+    let request = crate::attribution::launch::Request {
+        codesense_home: tmp.path(),
+        principal: &alice(),
+        cwd: &cwd,
+        runtime: AgentCli::Claude,
+    };
+    let (edit, _env) =
+        refresh_attribution(&request, &session, &applied.argv(str::to_string), true).unwrap();
+    assert!(edit.is_none());
+    let rewritten = read_json(&file);
+    assert!(rules(&rewritten, "allow").contains(&expanded));
+    assert!(!rewritten.to_string().contains(permissions::LAUNCH_PARENT_TOKEN));
+    forget_launch_env(&session);
+}

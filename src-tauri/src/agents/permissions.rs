@@ -1120,4 +1120,78 @@ mod tests {
         let entries = generate(&a, AgentCli::Codex, LaunchMode::Foreground);
         assert_eq!(entries[0].target, GeneratedTarget::LaunchSettings);
     }
+
+    /// The `{{launch_parent}}` rules, pinned to the case file the JS twin
+    /// (`scripts/lib/launch-parent.mjs`) reads too, so the two never drift.
+    #[test]
+    fn launch_parent_expansion_matches_the_shared_cases() {
+        #[derive(serde::Deserialize)]
+        struct Case {
+            name: String,
+            cwd: String,
+            settings: Value,
+            expect: Value,
+            unexpanded: Value,
+        }
+        let cases: Vec<Case> =
+            serde_json::from_str(include_str!("testdata/launch_parent_cases.json")).unwrap();
+        assert!(cases.len() >= 15);
+        for case in cases {
+            let expansion = expand_launch_parent(&case.settings, Path::new(&case.cwd));
+            assert_eq!(expansion.content, case.expect, "{}", case.name);
+            assert_eq!(
+                serde_json::to_value(&expansion.unexpanded).unwrap(),
+                case.unexpanded,
+                "{}",
+                case.name
+            );
+            // A rule holds the token exactly when the expansion changes or reports one.
+            assert_eq!(
+                holds_launch_parent(&case.settings),
+                expansion.content != case.settings || !expansion.unexpanded.is_empty(),
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_launch_folder_that_is_not_utf8_expands_nothing() {
+        use std::os::unix::ffi::OsStrExt;
+        let cwd = Path::new(std::ffi::OsStr::from_bytes(b"/a/b\xff/content"));
+        let settings = json!({"permissions": {
+            "allow": ["Edit(//{{launch_parent}}/foreman-*/**)", "Bash(git status)"],
+            "deny": ["Edit(//{{launch_parent}}/foreman-*/.git/**)"],
+        }});
+        let expansion = expand_launch_parent(&settings, cwd);
+        assert_eq!(
+            expansion.content,
+            json!({"permissions": {
+                "allow": ["Bash(git status)"],
+                "deny": ["Edit(//{{launch_parent}}/foreman-*/.git/**)"],
+            }})
+        );
+        assert_eq!(
+            serde_json::to_value(&expansion.unexpanded).unwrap(),
+            json!([
+                {"list": "allow", "rule": "Edit(//{{launch_parent}}/foreman-*/**)", "dropped": true, "reason": "cwd"},
+                {"list": "deny", "rule": "Edit(//{{launch_parent}}/foreman-*/.git/**)", "dropped": false, "reason": "cwd"},
+            ])
+        );
+    }
+
+    #[test]
+    fn holds_launch_parent_looks_only_at_the_rule_lists() {
+        assert!(holds_launch_parent(
+            &json!({"permissions": {"allow": ["Bash(echo {{launch_parent}})"]}})
+        ));
+        assert!(holds_launch_parent(
+            &json!({"permissions": {"ask": ["Read(//{{launch_parent}}/x)"]}})
+        ));
+        assert!(!holds_launch_parent(
+            &json!({"permissions": {"allow": ["Edit(//**)"]}, "env": {"X": "{{launch_parent}}"}})
+        ));
+        assert!(!holds_launch_parent(&json!({"approval_policy": "never"})));
+    }
 }
