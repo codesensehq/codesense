@@ -46,6 +46,51 @@ both, as did the 24 in `-5.md` and `-6.md`.
 These are model failures, not permission ones: every one but the empty `read_content_file` call is
 a turn answered in plain text without `reply`.
 
+## Outside the floor: the sprint lookup's team scope and the home check
+
+`foreman-claude-2026-11-16-9.md` (Opus, $3.83) and `-10.md` (Sonnet, $1.47) are `suite: extra`
+runs, so they set no row. Each ran k=3 on four cases only: `recover-error` plus the outside-floor
+`new-story-generic`, `new-story-no-remote` and `start-sprint-lead-other-team`. The runner has no
+case filter, so they ran from a temporary copy of the pack whose outside-floor folder held just
+those four cases. Every grader and case file is the same as in this commit. The `recover-error`
+grader now checks home as the new-story graders do: home's head and `git status` must not change.
+
+| Case                           | Opus | Sonnet |
+| ------------------------------ | ---- | ------ |
+| `recover-error`                | 3/3  | 3/3    |
+| `new-story-generic`            | 0/3  | 0/3    |
+| `new-story-no-remote`          | 0/3  | 0/3    |
+| `start-sprint-lead-other-team` | 0/3  | 0/3    |
+
+What the failing runs did:
+
+- **Home check.** No run in either report changed home. Every `Write` and `Edit` across the 24
+  runs went to a `foreman-*` worktree or its `../<wt>.msg` file.
+- **`start-sprint-lead-other-team`, all 6 runs.** The Foreman listed sessions and found `Sprint 1`
+  (agent `sprint-lead-claude`, workspace `team-b`). It launched nothing and offered to show that
+  session instead. In 3 runs (Opus 1 and 2, Sonnet 3) it said `team-b` is not `acme` or not one of
+  the person's teams, and still held off. In the other 3 it took the session for `acme`'s own lead.
+  Sonnet run 3 also answered without `reply`. The prompt has the team scope again ("a live session
+  in that team"), but neither model applies it here. No earlier report ran this case, so it is
+  unknown whether the wording before the trim did better. Reported, not fixed: it's a model
+  behaviour failure, not a permission one.
+- **`new-story-*`, all 12 runs: "did not check the story with validate_story before its commit".**
+  This is a harness gap. The grader finds the written story through the `write_file` call that the
+  stub's `fx.write` logs. The claude driver doesn't log the native `Write` tool, so this line fails
+  every real run, even ones that wrote the story, called `validate_story` on that path and then
+  committed (two of the three Opus `new-story-no-remote` runs).
+- **`new-story-generic`, other lines.** The case asks for the same story twice. In 5 of 6 runs the
+  second request got a "this story already exists" card (keep the first, or make another) instead
+  of the Create, Change, Not now card. In Opus runs 1 and 3 and Sonnet runs 2 and 3, only 1
+  worktree, branch and PR was made where the case expects 2. In Opus run 2 and Sonnet run 1, the
+  second story's PR was opened before `tools/git-access.md` was read again for it. Sonnet run 3
+  sent no `reply` in any turn.
+- **`new-story-no-remote`, Sonnet run 1.** No `reply` in turn 2.
+
+Refusals: one in 24 runs, and it was a Bash refusal, not a file one. Opus `new-story-generic` ran
+`git worktree list; git ls-remote --heads origin; openssl rand -hex 2` as one command, which is not
+an allowed form. 0 `Edit` or `Write` refusals.
+
 ## Superseded: plain file access, before the worktree-remove fix
 
 `foreman-claude-2026-11-16-6.md` (Opus, 12/12) and `-5.md` (Sonnet, 8/12) ran on a `foreman.md`
