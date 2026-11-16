@@ -1270,6 +1270,9 @@ export interface InboxView {
   hasMore: boolean;
   messages: InboxMessageRow[];
   humanUnread: number;
+  /** When the read named a saved agent's thread (`agentId` with `storyId`): every address of its
+   *  sessions (handles and tab session ids). */
+  threadSessions?: string[];
 }
 
 /** The team whose inbox an app command reads or answers. */
@@ -1513,6 +1516,9 @@ export interface InboxQuery {
   before?: number;
   scope?: InboxScope;
   agentId?: string;
+  /** With `agentId`: that saved agent's thread on this story (empty: launched with none),
+   *  every session of it, ended ones included; `sessionId` then names the seat. */
+  storyId?: string;
   sessionId?: string;
   role?: string;
   /** Only messages of this kind, applied before `limit`. */

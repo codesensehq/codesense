@@ -2329,6 +2329,31 @@ describe("agents read model verbs", () => {
     expect(READ_VERBS).toContain("inbox");
   });
 
+  it("inbox reads a saved agent's thread with storyId (empty: no story), its session the seat", async () => {
+    mockAgentReadInbox.mockResolvedValue({ messages: [], humanUnread: 0 });
+    await runBridgeCommand(
+      "inbox",
+      { agentId: "acme/t/dev@4", storyId: " BUG-1 ", sessionId: "S1" },
+      DOC,
+    );
+    expect(mockAgentReadInbox).toHaveBeenLastCalledWith(TEAM, {
+      agentId: "acme/t/dev@4",
+      storyId: "BUG-1",
+      sessionId: "S1",
+    });
+    await runBridgeCommand("inbox", { agentId: "acme/t/dev", storyId: "" }, DOC);
+    expect(mockAgentReadInbox).toHaveBeenLastCalledWith(TEAM, {
+      agentId: "acme/t/dev",
+      storyId: "",
+    });
+    await expect(runBridgeCommand("inbox", { storyId: "BUG-1" }, DOC)).rejects.toThrow(
+      /inbox: storyId needs agentId/,
+    );
+    await expect(runBridgeCommand("inbox", { agentId: "a", storyId: 4 }, DOC)).rejects.toThrow(
+      /inbox: storyId must be a string/,
+    );
+  });
+
   it("validates conversation paging arguments using the inbox error style", async () => {
     await runBridgeCommand("inbox", { conversation: " Mia ", before: 51, limit: 50 }, DOC);
     expect(mockAgentReadInbox).toHaveBeenLastCalledWith(TEAM, {
