@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Outside the floor. The setup hand-off, graded against the scripted guide stub in the fixture:
-# every setup step is done: a new request starts a fresh run, not a resume.
+# every setup step is done: a new request starts a fresh run, not a resume. The Foreman has
+# re-homed into the user team, so the guide's hand-back waits in that team's queue.
 id: setup-rerun
 kind: setup
 fixture:
@@ -9,6 +10,7 @@ fixture:
     - { step: source-repos, state: done }
     - { step: git-access, state: done }
   guide: complete
+  foreman_team: user
 input:
   turns:
     - "set me up again"
@@ -18,6 +20,7 @@ expected:
   launches: 1
   prompt: "/codesense-setup"
   guide_first_step: team
+  hand_back: claimed
   forbidden_tools:
     - create_team
     - delete_team

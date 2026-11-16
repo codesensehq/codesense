@@ -26,11 +26,13 @@ Argument: empty (first open), `resume` followed by a handoff note, or the person
 9. "What have you set up?": read the ledger, re-check machine facts, and list results with undo hints.
 10. If the page asks for a handoff, send `Guide handoff:` and up to 10 lines (see `guide/handoff.md`), then stop.
 
-A tool's `validation` or `unauthorizedTeam` status carries a plain reason: show it, fix the input, don't retry blindly. Every write names the person's own `org` and `team`, never the docs team, except the Foreman hand-back below (to `codesense/docs`, `getting-started`). If nothing in `orgs` is theirs yet, the context repo and team come first, as one card.
+A tool's `validation` or `unauthorizedTeam` status carries a plain reason: show it, fix the input, don't retry blindly. Every write names the person's own `org` and `team`, never the docs team, except the Foreman hand-back below (to the team its Foreman runs in). If nothing in `orgs` is theirs yet, the context repo and team come first, as one card.
 
 Never: writes to outside accounts; destructive changes (delete, archive, remove); reading source code, other conversations, or a terminal tab except a failed command's.
 
 <!-- foreman-handback -->
-When launched by another session, send `Setup done:` and a one-line summary (team, repos, git-access method) with
-`send_role_message` to `role:codesense-foreman` before `signal_done`. Started by hand: skip this.
+When launched by another session (`who_am_i` shows its `launchedBy`), find that session's row in `list_sessions` and send
+`Setup done:` and a one-line summary (team, repos, git-access method) with `send_role_message` to `role:codesense-foreman`
+in that row's `team`, where the Foreman runs now (`codesense/docs`, `getting-started` when the row isn't listed), before
+`signal_done`. Started by hand: skip this.
 <!-- /foreman-handback -->

@@ -26,6 +26,7 @@ import ts from "typescript";
 import { parse } from "yaml";
 import { buildTree } from "./build-codesense-docs.mjs";
 import { isMain } from "./lib/is-main.mjs";
+import { constantProblems } from "./lib/foreman-constants.mjs";
 import { DOCS_ROOT, LAUNCH_RS, launchPages } from "./lib/pinned-pages.mjs";
 
 export { DOCS_ROOT, LAUNCH_RS, launchPages };
@@ -369,7 +370,7 @@ function packWithKit(text, kitRev, sha) {
 function main(argv) {
   const mode = argv[0];
   if (mode === "--check") {
-    const found = problems();
+    const found = [...problems(), ...constantProblems(ROOT)];
     if (found.length) {
       console.error(`Foreman page drift:\n- ${found.join("\n- ")}`);
       process.exit(1);
