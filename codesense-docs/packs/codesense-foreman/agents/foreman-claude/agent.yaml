@@ -141,21 +141,22 @@ permissions:
       - Bash(sh stories/*.sh)
       - Bash(sh stories/*.sh *)
       - Bash(gh pr create --head foreman/* --title * --body *)
-      - Read(../foreman-*/**)
-      - Edit(../foreman-*/**)
-      - Write(../foreman-*/**)
-      - Read(../foreman-*.msg)
-      - Write(../foreman-*.msg)
+      # Claude never matches a `../` file rule, so these are absolute globs (`//` is the root,
+      # live probe, 2026-11-16). They match a foreman-* directory anywhere; `Edit(./**)` below
+      # still keeps home read-only, since a deny beats an allow.
+      - Read(//**/foreman-*/**)
+      - Edit(//**/foreman-*/**)
+      - Write(//**/foreman-*/**)
+      - Read(//**/foreman-*.msg)
+      - Write(//**/foreman-*.msg)
     deny:
+      # Claude checks only `Edit(path)` denies for files, and they cover Edit, Write and
+      # NotebookEdit; it ignores a `Write(path)` or `NotebookEdit(path)` deny and warns at startup.
       # The home worktree is read-only: it only fast-forwards.
       - Edit(./**)
-      - Write(./**)
-      - NotebookEdit(./**)
       # No git internals in a foreman-* worktree.
-      - Edit(../foreman-*/.git)
-      - Edit(../foreman-*/.git/**)
-      - Write(../foreman-*/.git)
-      - Write(../foreman-*/.git/**)
+      - Edit(//**/foreman-*/.git)
+      - Edit(//**/foreman-*/.git/**)
       # Nothing between the worktree and its one allowed subcommand, nothing after the
       # pushed branch or the removed worktree, nothing more on a new worktree. (A trailing
       # ` *` needs one more word (live probe, 2026-11-13), so these end in one extra ` *`.)
@@ -217,4 +218,4 @@ permissions:
       - mcp__codesense__attach_context_repository
       - mcp__codesense__detach_context_repository
       - mcp__codesense__create_local_organization
-revision: 3
+revision: 4
