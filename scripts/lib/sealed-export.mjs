@@ -2,8 +2,9 @@
 // Shared by the two sealed Cargo exports (MCP reference, live-data contract).
 import { execFileSync, spawnSync } from "node:child_process";
 
-// `gen:docs:check:pr` sets the env var: story PRs never re-export, so the PR gate tolerates
-// input-only and inherited drift. Strict `gen:docs:check` (the wave) leaves it unset.
+// `gen:docs:check:pr` sets the env var: the PR gate tolerates input-only and inherited drift,
+// whether a PR left the exports alone or re-exported before main moved inputs it did not touch.
+// Strict `gen:docs:check` (the wave) leaves it unset.
 export const allowStaleExport = (argv = process.argv, env = process.env) =>
   argv.includes("--allow-stale-export") || env.DOCS_ALLOW_STALE_EXPORT === "1";
 
