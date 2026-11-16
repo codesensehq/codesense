@@ -43,19 +43,31 @@ test("the app's Foreman constants and the launch grant agree with the pack", () 
 test("a history, role, agent or docs team that drifts from the pack fails", () => {
   one(
     scratch((change) =>
-      change("src/features/foreman/use-foreman-thread.ts", "FOREMAN_HISTORY = 5", "FOREMAN_HISTORY = 6"),
+      change(
+        "src/features/foreman/use-foreman-thread.ts",
+        "FOREMAN_HISTORY = 5",
+        "FOREMAN_HISTORY = 6",
+      ),
     ),
     /FOREMAN_HISTORY 6 is not the pack's foreman\.history 5/,
   );
   one(
     scratch((change) =>
-      change("src/features/foreman/open-foreman.ts", 'FOREMAN_ROLE = "codesense-foreman"', 'FOREMAN_ROLE = "foreman"'),
+      change(
+        "src/features/foreman/open-foreman.ts",
+        'FOREMAN_ROLE = "codesense-foreman"',
+        'FOREMAN_ROLE = "foreman"',
+      ),
     ),
     /FOREMAN_ROLE "foreman" is not the pack's foreman\.role/,
   );
   one(
     scratch((change) =>
-      change("src/shared/lib/codesense-docs.ts", 'CODESENSE_DOCS_TEAM = "getting-started"', 'CODESENSE_DOCS_TEAM = "start"'),
+      change(
+        "src/shared/lib/codesense-docs.ts",
+        'CODESENSE_DOCS_TEAM = "getting-started"',
+        'CODESENSE_DOCS_TEAM = "start"',
+      ),
     ),
     /FOREMAN_TEAM .* is not the pack's foreman\.docs/,
   );
@@ -78,17 +90,19 @@ test("a pack agent isForemanAgent would not match, or a matcher without the suff
     scratch((change) =>
       change(
         "codesense-docs/packs/codesense-foreman/story-view.yml",
-        "- codesense/docs/getting-started/foreman-claude",
-        "- codesense/docs/getting-started/foreman-claude-2",
+        "- codesense/docs/getting-started/foreman-claude\n",
+        "- codesense/docs/getting-started/foreman-claude\n    - acme/foreman-claude-2\n",
       ),
     ),
-    /isForemanAgent does not match the pack's agent "codesense\/docs\/getting-started\/foreman-claude-2"/,
+    /isForemanAgent does not match the pack's agent "acme\/foreman-claude-2"/,
   );
   const found = scratch((change) =>
     change("src/features/foreman/open-foreman.ts", "id.endsWith(`/${FOREMAN_AGENT}`)", "false"),
   );
   assert.ok(
-    found.some((line) => /isForemanAgent no longer matches a key ending in \/FOREMAN_AGENT/.test(line)),
+    found.some((line) =>
+      /isForemanAgent no longer matches a key ending in \/FOREMAN_AGENT/.test(line),
+    ),
     found.join("\n"),
   );
 });

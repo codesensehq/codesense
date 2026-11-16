@@ -374,6 +374,7 @@ test("after the hand-back or signal_done nothing acts, but reads may follow", ()
 // verb or a write the check refuses after the hand-back, so a new acting tool can't slip by.
 const NOT_ACTING = [
   "who_am_i",
+  "list_sessions",
   "read_messages",
   "codesense_overview",
   "describe_setup",

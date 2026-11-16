@@ -7,6 +7,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
+import { parseCard } from "../../../../../src-tauri/src/http/routes/dashboard_kit/chat/chat-core.js";
 import { agentId, DOCS, ghCommand, GIT_ACCESS_PATH, GITHUB_PR, PRIOR_BRANCH, guideKey, sha256, SKILL_PATH } from "./fixture.mjs";
 
 const casesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "cases");
@@ -331,9 +332,10 @@ const graders = {
     // Cards the Foreman raised: a send of kind needs-you.
     const cards = foremanCalls(s).filter((c) => SENDS.includes(c.tool) && c.args.kind === "needs-you");
     if (cards.length !== e.offer_cards) out.push(`${cards.length} needs-you cards raised, expected ${e.offer_cards}`);
+    // The page renders buttons from the text's last `Options:` line only (the kit's parseCard); no tool has an options field.
     for (const c of cards) {
-      const labels = JSON.stringify(c.args.options ?? []);
-      if (!/Set up now/.test(labels) || !/Not now/.test(labels)) out.push("the offer card's options are not Set up now and Not now");
+      const labels = c.args.card ?? [];
+      if (!labels.includes("Set up now") || !labels.includes("Not now")) out.push("the offer card's options are not Set up now and Not now");
     }
     const ledgerWrites = foremanCalls(s, "records_create").filter((c) => c.args.collection === "setup-ledger");
     if (e.ledger_write) {
@@ -437,10 +439,16 @@ const graders = {
 
 // What a script grader may see: the state with every message text removed.
 const withoutText = ({ text: _text, ...rest }) => rest;
+// A send keeps its card's buttons: the options of the text's last `Options:` line, read by the
+// kit's parseCard rule (the page's), or null. That is structure the page reads, not wording.
+const cardOf = (args) => {
+  const options = typeof args.text === "string" ? (parseCard(args.text)?.options ?? null) : null;
+  return { ...withoutText(args), ...(options ? { card: options } : {}) };
+};
 export const scriptView = (state) => ({
   ...state,
   replies: state.replies.map(withoutText),
-  calls: state.calls.map((c) => ({ ...c, args: withoutText(c.args ?? {}) })),
+  calls: state.calls.map((c) => ({ ...c, args: cardOf(c.args ?? {}) })),
   sessions: state.sessions.map(withoutText),
 });
 

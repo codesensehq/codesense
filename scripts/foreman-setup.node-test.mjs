@@ -411,9 +411,12 @@ test("setup-rerun, re-homed: the guide hands back to the Foreman's team and the 
     assert.deepEqual(sent.args.team, { org: CONFIG.team, team: CONFIG.team });
   });
   // The same guide in a docs-team fixture hands back to the docs team, where that Foreman runs.
-  await withFixture({ ...caseDef, fixture: { ...caseDef.fixture, foreman_team: "docs" } }, async (fx) => {
-    launchWith()({ fx, turns: caseDef.input.turns });
-    const [sent] = fx.state().calls.filter((c) => c.tool === "send_role_message");
-    assert.deepEqual(sent.args.team, { org: "codesense/docs", team: "getting-started" });
-  });
+  await withFixture(
+    { ...caseDef, fixture: { ...caseDef.fixture, foreman_team: "docs" } },
+    async (fx) => {
+      launchWith()({ fx, turns: caseDef.input.turns });
+      const [sent] = fx.state().calls.filter((c) => c.tool === "send_role_message");
+      assert.deepEqual(sent.args.team, { org: "codesense/docs", team: "getting-started" });
+    },
+  );
 });

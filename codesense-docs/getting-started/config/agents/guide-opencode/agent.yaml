@@ -18,6 +18,7 @@ permissions:
 mcp:
   bridge_tools:
     - who_am_i
+    - list_sessions
     - read_messages
     - codesense_overview
     - describe_setup

@@ -152,8 +152,7 @@ const good = {
         else
           fx.tool(F, "reply", {
             kind: "needs-you",
-            text: "You have no team or repo yet. Set up now?",
-            options: ["Set up now", "Not now"],
+            text: "You have no team or repo yet. Set up now?\nOptions: `Set up now`, `Not now`",
           });
       }
     }
