@@ -22,13 +22,13 @@ parts:
     targets: [ claude, codex, opencode ]
 files:
   - path: .agents/skills/codesense-setup/SKILL.md
-    sha256: 655c6a525f75ef9630aa6ace40dbcd4b75924a4b99b2b133a5c67d8aec436a56
+    sha256: 24faa7b26f53bc5c1d88e02010ededa32fb40dd35c23d0ff90cbda3d0b6f52ea
     exec: false
   - path: .claude/skills/codesense-setup/SKILL.md
-    sha256: 655c6a525f75ef9630aa6ace40dbcd4b75924a4b99b2b133a5c67d8aec436a56
+    sha256: 24faa7b26f53bc5c1d88e02010ededa32fb40dd35c23d0ff90cbda3d0b6f52ea
     exec: false
   - path: .opencode/command/codesense-setup.md
-    sha256: 655c6a525f75ef9630aa6ace40dbcd4b75924a4b99b2b133a5c67d8aec436a56
+    sha256: 24faa7b26f53bc5c1d88e02010ededa32fb40dd35c23d0ff90cbda3d0b6f52ea
     exec: false
   - path: CHANGELOG.md
     sha256: 938e4e8b502275881a6617f2ea96bfa7dc695f435bf83cc84108c73d53362236
@@ -46,10 +46,10 @@ files:
     sha256: 07fa5e9ee0fcd4e687e07d11ac9a9fb0edd41122dc36f07f48174c456d088fc2
     exec: false
   - path: commands/codesense-setup.md
-    sha256: 655c6a525f75ef9630aa6ace40dbcd4b75924a4b99b2b133a5c67d8aec436a56
+    sha256: 24faa7b26f53bc5c1d88e02010ededa32fb40dd35c23d0ff90cbda3d0b6f52ea
     exec: false
   - path: content/guide/core-steps.md
-    sha256: a4f408d982701fbd4bb00ca67e9fe3a3e8fd0fc989e9b3350b82e961e7d9e825
+    sha256: 1bee709d90096faa95c0ec7c1c125e19737c98223e4253187dd5c625f866cb43
     exec: false
   - path: content/guide/guide.js
     sha256: 998879e87706f7cecd4381a2b694de0abd295182bcc5a47ae3c64a56399997ed
