@@ -112,6 +112,12 @@
         "gotoAgent": "sessions:read",
         "humanStatus": "inbox:read:team",
         "inbox": "inbox:read:team",
+        "inbox.pin": "inbox:write",
+        "inbox.pins": "inbox:read:team",
+        "inbox.reorderPins": "inbox:write",
+        "inbox.replacePin": "inbox:write",
+        "inbox.restorePin": "inbox:write",
+        "inbox.unpin": "inbox:write",
         "inboxRollup": "inbox:read:all-teams",
         "launchUnder": "sessions:read",
         "loadMedia": "inbox:write",
@@ -129,6 +135,8 @@
         "openTab": "launch",
         "openWorkspace": "launch",
         "page": "sessions:read",
+        "pin": "inbox:write",
+        "pins": "inbox:read:team",
         "postMessage": "inbox:write",
         "prefs": "sessions:read",
         "queryContext": "context:read",
@@ -145,7 +153,10 @@
         "records.search": "records:read:own",
         "records.setFields": "records:write:own",
         "records.write": "records:write:own",
+        "reorderPins": "inbox:write",
+        "replacePin": "inbox:write",
         "replyAsHuman": "inbox:write",
+        "restorePin": "inbox:write",
         "roles": "inbox:read:team",
         "routeToContext": "context:write",
         "routine": "routines:read",
@@ -167,8 +178,11 @@
         "sendToSession": "sessions:send",
         "sendToWorkspaceTab": "sessions:send",
         "sessionRead": "sessions:read",
+        "sessionRecord": "sessions:read",
         "sessionUsage": "sessions:read",
         "sessions": "sessions:read",
+        "sessions.unwatchText": "sessions:read",
+        "sessions.watchText": "sessions:read",
         "setField": "context:write",
         "setHumanStatus": "inbox:write",
         "setModelRate": "accounts:manage",
@@ -176,6 +190,7 @@
         "setStatus": "context:write",
         "setUiState": "sessions:read",
         "setup": "repo:read",
+        "setupState": "machines:read",
         "showMenu": "sessions:read",
         "showPopover": "sessions:read",
         "stopSession": "sessions:stop",
@@ -183,6 +198,7 @@
         "storyTotals": "sessions:read",
         "subscribe": "sessions:read",
         "unarchive": "inbox:write",
+        "unpin": "inbox:write",
         "unsubscribe": "sessions:read",
         "updates": "inbox:read:team",
         "validateYaml": "context:read",
@@ -333,6 +349,36 @@
         "purpose": "Show an agent by handle or bare definition id through the native Show path: select and reveal its tab (restoring or adopting it if needed), switch its team, open saved output, or state why it cannot be shown. With preserveFocus:true the tab is still activated but keyboard focus stays on the calling frame. Without it the terminal takes focus as usual. Resolves {located,outcome}.",
         "tier": "spawn"
       },
+      "inbox.pin": {
+        "args": "{agentId: string, storyId?: string, messageId: number, position?: number, preview?: {shortName?: string, value?: string, unit?: string, status?: 'on-track'|'running'|'needs-you'|'not-updating', chart?: {kind:'segments', segments: status[], label} | {kind:'progress', percent: number, label} | {kind:'stack', parts: {label, value}[], label}, lines?: string[]}}",
+        "deny_example": "denied: inbox write scope",
+        "purpose": "The pin verb under its resource namespace: the same verb, with the same args, grant and result.",
+        "tier": "metadata"
+      },
+      "inbox.reorderPins": {
+        "args": "{agentId: string, storyId?: string, messageIds: number[]}",
+        "deny_example": "denied: inbox write scope",
+        "purpose": "The reorderPins verb under its resource namespace: the same verb, with the same args, grant and result.",
+        "tier": "metadata"
+      },
+      "inbox.replacePin": {
+        "args": "{agentId: string, storyId?: string, messageId: number, replaces: number}",
+        "deny_example": "denied: inbox write scope",
+        "purpose": "The replacePin verb under its resource namespace: the same verb, with the same args, grant and result.",
+        "tier": "metadata"
+      },
+      "inbox.restorePin": {
+        "args": "{agentId: string, storyId?: string, messageId: number}",
+        "deny_example": "denied: inbox write scope",
+        "purpose": "The restorePin verb under its resource namespace: the same verb, with the same args, grant and result.",
+        "tier": "metadata"
+      },
+      "inbox.unpin": {
+        "args": "{agentId: string, storyId?: string, messageId: number}",
+        "deny_example": "denied: inbox write scope",
+        "purpose": "The unpin verb under its resource namespace: the same verb, with the same args, grant and result.",
+        "tier": "metadata"
+      },
       "launchUnder": {
         "args": "{handle: string, task?: string}",
         "deny_example": "unavailable: no such agent",
@@ -411,6 +457,12 @@
         "purpose": "Open a workspace — the generic open primitive. Back-compat `{storyId}`, or a `{target}` descriptor: `story` (worktree + agent), `epic` (prepare + assemble + agent, so `getEpicHandle()`/`sendToSession` reach it), `branch` (`{repo, branch}` — check out an arbitrary branch/PR into a managed worktree with the install layer, so `runSkill('code-review')` etc. run on it; adoptable into a CLI tab), or `dir` (`{path}` — open a plain CLI terminal rooted at ANY directory, the generic kind; new tabs inherit the cwd, and the tab-management verbs `openTab`/`sendToWorkspaceTab` drive it). The `epic` target opens the doc's OWN containing epic by default; passing an explicit `{team, epic}` (team = `orgSlug:teamName`, epic = a content-root-relative path) opens ANY managed epic. `headed` defaults `true`; `headed:false` runs the agent for ANY kind (story, epic, branch, or dir) in the BACKGROUND with no visible terminal (observe/adopt/kill from the Background agents panel). A headless epic/dir backgrounds ONE agent session (not the visible tile/shell the headed open surfaces). A `story` target also accepts an optional `session` (a lowercase slug) to open an ADDITIONAL named agent session on the SAME worktree (address it later via `sendToSession('storyId#session', …)`), and an optional `title` for the tab's display name. Every kind that launches an agent takes an optional `agent` — the agent that runs: a key (e.g. `builtin/codex`) or an id found in the team, then your private space, then the starters; omitted = `builtin/claude`. An unknown agent rejects `invalid: <reason>` and spawns nothing. `agent` applies to `story` (always), `branch` (the review agent, headed or background), `dir`, and `epic` ONLY via its HEADLESS agent (`headed:false`) — a HEADED epic open is a bare terminal with no auto-launched agent, so an agent there is rejected. Omitting `session` = the story's single main session, unchanged; fire several `openWorkspace` calls with different `session` labels to run e.g. architecture-review + ux-review + dev in parallel on one story. `initialPrompt` is the spawned agent's starting prompt in the SAME call (spawn → wait-live → submit into the agent, not the shell; a slash command such as `/review` works) — story-only (the only agent-backed session-returner that threads one today); epic, branch, and dir targets reject `initialPrompt`, and an empty/whitespace prompt is treated as absent (byte-identical spawn-only). `sessionMode` picks the launch's session semantics: `'focus'` (the DEFAULT, or omitted) REUSES + focuses the story's existing session — a repeat `openWorkspace` shows the same agent, takes no second cap slot (idempotent); `'new'` FORKS a fresh session even when one is live (a retry / parallel attempt — e.g. a second reviewer), auto-minted as `storyId#attempt-N` and legible in the Background agents panel as \"StoryId · Attempt N\". Each `'new'` fork costs one cap slot and rejects `busy` when saturated (never a silent focus-instead-of-fork). STORY-ONLY (like `initialPrompt`) — epic/branch/dir reject `'new'`; to get a second ADDRESSABLE session, prefer naming it via `session`. A `story` target also takes an optional `machineId`: where the story's workspace is created when it has none yet — a machine id from the team's machines, or `\"local\"` for This Mac. A new workspace is created on that machine (its worktree copied there) and its agent starts there; an existing workspace opens where it lives, and a `machineId` naming somewhere else rejects `unavailable:` (a workspace stays where it was created). Other kinds reject `machineId`.",
         "tier": "spawn"
       },
+      "pin": {
+        "args": "{agentId: string, storyId?: string, messageId: number, position?: number, preview?: {shortName?: string, value?: string, unit?: string, status?: 'on-track'|'running'|'needs-you'|'not-updating', chart?: {kind:'segments', segments: status[], label} | {kind:'progress', percent: number, label} | {kind:'stack', parts: {label, value}[], label}, lines?: string[]}}",
+        "deny_example": "denied: inbox write scope",
+        "purpose": "Pin a message of the page's team into an agent thread's pin list, the strip that agent's chat overlay and full view share. The thread is the saved agent agentId plus storyId, as its session was launched (omit storyId for none). position 0 is first; omitted or past the end, it goes last; pinning a pinned message leaves it in place, and a preview replaces its preview. preview is what the folded pin shows (a short name, a headline value and unit, a status, a small chart, up to 3 key lines). A thread shows at most 3 pins. Requires inbox:write. Fires the pins topic and the agent-pins-changed event. An agent pins its own thread with the pin MCP tool. Resolves `{status:'pins', org, team, agentId, storyId, pins:[{messageId, position, pinnedBy, pinnedAtMs, preview?, previewAtMs?}], outcome:'pinned'|'updated'|'unchanged'}` or `{status:'invalid', message}` (unknown, archived or withdrawn message, a fourth pin, or a preview too large).",
+        "tier": "metadata"
+      },
       "postMessage": {
         "args": "{to: string, text: string, onClick?: {type: 'goto-agent', agentId} | {type: 'open-file', path} | {type: 'show-message'}}",
         "deny_example": "denied: send budget",
@@ -459,11 +511,29 @@
         "purpose": "Replace, append to or patch one record's body; pass exactly one of body, append or patch. With base (the body you started from) a concurrent edit is merged: the result has merged: true and overlaps lists the regions both sides changed. Scope and profile are bound to the frame. Writes allow 30 per 10 seconds per frame and collection; flush writes are exempt.",
         "tier": "metadata"
       },
+      "reorderPins": {
+        "args": "{agentId: string, storyId?: string, messageIds: number[]}",
+        "deny_example": "denied: inbox write scope",
+        "purpose": "Put an agent thread's pins in this order. messageIds must name every live pin of the thread exactly once, else it resolves `{status:'invalid', message}` and nothing moves. Requires inbox:write. Resolves the list as pin does, with no outcome.",
+        "tier": "metadata"
+      },
+      "replacePin": {
+        "args": "{agentId: string, storyId?: string, messageId: number, replaces: number}",
+        "deny_example": "denied: inbox write scope",
+        "purpose": "At the cap, pin a message of the page's team in place of the shown pin replaces, in one step: that pin is kept aside (restorePin with replacing undoes this) and the new pin takes its place, so nothing else moves. Requires inbox:write. Resolves the list as pin does, with outcome 'replaced'; `{status:'invalid', message}`, changing nothing, when replaces is no longer a shown pin (the list changed), the message is already pinned, or it is unknown, archived or withdrawn. An agent's pin tool still refuses a fourth pin.",
+        "tier": "metadata"
+      },
       "replyAsHuman": {
         "args": "{org?: string, team?: string, messageId: number, text: string, contentType?: 'plain'|'markdown'|'html', summary?: string}",
         "deny_example": "denied: send budget",
         "purpose": "Pass both {org, team} to act in a synced team; omit both to keep the page team. Cross-team access requires inbox:read:all-teams in the Rust frame grant, included by the default open policy. Reply AS THE HUMAN to an `inbox()` message, exactly as the Inbox pane's reply does: the reply goes only to the message's `replyTo` when it has one (for `role:<id>`, queued as a pending delivery for that role), else to its sender, threaded under it, and the original is marked read. Resolves `{status:'sent', messageId}` or `{status:'invalid', message}` (blank text, unknown message).",
         "tier": "send"
+      },
+      "restorePin": {
+        "args": "{agentId: string, storyId?: string, messageId: number}",
+        "deny_example": "denied: inbox write scope",
+        "purpose": "Undo an unpin: bring the message's unpinned pin back into an agent thread's pin list as it was, keeping who pinned it, when, its preview and its place (the end when the list is shorter now). With replacing (the pin a replacePin put in its place), the Undo of that replace: the replacing pin goes in the same step, if it is still there. Requires inbox:write. Resolves the list as pin does, with outcome 'restored', or 'unchanged' when it is pinned already; `{status:'invalid', message}` when it was never pinned there, its message is archived or withdrawn, or the thread already shows 3 pins.",
+        "tier": "metadata"
       },
       "routeToContext": {
         "args": "{codeRepoPath, codeRepoSlug, logicalName, layer?}",
@@ -510,7 +580,7 @@
       "sendAsHuman": {
         "args": "{org?: string, team?: string, to: string, text: string, contentType?: 'plain'|'markdown'|'html', onClick?: {type: 'goto-agent', agentId} | {type: 'open-file', path} | {type: 'show-message'}, attachFile?: string, replyTo?: string, summary?: string, inReplyTo?: number}",
         "deny_example": "denied: send budget",
-        "purpose": "Pass both {org, team} to act in a synced team; omit both to keep the page team. Cross-team access requires inbox:read:all-teams in the Rust frame grant, included by the default open policy. Send a message AS THE HUMAN. `to` is a running session (a `sessions()` handle; the mail lands in that session's own inbox and its inbox waiter wakes it) or, failing that, a role (any role name, usually a saved Agent's id) queued in the page's team for whichever instance claims it. `contentType` defaults to markdown; `html` is sanitized in the inbox. `attachFile` is a team-content path shown as an attachment card. `replyTo` is where replies go instead of to the human, like an email Reply-To (only there): a running session's handle, `'human'`, or `'role:<agent id>'` (that role's durable queue, so the answer outlives the session that writes it). `summary` is one plain-text line (≤280 chars) shown as the message's one-line gist in the Inbox and lists; set it for html and long markdown. Resolves `{status:'sent', messageId, deliveryId?}` (`deliveryId` for a role) or `{status:'invalid', message}` (blank text, no recipient, a replyTo session that is not running, or an unknown inReplyTo). `inReplyTo` threads the reply under an existing message in this team, sends only to `to`, and marks the answered message read only if addressed to the human.",
+        "purpose": "Pass both {org, team} to act in a synced team; omit both to keep the page team. Cross-team access requires inbox:read:all-teams in the Rust frame grant, included by the default open policy. Send a message AS THE HUMAN. `to` is a running session (a `sessions()` handle; the mail lands in that session's own inbox and its inbox waiter wakes it) or, failing that, a role (any role name, usually a saved Agent's id) queued in the page's team for whichever instance claims it. `contentType` defaults to markdown; `html` is sanitized in the inbox. `attachFile` is a team-content path shown as an attachment card. `replyTo` is where replies go instead of to the human, like an email Reply-To (only there): a running session's handle, `'human'`, or `'role:<agent id>'` (that role's durable queue, so the answer outlives the session that writes it). `summary` is one plain-text line (≤280 chars) shown as the message's one-line gist in the Inbox and lists; set it for html and long markdown. Resolves `{status:'sent', messageId, deliveryId?}` (`deliveryId` for a role) or `{status:'invalid', message}` (blank text, no recipient, a replyTo session that is not running, or an unknown inReplyTo). Where a message to a session stands is pushed on the `messageDelivery` topic, keyed by messageId: `queued`, then `delivered` once the session's agent was told about it (delivered means told, not read). `inReplyTo` threads the reply under an existing message in this team, sends only to `to`, and marks the answered message read only if addressed to the human.",
         "tier": "send"
       },
       "sendPrompt": {
@@ -577,6 +647,12 @@
         "args": "{org?: string, team?: string, messageIds: number[], restoreUnread?: number[]}",
         "deny_example": "denied: write budget",
         "purpose": "Pass both {org, team} to act in a synced team; omit both to keep the page team. Cross-team access requires inbox:read:all-teams in the Rust frame grant, included by the default open policy. Undo `archive`: unarchive human-directed messages in one transaction and at most one inbox change event, with the same grant as archive. Archive also marks messages read, so pass the ids that were unread before archiving as `restoreUnread` to make them unread again; the others keep their read state. Resolves `{unarchived: n}`, counting rows that were archived; agent mail, unarchived and unknown ids are unchanged. Store failures reject verbatim.",
+        "tier": "metadata"
+      },
+      "unpin": {
+        "args": "{agentId: string, storyId?: string, messageId: number}",
+        "deny_example": "denied: inbox write scope",
+        "purpose": "Take a message out of an agent thread's pin list; the pins after it move up. The pin is kept aside, so restorePin can undo this. Requires inbox:write. Resolves the list as pin does, with outcome 'unpinned' or 'unchanged'.",
         "tier": "metadata"
       }
     }
@@ -962,7 +1038,7 @@
       "live": "const off = codesense.onAgentsChanged(() => reread()) follows versioned agentDefinitions rows when saved definitions or running counts change, plus compatibility revisions for role registrations, queues and the human's status; codesense.onInboxChanged((change?) => …) when a message is stored, read, claimed or reacted to (change.changes, when present: [{team: {org, team}, messageIds}] names the messages the committed update re-read, only your team's when you are team-scoped; re-read just those); window message `codesense:agent-activity-changed` when an update is posted. Each returns an unsubscribe. Re-read with the calls above. Registrations and claims also lapse with time, so a queue view may re-read on a slow timer (e.g. every 30s while visible).",
       "media_messages": "inbox() and inboxRollup() image attachments carry {kind:'image', sha256?, mime?, width?, height?, bytes?, alt, sourceUrl?, sourceHost?, state:'cached'|'pending'|'blocked'|'failed', reason?, retryable}. Render cached bytes from same-origin /media/v1/<sha256>, never from sourceUrl. Pending or retryable failed rows can call act('loadMedia', {org?,team?,messageId}) after the person taps. Blocked means remote media is off in team config; offer a source link, not a fetch. Respect OS Reduce Motion with a still first frame and explicit play/pause.",
       "role": "One read model for agents and their inboxes. Every call returns the same shape as its MCP twin (named in brackets), so a dashboard and an agent see the same data. Team-scoped calls act on the page's own team (else the active team). Reads mark nothing read and claim nothing.",
-      "roles": "await codesense.roles({role?, limit?}) [role_state] → {roles: [{role, roleName, registrations: [{instanceId, instanceName, generation, registeredAtMs, lastRenewedAtMs, expiresAtMs, live}], counts: {pending, claimed, accepted, acknowledged}, deliveries: [{deliveryId, messageId, state, from, fromName, excerpt, createdAtMs, firstClaimedAtMs, claimOwner, claimOwnerName, claimOwnerGeneration, claimExpiresAtMs, claimLapsed, receipt}], deliveriesTruncated}]}. Delivery state: pending (nobody holds it) | claimed (an instance is deciding; claimLapsed = its claim expired) | accepted (as work or no_work, not yet acknowledged) | acknowledged (finished). Open deliveries are all listed; `limit` caps acknowledged ones per role (default 20). A registration's `live` turns false at expiresAtMs.",
+      "roles": "await codesense.roles({role?, limit?}) [role_state] → {roles: [{role, roleName, registrations: [{instanceId, instanceName, generation, registeredAtMs, lastRenewedAtMs, expiresAtMs, live}], counts: {pending, claimed, accepted, acknowledged}, deliveries: [{deliveryId, messageId, state, from, fromName, excerpt, inReplyTo, text, textTruncated, createdAtMs, firstClaimedAtMs, claimOwner, claimOwnerName, claimOwnerGeneration, claimExpiresAtMs, claimLapsed, receipt}], deliveriesTruncated}]}. Delivery state: pending (nobody holds it) | claimed (an instance is deciding; claimLapsed = its claim expired) | accepted (as work or no_work, not yet acknowledged) | acknowledged (finished). Open deliveries are all listed; `limit` caps acknowledged ones per role (default 20). A registration's `live` turns false at expiresAtMs.",
       "sample": "content/examples/dashboards/agent-inbox-console.html in the CodeSense docs context repo (getting-started team) shows sessions, role queues and the human inbox live, with reply and mark-read.",
       "times": "Every *AtMs field is epoch milliseconds.",
       "updates": "await codesense.updates({limit?}) [list_agent_updates] → {updates: [{id, sessionId, agentName, role, text, createdAtMs}]} — agents' progress notes, newest first. These notes are available to dashboards and do not appear in the native human Inbox. Read update mail sent to the human with inbox({kind:'update'})."
@@ -1013,7 +1089,8 @@
       "slotContext",
       "theme",
       "kitTokens",
-      "virtualList"
+      "virtualList",
+      "inboxThread"
     ],
     "frame_presentation": {
       "builtins": "builtin:stop, builtin:close-tab and builtin:set-role use host labels, icons, availability and handlers. Stop and Close tab always use the host confirmation. Results include builtin:true after the action settles. Unknown builtin ids reject, including builtin:relaunch.",
@@ -1037,8 +1114,10 @@
     "live_hub": {
       "files": "Use codesense.files.list({scope:'team'|'private'|'story'|'agent',team?,storyId?,agentId?,dir?}) for {rows:[{id,path,name,kind:'dir'|'file'|'story'|'epic',size?,mtime?}]}. Story uses hydrate_story's default file closure; agentId is the full agent key and uses its context want set. Own content only until the sharing gate is connected; private scope is your private space. Read with files.read({path,maxBytes?}) for {text?,bytesUrl?,size,truncated,sha256}; text is capped at 1.5 MB, with a /viewer URL for larger or binary files. files.create({path,content?,onCollision:'keep-both'|'fail'}) returns {path}; files.move({from,to}) returns {fromPath,toPath}; files.delete({path}) returns {deletedPath}. MCP twins: list_context_content (omit context and use scope), read_content_file, create_content_file, move_content_file, delete_content_file. Subscribe with codesense.subscribe('files',{scope,dir?,storyId?,agentId?,window:[0,200],onChange}); page with codesense.page('files',cursor,options). Views are grant-derived team:<key>|files:<selector>, fed by the existing context-file-change watcher; never poll. Declare slots: file-nav for one context-following sidebar body, with host-owned width/collapse/resize. The native PipelineStatusNav stays default. ui:file-nav holds per-team {expanded,selected?,scope?}; native and pane share the same expansion backing store. Teaching example: arc-i-dashboard-primitives/pane-shapes.html#file-nav.",
       "machineStats": "Native Machines subscription: keyed by machine id (id), snapshot plus versioned deltas through this one hub. Resource fields match machines(): load1, cpuCount, memUsedBytes, memTotalBytes, diskFreeBytes, diskTotalBytes, diskPath, sampledAt and machineStatsSupported. The host watches only with subscribers; hidden/disposed frames and closed windows release subscriptions. Samples every 30 seconds while watched, no per-view polling; runtime state only.",
+      "messageDelivery": "Subscribe with codesense.subscribe('messageDelivery', {onChange}) to where each message the human sent to a session stands, in the page's team (all synced teams for an all-teams page): one row per message {id, messageId, team, to, state, toldAtMs, deliveredAtMs}. state is queued until the session's agent is told about the message (CodeSense's inbox notice covering it reached the agent) or the message is read, then delivered; toldAtMs is when it was told (null when it was read before any notice); deliveredAtMs is when it was delivered: when told, else when read (null while queued). Delivered means told, not read. Messages to a role are not listed: their delivery is the inbox message's delivery. Requires the inbox read grant the inbox topic takes. Find a sendAsHuman message's row by its messageId.",
       "navLens": "ui:file-nav mirrors the native viewer store in both directions: source {kind:'clone'|'private'} or {kind:'worktree',id}, view files|changes|history, lens everything|needs|agents|ready|active|review|blocked|not_started|done, arrange folders|stage, storiesOnly, doneOpen and historyBranches. setUiState writes the native setter; no independent persisted lens exists. files rows additionally expose starterPage, mergeMarked, shadows, overrides, installedSourceRepo, repoGlyph and repoTint from the native owners; installed groups keep their installed:// path. kit.stageRail(role,ready), kit.statusMark(mark) and kit.fileKindIcon(kind) are generated from native renders with matching metrics, colours and motion. showMenu items accept a kit icon name or {kind:'stageRail',role,ready}, {kind:'statusMark',mark}, {kind:'fileKindIcon',fileKind}; count, radioGroup with checked, and segmented:[{id,label,checked}] extend ordinary items. Choice returns the selected child itemId.",
       "notes_example": "A private Notes page: const {rows} = await codesense.records.list({collection:'notes'}) (pinned first, then most recent); const note = await codesense.records.read({collection:'notes', id}); keep note.body as base and save with const r = await codesense.records.write({collection:'notes', id, body, base, requestId}); when r.merged is true show r.body and highlight r.overlaps. Pin with codesense.records.setFields({collection:'notes', id, fields:{pinned:true}}). codesense.records.delete({collection:'notes', id}) is confirmable and human-only (agents can't delete notes); bring a note back with codesense.records.restore({collection:'notes', id, commit}) using a commit from records.history.",
+      "pins": "Subscribe to an agent thread's pin list with codesense.subscribe('pins', {agentId, storyId?, onChange}): one row per live pin {id, messageId, position, order, pinnedBy, pinnedAtMs, preview, previewAtMs, org, team, agentId, storyId} in list order, at most 3 (preview and previewAtMs are null until a preview is sent), in the page's team. Requires inbox:read:team. Pin, unpin and reorder (from a page or an agent's pin tool) arrive as deltas; a pin whose message is archived or withdrawn drops out and returns if it is restored. Read once with codesense.pins({agentId, storyId?}).",
       "records": "Use codesense.records.collections/list/read/search/history/readAt/create/write/setFields/delete/restore. Every call takes collection; scope, org, team and profile are bound to the frame. Subscribe with codesense.subscribe('records', {collection, window?: [from,to], onChange}); records views default to 200 rows, contain no bodies, and page through codesense.page('records', cursor, {collection}). Multiple collection subscriptions are independent; unsubscribe with its callback or {collection} as the third argument. The view key is records:<scope>:<org>[/<team>]:<collection>. Writer deltas carry actor, kind and optional requestId; duplicate requests and unchanged index rows produce no delta. Private history commits later update headCommit only. Team and story collections have no automatic history.",
       "sessions": "codesense.onSessions(cb) is subscribe('sessions')-backed. The Rust projection is shared by native and MCP consumers. Inbox and agentList projections are available through subscribe. onAgentsChanged follows the agentDefinitions projection, including unused saved agents changed by a save, external edit or pull; agents() reads its cached summary rows. Rich agent({key}) remains a fresh canonical read of resolved startup and login state. Compatibility revisions preserve role and human-status notifications. onInboxChanged retains visible-only inbox invalidations. No per-frame session re-reads or hidden polling.",
       "stories": "Subscribe to stories with {window:[0,200],onChange}; use page('stories',cursor) for more. This is a team-scoped, grant-derived team: view over the existing native full-team pipeline scan, taxonomy, dependency graph, agent marks and recursive epic counts. Rows are keyed by path; kind is story, epic, doc or main-doc. Stories carry storyId, declared title (without a repeated id), status, taxonomy role and label, ready, blockedBy, dependencyCount, mark, sprint, metadataValid and metadataInvalidReason. Epics carry total, done and a rolled-up mark. ownerPath locates docs and main docs. Null means absent. The existing watcher feeds snapshots plus deltas; never poll. Declare team scope or use the file-nav slot for a team-bound view.",
@@ -1078,6 +1157,7 @@
       "session_read": "await codesense.sessionRead({sessionId, include?: [conversation] or [turns], cursor?, limit?, turn?, toolUseId?}) [session_read] → joined session record, nativeSessionIds, models/cost (reported|rate_table|mixed|null), tools allowed/used (usedState and usedReason; used is null when absent/unsupported/unavailable, retained on expiry; firstError is the earliest indexed failure, firstRetainedError is the first outside droppedTurns or null, each with turn/toolUseId for a verified lookup), story, run, tasks, timing and unavailable reasons. retries is null (no recorded retry signal). Unknown cost is null with a reason. Conversation include returns the existing page and explicit availability state. Turns include returns the same page as summaries {index, role, tsMs, text (200 chars), toolCalls, toolErrors, model} with no tool input or result text, and the answer holds only session {sessionId, cli, branch, timing}, story and turns (not both includes); the app only, not published. Runtime reads are machine-wide; caller scope only gates story enrichment.",
       "session_usage": "await codesense.sessionUsage({sinceMs?, untilMs?, sessionId?, cwd?, story?, limit?, cursor?}) [session_usage] → {sessions, days, totals, total, nextCursor?}: nextCursor is present only when more sessions follow (pass it back as cursor, with the same other args, to read the next page; total, totals and days count the current matches on every page; during a walk a session that becomes active moves to the first page; a walk is complete when its distinct sessionIds equal total, otherwise walk again from page 1 through continuation, merging by sessionId, up to 2 recovery rewalks; after that report the truthful latest N of M.); per session cli (claude, codex or opencode), tokens {input, output, cacheRead, cacheWrite}, messages, models, firstAtMs, lastAtMs, org, team and agent (null when unattributed), machineId (the machine it ran on, as machines() names it: 'local' for this Mac), story {id, title, status, epic, basis?} (the story the session was spent on: its story worktree, else the story its launch was opened for, else a context worktree named <team>/<epic>-<n> with basis 'associated' (no basis means exact); null when not tied to one; story: 'DEMO-5' keeps only that story's sessions), costUsd (null when a model has no list price on file), unpricedModels; days: per local day totals. Covers this Mac and the remote machines it connects to. Each model call counts once, including Codex's start-up cache warm-up, which Codex's own total leaves out.",
       "setup": "await codesense.setup() [describe_setup] → {attribution}: whether line attribution and turn-link capture work on this Mac, the same object describe_setup returns under attribution. A passive read: it never installs, launches or refreshes. attribution: status {kind: active (git-ai installed, supported and its daemon answers; a repo's own setting can still keep a worktree off, shown on worktrees rows) | not_installed | installing | install_failed with message | unsupported_version with found | unsupported with reason | error with message; off with a reason appears only if a state ever reports it here, per-launch states are on worktrees rows}, binary (path), gitAiVersion, daemonReachable, warnings [text], previousBinary (null | {version, replacement, path}: the last git-ai replacement receipt), supportedVersions, notesRef (sense: notes stay on this Mac), notesPushRepos (repos set to push notes), daemonRepoRoots (how many attached clones CodeSense lists in git-ai's daemon_repo_roots; 0: no list, every repo; null while none resolves and the earlier list is kept), capture {lastSweepAt (epoch ms, null until the first sweep since the app started), trigger (startup|watcher or null), clonesSwept, logsSeen, logsNew, traceRowsStored, sessionMappingRowsStored (counts of the last startup or watcher pass, since app start; zero when none has run), watchErrors (registration failures in the latest watch reconciliation), lastError (the latest unresolved fixed phase message, no paths)}. Published (shared) dashboards declare `live: {queries: [setup]}` and get an allow-list only: status {kind, reason? (present only when the status is off)}, gitAiVersion, daemonReachable, supportedVersions, notesRef, daemonRepoRoots (a count) and the whole capture block; never the binary path, warnings or status message text, nor the previousBinary receipt or notesPushRepos. Always this Mac's values. Example: `const {attribution:a}=await codesense.setup(); rows=[['status',a.status.kind],['git-ai',a.gitAiVersion??'none'],['daemon',a.daemonReachable],['last sweep',a.capture.lastSweepAt??'not yet since start'],['logs new',a.capture.logsNew],['last error',a.capture.lastError??'none']]`.",
+      "setup_state": "await codesense.setupState() [describe_setup orgs] → {orgs: [{slug (owner/repo), displayName, loadErrors (registry files that failed to load; then teams is empty), teams: [{name, archived, parentTeam (null for a root team), starterPage?, synced (the team's content is on this Mac), sourceRepos: [{slug (owner/repo), remoteKey, attachment: attached | missing | unattached (a local checkout is bound, was bound but is gone, or never was)}]}]}]}: this Mac's orgs, teams and source repos, read-only, with no local paths. Any change to them (creating or deleting a team, attaching a context repo, adding a source repo, among others) makes the host post one window message, codesense:setup-changed, with no payload, once the change's events settle (a burst folds into one): re-read then.",
       "story_changes": "await codesense.storyChanges({storyId, only?}) [story_changes] → all linked sessions (sessionRead facts plus basis), tasks with review ids, totals {sessions,costUsd,wallMs,activeMs,idleMs,reviewRounds,reviewTasks,lines}, unavailable, historyAsOf, warnings. reviewRounds counts the story's complete phase:review review-rounds markers, never wave/use observations (null with unavailable.reviewRounds when unreadable); reviewTasks counts review tasks (else marker tasks, warnings.reviewTasks; null with unavailable.reviewTasks); warnings.reviewRounds says when they disagree. totals.lines {ai:{total,byRuntime:{<listed CLI id>:n,other:n+unlisted}},human,unattributed,total} counts the lines added by every landed non-merge commit of the story (an unmerged branch is unavailable.branches), whatever limit or cursor (ai: exact agent author in git-ai notes; human: exact human author; unattributed: no note, unknown or association only, never human); it is null with unavailable.lines when any commit cannot be attributed (no checkout, objects not local, notes changing, incomplete history), never partial. prs[] lists merged PRs found locally, so mergedAt (committer time of mergedSha, epoch ms) is always set. Unknown cost is null with a reason; wall spans sessions, active/idle sum them. Includes branches/worktrees, locally resolved PRs and commits, totals.commits/files, planned/plannedBase, actual file facts (lines:{added,removed}|null and linesReason) and plannedUntouched. File lines use a containing branch range once, or lines changed by this story’s merged PRs against each first parent once; incomparable branches keep file lines null with unavailable.fileLines. PR url/urlReason use only local origin metadata. Commits include author. limit (default100,max500) and cursor page commits; total is known, stale cursors refused. Missing branch/squash/open PR facts carry unavailable reasons, without network; only a trail missing its merge fetches origin once (10 s bound; unavailable.historyFetch). historyAsOf {fetchedAt, originHead}. Published query shares commit sha/date, repo-relative tracked file facts and PR/merged SHAs with link basis, worktree state/basis, session id/models/cost/timing and task ids/reviews; no host or worktree paths, records, accounts, branch names, commit subjects, goals or summaries. Private reads accept include:[\"ranges\"] for current-page introduced added-line ranges with resolver session/native IDs, basis and reasons, plus rangesBasis/rangesReason; default/empty include omits these fields. No-note/merge/unavailable reads preserve durable facts with explicit reasons. The resolver still attributes the full file internally. Published queries reject include and exclude ranges. No conversation. only?: [tasks|sessions|commits|prs|branches|worktrees|actual|reviews] answers just those arrays with totals; tasks, sessions and reviews never read git, and without a git array totals.commits, files and lines are null (unavailable.commits, files and lines say why) and a cursor is stale. reviews = the story's complete review rounds {id,round,phase,scope,skill,subjectKind,subjectRef,subjectRev,high,medium,low,dismissed,converged,reportedAt}; published queries drop id, subjectKind and subjectRef.",
       "story_totals": "await codesense.storyTotals({storyIds}) [story_totals] → {stories: {<id as asked>: {totals, unavailable: {field: index into reasons}, computedAtMs, refreshing?} | {pending: true} | {error}}, reasons, pending, indexing: {done, total}} for 1 to 500 ids in one answer, from the Mac's story totals index; it never walks git. kit.storyTotals(ids) and CS.storyTotals(ids) take any number of ids, ask in parts (500 in the app; hosted, as many as fit the hosted 2 KB args limit, about 120 to 150) and merge one answer, renumbering reasons, asking again for rest, with source cache and the oldest answered_at when any part came from the cache. totals equals storyChanges({storyId}).totals and unavailable its unavailable reasons. Each ready story also has mergedAt (the latest merge time of its merged PRs, epoch ms; null with mergedAtReason), prs (its newest 5 merged PRs as {number, merged}) with prsTotal, and runtimes (sorted ids of the CLIs that reported its sessions' usage), from the same computation. It also has firstActivityAt and lastActivityAt (epoch ms over the story's sessions' usage, commits, merges, tasks and review rounds; null with activityReason when none is recorded) and openSessions (sessions with observed timing and no end that were active in the 15 minutes before computedAtMs, by usage or turn); a row computed before these existed answers them null with activityReason refreshing while it is recomputed, never pending. linesInProgress is the lines on story branches not merged yet, shaped like totals.lines (null with linesInProgressReason); they move into totals.lines on merge (after a squash or rebase merge, lines stay here while the story's branch ref still exists, local or on origin, until it is deleted). While a story's commits are still being counted its lines are the earlier ones with refreshing true, or unavailable (\"counting in the background\") when it had none, never 0. pending: not indexed yet and queued; show Loading and ask again, never 0. refreshing: a commit, merge, session, task or review marker changed the story since computedAtMs and a recompute is queued. indexing counts the scope's indexed stories (done of total). An answer past 240 KB is cut: truncated: true and rest lists the ids to ask again. Published storyTotals pins storyIds like storyChanges.storyId (every id must pass), shares totals whole and only the reasons storyChanges publishes, and answers {error: failed}.",
       "why_line": "await codesense.whyLine({repo, rev?, story?, path, start, end}) [why_line] → committed line attribution from the bound local checkout's history, without fetching. An omitted rev is the story's merged SHA, else its branch head, else origin's default branch, never the checkout's HEAD (revSource says which; historyAsOf {fetchedAt, originHead}); lines are 1-based inclusive, end - start <= 2000. Returns resolvedCommit, notesRef, ranges with exact/associated/unknown basis and live joined sessions. Linked exact agent turn pointers are {sessionId,toolUseId,turn,reason?}, with a zero-based index from stored conversation metadata. Missing mappings use range.unavailable.turn; expired or dropped text keeps its index with a reason. Startup sweeps retained completed archives and live logs for attached clones with attribution enabled; completed archive events also capture while the app is open; exact-range queries reconcile on demand for these commits and parents. Stored mappings survive log deletion. Logs pruned before either capture cannot be recovered; no retention interval is assumed. Published turn and unavailable values use nested allow-lists. Missing local objects return unavailable. Full in-app JSON matches MCP; published queries omit native session ids, records, accounts, host paths and conversation.",
@@ -1260,6 +1340,18 @@
       },
       {
         "mcpTwin": null,
+        "presentationOnlyReason": "Agents read their pins in the result of the pin tool; pages read any thread of their team",
+        "tier": "exempt",
+        "verb": "pins"
+      },
+      {
+        "mcpTwin": null,
+        "presentationOnlyReason": "Agents read their pins in the result of the pin tool; pages read any thread of their team",
+        "tier": "exempt",
+        "verb": "inbox.pins"
+      },
+      {
+        "mcpTwin": null,
         "presentationOnlyReason": "Host presentation or dashboard-local operation",
         "tier": "exempt",
         "verb": "watchInbox"
@@ -1275,6 +1367,18 @@
         "presentationOnlyReason": "Host presentation or dashboard-local operation",
         "tier": "exempt",
         "verb": "watchAgentActivity"
+      },
+      {
+        "mcpTwin": null,
+        "presentationOnlyReason": "A page hears a session's assistant prose as it is written; agents read a session's turns with session_read",
+        "tier": "exempt",
+        "verb": "sessions.watchText"
+      },
+      {
+        "mcpTwin": null,
+        "presentationOnlyReason": "A page hears a session's assistant prose as it is written; agents read a session's turns with session_read",
+        "tier": "exempt",
+        "verb": "sessions.unwatchText"
       },
       {
         "mcpTwin": "routine_list",
@@ -1361,6 +1465,12 @@
         "verb": "setup"
       },
       {
+        "mcpTwin": "describe_setup",
+        "presentationOnlyReason": null,
+        "tier": "exempt",
+        "verb": "setupState"
+      },
+      {
         "mcpTwin": "story_changes",
         "presentationOnlyReason": null,
         "tier": "exempt",
@@ -1371,6 +1481,12 @@
         "presentationOnlyReason": null,
         "tier": "exempt",
         "verb": "storyTotals"
+      },
+      {
+        "mcpTwin": null,
+        "presentationOnlyReason": "A page's per-agent summary of session_usage and story_changes; agents read those two tools directly.",
+        "tier": "exempt",
+        "verb": "sessionRecord"
       },
       {
         "mcpTwin": "model_rates",
@@ -1575,6 +1691,46 @@
       {
         "tier": "metadata",
         "verb": "react"
+      },
+      {
+        "tier": "metadata",
+        "verb": "pin"
+      },
+      {
+        "tier": "metadata",
+        "verb": "unpin"
+      },
+      {
+        "tier": "metadata",
+        "verb": "restorePin"
+      },
+      {
+        "tier": "metadata",
+        "verb": "replacePin"
+      },
+      {
+        "tier": "metadata",
+        "verb": "reorderPins"
+      },
+      {
+        "tier": "metadata",
+        "verb": "inbox.pin"
+      },
+      {
+        "tier": "metadata",
+        "verb": "inbox.unpin"
+      },
+      {
+        "tier": "metadata",
+        "verb": "inbox.restorePin"
+      },
+      {
+        "tier": "metadata",
+        "verb": "inbox.replacePin"
+      },
+      {
+        "tier": "metadata",
+        "verb": "inbox.reorderPins"
       },
       {
         "tier": "metadata",
