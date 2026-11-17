@@ -1,0 +1,211 @@
+// SPDX-License-Identifier: MIT
+//! Windows: a protected owner-only DACL, reparse-point refusal, std's rename
+//! with a bounded retry, std's file locks, and a copy where symlinks need
+//! Developer Mode.
+
+use std::ffi::c_void;
+use std::fs::{File, OpenOptions};
+use std::io;
+use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+use std::path::Path;
+use std::time::Duration;
+
+use windows_sys::Win32::Foundation::{
+    LocalFree, ERROR_ACCESS_DENIED, ERROR_LOCK_VIOLATION, ERROR_PRIVILEGE_NOT_HELD,
+    ERROR_SHARING_VIOLATION, ERROR_SUCCESS,
+};
+use windows_sys::Win32::Security::Authorization::{
+    GetNamedSecurityInfoW, SetNamedSecurityInfoW, SE_FILE_OBJECT,
+};
+use windows_sys::Win32::Security::{
+    AddAccessAllowedAceEx, EqualSid, GetAce, GetLengthSid, InitializeAcl, ACCESS_ALLOWED_ACE,
+    ACE_HEADER, ACL, ACL_REVISION, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION,
+    OBJECT_INHERIT_ACE, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
+};
+use windows_sys::Win32::Storage::FileSystem::{
+    FILE_ALL_ACCESS, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
+    FILE_SHARE_READ, FILE_SHARE_WRITE,
+};
+
+use super::{Linked, ReplaceError};
+use crate::win::{wide, CurrentUser};
+
+/// `ACCESS_ALLOWED_ACE_TYPE`: an ACE that grants access to one SID.
+const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
+/// `ACCESS_DENIED_ACE_TYPE`: an ACE that only takes access away.
+const ACCESS_DENIED_ACE_TYPE: u8 = 1;
+
+/// How many times a replace meets a sharing violation before it is `Busy`.
+const REPLACE_ATTEMPTS: u32 = 5;
+/// The wait after the first sharing violation, doubled after each (150 ms in
+/// all).
+const FIRST_RETRY_DELAY: Duration = Duration::from_millis(10);
+
+pub(super) fn set_owner_only(path: &Path, is_dir: bool) -> io::Result<()> {
+    let user = CurrentUser::read()?;
+    let sid = user.sid();
+    // SAFETY: the SID is valid while `user` lives.
+    let sid_length = unsafe { GetLengthSid(sid) } as usize;
+    // The ACL header and one ACE, whose SID takes the place of `SidStart`.
+    let acl_length = std::mem::size_of::<ACL>() + std::mem::size_of::<ACCESS_ALLOWED_ACE>()
+        - std::mem::size_of::<u32>()
+        + sid_length;
+    let mut buffer = vec![0u32; acl_length.div_ceil(4)];
+    let acl = buffer.as_mut_ptr().cast::<ACL>();
+    let inherit = if is_dir {
+        OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE
+    } else {
+        0
+    };
+    // SAFETY: `acl` points to a DWORD-aligned buffer of the size given.
+    if unsafe { InitializeAcl(acl, (buffer.len() * 4) as u32, ACL_REVISION) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: the ACL was sized for this one ACE; the SID is valid.
+    if unsafe { AddAccessAllowedAceEx(acl, ACL_REVISION, inherit, FILE_ALL_ACCESS, sid) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let path = wide(path);
+    // SAFETY: `path` is NUL-terminated; the ACL lives across the call.
+    let status = unsafe {
+        SetNamedSecurityInfoW(
+            path.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            acl,
+            std::ptr::null(),
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return Err(io::Error::from_raw_os_error(status as i32));
+    }
+    Ok(())
+}
+
+pub(super) fn is_owner_only(path: &Path) -> io::Result<bool> {
+    let user = CurrentUser::read()?;
+    let path = wide(path);
+    let mut dacl: *mut ACL = std::ptr::null_mut();
+    let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    // SAFETY: `path` is NUL-terminated; the out pointers are writable.
+    let status = unsafe {
+        GetNamedSecurityInfoW(
+            path.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut dacl,
+            std::ptr::null_mut(),
+            &mut descriptor,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return Err(io::Error::from_raw_os_error(status as i32));
+    }
+    // SAFETY: `dacl` is null or points into `descriptor`, which is freed
+    // only after this; the SID is valid while `user` lives.
+    let owner_only = unsafe { grants_only(dacl, user.sid()) };
+    // SAFETY: the call allocated the descriptor with LocalAlloc.
+    unsafe { LocalFree(descriptor) };
+    Ok(owner_only)
+}
+
+/// Whether every ACE in `dacl` that grants access names `sid`. A null DACL
+/// grants everyone everything; an ACE of a kind not read here counts as a
+/// grant to someone else.
+///
+/// # Safety
+///
+/// `dacl` is null or a valid ACL, and `sid` a valid SID.
+unsafe fn grants_only(dacl: *const ACL, sid: PSID) -> bool {
+    if dacl.is_null() {
+        return false;
+    }
+    for index in 0..u32::from((*dacl).AceCount) {
+        let mut ace: *mut c_void = std::ptr::null_mut();
+        if GetAce(dacl, index, &mut ace) == 0 {
+            return false;
+        }
+        match (*ace.cast::<ACE_HEADER>()).AceType {
+            ACCESS_DENIED_ACE_TYPE => {}
+            ACCESS_ALLOWED_ACE_TYPE => {
+                let ace_sid = std::ptr::addr_of_mut!((*ace.cast::<ACCESS_ALLOWED_ACE>()).SidStart);
+                if EqualSid(ace_sid.cast(), sid) == 0 {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    true
+}
+
+pub(super) fn open_nofollow(options: &mut OpenOptions, path: &Path) -> io::Result<File> {
+    let file = options
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .open(path)?;
+    if file.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} is a link", path.display()),
+        ));
+    }
+    Ok(file)
+}
+
+pub(super) fn replace(from: &Path, to: &Path) -> Result<(), ReplaceError> {
+    let mut delay = FIRST_RETRY_DELAY;
+    for attempt in 1..=REPLACE_ATTEMPTS {
+        match std::fs::rename(from, to) {
+            Ok(()) => return Ok(()),
+            Err(error) if is_busy(&error) => {
+                if attempt < REPLACE_ATTEMPTS {
+                    std::thread::sleep(delay);
+                    delay *= 2;
+                }
+            }
+            Err(error) => return Err(ReplaceError::Io(error)),
+        }
+    }
+    Err(ReplaceError::Busy)
+}
+
+/// A handle elsewhere blocks the replace: a sharing or lock violation, or
+/// the access denied Windows reports for a file still open for deletion.
+fn is_busy(error: &io::Error) -> bool {
+    matches!(
+        error.raw_os_error().map(|code| code as u32),
+        Some(ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION | ERROR_ACCESS_DENIED)
+    )
+}
+
+pub(super) fn lock_exclusive(file: &File) -> io::Result<()> {
+    file.lock()
+}
+
+pub(super) fn try_lock_exclusive(file: &File) -> io::Result<bool> {
+    match file.try_lock() {
+        Ok(()) => Ok(true),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(false),
+        Err(std::fs::TryLockError::Error(error)) => Err(error),
+    }
+}
+
+pub(super) fn unlock(file: &File) -> io::Result<()> {
+    file.unlock()
+}
+
+pub(super) fn link_or_copy(target: &Path, link: &Path) -> io::Result<Linked> {
+    match std::os::windows::fs::symlink_file(target, link) {
+        Ok(()) => Ok(Linked::Symlink),
+        Err(error) if error.raw_os_error() == Some(ERROR_PRIVILEGE_NOT_HELD as i32) => {
+            std::fs::copy(target, link)?;
+            Ok(Linked::Copy)
+        }
+        Err(error) => Err(error),
+    }
+}

@@ -989,6 +989,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "codesense-platform"
+version = "0.1.0"
+dependencies = [
+ "dirs 5.0.1",
+ "dunce",
+ "libc",
+ "serde",
+ "tempfile",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "codesense-pty-core"
 version = "0.1.0"
 dependencies = [
