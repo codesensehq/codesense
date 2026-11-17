@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, act } from "@testing-library/react";
-import { forwardRef, useImperativeHandle } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
 
 import { fileContentCache } from "@/shared/lib/file-content-cache";
 import { fileViewKey } from "@/shared/lib/view-snapshot";
@@ -10,7 +10,13 @@ import { useViewerStore } from "@/shared/stores/viewer-store";
 // Stub the CM6 editor to a controlled textarea so the wrapper's read / guard /
 // read-only wiring is the subject under test. CM internals live in the
 // code-editor suites. The handle exposes `scrollEl`, standing in for CM's scroller.
-const scroll = vi.hoisted(() => ({ el: null as HTMLElement | null }));
+// `withhold` holds the handle back until `release()` runs, like CM's lazy chunk
+// landing after the file read.
+const scroll = vi.hoisted(() => ({
+  el: null as HTMLElement | null,
+  withhold: false,
+  release: null as (() => void) | null,
+}));
 vi.mock("@/shared/components/code-editor", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/shared/components/code-editor")>();
   return {
@@ -31,7 +37,18 @@ vi.mock("@/shared/components/code-editor", async (importOriginal) => {
       },
       ref: React.Ref<{ getScrollElement: () => HTMLElement | null }>,
     ) {
-      useImperativeHandle(ref, () => ({ getScrollElement: () => scroll.el }), []);
+      const [handleReady, setHandleReady] = useState(!scroll.withhold);
+      useEffect(() => {
+        scroll.release = () => setHandleReady(true);
+        return () => {
+          scroll.release = null;
+        };
+      }, []);
+      useImperativeHandle(
+        ref,
+        () => (handleReady ? { getScrollElement: () => scroll.el } : null) as never,
+        [handleReady],
+      );
       return (
         <div
           data-testid="mock-code-editor"
@@ -61,6 +78,8 @@ beforeEach(() => {
   readFileMock.mockReset();
   fileContentCache.clear();
   scroll.el = document.createElement("div");
+  scroll.withhold = false;
+  scroll.release = null;
   useViewerStore.setState({ viewStateByKey: {} });
 });
 
@@ -239,6 +258,20 @@ describe("CodeFileViewer scroll position across tab switches", () => {
     scrollTo(480);
     resize(0, 0);
     // A hidden box loses its scroll offset in the engine.
+    scrollTo(0);
+    resize(400, 100);
+    expect(scroll.el!.scrollTop).toBe(480);
+  });
+
+  it("tracks the scroll when the editor handle arrives after the content", async () => {
+    scroll.withhold = true;
+    await renderReady(KEY);
+    await act(async () => {
+      scroll.release!();
+    });
+    resize(400, 100);
+    scrollTo(480);
+    resize(0, 0);
     scrollTo(0);
     resize(400, 100);
     expect(scroll.el!.scrollTop).toBe(480);
