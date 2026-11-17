@@ -139,6 +139,7 @@ import { getEffectiveTreeFontPx } from "@/shared/lib/font-sizes";
 import { useTrailingDebounce } from "@/shared/lib/use-trailing-debounce";
 import { PaneCollapseDivider, type PaneSize } from "../components/pane-collapse-divider";
 import type { DragResizeOptions } from "./use-drag-resize";
+import { basename } from "@/shared/lib/path";
 
 const EMPTY_PATHS: string[] = [];
 
@@ -1743,7 +1744,7 @@ export function TeamWorkspaceView({ teamKey }: TeamWorkspaceViewProps) {
                   ) : (
                     <FileWarningPlaceholder
                       message="No preview available"
-                      filename={p.split("/").pop() ?? p}
+                      filename={basename(p) || p}
                       testId="nav-no-preview"
                     />
                   );

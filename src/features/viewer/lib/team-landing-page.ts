@@ -30,6 +30,7 @@ import {
   type LandingCandidate,
   type LandingPageResolution,
 } from "@/tauri/commands";
+import { relative } from "@/shared/lib/path";
 
 /** Conventional landing pages, in preference order, at the team's content root. */
 export const LANDING_PAGE_FALLBACKS = ["README.md", "README.html", "index.html"] as const;
@@ -51,10 +52,7 @@ export function isContentRelative(path: string): boolean {
  *  it. Doubled and trailing slashes are ignored, so two spellings of one file
  *  compare equal; anything else outside the folder is `null`. */
 export function contentRelativePath(path: string, contentRoot: string): string | null {
-  const norm = (p: string) => p.replace(/\/{2,}/g, "/").replace(/\/+$/, "");
-  const file = norm(path);
-  const root = norm(contentRoot);
-  return file.startsWith(`${root}/`) ? file.slice(root.length + 1) || null : null;
+  return relative(contentRoot, path) || null;
 }
 
 /** The pages to try, in order: the declared one (when safe, exact name), then
@@ -167,8 +165,7 @@ export function asLandingPageResolution(raw: unknown): LandingPageResolution {
 /** Forget resolved landing pages: those under `changedPath`'s team content, or
  *  all of them when no path is given. */
 export function invalidateLandingPages(changedPath?: string): void {
-  const under = (root: string) =>
-    !changedPath || changedPath === root || changedPath.startsWith(`${root}/`);
+  const under = (root: string) => !changedPath || relative(root, changedPath) !== null;
   let dropped = [...shownRoots].some(under);
   for (const [key, { contentRoot }] of memo) {
     if (under(contentRoot)) {

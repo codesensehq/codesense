@@ -19,6 +19,7 @@ import { readFile } from "@/tauri/commands";
 
 import { isTooLargeToView, looksBinary, utf8ByteLength } from "../lib/worktree-file-view";
 import { FileWarningPlaceholder } from "./file-warning-placeholder";
+import { basename } from "@/shared/lib/path";
 
 /**
  * SW-VE-2: the `code` render case in {@link renderViewer} — a read-only,
@@ -143,7 +144,7 @@ export function CodeFileViewer({
     };
   }, [filePath, refreshKey, changedPaths]);
 
-  const filename = filePath.split("/").pop() ?? filePath;
+  const filename = basename(filePath) || filePath;
 
   if (state === "binary") {
     return (

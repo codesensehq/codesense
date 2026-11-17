@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+import { basename, dirname } from "@/shared/lib/path";
+
 /**
  * The worktree editor's open-tab list as plain data: which files are open, in
  * what order, and which one a close hands focus to. Pure so the ordering rules
@@ -65,7 +67,7 @@ export function cycleTab(
 export function tabLabels(
   tabs: readonly string[],
 ): Map<string, { name: string; hint: string | null }> {
-  const base = (p: string) => p.slice(p.lastIndexOf("/") + 1);
+  const base = basename;
   const counts = new Map<string, number>();
   for (const t of tabs) counts.set(base(t), (counts.get(base(t)) ?? 0) + 1);
   const out = new Map<string, { name: string; hint: string | null }>();
@@ -73,9 +75,7 @@ export function tabLabels(
     const name = base(t);
     let hint: string | null = null;
     if ((counts.get(name) ?? 0) > 1) {
-      const slash = t.lastIndexOf("/");
-      const dir = slash === -1 ? "" : t.slice(0, slash);
-      hint = dir.slice(dir.lastIndexOf("/") + 1) || null;
+      hint = basename(dirname(t)) || null;
     }
     out.set(t, { name, hint });
   }

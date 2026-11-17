@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { resolveViewerLinkPath } from "@/shared/lib/viewer-file-type";
+import { relative } from "@/shared/lib/path";
 
 /** SW-SN-9: the shared, framework-free link model for scratch notes.
  *
@@ -57,8 +58,8 @@ function decodeCsTarget(target: string): string {
  *  sibling sharing a prefix (`/x/content` vs `/x/content-2`) is never treated as
  *  inside the root. `root` may carry a trailing slash. */
 export function isUnderContentRoot(absPath: string, root: string): boolean {
-  const r = root.replace(/\/+$/, "");
-  return r !== "" && (absPath === r || absPath.startsWith(`${r}/`));
+  if (root.replace(/[\\/]+$/, "") === "") return false;
+  return relative(root, absPath) !== null;
 }
 
 /** A minimal projection of a react-flow pipeline node's `data` — the only two

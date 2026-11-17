@@ -20,13 +20,14 @@ import { useSummaryHeadings } from "@/shared/hooks/use-summary-headings";
 import { isPipelineFileName } from "@/shared/lib/pipeline-graph/pipeline-file-filter";
 import { formatStoryDisplayTitle } from "@/shared/lib/pipeline-graph/story-display-title";
 import { useStoryDetails } from "@/shared/lib/pipeline-graph/use-story-details";
+import { basename } from "@/shared/lib/path";
 
 /**
  * A tab's label: a story file with a frontmatter `title:` reads "<id> — <title>" like its
  * card, nav row and HUD tile; anything else keeps its file name.
  */
 function TabTitle({ path, name }: { path: string; name: string }) {
-  const fileName = path.split("/").pop() ?? name;
+  const fileName = basename(path) || name;
   const isStory = isPipelineFileName(fileName);
   const headings = useSummaryHeadings();
   const { data } = useStoryDetails(isStory ? path : undefined, headings);
