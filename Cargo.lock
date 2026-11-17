@@ -963,6 +963,7 @@ dependencies = [
 name = "codesense-fs-core"
 version = "0.1.0"
 dependencies = [
+ "codesense-platform",
  "globset",
  "log",
  "notify",

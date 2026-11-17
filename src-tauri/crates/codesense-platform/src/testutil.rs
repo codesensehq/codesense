@@ -11,8 +11,8 @@ use std::path::Path;
 /// privilege; a file symlink otherwise, skipped where creating one needs
 /// Developer Mode or elevation. A target that does not exist is linked as a
 /// file.
-pub fn symlink_or_skip(target: &Path, link: &Path) -> bool {
-    sys::symlink_or_skip(target, link)
+pub fn symlink_or_skip(target: impl AsRef<Path>, link: impl AsRef<Path>) -> bool {
+    sys::symlink_or_skip(target.as_ref(), link.as_ref())
 }
 
 #[cfg(unix)]
