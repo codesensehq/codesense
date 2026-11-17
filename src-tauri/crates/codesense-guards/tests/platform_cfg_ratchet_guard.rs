@@ -256,25 +256,24 @@ struct Attr {
 impl Attr {
     /// The predicate of a `cfg(…)` attribute.
     fn cfg(&self) -> Option<&str> {
-        self.body.strip_prefix("cfg(")?.strip_suffix(')')
+        call(&self.body, "cfg")
     }
+}
 
-    /// Whether this is an OS-specific `cfg` or `cfg_attr` attribute.
-    fn names_os(&self) -> bool {
-        meta_names_os(&self.body)
-    }
+/// The arguments of `name(…)` in a squashed meta item.
+fn call<'a>(meta: &'a str, name: &str) -> Option<&'a str> {
+    meta.strip_prefix(name)?
+        .strip_prefix('(')?
+        .strip_suffix(')')
 }
 
 /// `cfg(<OS predicate>)`, or `cfg_attr(<predicate>, <attrs>)` whose predicate
 /// names an OS or whose attributes hold such a `cfg`/`cfg_attr`.
 fn meta_names_os(meta: &str) -> bool {
-    if let Some(predicate) = meta.strip_prefix("cfg(").and_then(|m| m.strip_suffix(')')) {
+    if let Some(predicate) = call(meta, "cfg") {
         return names_os(predicate);
     }
-    let Some(inner) = meta
-        .strip_prefix("cfg_attr(")
-        .and_then(|m| m.strip_suffix(')'))
-    else {
+    let Some(inner) = call(meta, "cfg_attr") else {
         return false;
     };
     let args = args(inner);
@@ -332,11 +331,7 @@ fn names_os(predicate: &str) -> bool {
 
 /// `test`, or `all(…)` with `test` among its arguments.
 fn is_test(predicate: &str) -> bool {
-    predicate == "test"
-        || predicate
-            .strip_prefix("all(")
-            .and_then(|rest| rest.strip_suffix(')'))
-            .is_some_and(|inner| args(inner).contains(&"test"))
+    predicate == "test" || call(predicate, "all").is_some_and(|inner| args(inner).contains(&"test"))
 }
 
 // ---------------------------------------------------------------------------
@@ -354,23 +349,27 @@ fn test_regions(b: &[u8]) -> Vec<(usize, usize)> {
             k += 1;
             continue;
         };
-        let joined = !attr.inner
-            && prev_end.is_some_and(|end: usize| {
-                b[end..attr.start]
-                    .iter()
-                    .all(|c: &u8| c.is_ascii_whitespace())
-            });
+        if attr.inner {
+            k = attr.end;
+            prev_end = None;
+            continue;
+        }
+        let joined = prev_end.is_some_and(|end: usize| {
+            b[end..attr.start]
+                .iter()
+                .all(|c: &u8| c.is_ascii_whitespace())
+        });
         if !joined {
             run_start = attr.start;
         }
-        if !attr.inner && attr.cfg().is_some_and(is_test) {
+        if attr.cfg().is_some_and(is_test) {
             let end = item_end(b, attr.end);
             regions.push((run_start, end));
             k = end;
             prev_end = None;
         } else {
             k = attr.end;
-            prev_end = (!attr.inner).then_some(attr.end);
+            prev_end = Some(attr.end);
         }
     }
     regions
@@ -408,7 +407,8 @@ fn item_end(b: &[u8], from: usize) -> usize {
 
 /// Whether the `<` at `at` opens generic arguments (`Vec<u8>`, `f::<T>`)
 /// rather than comparing (`a < b`, `a <= b`, `a << b`): it follows an
-/// identifier or `::` directly, and no space, `=` or `<` follows it.
+/// identifier or `::` directly, and no space, `=` or `<` follows it (rustfmt
+/// spaces every comparison).
 fn opens_generic(b: &[u8], at: usize) -> bool {
     let after_path = at > 0 && (is_ident(b[at - 1]) || b[at - 1] == b':');
     let next = b.get(at + 1).copied().unwrap_or(b' ');
@@ -429,7 +429,6 @@ fn test_only_file(b: &[u8]) -> bool {
     })
 }
 
-#[derive(Debug, PartialEq)]
 struct ModDecl {
     name: String,
     /// The `#[path = "…"]` value, if any.
@@ -506,7 +505,7 @@ fn literal_in(src: &str, b: &[u8], attr: &Attr) -> Option<String> {
     Some(src[open + 1..close].to_string())
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Default)]
 struct Counts {
     /// OS-specific sites.
     sites: usize,
@@ -519,7 +518,7 @@ fn count(b: &[u8]) -> Counts {
     let mut k = 0;
     while k < b.len() {
         if let Some(attr) = attr_at(b, k) {
-            if attr.names_os() {
+            if meta_names_os(&attr.body) {
                 counts.sites += 1;
                 counts.os_attrs += 1;
             }
@@ -531,24 +530,23 @@ fn count(b: &[u8]) -> Counts {
             continue;
         }
         let end = ident_end(b, k);
-        let open = skip_ws(b, skip_ws(b, end) + 1);
-        if &b[k..end] == b"cfg"
-            && b.get(skip_ws(b, end)) == Some(&b'!')
-            && b.get(open) == Some(&b'(')
-        {
-            let close = close_of(b, open);
-            if names_os(&squash(&b[open + 1..close])) {
-                counts.sites += 1;
-            }
-            k = close;
-            continue;
-        }
         let word = &b[k..end];
+        if word == b"cfg" && b.get(skip_ws(b, end)) == Some(&b'!') {
+            let open = skip_ws(b, skip_ws(b, end) + 1);
+            if b.get(open) == Some(&b'(') {
+                let close = close_of(b, open);
+                if names_os(&squash(&b[open + 1..close])) {
+                    counts.sites += 1;
+                }
+                k = close;
+                continue;
+            }
+        }
         if OS_CRATES.iter().any(|name| word == name.as_bytes()) && path_sep(b, end).is_some() {
             counts.sites += 1;
         } else if word == b"std" {
             if let Some(next) = path_sep(b, end) {
-                counts.sites += std_os_paths(b, next, "std").0;
+                counts.sites += std_os_paths(b, next, b"std").0;
             }
         }
         k = end;
@@ -566,7 +564,7 @@ fn path_sep(b: &[u8], at: usize) -> Option<usize> {
 /// whose parent segment is `parent`: `std::os::unix::net::UnixStream`,
 /// `std::{io, os::unix::fs::PermissionsExt}`, `std::os::{fd, unix::io}`. One
 /// per segment; returns the count and where the tree ends.
-fn std_os_paths(b: &[u8], at: usize, parent: &str) -> (usize, usize) {
+fn std_os_paths(b: &[u8], at: usize, parent: &[u8]) -> (usize, usize) {
     let mut k = skip_ws(b, at);
     match b.get(k).copied() {
         Some(b'{') => {
@@ -591,10 +589,12 @@ fn std_os_paths(b: &[u8], at: usize, parent: &str) -> (usize, usize) {
         }
         Some(c) if is_ident(c) => {
             let end = ident_end(b, k);
-            let segment = String::from_utf8_lossy(&b[k..end]).into_owned();
-            let hit = usize::from(parent == "os" && STD_OS_MODULES.contains(&segment.as_str()));
+            let segment = &b[k..end];
+            let hit = usize::from(
+                parent == b"os" && STD_OS_MODULES.iter().any(|m| segment == m.as_bytes()),
+            );
             if let Some(next) = path_sep(b, end).filter(|&n| b.get(n) != Some(&b'<')) {
-                let (n, after) = std_os_paths(b, next, &segment);
+                let (n, after) = std_os_paths(b, next, segment);
                 return (hit + n, after);
             }
             // `unix as u` in a use tree.
@@ -612,11 +612,10 @@ fn std_os_paths(b: &[u8], at: usize, parent: &str) -> (usize, usize) {
 struct Parsed {
     /// Every OS attribute and site, test code included.
     all: Counts,
-    /// What remains once the test-gated items are blanked.
+    /// What remains once the test-gated items are blanked (nothing for a
+    /// file `#![cfg(test)]` gates as a whole).
     kept: Counts,
     mods: Vec<ModDecl>,
-    /// `#![cfg(test)]` gates the whole file.
-    test_only: bool,
 }
 
 fn parse(src: &str) -> Parsed {
@@ -628,20 +627,19 @@ fn parse(src: &str) -> Parsed {
     for decl in &mut mods {
         decl.test = test_only || regions.iter().any(|&(s, e)| s <= decl.at && decl.at < e);
     }
-    let mut kept = b.to_vec();
-    for &(start, end) in &regions {
-        blank(&mut kept[start..end]);
-    }
-    Parsed {
-        all: count(b),
-        kept: if test_only {
-            Counts::default()
-        } else {
-            count(&kept)
-        },
-        mods,
-        test_only,
-    }
+    let all = count(b);
+    let kept = if test_only {
+        Counts::default()
+    } else if regions.is_empty() {
+        all
+    } else {
+        let mut kept = b.to_vec();
+        for &(start, end) in &regions {
+            blank(&mut kept[start..end]);
+        }
+        count(&kept)
+    };
+    Parsed { all, kept, mods }
 }
 
 // ---------------------------------------------------------------------------
@@ -650,7 +648,7 @@ fn parse(src: &str) -> Parsed {
 /// What one tree holds: per file (app-root-relative label), its non-test
 /// sites (files with none are left out) and, per crate, the OS-gated
 /// attributes in its test code.
-#[derive(Debug, Default, PartialEq)]
+#[derive(Default)]
 struct Scan {
     sites: BTreeMap<String, usize>,
     test_gates: BTreeMap<String, usize>,
@@ -678,7 +676,7 @@ fn scan(root: &Path) -> Scan {
     let mut out = Scan::default();
     for (file, file_parsed) in &parsed {
         let reached = |test: bool| seen.contains(&(file.clone(), test));
-        let test_only = file_parsed.test_only || (reached(true) && !reached(false));
+        let test_only = reached(true) && !reached(false);
         let label = label(root, file);
         let kept = if test_only {
             Counts::default()
@@ -768,8 +766,11 @@ fn walk(
                     base
                 };
                 let child = clean(&from.join(rel));
-                let child_dir = child.parent().expect("a module file has a directory");
-                (child.clone(), child_dir.to_path_buf())
+                let child_dir = child
+                    .parent()
+                    .expect("a module file has a directory")
+                    .to_path_buf();
+                (child, child_dir)
             }
             None => {
                 let flat = base.join(format!("{}.rs", decl.name));
@@ -1182,9 +1183,11 @@ fn test_items_are_skipped_by_brace_matching() {
         "the whole attribute run and `use` are test code"
     );
 
-    let file = parse("//! Tests.\n#![cfg(test)]\nuse std::os::unix::fs::PermissionsExt;\n#[cfg(unix)]\nfn t() {}\n");
-    assert!(file.test_only);
+    let file_src = "//! Tests.\n#![cfg(test)]\nuse std::os::unix::fs::PermissionsExt;\n#[cfg(unix)]\nfn t() {}\n";
+    assert!(test_only_file(strip(file_src).as_bytes()));
+    let file = parse(file_src);
     assert_eq!(file.kept.sites, 0);
+    assert_eq!(file.all.os_attrs, 1, "its OS gates are test items");
 
     let inner = parse("#![cfg(unix)]\n#[cfg(test)]\nmod t {}\n");
     assert_eq!(
@@ -1243,9 +1246,7 @@ fn mod_declarations_carry_path_inline_and_test() {
 // The guard on fixture trees, through `CODESENSE_GUARD_ROOT`.
 
 fn fixture(case: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/platform_cfg")
-        .join(case)
+    guard_support::resolve(&format!("tests/fixtures/platform_cfg/{case}"))
 }
 
 /// Run the guard's own check in a child test process with
