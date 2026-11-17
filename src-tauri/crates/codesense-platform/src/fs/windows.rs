@@ -6,7 +6,8 @@
 use std::ffi::c_void;
 use std::fs::{File, OpenOptions};
 use std::io;
-use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+use std::os::windows::fs::OpenOptionsExt;
+use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 use std::time::Duration;
 
@@ -15,7 +16,7 @@ use windows_sys::Win32::Foundation::{
     ERROR_SHARING_VIOLATION, ERROR_SUCCESS,
 };
 use windows_sys::Win32::Security::Authorization::{
-    GetNamedSecurityInfoW, SetNamedSecurityInfoW, SE_FILE_OBJECT,
+    GetSecurityInfo, SetNamedSecurityInfoW, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
     AddAccessAllowedAceEx, EqualSid, GetAce, GetLengthSid, InitializeAcl, ACCESS_ALLOWED_ACE,
@@ -23,7 +24,7 @@ use windows_sys::Win32::Security::{
     OBJECT_INHERIT_ACE, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    FILE_ALL_ACCESS, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
+    FILE_ALL_ACCESS, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
     FILE_SHARE_READ, FILE_SHARE_WRITE,
 };
 
@@ -84,15 +85,15 @@ pub(super) fn set_owner_only(path: &Path, is_dir: bool) -> io::Result<()> {
     Ok(())
 }
 
-pub(super) fn is_owner_only(path: &Path) -> io::Result<bool> {
+pub(super) fn is_owner_only(file: &File) -> io::Result<bool> {
     let user = CurrentUser::read()?;
-    let path = wide(path);
     let mut dacl: *mut ACL = std::ptr::null_mut();
     let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
-    // SAFETY: `path` is NUL-terminated; the out pointers are writable.
+    // SAFETY: the file's handle is open (read access includes READ_CONTROL);
+    // the out pointers are writable.
     let status = unsafe {
-        GetNamedSecurityInfoW(
-            path.as_ptr(),
+        GetSecurityInfo(
+            file.as_raw_handle(),
             SE_FILE_OBJECT,
             DACL_SECURITY_INFORMATION,
             std::ptr::null_mut(),
@@ -145,10 +146,12 @@ unsafe fn grants_only(dacl: *const ACL, sid: PSID) -> bool {
 
 pub(super) fn open_nofollow(options: &mut OpenOptions, path: &Path) -> io::Result<File> {
     let file = options
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
         .open(path)?;
-    if file.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+    // Only name surrogates (symlinks, junctions) are links; other reparse
+    // points (cloud placeholders, deduplicated files) open as files.
+    if file.metadata()?.file_type().is_symlink() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("{} is a link", path.display()),
@@ -162,7 +165,7 @@ pub(super) fn replace(from: &Path, to: &Path) -> Result<(), ReplaceError> {
     for attempt in 1..=REPLACE_ATTEMPTS {
         match std::fs::rename(from, to) {
             Ok(()) => return Ok(()),
-            Err(error) if is_busy(&error) => {
+            Err(error) if is_busy(&error, to) => {
                 if attempt < REPLACE_ATTEMPTS {
                     std::thread::sleep(delay);
                     delay *= 2;
@@ -175,12 +178,14 @@ pub(super) fn replace(from: &Path, to: &Path) -> Result<(), ReplaceError> {
 }
 
 /// A handle elsewhere blocks the replace: a sharing or lock violation, or
-/// the access denied Windows reports for a file still open for deletion.
-fn is_busy(error: &io::Error) -> bool {
-    matches!(
-        error.raw_os_error().map(|code| code as u32),
-        Some(ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION | ERROR_ACCESS_DENIED)
-    )
+/// the access denied Windows reports for a file another handle holds. Access
+/// denied on a directory target is a plain error: no handle frees it.
+fn is_busy(error: &io::Error, to: &Path) -> bool {
+    match error.raw_os_error().map(|code| code as u32) {
+        Some(ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION) => true,
+        Some(ERROR_ACCESS_DENIED) => !to.is_dir(),
+        _ => false,
+    }
 }
 
 pub(super) fn lock_exclusive(file: &File) -> io::Result<()> {
@@ -203,7 +208,10 @@ pub(super) fn link_or_copy(target: &Path, link: &Path) -> io::Result<Linked> {
     match std::os::windows::fs::symlink_file(target, link) {
         Ok(()) => Ok(Linked::Symlink),
         Err(error) if error.raw_os_error() == Some(ERROR_PRIVILEGE_NOT_HELD as i32) => {
-            std::fs::copy(target, link)?;
+            // A relative target is read from the link's directory, as the
+            // symlink would have resolved it, never from the working directory.
+            let source = link.parent().unwrap_or(Path::new("")).join(target);
+            std::fs::copy(source, link)?;
             Ok(Linked::Copy)
         }
         Err(error) => Err(error),

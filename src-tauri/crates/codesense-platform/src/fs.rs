@@ -19,8 +19,9 @@ use self::windows as sys;
 
 /// Make `path` readable and writable by this user only: mode 0600 for a file
 /// and 0700 for a directory on unix; on Windows a protected DACL granting
-/// only the current user (inherited by a directory's new entries). A link is
-/// refused and left unchanged: its target is not ours to change.
+/// only the current user (inherited by a directory's new entries). A link,
+/// to a file or a directory, is refused and left unchanged: its target is not
+/// ours to change.
 pub fn set_owner_only(path: &Path) -> io::Result<()> {
     let metadata = std::fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() {
@@ -29,18 +30,20 @@ pub fn set_owner_only(path: &Path) -> io::Result<()> {
     sys::set_owner_only(path, metadata.is_dir())
 }
 
-/// Whether only this user may use `path`: on unix, owned by the effective
-/// uid with no group or other permission bits; on Windows, every ACE that
-/// grants access names the current user.
-pub fn is_owner_only(path: &Path) -> io::Result<bool> {
-    sys::is_owner_only(path)
+/// Whether only this user may use the open `file` (open it with
+/// [`open_nofollow`], so a link is never followed): on unix, owned by the
+/// effective uid with no group or other permission bits; on Windows, every
+/// ACE that grants access names the current user.
+pub fn is_owner_only(file: &File) -> io::Result<bool> {
+    sys::is_owner_only(file)
 }
 
 /// Open `path` with `options`, refusing it when it is a link: `O_NOFOLLOW`
 /// (with `O_CLOEXEC`) on unix; on Windows the link itself is opened and a
-/// reparse point (symlink or junction) is refused. On Windows the file is
-/// shared for read, write and delete, so [`atomic_replace`] can replace it
-/// while it is open.
+/// symlink or junction is refused (other reparse points, such as cloud
+/// placeholders, open). A directory opens for reading on every OS. On
+/// Windows the file is shared for read, write and delete, so
+/// [`atomic_replace`] can replace it while it is open.
 pub fn open_nofollow(options: &mut OpenOptions, path: &Path) -> io::Result<File> {
     sys::open_nofollow(options, path)
 }
@@ -105,11 +108,11 @@ fn tmp_sibling(path: &Path, nonce: u64) -> PathBuf {
 /// the same path never shares the temp, so every rename publishes a complete
 /// file. A failure removes the temp and leaves `path` as it was.
 ///
-/// On Windows the rename is std's, which replaces with POSIX semantics where
-/// the file system has them (a reader opened through [`open_nofollow`] keeps
-/// the old bytes) and falls back to `MoveFileExW(MOVEFILE_REPLACE_EXISTING)`.
-/// A sharing violation is retried a few times, then reported as
-/// [`ReplaceError::Busy`].
+/// On Windows the rename is std's: `MoveFileExW(MOVEFILE_REPLACE_EXISTING)`,
+/// and when that is denied because the target is open, a rename with POSIX
+/// semantics, so a reader opened through [`open_nofollow`] keeps the old
+/// bytes. A sharing violation, or access denied on a file, is retried a few
+/// times, then reported as [`ReplaceError::Busy`].
 pub fn atomic_replace(path: &Path, bytes: &[u8]) -> Result<(), ReplaceError> {
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -160,7 +163,8 @@ pub enum Linked {
 }
 
 /// Make `link` a symlink to the file `target`, or on Windows, when the
-/// account may not create symlinks, a copy of it.
+/// account may not create symlinks, a copy of it. A relative `target` is
+/// taken from `link`'s directory, as a symlink resolves it.
 pub fn link_or_copy(target: &Path, link: &Path) -> io::Result<Linked> {
     sys::link_or_copy(target, link)
 }
@@ -251,7 +255,10 @@ mod tests {
         let path = dir.path().join("occupied");
         std::fs::create_dir(&path).unwrap();
         std::fs::write(path.join("guard"), b"").unwrap();
-        assert!(atomic_replace(&path, b"payload").is_err());
+        assert!(matches!(
+            atomic_replace(&path, b"payload"),
+            Err(ReplaceError::Io(_))
+        ));
         let strays = std::fs::read_dir(dir.path())
             .unwrap()
             .filter_map(Result::ok)

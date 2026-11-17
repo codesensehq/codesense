@@ -14,9 +14,9 @@ pub(super) fn set_owner_only(path: &Path, is_dir: bool) -> io::Result<()> {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
 }
 
-pub(super) fn is_owner_only(path: &Path) -> io::Result<bool> {
+pub(super) fn is_owner_only(file: &File) -> io::Result<bool> {
     use std::os::unix::fs::MetadataExt;
-    let meta = std::fs::metadata(path)?;
+    let meta = file.metadata()?;
     // SAFETY: geteuid has no preconditions.
     Ok(meta.uid() == unsafe { libc::geteuid() } && meta.mode() & 0o077 == 0)
 }

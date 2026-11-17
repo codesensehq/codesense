@@ -15,6 +15,7 @@ use codesense_platform::fs::{
     portable_name, set_owner_only, try_lock_exclusive, Linked, NonPortableName,
 };
 use codesense_platform::process::{is_alive, kill_hard, terminate, Pid, ProcessTree};
+use codesense_platform::testutil::symlink_or_skip;
 use codesense_platform::user::current_user;
 
 fn fixture(args: &[&str]) -> Command {
@@ -122,9 +123,14 @@ fn set_owner_only_denies_others() {
     std::fs::write(&file, "secret").unwrap();
     let private = dir.path().join("private");
     std::fs::create_dir(&private).unwrap();
+    let owner_only = |path: &Path| {
+        let opened = open_nofollow(OpenOptions::new().read(true), path).unwrap();
+        is_owner_only(&opened).unwrap()
+    };
     for path in [&file, &private] {
+        assert!(!owner_only(path), "shared before: {}", path.display());
         set_owner_only(path).unwrap();
-        assert!(is_owner_only(path).unwrap(), "{}", path.display());
+        assert!(owner_only(path), "{}", path.display());
         expect_owner_only_mode(path);
     }
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "secret");
@@ -216,6 +222,28 @@ fn open_nofollow_refuses_links() {
 }
 
 #[test]
+fn open_nofollow_refuses_a_directory_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("target");
+    std::fs::create_dir(&target).unwrap();
+    let link = dir.path().join("link");
+    if !symlink_or_skip(&target, &link) {
+        return;
+    }
+    assert!(open_nofollow(OpenOptions::new().read(true), &target).is_ok());
+    assert!(open_nofollow(OpenOptions::new().read(true), &link).is_err());
+}
+
+#[test]
+fn link_or_copy_takes_a_relative_target_from_the_link() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("target"), "beside the link").unwrap();
+    let link = dir.path().join("link");
+    link_or_copy(Path::new("target"), &link).unwrap();
+    assert_eq!(std::fs::read(&link).unwrap(), b"beside the link");
+}
+
+#[test]
 fn link_or_copy_yields_same_bytes() {
     let dir = tempfile::tempdir().unwrap();
     let target = dir.path().join("target");
@@ -239,6 +267,23 @@ fn canonicalize_has_no_verbatim_prefix() {
     );
     assert_eq!(std::fs::read_to_string(&canonical).unwrap(), "a");
     expect_canonical(&file, &canonical);
+}
+
+#[test]
+fn canonicalize_keeps_a_unc_path_unc() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("a.txt");
+    std::fs::write(&file, "a").unwrap();
+    let Some(unc) = expect_unc_form(&file) else {
+        return;
+    };
+    let canonical = canonicalize(&unc).unwrap();
+    let text = canonical.to_string_lossy();
+    assert!(
+        text.starts_with(r"\\") && !text.starts_with(r"\\?\"),
+        "{text}"
+    );
+    assert_eq!(std::fs::read_to_string(&canonical).unwrap(), "a");
 }
 
 #[test]
@@ -380,6 +425,24 @@ fn expect_replace_past_foreign_handle(
 fn expect_linked(linked: Linked) {
     if cfg!(unix) {
         assert_eq!(linked, Linked::Symlink);
+    }
+}
+
+/// The UNC form of the local `path` (`\\localhost\C$\…`), where this host
+/// serves its administrative share; `None` (and the test skips) elsewhere.
+/// Unix has no UNC paths.
+fn expect_unc_form(path: &Path) -> Option<PathBuf> {
+    if cfg!(unix) {
+        return None;
+    }
+    let text = path.to_str()?;
+    let (drive, rest) = text.split_once(':')?;
+    let unc = PathBuf::from(format!(r"\\localhost\{drive}${rest}"));
+    if unc.exists() {
+        Some(unc)
+    } else {
+        eprintln!("skipped: {} is not reachable", unc.display());
+        None
     }
 }
 
