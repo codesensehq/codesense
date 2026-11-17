@@ -23,8 +23,8 @@ export async function pasteFromClipboard(target: { paste(data: string): void }):
 
 /**
  * Write the terminal's selection to the clipboard. Nothing is written for an empty selection,
- * so a repaint that dropped it cannot clobber the clipboard; a missing Clipboard API or a
- * refused write is a logged no-op.
+ * so a repaint that dropped it cannot clobber the clipboard. A missing Clipboard API is a
+ * silent no-op; a refused write is logged.
  */
 export async function copySelectionToClipboard(target: { getSelection(): string }): Promise<void> {
   const selection = target.getSelection();
