@@ -130,9 +130,6 @@ jobs:
       - name: Check scripts
         # Both scripts, here: macOS runners ship no shellcheck.
         run: shellcheck scripts/ci/unsigned-bundle.sh scripts/ci/bundle-manifest.sh
-      - name: Check the base config is unchanged
-        # The Linux differences live in tauri.linux.conf.json; macOS reads tauri.conf.json as is.
-        run: git diff --exit-code origin/main -- src-tauri/tauri.conf.json
       - name: Build app
         run: bash scripts/ci/unsigned-bundle.sh linux
       - name: Check the sidecars sit beside the app

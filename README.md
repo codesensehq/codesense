@@ -75,7 +75,8 @@ A maintainer can build a test app from `main` without a local build: run the
 `gh workflow run test-build.yml --repo codesensehq/codesense --ref main -f platform=macos`
 (`platform=linux` for the Linux build; the default, `all`, builds every platform
 the workflow has). A build takes about an hour. When it finishes, the run page
-has its artifacts, kept for 7 days.
+has its artifacts, kept for 7 days. There is no Windows build yet: `platform=windows`
+runs nothing.
 
 ### macOS
 
@@ -100,9 +101,11 @@ sudo dnf install ./CodeSense-*.rpm        # Fedora
 chmod +x CodeSense_*.AppImage && ./CodeSense_*.AppImage
 ```
 
-Two features are off on Linux for now: git-ai attribution and the bundled
-starship prompt. The terminal, the editor and the rest of the app work without
-them.
+If the AppImage will not start for want of FUSE, install it (`sudo apt install libfuse2`,
+or `libfuse2t64` on Ubuntu 24.04) or run it with `--appimage-extract-and-run`.
+
+Some things are off on Linux for now: git-ai attribution, the bundled starship
+prompt, and keeping saved secrets (SSH passphrases and the like) between runs.
 
 Every test build is a source build like the one above: the `internal` channel,
 no update checks and no dashboard publishing.

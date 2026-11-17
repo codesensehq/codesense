@@ -9,12 +9,11 @@
 # no sha256 (their signature and build paths differ per build); every other file does.
 # A symlink lists its target. Info.plist follows, converted to canonical XML.
 #
-# Fields expected to differ between two builds of the same source:
-#   - the size of every Mach-O file, and Contents/_CodeSignature/CodeResources (it holds the
-#     hashes of those files);
-#   - the Info.plist keys that name the build (the build machine, SDK and Xcode build
-#     numbers), which only change when the runner image does.
-# Everything else (the file list, modes, sizes and hashes of resources) must match.
+# The one field expected to differ between two builds of the same source is the sha256 of
+# Contents/_CodeSignature/CodeResources, which holds the hashes of the signed Mach-O files.
+# Everything else (the file list, modes, sizes, resource hashes and Info.plist) must match.
+# A Mach-O file is compared by size only, so a change that keeps its size shows up in
+# CodeResources alone.
 #
 # Runs on macOS: bash 3.2 and BSD tools.
 set -euo pipefail

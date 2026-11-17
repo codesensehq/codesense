@@ -2714,13 +2714,12 @@ mod shell_tests {
             &other_resources(&base),
             "every other resource is untouched"
         );
+        let mut external_bin = base["bundle"]["externalBin"].as_array().unwrap().clone();
+        external_bin.push(serde_json::json!("binaries/codesense-emulator"));
         assert_eq!(
             merged["bundle"]["externalBin"],
-            serde_json::json!([
-                "binaries/codesense-bridge",
-                "binaries/codesense-session-server",
-                "binaries/codesense-emulator"
-            ])
+            serde_json::Value::Array(external_bin),
+            "the base sidecars plus the emulator worker"
         );
     }
 }

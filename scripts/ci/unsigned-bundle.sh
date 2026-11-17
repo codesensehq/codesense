@@ -5,11 +5,15 @@
 # Usage: bash scripts/ci/unsigned-bundle.sh <macos|linux>
 #
 # Both platforms build the two sidecars, then run `tauri build` with
-# src-tauri/tauri.unsigned.conf.json (no updater artifacts and no secrets), and collect the
-# bundles into $RUNNER_TEMP. The platform branch holds what differs: macOS fetches git-ai,
-# signs ad hoc (Apple silicon needs a signature to launch the app) and zips the app; Linux
-# builds the deb, rpm and AppImage. `pnpm exec tauri` runs the CLI directly: the `tauri`
-# script in package.json is POSIX shell and does not run on a Windows runner.
+# src-tauri/tauri.unsigned.conf.json (no updater artifacts and no secrets). The platform
+# branch holds what differs:
+#   - macOS fetches git-ai, signs ad hoc (Apple silicon needs a signature to launch the app),
+#     builds the app and dmg, and zips the app to $RUNNER_TEMP/CodeSense.app.zip. The dmg
+#     stays in target/release/bundle/dmg.
+#   - Linux builds the deb, rpm and AppImage, and checks that each of them is exactly one
+#     file under target/release/bundle.
+# `pnpm exec tauri` runs the CLI directly: the `tauri` script in package.json is POSIX shell
+# and does not run on a Windows runner.
 set -euo pipefail
 
 usage() {
