@@ -9,9 +9,10 @@ import { useViewerStore } from "@/shared/stores/viewer-store";
 
 // Stub the CM6 editor to a controlled textarea so the wrapper's read / guard /
 // read-only wiring is the subject under test. CM internals live in the
-// code-editor suites. The handle exposes `scrollEl`, standing in for CM's scroller.
+// code-editor suites. The handle exposes `getScrollElement()`, returning `scroll.el` (CM's scroller).
 // `withhold` holds the handle back until `release()` runs, like CM's lazy chunk
 // landing after the file read.
+type ScrollHandle = { getScrollElement: () => HTMLElement | null };
 const scroll = vi.hoisted(() => ({
   el: null as HTMLElement | null,
   withhold: false,
@@ -35,7 +36,7 @@ vi.mock("@/shared/components/code-editor", async (importOriginal) => {
         ariaLabel?: string;
         language?: string;
       },
-      ref: React.Ref<{ getScrollElement: () => HTMLElement | null }>,
+      ref: React.Ref<ScrollHandle | null>,
     ) {
       const [handleReady, setHandleReady] = useState(!scroll.withhold);
       useEffect(() => {
@@ -44,9 +45,9 @@ vi.mock("@/shared/components/code-editor", async (importOriginal) => {
           scroll.release = null;
         };
       }, []);
-      useImperativeHandle(
+      useImperativeHandle<ScrollHandle | null, ScrollHandle | null>(
         ref,
-        () => (handleReady ? { getScrollElement: () => scroll.el } : null) as never,
+        () => (handleReady ? { getScrollElement: () => scroll.el } : null),
         [handleReady],
       );
       return (
