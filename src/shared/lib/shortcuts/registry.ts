@@ -1371,6 +1371,8 @@ export interface ResolvedBinding {
 let resolvedCache: {
   shortcuts: Record<string, string>;
   actions: readonly ShortcutAction[];
+  /** The terminal chords depend on the platform, which tests flip. */
+  mac: boolean;
   bindings: Map<string, ResolvedBinding>;
 } | null = null;
 
@@ -1382,21 +1384,25 @@ let resolvedCache: {
  */
 export function resolveBindings(shortcuts: Record<string, string>): Map<string, ResolvedBinding> {
   const actions = allShortcutActions();
-  if (resolvedCache?.shortcuts === shortcuts && resolvedCache.actions === actions)
+  const mac = isMac();
+  if (
+    resolvedCache?.shortcuts === shortcuts &&
+    resolvedCache.actions === actions &&
+    resolvedCache.mac === mac
+  )
     return resolvedCache.bindings;
-  const bindings = new Map<string, ResolvedBinding>();
+  const drafts = new Map<string, Omit<ResolvedBinding, "terminalKeystroke">>();
   const owners = new Map<string, string>();
   const bind = (id: string, keystroke: string) => {
-    bindings.set(id, { keystroke, terminalKeystroke: keystroke });
+    drafts.set(id, { keystroke });
     if (!owners.has(keystroke)) owners.set(keystroke, id);
   };
   const defaults: ShortcutAction[] = [];
   for (const action of actions) {
     const override = shortcuts[action.id];
     if (override === "")
-      bindings.set(action.id, {
+      drafts.set(action.id, {
         keystroke: "",
-        terminalKeystroke: "",
         unbound: { kind: "cleared" },
       });
     else if (override !== undefined) bind(action.id, override);
@@ -1408,30 +1414,28 @@ export function resolveBindings(shortcuts: Record<string, string>): Map<string, 
     const reserved = wanted ? isReservedForDashboardCommand(wanted) : null;
     const winner = owners.get(wanted);
     if (!wanted)
-      bindings.set(action.id, {
+      drafts.set(action.id, {
         keystroke: "",
-        terminalKeystroke: "",
         unbound: { kind: "none" },
       });
     else if (reserved)
-      bindings.set(action.id, {
+      drafts.set(action.id, {
         keystroke: "",
-        terminalKeystroke: "",
         unbound: { kind: "reserved", wanted, message: reserved.message },
       });
     else if (winner)
-      bindings.set(action.id, {
+      drafts.set(action.id, {
         keystroke: "",
-        terminalKeystroke: "",
         unbound: { kind: "conflict", wanted, winner },
       });
     else bind(action.id, wanted);
   }
-  const keystrokes = [...bindings.values()].map((b) => b.keystroke).filter(Boolean);
-  for (const binding of bindings.values()) {
-    binding.terminalKeystroke = terminalChord(binding.keystroke, keystrokes);
+  const keystrokes = [...drafts.values()].map((d) => d.keystroke).filter(Boolean);
+  const bindings = new Map<string, ResolvedBinding>();
+  for (const [id, draft] of drafts) {
+    bindings.set(id, { ...draft, terminalKeystroke: terminalChord(draft.keystroke, keystrokes) });
   }
-  resolvedCache = { shortcuts, actions, bindings };
+  resolvedCache = { shortcuts, actions, mac, bindings };
   return bindings;
 }
 
