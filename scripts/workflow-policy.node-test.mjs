@@ -574,6 +574,23 @@ for (const [name, fixture, error] of [
     /GitHub-hosted/,
   ],
   ["runner expression", good.replace("ubuntu-24.04", "${{ vars.RUNNER }}"), /GitHub-hosted/],
+  ...[
+    ["a self-hosted matrix entry", "include:\n          - runner: self-hosted"],
+    ["an unknown matrix label", "include:\n          - runner: ubuntu-build"],
+    ["a matrix entry without a runner", "include:\n          - arch: arm64"],
+    ["an empty matrix include", "include: []"],
+    [
+      "a matrix base axis",
+      "runner: [self-hosted]\n        include:\n          - runner: ubuntu-24.04",
+    ],
+  ].map(([name, matrix]) => [
+    name,
+    good.replace(
+      "runs-on: ubuntu-24.04",
+      `runs-on: \${{ matrix.runner }}\n    strategy:\n      matrix:\n        ${matrix}`,
+    ),
+    /GitHub-hosted/,
+  ]),
   ["unpinned container", good + "    container: ubuntu:24.04\n", /container image/],
   [
     "unpinned service",

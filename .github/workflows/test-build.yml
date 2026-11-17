@@ -91,7 +91,7 @@ jobs:
     name: Unsigned Linux app (${{ matrix.arch }})
     if: inputs.platform == 'all' || inputs.platform == 'linux'
     # One definition for both architectures; each leg builds natively. x86_64 runs on the
-    # oldest hosted Ubuntu so the bundle links an older glibc; the arm64 runner image starts at
+    # oldest hosted Ubuntu so the bundle links an older glibc; the arm64 leg runs on
     # 24.04, so that build needs Ubuntu 24.04 or newer.
     strategy:
       fail-fast: false

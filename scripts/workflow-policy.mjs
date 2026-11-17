@@ -6,11 +6,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 // A job may take its runner from its matrix: `runs-on: ${{ matrix.runner }}` stands for the
-// `runner` of every `include` entry, each a literal label the caller checks. Null otherwise.
+// `runner` of every `include` entry, each a literal label the caller checks. Null unless the
+// matrix is only an `include` list: a base axis (`runner: [self-hosted]`) would add legs too.
 const matrixRunners = (job) => {
   const match = /^\$\{\{\s*matrix\.(\w+)\s*\}\}$/.exec(job?.["runs-on"] ?? "");
-  const include = job?.strategy?.matrix?.include;
-  return match && Array.isArray(include) ? include.map((entry) => entry?.[match[1]]) : null;
+  const matrix = job?.strategy?.matrix;
+  if (!match || Object.keys(matrix ?? {}).join() !== "include") return null;
+  return Array.isArray(matrix.include) ? matrix.include.map((entry) => entry?.[match[1]]) : null;
 };
 
 const HOSTED_RUNNERS = new Set([
@@ -36,8 +38,8 @@ const COMMIT_EMAILS = {
   triggers: ["push", "schedule", "workflow_dispatch"],
 };
 // The test build is dispatched by hand: its `platform` input picks which job runs, and each
-// job names the platform it builds. Its Linux job runs on the oldest hosted Linux runner, so
-// the bundle links an older glibc; its arm64 leg runs on the hosted arm64 runner.
+// job names the platform it builds. Its x86_64 leg runs on the oldest hosted Linux runner, so
+// the bundle links an older glibc; the arm64 leg runs on ubuntu-24.04-arm, so 24.04 is its floor.
 const TEST_BUILD = {
   file: "test-build.yml",
   platforms: ["all", "macos", "windows", "linux"],
@@ -219,15 +221,15 @@ export function workflowPolicy(text, file = "") {
       errors.push(`${name}: job must be a mapping`);
       continue;
     }
+    const fromMatrix = matrixRunners(job);
     const runners =
-      matrixRunners(job) ?? (Array.isArray(job["runs-on"]) ? job["runs-on"] : [job["runs-on"]]);
-    const literal = matrixRunners(job) !== null;
+      fromMatrix ?? (Array.isArray(job["runs-on"]) ? job["runs-on"] : [job["runs-on"]]);
     if (
-      (!literal && runners.length !== 1) ||
+      (!fromMatrix && runners.length !== 1) ||
       runners.length === 0 ||
       !runners.every((runner) => typeof runner === "string" && HOSTED_RUNNERS.has(runner))
     )
-      errors.push(`${name}: runs-on must name a GitHub-hosted runner without expressions`);
+      errors.push(`${name}: runs-on must name a GitHub-hosted runner, or a matrix of them`);
     const checkImage = (container, label) => {
       const image = mapping(container) ? container.image : container;
       if (typeof image !== "string" || !/^[^\s@]+@sha256:[0-9a-f]{64}$/.test(image))
