@@ -11,6 +11,7 @@ import {
   useAgentInboxRailStore,
 } from "@/features/viewer/stores/agent-inbox-rail-store";
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
+import { useManagedSessionStore } from "@/shared/stores/use-managed-session-store";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { usePrefsStore } from "@/features/dashboard/lib/prefs-client";
 import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
@@ -860,14 +861,97 @@ describe("ChatOverlay", () => {
     expect(sends[0]!.to).toBe(read.dto.handle);
   });
 
-  it("Terminal hands the tab back to the terminal, and names the key that brings the chat back", async () => {
+  it("has no Terminal button: the caption's switch is the way back, and Full view stays", async () => {
     act(() => openAgentInboxRail(SESSION));
     await renderOverlay(600, 300);
-    const terminal = screen.getByRole("button", { name: "Terminal" });
-    expect(terminal.getAttribute("title")).toMatch(/⌘I|Ctrl\+I/);
+    expect(screen.queryByRole("button", { name: "Terminal" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Full view" })).toBeInTheDocument();
+  });
+
+  it("Escape in the composer leaves the box and does not flip to the CLI", async () => {
+    act(() => openAgentInboxRail(SESSION));
+    await renderOverlay(600, 300);
+    const box = composerBox();
+    box.focus();
+    fireEvent.keyDown(box, { key: "Escape" });
     expect(useAgentInboxRailStore.getState().bySession[SESSION]).toBeDefined();
-    fireEvent.click(terminal);
-    expect(useAgentInboxRailStore.getState().bySession[SESSION]).toBeUndefined();
+  });
+
+  describe("the CLI needs you while the chat covers it", () => {
+    const line = () => screen.queryByTestId("chat-overlay-needs");
+    const askUser = () =>
+      act(() =>
+        useManagedSessionStore.setState({
+          pendingAsks: { q1: { correlationId: "c1", sessionId: SESSION, question: "Ship it?" } },
+        }),
+      );
+    const activity = (revision: number, waiting: boolean) =>
+      act(() =>
+        useAgentStateStore.getState().recordActivity(
+          {
+            session: SESSION,
+            identity: { hostBootId: "h", sessionIncarnation: "s", invocationId: "i" },
+            revision,
+            turnGeneration: 1,
+            provider: "claude",
+            state: waiting ? "needs-permission" : "working",
+            ...(waiting ? { reason: "question" as const } : {}),
+            observed: true,
+            limited: false,
+            exit: null,
+            asks: [],
+          },
+          0,
+        ),
+      );
+    const cliQuestion = () => activity(1, true);
+
+    it.each(["permission", "startup"] as const)(
+      "a %s shows one chrome line with Show CLI, which flips to the CLI",
+      async (kind) => {
+        act(() => openAgentInboxRail(SESSION));
+        roster({ needsYouKind: kind });
+        await renderOverlay(600, 300);
+        const needs = await screen.findByTestId("chat-overlay-needs");
+        expect(needs).toHaveTextContent("Input needed");
+        expect(screen.getAllByTestId("chat-overlay-needs")).toHaveLength(1);
+        fireEvent.click(within(needs).getByRole("button", { name: "Show CLI" }));
+        expect(useAgentInboxRailStore.getState().bySession[SESSION]).toBeUndefined();
+      },
+    );
+
+    it("a CLI question shows it, and the line clears when the CLI no longer waits", async () => {
+      act(() => openAgentInboxRail(SESSION));
+      await renderOverlay(600, 300);
+      expect(line()).toBeNull();
+      cliQuestion();
+      await waitFor(() => expect(line()).not.toBeNull());
+      activity(2, false);
+      await waitFor(() => expect(line()).toBeNull());
+    });
+
+    it("an ask_user alone is answered in the chat and shows no line", async () => {
+      act(() => openAgentInboxRail(SESSION));
+      await renderOverlay(600, 300);
+      askUser();
+      expect(line()).toBeNull();
+    });
+
+    it("an ask_user and a CLI question both open: the CLI question shows the line", async () => {
+      act(() => openAgentInboxRail(SESSION));
+      await renderOverlay(600, 300);
+      askUser();
+      cliQuestion();
+      await waitFor(() => expect(line()).not.toBeNull());
+    });
+
+    it("is chrome, never a message in the thread", async () => {
+      act(() => openAgentInboxRail(SESSION));
+      roster({ needsYouKind: "permission" });
+      await renderOverlay(600, 300);
+      const needs = await screen.findByTestId("chat-overlay-needs");
+      expect(screen.getByTestId("ibx-msgs")).not.toContainElement(needs);
+    });
   });
 
   it("Escape outside the composer closes the chat", async () => {

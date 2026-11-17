@@ -93,3 +93,27 @@ export function selectNeedsYouKind(state: NeedsYouState, sessionId: string): Nee
   }
   return null;
 }
+
+/** What the CLI itself is waiting on, as the chat shows it while covering the terminal. */
+export type CliNeedsKind = Extract<NeedsYouKind, "permission" | "startup" | "question">;
+
+/**
+ * The prompt the CLI needs answered at its terminal: a permission prompt, a startup screen, or a
+ * question from the CLI's own status. An `ask_user` from the agent is answered in the chat, so a
+ * question counts only when the CLI's status snapshot says so; with both open, the CLI's wins.
+ */
+export function selectCliNeedsYouKind(
+  state: NeedsYouState,
+  sessionId: string,
+): CliNeedsKind | null {
+  const kind = selectNeedsYouKind(state, sessionId);
+  if (kind === "permission" || kind === "startup") return kind;
+  if (kind !== "question") return null;
+  const snapshot = state.crashes?.activityBySession?.[sessionId]?.snapshot;
+  return snapshot?.observed &&
+    snapshot.exit == null &&
+    snapshot.state === "needs-permission" &&
+    snapshot.reason === "question"
+    ? "question"
+    : null;
+}

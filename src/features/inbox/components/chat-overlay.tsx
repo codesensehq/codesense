@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { Maximize2, SquareTerminal, X } from "lucide-react";
+import { Maximize2, X } from "lucide-react";
 
 import { isForemanAgent, openForeman } from "@/features/foreman/open-foreman";
 import { FOREMAN_TEAM, useForemanThread } from "@/features/foreman/use-foreman-thread";
 import { RemoteServerUpdateAction } from "@/features/viewer/components/remote-server-update";
 import { useAgentStatusOf } from "@/features/viewer/hooks/use-agent-status-of";
 import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
+import { useCliNeedsYou } from "@/features/viewer/lib/cli-workspace/store/terminal-tab-selectors";
 import { formatElapsed } from "@/features/viewer/lib/agent-row-presentation";
 import {
   closeAgentInboxRailToTerminal,
@@ -16,8 +17,6 @@ import {
 } from "@/features/viewer/stores/agent-inbox-rail-store";
 import { StatusMark } from "@/shared/components/status-mark";
 import { useNow } from "@/shared/hooks/use-now";
-import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
-import { findShortcutAction } from "@/shared/lib/shortcuts/registry";
 import { markOfAgentStatus } from "@/shared/lib/status-mark";
 import { agentStatusWords } from "@/shared/lib/terminal-dot-words";
 import { useSubagentsOpen } from "@/shared/stores/agent-state-store";
@@ -48,13 +47,14 @@ import { Ico, InboxLoading, MessageBody, ReadFailure, StaleNotice } from "./prim
 import { PinPreview, type OwnPinCard } from "./pin-preview";
 import { Conversation } from "./threads-lens";
 
-/**
- * The shortcut that flips a covered tab between its chat and its terminal (and opens or closes a
- * docked chat). One place, so the key can change without touching the overlay.
- */
-export const CHAT_TERMINAL_SHORTCUT_ID = "viewer.toggle-agent-inbox";
-
 const NO_ROWS: readonly AgentSessionRow[] = [];
+
+/** What the CLI is waiting on, as the chat's chrome line says it. */
+const CLI_NEEDS_WORDS = {
+  permission: "it is asking for permission",
+  startup: "it is on a startup screen",
+  question: "it is asking a question",
+} as const;
 
 /**
  * An agent's chat on its own terminal tab: the conversation with you (the same thread its full
@@ -105,6 +105,7 @@ export function ChatOverlay({
   const statusOf = useAgentStatusOf(statusRows);
   const status = row ? statusOf(row) : null;
   const subagents = useSubagentsOpen(sessionId);
+  const cliNeeds = useCliNeedsYou(sessionId);
   const rootRef = useRef<HTMLElement>(null);
   const layout = overlayLayout(size.width, size.height);
   const tall = layout.height === "tall";
@@ -300,9 +301,6 @@ export function ChatOverlay({
   const agentPage = useOrgStore((state) =>
     team ? teamAgentPage(state.orgs, team.org, team.team) : null,
   );
-  const keyHint = formatKeystrokeDisplay(
-    findShortcutAction(CHAT_TERMINAL_SHORTCUT_ID)?.defaultKeystroke ?? "",
-  );
   const toTerminal = () =>
     closeAgentInboxRailToTerminal(
       sessionId,
@@ -427,12 +425,6 @@ export function ChatOverlay({
             )}
             {layout.record === "in-head" && record}
             <span className="ibx-ov-sp" />
-            {button(
-              "Terminal",
-              SquareTerminal,
-              toTerminal,
-              keyHint ? `Terminal (${keyHint} brings the chat back)` : "Terminal",
-            )}
             {foreman
               ? button("Full view", Maximize2, openForeman)
               : agentPage &&
@@ -535,6 +527,17 @@ export function ChatOverlay({
             <span aria-hidden>·</span>
             <button type="button" className="ibx-ov-pins-retry" onClick={openForeman}>
               Open full view
+            </button>
+          </div>
+        )}
+        {cliNeeds && (
+          // Chrome, not a message: the CLI's own prompt, which only the CLI can answer.
+          <div className="ibx-ov-needs" role="status" data-testid="chat-overlay-needs">
+            <b>Input needed</b>
+            <span aria-hidden>·</span>
+            <span>{CLI_NEEDS_WORDS[cliNeeds]}</span>
+            <button type="button" className="ibx-ov-pins-retry" onClick={toTerminal}>
+              Show CLI
             </button>
           </div>
         )}

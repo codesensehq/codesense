@@ -6,6 +6,8 @@
  * takes the focus from an element elsewhere: another cell's terminal, a text field, a dialog.
  */
 export function mayCoverTakeFocus(root: Element, held: Element | null): boolean {
+  // An arrow key on the Chat | CLI switch moves the selection and keeps the focus there.
+  if (held?.closest("[data-keeps-focus]")) return false;
   const pane = root.closest("[data-focus-pane]");
   if (held && held !== document.body) return !!pane && pane.contains(held);
   return !!pane && pane.hasAttribute("data-pane-active");

@@ -12,8 +12,7 @@ import { create } from "zustand";
 import { isMac, isReservedForDashboardCommand } from "./keystroke";
 import { requestNewWorkspaceTerminal } from "@/features/viewer/lib/new-workspace-terminal";
 import {
-  closeAgentInboxRailToTerminal,
-  openAgentInboxRail,
+  flipAgentView,
   useAgentInboxRailStore,
 } from "@/features/viewer/stores/agent-inbox-rail-store";
 import { toast } from "sonner";
@@ -169,20 +168,6 @@ function resolvePaneNav(
     activePaneId: fallbackWorkspaceId,
     switchFn: (tk, id) => switchContext({ teamKey: tk, workspaceId: id }, "nav"),
   };
-}
-
-/**
- * Close a tab's chat overlay. When focus is inside it (⌘I pressed in the composer), it goes
- * to that tab's terminal first, rather than falling to the page body as the overlay unmounts.
- */
-function closeInboxRailKeepingFocus(sessionId: string): void {
-  const active = typeof document === "undefined" ? null : document.activeElement;
-  const overlay = active?.closest<HTMLElement>('[data-testid="chat-overlay"]');
-  const pane =
-    overlay && overlay.dataset.sessionId === sessionId
-      ? overlay.closest("[data-pane-id], [data-pane-active]")
-      : null;
-  closeAgentInboxRailToTerminal(sessionId, pane);
 }
 
 export interface ShortcutAction {
@@ -709,7 +694,7 @@ const shortcutActions: readonly ShortcutAction[] = [
     },
   },
   {
-    // Toggle the FOCUSED tile's ACTIVE TAB's docked inbox. Per-session scoping
+    // Flip the FOCUSED tile's ACTIVE TAB between its chat and its CLI. Per-session scoping
     // via `agent-inbox-rail-store`; inert when no active tab exists. ⌘ only on
     // macOS: ⌃I is Tab to a shell.
     id: "viewer.toggle-agent-inbox",
@@ -723,9 +708,7 @@ const shortcutActions: readonly ShortcutAction[] = [
       if (!workspace) return;
       const activeTabId = selectActiveTerminalTab(useViewerStore.getState(), teamKey, workspace.id);
       if (!activeTabId || !isRunningAgent(useAgentStateStore.getState(), activeTabId)) return;
-      const isOpen = !!useAgentInboxRailStore.getState().bySession[activeTabId];
-      if (isOpen) closeInboxRailKeepingFocus(activeTabId);
-      else openAgentInboxRail(activeTabId);
+      flipAgentView(activeTabId);
     },
   },
   {

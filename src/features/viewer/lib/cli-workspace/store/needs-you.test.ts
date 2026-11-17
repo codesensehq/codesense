@@ -27,6 +27,7 @@ import {
   NEEDS_YOU_STATUSES,
   type NeedsYouListState,
   selectScopeMarkFacts,
+  selectCliNeedsYouKind,
   selectNeedsYouKind,
   selectSessionNeedsYou,
   selectSessionsNeedingYou,
@@ -162,6 +163,81 @@ describe("selectSessionNeedsYou / selectNeedsYouKind — anchored to the dot", (
 
   it("the needs-you dot states are needs-permission, crashed and error", () => {
     expect([...NEEDS_YOU_STATUSES].sort()).toEqual(["crashed", "error", "needs-permission"]);
+  });
+});
+
+describe("selectCliNeedsYouKind — what the CLI itself is waiting on", () => {
+  const snapshot = (reason?: ActivitySnapshot["reason"]): ActivitySnapshot => ({
+    session: "permission",
+    identity: { hostBootId: "boot", sessionIncarnation: "pty", invocationId: "run" },
+    revision: 1,
+    turnGeneration: 1,
+    provider: "claude",
+    state: "needs-permission",
+    ...(reason ? { reason } : {}),
+    observed: true,
+    limited: false,
+    exit: null,
+    asks: [],
+  });
+  const withSnapshot = (
+    id: string,
+    snap: ActivitySnapshot,
+    extra: Partial<NeedsYouListState> = {},
+  ) =>
+    state({
+      crashes: {
+        bySession: records,
+        activityBySession: { [id]: { snapshot: { ...snap, session: id }, freshness: "current" } },
+      },
+      ...extra,
+    });
+
+  it("a permission prompt is the CLI's", () => {
+    expect(selectCliNeedsYouKind(state(), "permission")).toBe("permission");
+  });
+
+  it("a startup screen is the CLI's", () => {
+    projectSessionStatus("booting", "paused", { needsYouKind: "startup" });
+    expect(selectCliNeedsYouKind(state(), "booting")).toBe("startup");
+  });
+
+  it("a question from the CLI's own status is the CLI's", () => {
+    expect(
+      selectCliNeedsYouKind(withSnapshot("permission", snapshot("question")), "permission"),
+    ).toBe("question");
+  });
+
+  it("an ask_user alone is the chat's, not the CLI's", () => {
+    expect(selectNeedsYouKind(state(), "asking")).toBe("question");
+    expect(selectCliNeedsYouKind(state(), "asking")).toBeNull();
+    const ask = withSnapshot("asking", {
+      ...snapshot(),
+      state: "idle",
+      reason: undefined,
+      asks: ["a"],
+    });
+    expect(selectCliNeedsYouKind(ask, "asking")).toBeNull();
+  });
+
+  it("with an ask_user and a CLI question both open, the CLI question wins", () => {
+    const both = withSnapshot("permission", snapshot("question"), {
+      pendingAsks: { q: { sessionId: "permission" } },
+    });
+    expect(selectCliNeedsYouKind(both, "permission")).toBe("question");
+  });
+
+  it("clears when the CLI's question is answered", () => {
+    const answered = { ...snapshot("question"), state: "working" } as ActivitySnapshot;
+    expect(selectCliNeedsYouKind(withSnapshot("permission", answered), "permission")).toBe(
+      "permission",
+    );
+    const gone = { ...snapshot("question"), exit: { code: 0, signal: null, requested: false } };
+    expect(selectCliNeedsYouKind(withSnapshot("asking", gone), "asking")).toBeNull();
+  });
+
+  it.each(["crashed", "failed", "done", "thinking", "nothing"])("%s is not a CLI prompt", (id) => {
+    expect(selectCliNeedsYouKind(state(), id)).toBeNull();
   });
 });
 

@@ -50,6 +50,16 @@ describe("a covering chat and keyboard focus", () => {
     expect(mayCoverTakeFocus(chat("b"), document.activeElement)).toBe(false);
   });
 
+  it("keeps the focus on the Chat | CLI switch while an arrow key flips the view", () => {
+    const { chat } = cells("a");
+    const sw = document.createElement("div");
+    sw.setAttribute("data-keeps-focus", "");
+    sw.innerHTML = '<button data-testid="seg"></button>';
+    document.querySelector('[data-focus-pane="a"]')!.append(sw);
+    sw.querySelector("button")!.focus();
+    expect(mayCoverTakeFocus(chat("a"), document.activeElement)).toBe(false);
+  });
+
   it("keeps the focus where it already is inside the chat", () => {
     const { chat } = cells("a");
     document.querySelector<HTMLElement>('[data-testid="in-a"]')!.focus();

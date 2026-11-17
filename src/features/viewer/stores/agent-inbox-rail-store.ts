@@ -203,3 +203,35 @@ export function useChatCovers(sessionId: string): boolean {
   const running = useRunningAgent(sessionId);
   return open && running;
 }
+
+const CHAT_PANE = "[data-focus-pane], [data-pane-id], [data-pane-active]";
+
+/** The pane (caption and body) of the tab whose chat is mounted for `sessionId`. */
+function paneOfChat(sessionId: string): Element | null {
+  if (typeof document === "undefined") return null;
+  return (
+    document
+      .querySelector(`[data-testid="chat-overlay"][data-session-id="${CSS.escape(sessionId)}"]`)
+      ?.closest(CHAT_PANE) ?? null
+  );
+}
+
+/**
+ * Show `sessionId`'s chat over its terminal. `focus`: the composer takes the keyboard (a click or
+ * the shortcut); `keep`: it stays where it is (an arrow key on the Chat | CLI switch).
+ */
+export function showAgentChat(sessionId: string, how: "focus" | "keep") {
+  useAgentInboxRailStore.getState().open(sessionId, { compose: how === "focus" });
+}
+
+/** Show `sessionId`'s CLI, handing it the keyboard on `focus` and leaving it on `keep`. */
+export function showAgentCli(sessionId: string, how: "focus" | "keep") {
+  if (how === "focus") closeAgentInboxRailToTerminal(sessionId, paneOfChat(sessionId));
+  else closeAgentInboxRail(sessionId);
+}
+
+/** Flip a tab between its chat and its CLI, with the keyboard following (the shortcut). */
+export function flipAgentView(sessionId: string) {
+  if (useAgentInboxRailStore.getState().bySession[sessionId]) showAgentCli(sessionId, "focus");
+  else showAgentChat(sessionId, "focus");
+}

@@ -3,7 +3,7 @@ import { openAgentInboxRail } from "@/features/viewer/stores/agent-inbox-rail-st
 import { REGISTERED_AGENT_CLIS } from "@/shared/lib/agent-runtimes";
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
 import type React from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, act, cleanup, fireEvent, screen, waitFor } from "@/test-utils";
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -41,6 +41,8 @@ vi.mock("@/features/viewer/hooks/use-tab-source-repo", () => ({
 
 import { TerminalGridCaption } from "./terminal-grid-caption";
 import { useAgentInboxRailStore } from "@/features/viewer/stores/agent-inbox-rail-store";
+import { useHeldOutputStore } from "@/features/viewer/stores/held-output-store";
+import { stubResizeObserver } from "@/test/resize-observer-stub";
 import { useInboxSessionsStore } from "@/features/inbox/hooks/use-inbox-sessions";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 import { resetSessionPrompts } from "@/features/viewer/hooks/use-session-prompt";
@@ -85,7 +87,8 @@ beforeEach(() => {
     exitBySession: {},
     processAgentBySession: { "sid-a": "codex" },
   });
-  useAgentInboxRailStore.setState({ bySession: {} });
+  useAgentInboxRailStore.setState({ bySession: {}, pending: {} });
+  useHeldOutputStore.setState({ bySession: {} });
   useViewerStore.setState({
     sourceDiffShownBySession: {},
     worktreeEditorOpenBySession: {},
@@ -104,75 +107,88 @@ beforeEach(() => {
   sessionPromptMock.mockResolvedValue(NO_PROMPT);
 });
 
-describe("TerminalGridCaption Inbox toggle (SW-TP CAP-10)", () => {
-  it.each(["gemini", "aider", "cursor-agent"])("hides inbox controls for detected %s", (cli) => {
+const SWITCH = "chat-cli-switch-tab-a";
+const chatSeg = () => screen.getByTestId(`${SWITCH}-chat`);
+const cliSeg = () => screen.getByTestId(`${SWITCH}-cli`);
+
+describe("TerminalGridCaption Chat | CLI switch", () => {
+  it.each(["gemini", "aider", "cursor-agent"])("has no switch for detected %s", (cli) => {
     useAgentStateStore.getState().setProcessAgent("sid-a", cli);
     mountFor(story);
-    expect(screen.queryByTestId("terminal-grid-caption-inbox-tab-a")).toBeNull();
+    expect(screen.queryByTestId(SWITCH)).toBeNull();
     openAgentInboxRail("sid-a");
     expect(useAgentInboxRailStore.getState().bySession["sid-a"]).toBeUndefined();
     cleanup();
   });
-  it("hides the inbox on a shell, restores it for a live agent, and removes it at exit", () => {
+
+  it("has no switch on a shell, offers it for a live agent, and removes it at exit", () => {
     useAgentStateStore.getState().setProcessAgent("sid-a", null);
     mountFor(story);
-    expect(screen.queryByTestId("terminal-grid-caption-inbox-tab-a")).toBeNull();
+    expect(screen.queryByTestId(SWITCH)).toBeNull();
     act(() => useAgentStateStore.getState().setProcessAgent("sid-a", "codex"));
-    expect(screen.getByTestId("terminal-grid-caption-inbox-tab-a")).toBeInTheDocument();
+    expect(screen.getByTestId(SWITCH)).toBeInTheDocument();
     act(() => useAgentStateStore.getState().setProcessAgent("sid-a", null));
-    expect(screen.queryByTestId("terminal-grid-caption-inbox-tab-a")).toBeNull();
+    expect(screen.queryByTestId(SWITCH)).toBeNull();
     cleanup();
   });
 
   it.each(REGISTERED_AGENT_CLIS.map((row) => row.runtime))(
-    "opens the inbox for detected %s on the tab's sessionId on first click",
+    "flips detected %s between its CLI and its chat on the tab's sessionId",
     (cli) => {
       useAgentStateStore.getState().setProcessAgent("sid-a", cli);
-      const { getByTestId } = mountFor(story);
+      mountFor(story);
       expect(useAgentInboxRailStore.getState().bySession["sid-a"]).toBeUndefined();
-      const inbox = getByTestId("terminal-grid-caption-inbox-tab-a");
-      expect(inbox).toHaveAccessibleName("Inbox");
-      fireEvent.click(inbox);
+      expect(cliSeg()).toHaveAttribute("aria-checked", "true");
+      fireEvent.click(chatSeg());
       expect(useAgentInboxRailStore.getState().bySession["sid-a"]).toBeDefined();
-      cleanup();
-    },
-  );
-
-  it.each(REGISTERED_AGENT_CLIS.map((row) => row.runtime))(
-    "closes the inbox for detected %s on the next click",
-    (cli) => {
-      useAgentStateStore.getState().setProcessAgent("sid-a", cli);
-      const { getByTestId } = mountFor(story);
-      fireEvent.click(getByTestId("terminal-grid-caption-inbox-tab-a"));
-      fireEvent.click(getByTestId("terminal-grid-caption-inbox-tab-a"));
+      // A click moves the keyboard into the chat: the composer is asked for.
+      expect(useAgentInboxRailStore.getState().bySession["sid-a"]?.composeRequest).toBe(1);
+      expect(chatSeg()).toHaveAttribute("aria-checked", "true");
+      fireEvent.click(cliSeg());
       expect(useAgentInboxRailStore.getState().bySession["sid-a"]).toBeUndefined();
+      expect(cliSeg()).toHaveAttribute("aria-checked", "true");
       cleanup();
     },
   );
 
-  it("stays reliable under rapid repeated clicks (10 toggles → closed)", () => {
-    const { getByTestId } = mountFor(story);
-    const btn = getByTestId("terminal-grid-caption-inbox-tab-a");
-    for (let i = 0; i < 10; i++) fireEvent.click(btn);
+  it("an arrow key flips the view without asking for the composer", () => {
+    mountFor(story);
+    cliSeg().focus();
+    fireEvent.keyDown(cliSeg(), { key: "ArrowLeft" });
+    expect(useAgentInboxRailStore.getState().bySession["sid-a"]).toEqual({ composeRequest: 0 });
+    expect(chatSeg()).toHaveFocus();
+    fireEvent.keyDown(chatSeg(), { key: "ArrowRight" });
     expect(useAgentInboxRailStore.getState().bySession["sid-a"]).toBeUndefined();
-    fireEvent.click(btn);
-    expect(useAgentInboxRailStore.getState().bySession["sid-a"]).toBeDefined();
-    cleanup();
-  });
-  it('names itself: the toggle reads "Inbox" beside its glyph, folding to the glyph in a narrow tile', () => {
-    const { getByTestId } = mountFor(story);
-    const btn = getByTestId("terminal-grid-caption-inbox-tab-a");
-    expect(btn).toHaveAccessibleName("Inbox");
-    const word = Array.from(btn.querySelectorAll("span")).find((el) => el.textContent === "Inbox");
-    expect(word).toBeDefined();
-    // Hidden until the caption's container is wide enough to carry the word.
-    expect(word!.className).toContain("hidden");
-    expect(word!.className).toContain("@[18rem]/caption:inline");
-    expect(getByTestId("terminal-grid-caption-tab-a").className).toContain("@container/caption");
+    expect(cliSeg()).toHaveFocus();
     cleanup();
   });
 
-  it("carries the session's unread count as a chip, and says it in its name", async () => {
+  it("follows the tab's own state, per tab, and survives a remount", () => {
+    useAgentInboxRailStore.getState().open("sid-a");
+    const { unmount } = mountFor(story);
+    expect(chatSeg()).toHaveAttribute("aria-checked", "true");
+    unmount();
+    mountFor(story);
+    expect(chatSeg()).toHaveAttribute("aria-checked", "true");
+    cleanup();
+  });
+
+  describe("by the caption's measured width", () => {
+    let ro: ReturnType<typeof stubResizeObserver>;
+    afterEach(() => ro.restore());
+    it.each([
+      [479, false],
+      [480, true],
+    ])("at %i px the segments carry words: %s", (width, words) => {
+      ro = stubResizeObserver(width);
+      mountFor(story);
+      expect(screen.queryByText("Chat") !== null).toBe(words);
+      expect(chatSeg()).toHaveAccessibleName("Chat");
+      cleanup();
+    });
+  });
+
+  it("carries the session's unread count on the Chat segment, and says it in its name", async () => {
     agentReadSessionsMock.mockResolvedValueOnce([
       {
         handle: "sid-a",
@@ -184,22 +200,30 @@ describe("TerminalGridCaption Inbox toggle (SW-TP CAP-10)", () => {
       },
     ]);
     mountFor(story, { teamKey: "acme:default" });
-    expect(await screen.findByTestId("terminal-grid-caption-inbox-tab-a-count")).toHaveTextContent(
-      "2",
-    );
-    expect(screen.getByTestId("terminal-grid-caption-inbox-tab-a")).toHaveAccessibleName(
-      "Inbox — 2 messages · 0 in group chat",
-    );
+    await waitFor(() => expect(chatSeg()).toHaveAccessibleName("Chat, 2 unread"));
+    expect(chatSeg()).toHaveTextContent("2");
     cleanup();
   });
 
-  it("shows no count chip when nothing is unread", async () => {
+  it("shows no count when nothing is unread", async () => {
     // The roster is one store for every inbox surface: drop the last test's read.
     useInboxSessionsStore.setState({ sessions: null });
     mountFor(story, { teamKey: "acme:default" });
     await waitFor(() => expect(agentReadSessionsMock).toHaveBeenCalled());
     await Promise.resolve();
-    expect(screen.queryByTestId("terminal-grid-caption-inbox-tab-a-count")).toBeNull();
+    expect(chatSeg()).toHaveAccessibleName("Chat");
+    cleanup();
+  });
+
+  it("says what the covered CLI holds, and when it needs you", () => {
+    useAgentInboxRailStore.getState().open("sid-a");
+    useHeldOutputStore.setState({ bySession: { "sid-a": 214 } });
+    const ro2 = stubResizeObserver(700);
+    mountFor(story);
+    expect(cliSeg()).toHaveTextContent("214 new");
+    act(() => useHeldOutputStore.setState({ bySession: {} }));
+    expect(cliSeg()).not.toHaveTextContent("new");
+    ro2.restore();
     cleanup();
   });
 
@@ -260,7 +284,7 @@ describe("TerminalGridCaption capability-gated icon visibility (SW-TP CAP-6)", (
     expect(screen.getByTestId("terminal-grid-caption-hud-tab-a")).toBeTruthy();
     expect(screen.getByTestId("terminal-grid-caption-editor-tab-a")).toBeTruthy();
     expect(screen.getByTestId("terminal-grid-caption-diff-tab-a")).toBeTruthy();
-    expect(screen.getByTestId("terminal-grid-caption-inbox-tab-a")).toBeTruthy();
+    expect(screen.getByTestId("chat-cli-switch-tab-a")).toBeTruthy();
     cleanup();
   });
 
@@ -278,7 +302,7 @@ describe("TerminalGridCaption capability-gated icon visibility (SW-TP CAP-6)", (
     expect(screen.getByTestId("terminal-grid-caption-hud-tab-a")).toBeTruthy();
     expect(screen.getByTestId("terminal-grid-caption-editor-tab-a")).toBeTruthy();
     expect(screen.queryByTestId("terminal-grid-caption-diff-tab-a")).toBeNull();
-    expect(screen.getByTestId("terminal-grid-caption-inbox-tab-a")).toBeTruthy();
+    expect(screen.getByTestId("chat-cli-switch-tab-a")).toBeTruthy();
     cleanup();
   });
 
@@ -290,7 +314,7 @@ describe("TerminalGridCaption capability-gated icon visibility (SW-TP CAP-6)", (
     mountFor(generic);
     expect(screen.getByTestId("terminal-grid-caption-diff-tab-a")).toBeTruthy();
     expect(screen.getByTestId("terminal-grid-caption-editor-tab-a")).toBeTruthy();
-    expect(screen.getByTestId("terminal-grid-caption-inbox-tab-a")).toBeTruthy();
+    expect(screen.getByTestId("chat-cli-switch-tab-a")).toBeTruthy();
     cleanup();
   });
 
@@ -692,7 +716,7 @@ describe("TerminalGridCaption capability gating (SW-IB1-D1 + SW-VE-12)", () => {
     mountFor(story);
     expect(screen.getByTestId("terminal-grid-caption-editor-tab-a")).toBeTruthy();
     expect(screen.getByTestId("terminal-grid-caption-diff-tab-a")).toBeTruthy();
-    expect(screen.getByTestId("terminal-grid-caption-inbox-tab-a")).toBeTruthy();
+    expect(screen.getByTestId("chat-cli-switch-tab-a")).toBeTruthy();
     cleanup();
   });
 
@@ -725,10 +749,8 @@ describe("TerminalGridCaption two-register tooltips + canonical labels (SW-IB1-D
       "aria-label",
       "Diff",
     );
-    expect(screen.getByTestId("terminal-grid-caption-inbox-tab-a")).toHaveAttribute(
-      "aria-label",
-      "Inbox",
-    );
+    expect(screen.getByTestId("chat-cli-switch-tab-a-chat")).toHaveAttribute("aria-label", "Chat");
+    expect(screen.getByTestId("chat-cli-switch-tab-a-cli")).toHaveAttribute("aria-label", "CLI");
     cleanup();
   });
 
@@ -741,18 +763,18 @@ describe("TerminalGridCaption two-register tooltips + canonical labels (SW-IB1-D
     cleanup();
   });
 
-  it("every icon button carries aria-pressed reflecting its open/closed state", () => {
+  it("every toggle carries aria-pressed reflecting its open/closed state", () => {
     useTabSourceRepoMock.mockReturnValue({
       folder: { kind: "folder", cwd: "/w/story" },
       repo: { root: "/w/story", isRoot: true },
     });
     const { getByTestId } = mountFor(story);
-    for (const kind of ["hud", "editor", "diff", "inbox"]) {
+    for (const kind of ["hud", "editor", "diff"]) {
       const btn = getByTestId(`terminal-grid-caption-${kind}-tab-a`);
       expect(btn.getAttribute("aria-pressed")).toBe("false");
     }
-    fireEvent.click(getByTestId("terminal-grid-caption-inbox-tab-a"));
-    expect(getByTestId("terminal-grid-caption-inbox-tab-a").getAttribute("aria-pressed")).toBe(
+    fireEvent.click(getByTestId("terminal-grid-caption-diff-tab-a"));
+    expect(getByTestId("terminal-grid-caption-diff-tab-a").getAttribute("aria-pressed")).toBe(
       "true",
     );
     cleanup();
@@ -763,10 +785,14 @@ describe("TerminalGridCaption press-is-color-not-motion (SW-IB1-D1)", () => {
   // Pressed = overlay-open: the icon paints a color-mix accent fill at 85%
   // over the toolbar bg, with --accent-foreground text (readable on the fill) —
   // NO scale transform anywhere.
-  it("the pressed Inbox button paints an accent-fill background and sets no transform", () => {
+  it("the pressed Diff button paints an accent-fill background and sets no transform", () => {
+    useTabSourceRepoMock.mockReturnValue({
+      folder: { kind: "folder", cwd: "/w/story" },
+      repo: { root: "/w/story", isRoot: true },
+    });
     const { getByTestId } = mountFor(story);
-    fireEvent.click(getByTestId("terminal-grid-caption-inbox-tab-a"));
-    const btn = getByTestId("terminal-grid-caption-inbox-tab-a");
+    fireEvent.click(getByTestId("terminal-grid-caption-diff-tab-a"));
+    const btn = getByTestId("terminal-grid-caption-diff-tab-a");
     // The pressed background is a Tailwind arbitrary utility (DESIGN §
     // toolbar-icon-pressed-bg: color-mix 85% accent). We stamp the exact
     // mix on the className so it stays assertable in jsdom.
