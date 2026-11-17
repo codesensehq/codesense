@@ -136,11 +136,14 @@ jobs:
       - name: Build app
         run: bash scripts/ci/unsigned-bundle.sh linux
       - name: Check the sidecars sit beside the app
+        # The app binary's name comes from the product, so it is the one other file in /usr/bin.
         run: |
-          listing=$(dpkg -c target/release/bundle/deb/*.deb)
-          for name in codesense codesense-bridge codesense-session-server codesense-emulator; do
-            grep -E " \./usr/bin/$name\$" <<<"$listing" || { echo "Error: $name is not in /usr/bin of the deb" >&2; exit 1; }
+          bin_files=$(dpkg -c target/release/bundle/deb/*.deb | awk '$NF ~ /^\.\/usr\/bin\/./ {print $NF}')
+          echo "$bin_files"
+          for name in codesense-bridge codesense-session-server codesense-emulator; do
+            grep -Fx "./usr/bin/$name" <<<"$bin_files" || { echo "Error: $name is not in /usr/bin of the deb" >&2; exit 1; }
           done
+          [[ $(wc -l <<<"$bin_files") -eq 4 ]] || { echo "Error: expected the app binary and three sidecars in /usr/bin" >&2; exit 1; }
       - name: Upload deb
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
