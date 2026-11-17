@@ -442,3 +442,99 @@ mod tests {
         unsafe { std::env::remove_var(&key) };
     }
 }
+
+/// The store against a real Secret Service. Every test is `#[ignore]`d, so only the Linux app CI
+/// job runs them, under a private session bus with the keyring daemon unlocked (the filter there
+/// is `test(~secret_service_tests)`). nextest gives each test its own process.
+#[cfg(all(test, target_os = "linux"))]
+mod secret_service_tests {
+    use super::*;
+
+    const SERVICE: &str = "codesense-secret-service-test";
+    const READER_ACCOUNT_ENV: &str = "CODESENSE_TEST_SECRET_ACCOUNT";
+
+    fn unique_account(label: &str) -> String {
+        format!("{label}-{}", std::process::id())
+    }
+
+    #[test]
+    #[ignore = "needs a Secret Service session"]
+    fn set_get_and_delete_round_trip() {
+        assert!(secret_store_available());
+        let store = KeychainStore::new(SERVICE);
+        let account = unique_account("round-trip");
+        assert!(store.get(&account).unwrap().is_none());
+
+        store.set(&account, &Secret::new("first")).unwrap();
+        assert_eq!(store.get(&account).unwrap().unwrap().expose(), "first");
+
+        store.set(&account, &Secret::new("second")).unwrap();
+        assert_eq!(store.get(&account).unwrap().unwrap().expose(), "second");
+
+        store.delete(&account).unwrap();
+        assert!(store.get(&account).unwrap().is_none());
+        // An absent entry is already removed.
+        store.delete(&account).unwrap();
+    }
+
+    /// Run by `a_second_process_reads_what_the_first_wrote`, not on its own: without the
+    /// account variable it has nothing to read and passes.
+    #[test]
+    #[ignore = "needs a Secret Service session"]
+    fn reader_process() {
+        let Ok(account) = std::env::var(READER_ACCOUNT_ENV) else {
+            return;
+        };
+        let secret = KeychainStore::new(SERVICE).get(&account).unwrap();
+        assert_eq!(secret.unwrap().expose(), "kept across processes");
+    }
+
+    #[test]
+    #[ignore = "needs a Secret Service session"]
+    fn a_second_process_reads_what_the_first_wrote() {
+        let store = KeychainStore::new(SERVICE);
+        let account = unique_account("persist");
+        store
+            .set(&account, &Secret::new("kept across processes"))
+            .unwrap();
+
+        // The test binary again, as a fresh process, running only the reader.
+        let reader = format!(
+            "{}::reader_process",
+            module_path!().split_once("::").unwrap().1
+        );
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--ignored", "--exact", &reader, "--nocapture"])
+            .env(READER_ACCOUNT_ENV, &account)
+            .output()
+            .unwrap();
+        let ran = String::from_utf8_lossy(&output.stdout);
+        store.delete(&account).unwrap();
+        assert!(output.status.success(), "reader failed: {ran}");
+        assert!(ran.contains("1 passed"), "the reader did not run: {ran}");
+    }
+
+    #[test]
+    #[ignore = "needs a Secret Service session"]
+    fn with_no_session_bus_every_call_is_unavailable() {
+        // SAFETY: nextest runs each test in its own process, and nothing here starts a thread
+        // that reads the environment before this call.
+        unsafe {
+            std::env::set_var(
+                "DBUS_SESSION_BUS_ADDRESS",
+                "unix:path=/nonexistent/codesense-bus",
+            );
+        }
+        assert!(!secret_store_available());
+        let store = KeychainStore::new(SERVICE);
+        assert_eq!(store.get("any").unwrap_err(), CredentialError::Unavailable);
+        assert_eq!(
+            store.set("any", &Secret::new("x")).unwrap_err(),
+            CredentialError::Unavailable
+        );
+        assert_eq!(
+            store.delete("any").unwrap_err(),
+            CredentialError::Unavailable
+        );
+    }
+}
