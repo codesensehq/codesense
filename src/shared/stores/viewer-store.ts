@@ -44,7 +44,7 @@ import {
   retireAgentSession,
   snapshotAgentSession,
 } from "@/shared/stores/agent-state-store";
-import { closeAgentInboxRail } from "@/features/viewer/stores/agent-inbox-rail-store";
+import { forgetAgentInboxRail } from "@/features/viewer/stores/agent-inbox-rail-store";
 import {
   useTeamSurfaceStore,
   publishTeamTree,
@@ -8704,7 +8704,7 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     // its own store (agent-inbox-rail-store). Close it alongside the rest of
     // the per-session prune so a reopened session can't inherit a ghost
     // open-state from the removed tab.
-    closeAgentInboxRail(removed.sessionId);
+    forgetAgentInboxRail(removed.sessionId);
 
     // PT-2 state-driven close, decided by the host where the process lives: an
     // idle shell (or an exited tab) goes, a busy one keeps running out of sight.

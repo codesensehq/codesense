@@ -23,6 +23,10 @@ import {
 import { whenTerminalLayoutHydrated } from "@/shared/lib/terminal-layout";
 import { logger } from "@/shared/lib/logger";
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
+import {
+  clearOpenedAsAgent,
+  markOpenedAsAgent,
+} from "@/features/viewer/stores/agent-inbox-rail-store";
 
 /**
  * SW-GS-2b — the generalized codesense-managed-agent session launcher: connect
@@ -312,6 +316,8 @@ async function connectAgentSessionInner(
       execution,
     });
     tabOpened = true;
+    // A first launch: the tab opens on its chat once the agent runs.
+    markOpenedAsAgent(tab.sessionId);
 
     // A structured exec already started the agent. Shell launches still use the
     // existing bounded injector and surface its failure.
@@ -332,6 +338,7 @@ async function connectAgentSessionInner(
     recordAgentLaunch(tab.sessionId, recorded, line);
     activityWrapped = launched.activityWrapped;
   } catch (err) {
+    clearOpenedAsAgent(tab.sessionId);
     try {
       await deps.closeTab(tab.sessionId);
     } catch (closeError) {

@@ -16,6 +16,7 @@ import {
   IN_FLIGHT_STALE_MS,
 } from "@/shared/lib/agent-session-launcher";
 import { useViewerStore } from "@/shared/stores/viewer-store";
+import { useAgentInboxRailStore } from "@/features/viewer/stores/agent-inbox-rail-store";
 import {
   seedTerminalTabs,
   terminalHost,
@@ -293,6 +294,31 @@ describe("connectAgentSession orchestration (AC-1/2/3/5/7)", () => {
     // The half-built tab is ended so findExisting can't re-bind a dead orphan.
     expect(deps.closeTab).toHaveBeenCalledTimes(1);
     expect(calls).toEqual(["provision", "projectScopeConfig", "openTab", "closeTab"]);
+  });
+
+  it("marks the new tab to open on its chat once the agent runs", async () => {
+    useAgentInboxRailStore.setState({ bySession: {}, pending: {} });
+    const { deps } = makeDeps();
+    const { sessionId } = await connectAgentSession(params, deps);
+    expect(useAgentInboxRailStore.getState().pending[sessionId]).toBe(true);
+  });
+
+  it("adopting a running tab marks nothing", async () => {
+    useAgentInboxRailStore.setState({ bySession: {}, pending: {} });
+    const { deps } = makeDeps({
+      findExisting: vi.fn(async () => ({ workspaceId: "w", sessionId: "existing" })),
+    });
+    await connectAgentSession(params, deps);
+    expect(useAgentInboxRailStore.getState().pending).toEqual({});
+  });
+
+  it("a launch that fails leaves no mark behind", async () => {
+    useAgentInboxRailStore.setState({ bySession: {}, pending: {} });
+    const { deps } = makeDeps({
+      launchAgentLine: vi.fn(async () => ({ ok: false, reason: "agent-busy" }) as const),
+    });
+    await expect(connectAgentSession(params, deps)).rejects.toThrow();
+    expect(useAgentInboxRailStore.getState().pending).toEqual({});
   });
 
   it("a launch that never reached the prompt keeps no launch spec", async () => {
