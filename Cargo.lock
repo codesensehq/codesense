@@ -906,6 +906,7 @@ dependencies = [
  "criterion",
  "cron",
  "dashmap",
+ "dbus",
  "dbus-secret-service",
  "dhat",
  "dirs 5.0.1",
