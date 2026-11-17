@@ -10,6 +10,7 @@ import { useAgentStateStore } from "@/shared/stores/agent-state-store";
 import { beginContextNavigation } from "@/shared/lib/context-navigation";
 import { create } from "zustand";
 import { isMac, isReservedForDashboardCommand } from "./keystroke";
+import { terminalChord } from "./terminal-chord";
 import { requestNewWorkspaceTerminal } from "@/features/viewer/lib/new-workspace-terminal";
 import {
   closeAgentInboxRailToTerminal,
@@ -1362,6 +1363,8 @@ export type UnboundReason =
 export interface ResolvedBinding {
   /** `""` when unbound. */
   keystroke: string;
+  /** The chord the action answers to from a focused terminal; `""` when it has none there. */
+  terminalKeystroke: string;
   unbound?: UnboundReason;
 }
 
@@ -1384,13 +1387,18 @@ export function resolveBindings(shortcuts: Record<string, string>): Map<string, 
   const bindings = new Map<string, ResolvedBinding>();
   const owners = new Map<string, string>();
   const bind = (id: string, keystroke: string) => {
-    bindings.set(id, { keystroke });
+    bindings.set(id, { keystroke, terminalKeystroke: keystroke });
     if (!owners.has(keystroke)) owners.set(keystroke, id);
   };
   const defaults: ShortcutAction[] = [];
   for (const action of actions) {
     const override = shortcuts[action.id];
-    if (override === "") bindings.set(action.id, { keystroke: "", unbound: { kind: "cleared" } });
+    if (override === "")
+      bindings.set(action.id, {
+        keystroke: "",
+        terminalKeystroke: "",
+        unbound: { kind: "cleared" },
+      });
     else if (override !== undefined) bind(action.id, override);
     else if (!action.command) bind(action.id, action.defaultKeystroke);
     else defaults.push(action);
@@ -1399,15 +1407,29 @@ export function resolveBindings(shortcuts: Record<string, string>): Map<string, 
     const wanted = action.defaultKeystroke;
     const reserved = wanted ? isReservedForDashboardCommand(wanted) : null;
     const winner = owners.get(wanted);
-    if (!wanted) bindings.set(action.id, { keystroke: "", unbound: { kind: "none" } });
+    if (!wanted)
+      bindings.set(action.id, {
+        keystroke: "",
+        terminalKeystroke: "",
+        unbound: { kind: "none" },
+      });
     else if (reserved)
       bindings.set(action.id, {
         keystroke: "",
+        terminalKeystroke: "",
         unbound: { kind: "reserved", wanted, message: reserved.message },
       });
     else if (winner)
-      bindings.set(action.id, { keystroke: "", unbound: { kind: "conflict", wanted, winner } });
+      bindings.set(action.id, {
+        keystroke: "",
+        terminalKeystroke: "",
+        unbound: { kind: "conflict", wanted, winner },
+      });
     else bind(action.id, wanted);
+  }
+  const keystrokes = [...bindings.values()].map((b) => b.keystroke).filter(Boolean);
+  for (const binding of bindings.values()) {
+    binding.terminalKeystroke = terminalChord(binding.keystroke, keystrokes);
   }
   resolvedCache = { shortcuts, actions, bindings };
   return bindings;

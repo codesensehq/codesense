@@ -86,7 +86,7 @@ function unboundNote(action: ShortcutAction, binding: ResolvedBinding): string |
  * inline beneath the row until the user retries or Escapes.
  */
 export function ShortcutRow({ action, humanOnly }: ShortcutRowProps) {
-  const binding = useResolvedBinding(action.id) ?? { keystroke: "" };
+  const binding = useResolvedBinding(action.id) ?? { keystroke: "", terminalKeystroke: "" };
   const current = binding.keystroke;
   const hasOverride = useShortcutsStore((s) => action.id in s.shortcuts);
   const setShortcut = useShortcutsStore((s) => s.setShortcut);
