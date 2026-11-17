@@ -610,7 +610,7 @@ pub(crate) fn initialize(app: &tauri::AppHandle, home: &Path, path: Option<&OsSt
         path,
         crate::commands::paths::resolve_bundled_resource(app, PIN.resource),
         PIN.clone(),
-        cfg!(all(target_os = "macos", target_arch = "aarch64")),
+        crate::platform_caps::enabled(crate::platform_caps::GIT_AI),
     );
 }
 /// Background triggers skip an existing flight. Explicit attribution-on waits up to 30s.
@@ -724,7 +724,7 @@ pub(crate) fn platform_status(home: &Path) -> Option<AttributionStatus> {
     #[cfg(not(test))]
     {
         let _ = home;
-        (!cfg!(all(target_os = "macos", target_arch = "aarch64"))).then(|| {
+        (!crate::platform_caps::enabled(crate::platform_caps::GIT_AI)).then(|| {
             AttributionStatus::Unsupported {
                 reason: "platform".into(),
             }

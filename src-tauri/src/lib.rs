@@ -76,6 +76,7 @@ mod http;
 mod install;
 #[cfg(feature = "dhat-heap")]
 pub mod leak_support;
+pub mod linux_startup;
 /// The beta channels' update channel (SV-PBF-278: no license gate; static manifest).
 /// Beta channels only; internal builds have none of it.
 #[cfg(not(cs_channel = "internal"))]
@@ -90,6 +91,7 @@ mod operations;
 /// derived risk facts.
 pub mod packs;
 mod panes;
+mod platform_caps;
 #[cfg(feature = "bench-support")]
 pub mod perf_support;
 mod principal_lifecycle;
@@ -374,7 +376,14 @@ pub fn run() {
             LevelFilter::Info
         });
 
-    let builder = tauri::Builder::default();
+    let builder = tauri::Builder::default().on_page_load(|webview, payload| {
+        // Once per process: a reload or in-app navigation finishes loading again.
+        static LOGGED: std::sync::Once = std::sync::Once::new();
+        let loaded = payload.event() == tauri::webview::PageLoadEvent::Finished;
+        if loaded && webview.label() == "main" {
+            LOGGED.call_once(|| log::info!(target: "system", "webview ready"));
+        }
+    });
 
     // macOS-only menu bar. Item clicks emit `menu:action` events with
     // the item id as payload — the frontend dispatches via the shared
@@ -566,6 +575,7 @@ pub fn run() {
             live_hub::start(app.handle());
             log::info!(target: "system", "CodeSense v{} starting (log_level={:?}, platform={})",
                 env!("CARGO_PKG_VERSION"), log_level, std::env::consts::OS);
+            platform_caps::log_startup();
 
             // SW-PB-22f-3: keep published dashboards in step with their folders.
             #[cfg(feature = "dashboard-publish")]
@@ -1686,6 +1696,7 @@ pub fn run() {
             // Logging
             commands::system::get_log_file_path,
             commands::system::get_log_debug_enabled,
+            commands::system::get_platform_caps,
             // HTTP API
             commands::system::get_http_api_port,
             commands::frames::mint_frame,
