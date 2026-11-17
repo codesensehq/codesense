@@ -9,6 +9,7 @@ import { StatusMark } from "@/shared/components/status-mark";
 
 import { agentStatusLook, useNoteAgents } from "../lib/note-agents";
 import { NtPopover, NtPopoverAnchor, NtPopoverContent } from "./nt-popover";
+import { hasCmd } from "@/shared/lib/shortcuts/keystroke";
 
 export interface AnchorRect {
   top: number;
@@ -154,7 +155,7 @@ export function SendPicker({
                 setSelectedId(pickRowId(rows[(activeIndex - 1 + rows.length) % rows.length]));
               } else if (e.key === "Enter") {
                 e.preventDefault();
-                if (e.metaKey && e.altKey) onPasteTerminal();
+                if (hasCmd(e) && e.altKey) onPasteTerminal();
                 else run(rows[activeIndex]);
               }
             }}

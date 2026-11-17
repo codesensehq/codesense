@@ -13,7 +13,7 @@ vi.mock("@/features/shell/host-agent-menu", () => ({
   HostAgentPopover: () => null,
 }));
 import { openNativeMenu } from "@/features/shell/native-menu-openers";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, onTestFinished } from "vitest";
 import { render, screen, fireEvent, within } from "@/test-utils";
 import { PipelineStatusNav } from "./pipeline-status-nav";
 import type { StoryRef, DerivedPipelineTree } from "@/shared/lib/pipeline-graph/types";
@@ -64,6 +64,7 @@ vi.mock("@/shared/lib/send-to-terminal", () => ({
   sendTextToTerminal: vi.fn(),
 }));
 import { sendTextToTerminal } from "@/shared/lib/send-to-terminal";
+import { restorePlatform, setPlatform } from "@/test/platform";
 const mockSendTextToTerminal = vi.mocked(sendTextToTerminal);
 
 /** Thin wrapper: delegates to shared buildStoryRef with /repo path convention. */
@@ -757,6 +758,27 @@ describe("PipelineStatusNav", () => {
     fireEvent.click(screen.getByText("My Story"), { metaKey: true });
     expect(mockSendTextToTerminal).toHaveBeenCalledWith("/repo/F-1-my-story.md");
     expect(onFileSelect).not.toHaveBeenCalled();
+  });
+
+  it("off macOS, ctrl-click on a story row sends to terminal and meta-click does not", () => {
+    setPlatform("Win32");
+    onTestFinished(restorePlatform);
+    const tree = makeTree({
+      stories: [makeStory("F-1-my-story.md", "todo", { title: "My Story" })],
+    });
+    render(
+      <PipelineStatusNav
+        tree={tree}
+        repoPath="/repo"
+        selectedPath={null}
+        onFileSelect={onFileSelect}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("My Story"), { metaKey: true });
+    expect(mockSendTextToTerminal).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText("My Story"), { ctrlKey: true });
+    expect(mockSendTextToTerminal).toHaveBeenCalledWith("/repo/F-1-my-story.md");
   });
 
   it("highlights selected file", () => {

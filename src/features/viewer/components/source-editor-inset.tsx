@@ -45,6 +45,7 @@ import { EditorBreadcrumbs } from "./worktree-editor/editor-breadcrumbs";
 import { EditorQuickOpen } from "./worktree-editor/editor-quick-open";
 import { EditorStateMessage, Kbd } from "./worktree-editor/editor-states";
 import { isViewToggleChord } from "./worktree-editor/worktree-view-mode";
+import { hasCmd, hasMod } from "@/shared/lib/shortcuts/keystroke";
 
 /** A pending discard confirmation: closing a dirty tab, or the whole editor
  *  while any tab is dirty. Held until confirmed or cancelled — unsaved edits
@@ -584,7 +585,7 @@ export function SourceEditorInset({
   const toggleWrap = () => setWrapOverride(!effectiveWrap);
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    const mod = e.metaKey || e.ctrlKey;
+    const mod = hasMod(e);
     const target = e.target as HTMLElement | null;
     const inCode = !!target?.closest?.(".cm-editor");
     const claim = () => {
@@ -625,7 +626,7 @@ export function SourceEditorInset({
       openPalette("");
       return;
     }
-    if (e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === "g") {
+    if (e.ctrlKey && !hasCmd(e) && !e.altKey && e.key.toLowerCase() === "g") {
       claim();
       openPalette(":");
       return;

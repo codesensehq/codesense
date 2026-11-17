@@ -32,6 +32,7 @@ import {
 } from "../lib/note-blocks";
 import type { AgentRefAttrs } from "../lib/agent-ref";
 import { noteDecorationsKey, type ChangeOverlay } from "../lib/note-decorations";
+import { hasCommandModifier } from "@/shared/lib/shortcuts/keystroke";
 
 declare const __NOTE_EDITOR_VERSION__: string;
 const lowlight = createLowlight(common);
@@ -197,9 +198,7 @@ export function createEditor(element: HTMLElement, options: KitEditorOptions = {
           if (event.key !== "Shift") escapeTab = false;
           if (
             event.isComposing ||
-            event.metaKey ||
-            event.ctrlKey ||
-            event.altKey ||
+            hasCommandModifier(event) ||
             SuggestionPluginKey.getState(view.state)?.active ||
             slashCommandsKey.getState(view.state)?.active
           )

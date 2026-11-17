@@ -113,7 +113,10 @@ vi.mock("@/shared/lib/shortcuts/registry", () => ({
   allShortcutActions: () => shortcutActions,
   resolveBindings: (overrides: Record<string, string>) =>
     new Map(
-      shortcutActions.map((a) => [a.id, { keystroke: overrides[a.id] ?? a.defaultKeystroke }]),
+      shortcutActions.map((a) => {
+        const keystroke = overrides[a.id] ?? a.defaultKeystroke;
+        return [a.id, { keystroke, terminalKeystroke: keystroke }];
+      }),
     ),
   dashboardCommandActionId: (dashboard: string, id: string) => `${dashboard}/${id}`,
   setDynamicShortcutActions: () => {},

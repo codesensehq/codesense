@@ -7,6 +7,8 @@
  * intent to its own scroll backend (DOM scrollTo vs xterm scrollLines).
  */
 
+import { hasMod } from "./shortcuts/keystroke";
+
 export type ScrollIntent =
   | { action: "top" }
   | { action: "bottom" }
@@ -21,13 +23,13 @@ export type ScrollIntent =
  * with their own logic (e.g., markdown adds plain-arrow scrolling;
  * terminal passes through to the shell).
  *
- * Uses `metaKey || ctrlKey` for cross-platform Cmd/Ctrl support,
- * matching the markdown viewer's pattern.
+ * Uses `hasMod` (Cmd or Ctrl) for cross-platform support, matching the
+ * markdown viewer's pattern.
  */
 export function parseScrollIntent(e: KeyboardEvent): ScrollIntent | null {
   if (e.shiftKey) return null;
 
-  const cmd = e.metaKey || e.ctrlKey;
+  const cmd = hasMod(e);
 
   // Cmd/Ctrl+arrows — highest priority
   if (cmd && e.key === "ArrowUp") return { action: "top" };

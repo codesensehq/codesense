@@ -11,6 +11,7 @@ import { useOrgStore } from "@/shared/stores/org-store";
 import { buildTeamKey } from "@/shared/lib/team-key";
 import { ROW_POPUP_ATTR, TERMINAL_POPUP_ATTR } from "@/shared/lib/focus-utils";
 import { matchShortcut, useShortcutHandler } from "./use-shortcut-handler";
+import { hasCmd } from "@/shared/lib/shortcuts/keystroke";
 
 it("the real split action yields to a forwarded page field", () => {
   const gate = {
@@ -445,7 +446,7 @@ describe("useShortcutHandler", () => {
     const { spy, restore } = spyAction("settings.open");
     try {
       const claimer = (e: KeyboardEvent) => {
-        if (e.metaKey && e.key === ",") e.stopPropagation();
+        if (hasCmd(e) && e.key === ",") e.stopPropagation();
       };
       // Listener attached to body bubbles to document; if document's
       // global handler is also bubble-phase, stopPropagation keeps the

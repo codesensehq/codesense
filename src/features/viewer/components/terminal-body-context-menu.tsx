@@ -7,7 +7,7 @@ import {
   type RefObject,
 } from "react";
 import { useCopyToClipboard } from "@/shared/hooks/use-copy-to-clipboard";
-import { logger } from "@/shared/lib/logger";
+import { pasteFromClipboard } from "@/shared/terminal/terminal-clipboard";
 import {
   PositionedContextMenu,
   PositionedMenuItem,
@@ -63,26 +63,6 @@ export function contextMenuAnchor(e: {
     return { x: rect.left + 8, y: rect.top + 8 };
   }
   return { x: e.clientX, y: e.clientY };
-}
-
-/**
- * Read the clipboard and paste into the terminal. `term.paste()` frames
- * bracketed paste per the terminal's own mode and routes through the gated
- * `onData` input seam — so an input-locked terminal (agent driving) drops the
- * paste like any other input, and we never write to the PTY directly. We pass
- * the raw text. Async read only (never the synchronous Electron clipboard,
- * which would block the renderer); `?.` tolerates an environment without the
- * Clipboard API.
- */
-export async function pasteFromClipboard(target: TerminalMenuTarget): Promise<void> {
-  try {
-    const text = await navigator.clipboard?.readText();
-    if (text) target.paste(text);
-  } catch (e) {
-    // readText rejects when the document isn't focused or permission is denied;
-    // a failed paste is a no-op, not a crash.
-    logger.warn("terminal", `paste failed: ${e}`);
-  }
 }
 
 /**

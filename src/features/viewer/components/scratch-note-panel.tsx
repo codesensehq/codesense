@@ -89,6 +89,7 @@ import { NoteOutline } from "./note-outline";
 import { StickyNoteHeaders } from "./sticky-note-headers";
 import { useNoteHeadings } from "./use-note-headings";
 import { scrollToHeadingBySlug } from "../lib/note-headings";
+import { hasMod } from "@/shared/lib/shortcuts/keystroke";
 import { join } from "@/shared/lib/path";
 
 const lowlight = createLowlight(all);
@@ -859,7 +860,7 @@ function NotesPane() {
   // ⌘B toggles the list (narrow), ⌘N makes a note — while focus is in the pane.
   const handlePaneKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      const mod = (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey;
+      const mod = hasMod(e) && !e.shiftKey && !e.altKey;
       if (!mod) return;
       const key = e.key.toLowerCase();
       if (key === "b") {
