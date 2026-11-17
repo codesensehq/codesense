@@ -9,6 +9,16 @@ mod tests;
 #[cfg(test)]
 #[path = "helpers/fake.rs"]
 mod fake;
+// Also declared by the `other` binary, so it is production code.
+#[cfg(test)]
+#[path = "both.rs"]
+mod both_in_tests;
+#[cfg(test)]
+mod nested {
+    // Inside an inline module, `#[path]` is relative to `src/nested/`.
+    #[path = "deep.rs"]
+    mod deep;
+}
 
 /// #[cfg(target_os = "linux")] in a doc comment.
 fn main() {

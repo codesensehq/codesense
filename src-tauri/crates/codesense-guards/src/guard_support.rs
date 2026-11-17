@@ -16,7 +16,8 @@ pub fn source_roots() -> Vec<PathBuf> {
     roots_at(&app_root())
 }
 
-fn roots_at(app: &Path) -> Vec<PathBuf> {
+/// [`source_roots`] for the app directory `app`.
+pub fn roots_at(app: &Path) -> Vec<PathBuf> {
     let mut roots = vec![app.join("src")];
     let mut crates: Vec<_> = std::fs::read_dir(app.join("crates"))
         .expect("read source crates")

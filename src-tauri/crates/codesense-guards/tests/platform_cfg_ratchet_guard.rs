@@ -57,7 +57,7 @@
 //! `src-tauri` to run it on that tree. Each failure is shown that way on the
 //! trees under `tests/fixtures/platform_cfg/`.
 
-use codesense_guards::guard_support::app_root;
+use codesense_guards::guard_support::{self, app_root};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write as _;
@@ -71,12 +71,10 @@ const CAPS: &str = "platform_caps_allowlist.txt";
 const PLATFORM_CRATE: &str = "crates/codesense-platform";
 const WRITE_BASELINE: &str = "CODESENSE_PLATFORM_CFG_BASELINE_WRITE";
 const OS_KEYS: [&str; 4] = ["unix", "windows", "target_os", "target_family"];
-const OS_PATHS: [&str; 4] = [
-    "std::os::unix",
-    "std::os::windows",
-    "libc::",
-    "windows_sys::",
-];
+/// Crates whose every path is OS-specific.
+const OS_CRATES: [&str; 2] = ["libc", "windows_sys"];
+/// The `std::os` modules that are OS-specific.
+const STD_OS_MODULES: [&str; 2] = ["unix", "windows"];
 
 // ---------------------------------------------------------------------------
 // Lexing: blank comments and literals, keeping every byte offset.
@@ -257,14 +255,27 @@ impl Attr {
         self.body.strip_prefix("cfg(")?.strip_suffix(')')
     }
 
-    /// The predicate this attribute gates on: that of `cfg(…)`, or the first
-    /// argument of `cfg_attr(…)`.
-    fn predicate(&self) -> Option<&str> {
-        self.cfg().or_else(|| {
-            let inner = self.body.strip_prefix("cfg_attr(")?.strip_suffix(')')?;
-            args(inner).into_iter().next()
-        })
+    /// Whether this is an OS-specific `cfg` or `cfg_attr` attribute.
+    fn names_os(&self) -> bool {
+        meta_names_os(&self.body)
     }
+}
+
+/// `cfg(<OS predicate>)`, or `cfg_attr(<predicate>, <attrs>)` whose predicate
+/// names an OS or whose attributes hold such a `cfg`/`cfg_attr`.
+fn meta_names_os(meta: &str) -> bool {
+    if let Some(predicate) = meta.strip_prefix("cfg(").and_then(|m| m.strip_suffix(')')) {
+        return names_os(predicate);
+    }
+    let Some(inner) = meta
+        .strip_prefix("cfg_attr(")
+        .and_then(|m| m.strip_suffix(')'))
+    else {
+        return false;
+    };
+    let args = args(inner);
+    args.first().is_some_and(|predicate| names_os(predicate))
+        || args.iter().skip(1).any(|attr| meta_names_os(attr))
 }
 
 fn attr_at(b: &[u8], at: usize) -> Option<Attr> {
@@ -328,7 +339,8 @@ fn is_test(predicate: &str) -> bool {
 // One file: test regions, `mod` declarations, sites.
 
 /// Byte ranges of the test-gated items, each from the first attribute of the
-/// attribute run holding the test cfg to the end of the item.
+/// attribute run holding the test cfg to the end of the item. An inner
+/// attribute (`#![…]`) belongs to its enclosing module, never to a run.
 fn test_regions(b: &[u8]) -> Vec<(usize, usize)> {
     let mut regions = Vec::new();
     let (mut run_start, mut prev_end) = (0, None);
@@ -338,11 +350,12 @@ fn test_regions(b: &[u8]) -> Vec<(usize, usize)> {
             k += 1;
             continue;
         };
-        let joined = prev_end.is_some_and(|end: usize| {
-            b[end..attr.start]
-                .iter()
-                .all(|c: &u8| c.is_ascii_whitespace())
-        });
+        let joined = !attr.inner
+            && prev_end.is_some_and(|end: usize| {
+                b[end..attr.start]
+                    .iter()
+                    .all(|c: &u8| c.is_ascii_whitespace())
+            });
         if !joined {
             run_start = attr.start;
         }
@@ -353,25 +366,33 @@ fn test_regions(b: &[u8]) -> Vec<(usize, usize)> {
             prev_end = None;
         } else {
             k = attr.end;
-            prev_end = Some(attr.end);
+            prev_end = (!attr.inner).then_some(attr.end);
         }
     }
     regions
 }
 
-/// The end of the item after an attribute: past its `;` or its `{…}` body, or
-/// at the close of the enclosing block.
+/// The end of what an attribute gates: past its `;` or its `{…}` body, at the
+/// `,` after a field, variant, parameter or match arm, or at the close of the
+/// enclosing block. Generic `<…>` holds its commas; `->` and `=>` are not
+/// brackets.
 fn item_end(b: &[u8], from: usize) -> usize {
-    let mut depth = 0usize;
-    for k in from..b.len() {
+    let (mut depth, mut angle) = (0usize, 0usize);
+    let mut k = from;
+    while k < b.len() {
         match b[k] {
+            b'-' | b'=' if b.get(k + 1) == Some(&b'>') => k += 1,
+            b'<' => angle += 1,
+            b'>' => angle = angle.saturating_sub(1),
             b'{' if depth == 0 => return (close_of(b, k) + 1).min(b.len()),
             b'(' | b'[' | b'{' => depth += 1,
             b')' | b']' | b'}' if depth == 0 => return k,
             b')' | b']' | b'}' => depth -= 1,
             b';' if depth == 0 => return k + 1,
+            b',' if depth == 0 && angle == 0 => return k + 1,
             _ => {}
         }
+        k += 1;
     }
     b.len()
 }
@@ -480,7 +501,7 @@ fn count(b: &[u8]) -> Counts {
     let mut k = 0;
     while k < b.len() {
         if let Some(attr) = attr_at(b, k) {
-            if attr.predicate().is_some_and(names_os) {
+            if attr.names_os() {
                 counts.sites += 1;
                 counts.os_attrs += 1;
             }
@@ -504,15 +525,70 @@ fn count(b: &[u8]) -> Counts {
             k = close;
             continue;
         }
-        if OS_PATHS.iter().any(|path| {
-            b[k..].starts_with(path.as_bytes())
-                && (path.ends_with("::") || !b.get(k + path.len()).is_some_and(|&c| is_ident(c)))
-        }) {
+        let word = &b[k..end];
+        if OS_CRATES.iter().any(|name| word == name.as_bytes()) && path_sep(b, end).is_some() {
             counts.sites += 1;
+        } else if word == b"std" {
+            if let Some(next) = path_sep(b, end) {
+                counts.sites += std_os_paths(b, next, "std").0;
+            }
         }
         k = end;
     }
     counts
+}
+
+/// Past the `::` after `at` (whitespace allowed), if there is one.
+fn path_sep(b: &[u8], at: usize) -> Option<usize> {
+    let k = skip_ws(b, at);
+    (b.get(k..k + 2) == Some(b"::".as_slice())).then(|| skip_ws(b, k + 2))
+}
+
+/// The `os::unix` / `os::windows` segments in the path or use tree at `at`,
+/// whose parent segment is `parent`: `std::os::unix::net::UnixStream`,
+/// `std::{io, os::unix::fs::PermissionsExt}`, `std::os::{fd, unix::io}`. One
+/// per segment; returns the count and where the tree ends.
+fn std_os_paths(b: &[u8], at: usize, parent: &str) -> (usize, usize) {
+    let mut k = skip_ws(b, at);
+    match b.get(k).copied() {
+        Some(b'{') => {
+            let mut hits = 0;
+            k += 1;
+            loop {
+                k = skip_ws(b, k);
+                match b.get(k).copied() {
+                    Some(b'}') => return (hits, k + 1),
+                    Some(b',') => k += 1,
+                    Some(_) => {
+                        let (n, next) = std_os_paths(b, k, parent);
+                        if next == k {
+                            return (hits, k);
+                        }
+                        hits += n;
+                        k = next;
+                    }
+                    None => return (hits, k),
+                }
+            }
+        }
+        Some(c) if is_ident(c) => {
+            let end = ident_end(b, k);
+            let segment = String::from_utf8_lossy(&b[k..end]).into_owned();
+            let hit = usize::from(parent == "os" && STD_OS_MODULES.contains(&segment.as_str()));
+            if let Some(next) = path_sep(b, end).filter(|&n| b.get(n) != Some(&b'<')) {
+                let (n, after) = std_os_paths(b, next, &segment);
+                return (hit + n, after);
+            }
+            // `unix as u` in a use tree.
+            let after = skip_ws(b, end);
+            if b[after..].starts_with(b"as") && !b.get(after + 2).is_some_and(|&c| is_ident(c)) {
+                return (hit, ident_end(b, skip_ws(b, after + 2)));
+            }
+            (hit, end)
+        }
+        Some(b'*') => (0, k + 1),
+        _ => (0, k),
+    }
 }
 
 struct Parsed {
@@ -563,16 +639,9 @@ struct Scan {
 }
 
 fn scan(root: &Path) -> Scan {
-    let mut src_dirs = vec![root.join("src")];
-    if let Ok(entries) = fs::read_dir(root.join("crates")) {
-        for entry in entries {
-            let dir = entry.expect("read a crate entry").path();
-            if dir != root.join(PLATFORM_CRATE) && dir.join("src").is_dir() {
-                src_dirs.push(dir.join("src"));
-            }
-        }
-    }
-    src_dirs.sort();
+    let platform = root.join(PLATFORM_CRATE).join("src");
+    let mut src_dirs = guard_support::roots_at(root);
+    src_dirs.retain(|dir| *dir != platform);
     let mut parsed = BTreeMap::new();
     for dir in &src_dirs {
         for file in rust_files(dir) {
@@ -1037,6 +1106,24 @@ fn one_site_per_attribute_or_macro_and_per_path() {
         ("use std::os::windows::io::AsRawHandle;", 1),
         ("fn f() { unsafe { libc::kill(libc::getpid(), 0) }; }", 2),
         ("use windows_sys::Win32::Foundation::CloseHandle;", 1),
+        ("use std::{os::unix::fs::PermissionsExt, path::Path};", 1),
+        ("use std::os::{fd::AsRawFd, unix::io::FromRawFd};", 1),
+        ("use std::{io, os::{fd, unix::prelude::*}};", 1),
+        ("use std::{io, os::unix as u};", 1),
+        ("use std::os::{unix, windows};", 2),
+        (
+            "fn f() { let _ = ::std::os::unix::net::UnixStream::connect(p); }",
+            1,
+        ),
+        (
+            "fn f() { let _ = std :: os :: windows :: io :: AsRawHandle::as_raw_handle; }",
+            1,
+        ),
+        ("#[cfg_attr(not(feature = \"x\"), cfg(unix))] fn f() {}", 1),
+        (
+            "#[cfg_attr(test, cfg_attr(feature = \"y\", cfg(windows)))] fn f() {}",
+            1,
+        ),
     ] {
         assert_eq!(sites(src), n, "{src}");
     }
@@ -1049,7 +1136,8 @@ fn non_os_cfgs_are_not_sites() {
         "#[cfg(feature = \"unix\")] fn f() {}",
         "#[cfg(any(test, feature = \"windows\"))] fn f() {}",
         "#[cfg_attr(test, allow(dead_code))] fn f() {}",
-        "#[cfg_attr(not(feature = \"x\"), cfg(unix))] fn f() {}",
+        "use std::os::fd::AsRawFd;",
+        "use std::{io, os::raw::c_int, unix, windows::x};",
         "#![cfg_attr(not(debug_assertions), windows_subsystem = \"windows\")]",
         "fn f() -> bool { cfg!(debug_assertions) }",
         "fn f() { mylibc::x(); not_windows_sys::y(); std::os::unixish(); }",
@@ -1080,11 +1168,32 @@ fn test_items_are_skipped_by_brace_matching() {
     assert!(file.test_only);
     assert_eq!(file.kept.sites, 0);
 
+    let inner = parse("#![cfg(unix)]\n#[cfg(test)]\nmod t {}\n");
+    assert_eq!(
+        inner.kept.sites, 1,
+        "an inner attribute never joins a test run"
+    );
+
     let not_test = parse("#[cfg(any(target_os = \"macos\", test))]\nfn f() { libc::getpid(); }\n");
     assert_eq!(
         not_test.kept.sites, 2,
         "`any(…, test)` is production code too"
     );
+}
+
+#[test]
+fn a_test_gated_member_ends_at_its_comma() {
+    for (src, n) in [
+        ("struct S { #[cfg(test)] a: bool, #[cfg(unix)] fd: i32 }", 1),
+        ("struct S { #[cfg(test)] a: HashMap<u8, u8>, #[cfg(unix)] fd: i32 }", 1),
+        ("enum E { #[cfg(test)] A(u8, u8), #[cfg(windows)] B }", 1),
+        ("fn f(#[cfg(test)] a: u8, #[cfg(unix)] b: i32) {}", 1),
+        ("fn f(x: u8) { match x { #[cfg(test)] 0 => a(), #[cfg(unix)] _ => libc::abort() } }", 2),
+        ("#[cfg(test)]\nfn g<A, B>(x: A) -> Result<A, B> { libc::abort() }\n#[cfg(unix)]\nfn h() {}", 1),
+        ("#[cfg(test)]\nconst LESS: bool = 1 < 2;\n#[cfg(unix)]\nfn h() {}", 1),
+    ] {
+        assert_eq!(sites(src), n, "{src}");
+    }
 }
 
 #[test]
@@ -1154,28 +1263,55 @@ fn assert_guard_fails(case: &str, needles: &[&str]) {
     }
 }
 
+fn rows(rows: &[(&str, usize)]) -> BTreeMap<String, usize> {
+    rows.iter().map(|&(k, v)| (k.to_string(), v)).collect()
+}
+
+#[test]
+fn baseline_regeneration_only_lowers_and_drops_rows() {
+    let root = std::env::temp_dir().join(format!("platform-cfg-write-{}", std::process::id()));
+    let lists = root.join(LISTS);
+    fs::create_dir_all(&lists).expect("create the temporary lists");
+    fs::write(
+        lists.join(BASELINE),
+        "# header\n\nsrc/a.rs 3\nsrc/b.rs 2\nsrc/c.rs 1\n",
+    )
+    .expect("write the temporary baseline");
+    let report = Report {
+        failures: Vec::new(),
+        computed: rows(&[("src/a.rs", 1), ("src/b.rs", 5), ("src/d.rs", 4)]),
+        listed: rows(&[("src/a.rs", 3), ("src/b.rs", 2), ("src/c.rs", 1)]),
+        test_gates: BTreeMap::new(),
+    };
+    write_lowered_baseline(&root, &report);
+    let text = fs::read_to_string(lists.join(BASELINE)).unwrap_or_default();
+    let _ = fs::remove_dir_all(&root);
+    assert_eq!(
+        text, "# header\n\nsrc/a.rs 1\nsrc/b.rs 2\n",
+        "a lowers, b is not raised, stale c is dropped, new d is not added"
+    );
+}
+
 #[test]
 fn the_passing_fixture_scans_as_expected() {
     let tree = fixture("pass");
     let scanned = scan(&tree);
-    fn expected(rows: &[(&str, usize)]) -> BTreeMap<String, usize> {
-        rows.iter().map(|&(k, v)| (k.to_string(), v)).collect()
-    }
     assert_eq!(
         scanned.sites,
-        expected(&[
+        rows(&[
             ("crates/demo/src/lib.rs", 2),
+            ("src/bin/tool/main.rs", 1),
+            ("src/both.rs", 1),
             ("src/mac_ui.rs", 1),
             ("src/main.rs", 1),
             ("src/orphan.rs", 1),
             ("src/unix_bits.rs", 3),
         ]),
-        "the platform crate and every test file are skipped; an unreached file is scanned"
+        "the platform crate and every test-only file are skipped (bin roots and `#[path]` in an \
+         inline module are followed); a file reached by a test and a production route, or by none, \
+         is scanned"
     );
-    assert_eq!(
-        scanned.test_gates,
-        expected(&[("app (src)", 3), ("demo", 3)])
-    );
+    assert_eq!(scanned.test_gates, rows(&[("app (src)", 3), ("demo", 3)]));
 }
 
 #[test]
@@ -1188,7 +1324,7 @@ fn the_guard_passes_a_clean_tree_and_reports_to_the_step_summary() {
     let _ = fs::remove_file(&summary);
     assert!(passed, "the passing fixture failed:\n{out}");
     for needle in [
-        "6 OS-specific sites in 4 files",
+        "8 OS-specific sites in 6 files",
         "OS-gated items in test code (report only): 6",
         "| app (src) | 3 |",
         "| demo | 3 |",
