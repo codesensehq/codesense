@@ -6,7 +6,11 @@
 //! `get_platform_caps` command) reads only that resolved list.
 
 use serde::Serialize;
+use std::fmt::Write;
 use std::sync::OnceLock;
+
+pub const GIT_AI: &str = "git-ai";
+pub const STARSHIP: &str = "starship";
 
 /// Whether a capability exists on one OS.
 #[derive(Clone, Copy)]
@@ -21,19 +25,19 @@ struct Row {
     key: &'static str,
     macos: Support,
     linux: Support,
-    /// Why the capability is off; shown wherever it is reported unavailable.
+    /// Why the capability is off on a platform that lacks it.
     reason: &'static str,
 }
 
 const TABLE: &[Row] = &[
     Row {
-        key: "git-ai",
+        key: GIT_AI,
         macos: Support::OnFor(&["aarch64"]),
         linux: Support::Off,
         reason: "the bundled git-ai binary is only shipped for macOS on Apple silicon",
     },
     Row {
-        key: "starship",
+        key: STARSHIP,
         macos: Support::On,
         linux: Support::Off,
         reason: "the starship prompt binary is not bundled on this OS yet",
@@ -85,11 +89,9 @@ pub fn enabled(key: &str) -> bool {
 fn log_line(caps: &[Cap]) -> String {
     let mut line = String::from("caps:");
     for cap in caps {
-        line.push_str(&format!(
-            " {}={}",
-            cap.key,
-            if cap.on { "on" } else { "off" }
-        ));
+        let state = if cap.on { "on" } else { "off" };
+        // Writing to a `String` cannot fail.
+        let _ = write!(line, " {}={state}", cap.key);
     }
     line
 }
@@ -125,10 +127,17 @@ mod tests {
     }
 
     #[test]
-    fn an_off_row_carries_its_reason_and_an_on_row_does_not() {
-        let caps = resolve(TABLE, "macos", "x86_64");
-        assert!(caps[0].reason.is_some_and(|r| !r.is_empty()));
-        assert_eq!(caps[1].reason, None);
+    fn a_reason_is_present_exactly_when_a_row_is_off() {
+        for (os, arch) in [
+            ("macos", "aarch64"),
+            ("macos", "x86_64"),
+            ("linux", "x86_64"),
+        ] {
+            for cap in resolve(TABLE, os, arch) {
+                assert_eq!(cap.reason.is_none(), cap.on, "{os} {arch} {}", cap.key);
+                assert!(cap.reason.map_or(true, |r| !r.is_empty()));
+            }
+        }
     }
 
     #[test]
@@ -153,11 +162,20 @@ mod tests {
     }
 
     #[test]
-    fn enabled_reads_the_resolved_list() {
+    fn a_capability_resolves_on_only_where_its_row_says() {
+        let on = |os, arch, key| {
+            resolve(TABLE, os, arch)
+                .iter()
+                .any(|cap| cap.key == key && cap.on)
+        };
+        assert!(on("macos", "aarch64", GIT_AI));
+        assert!(!on("macos", "x86_64", GIT_AI));
+        assert!(!on("linux", "x86_64", GIT_AI));
+        assert!(on("macos", "x86_64", STARSHIP));
+    }
+
+    #[test]
+    fn enabled_is_false_for_an_unknown_key() {
         assert!(!enabled("no-such-capability"));
-        assert_eq!(
-            enabled("starship"),
-            caps().iter().any(|c| c.key == "starship" && c.on)
-        );
     }
 }

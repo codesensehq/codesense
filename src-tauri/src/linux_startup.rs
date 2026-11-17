@@ -3,7 +3,6 @@
 
 use std::ffi::OsStr;
 
-#[cfg(target_os = "linux")]
 const DMABUF_VAR: &str = "WEBKIT_DISABLE_DMABUF_RENDERER";
 
 /// The value to set for `WEBKIT_DISABLE_DMABUF_RENDERER`, or `None` to keep what the user set
@@ -12,8 +11,8 @@ pub fn webkit_env_default(user_value: Option<&OsStr>) -> Option<&'static str> {
     user_value.is_none().then_some("1")
 }
 
-/// Applies the WebKitGTK defaults. Call first in `main`, before any thread starts.
-#[cfg(target_os = "linux")]
+/// Applies the WebKitGTK defaults. Call first in `main`, before any thread starts, and only on
+/// Linux: it sets an environment variable on whatever OS it runs on.
 pub fn apply_webkit_env_defaults() {
     let user_value = std::env::var_os(DMABUF_VAR);
     if let Some(value) = webkit_env_default(user_value.as_deref()) {

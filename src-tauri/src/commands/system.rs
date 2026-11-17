@@ -286,7 +286,7 @@ pub fn get_http_api_port(app: tauri::AppHandle) -> Option<u16> {
     app.try_state::<crate::http::HttpApiPort>().map(|p| p.0)
 }
 
-/// The features this OS and architecture supports, resolved once at startup.
+/// The features this OS and architecture support, resolved lazily, once, on first use.
 #[tauri::command]
 pub fn get_platform_caps() -> &'static [crate::platform_caps::Cap] {
     crate::platform_caps::caps()
