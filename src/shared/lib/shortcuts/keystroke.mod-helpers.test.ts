@@ -10,14 +10,9 @@ import {
   matchesKeystroke,
   modifiersFrom,
 } from "./keystroke";
+import { restorePlatform, setPlatform } from "@/test/platform";
 
-const originalPlatform = navigator.platform;
-
-function setPlatform(value: string): void {
-  Object.defineProperty(navigator, "platform", { value, configurable: true, writable: true });
-}
-
-afterEach(() => setPlatform(originalPlatform));
+afterEach(restorePlatform);
 
 const none = { metaKey: false, ctrlKey: false, altKey: false, shiftKey: false };
 

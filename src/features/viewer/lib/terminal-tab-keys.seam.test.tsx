@@ -49,6 +49,7 @@ import {
   type SeedTab,
 } from "@/test/terminal-layout-harness";
 import { resetTestTerminalHost } from "@/test/terminal-layout-source-mock";
+import { restorePlatform, setPlatform } from "@/test/platform";
 
 /**
  * The terminal tab keys, end to end through the real pieces: a keydown in the
@@ -245,11 +246,6 @@ function press(init: KeyboardEventInit) {
   fireEvent.keyDown(document.activeElement ?? document.body, init);
 }
 
-const originalPlatform = navigator.platform;
-function setPlatform(value: string) {
-  Object.defineProperty(navigator, "platform", { value, configurable: true, writable: true });
-}
-
 beforeEach(() => {
   vi.clearAllMocks();
   // The Mac rules are the strict ones (⌘ only; ⌃ chords belong to the shell).
@@ -273,7 +269,7 @@ beforeEach(() => {
 afterEach(async () => {
   // Let a focus the coordinator scheduled for the next frame land in THIS test.
   await act(async () => new Promise((r) => setTimeout(r, 50)));
-  setPlatform(originalPlatform);
+  restorePlatform();
   vi.restoreAllMocks(); // spies on store verbs never outlive their test
   expect(ptyKeys).toEqual([]);
 });

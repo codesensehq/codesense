@@ -9,13 +9,9 @@ import { useViewerStore, type Workspace } from "@/shared/stores/viewer-store";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { buildTeamKey } from "@/shared/lib/team-key";
 import { matchShortcut, useShortcutHandler } from "./use-shortcut-handler";
+import { restorePlatform, setPlatform } from "@/test/platform";
 
 const TEAM_KEY = buildTeamKey("acme", "core");
-const originalPlatform = navigator.platform;
-
-function setPlatform(value: string): void {
-  Object.defineProperty(navigator, "platform", { value, configurable: true, writable: true });
-}
 
 function Harness({ inTerminal }: { inTerminal: boolean }) {
   useShortcutHandler();
@@ -84,7 +80,7 @@ beforeEach(() => {
 
 afterEach(() => {
   rig.restore();
-  setPlatform(originalPlatform);
+  restorePlatform();
 });
 
 function focusField(): void {

@@ -11,6 +11,7 @@ import {
   isTerminalFocused,
   isTerminalPopupFocused,
 } from "./focus-utils";
+import { restorePlatform, setPlatform } from "@/test/platform";
 
 describe("focus-utils", () => {
   afterEach(() => {
@@ -84,6 +85,8 @@ describe("focus-utils", () => {
   });
 
   describe("isCmdW", () => {
+    afterEach(restorePlatform);
+
     const press = (init: Partial<KeyboardEventInit>) =>
       isCmdW(new KeyboardEvent("keydown", { metaKey: true, ...init }));
 
@@ -106,23 +109,10 @@ describe("focus-utils", () => {
     });
 
     it("is not Ctrl+W off macOS, where it is a shell key", () => {
-      const original = navigator.platform;
-      Object.defineProperty(navigator, "platform", {
-        value: "Win32",
-        configurable: true,
-        writable: true,
-      });
-      try {
-        expect(
-          isCmdW(new KeyboardEvent("keydown", { key: "w", code: "KeyW", ctrlKey: true })),
-        ).toBe(false);
-      } finally {
-        Object.defineProperty(navigator, "platform", {
-          value: original,
-          configurable: true,
-          writable: true,
-        });
-      }
+      setPlatform("Win32");
+      expect(isCmdW(new KeyboardEvent("keydown", { key: "w", code: "KeyW", ctrlKey: true }))).toBe(
+        false,
+      );
     });
 
     it("needs ⌘", () => {

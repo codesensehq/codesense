@@ -7,6 +7,7 @@ import {
   REPEAT_INTERVAL,
   NATIVE_REPEAT_THRESHOLD,
 } from "./terminal-key-handler";
+import { restorePlatform, setPlatform } from "@/test/platform";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -918,17 +919,11 @@ describe("scroll shortcuts (C.2)", () => {
 });
 
 describe("Ctrl keys off macOS", () => {
-  const originalPlatform = navigator.platform;
-
-  function setPlatform(value: string): void {
-    Object.defineProperty(navigator, "platform", { value, configurable: true, writable: true });
-  }
-
   function chord(init: KeyboardEventInit & { key: string }): KeyboardEvent {
     return new KeyboardEvent("keydown", { cancelable: true, ...init });
   }
 
-  afterEach(() => setPlatform(originalPlatform));
+  afterEach(restorePlatform);
 
   it("lets Ctrl+Left and Ctrl+Right through to xterm untouched", () => {
     setPlatform("Win32");
