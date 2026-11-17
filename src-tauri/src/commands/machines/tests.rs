@@ -1818,6 +1818,22 @@ fn a_replaced_passphrase_leaves_the_keychain() {
     assert_eq!(store.get("new").unwrap().unwrap().expose(), "b");
 }
 
+/// With no secret store the person is told so before any dialog opens.
+#[test]
+fn no_secret_store_stops_a_capture_before_the_prompt() {
+    let root = tempfile::tempdir().unwrap();
+    let env = env_for(root.path(), 1);
+    let error = capture_passphrase(
+        &env,
+        &crate::commands::credential_store::UnavailableStore,
+        "~/k",
+        |_| panic!("the prompt must not open"),
+        |_, _| Ok(()),
+    )
+    .unwrap_err();
+    assert_eq!(error, passphrase::UNAVAILABLE_MESSAGE);
+}
+
 /// The dialog's answer goes to the keychain only once it unlocks the key;
 /// only a handle comes back.
 #[test]
