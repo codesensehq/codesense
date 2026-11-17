@@ -145,7 +145,7 @@ export function EditorTabStrip({
           const label = labels.get(path) ?? { name: path, hint: null };
           const state = states.get(path);
           const dirty = state?.dirty ?? false;
-          const rel = relative(rootPath || "/", path) || path;
+          const rel = relative(rootPath, path) || path;
           return (
             <div
               key={path}

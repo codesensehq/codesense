@@ -323,8 +323,6 @@ export function WorktreeFileTree({
 /** The folders between `rootPath` and `path`, nearest the root first; empty
  *  for a path outside the root. */
 function ancestorDirs(rootPath: string, path: string): string[] {
-  // A worktree at the filesystem root arrives with its `/` trimmed to "".
-  const root = rootPath || "/";
-  const dirs = split(relative(root, path) ?? "").slice(0, -1);
-  return dirs.map((_, i) => join(root, ...dirs.slice(0, i + 1)));
+  const dirs = split(relative(rootPath, path) ?? "").slice(0, -1);
+  return dirs.map((_, i) => join(rootPath, ...dirs.slice(0, i + 1)));
 }

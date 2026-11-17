@@ -4,7 +4,7 @@ import { LocateFixed, PanelLeft, PanelLeftClose, RefreshCw, Save, Search, X } fr
 import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
-import { basename, join, relative } from "@/shared/lib/path";
+import { basename, join, relative, trimTrailingSeparators } from "@/shared/lib/path";
 import { toastFailure } from "@/shared/lib/with-error-toast";
 import type { Workspace, WorktreeEditorDraft } from "@/shared/stores/viewer-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
@@ -108,11 +108,9 @@ export function SourceEditorInset({
   // The effective root: a remote tab keeps `ws.cwd` empty so nothing local
   // treats the remote directory as a path on this Mac.
   const reportedRoot = remote ? (ws.location.cwd ?? "") : ws.cwd;
-  const rootPath = reportedRoot.replace(/\/+$/, "");
-  // A worktree AT "/" trims to "" (so paths still join as "/" + rel) but is a
-  // real root, unlike a root not reported yet.
+  const rootPath = trimTrailingSeparators(reportedRoot);
   const rootReady = reportedRoot.trim() !== "";
-  const rootLabel = rootReady && rootPath === "" ? "/" : basename(rootPath) || rootPath;
+  const rootLabel = basename(rootPath) || rootPath;
   const machine = useMachine(remote ? ws.location.machineId : "");
   // The machine's display name once the machines list has loaded; its id
   // meanwhile, so the status bar never says just "Remote".
@@ -120,9 +118,7 @@ export function SourceEditorInset({
   // Only once the machines list has loaded: an unknown machine isn't "offline".
   const machineOffline = remote && machine ? machineOfflineWord(machine) : null;
 
-  // A root of `/` is trimmed to "" above; the path helpers need it back.
-  const pathRoot = rootPath || "/";
-  const toAbs = useCallback((rel: string) => join(pathRoot, rel), [pathRoot]);
+  const toAbs = useCallback((rel: string) => join(rootPath, rel), [rootPath]);
   // One stable object per (path, size), so memoized panes skip unrelated renders.
   const filesRef = useRef(new Map<string, SelectedFile>());
   const fileFor = (rel: string): SelectedFile => {
@@ -135,7 +131,7 @@ export function SourceEditorInset({
     filesRef.current.set(rel, next);
     return next;
   };
-  const toRel = useCallback((abs: string) => relative(pathRoot, abs) || abs, [pathRoot]);
+  const toRel = useCallback((abs: string) => relative(rootPath, abs) || abs, [rootPath]);
 
   // ── Tabs ────────────────────────────────────────────────────────────────
   // Identity follows file-buffer-model: tabs, panes, statuses, drafts, sizes and
@@ -555,7 +551,7 @@ export function SourceEditorInset({
 
   // ── Scratch overlay (local only) ────────────────────────────────────────
   const { files: scratchFiles, refresh: refreshScratch } = useScratchOverlayFiles(ws.cwd);
-  const activeRel = active ? relative(pathRoot, toAbs(active)) : null;
+  const activeRel = active ? relative(rootPath, toAbs(active)) : null;
   const activeScratch = activeRel === null ? undefined : scratchFiles.get(activeRel);
   const [scratchBusy, setScratchBusy] = useState(false);
   const chooseScratchFile = useCallback(

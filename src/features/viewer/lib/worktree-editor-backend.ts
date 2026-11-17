@@ -17,7 +17,7 @@ import type { Workspace } from "@/shared/stores/viewer-store";
 import { isRemoteWorkspace, workspaceSourceRepo } from "@/shared/lib/workspace-location";
 
 import type { RemoteFileAdapter } from "./use-file-editor";
-import { join, relative } from "@/shared/lib/path";
+import { join, relative, trimTrailingSeparators } from "@/shared/lib/path";
 
 /**
  * Everything the worktree editor needs from the filesystem, resolved once per
@@ -88,8 +88,7 @@ export function decodeUtf8Strict(bytes: Uint8Array): string {
  *  unchanged it would be resolved against the root on the machine and name a
  *  different file. */
 export function rootRelative(root: string, abs: string): string {
-  // A remote root at `/` arrives trimmed to "".
-  const rel = relative(root || "/", abs);
+  const rel = relative(root, abs);
   if (rel !== null) return rel;
   throw { kind: "transportFailure", message: `${abs} is outside the worktree.` };
 }
@@ -100,9 +99,9 @@ export function makeRemoteBackend(
   rootPath: string,
   branch: string | null,
 ): WorktreeEditorBackend {
-  const root = rootPath.replace(/\/+$/, "");
+  const root = trimTrailingSeparators(rootPath);
   const rel = (abs: string) => rootRelative(root, abs);
-  const toAbsolute = (relPath: string) => (relPath === "" ? root : join(root || "/", relPath));
+  const toAbsolute = (relPath: string) => (relPath === "" ? root : join(root, relPath));
   return {
     location: "remote",
     rootPath: root,
@@ -153,7 +152,7 @@ export function makeRemoteBackend(
 export function makeLocalBackend(rootPath: string): WorktreeEditorBackend {
   return {
     location: "local",
-    rootPath: rootPath.replace(/\/+$/, ""),
+    rootPath: trimTrailingSeparators(rootPath),
     listFiles: async () => {
       const list = await worktreeListFiles(rootPath);
       return { ...list, includesUntracked: true };
