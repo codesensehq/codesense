@@ -260,9 +260,9 @@ fn absence_of(error: &dbus_secret_service::Error) -> Probe {
     }
 }
 
-/// D-Bus errors that say there is no session bus to talk to. A `NoReply`, a timeout, or a
-/// `NameHasNoOwner` (which dbus-broker also reports while it activates a service) is not here:
-/// a slow or starting daemon is not an absent one.
+/// D-Bus errors that say there is no session bus or no Secret Service to talk to. A `NoReply`, a
+/// timeout, or a `NameHasNoOwner` (dbus-broker also sends it when activating a service fails) is
+/// not here: a slow or failing daemon is not an absent one.
 #[cfg(target_os = "linux")]
 const NO_SERVICE_ERRORS: [&str; 6] = [
     "org.freedesktop.DBus.Error.NoServer",
@@ -599,6 +599,13 @@ mod tests {
         for name in NO_SERVICE_ERRORS {
             assert_eq!(absence_of(&dbus_error(name)), Probe::Absent, "{name}");
         }
+        // The name is matched, not searched for in the message: a failure that merely mentions
+        // an absence is still unknown.
+        let mentions_absence = dbus_secret_service::Error::Dbus(dbus::Error::new_custom(
+            "org.freedesktop.DBus.Error.Failed",
+            "org.freedesktop.DBus.Error.ServiceUnknown",
+        ));
+        assert_eq!(absence_of(&mentions_absence), Probe::Unknown);
         for name in [
             "org.freedesktop.DBus.Error.NameHasNoOwner",
             "org.freedesktop.DBus.Error.NoReply",
