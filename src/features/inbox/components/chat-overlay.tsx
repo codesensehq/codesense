@@ -39,6 +39,7 @@ import { useAgentInbox } from "../hooks/use-session-inbox";
 import { formatCost, modelLabel, useSessionRecord } from "../hooks/use-session-record";
 import { openAgentFullView, teamAgentPage } from "../lib/agent-full-view";
 import { createDeliveryTracker } from "../lib/delivery-marks";
+import { mayCoverTakeFocus } from "../lib/overlay-focus";
 import { overlayLayout, type OverlayRecordField } from "../lib/overlay-layout";
 import { HUMAN, formatClock, labelOf, msgKey, sameTeam } from "../model";
 import { InboxViewProvider, type InboxView } from "./inbox-view-context";
@@ -59,8 +60,7 @@ const NO_ROWS: readonly AgentSessionRow[] = [];
  * An agent's chat on its own terminal tab: the conversation with you (the same thread its full
  * view shows), its pins as previews shaped by the pane, and a one-line composer. Every part
  * reads the pane's width and height through {@link overlayLayout}, so one markup serves a
- * 250 × 250 tile and a 900 × 250 strip. `placement` says whether it docks beside the terminal
- * or covers the tab.
+ * 250 × 250 tile and a 900 × 250 strip. It always covers its tab.
  */
 export function ChatOverlay({
   tabId,
@@ -68,7 +68,6 @@ export function ChatOverlay({
   teamKey,
   composeRequest,
   size,
-  placement,
   visible = true,
   style,
 }: {
@@ -78,7 +77,6 @@ export function ChatOverlay({
   composeRequest: number;
   /** The overlay's own size: what its layout is read from. */
   size: { width: number; height: number };
-  placement: "dock" | "cover";
   visible?: boolean;
   style?: React.CSSProperties;
 }) {
@@ -313,15 +311,16 @@ export function ChatOverlay({
 
   // Covering the tab, the chat takes the keyboard from the terminal it hides: focus lands in
   // its composer once that shows (or on the chat itself while it loads), unless it is already
-  // inside it (the chat itself, held while it loads, gives way to the composer).
+  // inside it (the chat itself, held while it loads, gives way to the composer). It never takes
+  // the focus from an element outside its own pane.
   useEffect(() => {
     const root = rootRef.current;
     const held = document.activeElement;
-    if (placement !== "cover" || !visible || !root || (held !== root && root.contains(held)))
-      return;
+    if (!visible || !root || (held !== root && root.contains(held))) return;
+    if (!mayCoverTakeFocus(root, held)) return;
     const composer = root.querySelector<HTMLTextAreaElement>(".ibx-comp textarea");
     (composer ?? root).focus({ preventScroll: true });
-  }, [placement, visible, loaded, groupShown]);
+  }, [visible, loaded, groupShown]);
 
   const now = useNow(visible, 60_000);
   const statusWord = status ? agentStatusWords(status, subagents) : null;
@@ -391,7 +390,6 @@ export function ChatOverlay({
         aria-label={`Chat with ${name}`}
         data-testid="chat-overlay"
         data-session-id={sessionId}
-        data-placement={placement}
         data-width={layout.width}
         data-height={layout.height}
         data-head={layout.head}

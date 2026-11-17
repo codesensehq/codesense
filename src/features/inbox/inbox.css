@@ -140,7 +140,7 @@
   line-height: 15px;
 }
 
-/* ---------- docked split ---------- */
+/* ---------- the tab body: terminal under the chat ---------- */
 .ibx-split {
   position: relative;
   display: flex;
@@ -168,11 +168,7 @@
   min-height: 0;
   overflow: hidden;
   background: var(--ibx-bg);
-  border-left: 1px solid var(--ibx-border);
   z-index: 2;
-}
-.ibx-ov[data-placement="cover"] {
-  border-left: 0;
 }
 .ibx-ov-head {
   flex: none;

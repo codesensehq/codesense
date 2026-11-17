@@ -189,16 +189,17 @@ function roster(extra: Partial<AgentSessionRow> = {}) {
   });
 }
 
-async function renderOverlay(width: number, height: number, placement: "dock" | "cover" = "cover") {
+async function renderOverlay(width: number, height: number, paneAttrs: object = {}) {
   const utils = render(
-    <ChatOverlay
-      tabId="tab-1"
-      sessionId={SESSION}
-      teamKey={TEAM_KEY}
-      composeRequest={0}
-      size={{ width, height }}
-      placement={placement}
-    />,
+    <div {...paneAttrs}>
+      <ChatOverlay
+        tabId="tab-1"
+        sessionId={SESSION}
+        teamKey={TEAM_KEY}
+        composeRequest={0}
+        size={{ width, height }}
+      />
+    </div>,
   );
   await screen.findByText("Review is clean; merge card is next.");
   return utils;
@@ -346,7 +347,7 @@ const lead = (extra = {}) => [
 describe("ChatOverlay marks (chat-core)", () => {
   it("marks what you send Queued while a busy lead is not told, Delivered once it is, none on history", async () => {
     api.loadInboxSessions.mockResolvedValue(lead({ mailNotice: "pending" }));
-    await renderOverlay(420, 700, "dock");
+    await renderOverlay(420, 700);
     expect(screen.queryByText("Queued")).toBeNull();
     expect(screen.queryByText("Delivered")).toBeNull();
     await waitFor(() => expect(useInboxSessionsStore.getState().sessions).toHaveLength(1));
@@ -367,7 +368,7 @@ describe("ChatOverlay marks (chat-core)", () => {
 
   it("marks a send to an idle lead Delivered at once", async () => {
     api.loadInboxSessions.mockResolvedValue(lead({ state: "idle", unread: 0 }));
-    await renderOverlay(420, 700, "dock");
+    await renderOverlay(420, 700);
     await waitFor(() => expect(useInboxSessionsStore.getState().sessions).toHaveLength(1));
     arrive(msg(7, "human", LEAD, "Ship it", { createdAtMs: Date.now() }));
     expect(await screen.findByText("Delivered")).toBeInTheDocument();
@@ -376,7 +377,7 @@ describe("ChatOverlay marks (chat-core)", () => {
 
 describe("ChatOverlay", () => {
   it("shows that agent's chat at its newest message, and sends to the agent from its composer", async () => {
-    await renderOverlay(420, 700, "dock");
+    await renderOverlay(420, 700);
     const msgs = screen.getByTestId("ibx-msgs");
     // The thread reads oldest to newest, and the last line is the agent's newest message.
     const shown = Array.from(msgs.querySelectorAll(".ibx-m"));
@@ -786,7 +787,6 @@ describe("ChatOverlay", () => {
         teamKey={TEAM_KEY}
         composeRequest={0}
         size={{ width: 420, height: 700 }}
-        placement="cover"
       />,
     );
     const empty = await screen.findByTestId("chat-overlay-empty");
@@ -862,7 +862,7 @@ describe("ChatOverlay", () => {
 
   it("Terminal hands the tab back to the terminal, and names the key that brings the chat back", async () => {
     act(() => openAgentInboxRail(SESSION));
-    await renderOverlay(600, 300, "cover");
+    await renderOverlay(600, 300);
     const terminal = screen.getByRole("button", { name: "Terminal" });
     expect(terminal.getAttribute("title")).toMatch(/⌘I|Ctrl\+I/);
     expect(useAgentInboxRailStore.getState().bySession[SESSION]).toBeDefined();
@@ -872,7 +872,7 @@ describe("ChatOverlay", () => {
 
   it("Escape outside the composer closes the chat", async () => {
     act(() => openAgentInboxRail(SESSION));
-    await renderOverlay(420, 700, "dock");
+    await renderOverlay(420, 700);
     expect(useAgentInboxRailStore.getState().bySession[SESSION]).toBeDefined();
     fireEvent.keyDown(screen.getByTestId("ibx-msgs"), { key: "Escape" });
     expect(useAgentInboxRailStore.getState().bySession[SESSION]).toBeUndefined();
@@ -929,7 +929,7 @@ describe("ChatOverlay", () => {
 
   it.each(AGENT_RUNTIMES)("shows the chat and its composer for a %s session", async (runtime) => {
     roster({ kind: runtime });
-    await renderOverlay(420, 700, "dock");
+    await renderOverlay(420, 700);
     expect(screen.getByTestId("ibx-msgs")).toBeInTheDocument();
     expect(screen.getByRole("textbox")).toBeEnabled();
     expect(screen.getByRole("button", { name: "Full view" })).toBeInTheDocument();
@@ -962,7 +962,7 @@ describe("ChatOverlay", () => {
         0,
       );
       expect(isRunningAgent(useAgentStateStore.getState(), SESSION)).toBe(true);
-      await renderOverlay(420, 700, "dock");
+      await renderOverlay(420, 700);
       expect(api.loadSessionInbox).toHaveBeenCalledWith(SESSION);
       const shown = Array.from(screen.getByTestId("ibx-msgs").querySelectorAll(".ibx-m"));
       expect(shown.at(-1)).toHaveTextContent("Review is clean; merge card is next.");
@@ -977,11 +977,23 @@ describe("ChatOverlay", () => {
     },
   );
 
-  it("covering the tab, takes the keyboard into its composer; docked, leaves it where it is", async () => {
-    const { unmount } = await renderOverlay(600, 300, "cover");
+  it("covering the tab, takes the keyboard into its composer when its pane is the active tab", async () => {
+    await renderOverlay(600, 300, { "data-focus-pane": "tab-1", "data-pane-active": "" });
     await waitFor(() => expect(screen.getByRole("textbox")).toHaveFocus());
+  });
+
+  it("never takes the keyboard from an element outside its pane, nor in a tab that is not active", async () => {
+    const other = document.createElement("input");
+    document.body.append(other);
+    other.focus();
+    const { unmount } = await renderOverlay(600, 300, {
+      "data-focus-pane": "tab-1",
+      "data-pane-active": "",
+    });
+    expect(other).toHaveFocus();
     unmount();
-    await renderOverlay(420, 700, "dock");
+    other.remove();
+    await renderOverlay(600, 300, { "data-focus-pane": "tab-1" });
     expect(screen.getByRole("textbox")).not.toHaveFocus();
   });
 
@@ -992,7 +1004,7 @@ describe("ChatOverlay", () => {
     it("flips the chat to the workspace room and back", async () => {
       roster(room);
       act(() => openAgentInboxRail(SESSION));
-      await renderOverlay(420, 700, "dock");
+      await renderOverlay(420, 700);
       ask();
       const pane = await screen.findByTestId("group-pane");
       expect(pane).toHaveAttribute("data-room", "ws-1");
@@ -1021,7 +1033,7 @@ describe("ChatOverlay", () => {
 
     it("has nothing to open for a session with no room, and says it handled the request", async () => {
       act(() => openAgentInboxRail(SESSION));
-      await renderOverlay(420, 700, "dock");
+      await renderOverlay(420, 700);
       ask();
       await waitFor(() =>
         expect(useAgentInboxRailStore.getState().bySession[SESSION]?.groupHandled).toBe(1),
@@ -1911,7 +1923,6 @@ describe("ChatOverlay for the Foreman", () => {
         teamKey={teamKey}
         composeRequest={0}
         size={{ width: 420, height: 700 }}
-        placement="dock"
       />,
     );
     await screen.findByText("Hello from the live Foreman.");
@@ -2214,7 +2225,7 @@ describe("ChatOverlay on a successor session", () => {
       },
       source: "live",
     });
-    await renderOverlay(420, 700, "dock");
+    await renderOverlay(420, 700);
     expect(await screen.findByText("The first session answered")).toBeInTheDocument();
     expect(screen.getByText("Asked the first session")).toBeInTheDocument();
     expect(screen.getByText("Sent from the first session's tab")).toBeInTheDocument();
@@ -2254,7 +2265,7 @@ describe("ChatOverlay on a successor session", () => {
       },
       source: "live",
     });
-    await renderOverlay(420, 700, "dock");
+    await renderOverlay(420, 700);
     await screen.findByText("Unread from this session");
     const read = () =>
       vi
@@ -2268,7 +2279,7 @@ describe("ChatOverlay on a successor session", () => {
 
   it("reads one session's inbox when the session was launched from no saved agent", async () => {
     roster({ agentRevision: null, story: null });
-    await renderOverlay(420, 700, "dock");
+    await renderOverlay(420, 700);
     await waitFor(() => expect(api.loadSessionInbox).toHaveBeenCalledWith(SESSION));
     expect(api.loadThreadInbox).not.toHaveBeenCalled();
   });
