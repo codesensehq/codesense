@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
-import { getErrorMessage } from "@/shared/lib/error-message";
+import {
+  TYPED_ERROR_PREFIX,
+  getErrorMessage,
+  userFacingErrorMessage,
+} from "@/shared/lib/error-message";
 
-/** With no secret store the app already says it in full ("Can't save the passphrase: no
- *  Secret Service is running. …"); any other failure is named for what it stopped. */
-export const passphraseSaveError = (e: unknown): string => {
-  const message = getErrorMessage(e);
-  return message.startsWith("Can't save the passphrase")
-    ? message
-    : `Couldn't keep the passphrase: ${message}`;
-};
+/** With no secret store the app answers with a typed `unavailable:` error whose sentence already
+ *  says it in full; any other failure is named for what it stopped. */
+export const passphraseSaveError = (e: unknown): string =>
+  TYPED_ERROR_PREFIX.test(getErrorMessage(e))
+    ? userFacingErrorMessage(e)
+    : `Couldn't keep the passphrase: ${getErrorMessage(e)}`;
