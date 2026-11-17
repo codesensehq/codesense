@@ -21,8 +21,12 @@
 //! - **A site** is one `#[cfg(…)]`, `#![cfg(…)]`, `#[cfg_attr(<predicate>, …)]`
 //!   or `cfg!(…)` whose predicate names `unix`, `windows`, `target_os` or
 //!   `target_family` anywhere, inside `all`/`any`/`not` too, counted once per
-//!   attribute or macro however many it names; plus one per `std::os::unix`,
-//!   `std::os::windows`, `libc::` or `windows_sys::` path. `debug_assertions`,
+//!   attribute or macro however many it names. A `cfg_attr` also counts when
+//!   one of its attributes is such a `cfg` (`cfg_attr(feature = "x",
+//!   cfg(unix))`). Plus one per `libc::` or `windows_sys::` path and one per
+//!   `os::unix` or `os::windows` segment of a `std` path or use tree
+//!   (`std::os::unix::net`, `use std::{io, os::unix::fs}`,
+//!   `use std::os::{fd, windows::io}`). `debug_assertions`,
 //!   `test` and `feature = …` predicates are not sites. Comments and the
 //!   contents of string, byte-string, raw-string and char literals are blanked
 //!   before anything is matched.
@@ -374,15 +378,20 @@ fn test_regions(b: &[u8]) -> Vec<(usize, usize)> {
 
 /// The end of what an attribute gates: past its `;` or its `{…}` body, at the
 /// `,` after a field, variant, parameter or match arm, or at the close of the
-/// enclosing block. Generic `<…>` holds its commas; `->` and `=>` are not
-/// brackets.
+/// enclosing block. Generic `<…>` holds its commas, a comparison's `<` does
+/// not; `->` and `=>` are not brackets.
 fn item_end(b: &[u8], from: usize) -> usize {
     let (mut depth, mut angle) = (0usize, 0usize);
     let mut k = from;
     while k < b.len() {
         match b[k] {
-            b'-' | b'=' if b.get(k + 1) == Some(&b'>') => k += 1,
-            b'<' => angle += 1,
+            b'-' if b.get(k + 1) == Some(&b'>') => k += 1,
+            // A match arm's guard is over: no generic spans `=>`.
+            b'=' if b.get(k + 1) == Some(&b'>') => {
+                angle = 0;
+                k += 1;
+            }
+            b'<' if opens_generic(b, k) => angle += 1,
             b'>' => angle = angle.saturating_sub(1),
             b'{' if depth == 0 => return (close_of(b, k) + 1).min(b.len()),
             b'(' | b'[' | b'{' => depth += 1,
@@ -395,6 +404,15 @@ fn item_end(b: &[u8], from: usize) -> usize {
         k += 1;
     }
     b.len()
+}
+
+/// Whether the `<` at `at` opens generic arguments (`Vec<u8>`, `f::<T>`)
+/// rather than comparing (`a < b`, `a <= b`, `a << b`): it follows an
+/// identifier or `::` directly, and no space, `=` or `<` follows it.
+fn opens_generic(b: &[u8], at: usize) -> bool {
+    let after_path = at > 0 && (is_ident(b[at - 1]) || b[at - 1] == b':');
+    let next = b.get(at + 1).copied().unwrap_or(b' ');
+    after_path && !next.is_ascii_whitespace() && next != b'=' && next != b'<'
 }
 
 /// Whether a file-level `#![cfg(test)]` gates the whole file.
@@ -1191,6 +1209,10 @@ fn a_test_gated_member_ends_at_its_comma() {
         ("fn f(x: u8) { match x { #[cfg(test)] 0 => a(), #[cfg(unix)] _ => libc::abort() } }", 2),
         ("#[cfg(test)]\nfn g<A, B>(x: A) -> Result<A, B> { libc::abort() }\n#[cfg(unix)]\nfn h() {}", 1),
         ("#[cfg(test)]\nconst LESS: bool = 1 < 2;\n#[cfg(unix)]\nfn h() {}", 1),
+        ("fn f(n: i32) { match n { #[cfg(test)] n if n < 0 => a(), #[cfg(unix)] _ => libc::abort() } }", 2),
+        ("fn f() -> S { S { #[cfg(test)] ok: a < b, #[cfg(unix)] fd: 1 } }", 1),
+        ("fn f() -> S { S { #[cfg(test)] m: HashMap::<u8, u8>::new(), #[cfg(unix)] fd: 1 } }", 1),
+        ("fn f() -> S { S { #[cfg(test)] m: Vec<Option<u8>>, #[cfg(unix)] fd: 1 } }", 1),
     ] {
         assert_eq!(sites(src), n, "{src}");
     }
