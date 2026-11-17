@@ -60,6 +60,7 @@ describe("row display helpers", () => {
     );
     expect(formatSessionHandle("SW-A")).toBe("SW-A");
     expect(formatSessionHandle("/ctx/epic/README.md")).toBe("README.md");
+    expect(formatSessionHandle("C:\\ctx\\epic\\README.md")).toBe("README.md");
   });
 
   it("formatSessionHandle leaves branch/team, path and multi-# handles opaque (no mis-split)", () => {

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { splitStoryHandle, titleCaseLabel } from "@/features/dashboard/components/dashboard-launch";
+import { basename } from "@/shared/lib/path";
 import { CODESENSE_LAUNCHER } from "@/shared/stores/viewer-store";
 import type { AgentSessionRow } from "@/tauri/commands";
 import { useAgentListProjectionStore } from "./agent-list-projection";
@@ -40,8 +41,9 @@ export function foregroundSessionId(session: AgentSessionRow): string | null {
  *  `team::epic` / `repo::branch`) — the last path/`::` segment, never parsed for
  *  meaning (handles stay opaque per SW-DX-11 §2). */
 function shortHandle(handle: string): string {
+  if (!/::|[\\/]/.test(handle)) return handle;
   const tail = handle.split("::").pop() ?? handle;
-  return tail.split("/").filter(Boolean).pop() ?? handle;
+  return basename(tail) || handle;
 }
 
 /** SW-DX-17e (AC-6): render a COMPOUND session handle `stem#label` — a SW-GW-6
