@@ -91,12 +91,9 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"] }
 reqwest_mcp = { package = "reqwest", version = "0.13.2", default-features = false, features = ["json", "stream", "rustls"] }
 tauri-plugin-log = "~2.8.0"
 log = "0.4"
-# OS keychain for credentials at rest (replaces the 0600 auth.json).
-# macOS-native store (the app's platform); the crate still compiles elsewhere
-# (unmatched platform → runtime error, not a build break — CI runs ubuntu, so
-# tests use an in-memory fake, never the real backend). Access is
+# OS keychain for credentials at rest (replaces the 0600 auth.json). The backend is
+# chosen per target below: macOS Keychain, or Secret Service on Linux. Access is
 # synchronous/blocking — callers offload via `commands::await_blocking`.
-keyring = { version = "3", features = ["apple-native"] }
 futures-util = "0.3"
 # `rustls-tls-webpki-roots` lets the dashboard live link open `wss://`.
 tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
@@ -166,12 +163,19 @@ objc2-web-kit = { version = "0.3", default-features = false, features = ["WKWebV
 objc2-foundation = { version = "0.3", features = ["NSData", "NSError", "NSGeometry", "NSProcessInfo", "NSString", "NSURL", "NSURLRequest"] }
 block2 = "0.6"
 dispatch2 = "0.3"
+keyring = { version = "3", features = ["apple-native"] }
 
 # Linux copy-on-write clone (btrfs/XFS/bcachefs FICLONE detection).
 # macOS uses libc::clonefile directly (already a dep); this never enters the
 # macOS dependency graph.
 [target.'cfg(target_os = "linux")'.dependencies]
 reflink-copy = "0.1"
+# Secret Service is the only Linux secret backend: without a backend feature keyring
+# falls back to an in-memory mock that forgets every secret on exit.
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
+# Probes the session bus for the default collection without unlocking it. The same
+# crate (and version) keyring's `sync-secret-service` already builds.
+dbus-secret-service = "4.0.0-rc.2"
 
 [dev-dependencies]
 # Count SQLite VM work in spend-cap scaling tests without a wall-clock budget.
