@@ -19,7 +19,7 @@ import {
  *   /Users/me/.codesense/…/default/demo    → ~/…/default/demo
  *   /usr/local/bin                         → /…/local/bin
  *   /                                      → /
- *   C:\Users\me\code\app                → C:\…\code\app
+ *   C:\Users\me\code\app                   → C:\…\code\app
  *
  * The caption renders `head` and `parent` muted and `leaf` emphasized, so the
  * directory you are in is what the eye lands on.

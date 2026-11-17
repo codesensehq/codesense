@@ -737,7 +737,7 @@ export function SourceEditorInset({
                 <span className="text-xs font-semibold text-foreground">Files</span>
                 <span
                   className="min-w-0 flex-1 truncate text-[0.7rem] text-muted-foreground"
-                  title={rootReady && rootPath === "" ? "/" : rootPath}
+                  title={rootPath}
                 >
                   {rootLabel}
                 </span>

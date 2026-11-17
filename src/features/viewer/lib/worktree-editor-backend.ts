@@ -195,7 +195,7 @@ export function backendFor(loc: {
   if (loc.kind === "remote") {
     // No remote directory yet (a machine location without its cwd): there is
     // no backend until it arrives. A worktree AT "/" is a real root, though —
-    // it trims to "" but paths still anchor correctly ("/" + rel).
+    // its root stays "/" and paths anchor correctly ("/" + rel).
     return loc.machineId && loc.handle && loc.remoteRoot.trim() !== ""
       ? makeRemoteBackend(loc.machineId, loc.handle, loc.remoteRoot, loc.branch)
       : null;

@@ -41,7 +41,6 @@ export function foregroundSessionId(session: AgentSessionRow): string | null {
  *  `team::epic` / `repo::branch`) — the last path/`::` segment, never parsed for
  *  meaning (handles stay opaque per SW-DX-11 §2). */
 function shortHandle(handle: string): string {
-  if (!/::|[\\/]/.test(handle)) return handle;
   const tail = handle.split("::").pop() ?? handle;
   return basename(tail) || handle;
 }
@@ -59,10 +58,10 @@ export function formatSessionHandle(handle: string): string {
   // (a slug) contains neither `::` nor `/`. Everything else is opaque and renders
   // via {@link shortHandle}: a branch/team handle (`::`-bearing, `repo::branch`) or
   // a PATH handle (epic `…/README.md`, dir absolute path — both may legally contain
-  // `#`). Guarding on `::`/`/` (not just `::`) stops story grammar from mis-splitting
+  // `#`). Guarding on `::`/a separator (not just `::`) stops story grammar from mis-splitting
   // a path like `/x/my#proj` into "my · Proj". A multi-`#` story handle also stays
   // opaque (never leak a raw `#` into the humanized label). Review r1+r2.
-  if (handle.includes("::") || handle.includes("/")) return shortHandle(handle);
+  if (/::|[\\/]/.test(handle)) return shortHandle(handle);
   const { storyId, label } = splitStoryHandle(handle);
   if (!label || label.includes("#")) return shortHandle(handle);
   return `${shortHandle(storyId)} · ${titleCaseLabel(label)}`;

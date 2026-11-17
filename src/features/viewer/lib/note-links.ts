@@ -54,7 +54,7 @@ function decodeCsTarget(target: string): string {
 }
 
 /** True when `absPath` is `root` or a descendant of it — the shared path-boundary
- *  test used by `toContentRelative` and the picker's file-candidate guard so a
+ *  test used by the picker's file-candidate guard so a
  *  sibling sharing a prefix (`/x/content` vs `/x/content-2`) is never treated as
  *  inside the root. `root` may carry a trailing slash. */
 export function isUnderContentRoot(absPath: string, root: string): boolean {

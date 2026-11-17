@@ -99,7 +99,7 @@ export function dirname(path: string): string {
 
 /**
  * `path` relative to `dir`, always `/`-joined (the form Rust and git use), or
- * `null` when `path` is not inside `dir`. The root itself gives `""`.
+ * `null` when `path` is not inside `dir`. `dir` itself gives `""`.
  */
 export function relative(dir: string, path: string): string | null {
   const dirRoot = root(dir);
