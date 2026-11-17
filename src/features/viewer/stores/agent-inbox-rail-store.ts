@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { isRunningAgent } from "@/features/viewer/lib/hand-agents";
+import { isRunningAgent, useRunningAgent } from "@/features/viewer/lib/hand-agents";
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
 import { create } from "zustand";
 
@@ -195,4 +195,11 @@ export function closeAgentInboxRailToTerminal(sessionId: string, pane: Element |
     requestAnimationFrame(() =>
       pane.querySelector<HTMLTextAreaElement>(".xterm textarea")?.focus(),
     );
+}
+
+/** Whether the chat covers `sessionId`'s tab: it is open and the agent still runs. */
+export function useChatCovers(sessionId: string): boolean {
+  const open = useAgentInboxRailStore((s) => !!s.bySession[sessionId]);
+  const running = useRunningAgent(sessionId);
+  return open && running;
 }

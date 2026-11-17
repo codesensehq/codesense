@@ -71,6 +71,7 @@ vi.mock("@/tauri/commands", async (importOriginal) => ({
   }),
 }));
 vi.mock("./source-editor-inset", () => ({ WorktreeEditorSurface: () => null }));
+vi.mock("@/features/inbox/components/chat-overlay", () => ({ ChatOverlay: () => null }));
 vi.mock("@/features/dashboard/components/markdown-viewer", () => ({ MarkdownViewer: () => null }));
 vi.mock("@/shared/lib/pipeline-graph/use-story-details", () => ({
   useStoryDetails: vi.fn(() => ({ data: { title: null, storyText: "" }, loading: false })),
@@ -91,6 +92,14 @@ import {
 } from "@/shared/terminal/terminal-manager";
 import { rememberTerminalSize } from "@/shared/lib/terminal-open";
 import { useOrgStore } from "@/shared/stores/org-store";
+import { useAgentStateStore } from "@/shared/stores/agent-state-store";
+import {
+  closeAgentInboxRail,
+  openAgentInboxRail,
+  useAgentInboxRailStore,
+} from "@/features/viewer/stores/agent-inbox-rail-store";
+import { PANE_START_TIMEOUT_MS } from "@/features/viewer/hooks/use-pane-startup";
+import { useHeldOutputStore } from "@/features/viewer/stores/held-output-store";
 import { writePty } from "@/tauri/commands";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 import {
@@ -244,6 +253,78 @@ function referenceAfter(session: string, chunks: number): Promise<ReferenceBuffe
 async function expectParity(session: string) {
   expect(await bufferOf(session)).toEqual(await headlessFrom(FIXTURE[session]));
 }
+
+describe("a chat covering an agent tab parks its terminal", () => {
+  beforeEach(() => {
+    useAgentInboxRailStore.setState({ bySession: {}, pending: {} });
+    useHeldOutputStore.setState({ bySession: {} });
+  });
+  afterEach(() => {
+    useAgentInboxRailStore.setState({ bySession: {}, pending: {} });
+    useAgentStateStore.setState({ processAgentBySession: {} });
+  });
+
+  it("holds every line while covered, counts them, and shows them all in order on the CLI", async () => {
+    renderApp();
+    await flush();
+    act(() => {
+      useAgentStateStore.getState().setProcessAgent("codex", "codex");
+      openAgentInboxRail("codex");
+    });
+    await flush();
+    expect(terminalManager.holdsVisible("codex")).toBe(false);
+    act(() => {
+      for (let i = 1; i <= 40; i++) h.server.produce("codex", `held ${i}\r\n`);
+    });
+    await flush();
+    expect(useHeldOutputStore.getState().bySession["codex"]).toBe(40);
+    act(() => closeAgentInboxRail("codex"));
+    await flush();
+    expect(terminalManager.holdsVisible("codex")).toBe(true);
+    expect(useHeldOutputStore.getState().bySession["codex"]).toBeUndefined();
+    const lines = (await bufferOf("codex")).lines.filter((l) => l.startsWith("held "));
+    expect(lines).toEqual(Array.from({ length: 40 }, (_, i) => `held ${i + 1}`));
+  });
+
+  it("a covered pane's startup does not time out, and is timed again from when it is shown", async () => {
+    // A parked display draws no frame: stand in for the renderer that never paints.
+    const listen = terminalManager.listen.bind(terminalManager);
+    vi.spyOn(terminalManager, "listen").mockImplementation((id, l) =>
+      listen(id, { ...l, render: undefined }),
+    );
+    act(() => {
+      useAgentStateStore.getState().setProcessAgent("codex", "codex");
+      openAgentInboxRail("codex");
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const view = renderApp();
+      const failed = () =>
+        view.container.querySelectorAll(
+          '[data-focus-pane="codex"] [data-testid="pane-startup-retry"]',
+        ).length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(PANE_START_TIMEOUT_MS + 1_000);
+      });
+      expect(failed()).toBe(0);
+      act(() => closeAgentInboxRail("codex"));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(PANE_START_TIMEOUT_MS + 1_000);
+      });
+      expect(failed()).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a shell tab is never parked by a chat", async () => {
+    renderApp();
+    await flush();
+    act(() => openAgentInboxRail("codex"));
+    expect(useAgentInboxRailStore.getState().bySession["codex"]).toBeUndefined();
+    expect(terminalManager.holdsVisible("codex")).toBe(true);
+  });
+});
 
 describe("every surface change is a slot move", () => {
   it("reattaches the same live terminal slots after renderer eviction", async () => {

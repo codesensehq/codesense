@@ -327,6 +327,12 @@ export interface TerminalManager {
   holdsVisible(sessionId: TerminalDisplayReference): boolean;
   /** Called whenever `sessionId`'s {@link holdsVisible} changes. */
   watchShown(sessionId: TerminalDisplayReference, listener: () => void): () => void;
+  /** Lines of output the display took while parked (not on screen) since it was last shown.
+   *  Counted as the output arrives: a terminal query that drains the parked output, or an
+   *  overflow that releases the display, does not reset it; showing the display does. */
+  heldLines(sessionId: TerminalDisplayReference): number;
+  /** Called when {@link heldLines} changed, at most once per animation frame. */
+  watchHeld(sessionId: TerminalDisplayReference, listener: () => void): () => void;
   /** Redraw the display in its slot (a shown canvas can come back empty). */
   repaint(sessionId: TerminalDisplayReference, slot: HTMLElement): void;
   /** The one size writer: resize the session's PTY to `cols`×`rows`. The
@@ -483,6 +489,11 @@ interface SessionEntry {
   borrowed: boolean;
   /** {@link TerminalManager.holdsVisible} as its watchers last heard it. */
   heardShown: boolean;
+  /** Lines of output that arrived while the display was parked, until it is shown again. Kept
+   *  here, not on the display: a drained ring or an overflow that releases the display keeps it. */
+  heldLines: number;
+  /** A held-count notification is queued for the next animation frame. */
+  heldNotifyQueued: boolean;
   find: TerminalFindState | null;
   route: ((data: string) => void) | null;
   readonly listeners: Set<SessionListener>;
@@ -625,6 +636,7 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
   });
   let globalsInstalled = false;
   const shownListeners = new Map<string, Set<() => void>>();
+  const heldListeners = new Map<string, Set<() => void>>();
   /** The font size each live display's atlas was built at. A rebuilt display is a new terminal. */
   const atlasFontPx = new WeakMap<Terminal, number>();
   /** Scroll positions saved while the window is blurred. */
@@ -800,6 +812,7 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
     d.pendingSeqEnd = item.seq;
     if (d.parked) {
       const overflowed = d.parkedOutput.append(item.data, item.seq);
+      hold(entry, item.data);
       notify(entry, (l) => l.output?.(item.data));
       if (overflowed) dropParked(entry);
       // A program waiting on a reply gets it now, not on the next show.
@@ -973,6 +986,25 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
     if (evictable(entry)) evict(entry);
   }
 
+  /** Tell the held-count watchers, once per animation frame however many chunks arrived. */
+  function notifyHeld(entry: SessionEntry): void {
+    if (entry.heldNotifyQueued) return;
+    entry.heldNotifyQueued = true;
+    requestAnimationFrame(() => {
+      entry.heldNotifyQueued = false;
+      for (const listener of [...(heldListeners.get(entry.sessionId) ?? [])]) listener();
+    });
+  }
+
+  /** Count the lines of `data`, which a parked display took instead of writing. */
+  function hold(entry: SessionEntry, data: string): void {
+    let lines = 0;
+    for (let at = data.indexOf("\n"); at !== -1; at = data.indexOf("\n", at + 1)) lines++;
+    if (lines === 0) return;
+    entry.heldLines += lines;
+    notifyHeld(entry);
+  }
+
   /** Tell the session's watchers when whether it is on screen changed. */
   function notifyShown(entry: SessionEntry): void {
     const now = sessions.get(entry.sessionId) === entry && holdsVisible(entry);
@@ -985,9 +1017,16 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
       } else if (!onScreen && !d.parked) {
         d.parked = true;
         const pending = d.coalescer.take();
-        if (pending && d.parkedOutput.append(pending, d.pendingSeqEnd)) dropParked(entry);
+        if (pending) {
+          hold(entry, pending);
+          if (d.parkedOutput.append(pending, d.pendingSeqEnd)) dropParked(entry);
+        }
       }
       if (!onScreen) d.term.options.cursorBlink = false;
+    }
+    if (sessions.get(entry.sessionId) === entry && shown(entry) && entry.heldLines > 0) {
+      entry.heldLines = 0;
+      notifyHeld(entry);
     }
     watchLenders();
     if (now === entry.heardShown) return;
@@ -1536,6 +1575,8 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
           lenders: [],
           borrowed: false,
           heardShown: false,
+          heldLines: 0,
+          heldNotifyQueued: false,
           find: null,
           route: null,
           listeners: new Set(),
@@ -1748,6 +1789,23 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
         listeners.delete(listener);
         if (listeners.size === 0 && shownListeners.get(sessionId) === listeners) {
           shownListeners.delete(sessionId);
+        }
+      };
+    },
+
+    heldLines(reference) {
+      return sessions.get(terminalDisplayKey(reference))?.heldLines ?? 0;
+    },
+
+    watchHeld(reference, listener) {
+      const sessionId = terminalDisplayKey(reference);
+      let listeners = heldListeners.get(sessionId);
+      if (!listeners) heldListeners.set(sessionId, (listeners = new Set()));
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+        if (listeners.size === 0 && heldListeners.get(sessionId) === listeners) {
+          heldListeners.delete(sessionId);
         }
       };
     },

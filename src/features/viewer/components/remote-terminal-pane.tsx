@@ -20,6 +20,8 @@ import { sessionTarget } from "@/shared/lib/terminal-layout-projection";
 import { onPrivateAuthorityRetired } from "@/shared/lib/private-terminal-authority";
 import { getErrorMessage } from "@/shared/lib/error-message";
 import { TerminalSlot } from "@/shared/terminal/terminal-slot";
+import { useChatCovers } from "@/features/viewer/stores/agent-inbox-rail-store";
+import { useHeldLinesReporter } from "@/features/viewer/stores/held-output-store";
 import { terminalManager, type TerminalFindState } from "@/shared/terminal/terminal-manager";
 import { TerminalFindBar, type TerminalSearch } from "./terminal-find-bar";
 import { RemoteServerUpdateAction, useRemoteServerUpdate } from "./remote-server-update";
@@ -127,6 +129,8 @@ export function RemoteTerminalPane({
   themeConfig: baseTheme,
 }: RemoteTerminalPaneProps) {
   const origin = tab.origin!;
+  const covered = useChatCovers(tab.sessionId);
+  const reportHeld = useHeldLinesReporter(tab.sessionId);
   const machine = useMachine(origin.machineId);
   const label = machine?.label ?? origin.machineId;
   // The Machine's color tints the terminal's own background (and every notice
@@ -433,7 +437,8 @@ export function RemoteTerminalPane({
           key={terminalDisplayKey(reference)}
           sessionId={reference}
           display={{ fontSizePx, themeConfig }}
-          active={visible}
+          active={visible && !covered}
+          onHeldChange={reportHeld}
           className="min-h-0 flex-1"
           focusOnReveal={() =>
             autoFocus &&
