@@ -2,7 +2,10 @@
 import { useRunningAgent } from "@/features/viewer/lib/hand-agents";
 import { lazy, Suspense, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
-import { useAgentInboxRailStore } from "@/features/viewer/stores/agent-inbox-rail-store";
+import {
+  useAgentInboxRailStore,
+  useChatCovers,
+} from "@/features/viewer/stores/agent-inbox-rail-store";
 
 // The chat (markdown renderer, thread) loads only once some tab opens it.
 const ChatOverlay = lazy(() => import("./chat-overlay").then((m) => ({ default: m.ChatOverlay })));
@@ -54,7 +57,7 @@ export function InboxSplit({
   const size = split.width > 0 ? split : UNMEASURED;
   const style: React.CSSProperties = { position: "absolute", inset: 0 };
 
-  const covered = !!target && visible && runningAgent;
+  const covered = useChatCovers(tab.sessionId) && visible;
 
   return (
     // `flex-1 min-h-0`: under the caption it takes exactly the height left, never `h-full`

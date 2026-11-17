@@ -42,6 +42,7 @@ vi.mock("@/features/viewer/hooks/use-tab-source-repo", () => ({
 import { TerminalGridCaption } from "./terminal-grid-caption";
 import { useAgentInboxRailStore } from "@/features/viewer/stores/agent-inbox-rail-store";
 import { useHeldOutputStore } from "@/features/viewer/stores/held-output-store";
+import { projectSessionStatus, resetSessionProjection } from "@/test/session-projection-fixture";
 import { stubResizeObserver } from "@/test/resize-observer-stub";
 import { useInboxSessionsStore } from "@/features/inbox/hooks/use-inbox-sessions";
 import { useViewerStore } from "@/shared/stores/viewer-store";
@@ -223,6 +224,13 @@ describe("TerminalGridCaption Chat | CLI switch", () => {
     expect(cliSeg()).toHaveTextContent("214 new");
     act(() => useHeldOutputStore.setState({ bySession: {} }));
     expect(cliSeg()).not.toHaveTextContent("new");
+    expect(cliSeg()).not.toHaveAttribute("data-needs");
+    act(() => {
+      projectSessionStatus("sid-a", "paused", { needsYouKind: "permission" });
+    });
+    expect(cliSeg()).toHaveAttribute("data-needs", "true");
+    expect(cliSeg()).toHaveTextContent("Input needed");
+    resetSessionProjection();
     ro2.restore();
     cleanup();
   });

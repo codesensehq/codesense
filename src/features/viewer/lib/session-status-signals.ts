@@ -110,10 +110,15 @@ export function selectCliNeedsYouKind(
   if (kind === "permission" || kind === "startup") return kind;
   if (kind !== "question") return null;
   const snapshot = state.crashes?.activityBySession?.[sessionId]?.snapshot;
-  return snapshot?.observed &&
+  if (
+    snapshot?.observed &&
     snapshot.exit == null &&
     snapshot.state === "needs-permission" &&
     snapshot.reason === "question"
-    ? "question"
+  )
+    return "question";
+  // An ask_user is the chat's, but a permission prompt open beside it is still the CLI's.
+  return selectSessionAiStatus(state, state.agentDots, sessionId) === "needs-permission"
+    ? "permission"
     : null;
 }

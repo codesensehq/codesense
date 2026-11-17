@@ -10,7 +10,7 @@ import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-pr
 import { useCliNeedsYou } from "@/features/viewer/lib/cli-workspace/store/terminal-tab-selectors";
 import { formatElapsed } from "@/features/viewer/lib/agent-row-presentation";
 import {
-  closeAgentInboxRailToTerminal,
+  showAgentCli,
   markAgentInboxRailComposeHandled,
   useAgentInboxRailComposeHandled,
   useAgentInboxRailStore,
@@ -301,11 +301,7 @@ export function ChatOverlay({
   const agentPage = useOrgStore((state) =>
     team ? teamAgentPage(state.orgs, team.org, team.team) : null,
   );
-  const toTerminal = () =>
-    closeAgentInboxRailToTerminal(
-      sessionId,
-      rootRef.current?.closest("[data-pane-id], [data-pane-active]") ?? null,
-    );
+  const toTerminal = () => showAgentCli(sessionId, "focus");
 
   // Covering the tab, the chat takes the keyboard from the terminal it hides: focus lands in
   // its composer once that shows (or on the chat itself while it loads), unless it is already

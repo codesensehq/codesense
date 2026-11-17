@@ -227,6 +227,12 @@ describe("selectCliNeedsYouKind — what the CLI itself is waiting on", () => {
     expect(selectCliNeedsYouKind(both, "permission")).toBe("question");
   });
 
+  it("with an ask_user open and the CLI on a permission prompt, the CLI's prompt shows", () => {
+    const both = state({ pendingAsks: { q: { sessionId: "permission" } } });
+    expect(selectNeedsYouKind(both, "permission")).toBe("question");
+    expect(selectCliNeedsYouKind(both, "permission")).toBe("permission");
+  });
+
   it("clears when the CLI's question is answered", () => {
     const answered = { ...snapshot("question"), state: "working" } as ActivitySnapshot;
     expect(selectCliNeedsYouKind(withSnapshot("permission", answered), "permission")).toBe(

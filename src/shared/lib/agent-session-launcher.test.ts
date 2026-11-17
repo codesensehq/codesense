@@ -203,6 +203,18 @@ describe("connectAgentSession orchestration (AC-1/2/3/5/7)", () => {
     await expect(connectAgentSession(params, deps)).resolves.not.toHaveProperty("activityWrapped");
   });
 
+  it.each([
+    [false, true],
+    [true, false],
+  ])("a launch with headless %s opens on its chat: %s", async (headless, marked) => {
+    const { deps } = makeDeps();
+    const { sessionId } = await connectAgentSession(
+      { ...params, role: `mark-${headless}`, headless },
+      deps,
+    );
+    expect(!!useAgentInboxRailStore.getState().pending[sessionId]).toBe(marked);
+  });
+
   it("AC-1: when an owned tab already exists, returns it and never spawns a duplicate", async () => {
     const existing = { workspaceId: "test-agent", sessionId: "already" };
     const { deps, calls } = makeDeps({ findExisting: vi.fn(async () => existing) });

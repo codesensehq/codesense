@@ -531,6 +531,7 @@ export async function connectNamedAgent(
         role: p.role,
         workspaceKey: p.workspaceKey,
         title: p.title,
+        headless: agent.headless,
         prepare: async (sessionId) => {
           prepared = await prepare({
             agentKey: agent.agent,
