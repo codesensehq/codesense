@@ -623,7 +623,6 @@ impl LocalProfileState {
         }
         std::thread::spawn(move || {
             use super::credential_store::{default_store, AUTH_SERVICE};
-            let message = LEGACY_UNREADABLE;
             let keychain = legacy_from_keychain(default_store(AUTH_SERVICE).as_ref());
             let legacy = match keychain {
                 Ok(Some(legacy)) => Ok(Some(legacy)),
@@ -631,13 +630,13 @@ impl LocalProfileState {
                     let file = app
                         .path()
                         .app_config_dir()
-                        .map_err(|_| message.to_string())
+                        .map_err(|_| LEGACY_UNREADABLE.to_string())
                         .and_then(|p| match std::fs::read(p.join("auth.json")) {
                             Ok(bytes) => serde_json::from_slice(&bytes)
                                 .map(Some)
-                                .map_err(|_| message.to_string()),
+                                .map_err(|_| LEGACY_UNREADABLE.to_string()),
                             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                            Err(_) => Err(message.to_string()),
+                            Err(_) => Err(LEGACY_UNREADABLE.to_string()),
                         });
                     match file {
                         Ok(Some(legacy)) => Ok(Some(legacy)),
@@ -654,7 +653,7 @@ impl LocalProfileState {
         });
     }
 }
-/// What the legacy identity blob's read says, for the import.
+/// The reason given when the legacy identity metadata can't be read.
 const LEGACY_UNREADABLE: &str = "Historical identity metadata could not be read; local use remains available and recovery will retry on the next startup";
 
 /// The legacy identity blob in the keychain. A store that is unavailable holds no

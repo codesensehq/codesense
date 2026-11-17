@@ -62,9 +62,10 @@ pub fn prompt(_key: &Path) -> Result<Option<Secret>, String> {
     Err("storing a key passphrase needs the macOS keychain".into())
 }
 
-/// Shown when there is no secret store to keep a passphrase in.
+/// The error when there is no secret store to keep a passphrase in. It carries the typed
+/// `unavailable:` prefix, which the panels strip before showing the sentence.
 pub const UNAVAILABLE_MESSAGE: &str =
-    "Can't save the passphrase: no Secret Service is running. You'll be asked again next time.";
+    "unavailable: Can't save the passphrase: no Secret Service is running. You'll be asked again next time.";
 
 /// Shown when a handle's passphrase is not in the store.
 const NOT_SAVED_MESSAGE: &str =

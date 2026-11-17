@@ -120,36 +120,45 @@ pub trait CredentialStore: Send + Sync {
     }
 }
 
-/// The local value source: the OS keychain (macOS Keychain via `keyring`). Holds
-/// only the service namespace — each call opens a fresh keyring `Entry`.
+/// The local value source: the OS keychain via `keyring` (the macOS Keychain, or Secret Service on
+/// Linux). Holds only the service namespace — each call opens a fresh keyring `Entry`.
 pub struct KeychainStore {
     service: &'static str,
+}
+
+/// Turn a keyring failure into the store's error, in this one place. `Unavailable` means there
+/// is no store at all: a keyring `NoStorageAccess` or `PlatformFailure` while `reachable` says the
+/// secret store can't be reached (the probe's checks: no session bus, no Secret Service, no
+/// default collection). A locked store, a dismissed prompt and any other failure stay `Failed`,
+/// and the text of a `Failed` is the same on every platform.
+fn classify(
+    error: keyring::Error,
+    what: &str,
+    reachable: impl FnOnce() -> bool,
+) -> CredentialError {
+    let no_store = matches!(
+        error,
+        keyring::Error::NoStorageAccess(_) | keyring::Error::PlatformFailure(_)
+    ) && !reachable();
+    if no_store {
+        CredentialError::Unavailable
+    } else {
+        CredentialError::Failed(format!("keychain {what} failed: {error}"))
+    }
+}
+
+fn store_reachable() -> bool {
+    matches!(platform_probe(), Some(_))
 }
 
 impl KeychainStore {
     pub fn new(service: &'static str) -> Self {
         Self { service }
     }
-}
 
-/// Turn a keyring failure into the store's error, in this one place. On Linux a
-/// missing or unreachable Secret Service (no session bus, no service, no default
-/// collection, or one that can't be unlocked) is `Unavailable`; macOS keeps every
-/// failure as a message, because there a refused read is not the same as no store.
-fn classify(error: keyring::Error, what: &str) -> CredentialError {
-    #[cfg(target_os = "linux")]
-    if matches!(
-        error,
-        keyring::Error::NoStorageAccess(_) | keyring::Error::PlatformFailure(_)
-    ) {
-        return CredentialError::Unavailable;
-    }
-    CredentialError::Failed(format!("keychain {what} failed: {error}"))
-}
-
-impl KeychainStore {
     fn entry(&self, account: &str) -> Result<keyring::Entry, CredentialError> {
-        keyring::Entry::new(self.service, account).map_err(|e| classify(e, "entry open"))
+        keyring::Entry::new(self.service, account)
+            .map_err(|e| classify(e, "entry open", store_reachable))
     }
 }
 
@@ -158,20 +167,20 @@ impl CredentialStore for KeychainStore {
         match self.entry(account)?.get_password() {
             Ok(v) => Ok(Some(Secret::new(v))),
             Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(classify(e, "read")),
+            Err(e) => Err(classify(e, "read", store_reachable)),
         }
     }
 
     fn set(&self, account: &str, value: &Secret) -> Result<(), CredentialError> {
         self.entry(account)?
             .set_password(value.expose())
-            .map_err(|e| classify(e, "write"))
+            .map_err(|e| classify(e, "write", store_reachable))
     }
 
     fn delete(&self, account: &str) -> Result<(), CredentialError> {
         match self.entry(account)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(classify(e, "delete")),
+            Err(e) => Err(classify(e, "delete", store_reachable)),
         }
     }
 }
@@ -408,6 +417,79 @@ mod tests {
             "locked"
         );
         assert_ne!(CredentialError::Unavailable, CredentialError::from("x"));
+    }
+
+    fn io_failure(message: &str) -> Box<dyn std::error::Error + Send + Sync> {
+        std::io::Error::other(message.to_string()).into()
+    }
+
+    /// Only a no-store failure is `Unavailable`; every other keyring error, and any failure while
+    /// the store can be reached (locked, a dismissed prompt), is a `Failed` with the same text on
+    /// every platform.
+    #[test]
+    fn classify_maps_only_a_missing_store_to_unavailable() {
+        let variants = || {
+            [
+                keyring::Error::PlatformFailure(io_failure("bus gone")),
+                keyring::Error::NoStorageAccess(io_failure("no collection")),
+                keyring::Error::NoEntry,
+                keyring::Error::BadEncoding(vec![0xff]),
+                keyring::Error::TooLong("service".into(), 8),
+                keyring::Error::Invalid("account".into(), "empty".into()),
+                keyring::Error::Ambiguous(Vec::new()),
+            ]
+        };
+        for (index, error) in variants().into_iter().enumerate() {
+            // The store is reachable (a locked keyring, a dismissed prompt, macOS): a message.
+            let text = error.to_string();
+            assert_eq!(
+                classify(error, "read", || true),
+                CredentialError::Failed(format!("keychain read failed: {text}")),
+                "variant {index} with a reachable store"
+            );
+        }
+        for (index, error) in variants().into_iter().enumerate() {
+            let storage_error = index < 2;
+            let text = error.to_string();
+            let expected = if storage_error {
+                CredentialError::Unavailable
+            } else {
+                CredentialError::Failed(format!("keychain write failed: {text}"))
+            };
+            assert_eq!(
+                classify(error, "write", || false),
+                expected,
+                "variant {index} with no store"
+            );
+        }
+    }
+
+    /// macOS keeps its exact message text.
+    #[test]
+    fn classify_keeps_the_keychain_failure_text() {
+        let error = keyring::Error::PlatformFailure(io_failure("boom"));
+        assert_eq!(
+            classify(error, "delete", || true),
+            CredentialError::Failed(
+                "keychain delete failed: Platform secure storage failure: boom".into()
+            )
+        );
+        let error = keyring::Error::NoStorageAccess(io_failure("denied"));
+        assert_eq!(
+            classify(error, "entry open", || true),
+            CredentialError::Failed(
+                "keychain entry open failed: Couldn't access platform secure storage: denied"
+                    .into()
+            )
+        );
+    }
+
+    /// The probe is not consulted for an error that is never a missing store.
+    #[test]
+    fn classify_does_not_probe_for_other_errors() {
+        let error = keyring::Error::NoEntry;
+        let failed = classify(error, "read", || panic!("no probe for NoEntry"));
+        assert!(matches!(failed, CredentialError::Failed(_)));
     }
 
     #[test]

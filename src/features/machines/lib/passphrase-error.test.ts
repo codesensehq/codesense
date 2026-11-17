@@ -4,9 +4,13 @@ import { passphraseSaveError } from "./passphrase-error";
 
 describe("passphraseSaveError", () => {
   it("shows the no-secret-store message as it is", () => {
-    const message =
-      "Can't save the passphrase: no Secret Service is running. You'll be asked again next time.";
-    expect(passphraseSaveError(message)).toBe(message);
+    expect(
+      passphraseSaveError(
+        "unavailable: Can't save the passphrase: no Secret Service is running. You'll be asked again next time.",
+      ),
+    ).toBe(
+      "Can't save the passphrase: no Secret Service is running. You'll be asked again next time.",
+    );
   });
 
   it("names any other failure", () => {
