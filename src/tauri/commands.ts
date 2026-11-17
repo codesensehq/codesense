@@ -5921,6 +5921,14 @@ export const installCommandLineTools = () => invoke<CltInstallResult>("install_c
 export const getLogFilePath = () => invoke<string>("get_log_file_path");
 export const getLogDebugEnabled = () => invoke<boolean>("get_log_debug_enabled");
 
+// Platform capabilities
+export interface PlatformCap {
+  key: string;
+  on: boolean;
+  reason: string | null;
+}
+export const getPlatformCaps = () => invoke<PlatformCap[]>("get_platform_caps");
+
 // HTTP API
 export const getHttpApiPort = () => invoke<number | null>("get_http_api_port");
 
