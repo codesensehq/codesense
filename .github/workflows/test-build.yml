@@ -88,9 +88,20 @@ jobs:
           if-no-files-found: error
 
   linux-app:
-    name: Unsigned Linux app
+    name: Unsigned Linux app (${{ matrix.arch }})
     if: inputs.platform == 'all' || inputs.platform == 'linux'
-    runs-on: ubuntu-22.04
+    # One definition for both architectures; each leg builds natively. x86_64 runs on the
+    # oldest hosted Ubuntu so the bundle links an older glibc; the arm64 runner image starts at
+    # 24.04, so that build needs Ubuntu 24.04 or newer.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     # A cold release build of the app and both sidecars, with no dependency cache.
     timeout-minutes: 150
     permissions:

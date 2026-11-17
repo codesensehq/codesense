@@ -5,6 +5,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+// A job may take its runner from its matrix: `runs-on: ${{ matrix.runner }}` stands for the
+// `runner` of every `include` entry, each a literal label the caller checks. Null otherwise.
+const matrixRunners = (job) => {
+  const match = /^\$\{\{\s*matrix\.(\w+)\s*\}\}$/.exec(job?.["runs-on"] ?? "");
+  const include = job?.strategy?.matrix?.include;
+  return match && Array.isArray(include) ? include.map((entry) => entry?.[match[1]]) : null;
+};
+
 const HOSTED_RUNNERS = new Set([
   "ubuntu-latest",
   "ubuntu-24.04",
@@ -29,12 +37,12 @@ const COMMIT_EMAILS = {
 };
 // The test build is dispatched by hand: its `platform` input picks which job runs, and each
 // job names the platform it builds. Its Linux job runs on the oldest hosted Linux runner, so
-// the bundle links an older glibc.
+// the bundle links an older glibc; its arm64 leg runs on the hosted arm64 runner.
 const TEST_BUILD = {
   file: "test-build.yml",
   platforms: ["all", "macos", "windows", "linux"],
   jobs: { "macos-app": "macos", "linux-app": "linux" },
-  linuxRunner: "ubuntu-22.04",
+  linuxRunners: ["ubuntu-22.04", "ubuntu-24.04-arm"],
 };
 const JOB_PERMISSIONS = new Map([
   [`${COMMIT_EMAILS.file}:${COMMIT_EMAILS.job}`, { contents: "read" }],
@@ -195,8 +203,11 @@ export function workflowPolicy(text, file = "") {
     for (const [name, os] of Object.entries(TEST_BUILD.jobs))
       if (workflow.jobs?.[name]?.if !== `inputs.platform == 'all' || inputs.platform == '${os}'`)
         errors.push(`${name}: if must run the job for platform all or ${os} only`);
-    if (workflow.jobs?.["linux-app"]?.["runs-on"] !== TEST_BUILD.linuxRunner)
-      errors.push(`linux-app: runs-on must be ${TEST_BUILD.linuxRunner}`);
+    if (
+      JSON.stringify(matrixRunners(workflow.jobs?.["linux-app"])) !==
+      JSON.stringify(TEST_BUILD.linuxRunners)
+    )
+      errors.push(`linux-app: the matrix must run on ${TEST_BUILD.linuxRunners.join(" and ")}`);
   }
   if (
     file === COMMIT_EMAILS.file &&
@@ -208,8 +219,14 @@ export function workflowPolicy(text, file = "") {
       errors.push(`${name}: job must be a mapping`);
       continue;
     }
-    const runners = Array.isArray(job["runs-on"]) ? job["runs-on"] : [job["runs-on"]];
-    if (runners.length !== 1 || typeof runners[0] !== "string" || !HOSTED_RUNNERS.has(runners[0]))
+    const runners =
+      matrixRunners(job) ?? (Array.isArray(job["runs-on"]) ? job["runs-on"] : [job["runs-on"]]);
+    const literal = matrixRunners(job) !== null;
+    if (
+      (!literal && runners.length !== 1) ||
+      runners.length === 0 ||
+      !runners.every((runner) => typeof runner === "string" && HOSTED_RUNNERS.has(runner))
+    )
       errors.push(`${name}: runs-on must name a GitHub-hosted runner without expressions`);
     const checkImage = (container, label) => {
       const image = mapping(container) ? container.image : container;
