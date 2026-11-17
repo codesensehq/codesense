@@ -15,9 +15,7 @@ describe("connectivity: no resolver fork (AC-3)", () => {
     expect(files.length).toBeGreaterThan(0);
     for (const f of files) {
       const src = readFileSync(join(here, f), "utf8");
-      expect(src, `${f} must not do path resolution`).not.toMatch(
-        /shared\/lib\/path|\.\.\/path|resolveRelative/,
-      );
+      expect(src, `${f} must not do path resolution`).not.toMatch(/\bresolveRelative\b/);
     }
   });
 

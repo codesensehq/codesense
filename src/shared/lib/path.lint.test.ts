@@ -49,6 +49,11 @@ describe("path splitting lint rule", () => {
     expect(await lint(code, "src/features/dashboard/x.ts")).toEqual([]);
   });
 
+  it("passes a dashboard file path split on a content-repo logical path (AC 3)", async () => {
+    const code = 'export const f = (file: { path: string }) => file.path.split("/");\n';
+    expect(await lint(code, "src/features/dashboard/x.ts")).toEqual([]);
+  });
+
   it("passes a receiver whose name does not look like a path", async () => {
     const code = 'export const f = (agentKey: string) => agentKey.split("/");\n';
     expect(await lint(code, VIEWER)).toEqual([]);
