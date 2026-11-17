@@ -22,6 +22,7 @@
 
 import { parseScrollIntent } from "./scroll-keys";
 import { hasAnyModifier, hasCmd, hasCommandModifier, isMac } from "./shortcuts/keystroke";
+import { terminalClipboardAction } from "./shortcuts/terminal-chord";
 
 // ---------------------------------------------------------------------------
 // Key repeat polyfill constants
@@ -137,18 +138,6 @@ export interface TerminalKeyHandler {
   clearRepeat: () => void;
 }
 
-/** Ctrl+Shift+C or Ctrl+Shift+V with nothing else held. */
-function isTerminalClipboardChord(event: KeyboardEvent): boolean {
-  const key = event.key.toLowerCase();
-  return (
-    event.ctrlKey &&
-    event.shiftKey &&
-    !event.altKey &&
-    !hasCmd(event) &&
-    (key === "c" || key === "v")
-  );
-}
-
 export function createTerminalKeyHandler(
   writeToPty: (data: string) => void,
   options?: TerminalKeyHandlerOptions,
@@ -193,10 +182,12 @@ export function createTerminalKeyHandler(
     // ── Ctrl+Shift+C / Ctrl+Shift+V → copy / paste (off macOS) ─────────
     // The terminal's own chords: Ctrl+C and Ctrl+V are shell input there. Prevent the default
     // so the webview does not also paste, and return false so xterm does not see the key.
-    if (event.type === "keydown" && !isMac() && isTerminalClipboardChord(event)) {
+    const clipboardAction =
+      event.type === "keydown" && !isMac() ? terminalClipboardAction(event) : null;
+    if (clipboardAction) {
       event.preventDefault();
       if (!event.repeat) {
-        if (event.key.toLowerCase() === "c") options?.copySelection?.();
+        if (clipboardAction === "copy") options?.copySelection?.();
         else options?.paste?.();
       }
       return false;

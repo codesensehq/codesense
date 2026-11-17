@@ -989,6 +989,17 @@ describe("Ctrl keys off macOS", () => {
     expect(paste).not.toHaveBeenCalled();
   });
 
+  it("copies and pastes by the physical key on a layout whose C and V are other letters", () => {
+    setPlatform("Win32");
+    const copySelection = vi.fn();
+    const paste = vi.fn();
+    const { handler } = createTerminalKeyHandler(vi.fn(), { copySelection, paste });
+    expect(handler(chord({ key: "С", code: "KeyC", ctrlKey: true, shiftKey: true }))).toBe(false);
+    expect(handler(chord({ key: "М", code: "KeyV", ctrlKey: true, shiftKey: true }))).toBe(false);
+    expect(copySelection).toHaveBeenCalledOnce();
+    expect(paste).toHaveBeenCalledOnce();
+  });
+
   it("does not take Ctrl+Shift+C on macOS", () => {
     setPlatform("MacIntel");
     const copySelection = vi.fn();

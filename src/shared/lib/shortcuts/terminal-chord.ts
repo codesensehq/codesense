@@ -83,3 +83,18 @@ export function terminalChord(keystroke: string, bindings: Iterable<string>): st
 export function isTerminalBracketKey(e: ModifierState & { key: string }): boolean {
   return !!e.ctrlKey && !hasCmd(e) && !e.altKey && !e.shiftKey && (e.key === "[" || e.key === "]");
 }
+
+/**
+ * The terminal clipboard action a keydown asks for off macOS: Ctrl+Shift+C copies, Ctrl+Shift+V
+ * pastes, with nothing else held. The physical key counts too, so a layout whose C and V keys
+ * produce other letters (Cyrillic, Greek) keeps the chords.
+ */
+export function terminalClipboardAction(
+  e: ModifierState & { key: string; code?: string },
+): "copy" | "paste" | null {
+  if (!e.ctrlKey || !e.shiftKey || e.altKey || hasCmd(e)) return null;
+  const key = e.key.toLowerCase();
+  if (e.code === "KeyC" || key === "c") return "copy";
+  if (e.code === "KeyV" || key === "v") return "paste";
+  return null;
+}
