@@ -30,7 +30,7 @@ import {
   type LandingCandidate,
   type LandingPageResolution,
 } from "@/tauri/commands";
-import { relative } from "@/shared/lib/path";
+import { relative, trimTrailingSeparators } from "@/shared/lib/path";
 
 /** Conventional landing pages, in preference order, at the team's content root. */
 export const LANDING_PAGE_FALLBACKS = ["README.md", "README.html", "index.html"] as const;
@@ -70,7 +70,7 @@ export function landingPageCandidates(team: Pick<Team, "landing_page">): Landing
 
 /** The team's content folder: `{org_root}/{team}/content`. */
 export function teamContentRoot(orgRoot: string, teamName: string): string {
-  return pathToTeamContentDirSync(orgRoot.replace(/\/+$/, ""), teamName);
+  return pathToTeamContentDirSync(trimTrailingSeparators(orgRoot), teamName);
 }
 
 /** Nothing open in the team: no tabs and no active tab. */

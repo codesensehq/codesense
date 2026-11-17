@@ -54,6 +54,12 @@ describe("openInWorktreeEditor", () => {
     expect(request()?.path).toBe("src/a.ts");
   });
 
+  it("opens a file under a Windows worktree that ends in a separator", () => {
+    seedWorkspace({ id: "w1", cwd: "C:\\Users\\dev\\wt\\" });
+    open("C:\\Users\\dev\\wt\\src\\a.ts");
+    expect(request()?.path).toBe("src/a.ts");
+  });
+
   it("uses the machine directory for a remote workspace", () => {
     seedWorkspace({
       id: "w1",

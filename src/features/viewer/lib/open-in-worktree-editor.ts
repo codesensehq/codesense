@@ -3,7 +3,7 @@ import { create } from "zustand";
 
 import { readTeamKeyed, useViewerStore } from "@/shared/stores/viewer-store";
 import { isRemoteWorkspace } from "@/shared/lib/workspace-location";
-import { join, relative, split } from "@/shared/lib/path";
+import { join, relative, split, trimTrailingSeparators } from "@/shared/lib/path";
 
 /**
  * Open a file in a tile's worktree code editor, optionally at a line — THE
@@ -68,13 +68,13 @@ export function openInWorktreeEditor(target: WorktreeEditorTarget): void {
 }
 
 /** The workspace's worktree directory (on its machine, for a remote one),
- *  without a trailing slash; `null` when unknown or the filesystem root. */
+ *  without a trailing separator; `null` when unknown. */
 function worktreeRoot(teamKey: string, workspaceId: string): string | null {
   const s = useViewerStore.getState();
   const ws = readTeamKeyed(s.workspaces, teamKey, []).find((w) => w.id === workspaceId);
   if (!ws) return null;
   const dir = (isRemoteWorkspace(ws) ? ws.location.cwd : ws.cwd) ?? "";
-  const trimmed = dir.replace(/\/+$/, "");
+  const trimmed = trimTrailingSeparators(dir);
   return trimmed === "" ? null : trimmed;
 }
 

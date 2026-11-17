@@ -68,7 +68,10 @@ export function tabLabels(
   tabs: readonly string[],
 ): Map<string, { name: string; hint: string | null }> {
   const counts = new Map<string, number>();
-  for (const t of tabs) counts.set(basename(t), (counts.get(basename(t)) ?? 0) + 1);
+  for (const t of tabs) {
+    const name = basename(t);
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
   const out = new Map<string, { name: string; hint: string | null }>();
   for (const t of tabs) {
     const name = basename(t);
