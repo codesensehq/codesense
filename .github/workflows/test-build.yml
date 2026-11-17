@@ -56,8 +56,6 @@ jobs:
       - name: Set up Rust
         # Matches ci.yml; rustup's proxies read the channel in rust-toolchain.toml.
         run: rustup toolchain install stable --profile minimal
-      - name: Check scripts
-        run: shellcheck scripts/ci/unsigned-bundle.sh scripts/ci/bundle-manifest.sh
       - name: Build app
         # Sidecars, git-ai, the ad-hoc signed bundle and its zip: see the script.
         run: bash scripts/ci/unsigned-bundle.sh macos
@@ -124,6 +122,7 @@ jobs:
         # Matches ci.yml; rustup's proxies read the channel in rust-toolchain.toml.
         run: rustup toolchain install stable --profile minimal
       - name: Check scripts
+        # Both scripts, here: macOS runners ship no shellcheck.
         run: shellcheck scripts/ci/unsigned-bundle.sh scripts/ci/bundle-manifest.sh
       - name: Check the base config is unchanged
         # The Linux differences live in tauri.linux.conf.json; macOS reads tauri.conf.json as is.
