@@ -140,6 +140,7 @@ import { DEFAULT_NOTE_TITLE, UNTITLED_NOTE_TITLE, isBlankNote } from "@/shared/l
 import { summarize } from "@/features/notes/lib/note-summary";
 import type { Phase } from "@/shared/lib/roles";
 import { startOpenTimer } from "@/shared/lib/open-path-timing";
+import { basename } from "@/shared/lib/path";
 import { createDebouncedAction } from "@/shared/lib/debounced-action";
 import { fireWorkspaceOpened, fireWorkspaceClosed } from "@/shared/lib/workspace-watch-hooks";
 import { VIEWER_PERF } from "@/shared/lib/viewer-perf-config";
@@ -3591,7 +3592,7 @@ function tabNameFromPath(filePath: string): string {
   // virtual paths registered without a title.
   const virtualTitle = resolveVirtualTabTitle(filePath);
   if (virtualTitle) return virtualTitle;
-  return stripViewerExtension(filePath.split("/").pop() ?? filePath);
+  return stripViewerExtension(basename(filePath) || filePath);
 }
 
 /** A committed (non-preview) tab built from a file path — the shape shared by

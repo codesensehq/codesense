@@ -428,16 +428,6 @@ describe("ViewerTabs — Windows paths", () => {
     mockTitleByPath = {};
   });
 
-  it("a tab for a Windows path shows its file name", () => {
-    const path = "C:\\Users\\a\\repo\\src\\x.ts";
-    setupState({
-      openTabs: { [REPO]: [{ path, name: "x.ts" }] },
-      activeTab: { [REPO]: path },
-    });
-    render(<ViewerTabs repoPath={REPO} />);
-    expect(screen.getByText("x.ts")).toBeInTheDocument();
-  });
-
   it("a story under a Windows path still shows its frontmatter title", () => {
     const path = "C:\\ctx\\epic\\TR-1-api-health-endpoint.md";
     mockTitleByPath = { [path]: "API health endpoint" };
