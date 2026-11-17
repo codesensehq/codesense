@@ -77,6 +77,7 @@ interface CodeEditorHandle {
 
   getScrollPos(): number;
   scrollTo(pos: number): void;
+  getScrollElement(): HTMLElement | null; // CodeMirror's `.cm-scroller`; null after unmount
 
   checkConflict(diskVersion: string): boolean;
 }

@@ -97,7 +97,9 @@ export function renderViewer(
       return <ImageViewer {...common} changedPaths={md.changedPaths} />;
     case "code":
       // Read-only, syntax-highlighted.
-      return <CodeFileViewer {...common} changedPaths={md.changedPaths} />;
+      return (
+        <CodeFileViewer {...common} changedPaths={md.changedPaths} viewStateKey={md.viewStateKey} />
+      );
     default: {
       const _exhaustive: never = fileType;
       void _exhaustive;
