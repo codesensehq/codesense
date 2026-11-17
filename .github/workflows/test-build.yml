@@ -2,10 +2,21 @@
 name: Test build
 
 # Run by hand from the Actions tab (or `gh workflow run test-build.yml --ref main`) to get an
-# unsigned macOS app to install for testing. The build uses no secrets: it is ad-hoc signed, not
-# notarized and has no updater artifacts. README.md#test-builds says how to install it.
+# unsigned app to install for testing: pick a platform, or leave it on all. The builds use no
+# secrets: they are not notarized and have no updater artifacts (macOS is signed ad hoc).
+# README.md#test-builds says how to install each one.
 on:
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Which app to build
+        type: choice
+        options:
+          - all
+          - macos
+          - windows
+          - linux
+        default: all
 
 permissions: {}
 
@@ -16,6 +27,7 @@ concurrency:
 jobs:
   macos-app:
     name: Unsigned macOS app
+    if: inputs.platform == 'all' || inputs.platform == 'macos'
     runs-on: macos-15
     # A cold release build of the app and both sidecars, with no dependency cache.
     timeout-minutes: 150
@@ -43,31 +55,13 @@ jobs:
       - name: Set up Rust
         # Matches ci.yml; rustup's proxies read the channel in rust-toolchain.toml.
         run: rustup toolchain install stable --profile minimal
-      - name: Fetch git-ai
-        # The bundle ships resources/git-ai; the script verifies it against src-tauri/git-ai.pin.
-        run: bash scripts/fetch-git-ai.sh
-      - name: Build bridge sidecar
-        run: bash scripts/build-bridge.sh --release
-      - name: Build session-server sidecar
-        # Also builds the terminal emulator worker beside it.
-        run: bash scripts/build-session-server.sh --release
+      - name: Check scripts
+        run: shellcheck scripts/ci/unsigned-bundle.sh scripts/ci/bundle-manifest.sh
       - name: Build app
-        # beforeBuildCommand runs both sidecar scripts again; with their release builds in place
-        # cargo has nothing left to compile. signingIdentity "-" signs ad hoc, which Apple
-        # silicon needs to launch the app; no Apple identity or updater key is involved.
-        env:
-          # tsc in beforeBuildCommand needs more than the ~2 GB default heap Node picks on this
-          # runner's 7 GB (it peaks near 2.8 GB); ubuntu-latest's larger default is why CI's
-          # typecheck never hits it. A ceiling with room to grow: tsc and vite run one at a time.
-          NODE_OPTIONS: --max-old-space-size=6144
-        run: >-
-          pnpm tauri build
-          --config '{"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-"}}}'
-      - name: Zip app
-        # ditto keeps the bundle's symlinks, modes and signature, which a plain zip may not.
-        run: |
-          bundle=target/release/bundle
-          ditto -c -k --keepParent "$bundle/macos/CodeSense.app" "$RUNNER_TEMP/CodeSense.app.zip"
+        # Sidecars, git-ai, the ad-hoc signed bundle and its zip: see the script.
+        run: bash scripts/ci/unsigned-bundle.sh macos
+      - name: Write manifest
+        run: bash scripts/ci/bundle-manifest.sh target/release/bundle/macos/CodeSense.app > "$RUNNER_TEMP/bundle-manifest.txt"
       - name: Upload app
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -80,6 +74,87 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           path: target/release/bundle/dmg/*.dmg
+          archive: false
+          retention-days: 7
+          if-no-files-found: error
+      - name: Upload manifest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: ${{ runner.temp }}/bundle-manifest.txt
+          archive: false
+          retention-days: 7
+          if-no-files-found: error
+
+  linux-app:
+    name: Unsigned Linux app
+    if: inputs.platform == 'all' || inputs.platform == 'linux'
+    runs-on: ubuntu-22.04
+    # A cold release build of the app and both sidecars, with no dependency cache.
+    timeout-minutes: 150
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install system libraries
+        # What rust.yml's Linux check installs, plus file (linuxdeploy) and rpm (the rpm bundle).
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev libxdo-dev libssl-dev \
+            file rpm
+      - name: Set up pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Set up Rust
+        # Matches ci.yml; rustup's proxies read the channel in rust-toolchain.toml.
+        run: rustup toolchain install stable --profile minimal
+      - name: Check scripts
+        run: shellcheck scripts/ci/unsigned-bundle.sh scripts/ci/bundle-manifest.sh
+      - name: Check the base config is unchanged
+        # The Linux differences live in tauri.linux.conf.json; macOS reads tauri.conf.json as is.
+        run: |
+          git fetch --no-tags --depth=1 https://github.com/${{ github.repository }}.git main
+          git diff --exit-code FETCH_HEAD -- src-tauri/tauri.conf.json
+      - name: Build app
+        run: bash scripts/ci/unsigned-bundle.sh linux
+      - name: Check the sidecars sit beside the app
+        run: |
+          listing=$(dpkg -c target/release/bundle/deb/*.deb)
+          for name in codesense codesense-bridge codesense-session-server codesense-emulator; do
+            grep -E " \./usr/bin/$name\$" <<<"$listing" || { echo "Error: $name is not in /usr/bin of the deb" >&2; exit 1; }
+          done
+      - name: Upload deb
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: target/release/bundle/deb/*.deb
+          archive: false
+          retention-days: 7
+          if-no-files-found: error
+      - name: Upload rpm
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: target/release/bundle/rpm/*.rpm
+          archive: false
+          retention-days: 7
+          if-no-files-found: error
+      - name: Upload AppImage
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: target/release/bundle/appimage/*.AppImage
           archive: false
           retention-days: 7
           if-no-files-found: error

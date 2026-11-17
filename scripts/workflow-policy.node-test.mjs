@@ -1222,3 +1222,56 @@ test("the open-issue check covers every quarantine ledger file", (t) => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /issues\/2 \(CLOSED, tests\/quarantine\.extra\.json\)/);
 });
+
+// The test build's `platform` input picks the job: `all` runs every job, a platform only its own.
+const testBuildFile = "test-build.yml";
+const testBuild = () => fs.readFileSync(path.join(directory, testBuildFile), "utf8");
+
+test("test build: the platform input and the jobs it gates", () => {
+  const workflow = parse(testBuild());
+  assert.deepEqual(workflow.on.workflow_dispatch.inputs.platform, {
+    description: "Which app to build",
+    type: "choice",
+    options: ["all", "macos", "windows", "linux"],
+    default: "all",
+  });
+  assert.equal(
+    workflow.jobs["macos-app"].if,
+    "inputs.platform == 'all' || inputs.platform == 'macos'",
+  );
+  assert.equal(
+    workflow.jobs["linux-app"].if,
+    "inputs.platform == 'all' || inputs.platform == 'linux'",
+  );
+  assert.equal(workflow.jobs["linux-app"]["runs-on"], "ubuntu-22.04");
+});
+
+test("test build: the Linux job uploads the deb, rpm and AppImage, each one file kept 7 days", () => {
+  const uploads = parse(testBuild()).jobs["linux-app"].steps.filter((step) =>
+    step.uses?.startsWith("actions/upload-artifact@"),
+  );
+  assert.deepEqual(
+    uploads.map((step) => step.with.path),
+    [
+      "target/release/bundle/deb/*.deb",
+      "target/release/bundle/rpm/*.rpm",
+      "target/release/bundle/appimage/*.AppImage",
+    ],
+  );
+  for (const { with: inputs } of uploads) {
+    assert.equal(inputs.archive, false);
+    assert.equal(inputs["retention-days"], 7);
+    assert.equal(inputs["if-no-files-found"], "error");
+  }
+});
+
+test("test build: the policy rejects a missing platform gate, input or runner", () => {
+  const cases = [
+    [testBuild().replace("inputs.platform == 'linux'", "true"), /linux-app: if must run/],
+    [testBuild().replace("default: all", "default: linux"), /platform input must be a choice/],
+    [testBuild().replace("          - windows\n", ""), /platform input must be a choice/],
+    [testBuild().replace("ubuntu-22.04", "ubuntu-24.04"), /runs-on must be ubuntu-22.04/],
+  ];
+  for (const [fixture, error] of cases)
+    assert.match(workflowPolicy(fixture, testBuildFile).join("\n"), error);
+});

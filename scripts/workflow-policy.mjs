@@ -27,6 +27,15 @@ const COMMIT_EMAILS = {
   job: "commit-emails",
   triggers: ["push", "schedule", "workflow_dispatch"],
 };
+// The test build is dispatched by hand: its `platform` input picks which job runs, and each
+// job names the platform it builds. Its Linux job runs on the oldest hosted Linux runner, so
+// the bundle links an older glibc.
+const TEST_BUILD = {
+  file: "test-build.yml",
+  platforms: ["all", "macos", "windows", "linux"],
+  jobs: { "macos-app": "macos", "linux-app": "linux" },
+  linuxRunner: "ubuntu-22.04",
+};
 const JOB_PERMISSIONS = new Map([
   [`${COMMIT_EMAILS.file}:${COMMIT_EMAILS.job}`, { contents: "read" }],
   ["dco.yml:dco", { contents: "read", "pull-requests": "read" }],
@@ -172,6 +181,23 @@ export function workflowPolicy(text, file = "") {
     errors.push("concurrency must group and cancel superseded runs");
   if (!mapping(workflow.jobs) || !Object.keys(workflow.jobs).length)
     errors.push("workflow must define jobs");
+  if (file === TEST_BUILD.file) {
+    const platform = mapping(workflow.on) ? workflow.on.workflow_dispatch?.inputs?.platform : null;
+    if (
+      !mapping(platform) ||
+      platform.type !== "choice" ||
+      platform.default !== "all" ||
+      JSON.stringify(platform.options) !== JSON.stringify(TEST_BUILD.platforms)
+    )
+      errors.push(
+        `test build: the platform input must be a choice of ${TEST_BUILD.platforms.join(", ")} defaulting to all`,
+      );
+    for (const [name, os] of Object.entries(TEST_BUILD.jobs))
+      if (workflow.jobs?.[name]?.if !== `inputs.platform == 'all' || inputs.platform == '${os}'`)
+        errors.push(`${name}: if must run the job for platform all or ${os} only`);
+    if (workflow.jobs?.["linux-app"]?.["runs-on"] !== TEST_BUILD.linuxRunner)
+      errors.push(`linux-app: runs-on must be ${TEST_BUILD.linuxRunner}`);
+  }
   if (
     file === COMMIT_EMAILS.file &&
     JSON.stringify(Object.keys(workflow.jobs ?? {})) !== JSON.stringify([COMMIT_EMAILS.job])

@@ -71,22 +71,41 @@ build, see [Building your own release](#building-your-own-release).
 ## Test builds
 
 A maintainer can build a test app from `main` without a local build: run the
-**Test build** workflow from the Actions tab, or
-`gh workflow run test-build.yml --repo codesensehq/codesense --ref main`. It
-takes about an hour. When it finishes, the run page has two artifacts, kept for
-7 days: `CodeSense.app.zip` (the app) and the DMG.
+**Test build** workflow from the Actions tab and pick a platform, or
+`gh workflow run test-build.yml --repo codesensehq/codesense --ref main -f platform=macos`
+(`platform=linux` for the Linux build; the default, `all`, builds every platform
+the workflow has). A build takes about an hour. When it finishes, the run page
+has its artifacts, kept for 7 days.
 
-The test build is not signed with an Apple Developer ID (it is signed ad hoc)
-and not notarized, so macOS blocks it until you clear its quarantine flag.
-Unzip `CodeSense.app.zip` (or open the DMG), move `CodeSense.app` to
-Applications, then run:
+### macOS
+
+The artifacts are `CodeSense.app.zip` (the app), the DMG and a manifest of the
+bundle's files. The test build is not signed with an Apple Developer ID (it is
+signed ad hoc) and not notarized, so macOS blocks it until you clear its
+quarantine flag. Unzip `CodeSense.app.zip` (or open the DMG), move
+`CodeSense.app` to Applications, then run:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/CodeSense.app
 ```
 
-It is a source build like the one above: the `internal` channel, no update
-checks and no dashboard publishing.
+### Linux
+
+The artifacts are a `.deb`, an `.rpm` and an AppImage, built on Ubuntu 22.04
+and not signed. Install the one for your distribution:
+
+```bash
+sudo apt install ./CodeSense_*.deb        # Debian, Ubuntu
+sudo dnf install ./CodeSense-*.rpm        # Fedora
+chmod +x CodeSense_*.AppImage && ./CodeSense_*.AppImage
+```
+
+Two features are off on Linux for now: git-ai attribution and the bundled
+starship prompt. The terminal, the editor and the rest of the app work without
+them.
+
+Every test build is a source build like the one above: the `internal` channel,
+no update checks and no dashboard publishing.
 
 ## Building your own release
 
