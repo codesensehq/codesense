@@ -138,10 +138,11 @@ jobs:
       - name: Check the sidecars sit beside the app
         # The app binary's name comes from the product, so it is the one other file in /usr/bin.
         run: |
-          bin_files=$(dpkg -c target/release/bundle/deb/*.deb | awk '$NF ~ /^\.\/usr\/bin\/./ {print $NF}')
-          echo "$bin_files"
+          listing=$(dpkg -c target/release/bundle/deb/*.deb)
+          echo "$listing"
+          bin_files=$(awk '$NF ~ /(^|\/)usr\/bin\/[^/]+$/ {print $NF}' <<<"$listing")
           for name in codesense-bridge codesense-session-server codesense-emulator; do
-            grep -Fx "./usr/bin/$name" <<<"$bin_files" || { echo "Error: $name is not in /usr/bin of the deb" >&2; exit 1; }
+            grep -E "(^|/)usr/bin/$name\$" <<<"$bin_files" || { echo "Error: $name is not in /usr/bin of the deb" >&2; exit 1; }
           done
           [[ $(wc -l <<<"$bin_files") -eq 4 ]] || { echo "Error: expected the app binary and three sidecars in /usr/bin" >&2; exit 1; }
       - name: Upload deb
