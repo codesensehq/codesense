@@ -200,8 +200,7 @@ static SECRET_STORE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 /// touched.
 pub fn secret_store_available() -> bool {
     *SECRET_STORE.get_or_init(|| {
-        let source = std::env::var(CRED_SOURCE_ENV).unwrap_or_default();
-        let state = secret_store_state(&source, platform_probe);
+        let state = secret_store_state(&cred_source(), platform_probe);
         match state {
             Probe::Present(backend) => log::info!(target: "auth", "secret store: {backend}"),
             Probe::Env => log::info!(target: "auth", "secret store: env (read-only)"),
@@ -215,8 +214,8 @@ pub fn secret_store_available() -> bool {
 
 /// The state for a credential source (`CODESENSE_CRED_SOURCE`) and the OS probe, which the
 /// environment source never runs.
-fn secret_store_state(source: &str, os: impl FnOnce() -> Probe) -> Probe {
-    if source == "env" {
+fn secret_store_state(source: &CredSource, os: impl FnOnce() -> Probe) -> Probe {
+    if matches!(source, CredSource::Env) {
         Probe::Env
     } else {
         os()
@@ -253,15 +252,17 @@ fn platform_probe() -> Probe {
 fn absence_of(error: &dbus_secret_service::Error) -> Probe {
     match error {
         dbus_secret_service::Error::NoResult => Probe::Absent,
-        dbus_secret_service::Error::Dbus(source) if names_no_service(&format!("{source:?}")) => {
-            Probe::Absent
-        }
+        dbus_secret_service::Error::Dbus(source) => match source.name() {
+            Some(name) if NO_SERVICE_ERRORS.contains(&name) => Probe::Absent,
+            _ => Probe::Unknown,
+        },
         _ => Probe::Unknown,
     }
 }
 
-/// D-Bus errors that say there is no session bus, or nothing owns the Secret Service name. A
-/// `NoReply`, a timeout or a failed call is not here: a slow daemon is not an absent one.
+/// D-Bus errors that say there is no session bus to talk to. A `NoReply`, a timeout, or a
+/// `NameHasNoOwner` (which dbus-broker also reports while it activates a service) is not here:
+/// a slow or starting daemon is not an absent one.
 #[cfg(target_os = "linux")]
 const NO_SERVICE_ERRORS: [&str; 6] = [
     "org.freedesktop.DBus.Error.NoServer",
@@ -269,18 +270,8 @@ const NO_SERVICE_ERRORS: [&str; 6] = [
     "org.freedesktop.DBus.Error.BadAddress",
     "org.freedesktop.DBus.Error.NotSupported",
     "org.freedesktop.DBus.Error.ServiceUnknown",
-    "org.freedesktop.DBus.Error.NameHasNoOwner",
+    "org.freedesktop.DBus.Error.Spawn.ExecFailed",
 ];
-
-#[cfg(target_os = "linux")]
-fn names_no_service(described: &str) -> bool {
-    for name in NO_SERVICE_ERRORS {
-        if described.contains(name) {
-            return true;
-        }
-    }
-    false
-}
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn platform_probe() -> Probe {
@@ -319,24 +310,44 @@ impl CredentialStore for EnvStore {
 /// The env var that selects the value source for this deployment.
 pub const CRED_SOURCE_ENV: &str = "CODESENSE_CRED_SOURCE";
 
+/// Which credential value source `CODESENSE_CRED_SOURCE` selects.
+#[derive(Debug, PartialEq, Eq)]
+enum CredSource {
+    /// `env`: secrets are injected into the process environment.
+    Env,
+    /// Unset or empty: the OS keychain.
+    Keychain,
+    /// Set to something else, a likely typo; treated as the keychain.
+    Unrecognized(String),
+}
+
+/// The one place the variable is read and parsed.
+fn cred_source() -> CredSource {
+    match std::env::var(CRED_SOURCE_ENV) {
+        Ok(v) if v == "env" => CredSource::Env,
+        Ok(v) if !v.is_empty() => CredSource::Unrecognized(v),
+        _ => CredSource::Keychain,
+    }
+}
+
 /// Select the credential value source for this deployment topology. A desktop
 /// install resolves from the OS keychain; an always-up headless/CI runner sets
 /// `CODESENSE_CRED_SOURCE=env` so the same accounts resolve from injected env /
 /// the platform secret manager instead.
 pub fn default_store(service: &'static str) -> Box<dyn CredentialStore> {
-    match std::env::var(CRED_SOURCE_ENV) {
-        Ok(v) if v == "env" => Box::new(EnvStore::new(service)),
+    match cred_source() {
+        CredSource::Env => Box::new(EnvStore::new(service)),
         // Set-but-unrecognized is a likely misconfiguration (e.g. a typo) that
         // would silently fall back to the keychain — absent on a headless
         // runner. Warn so it is visible.
-        Ok(v) if !v.is_empty() => {
+        CredSource::Unrecognized(v) => {
             log::warn!(
                 target: "auth",
                 "{CRED_SOURCE_ENV}={v:?} is unrecognized — falling back to the OS keychain store"
             );
             Box::new(KeychainStore::new(service))
         }
-        _ => Box::new(KeychainStore::new(service)),
+        CredSource::Keychain => Box::new(KeychainStore::new(service)),
     }
 }
 
@@ -554,12 +565,17 @@ mod tests {
     #[test]
     fn the_env_source_is_not_probed_and_is_not_a_store() {
         assert_eq!(
-            secret_store_state("env", || panic!("the env source never probes the OS")),
+            secret_store_state(&CredSource::Env, || {
+                panic!("the env source never probes the OS")
+            }),
             Probe::Env
         );
-        for source in ["", "keychain", "typo"] {
+        for source in [
+            CredSource::Keychain,
+            CredSource::Unrecognized("typo".into()),
+        ] {
             assert_eq!(
-                secret_store_state(source, || Probe::Absent),
+                secret_store_state(&source, || Probe::Absent),
                 Probe::Absent,
                 "{source:?}"
             );
@@ -577,17 +593,20 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_only_a_definite_dbus_absence_is_absent() {
-        let described = |name: &str| format!("D-Bus error: a message ({name})");
+        let dbus_error = |name: &str| {
+            dbus_secret_service::Error::Dbus(dbus::Error::new_custom(name, "a message"))
+        };
         for name in NO_SERVICE_ERRORS {
-            assert!(names_no_service(&described(name)), "{name}");
+            assert_eq!(absence_of(&dbus_error(name)), Probe::Absent, "{name}");
         }
         for name in [
+            "org.freedesktop.DBus.Error.NameHasNoOwner",
             "org.freedesktop.DBus.Error.NoReply",
             "org.freedesktop.DBus.Error.Timeout",
             "org.freedesktop.DBus.Error.Failed",
             "org.freedesktop.DBus.Error.AccessDenied",
         ] {
-            assert!(!names_no_service(&described(name)), "{name}");
+            assert_eq!(absence_of(&dbus_error(name)), Probe::Unknown, "{name}");
         }
         assert_eq!(
             absence_of(&dbus_secret_service::Error::NoResult),

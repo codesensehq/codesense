@@ -1972,6 +1972,8 @@ impl<C: Connect> LiveLink<C> {
     /// The connection loop. It never returns.
     pub async fn run(self) {
         let mut backoff = Backoff::default();
+        // Its own delay for failed token reads, so a locked keyring is not asked at every pass.
+        let mut read_backoff = Backoff::default();
         // A token refused in this run. It is never dialled again, even when the
         // refusal could not be saved to the records (review C6).
         let mut refused_here: Option<String> = None;
@@ -1981,16 +1983,19 @@ impl<C: Connect> LiveLink<C> {
                 continue;
             }
             let token = match self.read_token().await {
-                Ok(Some(token)) => token,
+                Ok(Some(token)) => {
+                    read_backoff.reset();
+                    token
+                }
                 Ok(None) => {
+                    read_backoff.reset();
                     log::info!(target: "dashboard_publish", "live link: no publisher token saved");
                     sleep(PASS).await;
                     continue;
                 }
                 Err(e) => {
-                    // A locked keyring can ask again at every read: back off, don't re-read each pass.
                     log::warn!(target: "dashboard_publish", "live link: publisher token unavailable: {e}");
-                    sleep(backoff.next()).await;
+                    sleep(read_backoff.next().max(PASS)).await;
                     continue;
                 }
             };

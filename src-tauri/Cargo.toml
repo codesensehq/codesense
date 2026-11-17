@@ -181,6 +181,10 @@ dbus-secret-service = "4.0.0-rc.2"
 [target.'cfg(not(any(target_os = "macos", target_os = "linux")))'.dependencies]
 keyring = "3"
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# Builds the D-Bus errors the Secret Service probe's table test feeds it. Already in the tree.
+dbus = "0.9"
+
 [dev-dependencies]
 # Count SQLite VM work in spend-cap scaling tests without a wall-clock budget.
 rusqlite = { version = "0.32", features = ["hooks"] }
