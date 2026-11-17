@@ -114,6 +114,17 @@ describe("terminalChord for a dashboard command", () => {
   });
 });
 
+describe("terminalChord between dashboard commands", () => {
+  it("lifts the bare Ctrl command over the other's own Ctrl+Shift chord", () => {
+    setPlatform("Win32");
+    const commands = ["CmdOrCtrl+Y", "CmdOrCtrl+Shift+Y"];
+    expect(terminalChord("CmdOrCtrl+Y", { builtIns: [], commands }, true)).toBe(
+      "CmdOrCtrl+Shift+Y",
+    );
+    expect(terminalChord("CmdOrCtrl+Shift+Y", { builtIns: [], commands }, true)).toBe("");
+  });
+});
+
 describe("terminalClipboardAction", () => {
   const base = { ctrlKey: true, shiftKey: true, metaKey: false, altKey: false };
 
@@ -127,11 +138,21 @@ describe("terminalClipboardAction", () => {
     expect(terminalClipboardAction({ ...base, key: "М", code: "KeyV" })).toBe("paste");
   });
 
+  it("follows the physical key where the key types a sign, as an Arabic layout does", () => {
+    expect(terminalClipboardAction({ ...base, key: "}", code: "KeyC" })).toBe("copy");
+    expect(terminalClipboardAction({ ...base, key: "{", code: "KeyV" })).toBe("paste");
+  });
+
   it("does not follow the physical key where the key types another Latin letter", () => {
     expect(terminalClipboardAction({ ...base, key: "K", code: "KeyV" })).toBeNull();
     expect(terminalClipboardAction({ ...base, key: "J", code: "KeyC" })).toBeNull();
     expect(terminalClipboardAction({ ...base, key: "k", code: "KeyV" })).toBeNull();
     expect(terminalClipboardAction({ ...base, key: "j", code: "KeyC" })).toBeNull();
+  });
+
+  it("needs Ctrl: Shift alone on C or V is not a clipboard key", () => {
+    expect(terminalClipboardAction({ ...base, ctrlKey: false, key: "C", code: "KeyC" })).toBeNull();
+    expect(terminalClipboardAction({ ...base, ctrlKey: false, key: "V", code: "KeyV" })).toBeNull();
   });
 
   it("needs Ctrl and Shift and nothing else", () => {

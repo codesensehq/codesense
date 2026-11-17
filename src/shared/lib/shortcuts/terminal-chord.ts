@@ -14,7 +14,6 @@ import {
   formatKeystroke,
   hasCmd,
   isMac,
-  isNonLatinLetterOn,
   parseKeystroke,
   type KeystrokeParts,
   type ModifierState,
@@ -70,11 +69,10 @@ function heldChords(bindings: Iterable<string>): Set<string> {
   return held;
 }
 
-/** The chords the bindings (other than `except`) are lifted onto. */
-function liftedOnto(bindings: Iterable<string>, except: string): Set<string> {
+/** The chords the bindings are lifted onto. */
+function liftedOnto(bindings: Iterable<string>): Set<string> {
   const onto = new Set<string>();
   for (const binding of bindings) {
-    if (binding === except) continue;
     const parts = tryParse(binding);
     if (!parts) continue;
     const lift = lifted(parts);
@@ -107,8 +105,8 @@ export function terminalChord(
   // An own Ctrl+Shift binding loses its chord to the action lifted onto it.
   const ownShifted = parts.cmdOrCtrl && parts.shift && !parts.alt && isControlKey(parts.key);
   if (ownShifted) {
-    const taken = liftedOnto(builtIns, keystroke);
-    if (command) for (const chordTaken of liftedOnto(commands, keystroke)) taken.add(chordTaken);
+    const taken = liftedOnto(builtIns);
+    if (command) for (const chordTaken of liftedOnto(commands)) taken.add(chordTaken);
     if (taken.has(formatKeystroke(parts))) return "";
   }
   return chord;
@@ -122,17 +120,22 @@ export function isTerminalBracketKey(e: ModifierState & { key: string }): boolea
   return !!e.ctrlKey && !hasCmd(e) && !e.altKey && !e.shiftKey && (e.key === "[" || e.key === "]");
 }
 
+/** Whether `key` is a Latin letter; a sign (Arabic's `}` on C's place) or another script is not. */
+function isLatinLetter(key: string): boolean {
+  return /^\p{Script=Latin}$/u.test(key);
+}
+
 /**
  * The terminal clipboard action a keydown asks for off macOS: Ctrl+Shift+C copies, Ctrl+Shift+V
- * pastes, with nothing else held. The physical key counts only where the layout has no Latin
- * letters (Cyrillic, Greek), so Dvorak's `j` on the C key stays a `j`.
+ * pastes, with nothing else held. The physical key counts when the key types no Latin letter
+ * (Cyrillic, Greek, Arabic's `}` on C's place), so Dvorak's `j` on the C key stays a `j`.
  */
 export function terminalClipboardAction(
   e: ModifierState & { key: string; code?: string },
 ): "copy" | "paste" | null {
   if (!e.ctrlKey || !e.shiftKey || e.altKey || hasCmd(e)) return null;
   const key = e.key.toLowerCase();
-  if (key === "c" || isNonLatinLetterOn(e, "KeyC")) return "copy";
-  if (key === "v" || isNonLatinLetterOn(e, "KeyV")) return "paste";
+  if (key === "c" || (e.code === "KeyC" && !isLatinLetter(key))) return "copy";
+  if (key === "v" || (e.code === "KeyV" && !isLatinLetter(key))) return "paste";
   return null;
 }
