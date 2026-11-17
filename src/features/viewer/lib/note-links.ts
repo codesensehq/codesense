@@ -180,11 +180,7 @@ export function buildCsLinkToDoc(doc: DocIdentity): CsLink | null {
  *  portable, content-root-relative path. Requires a real path boundary so a
  *  sibling dir sharing a prefix (`/x/content` vs `/x/content-2`) isn't mangled. */
 export function toContentRelative(absPath: string, teamContentPath: string): string {
-  if (isUnderContentRoot(absPath, teamContentPath)) {
-    const root = teamContentPath.replace(/\/+$/, "");
-    return absPath.slice(root.length).replace(/^\/+/, "");
-  }
-  return absPath.replace(/^\/+/, "");
+  return relative(teamContentPath, absPath) ?? absPath.replace(/^[\\/]+/, "");
 }
 
 function splitHash(target: string): [string, string | undefined] {
