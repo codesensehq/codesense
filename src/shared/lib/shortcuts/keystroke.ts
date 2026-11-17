@@ -155,6 +155,11 @@ export function modifiersFrom(
   return { metaKey, ctrlKey, altKey, shiftKey };
 }
 
+/** Whether `key` is a Latin letter; a sign or a letter of another script is not. */
+export function isLatinLetter(key: string): boolean {
+  return /^\p{Script=Latin}$/u.test(key);
+}
+
 /**
  * Whether `e` types a letter that is not Latin on the physical key `code` (a Cyrillic or Greek
  * layout's letter on W's place). A Latin letter or a sign there is that layout's own key, never
@@ -162,7 +167,7 @@ export function modifiersFrom(
  */
 export function isNonLatinLetterOn(e: { key?: string; code?: string }, code: string): boolean {
   const key = typeof e.key === "string" ? e.key.toLowerCase() : "";
-  return e.code === code && /^\p{L}$/u.test(key) && !/^\p{Script=Latin}$/u.test(key);
+  return e.code === code && /^\p{L}$/u.test(key) && !isLatinLetter(key);
 }
 
 /** Parse a canonical keystroke string into its parts. Throws on invalid input. */

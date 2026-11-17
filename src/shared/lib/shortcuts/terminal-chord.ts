@@ -13,6 +13,7 @@
 import {
   formatKeystroke,
   hasCmd,
+  isLatinLetter,
   isMac,
   parseKeystroke,
   type KeystrokeParts,
@@ -117,12 +118,7 @@ export function terminalChord(
  * a terminal, whatever a binding says.
  */
 export function isTerminalBracketKey(e: ModifierState & { key: string }): boolean {
-  return !!e.ctrlKey && !hasCmd(e) && !e.altKey && !e.shiftKey && (e.key === "[" || e.key === "]");
-}
-
-/** Whether `key` is a Latin letter; a sign (Arabic's `}` on C's place) or another script is not. */
-function isLatinLetter(key: string): boolean {
-  return /^\p{Script=Latin}$/u.test(key);
+  return !!e.ctrlKey && !hasCmd(e) && !e.altKey && !e.shiftKey && isBracketKey(e.key);
 }
 
 /**
