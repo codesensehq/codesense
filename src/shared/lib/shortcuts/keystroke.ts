@@ -288,12 +288,14 @@ export function matchesKeystroke(
   } catch {
     return false;
   }
+  // Off macOS, AltGr reports as Ctrl+Alt while it types a character: never a shortcut.
+  if (!isMac() && event.getModifierState?.("AltGraph")) return false;
   // `CmdOrCtrl` matches either Meta or Ctrl — Tauri / Electron's
   // `CommandOrControl` accelerator convention. A strict per-platform
   // check via `isMac()` breaks under Playwright (Desktop Chrome's UA
   // reports `Win32` regardless of host OS) and is also user-hostile
   // for users on remapped keyboards.
-  const actualCmdOrCtrl = event.metaKey || event.ctrlKey;
+  const actualCmdOrCtrl = hasMod(event);
   if (actualCmdOrCtrl !== expected.cmdOrCtrl) return false;
   if (options.macCmdOnly && expected.cmdOrCtrl && isMac() && (!event.metaKey || event.ctrlKey))
     return false;

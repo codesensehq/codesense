@@ -34,8 +34,7 @@ function shortcutFor(id: string): string {
   return map[id] ?? "CmdOrCtrl+Alt+unused";
 }
 vi.mock("@/shared/stores/shortcuts-store", () => ({
-  useEffectiveShortcut: (id: string) => shortcutFor(id),
-  getEffectiveShortcut: (id: string) => shortcutFor(id),
+  useShortcutsStore: { getState: () => ({ shortcuts: {} }) },
 }));
 
 // One spy per intercepted action id; SHORTCUT_ACTIONS is the mocked registry.
@@ -61,13 +60,31 @@ const { INTERCEPTED_IDS, runFor } = vi.hoisted(() => {
   const runs: Record<string, ReturnType<typeof vi.fn<() => void>>> = {};
   return { INTERCEPTED_IDS: ids, runFor: (id: string) => (runs[id] ??= vi.fn<() => void>()) };
 });
-vi.mock("@/shared/lib/shortcuts/registry", () => ({
-  SHORTCUT_ACTIONS: INTERCEPTED_IDS.map((id) => ({
-    id,
-    scope: id.startsWith("nav.") ? "global" : "workspace",
-    run: () => runFor(id)(),
-  })),
-}));
+vi.mock("@/shared/lib/shortcuts/registry", async () => {
+  const { terminalChord } = await vi.importActual<
+    typeof import("@/shared/lib/shortcuts/terminal-chord")
+  >("@/shared/lib/shortcuts/terminal-chord");
+  return {
+    SHORTCUT_ACTIONS: INTERCEPTED_IDS.map((id) => ({
+      id,
+      scope: id.startsWith("nav.") ? "global" : "workspace",
+      run: () => runFor(id)(),
+    })),
+    // The real terminal rule over the mocked bindings, read per key so a test can switch platform.
+    resolveBindings: () => {
+      const keystrokes = INTERCEPTED_IDS.map(shortcutFor);
+      return new Map(
+        INTERCEPTED_IDS.map((id) => [
+          id,
+          {
+            keystroke: shortcutFor(id),
+            terminalKeystroke: terminalChord(shortcutFor(id), keystrokes),
+          },
+        ]),
+      );
+    },
+  };
+});
 
 /**
  * Harness renders a terminal host element (with data-xterm-host) containing
@@ -419,4 +436,65 @@ it("leaves a workspace chord to the terminal when there is no focused workspace"
   expect(event.defaultPrevented).toBe(false);
   expect(ptyKey).toHaveBeenCalledOnce();
   expect(runFor("viewer.cycle-workspace-next")).not.toHaveBeenCalled();
+});
+
+describe("off macOS", () => {
+  const originalPlatform = navigator.platform;
+
+  beforeEach(() => {
+    Object.defineProperty(navigator, "platform", {
+      value: "Win32",
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(navigator, "platform", {
+      value: originalPlatform,
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  it("leaves Ctrl+[ and Ctrl+] to the shell", () => {
+    const ptyKey = vi.fn();
+    const { getByTestId } = render(<Harness ptyKey={ptyKey} />);
+    const pty = getByTestId("pty-mock");
+    for (const key of ["[", "]"]) {
+      expect(press(pty, { key, ctrlKey: true }).defaultPrevented, key).toBe(false);
+    }
+    expect(ptyKey).toHaveBeenCalledTimes(2);
+    for (const id of INTERCEPTED_IDS) expect(runFor(id), id).not.toHaveBeenCalled();
+  });
+
+  it("answers context back to Ctrl+Shift+[, which the lifted action wins over its own binding", () => {
+    const ptyKey = vi.fn();
+    const { getByTestId } = render(<Harness ptyKey={ptyKey} />);
+    const event = press(getByTestId("pty-mock"), {
+      key: "{",
+      code: "BracketLeft",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    expect(event.defaultPrevented).toBe(true);
+    expect(runFor("nav.context-back")).toHaveBeenCalledOnce();
+    expect(runFor("viewer.cycle-terminal-tab-prev")).not.toHaveBeenCalled();
+    expect(ptyKey).not.toHaveBeenCalled();
+  });
+
+  it("keeps Ctrl+digit chords, which are not shell keys", () => {
+    const { getByTestId } = render(<Harness ptyKey={vi.fn()} />);
+    expect(press(getByTestId("pty-mock"), { key: "1", ctrlKey: true }).defaultPrevented).toBe(true);
+    expect(runFor("viewer.jump-workspace-1")).toHaveBeenCalledOnce();
+  });
+
+  it("still cycles the workspace on Ctrl+Alt+]", () => {
+    const ptyKey = vi.fn();
+    const { getByTestId } = render(<Harness ptyKey={ptyKey} />);
+    const event = press(getByTestId("pty-mock"), { key: "]", ctrlKey: true, altKey: true });
+    expect(event.defaultPrevented).toBe(true);
+    expect(runFor("viewer.cycle-workspace-next")).toHaveBeenCalledOnce();
+    expect(ptyKey).not.toHaveBeenCalled();
+  });
 });
