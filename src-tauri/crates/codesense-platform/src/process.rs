@@ -5,8 +5,10 @@
 //! Unix: the root leads a fresh process group (its pgid is its pid) and the
 //! tree is signalled through the group, SIGTERM to ask and SIGKILL to end, as
 //! the pty runner and the capture runner do. Windows: the root is assigned to
-//! a Job Object that kills every process in it when it closes. A process with
-//! no console has no polite stop there, so [`terminate`] ends the job too.
+//! a Job Object that kills every process in it when it closes. It starts
+//! suspended and runs only once it is in the job, so nothing it starts escapes
+//! (this replaces the command's creation flags). A process with no console has
+//! no polite stop there, so [`terminate`] ends the job too.
 
 use std::io;
 use std::process::{Child, Command, ExitStatus};
@@ -63,9 +65,6 @@ pub struct ProcessTree {
 
 impl ProcessTree {
     /// Spawn `command` as the root of a new tree.
-    ///
-    /// On Windows the root joins its job just after it starts; a process it
-    /// starts in that instant is outside the job.
     pub fn spawn(command: &mut Command) -> io::Result<Self> {
         sys::prepare(command);
         let mut child = command.spawn()?;
