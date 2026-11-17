@@ -185,10 +185,15 @@ static SECRET_STORE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 /// no Secret Service keeps running; saving a secret then fails with
 /// [`CredentialError::Unavailable`].
 pub fn secret_store_available() -> bool {
-    *SECRET_STORE.get_or_init(|| {
-        let backend = platform_probe();
-        log::info!(target: "auth", "secret store: {}", backend.unwrap_or("unavailable"));
-        backend.is_some()
+    *SECRET_STORE.get_or_init(|| match platform_probe() {
+        Some(backend) => {
+            log::info!(target: "auth", "secret store: {backend}");
+            true
+        }
+        None => {
+            log::info!(target: "auth", "secret store: unavailable");
+            false
+        }
     })
 }
 
@@ -201,10 +206,14 @@ fn platform_probe() -> Option<&'static str> {
 fn platform_probe() -> Option<&'static str> {
     use dbus_secret_service::{EncryptionType, SecretService};
     // A zero prompt timeout cancels any prompt at once, so a probe can never ask.
-    SecretService::connect_with_max_prompt_timeout(EncryptionType::Plain, 0)
-        .and_then(|service| service.get_default_collection().map(|_| ()))
-        .ok()
-        .map(|()| "secret-service")
+    let Ok(service) = SecretService::connect_with_max_prompt_timeout(EncryptionType::Plain, 0)
+    else {
+        return None;
+    };
+    match service.get_default_collection() {
+        Ok(_) => Some("secret-service"),
+        Err(_) => None,
+    }
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
