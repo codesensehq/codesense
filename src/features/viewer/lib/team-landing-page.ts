@@ -45,6 +45,7 @@ type Resolve = (
  *  Mirrors Rust `is_content_relative`; the backend checks again, through symlinks. */
 export function isContentRelative(path: string): boolean {
   if (!path || path.startsWith("/") || path.includes("\\")) return false;
+  // eslint-disable-next-line no-restricted-syntax -- a declared page is a logical content path, always `/`
   return path.split("/").every((seg) => seg !== "" && !seg.startsWith("."));
 }
 
