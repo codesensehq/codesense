@@ -34,6 +34,16 @@ describe("blockQuery — a block's UI defaults on top of its parsed query", () =
     });
   });
 
+  it("resolves relative refs against a block under a drive-letter folder", () => {
+    const q = blockQuery(spec("related: ./notes.md\ndepends: ../y/S-1.md"), {
+      basePath: "C:\\Users\\a\\ctx\\13-x\\README.md",
+    });
+    expect(q.relationships).toEqual({
+      hasSupportingDoc: "C:\\Users\\a\\ctx\\13-x\\notes.md",
+      dependsOn: "C:\\Users\\a\\ctx\\y\\S-1.md",
+    });
+  });
+
   it("bounds by a resolved scope root; caps by the view's limit; boards group by status", () => {
     const q = blockQuery(spec("scope: 13-x\nlimit: 25\nview: board"), {
       basePath: BASE,

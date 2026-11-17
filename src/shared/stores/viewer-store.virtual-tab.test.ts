@@ -119,6 +119,21 @@ describe("viewer-store virtual tabs @P1", () => {
   });
 });
 
+describe("viewer-store tab names from Windows paths", () => {
+  beforeEach(() => {
+    __resetVirtualTabsForTest();
+    useViewerStore.setState({ openTabs: {}, activeTab: {} });
+  });
+
+  it("openFile names the tab after the file, for backslash and drive-root paths", () => {
+    const store = useViewerStore.getState();
+    store.openFile(TEAM, "repo", "C:\\Users\\a\\repo\\src\\x.ts");
+    store.openFile(TEAM, "repo", "\\\\server\\share\\notes\\y.md");
+    const names = (useViewerStore.getState().openTabs[TEAM] ?? []).map((t) => t.name);
+    expect(names).toEqual(["x.ts", "y"]);
+  });
+});
+
 // Persisting is a no-op until the saved state has loaded (SW-FU-B2).
 beforeEach(() => {
   useViewerStore.setState({ stateLoaded: true });

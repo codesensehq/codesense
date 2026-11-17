@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import type { PublishFile } from "@/features/git-sync/lib/types";
+import { basename, dirname, split } from "@/shared/lib/path";
 
 /**
  * The source-diff rail's pure model: filtering, the directory tree, the visible
@@ -57,17 +58,12 @@ interface MutableDir {
   files: PublishFile[];
 }
 
-function basenameOf(path: string): string {
-  const i = path.lastIndexOf("/");
-  return i < 0 ? path : path.slice(i + 1);
-}
-
 /** The changed files as a directory tree: directories first, then files, each
  *  sorted by name; a directory holding only one sub-directory merges with it. */
 export function buildFileTree(files: readonly PublishFile[]): DiffTreeNode[] {
   const root: MutableDir = { dirs: new Map(), files: [] };
   for (const file of files) {
-    const parts = file.path.split("/");
+    const parts = split(file.path);
     let dir = root;
     for (const part of parts.slice(0, -1)) {
       let next = dir.dirs.get(part);
@@ -97,8 +93,8 @@ export function buildFileTree(files: readonly PublishFile[]): DiffTreeNode[] {
         return { kind: "dir", path, name: label, children, fileCount: countFiles(children) };
       });
     const fileNodes: DiffTreeNode[] = [...dir.files]
-      .sort((a, b) => naturalCompare(basenameOf(a.path), basenameOf(b.path)))
-      .map((file) => ({ kind: "file", file, name: basenameOf(file.path) }));
+      .sort((a, b) => naturalCompare(basename(a.path), basename(b.path)))
+      .map((file) => ({ kind: "file", file, name: basename(file.path) }));
     return [...dirNodes, ...fileNodes];
   };
   return toNodes(root, "");
@@ -174,14 +170,14 @@ export function stepFile(
  */
 export function prefersTree(files: readonly PublishFile[]): boolean {
   if (files.length < 6) return false;
-  const dirs = new Set(files.map((f) => f.path.slice(0, Math.max(0, f.path.lastIndexOf("/")))));
+  const dirs = new Set(files.map((f) => dirname(f.path)));
   return dirs.size >= 2;
 }
 
 /** Split a repo path into its directory (with trailing slash) and file name. */
 export function splitPath(path: string): { dir: string; name: string } {
-  const i = path.lastIndexOf("/");
-  return i < 0 ? { dir: "", name: path } : { dir: path.slice(0, i + 1), name: path.slice(i + 1) };
+  const name = basename(path);
+  return { dir: path.slice(0, path.length - name.length), name };
 }
 
 /** Numeric-aware name order, with a plain compare breaking its ties

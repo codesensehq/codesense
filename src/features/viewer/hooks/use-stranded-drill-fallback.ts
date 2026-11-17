@@ -6,6 +6,7 @@ import {
   nearestExistingSubtree,
 } from "@/shared/lib/pipeline-graph/pipeline-utils";
 import type { DerivedPipelineTree } from "@/shared/lib/pipeline-graph/types";
+import { relative } from "@/shared/lib/path";
 
 /**
  * When the folder the nav is drilled into disappears from the tree (it was
@@ -31,8 +32,7 @@ export function useStrandedDrillFallback({
 }): void {
   useEffect(() => {
     if (!tree || loading || !scopePath || !drillPath) return;
-    const root = tree.absoluteDirPath.replace(/\/+$/, "");
-    if (!drillPath.startsWith(`${root}/`)) return;
+    if (!relative(tree.absoluteDirPath, drillPath)) return;
     if (findScopedSubtree(tree, scopePath)) return;
     onDrill(nearestExistingSubtree(tree, scopePath).absoluteDirPath);
   }, [tree, loading, scopePath, drillPath, onDrill]);

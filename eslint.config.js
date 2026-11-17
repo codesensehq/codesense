@@ -19,6 +19,26 @@ const ERROR_NAME = "/^(e|err|error|cause)$/";
 // contract; the remaining retired terms still fail lint.
 const RETIRED_WORDS =
   "/\\b[Ww]orkspaces?\\b|Codesense|[Ss]ample epic|Invite a teammate|[Ss]ample pipeline/";
+// Hand-rolled file-system path splitting. `src/shared/lib/path.ts` is the one path helper;
+// the folders in PATH_HELPER_FOLDERS use it instead of splitting on a forward slash.
+// The receiver must look like a path (`relPath`, `file.path`, `cwd`, `rootDir`), so keys,
+// slugs and URLs that split on `/` stay quiet. Widen the folder list as folders migrate.
+const PATH_HELPER_FOLDERS = ["src/features/viewer/**", "src/features/shell/**"];
+const PATH_SPLIT_CALL =
+  "CallExpression[callee.property.name=/^(split|lastIndexOf|indexOf)$/][arguments.0.value='/']";
+const PATH_RECEIVER = "/path|cwd|dir|root/i";
+const PATH_SPLIT_MESSAGE =
+  "Split, slice and join file-system paths with the helpers in @/shared/lib/path (they also handle C:\\ and UNC paths). A logical content path, key or URL that really is `/`-delimited takes an eslint-disable-next-line with the reason.";
+const PATH_SPLIT_SELECTORS = [
+  {
+    selector: `${PATH_SPLIT_CALL}[callee.object.name=${PATH_RECEIVER}]`,
+    message: PATH_SPLIT_MESSAGE,
+  },
+  {
+    selector: `${PATH_SPLIT_CALL}[callee.object.property.name=${PATH_RECEIVER}]`,
+    message: PATH_SPLIT_MESSAGE,
+  },
+];
 const VISIBLE_PROP = "/^(title|label|aria-label|placeholder|detail|body|why|message|description)$/";
 
 export default tseslint.config(
@@ -105,6 +125,17 @@ export default tseslint.config(
       "no-empty": ["error", { allowEmptyCatch: true }],
       "@typescript-eslint/no-this-alias": "off",
       "@typescript-eslint/no-unused-expressions": "off",
+    },
+  },
+
+  // File-system paths in these folders go through the shared path helper. Before the
+  // first-use block, which appends PATH_SPLIT_SELECTORS to its own list: the last block
+  // that sets `no-restricted-syntax` for a file wins whole.
+  {
+    files: PATH_HELPER_FOLDERS,
+    ignores: ["**/*.test.*", "**/__fixtures__/**"],
+    rules: {
+      "no-restricted-syntax": ["error", ...PATH_SPLIT_SELECTORS],
     },
   },
 
@@ -200,6 +231,8 @@ export default tseslint.config(
           selector: "JSXAttribute > Literal[value=/\\.\\.\\./]",
           message: "Write an ellipsis (…), never three dots.",
         },
+        // A first-use surface inside a path-helper folder keeps the path rule too.
+        ...PATH_SPLIT_SELECTORS,
       ],
     },
   },

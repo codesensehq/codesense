@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { dirname } from "@/shared/lib/basename";
+import { dirname } from "@/shared/lib/path";
 import { dropPositionInRect, type DragPosition } from "@/shared/lib/drag-drop-hit-test";
 import type { FlatNavItem } from "./flatten-nav-tree";
 

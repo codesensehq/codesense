@@ -11,12 +11,6 @@ export type ScratchOverlayIndex = ReadonlyMap<string, ScratchOverlayFile>;
 
 const EMPTY: ScratchOverlayIndex = new Map();
 
-/** The worktree-relative form of an absolute path under `root` (`null` outside it). */
-export function relativeToRoot(root: string, absolute: string): string | null {
-  const base = root.endsWith("/") ? root : `${root}/`;
-  return absolute.startsWith(base) ? absolute.slice(base.length) : null;
-}
-
 /**
  * SLW-PT-20 — which files of the worktree at `cwd` the user's scratch overlay
  * materialized (or set aside for the team's). Read from what the worktree

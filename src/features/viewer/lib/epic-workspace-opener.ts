@@ -8,6 +8,7 @@ import {
 } from "@/tauri/commands";
 import { getCurrentUser } from "@/shared/lib/get-current-user";
 import { getCodesenseHome } from "@/shared/lib/codesense-home";
+import { trimTrailingSeparators } from "@/shared/lib/path";
 import { teamContentPathFromEpicDocPath } from "@/shared/lib/team-content-path";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
@@ -106,9 +107,10 @@ export function deriveEpicScopeFromPath(
   // Normalize trailing slashes on both sides — a divergence between how the
   // store persists `org_root` and the emitted path would otherwise silently
   // disable reassembly (write lands, but no match → no assemble).
-  const stripTrailing = (p: string): string => p.replace(/\/+$/, "");
-  const target = stripTrailing(parsed.orgRoot);
-  const org = useOrgStore.getState().orgs.find((o) => stripTrailing(o.org_root) === target);
+  const target = trimTrailingSeparators(parsed.orgRoot);
+  const org = useOrgStore
+    .getState()
+    .orgs.find((o) => trimTrailingSeparators(o.org_root) === target);
   if (!org) return null;
   return { orgSlug: org.slug, team: parsed.team };
 }

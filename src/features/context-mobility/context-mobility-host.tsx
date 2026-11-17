@@ -13,7 +13,7 @@ import { useOrgStore } from "@/shared/stores/org-store";
 import { useScopeActive } from "@/shared/lib/warm-scopes";
 import { useUiStore } from "@/shared/stores/ui-store";
 import { useCurrentUser } from "@/shared/lib/get-current-user";
-import { basename } from "@/shared/lib/basename";
+import { basename } from "@/shared/lib/path";
 
 /**
  * SLW-PT-18 — the thin LIVE-WIRE layer for the content-mobility epic.

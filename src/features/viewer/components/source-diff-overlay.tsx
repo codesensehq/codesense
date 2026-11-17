@@ -33,7 +33,7 @@ import {
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import { basename } from "@/shared/lib/basename";
+import { basename } from "@/shared/lib/path";
 import { useTrailingDebounce } from "@/shared/lib/use-trailing-debounce";
 import { useRecentActivity } from "@/shared/lib/use-recent-activity";
 import type { SourceDiffMode, Workspace } from "@/shared/stores/viewer-store";

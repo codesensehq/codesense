@@ -30,6 +30,7 @@ import {
   type LandingCandidate,
   type LandingPageResolution,
 } from "@/tauri/commands";
+import { relative, trimTrailingSeparators } from "@/shared/lib/path";
 
 /** Conventional landing pages, in preference order, at the team's content root. */
 export const LANDING_PAGE_FALLBACKS = ["README.md", "README.html", "index.html"] as const;
@@ -44,6 +45,7 @@ type Resolve = (
  *  Mirrors Rust `is_content_relative`; the backend checks again, through symlinks. */
 export function isContentRelative(path: string): boolean {
   if (!path || path.startsWith("/") || path.includes("\\")) return false;
+  // eslint-disable-next-line no-restricted-syntax -- a declared page is a logical content path, always `/`
   return path.split("/").every((seg) => seg !== "" && !seg.startsWith("."));
 }
 
@@ -51,10 +53,7 @@ export function isContentRelative(path: string): boolean {
  *  it. Doubled and trailing slashes are ignored, so two spellings of one file
  *  compare equal; anything else outside the folder is `null`. */
 export function contentRelativePath(path: string, contentRoot: string): string | null {
-  const norm = (p: string) => p.replace(/\/{2,}/g, "/").replace(/\/+$/, "");
-  const file = norm(path);
-  const root = norm(contentRoot);
-  return file.startsWith(`${root}/`) ? file.slice(root.length + 1) || null : null;
+  return relative(contentRoot, path) || null;
 }
 
 /** The pages to try, in order: the declared one (when safe, exact name), then
@@ -71,7 +70,7 @@ export function landingPageCandidates(team: Pick<Team, "landing_page">): Landing
 
 /** The team's content folder: `{org_root}/{team}/content`. */
 export function teamContentRoot(orgRoot: string, teamName: string): string {
-  return pathToTeamContentDirSync(orgRoot.replace(/\/+$/, ""), teamName);
+  return pathToTeamContentDirSync(trimTrailingSeparators(orgRoot), teamName);
 }
 
 /** Nothing open in the team: no tabs and no active tab. */
@@ -167,8 +166,7 @@ export function asLandingPageResolution(raw: unknown): LandingPageResolution {
 /** Forget resolved landing pages: those under `changedPath`'s team content, or
  *  all of them when no path is given. */
 export function invalidateLandingPages(changedPath?: string): void {
-  const under = (root: string) =>
-    !changedPath || changedPath === root || changedPath.startsWith(`${root}/`);
+  const under = (root: string) => !changedPath || relative(root, changedPath) !== null;
   let dropped = [...shownRoots].some(under);
   for (const [key, { contentRoot }] of memo) {
     if (under(contentRoot)) {

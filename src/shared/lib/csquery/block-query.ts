@@ -13,8 +13,7 @@
  * - `limit` is the view's cap (the connectivity view asks for the full set).
  */
 
-import { dirname } from "../basename";
-import { resolveRelativePath } from "../paths/resolve-relative-path";
+import { dirname, resolveRelative } from "../path";
 import type { ContextQuery, ContextRelationshipFilter, ContextSort } from "../context-query/types";
 import type { CsQuerySpec } from "./types";
 
@@ -34,7 +33,7 @@ function resolveRefs(
   const out = { ...rel };
   for (const k of ["hasSupportingDoc", "backlinkedBy", "dependsOn"] as const) {
     const v = out[k];
-    if (v && looksRelative(v)) out[k] = resolveRelativePath(base, v);
+    if (v && looksRelative(v)) out[k] = resolveRelative(base, v);
   }
   return out;
 }

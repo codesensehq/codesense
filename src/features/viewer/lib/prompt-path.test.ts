@@ -58,3 +58,28 @@ describe("abbreviatePromptPath", () => {
     expect(fmt("/Users//dev//code//app/x", HOME)).toBe("~/…/app/x");
   });
 });
+
+describe("abbreviatePromptPath — Windows paths", () => {
+  it("keeps the path's own separator", () => {
+    const p = abbreviatePromptPath("C:\\Users\\a\\repo");
+    expect(p).toMatchObject({ head: "C:\\…\\", parent: "a", leaf: "repo", elided: true });
+    expect(formatPromptPath(p)).toBe("C:\\…\\a\\repo");
+  });
+
+  it("says a Windows home as ~", () => {
+    const p = abbreviatePromptPath("C:\\Users\\a\\repo", "C:\\Users\\a");
+    expect(p).toMatchObject({ head: "~\\", parent: null, leaf: "repo", elided: false });
+    expect(formatPromptPath(p)).toBe("~\\repo");
+    expect(abbreviatePromptPath("C:\\Users\\a", "C:\\Users\\a")).toMatchObject({ leaf: "~" });
+  });
+
+  it("applies home only on a segment boundary and ignores a drive-root home", () => {
+    expect(fmt("C:\\Users\\ada\\x", "C:\\Users\\a")).toBe("C:\\…\\ada\\x");
+    expect(fmt("C:\\srv\\app", "C:\\")).toBe("C:\\srv\\app");
+  });
+
+  it("handles a drive root and a UNC share", () => {
+    expect(abbreviatePromptPath("C:\\")).toMatchObject({ head: "", parent: null, leaf: "C:\\" });
+    expect(fmt("\\\\server\\share\\a\\b\\c", null)).toBe("\\\\server\\share\\…\\b\\c");
+  });
+});

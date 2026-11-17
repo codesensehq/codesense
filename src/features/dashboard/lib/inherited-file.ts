@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { baseName, ingestFile } from "@/features/dashboard/lib/structural-ops";
-import { dirname } from "@/shared/lib/basename";
+import { dirname } from "@/shared/lib/path";
 
 // ---------------------------------------------------------------------------
 // SW-XS-20 — a file a team inherits from a parent team lives at its real path in

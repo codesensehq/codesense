@@ -5,7 +5,7 @@ import {
   PIPELINE_EXTENSIONS,
 } from "@/shared/lib/pipeline-graph/pipeline-file-filter";
 import { stripPipelineExtension } from "@/shared/lib/pipeline-graph/pipeline-utils";
-import { basename } from "@/shared/lib/basename";
+import { basename } from "@/shared/lib/path";
 import type { WorktreeConfig } from "@/shared/types/worktree-config";
 
 const DEFAULT_BRANCH_PREFIX = "feat/";
