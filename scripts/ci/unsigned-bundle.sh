@@ -50,7 +50,11 @@ case "$PLATFORM" in
     linux)
         # linuxdeploy is itself an AppImage, and a runner has no FUSE to mount one.
         export APPIMAGE_EXTRACT_AND_RUN=1
-        tauri_args+=(--bundles "deb,rpm,appimage")
+        # linuxdeploy's bundled strip cannot read the newer relocation sections that the
+        # Ubuntu 24.04 libraries carry, and the bundle fails; skip stripping the bundled files.
+        export NO_STRIP=true
+        # --verbose shows linuxdeploy's own output, which a failed AppImage otherwise hides.
+        tauri_args+=(--verbose --bundles "deb,rpm,appimage")
         ;;
 esac
 
