@@ -21,7 +21,7 @@
  */
 
 import { parseScrollIntent } from "./scroll-keys";
-import { hasAnyModifier, hasCmd, hasCommandModifier } from "./shortcuts/keystroke";
+import { hasAnyModifier, hasCmd, hasCommandModifier, isMac } from "./shortcuts/keystroke";
 
 // ---------------------------------------------------------------------------
 // Key repeat polyfill constants
@@ -124,6 +124,10 @@ export interface TerminalKeyHandlerOptions {
   scrollLines?: (n: number) => void;
   /** Scroll by n pages (negative = up). */
   scrollPages?: (n: number) => void;
+  /** Copy the selection to the clipboard (Ctrl+Shift+C off macOS). */
+  copySelection?: () => void;
+  /** Paste the clipboard into the PTY (Ctrl+Shift+V off macOS). */
+  paste?: () => void;
 }
 
 export interface TerminalKeyHandler {
@@ -131,6 +135,18 @@ export interface TerminalKeyHandler {
   handler: (event: KeyboardEvent) => boolean;
   /** Clear any active repeat timers. Call on blur / compositionstart / dispose. */
   clearRepeat: () => void;
+}
+
+/** Ctrl+Shift+C or Ctrl+Shift+V with nothing else held. */
+function isTerminalClipboardChord(event: KeyboardEvent): boolean {
+  const key = event.key.toLowerCase();
+  return (
+    event.ctrlKey &&
+    event.shiftKey &&
+    !event.altKey &&
+    !hasCmd(event) &&
+    (key === "c" || key === "v")
+  );
 }
 
 export function createTerminalKeyHandler(
@@ -172,6 +188,18 @@ export function createTerminalKeyHandler(
         clearRepeat();
       }
       return true;
+    }
+
+    // ── Ctrl+Shift+C / Ctrl+Shift+V → copy / paste (off macOS) ─────────
+    // The terminal's own chords: Ctrl+C and Ctrl+V are shell input there. Prevent the default
+    // so the webview does not also paste, and return false so xterm does not see the key.
+    if (event.type === "keydown" && !isMac() && isTerminalClipboardChord(event)) {
+      event.preventDefault();
+      if (!event.repeat) {
+        if (event.key.toLowerCase() === "c") options?.copySelection?.();
+        else options?.paste?.();
+      }
+      return false;
     }
 
     // ── Scroll shortcuts (Cmd+Up/Down, Alt+Up/Down, PageUp/PageDown) ──

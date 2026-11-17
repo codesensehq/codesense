@@ -916,3 +916,84 @@ describe("scroll shortcuts (C.2)", () => {
     expect(writeToPty).not.toHaveBeenCalled();
   });
 });
+
+describe("Ctrl keys off macOS", () => {
+  const originalPlatform = navigator.platform;
+
+  function setPlatform(value: string): void {
+    Object.defineProperty(navigator, "platform", { value, configurable: true, writable: true });
+  }
+
+  function chord(init: KeyboardEventInit & { key: string }): KeyboardEvent {
+    return new KeyboardEvent("keydown", { cancelable: true, ...init });
+  }
+
+  afterEach(() => setPlatform(originalPlatform));
+
+  it("lets Ctrl+Left and Ctrl+Right through to xterm untouched", () => {
+    setPlatform("Win32");
+    const writeToPty = vi.fn();
+    const { handler } = createTerminalKeyHandler(writeToPty);
+    for (const key of ["ArrowLeft", "ArrowRight"]) {
+      const event = chord({ key, ctrlKey: true });
+      expect(handler(event)).toBe(true);
+      expect(event.defaultPrevented).toBe(false);
+    }
+    expect(writeToPty).not.toHaveBeenCalled();
+  });
+
+  it("copies the selection once on Ctrl+Shift+C and keeps the key from xterm", () => {
+    setPlatform("Win32");
+    const copySelection = vi.fn();
+    const paste = vi.fn();
+    const { handler } = createTerminalKeyHandler(vi.fn(), { copySelection, paste });
+    const event = chord({ key: "C", ctrlKey: true, shiftKey: true });
+    expect(handler(event)).toBe(false);
+    expect(event.defaultPrevented).toBe(true);
+    expect(copySelection).toHaveBeenCalledOnce();
+    expect(paste).not.toHaveBeenCalled();
+  });
+
+  it("pastes once on Ctrl+Shift+V and stops the webview pasting again", () => {
+    setPlatform("Linux x86_64");
+    const copySelection = vi.fn();
+    const paste = vi.fn();
+    const { handler } = createTerminalKeyHandler(vi.fn(), { copySelection, paste });
+    const event = chord({ key: "V", ctrlKey: true, shiftKey: true });
+    expect(handler(event)).toBe(false);
+    expect(event.defaultPrevented).toBe(true);
+    expect(paste).toHaveBeenCalledOnce();
+    expect(copySelection).not.toHaveBeenCalled();
+  });
+
+  it("does not repeat a copy or paste while the key is held", () => {
+    setPlatform("Win32");
+    const paste = vi.fn();
+    const { handler } = createTerminalKeyHandler(vi.fn(), { paste });
+    handler(chord({ key: "V", ctrlKey: true, shiftKey: true }));
+    expect(handler(chord({ key: "V", ctrlKey: true, shiftKey: true, repeat: true }))).toBe(false);
+    expect(paste).toHaveBeenCalledOnce();
+  });
+
+  it("leaves plain Ctrl+C and Ctrl+V to the shell", () => {
+    setPlatform("Win32");
+    const copySelection = vi.fn();
+    const paste = vi.fn();
+    const { handler } = createTerminalKeyHandler(vi.fn(), { copySelection, paste });
+    for (const key of ["c", "v"]) {
+      const event = chord({ key, ctrlKey: true });
+      expect(handler(event)).toBe(true);
+      expect(event.defaultPrevented).toBe(false);
+    }
+    expect(copySelection).not.toHaveBeenCalled();
+    expect(paste).not.toHaveBeenCalled();
+  });
+
+  it("does not take Ctrl+Shift+C on macOS", () => {
+    setPlatform("MacIntel");
+    const copySelection = vi.fn();
+    const { handler } = createTerminalKeyHandler(vi.fn(), { copySelection });
+    expect(handler(chord({ key: "C", ctrlKey: true, shiftKey: true }))).toBe(true);
+    expect(copySelection).not.toHaveBeenCalled();
+  });
+});

@@ -1097,6 +1097,18 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
         scrollToBottom: () => term.scrollToBottom(),
         scrollLines: (n) => term.scrollLines(n),
         scrollPages: (n) => term.scrollPages(n),
+        copySelection: () => {
+          const selection = term.getSelection();
+          if (selection) void navigator.clipboard.writeText(selection).catch(() => undefined);
+        },
+        paste: () => {
+          void navigator.clipboard
+            .readText()
+            .then((text) => {
+              if (text) term.paste(text);
+            })
+            .catch(() => undefined);
+        },
       },
     );
     term.attachCustomKeyEventHandler(keys.handler);
