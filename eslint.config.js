@@ -204,6 +204,24 @@ export default tseslint.config(
     },
   },
 
+  // The Mod key is read through the helpers in `src/shared/lib/shortcuts/keystroke.ts`
+  // (`hasMod`, `hasCmd`, `hasPlatformMod`, ...), so no file reads `.metaKey` on its own and
+  // Cmd-versus-Ctrl stays one decision.
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    ignores: ["src/shared/lib/shortcuts/**"],
+    rules: {
+      "no-restricted-properties": [
+        "error",
+        {
+          property: "metaKey",
+          message:
+            "Read modifiers through hasMod / hasCmd / hasPlatformMod / hasAnyModifier / hasCommandModifier (@/shared/lib/shortcuts/keystroke).",
+        },
+      ],
+    },
+  },
+
   // Test file relaxations
   {
     files: ["**/*.test.*", "**/*.spec.*", "tests/**/*"],

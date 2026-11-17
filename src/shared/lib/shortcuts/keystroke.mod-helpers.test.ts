@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: MIT
 import { afterEach, describe, expect, it } from "vitest";
 
-import { hasAnyModifier, hasCmd, hasCommandModifier, hasMod, hasPlatformMod } from "./keystroke";
+import {
+  hasAnyModifier,
+  hasCmd,
+  hasCommandModifier,
+  hasMod,
+  hasPlatformMod,
+  modifiersFrom,
+} from "./keystroke";
 
 const originalPlatform = navigator.platform;
 
@@ -47,5 +54,26 @@ describe("mod helpers", () => {
     for (const k of ["metaKey", "ctrlKey", "altKey"] as const) {
       expect(hasCommandModifier({ ...none, [k]: true })).toBe(true);
     }
+  });
+
+  it("treats a flag left out as not held", () => {
+    expect(hasMod({})).toBe(false);
+    expect(hasMod({ ctrlKey: true })).toBe(true);
+    expect(hasAnyModifier({ shiftKey: true })).toBe(true);
+  });
+});
+
+describe("modifiersFrom", () => {
+  it("returns the four flags of a posted message", () => {
+    expect(
+      modifiersFrom({ key: "k", metaKey: true, ctrlKey: false, altKey: false, shiftKey: true }),
+    ).toEqual({ metaKey: true, ctrlKey: false, altKey: false, shiftKey: true });
+  });
+
+  it("returns null when any flag is not a boolean", () => {
+    expect(modifiersFrom({ metaKey: true, ctrlKey: false, altKey: false })).toBeNull();
+    expect(
+      modifiersFrom({ metaKey: 1, ctrlKey: false, altKey: false, shiftKey: false }),
+    ).toBeNull();
   });
 });

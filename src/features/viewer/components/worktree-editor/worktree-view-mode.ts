@@ -16,26 +16,14 @@ const RENDERABLE: ReadonlySet<ViewerFileType> = new Set([
 const STORAGE_KEY = "codesense.worktree-editor.view-mode";
 
 /** ⇧⌘V (⇧⌃V off the Mac): Rendered ⇄ Source, as VS Code's preview toggle. */
-export function isViewToggleChord({
-  code,
-  metaKey,
-  ctrlKey,
-  shiftKey,
-  altKey,
-}: {
+export function isViewToggleChord(key: {
   code?: string;
   metaKey?: boolean;
   ctrlKey?: boolean;
   shiftKey?: boolean;
   altKey?: boolean;
 }): boolean {
-  const mods = {
-    metaKey: !!metaKey,
-    ctrlKey: !!ctrlKey,
-    altKey: !!altKey,
-    shiftKey: !!shiftKey,
-  };
-  return hasMod(mods) && mods.shiftKey && !mods.altKey && code === "KeyV";
+  return hasMod(key) && !!key.shiftKey && !key.altKey && key.code === "KeyV";
 }
 
 /** The viewer type of `path` when the viewer can render it, else `null`. */

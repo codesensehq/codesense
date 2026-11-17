@@ -107,34 +107,52 @@ export function isMac(): boolean {
   );
 }
 
-type ModifierState = Pick<
-  KeyboardEvent | MouseEvent,
-  "metaKey" | "ctrlKey" | "altKey" | "shiftKey"
+/** The four modifier flags of a keyboard or mouse event; a flag left out counts as not held. */
+export type ModifierState = Partial<
+  Pick<KeyboardEvent | MouseEvent, "metaKey" | "ctrlKey" | "altKey" | "shiftKey">
 >;
 
 /** Meta or Ctrl: the `CmdOrCtrl` modifier of a keyboard shortcut. */
 export function hasMod(e: ModifierState): boolean {
-  return e.metaKey || e.ctrlKey;
+  return !!(e.metaKey || e.ctrlKey);
 }
 
 /** The Meta key itself: a macOS Cmd feature that stays Cmd-only. */
 export function hasCmd(e: ModifierState): boolean {
-  return e.metaKey;
+  return !!e.metaKey;
 }
 
 /** Meta on macOS, Ctrl elsewhere: the platform modifier for mouse gestures such as Cmd+click. */
 export function hasPlatformMod(e: ModifierState): boolean {
-  return isMac() ? e.metaKey : e.ctrlKey;
+  return !!(isMac() ? e.metaKey : e.ctrlKey);
 }
 
 /** Any of Meta, Ctrl, Alt or Shift is held. */
 export function hasAnyModifier(e: ModifierState): boolean {
-  return e.metaKey || e.ctrlKey || e.altKey || e.shiftKey;
+  return !!(e.metaKey || e.ctrlKey || e.altKey || e.shiftKey);
 }
 
 /** Any of Meta, Ctrl or Alt is held (Shift alone does not make a command chord). */
 export function hasCommandModifier(e: ModifierState): boolean {
-  return e.metaKey || e.ctrlKey || e.altKey;
+  return !!(e.metaKey || e.ctrlKey || e.altKey);
+}
+
+/**
+ * The four modifier flags out of a posted message (a frame's key data), or `null` when
+ * any of them is not a boolean.
+ */
+export function modifiersFrom(
+  data: Record<string, unknown>,
+): Pick<KeyboardEvent, "metaKey" | "ctrlKey" | "altKey" | "shiftKey"> | null {
+  const { metaKey, ctrlKey, altKey, shiftKey } = data;
+  if (
+    typeof metaKey !== "boolean" ||
+    typeof ctrlKey !== "boolean" ||
+    typeof altKey !== "boolean" ||
+    typeof shiftKey !== "boolean"
+  )
+    return null;
+  return { metaKey, ctrlKey, altKey, shiftKey };
 }
 
 /** Parse a canonical keystroke string into its parts. Throws on invalid input. */
