@@ -387,7 +387,11 @@ test("rust.yml's Linux app job runs the credential store tests under a session b
   const test = job.steps.find((step) => step.name.startsWith("Test the credential store"));
   assert.match(test.run, /dbus-run-session -- bash -ec/);
   assert.match(test.run, /gnome-keyring-daemon --unlock/);
-  assert.match(test.run, /--run-ignored only -E "test\(~secret_service_tests\)"/);
+  assert.match(test.run, /--run-ignored all/);
+  assert.match(
+    test.run,
+    /-E "test\(~secret_service_tests\) \| test\(linux_uses_secret_service_not_the_mock_store\)"/,
+  );
   // The tests are named by that filter, not by a package-wide run.
   assert.match(test.run, /-p codesense --lib/);
   assert.ok(!workflow.jobs["flaky-issues"].needs.includes("rust-linux-app"));

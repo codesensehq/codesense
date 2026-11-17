@@ -621,12 +621,14 @@ jobs:
         run: cargo nextest run --profile ci --locked -p codesense --lib --no-run
       - name: Test the credential store against Secret Service
         # A private session bus with the keyring daemon unlocked by a throwaway password, as
-        # keyring's own CI does. The filter must match: nextest fails when no test runs.
+        # keyring's own CI does. The filter also picks the backend-selection test, which is not
+        # ignored. It must match: nextest fails when no test runs.
         run: |
           dbus-run-session -- bash -ec '
             echo "ci-keyring" | gnome-keyring-daemon --unlock > /dev/null
             cargo nextest run --profile ci --locked -p codesense --lib \
-              --run-ignored only -E "test(~secret_service_tests)"
+              --run-ignored all \
+              -E "test(~secret_service_tests) | test(linux_uses_secret_service_not_the_mock_store)"
           '
 
   flaky-issues:
