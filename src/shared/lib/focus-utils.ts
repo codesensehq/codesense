@@ -8,7 +8,7 @@
  */
 
 import { isInHiddenTeam, queryAllShown } from "@/shared/lib/warm-scopes";
-import { hasCmd } from "@/shared/lib/shortcuts/keystroke";
+import { hasCmd, isNonLatinLetterOn } from "@/shared/lib/shortcuts/keystroke";
 
 export type PaneType = "file" | "terminal" | "scratch-note";
 
@@ -39,7 +39,7 @@ export function isCmdW(
   // A synthesized or IME event can carry no key at all.
   const key = typeof e.key === "string" ? e.key.toLowerCase() : "";
   if (key === "w") return true;
-  return e.code === "KeyW" && /^\p{L}$/u.test(key) && !/^\p{Script=Latin}$/u.test(key);
+  return isNonLatinLetterOn(e, "KeyW");
 }
 
 /** True when keyboard focus is inside a terminal popup (its terminal or its own controls). */

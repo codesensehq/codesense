@@ -1,7 +1,13 @@
 // SPDX-License-Identifier: MIT
 import { afterEach, describe, expect, it } from "vitest";
 
-import { resolveBindings, SHORTCUT_ACTIONS } from "./registry";
+import {
+  resolveBindings,
+  setDynamicShortcutActions,
+  SHORTCUT_ACTIONS,
+  type ShortcutAction,
+} from "./registry";
+import { restorePlatform, setPlatform } from "@/test/platform";
 
 /**
  * Every built-in default binding, the chord it answers to from a focused terminal off macOS
@@ -80,13 +86,7 @@ const TABLE: ReadonlyArray<[string, string, string]> = [
   ...GENERATED_UNCHANGED.map(([id, chord]): [string, string, string] => [id, chord, chord]),
 ];
 
-const originalPlatform = navigator.platform;
-
-function setPlatform(value: string): void {
-  Object.defineProperty(navigator, "platform", { value, configurable: true, writable: true });
-}
-
-afterEach(() => setPlatform(originalPlatform));
+afterEach(restorePlatform);
 
 describe("default bindings", () => {
   it("the table lists every built-in action once, with its default", () => {
@@ -159,5 +159,35 @@ describe("default bindings", () => {
     const bindings = resolveBindings({ "viewer.clear-terminal": "CmdOrCtrl+L" });
     expect(bindings.get("viewer.clear-terminal")?.keystroke).toBe("CmdOrCtrl+L");
     expect(bindings.get("viewer.clear-terminal")?.terminalKeystroke).toBe("CmdOrCtrl+Shift+L");
+  });
+});
+
+describe("a dashboard command in a terminal", () => {
+  const pageCommand: ShortcutAction = {
+    id: "page/hud-size",
+    label: "Resize",
+    defaultKeystroke: "CmdOrCtrl+U",
+    scope: "global",
+    command: {
+      dashboard: "page",
+      dashboardTitle: "Page",
+      dashboardScope: "built-in",
+      humanOnly: false,
+      active: true,
+    },
+    run: () => {},
+  };
+
+  afterEach(() => setDynamicShortcutActions([]));
+
+  it("never takes a built-in's own Ctrl+Shift chord", () => {
+    setPlatform("Win32");
+    setDynamicShortcutActions([pageCommand]);
+    const bindings = resolveBindings({});
+    expect(bindings.get("page/hud-size")?.keystroke).toBe("CmdOrCtrl+U");
+    expect(bindings.get("page/hud-size")?.terminalKeystroke).toBe("");
+    expect(bindings.get("viewer.toggle-story-hud-size")?.terminalKeystroke).toBe(
+      "CmdOrCtrl+Shift+U",
+    );
   });
 });

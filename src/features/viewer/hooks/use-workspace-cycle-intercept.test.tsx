@@ -7,6 +7,7 @@ import { useWorkspaceCycleIntercept } from "./use-workspace-cycle-intercept";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useUiStore } from "@/shared/stores/ui-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
+import { restorePlatform, setPlatform } from "@/test/platform";
 
 // The intercept delegates EVERY recognized chord to the registry action's run(),
 // so the command behavior lives in exactly one place. The test mocks the registry
@@ -78,7 +79,7 @@ vi.mock("@/shared/lib/shortcuts/registry", async () => {
           id,
           {
             keystroke: shortcutFor(id),
-            terminalKeystroke: terminalChord(shortcutFor(id), keystrokes),
+            terminalKeystroke: terminalChord(shortcutFor(id), { builtIns: keystrokes }),
           },
         ]),
       );
@@ -441,23 +442,9 @@ it("leaves a workspace chord to the terminal when there is no focused workspace"
 });
 
 describe("off macOS", () => {
-  const originalPlatform = navigator.platform;
+  beforeEach(() => setPlatform("Win32"));
 
-  beforeEach(() => {
-    Object.defineProperty(navigator, "platform", {
-      value: "Win32",
-      configurable: true,
-      writable: true,
-    });
-  });
-
-  afterEach(() => {
-    Object.defineProperty(navigator, "platform", {
-      value: originalPlatform,
-      configurable: true,
-      writable: true,
-    });
-  });
+  afterEach(restorePlatform);
 
   it("leaves Ctrl+[ and Ctrl+] to the shell", () => {
     const ptyKey = vi.fn();

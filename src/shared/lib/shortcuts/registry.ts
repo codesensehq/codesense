@@ -1430,10 +1430,21 @@ export function resolveBindings(shortcuts: Record<string, string>): Map<string, 
       });
     else bind(action.id, wanted);
   }
-  const keystrokes = [...drafts.values()].map((d) => d.keystroke).filter(Boolean);
+  const builtIns: string[] = [];
+  const commands: string[] = [];
+  for (const action of actions) {
+    const bound = drafts.get(action.id)?.keystroke;
+    if (bound) (action.command ? commands : builtIns).push(bound);
+  }
   const bindings = new Map<string, ResolvedBinding>();
-  for (const [id, draft] of drafts) {
-    bindings.set(id, { ...draft, terminalKeystroke: terminalChord(draft.keystroke, keystrokes) });
+  for (const action of actions) {
+    const draft = drafts.get(action.id)!;
+    const terminalKeystroke = terminalChord(
+      draft.keystroke,
+      { builtIns, commands },
+      !!action.command,
+    );
+    bindings.set(action.id, { ...draft, terminalKeystroke });
   }
   resolvedCache = { shortcuts, actions, mac, bindings };
   return bindings;

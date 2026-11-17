@@ -155,6 +155,16 @@ export function modifiersFrom(
   return { metaKey, ctrlKey, altKey, shiftKey };
 }
 
+/**
+ * Whether `e` types a letter that is not Latin on the physical key `code` (a Cyrillic or Greek
+ * layout's letter on W's place). A Latin letter or a sign there is that layout's own key, never
+ * the key `code` names on a QWERTY board.
+ */
+export function isNonLatinLetterOn(e: { key?: string; code?: string }, code: string): boolean {
+  const key = typeof e.key === "string" ? e.key.toLowerCase() : "";
+  return e.code === code && /^\p{L}$/u.test(key) && !/^\p{Script=Latin}$/u.test(key);
+}
+
 /** Parse a canonical keystroke string into its parts. Throws on invalid input. */
 export function parseKeystroke(str: string): KeystrokeParts {
   const segments = str.split("+").map((s) => s.trim());
