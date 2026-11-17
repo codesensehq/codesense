@@ -7,6 +7,7 @@ import {
   hasCommandModifier,
   hasMod,
   hasPlatformMod,
+  matchesKeystroke,
   modifiersFrom,
 } from "./keystroke";
 
@@ -75,5 +76,32 @@ describe("modifiersFrom", () => {
     expect(
       modifiersFrom({ metaKey: 1, ctrlKey: false, altKey: false, shiftKey: false }),
     ).toBeNull();
+  });
+});
+
+describe("AltGr", () => {
+  function chord(altGraph: boolean): KeyboardEvent {
+    const event = new KeyboardEvent("keydown", { key: "[", ctrlKey: true, altKey: true });
+    Object.defineProperty(event, "getModifierState", {
+      value: (name: string) => name === "AltGraph" && altGraph,
+    });
+    return event;
+  }
+
+  it("is never a host shortcut off macOS", () => {
+    setPlatform("Win32");
+    expect(matchesKeystroke(chord(true), "CmdOrCtrl+Alt+[")).toBe(false);
+  });
+
+  it("leaves a real Ctrl+Alt chord alone", () => {
+    setPlatform("Win32");
+    expect(matchesKeystroke(chord(false), "CmdOrCtrl+Alt+[")).toBe(true);
+  });
+
+  it("does not change macOS", () => {
+    setPlatform("MacIntel");
+    const event = new KeyboardEvent("keydown", { key: "[", metaKey: true, altKey: true });
+    Object.defineProperty(event, "getModifierState", { value: () => true });
+    expect(matchesKeystroke(event, "CmdOrCtrl+Alt+[")).toBe(true);
   });
 });

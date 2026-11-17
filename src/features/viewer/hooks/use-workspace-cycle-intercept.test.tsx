@@ -139,6 +139,8 @@ function HarnessNoHost({ ptyKey }: { ptyKey: (e: KeyboardEvent) => void }) {
 
 function press(pty: Element, init: KeyboardEventInit): KeyboardEvent {
   const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+  // happy-dom reports the Alt key's state for AltGraph; a browser does not.
+  Object.defineProperty(event, "getModifierState", { value: () => false });
   pty.dispatchEvent(event);
   return event;
 }
@@ -468,7 +470,7 @@ describe("off macOS", () => {
     for (const id of INTERCEPTED_IDS) expect(runFor(id), id).not.toHaveBeenCalled();
   });
 
-  it("answers context back to Ctrl+Shift+[, which the lifted action wins over its own binding", () => {
+  it("keeps Ctrl+Shift+[ for cycle terminal tab, and gives context back no key", () => {
     const ptyKey = vi.fn();
     const { getByTestId } = render(<Harness ptyKey={ptyKey} />);
     const event = press(getByTestId("pty-mock"), {
@@ -478,8 +480,8 @@ describe("off macOS", () => {
       shiftKey: true,
     });
     expect(event.defaultPrevented).toBe(true);
-    expect(runFor("nav.context-back")).toHaveBeenCalledOnce();
-    expect(runFor("viewer.cycle-terminal-tab-prev")).not.toHaveBeenCalled();
+    expect(runFor("viewer.cycle-terminal-tab-prev")).toHaveBeenCalledOnce();
+    expect(runFor("nav.context-back")).not.toHaveBeenCalled();
     expect(ptyKey).not.toHaveBeenCalled();
   });
 

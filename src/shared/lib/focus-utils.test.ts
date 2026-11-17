@@ -105,6 +105,26 @@ describe("focus-utils", () => {
       expect(press(init)).toBe(expected);
     });
 
+    it("is not Ctrl+W off macOS, where it is a shell key", () => {
+      const original = navigator.platform;
+      Object.defineProperty(navigator, "platform", {
+        value: "Win32",
+        configurable: true,
+        writable: true,
+      });
+      try {
+        expect(
+          isCmdW(new KeyboardEvent("keydown", { key: "w", code: "KeyW", ctrlKey: true })),
+        ).toBe(false);
+      } finally {
+        Object.defineProperty(navigator, "platform", {
+          value: original,
+          configurable: true,
+          writable: true,
+        });
+      }
+    });
+
     it("needs ⌘", () => {
       expect(isCmdW(new KeyboardEvent("keydown", { key: "w", code: "KeyW" }))).toBe(false);
     });

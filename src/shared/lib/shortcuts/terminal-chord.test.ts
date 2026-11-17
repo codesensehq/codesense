@@ -19,11 +19,20 @@ describe("terminalChord off macOS", () => {
     expect(terminalChord("CmdOrCtrl+K", all)).toBe("CmdOrCtrl+Shift+K");
   });
 
-  it("adds Shift to Ctrl with [, \\, ] and Space", () => {
+  it("adds Shift to Ctrl with \\ and Space", () => {
     setPlatform("Linux x86_64");
-    for (const key of ["[", "\\", "]", "Space"]) {
+    for (const key of ["\\", "Space"]) {
       expect(terminalChord(`CmdOrCtrl+${key}`, [])).toBe(`CmdOrCtrl+Shift+${key}`);
     }
+  });
+
+  it("gives Ctrl+[ and Ctrl+] no key and leaves Ctrl+Shift+[ and ] alone", () => {
+    setPlatform("Win32");
+    const all = ["CmdOrCtrl+[", "CmdOrCtrl+]", "CmdOrCtrl+Shift+[", "CmdOrCtrl+Shift+]"];
+    expect(terminalChord("CmdOrCtrl+[", all)).toBe("");
+    expect(terminalChord("CmdOrCtrl+]", all)).toBe("");
+    expect(terminalChord("CmdOrCtrl+Shift+[", all)).toBe("CmdOrCtrl+Shift+[");
+    expect(terminalChord("CmdOrCtrl+Shift+]", all)).toBe("CmdOrCtrl+Shift+]");
   });
 
   it("leaves chords that are not bare Ctrl control keys alone", () => {
