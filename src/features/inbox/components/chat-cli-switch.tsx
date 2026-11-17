@@ -118,6 +118,7 @@ export function ChatCliSwitch({
       role="radiogroup"
       aria-label="Chat or CLI"
       className="ibx-sw"
+      data-labels={labels ? "true" : undefined}
       // The chat that appears under it must not take the focus an arrow key keeps here.
       data-keeps-focus=""
       data-testid={`chat-cli-switch-${tabId}`}

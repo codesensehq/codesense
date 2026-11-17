@@ -9,7 +9,7 @@ test("the agents world boots into its team and its agents' workspace", async ({ 
   await page.setViewportSize({ width: 1600, height: 950 });
   await page.goto("/?agents=team");
   await expect(page.getByRole("button", { name: "Full screen" })).toBeVisible();
-  await expect(page.getByTestId("terminal-grid-caption-inbox-sess-login-lead")).toBeAttached();
+  await expect(page.getByTestId("chat-cli-switch-sess-login-lead-chat")).toBeAttached();
   const active = await page.evaluate(() => {
     const stores = (
       window as { __stores?: { useOrgStore: { getState(): { activeOrgSlug: string | null } } } }

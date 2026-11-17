@@ -169,7 +169,7 @@ async function openAgentChat(page: Page) {
   await page.getByRole("button", { name: "CodeSense Docs / getting-started" }).click();
   await page.getByText("Acme Widgets", { exact: true }).click();
   await page.getByText("AID-4", { exact: true }).last().click();
-  await page.getByTestId("terminal-grid-caption-inbox-nav-aid4-a").click();
+  await page.getByTestId("chat-cli-switch-nav-aid4-a-chat").click();
   const chat = page.locator('[data-testid="chat-overlay"]').first();
   await expect(chat).toBeVisible();
   return chat;

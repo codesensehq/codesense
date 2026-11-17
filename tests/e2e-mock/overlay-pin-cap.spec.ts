@@ -82,7 +82,7 @@ async function boot(page: Page, scheme: "light" | "dark") {
   await page.setViewportSize({ width: 1600, height: 950 });
   await page.goto("/?agents=team");
   await page.getByRole("button", { name: "Full screen" }).click();
-  await page.getByTestId(`terminal-grid-caption-inbox-${AGENT_TAB}`).click();
+  await page.getByTestId(`chat-cli-switch-${AGENT_TAB}-chat`).click();
   const chat = page.getByTestId("chat-overlay").first();
   await expect(chat).toBeVisible();
   return chat;
