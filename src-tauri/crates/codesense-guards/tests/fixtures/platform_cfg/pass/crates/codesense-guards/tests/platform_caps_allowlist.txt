@@ -1,0 +1,2 @@
+# <path> <cap key> <removing slug> <reason>
+crates/demo/src/lib.rs bridge port-the-bridge the bridge module is compiled out on Windows

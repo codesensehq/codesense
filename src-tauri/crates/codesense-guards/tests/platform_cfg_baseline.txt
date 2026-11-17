@@ -1,0 +1,10 @@
+# OS-specific sites per file outside the platform layer: the ceiling that
+# platform_cfg_ratchet_guard.rs holds. A row only goes down.
+#
+# Format: <path> <count>, the path relative to the app root (src-tauri),
+# e.g. src/lib.rs or crates/codesense-pty-core/src/process.rs.
+#
+# When sites move into codesense-platform, lower the rows in the same change:
+#   CODESENSE_PLATFORM_CFG_BASELINE_WRITE=1 cargo test -p codesense-guards --test platform_cfg_ratchet_guard
+# lowers rows and deletes stale ones; it never raises or adds a row. New OS
+# code goes in codesense-platform or behind a gate in platform_caps_allowlist.txt.

@@ -1,0 +1,5 @@
+# <path> <count>
+crates/demo/src/lib.rs 1
+src/main.rs 1
+src/orphan.rs 1
+src/unix_bits.rs 3
