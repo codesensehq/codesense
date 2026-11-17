@@ -8,6 +8,7 @@ import { useOrgStore } from "@/shared/stores/org-store";
 import { useUiStore } from "@/shared/stores/ui-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 import { restorePlatform, setPlatform } from "@/test/platform";
+import { keydown } from "@/test/keydown";
 
 // The intercept delegates EVERY recognized chord to the registry action's run(),
 // so the command behavior lives in exactly one place. The test mocks the registry
@@ -139,9 +140,7 @@ function HarnessNoHost({ ptyKey }: { ptyKey: (e: KeyboardEvent) => void }) {
 }
 
 function press(pty: Element, init: KeyboardEventInit): KeyboardEvent {
-  const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
-  // happy-dom reports the Alt key's state for AltGraph; a browser does not.
-  Object.defineProperty(event, "getModifierState", { value: () => false });
+  const event = keydown(init as KeyboardEventInit & { key: string });
   pty.dispatchEvent(event);
   return event;
 }

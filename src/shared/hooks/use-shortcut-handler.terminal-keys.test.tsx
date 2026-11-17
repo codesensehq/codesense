@@ -10,6 +10,7 @@ import { useOrgStore } from "@/shared/stores/org-store";
 import { buildTeamKey } from "@/shared/lib/team-key";
 import { matchShortcut, useShortcutHandler } from "./use-shortcut-handler";
 import { restorePlatform, setPlatform } from "@/test/platform";
+import { keydown } from "@/test/keydown";
 
 const TEAM_KEY = buildTeamKey("acme", "core");
 
@@ -43,20 +44,8 @@ function fired(runs: Map<string, ReturnType<typeof vi.fn>>): string[] {
   return [...runs].filter(([, spy]) => spy.mock.calls.length > 0).map(([id]) => id);
 }
 
-/**
- * A keydown whose AltGraph state is given, as a browser reports it: happy-dom reports the Alt
- * key's state for AltGraph, which would make every Ctrl+Alt chord look like AltGr.
- */
-function keydown(init: KeyboardEventInit & { key: string }, altGraph = false): KeyboardEvent {
-  const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
-  Object.defineProperty(event, "getModifierState", {
-    value: (name: string) => name === "AltGraph" && altGraph,
-  });
-  return event;
-}
-
 function press(init: KeyboardEventInit & { key: string }, altGraph = false): KeyboardEvent {
-  const event = keydown(init, altGraph);
+  const event = keydown(init, { altGraph });
   const field = document.querySelector<HTMLElement>('[data-testid="field"]')!;
   act(() => {
     field.dispatchEvent(event);

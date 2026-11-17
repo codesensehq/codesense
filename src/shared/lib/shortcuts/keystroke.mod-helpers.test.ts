@@ -11,6 +11,7 @@ import {
   modifiersFrom,
 } from "./keystroke";
 import { restorePlatform, setPlatform } from "@/test/platform";
+import { keydown } from "@/test/keydown";
 
 afterEach(restorePlatform);
 
@@ -75,13 +76,8 @@ describe("modifiersFrom", () => {
 });
 
 describe("AltGr", () => {
-  function chord(altGraph: boolean): KeyboardEvent {
-    const event = new KeyboardEvent("keydown", { key: "[", ctrlKey: true, altKey: true });
-    Object.defineProperty(event, "getModifierState", {
-      value: (name: string) => name === "AltGraph" && altGraph,
-    });
-    return event;
-  }
+  const chord = (altGraph: boolean) =>
+    keydown({ key: "[", ctrlKey: true, altKey: true }, { altGraph });
 
   it("is never a host shortcut off macOS", () => {
     setPlatform("Win32");
@@ -95,8 +91,7 @@ describe("AltGr", () => {
 
   it("does not change macOS", () => {
     setPlatform("MacIntel");
-    const event = new KeyboardEvent("keydown", { key: "[", metaKey: true, altKey: true });
-    Object.defineProperty(event, "getModifierState", { value: () => true });
+    const event = keydown({ key: "[", metaKey: true, altKey: true }, { altGraph: true });
     expect(matchesKeystroke(event, "CmdOrCtrl+Alt+[")).toBe(true);
   });
 });
