@@ -1,17 +1,51 @@
 // SPDX-License-Identifier: MIT
 import { describe, expect, it } from "vitest";
 
-import { basename, dirname, isAbsolute, join, relative, resolveRelative, split } from "./path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolveRelative,
+  root,
+  separator,
+  split,
+} from "./path";
+
+describe("separator", () => {
+  it("is the path's first separator, or / when it has none", () => {
+    expect(separator("C:\\Users\\a")).toBe("\\");
+    expect(separator("C:/Users")).toBe("/");
+    expect(separator("a/b\\c")).toBe("/");
+    expect(separator("file.txt")).toBe("/");
+    expect(separator("")).toBe("/");
+  });
+});
+
+describe("root", () => {
+  it.each([
+    ["/a/b", "/"],
+    ["C:\\Users", "C:\\"],
+    ["C:/Users", "C:/"],
+    ["\\\\server\\share\\a", "\\\\server\\share"],
+    ["a/b", ""],
+    ["C:x", ""],
+  ])("is the root of %j", (input, expected) => {
+    expect(root(input)).toBe(expected);
+  });
+});
 
 describe("split", () => {
   it.each([
     ["a/b/c.md", ["a", "b", "c.md"]],
-    ["/a/b", ["/", "a", "b"]],
-    ["C:\\Users\\a", ["C:\\", "Users", "a"]],
-    ["C:/Users/a", ["C:/", "Users", "a"]],
-    ["\\\\server\\share\\a\\b", ["\\\\server\\share", "a", "b"]],
+    ["/a/b", ["a", "b"]],
+    ["C:\\Users\\a", ["Users", "a"]],
+    ["C:/Users/a", ["Users", "a"]],
+    ["\\\\server\\share\\a\\b", ["a", "b"]],
     ["a\\b/c", ["a", "b", "c"]],
     ["a/b///", ["a", "b"]],
+    ["/", []],
     ["", []],
   ])("splits %j", (input, expected) => {
     expect(split(input)).toEqual(expected);
@@ -81,6 +115,11 @@ describe("join", () => {
     expect(join("\\\\server\\share", "a")).toBe("\\\\server\\share\\a");
   });
 
+  it("uses the first segment's separator inside later segments too", () => {
+    expect(join("C:\\r", "src/x.ts")).toBe("C:\\r\\src\\x.ts");
+    expect(join("/r", "src\\x.ts")).toBe("/r/src/x.ts");
+  });
+
   it("defaults to / when the first segment has no separator", () => {
     expect(join("a", "b")).toBe("a/b");
   });
@@ -95,10 +134,8 @@ describe("join", () => {
   it("skips empty segments and rebuilds a split path", () => {
     expect(join("a", "", "b")).toBe("a/b");
     expect(join("", "b")).toBe("b");
-    for (const path of ["C:\\Users\\a", "/a/b"]) {
-      const [first = "", ...rest] = split(path);
-      expect(join(first, ...rest)).toBe(path);
-    }
+    expect(join(root("C:\\Users\\a"), ...split("C:\\Users\\a"))).toBe("C:\\Users\\a");
+    expect(join(root("/a/b"), ...split("/a/b"))).toBe("/a/b");
   });
 });
 

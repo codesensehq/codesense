@@ -21,7 +21,7 @@ function rootOf(path: string): string {
 }
 
 /** The path's own separator: its first `\` or `/`, else `/`. */
-function separatorOf(path: string): string {
+export function separator(path: string): string {
   const match = /[\\/]/.exec(path);
   return match ? match[0] : "/";
 }
@@ -36,14 +36,14 @@ function normalizedRoot(root: string): string {
   return DRIVE_ROOT.test(slashed) ? slashed.toLowerCase() : slashed;
 }
 
-/**
- * The path's segments. An absolute path's root (`/`, `C:\`, `\\server\share`)
- * is its first element, so `join(...split(p))` rebuilds the path.
- */
+/** The path's root: `/`, `C:\`, `C:/` or `\\server\share`; `""` for a relative path. */
+export function root(path: string): string {
+  return rootOf(path);
+}
+
+/** The path's non-empty segments, without its root (`C:\\Users\\a` → `Users`, `a`). */
 export function split(path: string): string[] {
-  const root = rootOf(path);
-  const segments = segmentsAfter(path, root);
-  return root ? [root, ...segments] : segments;
+  return segmentsAfter(path, rootOf(path));
 }
 
 /** True for `/x`, `C:\x`, `C:/x` and `\\server\share`; false for `x/y` and `C:x`. */
@@ -52,14 +52,18 @@ export function isAbsolute(path: string): boolean {
 }
 
 /**
- * Join segments with the first segment's separator (`/` when it has none).
- * Empty segments are skipped; `.` and `..` are kept as given.
+ * Join segments with the first segment's separator (`/` when it has none), also
+ * for separators inside the later segments. Empty segments are skipped; `.` and
+ * `..` are kept as given.
  */
-export function join(first: string, ...rest: string[]): string {
-  const sep = separatorOf(first);
-  let out = first;
-  for (const part of rest) {
-    const trimmed = part.replace(/^[\\/]+/, "").replace(TRAILING_SEPARATORS, "");
+export function join(...parts: string[]): string {
+  const sep = separator(parts[0] ?? "");
+  let out = parts[0] ?? "";
+  for (const part of parts.slice(1)) {
+    const trimmed = part
+      .replace(/^[\\/]+/, "")
+      .replace(TRAILING_SEPARATORS, "")
+      .replace(SEPARATORS, sep);
     if (!trimmed) continue;
     out = out ? out.replace(TRAILING_SEPARATORS, "") + sep + trimmed : trimmed;
   }
@@ -117,7 +121,7 @@ export function resolveRelative(base: string, rel: string): string {
       parts.push(seg);
     }
   }
-  const sep = separatorOf(base);
+  const sep = separator(base);
   const body = parts.join(sep);
   if (!root) return body;
   if (/[\\/]$/.test(root)) return root + body;
