@@ -176,3 +176,36 @@ describe("WorktreeFileTree — a worktree at the filesystem root (review round 5
     expect(listDirectoryMock).not.toHaveBeenCalled();
   });
 });
+
+describe("WorktreeFileTree — a Windows worktree", () => {
+  it("expands every ancestor folder of a revealed C:\\ path", async () => {
+    const winRoot = "C:\\Users\\a\\repo";
+    listDirectoryMock.mockImplementation((p) => {
+      if (p === winRoot)
+        return Promise.resolve([entry("src", `${winRoot}\\src`, { is_dir: true, size: null })]);
+      if (p === `${winRoot}\\src`) return Promise.resolve([entry("x.ts", `${winRoot}\\src\\x.ts`)]);
+      return Promise.resolve([]);
+    });
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = vi.fn();
+    try {
+      const { rerender } = render(
+        <WorktreeFileTree rootPath={winRoot} selectedPath={null} onSelect={vi.fn()} />,
+      );
+      await screen.findByText("src");
+      expect(screen.queryByText("x.ts")).not.toBeInTheDocument();
+      rerender(
+        <WorktreeFileTree
+          rootPath={winRoot}
+          selectedPath={`${winRoot}\\src\\x.ts`}
+          reveal={{ path: `${winRoot}\\src\\x.ts`, nonce: 1 }}
+          onSelect={vi.fn()}
+        />,
+      );
+      expect(await screen.findByText("x.ts")).toBeInTheDocument();
+      expect(listDirectoryMock).toHaveBeenCalledWith(`${winRoot}\\src`);
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+});
