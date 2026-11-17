@@ -759,6 +759,39 @@ describe("PipelineStatusNav", () => {
     expect(onFileSelect).not.toHaveBeenCalled();
   });
 
+  it("off macOS, ctrl-click on a story row sends to terminal and meta-click does not", () => {
+    const original = navigator.platform;
+    Object.defineProperty(navigator, "platform", {
+      value: "Win32",
+      configurable: true,
+      writable: true,
+    });
+    try {
+      const tree = makeTree({
+        stories: [makeStory("F-1-my-story.md", "todo", { title: "My Story" })],
+      });
+      render(
+        <PipelineStatusNav
+          tree={tree}
+          repoPath="/repo"
+          selectedPath={null}
+          onFileSelect={onFileSelect}
+        />,
+      );
+
+      fireEvent.click(screen.getByText("My Story"), { metaKey: true });
+      expect(mockSendTextToTerminal).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByText("My Story"), { ctrlKey: true });
+      expect(mockSendTextToTerminal).toHaveBeenCalledWith("/repo/F-1-my-story.md");
+    } finally {
+      Object.defineProperty(navigator, "platform", {
+        value: original,
+        configurable: true,
+        writable: true,
+      });
+    }
+  });
+
   it("highlights selected file", () => {
     const tree = makeTree({
       stories: [makeStory("F-1-my-story.md", "todo", { title: "My Story" })],

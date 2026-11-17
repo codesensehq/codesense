@@ -188,10 +188,10 @@ describe("matchShortcut off macOS", () => {
 
   it("matches Ctrl+T outside a terminal and Ctrl+Shift+T in one", () => {
     setPlatform("Win32");
-    render(<Harness inTerminal={false} />);
+    const outside = render(<Harness inTerminal={false} />);
     const plain = keydown({ key: "t", code: "KeyT", ctrlKey: true });
     expect(matchShortcut(plain, {}, gate)?.id).toBe("viewer.new-terminal-tab");
-    cleanupRender();
+    outside.unmount();
     render(<Harness inTerminal />);
     focusField();
     expect(matchShortcut(plain, {}, gate)).toBeUndefined();
@@ -214,7 +214,3 @@ describe("matchShortcut off macOS", () => {
     expect(matchShortcut(ctrl, {}, gate)).toBeUndefined();
   });
 });
-
-function cleanupRender(): void {
-  document.body.innerHTML = "";
-}

@@ -315,6 +315,49 @@ describe("Control chords stay the shell's on macOS", () => {
   });
 });
 
+describe("Control chords stay the shell's off macOS", () => {
+  beforeEach(() => setPlatform("Win32"));
+
+  it.each(["c", "d", "z", "r", "l", "w", "k", "t", "f"])(
+    "Ctrl+%s reaches the terminal and triggers nothing",
+    async (key) => {
+      render(<TerminalArea />);
+      terminal("t1").focus();
+      press({ key, code: `Key${key.toUpperCase()}`, ctrlKey: true });
+      await settle();
+      expect(ptyKeys).toEqual([key]);
+      ptyKeys = [];
+      expect(tabsIn(WS)).toEqual(["t1", "t2", "t3"]);
+      expect(activeIn(WS)).toBe("t1");
+      expect(terminalHost().opened).toEqual([]);
+      expect(screen.queryByTestId("terminal-find-bar")).toBeNull();
+      expect(cleared).toEqual([]);
+    },
+  );
+
+  it("Ctrl+Shift+T opens a new tab from the terminal", async () => {
+    render(<TerminalArea />);
+    terminal("t1").focus();
+    press({ key: "T", code: "KeyT", ctrlKey: true, shiftKey: true });
+    await settle();
+    expect(tabsIn(WS)).toHaveLength(4);
+    expect(terminalHost().opened).toHaveLength(1);
+  });
+
+  it("Ctrl+Shift+K is not taken by Clear Terminal", async () => {
+    const openWorkspace = vi
+      .spyOn(SHORTCUT_ACTIONS.find((a) => a.id === "nav.open-workspace")!, "run")
+      .mockImplementation(() => {});
+    render(<TerminalArea />);
+    terminal("t1").focus();
+    press({ key: "K", code: "KeyK", ctrlKey: true, shiftKey: true });
+    await settle();
+    expect(cleared).toEqual([]);
+    expect(openWorkspace).toHaveBeenCalledOnce();
+    ptyKeys = [];
+  });
+});
+
 describe("⌘T — a quick tab on this Mac", () => {
   it("opens a tab in the focused workspace without the chooser", async () => {
     seed({ other: true });
