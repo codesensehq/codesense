@@ -70,6 +70,19 @@ pub const UNAVAILABLE_MESSAGE: &str =
 const NOT_SAVED_MESSAGE: &str =
     "The key's passphrase is no longer in your keychain. Save it again.";
 
+/// An account no passphrase is ever kept under, read only to ask the store whether it exists.
+const PROBE_ACCOUNT: &str = "availability-check";
+
+/// Fails with [`UNAVAILABLE_MESSAGE`] when there is no secret store, so a person is not
+/// asked for a passphrase that could not be kept. Reads one absent entry: nothing is
+/// unlocked or written.
+pub fn ensure_available(store: &dyn CredentialStore) -> Result<(), String> {
+    match store.get(PROBE_ACCOUNT) {
+        Err(CredentialError::Unavailable) => Err(UNAVAILABLE_MESSAGE.into()),
+        _ => Ok(()),
+    }
+}
+
 /// Keep `passphrase` in the keychain under a fresh handle. With no secret store
 /// the error is [`UNAVAILABLE_MESSAGE`] and nothing was kept.
 pub fn store(store: &dyn CredentialStore, passphrase: &Secret) -> Result<CredentialRef, String> {
@@ -114,7 +127,7 @@ pub fn forget(store: &dyn CredentialStore, handle: &CredentialRef) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::credential_store::UnavailableStore;
+    use crate::commands::credential_store::{FakeStore, UnavailableStore};
 
     fn handle() -> CredentialRef {
         CredentialRef {
@@ -127,6 +140,15 @@ mod tests {
     fn saving_with_no_secret_store_says_so_and_keeps_nothing() {
         let error = store(&UnavailableStore, &Secret::new("hunter2")).unwrap_err();
         assert_eq!(error, UNAVAILABLE_MESSAGE);
+    }
+
+    #[test]
+    fn no_secret_store_is_reported_before_anyone_is_asked() {
+        assert_eq!(
+            ensure_available(&UnavailableStore),
+            Err(UNAVAILABLE_MESSAGE.to_string())
+        );
+        assert_eq!(ensure_available(&FakeStore::default()), Ok(()));
     }
 
     #[test]
