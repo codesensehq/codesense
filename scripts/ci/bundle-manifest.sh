@@ -10,10 +10,11 @@
 # A symlink lists its target. Info.plist follows, converted to canonical XML.
 #
 # The one field expected to differ between two builds of the same source is the sha256 of
-# Contents/_CodeSignature/CodeResources, which holds the hashes of the signed Mach-O files.
-# Everything else (the file list, modes, sizes, resource hashes and Info.plist) must match.
-# A Mach-O file is compared by size only, so a change that keeps its size shows up in
-# CodeResources alone.
+# Contents/_CodeSignature/CodeResources, which covers the resources and the nested code (the
+# sidecars). Everything else (the file list, modes, sizes, resource hashes and Info.plist)
+# must match. A Mach-O file is compared by size only: a same-size change to a sidecar shows
+# up in CodeResources, but one to the main executable, whose hash lives in its own embedded
+# signature, is not caught.
 #
 # Runs on macOS: bash 3.2 and BSD tools.
 set -euo pipefail
