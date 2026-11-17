@@ -201,7 +201,7 @@ describe("backendFor", () => {
       remoteRoot: "/",
     });
     expect(backend?.location).toBe("remote");
-    expect(backend?.rootPath).toBe("");
+    expect(backend?.rootPath).toBe("/");
     cmd.sourceRemoteFileWrite.mockResolvedValue({ observation: { hash: "h1" } });
     await backend!.write("/src/a.ts", "x", "h0");
     expect(cmd.sourceRemoteFileWrite.mock.calls.at(-1)![2]).toBe("src/a.ts");

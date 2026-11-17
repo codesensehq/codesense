@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { getRepoColor } from "@/shared/lib/pipeline-graph/epic-colors";
 import { useNavModelProjection } from "../lib/use-nav-model-projection";
 import { fileSurfaceCall } from "@/tauri/commands";
-import { dirname } from "@/shared/lib/basename";
+import { dirname } from "@/shared/lib/path";
 import { useAgentRows } from "@/features/agents/lib/agent-names";
 import { liveHub } from "@/features/dashboard/lib/live-hub";
 import { registerNativeMenu, type NativeMenuRequest } from "@/features/shell/native-menu-openers";

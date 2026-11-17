@@ -12,7 +12,7 @@ import {
 import { FileWarningPlaceholder } from "@/features/viewer/components/file-warning-placeholder";
 import { looksBinary } from "@/features/viewer/lib/worktree-file-view";
 import { useCopyToClipboard } from "@/shared/hooks/use-copy-to-clipboard";
-import { basename, dirname } from "@/shared/lib/basename";
+import { basename, dirname } from "@/shared/lib/path";
 import { getErrorMessage } from "@/shared/lib/error-message";
 import { shellEscape } from "@/shared/lib/shell-escape";
 import { machineFsRead, openMachineTerminal } from "@/tauri/draft-commands";

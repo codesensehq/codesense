@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { fuzzyScore } from "@/shared/lib/fuzzy-match";
 
 import { FileGlyph } from "./file-glyph";
+import { basename, dirname } from "@/shared/lib/path";
 
 const MAX_RESULTS = 60;
 
@@ -54,7 +55,7 @@ export function matchIndices(query: string, name: string): number[] {
  */
 function scoreWord(word: string, path: string): number {
   const lower = path.toLowerCase();
-  const name = lower.slice(lower.lastIndexOf("/") + 1);
+  const name = basename(lower);
   if (name === word || name.startsWith(`${word}.`)) return 200;
   if (name.startsWith(word)) return 150;
   if (name.includes(word)) return 120;
@@ -300,9 +301,8 @@ function ResultRow({
   onHover: () => void;
   onChoose: () => void;
 }) {
-  const slash = path.lastIndexOf("/");
-  const name = path.slice(slash + 1);
-  const dir = slash === -1 ? "" : path.slice(0, slash);
+  const name = basename(path);
+  const dir = dirname(path);
   // Highlight the word that matched the name (the last one, by convention:
   // folders first, then the file — "auth sess").
   const lastWord = query.trim().split(/\s+/).pop() ?? "";

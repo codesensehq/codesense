@@ -23,6 +23,7 @@ import {
 } from "@/tauri/commands";
 import { parseToExportHtml } from "@/shared/lib/markdown-worker/client";
 import { getErrorMessage } from "@/shared/lib/error-message";
+import { basename } from "@/shared/lib/path";
 
 /**
  * Inline print-friendly stylesheet for markdown PDF export.
@@ -132,7 +133,7 @@ export async function exportViewerToPdf(filePath: string, teamContentPath: strin
     toast.error("PDF export is only available for markdown and HTML files");
     return;
   }
-  const fileName = filePath.split("/").pop() ?? "export";
+  const fileName = basename(filePath) || "export";
   const suggestedName = `${stripViewerExtension(fileName)}.pdf`;
 
   // Open save dialog first — bail early if user cancels

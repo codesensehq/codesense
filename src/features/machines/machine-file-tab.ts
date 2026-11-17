@@ -5,7 +5,7 @@ import { registerVirtualTab } from "@/shared/lib/virtual-viewer-registry";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 
 import { RemoteFileViewer } from "./components/remote-file-viewer";
-import { basename } from "@/shared/lib/basename";
+import { basename } from "@/shared/lib/path";
 
 import {
   MACHINE_FILE_PREFIX,

@@ -4,6 +4,7 @@ import { Window as DocWindow } from "happy-dom";
 import { frameEventClass, frameIpc } from "../../../../../tests/support/fixtures/frame";
 import { shimSource } from "../../../../../tests/support/page-shim";
 import type { PaneListing } from "@/tauri/commands";
+import { join } from "@/shared/lib/path";
 
 const SHIM = shimSource();
 
@@ -87,9 +88,9 @@ export function listing(options: {
 }): PaneListing {
   const { org, team, root, id, title, privateCopy = false, surface, present = true } = options;
   const scope = privateCopy ? "private" : "team";
-  const panesDir = `${root}/${privateCopy ? "private" : team}/panes`;
+  const panesDir = join(root, privateCopy ? "private" : team, "panes");
   return {
-    contentRoot: `${root}/${team}/content`,
+    contentRoot: join(root, team, "content"),
     chain: [team],
     panes: present
       ? [
@@ -100,7 +101,7 @@ export function listing(options: {
             scope,
             ...(privateCopy ? {} : { team }),
             ...(surface ? { surface } : {}),
-            path: `${panesDir}/${id}.html`,
+            path: join(panesDir, `${id}.html`),
             panesDir,
             panelId: privateCopy ? `pane:private:${org}/${id}` : `pane:${org}:${team}/${id}`,
           },

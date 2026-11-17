@@ -129,6 +129,20 @@ mod tests {
     }
 
     #[test]
+    fn replaces_by_rename_so_an_open_reader_keeps_the_old_bytes() {
+        use std::io::Read;
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("data.txt");
+        write_bytes_atomic(&path, b"old").unwrap();
+        let mut reader = std::fs::File::open(&path).unwrap();
+        write_bytes_atomic(&path, b"new").unwrap();
+        let mut held = String::new();
+        reader.read_to_string(&mut held).unwrap();
+        assert_eq!(held, "old");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+    }
+
+    #[test]
     fn no_tmp_sibling_left_on_success() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("data.txt");

@@ -32,7 +32,6 @@ impl Descriptor {
     }
 }
 
-#[cfg(unix)]
 pub fn read_descriptor(path: &std::path::Path) -> Result<Descriptor, &'static str> {
     use std::io::Read;
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
@@ -66,7 +65,6 @@ pub fn read_descriptor(path: &std::path::Path) -> Result<Descriptor, &'static st
 }
 
 /// Replace a launch endpoint without exposing a partially written capability to bridges.
-#[cfg(unix)]
 pub fn write_descriptor(path: &std::path::Path, descriptor: &Descriptor) -> Result<(), String> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
@@ -92,7 +90,7 @@ pub fn write_descriptor(path: &std::path::Path, descriptor: &Descriptor) -> Resu
     result
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]
@@ -112,5 +110,37 @@ mod tests {
         assert_eq!(read.socket, descriptor.socket);
         assert_eq!(read.capability, descriptor.capability);
         std::fs::remove_file(path).unwrap();
+    }
+
+    /// The writer makes the file 0600; the reader opens with `O_NOFOLLOW` and
+    /// refuses any group or other permission bit.
+    #[test]
+    fn a_descriptor_through_a_link_or_open_to_others_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("scoped-mcp-refusals-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("descriptor.json");
+        let descriptor = Descriptor {
+            version: VERSION,
+            socket: "/tmp/first.sock".into(),
+            capability: "a".repeat(64),
+        };
+        write_descriptor(&path, &descriptor).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+
+        let link = dir.join("link.json");
+        std::os::unix::fs::symlink(&path, &link).unwrap();
+        assert_eq!(
+            read_descriptor(&link).err(),
+            Some("local MCP launch descriptor unavailable")
+        );
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        assert_eq!(
+            read_descriptor(&path).err(),
+            Some("local MCP descriptor must be an owned private regular file")
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

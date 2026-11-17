@@ -12,7 +12,7 @@ import {
 } from "react";
 
 import { cn } from "@/lib/utils";
-import { basename } from "@/shared/lib/basename";
+import { basename } from "@/shared/lib/path";
 import { renderViewer } from "@/shared/lib/render-viewer";
 import { writeBinaryWorktreeFile } from "@/tauri/commands";
 import type { CanvasWriter } from "@/features/dashboard/components/excalidraw-canvas";

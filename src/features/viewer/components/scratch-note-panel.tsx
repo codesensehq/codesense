@@ -90,6 +90,7 @@ import { StickyNoteHeaders } from "./sticky-note-headers";
 import { useNoteHeadings } from "./use-note-headings";
 import { scrollToHeadingBySlug } from "../lib/note-headings";
 import { hasMod } from "@/shared/lib/shortcuts/keystroke";
+import { join } from "@/shared/lib/path";
 
 const lowlight = createLowlight(all);
 
@@ -426,7 +427,7 @@ function NotesPane() {
     () => ({
       id: activeNoteId,
       org: notesOrg,
-      path: notesDir && activeNoteId ? `${notesDir}/${activeNoteId}.md` : null,
+      path: notesDir && activeNoteId ? join(notesDir, `${activeNoteId}.md`) : null,
     }),
     [activeNoteId, notesOrg, notesDir],
   );

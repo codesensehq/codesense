@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import type { Node } from "@xyflow/react";
 
-import { basename } from "@/shared/lib/basename";
+import { basename } from "@/shared/lib/path";
 import type { GroupNodeData, StoryNodeData } from "@/shared/lib/pipeline-graph";
 import { QuickOpenDialog } from "@/features/viewer/components/quick-open-dialog";
 
