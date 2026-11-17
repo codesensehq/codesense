@@ -353,7 +353,7 @@ test("rust.yml skips its test jobs only when the changes job finds nothing Rust-
   const filter = changes.steps.find((step) => step.id === "filter");
   assert.match(filter.run, /^\s*\*\) echo "rust=true" >> "\$GITHUB_OUTPUT"; exit 0 ;;$/m);
   assert.match(filter.run, /node scripts\/rust-changes\.mjs "\$range" >> "\$GITHUB_OUTPUT"/);
-  for (const name of ["rust-macos-build", "rust-linux", "rust-check-linux"])
+  for (const name of ["rust-macos-build", "rust-linux", "rust-check-linux", "rust-linux-app"])
     assert.equal(workflow.jobs[name].needs, "changes", name);
   assert.deepEqual(workflow.jobs["rust-macos"].needs, [
     "changes",
@@ -361,6 +361,36 @@ test("rust.yml skips its test jobs only when the changes job finds nothing Rust-
     "rust-macos-test",
   ]);
   assert.equal(workflow.jobs["rust-check-linux"].if, `\${{ ${pathFilter} }}`);
+});
+
+// The Linux app job is not a required check: it carries the path filter and nothing else, so it
+// runs on pull requests, merge groups, main and the nightly run, and its tests (ignored
+// everywhere else) run in one place, under a private session bus with the keyring unlocked.
+test("rust.yml's Linux app job runs the credential store tests under a session bus", () => {
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  const job = workflow.jobs["rust-linux-app"];
+  assert.equal(job.name, "Rust (Linux app)");
+  assert.equal(job["runs-on"], "ubuntu-24.04");
+  assert.equal(job.if, `\${{ ${pathFilter} }}`);
+  assert.deepEqual(job.permissions, { contents: "read" });
+  const libs = job.steps.find((step) => step.name === "Install system libraries");
+  assert.match(
+    libs.run,
+    /^bash scripts\/install-linux-app-libs\.sh dbus gnome-keyring libsecret-tools$/,
+  );
+  // One apt list for every Linux job that builds the app.
+  assert.equal(
+    workflow.jobs["rust-check-linux"].steps.find((step) => step.name === "Install system libraries")
+      .run,
+    "bash scripts/install-linux-app-libs.sh",
+  );
+  const test = job.steps.find((step) => step.name.startsWith("Test the credential store"));
+  assert.match(test.run, /dbus-run-session -- bash -ec/);
+  assert.match(test.run, /gnome-keyring-daemon --unlock/);
+  assert.match(test.run, /--run-ignored only -E "test\(~secret_service_tests\)"/);
+  // The tests are named by that filter, not by a package-wide run.
+  assert.match(test.run, /-p codesense --lib/);
+  assert.ok(!workflow.jobs["flaky-issues"].needs.includes("rust-linux-app"));
 });
 
 // A push diffs before..after; a new branch tip (before all zeros) tests everything.

@@ -63,7 +63,7 @@ const NEVER_SKIPPED_ON = ["merge_group", "push", "schedule"];
 const RUST_PATH_FILTER = {
   file: "rust.yml",
   job: "changes",
-  jobs: ["rust-macos-build", "rust-macos", "rust-linux", "rust-check-linux"],
+  jobs: ["rust-macos-build", "rust-macos", "rust-linux", "rust-check-linux", "rust-linux-app"],
   terms: ["!cancelled()", "needs.changes.outputs.rust != 'false'"],
 };
 // And one more: rust.yml's macOS jobs are not a required check and skip merge groups (they run on
