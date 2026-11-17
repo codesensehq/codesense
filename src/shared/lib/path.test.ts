@@ -95,8 +95,10 @@ describe("join", () => {
   it("skips empty segments and rebuilds a split path", () => {
     expect(join("a", "", "b")).toBe("a/b");
     expect(join("", "b")).toBe("b");
-    expect(join(...split("C:\\Users\\a"))).toBe("C:\\Users\\a");
-    expect(join(...split("/a/b"))).toBe("/a/b");
+    for (const path of ["C:\\Users\\a", "/a/b"]) {
+      const [first = "", ...rest] = split(path);
+      expect(join(first, ...rest)).toBe(path);
+    }
   });
 });
 

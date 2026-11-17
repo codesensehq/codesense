@@ -7,7 +7,7 @@ import { toast } from "sonner";
 
 import { DOC_TYPE_ICON } from "@/shared/lib/pipeline-graph/doc-type-icon";
 import type { ResolvedSupportingDoc } from "@/shared/lib/pipeline-graph";
-import { basename } from "@/shared/lib/basename";
+import { basename } from "@/shared/lib/path";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 import { FloatingMenu } from "@/shared/components/floating-menu";
 

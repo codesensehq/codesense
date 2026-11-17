@@ -10,13 +10,13 @@ import { buildConnectivityView } from "./build-connectivity-view";
 const here = dirname(fileURLToPath(import.meta.url));
 
 describe("connectivity: no resolver fork (AC-3)", () => {
-  it("no connectivity module resolves paths itself (imports no resolveRelativePath)", () => {
+  it("no connectivity module resolves paths itself (imports no resolveRelative)", () => {
     const files = readdirSync(here).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"));
     expect(files.length).toBeGreaterThan(0);
     for (const f of files) {
       const src = readFileSync(join(here, f), "utf8");
       expect(src, `${f} must not do path resolution`).not.toMatch(
-        /resolve-relative-path|resolveRelativePath/,
+        /shared\/lib\/path|\.\.\/path|resolveRelative/,
       );
     }
   });

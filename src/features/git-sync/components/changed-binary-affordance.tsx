@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { FileWarning } from "lucide-react";
 
-import { basename } from "@/shared/lib/basename";
+import { basename } from "@/shared/lib/path";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 
 import type { PublishFileStatus } from "../lib/types";

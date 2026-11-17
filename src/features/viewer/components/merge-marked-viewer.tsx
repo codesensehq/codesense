@@ -2,7 +2,7 @@
 import { useState } from "react";
 
 import { cn } from "@/lib/utils";
-import { basename } from "@/shared/lib/basename";
+import { basename } from "@/shared/lib/path";
 import { canMergeMark } from "@/features/dashboard/lib/merge-mark";
 import { useMergeMarks } from "@/features/dashboard/lib/use-merge-marks";
 import { useReadyResolverContext } from "@/shared/hooks/use-resolver-context";

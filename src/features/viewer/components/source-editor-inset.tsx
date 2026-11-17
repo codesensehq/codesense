@@ -4,7 +4,7 @@ import { LocateFixed, PanelLeft, PanelLeftClose, RefreshCw, Save, Search, X } fr
 import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
-import { basename } from "@/shared/lib/basename";
+import { basename } from "@/shared/lib/path";
 import { toastFailure } from "@/shared/lib/with-error-toast";
 import type { Workspace, WorktreeEditorDraft } from "@/shared/stores/viewer-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
