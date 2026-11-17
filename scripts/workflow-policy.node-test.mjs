@@ -334,10 +334,11 @@ test("rust.yml runs macOS on a pull request only with ci:macos, and Linux always
   // The shards follow the build: no if of their own, so they run only when it succeeds.
   assert.equal(workflow.jobs["rust-macos-test"].needs, "rust-macos-build");
   assert.equal(workflow.jobs["rust-macos-test"].if, undefined);
-  // Another label's run has a group of its own, so it cannot cancel the pull request's run.
+  // Another label's run, ci:windows included, has a group of its own, so it cannot cancel the
+  // pull request's run or a ci:macos run.
   assert.equal(
     workflow.concurrency.group,
-    "${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci:macos' && github.event.label.name != 'ci:windows' && format('-{0}', github.run_id) || '' }}",
+    "${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci:macos' && format('-{0}', github.run_id) || '' }}",
   );
   assert.equal(workflow.jobs["rust-linux"].if, `\${{ ${pathFilter} }}`);
 });
@@ -369,8 +370,8 @@ test("rust.yml runs the Windows check on a pull request only with ci:windows, ne
       "cargo test --locked -p codesense-platform",
     ],
   );
-  // A label other than ci:macos or ci:windows must not cancel the pull request's run.
-  assert.match(workflow.concurrency.group, /label\.name != 'ci:windows'/);
+  // The ci:windows label's run gets a group of its own, so it never cancels a ci:macos run.
+  assert.doesNotMatch(workflow.concurrency.group, /ci:windows/);
   // The platform crate is tested on Linux and macOS too.
   for (const name of ["rust-linux", "rust-macos-build"])
     assert.match(workflow.jobs[name].env.RUST_PACKAGES, /-p codesense-platform\b/, name);

@@ -17,8 +17,9 @@ on:
 permissions: {}
 
 concurrency:
-  # A label other than ci:macos or ci:windows gets a group of its own, so it never cancels the pull request's run.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci:macos' && github.event.label.name != 'ci:windows' && format('-{0}', github.run_id) || '' }}
+  # A label other than ci:macos gets a group of its own, so it never cancels the pull request's run.
+  # ci:windows is such a label: its run must not cancel a ci:macos run either.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci:macos' && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 env:
