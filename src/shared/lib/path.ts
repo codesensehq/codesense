@@ -12,13 +12,9 @@
 
 /** A UNC share (`\\server\share`), a drive root (`C:\`), or a lone separator. */
 const ROOT = /^(?:\\{2}[^\\/]+[\\/]+[^\\/]+|[A-Za-z]:[\\/]|[\\/])/;
-const SEPARATORS = /[\\/]+/;
+const SEPARATORS = /[\\/]+/g;
 const TRAILING_SEPARATORS = /[\\/]+$/;
 const DRIVE_ROOT = /^[A-Za-z]:/;
-
-function rootOf(path: string): string {
-  return ROOT.exec(path)?.[0] ?? "";
-}
 
 /** The path's own separator: its first `\` or `/`, else `/`. */
 export function separator(path: string): string {
@@ -38,12 +34,12 @@ function normalizedRoot(root: string): string {
 
 /** The path's root: `/`, `C:\`, `C:/` or `\\server\share`; `""` for a relative path. */
 export function root(path: string): string {
-  return rootOf(path);
+  return ROOT.exec(path)?.[0] ?? "";
 }
 
-/** The path's non-empty segments, without its root (`C:\\Users\\a` → `Users`, `a`). */
+/** The path's non-empty segments, without its root (`C:\Users\a` → `Users`, `a`). */
 export function split(path: string): string[] {
-  return segmentsAfter(path, rootOf(path));
+  return segmentsAfter(path, root(path));
 }
 
 /** True for `/x`, `C:\x`, `C:/x` and `\\server\share`; false for `x/y` and `C:x`. */
@@ -71,12 +67,21 @@ export function join(...parts: string[]): string {
 }
 
 /**
+ * `path` without trailing separators, keeping a bare root (`/`, `C:\`,
+ * `\\server\share`) intact so trimming never turns a root into `""`.
+ */
+export function trimTrailingSeparators(path: string): string {
+  const trimmed = path.replace(TRAILING_SEPARATORS, "");
+  const rt = root(path);
+  return trimmed.length < rt.length ? rt : trimmed;
+}
+
+/**
  * The final segment, tolerant of trailing separators (`a/b/` → `b`). A bare
  * root (`/`, `C:\`) has none and gives `""`.
  */
 export function basename(path: string): string {
-  const root = rootOf(path);
-  return segmentsAfter(path, root).pop() ?? "";
+  return split(path).pop() ?? "";
 }
 
 /**
@@ -84,23 +89,24 @@ export function basename(path: string): string {
  * own parent (`/` → `/`, `C:\` → `C:\`, `\\server\share` → itself).
  */
 export function dirname(path: string): string {
-  const root = rootOf(path);
-  if (path.length <= root.length) return root;
+  const rt = root(path);
+  if (path.length <= rt.length) return rt;
   let i = path.length - 1;
   while (i >= 0 && path[i] !== "/" && path[i] !== "\\") i--;
-  if (i < root.length) return root;
+  if (i < rt.length) return rt;
   return path.slice(0, i);
 }
 
 /**
- * `path` relative to `root`, always `/`-joined (the form Rust and git use), or
- * `null` when `path` is not inside `root`. The root itself gives `""`.
+ * `path` relative to `dir`, always `/`-joined (the form Rust and git use), or
+ * `null` when `path` is not inside `dir`. The root itself gives `""`.
  */
-export function relative(root: string, path: string): string | null {
-  const rootRoot = rootOf(root);
-  if (normalizedRoot(rootRoot) !== normalizedRoot(rootOf(path))) return null;
-  const base = segmentsAfter(root, rootRoot);
-  const target = segmentsAfter(path, rootOf(path));
+export function relative(dir: string, path: string): string | null {
+  const dirRoot = root(dir);
+  const pathRoot = root(path);
+  if (normalizedRoot(dirRoot) !== normalizedRoot(pathRoot)) return null;
+  const base = segmentsAfter(dir, dirRoot);
+  const target = segmentsAfter(path, pathRoot);
   if (target.length < base.length) return null;
   if (!base.every((seg, i) => seg === target[i])) return null;
   return target.slice(base.length).join("/");
@@ -112,8 +118,8 @@ export function relative(root: string, path: string): string | null {
  * root, the drive or the UNC share. The result uses `base`'s separator.
  */
 export function resolveRelative(base: string, rel: string): string {
-  const root = rootOf(base);
-  const parts = segmentsAfter(base, root);
+  const rt = root(base);
+  const parts = segmentsAfter(base, rt);
   for (const seg of rel.split(SEPARATORS)) {
     if (seg === "..") {
       if (parts.length > 0) parts.pop();
@@ -123,7 +129,7 @@ export function resolveRelative(base: string, rel: string): string {
   }
   const sep = separator(base);
   const body = parts.join(sep);
-  if (!root) return body;
-  if (/[\\/]$/.test(root)) return root + body;
-  return body ? root + sep + body : root;
+  if (!rt) return body;
+  if (/[\\/]$/.test(rt)) return rt + body;
+  return body ? rt + sep + body : rt;
 }

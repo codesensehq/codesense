@@ -11,6 +11,7 @@ import {
   root,
   separator,
   split,
+  trimTrailingSeparators,
 } from "./path";
 
 describe("separator", () => {
@@ -120,6 +121,12 @@ describe("join", () => {
     expect(join("/r", "src\\x.ts")).toBe("/r/src/x.ts");
   });
 
+  it("rewrites every separator in a nested later segment", () => {
+    expect(join("C:\\r", "src/a/x.ts")).toBe("C:\\r\\src\\a\\x.ts");
+    expect(join("\\\\server\\share", "a/b/c")).toBe("\\\\server\\share\\a\\b\\c");
+    expect(join("/r", "a\\b/c\\d")).toBe("/r/a/b/c/d");
+  });
+
   it("defaults to / when the first segment has no separator", () => {
     expect(join("a", "b")).toBe("a/b");
   });
@@ -218,5 +225,23 @@ describe("isAbsolute", () => {
 
   it.each(["x/y", "C:x", "", "..\\x"])("is false for %j", (p) => {
     expect(isAbsolute(p)).toBe(false);
+  });
+});
+
+describe("trimTrailingSeparators", () => {
+  it("drops trailing separators of either kind", () => {
+    expect(trimTrailingSeparators("/a/b/")).toBe("/a/b");
+    expect(trimTrailingSeparators("C:\\a\\b\\\\")).toBe("C:\\a\\b");
+    expect(trimTrailingSeparators("a/b")).toBe("a/b");
+    expect(trimTrailingSeparators("")).toBe("");
+  });
+
+  it("keeps a bare root", () => {
+    expect(trimTrailingSeparators("/")).toBe("/");
+    expect(trimTrailingSeparators("//")).toBe("/");
+    expect(trimTrailingSeparators("C:\\")).toBe("C:\\");
+    expect(trimTrailingSeparators("C:/")).toBe("C:/");
+    expect(trimTrailingSeparators("\\\\server\\share")).toBe("\\\\server\\share");
+    expect(trimTrailingSeparators("\\\\server\\share\\")).toBe("\\\\server\\share");
   });
 });
