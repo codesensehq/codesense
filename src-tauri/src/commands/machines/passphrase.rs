@@ -127,7 +127,6 @@ mod tests {
     fn saving_with_no_secret_store_says_so_and_keeps_nothing() {
         let error = store(&UnavailableStore, &Secret::new("hunter2")).unwrap_err();
         assert_eq!(error, UNAVAILABLE_MESSAGE);
-        assert!(!error.contains("hunter2"));
     }
 
     #[test]
