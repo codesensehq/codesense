@@ -983,6 +983,7 @@ dependencies = [
 name = "codesense-host-proto"
 version = "0.1.0"
 dependencies = [
+ "codesense-platform",
  "libc",
  "serde",
  "serde_json",

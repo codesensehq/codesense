@@ -32,7 +32,6 @@ impl Descriptor {
     }
 }
 
-#[cfg(unix)]
 pub fn read_descriptor(path: &std::path::Path) -> Result<Descriptor, &'static str> {
     use std::io::Read;
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
@@ -66,7 +65,6 @@ pub fn read_descriptor(path: &std::path::Path) -> Result<Descriptor, &'static st
 }
 
 /// Replace a launch endpoint without exposing a partially written capability to bridges.
-#[cfg(unix)]
 pub fn write_descriptor(path: &std::path::Path, descriptor: &Descriptor) -> Result<(), String> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
@@ -92,7 +90,7 @@ pub fn write_descriptor(path: &std::path::Path, descriptor: &Descriptor) -> Resu
     result
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]
