@@ -104,6 +104,16 @@ describe("renderViewer virtual-tab dispatch (AC-11) @P1", () => {
     );
   });
 
+  it("forwards the view-state key to the code viewer", () => {
+    const el = renderViewer(
+      { ...common, filePath: "/team/a.ts" },
+      { ...md, redline: null, viewStateKey: "file:acme:default:/team/a.ts" },
+    );
+    expect(el.props).toEqual(
+      expect.objectContaining({ viewStateKey: "file:acme:default:/team/a.ts" }),
+    );
+  });
+
   it("a changed code/config file routes to the Files diff wrapper, which shows a code diff", () => {
     const redline = { orgRoot: "/ctx", teamKey: "acme:default", navRepoPath: "/ctx" };
     for (const path of ["/ctx/d.yaml", "/ctx/e.ts", "/ctx/f.sh"]) {
