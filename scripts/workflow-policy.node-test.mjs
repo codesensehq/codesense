@@ -337,9 +337,50 @@ test("rust.yml runs macOS on a pull request only with ci:macos, and Linux always
   // Another label's run has a group of its own, so it cannot cancel the pull request's run.
   assert.equal(
     workflow.concurrency.group,
-    "${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci:macos' && format('-{0}', github.run_id) || '' }}",
+    "${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci:macos' && github.event.label.name != 'ci:windows' && format('-{0}', github.run_id) || '' }}",
   );
   assert.equal(workflow.jobs["rust-linux"].if, `\${{ ${pathFilter} }}`);
+});
+
+const windowsOptIn = macosOptIn.replaceAll("ci:macos", "ci:windows");
+test("rust.yml runs the Windows check on a pull request only with ci:windows, never in a merge group", () => {
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  const job = workflow.jobs["rust-check-windows"];
+  assert.equal(job.name, "Rust check (Windows)");
+  assert.equal(job.needs, "changes");
+  assert.equal(job.if, `\${{ ${pathFilter} && ${offMergeGroups} && (${windowsOptIn}) }}`);
+  // The literal runner, not an expression, so the policy's hosted-runner allowlist applies.
+  assert.equal(job["runs-on"], "windows-2025");
+  // Line endings are set before checkout, and the nightly alone saves the Windows cache.
+  const steps = job.steps;
+  const autocrlf = steps.findIndex((s) => s.run === "git config --global core.autocrlf false");
+  const checkout = steps.findIndex((s) => s.uses?.startsWith("actions/checkout@"));
+  assert.ok(autocrlf >= 0 && autocrlf < checkout);
+  const cache = steps.find((s) => s.uses?.startsWith("Swatinem/rust-cache@"));
+  assert.equal(cache.with["shared-key"], "rust-windows");
+  assert.equal(
+    cache.with["save-if"],
+    "${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}",
+  );
+  assert.deepEqual(
+    steps.filter((s) => /\bcargo\b/.test(s.run ?? "")).map((s) => s.run),
+    [
+      "cargo check --locked -p codesense-platform -p codesense-host-proto -p codesense-fs-core --all-targets",
+      "cargo test --locked -p codesense-platform",
+    ],
+  );
+  // A label other than ci:macos or ci:windows must not cancel the pull request's run.
+  assert.match(workflow.concurrency.group, /label\.name != 'ci:windows'/);
+  // The platform crate is tested on Linux and macOS too.
+  for (const name of ["rust-linux", "rust-macos-build"])
+    assert.match(workflow.jobs[name].env.RUST_PACKAGES, /-p codesense-platform\b/, name);
+});
+
+test("the policy accepts the Windows check's runner literal and rejects expressions", () => {
+  const windows = (runner) => workflowPolicy(good.replace("ubuntu-24.04", runner)).join("\n");
+  assert.equal(windows("windows-2025"), "");
+  assert.match(windows("${{ matrix.os }}"), /GitHub-hosted/);
+  assert.match(windows("windows-2019"), /GitHub-hosted/);
 });
 
 // A Rust-free change skips the Rust jobs. Scheduled and manual runs always test, and the jobs
@@ -446,9 +487,10 @@ test("only rust.yml's macOS jobs may skip merge groups, and still run on push an
       ),
       file,
     ).join("\n");
-  for (const job of ["rust-macos-build", "rust-macos"])
+  for (const job of ["rust-macos-build", "rust-macos", "rust-check-windows"])
     for (const condition of [
       `\${{ ${pathFilter} && ${offMergeGroups} && (${macosOptIn}) }}`,
+      `\${{ ${pathFilter} && ${offMergeGroups} && (${windowsOptIn}) }}`,
       `\${{ ${pathFilter} && ${offMergeGroups} }}`,
     ])
       assert.equal(filtered(condition, "rust.yml", job), "", `${job}: ${condition}`);
@@ -460,6 +502,16 @@ test("only rust.yml's macOS jobs may skip merge groups, and still run on push an
       "rust-macos-test",
     ],
     [`\${{ ${pathFilter} && ${offMergeGroups} && (${macosOptIn}) }}`, "ci.yml", "rust-macos"],
+    [
+      `\${{ ${pathFilter} && ${offMergeGroups} && (${windowsOptIn}) }}`,
+      "ci.yml",
+      "rust-check-windows",
+    ],
+    [
+      `\${{ ${pathFilter} && github.event_name == 'pull_request' && (${windowsOptIn}) }}`,
+      "rust.yml",
+      "rust-check-windows",
+    ],
     [`\${{ ${pathFilter} && ${offMergeGroups} && ${offMergeGroups} }}`, "rust.yml", "rust-macos"],
     [`\${{ ${pathFilter} && (${macosOptIn}) && ${offMergeGroups} }}`, "rust.yml", "rust-macos"],
     [`\${{ ${offMergeGroups} && ${pathFilter} && (${macosOptIn}) }}`, "rust.yml", "rust-macos"],
@@ -923,7 +975,7 @@ test("Rust jobs preserve package coverage for nextest and doctests and always up
   const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
   const packages = (command) => [...command.matchAll(/-p ([a-z-]+)/g)].map((m) => m[1]).sort();
   // Linux runs only the crates that pass there today; the rest join once fixed.
-  const portable = ["codesense-host-proto", "codesense-fs-core"];
+  const portable = ["codesense-platform", "codesense-host-proto", "codesense-fs-core"];
   // Doctests run after a failed step, but only once the test build ran and succeeded.
   const afterCompile = "(success() || failure()) && steps.compile.outcome == 'success'";
   const doctests = (steps, condition = afterCompile) => {
