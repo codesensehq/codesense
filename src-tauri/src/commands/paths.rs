@@ -103,6 +103,21 @@ mod tests {
     fn test_codesense_home_dir_returns_dotcodesense() {
         let dir = codesense_home_dir().expect("home dir should exist");
         assert!(dir.ends_with(".codesense"));
+        assert_eq!(dir, dirs::home_dir().unwrap().join(".codesense"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_private_dir_creates_0700_and_refuses_a_symlink() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("private");
+        ensure_private_dir(&dir).unwrap();
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
+        let link = root.path().join("link");
+        std::os::unix::fs::symlink(&dir, &link).unwrap();
+        assert!(ensure_private_dir(&link).is_err());
     }
 
     #[test]

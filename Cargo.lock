@@ -963,6 +963,7 @@ dependencies = [
 name = "codesense-fs-core"
 version = "0.1.0"
 dependencies = [
+ "codesense-platform",
  "globset",
  "log",
  "notify",
@@ -983,9 +984,23 @@ dependencies = [
 name = "codesense-host-proto"
 version = "0.1.0"
 dependencies = [
+ "codesense-platform",
  "libc",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "codesense-platform"
+version = "0.1.0"
+dependencies = [
+ "codesense-platform",
+ "dirs 5.0.1",
+ "dunce",
+ "libc",
+ "serde",
+ "tempfile",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

@@ -1,0 +1,43 @@
+[package]
+name = "codesense-platform"
+version = "0.1.0"
+description = "The one place OS-specific mechanisms live: process trees, private and atomic files, locks, links, the codesense home, the current user and the open-file limit"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[lib]
+name = "codesense_platform"
+
+# The process the contract tests drive (`tests/contract.rs`), so they need no shell.
+[[bin]]
+name = "platform-fixture"
+path = "src/bin/platform_fixture.rs"
+
+[features]
+# Helpers for other crates' tests; enable it on a dev-dependency only.
+testutil = []
+
+[dependencies]
+dirs = "5"
+dunce = "1"
+serde = { version = "1", features = ["derive"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+# Itself with the test helpers, for the contract suite's link rows.
+codesense-platform = { path = ".", features = ["testutil"] }
+tempfile = "3"
