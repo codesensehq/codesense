@@ -1988,8 +1988,9 @@ impl<C: Connect> LiveLink<C> {
                     continue;
                 }
                 Err(e) => {
+                    // A locked keyring can ask again at every read: back off, don't re-read each pass.
                     log::warn!(target: "dashboard_publish", "live link: publisher token unavailable: {e}");
-                    sleep(PASS).await;
+                    sleep(backoff.next()).await;
                     continue;
                 }
             };
@@ -2816,7 +2817,7 @@ impl Opens {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::credential_store::FakeStore;
+    use crate::commands::credential_store::{CredentialError, FakeStore};
     use crate::dashboard_publish::manifest::{LiveQueries, MANIFEST_FILE};
     use crate::dashboard_publish::push::tests::{token_store, TOKEN};
     use crate::dashboard_publish::state::{Event, LiveApproved};
@@ -3413,6 +3414,47 @@ mod tests {
             Some("Bearer csp_new_token")
         );
         assert!(upgrades.iter().all(|(_, target)| !target.contains("csp_")));
+        link.abort();
+    }
+
+    /// A keychain that fails every read, as a locked one does, and counts the reads.
+    #[derive(Default)]
+    struct LockedStore {
+        reads: std::sync::atomic::AtomicUsize,
+    }
+
+    impl CredentialStore for LockedStore {
+        fn get(&self, _: &str) -> Result<Option<Secret>, CredentialError> {
+            self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err("keychain locked".into())
+        }
+        fn set(&self, _: &str, _: &Secret) -> Result<(), CredentialError> {
+            Err("keychain locked".into())
+        }
+    }
+
+    /// A token read that fails is retried with a growing delay, not on every pass: a locked
+    /// keyring can prompt each time.
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_token_read_backs_off_instead_of_repeating_every_pass() {
+        let data = tempfile::tempdir().unwrap();
+        let _folder = live_dashboard_as(
+            data.path(),
+            "live-locked",
+            "live:\n  queries: all\n",
+            Some(LiveQueries::All),
+        );
+        let relay = Relay::new(Mode::Answer);
+        let store = Arc::new(LockedStore::default());
+        let shared: Arc<dyn CredentialStore> = store.clone();
+        let link = tokio::spawn(LiveLink::new(data.path(), relay.clone(), shared).run());
+        sleep(secs(120)).await;
+        let reads = store.reads.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            (3..12).contains(&reads),
+            "{reads} reads in 120 s: a pass every {PASS:?} would be 24"
+        );
+        assert!(relay.attempts().is_empty());
         link.abort();
     }
 

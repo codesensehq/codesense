@@ -137,6 +137,12 @@ mod tests {
         }
     }
 
+    /// The panels branch on this prefix to show the sentence without it.
+    #[test]
+    fn the_unavailable_message_carries_the_typed_prefix() {
+        assert!(UNAVAILABLE_MESSAGE.starts_with("unavailable: "));
+    }
+
     #[test]
     fn saving_with_no_secret_store_says_so_and_keeps_nothing() {
         let error = store(&UnavailableStore, &Secret::new("hunter2")).unwrap_err();

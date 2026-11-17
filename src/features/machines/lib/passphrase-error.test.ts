@@ -13,6 +13,12 @@ describe("passphraseSaveError", () => {
     );
   });
 
+  it("names a failure with another typed prefix instead of hiding it", () => {
+    expect(passphraseSaveError("denied: the key is not yours")).toBe(
+      "Couldn't keep the passphrase: denied: the key is not yours",
+    );
+  });
+
   it("names any other failure", () => {
     expect(passphraseSaveError("the passphrase dialog failed: x")).toBe(
       "Couldn't keep the passphrase: the passphrase dialog failed: x",

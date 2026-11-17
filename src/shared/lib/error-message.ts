@@ -6,7 +6,7 @@ export function getErrorMessage(err: unknown): string {
 
 /** The typed prefixes Rust commands put on an error so code can branch on the kind of failure.
  *  They are for code, never for a person to read. */
-export const TYPED_ERROR_PREFIX = /^(?:unavailable|denied|invalid|conflict|not_found|busy):\s*/;
+const TYPED_ERROR_PREFIX = /^(?:unavailable|denied|invalid|conflict|not_found|busy):\s*/;
 
 /** Rust's "no such story in the index" refusal. */
 const UNINDEXED_STORY = /^no managed story with id '([^']+)'$/;
