@@ -45,6 +45,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The build's docs check compares the export files with origin/main, which a
+          # shallow checkout of a branch lacks.
+          fetch-depth: 0
       - name: Set up pnpm
         uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - name: Set up Node
@@ -103,6 +106,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The build's docs check compares the export files with origin/main, which a
+          # shallow checkout of a branch lacks.
+          fetch-depth: 0
       - name: Install system libraries
         # What rust.yml's Linux check installs, plus file (linuxdeploy) and rpm (the rpm bundle).
         run: |
@@ -126,9 +132,7 @@ jobs:
         run: shellcheck scripts/ci/unsigned-bundle.sh scripts/ci/bundle-manifest.sh
       - name: Check the base config is unchanged
         # The Linux differences live in tauri.linux.conf.json; macOS reads tauri.conf.json as is.
-        run: |
-          git fetch --no-tags --depth=1 https://github.com/${{ github.repository }}.git main
-          git diff --exit-code FETCH_HEAD -- src-tauri/tauri.conf.json
+        run: git diff --exit-code origin/main -- src-tauri/tauri.conf.json
       - name: Build app
         run: bash scripts/ci/unsigned-bundle.sh linux
       - name: Check the sidecars sit beside the app
