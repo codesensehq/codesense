@@ -1096,7 +1096,8 @@ pub use async_helpers::await_blocking;
 // diff). → 515.
 // +1 `agent_read_model::list_thread_inbox` (a saved agent + story thread's conversation, ended
 // sessions included). → 516.
-pub const EXPECTED_COMMAND_COUNT: usize = 516;
+// +1 `system::get_platform_caps` (which optional features this OS supports). → 517.
+pub const EXPECTED_COMMAND_COUNT: usize = 517;
 
 #[cfg(test)]
 mod tests {
