@@ -1717,8 +1717,8 @@ export function TeamWorkspaceView({ teamKey }: TeamWorkspaceViewProps) {
                         pendingHash: pendingHash?.path === p ? pendingHash.hash : null,
                         onPendingHashConsumed: handlePendingHashConsumed,
                         onContentCommitted: bumpViewerContentVersion,
-                        // RF-perf-12: preserve this file's markdown scroll
-                        // across a team-unmount / eviction remount.
+                        // RF-perf-12: this file's view state (markdown, HTML
+                        // and code scroll) across a tab switch or remount.
                         viewStateKey: fileViewKey(teamKey, p),
                         // SW-DX-5: the already-scanned tree an inline
                         // `csquery` block first-paints against (reused,
