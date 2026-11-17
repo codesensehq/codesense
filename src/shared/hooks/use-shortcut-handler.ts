@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { useEffect } from "react";
 
-import { matchesKeystroke, parseKeystroke } from "@/shared/lib/shortcuts/keystroke";
+import { hasCmd, matchesKeystroke, parseKeystroke } from "@/shared/lib/shortcuts/keystroke";
 import { allShortcutActions, resolveBindings } from "@/shared/lib/shortcuts/registry";
 import { isDispatchable, type DispatchGateState } from "@/shared/lib/shortcuts/is-dispatchable";
 import {
@@ -20,7 +20,7 @@ import { NO_TEAM_SENTINEL, useActiveTeamKey } from "@/shared/lib/team-key";
 /**
  * Global keyboard handler driven by the shortcut action registry +
  * user overrides from `useShortcutsStore`. Replaces the per-shortcut
- * inline `if (e.metaKey && e.key === …)` branches that used to live in
+ * inline Cmd-plus-key branches that used to live in
  * `App.tsx` and `RepoViewerView`.
  *
  * Mount ONCE at the app root. A workspace-scoped action (`scope:
@@ -70,7 +70,7 @@ export function useShortcutHandler(): void {
       if (e.isComposing) return;
       if (
         e.ctrlKey &&
-        !e.metaKey &&
+        !hasCmd(e) &&
         !e.altKey &&
         !e.shiftKey &&
         (e.key === "[" || e.key === "]") &&

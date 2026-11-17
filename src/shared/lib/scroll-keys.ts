@@ -7,6 +7,8 @@
  * intent to its own scroll backend (DOM scrollTo vs xterm scrollLines).
  */
 
+import { hasMod } from "./shortcuts/keystroke";
+
 export type ScrollIntent =
   | { action: "top" }
   | { action: "bottom" }
@@ -27,7 +29,7 @@ export type ScrollIntent =
 export function parseScrollIntent(e: KeyboardEvent): ScrollIntent | null {
   if (e.shiftKey) return null;
 
-  const cmd = e.metaKey || e.ctrlKey;
+  const cmd = hasMod(e);
 
   // Cmd/Ctrl+arrows — highest priority
   if (cmd && e.key === "ArrowUp") return { action: "top" };

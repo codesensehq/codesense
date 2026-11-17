@@ -5,6 +5,7 @@ import { appPopoverBoundsElements, type PopoverBounds } from "@/shared/lib/popov
 export type { PopoverBounds } from "@/shared/lib/popover-bounds";
 
 import { ROW_POPUP_ATTR, isCmdW } from "@/shared/lib/focus-utils";
+import { hasCommandModifier } from "@/shared/lib/shortcuts/keystroke";
 
 /** A row popup's size: its width, and the height of its body (the part a drag resizes). */
 export interface PopoverSize {
@@ -532,7 +533,7 @@ export function useRowPopover({
   // The arrow keys resize from the grip too: left and right its width, up and down its height.
   const resizeByKey = (e: React.KeyboardEvent<HTMLElement>) => {
     // A chord (⌘, ⌥ or ⌃ with an arrow) is a shortcut, not a resize.
-    if (e.metaKey || e.altKey || e.ctrlKey) return;
+    if (hasCommandModifier(e)) return;
     const step = e.shiftKey ? KEY_STEP_PX * 4 : KEY_STEP_PX;
     const delta = {
       ArrowLeft: [-step, 0],

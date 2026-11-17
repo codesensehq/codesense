@@ -85,6 +85,7 @@ import { dashboardPrefsKey } from "../lib/dashboard-prefs";
 import { pageSdk } from "../lib/page-sdk";
 import { FRAME_PRESENTATION_UNAVAILABLE } from "../lib/frame-presentation";
 import { READ_VERBS, resolveFrameCall, type BridgeMessageIdentity } from "./html-bridge";
+import { hasMod } from "@/shared/lib/shortcuts/keystroke";
 
 // SW-SD-1: cap the wait for a doc to answer a `codesense:snapshot-request` so a
 // wedged/never-responding doc can't strand a pending correlation entry or leave
@@ -1979,21 +1980,20 @@ export function HtmlViewer({
 
       // Frame keys use the whole registry and current user bindings inside the source guard.
       if (type === "codesense:shortcut") {
+        const { metaKey, ctrlKey, shiftKey, altKey } = data;
         if (
           typeof data.key !== "string" ||
           typeof data.code !== "string" ||
-          [data.metaKey, data.ctrlKey, data.shiftKey, data.altKey].some(
-            (v) => typeof v !== "boolean",
-          )
+          [metaKey, ctrlKey, shiftKey, altKey].some((v) => typeof v !== "boolean")
         )
           return;
         const key = {
           key: data.key,
           code: data.code,
-          metaKey: data.metaKey as boolean,
-          ctrlKey: data.ctrlKey as boolean,
-          shiftKey: data.shiftKey as boolean,
-          altKey: data.altKey as boolean,
+          metaKey: metaKey as boolean,
+          ctrlKey: ctrlKey as boolean,
+          shiftKey: shiftKey as boolean,
+          altKey: altKey as boolean,
         };
         const editorTarget = data.editorTarget === true;
         const textFieldTarget = data.textFieldTarget === true;
@@ -2193,7 +2193,7 @@ export function HtmlViewer({
         const resolved = resolveViewerLinkPath(href, linkOwner, teamContentPath);
         if (!resolved) return;
         const fragment = href.split("#")[1];
-        const openInNewTab = !!(event.data.metaKey || event.data.ctrlKey);
+        const openInNewTab = hasMod(event.data);
         const navigate = (path: string) =>
           onNavigate(path, {
             ...(openInNewTab ? { openInNewTab: true } : {}),

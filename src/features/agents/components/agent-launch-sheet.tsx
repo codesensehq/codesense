@@ -139,6 +139,7 @@ import { useAgentsStore, watchAgentList } from "../stores/agents-store";
 import { draftFromDefinition, emptyDraft, formFromDraft } from "../lib/agent-form";
 import { useAgentPreview } from "../lib/use-agent-preview";
 import { FacePicker } from "./face-picker";
+import { hasMod } from "@/shared/lib/shortcuts/keystroke";
 
 const LOCAL_MACHINE = LOCAL_MACHINE_ID;
 
@@ -755,7 +756,7 @@ export function AgentLaunchSheet({
           taskRef.current?.focus();
         }}
         onKeyDown={(e) => {
-          if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && !e.nativeEvent.isComposing) {
+          if (hasMod(e) && e.key === "Enter" && !e.nativeEvent.isComposing) {
             e.preventDefault();
             launch();
           }
@@ -1636,8 +1637,7 @@ export function StoryInput({
                   setSelectedId(matches[Math.min(matches.length - 1, active + 1)].storyId);
                 else if (e.key === "ArrowUp")
                   setSelectedId(matches[Math.max(0, active - 1)].storyId);
-                else if (e.key === "Enter" && !e.metaKey && !e.ctrlKey)
-                  pick(matches[active].storyId);
+                else if (e.key === "Enter" && !hasMod(e)) pick(matches[active].storyId);
                 else return;
                 e.preventDefault();
               }}

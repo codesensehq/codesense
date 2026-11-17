@@ -8,6 +8,7 @@
  */
 
 import { isInHiddenTeam, queryAllShown } from "@/shared/lib/warm-scopes";
+import { hasCmd } from "@/shared/lib/shortcuts/keystroke";
 
 export type PaneType = "file" | "terminal" | "scratch-note";
 
@@ -34,7 +35,7 @@ export function isRowPopupFocused(): boolean {
 export function isCmdW(
   e: Pick<KeyboardEvent, "metaKey" | "ctrlKey" | "altKey" | "shiftKey" | "key" | "code">,
 ): boolean {
-  if (!e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return false;
+  if (!hasCmd(e) || e.ctrlKey || e.altKey || e.shiftKey) return false;
   // A synthesized or IME event can carry no key at all.
   const key = typeof e.key === "string" ? e.key.toLowerCase() : "";
   if (key === "w") return true;

@@ -21,6 +21,7 @@
  */
 
 import { parseScrollIntent } from "./scroll-keys";
+import { hasAnyModifier, hasCmd, hasCommandModifier } from "./shortcuts/keystroke";
 
 // ---------------------------------------------------------------------------
 // Key repeat polyfill constants
@@ -85,7 +86,7 @@ export function keyToSequence(
   if (MODIFIER_KEYS.has(event.key)) return null;
 
   // Special keys (unmodified only — modified combos rely on native repeat)
-  if (!event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+  if (!hasAnyModifier(event)) {
     // Arrow keys — mode-aware
     const arrowSuffix = ARROW_KEY_SUFFIX[event.key];
     if (arrowSuffix) {
@@ -98,7 +99,7 @@ export function keyToSequence(
   }
 
   // Printable characters (with or without shift — shift changes event.key)
-  if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+  if (event.key.length === 1 && !hasCommandModifier(event)) {
     return event.key;
   }
 
@@ -221,9 +222,7 @@ export function createTerminalKeyHandler(
       event.type === "keydown" &&
       event.key === "Enter" &&
       event.shiftKey &&
-      !event.ctrlKey &&
-      !event.metaKey &&
-      !event.altKey
+      !hasCommandModifier(event)
     ) {
       clearRepeat();
       if (pendingNewline) return false;
@@ -241,7 +240,7 @@ export function createTerminalKeyHandler(
     // ── Cmd+Left/Right → Ctrl+A / Ctrl+E ─────────────────────────────
     if (
       event.type === "keydown" &&
-      event.metaKey &&
+      hasCmd(event) &&
       !event.shiftKey &&
       !event.altKey &&
       !event.ctrlKey &&

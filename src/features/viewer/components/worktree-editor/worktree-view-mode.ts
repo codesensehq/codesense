@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { getViewerFileType, type ViewerFileType } from "@/shared/lib/viewer-file-type";
+import { hasMod } from "@/shared/lib/shortcuts/keystroke";
 
 /** How a renderable worktree file is shown: through the viewer, or as text. */
 export type WorktreeViewMode = "rendered" | "source";
@@ -15,14 +16,26 @@ const RENDERABLE: ReadonlySet<ViewerFileType> = new Set([
 const STORAGE_KEY = "codesense.worktree-editor.view-mode";
 
 /** ⇧⌘V (⇧⌃V off the Mac): Rendered ⇄ Source, as VS Code's preview toggle. */
-export function isViewToggleChord(key: {
+export function isViewToggleChord({
+  code,
+  metaKey,
+  ctrlKey,
+  shiftKey,
+  altKey,
+}: {
   code?: string;
   metaKey?: boolean;
   ctrlKey?: boolean;
   shiftKey?: boolean;
   altKey?: boolean;
 }): boolean {
-  return !!(key.metaKey || key.ctrlKey) && !!key.shiftKey && !key.altKey && key.code === "KeyV";
+  const mods = {
+    metaKey: !!metaKey,
+    ctrlKey: !!ctrlKey,
+    altKey: !!altKey,
+    shiftKey: !!shiftKey,
+  };
+  return hasMod(mods) && mods.shiftKey && !mods.altKey && code === "KeyV";
 }
 
 /** The viewer type of `path` when the viewer can render it, else `null`. */

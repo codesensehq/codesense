@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { focusedWorkspaceOf } from "@/shared/hooks/use-active-workspace-context";
 import { isRowPopupFocused, editorOwnsShortcut } from "@/shared/lib/focus-utils";
 import { isDispatchable } from "@/shared/lib/shortcuts/is-dispatchable";
-import { matchesKeystroke } from "@/shared/lib/shortcuts/keystroke";
+import { hasCmd, matchesKeystroke } from "@/shared/lib/shortcuts/keystroke";
 import { SHORTCUT_ACTIONS } from "@/shared/lib/shortcuts/registry";
 import { getActiveTeamKey, NO_TEAM_SENTINEL } from "@/shared/lib/team-key";
 import { getEffectiveShortcut } from "@/shared/stores/shortcuts-store";
@@ -84,7 +84,7 @@ export function useWorkspaceCycleIntercept(repoPath: string | null): void {
       // Ctrl+[ is Escape for terminal programs; user overrides must preserve it too.
       if (
         event.ctrlKey &&
-        !event.metaKey &&
+        !hasCmd(event) &&
         !event.altKey &&
         !event.shiftKey &&
         (event.key === "[" || event.key === "]")

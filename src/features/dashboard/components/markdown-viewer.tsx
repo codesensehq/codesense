@@ -35,6 +35,7 @@ import { parseResultCache } from "@/shared/lib/parse-result-cache";
 import type { DerivedPipelineTree } from "@/shared/lib/pipeline-graph/types";
 import { CsQueryIsland } from "./csquery/cs-query-view";
 import morphdom from "morphdom";
+import { hasMod } from "@/shared/lib/shortcuts/keystroke";
 
 // F.34: morphdom options — hoisted to module scope to avoid per-block
 // closure allocation. `onBeforeElUpdated` preserves diagram island
@@ -1095,7 +1096,7 @@ export const MarkdownViewer = memo(function MarkdownViewer({
       // a handler.
       e.preventDefault();
       if (!onNavigate) return;
-      const openInNewTab = e.metaKey || e.ctrlKey;
+      const openInNewTab = hasMod(e);
       if (openInNewTab || resolved.hash) {
         onNavigate(resolved.path, {
           ...(openInNewTab ? { openInNewTab: true } : {}),
@@ -1187,7 +1188,7 @@ export const MarkdownViewer = memo(function MarkdownViewer({
                 href="#"
                 onClick={(e) => {
                   e.preventDefault();
-                  navigate(e.metaKey || e.ctrlKey);
+                  navigate(hasMod(e));
                 }}
                 onAuxClick={(e) => {
                   if (e.button !== 1) return;

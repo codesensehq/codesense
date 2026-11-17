@@ -4,6 +4,7 @@ import { useEffect, useId, useRef, useState, type FocusEvent, type KeyboardEvent
 import { X } from "lucide-react";
 
 import type { PaneStartupPhase } from "../hooks/use-pane-startup";
+import { hasCommandModifier } from "@/shared/lib/shortcuts/keystroke";
 
 export type EndedOutcome = "ended" | "crashed";
 
@@ -63,7 +64,7 @@ const BUTTON =
 
 /** A key that would type something (a printable character or Space). */
 function isTyping(e: KeyboardEvent): boolean {
-  return e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey;
+  return e.key.length === 1 && !hasCommandModifier(e);
 }
 
 /** The bar's headline: `Ended`, `Crashed`, `Restart failed`, or `claude crashed`. */
