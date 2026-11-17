@@ -4,9 +4,7 @@
 
 fn main() {
     // Must stay first: it sets an environment variable, which is only sound before any thread starts.
-    if std::env::consts::OS == "linux" {
-        codesense_lib::linux_startup::apply_webkit_env_defaults();
-    }
+    codesense_lib::linux_startup::apply_webkit_env_defaults();
     if codesense_pty_core::activity::run_helper() {
         return;
     }

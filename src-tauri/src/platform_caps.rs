@@ -38,9 +38,9 @@ const TABLE: &[Row] = &[
     },
     Row {
         key: STARSHIP,
-        macos: Support::On,
+        macos: Support::OnFor(&["aarch64"]),
         linux: Support::Off,
-        reason: "the starship prompt binary is not bundled on this OS yet",
+        reason: "the bundled starship binary is only shipped for macOS on Apple silicon",
     },
 ];
 
@@ -115,8 +115,8 @@ mod tests {
     }
 
     #[test]
-    fn macos_intel_has_no_git_ai() {
-        assert_eq!(line("macos", "x86_64"), "caps: git-ai=off starship=on");
+    fn macos_intel_has_no_bundled_binaries() {
+        assert_eq!(line("macos", "x86_64"), "caps: git-ai=off starship=off");
     }
 
     #[test]
@@ -171,11 +171,16 @@ mod tests {
         assert!(on("macos", "aarch64", GIT_AI));
         assert!(!on("macos", "x86_64", GIT_AI));
         assert!(!on("linux", "x86_64", GIT_AI));
-        assert!(on("macos", "x86_64", STARSHIP));
+        assert!(on("macos", "aarch64", STARSHIP));
+        assert!(!on("macos", "x86_64", STARSHIP));
+        assert!(!on("linux", "x86_64", STARSHIP));
     }
 
     #[test]
-    fn enabled_is_false_for_an_unknown_key() {
+    fn enabled_matches_the_live_host() {
+        let apple_silicon = cfg!(all(target_os = "macos", target_arch = "aarch64"));
+        assert_eq!(enabled(GIT_AI), apple_silicon);
+        assert_eq!(enabled(STARSHIP), apple_silicon);
         assert!(!enabled("no-such-capability"));
     }
 }

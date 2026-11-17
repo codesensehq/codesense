@@ -1537,7 +1537,6 @@ pub fn run() {
             commands::update::download_and_install_update,
             // Dependency manager
             commands::deps::get_dependency_status,
-            commands::system::get_platform_caps,
             commands::deps::recheck_dependencies,
             commands::deps::resolve_agent_cli,
             commands::deps::install_command_line_tools,
@@ -1697,6 +1696,7 @@ pub fn run() {
             // Logging
             commands::system::get_log_file_path,
             commands::system::get_log_debug_enabled,
+            commands::system::get_platform_caps,
             // HTTP API
             commands::system::get_http_api_port,
             commands::frames::mint_frame,

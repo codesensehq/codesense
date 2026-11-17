@@ -11,9 +11,12 @@ pub fn webkit_env_default(user_value: Option<&OsStr>) -> Option<&'static str> {
     user_value.is_none().then_some("1")
 }
 
-/// Applies the WebKitGTK defaults. Call first in `main`, before any thread starts, and only on
-/// Linux: it sets an environment variable on whatever OS it runs on.
+/// Applies the WebKitGTK defaults on Linux and does nothing elsewhere. Call first in `main`,
+/// before any thread starts.
 pub fn apply_webkit_env_defaults() {
+    if std::env::consts::OS != "linux" {
+        return;
+    }
     let user_value = std::env::var_os(DMABUF_VAR);
     if let Some(value) = webkit_env_default(user_value.as_deref()) {
         // Safe to mutate the environment here: this crate is edition 2021, where `set_var` is
