@@ -1966,6 +1966,7 @@ impl<C: Connect> LiveLink<C> {
         tokio::task::spawn_blocking(move || store.get(TOKEN_ACCOUNT))
             .await
             .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())
     }
 
     /// The connection loop. It never returns.

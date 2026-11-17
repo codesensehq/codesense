@@ -27,7 +27,7 @@ pub async fn token(store: Arc<dyn CredentialStore>) -> Result<Option<Secret>, St
     tokio::task::spawn_blocking(move || store.get(TOKEN_ACCOUNT))
         .await
         .map_err(|_| "Couldn't read your Keychain".to_string())?
-        .map_err(|e| crate::feedback::redact(&e))
+        .map_err(|e| crate::feedback::redact(&e.to_string()))
 }
 
 pub async fn status_with(store: Arc<dyn CredentialStore>, host: Option<&str>) -> KeyStatus {
@@ -84,7 +84,7 @@ pub async fn save_with(store: Arc<dyn CredentialStore>, key: String) -> Result<(
         .map_err(|e| {
             format!(
                 "Couldn't save to your Keychain: {}. Nothing changed.",
-                crate::feedback::redact(&e)
+                crate::feedback::redact(&e.to_string())
             )
         })
 }
@@ -93,7 +93,7 @@ pub async fn remove_with(store: Arc<dyn CredentialStore>) -> Result<(), String> 
     tokio::task::spawn_blocking(move || store.delete(TOKEN_ACCOUNT))
         .await
         .map_err(|_| "Couldn't remove the publishing key".to_string())?
-        .map_err(|e| crate::feedback::redact(&e))
+        .map_err(|e| crate::feedback::redact(&e.to_string()))
 }
 
 #[tauri::command]
@@ -168,15 +168,16 @@ mod tests {
 #[cfg(test)]
 mod failure_tests {
     use super::*;
+    use crate::commands::credential_store::{CredentialError, UnavailableStore};
     struct Locked;
     impl CredentialStore for Locked {
-        fn get(&self, _: &str) -> Result<Option<Secret>, String> {
+        fn get(&self, _: &str) -> Result<Option<Secret>, CredentialError> {
             Err("Keychain is locked".into())
         }
-        fn set(&self, _: &str, _: &Secret) -> Result<(), String> {
+        fn set(&self, _: &str, _: &Secret) -> Result<(), CredentialError> {
             Err("could not write csp_private_test_a91f".into())
         }
-        fn delete(&self, _: &str) -> Result<(), String> {
+        fn delete(&self, _: &str) -> Result<(), CredentialError> {
             Err("Keychain is locked".into())
         }
     }
@@ -192,6 +193,19 @@ mod failure_tests {
             .unwrap_err();
         assert!(!error.contains("private_test"));
         assert!(error.contains("Nothing changed"));
+        assert!(remove_with(store).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn no_secret_store_fails_each_key_call_without_panicking() {
+        let store: Arc<dyn CredentialStore> = Arc::new(UnavailableStore);
+        assert_eq!(
+            status_with(store.clone(), None).await.status,
+            KeyState::Unavailable
+        );
+        assert!(save_with(store.clone(), "csp_private_test_a91f".into())
+            .await
+            .is_err());
         assert!(remove_with(store).await.is_err());
     }
 }

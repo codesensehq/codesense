@@ -622,19 +622,9 @@ impl LocalProfileState {
             return;
         }
         std::thread::spawn(move || {
-            use super::credential_store::{default_store, AUTH_ACCOUNT, AUTH_SERVICE};
-            let message = "Historical identity metadata could not be read; local use remains available and recovery will retry on the next startup";
-            let keychain = default_store(AUTH_SERVICE)
-                .get(AUTH_ACCOUNT)
-                .map_err(|_| message.to_string())
-                .and_then(|secret| {
-                    secret
-                        .map(|secret| {
-                            serde_json::from_str::<super::auth::AuthFile>(secret.expose())
-                                .map_err(|_| message.to_string())
-                        })
-                        .transpose()
-                });
+            use super::credential_store::{default_store, AUTH_SERVICE};
+            let message = LEGACY_UNREADABLE;
+            let keychain = legacy_from_keychain(default_store(AUTH_SERVICE).as_ref());
             let legacy = match keychain {
                 Ok(Some(legacy)) => Ok(Some(legacy)),
                 keychain => {
@@ -662,6 +652,33 @@ impl LocalProfileState {
             use tauri::Emitter;
             let _ = app.emit("local-profiles-changed", ());
         });
+    }
+}
+/// What the legacy identity blob's read says, for the import.
+const LEGACY_UNREADABLE: &str = "Historical identity metadata could not be read; local use remains available and recovery will retry on the next startup";
+
+/// The legacy identity blob in the keychain. A store that is unavailable holds no
+/// blob: nothing to import and nothing to retry (the import runs once per launch,
+/// so this logs once per run).
+fn legacy_from_keychain(
+    store: &dyn super::credential_store::CredentialStore,
+) -> Result<Option<super::auth::AuthFile>, String> {
+    use super::credential_store::{CredentialError, AUTH_ACCOUNT};
+    match store.get(AUTH_ACCOUNT) {
+        Err(CredentialError::Unavailable) => {
+            log::info!(target: "auth", "no secret store is available: nothing to import from it");
+            Ok(None)
+        }
+        stored => stored
+            .map_err(|_| LEGACY_UNREADABLE.to_string())
+            .and_then(|secret| {
+                secret
+                    .map(|secret| {
+                        serde_json::from_str::<super::auth::AuthFile>(secret.expose())
+                            .map_err(|_| LEGACY_UNREADABLE.to_string())
+                    })
+                    .transpose()
+            }),
     }
 }
 /// The selected profile without pinning the selection (see
@@ -818,6 +835,11 @@ pub async fn set_local_identity(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn an_unavailable_secret_store_has_nothing_to_import() {
+        let store = crate::commands::credential_store::UnavailableStore;
+        assert!(matches!(legacy_from_keychain(&store), Ok(None)));
+    }
     #[test]
     fn cp3_active_reader_pins_namespace_while_metadata_persistence_is_stalled() {
         use std::sync::{mpsc, Arc};
