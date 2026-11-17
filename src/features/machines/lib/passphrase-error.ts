@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import { getErrorMessage } from "@/shared/lib/error-message";
 
 /** With no secret store the app already says it in full ("Can't save the passphrase: no

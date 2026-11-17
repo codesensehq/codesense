@@ -37,8 +37,8 @@ pub enum CredentialError {
 impl fmt::Display for CredentialError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Unavailable => f.write_str("no secret store is available"),
-            Self::Failed(message) => f.write_str(message),
+            Self::Unavailable => write!(f, "no secret store is available"),
+            Self::Failed(message) => write!(f, "{message}"),
         }
     }
 }
