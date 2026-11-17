@@ -1,4 +1,4 @@
-/* CodeSense kit editor | TipTap 3.32.2 | inputs f7b47b8527572824d954 */
+/* CodeSense kit editor | TipTap 3.32.2 | inputs 764bab177b06476f0c7d */
 var Ec = Object.defineProperty, lh = (t, e) => {
   let n = {};
   for (var r in t) Ec(n, r, {
@@ -40992,7 +40992,7 @@ function QN(t) {
 }
 const eb = qw($w);
 eb.register("plaintext", () => ({ contains: [] }));
-const eO = "f7b47b8527572824d954";
+const eO = "764bab177b06476f0c7d";
 function ah(t, e, n) {
   return t ? {
     ...t,
