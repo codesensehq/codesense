@@ -67,12 +67,11 @@ export function cycleTab(
 export function tabLabels(
   tabs: readonly string[],
 ): Map<string, { name: string; hint: string | null }> {
-  const base = basename;
   const counts = new Map<string, number>();
-  for (const t of tabs) counts.set(base(t), (counts.get(base(t)) ?? 0) + 1);
+  for (const t of tabs) counts.set(basename(t), (counts.get(basename(t)) ?? 0) + 1);
   const out = new Map<string, { name: string; hint: string | null }>();
   for (const t of tabs) {
-    const name = base(t);
+    const name = basename(t);
     let hint: string | null = null;
     if ((counts.get(name) ?? 0) > 1) {
       hint = basename(dirname(t)) || null;

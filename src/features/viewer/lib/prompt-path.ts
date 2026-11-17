@@ -19,14 +19,14 @@ import {
  *   /Users/me/.codesense/…/default/demo    → ~/…/default/demo
  *   /usr/local/bin                         → /…/local/bin
  *   /                                      → /
- *   C:\\Users\\me\\code\\app                → C:\\…\\code\\app
+ *   C:\Users\me\code\app                → C:\…\code\app
  *
  * The caption renders `head` and `parent` muted and `leaf` emphasized, so the
  * directory you are in is what the eye lands on.
  */
 export interface PromptPath {
   /** Everything before `parent`, ending in its separator: `~/`, `~/…/`,
-   *  `/`, `/…/`, `C:\\…\\` — or empty when the whole path is `~` or a root. */
+   *  `/`, `/…/`, `C:\…\` — or empty when the whole path is `~` or a root. */
   head: string;
   /** The segment above the current directory, when shown. */
   parent: string | null;
@@ -36,7 +36,7 @@ export interface PromptPath {
   elided: boolean;
   /** The path as given, for the tooltip and Copy path. */
   full: string;
-  /** The path's own separator (`/` or `\\`), joining `parent` and ending `head`. */
+  /** The path's own separator (`/` or `\`), joining `parent` and ending `head`. */
   separator: string;
 }
 
