@@ -390,7 +390,7 @@ test("rust.yml's Linux app job runs the credential store tests under a session b
   assert.match(test.run, /--run-ignored all/);
   assert.match(
     test.run,
-    /-E "test\(~secret_service_tests\) \| test\(linux_uses_secret_service_not_the_mock_store\)"/,
+    /-E "test\(~secret_service_tests\) \| test\(~credential_store::tests::linux_\)"/,
   );
   // The tests are named by that filter, not by a package-wide run.
   assert.match(test.run, /-p codesense --lib/);
