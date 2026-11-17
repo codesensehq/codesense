@@ -3,12 +3,13 @@
 //! with a bounded retry, std's file locks, and a copy where symlinks need
 //! Developer Mode.
 
-use std::ffi::c_void;
+use std::ffi::{c_void, OsString};
 use std::fs::{File, OpenOptions};
 use std::io;
+use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf, Prefix};
 use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{
@@ -28,7 +29,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_SHARE_READ, FILE_SHARE_WRITE,
 };
 
-use super::{Linked, ReplaceError};
+use super::{portable_name, Linked, ReplaceError};
 use crate::win::{wide, CurrentUser};
 
 /// `ACCESS_ALLOWED_ACE_TYPE`: an ACE that grants access to one SID.
@@ -160,6 +161,50 @@ pub(super) fn open_nofollow(options: &mut OpenOptions, path: &Path) -> io::Resul
     Ok(file)
 }
 
+/// The longest plain path, in UTF-16 units: `MAX_PATH` less its NUL.
+const MAX_PLAIN_PATH: usize = 259;
+
+pub(super) fn canonicalize(path: &Path) -> io::Result<PathBuf> {
+    dunce::canonicalize(path).map(plain_unc)
+}
+
+/// `\\?\UNC\server\share\rest` as `\\server\share\rest`, when the plain
+/// form names the same file: every component after the share is a portable
+/// name (so no `.`, `..`, trailing dot or space, or reserved device name) and
+/// the whole fits in `MAX_PATH`. Any other path, verbatim or not, is
+/// returned as it is. dunce applies the same rule to disk paths only.
+fn plain_unc(path: PathBuf) -> PathBuf {
+    match plain_unc_form(&path) {
+        Some(plain) => PathBuf::from(plain),
+        None => path,
+    }
+}
+
+fn plain_unc_form(path: &Path) -> Option<OsString> {
+    let mut components = path.components();
+    let Some(Component::Prefix(prefix)) = components.next() else {
+        return None;
+    };
+    let Prefix::VerbatimUNC(server, share) = prefix.kind() else {
+        return None;
+    };
+    let mut plain = OsString::from(r"\\");
+    plain.push(server);
+    plain.push(r"\");
+    plain.push(share);
+    for component in components {
+        match component {
+            Component::RootDir => {}
+            Component::Normal(name) if name.to_str().is_some_and(|n| portable_name(n).is_ok()) => {
+                plain.push(r"\");
+                plain.push(name);
+            }
+            _ => return None,
+        }
+    }
+    (plain.encode_wide().count() <= MAX_PLAIN_PATH).then_some(plain)
+}
+
 pub(super) fn replace(from: &Path, to: &Path) -> Result<(), ReplaceError> {
     let mut delay = FIRST_RETRY_DELAY;
     for attempt in 1..=REPLACE_ATTEMPTS {
@@ -215,5 +260,53 @@ pub(super) fn link_or_copy(target: &Path, link: &Path) -> io::Result<Linked> {
             Ok(Linked::Copy)
         }
         Err(error) => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::plain_unc;
+
+    #[test]
+    fn a_verbatim_unc_path_becomes_plain() {
+        assert_eq!(
+            plain_unc(PathBuf::from(r"\\?\UNC\server\share\dir\file.txt")),
+            PathBuf::from(r"\\server\share\dir\file.txt")
+        );
+        assert_eq!(
+            plain_unc(PathBuf::from(r"\\?\UNC\localhost\C$\Users")),
+            PathBuf::from(r"\\localhost\C$\Users")
+        );
+        assert_eq!(
+            plain_unc(PathBuf::from(r"\\?\UNC\server\share")),
+            PathBuf::from(r"\\server\share")
+        );
+    }
+
+    #[test]
+    fn a_path_the_plain_form_would_change_stays_verbatim() {
+        let long = format!(
+            r"\\?\UNC\server\share\{}",
+            vec!["a".repeat(100); 3].join(r"\")
+        );
+        for verbatim in [
+            long.as_str(),
+            r"\\?\UNC\server\share\CON",
+            r"\\?\UNC\server\share\dir\trailing.",
+            r"\\?\UNC\server\share\a:b",
+            r"\\?\UNC\server\share\.\x",
+            r"\\?\UNC\server\share\..\x",
+        ] {
+            assert_eq!(plain_unc(PathBuf::from(verbatim)), PathBuf::from(verbatim));
+        }
+    }
+
+    #[test]
+    fn other_paths_are_untouched() {
+        for path in [r"C:\Users\x", r"\\?\C:\Users\x", r"\\server\share\x"] {
+            assert_eq!(plain_unc(PathBuf::from(path)), PathBuf::from(path));
+        }
     }
 }

@@ -171,10 +171,11 @@ pub fn link_or_copy(target: &Path, link: &Path) -> io::Result<Linked> {
 
 /// The canonical, absolute form of `path`, with links resolved. On Windows
 /// it has no `\\?\` prefix where the plain form means the same (so text
-/// handed to agents and shells stays usable) and keeps UNC paths UNC; on unix
-/// it is `std::fs::canonicalize`.
+/// handed to agents and shells stays usable): `C:\…` for a disk (dunce) and
+/// `\\server\share\…` for a UNC path; otherwise it keeps the verbatim form.
+/// On unix it is `std::fs::canonicalize`.
 pub fn canonicalize(path: &Path) -> io::Result<PathBuf> {
-    dunce::canonicalize(path)
+    sys::canonicalize(path)
 }
 
 /// Why [`portable_name`] refused a name.

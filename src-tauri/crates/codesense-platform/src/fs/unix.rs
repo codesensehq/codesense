@@ -28,6 +28,10 @@ pub(super) fn open_nofollow(options: &mut OpenOptions, path: &Path) -> io::Resul
         .open(path)
 }
 
+pub(super) fn canonicalize(path: &Path) -> io::Result<std::path::PathBuf> {
+    dunce::canonicalize(path)
+}
+
 pub(super) fn replace(from: &Path, to: &Path) -> Result<(), ReplaceError> {
     std::fs::rename(from, to).map_err(ReplaceError::Io)
 }
