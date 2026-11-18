@@ -54,7 +54,7 @@ mod warm;
 pub fn caps_off(key: &str) -> std::io::Error {
     std::io::Error::new(
         std::io::ErrorKind::Unsupported,
-        format!("{key} is not available on this platform"),
+        format!("{key} is not available in this build"),
     )
 }
 
