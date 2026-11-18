@@ -32,7 +32,9 @@ pub fn set_owner_only(path: &Path) -> io::Result<()> {
 }
 
 /// Whether only this user may use the open `file` (open it with
-/// [`open_nofollow`], so a link is never followed): on unix, owned by the
+/// [`open_nofollow`], so a link is never followed, and with read or write
+/// access: on Windows the check needs `READ_CONTROL`, so a handle with less,
+/// such as only `FILE_READ_ATTRIBUTES`, is an error): on unix, owned by the
 /// effective uid with no group or other permission bits; on Windows, owned
 /// as [`is_owned_by_current_user`] has it, and every ACE that grants access
 /// names the current user. A file made owner-only while elevated is owned by
@@ -43,7 +45,9 @@ pub fn is_owner_only(file: &File) -> io::Result<bool> {
 }
 
 /// Whether this user owns the open `file` (open it with [`open_nofollow`],
-/// so a link is never followed), whatever its permissions.
+/// so a link is never followed, and with read or write access, as for
+/// [`is_owner_only`]; with less, Windows returns an error), whatever its
+/// permissions.
 ///
 /// Unix: strictly `uid == euid`.
 ///
