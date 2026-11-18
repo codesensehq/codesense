@@ -232,10 +232,10 @@ pub(super) fn file_id_of(file: &File) -> io::Result<FileId> {
         )
     };
     if read != 0 {
-        return Ok(FileId {
-            volume: info.VolumeSerialNumber,
-            index: u128::from_le_bytes(info.FileId.Identifier),
-        });
+        return file_id_from(
+            info.VolumeSerialNumber,
+            u128::from_le_bytes(info.FileId.Identifier),
+        );
     }
     let error = io::Error::last_os_error();
     match error.raw_os_error().map(|code| code as u32) {
@@ -254,10 +254,22 @@ fn file_index_of(file: &File) -> io::Result<FileId> {
     if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
         return Err(io::Error::last_os_error());
     }
-    Ok(FileId {
-        volume: u64::from(info.dwVolumeSerialNumber),
-        index: u128::from((u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow)),
-    })
+    file_id_from(
+        u64::from(info.dwVolumeSerialNumber),
+        u128::from((u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow)),
+    )
+}
+
+/// A [`FileId`], or `Unsupported` for a zero index: some virtual and
+/// redirected drives report 0 for every file, so it names none of them.
+fn file_id_from(volume: u64, index: u128) -> io::Result<FileId> {
+    if index == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "the file system reports no file id",
+        ));
+    }
+    Ok(FileId { volume, index })
 }
 
 pub(super) fn create_owner_only(path: &Path, creation: Creation, open: Open) -> io::Result<File> {
@@ -454,7 +466,7 @@ mod tests {
     use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
     use windows_sys::Win32::Security::PSID;
 
-    use super::{owner_is_current, plain_unc};
+    use super::{file_id_from, owner_is_current, plain_unc};
 
     /// A SID parsed from its string form, freed on drop.
     struct Sid(PSID);
@@ -475,6 +487,14 @@ mod tests {
             // SAFETY: ConvertStringSidToSidW allocated the SID with LocalAlloc.
             unsafe { LocalFree(self.0) };
         }
+    }
+
+    #[test]
+    fn a_zero_file_index_is_unsupported() {
+        let error = file_id_from(7, 0).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+        assert_eq!(file_id_from(7, 1).unwrap(), file_id_from(7, 1).unwrap());
+        assert_ne!(file_id_from(7, 1).unwrap(), file_id_from(8, 1).unwrap());
     }
 
     #[test]

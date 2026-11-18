@@ -71,7 +71,9 @@ pub fn is_owned_by_current_user(file: &File) -> io::Result<bool> {
 /// device and inode; on Windows the volume serial and the 128-bit file id.
 /// Two are equal for the same file. A file that replaces another at the same
 /// path has a different id only while the old file still exists or is held
-/// open: once a file is deleted, its id may be given to a new one.
+/// open: once a file is deleted, its id may be given to a new one. On FAT,
+/// whose fallback index is a directory slot a rename can reuse, identity is
+/// best-effort; a file system that reports no id at all is `Unsupported`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FileId {
     volume: u64,
