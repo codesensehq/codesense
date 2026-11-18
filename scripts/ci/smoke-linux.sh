@@ -211,17 +211,17 @@ start_session() {
 desktop() {
     local line owner
     # The app's store is the Secret Service's default collection: the login keyring, which a
-    # throwaway password creates and unlocks (an empty one creates none here).
+    # throwaway password creates and unlocks (an empty one creates none here). --unlock starts
+    # the daemon and prints what to export; --start would replace it and lose the login keyring.
     mkdir -p "$XDG_DATA_HOME/keyrings"
     echo login >"$XDG_DATA_HOME/keyrings/default"
-    printf smoke | gnome-keyring-daemon --unlock --components=secrets >/dev/null
-    owner=$(secrets_owner)
-    # --start attaches to the daemon --unlock started and prints what to export.
     while IFS= read -r line; do
         if [[ "$line" == *=* ]]; then export "${line?}"; fi
-    done < <(gnome-keyring-daemon --start --components=secrets)
-    [[ "$(secrets_owner)" == "$owner" ]] || fail "gnome-keyring-daemon --start replaced the daemon --unlock started"
+    done < <(printf smoke | gnome-keyring-daemon --unlock --components=secrets)
+    owner=$(secrets_owner)
+    grep -q 'string ":' <<<"$owner" || fail "nothing owns org.freedesktop.secrets after unlocking: $owner"
     default_collection
+    [[ "$(secrets_owner)" == "$owner" ]] || fail "the keyring daemon was replaced after unlocking"
     xvfb-run -a -s "-screen 0 1280x800x24" bash "$SELF" launch "$@"
 }
 
