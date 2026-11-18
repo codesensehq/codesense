@@ -44,7 +44,7 @@ tauri_args=(--config src-tauri/tauri.unsigned.conf.json)
 # Platform preparation.
 case "$PLATFORM" in
     macos)
-        # The bundle ships resources/git-ai; the script verifies it against src-tauri/git-ai.pin.
+        # The bundle ships resources/git-ai, which the script verifies against its pin in src-tauri/pins/.
         bash scripts/fetch-git-ai.sh
         # An inline config merged over the unsigned one: signingIdentity "-" signs ad hoc,
         # and no Apple identity or updater key is involved.

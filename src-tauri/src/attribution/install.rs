@@ -31,7 +31,7 @@ pub(crate) struct Pin {
 // The builder and runtime read the same release manifest. Before changing its hash,
 // run `codesign -dv` and `spctl -a -t install` on the new asset.
 pub(crate) static PIN: std::sync::LazyLock<Pin> = std::sync::LazyLock::new(|| {
-    Pin::parse(include_str!("../../git-ai.pin")).expect("invalid bundled git-ai pin")
+    Pin::parse(include_str!("../../pins/git-ai-macos-arm64.pin")).expect("invalid bundled git-ai pin")
 });
 impl Pin {
     fn parse(text: &'static str) -> Result<Self, &'static str> {
