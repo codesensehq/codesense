@@ -2426,7 +2426,9 @@ fn a_local_argv_launch_carries_the_login_path_and_a_remote_one_never_does() {
     assert_eq!(intent.login_path.as_deref(), Some(login));
     let environment =
         HostEnvironment::with_vars(None, None, [("PATH".into(), "/usr/bin:/bin".into())]);
-    let spec = intent.resolve(&session("login-path"), &environment);
+    let spec = intent
+        .resolve(&session("login-path"), &environment)
+        .expect("the spawn resolves");
     assert_eq!(
         spec.command.get_env("PATH"),
         Some(std::ffi::OsStr::new(login))
