@@ -28,13 +28,60 @@ pub(crate) struct Pin {
     pub resource: &'static str,
     pub sha256: String,
 }
-// The builder and runtime read the same release manifest. Before changing its hash,
-// run `codesign -dv` and `spctl -a -t install` on the new asset.
+/// Each target's pin by `std::env::consts::{OS, ARCH}` and the pin's platform. The builder
+/// (scripts/fetch-bundled.sh) and the runtime read the same pin files.
+const TARGET_PINS: [(&str, &str, &str, &str); 5] = [
+    (
+        "macos",
+        "aarch64",
+        "macos-arm64",
+        include_str!("../../pins/git-ai-macos-arm64.pin"),
+    ),
+    (
+        "linux",
+        "x86_64",
+        "linux-x86_64",
+        include_str!("../../pins/git-ai-linux-x86_64.pin"),
+    ),
+    (
+        "linux",
+        "aarch64",
+        "linux-aarch64",
+        include_str!("../../pins/git-ai-linux-aarch64.pin"),
+    ),
+    (
+        "windows",
+        "x86_64",
+        "windows-x86_64",
+        include_str!("../../pins/git-ai-windows-x86_64.pin"),
+    ),
+    (
+        "windows",
+        "aarch64",
+        "windows-arm64",
+        include_str!("../../pins/git-ai-windows-arm64.pin"),
+    ),
+];
+/// The git-ai pin for one target, or `None` where this build pins none.
+pub(crate) fn pin_for(os: &str, arch: &str) -> Option<Pin> {
+    TARGET_PINS
+        .iter()
+        .find(|&&(o, a, _, _)| (o, a) == (os, arch))
+        .map(|&(_, _, platform, text)| {
+            Pin::parse(text, platform).expect("invalid bundled git-ai pin")
+        })
+}
+// The running target's pin. A target with none takes the macOS arm64 pin, so `PIN` is always a
+// pin; git-ai is unsupported there (`supported`). Before changing the macOS arm64 pin's hash,
+// run `codesign -dv` and `spctl -a -t install` on the new asset; that applies to macOS only.
 pub(crate) static PIN: std::sync::LazyLock<Pin> = std::sync::LazyLock::new(|| {
-    Pin::parse(include_str!("../../pins/git-ai-macos-arm64.pin")).expect("invalid bundled git-ai pin")
+    pin_for(std::env::consts::OS, std::env::consts::ARCH)
+        .or_else(|| pin_for("macos", "aarch64"))
+        .expect("the macOS arm64 git-ai pin")
 });
 impl Pin {
-    fn parse(text: &'static str) -> Result<Self, &'static str> {
+    /// Parses a committed pin, which must name `platform`, the target it is listed under.
+    fn parse(text: &'static str, platform: &str) -> Result<Self, &'static str> {
         let mut values = HashMap::new();
         for line in text
             .lines()
@@ -62,10 +109,14 @@ impl Pin {
         if get("tag")? != format!("v{expected_version}") || get("repo")? != "alfypops/git-ai" {
             return Err("invalid pin release");
         }
+        let pin_platform = get("platform")?;
+        if pin_platform != platform {
+            return Err("pin platform does not match its target");
+        }
         Ok(Self {
             expected_version,
             asset: get("asset")?,
-            platform: get("platform")?,
+            platform: pin_platform,
             resource: "resources/git-ai",
             sha256: sha256.into(),
         })
