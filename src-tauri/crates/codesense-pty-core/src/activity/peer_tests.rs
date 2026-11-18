@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-//! What `peer` answers today, pinned before its process identity moves.
+//! What `peer` answers: descent through a re-parented chain, runs after exit
+//! (reaped and not) and start order against wall time.
 
 use super::peer;
 use std::io::{BufRead, BufReader, Write};
