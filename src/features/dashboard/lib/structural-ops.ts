@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { basename } from "@/shared/lib/basename";
+import { basename } from "@/shared/lib/path";
 import {
   createFile,
   deleteContentFile,
@@ -18,7 +18,7 @@ export type StructuralResult = { ok: true } | { ok: false; error: string };
 
 // The basename (last path segment) now lives in one shared util; re-exported
 // here under the historical name so existing importers are unaffected.
-export { basename as baseName } from "@/shared/lib/basename";
+export { basename as baseName } from "@/shared/lib/path";
 
 /**
  * A name/target collision from the gated commands — `create_file` errors

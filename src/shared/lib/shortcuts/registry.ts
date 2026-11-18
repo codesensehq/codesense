@@ -10,6 +10,7 @@ import { useAgentStateStore } from "@/shared/stores/agent-state-store";
 import { beginContextNavigation } from "@/shared/lib/context-navigation";
 import { create } from "zustand";
 import { isMac, isReservedForDashboardCommand } from "./keystroke";
+import { terminalChord } from "./terminal-chord";
 import { requestNewWorkspaceTerminal } from "@/features/viewer/lib/new-workspace-terminal";
 import {
   closeAgentInboxRailToTerminal,
@@ -1362,12 +1363,16 @@ export type UnboundReason =
 export interface ResolvedBinding {
   /** `""` when unbound. */
   keystroke: string;
+  /** The chord the action answers to from a focused terminal; `""` when it has none there. */
+  terminalKeystroke: string;
   unbound?: UnboundReason;
 }
 
 let resolvedCache: {
   shortcuts: Record<string, string>;
   actions: readonly ShortcutAction[];
+  /** The terminal chords depend on the platform, which tests flip. */
+  mac: boolean;
   bindings: Map<string, ResolvedBinding>;
 } | null = null;
 
@@ -1379,18 +1384,27 @@ let resolvedCache: {
  */
 export function resolveBindings(shortcuts: Record<string, string>): Map<string, ResolvedBinding> {
   const actions = allShortcutActions();
-  if (resolvedCache?.shortcuts === shortcuts && resolvedCache.actions === actions)
+  const mac = isMac();
+  if (
+    resolvedCache?.shortcuts === shortcuts &&
+    resolvedCache.actions === actions &&
+    resolvedCache.mac === mac
+  )
     return resolvedCache.bindings;
-  const bindings = new Map<string, ResolvedBinding>();
+  const drafts = new Map<string, Omit<ResolvedBinding, "terminalKeystroke">>();
   const owners = new Map<string, string>();
   const bind = (id: string, keystroke: string) => {
-    bindings.set(id, { keystroke });
+    drafts.set(id, { keystroke });
     if (!owners.has(keystroke)) owners.set(keystroke, id);
   };
   const defaults: ShortcutAction[] = [];
   for (const action of actions) {
     const override = shortcuts[action.id];
-    if (override === "") bindings.set(action.id, { keystroke: "", unbound: { kind: "cleared" } });
+    if (override === "")
+      drafts.set(action.id, {
+        keystroke: "",
+        unbound: { kind: "cleared" },
+      });
     else if (override !== undefined) bind(action.id, override);
     else if (!action.command) bind(action.id, action.defaultKeystroke);
     else defaults.push(action);
@@ -1399,17 +1413,40 @@ export function resolveBindings(shortcuts: Record<string, string>): Map<string, 
     const wanted = action.defaultKeystroke;
     const reserved = wanted ? isReservedForDashboardCommand(wanted) : null;
     const winner = owners.get(wanted);
-    if (!wanted) bindings.set(action.id, { keystroke: "", unbound: { kind: "none" } });
+    if (!wanted)
+      drafts.set(action.id, {
+        keystroke: "",
+        unbound: { kind: "none" },
+      });
     else if (reserved)
-      bindings.set(action.id, {
+      drafts.set(action.id, {
         keystroke: "",
         unbound: { kind: "reserved", wanted, message: reserved.message },
       });
     else if (winner)
-      bindings.set(action.id, { keystroke: "", unbound: { kind: "conflict", wanted, winner } });
+      drafts.set(action.id, {
+        keystroke: "",
+        unbound: { kind: "conflict", wanted, winner },
+      });
     else bind(action.id, wanted);
   }
-  resolvedCache = { shortcuts, actions, bindings };
+  const builtIns: string[] = [];
+  const commands: string[] = [];
+  for (const action of actions) {
+    const bound = drafts.get(action.id)?.keystroke;
+    if (bound) (action.command ? commands : builtIns).push(bound);
+  }
+  const bindings = new Map<string, ResolvedBinding>();
+  for (const action of actions) {
+    const draft = drafts.get(action.id)!;
+    const terminalKeystroke = terminalChord(
+      draft.keystroke,
+      { builtIns, commands },
+      !!action.command,
+    );
+    bindings.set(action.id, { ...draft, terminalKeystroke });
+  }
+  resolvedCache = { shortcuts, actions, mac, bindings };
   return bindings;
 }
 

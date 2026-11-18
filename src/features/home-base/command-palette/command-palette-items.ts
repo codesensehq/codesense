@@ -14,7 +14,7 @@
 // appears in a name/path); the dialog carries the dispatch kind in `id`.
 
 import type { QuickPickerItem } from "@/features/viewer/components/quick-open-dialog";
-import { basename } from "@/shared/lib/basename";
+import { basename } from "@/shared/lib/path";
 import type { Team } from "@/shared/types/domain";
 
 // NUL — never appears in ids/paths; a safe field separator (mirrors

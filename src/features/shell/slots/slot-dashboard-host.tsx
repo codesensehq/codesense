@@ -53,6 +53,7 @@ import { nativeSurface, SLOT_REGISTRY, type SlotId } from "./slot-registry";
 import { SlotFallbackStrip, type SlotFailure } from "./slot-fallback-strip";
 import { NativeSlotProvider } from "./native-slot-context";
 import { useSlotDebugTrace, type SlotRefreshTrigger } from "./slot-debug";
+import { basename } from "@/shared/lib/path";
 
 type PaneFrame = {
   attempt: number;
@@ -1073,7 +1074,7 @@ export function SlotDashboardHost({
         badge: entry.declaration?.badge,
         contentRoot: attemptRoot.current.contentRoot,
         panesDir: entry.panesDir,
-        fileName: entry.path.split("/").pop() ?? `${entry.id}.html`,
+        fileName: basename(entry.path) || `${entry.id}.html`,
         dashboardRef: entry.dashboardRef,
         ...(entry.dashboardRef?.scope === "built-in"
           ? { builtinTeam: attemptRoot.current.builtinTeam ?? recovery.team }

@@ -33,7 +33,7 @@ import {
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import { basename } from "@/shared/lib/basename";
+import { basename } from "@/shared/lib/path";
 import { useTrailingDebounce } from "@/shared/lib/use-trailing-debounce";
 import { useRecentActivity } from "@/shared/lib/use-recent-activity";
 import type { SourceDiffMode, Workspace } from "@/shared/stores/viewer-store";
@@ -68,7 +68,7 @@ import { STATUS_LABEL, StatusChip } from "@/features/git-sync/components/file-st
 import type { PublishFile } from "@/features/git-sync/lib/types";
 import { routeFileToContext, unrouteFileFromContext } from "@/tauri/commands";
 import { useEffectiveShortcut } from "@/shared/stores/shortcuts-store";
-import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
+import { formatKeystrokeDisplay, hasCommandModifier } from "@/shared/lib/shortcuts/keystroke";
 import { useMachine } from "@/features/machines/stores/machines-store";
 
 import {
@@ -888,7 +888,7 @@ export function SourceDiffOverlay({
   const structuralAvailable = paneFile != null && isStructuralLanguage(detectLanguageId(paneFile));
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (hasCommandModifier(e)) return;
     const target = e.target as HTMLElement | null;
     if (
       target &&

@@ -161,7 +161,12 @@ import {
   type AgentStatus,
 } from "@/shared/lib/agent-status-config";
 import { type FaceSource } from "@/shared/lib/avatar-packs";
-import { isMac } from "@/shared/lib/shortcuts/keystroke";
+import {
+  hasAnyModifier,
+  hasCommandModifier,
+  hasMod,
+  isMac,
+} from "@/shared/lib/shortcuts/keystroke";
 import {
   countMarks,
   MARK_WORDS,
@@ -892,13 +897,7 @@ export function AgentsTreeView({
     return focusLookAgain();
   }, [focusWant, focusReq.look, paneRows, virtualizer, focusDone, focusLookAgain]);
   const onListKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (
-      (e.key === "ArrowLeft" || e.key === "ArrowRight") &&
-      !e.altKey &&
-      !e.metaKey &&
-      !e.ctrlKey &&
-      !e.shiftKey
-    ) {
+    if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !hasAnyModifier(e)) {
       const focused = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>(
         "[data-row-index]",
       );
@@ -919,7 +918,7 @@ export function AgentsTreeView({
     }
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
     // Alt+Up/Down on a workspace card's name moves the card one place among its team's cards.
-    if (e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
+    if (e.altKey && !hasMod(e) && !e.shiftKey) {
       const name = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>(
         ".ag-ws-name",
       );
@@ -2201,7 +2200,7 @@ function radioGroupKeys<T extends string>(
       : e.key === "ArrowUp" || e.key === "ArrowLeft"
         ? -1
         : 0;
-  if (step === 0 || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (step === 0 || hasCommandModifier(e)) return;
   e.preventDefault();
   const at = options.findIndex((o) => o.id === current);
   // A value none of the options holds steps onto the first (down) or the last (up).
@@ -3234,7 +3233,7 @@ const AgentListRow = memo(function AgentListRow({
               onReveal(row);
             }}
             onKeyDown={(e) => {
-              const plainKey = !e.metaKey && !e.ctrlKey && !e.altKey;
+              const plainKey = !hasCommandModifier(e);
               // M opens the inbox chat (offline agents too: their inbox keeps the mail).
               if (inboxEligible && onChat && plainKey && /^m$/i.test(e.key)) {
                 e.preventDefault();

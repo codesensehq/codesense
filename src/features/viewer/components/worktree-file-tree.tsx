@@ -7,10 +7,11 @@ import type { FileEntry, ScratchOverlayFile } from "@/tauri/commands";
 import { useRovingTreeNav, type RovingTreeRow } from "@/shared/hooks/use-roving-tree-nav";
 
 import { useWorktreeChildrenByPath } from "../lib/use-worktree-children-by-path";
-import { relativeToRoot, type ScratchOverlayIndex } from "../lib/use-scratch-overlay-files";
+import type { ScratchOverlayIndex } from "../lib/use-scratch-overlay-files";
 import { ScratchTreeBadge } from "./scratch-file-badge";
 import { isNoiseDir } from "../lib/worktree-file-view";
 import { FileGlyph } from "./worktree-editor/file-glyph";
+import { join, relative, split } from "@/shared/lib/path";
 
 export interface WorktreeFileSelection {
   /** Absolute path of the selected file. */
@@ -265,7 +266,7 @@ export function WorktreeFileTree({
         const selected = entry.path === selectedPath;
         const noise = isNoiseDir(entry.name, entry.is_dir);
         const expanded = entry.is_dir && expandedPaths.has(entry.path);
-        const rel = entry.is_dir ? null : relativeToRoot(rootPath, entry.path);
+        const rel = entry.is_dir ? null : relative(rootPath, entry.path);
         const scratch = rel === null ? undefined : scratchFiles?.get(rel);
         const row = (
           <button
@@ -322,12 +323,6 @@ export function WorktreeFileTree({
 /** The folders between `rootPath` and `path`, nearest the root first; empty
  *  for a path outside the root. */
 function ancestorDirs(rootPath: string, path: string): string[] {
-  if (!path.startsWith(`${rootPath}/`)) return [];
-  const out: string[] = [];
-  let at = path.indexOf("/", rootPath.length + 1);
-  while (at !== -1) {
-    out.push(path.slice(0, at));
-    at = path.indexOf("/", at + 1);
-  }
-  return out;
+  const dirs = split(relative(rootPath, path) ?? "").slice(0, -1);
+  return dirs.map((_, i) => join(rootPath, ...dirs.slice(0, i + 1)));
 }

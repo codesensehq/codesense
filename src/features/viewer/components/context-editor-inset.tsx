@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Columns2, Save, TriangleAlert } from "lucide-react";
 
-import { basename } from "@/shared/lib/basename";
+import { basename } from "@/shared/lib/path";
 import { cn } from "@/lib/utils";
 import { CodeEditor, CodeMergeView, useEditorAffordances } from "@/shared/components/code-editor";
 import type { CodeEditorHandle, CodeMergeViewHandle } from "@/shared/components/code-editor";

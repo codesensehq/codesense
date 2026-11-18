@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useRef } from "react";
+import { hasCommandModifier } from "@/shared/lib/shortcuts/keystroke";
 
 /** What the arrows land on: every enabled control in the menu, minus the mouse-only
  *  extras marked `data-roving-skip` (each has a keyboard path on its row instead). */
@@ -54,7 +55,7 @@ export function useMenuRoving() {
     if (e.key === "Home") return go(0);
     if (e.key === "End") return go(items.length - 1);
 
-    if (e.key.length !== 1 || e.key === " " || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key.length !== 1 || e.key === " " || hasCommandModifier(e)) return;
     const now = Date.now();
     const prefix =
       (now - typed.current.at < TYPEAHEAD_MS ? typed.current.text : "") + e.key.toLowerCase();

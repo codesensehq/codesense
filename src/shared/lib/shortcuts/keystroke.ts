@@ -107,6 +107,69 @@ export function isMac(): boolean {
   );
 }
 
+/** The four modifier flags of a keyboard or mouse event; a flag left out counts as not held. */
+export type ModifierState = Partial<
+  Pick<KeyboardEvent | MouseEvent, "metaKey" | "ctrlKey" | "altKey" | "shiftKey">
+>;
+
+/** Meta or Ctrl: the `CmdOrCtrl` modifier of a keyboard shortcut. */
+export function hasMod(e: ModifierState): boolean {
+  return !!(e.metaKey || e.ctrlKey);
+}
+
+/** The Meta key itself: a macOS Cmd feature that stays Cmd-only. */
+export function hasCmd(e: ModifierState): boolean {
+  return !!e.metaKey;
+}
+
+/** Meta on macOS, Ctrl elsewhere: the platform modifier for mouse gestures such as Cmd+click. */
+export function hasPlatformMod(e: ModifierState): boolean {
+  return !!(isMac() ? e.metaKey : e.ctrlKey);
+}
+
+/** Any of Meta, Ctrl, Alt or Shift is held. */
+export function hasAnyModifier(e: ModifierState): boolean {
+  return !!(e.metaKey || e.ctrlKey || e.altKey || e.shiftKey);
+}
+
+/** Any of Meta, Ctrl or Alt is held (Shift alone does not make a command chord). */
+export function hasCommandModifier(e: ModifierState): boolean {
+  return !!(e.metaKey || e.ctrlKey || e.altKey);
+}
+
+/**
+ * The four modifier flags out of a posted message (a frame's key data), or `null` when
+ * any of them is not a boolean.
+ */
+export function modifiersFrom(
+  data: Record<string, unknown>,
+): Pick<KeyboardEvent, "metaKey" | "ctrlKey" | "altKey" | "shiftKey"> | null {
+  const { metaKey, ctrlKey, altKey, shiftKey } = data;
+  if (
+    typeof metaKey !== "boolean" ||
+    typeof ctrlKey !== "boolean" ||
+    typeof altKey !== "boolean" ||
+    typeof shiftKey !== "boolean"
+  )
+    return null;
+  return { metaKey, ctrlKey, altKey, shiftKey };
+}
+
+/** Whether `key` is a Latin letter; a sign or a letter of another script is not. */
+export function isLatinLetter(key: string): boolean {
+  return /^\p{Script=Latin}$/u.test(key);
+}
+
+/**
+ * Whether `e` types a letter that is not Latin on the physical key `code` (a Cyrillic or Greek
+ * layout's letter on W's place). A Latin letter or a sign there is that layout's own key, never
+ * the key `code` names on a QWERTY board.
+ */
+export function isNonLatinLetterOn(e: { key?: string; code?: string }, code: string): boolean {
+  const key = typeof e.key === "string" ? e.key.toLowerCase() : "";
+  return e.code === code && /^\p{L}$/u.test(key) && !isLatinLetter(key);
+}
+
 /** Parse a canonical keystroke string into its parts. Throws on invalid input. */
 export function parseKeystroke(str: string): KeystrokeParts {
   const segments = str.split("+").map((s) => s.trim());
@@ -240,12 +303,14 @@ export function matchesKeystroke(
   } catch {
     return false;
   }
+  // Off macOS, AltGr reports as Ctrl+Alt while it types a character: never a shortcut.
+  if (!isMac() && event.getModifierState?.("AltGraph")) return false;
   // `CmdOrCtrl` matches either Meta or Ctrl — Tauri / Electron's
   // `CommandOrControl` accelerator convention. A strict per-platform
   // check via `isMac()` breaks under Playwright (Desktop Chrome's UA
   // reports `Win32` regardless of host OS) and is also user-hostile
   // for users on remapped keyboards.
-  const actualCmdOrCtrl = event.metaKey || event.ctrlKey;
+  const actualCmdOrCtrl = hasMod(event);
   if (actualCmdOrCtrl !== expected.cmdOrCtrl) return false;
   if (options.macCmdOnly && expected.cmdOrCtrl && isMac() && (!event.metaKey || event.ctrlKey))
     return false;

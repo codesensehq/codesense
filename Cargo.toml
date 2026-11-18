@@ -3,6 +3,7 @@ members = [
     "src-tauri",
     "src-tauri/crates/codesense-guards",
     "src-tauri/crates/codesense-bridge",
+    "src-tauri/crates/codesense-platform",
     "src-tauri/crates/codesense-host-proto",
     "src-tauri/crates/codesense-pty-core",
     "src-tauri/crates/codesense-fs-core",

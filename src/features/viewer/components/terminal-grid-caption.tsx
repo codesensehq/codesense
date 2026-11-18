@@ -4,7 +4,7 @@ import { useEffect, useId, useRef, type KeyboardEvent, type MouseEvent } from "r
 import { AlarmClock, Code, GitCompareArrows, Inbox, PanelTopOpen, X } from "lucide-react";
 import type { TerminalTab } from "@/features/viewer/lib/cli-workspace/store/viewer-access";
 import { InfoTip } from "@/components/ui/tooltip";
-import { isMac } from "@/shared/lib/shortcuts/keystroke";
+import { hasAnyModifier, isMac } from "@/shared/lib/shortcuts/keystroke";
 import { tabCloseTooltip, useCloseVerb } from "../lib/terminal-close";
 import { ScopedStatusMark } from "./session-status-mark";
 import { MiddleTruncate } from "./middle-truncate";
@@ -224,7 +224,7 @@ export function TerminalGridCaption({
     focusCellTerminal(e.currentTarget);
   };
   const onKeyDown = (e: KeyboardEvent<HTMLButtonElement>) => {
-    if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+    if (hasAnyModifier(e)) return;
     if (e.key === "Delete" || (e.key === "Backspace" && isMac())) {
       e.preventDefault();
       e.stopPropagation();

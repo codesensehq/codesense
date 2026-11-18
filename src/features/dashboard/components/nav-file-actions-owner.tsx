@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { getRepoColor } from "@/shared/lib/pipeline-graph/epic-colors";
 import { useNavModelProjection } from "../lib/use-nav-model-projection";
 import { fileSurfaceCall } from "@/tauri/commands";
-import { dirname } from "@/shared/lib/basename";
+import { dirname } from "@/shared/lib/path";
 import { useAgentRows } from "@/features/agents/lib/agent-names";
 import { liveHub } from "@/features/dashboard/lib/live-hub";
 import { registerNativeMenu, type NativeMenuRequest } from "@/features/shell/native-menu-openers";
@@ -99,6 +99,7 @@ import {
 } from "@/features/git-sync/components/attach-to-node-picker";
 import { useAttachDocToNode } from "@/features/dashboard/lib/use-attach-doc-to-node";
 import { getViewerFileType } from "@/shared/lib/viewer-file-type";
+import { hasPlatformMod } from "@/shared/lib/shortcuts/keystroke";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -740,7 +741,7 @@ export function NavFileActionsOwner({
                     <span
                       className="font-semibold whitespace-nowrap cursor-default"
                       onClick={(e: React.MouseEvent) => {
-                        if (e.metaKey) {
+                        if (hasPlatformMod(e)) {
                           sendTextToTerminal(tree.absoluteDirPath);
                         }
                       }}
@@ -775,7 +776,7 @@ export function NavFileActionsOwner({
               className="truncate min-w-0 font-semibold cursor-default"
               title={drillLeafLabel}
               onClick={(e: React.MouseEvent) => {
-                if (e.metaKey) sendTextToTerminal(tree.absoluteDirPath);
+                if (hasPlatformMod(e)) sendTextToTerminal(tree.absoluteDirPath);
               }}
             >
               {drillLeafLabel}

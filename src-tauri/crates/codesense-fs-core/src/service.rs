@@ -130,6 +130,7 @@ impl FsGate for RootSetFs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codesense_platform::testutil::symlink_or_skip;
     use std::fs;
     use tempfile::tempdir;
 
@@ -191,7 +192,6 @@ mod tests {
         assert_eq!(service.list(&root.join("..")).unwrap_err(), DENIED);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_symlink_outside_the_roots_pointing_in_is_denied() {
         // The requested path is judged too, not only where it resolves.
@@ -199,20 +199,23 @@ mod tests {
         fs::write(root.path().join("a.md"), "alpha").unwrap();
         let elsewhere = tempdir().unwrap();
         let link = elsewhere.path().join("into-root");
-        std::os::unix::fs::symlink(root.path(), &link).unwrap();
+        if !symlink_or_skip(root.path(), &link) {
+            return;
+        }
         let service = RootSetFs::new(vec![root.path().to_path_buf()]);
 
         assert_eq!(service.list(&link).unwrap_err(), DENIED);
         assert_eq!(service.read(&link.join("a.md")).unwrap_err(), DENIED);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_symlink_under_a_root_escaping_it_is_denied() {
         let root = tempdir().unwrap();
         let outside = tempdir().unwrap();
         fs::write(outside.path().join("b.md"), "beta").unwrap();
-        std::os::unix::fs::symlink(outside.path(), root.path().join("escape")).unwrap();
+        if !symlink_or_skip(outside.path(), root.path().join("escape")) {
+            return;
+        }
         let service = RootSetFs::new(vec![root.path().to_path_buf()]);
 
         // The link itself still lists as a directory entry of the root…
@@ -234,13 +237,14 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_symlink_under_a_root_staying_inside_it_is_followed() {
         let root = tempdir().unwrap();
         fs::create_dir_all(root.path().join("real")).unwrap();
         fs::write(root.path().join("real/c.md"), "gamma").unwrap();
-        std::os::unix::fs::symlink(root.path().join("real"), root.path().join("alias")).unwrap();
+        if !symlink_or_skip(root.path().join("real"), root.path().join("alias")) {
+            return;
+        }
         let service = RootSetFs::new(vec![root.path().to_path_buf()]);
 
         assert_eq!(
@@ -249,12 +253,13 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_missing_leaf_under_an_escaping_symlink_is_denied() {
         let root = tempdir().unwrap();
         let outside = tempdir().unwrap();
-        std::os::unix::fs::symlink(outside.path(), root.path().join("escape")).unwrap();
+        if !symlink_or_skip(outside.path(), root.path().join("escape")) {
+            return;
+        }
         let service = RootSetFs::new(vec![root.path().to_path_buf()]);
 
         assert_eq!(
@@ -265,14 +270,15 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_canonically_spelled_path_under_an_aliased_root_is_admitted() {
         let real = tempdir().unwrap();
         fs::write(real.path().join("a.md"), "alpha").unwrap();
         let aliases = tempdir().unwrap();
         let alias = aliases.path().join("alias");
-        std::os::unix::fs::symlink(real.path(), &alias).unwrap();
+        if !symlink_or_skip(real.path(), &alias) {
+            return;
+        }
         let service = RootSetFs::new(vec![alias.clone()]);
 
         let canonical = real.path().canonicalize().unwrap().join("a.md");
@@ -305,15 +311,18 @@ mod tests {
         assert_eq!(service.list(&cwd).unwrap_err(), DENIED);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_secret_reached_through_an_innocent_alias_is_denied() {
         let root = tempdir().unwrap();
         fs::write(root.path().join(".env"), "SECRET=1").unwrap();
         fs::create_dir_all(root.path().join(".git")).unwrap();
         fs::write(root.path().join(".git/config"), "[core]").unwrap();
-        std::os::unix::fs::symlink(root.path().join(".env"), root.path().join("notes.md")).unwrap();
-        std::os::unix::fs::symlink(root.path().join(".git"), root.path().join("meta")).unwrap();
+        if !symlink_or_skip(root.path().join(".env"), root.path().join("notes.md")) {
+            return;
+        }
+        if !symlink_or_skip(root.path().join(".git"), root.path().join("meta")) {
+            return;
+        }
         let service = RootSetFs::new(vec![root.path().to_path_buf()]);
 
         assert_eq!(

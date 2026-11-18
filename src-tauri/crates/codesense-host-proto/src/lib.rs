@@ -38,11 +38,14 @@ pub use hello::{
     XTERM_VERSION,
 };
 
+// Unix only until the local IPC layer lands: it passes descriptors over a Unix socket.
 #[cfg(unix)]
 pub mod broker;
 pub mod executor;
 pub mod reverse_mcp;
 
+// Unix only until the local IPC layer lands: its launch descriptor names a Unix socket.
+#[cfg(unix)]
 pub mod scoped_mcp;
 
 #[cfg(any(test, feature = "test-support"))]

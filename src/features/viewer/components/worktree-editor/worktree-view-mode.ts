@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { getViewerFileType, type ViewerFileType } from "@/shared/lib/viewer-file-type";
+import { hasMod } from "@/shared/lib/shortcuts/keystroke";
 
 /** How a renderable worktree file is shown: through the viewer, or as text. */
 export type WorktreeViewMode = "rendered" | "source";
@@ -22,7 +23,7 @@ export function isViewToggleChord(key: {
   shiftKey?: boolean;
   altKey?: boolean;
 }): boolean {
-  return !!(key.metaKey || key.ctrlKey) && !!key.shiftKey && !key.altKey && key.code === "KeyV";
+  return hasMod(key) && !!key.shiftKey && !key.altKey && key.code === "KeyV";
 }
 
 /** The viewer type of `path` when the viewer can render it, else `null`. */

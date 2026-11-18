@@ -10,6 +10,7 @@ import { CODESENSE_DOCS_DISPLAY_NAME, isCodesenseDocs } from "@/shared/lib/codes
 import type { Org, Team } from "@/shared/types/domain";
 
 import { contentRelativePath, isContentRelative, teamContentRoot } from "./team-landing-page";
+import { basename } from "@/shared/lib/path";
 
 export type StarterPageChoice =
   /** Not a file of any team's content (a source repo file, a virtual tab): no item. */
@@ -25,7 +26,7 @@ export type StarterPageChoice =
 /** A file node by its name: a basename with an extension, not a dotfile. Folders
  *  (epic and plain directories) carry no starter page item. */
 export function looksLikeFile(path: string): boolean {
-  const name = path.replace(/\/+$/, "").split("/").pop() ?? "";
+  const name = basename(path);
   return /^[^.].*\.[^./]+$/.test(name);
 }
 
@@ -45,7 +46,7 @@ export function starterPageChoice(input: {
   const { org, team, path, effectivePath } = input;
   const contentRoot = teamContentRoot(org.org_root, team.name);
   const rel = contentRelativePath(path, contentRoot);
-  const name = path.replace(/\/+$/, "").split("/").pop() ?? "";
+  const name = basename(path);
   const isFile = input.isFile ?? (looksLikeFile(path) || name.startsWith("."));
   if (rel === null) {
     if (!isFile) return { kind: "hidden" };

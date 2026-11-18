@@ -83,3 +83,28 @@ describe("tabLabels — a root-level file sharing a nested file's name", () => {
     expect(labels.get("src/index.ts")).toEqual({ name: "index.ts", hint: "src" });
   });
 });
+
+describe("tabLabels — Windows paths", () => {
+  it("names a tab by its file and hints the parent folder for duplicates", () => {
+    const labels = tabLabels([
+      "C:\\Users\\a\\repo\\src\\a\\index.ts",
+      "C:\\Users\\a\\repo\\src\\b\\index.ts",
+      "C:\\Users\\a\\repo\\x.ts",
+    ]);
+    expect(labels.get("C:\\Users\\a\\repo\\src\\a\\index.ts")).toEqual({
+      name: "index.ts",
+      hint: "a",
+    });
+    expect(labels.get("C:\\Users\\a\\repo\\src\\b\\index.ts")).toEqual({
+      name: "index.ts",
+      hint: "b",
+    });
+    expect(labels.get("C:\\Users\\a\\repo\\x.ts")).toEqual({ name: "x.ts", hint: null });
+  });
+
+  it("gives a root-level duplicate no hint", () => {
+    const labels = tabLabels(["x.ts", "src\\x.ts"]);
+    expect(labels.get("x.ts")).toEqual({ name: "x.ts", hint: null });
+    expect(labels.get("src\\x.ts")).toEqual({ name: "x.ts", hint: "src" });
+  });
+});

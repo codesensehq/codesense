@@ -70,6 +70,7 @@ import {
   createTerminalKeyHandler,
   type TerminalKeyHandler,
 } from "@/shared/lib/terminal-key-handler";
+import { copySelectionToClipboard, pasteFromClipboard } from "./terminal-clipboard";
 import { rememberTerminalSize } from "@/shared/lib/terminal-open";
 import { referenceBuffer, type ReferenceBuffer } from "./buffer-dump";
 import { onPrivateAuthorityRetired } from "@/shared/lib/private-terminal-authority";
@@ -1097,6 +1098,8 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
         scrollToBottom: () => term.scrollToBottom(),
         scrollLines: (n) => term.scrollLines(n),
         scrollPages: (n) => term.scrollPages(n),
+        copySelection: () => void copySelectionToClipboard(term),
+        paste: () => void pasteFromClipboard(term),
       },
     );
     term.attachCustomKeyEventHandler(keys.handler);

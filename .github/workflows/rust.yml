@@ -3,10 +3,10 @@ name: Rust tests
 
 on:
   pull_request:
-    # The defaults, plus labeled: adding ci:macos starts the macOS job (below) on the pull request.
+    # The defaults, plus labeled: adding ci:macos or ci:windows starts that OS's job (below) on the pull request.
     types: [opened, synchronize, reopened, labeled]
   merge_group:
-  # The macOS job skips merge groups, so it runs on each push to main instead, after the merge.
+  # The macOS and Windows jobs skip merge groups, so they run on each push to main instead, after the merge.
   # The nightly run on main saves the caches and tracks flaky tests.
   push:
     branches: [main]
@@ -18,6 +18,7 @@ permissions: {}
 
 concurrency:
   # A label other than ci:macos gets a group of its own, so it never cancels the pull request's run.
+  # ci:windows is such a label: its run must not cancel a ci:macos run either.
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci:macos' && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
@@ -134,7 +135,7 @@ jobs:
       CARGO_INCREMENTAL: "0"
       RUST_BACKTRACE: "1"
       CARGO_TERM_COLOR: always
-      RUST_PACKAGES: -p codesense-guards -p codesense -p codesense-host-proto -p codesense-pty-core -p codesense-fs-core -p codesense-session-server
+      RUST_PACKAGES: -p codesense-guards -p codesense -p codesense-platform -p codesense-host-proto -p codesense-pty-core -p codesense-fs-core -p codesense-session-server
       PART: ${{ matrix.part }}
     steps:
       # All paths below are relative to this repository's checkout.
@@ -415,7 +416,7 @@ jobs:
       CARGO_TERM_COLOR: always
       # Only the crates that pass on Linux today; macOS also runs pty-core,
       # session-server, guards and the desktop app.
-      RUST_PACKAGES: -p codesense-host-proto -p codesense-fs-core
+      RUST_PACKAGES: -p codesense-platform -p codesense-host-proto -p codesense-fs-core
     steps:
       # All paths below are relative to this repository's checkout.
       - name: Check out source
@@ -631,6 +632,48 @@ jobs:
               --run-ignored all \
               -E "test(~secret_service_tests) | test(~credential_store::tests::linux_)"
           '
+
+  rust-check-windows:
+    name: Rust check (Windows)
+    # A compile check of the crates that build on Windows, plus the platform crate's tests. Not a
+    # required check: like the macOS jobs it never runs on a merge group, runs after the merge on
+    # each push to main that changes something Rust can see, always on the nightly schedule and
+    # workflow_dispatch, and on a pull request only with the ci:windows label (never a Dependabot
+    # pull request, and not again when another label is added). The crate set grows as crates port.
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' && github.event_name != 'merge_group' && (github.event_name != 'pull_request' || (github.event.pull_request.user.login != 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'ci:windows') && (github.event.action != 'labeled' || github.event.label.name == 'ci:windows'))) }}
+    runs-on: windows-2025
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUST_BACKTRACE: "1"
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Keep line endings as committed
+        # Before checkout, so the checkout keeps LF and tests that read source files see what Linux sees.
+        run: git config --global core.autocrlf false
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Rust
+        # Matches ci.yml; rustup's proxies read the channel in rust-toolchain.toml.
+        run: rustup toolchain install stable --profile minimal
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: rust-windows
+          save-if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - name: Check the Windows crates
+        run: cargo check --locked -p codesense-platform -p codesense-host-proto -p codesense-fs-core --all-targets
+      - name: Test the platform crate
+        run: cargo test --locked -p codesense-platform
 
   flaky-issues:
     name: Track flaky Rust tests
