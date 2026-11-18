@@ -168,11 +168,13 @@ mod tests {
     #[test]
     fn the_walk_stops_at_init_a_gone_parent_a_self_parent_and_its_depth() {
         let root = process(10, 100, 1);
+        let unread = |_: u32| -> Option<Identity> { unreachable!("the walk stops before reading") };
         for may_be_stale in [true, false] {
-            assert!(!walk(process(30, 300, 1), root, may_be_stale, &[]));
-            assert!(!walk(process(30, 300, 0), root, may_be_stale, &[]));
+            for parent in [1, 0, 30] {
+                let peer = process(30, 300, parent);
+                assert!(!descends_with(peer, root, may_be_stale, unread));
+            }
             assert!(!walk(process(30, 300, 20), root, may_be_stale, &[]));
-            assert!(!walk(process(30, 300, 30), root, may_be_stale, &[]));
             let ring = [process(40, 0, 41), process(41, 0, 40)];
             assert!(!walk(ring[0], root, may_be_stale, &ring));
         }
