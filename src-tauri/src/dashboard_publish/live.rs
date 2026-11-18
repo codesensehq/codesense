@@ -3422,44 +3422,125 @@ mod tests {
         link.abort();
     }
 
-    /// A keychain that fails every read, as a locked one does, and counts the reads.
-    #[derive(Default)]
-    struct LockedStore {
+    /// A keychain whose reads follow a script and then fail, as a locked one does. It counts
+    /// the reads.
+    struct ScriptedStore {
+        script: Mutex<std::collections::VecDeque<Result<Option<Secret>, CredentialError>>>,
         reads: std::sync::atomic::AtomicUsize,
     }
 
-    impl CredentialStore for LockedStore {
+    impl ScriptedStore {
+        fn new(
+            script: impl IntoIterator<Item = Result<Option<Secret>, CredentialError>>,
+        ) -> Arc<Self> {
+            Arc::new(Self {
+                script: Mutex::new(script.into_iter().collect()),
+                reads: Default::default(),
+            })
+        }
+        fn reads(&self) -> usize {
+            self.reads.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl CredentialStore for ScriptedStore {
         fn get(&self, _: &str) -> Result<Option<Secret>, CredentialError> {
             self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Err("keychain locked".into())
+            let next = self.script.lock().unwrap().pop_front();
+            next.unwrap_or_else(|| Err("keychain locked".into()))
         }
         fn set(&self, _: &str, _: &Secret) -> Result<(), CredentialError> {
             Err("keychain locked".into())
         }
     }
 
-    /// A token read that fails is retried with a growing delay, not on every pass: a locked
-    /// keyring can prompt each time.
-    #[tokio::test(start_paused = true)]
-    async fn a_failed_token_read_backs_off_instead_of_repeating_every_pass() {
-        let data = tempfile::tempdir().unwrap();
-        let _folder = live_dashboard_as(
-            data.path(),
-            "live-locked",
-            "live:\n  queries: all\n",
-            Some(LiveQueries::All),
-        );
-        let relay = Relay::new(Mode::Answer);
-        let store = Arc::new(LockedStore::default());
+    fn locked() -> Result<Option<Secret>, CredentialError> {
+        Err("keychain locked".into())
+    }
+
+    fn start_with(
+        data: &Path,
+        relay: &Relay,
+        store: &Arc<ScriptedStore>,
+    ) -> tokio::task::JoinHandle<()> {
         let shared: Arc<dyn CredentialStore> = store.clone();
-        let link = tokio::spawn(LiveLink::new(data.path(), relay.clone(), shared).run());
-        sleep(secs(120)).await;
-        let reads = store.reads.load(std::sync::atomic::Ordering::SeqCst);
+        tokio::spawn(LiveLink::new(data, relay.clone(), shared).run())
+    }
+
+    fn live_folder(data: &Path, id: &str) -> tempfile::TempDir {
+        live_dashboard_as(data, id, "live:\n  queries: all\n", Some(LiveQueries::All))
+    }
+
+    /// A token read that fails waits at least a pass (not the connect backoff's 1 s, 2 s, 4 s:
+    /// 4 reads by 8.4 s without the floor, 2 with it), then waits longer each time. A locked
+    /// keyring can prompt on every read.
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_token_read_waits_a_pass_and_then_longer() {
+        let data = tempfile::tempdir().unwrap();
+        let _folder = live_folder(data.path(), "live-locked");
+        let relay = Relay::new(Mode::Answer);
+        let store = ScriptedStore::new([]);
+        let link = start_with(data.path(), &relay, &store);
+        sleep(secs(9)).await;
+        assert!(store.reads() <= 2, "{} reads in 9 s", store.reads());
+        sleep(secs(111)).await;
         assert!(
-            (3..12).contains(&reads),
-            "{reads} reads in 120 s: a pass every {PASS:?} would be 24"
+            (3..12).contains(&store.reads()),
+            "{} reads in 120 s: a pass every {PASS:?} would be 24",
+            store.reads()
         );
         assert!(relay.attempts().is_empty());
+        link.abort();
+    }
+
+    /// Five failed reads grow the delay (the sixth wait is 25 s or more); then `good` is read,
+    /// and the reads after it are every pass again: three more within 17 s, nine in all. Without
+    /// the reset the next wait is at least 25 s, which is seven in all.
+    async fn reads_resume_every_pass_after(good: Result<Option<Secret>, CredentialError>) {
+        let data = tempfile::tempdir().unwrap();
+        let _folder = live_folder(data.path(), "live-recovered");
+        // A token is read, so the link dials, and the relay refuses.
+        let relay = Relay::new(Mode::Reject(500, "{}".into()));
+        let store = ScriptedStore::new([locked(), locked(), locked(), locked(), locked(), good]);
+        let link = start_with(data.path(), &relay, &store);
+        let mut waited = 0;
+        while store.reads() < 6 {
+            sleep(secs(1)).await;
+            waited += 1;
+            assert!(waited < 120, "the script never reached its good read");
+        }
+        sleep(secs(17)).await;
+        assert!(store.reads() >= 9, "{} reads in all", store.reads());
+        link.abort();
+    }
+
+    /// A read with no token resets the delay.
+    #[tokio::test(start_paused = true)]
+    async fn a_read_with_no_token_resets_the_token_read_delay() {
+        reads_resume_every_pass_after(Ok(None)).await;
+    }
+
+    /// So does a read that finds one.
+    #[tokio::test(start_paused = true)]
+    async fn a_read_with_a_token_resets_the_token_read_delay() {
+        reads_resume_every_pass_after(Ok(Some(Secret::new(TOKEN)))).await;
+    }
+
+    /// Failed token reads have a delay of their own: the connect backoff keeps growing (1 s,
+    /// 2 s, 4 s, ...) while a token is read each time, rather than being reset by those reads.
+    #[tokio::test(start_paused = true)]
+    async fn token_reads_leave_the_connect_backoff_alone() {
+        let data = tempfile::tempdir().unwrap();
+        let _folder = live_folder(data.path(), "live-refused-connect");
+        let relay = Relay::new(Mode::Reject(500, "{}".into()));
+        let store = ScriptedStore::new((0..100).map(|_| Ok(Some(Secret::new(TOKEN)))));
+        let link = start_with(data.path(), &relay, &store);
+        sleep(secs(30)).await;
+        let attempts = relay.attempts().len();
+        assert!(
+            (3..=6).contains(&attempts),
+            "{attempts} connect attempts in 30 s: the backoff did not grow"
+        );
         link.abort();
     }
 
