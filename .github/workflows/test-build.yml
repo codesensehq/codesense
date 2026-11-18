@@ -125,12 +125,13 @@ jobs:
           # shallow checkout of a branch lacks.
           fetch-depth: 0
       - name: Install system libraries
-        # What rust.yml's Linux check installs, plus file (linuxdeploy) and rpm (the rpm bundle).
+        # What rust.yml's Linux check installs, plus file (linuxdeploy), rpm (the rpm bundle) and
+        # libarchive-tools (bsdtar, to check the rpm's contents).
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev libxdo-dev libssl-dev \
-            file rpm
+            file rpm libarchive-tools
       - name: Set up pnpm
         uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - name: Set up Node
@@ -171,9 +172,8 @@ jobs:
             mkdir -p "$dir"
             case "$format" in
               deb) dpkg-deb -x target/release/bundle/deb/*.deb "$dir" ;;
-              # Through a file, not a pipe: cpio stops at the archive trailer, and rpm2cpio
-              # writing the rest into a closed pipe fails the step under pipefail.
-              rpm) rpm2cpio target/release/bundle/rpm/*.rpm > "$dir.cpio" && (cd "$dir" && cpio -idm < "$dir.cpio") ;;
+              # libarchive reads the rpm payload itself; rpm2cpio fails on this rpm without a message.
+              rpm) bsdtar -xf target/release/bundle/rpm/*.rpm -C "$dir" ;;
               appimage)
                 appimage=$(realpath target/release/bundle/appimage/*.AppImage)
                 chmod +x "$appimage"
