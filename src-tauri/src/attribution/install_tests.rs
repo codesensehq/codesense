@@ -168,9 +168,16 @@ fn supported_needs_a_pin_and_the_capability() {
         ("linux", "x86_64", true),
         ("linux", "aarch64", true),
         ("linux", "riscv64", false),
+        // A pin, but the capability is off.
+        ("windows", "x86_64", false),
+        ("windows", "aarch64", false),
         ("freebsd", "x86_64", false),
     ] {
         assert_eq!(supported(os, arch), expected, "{os} {arch}");
+    }
+    // The Windows targets above have a pin, so the capability alone turns them off.
+    for arch in ["x86_64", "aarch64"] {
+        assert!(pin_for("windows", arch).is_some(), "windows {arch}");
     }
 }
 #[test]
