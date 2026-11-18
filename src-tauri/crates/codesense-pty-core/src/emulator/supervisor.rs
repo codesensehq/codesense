@@ -698,6 +698,45 @@ mod tests {
     }
 
     #[test]
+    fn a_pin_is_an_owner_executable_copy_in_a_private_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let worker = dir.path().join("worker");
+        std::fs::write(&worker, b"worker bytes").unwrap();
+        let runtime = dir.path().join("run").join("emulator");
+        let pinned = pin(&worker, &runtime).unwrap();
+        assert_eq!(pinned.parent(), Some(runtime.as_path()));
+        let name = pinned.file_name().unwrap().to_str().unwrap();
+        let prefix = format!("{WORKER_BIN}.{}.{}.", machine_tag(), std::process::id());
+        assert!(name.starts_with(&prefix), "{name}");
+        assert_eq!(std::fs::read(&pinned).unwrap(), b"worker bytes");
+        for path in [dir.path().join("run"), runtime, pinned] {
+            expect_owner_rwx(&path);
+        }
+    }
+
+    #[test]
+    fn a_spawn_refused_for_another_reason_is_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing");
+        let error = spawn(&missing, dir.path()).unwrap_err();
+        let wanted = format!("spawn {}: ", missing.display());
+        assert!(error.starts_with(&wanted), "{error}");
+    }
+
+    /// Unix: mode 0700, for each directory the pin made and for the copy.
+    /// Windows: the copy and the directory exist.
+    fn expect_owner_rwx(path: &Path) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "{}", path.display());
+        }
+        #[cfg(not(unix))]
+        assert!(path.exists(), "{}", path.display());
+    }
+
+    #[test]
     fn a_worker_sees_only_the_allowed_environment() {
         assert!(worker_env().all(|(key, _)| WORKER_ENV.contains(&key)));
         assert!(!WORKER_ENV

@@ -327,6 +327,16 @@ mod tests {
         assert!(!tmp.path().join("nowhere.sh").exists(), "never followed");
     }
 
+    /// The right bytes without an execute bit are not an install: on Windows,
+    /// where a `.sh` file is never executable, `install` rewrites the hook.
+    #[test]
+    fn a_byte_identical_hook_without_an_execute_bit_is_not_installed() {
+        let tmp = tempdir().unwrap();
+        let dest = tmp.path().join(NAME);
+        fs::write(&dest, SOURCE).unwrap();
+        assert!(!is_installed(&dest, SOURCE));
+    }
+
     #[test]
     fn the_guard_command_is_guarded_like_the_status_command() {
         assert_eq!(

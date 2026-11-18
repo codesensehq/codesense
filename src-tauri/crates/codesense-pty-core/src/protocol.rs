@@ -2169,4 +2169,20 @@ mod tests {
         assert_ne!(socket_path(a), socket_path(b));
         assert_ne!(instance_id(a), instance_id(b));
     }
+
+    /// The probe answers from the singleton lock alone: no lock file or an
+    /// unheld one is no host, an exclusive holder is one, and the probe's own
+    /// shared lock is gone once it answers.
+    #[test]
+    fn host_running_answers_from_the_singleton_lock() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(host_running(root.path()), Ok(false), "no lock file");
+        let holder = std::fs::File::create(lock_path(root.path())).unwrap();
+        assert_eq!(host_running(root.path()), Ok(false), "an unheld lock");
+        assert!(holder.try_lock().is_ok(), "the probe released its lock");
+        assert_eq!(host_running(root.path()), Ok(true), "a held lock");
+        assert_eq!(host_running(root.path()), Ok(true), "still held");
+        holder.unlock().unwrap();
+        assert_eq!(host_running(root.path()), Ok(false), "released");
+    }
 }

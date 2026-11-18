@@ -563,5 +563,78 @@ pub mod removal {
             drop(removing);
             assert!(admit_spawn(cwd).is_ok());
         }
+
+        const LAUNCH_PENDING: &str =
+            "runningAgents: a launch is pending or removal is active; source retained";
+        const REMOVING: &str = "spawn refused: workspace is removing";
+
+        #[test]
+        fn each_side_is_refused_with_its_own_message() {
+            let dir = tempfile::tempdir().unwrap();
+            let worktree = dir.path().to_str().unwrap();
+            let pending = admit_spawn(worktree).unwrap();
+            assert_eq!(
+                begin_removal(worktree).err().as_deref(),
+                Some(LAUNCH_PENDING)
+            );
+            drop(pending);
+            let removing = begin_removal(worktree).unwrap();
+            assert_eq!(admit_spawn(worktree).err().as_deref(), Some(REMOVING));
+            drop(removing);
+        }
+
+        #[test]
+        fn a_held_exclusive_lock_refuses_a_launch_below_it() {
+            let dir = tempfile::tempdir().unwrap();
+            let nested = dir.path().join("a").join("b");
+            std::fs::create_dir_all(&nested).unwrap();
+            let removing = begin_removal(dir.path().to_str().unwrap()).unwrap();
+            for cwd in [dir.path(), nested.as_path()] {
+                assert_eq!(
+                    admit_spawn(cwd.to_str().unwrap()).err().as_deref(),
+                    Some(REMOVING),
+                    "{}",
+                    cwd.display()
+                );
+            }
+            drop(removing);
+            assert!(admit_spawn(nested.to_str().unwrap()).is_ok());
+        }
+
+        #[test]
+        fn concurrent_launches_in_one_workspace_both_proceed() {
+            let dir = tempfile::tempdir().unwrap();
+            let cwd = dir.path().to_str().unwrap();
+            let (first, second) = std::thread::scope(|scope| {
+                let first = scope.spawn(|| admit_spawn(cwd));
+                let second = scope.spawn(|| admit_spawn(cwd));
+                (first.join().unwrap(), second.join().unwrap())
+            });
+            let (first, second) = (first.unwrap(), second.unwrap());
+            assert!(begin_removal(cwd).is_err(), "both are pending");
+            drop(first);
+            assert!(begin_removal(cwd).is_err(), "one is still pending");
+            drop(second);
+            assert!(begin_removal(cwd).is_ok());
+        }
+
+        /// The fence's file is keyed by the user and the canonical path, so
+        /// the app and its sidecar, any spelling of the path, meet on it.
+        #[cfg(unix)]
+        #[test]
+        fn the_fence_is_a_private_file_per_user_and_canonical_path() {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = tempfile::tempdir().unwrap();
+            let admission = admit_spawn(dir.path().to_str().unwrap()).unwrap();
+            let canonical = dir.path().canonicalize().unwrap();
+            let key = blake3::hash(canonical.as_os_str().as_encoded_bytes());
+            // SAFETY: geteuid has no preconditions.
+            let uid = unsafe { libc::geteuid() };
+            let fence = format!("/tmp/codesense-worktree-{uid}-{key}.lock");
+            let mode = std::fs::metadata(&fence).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "{fence}");
+            drop(admission);
+            let _ = std::fs::remove_file(&fence);
+        }
     }
 }
