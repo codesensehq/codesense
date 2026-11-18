@@ -39,7 +39,7 @@ use windows_sys::Win32::System::Pipes::{
 
 use super::Endpoint;
 use crate::process::Pid;
-use crate::win::{wide, CurrentUser, SingleUserAcl};
+use crate::win::{wide, CurrentUser, SingleUserAcl, SECURITY_DESCRIPTOR_REVISION};
 
 /// The start of every CodeSense pipe name.
 const PIPE_PREFIX: &str = r"\\.\pipe\codesense-";
@@ -49,8 +49,6 @@ const BUFFER_SIZE: u32 = 64 * 1024;
 const BUSY_WAIT: Duration = Duration::from_secs(5);
 /// How often an async connection retries a busy pipe.
 const BUSY_RETRY: Duration = Duration::from_millis(10);
-/// `SECURITY_DESCRIPTOR_REVISION`.
-const SECURITY_DESCRIPTOR_REVISION: u32 = 1;
 
 pub(super) fn address(endpoint: &Endpoint) -> io::Result<PathBuf> {
     let suffix = match endpoint {

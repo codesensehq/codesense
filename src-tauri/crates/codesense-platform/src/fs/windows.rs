@@ -1,36 +1,42 @@
 // SPDX-License-Identifier: MIT
-//! Windows: a protected owner-only DACL, reparse-point refusal, std's rename
-//! with a bounded retry, std's file locks, and a copy where symlinks need
-//! Developer Mode.
+//! Windows: a protected owner-only DACL, set on a path or at creation; DACL
+//! and owner checks; volume serial and 128-bit file id; reparse-point refusal;
+//! std's rename with a bounded retry, std's file locks, and a copy where
+//! symlinks need Developer Mode.
 
 use std::ffi::{c_void, OsString};
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::OpenOptionsExt;
-use std::os::windows::io::AsRawHandle;
+use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::path::{Component, Path, PathBuf, Prefix};
 use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{
-    LocalFree, ERROR_ACCESS_DENIED, ERROR_LOCK_VIOLATION, ERROR_PRIVILEGE_NOT_HELD,
-    ERROR_SHARING_VIOLATION, ERROR_SUCCESS,
+    LocalFree, ERROR_ACCESS_DENIED, ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER,
+    ERROR_LOCK_VIOLATION, ERROR_NOT_SUPPORTED, ERROR_PRIVILEGE_NOT_HELD, ERROR_SHARING_VIOLATION,
+    ERROR_SUCCESS, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Security::Authorization::{
     GetSecurityInfo, SetNamedSecurityInfoW, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    EqualSid, GetAce, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, CONTAINER_INHERIT_ACE,
-    DACL_SECURITY_INFORMATION, OBJECT_INHERIT_ACE, PROTECTED_DACL_SECURITY_INFORMATION,
-    PSECURITY_DESCRIPTOR, PSID,
+    EqualSid, GetAce, InitializeSecurityDescriptor, SetSecurityDescriptorControl,
+    SetSecurityDescriptorDacl, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, CONTAINER_INHERIT_ACE,
+    DACL_SECURITY_INFORMATION, OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION,
+    PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
+    SECURITY_DESCRIPTOR, SE_DACL_PROTECTED,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    FILE_ALL_ACCESS, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
-    FILE_SHARE_READ, FILE_SHARE_WRITE,
+    CreateFileW, FileIdInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
+    BY_HANDLE_FILE_INFORMATION, CREATE_NEW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO, FILE_READ_ATTRIBUTES,
+    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_ALWAYS,
 };
 
-use super::{portable_name, Linked, ReplaceError};
-use crate::win::{wide, CurrentUser, SingleUserAcl};
+use super::{portable_name, Creation, FileId, Linked, Open, ReplaceError};
+use crate::win::{wide, CurrentUser, SingleUserAcl, SECURITY_DESCRIPTOR_REVISION};
 
 /// `ACCESS_ALLOWED_ACE_TYPE`: an ACE that grants access to one SID.
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
@@ -70,33 +76,81 @@ pub(super) fn set_owner_only(path: &Path, is_dir: bool) -> io::Result<()> {
     Ok(())
 }
 
+/// A file's owner and DACL, read from its open handle; the security
+/// descriptor holding them is freed on drop.
+struct Security {
+    descriptor: PSECURITY_DESCRIPTOR,
+    owner: PSID,
+    dacl: *mut ACL,
+}
+
+impl Security {
+    fn of(file: &File) -> io::Result<Self> {
+        let mut owner: PSID = std::ptr::null_mut();
+        let mut dacl: *mut ACL = std::ptr::null_mut();
+        let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        // SAFETY: the file's handle is open (read or write access includes
+        // READ_CONTROL); the out pointers are writable.
+        let status = unsafe {
+            GetSecurityInfo(
+                file.as_raw_handle(),
+                SE_FILE_OBJECT,
+                OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                &mut owner,
+                std::ptr::null_mut(),
+                &mut dacl,
+                std::ptr::null_mut(),
+                &mut descriptor,
+            )
+        };
+        if status != ERROR_SUCCESS {
+            return Err(io::Error::from_raw_os_error(status as i32));
+        }
+        Ok(Self {
+            descriptor,
+            owner,
+            dacl,
+        })
+    }
+
+    /// Whether the owner is `user`'s token user or its default owner.
+    fn owned_by(&self, user: &CurrentUser) -> bool {
+        // SAFETY: the owner SID is null or points into the descriptor `self`
+        // holds; the user's SIDs are valid while `user` lives.
+        unsafe { owner_is_current(self.owner, user.sid(), user.default_owner()) }
+    }
+}
+
+/// Whether `owner` is the token's user or its default owner (`TokenOwner`),
+/// and no other SID. An elevated token's default owner is
+/// `BUILTIN\Administrators`, which then owns the files it creates.
+///
+/// # Safety
+///
+/// `owner` is null or a valid SID; `token_user` and `token_owner` are valid
+/// SIDs.
+unsafe fn owner_is_current(owner: PSID, token_user: PSID, token_owner: PSID) -> bool {
+    !owner.is_null() && (EqualSid(owner, token_user) != 0 || EqualSid(owner, token_owner) != 0)
+}
+
+impl Drop for Security {
+    fn drop(&mut self) {
+        // SAFETY: the call allocated the descriptor with LocalAlloc; it is
+        // freed once, here.
+        unsafe { LocalFree(self.descriptor) };
+    }
+}
+
 pub(super) fn is_owner_only(file: &File) -> io::Result<bool> {
     let user = CurrentUser::read()?;
-    let mut dacl: *mut ACL = std::ptr::null_mut();
-    let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
-    // SAFETY: the file's handle is open (read access includes READ_CONTROL);
-    // the out pointers are writable.
-    let status = unsafe {
-        GetSecurityInfo(
-            file.as_raw_handle(),
-            SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &mut dacl,
-            std::ptr::null_mut(),
-            &mut descriptor,
-        )
-    };
-    if status != ERROR_SUCCESS {
-        return Err(io::Error::from_raw_os_error(status as i32));
-    }
-    // SAFETY: `dacl` is null or points into `descriptor`, which is freed
-    // only after this; the SID is valid while `user` lives.
-    let owner_only = unsafe { grants_only(dacl, user.sid()) };
-    // SAFETY: the call allocated the descriptor with LocalAlloc.
-    unsafe { LocalFree(descriptor) };
-    Ok(owner_only)
+    let security = Security::of(file)?;
+    // SAFETY: `dacl` is null or points into the descriptor `security` holds;
+    // the SID is valid while `user` lives.
+    Ok(security.owned_by(user) && unsafe { grants_only(security.dacl, user.sid()) })
+}
+
+pub(super) fn is_owned_by_current_user(file: &File) -> io::Result<bool> {
+    Ok(Security::of(file)?.owned_by(CurrentUser::read()?))
 }
 
 /// Whether every ACE in `dacl` that grants access names `sid`. A null DACL
@@ -129,13 +183,144 @@ unsafe fn grants_only(dacl: *const ACL, sid: PSID) -> bool {
     true
 }
 
+pub(super) fn file_id(path: &Path) -> io::Result<FileId> {
+    file_id_of(&open_itself(
+        OpenOptions::new().access_mode(FILE_READ_ATTRIBUTES),
+        path,
+    )?)
+}
+
+/// The 128-bit `FILE_ID_INFO` id, not `nFileIndex`, which is only 64 bits
+/// and not unique on ReFS (Dev Drive). A file system that has no
+/// `FileIdInfo` (FAT, some network redirectors) falls back to `nFileIndex`.
+pub(super) fn file_id_of(file: &File) -> io::Result<FileId> {
+    // SAFETY: all-zero is a valid FILE_ID_INFO.
+    let mut info: FILE_ID_INFO = unsafe { std::mem::zeroed() };
+    // SAFETY: the file's handle is open; `info` is writable for the size given.
+    let read = unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileIdInfo,
+            std::ptr::addr_of_mut!(info).cast(),
+            std::mem::size_of::<FILE_ID_INFO>() as u32,
+        )
+    };
+    if read != 0 {
+        return file_id_from(
+            info.VolumeSerialNumber,
+            u128::from_le_bytes(info.FileId.Identifier),
+        );
+    }
+    let error = io::Error::last_os_error();
+    match error.raw_os_error().map(|code| code as u32) {
+        Some(ERROR_INVALID_PARAMETER | ERROR_INVALID_FUNCTION | ERROR_NOT_SUPPORTED) => {
+            file_index_of(file)
+        }
+        _ => Err(error),
+    }
+}
+
+/// The 64-bit file index, where the file system has no 128-bit id.
+fn file_index_of(file: &File) -> io::Result<FileId> {
+    // SAFETY: all-zero is a valid BY_HANDLE_FILE_INFORMATION.
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: the file's handle is open; `info` is writable.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    file_id_from(
+        u64::from(info.dwVolumeSerialNumber),
+        u128::from((u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow)),
+    )
+}
+
+/// A [`FileId`], or `Unsupported` for a zero index: some virtual and
+/// redirected drives report 0 for every file, so it names none of them.
+fn file_id_from(volume: u64, index: u128) -> io::Result<FileId> {
+    if index == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "the file system reports no file id",
+        ));
+    }
+    Ok(FileId { volume, index })
+}
+
+pub(super) fn create_owner_only(path: &Path, creation: Creation, open: Open) -> io::Result<File> {
+    let user = CurrentUser::read()?;
+    let acl = SingleUserAcl::new(user.sid(), 0, FILE_ALL_ACCESS)?;
+    // SAFETY: all-zero is a valid SECURITY_DESCRIPTOR to initialize.
+    let mut descriptor: SECURITY_DESCRIPTOR = unsafe { std::mem::zeroed() };
+    let descriptor_ptr: PSECURITY_DESCRIPTOR = std::ptr::addr_of_mut!(descriptor).cast();
+    // SAFETY: `descriptor` is an absolute descriptor of the full size; the
+    // ACL it points to outlives the CreateFileW call below.
+    let made = unsafe {
+        InitializeSecurityDescriptor(descriptor_ptr, SECURITY_DESCRIPTOR_REVISION) != 0
+            && SetSecurityDescriptorDacl(descriptor_ptr, 1, acl.as_ptr(), 0) != 0
+            && SetSecurityDescriptorControl(descriptor_ptr, SE_DACL_PROTECTED, SE_DACL_PROTECTED)
+                != 0
+    };
+    if !made {
+        return Err(io::Error::last_os_error());
+    }
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor_ptr,
+        bInheritHandle: 0,
+    };
+    let (access, disposition) = match creation {
+        Creation::OpenOrCreate => (GENERIC_READ | GENERIC_WRITE, OPEN_ALWAYS),
+        Creation::New => (GENERIC_WRITE, CREATE_NEW),
+    };
+    // A new file never follows a link, dangling or not, as unix `O_EXCL`
+    // and std's `create_new` refuse one.
+    let flags = if open == Open::NoFollow || creation == Creation::New {
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT
+    } else {
+        FILE_ATTRIBUTE_NORMAL
+    };
+    let wide_path = wide(path);
+    // SAFETY: the path is NUL-terminated; the attributes and the descriptor
+    // and ACL they point to live across the call.
+    let raw = unsafe {
+        CreateFileW(
+            wide_path.as_ptr(),
+            access,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            &attributes,
+            disposition,
+            flags,
+            std::ptr::null_mut(),
+        )
+    };
+    if raw == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: CreateFileW returned an open handle that nothing else owns.
+    let file = unsafe { File::from_raw_handle(raw) };
+    match open {
+        Open::Follow => Ok(file),
+        Open::NoFollow => refuse_link(file, path),
+    }
+}
+
 pub(super) fn open_nofollow(options: &mut OpenOptions, path: &Path) -> io::Result<File> {
-    let file = options
+    refuse_link(open_itself(options, path)?, path)
+}
+
+/// Open `path` itself with `options`, a link or a directory included, shared
+/// for read, write and delete.
+fn open_itself(options: &mut OpenOptions, path: &Path) -> io::Result<File> {
+    options
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-        .open(path)?;
-    // Only name surrogates (symlinks, junctions) are links; other reparse
-    // points (cloud placeholders, deduplicated files) open as files.
+        .open(path)
+}
+
+/// `file`, opened with `FILE_FLAG_OPEN_REPARSE_POINT`, or an error when it
+/// is a link. Only name surrogates (symlinks, junctions) are links; other
+/// reparse points (cloud placeholders, deduplicated files) open as files.
+fn refuse_link(file: File, path: &Path) -> io::Result<File> {
     if file.metadata()?.file_type().is_symlink() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -251,7 +436,62 @@ pub(super) fn link_or_copy(target: &Path, link: &Path) -> io::Result<Linked> {
 mod tests {
     use std::path::PathBuf;
 
-    use super::plain_unc;
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
+    use windows_sys::Win32::Security::PSID;
+
+    use super::{file_id_from, owner_is_current, plain_unc};
+
+    /// A SID parsed from its string form, freed on drop.
+    struct Sid(PSID);
+
+    impl Sid {
+        fn parse(text: &str) -> Self {
+            let wide: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
+            let mut sid: PSID = std::ptr::null_mut();
+            // SAFETY: `wide` is NUL-terminated; `sid` is writable.
+            let parsed = unsafe { ConvertStringSidToSidW(wide.as_ptr(), &mut sid) };
+            assert_ne!(parsed, 0, "{text}: {}", std::io::Error::last_os_error());
+            Self(sid)
+        }
+    }
+
+    impl Drop for Sid {
+        fn drop(&mut self) {
+            // SAFETY: ConvertStringSidToSidW allocated the SID with LocalAlloc.
+            unsafe { LocalFree(self.0) };
+        }
+    }
+
+    #[test]
+    fn a_zero_file_index_is_unsupported() {
+        let error = file_id_from(7, 0).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+        assert_eq!(file_id_from(7, 1).unwrap(), file_id_from(7, 1).unwrap());
+        assert_ne!(file_id_from(7, 1).unwrap(), file_id_from(8, 1).unwrap());
+    }
+
+    #[test]
+    fn the_owner_is_current_for_the_token_user_or_its_default_owner_only() {
+        let user = Sid::parse("S-1-5-21-1000-2000-3000-1001");
+        let administrators = Sid::parse("S-1-5-32-544");
+        let system = Sid::parse("S-1-5-18");
+        let same_user = Sid::parse("S-1-5-21-1000-2000-3000-1001");
+        // SAFETY: every SID lives to the end of the test.
+        unsafe {
+            assert!(owner_is_current(user.0, user.0, administrators.0));
+            assert!(owner_is_current(same_user.0, user.0, administrators.0));
+            assert!(owner_is_current(administrators.0, user.0, administrators.0));
+            assert!(owner_is_current(user.0, user.0, user.0));
+            assert!(!owner_is_current(system.0, user.0, administrators.0));
+            assert!(!owner_is_current(administrators.0, user.0, user.0));
+            assert!(!owner_is_current(
+                std::ptr::null_mut(),
+                user.0,
+                administrators.0
+            ));
+        }
+    }
 
     #[test]
     fn a_verbatim_unc_path_becomes_plain() {

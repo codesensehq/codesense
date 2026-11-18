@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Windows helpers shared by the modules' Windows arms: an owned kernel
-//! handle, the current user's SID, a DACL that grants one SID and wide path
-//! strings.
+//! handle, the current user's SID and default owner, a DACL that grants one
+//! SID and wide path strings.
 
 use std::io;
 use std::os::windows::ffi::OsStrExt;
@@ -12,8 +12,9 @@ use windows_sys::core::PWSTR;
 use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, HANDLE};
 use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows_sys::Win32::Security::{
-    AddAccessAllowedAceEx, EqualSid, GetLengthSid, GetTokenInformation, InitializeAcl, TokenUser,
-    ACCESS_ALLOWED_ACE, ACE_FLAGS, ACL, ACL_REVISION, PSID, TOKEN_QUERY, TOKEN_USER,
+    AddAccessAllowedAceEx, EqualSid, GetLengthSid, GetTokenInformation, InitializeAcl, TokenOwner,
+    TokenUser, ACCESS_ALLOWED_ACE, ACE_FLAGS, ACL, ACL_REVISION, PSID, TOKEN_INFORMATION_CLASS,
+    TOKEN_OWNER, TOKEN_QUERY, TOKEN_USER,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -48,10 +49,15 @@ impl Drop for Handle {
     }
 }
 
-/// The current process token's user, read once.
+/// `SECURITY_DESCRIPTOR_REVISION`, from a module this crate does not enable.
+pub(crate) const SECURITY_DESCRIPTOR_REVISION: u32 = 1;
+
+/// The current process token's user and default owner, read once.
 pub(crate) struct CurrentUser {
     /// The `TOKEN_USER` and the SID it points to, 8-byte aligned.
-    buffer: Vec<u64>,
+    user: Vec<u64>,
+    /// The `TOKEN_OWNER` and the SID it points to, 8-byte aligned.
+    owner: Vec<u64>,
 }
 
 impl CurrentUser {
@@ -74,36 +80,26 @@ impl CurrentUser {
             return Err(io::Error::last_os_error());
         }
         let token = Handle::new(token)?;
-        let mut length = 0u32;
-        // SAFETY: a null buffer of length 0 only asks for the size it needs.
-        unsafe {
-            GetTokenInformation(token.raw(), TokenUser, std::ptr::null_mut(), 0, &mut length)
-        };
-        if length == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        let mut buffer = vec![0u64; (length as usize).div_ceil(8)];
-        // SAFETY: `buffer` holds at least `length` writable bytes.
-        let read = unsafe {
-            GetTokenInformation(
-                token.raw(),
-                TokenUser,
-                buffer.as_mut_ptr().cast(),
-                length,
-                &mut length,
-            )
-        };
-        if read == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(Self { buffer })
+        Ok(Self {
+            user: token_information(&token, TokenUser)?,
+            owner: token_information(&token, TokenOwner)?,
+        })
     }
 
     /// The user's SID, valid while `self` lives.
     pub(crate) fn sid(&self) -> PSID {
         // SAFETY: the buffer holds the TOKEN_USER the token wrote, whose SID
         // points into the same buffer.
-        unsafe { (*self.buffer.as_ptr().cast::<TOKEN_USER>()).User.Sid }
+        unsafe { (*self.user.as_ptr().cast::<TOKEN_USER>()).User.Sid }
+    }
+
+    /// The SID that owns what this process creates, valid while `self`
+    /// lives: the user's, or for an elevated administrator, often the
+    /// Administrators group's.
+    pub(crate) fn default_owner(&self) -> PSID {
+        // SAFETY: the buffer holds the TOKEN_OWNER the token wrote, whose SID
+        // points into the same buffer.
+        unsafe { (*self.owner.as_ptr().cast::<TOKEN_OWNER>()).Owner }
     }
 
     /// Whether `sid` is this user's.
@@ -129,6 +125,31 @@ impl CurrentUser {
         };
         Ok(sid)
     }
+}
+
+/// One `class` of information about `token`, in an 8-byte-aligned buffer.
+fn token_information(token: &Handle, class: TOKEN_INFORMATION_CLASS) -> io::Result<Vec<u64>> {
+    let mut length = 0u32;
+    // SAFETY: a null buffer of length 0 only asks for the size it needs.
+    unsafe { GetTokenInformation(token.raw(), class, std::ptr::null_mut(), 0, &mut length) };
+    if length == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut buffer = vec![0u64; (length as usize).div_ceil(8)];
+    // SAFETY: `buffer` holds at least `length` writable bytes.
+    let read = unsafe {
+        GetTokenInformation(
+            token.raw(),
+            class,
+            buffer.as_mut_ptr().cast(),
+            length,
+            &mut length,
+        )
+    };
+    if read == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(buffer)
 }
 
 /// A DACL with one ACE, granting `access` to one SID: no one else is let in.
