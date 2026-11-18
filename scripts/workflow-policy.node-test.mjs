@@ -517,8 +517,8 @@ test("only rust.yml's test jobs may skip a merge group on the changes job's outp
     );
 });
 
-// Only rust.yml's macOS build and result jobs may skip merge groups, with exactly this term after
-// the path filter.
+// Only rust.yml's non-required jobs (the macOS build and result, the Windows check and the Linux
+// app job) may skip merge groups, with exactly this term after the path filter.
 test("only rust.yml's non-required jobs may skip merge groups, and still run on push and schedule", () => {
   const filtered = (condition, file = "rust.yml", job = "rust-macos") =>
     workflowPolicy(
