@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use std::collections::{BTreeMap, HashSet};
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
@@ -787,17 +787,27 @@ impl DependencyManager {
     /// Resolve the user's system `git` — detection, not management. codesense no
     /// longer downloads or pins its own git; it uses whatever git the user has
     /// (macOS/Linux ship one; the onboarding gate guides a user who has none).
-    /// Delegates to [`resolve_versioned_binary`]:
-    /// known-locations fast-path then a login-shell probe, version-gated to
-    /// [`MIN_GIT_VERSION`]. The version is returned even below the floor, so the
-    /// gate can show "found vX, need Y" guidance.
+    /// Delegates to [`resolve_versioned_binary`] with this OS's
+    /// [`git_search_plan`]: known-locations fast-path then (not on Windows) a
+    /// login-shell probe, version-gated to [`MIN_GIT_VERSION`]. The version is
+    /// returned even below the floor, so the gate can show "found vX, need Y"
+    /// guidance. No cache: every Re-check searches again.
     fn resolve_git() -> (Option<PathBuf>, Option<String>) {
+        // `|| None`: never start a login shell for the PATH here. Unix gets no
+        // PATH entries and keeps its own login-shell step below; Windows gets
+        // the process PATH.
+        let search = git_search_plan(
+            std::env::consts::OS,
+            cli::search_path(|| None).as_deref().map(OsStr::new),
+            &|k| std::env::var_os(k),
+        );
         resolve_versioned_binary(
             "git",
-            known_git_locations(),
+            search.known,
             GIT_PROBE_TIMEOUT,
             parse_git_version,
             check_git_version_minimum,
+            search.probe_login_shell,
         )
     }
 
@@ -1098,6 +1108,63 @@ fn known_git_locations() -> Vec<PathBuf> {
     locs
 }
 
+/// Where to look for git, per [`git_search_plan`].
+#[derive(Debug, PartialEq)]
+struct GitSearch {
+    /// The paths the fast path stats, in order.
+    known: Vec<PathBuf>,
+    /// Whether a fast-path miss falls back to the login-shell `PATH` probe.
+    probe_login_shell: bool,
+}
+
+/// Where to look for git on `os` (a [`std::env::consts::OS`] value), given the
+/// `PATH` to search (`path_env`) and the environment (`env`). Pure, so every
+/// OS's plan is testable on any host.
+///
+/// `"windows"`: the installs on `PATH`, then in the Git for Windows `Git\cmd`
+/// directories (`%ProgramFiles%`, `%ProgramW6432%`, user-scope
+/// `%LOCALAPPDATA%\Programs`), each only when its variable is set. These catch
+/// a fresh install the running app's `PATH` predates. No login-shell probe:
+/// `$SHELL -lic` means nothing on Windows. Any other `os`: the unix
+/// [`known_git_locations`], then the login-shell probe.
+fn git_search_plan(
+    os: &str,
+    path_env: Option<&OsStr>,
+    env: &dyn Fn(&str) -> Option<OsString>,
+) -> GitSearch {
+    if os != "windows" {
+        return GitSearch {
+            known: known_git_locations(),
+            probe_login_shell: true,
+        };
+    }
+    let var = |name: &str| {
+        env(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    let install_dirs = [
+        var("ProgramFiles").map(|dir| dir.join("Git").join("cmd")),
+        var("ProgramW6432").map(|dir| dir.join("Git").join("cmd")),
+        var("LOCALAPPDATA").map(|dir| dir.join("Programs").join("Git").join("cmd")),
+    ];
+    let dirs = path_env
+        .map(std::env::split_paths)
+        .into_iter()
+        .flatten()
+        .chain(install_dirs.into_iter().flatten())
+        // An entry a `PATH` cannot hold (a separator or quote in it) is dropped,
+        // so the join below cannot fail.
+        .filter(|dir| std::env::join_paths([dir]).is_ok());
+    let joined = std::env::join_paths(dirs).unwrap_or_default();
+    GitSearch {
+        // One lookup: `PATHEXT` naming and de-duplication (`%ProgramFiles%` is
+        // `%ProgramW6432%` on 64-bit Windows) are the CLI lookup's.
+        known: cli::candidates(&joined, "git"),
+        probe_login_shell: false,
+    }
+}
+
 /// Where `gh` is usually installed: Homebrew (both architectures) and the official
 /// installer's `/usr/local/bin`. User-local `~/.local/bin` is not here, so a stale copy
 /// there never wins over the user's own `$PATH` (see [`user_local_gh_locations`]).
@@ -1144,6 +1211,8 @@ fn resolve_gh_with(
 /// list of known install locations, spawning `<bin> --version` to gate each hit
 /// against `meets_floor`; then (b) a login-shell PATH probe for the miss (picks
 /// up Homebrew/asdf/npm-global that a Finder-launched `.app` doesn't inherit).
+/// Step (b) runs only when `probe_login_shell` is set (never on Windows, which
+/// has no login shell).
 /// Returns the resolved path (first candidate meeting the floor) plus the parsed
 /// version of the resolving — or last-probed — binary; the version is surfaced
 /// even when it fails the floor, so callers can show "found vX, need Y" guidance.
@@ -1158,6 +1227,7 @@ fn resolve_versioned_binary(
     probe_timeout: Duration,
     parse_version: impl Fn(&Path) -> Option<String>,
     meets_floor: impl Fn(&str) -> bool,
+    probe_login_shell: bool,
 ) -> (Option<PathBuf>, Option<String>) {
     // Retain the first (highest-priority) below-floor version seen on the fast
     // path, so that if nothing meets the floor we can still report "found vX, too
@@ -1185,6 +1255,11 @@ fn resolve_versioned_binary(
                 debug!(target: "deps", "could not determine {name} version at {}", path.display());
             }
         }
+    }
+
+    if !probe_login_shell {
+        debug!(target: "deps", "{name} not found in its known locations");
+        return (None, below_floor_version);
     }
 
     // Miss: resolve via the user's login-shell PATH.
@@ -3354,6 +3429,7 @@ mod tests {
             Duration::from_secs(1),
             |_p| Some("2.50.0".to_string()),
             |_v| true,
+            true,
         );
         assert_eq!(path.as_deref(), Some(bin.as_path()));
         assert_eq!(ver.as_deref(), Some("2.50.0"));
@@ -3366,9 +3442,136 @@ mod tests {
             Duration::from_secs(1),
             |_p| Some("2.39.3".to_string()),
             |_v| false,
+            true,
         );
         assert!(path.is_none());
         assert_eq!(ver.as_deref(), Some("2.39.3"));
+    }
+
+    /// With `probe_login_shell` off, a fast-path miss returns nothing, though the
+    /// login shell would find the binary; the probe-on control proves it would.
+    #[test]
+    fn test_resolve_versioned_binary_skips_login_shell_when_off() {
+        let resolve = |probe_login_shell| {
+            resolve_versioned_binary(
+                "sh",
+                vec![],
+                Duration::from_secs(10),
+                |_p| Some("9.9.9".to_string()),
+                |_v| true,
+                probe_login_shell,
+            )
+        };
+        assert_eq!(resolve(false), (None, None));
+        let (path, ver) = resolve(true);
+        assert!(path.is_some(), "the login shell finds sh");
+        assert_eq!(ver.as_deref(), Some("9.9.9"));
+    }
+
+    /// An executable `git` in `dir`, named the way the host's CLI lookup names it.
+    fn git_fixture(dir: &Path) -> PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        let git = cli::named_in(&[dir.to_path_buf()], "git")[0].clone();
+        std::fs::write(&git, b"").unwrap();
+        codesense_platform::testutil::set_executable(&git);
+        git
+    }
+
+    /// git_search_plan on Windows: the installs on `PATH`, then the Git for
+    /// Windows install directories, with no login-shell probe. `os` picks the
+    /// plan; the fixtures use the host's naming, so this runs on any host.
+    #[test]
+    fn test_git_search_plan_windows() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let on_path = tmp.path().join("bin");
+        let path_git = git_fixture(&on_path);
+        let empty_path = tmp.path().join("empty");
+        std::fs::create_dir_all(&empty_path).unwrap();
+        let program_files = tmp.path().join("Program Files");
+        let program_files_git = git_fixture(&program_files.join("Git").join("cmd"));
+        let local_app_data = tmp.path().join("AppData").join("Local");
+        let local_git = git_fixture(&local_app_data.join("Programs").join("Git").join("cmd"));
+
+        let plan = |path_env: Option<&Path>, vars: &[(&str, &Path)]| {
+            let vars: Vec<(String, OsString)> = vars
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.as_os_str().to_owned()))
+                .collect();
+            git_search_plan("windows", path_env.map(Path::as_os_str), &|key| {
+                vars.iter()
+                    .find(|(name, _)| name == key)
+                    .map(|(_, value)| value.clone())
+            })
+        };
+        let windows = |known: Vec<PathBuf>| GitSearch {
+            known,
+            probe_login_shell: false,
+        };
+
+        // git on PATH.
+        assert_eq!(
+            plan(Some(on_path.as_path()), &[]),
+            windows(vec![path_git.clone()])
+        );
+        // Only in %ProgramFiles%\Git\cmd, as after a fresh install the app's
+        // PATH predates (%ProgramW6432% is the same directory on 64-bit Windows).
+        assert_eq!(
+            plan(
+                Some(empty_path.as_path()),
+                &[
+                    ("ProgramFiles", program_files.as_path()),
+                    ("ProgramW6432", program_files.as_path()),
+                ],
+            ),
+            windows(vec![program_files_git.clone()])
+        );
+        // Both: the PATH copy first.
+        assert_eq!(
+            plan(
+                Some(on_path.as_path()),
+                &[("ProgramFiles", program_files.as_path())]
+            ),
+            windows(vec![path_git, program_files_git])
+        );
+        // A user-scope install under %LOCALAPPDATA%\Programs.
+        assert_eq!(
+            plan(
+                Some(empty_path.as_path()),
+                &[("LOCALAPPDATA", local_app_data.as_path())]
+            ),
+            windows(vec![local_git])
+        );
+        // No PATH and no variables set.
+        assert_eq!(plan(None, &[]), windows(vec![]));
+    }
+
+    /// git_search_plan on any OS but Windows: the unix locations in order, then
+    /// the login-shell probe; the Windows PATH and variables are not read.
+    #[test]
+    fn test_git_search_plan_unix_golden() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let on_path = tmp.path().join("bin");
+        git_fixture(&on_path);
+        let program_files = tmp.path().as_os_str().to_owned();
+        let home = dirs::home_dir().expect("a home directory");
+        for os in ["macos", "linux", "freebsd"] {
+            let plan = git_search_plan(os, Some(on_path.as_os_str()), &|key| {
+                (key == "ProgramFiles").then(|| program_files.clone())
+            });
+            assert_eq!(
+                plan,
+                GitSearch {
+                    known: vec![
+                        PathBuf::from("/opt/homebrew/bin/git"),
+                        PathBuf::from("/usr/local/bin/git"),
+                        PathBuf::from("/usr/bin/git"),
+                        home.join(".local/bin/git"),
+                    ],
+                    probe_login_shell: true,
+                },
+                "{os}"
+            );
+        }
     }
 
     /// classify_xcode_select maps `xcode-select --install`'s exit+stderr to the
