@@ -14,8 +14,9 @@ use std::path::{Component, Path, PathBuf, Prefix};
 use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{
-    LocalFree, ERROR_ACCESS_DENIED, ERROR_LOCK_VIOLATION, ERROR_PRIVILEGE_NOT_HELD,
-    ERROR_SHARING_VIOLATION, ERROR_SUCCESS, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE,
+    LocalFree, ERROR_ACCESS_DENIED, ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER,
+    ERROR_LOCK_VIOLATION, ERROR_NOT_SUPPORTED, ERROR_PRIVILEGE_NOT_HELD, ERROR_SHARING_VIOLATION,
+    ERROR_SUCCESS, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Security::Authorization::{
     GetSecurityInfo, SetNamedSecurityInfoW, SE_FILE_OBJECT,
@@ -215,7 +216,8 @@ pub(super) fn file_id(path: &Path) -> io::Result<FileId> {
 }
 
 /// The 128-bit `FILE_ID_INFO` id, not `nFileIndex`, which is only 64 bits
-/// and not unique on ReFS (Dev Drive).
+/// and not unique on ReFS (Dev Drive). A file system that has no
+/// `FileIdInfo` (FAT, some network redirectors) falls back to `nFileIndex`.
 pub(super) fn file_id_of(file: &File) -> io::Result<FileId> {
     // SAFETY: all-zero is a valid FILE_ID_INFO.
     let mut info: FILE_ID_INFO = unsafe { std::mem::zeroed() };
@@ -228,12 +230,32 @@ pub(super) fn file_id_of(file: &File) -> io::Result<FileId> {
             std::mem::size_of::<FILE_ID_INFO>() as u32,
         )
     };
-    if read == 0 {
+    if read != 0 {
+        return Ok(FileId {
+            volume: info.VolumeSerialNumber,
+            index: u128::from_le_bytes(info.FileId.Identifier),
+        });
+    }
+    let error = io::Error::last_os_error();
+    match error.raw_os_error().map(|code| code as u32) {
+        Some(ERROR_INVALID_PARAMETER | ERROR_INVALID_FUNCTION | ERROR_NOT_SUPPORTED) => {
+            file_index_of(file)
+        }
+        _ => Err(error),
+    }
+}
+
+/// The 64-bit file index, where the file system has no 128-bit id.
+fn file_index_of(file: &File) -> io::Result<FileId> {
+    // SAFETY: all-zero is a valid BY_HANDLE_FILE_INFORMATION.
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: the file's handle is open; `info` is writable.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
         return Err(io::Error::last_os_error());
     }
     Ok(FileId {
-        volume: info.VolumeSerialNumber,
-        index: u128::from_le_bytes(info.FileId.Identifier),
+        volume: u64::from(info.dwVolumeSerialNumber),
+        index: u128::from((u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow)),
     })
 }
 
