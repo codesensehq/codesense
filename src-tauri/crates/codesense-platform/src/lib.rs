@@ -18,8 +18,10 @@
 //! - [`limits`]: the open-file soft limit.
 //! - [`ipc`]: local endpoints, listeners and streams (Unix sockets, named
 //!   pipes) and the pid at the other end.
+//! - [`dialog`]: a system dialog that asks for a secret with hidden entry.
 
 pub mod cli;
+pub mod dialog;
 pub mod dirs;
 pub mod fs;
 pub mod ipc;

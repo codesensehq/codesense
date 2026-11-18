@@ -99,7 +99,6 @@ src/commands/dashboard_launch.rs 11
 src/commands/deps.rs 16
 src/commands/local_organization.rs 2
 src/commands/machines/mod.rs 9
-src/commands/machines/passphrase.rs 3
 src/commands/machines/registry.rs 7
 src/commands/machines/registry/private.rs 1
 src/commands/mcp_scope.rs 26

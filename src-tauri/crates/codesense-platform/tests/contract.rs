@@ -8,7 +8,7 @@ use std::cell::Cell;
 use std::ffi::{OsStr, OsString};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -23,7 +23,7 @@ use codesense_platform::fs::{
 };
 use codesense_platform::ipc::{blocking, Endpoint, LocalListener, LocalStream};
 use codesense_platform::process::{is_alive, kill_hard, terminate, Pid, ProcessTree};
-use codesense_platform::testutil::{pathext, set_executable, symlink_or_skip};
+use codesense_platform::testutil::{pathext, relative_from_cwd, set_executable, symlink_or_skip};
 use codesense_platform::user::{current_user, login_shell};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 
@@ -736,25 +736,6 @@ fn is_executable_accepts_only_an_absolute_executable_file() {
 fn same_volume_tempdir() -> tempfile::TempDir {
     std::fs::create_dir_all(env!("CARGO_TARGET_TMPDIR")).unwrap();
     tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap()
-}
-
-/// The relative path from the working directory to the absolute `path`: one
-/// `..` per component of the working directory, then `path` without its root.
-/// It reaches `path` (asserted), so a check that accepts it is not refusing
-/// relative paths.
-fn relative_from_cwd(path: &Path) -> PathBuf {
-    fn normal(component: &Component) -> bool {
-        matches!(component, Component::Normal(_))
-    }
-    let cwd = std::env::current_dir().unwrap();
-    let mut relative: PathBuf = cwd.components().filter(normal).map(|_| "..").collect();
-    relative.extend(path.components().filter(normal));
-    assert!(
-        relative.is_relative() && relative.exists(),
-        "{}",
-        relative.display()
-    );
-    relative
 }
 
 /// The fixture installs of `tool`: every spelling an OS might run.

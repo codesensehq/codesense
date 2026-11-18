@@ -19,6 +19,16 @@ describe("passphraseSaveError", () => {
     );
   });
 
+  it("names the missing passphrase dialog", () => {
+    expect(
+      passphraseSaveError(
+        "No passphrase dialog found. Install zenity or kdialog, or set SSH_ASKPASS.",
+      ),
+    ).toBe(
+      "Couldn't keep the passphrase: No passphrase dialog found. Install zenity or kdialog, or set SSH_ASKPASS.",
+    );
+  });
+
   it("names any other failure", () => {
     expect(passphraseSaveError("the passphrase dialog failed: x")).toBe(
       "Couldn't keep the passphrase: the passphrase dialog failed: x",

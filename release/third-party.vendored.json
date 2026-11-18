@@ -54,7 +54,7 @@
       "version": "1.24.2",
       "licence": "ISC",
       "source": "https://github.com/starship/starship",
-      "shippedAs": "resources/starship",
+      "shippedAs": "resources/starship (fetched per target on Linux by scripts/fetch-bundled.sh)",
       "licenceFile": "release/third-party/starship.LICENSE"
     },
     {

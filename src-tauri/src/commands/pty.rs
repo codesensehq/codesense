@@ -2686,8 +2686,10 @@ mod shell_tests {
     }
 
     /// Tauri merges `tauri.linux.conf.json` over the base config on Linux only.
-    /// It drops the two macOS-only binary resources, keeps the four starship
-    /// prompt presets and ships the emulator worker as a third sidecar.
+    /// It drops the two committed macOS binaries, ships the starship that
+    /// scripts/fetch-bundled.sh fetches for this target in their place as
+    /// `resources/starship`, keeps the four starship prompt presets and ships
+    /// the emulator worker as a third sidecar.
     #[test]
     fn the_linux_overlay_drops_the_macos_resources_and_ships_the_emulator() {
         let base: serde_json::Value =
@@ -2701,6 +2703,13 @@ mod shell_tests {
         for key in ["resources/git-ai", "resources/starship"] {
             assert!(!resources.contains_key(key), "{key} must not ship on Linux");
         }
+        assert_eq!(
+            resources
+                .get("resources/fetched/starship")
+                .and_then(|v| v.as_str()),
+            Some("resources/starship"),
+            "the fetched starship ships as resources/starship"
+        );
         for preset in ["compact", "minimal", "full", "twoline"] {
             let key = format!("resources/starship-{preset}.toml");
             assert_eq!(
@@ -2713,6 +2722,7 @@ mod shell_tests {
             let mut map = config["bundle"]["resources"].as_object().unwrap().clone();
             map.remove("resources/git-ai");
             map.remove("resources/starship");
+            map.remove("resources/fetched/starship");
             map
         };
         assert_eq!(
