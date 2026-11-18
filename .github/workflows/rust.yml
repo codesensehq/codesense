@@ -418,9 +418,9 @@ jobs:
       CARGO_INCREMENTAL: "0"
       RUST_BACKTRACE: "1"
       CARGO_TERM_COLOR: always
-      # Only the crates that pass on Linux today; macOS also runs pty-core,
+      # Only the crates that pass on Linux today, and the bridge; macOS also runs pty-core,
       # session-server, guards and the desktop app.
-      RUST_PACKAGES: -p codesense-platform -p codesense-host-proto -p codesense-fs-core
+      RUST_PACKAGES: -p codesense-platform -p codesense-host-proto -p codesense-fs-core -p codesense-bridge
     steps:
       # All paths below are relative to this repository's checkout.
       - name: Check out source
@@ -476,6 +476,10 @@ jobs:
         # and tracked as a public issue by flaky-issues on main.
         if: (success() || failure()) && steps.compile.outcome == 'success'
         run: node scripts/flaky-tests.mjs summary target/nextest/ci/junit.xml
+      - name: Compare the secret guard with its Perl script
+        # The Rust guard must deny everything the installed Perl guard denies (/usr/bin/perl is on
+        # the runner). It goes when the Perl script is deleted.
+        run: "cargo test --locked -p codesense-host-proto --lib hook:: -- --ignored"
       - name: Test Linux doctests
         timeout-minutes: 15
         # Runs after failed tests, but not when the test build never ran, so an earlier failure
@@ -675,6 +679,8 @@ jobs:
         run: cargo check --locked -p codesense-platform -p codesense-host-proto -p codesense-fs-core --all-targets
       - name: Test the platform crate
         run: cargo test --locked -p codesense-platform
+      - name: Test Claude's hooks
+        run: "cargo test --locked -p codesense-host-proto --lib hook::"
 
   flaky-issues:
     name: Track flaky Rust tests
