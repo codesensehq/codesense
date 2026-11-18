@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: MIT
 //! The platform contract: the same tests on every OS. Test bodies hold no
 //! `cfg`; what differs per OS is stated once, in an `expect_*` helper at the
-//! end. Process tests drive the `platform-fixture` binary, never a shell.
+//! end. Process tests drive the `platform-fixture` binary, never a shell;
+//! it is the client of the IPC rows.
 
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use codesense_platform::dirs::codesense_home;
@@ -14,9 +16,11 @@ use codesense_platform::fs::{
     atomic_replace, canonicalize, is_owner_only, link_or_copy, lock_exclusive, open_nofollow,
     portable_name, set_owner_only, try_lock_exclusive, Linked, NonPortableName,
 };
+use codesense_platform::ipc::{blocking, Endpoint, LocalListener, LocalStream};
 use codesense_platform::process::{is_alive, kill_hard, terminate, Pid, ProcessTree};
 use codesense_platform::testutil::symlink_or_skip;
 use codesense_platform::user::current_user;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 
 fn fixture(args: &[&str]) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_platform-fixture"));
@@ -334,6 +338,206 @@ fn portable_name_table() {
     ] {
         assert_eq!(portable_name(name), Ok(()), "{name}");
     }
+}
+
+/// How long an IPC row waits for a connection before it fails.
+const CONNECT_LIMIT: Duration = Duration::from_secs(10);
+
+/// The fixture as a client of `endpoint`, reached through its wire form.
+fn ipc_fixture(mode: &str, endpoint: &Endpoint, rest: &[&str]) -> ProcessTree {
+    let mut command = fixture(&[mode]);
+    command.arg(endpoint.to_wire().unwrap()).args(rest);
+    ProcessTree::spawn(&mut command).unwrap()
+}
+
+/// An endpoint of this test's own: in `dir` on unix, and named after `dir`,
+/// which is unique, so unique on Windows too.
+fn ephemeral(dir: &Path, tag: &str) -> Endpoint {
+    let unique = dir.file_name().unwrap().to_str().unwrap();
+    Endpoint::Ephemeral {
+        dir: dir.to_owned(),
+        name: format!("{tag}{unique}"),
+    }
+}
+
+fn runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+}
+
+async fn accept_within(listener: &mut LocalListener) -> LocalStream {
+    tokio::time::timeout(CONNECT_LIMIT, listener.accept())
+        .await
+        .expect("a client connects")
+        .unwrap()
+}
+
+/// The blocking listener's next connection, failing the test rather than
+/// hanging when none comes.
+fn accept_blocking_within(
+    mut listener: blocking::LocalListener,
+) -> (blocking::LocalListener, blocking::LocalStream) {
+    let (sent, received) = mpsc::channel();
+    std::thread::spawn(move || {
+        let stream = listener.accept();
+        let _ = sent.send((listener, stream));
+    });
+    let (listener, stream) = received
+        .recv_timeout(CONNECT_LIMIT)
+        .expect("a client connects");
+    (listener, stream.unwrap())
+}
+
+fn assert_in_use<T>(bound: std::io::Result<T>) {
+    let error = bound.err().expect("bound over a live listener");
+    assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse, "{error}");
+}
+
+/// Each fixture `send`s to its own endpoint; each listener hears only its
+/// own client.
+fn assert_kept_apart(endpoints: [Endpoint; 2]) {
+    runtime().block_on(async {
+        let mut listeners = endpoints
+            .each_ref()
+            .map(|endpoint| LocalListener::bind(endpoint).unwrap());
+        let mut clients: Vec<_> = endpoints
+            .iter()
+            .enumerate()
+            .map(|(i, endpoint)| ipc_fixture("send", endpoint, &[&format!("client-{i}")]))
+            .collect();
+        for (i, listener) in listeners.iter_mut().enumerate() {
+            let stream = accept_within(listener).await;
+            let mut line = String::new();
+            tokio::io::BufReader::new(stream)
+                .read_line(&mut line)
+                .await
+                .unwrap();
+            assert_eq!(line.trim(), format!("client-{i}"), "{:?}", endpoints[i]);
+        }
+        for client in &mut clients {
+            assert!(exits_within(client, Duration::from_secs(5)));
+        }
+    });
+}
+
+#[test]
+fn endpoint_echoes_one_mebibyte() {
+    let dir = tempfile::tempdir().unwrap();
+    let endpoint = ephemeral(dir.path(), "echo");
+    let echoed = runtime().block_on(async {
+        let mut listener = LocalListener::bind(&endpoint).unwrap();
+        let mut client = ipc_fixture("echo", &endpoint, &[]);
+        let mut stream = accept_within(&mut listener).await;
+        let mut buffer = vec![0; 64 * 1024];
+        let mut echoed = 0;
+        loop {
+            let read = stream.read(&mut buffer).await.unwrap();
+            if read == 0 {
+                break;
+            }
+            stream.write_all(&buffer[..read]).await.unwrap();
+            echoed += read;
+        }
+        assert_eq!(first_line(&mut client), "ok", "every byte back in order");
+        assert!(client.wait().unwrap().success());
+        echoed
+    });
+    assert_eq!(echoed, 1 << 20);
+}
+
+#[test]
+fn two_endpoints_do_not_cross() {
+    let root = tempfile::tempdir().unwrap();
+    assert_kept_apart([
+        Endpoint::Activity(root.path().to_owned()),
+        Endpoint::SessionServer(root.path().to_owned()),
+    ]);
+}
+
+#[test]
+fn two_roots_do_not_cross() {
+    let (first, second) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    assert_kept_apart([
+        Endpoint::Activity(first.path().to_owned()),
+        Endpoint::Activity(second.path().to_owned()),
+    ]);
+}
+
+#[test]
+fn wire_form_round_trips() {
+    let dir = tempfile::tempdir().unwrap();
+    for endpoint in [
+        Endpoint::Mcp,
+        Endpoint::Activity(dir.path().to_owned()),
+        Endpoint::SessionServer(dir.path().to_owned()),
+        ephemeral(dir.path(), "wire"),
+    ] {
+        let wire = endpoint.to_wire().unwrap();
+        let back = Endpoint::from_wire(&wire).unwrap();
+        assert_eq!(back.address().unwrap(), endpoint.address().unwrap());
+        assert_eq!(back.to_wire().unwrap(), wire, "{endpoint:?}");
+    }
+
+    // A client given only the wire form reaches the listener.
+    let endpoint = Endpoint::SessionServer(dir.path().to_owned());
+    let listener = blocking::LocalListener::bind(&endpoint).unwrap();
+    let mut client = ipc_fixture("send", &endpoint, &["by wire"]);
+    let (_listener, stream) = accept_blocking_within(listener);
+    let mut line = String::new();
+    BufReader::new(stream).read_line(&mut line).unwrap();
+    assert_eq!(line.trim(), "by wire");
+    assert!(exits_within(&mut client, Duration::from_secs(5)));
+}
+
+#[test]
+fn peer_pid_is_the_client() {
+    let dir = tempfile::tempdir().unwrap();
+    let this_process = Pid::from_raw(std::process::id());
+
+    let endpoint = ephemeral(dir.path(), "peer");
+    let listener = blocking::LocalListener::bind(&endpoint).unwrap();
+    let mut client = ipc_fixture("peer", &endpoint, &[]);
+    let (_listener, stream) = accept_blocking_within(listener);
+    assert_eq!(stream.peer_pid().unwrap(), client.pid());
+    assert_eq!(
+        first_line(&mut client),
+        this_process.to_string(),
+        "the client sees the listener's process"
+    );
+    drop(stream);
+    assert!(exits_within(&mut client, Duration::from_secs(5)));
+
+    runtime().block_on(async {
+        let endpoint = ephemeral(dir.path(), "peer-async");
+        let mut listener = LocalListener::bind(&endpoint).unwrap();
+        let connected = LocalStream::connect(&endpoint).await.unwrap();
+        let accepted = accept_within(&mut listener).await;
+        assert_eq!(accepted.peer_pid().unwrap(), this_process);
+        assert_eq!(connected.peer_pid().unwrap(), this_process);
+    });
+}
+
+#[test]
+fn stale_endpoint_rebinds() {
+    let dir = tempfile::tempdir().unwrap();
+    let endpoint = ephemeral(dir.path(), "stale");
+
+    let listener = blocking::LocalListener::bind(&endpoint).unwrap();
+    assert_in_use(blocking::LocalListener::bind(&endpoint));
+    runtime().block_on(async { assert_in_use(LocalListener::bind(&endpoint)) });
+    drop(listener);
+    drop(blocking::LocalListener::bind(&endpoint).unwrap());
+
+    // A listener whose process dies without cleaning up.
+    let mut owner = ipc_fixture("listen", &endpoint, &[]);
+    assert_eq!(first_line(&mut owner), "ready");
+    assert_in_use(blocking::LocalListener::bind(&endpoint));
+    kill_hard(&owner).unwrap();
+    assert!(exits_within(&mut owner, Duration::from_secs(5)));
+    let rebinds = || blocking::LocalListener::bind(&endpoint).is_ok();
+    assert!(eventually(Duration::from_secs(5), rebinds));
 }
 
 /// How many `.tmp.` siblings an atomic write left in `dir`.
