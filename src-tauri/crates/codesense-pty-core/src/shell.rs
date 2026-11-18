@@ -93,7 +93,8 @@ pub enum ShellRow {
     EnvShell,
     /// The login shell in the user's passwd entry.
     Passwd,
-    /// The first install of this name on the host's `PATH`.
+    /// The first install of this name on the host's `PATH` whose kind the
+    /// table accepts.
     OnPath(&'static str),
     /// This path.
     Fixed(&'static str),
@@ -256,7 +257,11 @@ pub fn resolve_shell_from(
                 (given(shell.as_deref()), ShellSource::Passwd)
             }
             ShellRow::OnPath(name) => (
-                env("PATH").and_then(|path| candidates(&path, name).into_iter().next()),
+                env("PATH").and_then(|path| {
+                    candidates(&path, name)
+                        .into_iter()
+                        .find(|found| shell_kind(found).is_some_and(|kind| table.accepts(kind)))
+                }),
                 ShellSource::Fallback,
             ),
             ShellRow::Fixed(path) => (Some(PathBuf::from(path)), ShellSource::Fallback),
@@ -734,6 +739,27 @@ mod tests {
             };
             assert_eq!(host.resolve(None, usable), want, "row {skip}");
         }
+    }
+
+    #[test]
+    fn windows_table_skips_a_path_shim_it_cannot_classify() {
+        let host = WindowsHost::new();
+        let shims = host.root.join("shims");
+        let shim = shims.join("pwsh.cmd");
+        let pwsh = shims.join("pwsh.exe");
+        let got = resolve_shell_from(
+            &WINDOWS,
+            None,
+            None,
+            || panic!("passwd consulted on Windows"),
+            host.env(),
+            |_: &OsStr, name: &str| {
+                assert_eq!(name, "pwsh");
+                vec![shim.clone(), pwsh.clone()]
+            },
+            usable_paths(vec![shim.clone(), pwsh.clone()]),
+        );
+        assert_eq!(got, found(pwsh, ShellKind::Pwsh, ShellSource::Fallback));
     }
 
     #[test]
