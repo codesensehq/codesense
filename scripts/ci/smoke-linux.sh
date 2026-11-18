@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Packaging smoke for the Linux test build: install the deb and the rpm in clean containers, and
 # launch the extracted AppImage headless. Release builds carry no WebDriver, so the launch checks
-# read the process, the screen and the app's log.
+# read the process, the app window and the app's log.
 #
 # Usage:
 #   smoke-linux.sh install <deb|rpm> <image> <package-dir> <out-dir>
@@ -23,7 +23,7 @@
 #   smoke-linux.sh variant <dmabuf|no-dbus> <out-dir>
 #       Launch the AppImage run extracted into <out-dir> again. dmabuf: with the user's
 #       WEBKIT_DISABLE_DMABUF_RENDERER=0, which the app keeps (the WebKit web process has it, and
-#       the log says nothing of it), the screen check still passes. no-dbus: with no session bus
+#       the log says nothing of it), the window check still passes. no-dbus: with no session bus
 #       (outside dbus-run-session, at an address that does not exist, so none autolaunches), the
 #       app stays up and logs secret store: unavailable.
 #   smoke-linux.sh caps-agree <listing> <log>
