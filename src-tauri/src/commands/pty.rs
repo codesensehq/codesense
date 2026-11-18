@@ -2686,12 +2686,13 @@ mod shell_tests {
     }
 
     /// Tauri merges `tauri.linux.conf.json` over the base config on Linux only.
-    /// It drops the two committed macOS binaries, ships the starship that
-    /// scripts/fetch-bundled.sh fetches for this target in their place as
-    /// `resources/starship`, keeps the four starship prompt presets and ships
-    /// the emulator worker as a third sidecar.
+    /// It drops the committed macOS starship and ships the one
+    /// scripts/fetch-bundled.sh fetches for this target in its place as
+    /// `resources/starship`, keeps the base mapping of `resources/git-ai` (which
+    /// the same script fetches for this target), keeps the four starship prompt
+    /// presets and ships the emulator worker as a third sidecar.
     #[test]
-    fn the_linux_overlay_drops_the_macos_resources_and_ships_the_emulator() {
+    fn the_linux_overlay_ships_the_fetched_binaries_and_the_emulator() {
         let base: serde_json::Value =
             serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
         let overlay: serde_json::Value =
@@ -2700,9 +2701,15 @@ mod shell_tests {
         merge_patch(&mut merged, &overlay);
 
         let resources = merged["bundle"]["resources"].as_object().unwrap();
-        for key in ["resources/git-ai", "resources/starship"] {
-            assert!(!resources.contains_key(key), "{key} must not ship on Linux");
-        }
+        assert!(
+            !resources.contains_key("resources/starship"),
+            "the committed macOS starship must not ship on Linux"
+        );
+        assert_eq!(
+            resources.get("resources/git-ai").and_then(|v| v.as_str()),
+            Some("resources/git-ai"),
+            "the fetched git-ai ships as resources/git-ai"
+        );
         assert_eq!(
             resources
                 .get("resources/fetched/starship")
@@ -2720,7 +2727,6 @@ mod shell_tests {
         }
         let other_resources = |config: &serde_json::Value| {
             let mut map = config["bundle"]["resources"].as_object().unwrap().clone();
-            map.remove("resources/git-ai");
             map.remove("resources/starship");
             map.remove("resources/fetched/starship");
             map
