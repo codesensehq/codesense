@@ -109,5 +109,28 @@ case "$PLATFORM" in
                 exit 1
             fi
         done
+        if [[ ",$LINUX_BUNDLES," == *,appimage,* ]]; then
+            # Insert the emulator byte for byte. An AppImage is its runtime followed by a squashfs,
+            # so the new image is Tauri's runtime bytes plus a squashfs of the extracted tree, made
+            # with the original's compressor; no appimagetool is needed.
+            appimage=$(realpath "$BUNDLE_DIR"/appimage/*.AppImage)
+            emulator="$PROJECT_ROOT/src-tauri/binaries/codesense-emulator-$(rustc -vV | sed -n 's/^host: //p')"
+            work=$(mktemp -d "$OUT_DIR/appimage.XXXXXX")
+            offset=$(env -u APPIMAGE_EXTRACT_AND_RUN "$appimage" --appimage-offset)
+            compressor=$(unsquashfs -s -o "$offset" "$appimage" | sed -n 's/^Compression //p')
+            (cd "$work" && env -u APPIMAGE_EXTRACT_AND_RUN "$appimage" --appimage-extract >/dev/null)
+            if [[ -e "$work/squashfs-root/usr/bin/codesense-emulator" ]]; then
+                echo "Error: the AppImage was bundled with the emulator" >&2
+                exit 1
+            fi
+            install -m 755 "$emulator" "$work/squashfs-root/usr/bin/codesense-emulator"
+            mksquashfs "$work/squashfs-root" "$work/fs.sqfs" -root-owned -noappend -no-progress \
+                -comp "$compressor"
+            # A temp file, then mv: a redirect onto the original would truncate it before head reads.
+            { head -c "$offset" "$appimage" && cat "$work/fs.sqfs"; } >"$work/rebuilt.AppImage"
+            chmod +x "$work/rebuilt.AppImage"
+            mv "$work/rebuilt.AppImage" "$appimage"
+            rm -rf "$work"
+        fi
         ;;
 esac
