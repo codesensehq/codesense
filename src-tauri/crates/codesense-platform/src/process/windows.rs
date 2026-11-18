@@ -39,7 +39,8 @@ const KILLED: u32 = 1;
 /// its pid been reused since.
 pub(super) const PARENT_MAY_BE_STALE: bool = true;
 
-/// What [`running`] needs to query and wait on a process.
+/// The access [`is_alive`] and [`inspect`] open a process with: query to read
+/// its times, synchronize so [`running`] can wait on it.
 const QUERY_AND_WAIT: u32 = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE;
 
 /// Start the child suspended, so it runs only once it is in the job (see
