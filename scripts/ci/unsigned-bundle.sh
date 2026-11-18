@@ -12,8 +12,11 @@
 #     stays in target/release/bundle/dmg.
 #   - Linux builds the formats in `bundles` (a comma list of deb, rpm and appimage; all three
 #     by default), and checks that each of them is exactly one file under
-#     target/release/bundle. The arm64 job leaves out appimage: linuxdeploy rewrites the
-#     bundled emulator executable, which breaks it on aarch64.
+#     target/release/bundle. The AppImage is bundled apart from the others, without the
+#     terminal emulator: linuxdeploy sets an rpath on every executable in the AppDir, and the
+#     emulator is a Bun-compiled executable whose payload sits after the ELF image, which the
+#     rewrite breaks (on aarch64 the bundle aborts). The script then inserts the untouched
+#     emulator and rebuilds the image from Tauri's own AppImage runtime plus a new squashfs.
 # `pnpm exec tauri` runs the CLI directly: the `tauri` script in package.json is POSIX shell
 # and does not run on a Windows runner.
 set -euo pipefail
@@ -54,7 +57,14 @@ case "$PLATFORM" in
         # linuxdeploy is itself an AppImage, and a runner has no FUSE to mount one.
         export APPIMAGE_EXTRACT_AND_RUN=1
         # --verbose shows linuxdeploy's own output, which a failed AppImage otherwise hides.
-        tauri_args+=(--verbose --bundles "$LINUX_BUNDLES")
+        tauri_args+=(--verbose)
+        # tauri build packs every format but the AppImage, which the collection step bundles.
+        build_bundles=$(tr ',' '\n' <<<"$LINUX_BUNDLES" | grep -vx appimage | paste -sd, -) || true
+        if [[ -n "$build_bundles" ]]; then
+            tauri_args+=(--bundles "$build_bundles")
+        else
+            tauri_args+=(--no-bundle)
+        fi
         ;;
 esac
 
@@ -72,6 +82,19 @@ case "$PLATFORM" in
         ditto -c -k --keepParent "$BUNDLE_DIR/macos/CodeSense.app" "$OUT_DIR/CodeSense.app.zip"
         ;;
     linux)
+        if [[ ",$LINUX_BUNDLES," == *,appimage,* ]]; then
+            # The Linux externalBin list without the emulator, so linuxdeploy never sees it. The
+            # merge replaces the array; the deb and rpm keep the full list.
+            appimage_config=$(node -e '
+                const list = require("./src-tauri/tauri.linux.conf.json").bundle.externalBin;
+                const rest = list.filter((bin) => bin !== "binaries/codesense-emulator");
+                if (rest.length !== list.length - 1) throw new Error("expected one emulator entry");
+                console.log(JSON.stringify({ bundle: { externalBin: rest } }));
+            ')
+            # Packs the app tauri build compiled; nothing is compiled again.
+            pnpm exec tauri bundle --verbose --bundles appimage \
+                --config src-tauri/tauri.unsigned.conf.json --config "$appimage_config"
+        fi
         # The job uploads each format as it is, so each must be exactly one file.
         for format in ${LINUX_BUNDLES//,/ }; do
             case "$format" in
