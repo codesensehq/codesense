@@ -2,7 +2,7 @@
 //! Helpers for other crates' tests: the `testutil` feature, enabled on a
 //! dev-dependency only.
 
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 /// Make `link` point at `target` for a test's setup and return `true`, or
 /// return `false` after saying why on stderr, and the test skips the rest.
@@ -13,6 +13,26 @@ use std::path::Path;
 /// file.
 pub fn symlink_or_skip(target: impl AsRef<Path>, link: impl AsRef<Path>) -> bool {
     sys::symlink_or_skip(target.as_ref(), link.as_ref())
+}
+
+/// The relative path from the working directory to the absolute `path`: one
+/// `..` per component of the working directory, then `path` without its root.
+/// It reaches `path` (asserted), so a check that refuses it is refusing
+/// relative paths, not a missing file. On Windows `path` must be on the
+/// working directory's volume.
+pub fn relative_from_cwd(path: &Path) -> PathBuf {
+    fn normal(component: &Component) -> bool {
+        matches!(component, Component::Normal(_))
+    }
+    let cwd = std::env::current_dir().unwrap();
+    let mut relative: PathBuf = cwd.components().filter(normal).map(|_| "..").collect();
+    relative.extend(path.components().filter(normal));
+    assert!(
+        relative.is_relative() && relative.exists(),
+        "{}",
+        relative.display()
+    );
+    relative
 }
 
 /// Make the file at `path` executable for a test's setup: the execute bits

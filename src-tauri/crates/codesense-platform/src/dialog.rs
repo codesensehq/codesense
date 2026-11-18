@@ -160,7 +160,11 @@ pub fn outcome(
     let said = String::from_utf8_lossy(stderr);
     let cancelled = match program {
         Program::Askpass => true,
-        Program::Zenity | Program::Kdialog => code == Some(1),
+        // GTK exits 1 when it cannot open a display ("cannot open display" in
+        // GTK 3, "Failed to open display" in GTK 4): that is no dialog, not a
+        // cancel.
+        Program::Zenity => code == Some(1) && !said.contains("open display"),
+        Program::Kdialog => code == Some(1),
         Program::Osascript => said.contains("-128"),
     };
     if cancelled {
@@ -327,17 +331,24 @@ mod tests {
 
     #[test]
     fn osascript_gets_the_script_then_text_title_and_button() {
-        let mut expected = Vec::new();
-        for line in OSASCRIPT_LINES {
-            expected.extend(["-e", line]);
-        }
-        expected.extend([
-            "--",
-            "Passphrase for /home/me/.ssh/id_ed25519",
-            "CodeSense",
-            "Save",
-        ]);
-        assert_eq!(strings(argv(Program::Osascript, &PROMPT)), expected);
+        assert_eq!(
+            strings(argv(Program::Osascript, &PROMPT)),
+            [
+                "-e",
+                "on run argv",
+                "-e",
+                "text returned of (display dialog (item 1 of argv) default answer \"\" \
+                 with hidden answer with title (item 2 of argv) \
+                 buttons {\"Cancel\", (item 3 of argv)} default button 2 cancel button 1 \
+                 with icon caution)",
+                "-e",
+                "end run",
+                "--",
+                PROMPT.text,
+                "CodeSense",
+                "Save",
+            ]
+        );
     }
 
     fn failed(result: Result<Option<String>, DialogError>) -> String {
@@ -432,6 +443,36 @@ mod tests {
     }
 
     #[test]
+    fn zenity_with_no_display_fails_instead_of_cancelling() {
+        for said in [
+            "(zenity:42): Gtk-WARNING **: 10:00:00.000: cannot open display: \n",
+            "(zenity:42): Gtk-WARNING **: 10:00:00.000: Failed to open display\n",
+        ] {
+            let why = failed(outcome(
+                Program::Zenity,
+                Some(1),
+                Vec::new(),
+                said.as_bytes(),
+            ));
+            assert!(
+                why.starts_with("the passphrase dialog zenity failed (exit 1): "),
+                "{why}"
+            );
+            assert!(why.contains("open display"), "{why}");
+        }
+        assert_eq!(
+            outcome(
+                Program::Zenity,
+                Some(1),
+                Vec::new(),
+                b"(zenity:42): Gtk-WARNING **: GtkDialog mapped without a transient parent\n"
+            ),
+            Ok(None),
+            "a cancel that prints a Gtk warning is still a cancel"
+        );
+    }
+
+    #[test]
     fn a_signal_fails_a_dialog_but_cancels_an_askpass() {
         for program in [Program::Zenity, Program::Kdialog, Program::Osascript] {
             assert_eq!(
@@ -490,6 +531,31 @@ mod tests {
         use std::os::unix::fs::{symlink, PermissionsExt};
         use std::path::PathBuf;
 
+        /// Wait until a fake just written can be run. A fork elsewhere in the
+        /// test process can hold the script's write descriptor until that child
+        /// execs, and Linux refuses to exec a file open for writing (`ETXTBSY`);
+        /// that clears within moments, so a run is retried, as the emulator
+        /// supervisor does. The run is a throwaway: each test's own run rewrites
+        /// the argv file.
+        fn runnable(path: &Path) {
+            let mut busy = 0;
+            loop {
+                match Command::new(path)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                {
+                    Ok(_) => return,
+                    Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) && busy < 50 => {
+                        busy += 1;
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    Err(e) => panic!("run {}: {e}", path.display()),
+                }
+            }
+        }
+
         struct Fakes {
             dir: tempfile::TempDir,
         }
@@ -528,6 +594,9 @@ mod tests {
                 );
                 std::fs::write(path, script).unwrap();
                 std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+                if mode & 0o111 != 0 {
+                    runnable(path);
+                }
                 path.to_path_buf()
             }
 
@@ -670,6 +739,21 @@ mod tests {
         }
 
         #[test]
+        fn zenity_with_no_display_fails_rather_than_cancelling() {
+            let fakes = Fakes::new();
+            fakes.on_path(
+                "zenity",
+                "echo '(zenity:42): Gtk-WARNING **: cannot open display: ' >&2; exit 1",
+            );
+            let why = failed(fakes.ask(None, &fakes.no_default()));
+            assert_eq!(
+                why,
+                "the passphrase dialog zenity failed (exit 1): \
+                 (zenity:42): Gtk-WARNING **: cannot open display:"
+            );
+        }
+
+        #[test]
         fn a_signal_fails_zenity_and_cancels_an_askpass() {
             let fakes = Fakes::new();
             fakes.on_path("zenity", "printf 'hunter2'; kill -9 $$");
@@ -711,9 +795,11 @@ mod tests {
         #[test]
         fn no_dialog_with_a_relative_ssh_askpass() {
             let fakes = Fakes::new();
-            fakes.elsewhere("askpass", "printf 'from askpass\\n'");
+            let askpass = fakes.elsewhere("askpass", "printf 'from askpass\\n'");
+            // It reaches the fake (asserted), so only its being relative refuses it.
+            let relative = crate::testutil::relative_from_cwd(&askpass);
             assert_eq!(
-                fakes.ask(Some(OsStr::new("askpass")), &fakes.no_default()),
+                fakes.ask(Some(relative.as_os_str()), &fakes.no_default()),
                 Err(DialogError::NoDialog)
             );
         }
