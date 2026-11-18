@@ -91,7 +91,9 @@ test("caps-agree: a capability is on exactly when its binary is bundled", () => 
   passes(capsAgree(extracted(), "caps: git-ai=off starship=off"));
   passes(capsAgree(extracted("starship", "git-ai"), "caps: git-ai=on starship=on"));
   passes(capsAgree(extracted("starship"), "caps: git-ai=off starship=on"));
-  // Other capabilities on the line are not this check's.
+  // Other capabilities on the line, such as secret-store after them, are not this check's.
+  passes(capsAgree(extracted(), "caps: git-ai=off starship=off secret-store=on"));
+  passes(capsAgree(extracted("starship"), "caps: git-ai=off starship=on secret-store=off"));
   passes(capsAgree(extracted(), "caps: bridge=on git-ai=off secret-store=on starship=off"));
 });
 
