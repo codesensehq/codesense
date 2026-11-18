@@ -1316,6 +1316,29 @@ fn baseline_regeneration_only_lowers_and_drops_rows() {
 }
 
 #[test]
+fn vendor_and_target_directories_are_not_scanned() {
+    let src = std::env::temp_dir().join(format!("platform-cfg-walk-{}", std::process::id()));
+    for dir in ["a/vendor", "a/target", "b"] {
+        fs::create_dir_all(src.join(dir)).expect("create a temporary source dir");
+    }
+    for file in [
+        "lib.rs",
+        "a/vendor/v.rs",
+        "a/target/t.rs",
+        "b/x.rs",
+        "b/notes.md",
+    ] {
+        fs::write(src.join(file), "").expect("write a temporary source");
+    }
+    let files: Vec<String> = rust_files(&src)
+        .iter()
+        .map(|file| label(&src, file))
+        .collect();
+    let _ = fs::remove_dir_all(&src);
+    assert_eq!(files, ["b/x.rs", "lib.rs"]);
+}
+
+#[test]
 fn the_passing_fixture_scans_as_expected() {
     let tree = fixture("pass");
     let scanned = scan(&tree);
@@ -1330,7 +1353,7 @@ fn the_passing_fixture_scans_as_expected() {
             ("src/orphan.rs", 1),
             ("src/unix_bits.rs", 3),
         ]),
-        "the platform crate and every test-only file are skipped (bin roots and `#[path]` in an \
+        "the platform crate, vendor/ and every test-only file are skipped (bin roots and `#[path]` in an \
          inline module are followed); a file reached by a test and a production route, or by none, \
          is scanned"
     );
@@ -1397,6 +1420,14 @@ fn a_stale_row_fails() {
             "`src/gone.rs` no longer exists; delete the row",
             "`src/main.rs` has no counted sites",
         ],
+    );
+}
+
+#[test]
+fn more_gate_rows_than_sites_fails() {
+    assert_guard_fails(
+        "extra_gate",
+        &["platform_caps_allowlist.txt:2: `src/main.rs` has 2 gate rows but 1 sites; delete the rows whose gate is gone"],
     );
 }
 
