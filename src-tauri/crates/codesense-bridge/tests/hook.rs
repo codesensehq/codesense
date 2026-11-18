@@ -1,0 +1,141 @@
+// SPDX-License-Identifier: MIT
+//! `codesense-bridge hook …` as Claude runs it: the built binary, the hook's JSON on stdin.
+
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
+use std::time::Duration;
+
+/// Run `codesense-bridge hook <args>` with `stdin` and a home of its own.
+fn hook(args: &[&str], stdin: &[u8], env: &[(&str, &str)]) -> Output {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let home = std::env::temp_dir().join(format!(
+        "codesense-bridge-hook-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&home).unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_codesense-bridge"));
+    command
+        .arg("hook")
+        .args(args)
+        .env("HOME", &home)
+        .env_remove("CODESENSE_API_PORT")
+        .env_remove("CODESENSE_STATUS_URL")
+        .env_remove("CODESENSE_TAB_SESSION_ID")
+        .envs(env.iter().copied())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    // A verb that reads no stdin may have exited already.
+    let _ = child.stdin.take().unwrap().write_all(stdin);
+    let output = child.wait_with_output().unwrap();
+    let _ = std::fs::remove_dir_all(&home);
+    output
+}
+
+#[test]
+fn the_secret_guard_denies_a_credential_read() {
+    let out = hook(
+        &["secret-guard"],
+        br#"{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/repo/.env"}}"#,
+        &[],
+    );
+    assert!(out.status.success());
+    let deny: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(deny["hookSpecificOutput"]["permissionDecision"], "deny");
+    assert_eq!(deny["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        codesense_host_proto::hook::Deny {
+            reason: codesense_host_proto::hook::GUARD_REASON
+        }
+        .to_json()
+    );
+}
+
+#[test]
+fn the_secret_guard_allows_ordinary_work_silently() {
+    let inputs: [&[u8]; 2] = [
+        br#"{"tool_name":"Read","tool_input":{"file_path":"/repo/src/main.rs"}}"#,
+        b"not json",
+    ];
+    for input in inputs {
+        let out = hook(&["secret-guard"], input, &[]);
+        assert!(out.status.success());
+        assert!(out.stdout.is_empty());
+    }
+}
+
+/// Answer each request 200 and hand its text back.
+fn listener() -> (String, mpsc::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port().to_string();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let mut raw = Vec::new();
+            let mut chunk = [0u8; 4096];
+            // The whole request: its head, then the body its Content-Length names.
+            let request = loop {
+                let n = stream.read(&mut chunk).unwrap();
+                raw.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&raw).to_string();
+                if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                    let length: usize = head
+                        .lines()
+                        .find_map(|l| l.strip_prefix("Content-Length: "))
+                        .unwrap()
+                        .parse()
+                        .unwrap();
+                    if body.len() >= length {
+                        break text;
+                    }
+                }
+                assert!(n > 0, "request ended early");
+            };
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .unwrap();
+            let _ = tx.send(request);
+        }
+    });
+    (port, rx)
+}
+
+#[test]
+fn notify_posts_the_event_once() {
+    let (port, rx) = listener();
+    let event = r#"{"hook_event_name":"Stop","session_id":"abc"}"#;
+    let out = hook(
+        &["notify"],
+        event.as_bytes(),
+        &[
+            ("CODESENSE_API_PORT", port.as_str()),
+            ("CODESENSE_TAB_SESSION_ID", "tab-1"),
+        ],
+    );
+    assert!(out.status.success());
+    let request = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(request.starts_with("POST /api/v1/terminal/status HTTP/1."));
+    assert!(request.contains("\r\nX-Codesense-Tab-Session-Id: tab-1\r\n"));
+    assert!(request.ends_with(event));
+    assert!(
+        rx.recv_timeout(Duration::from_millis(300)).is_err(),
+        "one post"
+    );
+}
+
+#[test]
+fn an_unknown_hook_prints_usage_and_succeeds() {
+    let verbs: [&[&str]; 2] = [&["bogus"], &[]];
+    for args in verbs {
+        let out = hook(args, b"{}", &[]);
+        assert!(out.status.success());
+        assert!(String::from_utf8_lossy(&out.stderr).contains("usage: codesense-bridge hook"));
+    }
+}

@@ -8,7 +8,7 @@ use std::cell::Cell;
 use std::ffi::{OsStr, OsString};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -23,8 +23,8 @@ use codesense_platform::fs::{
 };
 use codesense_platform::ipc::{blocking, Endpoint, LocalListener, LocalStream};
 use codesense_platform::process::{is_alive, kill_hard, terminate, Pid, ProcessTree};
-use codesense_platform::testutil::{pathext, set_executable, symlink_or_skip};
-use codesense_platform::user::current_user;
+use codesense_platform::testutil::{pathext, relative_from_cwd, set_executable, symlink_or_skip};
+use codesense_platform::user::{current_user, login_shell};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 
 fn fixture(args: &[&str]) -> Command {
@@ -738,25 +738,6 @@ fn same_volume_tempdir() -> tempfile::TempDir {
     tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap()
 }
 
-/// The relative path from the working directory to the absolute `path`: one
-/// `..` per component of the working directory, then `path` without its root.
-/// It reaches `path` (asserted), so a check that accepts it is not refusing
-/// relative paths.
-fn relative_from_cwd(path: &Path) -> PathBuf {
-    fn normal(component: &Component) -> bool {
-        matches!(component, Component::Normal(_))
-    }
-    let cwd = std::env::current_dir().unwrap();
-    let mut relative: PathBuf = cwd.components().filter(normal).map(|_| "..").collect();
-    relative.extend(path.components().filter(normal));
-    assert!(
-        relative.is_relative() && relative.exists(),
-        "{}",
-        relative.display()
-    );
-    relative
-}
-
 /// The fixture installs of `tool`: every spelling an OS might run.
 const TOOL_FILES: [&str; 3] = ["tool", "tool.cmd", "tool.exe"];
 
@@ -1077,5 +1058,21 @@ fn expect_search_path(found: Option<String>, probed: bool) {
     } else {
         assert!(probed);
         assert_eq!(found.as_deref(), Some("from the probe"));
+    }
+}
+
+#[test]
+fn login_shell_is_the_accounts_shell() {
+    expect_login_shell(login_shell());
+}
+
+/// Unix: the passwd entry's shell, an absolute path (every macOS and Linux
+/// account has one). Windows: none, as it has no login shell.
+fn expect_login_shell(shell: Option<String>) {
+    if cfg!(windows) {
+        assert_eq!(shell, None);
+    } else {
+        let shell = shell.expect("a login shell in the passwd entry");
+        assert!(shell.starts_with('/'), "{shell}");
     }
 }

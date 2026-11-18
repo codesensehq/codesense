@@ -7,6 +7,7 @@ import {
   hasCommandModifier,
   hasMod,
   hasPlatformMod,
+  keydownEvent,
   matchesKeystroke,
   modifiersFrom,
 } from "./keystroke";
@@ -93,5 +94,51 @@ describe("AltGr", () => {
     setPlatform("MacIntel");
     const event = keydown({ key: "[", metaKey: true, altKey: true }, { altGraph: true });
     expect(matchesKeystroke(event, "CmdOrCtrl+Alt+[")).toBe(true);
+  });
+});
+
+describe("keydownEvent", () => {
+  it("answers AltGraph from modifierAltGraph, not from the Alt key", () => {
+    const init = { key: "[", code: "Digit8", ctrlKey: true, altKey: true };
+    expect(keydownEvent({ ...init, modifierAltGraph: true }).getModifierState("AltGraph")).toBe(
+      true,
+    );
+    expect(keydownEvent({ ...init, modifierAltGraph: false }).getModifierState("AltGraph")).toBe(
+      false,
+    );
+    expect(keydownEvent(init).getModifierState("AltGraph")).toBe(false);
+  });
+
+  it("keeps the init's key, code and modifiers", () => {
+    const event = keydownEvent({
+      key: "[",
+      code: "Digit8",
+      ctrlKey: true,
+      altKey: true,
+      modifierAltGraph: true,
+    });
+    expect(event.type).toBe("keydown");
+    expect(event).toMatchObject({
+      key: "[",
+      code: "Digit8",
+      metaKey: false,
+      ctrlKey: true,
+      altKey: true,
+      shiftKey: false,
+    });
+    expect(event.getModifierState("Control")).toBe(true);
+    expect(event.getModifierState("Shift")).toBe(false);
+  });
+
+  it("is what the matcher refuses off macOS and accepts on macOS", () => {
+    setPlatform("Linux x86_64");
+    const altGr = { key: "[", code: "Digit8", ctrlKey: true, altKey: true };
+    expect(
+      matchesKeystroke(keydownEvent({ ...altGr, modifierAltGraph: true }), "CmdOrCtrl+Alt+["),
+    ).toBe(false);
+    expect(matchesKeystroke(keydownEvent(altGr), "CmdOrCtrl+Alt+[")).toBe(true);
+    setPlatform("MacIntel");
+    const mac = { key: "[", code: "Digit8", metaKey: true, altKey: true, modifierAltGraph: true };
+    expect(matchesKeystroke(keydownEvent(mac), "CmdOrCtrl+Alt+[")).toBe(true);
   });
 });

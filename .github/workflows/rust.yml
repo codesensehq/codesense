@@ -148,6 +148,10 @@ jobs:
         run: |
           git config --global user.name "CodeSense CI"
           git config --global user.email "security@codesense.ai"
+      - name: Test sidecar naming with bash 3.2
+        # macOS's own /bin/bash, the oldest bash the build scripts run under; once per run.
+        if: matrix.part == 'rest'
+        run: /bin/bash scripts/lib/sidecar.test.sh
       - name: Prepare logs
         run: mkdir -p "$RUNNER_TEMP/rust-ci-logs"
       - name: Set up pnpm
@@ -414,9 +418,9 @@ jobs:
       CARGO_INCREMENTAL: "0"
       RUST_BACKTRACE: "1"
       CARGO_TERM_COLOR: always
-      # Only the crates that pass on Linux today; macOS also runs pty-core,
+      # Only the crates that pass on Linux today, and the bridge; macOS also runs pty-core,
       # session-server, guards and the desktop app.
-      RUST_PACKAGES: -p codesense-platform -p codesense-host-proto -p codesense-fs-core
+      RUST_PACKAGES: -p codesense-platform -p codesense-host-proto -p codesense-fs-core -p codesense-bridge
     steps:
       # All paths below are relative to this repository's checkout.
       - name: Check out source
@@ -472,6 +476,10 @@ jobs:
         # and tracked as a public issue by flaky-issues on main.
         if: (success() || failure()) && steps.compile.outcome == 'success'
         run: node scripts/flaky-tests.mjs summary target/nextest/ci/junit.xml
+      - name: Compare the secret guard with its Perl script
+        # The Rust guard must deny everything the installed Perl guard denies (/usr/bin/perl is on
+        # the runner). It goes when the Perl script is deleted.
+        run: "cargo test --locked -p codesense-host-proto --lib hook:: -- --ignored"
       - name: Test Linux doctests
         timeout-minutes: 15
         # Runs after failed tests, but not when the test build never ran, so an earlier failure
@@ -548,8 +556,9 @@ jobs:
           shared-key: rust-check-linux
           save-if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}
           cache-on-failure: true
-      - name: Fetch git-ai
-        run: bash scripts/fetch-git-ai.sh
+      - name: Fetch bundled binaries
+        # The Linux bundle's pinned starship, which tauri-build needs in place.
+        run: bash scripts/fetch-bundled.sh
       - name: Build sidecars
         # The app's build script needs the bundled sidecars to exist.
         run: bash scripts/build-session-server.sh
@@ -614,8 +623,9 @@ jobs:
           shared-key: rust-linux-app
           save-if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}
           cache-on-failure: true
-      - name: Fetch git-ai
-        run: bash scripts/fetch-git-ai.sh
+      - name: Fetch bundled binaries
+        # The Linux bundle's pinned starship, which tauri-build needs in place.
+        run: bash scripts/fetch-bundled.sh
       - name: Build sidecars
         # The app's build script needs the bundled sidecars to exist.
         run: bash scripts/build-session-server.sh
@@ -653,6 +663,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Test sidecar naming in Git Bash
+        # The .exe suffix, and paths in Git Bash's /d/a/... form.
+        run: bash scripts/lib/sidecar.test.sh
       - name: Set up Rust
         # Matches ci.yml; rustup's proxies read the channel in rust-toolchain.toml.
         run: rustup toolchain install stable --profile minimal
@@ -666,6 +679,8 @@ jobs:
         run: cargo check --locked -p codesense-platform -p codesense-host-proto -p codesense-fs-core --all-targets
       - name: Test the platform crate
         run: cargo test --locked -p codesense-platform
+      - name: Test Claude's hooks
+        run: "cargo test --locked -p codesense-host-proto --lib hook::"
 
   flaky-issues:
     name: Track flaky Rust tests

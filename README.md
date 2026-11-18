@@ -49,18 +49,29 @@ git clone https://github.com/codesensehq/codesense.git
 cd codesense
 corepack enable
 pnpm install --frozen-lockfile
-bash scripts/fetch-git-ai.sh     # the pinned, checksummed git-ai binary
+bash scripts/fetch-bundled.sh    # the pinned, checksummed binaries this OS bundles
 pnpm build:emulator              # the terminal emulator worker
 pnpm run tauri dev               # run it
 pnpm tauri:build:unsigned        # or build a debug app, no signing or updater keys
 ```
 
+On Linux, use the deb or rpm from a Tauri build, or build an AppImage with
+`bash scripts/ci/unsigned-bundle.sh linux appimage`: the AppImage packer rewrites every
+executable it bundles, which breaks the bundled starship and the terminal emulator, and that
+script bundles it without the emulator and then repairs it with `scripts/ci/repair-appimage.sh`.
+The repair needs `python3` and squashfs-tools (`unsquashfs` and `mksquashfs`) on top of the
+Tauri prerequisites, and linuxdeploy, which packs the AppImage, needs `file`; on Debian or Ubuntu,
+`sudo apt install python3 squashfs-tools file`. The script checks for all of these AppImage tools
+before it starts the build.
+
 A signed release build (`pnpm run tauri build`) needs your own Apple signing
 identity and your own updater signing key; none are included here.
 
-`scripts/fetch-git-ai.sh` downloads the pinned git-ai release over HTTPS, with
-no GitHub login, and refuses it unless its SHA-256 matches `src-tauri/git-ai.pin`.
-`bash scripts/fetch-git-ai.sh --dry-run` prints the URL it would fetch. If a step
+`scripts/fetch-bundled.sh` downloads the third-party binaries the app bundles on
+this OS (git-ai on macOS, `src-tauri/git-ai.pin`; starship on Linux,
+`src-tauri/pins/`) over HTTPS, with no GitHub login, and refuses each unless its
+SHA-256 matches its pin. `bash scripts/fetch-bundled.sh --dry-run` prints the URL
+it would fetch. If a step
 fails on a clean checkout, please open an issue.
 
 A build from source uses the `internal` update channel by default and leaves out
@@ -107,10 +118,10 @@ chmod +x CodeSense_*.AppImage && ./CodeSense_*.AppImage
 If the AppImage will not start for want of FUSE, install it (`sudo apt install libfuse2`,
 or `libfuse2t64` on Ubuntu 24.04) or run it with `--appimage-extract-and-run`.
 
-Some things are off on Linux for now: git-ai attribution, the bundled starship prompt,
-and remembering an SSH key passphrase (it needs a passphrase prompt Linux doesn't have yet).
-Other saved secrets are kept in Secret Service (GNOME Keyring or KWallet) when one is
-running, and CodeSense says so when none is.
+Some things are off on Linux for now: git-ai attribution and remembering an SSH key
+passphrase (it needs a passphrase prompt Linux doesn't have yet). Other saved secrets
+are kept in Secret Service (GNOME Keyring or KWallet) when one is running, and
+CodeSense says so when none is.
 
 Every test build is a source build like the one above: the `internal` channel,
 no update checks and no dashboard publishing.
