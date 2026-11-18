@@ -1184,7 +1184,9 @@ mod tests {
             command: Some("echo hi".into()),
             ..interactive("")
         };
-        let error = command.resolve("s", &host).unwrap_err();
+        let Err(error) = command.resolve("s", &host) else {
+            panic!("a command line resolved without a POSIX runner");
+        };
         assert_eq!(error, SpawnError::NoPosixRunner);
         assert_eq!(
             error.to_string(),
