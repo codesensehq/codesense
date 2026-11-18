@@ -74,7 +74,7 @@ codesense-host-proto = { path = "crates/codesense-host-proto" }
 codesense-session-server = { path = "crates/codesense-session-server" }
 codesense-pty-core = { path = "crates/codesense-pty-core" }
 codesense-fs-core = { path = "crates/codesense-fs-core" }
-# OS-specific mechanisms; here, the passphrase dialog.
+# OS mechanisms: the command-line tool lookup and the passphrase dialog.
 codesense-platform = { path = "crates/codesense-platform" }
 sysinfo = "0.32"
 dirs = "5"

@@ -110,6 +110,14 @@ pub(super) fn unlock(file: &File) -> io::Result<()> {
     }
 }
 
+pub(super) fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.is_absolute()
+        && std::fs::metadata(path)
+            .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+}
+
 pub(super) fn link_or_copy(target: &Path, link: &Path) -> io::Result<Linked> {
     std::os::unix::fs::symlink(target, link)?;
     Ok(Linked::Symlink)

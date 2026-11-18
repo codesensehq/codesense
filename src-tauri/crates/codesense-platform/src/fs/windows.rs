@@ -333,6 +333,10 @@ fn refuse_link(file: File, path: &Path) -> io::Result<File> {
 /// The longest plain path, in UTF-16 units: `MAX_PATH` less its NUL.
 const MAX_PLAIN_PATH: usize = 259;
 
+pub(super) fn is_executable(path: &Path) -> bool {
+    path.is_absolute() && path.is_file() && crate::win::has_pathext(path)
+}
+
 pub(super) fn canonicalize(path: &Path) -> io::Result<PathBuf> {
     dunce::canonicalize(path).map(plain_unc)
 }

@@ -145,8 +145,8 @@ jobs:
         # Matches ci.yml; rustup's proxies read the channel in rust-toolchain.toml.
         run: rustup toolchain install stable --profile minimal
       - name: Check scripts
-        # Both scripts, here: macOS runners ship no shellcheck.
-        run: shellcheck scripts/ci/unsigned-bundle.sh scripts/ci/bundle-manifest.sh
+        # All of them, here: macOS runners ship no shellcheck.
+        run: shellcheck scripts/ci/unsigned-bundle.sh scripts/ci/bundle-manifest.sh scripts/ci/smoke-linux.sh
       - name: Build app
         env:
           BUNDLES: ${{ matrix.bundles }}
@@ -212,3 +212,82 @@ jobs:
           archive: false
           retention-days: 7
           if-no-files-found: error
+
+  linux-smoke:
+    name: Linux packaging smoke (${{ matrix.arch }})
+    if: inputs.platform == 'all' || inputs.platform == 'linux'
+    # A matrix job is needed whole, so both legs wait for both builds.
+    needs: linux-app
+    # Each leg runs on its build's runner and picks that build's packages by the architecture
+    # in their names. scripts/ci/smoke-linux.sh says what each step checks.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+            artifacts: "*{_amd64.deb,.x86_64.rpm,_amd64.AppImage}"
+            deb_images: ubuntu:22.04 ubuntu:24.04
+            appimage: true
+          # The arm64 build runs on 24.04, so 24.04 is the oldest Ubuntu it installs on.
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            artifacts: "*{_arm64.deb,.aarch64.rpm}"
+            deb_images: ubuntu:24.04
+            appimage: false
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download packages
+        # v8 is the first to read the unzipped files linux-app uploads.
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: ${{ matrix.artifacts }}
+          path: ${{ runner.temp }}/packages
+          merge-multiple: true
+      - name: Install the deb and rpm in clean containers
+        env:
+          DEB_IMAGES: ${{ matrix.deb_images }}
+        run: |
+          for image in $DEB_IMAGES; do
+            bash scripts/ci/smoke-linux.sh install deb "$image" "$RUNNER_TEMP/packages" "$RUNNER_TEMP/smoke"
+          done
+          bash scripts/ci/smoke-linux.sh install rpm fedora:44 "$RUNNER_TEMP/packages" "$RUNNER_TEMP/smoke"
+          bash scripts/ci/smoke-linux.sh same-resources "$RUNNER_TEMP/smoke/deb.list" "$RUNNER_TEMP/smoke/rpm.list"
+      - name: Install the desktop session tools
+        # An AppImage leaves out the GL, EGL and Mesa libraries every desktop has.
+        if: matrix.appimage
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb xauth x11-utils xdotool dbus \
+            gnome-keyring imagemagick libegl1 libgl1 libgles2 libgl1-mesa-dri
+      - name: Launch the AppImage
+        if: matrix.appimage
+        run: bash scripts/ci/smoke-linux.sh run "$RUNNER_TEMP/packages" "$RUNNER_TEMP/smoke/appimage"
+      - name: Launch the AppImage with DMABUF kept
+        if: matrix.appimage
+        run: bash scripts/ci/smoke-linux.sh variant dmabuf "$RUNNER_TEMP/smoke/appimage"
+      - name: Launch the AppImage with no session bus
+        if: matrix.appimage
+        run: bash scripts/ci/smoke-linux.sh variant no-dbus "$RUNNER_TEMP/smoke/appimage"
+      - name: Upload logs and screenshots
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-smoke-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/smoke/*.list
+            ${{ runner.temp }}/smoke/appimage/listing
+            ${{ runner.temp }}/smoke/appimage/*.log
+            ${{ runner.temp }}/smoke/appimage/*.png
+          retention-days: 7
+          if-no-files-found: warn

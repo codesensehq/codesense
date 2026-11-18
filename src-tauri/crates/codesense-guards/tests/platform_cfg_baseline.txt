@@ -97,7 +97,7 @@ src/commands/content_engine.rs 3
 src/commands/context_repo_git.rs 6
 src/commands/credential_store.rs 5
 src/commands/dashboard_launch.rs 11
-src/commands/deps.rs 19
+src/commands/deps.rs 16
 src/commands/local_organization.rs 2
 src/commands/machines/mod.rs 9
 src/commands/machines/registry.rs 7
