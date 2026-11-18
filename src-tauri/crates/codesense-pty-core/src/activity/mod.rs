@@ -9,6 +9,8 @@ mod inbox;
 mod ingress;
 mod launch;
 mod owner;
+#[cfg(all(test, unix))]
+mod peer_tests;
 mod process;
 mod subagents;
 
