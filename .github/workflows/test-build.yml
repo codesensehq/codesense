@@ -100,11 +100,12 @@ jobs:
           - arch: x86_64
             runner: ubuntu-22.04
             bundles: deb,rpm,appimage
-          # No AppImage on arm64: linuxdeploy rewrites the bundled emulator executable, which
-          # breaks it on aarch64.
+          # Both legs bundle the AppImage without the emulator and insert it untouched afterwards
+          # (scripts/ci/unsigned-bundle.sh): linuxdeploy's rpath rewrite breaks the Bun-compiled
+          # emulator, and on aarch64 aborts the bundle.
           - arch: arm64
             runner: ubuntu-24.04-arm
-            bundles: deb,rpm
+            bundles: deb,rpm,appimage
     runs-on: ${{ matrix.runner }}
     # A cold release build of the app and both sidecars, with no dependency cache.
     timeout-minutes: 150
@@ -125,12 +126,13 @@ jobs:
           # shallow checkout of a branch lacks.
           fetch-depth: 0
       - name: Install system libraries
-        # What rust.yml's Linux check installs, plus file (linuxdeploy) and rpm (the rpm bundle).
+        # What rust.yml's Linux check installs, plus file (linuxdeploy), rpm (the rpm bundle) and
+        # squashfs-tools (the AppImage rebuild in unsigned-bundle.sh).
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev libxdo-dev libssl-dev \
-            file rpm
+            file rpm squashfs-tools
       - name: Set up pnpm
         uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - name: Set up Node
@@ -159,6 +161,36 @@ jobs:
             grep -E "(^|/)usr/bin/$name\$" <<<"$bin_files" || { echo "Error: $name is not in /usr/bin of the deb" >&2; exit 1; }
           done
           [[ $(wc -l <<<"$bin_files") -eq 4 ]] || { echo "Error: expected the app binary and three sidecars in /usr/bin" >&2; exit 1; }
+      - name: Check the AppImage emulator
+        # A Bun-compiled executable keeps its payload after the ELF image, so the emulator must
+        # reach the AppImage's usr/bin byte for byte. The step prints every result before it
+        # fails on any, and extracts without FUSE in a temp dir of its own.
+        run: |
+          built="$PWD/src-tauri/binaries/codesense-emulator-$(rustc -vV | sed -n 's/^host: //p')"
+          appimage=$(ls "$PWD"/target/release/bundle/appimage/*.AppImage)
+          # The sidecar names come from the Linux config the bundle is built from.
+          sidecars=$(node -p 'require("./src-tauri/tauri.linux.conf.json").bundle.externalBin.map((p) => p.split("/").pop()).join("\n")')
+          cd "$(mktemp -d)"
+          "$appimage" --appimage-extract >/dev/null
+          bin_files=$(find squashfs-root/usr/bin -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
+          echo "usr/bin: ${bin_files//$'\n'/ }"
+          files_ok=true
+          for name in $sidecars; do
+            grep -qx "$name" <<<"$bin_files" || { echo "Error: $name is not in usr/bin of the AppImage" >&2; files_ok=false; }
+          done
+          [[ $(wc -l <<<"$bin_files") -eq $(($(wc -l <<<"$sidecars") + 1)) ]] || { echo "Error: expected the app binary and the sidecars in usr/bin" >&2; files_ok=false; }
+          emulator=squashfs-root/usr/bin/codesense-emulator
+          same=false
+          [[ -f "$emulator" && $(sha256sum <"$emulator") == $(sha256sum <"$built") ]] && same=true
+          rc=0
+          timeout 10 "./$emulator" </dev/null >stdout.txt || rc=$?
+          stdout_bytes=$(wc -c <stdout.txt)
+          echo "files: $files_ok"
+          echo "sha256 matches the built emulator: $same ($(sha256sum <"$emulator" | cut -c1-64) vs $(sha256sum <"$built" | cut -c1-64))"
+          echo "exit code with no input: $rc"
+          echo "stdout bytes with no input: $stdout_bytes"
+          head -c 400 stdout.txt
+          [[ $files_ok == true && $same == true && $rc -eq 0 && $stdout_bytes -eq 0 ]]
       - name: Upload deb
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -174,7 +206,6 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       - name: Upload AppImage
-        if: contains(matrix.bundles, 'appimage')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           path: target/release/bundle/appimage/*.AppImage
