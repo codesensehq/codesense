@@ -14,7 +14,9 @@
 //! - [`dirs`]: the codesense home.
 //! - [`user`]: the user this process runs as.
 //! - [`limits`]: the open-file soft limit.
+//! - [`dialog`]: a system dialog that asks for a secret with hidden entry.
 
+pub mod dialog;
 pub mod dirs;
 pub mod fs;
 pub mod limits;
