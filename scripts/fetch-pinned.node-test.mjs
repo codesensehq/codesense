@@ -229,3 +229,43 @@ test("fetch-bundled maps each host to its pins", (t) => {
     assert.equal(run.stderr, `No pinned binaries for this host: ${os} ${arch}\n`);
   }
 });
+
+test("the checksum uses sha256sum or shasum, whichever the host has, and needs one", (t) => {
+  const which = (name) =>
+    spawnSync("bash", ["-c", `command -v ${name}`], { encoding: "utf8" }).stdout.trim();
+  const bash = which("bash");
+  // A PATH holding only what the script runs besides the checksum tool, plus `tools`.
+  const runWith = (f, tools, ...args) => {
+    const bin = fs.mkdtempSync(path.join(f.dir, "bin-"));
+    for (const name of ["dirname", "cp", "mktemp", "mkdir", "install", "mv", "rm", ...tools]) {
+      fs.symlinkSync(which(name), path.join(bin, name));
+    }
+    return spawnSync(bash, [script, ...args], { cwd: f.dir, encoding: "utf8", env: { PATH: bin } });
+  };
+  for (const tool of ["sha256sum", "shasum"].filter(which)) {
+    const f = fixture(t);
+    const file = path.join(f.dir, "tool-linux");
+    fs.writeFileSync(file, binary);
+    const pin = f.pin({ asset: "tool-linux", sha256: f.sha256(file) });
+    assertInstalled(f, runWith(f, [tool], pin, f.dest, "--from", file));
+    fs.rmSync(path.dirname(f.dest), { recursive: true });
+    const wrong = f.pin({ asset: "tool-linux", sha256: "0".repeat(64) });
+    const run = runWith(f, [tool], wrong, f.dest, "--from", file);
+    assert.equal(run.status, 1, tool);
+    assert.match(run.stderr, /SHA-256 mismatch/, tool);
+  }
+  const f = fixture(t);
+  const file = path.join(f.dir, "tool-linux");
+  fs.writeFileSync(file, binary);
+  const run = runWith(
+    f,
+    [],
+    f.pin({ asset: "tool-linux", sha256: f.sha256(file) }),
+    f.dest,
+    "--from",
+    file,
+  );
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /neither sha256sum nor shasum is installed/);
+  assert.equal(fs.existsSync(f.dest), false);
+});

@@ -93,7 +93,15 @@ else
     exit 1
   fi
 fi
-actual="$(shasum -a 256 "$scratch/$asset")"
+# sha256sum where it exists (coreutils on Linux), else shasum, which every macOS has.
+if command -v sha256sum >/dev/null; then
+  actual="$(sha256sum "$scratch/$asset")"
+elif command -v shasum >/dev/null; then
+  actual="$(shasum -a 256 "$scratch/$asset")"
+else
+  printf '%s: neither sha256sum nor shasum is installed, so the download cannot be checked\n' "$name" >&2
+  exit 1
+fi
 actual="${actual%% *}"
 if [[ "$actual" != "$sha256" ]]; then
   printf '%s SHA-256 mismatch: expected %s, got %s\n' "$name" "$sha256" "$actual" >&2
