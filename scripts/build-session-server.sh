@@ -36,7 +36,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-BINARIES_DIR="$PROJECT_ROOT/src-tauri/binaries"
+# shellcheck source=SCRIPTDIR/lib/sidecar.sh
+. "$SCRIPT_DIR/lib/sidecar.sh"
 TARGET_DIR="${CARGO_TARGET_DIR:-$PROJECT_ROOT/target}"
 BIN_NAME="codesense-session-server"
 
@@ -64,36 +65,25 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
-HOST_TRIPLE=$(rustc -vV | awk '/^host:/ {print $2}')
-if [[ -z "$HOST_TRIPLE" ]]; then
-    echo "Error: Could not determine Rust target triple" >&2
-    exit 1
-fi
+HOST_TRIPLE="$(sidecar_host_triple)"
 if [[ ${#TARGETS[@]} -eq 0 ]]; then
     TARGETS=("$HOST_TRIPLE")
 fi
-
-sha256_line() {
-    if command -v sha256sum >/dev/null 2>&1; then
-        sha256sum "$1"
-    else
-        shasum -a 256 "$1"
-    fi
-}
 
 # Copy the built binary for $2 from $1 to the bundle location and record its
 # sha256 beside it.
 copy_artifact() {
     local source="$1" triple="$2"
-    local name="${3:-$BIN_NAME}-$triple"
+    local dest
+    dest="$(sidecar_path "${3:-$BIN_NAME}" "$triple")"
     if [[ ! -f "$source" ]]; then
         echo "Error: Built binary not found at $source" >&2
         exit 1
     fi
-    mkdir -p "$BINARIES_DIR"
-    cp "$source" "$BINARIES_DIR/$name"
-    (cd "$BINARIES_DIR" && sha256_line "$name" >"$name.sha256")
-    echo "Copied: $BINARIES_DIR/$name ($(cut -d' ' -f1 "$BINARIES_DIR/$name.sha256"))"
+    mkdir -p "$(dirname "$dest")"
+    cp "$source" "$dest"
+    sidecar_sha256_line "$dest" >"$dest.sha256"
+    echo "Copied: $dest ($(cut -d' ' -f1 "$dest.sha256"))"
 }
 
 # `CARGO_TARGET_<TRIPLE>_LINKER`, for a triple.
@@ -105,6 +95,19 @@ target_installed() {
     # grep reads to the end: an early exit would SIGPIPE rustup under pipefail.
     command -v rustup >/dev/null 2>&1 && rustup target list --installed | grep -x "$1" >/dev/null
 }
+
+# SIDECAR_DRY_RUN=1 prints the paths copy_artifact would write for each target,
+# and builds nothing (nor checks the targets: that happens below).
+if [[ "${SIDECAR_DRY_RUN:-}" == 1 ]]; then
+    for triple in "${TARGETS[@]}"; do
+        for name in "$BIN_NAME" codesense-bridge; do
+            dest="$(sidecar_path "$name" "$triple")"
+            echo "$dest"
+            echo "$dest.sha256"
+        done
+    done
+    exit 0
+fi
 
 cd "$PROJECT_ROOT"
 emulator_args=()
