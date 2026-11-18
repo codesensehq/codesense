@@ -113,6 +113,22 @@ fn every_target_pin_parses_and_names_its_own_platform() {
     }
 }
 #[test]
+fn every_git_ai_pin_file_has_a_target_and_every_target_a_file() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("pins");
+    let mut files: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .filter(|name| name.starts_with("git-ai-") && name.ends_with(".pin"))
+        .collect();
+    files.sort();
+    let mut targets: Vec<String> = TARGET_PINS
+        .iter()
+        .map(|(_, _, platform, _)| format!("git-ai-{platform}.pin"))
+        .collect();
+    targets.sort();
+    assert_eq!(files, targets);
+}
+#[test]
 fn linux_targets_pin_the_cs5_release() {
     for (arch, asset, sha256) in [
         (
