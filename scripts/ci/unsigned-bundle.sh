@@ -10,9 +10,9 @@
 #   - macOS fetches git-ai, signs ad hoc (Apple silicon needs a signature to launch the app),
 #     builds the app and dmg, and zips the app to $RUNNER_TEMP/CodeSense.app.zip. The dmg
 #     stays in target/release/bundle/dmg.
-#   - Linux fetches starship, builds the formats in `bundles` (a comma list of deb, rpm and appimage; all three
-#     by default), and checks that each of them is exactly one file under
-#     target/release/bundle. The arm64 job leaves out appimage: linuxdeploy rewrites the
+#   - Linux fetches starship, builds the formats in `bundles` (a comma list of deb, rpm and
+#     appimage; all three by default), puts the pinned starship back into the AppImage, and
+#     checks that each format is exactly one file under target/release/bundle. The arm64 job leaves out appimage: linuxdeploy rewrites the
 #     bundled emulator executable, which breaks it on aarch64.
 # `pnpm exec tauri` runs the CLI directly: the `tauri` script in package.json is POSIX shell
 # and does not run on a Windows runner.
@@ -55,12 +55,35 @@ case "$PLATFORM" in
         bash scripts/fetch-bundled.sh
         # linuxdeploy is itself an AppImage, and a runner has no FUSE to mount one.
         export APPIMAGE_EXTRACT_AND_RUN=1
-        # linuxdeploy strips every ELF file it bundles, which breaks the static starship binary.
-        export NO_STRIP=1
         # --verbose shows linuxdeploy's own output, which a failed AppImage otherwise hides.
         tauri_args+=(--verbose --bundles "$LINUX_BUNDLES")
         ;;
 esac
+
+# linuxdeploy sets an $ORIGIN rpath on every ELF file in the AppDir, and that patchelf rewrite
+# corrupts the static-pie starship, which then crashes. The deb and rpm ship the pinned bytes, so
+# this puts the same bytes back into the AppImage: unpack its squashfs image, replace
+# resources/starship, and pack it again behind the same runtime with the same compression.
+restore_appimage_starship() {
+    local appimage offset compression work target
+    appimage=$(echo "$BUNDLE_DIR"/appimage/*.AppImage)
+    offset=$(bash scripts/ci/appimage-offset.sh "$appimage")
+    compression=$(unsquashfs -s -o "$offset" "$appimage" | sed -n 's/^Compression //p')
+    work=$(mktemp -d)
+    unsquashfs -q -n -d "$work/root" -o "$offset" "$appimage"
+    target=$(find "$work/root" -path '*/resources/starship' -type f)
+    if [[ -z "$target" || "$target" == *$'\n'* ]]; then
+        echo "Error: expected one resources/starship in $appimage, found: $target" >&2
+        exit 1
+    fi
+    install -m 755 src-tauri/resources/fetched/starship "$target"
+    head -c "$offset" "$appimage" >"$work/CodeSense.AppImage"
+    mksquashfs "$work/root" "$work/image" -comp "$compression" -root-owned -noappend -no-progress >/dev/null
+    cat "$work/image" >>"$work/CodeSense.AppImage"
+    chmod 755 "$work/CodeSense.AppImage"
+    mv -f "$work/CodeSense.AppImage" "$appimage"
+    rm -rf "$work"
+}
 
 # Shared steps. beforeBuildCommand runs both sidecar scripts again; with their release builds
 # in place cargo has nothing left to compile. The session-server script builds the terminal
@@ -76,6 +99,9 @@ case "$PLATFORM" in
         ditto -c -k --keepParent "$BUNDLE_DIR/macos/CodeSense.app" "$OUT_DIR/CodeSense.app.zip"
         ;;
     linux)
+        if [[ ",$LINUX_BUNDLES," == *,appimage,* ]]; then
+            restore_appimage_starship
+        fi
         # The job uploads each format as it is, so each must be exactly one file.
         for format in ${LINUX_BUNDLES//,/ }; do
             case "$format" in

@@ -146,7 +146,7 @@ jobs:
         run: rustup toolchain install stable --profile minimal
       - name: Check scripts
         # The bundle and fetch scripts, here: macOS runners ship no shellcheck.
-        run: shellcheck -x scripts/ci/unsigned-bundle.sh scripts/ci/bundle-manifest.sh scripts/fetch-pinned.sh scripts/fetch-bundled.sh
+        run: shellcheck -x scripts/ci/unsigned-bundle.sh scripts/ci/bundle-manifest.sh scripts/fetch-pinned.sh scripts/fetch-bundled.sh scripts/ci/appimage-offset.sh
       - name: Build app
         env:
           BUNDLES: ${{ matrix.bundles }}
@@ -175,12 +175,11 @@ jobs:
               deb) dpkg-deb -x target/release/bundle/deb/*.deb "$dir" ;;
               # libarchive reads the rpm payload itself; rpm2cpio fails on this rpm without a message.
               rpm) bsdtar -xf target/release/bundle/rpm/*.rpm -C "$dir" ;;
-              # The squashfs image after the AppImage's ELF runtime, read without running the
-              # runtime (its --appimage-extract crashes on the runner). The ELF ends after its
-              # section header table: e_shoff + e_shentsize * e_shnum.
+              # The squashfs image after the AppImage's runtime, read without running the runtime
+              # (its --appimage-extract crashes on the runner).
               appimage)
                 appimage=$(echo target/release/bundle/appimage/*.AppImage)
-                offset=$(python3 -c 'import struct, sys; h = open(sys.argv[1], "rb").read(64); print(struct.unpack_from("<Q", h, 0x28)[0] + struct.unpack_from("<H", h, 0x3A)[0] * struct.unpack_from("<H", h, 0x3C)[0])' "$appimage")
+                offset=$(bash scripts/ci/appimage-offset.sh "$appimage")
                 unsquashfs -q -n -d "$dir/squashfs-root" -o "$offset" "$appimage"
                 ;;
             esac || { echo "Error: could not extract the $format" >&2; exit 1; }
