@@ -61,8 +61,8 @@ executable it bundles, which breaks the bundled starship and the terminal emulat
 script bundles it without the emulator and then repairs it with `scripts/ci/repair-appimage.sh`.
 The repair needs `python3` and squashfs-tools (`unsquashfs` and `mksquashfs`) on top of the
 Tauri prerequisites, and linuxdeploy, which packs the AppImage, needs `file`; on Debian or Ubuntu,
-`sudo apt install python3 squashfs-tools file`. The script checks for the repair's tools before it
-starts the build.
+`sudo apt install python3 squashfs-tools file`. The script checks for all of these AppImage tools
+before it starts the build.
 
 A signed release build (`pnpm run tauri build`) needs your own Apple signing
 identity and your own updater signing key; none are included here.

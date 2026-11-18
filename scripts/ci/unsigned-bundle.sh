@@ -61,7 +61,8 @@ case "$PLATFORM" in
         export APPIMAGE_EXTRACT_AND_RUN=1
         # --verbose shows linuxdeploy's own output, which a failed AppImage otherwise hides.
         tauri_args+=(--verbose)
-        # The AppImage repair's tools, checked now rather than after an hour's build.
+        # Every AppImage tool (the repair's, and linuxdeploy's `file`), checked now rather than
+        # after an hour's build.
         if [[ ",$LINUX_BUNDLES," == *,appimage,* ]]; then
             bash scripts/ci/repair-appimage.sh --check-tools
         fi
