@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { normalizeScopePath } from "./normalize";
+import { isWithin, relative } from "@/shared/lib/path";
 
 /**
  * Sync-helper between file-tree navigation and pipeline-viewer scope (30.7 AC-35).
@@ -40,26 +41,13 @@ export function computePipelineScopeUpdate(
   // a scope. Treat the unhydrated case as "no decision possible — pin null".
   if (!targetAbsolutePath || !contextRepoPath || !teamContentPath) return null;
 
-  const target = stripTrailingSlash(targetAbsolutePath);
-  const repo = stripTrailingSlash(contextRepoPath);
-  const contentRootAbs = stripTrailingSlash(teamContentPath);
-
-  // Inside content root — standard drill-in case.
-  if (target === contentRootAbs) return "";
-  const insidePrefix = `${contentRootAbs}/`;
-  if (target.startsWith(insidePrefix)) {
-    return normalizeScopePath(target.slice(insidePrefix.length));
-  }
+  // Inside content root — standard drill-in case (`relative` is `/`-joined).
+  const insideContent = relative(teamContentPath, targetAbsolutePath);
+  if (insideContent !== null) return insideContent && normalizeScopePath(insideContent);
 
   // Above content root but still inside the context repo — reset to root.
-  if (target === repo || target.startsWith(`${repo}/`)) {
-    return "";
-  }
+  if (isWithin(contextRepoPath, targetAbsolutePath)) return "";
 
   // Truly outside the repo — pin.
   return null;
-}
-
-function stripTrailingSlash(p: string): string {
-  return p.endsWith("/") && p.length > 1 ? p.slice(0, -1) : p;
 }

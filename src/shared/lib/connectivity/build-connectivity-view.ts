@@ -10,6 +10,7 @@ import {
   type OrphanDoc,
   type StoryConnectivity,
 } from "./types";
+import { isWithin } from "@/shared/lib/path";
 
 /**
  * SW-DX-8 — the pure connectivity builder (AC-1/2/4/5/6). Consumes the SW-DX-2
@@ -123,9 +124,7 @@ export function buildConnectivityView(
  *  An empty scope bounds NOTHING (never "everything") — a foot-gun guard for the
  *  shared/vanilla contract, which has no upstream non-empty check. */
 function isUnderScope(path: string, scopeRoot: string): boolean {
-  const prefix = scopeRoot.endsWith("/") ? scopeRoot.slice(0, -1) : scopeRoot;
-  if (prefix === "") return false;
-  return path === prefix || path.startsWith(`${prefix}/`);
+  return scopeRoot !== "" && isWithin(scopeRoot, path);
 }
 
 /** Bucket links by `groupKey`, preserving encounter order within a bucket. */

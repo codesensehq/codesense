@@ -93,3 +93,21 @@ describe("deriveOrgRoot", () => {
     );
   });
 });
+
+describe("Windows paths", () => {
+  it("joins the home with the OS home's own separator", async () => {
+    vi.mocked(homeDir).mockResolvedValue("C:\\Users\\me\\");
+    await expect(initCodesenseHome()).resolves.toBe("C:\\Users\\me\\.codesense");
+  });
+
+  it("derives a drive-letter org root", () => {
+    expect(deriveOrgRoot("C:\\Users\\a\\.codesense\\orgs\\o\\team\\content")).toBe(
+      "C:\\Users\\a\\.codesense\\orgs\\o",
+    );
+  });
+
+  it("does not warn for a backslash org root", () => {
+    deriveOrgRoot("C:\\Users\\a\\.codesense\\orgs\\o");
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+});

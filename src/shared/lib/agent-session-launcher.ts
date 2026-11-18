@@ -23,6 +23,7 @@ import {
 import { whenTerminalLayoutHydrated } from "@/shared/lib/terminal-layout";
 import { logger } from "@/shared/lib/logger";
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
+import { basename } from "@/shared/lib/path";
 
 /**
  * SW-GS-2b — the generalized codesense-managed-agent session launcher: connect
@@ -588,8 +589,7 @@ export async function relaunchAgentInLiveShell(
 
 /** The process name the AC-12 liveness probe matches: the agent exe basename. */
 export function agentBasename(agentPath: string): string {
-  const parts = agentPath.split("/");
-  return parts[parts.length - 1] || agentPath;
+  return basename(agentPath) || agentPath;
 }
 
 /** AC-12: true `<agent>`-process liveness in the owned tab (connected vs dropped

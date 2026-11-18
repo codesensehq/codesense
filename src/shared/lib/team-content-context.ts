@@ -3,6 +3,7 @@ import { teamAllContextId } from "./context-model";
 import { buildTeamKey, parseTeamKey } from "./team-key";
 import { pathToTeamContentDirSync } from "./team-content-path";
 import type { Org } from "@/shared/types/domain";
+import { isWithin, join, relative, trimTrailingSeparators } from "@/shared/lib/path";
 
 /** Content consumers need these roots, never a source clone or terminal cwd. */
 export interface ContentSource {
@@ -51,7 +52,7 @@ export function resolveTeamContentContext(
       error: "This team's context is unavailable. Refresh the workspace list.",
     };
   }
-  const orgRoot = org.org_root.replace(/\/+$/, "");
+  const orgRoot = trimTrailingSeparators(org.org_root);
   return {
     kind: "ready",
     source: {
@@ -76,7 +77,7 @@ export function teamContentIdentityForPath(
       const resolved = resolveTeamContentContext(buildTeamKey(org.slug, team.name), [org], true);
       if (resolved.kind !== "ready") continue;
       const root = resolved.source.teamContentPath;
-      if (path === root || path.startsWith(`${root}/`)) return resolved.source.repoPath;
+      if (isWithin(root, path)) return resolved.source.repoPath;
     }
   }
   return null;
@@ -91,13 +92,11 @@ export function teamContentNavigationPath(
 ): string | null {
   const own = resolveTeamContentContext(teamKey, orgs, true);
   if (own.kind !== "ready") return null;
-  if (filePath.startsWith(`${own.source.teamContentPath}/`)) return filePath;
+  if (relative(own.source.teamContentPath, filePath)) return filePath;
   if (!sourceTeam) return null;
   const { orgSlug } = parseTeamKey(teamKey);
   const source = resolveTeamContentContext(buildTeamKey(orgSlug, sourceTeam), orgs, true);
   if (source.kind !== "ready") return null;
-  const root = source.source.teamContentPath;
-  return filePath.startsWith(`${root}/`)
-    ? `${own.source.teamContentPath}${filePath.slice(root.length)}`
-    : null;
+  const rel = relative(source.source.teamContentPath, filePath);
+  return rel ? join(own.source.teamContentPath, rel) : null;
 }

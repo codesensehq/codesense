@@ -853,3 +853,20 @@ describe("explicit story setup continuation", () => {
     expect(runWorktreeSetupMock).toHaveBeenCalledOnce();
   });
 });
+
+describe("createWorktree on Windows paths", () => {
+  it("rehydrates when git lists the worktree with forward slashes", async () => {
+    listWorktreesMock.mockResolvedValue([
+      { path: "C:/Users/a/repo-wt/feat-x", head: "abc", branch: "refs/heads/feat/x" },
+    ]);
+    const worktreePath = "C:\\Users\\a\\repo-wt\\feat-x";
+    const result = await createWorktree({
+      repoPath: "C:\\Users\\a\\repo",
+      branchName: "feat/x",
+      worktreePath,
+      startPoint: "main",
+    });
+    expect(result).toEqual({ worktreePath, rehydrated: true });
+    expect(fetchAndCreateMock).not.toHaveBeenCalled();
+  });
+});

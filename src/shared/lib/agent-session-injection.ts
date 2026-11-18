@@ -11,6 +11,7 @@ import {
   type TerminalAiStatus,
 } from "@/features/viewer/lib/cli-workspace/store/viewer-access";
 import { sessionTarget } from "@/shared/lib/terminal-layout-projection";
+import { basename } from "@/shared/lib/path";
 
 /**
  * SW-GS-2a (AC-8/AC-9): the guarded auto-injection wrapper over `writePty`.
@@ -149,7 +150,8 @@ function managedLaunchTarget(
   | { target: NonNullable<ReturnType<typeof sessionTarget>>; provider: ActivityWrappedCli }
   | undefined {
   const first = /^(?:'([^']*)'|([^\s"'`;|&<>]+))(?:\s|$)/.exec(text.trimStart());
-  const provider = (first?.[1] ?? first?.[2])?.split("/").at(-1);
+  const command = first?.[1] ?? first?.[2];
+  const provider = command === undefined ? undefined : basename(command);
   const target = sessionTarget(getViewerState().terminalLayout, sessionId);
   return target && isActivityWrappedCli(provider) ? { target, provider } : undefined;
 }

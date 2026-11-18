@@ -130,3 +130,16 @@ describe("collapsePipelineBreadcrumbs @P1", () => {
     expect(parentAbsPath).toBe("/root");
   });
 });
+
+describe("buildPipelineBreadcrumbs on Windows paths", () => {
+  it("builds crumbs in the root's separator and accepts git's forward slashes", () => {
+    expect(
+      buildPipelineBreadcrumbs({
+        isDrilledIn: true,
+        rootPath: "C:\\o\\t\\content\\",
+        scopeAbsPath: "C:/o/t/content/epic/sub",
+        rootLabel: "Root",
+      }).map((c) => c.absPath),
+    ).toEqual(["C:\\o\\t\\content", "C:\\o\\t\\content\\epic", "C:\\o\\t\\content\\epic\\sub"]);
+  });
+});

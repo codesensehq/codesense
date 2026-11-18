@@ -6,6 +6,7 @@ import {
   KNOWN_BINARY_EXTENSIONS,
   VIEWER_EXTENSIONS,
 } from "@/shared/lib/viewer-file-type";
+import { split } from "@/shared/lib/path";
 
 /**
  * What kind of file a nav row is, told by shape alone (colour never carries file type):
@@ -71,7 +72,8 @@ export const FILE_KIND_EXTENSIONS = new Set([
   ...KNOWN_BINARY_EXTENSIONS,
 ]);
 
-/** The path rules of fileKindOf, exported so the pane kit's equivalent is generated from them. */
+/** The path rules of fileKindOf, exported so the pane kit's equivalent is generated from them.
+ *  fileKindOf tests them against the path's segments joined with `/`, so a Windows path matches too. */
 export const AGENT_DEFINITION_PATTERNS = [
   /(^|\/)\.claude\/agents\/[^/]+\.md$/i,
   /(^|\/)skills\/[^/]+\/SKILL\.md$/,
@@ -89,8 +91,10 @@ function isAgentDefinition(path: string): boolean {
  * always agrees with how the file opens; a dashboard is an HTML page under `dashboards/`.
  */
 export function fileKindOf(path: string): FileKind {
-  const ext = extensionOf(path.slice(path.lastIndexOf("/") + 1));
-  if (isAgentDefinition(path)) return "agentDef";
+  const segments = split(path);
+  const slashed = segments.join("/");
+  const ext = extensionOf(segments.at(-1) ?? "");
+  if (isAgentDefinition(slashed)) return "agentDef";
   if (ext === null || TEXT_EXTENSIONS.has(ext)) return "text";
   if (KNOWN_BINARY_EXTENSIONS.has(ext) || SLIDE_EXTENSIONS.has(ext)) {
     if (DOCUMENT_EXTENSIONS.has(ext)) return "pdf";
@@ -103,7 +107,7 @@ export function fileKindOf(path: string): FileKind {
     case "markdown":
       return "markdown";
     case "html":
-      return DASHBOARD_DIR_PATTERN.test(path) ? "dashboard" : "html";
+      return DASHBOARD_DIR_PATTERN.test(slashed) ? "dashboard" : "html";
     case "excalidraw":
       return "canvas";
     case "image":

@@ -11,6 +11,8 @@
 // `_team/` wrapper is gone). The parsers anchor on the first layer-marker child
 // (`install`/`content`/`repos`/`libraries`) after the org slug.
 
+import { join, root, split } from "@/shared/lib/path";
+
 export const TEAM_CONTENT_DIR = "content";
 
 /** The four layer-marker directory names a team directory directly contains.
@@ -21,7 +23,7 @@ export const LAYER_MARKER_DIRS = ["install", "content", "repos", "libraries"] as
 /** Synchronous mirror of Rust `path_to_team_content_dir(org_root, team)`.
  *  Returns `{org_root}/{team}/content`. */
 export function pathToTeamContentDirSync(orgRoot: string, team: string): string {
-  return `${orgRoot}/${team}/${TEAM_CONTENT_DIR}`;
+  return join(orgRoot, team, TEAM_CONTENT_DIR);
 }
 
 /** SLW-FX-14: inverse of {@link pathToTeamContentDirSync} for an epic
@@ -47,15 +49,14 @@ export function teamContentPathFromEpicDocPath(
   epicDocPath: string | null | undefined,
 ): { orgRoot: string; team: string; teamContentPath: string } | null {
   if (!epicDocPath) return null;
-  const parts = epicDocPath.split("/");
+  const segments = split(epicDocPath);
   // Anchor on the FIRST layer-marker after the org slug; the team is the
   // segment immediately before it. The marker must be `content` (an epic doc
   // lives under `content/`, never `install`/`repos`). Mirrors the Rust flat
   // parsers so it can't drift from `pathToTeamContentDirSync`.
-  const markerIdx = parts.findIndex((p) => (LAYER_MARKER_DIRS as readonly string[]).includes(p));
-  if (markerIdx < 2 || parts[markerIdx] !== TEAM_CONTENT_DIR) return null;
-  const team = parts[markerIdx - 1];
-  const orgRoot = parts.slice(0, markerIdx - 1).join("/");
-  if (orgRoot === "" || team === "") return null;
+  const markerIdx = segments.findIndex((s) => (LAYER_MARKER_DIRS as readonly string[]).includes(s));
+  if (markerIdx < 2 || segments[markerIdx] !== TEAM_CONTENT_DIR) return null;
+  const team = segments[markerIdx - 1];
+  const orgRoot = join(root(epicDocPath), ...segments.slice(0, markerIdx - 1));
   return { orgRoot, team, teamContentPath: pathToTeamContentDirSync(orgRoot, team) };
 }

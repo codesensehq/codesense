@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import type { ContextFile } from "@/tauri/commands";
 import type { DerivedPipelineTree } from "./types";
+import { basename } from "@/shared/lib/path";
 
 /** Reuse the effective nav overlay for inherited docs; retain own code/config search. */
 export function quickOpenContentFiles(
@@ -17,7 +18,7 @@ export function quickOpenContentFiles(
         files.set(relativePath, { fullPath: filePath, relativePath, name });
       };
       for (const file of [...node.stories, ...(node.docs ?? [])]) add(file.filePath, file.fileName);
-      if (node.mainDoc) add(node.mainDoc.filePath, node.mainDoc.filePath.split("/").pop()!);
+      if (node.mainDoc) add(node.mainDoc.filePath, basename(node.mainDoc.filePath));
       pending.push(...node.subEpics);
     }
   }

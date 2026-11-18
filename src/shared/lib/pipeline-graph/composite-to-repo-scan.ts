@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import type { RepoScanResult } from "./merge-pipeline-trees";
 import type { DerivedPipelineTree, DocRef } from "./types";
+import { basename } from "@/shared/lib/path";
 
 // ---------------------------------------------------------------------------
 // SLW-NC-1 — source-repo content as a second nav tree source. SW-XS-15: it is
@@ -199,7 +200,7 @@ function mergeTreeSourceWins(
   // file a source doc can shadow — it renders as its own `main-doc` row, so if
   // the source wins its name we must drop it too (else the row duplicates + the
   // winner would miss its shadow badge).
-  const ctxMainDocName = ctx.mainDoc?.filePath.split("/").pop() ?? null;
+  const ctxMainDocName = ctx.mainDoc ? basename(ctx.mainDoc.filePath) : null;
   const mainDocShadowed = ctxMainDocName != null && srcDocNames.has(ctxMainDocName);
 
   // Team-workspace docs/stories the source repo does NOT shadow stay as-is;

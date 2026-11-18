@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import type { DerivedPipelineTree, DocRef, StoryRef } from "./types";
+import { samePath } from "@/shared/lib/path";
 
 /**
  * The nav node found for a given `filePath`: the matching `StoryRef` (a story
@@ -56,10 +57,10 @@ export function findNavNodeByPath(
   if (!filePath) return null;
   return visitNavTree(tree, (node) => {
     for (const s of node.stories ?? []) {
-      if (s.filePath === filePath) return { story: s };
+      if (samePath(s.filePath, filePath)) return { story: s };
     }
     for (const d of node.docs ?? []) {
-      if (d.filePath === filePath) return { doc: d };
+      if (samePath(d.filePath, filePath)) return { doc: d };
     }
     return null;
   });
