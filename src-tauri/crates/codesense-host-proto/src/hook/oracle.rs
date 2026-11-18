@@ -190,6 +190,10 @@ const COMMANDS: &[&str] = &[
     "cat 1\u{663}>{p}",
     "A\u{e9}=1 cat {p}",
     "\u{e9}=1 cat {p}",
+    "A\u{e9}=/bin/rm cat {p}",
+    "A\u{10570}=1 rm {p}",
+    "\u{16d70}>x rm {p}",
+    "cat \u{16d70}< {p}",
 ];
 
 /// The corpus: the moved tests' cases plus the generated variants, each in every encoding.
@@ -235,6 +239,21 @@ fn corpus() -> Vec<Vec<u8>> {
     payloads.push(json!({"tool_name": "Write", "tool_input": {"file_path": ".env"}}));
 
     let mut corpus: Vec<Vec<u8>> = payloads.iter().flat_map(encodings).collect();
+    // Nesting near and past JSON::PP's depth limit, and numbers serde_json alone refuses.
+    let nested = |depth: usize| format!("{}{}", "[".repeat(depth), "]".repeat(depth));
+    for extra in [
+        nested(300),
+        nested(510),
+        nested(511),
+        "1e400".to_string(),
+        "-0.5e-999".to_string(),
+        "01".to_string(),
+    ] {
+        let read = format!(
+            r#"{{"tool_name":"Read","tool_input":{{"file_path":"/repo/x.pem","x":{extra}}}}}"#
+        );
+        corpus.push(read.into_bytes());
+    }
     // Bytes that are not one JSON document.
     corpus.push(b"not json".to_vec());
     corpus.push(Vec::new());

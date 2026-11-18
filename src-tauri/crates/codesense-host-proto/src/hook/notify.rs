@@ -11,7 +11,7 @@
 
 use std::fs;
 use std::io::{self, Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -141,12 +141,13 @@ pub fn notify(input: &[u8], env: &HookEnv) -> Outcome {
         .filter(|e| !e.is_empty())
         .unwrap_or_else(|| "?".to_string());
     let code = code.map_or_else(|| "none".to_string(), |c| c.to_string());
-    // One line per failure, whatever the body holds.
-    let body: String = body
-        .chars()
-        .take(200)
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect();
+    let body: String = body.chars().take(200).collect();
+    let (event, session, url, body) = (
+        one_line(&event),
+        one_line(session),
+        one_line(&url),
+        one_line(&body),
+    );
     log_fail(
         env,
         &format!(
@@ -156,12 +157,22 @@ pub fn notify(input: &[u8], env: &HookEnv) -> Outcome {
     Outcome::Failed
 }
 
+/// `text` with each control character as a space, so a failure is one log line whatever the
+/// event, session, URL or body holds.
+fn one_line(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
+}
+
 fn local_url(port: &str) -> String {
     format!("http://127.0.0.1:{port}/api/v1/terminal/status")
 }
 
-/// `http://host:port/path` as `(host:port, host, port, path)`; any other form is unsupported.
-fn parse_url(url: &str) -> Option<(&str, &str, u16, &str)> {
+/// `http://host:port/path` as `(host:port, addresses, port, path)`; any other form is
+/// unsupported. The host is an IP address or `localhost`: a name to look up could take longer
+/// than the whole post may.
+fn parse_url(url: &str) -> Option<(&str, Vec<IpAddr>, u16, &str)> {
     let rest = url.strip_prefix("http://")?;
     let (authority, path) = match rest.find('/') {
         Some(i) => rest.split_at(i),
@@ -177,24 +188,26 @@ fn parse_url(url: &str) -> Option<(&str, &str, u16, &str)> {
     if !valid(host) || !valid(path) || authority.contains('@') {
         return None;
     }
-    Some((authority, host, port.parse().ok()?, path))
+    let addrs = if host.eq_ignore_ascii_case("localhost") {
+        vec![Ipv4Addr::LOCALHOST.into(), Ipv6Addr::LOCALHOST.into()]
+    } else {
+        vec![host.parse().ok()?]
+    };
+    Some((authority, addrs, port.parse().ok()?, path))
 }
 
 /// POST `body` to `url` within [`TIMEOUT`] and read the whole answer.
 fn post(url: &str, session: &str, body: &[u8]) -> Result<Response, PostError> {
-    let (authority, host, port, path) = parse_url(url).ok_or(PostError::UnsupportedUrl)?;
+    let (authority, addrs, port, path) = parse_url(url).ok_or(PostError::UnsupportedUrl)?;
     let deadline = Instant::now() + TIMEOUT;
     let left = || {
         let left = deadline.saturating_duration_since(Instant::now());
         (!left.is_zero()).then_some(left).ok_or(PostError::Timeout)
     };
-    let addrs = (host, port)
-        .to_socket_addrs()
-        .map_err(|_| PostError::Connect)?;
     let mut failure = PostError::Connect;
     let mut stream = None;
-    for addr in addrs {
-        match TcpStream::connect_timeout(&addr, left()?) {
+    for ip in addrs {
+        match TcpStream::connect_timeout(&SocketAddr::new(ip, port), left()?) {
             Ok(s) => {
                 stream = Some(s);
                 break;
@@ -271,7 +284,8 @@ fn log_fail(env: &HookEnv, message: &str) {
         fs::create_dir_all(&dir)?;
         // Cap the log so a hook firing outside CodeSense can't grow it without bound.
         if fs::metadata(&log).is_ok_and(|m| m.is_file() && m.len() > LOG_CAP) {
-            fs::rename(&log, dir.join("notify-hook.log.1"))?;
+            // A failed rotation still logs the line.
+            let _ = fs::rename(&log, dir.join("notify-hook.log.1"));
         }
         let line = format!("{} {message}\n", utc_time(SystemTime::now()));
         fs::OpenOptions::new()
@@ -509,7 +523,13 @@ mod tests {
     fn an_unsupported_status_url_is_logged() {
         let home = TempDir::new();
         let mut env = env(&home, None);
-        for url in ["https://127.0.0.1:1/x", "http://127.0.0.1/x", "ftp://h:1/"] {
+        for url in [
+            "https://127.0.0.1:1/x",
+            "http://127.0.0.1/x",
+            "ftp://h:1/",
+            // A name to look up could outlast the post's deadline.
+            "http://example.invalid:1/x",
+        ] {
             env.status_url = Some(url.to_string());
             assert_eq!(notify(EVENT, &env), Outcome::Failed, "{url}");
             assert!(
@@ -531,6 +551,41 @@ mod tests {
         notify(EVENT, &env(&home, None));
         assert_eq!(fs::read(logs.join("notify-hook.log.1")).unwrap(), big);
         assert_eq!(log(&home).lines().count(), 1);
+    }
+
+    #[test]
+    fn a_failure_is_one_log_line_whatever_the_event_holds() {
+        let home = TempDir::new();
+        let mut env = env(&home, None);
+        env.tab_session = Some("tab\n1".to_string());
+        env.status_url = Some("ftp://h:1/".to_string());
+        assert_eq!(
+            notify(br#"{"hook_event_name":"Sto\np"}"#, &env),
+            Outcome::Failed
+        );
+        let log = log(&home);
+        assert_eq!(log.lines().count(), 1, "{log}");
+        assert!(
+            log.contains(" event=Sto p session=tab 1 url=ftp://h:1/ "),
+            "{log}"
+        );
+    }
+
+    #[test]
+    fn a_failed_rotation_still_logs_the_line() {
+        let home = TempDir::new();
+        let logs = home.0.join("logs");
+        // A non-empty directory where the rotated log goes: the rename fails.
+        fs::create_dir_all(logs.join("notify-hook.log.1")).unwrap();
+        fs::write(logs.join("notify-hook.log.1/x"), "x").unwrap();
+        fs::write(
+            logs.join("notify-hook.log"),
+            vec![b'x'; LOG_CAP as usize + 1],
+        )
+        .unwrap();
+        notify(EVENT, &env(&home, None));
+        assert!(log(&home)
+            .ends_with(" no-port: CODESENSE_API_PORT unset and no ~/.codesense/http.port\n"));
     }
 
     #[test]

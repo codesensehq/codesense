@@ -68,22 +68,29 @@ pub const FAMILIES: &[Family] = &[
 /// Directories under the home folder whose whole contents are protected.
 pub const PROTECTED_DIRS: &[&str] = &["~/.config/codesense-mcp"];
 
-/// A basename glob as an anchored regular expression, in the installed guard's Perl syntax.
-fn glob_regex(glob: &str) -> String {
-    let mut re = String::from("^");
+/// A basename glob as the body of a regular expression: `*` and `?` match within a line, and
+/// `escape` writes every other character in the caller's syntax.
+fn glob_body(glob: &str, escape: impl Fn(char, &mut String)) -> String {
+    let mut re = String::new();
     for c in glob.chars() {
         match c {
             '*' => re.push_str(".*"),
             '?' => re.push('.'),
-            c if c.is_ascii_alphanumeric() || c == '_' => re.push(c),
-            c => {
-                re.push('\\');
-                re.push(c);
-            }
+            c => escape(c, &mut re),
         }
     }
-    re.push('$');
     re
+}
+
+/// A basename glob as an anchored regular expression, in the installed guard's Perl syntax.
+fn glob_regex(glob: &str) -> String {
+    let body = glob_body(glob, |c, re| {
+        if !(c.is_ascii_alphanumeric() || c == '_') {
+            re.push('\\');
+        }
+        re.push(c);
+    });
+    format!("^{body}$")
 }
 
 /// Claude's `permissions.deny` rules for the protected families. The hook sees one path or
@@ -175,7 +182,7 @@ impl Deny {
 /// them.
 pub fn secret_guard(input: &[u8]) -> Option<Deny> {
     let text: String = input.iter().map(|&b| char::from(b)).collect();
-    let Ok(serde_json::Value::Object(call)) = serde_json::from_str(&text) else {
+    let Some(serde_json::Value::Object(call)) = decode(&text) else {
         return None;
     };
     let tool = call.get("tool_name").and_then(scalar).unwrap_or_default();
@@ -200,6 +207,69 @@ pub fn secret_guard(input: &[u8]) -> Option<Deny> {
     paths.iter().any(|p| secret(p)).then_some(Deny {
         reason: GUARD_REASON,
     })
+}
+
+/// How deep `JSON::PP` nests arrays and objects before it gives up (its `max_depth`).
+const MAX_DEPTH: usize = 512;
+
+/// `text` as JSON, wherever `JSON::PP` reads it: nested up to [`MAX_DEPTH`] (serde_json stops at
+/// 128 by default) and with numbers of any size (serde_json refuses `1e400`). A number never
+/// names a path, so each one is read as `0`; JSON the script could read keeps its shape.
+fn decode(text: &str) -> Option<serde_json::Value> {
+    use serde::Deserialize;
+    let mut tamed = String::with_capacity(text.len());
+    let (mut depth, mut deepest, mut in_string, mut escaped) = (0usize, 0, false, false);
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if in_string {
+            match c {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            tamed.push(c);
+            continue;
+        }
+        match c {
+            '"' => in_string = true,
+            '[' | '{' => {
+                depth += 1;
+                deepest = deepest.max(depth);
+                if depth > MAX_DEPTH {
+                    return None;
+                }
+            }
+            ']' | '}' => depth = depth.saturating_sub(1),
+            '-' | '0'..='9' => {
+                while chars
+                    .next_if(|c| matches!(c, '0'..='9' | '+' | '-' | '.' | 'e' | 'E'))
+                    .is_some()
+                {}
+                tamed.push('0');
+                continue;
+            }
+            _ => {}
+        }
+        tamed.push(c);
+    }
+    let parse = move || {
+        let mut de = serde_json::Deserializer::from_str(&tamed);
+        de.disable_recursion_limit();
+        let value = serde_json::Value::deserialize(&mut de).ok()?;
+        de.end().ok()?;
+        Some(value)
+    };
+    if deepest <= 128 {
+        return parse();
+    }
+    // Deep input recurses deeply: parse it on a stack sized for it.
+    std::thread::Builder::new()
+        .stack_size(64 << 20)
+        .spawn(parse)
+        .ok()?
+        .join()
+        .ok()?
 }
 
 /// A JSON value as Perl stringifies it, where it could name a path; arrays, objects, booleans
@@ -235,67 +305,102 @@ const PREFIX: &[&str] = &[
 
 /// The paths a Bash command reads, word for word as the script finds them. A path that is only
 /// written, created, deleted or the destination of a copy is not read.
+///
+/// The script's `\d` and `\w` follow its Perl's Unicode version, which the `regex` crate's need
+/// not match: one may class a newer character as a digit or letter and the other not, and that
+/// moves the verb (`A<new letter>=1 rm x` is an assignment then `rm`, or a verb that reads `x`).
+/// So the command is read with Unicode classes and again with ASCII ones, and every path either
+/// reading finds counts; a character the script classes either way is covered. Splitting words
+/// keeps Unicode `\s` in both.
 fn bash_reads(cmd: &str) -> Vec<String> {
-    static SEGMENT: LazyLock<Regex> = LazyLock::new(|| regex(r"&&|\|\||;|\||\n"));
-    static REDIRECT: LazyLock<Regex> = LazyLock::new(|| regex(r"(\d*[<>]+&?)"));
-    static WORDS: LazyLock<Regex> = LazyLock::new(|| regex(r#"[\s"'`()]+"#));
-    static WRITE: LazyLock<Regex> = LazyLock::new(|| regex(r"^\d*>"));
-    static READ: LazyLock<Regex> = LazyLock::new(|| regex(r"^\d*<"));
-    static ASSIGN: LazyLock<Regex> = LazyLock::new(|| regex(r"^[A-Za-z_]\w*="));
-    static OPTION_VALUE: LazyLock<Regex> = LazyLock::new(|| regex(r"^-[^=]*=(.+)$"));
+    static READERS: LazyLock<[BashReader; 2]> = LazyLock::new(|| {
+        [
+            BashReader::new(r"\d", r"\w"),
+            BashReader::new("[0-9]", "[A-Za-z0-9_]"),
+        ]
+    });
+    let mut read: Vec<String> = READERS.iter().flat_map(|r| r.reads(cmd)).collect();
+    read.sort();
+    read.dedup();
+    read
+}
 
-    let mut read: Vec<String> = Vec::new();
-    for segment in SEGMENT.split(cmd) {
-        let spaced = REDIRECT.replace_all(segment, " ${1} ");
-        let mut words = WORDS.split(&spaced).filter(|w| !w.is_empty());
-        let mut verb: Option<std::borrow::Cow<'_, str>> = None;
-        let mut operands: Vec<&str> = Vec::new();
-        while let Some(w) = words.next() {
-            if WRITE.is_match(w) {
-                // A write target.
-                words.next();
-                continue;
-            }
-            if READ.is_match(w) {
-                // A redirected read.
-                read.extend(words.next().map(str::to_string));
-                continue;
-            }
-            if verb.is_none() && ASSIGN.is_match(w) {
-                // VAR=value before the verb.
-                continue;
-            }
-            if verb.is_none() {
-                let base = basename(w);
-                if !PREFIX.contains(&&*base) {
-                    verb = Some(base);
-                }
-                continue;
-            }
-            operands.push(w);
+/// The script's word parser with one meaning of digit and word character.
+struct BashReader {
+    redirect: Regex,
+    write: Regex,
+    read: Regex,
+    assign: Regex,
+}
+
+impl BashReader {
+    fn new(digit: &str, word: &str) -> Self {
+        Self {
+            redirect: regex(&format!("({digit}*[<>]+&?)")),
+            write: regex(&format!("^{digit}*>")),
+            read: regex(&format!("^{digit}*<")),
+            assign: regex(&format!("^[A-Za-z_]{word}*=")),
         }
-        let Some(verb) = verb else { continue };
-        if WRITE_ONLY.contains(&&*verb) {
-            continue;
-        }
-        if TO_DESTINATION.contains(&&*verb) {
-            let mut args: Vec<&str> = operands
-                .into_iter()
-                .filter(|a| !a.starts_with('-'))
-                .collect();
-            args.pop();
-            read.extend(args.into_iter().map(str::to_string));
-            continue;
-        }
-        read.extend(operands.into_iter().map(str::to_string));
     }
-    // A value after = in an option (--env-file=.env) is an operand too.
-    read.into_iter()
-        .flat_map(|word| {
-            let value = OPTION_VALUE.captures(&word).map(|c| c[1].to_string());
-            std::iter::once(word).chain(value)
-        })
-        .collect()
+
+    fn reads(&self, cmd: &str) -> Vec<String> {
+        static SEGMENT: LazyLock<Regex> = LazyLock::new(|| regex(r"&&|\|\||;|\||\n"));
+        static WORDS: LazyLock<Regex> = LazyLock::new(|| regex(r#"[\s"'`()]+"#));
+        static OPTION_VALUE: LazyLock<Regex> = LazyLock::new(|| regex(r"^-[^=]*=(.+)$"));
+
+        let mut read: Vec<String> = Vec::new();
+        for segment in SEGMENT.split(cmd) {
+            let spaced = self.redirect.replace_all(segment, " ${1} ");
+            let mut words = WORDS.split(&spaced).filter(|w| !w.is_empty());
+            let mut verb: Option<std::borrow::Cow<'_, str>> = None;
+            let mut operands: Vec<&str> = Vec::new();
+            while let Some(w) = words.next() {
+                if self.write.is_match(w) {
+                    // A write target.
+                    words.next();
+                    continue;
+                }
+                if self.read.is_match(w) {
+                    // A redirected read.
+                    read.extend(words.next().map(str::to_string));
+                    continue;
+                }
+                if verb.is_none() && self.assign.is_match(w) {
+                    // VAR=value before the verb.
+                    continue;
+                }
+                if verb.is_none() {
+                    let base = basename(w);
+                    if !PREFIX.contains(&&*base) {
+                        verb = Some(base);
+                    }
+                    continue;
+                }
+                operands.push(w);
+            }
+            let Some(verb) = verb else { continue };
+            if WRITE_ONLY.contains(&&*verb) {
+                continue;
+            }
+            if TO_DESTINATION.contains(&&*verb) {
+                let mut args: Vec<&str> = operands
+                    .into_iter()
+                    .filter(|a| !a.starts_with('-'))
+                    .collect();
+                args.pop();
+                read.extend(args.into_iter().map(str::to_string));
+                continue;
+            }
+            read.extend(operands.into_iter().map(str::to_string));
+        }
+        // A value after = in an option (--env-file=.env) is an operand too.
+        read.into_iter()
+            .flat_map(|word| {
+                let value = OPTION_VALUE.captures(&word).map(|c| c[1].to_string());
+                std::iter::once(word).chain(value)
+            })
+            .collect()
+    }
 }
 
 /// Perl's `$` as the last thing in a pattern: the end, or just before a final newline.
@@ -311,14 +416,9 @@ impl Matcher {
     /// `flags` is `""` for the script's own, case-sensitive form, `"(?i)"` for any case.
     fn new(flags: &str) -> Self {
         let glob = |glob: &str| {
-            let body: String = glob
-                .chars()
-                .map(|c| match c {
-                    '*' => ".*".to_string(),
-                    '?' => ".".to_string(),
-                    c => regex::escape(c.encode_utf8(&mut [0; 4])),
-                })
-                .collect();
+            let body = glob_body(glob, |c, re| {
+                re.push_str(&regex::escape(c.encode_utf8(&mut [0; 4])))
+            });
             regex(&format!("{flags}^{body}{PERL_END}"))
         };
         Self {
@@ -345,17 +445,13 @@ impl Matcher {
         }
         let base = basename(path);
         let unglobbed = base.replace(['*', '?', '[', ']', '{', '}'], "");
-        let in_family = |name: &str| {
-            self.families.iter().any(|(family, except)| {
-                family.is_match(name) && !except.iter().any(|e| e.is_match(name))
-            })
+        let check = |name: &str| {
+            !name.is_empty()
+                && self.families.iter().any(|(family, except)| {
+                    family.is_match(name) && !except.iter().any(|e| e.is_match(name))
+                })
         };
-        // Bound before it is returned: as a tail expression the array's iterator would outlive
-        // `base` and `unglobbed`.
-        let denied = [&*base, unglobbed.as_str()]
-            .into_iter()
-            .any(|name| !name.is_empty() && in_family(name));
-        denied
+        check(&base) || check(&unglobbed)
     }
 }
 
@@ -583,6 +679,40 @@ pub(crate) mod tests {
         ] {
             let payload = call("Read", json!({ "file_path": path }));
             assert!(verdict(&payload).is_some(), "{path:?}");
+        }
+    }
+
+    /// A character one Unicode version calls a letter or digit and another does not still
+    /// leaves the read found: `regex` and Perl may disagree on new characters, and ASCII
+    /// classes alone would miss `é`, which Perl calls a letter.
+    #[test]
+    fn a_command_is_read_with_either_letter_and_digit_class() {
+        for command in [
+            "A\u{10570}=1 rm /repo/.env",
+            "\u{16d70}>x rm /repo/.env",
+            "A\u{e9}=/bin/rm cat /repo/.env",
+            "cat \u{663}< /repo/.env",
+        ] {
+            let payload = call("Bash", json!({ "command": command }));
+            assert!(verdict(&payload).is_some(), "{command:?}");
+        }
+    }
+
+    /// The script reads JSON nested up to 512 deep and numbers of any size; past that depth it
+    /// cannot parse the input and allows it.
+    #[test]
+    fn deep_nesting_and_huge_numbers_are_read_as_the_script_reads_them() {
+        let read = |extra: &str| {
+            format!(
+                r#"{{"tool_name":"Read","tool_input":{{"file_path":"/repo/.env","x":{extra}}}}}"#
+            )
+        };
+        let nested = |depth: usize| format!("{}{}", "[".repeat(depth), "]".repeat(depth));
+        assert!(secret_guard(read(&nested(300)).as_bytes()).is_some());
+        assert!(secret_guard(read(&nested(510)).as_bytes()).is_some());
+        assert_eq!(secret_guard(read(&nested(600)).as_bytes()), None);
+        for number in ["1e400", "-0.5e-999", "123456789012345678901234567890"] {
+            assert!(secret_guard(read(number).as_bytes()).is_some(), "{number}");
         }
     }
 
