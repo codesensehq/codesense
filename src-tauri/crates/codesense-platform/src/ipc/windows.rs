@@ -2,8 +2,10 @@
 //! Windows: named pipes `\\.\pipe\codesense-<user>-<endpoint>[-<root>]`.
 //! One function creates every instance, overlapped for tokio or not for the
 //! blocking form: a DACL that grants the current user alone, remote clients
-//! refused, and `FILE_FLAG_FIRST_PIPE_INSTANCE` on a listener's first
-//! instance. Clients open with identification-only impersonation.
+//! refused, the current user as owner, and `FILE_FLAG_FIRST_PIPE_INSTANCE`
+//! on a listener's first instance. Clients open with identification-only
+//! impersonation and refuse a pipe another user owns; either end refuses a
+//! peer process of another user.
 
 use std::ffi::OsStr;
 use std::io;
@@ -17,10 +19,12 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient, NamedPipeServer};
 use windows_sys::Win32::Foundation::{
-    ERROR_ACCESS_DENIED, ERROR_PIPE_BUSY, HANDLE, INVALID_HANDLE_VALUE,
+    LocalFree, ERROR_ACCESS_DENIED, ERROR_PIPE_BUSY, ERROR_SUCCESS, HANDLE, INVALID_HANDLE_VALUE,
 };
+use windows_sys::Win32::Security::Authorization::{GetSecurityInfo, SE_KERNEL_OBJECT};
 use windows_sys::Win32::Security::{
-    InitializeSecurityDescriptor, SetSecurityDescriptorDacl, SECURITY_ATTRIBUTES,
+    InitializeSecurityDescriptor, SetSecurityDescriptorDacl, SetSecurityDescriptorOwner,
+    OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
     SECURITY_DESCRIPTOR,
 };
 use windows_sys::Win32::Storage::FileSystem::{
@@ -30,10 +34,11 @@ use windows_sys::Win32::System::Pipes::{
     CreateNamedPipeW, GetNamedPipeClientProcessId, GetNamedPipeServerProcessId, PIPE_READMODE_BYTE,
     PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
+use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
 
 use super::Endpoint;
 use crate::process::Pid;
-use crate::win::{wide, CurrentUser, SingleUserAcl};
+use crate::win::{wide, CurrentUser, Handle, SingleUserAcl};
 
 /// The start of every CodeSense pipe name.
 const PIPE_PREFIX: &str = r"\\.\pipe\codesense-";
@@ -101,8 +106,9 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 }
 
 /// Create an instance of the pipe `name` that only the current user may
-/// open. The `first` of a listener fails with `AddrInUse` when the name
-/// already exists, whoever created it.
+/// open, and that names the current user as its owner. The `first` of a
+/// listener fails with `AddrInUse` when the name already exists, whoever
+/// created it.
 fn create_instance(name: &Path, first: bool, overlapped: bool) -> io::Result<OwnedHandle> {
     let user = CurrentUser::read()?;
     let acl = SingleUserAcl::new(user.sid(), 0, FILE_ALL_ACCESS)?;
@@ -115,6 +121,13 @@ fn create_instance(name: &Path, first: bool, overlapped: bool) -> io::Result<Own
     }
     // SAFETY: the descriptor points at the ACL, which outlives the create below.
     if unsafe { SetSecurityDescriptorDacl(descriptor_ptr, 1, acl.as_ptr(), 0) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // An explicit owner: an elevated token's default owner is Administrators,
+    // which a client could not tell from another user's.
+    // SAFETY: the descriptor points at the user's SID, which outlives the
+    // create below.
+    if unsafe { SetSecurityDescriptorOwner(descriptor_ptr, user.sid(), 0) } == 0 {
         return Err(io::Error::last_os_error());
     }
     let attributes = SECURITY_ATTRIBUTES {
@@ -130,8 +143,8 @@ fn create_instance(name: &Path, first: bool, overlapped: bool) -> io::Result<Own
         open_mode |= FILE_FLAG_OVERLAPPED;
     }
     let wide_name = wide(name);
-    // SAFETY: the name is NUL-terminated; the attributes, descriptor and ACL
-    // live across the call.
+    // SAFETY: the name is NUL-terminated; the attributes, descriptor, ACL and
+    // SID live across the call.
     let handle = unsafe {
         CreateNamedPipeW(
             wide_name.as_ptr(),
@@ -158,8 +171,71 @@ fn create_instance(name: &Path, first: bool, overlapped: bool) -> io::Result<Own
     Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
 }
 
-/// The pid of the other end of the pipe `handle`: the client's on a
-/// listener's instance, the listener's on a client's handle.
+/// A security descriptor the system allocated with LocalAlloc, freed on drop.
+struct LocalDescriptor(PSECURITY_DESCRIPTOR);
+
+impl Drop for LocalDescriptor {
+    fn drop(&mut self) {
+        // SAFETY: the descriptor was LocalAlloc'd for this value alone.
+        unsafe { LocalFree(self.0) };
+    }
+}
+
+fn another_user(peer: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        format!("the {peer} runs as another user"),
+    )
+}
+
+/// Refuse the pipe `handle` unless the current user owns it. Another
+/// account could create a pipe under this user's name first; it cannot make
+/// this user its owner.
+fn check_owner(handle: HANDLE) -> io::Result<()> {
+    let mut owner: PSID = std::ptr::null_mut();
+    let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    // SAFETY: the handle is an open pipe with READ_CONTROL (a duplex
+    // client's generic read); the out pointers are writable.
+    let status = unsafe {
+        GetSecurityInfo(
+            handle,
+            SE_KERNEL_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            &mut owner,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut descriptor,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return Err(io::Error::from_raw_os_error(status as i32));
+    }
+    // The owner points into the descriptor, freed on return.
+    let _descriptor = LocalDescriptor(descriptor);
+    if owner.is_null() || !CurrentUser::read()?.is(owner) {
+        return Err(another_user("pipe's server"));
+    }
+    Ok(())
+}
+
+/// Refuse the process `pid` unless its token is the current user's.
+fn check_process_user(pid: u32) -> io::Result<()> {
+    // SAFETY: OpenProcess has no preconditions; a null handle is its error.
+    let raw = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    let process = Handle::new(raw).map_err(|error| match error.kind() {
+        io::ErrorKind::PermissionDenied => another_user("peer"),
+        _ => error,
+    })?;
+    if !CurrentUser::read()?.is(CurrentUser::of_process(process.raw())?.sid()) {
+        return Err(another_user("peer"));
+    }
+    Ok(())
+}
+
+/// The pid of the other end of the pipe `handle`, when it runs as this
+/// user: the client's on a listener's instance, the listener's on a
+/// client's handle.
 fn peer_pid(handle: HANDLE, is_server: bool) -> io::Result<Pid> {
     let mut pid = 0u32;
     // SAFETY: the handle is an open pipe; `pid` is writable.
@@ -173,6 +249,10 @@ fn peer_pid(handle: HANDLE, is_server: bool) -> io::Result<Pid> {
     if read == 0 {
         return Err(io::Error::last_os_error());
     }
+    if !is_server {
+        check_owner(handle)?;
+    }
+    check_process_user(pid)?;
     Ok(Pid::from_raw(pid))
 }
 
@@ -222,7 +302,11 @@ impl Stream {
                 Err(error) if is_busy(&error) && start.elapsed() < BUSY_WAIT => {
                     tokio::time::sleep(BUSY_RETRY).await;
                 }
-                result => return result.map(Self::Client),
+                Err(error) => return Err(error),
+                Ok(pipe) => {
+                    check_owner(pipe.as_raw_handle())?;
+                    return Ok(Self::Client(pipe));
+                }
             }
         }
     }
@@ -352,11 +436,13 @@ pub(crate) mod blocking {
                         // pipe gone meanwhile shows in the next open.
                         unsafe { WaitNamedPipeW(wide_name.as_ptr(), left.as_millis() as u32) };
                     }
-                    result => {
-                        return result.map(|pipe| Self {
+                    Err(error) => return Err(error),
+                    Ok(pipe) => {
+                        check_owner(pipe.as_raw_handle())?;
+                        return Ok(Self {
                             pipe,
                             is_server: false,
-                        })
+                        });
                     }
                 }
             }
@@ -388,11 +474,8 @@ pub(crate) mod blocking {
 mod tests {
     use std::ffi::c_void;
 
-    use windows_sys::Win32::Foundation::{LocalFree, ERROR_SUCCESS};
-    use windows_sys::Win32::Security::Authorization::{GetSecurityInfo, SE_KERNEL_OBJECT};
     use windows_sys::Win32::Security::{
-        EqualSid, GetAce, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION,
-        PSECURITY_DESCRIPTOR,
+        GetAce, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION,
     };
 
     use super::*;
@@ -407,10 +490,11 @@ mod tests {
         }
     }
 
-    /// Read the DACL of the pipe instance `handle` back and find one ACE,
-    /// granting the current user.
+    /// Read the owner and DACL of the pipe instance `handle` back: the
+    /// current user owns it, and one ACE grants the current user.
     fn assert_current_user_only(handle: HANDLE) {
         let user = CurrentUser::read().unwrap();
+        let mut owner: PSID = std::ptr::null_mut();
         let mut dacl: *mut ACL = std::ptr::null_mut();
         let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
         // SAFETY: the instance's handle has READ_CONTROL (a duplex pipe's
@@ -419,8 +503,8 @@ mod tests {
             GetSecurityInfo(
                 handle,
                 SE_KERNEL_OBJECT,
-                DACL_SECURITY_INFORMATION,
-                std::ptr::null_mut(),
+                OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                &mut owner,
                 std::ptr::null_mut(),
                 &mut dacl,
                 std::ptr::null_mut(),
@@ -428,6 +512,12 @@ mod tests {
             )
         };
         assert_eq!(status, ERROR_SUCCESS);
+        let _descriptor = LocalDescriptor(descriptor);
+        assert!(
+            !owner.is_null() && user.is(owner),
+            "the current user owns it"
+        );
+        assert!(check_owner(handle).is_ok());
         assert!(!dacl.is_null(), "a null DACL lets everyone in");
         // SAFETY: the DACL lives in `descriptor`, freed after these reads.
         unsafe {
@@ -436,12 +526,7 @@ mod tests {
             assert_ne!(GetAce(dacl, 0, &mut ace), 0);
             assert_eq!((*ace.cast::<ACE_HEADER>()).AceType, ACCESS_ALLOWED_ACE_TYPE);
             let sid = std::ptr::addr_of_mut!((*ace.cast::<ACCESS_ALLOWED_ACE>()).SidStart);
-            assert_ne!(
-                EqualSid(sid.cast(), user.sid()),
-                0,
-                "the ACE names the current user"
-            );
-            LocalFree(descriptor);
+            assert!(user.is(sid.cast()), "the ACE names the current user");
         }
     }
 

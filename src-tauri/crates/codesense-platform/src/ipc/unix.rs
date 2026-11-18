@@ -13,6 +13,7 @@ use std::os::unix::net;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
@@ -25,6 +26,8 @@ const MCP_SOCKET: &str = "mcp.sock";
 const ACTIVITY_SOCKET: &str = "activity.sock";
 /// The session server's socket in its instance's root.
 const SESSION_SERVER_SOCKET: &str = "pty-server.sock";
+/// How long a bind waits on a socket already there before it counts it live.
+const PROBE_TIMEOUT: Duration = Duration::from_millis(50);
 
 pub(super) fn address(endpoint: &Endpoint) -> io::Result<PathBuf> {
     Ok(match endpoint {
@@ -86,8 +89,9 @@ fn bind(endpoint: &Endpoint) -> io::Result<(net::UnixListener, BoundSocket)> {
 }
 
 /// Remove a socket left at `path` by a listener that is gone. Anything else
-/// there stays: a live listener is `AddrInUse`, and a file that is not a
-/// socket of this user's is `PermissionDenied`.
+/// there stays: a live listener, or one too busy to answer the probe in
+/// time, is `AddrInUse`, and a file that is not a socket of this user's is
+/// `PermissionDenied`. A socket gone meanwhile needs no removing.
 fn remove_stale(path: &Path) -> io::Result<()> {
     let previous = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -101,15 +105,24 @@ fn remove_stale(path: &Path) -> io::Result<()> {
             format!("{} is not a socket of this user's", path.display()),
         ));
     }
-    match net::UnixStream::connect(path) {
-        Ok(_) => Err(in_use(path)),
-        Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => {
-            if file_identity(path)? != (previous.dev(), previous.ino()) {
-                return Err(in_use(path));
-            }
-            std::fs::remove_file(path)
-        }
-        Err(error) => Err(error),
+    let probe = socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None)?;
+    let removed = match probe.connect_timeout(&socket2::SockAddr::unix(path)?, PROBE_TIMEOUT) {
+        Ok(()) => return Err(in_use(path)),
+        Err(error) => match error.kind() {
+            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => return Err(in_use(path)),
+            io::ErrorKind::ConnectionRefused => match file_identity(path) {
+                Ok(identity) if identity != (previous.dev(), previous.ino()) => {
+                    return Err(in_use(path));
+                }
+                Ok(_) => std::fs::remove_file(path),
+                Err(error) => Err(error),
+            },
+            _ => Err(error),
+        },
+    };
+    match removed {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        removed => removed,
     }
 }
 

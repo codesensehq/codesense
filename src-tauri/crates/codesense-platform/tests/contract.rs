@@ -525,9 +525,16 @@ fn peer_pid_is_the_client() {
     runtime().block_on(async {
         let endpoint = ephemeral(dir.path(), "peer-async");
         let mut listener = LocalListener::bind(&endpoint).unwrap();
-        let connected = LocalStream::connect(&endpoint).await.unwrap();
+        let mut client = ipc_fixture("peer", &endpoint, &[]);
         let accepted = accept_within(&mut listener).await;
-        assert_eq!(accepted.peer_pid().unwrap(), this_process);
+        assert_eq!(accepted.peer_pid().unwrap(), client.pid());
+        assert_eq!(first_line(&mut client), this_process.to_string());
+        drop(accepted);
+        assert!(exits_soon(&mut client).await);
+
+        // The async client's end sees the listener's process.
+        let connected = LocalStream::connect(&endpoint).await.unwrap();
+        let _accepted = accept_within(&mut listener).await;
         assert_eq!(connected.peer_pid().unwrap(), this_process);
     });
 }

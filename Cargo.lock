@@ -1040,6 +1040,7 @@ dependencies = [
  "dunce",
  "libc",
  "serde",
+ "socket2",
  "tempfile",
  "tokio",
  "windows-sys 0.59.0",

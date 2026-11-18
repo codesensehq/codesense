@@ -11,7 +11,7 @@ use windows_sys::core::PWSTR;
 use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, HANDLE};
 use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows_sys::Win32::Security::{
-    AddAccessAllowedAceEx, GetLengthSid, GetTokenInformation, InitializeAcl, TokenUser,
+    AddAccessAllowedAceEx, EqualSid, GetLengthSid, GetTokenInformation, InitializeAcl, TokenUser,
     ACCESS_ALLOWED_ACE, ACE_FLAGS, ACL, ACL_REVISION, PSID, TOKEN_QUERY, TOKEN_USER,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
@@ -47,7 +47,8 @@ impl Drop for Handle {
     }
 }
 
-/// The current process token's user, read once.
+/// The current process token's user, read once; or another process's, read
+/// the same way.
 pub(crate) struct CurrentUser {
     /// The `TOKEN_USER` and the SID it points to, 8-byte aligned.
     buffer: Vec<u64>,
@@ -55,10 +56,15 @@ pub(crate) struct CurrentUser {
 
 impl CurrentUser {
     pub(crate) fn read() -> io::Result<Self> {
+        // SAFETY: the current-process pseudo handle needs no closing.
+        Self::of_process(unsafe { GetCurrentProcess() })
+    }
+
+    /// The user of the open process `process`'s token.
+    pub(crate) fn of_process(process: HANDLE) -> io::Result<Self> {
         let mut token: HANDLE = std::ptr::null_mut();
-        // SAFETY: the current-process pseudo handle needs no closing; `token`
-        // is writable.
-        if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        // SAFETY: the process handle is open; `token` is writable.
+        if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } == 0 {
             return Err(io::Error::last_os_error());
         }
         let token = Handle::new(token)?;
@@ -92,6 +98,12 @@ impl CurrentUser {
         // SAFETY: the buffer holds the TOKEN_USER the token wrote, whose SID
         // points into the same buffer.
         unsafe { (*self.buffer.as_ptr().cast::<TOKEN_USER>()).User.Sid }
+    }
+
+    /// Whether `sid` is this user's.
+    pub(crate) fn is(&self, sid: PSID) -> bool {
+        // SAFETY: both SIDs are valid.
+        unsafe { EqualSid(sid, self.sid()) != 0 }
     }
 
     /// The SID as text, `S-1-5-…`.
