@@ -86,6 +86,11 @@ function listItems(): string[] {
   return screen.getAllByRole("listitem").map((li) => li.textContent ?? "");
 }
 
+/** The texts of the commands rendered as `<code className="text-xs">` in list items. */
+function codeCommands(): string[] {
+  return Array.from(document.querySelectorAll("li code.text-xs")).map((c) => c.textContent ?? "");
+}
+
 /** Off macOS: no installer button and no Apple or brew copy anywhere. */
 function expectNoMacOsGuidance() {
   expect(screen.queryByRole("button", { name: /Install Git/ })).not.toBeInTheDocument();
@@ -246,6 +251,7 @@ describe("DependencyInstallView (per-OS install hints)", () => {
       "Prefer a newer git? brew install git",
       "Or download from git-scm.com/downloads",
     ]);
+    expect(codeCommands()).toEqual(["brew install git"]);
     expect(screen.getByRole("button", { name: /Install Git/ })).toBeInTheDocument();
   });
 
@@ -258,6 +264,7 @@ describe("DependencyInstallView (per-OS install hints)", () => {
       "Run winget install --id Git.Git -e --source winget",
       "Or download from git-scm.com/downloads",
     ]);
+    expect(codeCommands()).toEqual(["winget install --id Git.Git -e --source winget"]);
     expectNoMacOsGuidance();
   });
 
@@ -269,6 +276,7 @@ describe("DependencyInstallView (per-OS install hints)", () => {
       "Run winget upgrade --id Git.Git -e --source winget",
       "Or download from git-scm.com/downloads",
     ]);
+    expect(codeCommands()).toEqual(["winget upgrade --id Git.Git -e --source winget"]);
     expectNoMacOsGuidance();
   });
 
@@ -280,6 +288,11 @@ describe("DependencyInstallView (per-OS install hints)", () => {
       "Ubuntu (Git 2.44 or newer comes from the git-core PPA): sudo add-apt-repository ppa:git-core/ppa then sudo apt install git",
       "Fedora: sudo dnf install git",
       "Or download from git-scm.com/downloads",
+    ]);
+    expect(codeCommands()).toEqual([
+      "sudo add-apt-repository ppa:git-core/ppa",
+      "sudo apt install git",
+      "sudo dnf install git",
     ]);
     expectNoMacOsGuidance();
   });
