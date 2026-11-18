@@ -561,9 +561,10 @@ jobs:
     # The app crate's Linux-relevant tests, starting with the credential store against a real
     # Secret Service (GNOME Keyring on a private session bus). Not a required check. The tests are
     # `#[ignore]`d everywhere else, so only this job runs them. It widens as more of the app's
-    # Linux tests move here.
+    # Linux tests move here. Like the macOS and Windows jobs it skips merge groups, and runs on pull
+    # requests, main and the nightly run.
     needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' && github.event_name != 'merge_group' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -621,17 +622,8 @@ jobs:
       - name: Compile the app's tests
         run: cargo nextest run --profile ci --locked -p codesense --lib --no-run
       - name: Test the credential store against Secret Service
-        # A private session bus with the keyring daemon unlocked by a throwaway password, as
-        # keyring's own CI does. The filter also picks the store's Linux-only tests that are not
-        # ignored (the backend selection, the D-Bus error table). It must match: nextest fails
-        # when no test runs.
-        run: |
-          dbus-run-session -- bash -ec '
-            echo "ci-keyring" | gnome-keyring-daemon --unlock > /dev/null
-            cargo nextest run --profile ci --locked -p codesense --lib \
-              --run-ignored all \
-              -E "test(~secret_service_tests) | test(~credential_store::tests::linux_)"
-          '
+        # A private session bus; the script unlocks the keyring, checks it, and runs the tests.
+        run: dbus-run-session -- bash scripts/run-secret-service-tests.sh
 
   rust-check-windows:
     name: Rust check (Windows)

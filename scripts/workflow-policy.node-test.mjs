@@ -413,7 +413,8 @@ test("rust.yml's Linux app job runs the credential store tests under a session b
   const job = workflow.jobs["rust-linux-app"];
   assert.equal(job.name, "Rust (Linux app)");
   assert.equal(job["runs-on"], "ubuntu-24.04");
-  assert.equal(job.if, `\${{ ${pathFilter} }}`);
+  // Not a required check: it skips merge groups like the other non-required jobs.
+  assert.equal(job.if, `\${{ ${pathFilter} && ${offMergeGroups} }}`);
   assert.deepEqual(job.permissions, { contents: "read" });
   const libs = job.steps.find((step) => step.name === "Install system libraries");
   assert.match(
@@ -427,15 +428,21 @@ test("rust.yml's Linux app job runs the credential store tests under a session b
     "bash scripts/install-linux-app-libs.sh",
   );
   const test = job.steps.find((step) => step.name.startsWith("Test the credential store"));
-  assert.match(test.run, /dbus-run-session -- bash -ec/);
-  assert.match(test.run, /gnome-keyring-daemon --unlock/);
-  assert.match(test.run, /--run-ignored all/);
-  assert.match(
-    test.run,
-    /-E "test\(~secret_service_tests\) \| test\(~credential_store::tests::linux_\)"/,
-  );
-  // The tests are named by that filter, not by a package-wide run.
-  assert.match(test.run, /-p codesense --lib/);
+  assert.equal(test.run, "dbus-run-session -- bash scripts/run-secret-service-tests.sh");
+  const script = fs.readFileSync(new URL("run-secret-service-tests.sh", import.meta.url), "utf8");
+  assert.match(script, /gnome-keyring-daemon --unlock/);
+  // The keyring is checked before any test runs, so a failed unlock names itself.
+  assert.ok(script.indexOf("secret-tool lookup") < script.indexOf("nextest[@]"));
+  // Two runs, each of which must match a test (nextest fails when none does), so a renamed
+  // module fails here rather than going green with half the tests.
+  const runs = script.replace(/\\\n\s*/g, " ").match(/^"\$\{nextest\[@\]\}".*$/gm);
+  assert.equal(runs.length, 2);
+  assert.match(script, /^nextest=\(cargo nextest run .*-p codesense --lib --retries 0\)$/m);
+  assert.match(runs[0], /--run-ignored only/);
+  assert.match(runs[0], /test\(~credential_store::secret_service_tests::\)/);
+  // The helper tests the others start as child processes pass alone, so they are left out.
+  assert.match(runs[0], /- test\(~::reader_process\) - test\(~::no_bus_child\)/);
+  assert.match(runs[1], /test\(~credential_store::tests::linux_\)/);
   assert.ok(!workflow.jobs["flaky-issues"].needs.includes("rust-linux-app"));
 });
 
@@ -512,7 +519,7 @@ test("only rust.yml's test jobs may skip a merge group on the changes job's outp
 
 // Only rust.yml's macOS build and result jobs may skip merge groups, with exactly this term after
 // the path filter.
-test("only rust.yml's macOS jobs may skip merge groups, and still run on push and schedule", () => {
+test("only rust.yml's non-required jobs may skip merge groups, and still run on push and schedule", () => {
   const filtered = (condition, file = "rust.yml", job = "rust-macos") =>
     workflowPolicy(
       queued().replace(
@@ -522,7 +529,7 @@ test("only rust.yml's macOS jobs may skip merge groups, and still run on push an
       ),
       file,
     ).join("\n");
-  for (const job of ["rust-macos-build", "rust-macos", "rust-check-windows"])
+  for (const job of ["rust-macos-build", "rust-macos", "rust-check-windows", "rust-linux-app"])
     for (const condition of [
       `\${{ ${pathFilter} && ${offMergeGroups} && (${macosOptIn}) }}`,
       `\${{ ${pathFilter} && ${offMergeGroups} && (${windowsOptIn}) }}`,

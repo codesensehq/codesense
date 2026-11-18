@@ -61,6 +61,15 @@ test("touchesRust matches any changed path under a prefix, and an empty diff cou
   assert.equal(touchesRust([], RUST_PATHS), true);
 });
 
+test("every script rust.yml runs is Rust-relevant, so changing one runs the Rust jobs", () => {
+  const root = fileURLToPath(new URL("..", import.meta.url));
+  const workflow = fs.readFileSync(path.join(root, ".github/workflows/rust.yml"), "utf8");
+  const scripts = [...new Set(workflow.match(/\bscripts\/[\w./-]+\.(?:sh|mjs)\b/g))];
+  assert.ok(scripts.includes("scripts/install-linux-app-libs.sh"), "the pattern finds the scripts");
+  for (const script of scripts)
+    assert.equal(touchesRust(["src/app.tsx", script], RUST_PATHS), true, script);
+});
+
 test("the real tree's includes keep src/tauri/commands.ts Rust-relevant", () => {
   const root = fileURLToPath(new URL("..", import.meta.url));
   assert.ok(includedPaths(root).includes("src/tauri/commands.ts"));

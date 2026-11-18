@@ -73,13 +73,13 @@ const RUST_PATH_FILTER = {
   ],
   terms: ["!cancelled()", "needs.changes.outputs.rust != 'false'"],
 };
-// And one more: rust.yml's macOS jobs and its Windows check are not required checks and skip merge
+// And one more: rust.yml's macOS jobs, its Windows check and its Linux app job are not required checks and skip merge
 // groups (they run on push to main and nightly instead): the macOS build and the result job that
 // reports it (the test shards run only after the build), and the Windows check. Each may put exactly this term right after the path filter's;
 // what follows must still begin with OFF_PULL_REQUESTS, so push and schedule always run them.
 const OFF_MERGE_GROUPS = {
   file: "rust.yml",
-  jobs: ["rust-macos-build", "rust-macos", "rust-check-windows"],
+  jobs: ["rust-macos-build", "rust-macos", "rust-check-windows", "rust-linux-app"],
   term: "github.event_name != 'merge_group'",
 };
 // rust.yml's macOS result job may lead with always() in place of the path filter's !cancelled(),
