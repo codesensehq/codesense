@@ -221,9 +221,10 @@ fn decode(text: &str) -> Option<serde_json::Value> {
     let (mut depth, mut deepest, mut in_string) = (0usize, 0, false);
     // JSON::PP holds a high-surrogate escape until a low one pairs with it, however much of the
     // string comes between, and a later high replaces it. Hold it here too and emit it just
-    // before the next escape: before a low that is the pair, at the low's place as the script
-    // puts it; before any other escape or the closing quote it stays unpaired, and serde_json
-    // refuses the string as the script does.
+    // before the next `\u` escape or the closing quote: before a low, that is the pair, at the
+    // low's place as the script puts it; before any other `\u` escape or the closing quote it
+    // stays unpaired, and serde_json refuses the string as the script does. Simple escapes such
+    // as `\n` leave it held.
     let mut held: Option<String> = None;
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
@@ -548,20 +549,26 @@ pub(crate) mod tests {
     const HIGH: &str = "\\ud800";
     const HIGH2: &str = "\\udbff";
     const LOW: &str = "\\udc00";
+    const HIGH_UPPER: &str = "\\uD9AB";
+    const HIGH_MIXED: &str = "\\uDa00";
+    const LOW_LAST: &str = "\\uDFFF";
     const PLAIN: &str = "\\u0041";
 
     /// Strings JSON::PP reads as a split surrogate pair: a high escape, then a character, a
-    /// simple escape or another high (which replaces it), then the low that pairs with it.
-    pub(crate) fn split_pairs() -> [String; 3] {
+    /// simple escape or another high (which replaces it), then the low that pairs with it. The
+    /// hex digits may be either case.
+    pub(crate) fn split_pairs() -> [String; 5] {
         [
             format!("{HIGH}x{LOW}"),
             format!("{HIGH}\\n{LOW}"),
             format!("{HIGH2}{HIGH}{LOW}"),
+            format!("{HIGH_UPPER}x{LOW}"),
+            format!("{HIGH_MIXED}\\n{LOW_LAST}"),
         ]
     }
 
-    /// Strings JSON::PP and serde_json both refuse: a high with no low after it before another
-    /// escape or the closing quote, and a low with no high before it.
+    /// Strings JSON::PP and serde_json both refuse: a high followed by a non-surrogate `\u`
+    /// escape or the closing quote before any low, and a low with no high before it.
     pub(crate) fn unpaired() -> [String; 5] {
         [
             format!("{HIGH}A"),
@@ -737,8 +744,15 @@ pub(crate) mod tests {
     /// guard would allow what the script denies.
     #[test]
     fn a_split_surrogate_pair_is_read_as_the_script_reads_it() {
-        let pair = char::from_u32(0x10000).unwrap();
-        for (s, read) in split_pairs().iter().zip(["x", "\n", ""]) {
+        let reads = [
+            ("x", 0x10000),
+            ("\n", 0x10000),
+            ("", 0x10000),
+            ("x", 0x7ac00),
+            ("\n", 0x903ff),
+        ];
+        for (s, (read, pair)) in split_pairs().iter().zip(reads) {
+            let pair = char::from_u32(pair).unwrap();
             let decoded = decode(&format!(r#""a{s}b""#));
             assert_eq!(
                 decoded,
