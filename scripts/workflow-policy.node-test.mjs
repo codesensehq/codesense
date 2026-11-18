@@ -1263,8 +1263,8 @@ test("test build: the platform input and the jobs it gates", () => {
   const linux = workflow.jobs["linux-app"];
   assert.equal(linux["runs-on"], "${{ matrix.runner }}");
   assert.deepEqual(linux.strategy.matrix.include, [
-    { arch: "x86_64", runner: "ubuntu-22.04" },
-    { arch: "arm64", runner: "ubuntu-24.04-arm" },
+    { arch: "x86_64", runner: "ubuntu-22.04", bundles: "deb,rpm,appimage" },
+    { arch: "arm64", runner: "ubuntu-24.04-arm", bundles: "deb,rpm" },
   ]);
   assert.equal(linux.strategy["fail-fast"], false);
 });
@@ -1280,6 +1280,11 @@ test("test build: the Linux job uploads the deb, rpm and AppImage, each one file
       "target/release/bundle/rpm/*.rpm",
       "target/release/bundle/appimage/*.AppImage",
     ],
+  );
+  // Only the AppImage upload is conditional: the arm64 leg builds no AppImage.
+  assert.deepEqual(
+    uploads.map((step) => step.if),
+    [undefined, undefined, "contains(matrix.bundles, 'appimage')"],
   );
   for (const { with: inputs } of uploads) {
     assert.equal(inputs.archive, false);
@@ -1298,7 +1303,10 @@ test("test build: the policy rejects a missing platform gate, input or runner", 
       /matrix must run on ubuntu-22.04 and ubuntu-24.04-arm/,
     ],
     [
-      testBuild().replace("          - arch: arm64\n            runner: ubuntu-24.04-arm\n", ""),
+      testBuild().replace(
+        "          - arch: arm64\n            runner: ubuntu-24.04-arm\n            bundles: deb,rpm\n",
+        "",
+      ),
       /matrix must run on/,
     ],
     [testBuild().replace("runner: ubuntu-24.04-arm", "runner: self-hosted"), /matrix must run on/],

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Build the unsigned app bundle a test build ships, and collect the files to upload.
 #
-# Usage: bash scripts/ci/unsigned-bundle.sh <macos|linux>
+# Usage: bash scripts/ci/unsigned-bundle.sh <macos|linux> [bundles]
 #
 # Both platforms build the two sidecars, then run `tauri build` with
 # src-tauri/tauri.unsigned.conf.json (no updater artifacts and no secrets). The platform
@@ -10,19 +10,22 @@
 #   - macOS fetches git-ai, signs ad hoc (Apple silicon needs a signature to launch the app),
 #     builds the app and dmg, and zips the app to $RUNNER_TEMP/CodeSense.app.zip. The dmg
 #     stays in target/release/bundle/dmg.
-#   - Linux builds the deb, rpm and AppImage, and checks that each of them is exactly one
-#     file under target/release/bundle.
+#   - Linux builds the formats in `bundles` (a comma list of deb, rpm and appimage; all three
+#     by default), and checks that each of them is exactly one file under
+#     target/release/bundle. The arm64 job leaves out appimage: linuxdeploy rewrites the
+#     bundled emulator executable, which breaks it on aarch64.
 # `pnpm exec tauri` runs the CLI directly: the `tauri` script in package.json is POSIX shell
 # and does not run on a Windows runner.
 set -euo pipefail
 
 usage() {
-    echo "usage: $0 <macos|linux>" >&2
+    echo "usage: $0 <macos|linux> [bundles]" >&2
     exit 1
 }
 
-[[ $# -eq 1 ]] || usage
+[[ $# -ge 1 && $# -le 2 ]] || usage
 PLATFORM="$1"
+LINUX_BUNDLES="${2:-deb,rpm,appimage}"
 case "$PLATFORM" in
     macos | linux) ;;
     *) usage ;;
@@ -50,11 +53,8 @@ case "$PLATFORM" in
     linux)
         # linuxdeploy is itself an AppImage, and a runner has no FUSE to mount one.
         export APPIMAGE_EXTRACT_AND_RUN=1
-        # linuxdeploy's bundled strip cannot read the newer relocation sections that the
-        # Ubuntu 24.04 libraries carry, and the bundle fails; skip stripping the bundled files.
-        export NO_STRIP=true
         # --verbose shows linuxdeploy's own output, which a failed AppImage otherwise hides.
-        tauri_args+=(--verbose --bundles "deb,rpm,appimage")
+        tauri_args+=(--verbose --bundles "$LINUX_BUNDLES")
         ;;
 esac
 
@@ -73,7 +73,13 @@ case "$PLATFORM" in
         ;;
     linux)
         # The job uploads each format as it is, so each must be exactly one file.
-        for pattern in deb/*.deb rpm/*.rpm appimage/*.AppImage; do
+        for format in ${LINUX_BUNDLES//,/ }; do
+            case "$format" in
+                deb) pattern="deb/*.deb" ;;
+                rpm) pattern="rpm/*.rpm" ;;
+                appimage) pattern="appimage/*.AppImage" ;;
+                *) usage ;;
+            esac
             count=$(find "$BUNDLE_DIR/${pattern%/*}" -maxdepth 1 -name "${pattern#*/}" | wc -l)
             if [[ "$count" -ne 1 ]]; then
                 echo "Error: expected one $BUNDLE_DIR/$pattern, found $count" >&2
