@@ -209,31 +209,48 @@ start_session() {
 # Inside dbus-run-session: an empty password unlocks the login keyring (creating it), which
 # then serves the Secret Service on the session bus.
 desktop() {
-    local line
-    # The app's store is the Secret Service's default collection: point the default alias at
-    # the login keyring, which an empty password then creates and unlocks.
+    local line owner
+    # The app's store is the Secret Service's default collection: the login keyring, which a
+    # throwaway password creates and unlocks (an empty one creates none here).
     mkdir -p "$XDG_DATA_HOME/keyrings"
     echo login >"$XDG_DATA_HOME/keyrings/default"
-    printf '' | gnome-keyring-daemon --unlock --components=secrets >/dev/null
-    # --start joins the daemon --unlock started to this session; it prints what to export.
+    printf smoke | gnome-keyring-daemon --unlock --components=secrets >/dev/null
+    owner=$(secrets_owner)
+    # --start attaches to the daemon --unlock started and prints what to export.
     while IFS= read -r line; do
         if [[ "$line" == *=* ]]; then export "${line?}"; fi
     done < <(gnome-keyring-daemon --start --components=secrets)
+    [[ "$(secrets_owner)" == "$owner" ]] || fail "gnome-keyring-daemon --start replaced the daemon --unlock started"
     default_collection
     xvfb-run -a -s "-screen 0 1280x800x24" bash "$SELF" launch "$@"
 }
 
-# The Secret Service on this bus has a default collection, as the app's probe needs.
+# A Secret Service call on this session's bus, printing the reply.
+secret_service() {
+    dbus-send --session --print-reply --dest=org.freedesktop.secrets /org/freedesktop/secrets "$@" 2>&1 || true
+}
+
+# The bus name that owns org.freedesktop.secrets.
+secrets_owner() {
+    dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus \
+        org.freedesktop.DBus.GetNameOwner string:org.freedesktop.secrets 2>&1 | tail -n 1 || true
+}
+
+# The Secret Service on this bus has a stored default collection, as the app's probe needs: the
+# login keyring, never the in-memory session collection, which no desktop uses as its store.
 default_collection() {
-    local secrets=(dbus-send --session --print-reply --dest=org.freedesktop.secrets /org/freedesktop/secrets)
-    local alias collections
-    alias=$("${secrets[@]}" org.freedesktop.Secret.Service.ReadAlias string:default 2>&1) || true
-    collections=$("${secrets[@]}" org.freedesktop.DBus.Properties.Get \
-        string:org.freedesktop.Secret.Service string:Collections 2>&1) || true
-    echo "Secret Service default alias: $alias"
+    local login=/org/freedesktop/secrets/collection/login alias collections
+    ls -la "$XDG_DATA_HOME/keyrings"
+    collections=$(secret_service org.freedesktop.DBus.Properties.Get \
+        string:org.freedesktop.Secret.Service string:Collections)
     echo "Secret Service collections: $collections"
-    grep -q 'object path "/org/freedesktop/secrets/collection/' <<<"$alias" ||
-        fail "the Secret Service has no default collection"
+    alias=$(secret_service org.freedesktop.Secret.Service.ReadAlias string:default)
+    if ! grep -q "\"$login\"" <<<"$alias" && grep -q "\"$login\"" <<<"$collections"; then
+        secret_service org.freedesktop.Secret.Service.SetAlias string:default "objectpath:$login"
+        alias=$(secret_service org.freedesktop.Secret.Service.ReadAlias string:default)
+    fi
+    echo "Secret Service default alias: $alias"
+    grep -q "\"$login\"" <<<"$alias" || fail "the Secret Service's default collection is not the login keyring"
 }
 
 # Every process started under <pid>, at any depth.
