@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Helpers shared by test code only.
 
+pub(crate) mod bundle_config;
 pub(crate) mod source_guard;
 pub(crate) mod updater;
 

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "externalBin": [
+      "binaries/codesense-bridge",
+      "binaries/codesense-session-server",
+      "binaries/codesense-emulator"
+    ],
+    "resources": {
+      "resources/git-ai": null,
+      "resources/starship": null
+    }
+  }
+}

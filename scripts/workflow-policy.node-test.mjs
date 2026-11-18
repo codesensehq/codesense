@@ -627,6 +627,23 @@ for (const [name, fixture, error] of [
     /GitHub-hosted/,
   ],
   ["runner expression", good.replace("ubuntu-24.04", "${{ vars.RUNNER }}"), /GitHub-hosted/],
+  ...[
+    ["a self-hosted matrix entry", "include:\n          - runner: self-hosted"],
+    ["an unknown matrix label", "include:\n          - runner: ubuntu-build"],
+    ["a matrix entry without a runner", "include:\n          - arch: arm64"],
+    ["an empty matrix include", "include: []"],
+    [
+      "a matrix base axis",
+      "runner: [self-hosted]\n        include:\n          - runner: ubuntu-24.04",
+    ],
+  ].map(([name, matrix]) => [
+    name,
+    good.replace(
+      "runs-on: ubuntu-24.04",
+      `runs-on: \${{ matrix.runner }}\n    strategy:\n      matrix:\n        ${matrix}`,
+    ),
+    /GitHub-hosted/,
+  ]),
   ["unpinned container", good + "    container: ubuntu:24.04\n", /container image/],
   [
     "unpinned service",
@@ -1274,4 +1291,80 @@ test("the open-issue check covers every quarantine ledger file", (t) => {
   result = run();
   assert.equal(result.status, 1);
   assert.match(result.stderr, /issues\/2 \(CLOSED, tests\/quarantine\.extra\.json\)/);
+});
+
+// The test build's `platform` input picks the job: `all` runs every job, a platform only its own.
+const testBuildFile = "test-build.yml";
+const testBuild = () => fs.readFileSync(path.join(directory, testBuildFile), "utf8");
+
+test("test build: the platform input and the jobs it gates", () => {
+  const workflow = parse(testBuild());
+  assert.deepEqual(workflow.on.workflow_dispatch.inputs.platform, {
+    description: "Which app to build",
+    type: "choice",
+    options: ["all", "macos", "windows", "linux"],
+    default: "all",
+  });
+  assert.equal(
+    workflow.jobs["macos-app"].if,
+    "inputs.platform == 'all' || inputs.platform == 'macos'",
+  );
+  assert.equal(
+    workflow.jobs["linux-app"].if,
+    "inputs.platform == 'all' || inputs.platform == 'linux'",
+  );
+  const linux = workflow.jobs["linux-app"];
+  assert.equal(linux["runs-on"], "${{ matrix.runner }}");
+  assert.deepEqual(linux.strategy.matrix.include, [
+    { arch: "x86_64", runner: "ubuntu-22.04", bundles: "deb,rpm,appimage" },
+    { arch: "arm64", runner: "ubuntu-24.04-arm", bundles: "deb,rpm" },
+  ]);
+  assert.equal(linux.strategy["fail-fast"], false);
+});
+
+test("test build: the Linux job uploads the deb, rpm and AppImage, each one file kept 7 days", () => {
+  const uploads = parse(testBuild()).jobs["linux-app"].steps.filter((step) =>
+    step.uses?.startsWith("actions/upload-artifact@"),
+  );
+  assert.deepEqual(
+    uploads.map((step) => step.with.path),
+    [
+      "target/release/bundle/deb/*.deb",
+      "target/release/bundle/rpm/*.rpm",
+      "target/release/bundle/appimage/*.AppImage",
+    ],
+  );
+  // Only the AppImage upload is conditional: the arm64 leg builds no AppImage.
+  assert.deepEqual(
+    uploads.map((step) => step.if),
+    [undefined, undefined, "contains(matrix.bundles, 'appimage')"],
+  );
+  for (const { with: inputs } of uploads) {
+    assert.equal(inputs.archive, false);
+    assert.equal(inputs["retention-days"], 7);
+    assert.equal(inputs["if-no-files-found"], "error");
+  }
+});
+
+test("test build: the policy rejects a missing platform gate, input or runner", () => {
+  const cases = [
+    [testBuild().replace("inputs.platform == 'linux'", "true"), /linux-app: if must run/],
+    [testBuild().replace("default: all", "default: linux"), /platform input must be a choice/],
+    [testBuild().replace("          - windows\n", ""), /platform input must be a choice/],
+    [
+      testBuild().replace("runner: ubuntu-22.04", "runner: ubuntu-24.04"),
+      /matrix must run on ubuntu-22.04 and ubuntu-24.04-arm/,
+    ],
+    [
+      testBuild().replace(
+        "          - arch: arm64\n            runner: ubuntu-24.04-arm\n            bundles: deb,rpm\n",
+        "",
+      ),
+      /matrix must run on/,
+    ],
+    [testBuild().replace("runner: ubuntu-24.04-arm", "runner: self-hosted"), /matrix must run on/],
+    [testBuild().replace("${{ matrix.runner }}", "ubuntu-22.04"), /matrix must run on/],
+  ];
+  for (const [fixture, error] of cases)
+    assert.match(workflowPolicy(fixture, testBuildFile).join("\n"), error);
 });

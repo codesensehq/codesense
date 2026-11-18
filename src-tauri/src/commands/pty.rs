@@ -2285,6 +2285,7 @@ mod tests {
 #[cfg(test)]
 mod shell_tests {
     use super::*;
+    use crate::test_support::bundle_config::merge_patch;
     use codesense_pty_core::shell::ShellKind;
     use std::path::Path;
 
@@ -2645,23 +2646,6 @@ mod shell_tests {
     /// map in both files.
     #[test]
     fn the_release_overlay_adds_the_host_agents_and_keeps_every_resource() {
-        fn merge_patch(target: &mut serde_json::Value, patch: &serde_json::Value) {
-            match (target, patch) {
-                (serde_json::Value::Object(target), serde_json::Value::Object(patch)) => {
-                    for (key, value) in patch {
-                        if value.is_null() {
-                            target.remove(key);
-                        } else {
-                            merge_patch(
-                                target.entry(key.clone()).or_insert(serde_json::Value::Null),
-                                value,
-                            );
-                        }
-                    }
-                }
-                (target, patch) => *target = patch.clone(),
-            }
-        }
         let base: serde_json::Value =
             serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
         let overlay: serde_json::Value =
@@ -2693,6 +2677,50 @@ mod shell_tests {
             }
         }
         bundled(codesense_session_server::install::EMULATOR_NOTICES);
+    }
+
+    /// Tauri merges `tauri.linux.conf.json` over the base config on Linux only.
+    /// It drops the two macOS-only binary resources, keeps the four starship
+    /// prompt presets and ships the emulator worker as a third sidecar.
+    #[test]
+    fn the_linux_overlay_drops_the_macos_resources_and_ships_the_emulator() {
+        let base: serde_json::Value =
+            serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
+        let overlay: serde_json::Value =
+            serde_json::from_str(include_str!("../../tauri.linux.conf.json")).unwrap();
+        let mut merged = base.clone();
+        merge_patch(&mut merged, &overlay);
+
+        let resources = merged["bundle"]["resources"].as_object().unwrap();
+        for key in ["resources/git-ai", "resources/starship"] {
+            assert!(!resources.contains_key(key), "{key} must not ship on Linux");
+        }
+        for preset in ["compact", "minimal", "full", "twoline"] {
+            let key = format!("resources/starship-{preset}.toml");
+            assert_eq!(
+                resources.get(&key).and_then(|v| v.as_str()),
+                Some(key.as_str()),
+                "{key} kept"
+            );
+        }
+        let other_resources = |config: &serde_json::Value| {
+            let mut map = config["bundle"]["resources"].as_object().unwrap().clone();
+            map.remove("resources/git-ai");
+            map.remove("resources/starship");
+            map
+        };
+        assert_eq!(
+            &other_resources(&merged),
+            &other_resources(&base),
+            "every other resource is untouched"
+        );
+        let mut external_bin = base["bundle"]["externalBin"].as_array().unwrap().clone();
+        external_bin.push(serde_json::json!("binaries/codesense-emulator"));
+        assert_eq!(
+            merged["bundle"]["externalBin"],
+            serde_json::Value::Array(external_bin),
+            "the base sidecars plus the emulator worker"
+        );
     }
 }
 
