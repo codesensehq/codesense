@@ -103,16 +103,16 @@ pub fn caps() -> &'static [Cap] {
 }
 
 /// Whether the named capability is on for one platform; an unknown key is off. The running
-/// platform reads `caps()`, so its probes run once; any other resolves only the key's row, and a
-/// probe row there runs this host's probe.
+/// platform reads `caps()`, so its probes run once; any other resolves only the key's row. A
+/// probe row is off there: a probe can only answer for the host it runs on.
 pub fn enabled_for(key: &str, os: &str, arch: &str) -> bool {
     if (os, arch) == (std::env::consts::OS, std::env::consts::ARCH) {
         return caps().iter().any(|cap| cap.key == key && cap.on);
     }
     TABLE
         .iter()
-        .position(|row| row.key == key)
-        .is_some_and(|i| resolve(&TABLE[i..=i], os, arch, &|probe| probe())[0].on)
+        .find(|row| row.key == key)
+        .is_some_and(|row| resolve(std::slice::from_ref(row), os, arch, &|_| false)[0].on)
 }
 
 fn log_line(caps: &[Cap]) -> String {
@@ -297,6 +297,24 @@ mod tests {
                 assert_eq!(enabled_for(key, os, arch), row.on, "{os} {arch} {key}");
             }
             assert!(!enabled_for("no-such-capability", os, arch));
+        }
+    }
+
+    /// Off the running platform a probe row is off, so this host's probe never answers for
+    /// another platform.
+    #[test]
+    fn enabled_for_another_platform_never_runs_a_probe() {
+        let host = (std::env::consts::OS, std::env::consts::ARCH);
+        for (os, arch) in [
+            ("macos", "aarch64"),
+            ("macos", "x86_64"),
+            ("linux", "x86_64"),
+            ("linux", "aarch64"),
+            ("windows", "x86_64"),
+        ] {
+            if (os, arch) != host {
+                assert!(!enabled_for(SECRET_STORE, os, arch), "{os} {arch}");
+            }
         }
     }
 
