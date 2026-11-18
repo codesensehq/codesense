@@ -9,7 +9,8 @@
 //!
 //! - [`process`]: a [`process::ProcessTree`] ended as a whole, the group of a
 //!   process started elsewhere, single-process stops, exit checks, process
-//!   groups and pid liveness.
+//!   groups, pid liveness and process identity (pid, start time, parent,
+//!   descent).
 //! - [`fs`]: owner-only files, directories and checks, file identity,
 //!   no-follow opens, atomic replace, exclusive and shared locks, links,
 //!   canonical paths, portable names, execute bits, busy files, executable

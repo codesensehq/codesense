@@ -1,16 +1,20 @@
 // SPDX-License-Identifier: MIT
 //! Windows: a Job Object per tree, with kill-on-close; one without it for an
-//! adopted group.
+//! adopted group; process identity from the creation time and a Toolhelp
+//! snapshot's parent.
 
 use std::io;
 use std::os::windows::io::AsRawHandle;
 use std::process::{Child, Command};
+use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{
-    ERROR_ACCESS_DENIED, HANDLE, INVALID_HANDLE_VALUE, STILL_ACTIVE, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    ERROR_ACCESS_DENIED, FILETIME, HANDLE, INVALID_HANDLE_VALUE, STILL_ACTIVE, WAIT_OBJECT_0,
+    WAIT_TIMEOUT,
 };
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, Thread32First, Thread32Next,
+    PROCESSENTRY32W, TH32CS_SNAPPROCESS, TH32CS_SNAPTHREAD, THREADENTRY32,
 };
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
@@ -18,12 +22,16 @@ use windows_sys::Win32::System::JobObjects::{
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 use windows_sys::Win32::System::Threading::{
-    GetExitCodeProcess, OpenProcess, OpenThread, ResumeThread, TerminateProcess,
+    GetExitCodeProcess, GetProcessTimes, OpenProcess, OpenThread, ResumeThread, TerminateProcess,
     WaitForSingleObject, CREATE_NO_WINDOW, CREATE_SUSPENDED, PROCESS_QUERY_LIMITED_INFORMATION,
     PROCESS_SET_QUOTA, PROCESS_TERMINATE, THREAD_SUSPEND_RESUME,
 };
 
+use super::Identity;
 use crate::win::Handle;
+
+/// The Unix epoch as a FILETIME: 100 ns intervals since 1601-01-01.
+const UNIX_EPOCH_FILETIME: u64 = 116_444_736_000_000_000;
 
 /// The exit code of every process the job ends.
 const KILLED: u32 = 1;
@@ -154,10 +162,84 @@ pub(super) fn is_alive(pid: u32) -> bool {
             Ok(process) => process,
             Err(error) => return error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32),
         };
+    still_active(&process)
+}
+
+/// Whether the open `process` has not exited. An exited process stays
+/// openable while any handle to it is open.
+fn still_active(process: &Handle) -> bool {
     let mut code = 0u32;
     // SAFETY: the process handle is open; `code` is writable.
     let read = unsafe { GetExitCodeProcess(process.raw(), &mut code) };
     read != 0 && code == STILL_ACTIVE as u32
+}
+
+/// The running process `pid`: its creation time as a FILETIME, and its parent
+/// from a Toolhelp snapshot.
+pub(super) fn inspect(pid: u32) -> Option<Identity> {
+    if pid == 0 {
+        return None;
+    }
+    // SAFETY: opening a process for a limited query has no other effect.
+    let process =
+        Handle::new(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) }).ok()?;
+    if !still_active(&process) {
+        return None;
+    }
+    let zero = FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let (mut creation, mut exit, mut kernel, mut user) = (zero, zero, zero, zero);
+    // SAFETY: the process handle is open; the four times are writable.
+    let read = unsafe {
+        GetProcessTimes(
+            process.raw(),
+            &mut creation,
+            &mut exit,
+            &mut kernel,
+            &mut user,
+        )
+    };
+    if read == 0 {
+        return None;
+    }
+    Some(Identity {
+        pid,
+        start: (u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime),
+        parent: parent_of(pid)?,
+    })
+}
+
+/// The parent pid Toolhelp records for `pid`. Windows never re-parents, so
+/// the parent may have exited and its pid been reused since.
+fn parent_of(pid: u32) -> Option<u32> {
+    // SAFETY: a snapshot of every process; it takes no pointers.
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        return None;
+    }
+    let snapshot = Handle::new(snapshot).ok()?;
+    // SAFETY: all-zero is a valid value of this plain-data struct.
+    let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+    entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+    // SAFETY: the snapshot is open; `entry` is writable and its size is set.
+    let mut found = unsafe { Process32FirstW(snapshot.raw(), &mut entry) } != 0;
+    while found {
+        if entry.th32ProcessID == pid {
+            return Some(entry.th32ParentProcessID);
+        }
+        // SAFETY: as for `Process32FirstW`.
+        found = unsafe { Process32NextW(snapshot.raw(), &mut entry) } != 0;
+    }
+    None
+}
+
+/// Compare a creation FILETIME with `time` since the epoch.
+pub(super) fn started_after(start: u64, time: Duration) -> bool {
+    start
+        .checked_sub(UNIX_EPOCH_FILETIME)
+        .is_some_and(|since| u128::from(since / 10) >= time.as_micros())
 }
 
 pub(super) fn terminate_pid(pid: u32) -> io::Result<()> {
