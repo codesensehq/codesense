@@ -5689,7 +5689,7 @@ fn launch_detached_with_env(
     emulator: Option<&Path>,
     env: &[(&str, String)],
 ) -> Result<(), String> {
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
 
     let log = root.join("logs");
     let stderr = std::fs::create_dir_all(&log)
@@ -5700,23 +5700,7 @@ fn launch_detached_with_env(
                 .open(log.join("pty-server.log"))
         })
         .map_or_else(|_| Stdio::null(), Stdio::from);
-    let mut command = Command::new(binary);
-    codesense_pty_core::nofile::inherit_original_limit(&mut command);
-    command.env("CODESENSE_LOCAL_WAKE_HOLDS", "1");
-    // `--root` last: the instance's sidecars are found by their args' suffix.
-    if let Some(resources) = resources {
-        command.arg("--resources").arg(resources);
-    }
-    if let Some(emulator) = emulator {
-        command.arg("--emulator").arg(emulator);
-    }
-    let status = command
-        .arg("--root")
-        .arg(root)
-        // Never inherit a lifetime tie from the app's own environment: a product
-        // sidecar must outlive the app.
-        .env_remove(SIDECAR_EXIT_WITH_PID_ENV)
-        .envs(env.iter().map(|(key, value)| (*key, value.as_str())))
+    let status = sidecar_command(binary, root, resources, emulator, env)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(stderr)
@@ -5727,6 +5711,36 @@ fn launch_detached_with_env(
     } else {
         Err(format!("{binary:?} exited with {status}"))
     }
+}
+
+/// The sidecar's command line and environment, without its stdio.
+fn sidecar_command(
+    binary: &Path,
+    root: &Path,
+    resources: Option<&Path>,
+    emulator: Option<&Path>,
+    env: &[(&str, String)],
+) -> std::process::Command {
+    let mut command = std::process::Command::new(binary);
+    codesense_pty_core::nofile::inherit_original_limit(&mut command);
+    command.env("CODESENSE_LOCAL_WAKE_HOLDS", "1");
+    // `--root` last: the instance's sidecars are found by their args' suffix.
+    if let Some(resources) = resources {
+        command.arg("--resources").arg(resources);
+    }
+    if let Some(emulator) = emulator {
+        command.arg("--emulator").arg(emulator);
+    }
+    command.arg("--root").arg(root);
+    // Every PTY the sidecar starts inherits its environment, so the WebKit default the app set
+    // for its own webview stops here; `env` below still wins.
+    crate::linux_startup::remove_app_webkit_env(&mut command);
+    command
+        // Never inherit a lifetime tie from the app's own environment: a product
+        // sidecar must outlive the app.
+        .env_remove(SIDECAR_EXIT_WITH_PID_ENV)
+        .envs(env.iter().map(|(key, value)| (*key, value.as_str())));
+    command
 }
 
 #[cfg(test)]

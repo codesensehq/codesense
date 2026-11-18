@@ -22,9 +22,8 @@ use windows_sys::Win32::Security::Authorization::{
     GetSecurityInfo, SetNamedSecurityInfoW, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    AddAccessAllowedAceEx, EqualSid, GetAce, GetLengthSid, InitializeAcl,
-    InitializeSecurityDescriptor, SetSecurityDescriptorControl, SetSecurityDescriptorDacl,
-    ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_REVISION, CONTAINER_INHERIT_ACE,
+    EqualSid, GetAce, InitializeSecurityDescriptor, SetSecurityDescriptorControl,
+    SetSecurityDescriptorDacl, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, CONTAINER_INHERIT_ACE,
     DACL_SECURITY_INFORMATION, OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION,
     PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
     SECURITY_DESCRIPTOR, SE_DACL_PROTECTED,
@@ -37,14 +36,12 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 
 use super::{portable_name, Creation, FileId, Linked, Open, ReplaceError};
-use crate::win::{wide, CurrentUser};
+use crate::win::{wide, CurrentUser, SingleUserAcl, SECURITY_DESCRIPTOR_REVISION};
 
 /// `ACCESS_ALLOWED_ACE_TYPE`: an ACE that grants access to one SID.
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
 /// `ACCESS_DENIED_ACE_TYPE`: an ACE that only takes access away.
 const ACCESS_DENIED_ACE_TYPE: u8 = 1;
-/// `SECURITY_DESCRIPTOR_REVISION`, from a module this crate does not enable.
-const SECURITY_DESCRIPTOR_REVISION: u32 = 1;
 
 /// How many times a replace meets a sharing violation before it is `Busy`.
 const REPLACE_ATTEMPTS: u32 = 5;
@@ -54,7 +51,12 @@ const FIRST_RETRY_DELAY: Duration = Duration::from_millis(10);
 
 pub(super) fn set_owner_only(path: &Path, is_dir: bool) -> io::Result<()> {
     let user = CurrentUser::read()?;
-    let acl = owner_only_acl(&user, is_dir)?;
+    let inherit = if is_dir {
+        OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE
+    } else {
+        0
+    };
+    let acl = SingleUserAcl::new(user.sid(), inherit, FILE_ALL_ACCESS)?;
     let path = wide(path);
     // SAFETY: `path` is NUL-terminated; the ACL lives across the call.
     let status = unsafe {
@@ -64,7 +66,7 @@ pub(super) fn set_owner_only(path: &Path, is_dir: bool) -> io::Result<()> {
             DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            acl.as_ptr().cast(),
+            acl.as_ptr(),
             std::ptr::null(),
         )
     };
@@ -72,34 +74,6 @@ pub(super) fn set_owner_only(path: &Path, is_dir: bool) -> io::Result<()> {
         return Err(io::Error::from_raw_os_error(status as i32));
     }
     Ok(())
-}
-
-/// An ACL with one ACE granting `user` full access, inherited by a
-/// directory's new entries when `is_dir`, in a DWORD-aligned buffer.
-fn owner_only_acl(user: &CurrentUser, is_dir: bool) -> io::Result<Vec<u32>> {
-    let sid = user.sid();
-    // SAFETY: the SID is valid while `user` lives.
-    let sid_length = unsafe { GetLengthSid(sid) } as usize;
-    // The ACL header and one ACE, whose SID takes the place of `SidStart`.
-    let acl_length = std::mem::size_of::<ACL>() + std::mem::size_of::<ACCESS_ALLOWED_ACE>()
-        - std::mem::size_of::<u32>()
-        + sid_length;
-    let mut buffer = vec![0u32; acl_length.div_ceil(4)];
-    let acl = buffer.as_mut_ptr().cast::<ACL>();
-    let inherit = if is_dir {
-        OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE
-    } else {
-        0
-    };
-    // SAFETY: `acl` points to a DWORD-aligned buffer of the size given.
-    if unsafe { InitializeAcl(acl, (buffer.len() * 4) as u32, ACL_REVISION) } == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: the ACL was sized for this one ACE; the SID is valid.
-    if unsafe { AddAccessAllowedAceEx(acl, ACL_REVISION, inherit, FILE_ALL_ACCESS, sid) } == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(buffer)
 }
 
 /// A file's owner and DACL, read from its open handle; the security
@@ -172,11 +146,11 @@ pub(super) fn is_owner_only(file: &File) -> io::Result<bool> {
     let security = Security::of(file)?;
     // SAFETY: `dacl` is null or points into the descriptor `security` holds;
     // the SID is valid while `user` lives.
-    Ok(security.owned_by(&user) && unsafe { grants_only(security.dacl, user.sid()) })
+    Ok(security.owned_by(user) && unsafe { grants_only(security.dacl, user.sid()) })
 }
 
 pub(super) fn is_owned_by_current_user(file: &File) -> io::Result<bool> {
-    Ok(Security::of(file)?.owned_by(&CurrentUser::read()?))
+    Ok(Security::of(file)?.owned_by(CurrentUser::read()?))
 }
 
 /// Whether every ACE in `dacl` that grants access names `sid`. A null DACL
@@ -274,7 +248,7 @@ fn file_id_from(volume: u64, index: u128) -> io::Result<FileId> {
 
 pub(super) fn create_owner_only(path: &Path, creation: Creation, open: Open) -> io::Result<File> {
     let user = CurrentUser::read()?;
-    let acl = owner_only_acl(&user, false)?;
+    let acl = SingleUserAcl::new(user.sid(), 0, FILE_ALL_ACCESS)?;
     // SAFETY: all-zero is a valid SECURITY_DESCRIPTOR to initialize.
     let mut descriptor: SECURITY_DESCRIPTOR = unsafe { std::mem::zeroed() };
     let descriptor_ptr: PSECURITY_DESCRIPTOR = std::ptr::addr_of_mut!(descriptor).cast();
@@ -282,7 +256,7 @@ pub(super) fn create_owner_only(path: &Path, creation: Creation, open: Open) -> 
     // ACL it points to outlives the CreateFileW call below.
     let made = unsafe {
         InitializeSecurityDescriptor(descriptor_ptr, SECURITY_DESCRIPTOR_REVISION) != 0
-            && SetSecurityDescriptorDacl(descriptor_ptr, 1, acl.as_ptr().cast(), 0) != 0
+            && SetSecurityDescriptorDacl(descriptor_ptr, 1, acl.as_ptr(), 0) != 0
             && SetSecurityDescriptorControl(descriptor_ptr, SE_DACL_PROTECTED, SE_DACL_PROTECTED)
                 != 0
     };

@@ -6160,3 +6160,37 @@ fn a_current_terminal_server_positively_confirms_an_empty_worktree() {
     assert!(usage.entries.is_empty());
     assert!(usage.opening.is_empty());
 }
+
+/// The sidecar's environment, as `(name, value)` with `None` for a removal.
+fn sidecar_envs(env: &[(&str, String)]) -> Vec<(String, Option<String>)> {
+    let command = sidecar_command(Path::new("pty-server"), Path::new("root"), None, None, env);
+    command
+        .get_envs()
+        .map(|(name, value)| {
+            (
+                name.to_string_lossy().into_owned(),
+                value.map(|v| v.to_string_lossy().into_owned()),
+            )
+        })
+        .collect()
+}
+
+/// When the app set the WebKit default, the sidecar (and so every PTY it starts) doesn't
+/// inherit it or its marker.
+#[test]
+fn sidecar_command_drops_app_owned_webkit_env() {
+    let _owned = crate::linux_startup::force_app_owned_for_test(true);
+    let envs = sidecar_envs(&[]);
+    for name in ["WEBKIT_DISABLE_DMABUF_RENDERER", "CODESENSE_WEBKIT_DMABUF_DEFAULT"] {
+        assert!(envs.contains(&(name.to_string(), None)), "{name} in {envs:?}");
+    }
+}
+
+/// An explicit value the launch passes wins over the strip.
+#[test]
+fn sidecar_command_extra_env_wins_over_webkit_strip() {
+    let _owned = crate::linux_startup::force_app_owned_for_test(true);
+    let envs = sidecar_envs(&[("WEBKIT_DISABLE_DMABUF_RENDERER", "7".to_string())]);
+    let expected = ("WEBKIT_DISABLE_DMABUF_RENDERER".to_string(), Some("7".to_string()));
+    assert!(envs.contains(&expected), "{envs:?}");
+}

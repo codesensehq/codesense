@@ -14,9 +14,12 @@
 //! - [`dirs`]: the codesense home.
 //! - [`user`]: the user this process runs as.
 //! - [`limits`]: the open-file soft limit.
+//! - [`ipc`]: local endpoints, listeners and streams (Unix sockets, named
+//!   pipes) and the pid at the other end.
 
 pub mod dirs;
 pub mod fs;
+pub mod ipc;
 pub mod limits;
 pub mod process;
 pub mod user;

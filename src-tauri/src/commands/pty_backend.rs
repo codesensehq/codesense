@@ -860,12 +860,13 @@ fn emulator_worker() -> Result<std::path::PathBuf, String> {
 }
 
 /// The in-process host's environment: this process's, with the resources
-/// the app ships.
+/// the app ships, less the WebKit default the app set for its own webview.
 pub fn in_process_environment(app: &tauri::AppHandle) -> HostEnvironment {
     HostEnvironment::of_process(
         crate::commands::paths::codesense_home_dir(),
         crate::commands::paths::resolve_bundled_resource(app, "resources"),
     )
+    .without_vars(crate::linux_startup::app_owned_env().iter().copied())
 }
 
 /// Start the in-process host's emulator worker on a thread of its own, so app

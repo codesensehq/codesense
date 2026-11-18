@@ -250,6 +250,8 @@ pub fn spawn_capture(req: CaptureRequest) -> Result<CaptureOutput, CaptureError>
         } else {
             Stdio::null()
         });
+    // The WebKit default the app set for its own webview is not the child's to inherit.
+    crate::linux_startup::remove_app_webkit_env(&mut command);
     // SW-AN-46: strip guarded vars from the inherited env FIRST, so an explicit `env`
     // override below still wins on a colliding key.
     for name in &req.env_remove {
@@ -501,6 +503,67 @@ mod tests {
         std::env::remove_var("AN46_STRIP_PROBE");
         std::env::remove_var("AN46_KEEP_PROBE");
         assert_eq!(String::from_utf8_lossy(&out.stdout), "GONE|override");
+    }
+
+    /// Sets process variables for a test and restores their previous values on drop.
+    struct SetVars(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+    impl SetVars {
+        fn new(vars: &[(&'static str, &str)]) -> Self {
+            let saved = vars
+                .iter()
+                .map(|(name, value)| {
+                    let previous = std::env::var_os(name);
+                    std::env::set_var(name, value);
+                    (*name, previous)
+                })
+                .collect();
+            Self(saved)
+        }
+    }
+
+    impl Drop for SetVars {
+        fn drop(&mut self) {
+            for (name, previous) in &self.0 {
+                match previous {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+
+    /// Runs `sh` printing the WebKit variable and its marker as the child sees them, with the
+    /// app owning both and both set in this process.
+    fn webkit_env_seen_by_child(env: Vec<(String, String)>) -> String {
+        // Holds the env lock until it drops; don't take `env_guard()` again.
+        let _owned = crate::linux_startup::force_app_owned_for_test(true);
+        // Declared after `_owned`, so it restores the variables while the lock is still held.
+        let _vars = SetVars::new(&[
+            ("WEBKIT_DISABLE_DMABUF_RENDERER", "1"),
+            ("CODESENSE_WEBKIT_DMABUF_DEFAULT", "1"),
+        ]);
+        let out = spawn_capture(CaptureRequest {
+            args: vec![
+                "-c".to_string(),
+                "printf %s \"${WEBKIT_DISABLE_DMABUF_RENDERER-unset}|${CODESENSE_WEBKIT_DMABUF_DEFAULT-unset}\""
+                    .to_string(),
+            ],
+            env,
+            ..req(PathBuf::from("/bin/sh"))
+        });
+        String::from_utf8_lossy(&out.unwrap().stdout).into_owned()
+    }
+
+    #[test]
+    fn app_owned_webkit_env_is_not_inherited() {
+        assert_eq!(webkit_env_seen_by_child(Vec::new()), "unset|unset");
+    }
+
+    #[test]
+    fn explicit_webkit_env_wins_over_the_strip() {
+        let env = vec![("WEBKIT_DISABLE_DMABUF_RENDERER".to_string(), "7".to_string())];
+        assert_eq!(webkit_env_seen_by_child(env), "7|unset");
     }
 
     #[test]
