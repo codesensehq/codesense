@@ -247,6 +247,10 @@ fn run(mut command: Command) -> Result<GitPromptStatus, Miss> {
                 // The exit can't be observed without reaping (or something
                 // else reaped `git`): signal the group only while `git` is
                 // provably still running, since a reaped pid may be reused.
+                // A `try_wait` that reaps `git` closes the tree, which kills
+                // what it left in its group, as after any exit: the group id
+                // stays reserved while a member lives, and an empty one is
+                // not an error.
                 if matches!(tree.try_wait(), Ok(None)) {
                     let _ = kill_hard(&tree);
                     let _ = tree.wait();
