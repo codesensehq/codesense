@@ -713,13 +713,9 @@ mod tests {
     /// A child in this process's own group is never signalled through it: on
     /// unix it gets no group (signalling it would reach the test's own); on
     /// Windows it is adopted into a job of its own.
-    #[cfg(unix)]
     #[test]
     fn a_child_in_this_process_group_is_never_signalled_through_it() {
-        let shared = std::process::Command::new("sleep")
-            .arg("30")
-            .spawn()
-            .unwrap();
+        let shared = expect_long_running().spawn().unwrap();
         let shared = SessionChild::new(Box::new(shared));
         assert_eq!(shared.process_group.is_some(), expect_own_group_adopted());
         let shared = ChildHandle(Arc::new(Mutex::new(shared)));
@@ -727,8 +723,25 @@ mod tests {
         shared.wait();
     }
 
+    /// Unix: a plain child shares this process's group, which is never
+    /// adopted. Windows: any process is adopted into a job of its own.
     fn expect_own_group_adopted() -> bool {
         cfg!(windows)
+    }
+
+    /// A command that runs until it is killed, started in this process's own
+    /// group: `sleep` on unix, `ping` on Windows (which has no `sleep`).
+    fn expect_long_running() -> std::process::Command {
+        if cfg!(windows) {
+            let mut ping = std::process::Command::new("ping");
+            ping.args(["-n", "60", "127.0.0.1"])
+                .stdout(std::process::Stdio::null());
+            ping
+        } else {
+            let mut sleep = std::process::Command::new("sleep");
+            sleep.arg("30");
+            sleep
+        }
     }
 
     /// Dropping a session child signals nothing; only its teardown paths do.

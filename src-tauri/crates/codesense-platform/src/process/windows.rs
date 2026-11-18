@@ -43,7 +43,9 @@ pub(super) fn prepare_hidden(command: &mut Command) {
     command.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
 }
 
-/// The tree's job; closing its handle kills whatever is still in it.
+/// A job. A tree's job (from [`Group::adopt`]) has kill-on-close, so closing
+/// its handle kills whatever is still in it; an adopted group's job (from
+/// [`Group::adopt_pid`]) does not, so closing it leaves its processes running.
 pub(super) struct Group(Handle);
 
 impl Group {
