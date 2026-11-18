@@ -134,7 +134,7 @@ case "$PLATFORM" in
                 echo "Error: expected one resources/starship in $appimage, found: $starship" >&2
                 exit 1
             fi
-            install -m 755 src-tauri/resources/fetched/starship "$starship"
+            install -m 755 "$(bash scripts/fetch-bundled.sh --print-dest)" "$starship"
             mksquashfs "$work/squashfs-root" "$work/fs.sqfs" -root-owned -noappend -no-progress \
                 -comp "$compressor"
             # A temp file, then mv: a redirect onto the original would truncate it before head reads.

@@ -196,13 +196,13 @@ test("fetch-bundled maps each host to its pins", (t) => {
   const f = fixture(t);
   const bin = path.join(f.dir, "bin");
   fs.mkdirSync(bin);
-  const host = (os, arch) => {
+  const host = (os, arch, flag = "--dry-run") => {
     fs.writeFileSync(
       path.join(bin, "uname"),
       `#!/bin/sh\ncase "$1" in -s) echo ${os} ;; -m) echo ${arch} ;; esac\n`,
       { mode: 0o755 },
     );
-    return spawnSync("bash", [path.join(root, "scripts/fetch-git-ai.sh"), "--dry-run"], {
+    return spawnSync("bash", [path.join(root, "scripts/fetch-git-ai.sh"), flag], {
       cwd: f.dir,
       encoding: "utf8",
       env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
@@ -220,6 +220,32 @@ test("fetch-bundled maps each host to its pins", (t) => {
     if (typeof url === "string") assert.equal(run.stdout, url);
     else assert.match(run.stdout, url);
   }
+  // The pin and destination other scripts read from here, so the mapping lives in one place.
+  for (const [os, arch, pin, dest] of [
+    ["Darwin", "arm64", "src-tauri/git-ai.pin", "src-tauri/resources/git-ai"],
+    [
+      "Linux",
+      "x86_64",
+      "src-tauri/pins/starship-linux-x86_64.pin",
+      "src-tauri/resources/fetched/starship",
+    ],
+    [
+      "Linux",
+      "aarch64",
+      "src-tauri/pins/starship-linux-aarch64.pin",
+      "src-tauri/resources/fetched/starship",
+    ],
+  ]) {
+    for (const [flag, expected] of [
+      ["--print-pin", pin],
+      ["--print-dest", dest],
+    ]) {
+      const run = host(os, arch, flag);
+      assert.equal(run.status, 0, `${os} ${arch} ${flag}: ${run.stderr}`);
+      assert.equal(run.stdout, `${expected}\n`);
+    }
+    assert.ok(fs.existsSync(path.join(root, pin)), pin);
+  }
   for (const [os, arch] of [
     ["Linux", "riscv64"],
     ["FreeBSD", "amd64"],
@@ -227,7 +253,11 @@ test("fetch-bundled maps each host to its pins", (t) => {
     const run = host(os, arch);
     assert.equal(run.status, 1);
     assert.equal(run.stderr, `No pinned binaries for this host: ${os} ${arch}\n`);
+    assert.equal(host(os, arch, "--print-pin").status, 1);
   }
+  const bad = host("Linux", "x86_64", "--print");
+  assert.equal(bad.status, 2);
+  assert.match(bad.stderr, /^Usage: /);
 });
 
 test("the checksum uses sha256sum or shasum, whichever the host has, and needs one", (t) => {

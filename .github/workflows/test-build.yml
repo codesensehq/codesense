@@ -167,7 +167,7 @@ jobs:
         env:
           BUNDLES: ${{ matrix.bundles }}
         run: |
-          pin="src-tauri/pins/starship-linux-$(uname -m).pin"
+          pin=$(bash scripts/fetch-bundled.sh --print-pin)
           expected="starship $(sed -n 's/^version=//p' "$pin")"
           for format in ${BUNDLES//,/ }; do
             dir="$RUNNER_TEMP/extract-$format"
