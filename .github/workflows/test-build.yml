@@ -159,6 +159,37 @@ jobs:
             grep -E "(^|/)usr/bin/$name\$" <<<"$bin_files" || { echo "Error: $name is not in /usr/bin of the deb" >&2; exit 1; }
           done
           [[ $(wc -l <<<"$bin_files") -eq 4 ]] || { echo "Error: expected the app binary and three sidecars in /usr/bin" >&2; exit 1; }
+      - name: Check the AppImage emulator
+        # A Bun-compiled executable keeps its payload after the ELF image, so the emulator must
+        # reach the AppImage's usr/bin byte for byte. The step prints every result before it
+        # fails on any, and extracts without FUSE in a temp dir of its own.
+        if: contains(matrix.bundles, 'appimage')
+        run: |
+          built="$PWD/src-tauri/binaries/codesense-emulator-$(rustc -vV | sed -n 's/^host: //p')"
+          appimage=$(ls "$PWD"/target/release/bundle/appimage/*.AppImage)
+          # The sidecar names come from the Linux config the bundle is built from.
+          sidecars=$(node -p 'require("./src-tauri/tauri.linux.conf.json").bundle.externalBin.map((p) => p.split("/").pop()).join("\n")')
+          cd "$(mktemp -d)"
+          "$appimage" --appimage-extract >/dev/null
+          bin_files=$(find squashfs-root/usr/bin -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
+          echo "usr/bin: ${bin_files//$'\n'/ }"
+          files_ok=true
+          for name in $sidecars; do
+            grep -qx "$name" <<<"$bin_files" || { echo "Error: $name is not in usr/bin of the AppImage" >&2; files_ok=false; }
+          done
+          [[ $(wc -l <<<"$bin_files") -eq $(($(wc -l <<<"$sidecars") + 1)) ]] || { echo "Error: expected the app binary and the sidecars in usr/bin" >&2; files_ok=false; }
+          emulator=squashfs-root/usr/bin/codesense-emulator
+          same=false
+          [[ -f "$emulator" && $(sha256sum <"$emulator") == $(sha256sum <"$built") ]] && same=true
+          rc=0
+          timeout 10 "./$emulator" </dev/null >stdout.txt || rc=$?
+          stdout_bytes=$(wc -c <stdout.txt)
+          echo "files: $files_ok"
+          echo "sha256 matches the built emulator: $same ($(sha256sum <"$emulator" | cut -c1-64) vs $(sha256sum <"$built" | cut -c1-64))"
+          echo "exit code with no input: $rc"
+          echo "stdout bytes with no input: $stdout_bytes"
+          head -c 400 stdout.txt
+          [[ $files_ok == true && $same == true && $rc -eq 0 && $stdout_bytes -eq 0 ]]
       - name: Upload deb
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
