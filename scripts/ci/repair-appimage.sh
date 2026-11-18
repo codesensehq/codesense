@@ -19,26 +19,34 @@
 # Any build that ships an AppImage needs this step, a release one too.
 #
 # It needs python3 (scripts/ci/appimage-offset.sh), unsquashfs and mksquashfs (squashfs-tools)
-# and rustc. `--check-tools` checks for them and exits, so a build can fail before it starts.
+# and rustc. `--check-tools` checks for them, and for file, which linuxdeploy needs to pack the
+# AppImage in the first place, and exits, so a build can fail before it starts.
 #
 # Usage: bash scripts/ci/repair-appimage.sh <file.AppImage>
 #        bash scripts/ci/repair-appimage.sh --check-tools
 set -euo pipefail
 
+# Reports every missing tool, then fails. `file` only for --check-tools: the repair itself
+# does not run it.
 check_tools() {
-    local tool missing=()
+    local tool missing=() ok=true
     for tool in python3 unsquashfs mksquashfs rustc; do
         command -v "$tool" >/dev/null || missing+=("$tool")
     done
     if ((${#missing[@]})); then
         echo "Error: the AppImage repair needs tools that are not installed: ${missing[*]}" >&2
         echo "(unsquashfs and mksquashfs come with squashfs-tools)" >&2
-        exit 1
+        ok=false
     fi
+    if [[ "${1:-}" == with-linuxdeploy ]] && ! command -v file >/dev/null; then
+        echo "Error: linuxdeploy, which packs the AppImage, needs file, which is not installed" >&2
+        ok=false
+    fi
+    [[ $ok == true ]] || exit 1
 }
 
 if [[ $# -eq 1 && "$1" == --check-tools ]]; then
-    check_tools
+    check_tools with-linuxdeploy
     exit 0
 fi
 [[ $# -eq 1 && -f "$1" ]] || { echo "usage: $0 <file.AppImage> | --check-tools" >&2; exit 1; }
