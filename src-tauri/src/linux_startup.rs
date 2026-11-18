@@ -15,8 +15,9 @@ const MARKER: &str = "CODESENSE_WEBKIT_DMABUF_DEFAULT";
 /// The names the app sets for itself and keeps out of children.
 const APP_OWNED_NAMES: [&str; 2] = [DMABUF_VAR, MARKER];
 
-/// Whether this process set `WEBKIT_DISABLE_DMABUF_RENDERER` itself. Written only by
-/// [`apply_webkit_env_defaults`] (and the test seam), so it stays false off Linux.
+/// Whether the variable is the app's default (set by this process, or inherited with the marker
+/// from the app's own relaunch). Written only by [`apply_webkit_env_defaults`] (and the test
+/// seam), so it stays false off Linux.
 static APP_OWNED: AtomicBool = AtomicBool::new(false);
 
 /// What startup does with the WebKit default: the value to set (with the marker), if any, and
