@@ -15,11 +15,10 @@
 #   smoke-linux.sh run <package-dir> <out-dir>
 #       Extract the one .AppImage under <package-dir> into <out-dir>, check that every shared
 #       library its executables link resolves on this machine, and launch it under
-#       xvfb-run inside dbus-run-session, trying to unlock a keyring: it is alive at 30 s, has
-#       drawn a window that is not one colour, logs webview ready, a caps: line that agrees with
-#       the bundle (caps-agree) and a secret store: line, and exits within 10 s of SIGTERM.
-#       Which store that line names is not checked here (see SECRET_SERVICE_SKIP): the keyring
-#       is set up best effort, and its diagnostics are logged. Each launch leaves <mode>.log and
+#       xvfb-run inside dbus-run-session with an unlocked login keyring as the Secret Service's
+#       default collection: it is alive at 30 s, has drawn a window that is not one colour, logs
+#       webview ready, a caps: line that agrees with the bundle (caps-agree) and secret store:
+#       secret-service, and exits within 10 s of SIGTERM. Each launch leaves <mode>.log and
 #       <mode>.png in <out-dir>.
 #   smoke-linux.sh variant <dmabuf|no-dbus> <out-dir>
 #       Launch the AppImage run extracted into <out-dir> again. dmabuf: with the user's
@@ -40,8 +39,6 @@ SELF="$SCRIPT_DIR/smoke-linux.sh"
 SIDECARS=(codesense-bridge codesense-session-server codesense-emulator)
 # Resources the bundle carries only where the platform turns them on.
 OPTIONAL_RESOURCES=(starship git-ai)
-# Why a launch inside dbus-run-session does not require secret store: secret-service.
-SECRET_SERVICE_SKIP="skipped: secret store: secret-service: the Secret Service fixture under dbus-run-session is unreliable on the hosted x86_64 runner; the Rust (Linux app) job covers the Secret Service backend"
 
 usage() {
     sed -n 's/^#   //p' "$0" | grep "^smoke-linux.sh" | sed 's/^/usage: /' >&2
@@ -195,10 +192,12 @@ resolve_libs() {
 # A fresh home and runtime directory for each launch, then the session its mode needs.
 start_session() {
     local mode="$1" out="$2"
-    # The keyring daemon and the app share HOME and its data directory.
-    export HOME="$out/$mode-home" XDG_RUNTIME_DIR="$out/$mode-runtime" XDG_DATA_HOME="$out/$mode-home/.local/share"
+    # The keyring daemon and the app share HOME and its data directory. The names are neutral, so
+    # a path in the app's log never names the mode a check looks for.
+    HOME=$(mktemp -d "$out/home.XXXXXX")
+    XDG_RUNTIME_DIR=$(mktemp -d "$out/runtime.XXXXXX")
+    export HOME XDG_RUNTIME_DIR XDG_DATA_HOME="$HOME/.local/share"
     mkdir -p "$XDG_DATA_HOME"
-    mkdir -m 700 "$XDG_RUNTIME_DIR"
     case "$mode" in
         default) dbus-run-session -- bash "$SELF" desktop "$mode" "$out" ;;
         dmabuf) WEBKIT_DISABLE_DMABUF_RENDERER=0 dbus-run-session -- bash "$SELF" desktop "$mode" "$out" ;;
@@ -214,29 +213,41 @@ start_session() {
 # then serves the Secret Service on the session bus.
 desktop() {
     local line
-    # Best effort: a throwaway password creates and unlocks the login keyring, the Secret
-    # Service's default collection, and --unlock prints what to export. Nothing here fails the
-    # run; the log shows what the Secret Service ended up with.
+    # The app's store is the Secret Service's default collection: the login keyring, which a
+    # throwaway password creates and unlocks (an empty one creates none here). --unlock starts
+    # the daemon and prints what to export; --start would replace it and lose the login keyring.
     mkdir -p "$XDG_DATA_HOME/keyrings"
     echo login >"$XDG_DATA_HOME/keyrings/default"
     while IFS= read -r line; do
         if [[ "$line" == *=* ]]; then export "${line?}"; fi
-    done < <(printf smoke | gnome-keyring-daemon --unlock --components=secrets || true)
-    secret_service_diagnostics
+    done < <(printf smoke | gnome-keyring-daemon --unlock --components=secrets)
+    default_collection
     xvfb-run -a -s "-screen 0 1280x800x24" bash "$SELF" launch "$@"
 }
 
-# What owns the Secret Service on this bus, the keyrings on disk, its collections and its default.
-secret_service_diagnostics() {
-    local bus=(dbus-send --session --print-reply)
-    local secrets=("${bus[@]}" --dest=org.freedesktop.secrets /org/freedesktop/secrets)
-    echo "Secret Service owner: $("${bus[@]}" --dest=org.freedesktop.DBus /org/freedesktop/DBus \
-        org.freedesktop.DBus.GetNameOwner string:org.freedesktop.secrets 2>&1)"
-    ls -la "$XDG_DATA_HOME/keyrings" || true
-    echo "Secret Service collections: $("${secrets[@]}" org.freedesktop.DBus.Properties.Get \
-        string:org.freedesktop.Secret.Service string:Collections 2>&1)"
-    echo "Secret Service default alias: $("${secrets[@]}" org.freedesktop.Secret.Service.ReadAlias \
-        string:default 2>&1)"
+# A Secret Service call on this session's bus, printing the reply.
+secret_service() {
+    dbus-send --session --print-reply --dest=org.freedesktop.secrets /org/freedesktop/secrets "$@" 2>&1 || true
+}
+
+# The Secret Service on this bus has a stored default collection, as the app's probe needs: the
+# login keyring, never the in-memory session collection, which no desktop uses as its store. The
+# owner is logged only: the bus may activate the daemon on the first call.
+default_collection() {
+    local login=/org/freedesktop/secrets/collection/login alias collections
+    echo "Secret Service owner: $(dbus-send --session --print-reply --dest=org.freedesktop.DBus \
+        /org/freedesktop/DBus org.freedesktop.DBus.GetNameOwner string:org.freedesktop.secrets 2>&1)"
+    ls -la "$XDG_DATA_HOME/keyrings"
+    collections=$(secret_service org.freedesktop.DBus.Properties.Get \
+        string:org.freedesktop.Secret.Service string:Collections)
+    echo "Secret Service collections: $collections"
+    alias=$(secret_service org.freedesktop.Secret.Service.ReadAlias string:default)
+    if ! grep -q "\"$login\"" <<<"$alias" && grep -q "\"$login\"" <<<"$collections"; then
+        secret_service org.freedesktop.Secret.Service.SetAlias string:default "objectpath:$login"
+        alias=$(secret_service org.freedesktop.Secret.Service.ReadAlias string:default)
+    fi
+    echo "Secret Service default alias: $alias"
+    grep -q "\"$login\"" <<<"$alias" || fail "the Secret Service's default collection is not the login keyring"
 }
 
 # Every process started under <pid>, at any depth.
@@ -266,7 +277,8 @@ kept_dmabuf() {
 
 # Inside xvfb-run: launch the app, check it while it runs, stop it, then check its log.
 launch() {
-    local mode="$1" out="$2" log="$1.log" shot="$1.png" pid waited
+    local mode="$1" out="$2" log="$1.log" shot="$1.png" pid waited store=secret-service
+    if [[ "$mode" == no-dbus ]]; then store=unavailable; fi
     cd "$out"
     "$out/squashfs-root/AppRun" >"$log" 2>&1 &
     pid=$!
@@ -290,19 +302,11 @@ launch() {
     if alive "$pid"; then fail "the app is still running 10 s after SIGTERM"; fi
     wait "$pid" || true
     echo "The app exited within 10 s of SIGTERM"
-    # The launch's own directories ($mode-home, $mode-runtime) lose their mode in the plain log,
-    # so a path never reads as the app mentioning it.
-    plain_log "$log" | sed "s|$out/$mode-|$out/|g" >"$mode.txt"
+    plain_log "$log" >"$mode.txt"
     grep -q "webview ready" "$mode.txt" || fail "the log has no webview ready"
     caps_agree listing "$log"
-    grep -qE "(^| )secret store: " "$mode.txt" || fail "the log has no secret store: line"
-    if [[ "$mode" == no-dbus ]]; then
-        grep -qE "(^| )secret store: unavailable\$" "$mode.txt" || fail "the log has no secret store: unavailable"
-        echo "The log has webview ready and secret store: unavailable"
-    else
-        echo "The log has webview ready and a secret store: line"
-        echo "$SECRET_SERVICE_SKIP"
-    fi
+    grep -qE "(^| )secret store: $store\$" "$mode.txt" || fail "the log has no secret store: $store"
+    echo "The log has webview ready and secret store: $store"
     if [[ "$mode" == dmabuf ]] && grep -qi dmabuf "$mode.txt"; then
         fail "the log mentions DMABUF; the app should keep the user's value without a word"
     fi
