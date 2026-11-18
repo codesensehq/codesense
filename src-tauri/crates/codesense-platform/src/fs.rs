@@ -35,7 +35,9 @@ pub fn set_owner_only(path: &Path) -> io::Result<()> {
 /// [`open_nofollow`], so a link is never followed): on unix, owned by the
 /// effective uid with no group or other permission bits; on Windows, owned
 /// as [`is_owned_by_current_user`] has it, and every ACE that grants access
-/// names the current user.
+/// names the current user. A file made owner-only while elevated is owned by
+/// Administrators, so it is not owner-only to a later run without elevation
+/// (see [`is_owned_by_current_user`]).
 pub fn is_owner_only(file: &File) -> io::Result<bool> {
     sys::is_owner_only(file)
 }
@@ -52,6 +54,11 @@ pub fn is_owner_only(file: &File) -> io::Result<bool> {
 /// is therefore the token's own two SIDs: under an elevated token, a file
 /// another member of Administrators created also counts as owned, which that
 /// member could open and change anyway.
+///
+/// The other way round, a file made while elevated is owned by
+/// Administrators, so a later run without elevation finds it not owned (and
+/// not [`is_owner_only`]) and fails closed. Callers treat that as a file to
+/// recreate, not as an attack.
 pub fn is_owned_by_current_user(file: &File) -> io::Result<bool> {
     sys::is_owned_by_current_user(file)
 }
