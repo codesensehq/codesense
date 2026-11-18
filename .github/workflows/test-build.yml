@@ -88,9 +88,24 @@ jobs:
           if-no-files-found: error
 
   linux-app:
-    name: Unsigned Linux app
+    name: Unsigned Linux app (${{ matrix.arch }})
     if: inputs.platform == 'all' || inputs.platform == 'linux'
-    runs-on: ubuntu-22.04
+    # One definition for both architectures; each leg builds natively. x86_64 runs on the
+    # oldest hosted Ubuntu so the bundle links an older glibc; the arm64 leg runs on
+    # 24.04, so that build needs Ubuntu 24.04 or newer.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+            bundles: deb,rpm,appimage
+          # No AppImage on arm64: linuxdeploy rewrites the bundled emulator executable, which
+          # breaks it on aarch64.
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            bundles: deb,rpm
+    runs-on: ${{ matrix.runner }}
     # A cold release build of the app and both sidecars, with no dependency cache.
     timeout-minutes: 150
     permissions:
@@ -131,7 +146,9 @@ jobs:
         # Both scripts, here: macOS runners ship no shellcheck.
         run: shellcheck scripts/ci/unsigned-bundle.sh scripts/ci/bundle-manifest.sh
       - name: Build app
-        run: bash scripts/ci/unsigned-bundle.sh linux
+        env:
+          BUNDLES: ${{ matrix.bundles }}
+        run: bash scripts/ci/unsigned-bundle.sh linux "$BUNDLES"
       - name: Check the sidecars sit beside the app
         # The app binary's name comes from the product, so it is the one other file in /usr/bin.
         run: |
@@ -157,6 +174,7 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       - name: Upload AppImage
+        if: contains(matrix.bundles, 'appimage')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           path: target/release/bundle/appimage/*.AppImage
