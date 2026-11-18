@@ -12,12 +12,12 @@ const DMABUF_VAR: &str = "WEBKIT_DISABLE_DMABUF_RENDERER";
 /// tells that instance the `1` is still the app's, not the user's.
 const MARKER: &str = "CODESENSE_WEBKIT_DMABUF_DEFAULT";
 
-/// The names the app set for itself, in the order children have them removed.
-const APP_OWNED: [&str; 2] = [DMABUF_VAR, MARKER];
+/// The names the app sets for itself and keeps out of children.
+const APP_OWNED_NAMES: [&str; 2] = [DMABUF_VAR, MARKER];
 
 /// Whether this process set `WEBKIT_DISABLE_DMABUF_RENDERER` itself. Written only by
 /// [`apply_webkit_env_defaults`] (and the test seam), so it stays false off Linux.
-static APP_OWNED_FLAG: AtomicBool = AtomicBool::new(false);
+static APP_OWNED: AtomicBool = AtomicBool::new(false);
 
 /// What startup does with the WebKit default: the value to set (with the marker), if any, and
 /// whether the variable is the app's to keep out of children.
@@ -63,15 +63,15 @@ pub fn apply_webkit_env_defaults() {
         std::env::set_var(DMABUF_VAR, value);
         std::env::set_var(MARKER, "1");
     }
-    APP_OWNED_FLAG.store(plan.app_owned, Ordering::Relaxed);
+    APP_OWNED.store(plan.app_owned, Ordering::Relaxed);
 }
 
 /// The variables the app set for its own webview, which shells, agents and tools it starts must
 /// not inherit: they get the user's environment, while the app keeps its default (and the
 /// marker, for its relaunch). Empty when the user set the variable, and always off Linux.
 pub fn app_owned_env() -> &'static [&'static str] {
-    if APP_OWNED_FLAG.load(Ordering::Relaxed) {
-        &APP_OWNED
+    if APP_OWNED.load(Ordering::Relaxed) {
+        &APP_OWNED_NAMES
     } else {
         &[]
     }
@@ -95,7 +95,7 @@ pub(crate) struct ForcedOwnership {
 #[cfg(test)]
 impl Drop for ForcedOwnership {
     fn drop(&mut self) {
-        APP_OWNED_FLAG.store(self.previous, Ordering::Relaxed);
+        APP_OWNED.store(self.previous, Ordering::Relaxed);
     }
 }
 
@@ -104,7 +104,7 @@ impl Drop for ForcedOwnership {
 #[cfg(test)]
 pub(crate) fn force_app_owned_for_test(owned: bool) -> ForcedOwnership {
     let env = crate::content_engine::test_support::env_guard();
-    let previous = APP_OWNED_FLAG.swap(owned, Ordering::Relaxed);
+    let previous = APP_OWNED.swap(owned, Ordering::Relaxed);
     ForcedOwnership {
         previous,
         _env: env,

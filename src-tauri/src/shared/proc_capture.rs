@@ -505,13 +505,44 @@ mod tests {
         assert_eq!(String::from_utf8_lossy(&out.stdout), "GONE|override");
     }
 
+    /// Sets process variables for a test and restores their previous values on drop.
+    struct SetVars(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+    impl SetVars {
+        fn new(vars: &[(&'static str, &str)]) -> Self {
+            let saved = vars
+                .iter()
+                .map(|(name, value)| {
+                    let previous = std::env::var_os(name);
+                    std::env::set_var(name, value);
+                    (*name, previous)
+                })
+                .collect();
+            Self(saved)
+        }
+    }
+
+    impl Drop for SetVars {
+        fn drop(&mut self) {
+            for (name, previous) in &self.0 {
+                match previous {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+
     /// Runs `sh` printing the WebKit variable and its marker as the child sees them, with the
     /// app owning both and both set in this process.
     fn webkit_env_seen_by_child(env: Vec<(String, String)>) -> String {
         // Holds the env lock until it drops; don't take `env_guard()` again.
         let _owned = crate::linux_startup::force_app_owned_for_test(true);
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-        std::env::set_var("CODESENSE_WEBKIT_DMABUF_DEFAULT", "1");
+        // Declared after `_owned`, so it restores the variables while the lock is still held.
+        let _vars = SetVars::new(&[
+            ("WEBKIT_DISABLE_DMABUF_RENDERER", "1"),
+            ("CODESENSE_WEBKIT_DMABUF_DEFAULT", "1"),
+        ]);
         let out = spawn_capture(CaptureRequest {
             args: vec![
                 "-c".to_string(),
@@ -521,8 +552,6 @@ mod tests {
             env,
             ..req(PathBuf::from("/bin/sh"))
         });
-        std::env::remove_var("WEBKIT_DISABLE_DMABUF_RENDERER");
-        std::env::remove_var("CODESENSE_WEBKIT_DMABUF_DEFAULT");
         String::from_utf8_lossy(&out.unwrap().stdout).into_owned()
     }
 
