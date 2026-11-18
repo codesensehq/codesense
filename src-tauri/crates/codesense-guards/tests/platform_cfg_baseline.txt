@@ -27,7 +27,6 @@ crates/codesense-pty-core/src/agent_cli/hermes/lifecycle.rs 9
 crates/codesense-pty-core/src/agent_cli/version_cache.rs 18
 crates/codesense-pty-core/src/emulator/supervisor.rs 8
 crates/codesense-pty-core/src/fixtures.rs 23
-crates/codesense-pty-core/src/git_prompt.rs 16
 crates/codesense-pty-core/src/inbox_host.rs 4
 crates/codesense-pty-core/src/layout.rs 1
 crates/codesense-pty-core/src/leak_gate.rs 14
