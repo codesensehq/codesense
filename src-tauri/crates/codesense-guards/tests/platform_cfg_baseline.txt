@@ -32,7 +32,6 @@ crates/codesense-pty-core/src/inbox_host.rs 4
 crates/codesense-pty-core/src/layout.rs 1
 crates/codesense-pty-core/src/leak_gate.rs 14
 crates/codesense-pty-core/src/notify_hook.rs 6
-crates/codesense-pty-core/src/process.rs 10
 crates/codesense-pty-core/src/protocol.rs 3
 crates/codesense-pty-core/src/remote_workspace.rs 9
 crates/codesense-pty-core/src/runner.rs 1
