@@ -377,6 +377,26 @@ fn an_exited_child_whose_handle_is_open_no_longer_runs() {
 }
 
 #[test]
+fn a_child_that_exits_with_the_still_active_code_no_longer_runs() {
+    let mut child = fixture(&["exit", "259"])
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let identity = Identity::inspect(child.id()).expect("the child reads");
+    assert!(identity.runs());
+    child.stdin.take().unwrap().write_all(b"exit\n").unwrap();
+    assert!(
+        eventually(Duration::from_secs(5), || Identity::inspect(identity.pid)
+            .is_none()),
+        "an exited child still reads"
+    );
+    assert!(!identity.runs());
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(expect_exit_code(259)));
+    assert!(!is_alive(Pid::from_raw(identity.pid)));
+}
+
+#[test]
 fn current_user_is_stable() {
     let user = current_user().unwrap();
     assert_eq!(user, current_user().unwrap());
@@ -1517,7 +1537,17 @@ fn expect_login_shell(shell: Option<String>) {
 }
 
 /// Unix: an exited child not yet reaped is a zombie that holds its pid, so it
-/// is not retired. Windows: `is_alive` reads its exit code, so it is.
+/// is not retired. Windows: `is_alive` sees its handle signalled, so it is.
 fn expect_retired_while_unreaped() -> bool {
     cfg!(windows)
+}
+
+/// The code a parent reads for a child that exits with `code`. Unix keeps
+/// only its low 8 bits; Windows keeps all 32.
+fn expect_exit_code(code: i32) -> i32 {
+    if cfg!(unix) {
+        code & 0xff
+    } else {
+        code
+    }
 }

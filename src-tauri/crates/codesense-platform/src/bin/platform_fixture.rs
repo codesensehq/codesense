@@ -11,6 +11,7 @@
 //! - `lock-dir`: print the shared lock directory, then exit.
 //! - `console`: print `console window` or `no console window`, then exit.
 //! - `sleep`: sleep.
+//! - `exit <code>`: wait for a line on stdin, then exit with `code`.
 //!
 //! IPC client modes take an endpoint's wire form:
 //!
@@ -105,6 +106,14 @@ fn main() {
             "no console window"
         }),
         Some("sleep") => sleep_forever(),
+        Some("exit") => {
+            let code = args.next().and_then(|code| code.into_string().ok());
+            let code = code
+                .and_then(|code| code.parse().ok())
+                .expect("an exit code");
+            let _ = std::io::stdin().read_line(&mut String::new());
+            std::process::exit(code);
+        }
         other => {
             eprintln!("platform-fixture: unknown mode {other:?}");
             std::process::exit(2);
