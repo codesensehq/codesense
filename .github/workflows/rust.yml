@@ -528,12 +528,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install system libraries
-        # What the Tauri app links against on Linux: WebKitGTK, the tray indicator, SVG icons,
-        # D-Bus for the keyring, xdo for input, and OpenSSL.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev libxdo-dev libssl-dev
+        run: bash scripts/install-linux-app-libs.sh
       - name: Set up pnpm
         uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - name: Set up Node
@@ -560,6 +555,75 @@ jobs:
         run: bash scripts/build-session-server.sh
       - name: Check the desktop app
         run: cargo check --locked -p codesense --lib --tests --features dashboard-publish
+
+  rust-linux-app:
+    name: Rust (Linux app)
+    # The app crate's Linux-relevant tests, starting with the credential store against a real
+    # Secret Service (GNOME Keyring on a private session bus). Not a required check. The tests are
+    # `#[ignore]`d everywhere else, so only this job runs them. It widens as more of the app's
+    # Linux tests move here. Like the macOS and Windows jobs it skips merge groups, and runs on pull
+    # requests, main and the nightly run.
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' && github.event_name != 'merge_group' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUST_BACKTRACE: "1"
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install system libraries
+        # The shared app list, plus a session bus, the keyring daemon and its CLI.
+        run: bash scripts/install-linux-app-libs.sh dbus gnome-keyring libsecret-tools
+      - name: Set up pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: ${{ github.event_name != 'merge_group' && 'pnpm' || '' }}
+      - name: Install dependencies
+        # build.rs runs the docs generators, which import packages.
+        run: pnpm install --frozen-lockfile
+      - name: Set up Rust
+        # Matches ci.yml; rustup's proxies read the channel in rust-toolchain.toml.
+        run: rustup toolchain install stable --profile minimal
+      - name: Restore scanner archives
+        # Archives named by their sha256; install-scanners verifies each against the lock before use.
+        id: scanner-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/scanner-archives
+          key: scanner-archives-nextest-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('release/scanners.lock') }}
+      - name: Install pinned nextest
+        run: |
+          bash scripts/install-scanners.sh "$RUNNER_TEMP/rust-ci-tools" --cache "$RUNNER_TEMP/scanner-archives" --tool cargo-nextest
+          echo "$RUNNER_TEMP/rust-ci-tools" >> "$GITHUB_PATH"
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: rust-linux-app
+          save-if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - name: Fetch git-ai
+        run: bash scripts/fetch-git-ai.sh
+      - name: Build sidecars
+        # The app's build script needs the bundled sidecars to exist.
+        run: bash scripts/build-session-server.sh
+      - name: Compile the app's tests
+        run: cargo nextest run --profile ci --locked -p codesense --lib --no-run
+      - name: Test the credential store against Secret Service
+        # A private session bus; the script unlocks the keyring, checks it, and runs the tests.
+        run: dbus-run-session -- bash scripts/run-secret-service-tests.sh
 
   rust-check-windows:
     name: Rust check (Windows)

@@ -662,3 +662,128 @@ mod tests {
         unsafe { std::env::remove_var(&key) };
     }
 }
+
+/// The store against a real Secret Service. Every test is `#[ignore]`d, so only the Linux app CI
+/// job runs them, under a private session bus with the keyring daemon unlocked (the filter there
+/// is `test(~secret_service_tests)`). nextest gives each test its own process.
+#[cfg(all(test, target_os = "linux"))]
+mod secret_service_tests {
+    use super::*;
+
+    const SERVICE: &str = "codesense-secret-service-test";
+    const READER_ACCOUNT_ENV: &str = "CODESENSE_TEST_SECRET_ACCOUNT";
+    const NO_BUS_ENV: &str = "CODESENSE_TEST_NO_BUS";
+
+    fn unique_account(label: &str) -> String {
+        format!("{label}-{}", std::process::id())
+    }
+
+    /// This test binary again, as a fresh process running only `test` (an ignored test in this
+    /// module) with `envs` set for it alone.
+    fn run_child(test: &str, envs: &[(&str, &str)]) -> std::process::Output {
+        let name = format!("{}::{test}", module_path!().split_once("::").unwrap().1);
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command.args(["--ignored", "--exact", &name, "--nocapture"]);
+        for (key, value) in envs {
+            command.env(key, value);
+        }
+        command.output().unwrap()
+    }
+
+    /// The child exited cleanly and ran its one test (a filter that matched nothing also exits
+    /// cleanly). Its output is in the message either way.
+    fn assert_child_passed(test: &str, output: &std::process::Output) {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "{test} failed\nstdout: {stdout}\nstderr: {stderr}"
+        );
+        assert!(
+            stdout.contains("1 passed"),
+            "{test} did not run\nstdout: {stdout}\nstderr: {stderr}"
+        );
+    }
+
+    #[test]
+    #[ignore = "needs a Secret Service session"]
+    fn set_get_and_delete_round_trip() {
+        assert!(secret_store_available());
+        let store = KeychainStore::new(SERVICE);
+        let account = unique_account("round-trip");
+        assert!(store.get(&account).unwrap().is_none());
+
+        store.set(&account, &Secret::new("first")).unwrap();
+        assert_eq!(store.get(&account).unwrap().unwrap().expose(), "first");
+
+        store.set(&account, &Secret::new("second")).unwrap();
+        assert_eq!(store.get(&account).unwrap().unwrap().expose(), "second");
+
+        store.delete(&account).unwrap();
+        assert!(store.get(&account).unwrap().is_none());
+        // An absent entry is already removed.
+        store.delete(&account).unwrap();
+    }
+
+    /// Started by `a_second_process_reads_what_the_first_wrote`, and left out of the CI filter:
+    /// without the account variable it has nothing to read and would pass alone.
+    #[test]
+    #[ignore = "needs a Secret Service session"]
+    fn reader_process() {
+        let Ok(account) = std::env::var(READER_ACCOUNT_ENV) else {
+            return;
+        };
+        let secret = KeychainStore::new(SERVICE).get(&account).unwrap();
+        assert_eq!(secret.unwrap().expose(), "kept across processes");
+    }
+
+    #[test]
+    #[ignore = "needs a Secret Service session"]
+    fn a_second_process_reads_what_the_first_wrote() {
+        let store = KeychainStore::new(SERVICE);
+        let account = unique_account("persist");
+        store
+            .set(&account, &Secret::new("kept across processes"))
+            .unwrap();
+        let output = run_child("reader_process", &[(READER_ACCOUNT_ENV, &account)]);
+        store.delete(&account).unwrap();
+        assert_child_passed("reader_process", &output);
+    }
+
+    /// Started by `with_no_session_bus_every_call_is_unavailable` with no usable bus, and left
+    /// out of the CI filter: without the variable it would run against the real session.
+    #[test]
+    #[ignore = "needs a Secret Service session"]
+    fn no_bus_child() {
+        if std::env::var(NO_BUS_ENV).is_err() {
+            return;
+        }
+        assert!(!secret_store_available());
+        let store = KeychainStore::new(SERVICE);
+        assert_eq!(store.get("any").unwrap_err(), CredentialError::Unavailable);
+        assert_eq!(
+            store.set("any", &Secret::new("x")).unwrap_err(),
+            CredentialError::Unavailable
+        );
+        assert_eq!(
+            store.delete("any").unwrap_err(),
+            CredentialError::Unavailable
+        );
+    }
+
+    #[test]
+    #[ignore = "needs a Secret Service session"]
+    fn with_no_session_bus_every_call_is_unavailable() {
+        let output = run_child(
+            "no_bus_child",
+            &[
+                (NO_BUS_ENV, "1"),
+                (
+                    "DBUS_SESSION_BUS_ADDRESS",
+                    "unix:path=/nonexistent/codesense-bus",
+                ),
+            ],
+        );
+        assert_child_passed("no_bus_child", &output);
+    }
+}
