@@ -16,7 +16,7 @@ use crate::fs::{canonicalize, is_executable};
 /// are one install; the first spelling is kept).
 pub fn candidates(path_env: &OsStr, name: &str) -> Vec<PathBuf> {
     let dirs: Vec<PathBuf> = std::env::split_paths(path_env)
-        .filter(|dir| !dir.as_os_str().is_empty() && dir.is_absolute())
+        .filter(|dir| dir.is_absolute())
         .collect();
     let mut seen = HashSet::new();
     named_in(&dirs, name)

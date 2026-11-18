@@ -23,7 +23,7 @@ use codesense_platform::fs::{
 };
 use codesense_platform::ipc::{blocking, Endpoint, LocalListener, LocalStream};
 use codesense_platform::process::{is_alive, kill_hard, terminate, Pid, ProcessTree};
-use codesense_platform::testutil::{set_executable, symlink_or_skip};
+use codesense_platform::testutil::{pathext, set_executable, symlink_or_skip};
 use codesense_platform::user::current_user;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 
@@ -1001,29 +1001,6 @@ fn expect_executable_name(stem: &str) -> String {
         format!("{stem}.exe")
     } else {
         stem.to_owned()
-    }
-}
-
-/// `PATHEXT`'s extensions in order, each with a leading dot, or Windows'
-/// default when it lists none.
-fn pathext() -> Vec<String> {
-    let listed: Vec<String> = std::env::var("PATHEXT")
-        .unwrap_or_default()
-        .split(';')
-        .map(str::trim)
-        .filter(|ext| !ext.is_empty())
-        .map(|ext| {
-            if ext.starts_with('.') {
-                ext.to_owned()
-            } else {
-                format!(".{ext}")
-            }
-        })
-        .collect();
-    if listed.is_empty() {
-        [".COM", ".EXE", ".BAT", ".CMD"].map(str::to_owned).to_vec()
-    } else {
-        listed
     }
 }
 

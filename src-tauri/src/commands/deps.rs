@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use std::collections::{BTreeMap, HashSet};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
@@ -955,7 +956,7 @@ fn probe_login_path() -> Option<String> {
 
 /// The canonical target of `path`, or `path` itself when it can't be canonicalized.
 fn canonical_key(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    codesense_platform::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// The canonical target with its mtime, length and inode — what a launch compares
@@ -1008,7 +1009,7 @@ fn resolve_agent_binary(
     meets_floor: impl Fn(&str) -> bool,
 ) -> AgentResolution {
     let path_candidates = login_path
-        .map(|path| cli::candidates(std::ffi::OsStr::new(path), basename))
+        .map(|path| cli::candidates(OsStr::new(path), basename))
         .unwrap_or_default();
     let mut below_floor_version: Option<String> = None;
     let mut pick = |candidates: &mut dyn Iterator<Item = &PathBuf>| {
@@ -3462,11 +3463,11 @@ mod tests {
             a.display()
         );
         assert_eq!(
-            cli::candidates(std::ffi::OsStr::new(&path), "claude"),
+            cli::candidates(OsStr::new(&path), "claude"),
             vec![in_b, in_a]
         );
-        assert!(cli::candidates(std::ffi::OsStr::new(""), "claude").is_empty());
-        assert!(cli::candidates(std::ffi::OsStr::new(&path), "codex").is_empty());
+        assert!(cli::candidates(OsStr::new(""), "claude").is_empty());
+        assert!(cli::candidates(OsStr::new(&path), "codex").is_empty());
     }
 
     #[test]
@@ -3480,16 +3481,13 @@ mod tests {
         // The first spelling on PATH is kept.
         let path = path_of(&[&links, &tmp.path().join("real")]);
         assert_eq!(
-            cli::candidates(std::ffi::OsStr::new(&path), "claude"),
+            cli::candidates(OsStr::new(&path), "claude"),
             vec![links.join("claude")]
         );
         // The same directory listed twice is one install.
         let real_dir = tmp.path().join("real");
         let twice = path_of(&[&real_dir, &real_dir]);
-        assert_eq!(
-            cli::candidates(std::ffi::OsStr::new(&twice), "claude"),
-            vec![real]
-        );
+        assert_eq!(cli::candidates(OsStr::new(&twice), "claude"), vec![real]);
     }
 
     /// The fixed locations of `basename` in the package directories `dirs`, as

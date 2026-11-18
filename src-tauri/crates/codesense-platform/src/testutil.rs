@@ -21,9 +21,20 @@ pub fn set_executable(path: impl AsRef<Path>) {
     sys::set_executable(path.as_ref())
 }
 
+/// The extensions `PATHEXT` names as executable, as the lookup reads them:
+/// on Windows `PATHEXT`'s, each with a leading dot; elsewhere Windows'
+/// default list.
+pub fn pathext() -> Vec<String> {
+    sys::pathext()
+}
+
 #[cfg(unix)]
 mod sys {
     use std::path::Path;
+
+    pub(super) fn pathext() -> Vec<String> {
+        [".COM", ".EXE", ".BAT", ".CMD"].map(str::to_owned).to_vec()
+    }
 
     pub(super) fn set_executable(path: &Path) {
         use std::os::unix::fs::PermissionsExt;
@@ -48,6 +59,10 @@ mod sys {
     use std::path::Path;
 
     use windows_sys::Win32::Foundation::ERROR_PRIVILEGE_NOT_HELD;
+
+    pub(super) fn pathext() -> Vec<String> {
+        crate::win::pathext()
+    }
 
     pub(super) fn set_executable(_path: &Path) {}
 

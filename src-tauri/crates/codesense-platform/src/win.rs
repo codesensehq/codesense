@@ -201,13 +201,7 @@ pub(crate) fn pathext() -> Vec<String> {
         .split(';')
         .map(str::trim)
         .filter(|ext| !ext.is_empty())
-        .map(|ext| {
-            if ext.starts_with('.') {
-                ext.to_owned()
-            } else {
-                format!(".{ext}")
-            }
-        })
+        .map(|ext| format!(".{}", ext.trim_start_matches('.')))
         .collect();
     if listed.is_empty() {
         [".COM", ".EXE", ".BAT", ".CMD"].map(str::to_owned).to_vec()
