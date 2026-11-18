@@ -33,7 +33,7 @@ pub(super) fn is_owned_by_current_user(file: &File) -> io::Result<bool> {
 fn id(meta: &Metadata) -> FileId {
     FileId {
         volume: meta.dev(),
-        index: meta.ino(),
+        index: u128::from(meta.ino()),
     }
 }
 

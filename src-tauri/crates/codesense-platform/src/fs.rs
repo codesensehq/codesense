@@ -57,13 +57,14 @@ pub fn is_owned_by_current_user(file: &File) -> io::Result<bool> {
 }
 
 /// Which file a path or an open file is, whatever its name: on unix the
-/// device and inode; on Windows the volume serial and file index. Two are
-/// equal for the same file while it exists; a file that replaces another at
-/// the same path has its own.
+/// device and inode; on Windows the volume serial and the 128-bit file id.
+/// Two are equal for the same file. A file that replaces another at the same
+/// path has a different id only while the old file still exists or is held
+/// open: once a file is deleted, its id may be given to a new one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FileId {
     volume: u64,
-    index: u64,
+    index: u128,
 }
 
 /// The [`FileId`] of `path` itself: a final link is not followed, so a link

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Windows: a protected owner-only DACL, set on a path or at creation; DACL
-//! and owner checks; volume serial and file index; reparse-point refusal;
+//! and owner checks; volume serial and 128-bit file id; reparse-point refusal;
 //! std's rename with a bounded retry, std's file locks, and a copy where
 //! symlinks need Developer Mode.
 
@@ -29,10 +29,9 @@ use windows_sys::Win32::Security::{
     SECURITY_DESCRIPTOR, SE_DACL_PROTECTED,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, CREATE_NEW,
-    FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_BACKUP_SEMANTICS,
-    FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
-    FILE_SHARE_WRITE, OPEN_ALWAYS,
+    CreateFileW, FileIdInfo, GetFileInformationByHandleEx, CREATE_NEW, FILE_ALL_ACCESS,
+    FILE_ATTRIBUTE_NORMAL, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO,
+    FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_ALWAYS,
 };
 
 use super::{portable_name, Creation, FileId, Linked, Open, ReplaceError};
@@ -208,30 +207,33 @@ unsafe fn grants_only(dacl: *const ACL, sid: PSID) -> bool {
     true
 }
 
-/// Open `path` itself, a link or directory included, with only `access`:
-/// enough to read its identity.
-fn open_itself(path: &Path, access: u32) -> io::Result<File> {
-    OpenOptions::new()
-        .access_mode(access)
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
-        .open(path)
-}
-
 pub(super) fn file_id(path: &Path) -> io::Result<FileId> {
-    file_id_of(&open_itself(path, FILE_READ_ATTRIBUTES)?)
+    file_id_of(&open_itself(
+        OpenOptions::new().access_mode(FILE_READ_ATTRIBUTES),
+        path,
+    )?)
 }
 
+/// The 128-bit `FILE_ID_INFO` id, not `nFileIndex`, which is only 64 bits
+/// and not unique on ReFS (Dev Drive).
 pub(super) fn file_id_of(file: &File) -> io::Result<FileId> {
-    // SAFETY: all-zero is a valid BY_HANDLE_FILE_INFORMATION.
-    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
-    // SAFETY: the file's handle is open; `info` is writable.
-    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+    // SAFETY: all-zero is a valid FILE_ID_INFO.
+    let mut info: FILE_ID_INFO = unsafe { std::mem::zeroed() };
+    // SAFETY: the file's handle is open; `info` is writable for the size given.
+    let read = unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileIdInfo,
+            std::ptr::addr_of_mut!(info).cast(),
+            std::mem::size_of::<FILE_ID_INFO>() as u32,
+        )
+    };
+    if read == 0 {
         return Err(io::Error::last_os_error());
     }
     Ok(FileId {
-        volume: u64::from(info.dwVolumeSerialNumber),
-        index: (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+        volume: info.VolumeSerialNumber,
+        index: u128::from_le_bytes(info.FileId.Identifier),
     })
 }
 
@@ -291,11 +293,16 @@ pub(super) fn create_owner_only(path: &Path, creation: Creation, open: Open) -> 
 }
 
 pub(super) fn open_nofollow(options: &mut OpenOptions, path: &Path) -> io::Result<File> {
-    let file = options
+    refuse_link(open_itself(options, path)?, path)
+}
+
+/// Open `path` itself with `options`, a link or a directory included, shared
+/// for read, write and delete.
+fn open_itself(options: &mut OpenOptions, path: &Path) -> io::Result<File> {
+    options
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-        .open(path)?;
-    refuse_link(file, path)
+        .open(path)
 }
 
 /// `file`, opened with `FILE_FLAG_OPEN_REPARSE_POINT`, or an error when it
