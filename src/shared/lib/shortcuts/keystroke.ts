@@ -155,6 +155,22 @@ export function modifiersFrom(
   return { metaKey, ctrlKey, altKey, shiftKey };
 }
 
+/**
+ * A keydown built from `init` whose `getModifierState("AltGraph")` answers `init.modifierAltGraph`;
+ * every other name answers as the platform event does. happy-dom ignores `modifierAltGraph` and
+ * answers AltGraph with the Alt key's state, so without this a rebuilt Ctrl+Alt key would look
+ * like AltGr in tests and not in a webview.
+ */
+export function keydownEvent(init: KeyboardEventInit): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", init);
+  const platform = event.getModifierState.bind(event);
+  const altGraph = init.modifierAltGraph === true;
+  Object.defineProperty(event, "getModifierState", {
+    value: (name: string) => (name === "AltGraph" ? altGraph : platform(name)),
+  });
+  return event;
+}
+
 /** Whether `key` is a Latin letter; a sign or a letter of another script is not. */
 export function isLatinLetter(key: string): boolean {
   return /^\p{Script=Latin}$/u.test(key);
