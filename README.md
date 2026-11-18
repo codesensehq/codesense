@@ -94,7 +94,7 @@ xattr -dr com.apple.quarantine /Applications/CodeSense.app
 
 The artifacts are not signed, for two architectures. The x86_64 files (`..._amd64.deb`,
 `...x86_64.rpm`, `...amd64.AppImage`) are built on Ubuntu 22.04 and run on Ubuntu 22.04 or
-newer. The arm64 files (`..._arm64.deb` and `...aarch64.rpm`, with no AppImage yet) are for
+newer. The arm64 files (`..._arm64.deb`, `...aarch64.rpm`, `..._aarch64.AppImage`) are for
 64-bit ARM machines, such as a Linux VM on an Apple silicon Mac; they are built on Ubuntu 24.04
 and need Ubuntu 24.04 or newer. Install the one for your distribution and architecture:
 
@@ -107,8 +107,10 @@ chmod +x CodeSense_*.AppImage && ./CodeSense_*.AppImage
 If the AppImage will not start for want of FUSE, install it (`sudo apt install libfuse2`,
 or `libfuse2t64` on Ubuntu 24.04) or run it with `--appimage-extract-and-run`.
 
-Some things are off on Linux for now: git-ai attribution, the bundled starship
-prompt, and keeping saved secrets (SSH passphrases and the like) between runs.
+Some things are off on Linux for now: git-ai attribution, the bundled starship prompt,
+and remembering an SSH key passphrase (it needs a passphrase prompt Linux doesn't have yet).
+Other saved secrets are kept in Secret Service (GNOME Keyring or KWallet) when one is
+running, and CodeSense says so when none is.
 
 Every test build is a source build like the one above: the `internal` channel,
 no update checks and no dashboard publishing.
