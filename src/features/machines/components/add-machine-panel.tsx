@@ -38,6 +38,7 @@ import { formatMachineAddress, parseMachineAddress } from "../lib/machine-addres
 import { retireLeftoverLegacyServer } from "../lib/machine-actions";
 import { MB } from "../lib/machine-file-path";
 import { passphraseSaveError } from "../lib/passphrase-error";
+import { passphraseDialogHint } from "../lib/passphrase-hint";
 import { TONE_CLASS, type MachineTone } from "../lib/machine-status";
 import { refreshMachine, reloadMachines } from "../stores/machines-store";
 
@@ -658,8 +659,8 @@ export function AddMachinePanel({
                 )}
               </div>
               <p className="text-[11px] text-muted-foreground">
-                macOS asks for it in its own dialog. CodeSense keeps it in your keychain and never
-                shows or sends it.
+                {passphraseDialogHint()} CodeSense keeps it in your keychain and never shows or
+                sends it.
               </p>
             </div>
           )}

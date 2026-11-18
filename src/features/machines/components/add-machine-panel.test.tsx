@@ -172,6 +172,28 @@ describe("Set up / Review key", () => {
   });
 });
 
+describe("Key + passphrase", () => {
+  it("off macOS, says a system dialog asks for the passphrase", async () => {
+    const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux x86_64");
+    try {
+      installMachinesBackend("demo");
+      await loadTeamMachines(TEAM_KEY);
+      render(
+        <MachineReserve
+          panel={{ mode: "setUp", machineId: "gpu-box-2" }}
+          teamKey={TEAM_KEY}
+          onClose={vi.fn()}
+        />,
+      );
+      await userEvent.click(await screen.findByTestId("machine-signin-keychainPassphrase"));
+      expect(screen.getByText(/^A system dialog asks for it\. /)).toBeInTheDocument();
+      expect(screen.queryByText(/macOS asks for it/)).toBeNull();
+    } finally {
+      platform.mockRestore();
+    }
+  });
+});
+
 describe("Saving an edit", () => {
   it("sends the revision the machine had when the panel opened, not a later one", async () => {
     const ready: MachineTestReport = {
