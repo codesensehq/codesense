@@ -114,3 +114,22 @@ describe("findRepoBySourcePath", () => {
     expect(findRepoBySourcePath("/anything")).toBeUndefined();
   });
 });
+
+describe("repo lookups on Windows paths", () => {
+  beforeEach(() => {
+    useConfigStore.setState({ repos: [] });
+    useOrgStore.setState({ workspaceRepos: {}, suspendedWorkspaceRepos: {} });
+  });
+
+  it("resolveRepo finds a config repo across separators", () => {
+    const repo = makeRepo({ repoPath: "C:\\Users\\a\\repo" });
+    useConfigStore.setState({ repos: [repo] });
+    expect(resolveRepo("C:/Users/a/repo")).toBe(repo);
+  });
+
+  it("findRepoBySourcePath finds a workspace clone across separators", () => {
+    const repo = makeRepo({ repoPath: "workspace:o:t:acme/api", localPath: "C:\\src\\api" });
+    useOrgStore.setState({ workspaceRepos: { [repo.repoPath]: repo } });
+    expect(findRepoBySourcePath("C:/src/api")).toBe(repo);
+  });
+});

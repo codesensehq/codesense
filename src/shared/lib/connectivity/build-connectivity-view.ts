@@ -10,7 +10,7 @@ import {
   type OrphanDoc,
   type StoryConnectivity,
 } from "./types";
-import { isWithin } from "@/shared/lib/path";
+import { isWithin, root, trimTrailingSeparators } from "@/shared/lib/path";
 
 /**
  * SW-DX-8 — the pure connectivity builder (AC-1/2/4/5/6). Consumes the SW-DX-2
@@ -121,10 +121,12 @@ export function buildConnectivityView(
 }
 
 /** True when `path` is `scopeRoot` itself or nested under it (separator-guarded).
- *  An empty scope bounds NOTHING (never "everything") — a foot-gun guard for the
- *  shared/vanilla contract, which has no upstream non-empty check. */
+ *  An empty scope or a bare root (`/`, `C:\`) bounds NOTHING (never "everything") —
+ *  a foot-gun guard for the shared/vanilla contract, which has no upstream
+ *  non-empty check. */
 function isUnderScope(path: string, scopeRoot: string): boolean {
-  return scopeRoot !== "" && isWithin(scopeRoot, path);
+  const scope = trimTrailingSeparators(scopeRoot);
+  return scope !== "" && scope !== root(scope) && isWithin(scope, path);
 }
 
 /** Bucket links by `groupKey`, preserving encounter order within a bucket. */

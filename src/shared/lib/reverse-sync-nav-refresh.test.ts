@@ -95,3 +95,21 @@ describe("bumpTeamNavForWorktrees (SW-NR-1)", () => {
     expect(bumpMock).not.toHaveBeenCalled();
   });
 });
+
+describe("bumpTeamNavForWorktrees on Windows paths", () => {
+  beforeEach(() => {
+    bumpMock.mockClear();
+    useOrgStore.setState({ workspaceRepos: {} });
+    useViewerStore.setState({ workspaces: {} });
+  });
+
+  it("matches a git-style C:/ worktree to a workspace opened at C:\\", () => {
+    const repo = makeRepoState("9north", "default", "acme", "api");
+    useOrgStore.setState({ workspaceRepos: { [repo.repoPath]: repo } });
+    useViewerStore.setState({ workspaces: { "9north:default": [ws("C:\\wt\\feat-x")] } });
+
+    bumpTeamNavForWorktrees(["C:/wt/feat-x"]);
+
+    expect(bumpMock).toHaveBeenCalledWith("workspace:9north:default:acme/api", undefined, true);
+  });
+});
