@@ -92,6 +92,7 @@ it("forwards key descriptions without preventing browser editing defaults", asyn
         altKey: false,
         editorTarget: false,
         textFieldTarget: false,
+        altGraph: false,
       },
       "*",
     );
@@ -124,6 +125,47 @@ it("forwards Option chords and function keys but leaves Option+W to the page", a
   expect(key("w", { metaKey: false, altKey: true }).defaultPrevented).toBe(false);
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(post).not.toHaveBeenCalledWith({ type: "codesense:close-tab" }, "*");
+});
+
+// Windows reports AltGr as Ctrl+Alt: German AltGr+8 types "[".
+const altGr = { metaKey: false, ctrlKey: true, altKey: true, code: "Digit8" };
+
+it("forwards AltGr state so the host can tell it from Ctrl+Alt, and lets the frame type it", async () => {
+  const post = install();
+  expect(key("[", { ...altGr, modifierAltGraph: true }).defaultPrevented).toBe(false);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(post).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      type: "codesense:shortcut",
+      key: "[",
+      code: "Digit8",
+      altGraph: true,
+    }),
+    "*",
+  );
+  key("[", altGr);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(post).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      type: "codesense:shortcut",
+      key: "[",
+      code: "Digit8",
+      altGraph: false,
+    }),
+    "*",
+  );
+});
+
+it("a frozen frame still blocks an AltGr key and forwards its AltGr state", async () => {
+  const post = install();
+  hostMessage("codesense:freeze", { frozen: true });
+  const event = key("[", { ...altGr, modifierAltGraph: true });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(event.defaultPrevented).toBe(true);
+  expect(post).toHaveBeenLastCalledWith(
+    expect.objectContaining({ type: "codesense:shortcut", key: "[", altGraph: true }),
+    "*",
+  );
 });
 
 it("closes only on the exact ⌘W and forwards other W chords and modified arrows", async () => {
