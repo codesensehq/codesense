@@ -168,6 +168,16 @@ dry_run "$(emulator_lines "$HOST")" build-emulator.sh
 dry_run "$(emulator_lines "$MUSL" "$ARM_MUSL" aarch64-apple-darwin)" \
     build-emulator.sh --release --target "$MUSL" --target "$ARM_MUSL" --target aarch64-apple-darwin
 
+# The emulator's dry run comes after its runtime check: a triple with no Bun
+# runtime still fails, and prints no path.
+UNSUPPORTED="riscv64gc-unknown-linux-gnu"
+if actual="$(SIDECAR_DRY_RUN=1 PATH="$STUBS:$PATH" bash "$ROOT/scripts/build-emulator.sh" --target "$UNSUPPORTED" 2>"$TEST_DIR/stderr")"; then
+    fail "build-emulator.sh --target $UNSUPPORTED (dry run): exited 0"
+fi
+expect_eq "build-emulator.sh --target $UNSUPPORTED (dry run stdout)" "" "$actual"
+expect_eq "build-emulator.sh --target $UNSUPPORTED (dry run stderr)" \
+    "Error: no emulator runtime for $UNSUPPORTED" "$(cat "$TEST_DIR/stderr")"
+
 if [[ $FAILURES -gt 0 ]]; then
     exit 1
 fi

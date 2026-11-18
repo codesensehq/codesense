@@ -23,7 +23,7 @@ if [[ "${1:-}" == "--release" ]]; then
 fi
 
 TARGET_TRIPLE="$(sidecar_host_triple)"
-# Copy with target-triple suffix (Tauri sidecar naming convention)
+# Where Tauri's externalBin looks for it: src-tauri/binaries/<name>-<triple>[.exe]
 DEST="$(sidecar_path codesense-bridge "$TARGET_TRIPLE")"
 
 # SIDECAR_DRY_RUN=1 prints the path this would write, and builds nothing.
