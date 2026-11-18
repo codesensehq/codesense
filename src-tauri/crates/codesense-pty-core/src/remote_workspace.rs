@@ -477,8 +477,9 @@ pub mod removal {
     use std::path::{Path, PathBuf};
 
     use codesense_platform::fs::{
-        create_dir_owner_only, create_owner_only, try_lock_exclusive, try_lock_shared, unlock, Open,
+        create_owner_only, try_lock_exclusive, try_lock_shared, unlock, Open,
     };
+    use codesense_platform::user::{current_user, User};
 
     /// Removal's refusal while a launch holds the fence.
     const LAUNCH_PENDING: &str =
@@ -492,30 +493,41 @@ pub mod removal {
         format!("workspace admission: {e}")
     }
 
-    /// The directory the fence's lock files live in, the same for the app and
-    /// its sidecar whatever their environments.
-    fn lock_dir() -> Result<PathBuf, String> {
-        codesense_platform::dirs::lock_dir()
-            .ok_or_else(|| "workspace admission: no home directory for the lock files".into())
+    /// Where this user's fence files live and whose they are, read once per
+    /// admission: the same for the app and its sidecar whatever their
+    /// environments.
+    struct Fence {
+        dir: PathBuf,
+        user: User,
     }
 
-    fn lock(dir: &Path, path: &Path, exclusive: bool) -> Result<File, String> {
-        let path = path.canonicalize().map_err(admission)?;
-        let key = blake3::hash(path.as_os_str().as_encoded_bytes());
-        let user = codesense_platform::user::current_user().map_err(admission)?;
-        // Architecture: a stable host-local inode shares the fence across the Mac
-        // app and its sidecar. Never unlink these files while another host may use them.
-        let file = create_owner_only(
-            &dir.join(format!("codesense-worktree-{user}-{key}.lock")),
-            Open::Follow,
-        )
-        .map_err(admission)?;
-        let attempt = if exclusive {
-            try_lock_exclusive(&file)
-        } else {
-            try_lock_shared(&file)
-        };
-        taken(attempt, exclusive).map(|()| file)
+    impl Fence {
+        fn new() -> Result<Self, String> {
+            Ok(Self {
+                dir: codesense_platform::dirs::lock_dir().map_err(admission)?,
+                user: current_user().map_err(admission)?,
+            })
+        }
+
+        fn lock(&self, path: &Path, exclusive: bool) -> Result<File, String> {
+            let path = path.canonicalize().map_err(admission)?;
+            let key = blake3::hash(path.as_os_str().as_encoded_bytes());
+            // Architecture: a stable host-local inode shares the fence across the Mac
+            // app and its sidecar. Never unlink these files while another host may use them.
+            let file = create_owner_only(
+                &self
+                    .dir
+                    .join(format!("codesense-worktree-{}-{key}.lock", self.user)),
+                Open::Follow,
+            )
+            .map_err(admission)?;
+            let attempt = if exclusive {
+                try_lock_exclusive(&file)
+            } else {
+                try_lock_shared(&file)
+            };
+            taken(attempt, exclusive).map(|()| file)
+        }
     }
 
     /// A lock the other side holds and a lock that could not be tried at all
@@ -529,35 +541,28 @@ pub mod removal {
     }
 
     pub fn admit_spawn(cwd: &str) -> Result<Admission, String> {
-        admit_spawn_in(&lock_dir()?, cwd)
-    }
-
-    fn admit_spawn_in(dir: &Path, cwd: &str) -> Result<Admission, String> {
         // Keep the existing missing-cwd behavior; no child can enter a removed directory.
         let path = Path::new(cwd);
         if !path.is_dir() {
             return Ok(Admission(Vec::new()));
         }
         let path = path.canonicalize().map_err(|e| e.to_string())?;
-        create_dir_owner_only(dir).map_err(admission)?;
+        let fence = Fence::new()?;
         path.ancestors()
-            .map(|p| lock(dir, p, false))
+            .map(|p| fence.lock(p, false))
             .collect::<Result<Vec<_>, _>>()
             .map(Admission)
     }
 
     pub fn begin_removal(path: &str) -> Result<Admission, String> {
-        begin_removal_in(&lock_dir()?, path)
-    }
-
-    fn begin_removal_in(dir: &Path, path: &str) -> Result<Admission, String> {
         // Architecture: this exclusive workspace lock marks it removing, counts
         // admitted-but-unregistered launches, and clears itself on every return.
         if !Path::new(path).exists() {
             return Ok(Admission(Vec::new()));
         }
-        create_dir_owner_only(dir).map_err(admission)?;
-        lock(dir, Path::new(path), true).map(|file| Admission(vec![file]))
+        Fence::new()?
+            .lock(Path::new(path), true)
+            .map(|file| Admission(vec![file]))
     }
 
     impl Drop for Admission {
@@ -654,28 +659,6 @@ pub mod removal {
             }
             assert_eq!(taken(Ok(true), true), Ok(()));
             assert_eq!(taken(Ok(true), false), Ok(()));
-        }
-
-        /// The lock directory need not exist: a fresh install has none. The
-        /// fence makes it owner-only, then works as ever.
-        #[test]
-        fn a_missing_lock_directory_is_made_owner_only_first() {
-            use codesense_platform::fs::{is_owner_only, open_nofollow};
-            let home = tempfile::tempdir().unwrap();
-            let locks = home.path().join("codesense").join("locks");
-            let worktree = tempfile::tempdir().unwrap();
-            let cwd = worktree.path().to_str().unwrap();
-            let pending = admit_spawn_in(&locks, cwd).unwrap();
-            let opened = open_nofollow(std::fs::OpenOptions::new().read(true), &locks).unwrap();
-            assert!(is_owner_only(&opened).unwrap());
-            assert_eq!(
-                begin_removal_in(&locks, cwd).err().as_deref(),
-                Some(LAUNCH_PENDING)
-            );
-            drop(pending);
-            let removing = begin_removal_in(&locks, cwd).unwrap();
-            assert_eq!(admit_spawn_in(&locks, cwd).err().as_deref(), Some(REMOVING));
-            drop(removing);
         }
 
         /// The fence's file is keyed by the user and the canonical path, so
