@@ -40,10 +40,17 @@ pub fn is_owner_only(file: &File) -> io::Result<bool> {
 }
 
 /// Whether this user owns the open `file` (open it with [`open_nofollow`],
-/// so a link is never followed), whatever its permissions: on unix its uid
-/// is the effective uid; on Windows its owner SID is the current user's, or
-/// the default owner of what this process creates (for an elevated
-/// administrator, often the Administrators group).
+/// so a link is never followed), whatever its permissions.
+///
+/// Unix: strictly `uid == euid`.
+///
+/// Windows: the owner SID is this process token's user SID or its default
+/// owner (`TokenOwner`), and nothing wider. An elevated administrator's
+/// token makes `BUILTIN\Administrators` the default owner, so the files this
+/// process creates carry that group rather than the user. The trust boundary
+/// is therefore the token's own two SIDs: under an elevated token, a file
+/// another member of Administrators created also counts as owned, which that
+/// member could open and change anyway.
 pub fn is_owned_by_current_user(file: &File) -> io::Result<bool> {
     sys::is_owned_by_current_user(file)
 }

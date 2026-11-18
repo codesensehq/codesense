@@ -223,6 +223,7 @@ fn file_id_of_a_directory_changes_when_it_is_removed_and_recreated() {
     let id = file_id(&path).unwrap();
     assert_eq!(id, file_id(&path).unwrap());
     let aside = dir.path().join("aside");
+    // Renamed, not deleted: a deleted directory's inode may be reused at once.
     std::fs::rename(&path, &aside).unwrap();
     std::fs::create_dir(&path).unwrap();
     assert_ne!(id, file_id(&path).unwrap());
