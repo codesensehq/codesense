@@ -31,6 +31,8 @@ base64 = "0.22"
 blake3 = "1"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 codesense-host-proto = { path = "../codesense-host-proto" }
+# OS mechanisms: process groups and trees, executable files, descriptor exhaustion, the
+# login shell and the command-line tool lookup.
 codesense-platform = { path = "../codesense-platform" }
 libc = "0.2"
 log = "0.4"
@@ -52,6 +54,7 @@ uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 codesense-host-proto = { path = "../codesense-host-proto", features = ["test-support"] }
+codesense-platform = { path = "../codesense-platform", features = ["testutil"] }
 # The trait error type of `portable_pty::MasterPty`, for the fake PTY in tests.
 anyhow = "1"
 tempfile = "3"

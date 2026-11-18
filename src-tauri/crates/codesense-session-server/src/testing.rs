@@ -134,7 +134,9 @@ pub fn sh(script: &str) -> SpawnIntent {
 /// [`sh`] resolved for session `id` on a test host, for a host that spawns
 /// it itself.
 pub fn sh_spec(id: &str, script: &str) -> PtySpec {
-    sh(script).resolve(id, &host_environment())
+    sh(script)
+        .resolve(id, &host_environment())
+        .expect("the spawn resolves")
 }
 
 /// A registration for `id`, optionally a story session (persisting) or an

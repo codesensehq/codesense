@@ -478,12 +478,42 @@ async fn replay_handshake(
 }
 
 fn main() {
+    let mut args = std::env::args_os().skip(1);
+    if args.next().is_some_and(|arg| arg == "hook") {
+        hook(args.next().as_deref().and_then(std::ffi::OsStr::to_str));
+        return;
+    }
     codesense_host_proto::nofile::raise(10_240);
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("create bridge runtime")
         .block_on(run());
+}
+
+/// `codesense-bridge hook <verb>`: one of Claude's hooks, reading the hook's JSON on stdin,
+/// before any socket or runtime. A hook never fails: whatever happens it exits 0.
+fn hook(verb: Option<&str>) {
+    use codesense_host_proto::hook;
+    use std::io::{Read, Write};
+    let input = || {
+        let mut input = Vec::new();
+        let _ = std::io::stdin().read_to_end(&mut input);
+        input
+    };
+    match verb {
+        Some("notify") => {
+            hook::notify(&input(), &hook::HookEnv::from_process());
+        }
+        Some("secret-guard") => {
+            if let Some(deny) = hook::secret_guard(&input()) {
+                let mut stdout = std::io::stdout().lock();
+                let _ = stdout.write_all(deny.to_json().as_bytes());
+                let _ = stdout.flush();
+            }
+        }
+        _ => eprintln!("usage: codesense-bridge hook notify|secret-guard"),
+    }
 }
 
 async fn run() {

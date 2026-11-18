@@ -103,10 +103,8 @@ impl Harness {
         } = launch;
         check(&valid).await?;
         // Mandatory enterprise hooks cannot be disabled by these user-level flags.
-        for path in crate::agents::adapter::CLAUDE_MANAGED_SETTINGS_PATHS.into_iter().chain([
-            "/Library/Application Support/ClaudeCode/managed-mcp.json",
-            "/etc/claude-code/managed-mcp.json",
-        ]) {
+        let managed = crate::agents::adapter::claude_managed(std::env::consts::OS);
+        for path in managed.settings.iter().chain(managed.mcp) {
             if Path::new(path).exists() {
                 return Err("capabilityUnavailable: managed Claude policy requires a supported isolated runtime".into());
             }

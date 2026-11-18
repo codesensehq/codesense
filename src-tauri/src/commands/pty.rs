@@ -667,7 +667,10 @@ pub(crate) fn consume_emitted_spawn_for_test<R: tauri::Runtime>(
     )?;
     let values = launch.values.clone();
     apply_bindings(&mut intent, Vec::new(), Vec::new(), launch);
-    Ok((intent.resolve(session, environment), values))
+    let spec = intent
+        .resolve(session, environment)
+        .map_err(|error| error.to_string())?;
+    Ok((spec, values))
 }
 
 /// A local shell tab with CodeSense's shell integration exports what a `claude` or
@@ -2395,7 +2398,9 @@ mod shell_tests {
             .contains(&"CLAUDE_CODE_OAUTH_TOKEN".to_string()));
         assert!(intent.env_remove.contains(&"ANTHROPIC_API_KEY".to_string()));
         let host = HostEnvironment::with_vars(None, None, [("PATH".into(), "/usr/bin".into())]);
-        let spec = intent.resolve("tab-isolated", &host);
+        let spec = intent
+            .resolve("tab-isolated", &host)
+            .expect("the spawn resolves");
         let env = |name: &str| {
             spec.command
                 .get_env(name)
@@ -2446,6 +2451,7 @@ mod shell_tests {
             let host = HostEnvironment::with_vars(None, None, [("PATH".into(), "/usr/bin".into())]);
             intent
                 .resolve("tab-scrub", &host)
+                .expect("the spawn resolves")
                 .command
                 .get_env("CLAUDE_CODE_OAUTH_TOKEN")
                 .map(|value| value.to_string_lossy().into_owned())
@@ -2620,11 +2626,11 @@ mod shell_tests {
             serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
         // Source path → bundled path.
         let resources = conf["bundle"]["resources"].as_object().unwrap();
-        for kind in [ShellKind::Zsh, ShellKind::Bash, ShellKind::Fish] {
-            let script = format!(
-                "resources/shell-integration/codesense-shell-init.{}",
-                kind.init_script_ext()
-            );
+        for ext in ShellKind::ALL
+            .into_iter()
+            .filter_map(ShellKind::init_script_ext)
+        {
+            let script = format!("resources/shell-integration/codesense-shell-init.{ext}");
             assert_eq!(
                 resources.get(&script).and_then(|v| v.as_str()),
                 Some(script.as_str()),
@@ -2926,10 +2932,12 @@ mod spend_telemetry_seams {
                     ..Default::default()
                 },
             );
-            let spec = intent.resolve(
-                "usage-cap",
-                &HostEnvironment::with_vars(None, None, [("PATH".into(), "/usr/bin".into())]),
-            );
+            let spec = intent
+                .resolve(
+                    "usage-cap",
+                    &HostEnvironment::with_vars(None, None, [("PATH".into(), "/usr/bin".into())]),
+                )
+                .expect("the spawn resolves");
             let get = |name| {
                 spec.command
                     .get_env(name)
