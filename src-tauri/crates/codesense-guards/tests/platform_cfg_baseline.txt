@@ -95,6 +95,7 @@ src/commands/agent_accounts.rs 12
 src/commands/agent_usage/mod.rs 3
 src/commands/content_engine.rs 3
 src/commands/context_repo_git.rs 6
+src/commands/credential_store.rs 5
 src/commands/dashboard_launch.rs 11
 src/commands/deps.rs 19
 src/commands/local_organization.rs 2
