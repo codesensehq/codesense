@@ -203,8 +203,8 @@ struct ProbeSlot {
 
 static PROBE: std::sync::OnceLock<std::sync::Arc<ProbeSlot>> = std::sync::OnceLock::new();
 
-/// The probe's slot. The first call starts the probe: on a background thread, except on macOS,
-/// where it is a constant.
+/// The probe's slot. The first call starts the probe on a background thread (on macOS it is a
+/// constant, so the thread ends at once).
 fn probe_slot() -> &'static std::sync::Arc<ProbeSlot> {
     PROBE.get_or_init(|| {
         let slot = std::sync::Arc::new(ProbeSlot {
@@ -212,11 +212,7 @@ fn probe_slot() -> &'static std::sync::Arc<ProbeSlot> {
             done: std::sync::Condvar::new(),
         });
         let running = std::sync::Arc::clone(&slot);
-        if cfg!(target_os = "macos") {
-            finish_probe(&running);
-        } else {
-            std::thread::spawn(move || finish_probe(&running));
-        }
+        std::thread::spawn(move || finish_probe(&running));
         slot
     })
 }
