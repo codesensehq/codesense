@@ -141,6 +141,8 @@ pub struct HostEnvironment {
     codesense_home: Option<PathBuf>,
     resources: Option<PathBuf>,
     vars: Vars,
+    /// Names its children never inherit, whatever `vars` holds.
+    env_remove: Vec<String>,
 }
 
 impl HostEnvironment {
@@ -152,6 +154,7 @@ impl HostEnvironment {
             codesense_home,
             resources,
             vars: Vars::Process,
+            env_remove: Vec::new(),
         }
     }
 
@@ -165,7 +168,15 @@ impl HostEnvironment {
             codesense_home,
             resources,
             vars: Vars::Given(vars.into_iter().collect()),
+            env_remove: Vec::new(),
         }
+    }
+
+    /// This environment without `names`: its children don't inherit them, though a spawn may
+    /// still set them explicitly.
+    pub fn without_vars(mut self, names: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.env_remove.extend(names.into_iter().map(Into::into));
+        self
     }
 
     /// The directory of the resources this host ships, when it has one.
@@ -188,6 +199,9 @@ impl HostEnvironment {
             for (key, value) in vars {
                 cmd.env(key, value);
             }
+        }
+        for name in &self.env_remove {
+            cmd.env_remove(name);
         }
         cmd
     }
@@ -763,6 +777,26 @@ mod tests {
             assert_eq!(restored.remote_launch, Some(launch));
             assert_eq!(restored.osc_enabled(), launch.is_shell());
         }
+    }
+
+    /// A removal list keeps a name from children whether the host inherits this process's
+    /// variables or gives exactly its own.
+    #[test]
+    fn without_vars_keeps_names_from_children() {
+        let inherited = HostEnvironment::of_process(None, None).without_vars(["PATH"]);
+        assert!(inherited.command("sh").get_env("PATH").is_none());
+        let given = HostEnvironment::with_vars(
+            None,
+            None,
+            [
+                ("A_VAR".to_string(), "1".to_string()),
+                ("B_VAR".to_string(), "2".to_string()),
+            ],
+        )
+        .without_vars(["A_VAR"]);
+        let cmd = given.command("sh");
+        assert!(cmd.get_env("A_VAR").is_none());
+        assert_eq!(cmd.get_env("B_VAR").and_then(|v| v.to_str()), Some("2"));
     }
 
     fn argv(spec: &PtySpec) -> Vec<String> {
