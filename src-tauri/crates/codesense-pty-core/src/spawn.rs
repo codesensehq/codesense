@@ -5,8 +5,9 @@
 //! its own [`HostEnvironment`]: the user's shell (from the host OS's
 //! [`ShellTable`], see [`crate::shell`]), the host's CodeSense bin dir, the
 //! managed RC wrappers written on the host's disk, and the shell-integration
-//! and starship resources shipped with the host. The in-process host and the session-server sidecar
-//! run this same code, so a local spawn resolves identically on either.
+//! and starship resources shipped with the host. The in-process host and the
+//! session-server sidecar run this same code, so a local spawn resolves
+//! identically on either.
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -633,9 +634,10 @@ fn build_spawn_command(
             Some(path) => {
                 cmd.env("__CODESENSE_SHELL_INIT", path.to_string_lossy().as_ref());
             }
-            None => {
+            None if resolved.shell.kind.init_script_ext().is_some() => {
                 warn!(target: "pty", "spawn_pty: shell-init script not found");
             }
+            None => {}
         }
         if preset == Some("plain") {
             cmd.env("__CODESENSE_PLAIN", "1");
@@ -1200,6 +1202,70 @@ mod tests {
             argv(&direct.resolve("s", &host).expect("the spawn resolves")),
             ["agent", "--flag"]
         );
+    }
+
+    /// An executable file at `path`, with its parent dirs.
+    fn install(path: &Path) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "").unwrap();
+        codesense_platform::testutil::set_executable(path);
+    }
+
+    /// The Windows table reads `ProgramFiles`, `SystemRoot` and `ComSpec`
+    /// from the host's own variables, in that order.
+    #[test]
+    fn the_windows_table_resolves_through_the_hosts_variables() {
+        let fx = Fixture::new();
+        let root = fx.home.join("drive");
+        let program_files = root.join("Program Files");
+        let system_root = root.join("Windows");
+        let pwsh = program_files.join("PowerShell").join("7").join("pwsh.exe");
+        let powershell = system_root
+            .join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe");
+        let comspec = system_root.join("System32").join("cmd.exe");
+        for path in [&pwsh, &powershell, &comspec] {
+            install(path);
+        }
+        let host = fx
+            .host(&[
+                ("ProgramFiles", program_files.to_str().unwrap()),
+                ("SystemRoot", system_root.to_str().unwrap()),
+                ("ComSpec", comspec.to_str().unwrap()),
+            ])
+            .with_shell_table(&crate::shell::WINDOWS);
+        for want in [&pwsh, &powershell, &comspec] {
+            let spec = interactive("")
+                .resolve("s", &host)
+                .expect("the spawn resolves");
+            assert_eq!(argv(&spec)[0], want.to_string_lossy());
+            std::fs::remove_file(want).unwrap();
+        }
+    }
+
+    /// A host built from given variables resolves with its own OS's table: a
+    /// fish user's command line runs under that table's POSIX runner, or is
+    /// an error where it has none.
+    #[test]
+    fn a_given_host_uses_its_own_oss_table() {
+        let fx = Fixture::new();
+        let fish = fx.home.join("fish");
+        install(&fish);
+        let intent = SpawnIntent {
+            shell: Some(fish.to_string_lossy().into_owned()),
+            command: Some("echo hi".into()),
+            ..interactive("")
+        };
+        let resolved = intent.resolve("s", &fx.host(&[]));
+        match ShellTable::host().posix_runner(fs::is_executable) {
+            Some(runner) => {
+                let spec = resolved.expect("the spawn resolves");
+                assert_eq!(argv(&spec)[0], runner.to_string_lossy());
+            }
+            None => assert!(matches!(resolved, Err(SpawnError::NoPosixRunner))),
+        }
     }
 
     /// Drive `spec` in a real PTY: wait for its first prompt mark, type
