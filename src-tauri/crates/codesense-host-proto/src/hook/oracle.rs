@@ -10,7 +10,9 @@ use std::process::{Command, Stdio};
 
 use serde_json::{json, Value};
 
-use super::tests::{allowed_cases, call, denied_cases, deny_more_cases, TempDir};
+use super::tests::{
+    allowed_cases, call, carrying, denied_cases, deny_more_cases, split_pairs, unpaired, TempDir,
+};
 use super::{guard_source, secret_guard, Deny, FAMILIES, GUARD_REASON};
 
 /// How a case's non-ASCII characters reach the guard: raw UTF-8 bytes (one Latin-1 character
@@ -268,6 +270,10 @@ fn corpus() -> Vec<Vec<u8>> {
     corpus.push(b"{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\".env\"}} x".to_vec());
     corpus
         .push(b"{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\".env\\ud800\"}}".to_vec());
+    // Surrogate escapes JSON::PP pairs across other text, and ones both sides refuse.
+    for s in split_pairs().into_iter().chain(unpaired()) {
+        corpus.extend(carrying(&s).map(String::into_bytes));
+    }
     corpus
 }
 

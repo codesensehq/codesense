@@ -218,14 +218,38 @@ const MAX_DEPTH: usize = 512;
 fn decode(text: &str) -> Option<serde_json::Value> {
     use serde::Deserialize;
     let mut tamed = String::with_capacity(text.len());
-    let (mut depth, mut deepest, mut in_string, mut escaped) = (0usize, 0, false, false);
+    let (mut depth, mut deepest, mut in_string) = (0usize, 0, false);
+    // JSON::PP holds a high-surrogate escape until a low one pairs with it, however much of the
+    // string comes between, and a later high replaces it. Hold it here too and emit it just
+    // before the next escape: before a low that is the pair, at the low's place as the script
+    // puts it; before any other escape or the closing quote it stays unpaired, and serde_json
+    // refuses the string as the script does.
+    let mut held: Option<String> = None;
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
         if in_string {
             match c {
-                _ if escaped => escaped = false,
-                '\\' => escaped = true,
-                '"' => in_string = false,
+                '\\' if hex_escape(chars.clone()) => {
+                    let escape: String = std::iter::once(c).chain(chars.by_ref().take(5)).collect();
+                    if let [b'd' | b'D', b'8' | b'9' | b'a' | b'b' | b'A' | b'B'] =
+                        &escape.as_bytes()[2..4]
+                    {
+                        held = Some(escape);
+                    } else {
+                        tamed.extend(held.take());
+                        tamed.push_str(&escape);
+                    }
+                    continue;
+                }
+                '\\' => {
+                    tamed.push(c);
+                    tamed.extend(chars.next());
+                    continue;
+                }
+                '"' => {
+                    in_string = false;
+                    tamed.extend(held.take());
+                }
                 _ => {}
             }
             tamed.push(c);
@@ -270,6 +294,11 @@ fn decode(text: &str) -> Option<serde_json::Value> {
         .ok()?
         .join()
         .ok()?
+}
+
+/// Whether `rest`, just past a backslash in a string, is `u` and four hex digits.
+fn hex_escape(mut rest: impl Iterator<Item = char>) -> bool {
+    rest.next() == Some('u') && rest.take(4).filter(char::is_ascii_hexdigit).count() == 4
 }
 
 /// A JSON value as Perl stringifies it, where it could name a path; arrays, objects, booleans
@@ -515,6 +544,49 @@ pub(crate) mod tests {
         json!({"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": input})
     }
 
+    /// JSON `\u` escapes: two high surrogates, a low one and a character that is neither.
+    const HIGH: &str = "\\ud800";
+    const HIGH2: &str = "\\udbff";
+    const LOW: &str = "\\udc00";
+    const PLAIN: &str = "\\u0041";
+
+    /// Strings JSON::PP reads as a split surrogate pair: a high escape, then a character, a
+    /// simple escape or another high (which replaces it), then the low that pairs with it.
+    pub(crate) fn split_pairs() -> [String; 3] {
+        [
+            format!("{HIGH}x{LOW}"),
+            format!("{HIGH}\\n{LOW}"),
+            format!("{HIGH2}{HIGH}{LOW}"),
+        ]
+    }
+
+    /// Strings JSON::PP and serde_json both refuse: a high with no low after it before another
+    /// escape or the closing quote, and a low with no high before it.
+    pub(crate) fn unpaired() -> [String; 5] {
+        [
+            format!("{HIGH}A"),
+            HIGH.to_string(),
+            LOW.to_string(),
+            format!("{HIGH}{PLAIN}{LOW}"),
+            format!("{HIGH}{LOW}{LOW}"),
+        ]
+    }
+
+    /// Payloads carrying the JSON string body `s`: beside a protected path, as a key, in a Bash
+    /// description and in the command itself.
+    pub(crate) fn carrying(s: &str) -> [String; 4] {
+        [
+            format!(
+                r#"{{"tool_name":"Read","tool_input":{{"file_path":"/repo/.env","x":"{s}"}}}}"#
+            ),
+            format!(r#"{{"tool_name":"Read","tool_input":{{"file_path":"/repo/.env","{s}":1}}}}"#),
+            format!(
+                r#"{{"tool_name":"Bash","tool_input":{{"command":"cat .env","description":"{s}"}}}}"#
+            ),
+            format!(r#"{{"tool_name":"Bash","tool_input":{{"command":"cat .env {s}"}}}}"#),
+        ]
+    }
+
     /// The guard's verdict on one hook payload: the deny reason, or `None` when it allows.
     fn verdict(payload: &Value) -> Option<&'static str> {
         secret_guard(payload.to_string().as_bytes()).map(|deny| deny.reason)
@@ -657,6 +729,31 @@ pub(crate) mod tests {
         let inputs: [&[u8]; 4] = [b"not json", b"", b"[1]", b"{\"tool_name\":\"Read\"} x"];
         for input in inputs {
             assert_eq!(secret_guard(input), None, "{input:?}");
+        }
+    }
+
+    /// JSON::PP pairs a high-surrogate escape with the next low one, whatever comes between,
+    /// and puts the pair where the low was; serde_json alone refuses such a string, and the
+    /// guard would allow what the script denies.
+    #[test]
+    fn a_split_surrogate_pair_is_read_as_the_script_reads_it() {
+        let pair = char::from_u32(0x10000).unwrap();
+        for (s, read) in split_pairs().iter().zip(["x", "\n", ""]) {
+            let decoded = decode(&format!(r#""a{s}b""#));
+            assert_eq!(
+                decoded,
+                Some(Value::String(format!("a{read}{pair}b"))),
+                "{s}"
+            );
+            for input in carrying(s) {
+                assert!(secret_guard(input.as_bytes()).is_some(), "{input}");
+            }
+        }
+        for s in unpaired() {
+            assert_eq!(decode(&format!(r#""{s}""#)), None, "{s}");
+            for input in carrying(&s) {
+                assert_eq!(secret_guard(input.as_bytes()), None, "{input}");
+            }
         }
     }
 
