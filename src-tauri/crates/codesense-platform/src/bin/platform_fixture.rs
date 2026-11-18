@@ -6,6 +6,7 @@
 //! - `ignore-terminate`: ignore the polite stop, print `ready`, then sleep.
 //! - `try-lock <path>`: print `locked` or `busy` for an exclusive lock on
 //!   `path`, then exit.
+//! - `lock-dir`: print the shared lock directory, then exit.
 //! - `sleep`: sleep.
 //!
 //! IPC client modes take an endpoint's wire form:
@@ -86,6 +87,10 @@ fn main() {
             let _listener = LocalListener::bind(&endpoint(args.next())).expect("bind");
             say("ready");
             sleep_forever()
+        }
+        Some("lock-dir") => {
+            let dir = codesense_platform::dirs::lock_dir().expect("a lock directory");
+            say(&dir.display().to_string());
         }
         Some("sleep") => sleep_forever(),
         other => {

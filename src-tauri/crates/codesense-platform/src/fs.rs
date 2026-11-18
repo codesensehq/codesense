@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Files: owner-only permissions, ownership checks, file identity,
-//! owner-only creates, opens that refuse links, atomic replace, exclusive
-//! locks, links with a copy fallback, canonical paths, names that are
-//! valid on every OS and whether a file is executable.
+//! owner-only creates of files and directories, opens that refuse links,
+//! atomic replace, exclusive and shared locks, links with a copy fallback,
+//! canonical paths, names that are valid on every OS, execute bits, busy
+//! files and whether a file is executable.
 
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -122,6 +123,45 @@ pub fn create_new_owner_only(path: &Path) -> io::Result<File> {
     sys::create_owner_only(path, Creation::New, Open::Follow)
 }
 
+/// Create the directory `path` and any missing parent, each one readable,
+/// writable and searchable by this user only: on unix a recursive
+/// `DirBuilder` with mode 0700; on Windows each directory it creates gets
+/// [`set_owner_only`]'s protected DACL. A directory already at `path` or on
+/// the way is left as it is; anything else there is an error.
+pub fn create_dir_owner_only(path: &Path) -> io::Result<()> {
+    sys::create_dir_owner_only(path, true)
+}
+
+/// Create exactly the one directory `path`, owner-only as
+/// [`create_dir_owner_only`] makes it: `AlreadyExists` when anything is at
+/// `path`, and an error when its parent is missing.
+pub fn create_dir_new_owner_only(path: &Path) -> io::Result<()> {
+    sys::create_dir_owner_only(path, false)
+}
+
+/// Who may run a file [`set_executable`] marks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reach {
+    /// This user only: unix mode 0700.
+    Owner,
+    /// Anyone may read and run it, only this user write it: unix mode 0755.
+    Everyone,
+}
+
+/// Make the file at `path` executable for `reach`, setting its whole unix
+/// mode (see [`Reach`]). Nothing on Windows, where the extension decides
+/// whether a file runs (see [`is_executable`]).
+pub fn set_executable(path: &Path, reach: Reach) -> io::Result<()> {
+    sys::set_executable(path, reach)
+}
+
+/// Whether `error` says the file is busy: on unix `ETXTBSY` (an exec of a
+/// file still open for writing); on Windows `ERROR_SHARING_VIOLATION`.
+/// Either clears when the other handle closes, so it is worth a retry.
+pub fn is_text_busy(error: &io::Error) -> bool {
+    sys::is_text_busy(error)
+}
+
 /// Open `path` with `options`, refusing it when it is a link: `O_NOFOLLOW`
 /// (with `O_CLOEXEC`) on unix; on Windows the link itself is opened and a
 /// symlink or junction is refused (other reparse points, such as cloud
@@ -232,7 +272,18 @@ pub fn try_lock_exclusive(file: &File) -> io::Result<bool> {
     sys::try_lock_exclusive(file)
 }
 
-/// Release a lock taken by [`lock_exclusive`] before the file is closed.
+/// Try to take a shared lock on `file` without waiting: `false` when
+/// another open file holds the exclusive lock. Any number of open files may
+/// hold it shared at once, and while one does, [`try_lock_exclusive`] is
+/// `false` for every other. `flock(LOCK_SH | LOCK_NB)` on unix, `LockFileEx`
+/// shared (std's `File::try_lock_shared`) on Windows; released as
+/// [`lock_exclusive`]'s is.
+pub fn try_lock_shared(file: &File) -> io::Result<bool> {
+    sys::try_lock_shared(file)
+}
+
+/// Release a lock taken by [`lock_exclusive`], [`try_lock_exclusive`] or
+/// [`try_lock_shared`] before the file is closed.
 pub fn unlock(file: &File) -> io::Result<()> {
     sys::unlock(file)
 }

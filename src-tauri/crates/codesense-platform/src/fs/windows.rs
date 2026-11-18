@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Windows: a protected owner-only DACL, set on a path or at creation; DACL
 //! and owner checks; volume serial and 128-bit file id; reparse-point refusal;
-//! std's rename with a bounded retry, std's file locks, and a copy where
-//! symlinks need Developer Mode.
+//! std's rename with a bounded retry, std's file locks, sharing violations,
+//! and a copy where symlinks need Developer Mode. Execute bits do not exist:
+//! the extension decides.
 
 use std::ffi::{c_void, OsString};
 use std::fs::{File, OpenOptions};
@@ -35,7 +36,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_ALWAYS,
 };
 
-use super::{portable_name, Creation, FileId, Linked, Open, ReplaceError};
+use super::{portable_name, Creation, FileId, Linked, Open, Reach, ReplaceError};
 use crate::win::{wide, CurrentUser, SingleUserAcl, SECURITY_DESCRIPTOR_REVISION};
 
 /// `ACCESS_ALLOWED_ACE_TYPE`: an ACE that grants access to one SID.
@@ -304,6 +305,42 @@ pub(super) fn create_owner_only(path: &Path, creation: Creation, open: Open) -> 
     }
 }
 
+pub(super) fn create_dir_owner_only(path: &Path, recursive: bool) -> io::Result<()> {
+    if !recursive {
+        return create_one_dir_owner_only(path);
+    }
+    // The missing directories, `path` first; made from the top down.
+    let missing: Vec<&Path> = path
+        .ancestors()
+        .take_while(|dir| !dir.as_os_str().is_empty() && !dir.is_dir())
+        .collect();
+    for dir in missing.into_iter().rev() {
+        match create_one_dir_owner_only(dir) {
+            // Made meanwhile by someone else: not ours to change.
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists && dir.is_dir() => {}
+            result => result?,
+        }
+    }
+    Ok(())
+}
+
+/// Create the one directory `dir` and give it the owner-only DACL, removing
+/// it again when that fails.
+fn create_one_dir_owner_only(dir: &Path) -> io::Result<()> {
+    std::fs::create_dir(dir)?;
+    set_owner_only(dir, true).inspect_err(|_| {
+        let _ = std::fs::remove_dir(dir);
+    })
+}
+
+pub(super) fn set_executable(_path: &Path, _reach: Reach) -> io::Result<()> {
+    Ok(())
+}
+
+pub(super) fn is_text_busy(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(ERROR_SHARING_VIOLATION as i32)
+}
+
 pub(super) fn open_nofollow(options: &mut OpenOptions, path: &Path) -> io::Result<File> {
     refuse_link(open_itself(options, path)?, path)
 }
@@ -411,7 +448,17 @@ pub(super) fn lock_exclusive(file: &File) -> io::Result<()> {
 }
 
 pub(super) fn try_lock_exclusive(file: &File) -> io::Result<bool> {
-    match file.try_lock() {
+    taken(file.try_lock())
+}
+
+pub(super) fn try_lock_shared(file: &File) -> io::Result<bool> {
+    taken(file.try_lock_shared())
+}
+
+/// A non-blocking lock attempt's answer: `false` when another handle holds a
+/// lock that conflicts.
+fn taken(attempt: Result<(), std::fs::TryLockError>) -> io::Result<bool> {
+    match attempt {
         Ok(()) => Ok(true),
         Err(std::fs::TryLockError::WouldBlock) => Ok(false),
         Err(std::fs::TryLockError::Error(error)) => Err(error),

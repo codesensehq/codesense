@@ -8,13 +8,14 @@
 //! use std where it has the mechanism and `windows-sys` where it does not.
 //!
 //! - [`process`]: a [`process::ProcessTree`] ended as a whole, and pid liveness.
-//! - [`fs`]: owner-only files and checks, file identity, no-follow opens,
-//!   atomic replace, exclusive locks, links, canonical paths, portable names
-//!   and executable files.
+//! - [`fs`]: owner-only files, directories and checks, file identity,
+//!   no-follow opens, atomic replace, exclusive and shared locks, links,
+//!   canonical paths, portable names, execute bits, busy files and
+//!   executable files.
 //! - [`cli`]: finding a command-line tool on `PATH` and in package-manager
 //!   directories.
-//! - [`dirs`]: the codesense home.
-//! - [`user`]: the user this process runs as.
+//! - [`dirs`]: the codesense home and the shared lock directory.
+//! - [`user`]: the user this process runs as and the host's name.
 //! - [`limits`]: the open-file soft limit.
 //! - [`ipc`]: local endpoints, listeners and streams (Unix sockets, named
 //!   pipes) and the pid at the other end.

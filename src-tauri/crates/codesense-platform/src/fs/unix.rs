@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-//! Unix: permission modes, uid and (dev, ino), `O_NOFOLLOW`, `rename` and
-//! `flock`.
+//! Unix: permission modes, uid and (dev, ino), `O_NOFOLLOW`, `rename`,
+//! `flock` and `ETXTBSY`.
 
 use std::fs::{File, Metadata, OpenOptions};
 use std::io;
@@ -8,7 +8,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-use super::{Creation, FileId, Linked, Open, ReplaceError};
+use super::{Creation, FileId, Linked, Open, Reach, ReplaceError};
 
 pub(super) fn set_owner_only(path: &Path, is_dir: bool) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -59,6 +59,27 @@ pub(super) fn create_owner_only(path: &Path, creation: Creation, open: Open) -> 
     options.open(path)
 }
 
+pub(super) fn create_dir_owner_only(path: &Path, recursive: bool) -> io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new()
+        .recursive(recursive)
+        .mode(0o700)
+        .create(path)
+}
+
+pub(super) fn set_executable(path: &Path, reach: Reach) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = match reach {
+        Reach::Owner => 0o700,
+        Reach::Everyone => 0o755,
+    };
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+}
+
+pub(super) fn is_text_busy(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(libc::ETXTBSY)
+}
+
 pub(super) fn open_nofollow(options: &mut OpenOptions, path: &Path) -> io::Result<File> {
     use std::os::unix::fs::OpenOptionsExt;
     options
@@ -84,9 +105,19 @@ pub(super) fn lock_exclusive(file: &File) -> io::Result<()> {
 }
 
 pub(super) fn try_lock_exclusive(file: &File) -> io::Result<bool> {
+    try_flock(file, libc::LOCK_EX)
+}
+
+pub(super) fn try_lock_shared(file: &File) -> io::Result<bool> {
+    try_flock(file, libc::LOCK_SH)
+}
+
+/// `flock(operation | LOCK_NB)`: `false` when another open file holds a lock
+/// that conflicts.
+fn try_flock(file: &File, operation: libc::c_int) -> io::Result<bool> {
     // SAFETY: `file` owns a live descriptor for the duration of this call;
     // `flock` neither retains the pointer nor accesses Rust-managed memory.
-    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    let result = unsafe { libc::flock(file.as_raw_fd(), operation | libc::LOCK_NB) };
     if result == 0 {
         return Ok(true);
     }
