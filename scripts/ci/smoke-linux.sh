@@ -18,6 +18,12 @@
 #       a window that is not one colour, logs webview ready, a caps: line that agrees with the
 #       bundle (caps-agree) and secret store: secret-service, and exits within 10 s of SIGTERM.
 #       Each launch leaves <mode>.log and <mode>.png in <out-dir>.
+#   smoke-linux.sh variant <dmabuf|no-dbus> <out-dir>
+#       Launch the AppImage run extracted into <out-dir> again. dmabuf: with the user's
+#       WEBKIT_DISABLE_DMABUF_RENDERER=0, which the app keeps (the WebKit web process has it, and
+#       the log says nothing of it), the screen check still passes. no-dbus: with no session bus
+#       (outside dbus-run-session, at an address that does not exist, so none autolaunches), the
+#       app stays up and logs secret store: unavailable.
 #   smoke-linux.sh caps-agree <listing> <log>
 #       The log has one caps: line, and its starship and git-ai are on exactly when the file
 #       list holds resources/starship and resources/git-ai.
@@ -173,6 +179,12 @@ start_session() {
     mkdir -m 700 "$XDG_RUNTIME_DIR"
     case "$mode" in
         default) dbus-run-session -- bash "$SELF" desktop "$mode" "$out" ;;
+        dmabuf) WEBKIT_DISABLE_DMABUF_RENDERER=0 dbus-run-session -- bash "$SELF" desktop "$mode" "$out" ;;
+        no-dbus)
+            DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent \
+                xvfb-run -a -s "-screen 0 1280x800x24" bash "$SELF" launch "$mode" "$out"
+            ;;
+        *) usage ;;
     esac
 }
 
@@ -183,9 +195,35 @@ desktop() {
     xvfb-run -a -s "-screen 0 1280x800x24" bash "$SELF" launch "$@"
 }
 
+# Every process started under <pid>, at any depth.
+descendants() {
+    local child
+    for child in $(pgrep -P "$1"); do
+        echo "$child"
+        descendants "$child"
+    done
+}
+
+# The app keeps the user's WEBKIT_DISABLE_DMABUF_RENDERER=0: its own environment and its WebKit
+# web processes' still have it.
+kept_dmabuf() {
+    local app="$1" web=() child
+    for child in $(descendants "$app"); do
+        # comm holds the first 15 bytes of the name.
+        if [[ $(cat "/proc/$child/comm" 2>/dev/null) == WebKitWebProces* ]]; then web+=("$child"); fi
+    done
+    ((${#web[@]})) || fail "the app started no WebKitWebProcess"
+    for child in "$app" "${web[@]}"; do
+        grep -qxz WEBKIT_DISABLE_DMABUF_RENDERER=0 "/proc/$child/environ" ||
+            fail "process $child ($(cat "/proc/$child/comm")) lost WEBKIT_DISABLE_DMABUF_RENDERER=0"
+    done
+    echo "The app and ${#web[@]} WebKit web process(es) keep WEBKIT_DISABLE_DMABUF_RENDERER=0"
+}
+
 # Inside xvfb-run: launch the app, check it while it runs, stop it, then check its log.
 launch() {
-    local mode="$1" out="$2" log="$1.log" shot="$1.png" pid waited
+    local mode="$1" out="$2" log="$1.log" shot="$1.png" pid waited store=secret-service
+    if [[ "$mode" == no-dbus ]]; then store=unavailable; fi
     cd "$out"
     "$out/squashfs-root/AppRun" >"$log" 2>&1 &
     pid=$!
@@ -195,9 +233,12 @@ launch() {
     sleep 30
     alive "$pid" || fail "the app exited within 30 s"
     echo "The app is alive at 30 s"
-    import -window root "$shot"
-    [[ $(identify -format '%k' "$shot") -gt 1 ]] || fail "the screen is one colour (see $shot)"
-    echo "The screen is not one colour"
+    if [[ "$mode" != no-dbus ]]; then
+        import -window root "$shot"
+        [[ $(identify -format '%k' "$shot") -gt 1 ]] || fail "the screen is one colour (see $shot)"
+        echo "The screen is not one colour"
+    fi
+    if [[ "$mode" == dmabuf ]]; then kept_dmabuf "$pid"; fi
     kill -TERM "$pid"
     for ((waited = 0; waited < 10; waited++)); do
         alive "$pid" || break
@@ -209,9 +250,11 @@ launch() {
     plain_log "$log" >"$mode.txt"
     grep -q "webview ready" "$mode.txt" || fail "the log has no webview ready"
     caps_agree listing "$log"
-    grep -qE "(^| )secret store: secret-service\$" "$mode.txt" ||
-        fail "the log has no secret store: secret-service"
-    echo "The log has webview ready and secret store: secret-service"
+    grep -qE "(^| )secret store: $store\$" "$mode.txt" || fail "the log has no secret store: $store"
+    echo "The log has webview ready and secret store: $store"
+    if [[ "$mode" == dmabuf ]] && grep -qi dmabuf "$mode.txt"; then
+        fail "the log mentions DMABUF; the app should keep the user's value without a word"
+    fi
 }
 
 [[ $# -ge 1 ]] || usage
@@ -233,6 +276,11 @@ case "$command" in
     run)
         [[ $# -eq 2 ]] || usage
         run_appimage "$@"
+        ;;
+    variant)
+        [[ $# -eq 2 && "$1" =~ ^(dmabuf|no-dbus)$ ]] || usage
+        [[ -d "$2/squashfs-root" ]] || fail "$2 has no extracted AppImage; smoke-linux.sh run extracts it"
+        start_session "$1" "$(realpath "$2")"
         ;;
     desktop | launch)
         [[ $# -eq 2 ]] || usage
