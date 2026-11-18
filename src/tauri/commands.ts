@@ -5835,8 +5835,26 @@ export interface ShadowedAgentInstall {
   onPath: boolean;
 }
 
+/** One step of git install guidance: a label, then the commands to run in order. */
+export interface HintLine {
+  label: string;
+  commands: string[];
+}
+
+/** How to install or upgrade git on the running OS (`git_install_hint` in deps.rs). */
+export interface GitInstallHint {
+  /** Offer Apple's Command Line Tools installer button. */
+  installer: boolean;
+  /** Lines shown when git is missing. */
+  install: HintLine[];
+  /** Lines shown when git is below the version floor. */
+  upgrade: HintLine[];
+}
+
 export interface DependencyStatus {
   git: GitStatus;
+  /** The running OS's row. Absent on the front end's own fallback statuses. */
+  gitInstall?: GitInstallHint;
   gh: GhStatus;
   /**
    * Per-agent binary-detection status keyed by CLI basename (`claude`, `codex`).

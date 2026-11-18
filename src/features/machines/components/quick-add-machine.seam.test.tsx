@@ -623,6 +623,21 @@ describe("Closing, passphrases and drafts", () => {
     });
   });
 
+  it("off macOS, says a system dialog asks for the passphrase", async () => {
+    const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux x86_64");
+    try {
+      freshHost();
+      await openAdd();
+      await typeAddress("root@203.0.113.10");
+      await userEvent.click(screen.getByTestId("add-machine-more"));
+      await userEvent.click(screen.getByTestId("machine-signin-keychainPassphrase"));
+      expect(screen.getByText(/^A system dialog asks for it\. /)).toBeInTheDocument();
+      expect(screen.queryByText(/macOS asks for it/)).toBeNull();
+    } finally {
+      platform.mockRestore();
+    }
+  });
+
   it("a passphrase never enters the panel; its machine connects only when picked", async () => {
     const { calls } = freshHost();
     await openAdd();
