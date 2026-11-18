@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: MIT
 //! Windows helpers shared by the modules' Windows arms: an owned kernel
-//! handle, the current user's SID and default owner, and wide path strings.
+//! handle, the current user's SID and default owner, a DACL that grants one
+//! SID and wide path strings.
 
 use std::io;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
+use std::sync::OnceLock;
 
 use windows_sys::core::PWSTR;
 use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, HANDLE};
 use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows_sys::Win32::Security::{
-    GetTokenInformation, TokenOwner, TokenUser, PSID, TOKEN_INFORMATION_CLASS, TOKEN_OWNER,
-    TOKEN_QUERY, TOKEN_USER,
+    AddAccessAllowedAceEx, EqualSid, GetLengthSid, GetTokenInformation, InitializeAcl, TokenOwner,
+    TokenUser, ACCESS_ALLOWED_ACE, ACE_FLAGS, ACL, ACL_REVISION, PSID, TOKEN_INFORMATION_CLASS,
+    TOKEN_OWNER, TOKEN_QUERY, TOKEN_USER,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -46,6 +49,9 @@ impl Drop for Handle {
     }
 }
 
+/// `SECURITY_DESCRIPTOR_REVISION`, from a module this crate does not enable.
+pub(crate) const SECURITY_DESCRIPTOR_REVISION: u32 = 1;
+
 /// The current process token's user and default owner, read once.
 pub(crate) struct CurrentUser {
     /// The `TOKEN_USER` and the SID it points to, 8-byte aligned.
@@ -55,7 +61,19 @@ pub(crate) struct CurrentUser {
 }
 
 impl CurrentUser {
-    pub(crate) fn read() -> io::Result<Self> {
+    /// The user and default owner, read from the token on the first call: a
+    /// process's user does not change, and this crate never sets its token's
+    /// owner.
+    pub(crate) fn read() -> io::Result<&'static Self> {
+        static USER: OnceLock<CurrentUser> = OnceLock::new();
+        if let Some(user) = USER.get() {
+            return Ok(user);
+        }
+        let user = Self::read_token()?;
+        Ok(USER.get_or_init(|| user))
+    }
+
+    fn read_token() -> io::Result<Self> {
         let mut token: HANDLE = std::ptr::null_mut();
         // SAFETY: the current-process pseudo handle needs no closing; `token`
         // is writable.
@@ -83,6 +101,12 @@ impl CurrentUser {
         // SAFETY: the buffer holds the TOKEN_OWNER the token wrote, whose SID
         // points into the same buffer.
         unsafe { (*self.owner.as_ptr().cast::<TOKEN_OWNER>()).Owner }
+    }
+
+    /// Whether `sid` is this user's.
+    pub(crate) fn is(&self, sid: PSID) -> bool {
+        // SAFETY: both SIDs are valid.
+        unsafe { EqualSid(sid, self.sid()) != 0 }
     }
 
     /// The SID as text, `S-1-5-…`.
@@ -127,6 +151,40 @@ fn token_information(token: &Handle, class: TOKEN_INFORMATION_CLASS) -> io::Resu
         return Err(io::Error::last_os_error());
     }
     Ok(buffer)
+}
+
+/// A DACL with one ACE, granting `access` to one SID: no one else is let in.
+pub(crate) struct SingleUserAcl {
+    /// The ACL header and its ACE, DWORD-aligned.
+    buffer: Vec<u32>,
+}
+
+impl SingleUserAcl {
+    /// Grant `access` to `sid` alone, with the ACE's `inherit` flags.
+    pub(crate) fn new(sid: PSID, inherit: ACE_FLAGS, access: u32) -> io::Result<Self> {
+        // SAFETY: the caller's SID is valid.
+        let sid_length = unsafe { GetLengthSid(sid) } as usize;
+        // The ACL header and one ACE, whose SID takes the place of `SidStart`.
+        let acl_length = std::mem::size_of::<ACL>() + std::mem::size_of::<ACCESS_ALLOWED_ACE>()
+            - std::mem::size_of::<u32>()
+            + sid_length;
+        let mut buffer = vec![0u32; acl_length.div_ceil(4)];
+        let acl = buffer.as_mut_ptr().cast::<ACL>();
+        // SAFETY: `acl` points to a DWORD-aligned buffer of the size given.
+        if unsafe { InitializeAcl(acl, (buffer.len() * 4) as u32, ACL_REVISION) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: the ACL was sized for this one ACE, which copies the SID.
+        if unsafe { AddAccessAllowedAceEx(acl, ACL_REVISION, inherit, access, sid) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self { buffer })
+    }
+
+    /// The ACL, valid while `self` lives.
+    pub(crate) fn as_ptr(&self) -> *const ACL {
+        self.buffer.as_ptr().cast()
+    }
 }
 
 /// `path` as a NUL-terminated wide string.
