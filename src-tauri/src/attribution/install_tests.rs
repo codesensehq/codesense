@@ -84,6 +84,11 @@ fn a_staged_binary_is_invoked_as_git_ai_and_installs() {
 fn pin_and_unsupported_platform_never_fetches() {
     let parsed = Pin::parse(include_str!("../../git-ai.pin")).expect("invalid bundled git-ai pin");
     assert_eq!(PIN.expected_version, parsed.expected_version);
+    assert_eq!(PIN.expected_version, "1.7.5-cs.4");
+    assert_eq!(
+        PIN.sha256,
+        "ebcd7fd565c09ac8df86d3aff828325e6d4428606bd184c438b467e94902a87c"
+    );
     assert_eq!(PIN.asset, "git-ai-macos-arm64");
     assert_eq!(PIN.platform, "macos-arm64");
     assert_eq!(PIN.resource, "resources/git-ai");
