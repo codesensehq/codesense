@@ -108,7 +108,8 @@ impl LocalListener {
     }
 }
 
-/// One connection, from either end.
+/// One connection, from either end. On Windows, dropping it closes the pipe
+/// when the runtime next runs: the read in flight is cancelled first.
 pub struct LocalStream(sys::Stream);
 
 impl LocalStream {

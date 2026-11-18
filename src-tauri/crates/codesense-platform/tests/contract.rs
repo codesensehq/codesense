@@ -390,6 +390,19 @@ fn accept_blocking_within(
     (listener, stream.unwrap())
 }
 
+/// [`exits_within`] five seconds, letting the runtime run meanwhile: on
+/// Windows a dropped async stream closes when the runtime next polls.
+async fn exits_soon(tree: &mut ProcessTree) -> bool {
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(5) {
+        if tree.try_wait().unwrap().is_some() {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    false
+}
+
 fn assert_in_use<T>(bound: std::io::Result<T>) {
     let error = bound.err().expect("bound over a live listener");
     assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse, "{error}");
@@ -417,7 +430,7 @@ fn assert_kept_apart(endpoints: [Endpoint; 2]) {
             assert_eq!(line.trim(), format!("client-{i}"), "{:?}", endpoints[i]);
         }
         for client in &mut clients {
-            assert!(exits_within(client, Duration::from_secs(5)));
+            assert!(exits_soon(client).await);
         }
     });
 }
