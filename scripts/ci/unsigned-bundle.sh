@@ -63,25 +63,6 @@ esac
 # emulator worker beside it.
 bash scripts/build-bridge.sh --release
 bash scripts/build-session-server.sh --release
-if [[ "$PLATFORM" == linux ]]; then
-    triple=$(rustc -vV | sed -n 's/^host: //p')
-    emu="src-tauri/binaries/codesense-emulator-$triple"
-    echo "::group::diag"
-    file "$emu" || true
-    ldd "$emu" || true
-    echo "ldd exit: $?"
-    readelf -lW "$emu" | head -40 || true
-    sudo apt-get install -y --no-install-recommends patchelf || true
-    cp "$emu" "$RUNNER_TEMP/emu-patched"
-    patchelf --set-rpath '$ORIGIN/../lib' "$RUNNER_TEMP/emu-patched" || true
-    ls -l "$emu" "$RUNNER_TEMP/emu-patched"
-    file "$RUNNER_TEMP/emu-patched" || true
-    ldd "$RUNNER_TEMP/emu-patched" || true
-    echo "ldd patched exit: $?"
-    "$RUNNER_TEMP/emu-patched" --version || true
-    echo "::endgroup::"
-    exit 1
-fi
 pnpm exec tauri build "${tauri_args[@]}"
 
 # Collect what the job uploads.
