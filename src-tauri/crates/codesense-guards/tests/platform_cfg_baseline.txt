@@ -35,7 +35,7 @@ crates/codesense-pty-core/src/notify_hook.rs 6
 crates/codesense-pty-core/src/process.rs 10
 crates/codesense-pty-core/src/protocol.rs 3
 crates/codesense-pty-core/src/remote_workspace.rs 9
-crates/codesense-pty-core/src/runner.rs 26
+crates/codesense-pty-core/src/runner.rs 1
 crates/codesense-pty-core/src/shell.rs 7
 crates/codesense-pty-core/src/tui_fixture.rs 18
 crates/codesense-session-server/src/askpass.rs 3

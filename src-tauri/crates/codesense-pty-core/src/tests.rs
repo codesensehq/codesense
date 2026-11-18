@@ -475,12 +475,9 @@ fn failed_background_start_releases_pty_and_dashboard_registration() {
                 .expect("startup-failure test session"),
         );
         let pid = session.session().pty.pid().expect("child pid") as libc::pid_t;
-        let pgid = session
-            .session()
-            .pty
-            .child()
-            .process_group()
-            .expect("child process group");
+        assert!(session.session().pty.child().has_process_group());
+        // portable-pty starts the child in a session of its own: it leads its group.
+        let pgid = pid;
         let identity = stable_process_identity(pid).expect("stable child identity");
         state
             .insert_session_reaping_displaced("startup-failed".to_string(), session.take())
@@ -526,12 +523,9 @@ fn same_id_replacement_reaps_displaced_process_group() {
         make_isolated_session("replace-me", "sleep 30 & wait", false).expect("old test session"),
     );
     let old_pid = old.session().pty.pid().expect("old child pid") as libc::pid_t;
-    let old_pgid = old
-        .session()
-        .pty
-        .child()
-        .process_group()
-        .expect("old child process group");
+    assert!(old.session().pty.child().has_process_group());
+    // portable-pty starts the child in a session of its own: it leads its group.
+    let old_pgid = old_pid;
     let old_identity = stable_process_identity(old_pid).expect("old stable identity");
     state
         .insert_session_reaping_displaced("replace-me".to_string(), old.take())
@@ -549,12 +543,8 @@ fn same_id_replacement_reaps_displaced_process_group() {
         .pty
         .pid()
         .expect("replacement child pid") as libc::pid_t;
-    let replacement_pgid = replacement
-        .session()
-        .pty
-        .child()
-        .process_group()
-        .expect("replacement child process group");
+    assert!(replacement.session().pty.child().has_process_group());
+    let replacement_pgid = replacement_pid;
     let replacement_identity =
         stable_process_identity(replacement_pid).expect("replacement stable identity");
     state

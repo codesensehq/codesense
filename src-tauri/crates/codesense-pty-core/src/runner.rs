@@ -22,28 +22,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use codesense_platform::process::{Pid, ProcessGroup};
 use log::{error, warn};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
-
-#[cfg(unix)]
-fn signal_group(pgid: libc::pid_t, signal: i32) -> Result<(), String> {
-    #[cfg(test)]
-    if pgid == TEST_GROUP_SIGNAL_FAILURE_PGID {
-        return Err("injected process-group signal failure".into());
-    }
-    if unsafe { libc::kill(-pgid, signal) } == 0 {
-        return Ok(());
-    }
-    let error = std::io::Error::last_os_error();
-    if error.raw_os_error() == Some(libc::ESRCH) {
-        Ok(())
-    } else {
-        Err(format!("signal process group {pgid}: {error}"))
-    }
-}
-
-#[cfg(all(unix, test))]
-const TEST_GROUP_SIGNAL_FAILURE_PGID: libc::pid_t = libc::pid_t::MAX - 1;
 
 /// How long the exit seam waits, after the reader reaches end-of-stream, for the
 /// child to become reapable so `pty-exit` can carry its real status. A shell's
@@ -118,33 +99,62 @@ impl From<portable_pty::ExitStatus> for ExitInfo {
     }
 }
 
+/// How the recorded process group is signalled.
+#[derive(Clone, Copy)]
+enum GroupSignal {
+    /// SIGTERM: a request the group may ignore.
+    Terminate,
+    /// SIGKILL.
+    Kill,
+}
+
 /// The spawned child plus the process group captured while its PID is
 /// known-current. Never resolve a group from the PID after a wait probe may have
 /// reaped the leader: the numeric PID can then belong to an unrelated process.
+/// Dropping it signals nothing.
 pub(crate) struct SessionChild {
     child: Box<dyn Child + Send>,
-    #[cfg(unix)]
-    process_group: Option<libc::pid_t>,
+    process_group: Option<ProcessGroup>,
     /// `None` until the group SIGKILL is sent; then whether it reached the group
     /// (or found it gone), so the leader needs no separate kill.
-    #[cfg(unix)]
     process_group_kill: Option<bool>,
+    /// Makes every group signal fail, for the teardown paths' tests.
+    #[cfg(test)]
+    fail_group_signals: bool,
 }
 
 impl SessionChild {
     fn new(child: Box<dyn Child + Send>) -> Self {
-        #[cfg(unix)]
-        let process_group = child
-            .process_id()
-            .map(|pid| unsafe { libc::getpgid(pid as libc::pid_t) })
-            .filter(|pgid| *pgid > 0 && *pgid != unsafe { libc::getpgrp() });
+        let process_group = child.process_id().and_then(|pid| {
+            ProcessGroup::adopt(Pid::from_raw(pid))
+                .inspect_err(|error| warn!(target: "pty", "process group not adopted: {error}"))
+                .ok()
+                .flatten()
+        });
         Self {
             child,
-            #[cfg(unix)]
             process_group,
-            #[cfg(unix)]
             process_group_kill: None,
+            #[cfg(test)]
+            fail_group_signals: false,
         }
+    }
+
+    /// Signal the recorded group, if there is one; a group that is gone is not
+    /// an error.
+    fn signal_group(&self, signal: GroupSignal) -> Result<(), String> {
+        let Some(group) = &self.process_group else {
+            return Ok(());
+        };
+        #[cfg(test)]
+        if self.fail_group_signals {
+            return Err("injected process-group signal failure".into());
+        }
+        match signal {
+            GroupSignal::Terminate => group.terminate(),
+            GroupSignal::Kill => group.kill(),
+        }
+        .map_err(|error| format!("signal process group: {error}"))
     }
 
     /// Nonblocking liveness probe that also closes the process-group lifecycle
@@ -198,11 +208,8 @@ impl SessionChild {
     /// spawn, wait a bounded grace period, then KILL that same group and reap
     /// the owning child synchronously. Numeric identity is never rediscovered.
     fn drain_for_replacement(&mut self, deadline: Instant) -> Result<(), String> {
-        #[cfg(unix)]
         if self.process_group_kill.is_none() {
-            if let Some(pgid) = self.process_group {
-                signal_group(pgid, libc::SIGTERM)?;
-            }
+            self.signal_group(GroupSignal::Terminate)?;
         }
         // Do not call try_wait here: on Unix that reaps an exited group leader,
         // allowing its numeric PGID to be reused before descendant cleanup.
@@ -235,40 +242,30 @@ impl SessionChild {
     /// SIGKILL the recorded process group once. Returns whether the group kill
     /// covered the leader: a group is recorded and its kill succeeded or found
     /// it already gone, now or on an earlier call.
-    #[cfg(unix)]
     fn terminate_process_group(&mut self) -> bool {
-        let Some(pgid) = self.process_group else {
+        if self.process_group.is_none() {
             return false;
-        };
-        *self.process_group_kill.get_or_insert_with(|| {
-            signal_group(pgid, libc::SIGKILL)
-                .inspect_err(|error| warn!(target: "pty", "process-group kill failed: {error}"))
-                .is_ok()
-        })
-    }
-
-    #[cfg(not(unix))]
-    fn terminate_process_group(&mut self) -> bool {
-        false
+        }
+        if let Some(covered) = self.process_group_kill {
+            return covered;
+        }
+        let covered = self
+            .signal_group(GroupSignal::Kill)
+            .inspect_err(|error| warn!(target: "pty", "process-group kill failed: {error}"))
+            .is_ok();
+        self.process_group_kill = Some(covered);
+        covered
     }
 
     /// Replacement's checked process-group close. Unlike ordinary interactive
     /// teardown, every unexpected signal failure is part of the result and
     /// therefore prevents the caller from publishing a retirement receipt.
-    #[cfg(unix)]
     fn terminate_process_group_for_replacement(&mut self) -> Result<(), String> {
         if self.process_group_kill.is_some() {
             return Ok(());
         }
-        if let Some(pgid) = self.process_group {
-            signal_group(pgid, libc::SIGKILL)?;
-        }
+        self.signal_group(GroupSignal::Kill)?;
         self.process_group_kill = Some(true);
-        Ok(())
-    }
-
-    #[cfg(not(unix))]
-    fn terminate_process_group_for_replacement(&mut self) -> Result<(), String> {
         Ok(())
     }
 }
@@ -342,9 +339,9 @@ impl ChildHandle {
             .map_err(|error| error.to_string())
     }
 
-    #[cfg(all(unix, test))]
-    pub(crate) fn process_group(&self) -> Option<libc::pid_t> {
-        self.lock().process_group
+    #[cfg(test)]
+    pub(crate) fn has_process_group(&self) -> bool {
+        self.lock().process_group.is_some()
     }
 }
 
@@ -394,8 +391,13 @@ impl PtySession {
     /// The PTY's foreground process group (`tcgetpgrp` on the master), when
     /// the driver can tell.
     #[cfg(feature = "e2e-dump")]
+    #[allow(unreachable_code)]
     pub fn foreground_pgid(&self) -> Option<i32> {
-        self.master.process_group_leader()
+        // portable-pty declares `process_group_leader` on unix only; this
+        // e2e-dump read is the one OS gate the runner keeps.
+        #[cfg(unix)]
+        return self.master.process_group_leader();
+        None
     }
 
     /// The PTY's size as `(cols, rows)`; 80×24 when the driver cannot say.
@@ -563,13 +565,8 @@ fn with_original_limit(command: CommandBuilder) -> CommandBuilder {
 fn resolve_program(command: &CommandBuilder) -> Option<std::path::PathBuf> {
     use std::path::{Component, Path};
     let program = Path::new(command.get_argv().first()?);
-    let executable = |path: std::path::PathBuf| {
-        let bytes = std::os::unix::ffi::OsStrExt::as_bytes(path.as_os_str());
-        let c_path = std::ffi::CString::new(bytes).ok()?;
-        // SAFETY: a NUL-terminated path; `access` only reads it.
-        let runnable = unsafe { libc::access(c_path.as_ptr(), libc::X_OK) } == 0;
-        (runnable && Path::is_file(&path)).then_some(path)
-    };
+    let executable =
+        |path: std::path::PathBuf| codesense_platform::fs::can_execute(&path).then_some(path);
     if program.is_absolute() {
         return executable(program.to_path_buf());
     }
@@ -591,20 +588,15 @@ fn resolve_program(command: &CommandBuilder) -> Option<std::path::PathBuf> {
 /// A spawn error that was EMFILE says so plainly, naming this
 /// process and its counts; any other error reads exactly as before.
 fn plainly(error: &(dyn std::error::Error + 'static)) -> String {
-    let emfile = std::iter::successors(Some(error), |cause| cause.source()).any(|cause| {
-        cause
-            .downcast_ref::<std::io::Error>()
-            .and_then(std::io::Error::raw_os_error)
-            == Some(libc::EMFILE)
-            // `openpty` reports its errno only in its message (`{:?}` of it).
-            || str::contains(&cause.to_string(), &format!("code: {},", libc::EMFILE))
-    });
-    if !emfile {
+    if !codesense_platform::limits::is_descriptor_exhaustion(error) {
         return error.to_string();
     }
     let process = std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.file_name().map(|name| name.to_string_lossy().into_owned()))
+        .and_then(|exe| {
+            exe.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
         .unwrap_or_else(|| "this process".into());
     format!("{} ({error})", crate::nofile::limit_reached(&process))
 }
@@ -612,6 +604,7 @@ fn plainly(error: &(dyn std::error::Error + 'static)) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codesense_platform::process::ProcessTree;
 
     #[derive(Clone, Debug)]
     struct ExitedChild(Arc<Mutex<Vec<&'static str>>>);
@@ -640,26 +633,39 @@ mod tests {
         }
     }
 
+    /// A `sleep` the test starts as a tree of its own, and its adopted group:
+    /// a real group for the teardown paths to signal.
+    #[cfg(unix)]
+    fn own_group() -> (ProcessTree, ProcessGroup) {
+        let mut sleep = std::process::Command::new("sleep");
+        sleep.arg("30");
+        let tree = ProcessTree::spawn(&mut sleep).unwrap();
+        let group = ProcessGroup::adopt(tree.pid())
+            .unwrap()
+            .expect("a group of its own");
+        (tree, group)
+    }
+
     #[cfg(unix)]
     #[test]
     fn rm4d_natural_exit_checks_recorded_group_cleanup() {
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let mut child = test_session_child(ExitedChild(calls.clone()), Some(libc::pid_t::MAX));
+        let (mut tree, group) = own_group();
+        let mut child = test_session_child(ExitedChild(calls.clone()), Some(group), false);
         child
             .drain_for_replacement(Instant::now() + Duration::from_millis(10))
             .unwrap();
         assert_eq!(child.process_group_kill, Some(true));
         assert_eq!(*calls.lock().unwrap(), ["kill-child", "owning-wait"]);
+        assert!(!tree.child().wait().unwrap().success(), "the group ended");
     }
 
     #[cfg(unix)]
     #[test]
     fn rm4d_natural_exit_propagates_group_signal_failure() {
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let mut child = test_session_child(
-            ExitedChild(calls.clone()),
-            Some(TEST_GROUP_SIGNAL_FAILURE_PGID),
-        );
+        let (_tree, group) = own_group();
+        let mut child = test_session_child(ExitedChild(calls.clone()), Some(group), true);
         assert_eq!(
             child.drain_for_replacement(Instant::now() + Duration::from_millis(10)),
             Err("injected process-group signal failure".into())
@@ -668,73 +674,91 @@ mod tests {
         assert!(calls.lock().unwrap().is_empty());
     }
 
-    /// The group signal is `kill(-pgid, signal)`: SIGTERM is a request the
-    /// group may ignore, SIGKILL ends it, and a gone group is not an error.
+    /// The group signals reach the whole group: SIGTERM is a request the group
+    /// may ignore, SIGKILL ends it, and a gone group is not an error.
     #[cfg(unix)]
     #[test]
     fn group_signals_reach_the_whole_group_and_a_gone_group_is_ok() {
         use std::io::BufRead;
-        use std::os::unix::process::{CommandExt, ExitStatusExt};
-        let mut leader = std::process::Command::new("/bin/sh")
+        use std::os::unix::process::ExitStatusExt;
+        let mut leader = std::process::Command::new("/bin/sh");
+        leader
             .args(["-c", "trap '' TERM; echo ready; while :; do sleep 1; done"])
-            .stdout(std::process::Stdio::piped())
-            .process_group(0)
-            .spawn()
-            .unwrap();
+            .stdout(std::process::Stdio::piped());
+        let mut tree = ProcessTree::spawn(&mut leader).unwrap();
         let mut ready = String::new();
-        std::io::BufReader::new(leader.stdout.take().unwrap())
+        std::io::BufReader::new(tree.child().stdout.take().unwrap())
             .read_line(&mut ready)
             .unwrap();
         assert_eq!(ready.trim(), "ready");
-        let pgid = leader.id() as libc::pid_t;
+        let group = ProcessGroup::adopt(tree.pid()).unwrap();
+        let child = test_session_child(ExitedChild(Default::default()), group, false);
 
-        signal_group(pgid, libc::SIGTERM).unwrap();
+        child.signal_group(GroupSignal::Terminate).unwrap();
         std::thread::sleep(Duration::from_millis(200));
-        assert!(leader.try_wait().unwrap().is_none(), "SIGTERM was ignored");
-        signal_group(pgid, libc::SIGKILL).unwrap();
-        assert_eq!(leader.wait().unwrap().signal(), Some(libc::SIGKILL));
+        assert!(
+            tree.child().try_wait().unwrap().is_none(),
+            "SIGTERM was ignored"
+        );
+        child.signal_group(GroupSignal::Kill).unwrap();
+        assert_eq!(tree.child().wait().unwrap().signal(), Some(libc::SIGKILL));
 
+        let pgid = tree.pid().as_raw() as libc::pid_t;
         let deadline = Instant::now() + Duration::from_secs(5);
         while unsafe { libc::kill(-pgid, 0) } == 0 && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert_eq!(signal_group(pgid, libc::SIGKILL), Ok(()));
+        assert_eq!(child.signal_group(GroupSignal::Kill), Ok(()));
     }
 
-    /// A child's group is recorded only when it leads one other than this
-    /// process's own: a plain child shares the test's group and gets none, so
-    /// teardown never signals the test's own group.
+    /// A child in this process's own group is never signalled through it: on
+    /// unix it gets no group (signalling it would reach the test's own); on
+    /// Windows it is adopted into a job of its own.
     #[cfg(unix)]
     #[test]
-    fn only_a_child_in_another_group_has_its_group_recorded() {
-        use std::os::unix::process::CommandExt;
-        let sleep = || {
-            let mut command = std::process::Command::new("sleep");
-            command.arg("30");
-            command
-        };
-        let shared = SessionChild::new(Box::new(sleep().spawn().unwrap()));
-        assert_eq!(shared.process_group, None);
-        let leader = sleep().process_group(0).spawn().unwrap();
-        let pid = leader.id();
-        let leader = SessionChild::new(Box::new(leader));
-        assert_eq!(leader.process_group, Some(pid as libc::pid_t));
-        for child in [shared, leader] {
-            let child = ChildHandle(Arc::new(Mutex::new(child)));
-            child.terminate();
-            child.wait();
-        }
+    fn a_child_in_this_process_group_is_never_signalled_through_it() {
+        let shared = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let shared = SessionChild::new(Box::new(shared));
+        assert_eq!(shared.process_group.is_some(), expect_own_group_adopted());
+        let shared = ChildHandle(Arc::new(Mutex::new(shared)));
+        shared.terminate();
+        shared.wait();
     }
 
+    fn expect_own_group_adopted() -> bool {
+        cfg!(windows)
+    }
+
+    /// Dropping a session child signals nothing; only its teardown paths do.
     #[cfg(unix)]
+    #[test]
+    fn dropping_a_session_child_signals_nothing() {
+        let (mut tree, group) = own_group();
+        drop(test_session_child(
+            ExitedChild(Default::default()),
+            Some(group),
+            false,
+        ));
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            tree.child().try_wait().unwrap().is_none(),
+            "the group was signalled"
+        );
+    }
+
     fn test_session_child(
         child: impl Child + Send + 'static,
-        process_group: Option<libc::pid_t>,
+        process_group: Option<ProcessGroup>,
+        fail_group_signals: bool,
     ) -> SessionChild {
         SessionChild {
             child: Box::new(child),
             process_group,
             process_group_kill: None,
+            fail_group_signals,
         }
     }
 
@@ -778,7 +802,8 @@ mod tests {
 
     #[cfg(unix)]
     fn dying_child(
-        process_group: Option<libc::pid_t>,
+        process_group: Option<ProcessGroup>,
+        fail_group_signals: bool,
         kill_delay: Duration,
     ) -> (ChildHandle, Arc<Mutex<Vec<&'static str>>>) {
         let calls = Arc::new(Mutex::new(Vec::new()));
@@ -789,6 +814,7 @@ mod tests {
         let child = ChildHandle(Arc::new(Mutex::new(test_session_child(
             child,
             process_group,
+            fail_group_signals,
         ))));
         (child, calls)
     }
@@ -799,7 +825,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_group_kill_skips_the_driver_kill_and_keeps_the_exit_status() {
-        let (child, calls) = dying_child(Some(libc::pid_t::MAX), EXIT_STATUS_GRACE * 3);
+        let (_tree, group) = own_group();
+        let (child, calls) = dying_child(Some(group), false, EXIT_STATUS_GRACE * 3);
         let teardown = std::thread::spawn({
             let child = child.clone();
             move || child.terminate()
@@ -826,12 +853,31 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn teardown_without_a_group_kill_still_kills_the_child() {
-        for process_group in [None, Some(TEST_GROUP_SIGNAL_FAILURE_PGID)] {
-            let (child, calls) = dying_child(process_group, Duration::ZERO);
+        for failing in [false, true] {
+            let (_tree, group) = own_group();
+            let (child, calls) = dying_child(failing.then_some(group), failing, Duration::ZERO);
             child.terminate();
             assert_eq!(*calls.lock().unwrap(), ["try-wait", "kill-child"]);
-            assert!(!child.lock().terminate_process_group(), "{process_group:?}");
+            assert!(!child.lock().terminate_process_group(), "{failing}");
         }
+    }
+
+    /// portable-pty starts the child in a session of its own, so its group is
+    /// recorded.
+    #[tokio::test]
+    async fn a_pty_child_has_its_group_recorded() {
+        let mut command = CommandBuilder::new("sh");
+        command.arg("-c");
+        command.arg("sleep 30");
+        let session = LocalPtyRunner
+            .spawn(PtySpec {
+                command,
+                size: PtySize::default(),
+            })
+            .await
+            .expect("local spawn succeeds");
+        assert!(session.child().has_process_group());
+        session.discard();
     }
 
     /// The built-in local driver really opens a PTY, forks the child, and
@@ -1051,7 +1097,10 @@ mod tests {
             Some(std::path::PathBuf::clone(&relative_tool)),
             "a relative PATH entry is taken against the working directory"
         );
-        assert_eq!(resolve("./tool"), Some(std::path::Path::join(cwd.path(), "./tool")));
+        assert_eq!(
+            resolve("./tool"),
+            Some(std::path::Path::join(cwd.path(), "./tool"))
+        );
         assert_eq!(resolve("/bin/sh"), Some("/bin/sh".into()));
         assert_eq!(resolve("tool"), None, "a bare name never searches the cwd");
         assert_eq!(resolve("definitely-not-installed-sv-pbf-290"), None);
@@ -1067,7 +1116,10 @@ mod tests {
     fn an_emfile_spawn_error_says_the_open_file_limit_was_reached() {
         let emfile = std::io::Error::from_raw_os_error(libc::EMFILE);
         let text = plainly(&emfile);
-        assert!(str::starts_with(&text, "open-file limit reached in "), "{text}");
+        assert!(
+            str::starts_with(&text, "open-file limit reached in "),
+            "{text}"
+        );
         let pid = format!("(pid {})", std::process::id());
         assert!(str::contains(&text, &pid), "{text}");
         assert!(str::contains(&text, " open of soft limit "), "{text}");
@@ -1077,7 +1129,10 @@ mod tests {
             "failed to openpty: Os {{ code: {}, kind: Uncategorized, message: \"Too many open files\" }}",
             libc::EMFILE
         ));
-        assert!(str::starts_with(&plainly(&openpty), "open-file limit reached in "));
+        assert!(str::starts_with(
+            &plainly(&openpty),
+            "open-file limit reached in "
+        ));
         // A wrapped EMFILE (the reader/writer `Dup { source }` shape) is found
         // through `source()`.
         #[derive(Debug)]
@@ -1093,7 +1148,10 @@ mod tests {
             }
         }
         let wrapped = Wrapped(std::io::Error::from_raw_os_error(libc::EMFILE));
-        assert!(str::starts_with(&plainly(&wrapped), "open-file limit reached in "));
+        assert!(str::starts_with(
+            &plainly(&wrapped),
+            "open-file limit reached in "
+        ));
         let wrapped_other = Wrapped(std::io::Error::from_raw_os_error(libc::ENOENT));
         assert_eq!(plainly(&wrapped_other), "failed to dup the pty");
         let other = std::io::Error::from_raw_os_error(libc::ENOENT);
