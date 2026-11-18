@@ -207,10 +207,83 @@ pub struct AgentBinaryStatus {
     pub supported: Option<String>,
 }
 
+/// One step of git install guidance: a label, then the commands to run in order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HintLine {
+    pub label: String,
+    pub commands: Vec<String>,
+}
+
+/// How to install or upgrade git on one OS, rendered by the "Git is required" view.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitInstallHint {
+    /// Offer Apple's Command Line Tools installer button.
+    pub installer: bool,
+    /// Lines shown when git is missing.
+    pub install: Vec<HintLine>,
+    /// Lines shown when git is below [`MIN_GIT_VERSION`].
+    pub upgrade: Vec<HintLine>,
+}
+
+fn hint_line(label: impl Into<String>, commands: &[&str]) -> HintLine {
+    HintLine {
+        label: label.into(),
+        commands: commands.iter().map(|c| c.to_string()).collect(),
+    }
+}
+
+/// The git install hint for `os` (a `std::env::consts::OS` value). Pure, so every OS's
+/// row is tested on every runner.
+pub fn git_install_hint(os: &str) -> GitInstallHint {
+    let (installer, install, upgrade) = match os {
+        "macos" => {
+            let lines = vec![hint_line("Prefer a newer git?", &["brew install git"])];
+            (true, lines.clone(), lines)
+        }
+        "windows" => (
+            false,
+            vec![hint_line(
+                "Run",
+                &["winget install --id Git.Git -e --source winget"],
+            )],
+            vec![hint_line(
+                "Run",
+                &["winget upgrade --id Git.Git -e --source winget"],
+            )],
+        ),
+        "linux" => {
+            let (major, minor) = MIN_GIT_VERSION;
+            let ubuntu =
+                format!("Ubuntu (Git {major}.{minor} or newer comes from the git-core PPA):");
+            let lines = vec![
+                hint_line(
+                    ubuntu,
+                    &[
+                        "sudo add-apt-repository ppa:git-core/ppa",
+                        "sudo apt install git",
+                    ],
+                ),
+                hint_line("Fedora:", &["sudo dnf install git"]),
+            ];
+            (false, lines.clone(), lines)
+        }
+        _ => (false, Vec::new(), Vec::new()),
+    };
+    GitInstallHint {
+        installer,
+        install,
+        upgrade,
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DependencyStatus {
     pub git: GitStatus,
+    /// How to install or upgrade git on the running OS.
+    pub git_install: GitInstallHint,
     pub gh: GhStatus,
     /// SW-AN-44: per-agent status keyed by descriptor basename (was a single claude-named
     /// `claude` field). With only the built-in Claude descriptor installed, `agents["claude"]`
@@ -731,6 +804,7 @@ impl DependencyManager {
                 path: inner.git_path.as_ref().map(|p| p.display().to_string()),
                 version: inner.git_version.clone(),
             },
+            git_install: git_install_hint(std::env::consts::OS),
             gh: GhStatus {
                 available: inner.gh.path.is_some(),
                 path: inner.gh.path.as_ref().map(|p| p.display().to_string()),
@@ -2204,6 +2278,67 @@ fn ensure_symlink_at(source: &Path, link: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::agents::launch_check::LaunchWarningCode;
+
+    #[test]
+    fn git_install_hint_per_os() {
+        let line = |label: &str, commands: &[&str]| HintLine {
+            label: label.to_string(),
+            commands: commands.iter().map(|c| c.to_string()).collect(),
+        };
+
+        let brew = vec![line("Prefer a newer git?", &["brew install git"])];
+        assert_eq!(
+            git_install_hint("macos"),
+            GitInstallHint {
+                installer: true,
+                install: brew.clone(),
+                upgrade: brew,
+            }
+        );
+
+        assert_eq!(
+            git_install_hint("windows"),
+            GitInstallHint {
+                installer: false,
+                install: vec![line(
+                    "Run",
+                    &["winget install --id Git.Git -e --source winget"]
+                )],
+                upgrade: vec![line(
+                    "Run",
+                    &["winget upgrade --id Git.Git -e --source winget"]
+                )],
+            }
+        );
+
+        let linux = vec![
+            line(
+                "Ubuntu (Git 2.44 or newer comes from the git-core PPA):",
+                &[
+                    "sudo add-apt-repository ppa:git-core/ppa",
+                    "sudo apt install git",
+                ],
+            ),
+            line("Fedora:", &["sudo dnf install git"]),
+        ];
+        assert_eq!(
+            git_install_hint("linux"),
+            GitInstallHint {
+                installer: false,
+                install: linux.clone(),
+                upgrade: linux,
+            }
+        );
+
+        assert_eq!(
+            git_install_hint("freebsd"),
+            GitInstallHint {
+                installer: false,
+                install: Vec::new(),
+                upgrade: Vec::new(),
+            }
+        );
+    }
 
     #[test]
     fn listed_dependency_probes_and_launches_ignore_previously_warmed_versions() {
