@@ -1393,12 +1393,18 @@ test("test build: every Linux leg checks the AppImage emulator after the build",
   const names = steps.map((step) => step.name);
   const check = steps.find((step) => step.name === "Check the AppImage emulator");
   assert.ok(check, "the emulator check step is missing");
+  assert.ok(names.indexOf("Build app") >= 0, "the Build app step is missing");
   assert.ok(names.indexOf(check.name) > names.indexOf("Build app"));
   assert.ok(names.indexOf(check.name) < names.indexOf("Upload AppImage"));
   assert.equal(check.if, undefined);
   assert.match(check.run, /--appimage-extract/);
   assert.match(check.run, /sha256sum <"\$emulator"\) == \$\(sha256sum <"\$built"\)/);
   assert.match(check.run, /timeout 10 "\.\/\$emulator" <\/dev\/null/);
+  // The step fails unless all three results and the file list hold.
+  assert.match(
+    check.run,
+    /\[\[ \$files_ok == true && \$same == true && \$rc -eq 0 && \$stdout_bytes -eq 0 \]\]\s*$/,
+  );
 });
 
 test("test build: the policy rejects a missing platform gate, input or runner", () => {
