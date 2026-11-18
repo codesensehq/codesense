@@ -9,8 +9,7 @@ use std::process::{Child, Command};
 use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{
-    ERROR_ACCESS_DENIED, FILETIME, HANDLE, INVALID_HANDLE_VALUE, STILL_ACTIVE, WAIT_OBJECT_0,
-    WAIT_TIMEOUT,
+    ERROR_ACCESS_DENIED, FILETIME, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, Thread32First, Thread32Next,
@@ -22,9 +21,9 @@ use windows_sys::Win32::System::JobObjects::{
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 use windows_sys::Win32::System::Threading::{
-    GetExitCodeProcess, GetProcessTimes, OpenProcess, OpenThread, ResumeThread, TerminateProcess,
-    WaitForSingleObject, CREATE_NO_WINDOW, CREATE_SUSPENDED, PROCESS_QUERY_LIMITED_INFORMATION,
-    PROCESS_SET_QUOTA, PROCESS_TERMINATE, THREAD_SUSPEND_RESUME,
+    GetProcessTimes, OpenProcess, OpenThread, ResumeThread, TerminateProcess, WaitForSingleObject,
+    CREATE_NO_WINDOW, CREATE_SUSPENDED, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA,
+    PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, THREAD_SUSPEND_RESUME,
 };
 
 use super::Identity;
@@ -39,6 +38,9 @@ const KILLED: u32 = 1;
 /// Windows never re-parents: a process's recorded parent may have exited and
 /// its pid been reused since.
 pub(super) const PARENT_MAY_BE_STALE: bool = true;
+
+/// What [`running`] needs to query and wait on a process.
+const QUERY_AND_WAIT: u32 = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE;
 
 /// Start the child suspended, so it runs only once it is in the job (see
 /// [`Group::adopt`]) and nothing it starts can escape it. std has no way to
@@ -160,22 +162,22 @@ pub(super) fn is_alive(pid: u32) -> bool {
     if pid == 0 {
         return false;
     }
-    // SAFETY: opening a process for a limited query has no other effect.
-    let process =
-        match Handle::new(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) }) {
-            Ok(process) => process,
-            Err(error) => return error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32),
-        };
-    still_active(&process)
+    // SAFETY: opening a process to query and wait on it has no other effect.
+    let process = match Handle::new(unsafe { OpenProcess(QUERY_AND_WAIT, 0, pid) }) {
+        Ok(process) => process,
+        Err(error) => return error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32),
+    };
+    running(&process)
 }
 
-/// Whether the open `process` has not exited. An exited process stays
-/// openable while any handle to it is open.
-fn still_active(process: &Handle) -> bool {
-    let mut code = 0u32;
-    // SAFETY: the process handle is open; `code` is writable.
-    let read = unsafe { GetExitCodeProcess(process.raw(), &mut code) };
-    read != 0 && code == STILL_ACTIVE as u32
+/// Whether the open `process` has not exited: its handle is signalled once
+/// it exits. An exited process stays openable while any handle to it is
+/// open. Its exit code can't tell: a process may exit with 259, the code
+/// that reads as still running.
+fn running(process: &Handle) -> bool {
+    // SAFETY: the process handle is open with `PROCESS_SYNCHRONIZE`; a zero
+    // timeout only polls.
+    unsafe { WaitForSingleObject(process.raw(), 0) == WAIT_TIMEOUT }
 }
 
 /// The running process `pid`: its creation time as a FILETIME, and its parent
@@ -184,10 +186,9 @@ pub(super) fn inspect(pid: u32) -> Option<Identity> {
     if pid == 0 {
         return None;
     }
-    // SAFETY: opening a process for a limited query has no other effect.
-    let process =
-        Handle::new(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) }).ok()?;
-    if !still_active(&process) {
+    // SAFETY: opening a process to query and wait on it has no other effect.
+    let process = Handle::new(unsafe { OpenProcess(QUERY_AND_WAIT, 0, pid) }).ok()?;
+    if !running(&process) {
         return None;
     }
     let zero = FILETIME {
