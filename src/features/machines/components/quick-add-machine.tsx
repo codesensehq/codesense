@@ -42,6 +42,7 @@ import {
 } from "../lib/add-machine-steps";
 import { TONE_CLASS } from "../lib/machine-status";
 import { passphraseSaveError } from "../lib/passphrase-error";
+import { passphraseDialogHint } from "../lib/passphrase-hint";
 import { reloadMachines } from "../stores/machines-store";
 
 /** Runtime warnings remain visible while allowing the machine to run other agents. */
@@ -749,8 +750,8 @@ export function QuickAddMachine({ teamKey, onClose }: { teamKey: string; onClose
                   )}
                 </div>
                 <p className="text-[11px] text-muted-foreground">
-                  macOS asks for it in its own dialog. {CREDENTIALS_IN_KEYCHAIN}, never shown or
-                  sent anywhere else.
+                  {passphraseDialogHint()} {CREDENTIALS_IN_KEYCHAIN}, never shown or sent anywhere
+                  else.
                 </p>
               </div>
             )}

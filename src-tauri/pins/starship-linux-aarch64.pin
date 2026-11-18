@@ -1,0 +1,8 @@
+version=1.24.2
+asset=starship-aarch64-unknown-linux-musl.tar.gz
+platform=linux-aarch64
+sha256=56b9ff412bbf374d29b99e5ac09a849124cb37a0a13121e8470df32de53c1ea6
+repo=starship/starship
+tag=v1.24.2
+archive=tar.gz
+member=starship

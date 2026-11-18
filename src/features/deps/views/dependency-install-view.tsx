@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { AlertCircle, Download, RotateCw } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { InlineAlert } from "@/components/ui/inline-alert";
@@ -98,6 +98,11 @@ export function DependencyInstallView({ initialStatus, onComplete }: DependencyI
   // Guard on `!available` so a resolved git never trips the "too old" copy during
   // the brief window before the onComplete effect unblocks the app.
   const belowFloor = !status.git.available && status.git.version != null;
+  // The running OS's install row; a front-end fallback status has none, so it gets
+  // the git-scm link alone.
+  const installer = status.gitInstall?.installer ?? false;
+  const lines = (belowFloor ? status.gitInstall?.upgrade : status.gitInstall?.install) ?? [];
+  const guided = installer || lines.length > 0;
 
   return (
     <div className="flex-1 min-h-0 overflow-x-hidden overflow-y-auto flex flex-col items-center">
@@ -118,17 +123,31 @@ export function DependencyInstallView({ initialStatus, onComplete }: DependencyI
           <div className="flex items-start gap-2">
             <AlertCircle size={16} className="mt-0.5 shrink-0 text-destructive" />
             <div className="space-y-2">
-              <p>Install Git, then re-check. The quickest way:</p>
+              <p>
+                {guided
+                  ? "Install Git, then re-check. The quickest way:"
+                  : "Install Git, then re-check."}
+              </p>
               <ul className="list-disc pl-4 space-y-1">
+                {installer && (
+                  <li>
+                    Click <span className="font-medium text-foreground">Install Git</span> below —
+                    it opens Apple's Command Line Tools installer.
+                  </li>
+                )}
+                {lines.map((line) => (
+                  <li key={line.label}>
+                    {`${line.label} `}
+                    {line.commands.map((command, i) => (
+                      <Fragment key={command}>
+                        {i > 0 && " then "}
+                        <code className="text-xs">{command}</code>
+                      </Fragment>
+                    ))}
+                  </li>
+                ))}
                 <li>
-                  Click <span className="font-medium text-foreground">Install Git</span> below — it
-                  opens Apple's Command Line Tools installer.
-                </li>
-                <li>
-                  Prefer a newer git? <code className="text-xs">brew install git</code>
-                </li>
-                <li>
-                  Or download from{" "}
+                  {guided ? "Or download from" : "Download from"}{" "}
                   <button
                     type="button"
                     className="underline hover:text-foreground"
@@ -147,31 +166,33 @@ export function DependencyInstallView({ initialStatus, onComplete }: DependencyI
           <InlineAlert severity="error" className="mt-3" title={error.title} error={error.reason} />
         )}
 
-        {/* Actions: install (primary) + re-check (secondary) */}
-        <AppButton
-          type="button"
-          size="lg"
-          className="mt-4 w-full"
-          onClick={onInstall}
-          disabled={installing}
-        >
-          {installing ? (
-            <>
-              <Spinner decorative />
-              Opening installer…
-            </>
-          ) : (
-            <>
-              <Download aria-hidden />
-              Install Git
-            </>
-          )}
-        </AppButton>
+        {/* Actions: install (primary, macOS only) + re-check (secondary) */}
+        {installer && (
+          <AppButton
+            type="button"
+            size="lg"
+            className="mt-4 w-full"
+            onClick={onInstall}
+            disabled={installing}
+          >
+            {installing ? (
+              <>
+                <Spinner decorative />
+                Opening installer…
+              </>
+            ) : (
+              <>
+                <Download aria-hidden />
+                Install Git
+              </>
+            )}
+          </AppButton>
+        )}
         <AppButton
           type="button"
           size="lg"
           variant="outline"
-          className="mt-2 w-full"
+          className={installer ? "mt-2 w-full" : "mt-4 w-full"}
           onClick={onRecheck}
           disabled={rechecking}
         >

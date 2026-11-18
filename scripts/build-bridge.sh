@@ -11,7 +11,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-BINARIES_DIR="$PROJECT_ROOT/src-tauri/binaries"
+# shellcheck source=SCRIPTDIR/lib/sidecar.sh
+. "$SCRIPT_DIR/lib/sidecar.sh"
 
 # Determine build profile
 PROFILE="debug"
@@ -21,11 +22,14 @@ if [[ "${1:-}" == "--release" ]]; then
     CARGO_FLAGS="--release"
 fi
 
-# Get the target triple
-TARGET_TRIPLE=$(rustc -vV | grep 'host:' | awk '{print $2}')
-if [[ -z "$TARGET_TRIPLE" ]]; then
-    echo "Error: Could not determine Rust target triple" >&2
-    exit 1
+TARGET_TRIPLE="$(sidecar_host_triple)"
+# Where Tauri's externalBin looks for it: src-tauri/binaries/<name>-<triple>[.exe]
+DEST="$(sidecar_path codesense-bridge "$TARGET_TRIPLE")"
+
+# SIDECAR_DRY_RUN=1 prints the path this would write, and builds nothing.
+if [[ "${SIDECAR_DRY_RUN:-}" == 1 ]]; then
+    echo "$DEST"
+    exit 0
 fi
 
 echo "Building codesense-bridge ($PROFILE) for $TARGET_TRIPLE..."
@@ -34,11 +38,9 @@ echo "Building codesense-bridge ($PROFILE) for $TARGET_TRIPLE..."
 cargo build -p codesense-bridge $CARGO_FLAGS
 
 # Ensure binaries directory exists
-mkdir -p "$BINARIES_DIR"
+mkdir -p "$(dirname "$DEST")"
 
-# Copy with target-triple suffix (Tauri sidecar naming convention)
 SOURCE="${CARGO_TARGET_DIR:-$PROJECT_ROOT/target}/$PROFILE/codesense-bridge"
-DEST="$BINARIES_DIR/codesense-bridge-$TARGET_TRIPLE"
 
 if [[ ! -f "$SOURCE" ]]; then
     echo "Error: Built binary not found at $SOURCE" >&2
