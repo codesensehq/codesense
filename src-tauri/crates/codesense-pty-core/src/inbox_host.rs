@@ -218,6 +218,18 @@ pub struct HostInbox {
     submitters: Mutex<HashMap<String, bool>>,
     /// What each session's desktop was last told of whom new mail reaches, and when.
     reported: Mutex<HashMap<String, (Reported, Instant)>>,
+    /// How long a waiter's notice may be held before the hold is logged.
+    cycle: Mutex<Cycle>,
+}
+
+/// One notice cycle: how long a notice offered to an agent awaits its confirm before it
+/// is offered again (the desktop's reservation TTL). A notice held longer is logged.
+struct Cycle(Duration);
+
+impl Default for Cycle {
+    fn default() -> Self {
+        Self(Duration::from_secs(60))
+    }
 }
 
 /// A versioned decision for one session. None lifts a hold.
@@ -234,10 +246,17 @@ struct WakeHolds {
 }
 
 impl WakeHolds {
+    /// What holds `session`'s wakes back: its hold's reason, or `undecided` before the
+    /// desktop decided for a host that requires a decision.
+    fn gate(&self, session: &str) -> Option<String> {
+        match self.sessions.get(session) {
+            Some((_, reason)) => reason.clone(),
+            None => self.required.then(|| "undecided".into()),
+        }
+    }
+
     fn allows(&self, session: &str) -> bool {
-        self.sessions
-            .get(session)
-            .map_or(!self.required, |(_, reason)| reason.is_none())
+        self.gate(session).is_none()
     }
 }
 
@@ -308,6 +327,22 @@ impl HostInbox {
     pub fn wake_allowed(&self, session: &str) -> bool {
         let holds = lock(&self.wake_holds);
         holds.allows(session)
+    }
+
+    /// What holds `session`'s waiting notice back, if one waits and something does: its
+    /// wake hold (`hold: <reason>`, or `hold: undecided` before the desktop decided), or
+    /// its agent lacking its CodeSense tools (`tools`).
+    fn held_gate(&self, outlet: &dyn InboxOutlet, session: &str) -> Option<String> {
+        let waiting = lock(&self.held)
+            .get(session)
+            .is_some_and(|held| !held.taken);
+        if !waiting {
+            return None;
+        }
+        if let Some(gate) = lock(&self.wake_holds).gate(session) {
+            return Some(format!("hold: {gate}"));
+        }
+        (outlet.has_tools(session) == Some(false)).then(|| "tools".into())
     }
 
     /// The desktop pushed `session`'s notice reserved under `token`: held for its agent,
@@ -843,9 +878,24 @@ impl HostInbox {
         self.report(outlet, session);
         let deadline = Instant::now() + INBOX_WAIT_HOLD;
         let mut no_stream: Option<(String, Instant)> = None;
+        let cycle = lock(&self.cycle).0;
+        // The gate holding the waiting notice back, since when, and whether it was logged.
+        let mut gated: Option<(String, Instant, bool)> = None;
         let (end, reason) = loop {
             if !crate::activity::peer::runs(owner) {
                 break (Some(InboxWait::Replaced), "parent-gone");
+            }
+            match self.held_gate(outlet, session) {
+                None => gated = None,
+                Some(gate) => match &mut gated {
+                    Some((held, since, logged)) if *held == gate => {
+                        if !*logged && since.elapsed() >= cycle {
+                            outlet.waiter_lifecycle(session, "held", &gate);
+                            *logged = true;
+                        }
+                    }
+                    _ => gated = Some((gate, Instant::now(), false)),
+                },
             }
             let taken = self.take(session, |token| match outlet.has_tools(session) {
                 Some(tools) => {

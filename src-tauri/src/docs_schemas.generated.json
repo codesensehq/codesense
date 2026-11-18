@@ -2409,6 +2409,6 @@
     "src-tauri/src/packs/manifest.rs": "cbefe924e32f030e301da71b9162d7d5bff7e98894d1782f7a43bd7a45b35a62",
     "src-tauri/src/queue_roles.rs": "b69b94aa10d5d0fc39d123858ea4cd42fe0d22b5af0c00b5479a3f9e8921b7ff",
     "src-tauri/src/routines/model.rs": "5bbdf683268ec98f285531eeb0313e051dd165f6ab71aa772127ff6674dd5a24",
-    "src-tauri/src/session_usage/spend_caps.rs": "f0fdcc1b2d50cdd71becea9baff2da595dc24e79ba5670b734259093a359e5db"
+    "src-tauri/src/session_usage/spend_caps.rs": "ba751d616189a696620f63f5a5263c45b134587a89200aa5367da6935b385912"
   }
 }
