@@ -250,6 +250,8 @@ pub fn spawn_capture(req: CaptureRequest) -> Result<CaptureOutput, CaptureError>
         } else {
             Stdio::null()
         });
+    // The WebKit default the app set for its own webview is not the child's to inherit.
+    crate::linux_startup::remove_app_webkit_env(&mut command);
     // SW-AN-46: strip guarded vars from the inherited env FIRST, so an explicit `env`
     // override below still wins on a colliding key.
     for name in &req.env_remove {
@@ -501,6 +503,38 @@ mod tests {
         std::env::remove_var("AN46_STRIP_PROBE");
         std::env::remove_var("AN46_KEEP_PROBE");
         assert_eq!(String::from_utf8_lossy(&out.stdout), "GONE|override");
+    }
+
+    /// Runs `sh` printing the WebKit variable and its marker as the child sees them, with the
+    /// app owning both and both set in this process.
+    fn webkit_env_seen_by_child(env: Vec<(String, String)>) -> String {
+        // Holds the env lock until it drops; don't take `env_guard()` again.
+        let _owned = crate::linux_startup::force_app_owned_for_test(true);
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        std::env::set_var("CODESENSE_WEBKIT_DMABUF_DEFAULT", "1");
+        let out = spawn_capture(CaptureRequest {
+            args: vec![
+                "-c".to_string(),
+                "printf %s \"${WEBKIT_DISABLE_DMABUF_RENDERER-unset}|${CODESENSE_WEBKIT_DMABUF_DEFAULT-unset}\""
+                    .to_string(),
+            ],
+            env,
+            ..req(PathBuf::from("/bin/sh"))
+        });
+        std::env::remove_var("WEBKIT_DISABLE_DMABUF_RENDERER");
+        std::env::remove_var("CODESENSE_WEBKIT_DMABUF_DEFAULT");
+        String::from_utf8_lossy(&out.unwrap().stdout).into_owned()
+    }
+
+    #[test]
+    fn app_owned_webkit_env_is_not_inherited() {
+        assert_eq!(webkit_env_seen_by_child(Vec::new()), "unset|unset");
+    }
+
+    #[test]
+    fn explicit_webkit_env_wins_over_the_strip() {
+        let env = vec![("WEBKIT_DISABLE_DMABUF_RENDERER".to_string(), "7".to_string())];
+        assert_eq!(webkit_env_seen_by_child(env), "7|unset");
     }
 
     #[test]

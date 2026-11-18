@@ -168,9 +168,9 @@ fn open_terminal_impl(
             if custom_cmd.is_empty() {
                 return Err("No custom terminal command configured".into());
             }
-            std::process::Command::new(&custom_cmd)
-                .arg(&repo_path)
-                .spawn()
+            let mut command = std::process::Command::new(&custom_cmd);
+            crate::linux_startup::remove_app_webkit_env(&mut command);
+            command.arg(&repo_path).spawn()
         }
         _ => return Err(format!("Unknown terminal: {}", terminal)),
     };
@@ -203,9 +203,9 @@ fn open_editor_impl(editor: String, custom_cmd: String, repo_path: String) -> Re
             if custom_cmd.is_empty() {
                 return Err("No custom editor command configured".into());
             }
-            std::process::Command::new(&custom_cmd)
-                .arg(&repo_path)
-                .spawn()
+            let mut command = std::process::Command::new(&custom_cmd);
+            crate::linux_startup::remove_app_webkit_env(&mut command);
+            command.arg(&repo_path).spawn()
         }
         _ => return Err(format!("Unknown editor: {}", editor)),
     };
