@@ -684,17 +684,18 @@ pub(crate) mod tests {
 
     /// A character one Unicode version calls a letter or digit and another does not still
     /// leaves the read found: `regex` and Perl may disagree on new characters, and ASCII
-    /// classes alone would miss `é`, which Perl calls a letter.
+    /// classes alone would miss `é`, which Perl calls a letter. The characters arrive as `\u`
+    /// escapes (U+10570, U+16D70, U+00E9, U+0663): raw, their UTF-8 bytes are other characters.
     #[test]
     fn a_command_is_read_with_either_letter_and_digit_class() {
         for command in [
-            "A\u{10570}=1 rm /repo/.env",
-            "\u{16d70}>x rm /repo/.env",
-            "A\u{e9}=/bin/rm cat /repo/.env",
-            "cat \u{663}< /repo/.env",
+            r"A\ud801\udd70=1 rm /repo/.env",
+            r"\ud81b\udd70>x rm /repo/.env",
+            r"A\u00e9=/bin/rm cat /repo/.env",
+            r"cat \u0663< /repo/.env",
         ] {
-            let payload = call("Bash", json!({ "command": command }));
-            assert!(verdict(&payload).is_some(), "{command:?}");
+            let input = format!(r#"{{"tool_name":"Bash","tool_input":{{"command":"{command}"}}}}"#);
+            assert!(secret_guard(input.as_bytes()).is_some(), "{command}");
         }
     }
 
