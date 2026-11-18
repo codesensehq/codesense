@@ -36,6 +36,10 @@ const UNIX_EPOCH_FILETIME: u64 = 116_444_736_000_000_000;
 /// The exit code of every process the job ends.
 const KILLED: u32 = 1;
 
+/// Windows never re-parents: a process's recorded parent may have exited and
+/// its pid been reused since.
+pub(super) const PARENT_MAY_BE_STALE: bool = true;
+
 /// Start the child suspended, so it runs only once it is in the job (see
 /// [`Group::adopt`]) and nothing it starts can escape it. std has no way to
 /// add a flag, so this replaces the command's creation flags.

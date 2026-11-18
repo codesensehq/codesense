@@ -39,7 +39,7 @@ impl Identity {
     /// Whether this process is `root` or runs under it, by its recorded
     /// parent and then each parent's fresh ancestry.
     pub fn descends_from(self, root: Identity) -> bool {
-        descends_with(self, root, Self::inspect)
+        descends_with(self, root, sys::PARENT_MAY_BE_STALE, Self::inspect)
     }
 
     /// Whether this process has certainly gone: its pid now names another
@@ -75,12 +75,15 @@ impl Identity {
     }
 }
 
-/// Walk from `peer` up through the parents `inspect` reads until `root`. A
-/// parent that started after its child is a stale record of a pid since
-/// reused (Windows never re-parents), so the walk stops there.
+/// Walk from `peer` up through the parents `inspect` reads until `root`.
+/// Where a recorded parent `may_be_stale` (Windows never re-parents, so it can
+/// be a dead pid since reused), a parent that started after its child stops
+/// the walk. Unix skips the check: a live process's parent is live or it was
+/// re-parented, and the macOS start is wall clock, which can step backwards.
 fn descends_with(
     mut peer: Identity,
     root: Identity,
+    may_be_stale: bool,
     inspect: impl Fn(u32) -> Option<Identity>,
 ) -> bool {
     for _ in 0..MAX_DEPTH {
@@ -93,7 +96,7 @@ fn descends_with(
         let Some(parent) = inspect(peer.parent) else {
             return false;
         };
-        if parent.start > peer.start {
+        if may_be_stale && parent.start > peer.start {
             return false;
         }
         peer = parent;
@@ -109,8 +112,8 @@ mod tests {
         Identity { pid, start, parent }
     }
 
-    fn walk(peer: Identity, root: Identity, table: &[Identity]) -> bool {
-        descends_with(peer, root, |pid| {
+    fn walk(peer: Identity, root: Identity, may_be_stale: bool, table: &[Identity]) -> bool {
+        descends_with(peer, root, may_be_stale, |pid| {
             table.iter().copied().find(|entry| entry.pid == pid)
         })
     }
@@ -120,16 +123,26 @@ mod tests {
         let root = process(10, 100, 1);
         let middle = process(20, 200, 10);
         let leaf = process(30, 300, 20);
-        assert!(walk(leaf, root, &[root, middle, leaf]));
-        assert!(walk(root, root, &[root]));
+        for may_be_stale in [true, false] {
+            assert!(walk(leaf, root, may_be_stale, &[root, middle, leaf]));
+            assert!(walk(root, root, may_be_stale, &[root]));
+        }
     }
 
     #[test]
-    fn a_parent_that_started_after_its_child_is_stale() {
+    fn a_parent_that_started_after_its_child_is_stale_where_parents_may_be() {
         let root = process(10, 100, 1);
         let leaf = process(30, 300, 20);
         let reused = process(20, 400, 10);
-        assert!(!walk(leaf, root, &[root, reused, leaf]));
+        assert!(!walk(leaf, root, true, &[root, reused, leaf]));
+    }
+
+    #[test]
+    fn a_parent_that_started_after_its_child_is_followed_where_parents_are_live() {
+        let root = process(10, 100, 1);
+        let leaf = process(30, 300, 20);
+        let later = process(20, 400, 10);
+        assert!(walk(leaf, root, false, &[root, later, leaf]));
     }
 
     #[test]
@@ -137,7 +150,9 @@ mod tests {
         let root = process(10, 100, 1);
         let middle = process(20, 300, 10);
         let leaf = process(30, 300, 20);
-        assert!(walk(leaf, root, &[root, middle, leaf]));
+        for may_be_stale in [true, false] {
+            assert!(walk(leaf, root, may_be_stale, &[root, middle, leaf]));
+        }
     }
 
     #[test]
@@ -145,17 +160,21 @@ mod tests {
         let root = process(10, 100, 1);
         let reused_root = process(10, 50, 1);
         let leaf = process(30, 300, 10);
-        assert!(!walk(leaf, root, &[reused_root, leaf]));
+        for may_be_stale in [true, false] {
+            assert!(!walk(leaf, root, may_be_stale, &[reused_root, leaf]));
+        }
     }
 
     #[test]
     fn the_walk_stops_at_init_a_gone_parent_a_self_parent_and_its_depth() {
         let root = process(10, 100, 1);
-        assert!(!walk(process(30, 300, 1), root, &[]));
-        assert!(!walk(process(30, 300, 0), root, &[]));
-        assert!(!walk(process(30, 300, 20), root, &[]));
-        assert!(!walk(process(30, 300, 30), root, &[]));
-        let ring = [process(40, 0, 41), process(41, 0, 40)];
-        assert!(!walk(ring[0], root, &ring));
+        for may_be_stale in [true, false] {
+            assert!(!walk(process(30, 300, 1), root, may_be_stale, &[]));
+            assert!(!walk(process(30, 300, 0), root, may_be_stale, &[]));
+            assert!(!walk(process(30, 300, 20), root, may_be_stale, &[]));
+            assert!(!walk(process(30, 300, 30), root, may_be_stale, &[]));
+            let ring = [process(40, 0, 41), process(41, 0, 40)];
+            assert!(!walk(ring[0], root, may_be_stale, &ring));
+        }
     }
 }

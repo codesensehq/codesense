@@ -11,6 +11,10 @@ use std::time::Duration;
 
 use super::Identity;
 
+/// A live process's parent is live or it was re-parented, so the parent it
+/// reads is never a stale record.
+pub(super) const PARENT_MAY_BE_STALE: bool = false;
+
 /// Put the child in a fresh process group (pgid == its own pid) so the whole
 /// tree can be signalled, not just the leader.
 pub(super) fn prepare(command: &mut Command) {
