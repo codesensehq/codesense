@@ -38,8 +38,8 @@ const TABLE: &[Row] = &[
     Row {
         key: GIT_AI,
         macos: Support::OnFor(&["aarch64"]),
-        linux: Support::Off,
-        reason: "the bundled git-ai binary is only shipped for macOS on Apple silicon",
+        linux: Support::OnFor(&["x86_64", "aarch64"]),
+        reason: "the bundled git-ai binary is shipped for macOS on Apple silicon and Linux on x86_64 and aarch64",
     },
     Row {
         key: STARSHIP,
@@ -160,11 +160,11 @@ mod tests {
     }
 
     #[test]
-    fn linux_has_starship_but_no_git_ai() {
+    fn linux_has_git_ai_and_starship() {
         for arch in ["x86_64", "aarch64"] {
             assert_eq!(
                 line("linux", arch, true),
-                "caps: git-ai=off starship=on secret-store=on"
+                "caps: git-ai=on starship=on secret-store=on"
             );
         }
     }
@@ -247,8 +247,8 @@ mod tests {
     fn serializes_as_key_on_reason() {
         let json = serde_json::to_value(resolved("linux", "x86_64", false)).unwrap();
         assert_eq!(json[0]["key"], "git-ai");
-        assert_eq!(json[0]["on"], false);
-        assert!(json[0]["reason"].is_string());
+        assert_eq!(json[0]["on"], true);
+        assert!(json[0]["reason"].is_null());
         assert_eq!(json[2]["key"], "secret-store");
         assert_eq!(json[2]["on"], false);
         assert!(json[2]["reason"].is_string());
@@ -263,7 +263,9 @@ mod tests {
         };
         assert!(on("macos", "aarch64", GIT_AI));
         assert!(!on("macos", "x86_64", GIT_AI));
-        assert!(!on("linux", "x86_64", GIT_AI));
+        assert!(on("linux", "x86_64", GIT_AI));
+        assert!(on("linux", "aarch64", GIT_AI));
+        assert!(!on("linux", "riscv64", GIT_AI));
         assert!(on("macos", "aarch64", STARSHIP));
         assert!(!on("macos", "x86_64", STARSHIP));
         assert!(on("linux", "x86_64", STARSHIP));
@@ -301,7 +303,13 @@ mod tests {
     #[test]
     fn enabled_matches_the_live_host() {
         let host = (std::env::consts::OS, std::env::consts::ARCH);
-        assert_eq!(enabled(GIT_AI), host == ("macos", "aarch64"));
+        assert_eq!(
+            enabled(GIT_AI),
+            matches!(
+                host,
+                ("macos", "aarch64") | ("linux", "x86_64") | ("linux", "aarch64")
+            )
+        );
         assert_eq!(
             enabled(STARSHIP),
             matches!(

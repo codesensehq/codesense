@@ -165,8 +165,8 @@ fn supported_needs_a_pin_and_the_capability() {
     for (os, arch, expected) in [
         ("macos", "aarch64", true),
         ("macos", "x86_64", false),
-        ("linux", "x86_64", false),
-        ("linux", "aarch64", false),
+        ("linux", "x86_64", true),
+        ("linux", "aarch64", true),
         ("linux", "riscv64", false),
         ("freebsd", "x86_64", false),
     ] {
