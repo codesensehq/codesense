@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: MIT
 import { describe, expect, it } from "vitest";
 import type { Org } from "@/shared/types/domain";
-import { orgHasTeams, resolveTeamContentContext } from "./team-content-context";
+import {
+  orgHasTeams,
+  resolveTeamContentContext,
+  teamContentIdentityForPath,
+} from "./team-content-context";
 
 const org: Org = {
   slug: "acme/context",
@@ -82,5 +86,26 @@ describe("team content resolution", () => {
       orgHasTeams({ ...org, teams: [{ name: "old", source_repos: [], archived: true }] }),
     ).toBe(false);
     expect(orgHasTeams(null)).toBe(false);
+  });
+});
+
+describe("teamContentIdentityForPath", () => {
+  it("names the team whose content holds a POSIX path", () => {
+    expect(teamContentIdentityForPath("/outside/attached/planning/content/x.md", [org])).toBe(
+      "team:acme/context:planning",
+    );
+    expect(
+      teamContentIdentityForPath("/outside/attached/planning/content2/x.md", [org]),
+    ).toBeNull();
+  });
+
+  it("matches a Windows org root across separators", () => {
+    const windowsOrg: Org = { ...org, org_root: "C:\\Users\\a\\ctx\\" };
+    expect(teamContentIdentityForPath("C:/Users/a/ctx/planning/content/x.md", [windowsOrg])).toBe(
+      "team:acme/context:planning",
+    );
+    expect(
+      teamContentIdentityForPath("C:\\Users\\a\\ctx\\planning\\content2\\x.md", [windowsOrg]),
+    ).toBeNull();
   });
 });
