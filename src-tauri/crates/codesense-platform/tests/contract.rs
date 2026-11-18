@@ -8,7 +8,7 @@ use std::cell::Cell;
 use std::ffi::{OsStr, OsString};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -23,7 +23,7 @@ use codesense_platform::fs::{
 };
 use codesense_platform::ipc::{blocking, Endpoint, LocalListener, LocalStream};
 use codesense_platform::process::{is_alive, kill_hard, terminate, Pid, ProcessTree};
-use codesense_platform::testutil::symlink_or_skip;
+use codesense_platform::testutil::{set_executable, symlink_or_skip};
 use codesense_platform::user::current_user;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 
@@ -713,7 +713,7 @@ fn stale_endpoint_rebinds() {
 
 #[test]
 fn is_executable_accepts_only_an_absolute_executable_file() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = same_volume_tempdir();
     let name = expect_executable_name("tool");
     let tool = executable(dir.path(), &name);
     assert!(is_executable(&tool), "{}", tool.display());
@@ -723,10 +723,36 @@ fn is_executable_accepts_only_an_absolute_executable_file() {
     let directory = dir.path().join(expect_executable_name("named"));
     std::fs::create_dir(&directory).unwrap();
     assert!(!is_executable(&directory), "a directory");
-    assert!(!is_executable(Path::new(&name)), "a relative path");
+    let relative = relative_from_cwd(&tool);
+    assert!(!is_executable(&relative), "{}", relative.display());
     assert!(!is_executable(
         &dir.path().join(expect_executable_name("missing"))
     ));
+}
+
+/// A temp dir under cargo's target directory, so it shares a volume with the
+/// working directory and [`relative_from_cwd`] can reach it.
+fn same_volume_tempdir() -> tempfile::TempDir {
+    tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap()
+}
+
+/// The relative path from the working directory to the absolute `path`: one
+/// `..` per component of the working directory, then `path` without its root.
+/// It reaches `path` (asserted), so a check that accepts it is not refusing
+/// relative paths.
+fn relative_from_cwd(path: &Path) -> PathBuf {
+    fn normal(component: &Component) -> bool {
+        matches!(component, Component::Normal(_))
+    }
+    let cwd = std::env::current_dir().unwrap();
+    let mut relative: PathBuf = cwd.components().filter(normal).map(|_| "..").collect();
+    relative.extend(path.components().filter(normal));
+    assert!(
+        relative.is_relative() && relative.exists(),
+        "{}",
+        relative.display()
+    );
+    relative
 }
 
 /// The fixture installs of `tool`: every spelling an OS might run.
@@ -738,9 +764,9 @@ fn path_of(dirs: &[&Path]) -> OsString {
 
 #[test]
 fn cli_candidates_follow_pathext_order() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = same_volume_tempdir();
     let dir = |name: &str| tmp.path().join(name);
-    for install in ["a", "b"] {
+    for install in ["a", "b", "c"] {
         for file in TOOL_FILES {
             executable(&dir(install), file);
         }
@@ -754,7 +780,7 @@ fn cli_candidates_follow_pathext_order() {
     let path = path_of(&[
         &dir("a"),
         Path::new(""),
-        Path::new("relative"),
+        &relative_from_cwd(&dir("c")),
         &dir("decoy"),
         &dir("named"),
         &dir("b"),
@@ -763,6 +789,8 @@ fn cli_candidates_follow_pathext_order() {
     assert_eq!(candidates(&path, "tool"), expected);
     assert!(candidates(OsStr::new(""), "tool").is_empty());
     assert!(candidates(&path, "other").is_empty());
+    let relative = path_of(&[&relative_from_cwd(&dir("c"))]);
+    assert!(candidates(&relative, "tool").is_empty(), "{relative:?}");
 }
 
 #[test]
@@ -976,28 +1004,27 @@ fn expect_executable_name(stem: &str) -> String {
     }
 }
 
-/// Unix: set the execute bits (0755). Windows: the extension is enough.
-fn set_executable(path: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    #[cfg(windows)]
-    let _ = path;
-}
-
-/// `PATHEXT`'s extensions in order, or Windows' default when it is unset.
+/// `PATHEXT`'s extensions in order, each with a leading dot, or Windows'
+/// default when it lists none.
 fn pathext() -> Vec<String> {
-    std::env::var("PATHEXT")
-        .ok()
-        .filter(|listed| !listed.trim().is_empty())
-        .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".to_owned())
+    let listed: Vec<String> = std::env::var("PATHEXT")
+        .unwrap_or_default()
         .split(';')
         .map(str::trim)
         .filter(|ext| !ext.is_empty())
-        .map(str::to_owned)
-        .collect()
+        .map(|ext| {
+            if ext.starts_with('.') {
+                ext.to_owned()
+            } else {
+                format!(".{ext}")
+            }
+        })
+        .collect();
+    if listed.is_empty() {
+        [".COM", ".EXE", ".BAT", ".CMD"].map(str::to_owned).to_vec()
+    } else {
+        listed
+    }
 }
 
 /// What `candidates` finds of [`TOOL_FILES`] in `dir`. Unix: `tool`, the one

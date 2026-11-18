@@ -5,9 +5,9 @@
 
 use std::collections::HashSet;
 use std::ffi::OsStr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use crate::fs::is_executable;
+use crate::fs::{canonicalize, is_executable};
 
 /// Every install of `name` on `path_env` (a `PATH` value), in `PATH` order:
 /// `which -a` without a shell. Empty and relative entries are skipped, each
@@ -22,7 +22,9 @@ pub fn candidates(path_env: &OsStr, name: &str) -> Vec<PathBuf> {
     named_in(&dirs, name)
         .into_iter()
         .filter(|candidate| is_executable(candidate))
-        .filter(|candidate| seen.insert(canonical_key(candidate)))
+        .filter(|candidate| {
+            seen.insert(canonicalize(candidate).unwrap_or_else(|_| candidate.clone()))
+        })
         .collect()
 }
 
@@ -39,7 +41,8 @@ pub fn named_in(dirs: &[PathBuf], name: &str) -> Vec<PathBuf> {
 
 /// The bin directories package managers install command-line tools into, in
 /// the order they are tried. A directory under the home is left out when the
-/// home (or on Windows its variable) is unknown.
+/// home (or on Windows its variable) is unknown. These are the package
+/// managers' directories only: codesense never puts its own binary in them.
 pub fn package_dirs() -> Vec<PathBuf> {
     sys::package_dirs()
 }
@@ -49,11 +52,6 @@ pub fn package_dirs() -> Vec<PathBuf> {
 /// process `PATH`, without calling `probe`.
 pub fn search_path(probe: impl FnOnce() -> Option<String>) -> Option<String> {
     sys::search_path(probe)
-}
-
-/// The canonical target of `path`, or `path` itself when it can't be canonicalized.
-fn canonical_key(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 #[cfg(unix)]

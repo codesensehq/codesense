@@ -15,9 +15,21 @@ pub fn symlink_or_skip(target: impl AsRef<Path>, link: impl AsRef<Path>) -> bool
     sys::symlink_or_skip(target.as_ref(), link.as_ref())
 }
 
+/// Make the file at `path` executable for a test's setup: the execute bits
+/// (mode 0755) on unix; nothing on Windows, where the extension decides.
+pub fn set_executable(path: impl AsRef<Path>) {
+    sys::set_executable(path.as_ref())
+}
+
 #[cfg(unix)]
 mod sys {
     use std::path::Path;
+
+    pub(super) fn set_executable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+            .unwrap_or_else(|error| panic!("chmod 755 {}: {error}", path.display()));
+    }
 
     pub(super) fn symlink_or_skip(target: &Path, link: &Path) -> bool {
         if let Err(error) = std::os::unix::fs::symlink(target, link) {
@@ -36,6 +48,8 @@ mod sys {
     use std::path::Path;
 
     use windows_sys::Win32::Foundation::ERROR_PRIVILEGE_NOT_HELD;
+
+    pub(super) fn set_executable(_path: &Path) {}
 
     pub(super) fn symlink_or_skip(target: &Path, link: &Path) -> bool {
         if target.is_dir() {

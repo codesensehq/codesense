@@ -193,14 +193,21 @@ pub(crate) fn wide(path: &Path) -> Vec<u16> {
 }
 
 /// The extensions `PATHEXT` names as executable, in its order (`.COM;.EXE;
-/// .BAT;.CMD` when it is unset or empty), each with its leading dot.
+/// .BAT;.CMD` when it lists none), each with a leading dot (added where an
+/// entry has none).
 pub(crate) fn pathext() -> Vec<String> {
     let listed: Vec<String> = std::env::var("PATHEXT")
         .unwrap_or_default()
         .split(';')
         .map(str::trim)
         .filter(|ext| !ext.is_empty())
-        .map(str::to_owned)
+        .map(|ext| {
+            if ext.starts_with('.') {
+                ext.to_owned()
+            } else {
+                format!(".{ext}")
+            }
+        })
         .collect();
     if listed.is_empty() {
         [".COM", ".EXE", ".BAT", ".CMD"].map(str::to_owned).to_vec()
@@ -214,10 +221,8 @@ pub(crate) fn has_pathext(path: &Path) -> bool {
     let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
         return false;
     };
-    pathext().iter().any(|listed| {
-        listed
-            .strip_prefix('.')
-            .unwrap_or(listed)
-            .eq_ignore_ascii_case(ext)
-    })
+    let ext = format!(".{ext}");
+    pathext()
+        .iter()
+        .any(|listed| listed.eq_ignore_ascii_case(&ext))
 }
