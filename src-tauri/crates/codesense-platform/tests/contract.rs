@@ -128,13 +128,33 @@ fn set_owner_only_denies_others() {
         let opened = open_nofollow(OpenOptions::new().read(true), path).unwrap();
         is_owner_only(&opened).unwrap()
     };
+    let owned = |path: &Path| {
+        let opened = open_nofollow(OpenOptions::new().read(true), path).unwrap();
+        is_owned_by_current_user(&opened).unwrap()
+    };
     for path in [&file, &private] {
+        assert!(owned(path), "{}", path.display());
         assert!(!owner_only(path), "shared before: {}", path.display());
         set_owner_only(path).unwrap();
+        assert!(owned(path), "{}", path.display());
         assert!(owner_only(path), "{}", path.display());
         expect_owner_only_mode(path);
     }
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "secret");
+}
+
+#[test]
+fn an_owner_only_acl_with_another_owner_is_not_owner_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("foreign");
+    std::fs::write(&file, "foreign").unwrap();
+    set_owner_only(&file).unwrap();
+    if !expect_foreign_owner(&file) {
+        return;
+    }
+    let opened = open_nofollow(OpenOptions::new().read(true), &file).unwrap();
+    assert!(!is_owned_by_current_user(&opened).unwrap());
+    assert!(!is_owner_only(&opened).unwrap());
 }
 
 #[test]
@@ -480,6 +500,35 @@ fn expect_home_variable() -> &'static str {
         "USERPROFILE"
     } else {
         "HOME"
+    }
+}
+
+/// Give `path` an owner that is not this user and return `true`, or return
+/// `false` after saying why on stderr, and the test skips the rest. Unix:
+/// `chown` to `nobody` (65534), which needs root. Windows: SYSTEM as the
+/// owner through `icacls /setowner`, which needs an administrator.
+fn expect_foreign_owner(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        if let Err(error) = std::os::unix::fs::chown(path, Some(65534), None) {
+            eprintln!("skipped: changing a file's owner needs root ({error})");
+            return false;
+        }
+        true
+    }
+    #[cfg(windows)]
+    {
+        let status = Command::new("icacls")
+            .arg(path)
+            .args(["/setowner", "*S-1-5-18"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("run icacls");
+        if !status.success() {
+            eprintln!("skipped: icacls /setowner needs an administrator ({status})");
+        }
+        status.success()
     }
 }
 

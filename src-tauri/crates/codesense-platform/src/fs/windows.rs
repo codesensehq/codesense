@@ -137,6 +137,18 @@ impl Security {
             dacl,
         })
     }
+
+    /// Whether the owner is `user`'s token user or its default owner
+    /// (`TokenOwner`), and no other SID.
+    fn owned_by(&self, user: &CurrentUser) -> bool {
+        // SAFETY: the owner SID points into the descriptor `self` holds; the
+        // user's SIDs are valid while `user` lives.
+        !self.owner.is_null()
+            && unsafe {
+                EqualSid(self.owner, user.sid()) != 0
+                    || EqualSid(self.owner, user.default_owner()) != 0
+            }
+    }
 }
 
 impl Drop for Security {
@@ -152,19 +164,11 @@ pub(super) fn is_owner_only(file: &File) -> io::Result<bool> {
     let security = Security::of(file)?;
     // SAFETY: `dacl` is null or points into the descriptor `security` holds;
     // the SID is valid while `user` lives.
-    Ok(unsafe { grants_only(security.dacl, user.sid()) })
+    Ok(security.owned_by(&user) && unsafe { grants_only(security.dacl, user.sid()) })
 }
 
 pub(super) fn is_owned_by_current_user(file: &File) -> io::Result<bool> {
-    let user = CurrentUser::read()?;
-    let security = Security::of(file)?;
-    let owner = security.owner;
-    // SAFETY: the owner SID points into the descriptor `security` holds; the
-    // user's SIDs are valid while `user` lives.
-    Ok(!owner.is_null()
-        && unsafe {
-            EqualSid(owner, user.sid()) != 0 || EqualSid(owner, user.default_owner()) != 0
-        })
+    Ok(Security::of(file)?.owned_by(&CurrentUser::read()?))
 }
 
 /// Whether every ACE in `dacl` that grants access names `sid`. A null DACL

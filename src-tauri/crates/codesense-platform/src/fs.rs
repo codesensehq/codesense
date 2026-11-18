@@ -33,8 +33,9 @@ pub fn set_owner_only(path: &Path) -> io::Result<()> {
 
 /// Whether only this user may use the open `file` (open it with
 /// [`open_nofollow`], so a link is never followed): on unix, owned by the
-/// effective uid with no group or other permission bits; on Windows, every
-/// ACE that grants access names the current user.
+/// effective uid with no group or other permission bits; on Windows, owned
+/// as [`is_owned_by_current_user`] has it, and every ACE that grants access
+/// names the current user.
 pub fn is_owner_only(file: &File) -> io::Result<bool> {
     sys::is_owner_only(file)
 }
