@@ -105,7 +105,7 @@ jobs:
           # emulator, and on aarch64 aborts the bundle.
           - arch: arm64
             runner: ubuntu-24.04-arm
-            bundles: deb,rpm
+            bundles: deb,rpm,appimage
     runs-on: ${{ matrix.runner }}
     # A cold release build of the app and both sidecars, with no dependency cache.
     timeout-minutes: 150
@@ -165,7 +165,6 @@ jobs:
         # A Bun-compiled executable keeps its payload after the ELF image, so the emulator must
         # reach the AppImage's usr/bin byte for byte. The step prints every result before it
         # fails on any, and extracts without FUSE in a temp dir of its own.
-        if: contains(matrix.bundles, 'appimage')
         run: |
           built="$PWD/src-tauri/binaries/codesense-emulator-$(rustc -vV | sed -n 's/^host: //p')"
           appimage=$(ls "$PWD"/target/release/bundle/appimage/*.AppImage)
@@ -207,7 +206,6 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       - name: Upload AppImage
-        if: contains(matrix.bundles, 'appimage')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           path: target/release/bundle/appimage/*.AppImage
