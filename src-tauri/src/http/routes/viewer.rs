@@ -65,7 +65,7 @@ pub(crate) const PAGE_SDK_FEATURES: &[&str] = &[
 /// and a plain Escape as `codesense:key-escape`. The host matches them against the
 /// whole shortcut registry (built-ins and dashboard commands) with the user's
 /// current bindings and applies its normal UI gate.
-/// `altGraph` is the key's AltGr state: off macOS AltGr reports as Ctrl+Alt while
+/// `altGraph` is the key's AltGr state: on Windows AltGr reports as Ctrl+Alt while
 /// it types a character, and the host's matcher refuses it as a shortcut.
 /// Generic forwarding uses a macrotask: trusted events may run a microtask
 /// checkpoint between listeners, before later page window handlers can prevent

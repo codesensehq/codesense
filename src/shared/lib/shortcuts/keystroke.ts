@@ -157,16 +157,16 @@ export function modifiersFrom(
 
 /**
  * A keydown built from `init` whose `getModifierState("AltGraph")` answers `init.modifierAltGraph`;
- * every other name answers as the platform event does. happy-dom ignores `modifierAltGraph` and
+ * every other name answers as the event itself does. happy-dom ignores `modifierAltGraph` and
  * answers AltGraph with the Alt key's state, so without this a rebuilt Ctrl+Alt key would look
  * like AltGr in tests and not in a webview.
  */
 export function keydownEvent(init: KeyboardEventInit): KeyboardEvent {
   const event = new KeyboardEvent("keydown", init);
-  const platform = event.getModifierState.bind(event);
+  const native = event.getModifierState.bind(event);
   const altGraph = init.modifierAltGraph === true;
   Object.defineProperty(event, "getModifierState", {
-    value: (name: string) => (name === "AltGraph" ? altGraph : platform(name)),
+    value: (name: string) => (name === "AltGraph" ? altGraph : native(name)),
   });
   return event;
 }

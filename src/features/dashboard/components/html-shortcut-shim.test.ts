@@ -132,8 +132,9 @@ const altGr = { metaKey: false, ctrlKey: true, altKey: true, code: "Digit8" };
 
 it("forwards AltGr state so the host can tell it from Ctrl+Alt, and lets the frame type it", async () => {
   const post = install();
-  expect(key("[", { ...altGr, modifierAltGraph: true }).defaultPrevented).toBe(false);
+  const event = key("[", { ...altGr, modifierAltGraph: true });
   await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(event.defaultPrevented).toBe(false);
   expect(post).toHaveBeenLastCalledWith(
     expect.objectContaining({
       type: "codesense:shortcut",
