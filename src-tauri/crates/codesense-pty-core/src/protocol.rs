@@ -66,24 +66,16 @@ pub fn lock_path(root: &Path) -> PathBuf {
 /// would find it held: never probe while this instance may be launching its
 /// host. `Err` when it cannot be told.
 pub fn host_running(root: &Path) -> Result<bool, String> {
-    use std::os::fd::AsRawFd;
     let path = lock_path(root);
     let file = match std::fs::File::open(&path) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(e) => return Err(format!("open {path:?}: {e}")),
     };
-    // SAFETY: `flock` on a descriptor `file` owns and keeps open for the call;
-    // the shared lock taken on success is released as `file` closes.
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } == 0 {
-        return Ok(false);
-    }
-    let error = std::io::Error::last_os_error();
-    if error.kind() == std::io::ErrorKind::WouldBlock {
-        Ok(true)
-    } else {
-        Err(format!("probe {path:?}: {error}"))
-    }
+    // The shared lock taken when it is free is released as `file` closes.
+    codesense_platform::fs::try_lock_shared(&file)
+        .map(|taken| !taken)
+        .map_err(|e| format!("probe {path:?}: {e}"))
 }
 
 /// The pid the host serving the instance rooted at `root` recorded in its

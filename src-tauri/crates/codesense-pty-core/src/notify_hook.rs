@@ -15,6 +15,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use codesense_platform::fs::{is_executable, set_executable, Reach};
+
 /// The reference hook, embedded in the app binary. The repo copy at
 /// `scripts/codesense-notify.reference.sh` is the single source of truth;
 /// edits there flow in on the next build.
@@ -23,8 +25,8 @@ pub const SOURCE: &str = include_str!("../../../../scripts/codesense-notify.refe
 /// The installed hook's file name in a host's activity root.
 pub const NAME: &str = "codesense-notify.sh";
 
-/// Mode the installed hook lands with (executable for owner, read + exec
-/// for group and other).
+/// Mode the installed hook lands with on unix (executable for owner, read + exec
+/// for group and other): [`Reach::Everyone`].
 pub const MODE: u32 = 0o755;
 
 /// The secret-file guard's template, installed beside the status hook with the protected
@@ -186,25 +188,22 @@ fn install_one(root: &Path, name: &str, source: &str) -> io::Result<()> {
     if is_installed(&dest, source) {
         return Ok(());
     }
-    atomic_write_mode(&dest, source.as_bytes(), MODE)
+    atomic_write_mode(&dest, source.as_bytes())
 }
 
-/// Whether `dest` is a regular, owner-executable file holding `source`.
+/// Whether `dest` is a regular file this OS would run, holding `source`. On
+/// Windows a `.sh` file never is, so the hook is rewritten on every install.
 fn is_installed(dest: &Path, source: &str) -> bool {
     let Ok(meta) = fs::symlink_metadata(dest) else {
         return false;
     };
-    #[cfg(unix)]
-    let executable = {
-        use std::os::unix::fs::PermissionsExt;
-        meta.permissions().mode() & 0o100 != 0
-    };
-    #[cfg(not(unix))]
-    let executable = true;
-    meta.is_file() && executable && fs::read(dest).is_ok_and(|bytes| bytes == source.as_bytes())
+    meta.is_file()
+        && is_executable(dest)
+        && fs::read(dest).is_ok_and(|bytes| bytes == source.as_bytes())
 }
 
-fn atomic_write_mode(dest: &Path, bytes: &[u8], mode: u32) -> io::Result<()> {
+/// Write `bytes` to `dest` through a tmp file given [`MODE`] before the rename.
+fn atomic_write_mode(dest: &Path, bytes: &[u8]) -> io::Result<()> {
     let parent = dest.parent().unwrap_or_else(|| Path::new("."));
     let file_name = dest.file_name().ok_or_else(|| {
         io::Error::new(
@@ -224,15 +223,7 @@ fn atomic_write_mode(dest: &Path, bytes: &[u8], mode: u32) -> io::Result<()> {
         f.write_all(bytes)?;
         f.sync_all()?;
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&tmp, fs::Permissions::from_mode(mode))?;
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = mode;
-    }
+    set_executable(&tmp, Reach::Everyone)?;
     if let Err(e) = fs::rename(&tmp, dest) {
         let _ = fs::remove_file(&tmp);
         return Err(e);

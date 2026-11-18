@@ -20,6 +20,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use codesense_platform::fs::{create_dir_owner_only, is_text_busy, set_executable, Reach};
+use codesense_platform::process::{is_alive, Pid};
 use log::{error, info, warn};
 
 use super::client::EmulatorLink;
@@ -484,11 +486,7 @@ fn log_started(pid: u32, info: &WorkerInfo) {
 /// `codesense-emulator.<machine>.<pid>.<n>`. On macOS the copy is a clone (no
 /// data is duplicated); the signature travels with the file.
 fn pin(worker: &Path, runtime_dir: &Path) -> Result<PathBuf, String> {
-    use std::os::unix::fs::DirBuilderExt;
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(runtime_dir)
+    create_dir_owner_only(runtime_dir)
         .map_err(|e| format!("create {}: {e}", runtime_dir.display()))?;
     let machine = machine_tag();
     remove_stale_pins(runtime_dir, &machine);
@@ -499,8 +497,7 @@ fn pin(worker: &Path, runtime_dir: &Path) -> Result<PathBuf, String> {
     ));
     std::fs::copy(worker, &pinned)
         .map_err(|e| format!("copy {} to {}: {e}", worker.display(), pinned.display()))?;
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&pinned, std::fs::Permissions::from_mode(0o700))
+    set_executable(&pinned, Reach::Owner)
         .map_err(|e| format!("chmod {}: {e}", pinned.display()))?;
     Ok(pinned)
 }
@@ -509,15 +506,7 @@ fn pin(worker: &Path, runtime_dir: &Path) -> Result<PathBuf, String> {
 /// parseable. A home directory can be shared between machines (NFS), and a
 /// pid is only meaningful on the machine that issued it.
 fn machine_tag() -> String {
-    let mut buf = [0u8; 256];
-    // SAFETY: `buf` is writable for its whole length, which is what we pass.
-    let rc = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
-    let name = if rc == 0 {
-        let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-        String::from_utf8_lossy(&buf[..end]).into_owned()
-    } else {
-        String::new()
-    };
+    let name = codesense_platform::user::hostname().unwrap_or_default();
     let tag: String = name
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
@@ -543,20 +532,14 @@ fn remove_stale_pins(runtime_dir: &Path, machine: &str) {
             .to_str()
             .and_then(|name| name.strip_prefix(&prefix))
             .and_then(|rest| rest.split('.').next())
-            .and_then(|pid| pid.parse::<libc::pid_t>().ok())
+            .and_then(|pid| pid.parse().ok().map(Pid::from_raw))
         else {
             continue;
         };
-        if !process_alive(pid) {
+        if !is_alive(pid) {
             let _ = std::fs::remove_file(entry.path());
         }
     }
-}
-
-fn process_alive(pid: libc::pid_t) -> bool {
-    // SAFETY: signal 0 only checks that the process exists and may be signalled.
-    let rc = unsafe { libc::kill(pid, 0) };
-    rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 /// Start the worker at `path` and wait for its `hello`.
@@ -597,7 +580,7 @@ fn spawn(path: &Path, cwd: &Path) -> Result<Child, String> {
             .spawn()
         {
             Ok(child) => return Ok(child),
-            Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) && busy < TEXT_BUSY_RETRIES => {
+            Err(e) if is_text_busy(&e) && busy < TEXT_BUSY_RETRIES => {
                 busy += 1;
                 std::thread::sleep(TEXT_BUSY_WAIT);
             }

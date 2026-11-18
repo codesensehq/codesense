@@ -319,13 +319,9 @@ const SERVER_ID_FILE: &str = "pty-server-id";
 
 /// Write `contents` to a new file only its owner can read or write.
 fn write_owner_only(path: &Path, contents: &str) -> std::io::Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)?;
+    use codesense_platform::fs::{create_owner_only, Open};
+    let mut file = create_owner_only(path, Open::Follow)?;
+    file.set_len(0)?;
     std::io::copy(&mut contents.as_bytes(), &mut file).map(|_| ())
 }
 
