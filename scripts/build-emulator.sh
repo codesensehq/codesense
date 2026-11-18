@@ -39,6 +39,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=lib/download-retry.sh
 . "$SCRIPT_DIR/lib/download-retry.sh"
+# shellcheck source=SCRIPTDIR/lib/sidecar.sh
+. "$SCRIPT_DIR/lib/sidecar.sh"
 BINARIES_DIR="$PROJECT_ROOT/src-tauri/binaries"
 BUNDLE="$PROJECT_ROOT/target/emulator/codesense-emulator.cjs"
 BIN_NAME="codesense-emulator"
@@ -67,11 +69,7 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
-HOST_TRIPLE=$(rustc -vV | awk '/^host:/ {print $2}')
-if [[ -z "$HOST_TRIPLE" ]]; then
-    echo "Error: Could not determine Rust target triple" >&2
-    exit 1
-fi
+HOST_TRIPLE="$(sidecar_host_triple)"
 if [[ ${#TARGETS[@]} -eq 0 ]]; then
     TARGETS=("$HOST_TRIPLE")
 fi
@@ -169,6 +167,17 @@ for triple in "${TARGETS[@]}"; do
     fi
 done
 
+# SIDECAR_DRY_RUN=1 prints the paths each target's worker and .sha256 would be
+# written to, and builds nothing.
+if [[ "${SIDECAR_DRY_RUN:-}" == 1 ]]; then
+    for triple in "${TARGETS[@]}"; do
+        out="$(sidecar_path "$BIN_NAME" "$triple")"
+        echo "$out"
+        echo "$out.sha256"
+    done
+    exit 0
+fi
+
 echo "Bundling the emulator worker..."
 # esbuild strips types without checking them. The bundle runs under the pinned Bun
 # (compiled below), never the repo's Node, so --target only sets syntax lowering and
@@ -185,18 +194,18 @@ cp "$BUNDLE" "$BINARIES_DIR/$BIN_NAME.cjs"
 for triple in "${TARGETS[@]}"; do
     asset="$(bun_asset "$triple")"
     runtime="$(fetch_bun "$asset")"
-    name="$BIN_NAME-$triple"
+    out="$(sidecar_path "$BIN_NAME" "$triple")"
     echo "Compiling $BIN_NAME for $triple (Bun $BUN_VERSION, $asset)..."
     # A worker must never pick up a .env or bunfig.toml from its working directory.
     "$COMPILER" build --compile --target="$(bun_compile_target "$asset")" \
         --compile-executable-path="$runtime" \
         --no-compile-autoload-dotenv --no-compile-autoload-bunfig \
-        "$BUNDLE" --outfile "$BINARIES_DIR/$name" >/dev/null
-    (cd "$BINARIES_DIR" && echo "$(sha256_hex "$name")  $name" >"$name.sha256")
-    echo "Built: $BINARIES_DIR/$name ($(cut -d' ' -f1 "$BINARIES_DIR/$name.sha256"))"
+        "$BUNDLE" --outfile "$out" >/dev/null
+    sidecar_sha256_line "$out" >"$out.sha256"
+    echo "Built: $out ($(cut -d' ' -f1 "$out.sha256"))"
     if [[ "$triple" == *-apple-darwin ]]; then
         app_copy="$BINARIES_DIR/$BIN_NAME"
-        cp "$BINARIES_DIR/$name" "$app_copy"
+        cp "$out" "$app_copy"
         if [[ $RELEASE -eq 1 && -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
             codesign --force --timestamp --options runtime \
                 --entitlements "$ENTITLEMENTS" -s "$APPLE_SIGNING_IDENTITY" "$app_copy"
