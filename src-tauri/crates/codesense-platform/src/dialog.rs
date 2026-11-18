@@ -21,6 +21,9 @@ use std::fmt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+#[cfg(unix)]
+use crate::fs::is_executable;
+
 /// The words a dialog shows: its window title, the line above the entry and
 /// the label of the button that answers.
 #[derive(Debug, Clone, Copy)]
@@ -238,7 +241,9 @@ pub fn ask_secret_with(
 }
 
 /// The first candidate in order: zenity, kdialog, `SSH_ASKPASS` when absolute,
-/// then the default askpass.
+/// then the default askpass. A candidate counts when [`is_executable`] says so
+/// (links followed, so a dangling one is absent); empty and relative `PATH`
+/// entries are skipped, so nothing runs from the working directory.
 #[cfg(unix)]
 fn find_dialog(
     path_var: Option<&std::ffi::OsStr>,
@@ -246,31 +251,16 @@ fn find_dialog(
     askpass_default: &Path,
 ) -> Option<(Program, std::path::PathBuf)> {
     let on_path = |program: Program| {
-        path_var
+        let found = crate::cli::candidates(path_var?, program.name())
             .into_iter()
-            .flat_map(std::env::split_paths)
-            // An empty or relative entry would run a program from wherever
-            // the app was started.
-            .filter(|dir| dir.is_absolute())
-            .map(|dir| dir.join(program.name()))
-            .find(|candidate| is_executable(candidate))
-            .map(|found| (program, found))
+            .next()?;
+        Some((program, found))
     };
-    let askpass = |path: &Path| {
-        (path.is_absolute() && is_executable(path)).then(|| (Program::Askpass, path.to_path_buf()))
-    };
+    let askpass = |path: &Path| is_executable(path).then(|| (Program::Askpass, path.to_path_buf()));
     on_path(Program::Zenity)
         .or_else(|| on_path(Program::Kdialog))
         .or_else(|| askpass_var.and_then(|var| askpass(Path::new(var))))
         .or_else(|| askpass(askpass_default))
-}
-
-/// An executable regular file, following symlinks: a dangling link is absent.
-#[cfg(unix)]
-fn is_executable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path)
-        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
 }
 
 #[cfg(test)]
