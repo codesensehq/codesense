@@ -3,16 +3,17 @@
 //! `cfg`; what differs per OS is stated once, in an `expect_*` helper at the
 //! end. Process tests drive the `platform-fixture` binary, never a shell.
 
-use std::fs::OpenOptions;
-use std::io::{BufRead, BufReader, Read};
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use codesense_platform::dirs::codesense_home;
 use codesense_platform::fs::{
-    atomic_replace, canonicalize, is_owner_only, link_or_copy, lock_exclusive, open_nofollow,
-    portable_name, set_owner_only, try_lock_exclusive, Linked, NonPortableName,
+    atomic_replace, canonicalize, create_new_owner_only, create_owner_only, file_id, file_id_of,
+    is_owned_by_current_user, is_owner_only, link_or_copy, lock_exclusive, open_nofollow,
+    portable_name, set_owner_only, try_lock_exclusive, Linked, NonPortableName, Open,
 };
 use codesense_platform::process::{is_alive, kill_hard, terminate, Pid, ProcessTree};
 use codesense_platform::testutil::symlink_or_skip;
@@ -134,6 +135,112 @@ fn set_owner_only_denies_others() {
         expect_owner_only_mode(path);
     }
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "secret");
+}
+
+#[test]
+fn a_file_this_user_makes_is_theirs_and_an_owner_only_create_is_owner_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let opened = |path: &Path| open_nofollow(OpenOptions::new().read(true), path).unwrap();
+    let shared = dir.path().join("shared");
+    std::fs::write(&shared, "shared").unwrap();
+    assert!(is_owned_by_current_user(&opened(&shared)).unwrap());
+    assert!(is_owned_by_current_user(&opened(dir.path())).unwrap());
+
+    let private = dir.path().join("private");
+    let file = create_owner_only(&private, Open::Follow).unwrap();
+    assert!(is_owned_by_current_user(&file).unwrap());
+    assert!(is_owner_only(&file).unwrap());
+    assert!(is_owner_only(&opened(&private)).unwrap());
+    expect_owner_only_mode(&private);
+
+    let new = dir.path().join("new");
+    let file = create_new_owner_only(&new).unwrap();
+    assert!(is_owner_only(&file).unwrap());
+    assert!(is_owner_only(&opened(&new)).unwrap());
+    expect_owner_only_mode(&new);
+}
+
+#[test]
+fn create_owner_only_keeps_an_existing_files_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("existing");
+    std::fs::write(&path, "kept").unwrap();
+    for open in [Open::Follow, Open::NoFollow] {
+        let mut file = create_owner_only(&path, open).unwrap();
+        let mut held = String::new();
+        file.read_to_string(&mut held).unwrap();
+        assert_eq!(held, "kept", "{open:?}");
+    }
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "kept");
+}
+
+#[test]
+fn create_owner_only_with_no_follow_refuses_a_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("target");
+    std::fs::write(&target, "target").unwrap();
+    let link = dir.path().join("link");
+    if !symlink_or_skip(&target, &link) {
+        return;
+    }
+    assert!(create_owner_only(&link, Open::NoFollow).is_err());
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "target");
+}
+
+#[test]
+fn create_new_owner_only_refuses_an_existing_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("once");
+    create_new_owner_only(&path)
+        .unwrap()
+        .write_all(b"first")
+        .unwrap();
+    let again = create_new_owner_only(&path).unwrap_err();
+    assert_eq!(again.kind(), ErrorKind::AlreadyExists, "{again}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "first");
+}
+
+#[test]
+fn file_id_is_stable_and_changes_when_the_file_is_replaced() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("file");
+    std::fs::write(&path, "old").unwrap();
+    let id = file_id(&path).unwrap();
+    assert_eq!(id, file_id(&path).unwrap());
+    assert_eq!(id, file_id_of(&File::open(&path).unwrap()).unwrap());
+    atomic_replace(&path, b"new").unwrap();
+    assert_ne!(id, file_id(&path).unwrap());
+}
+
+/// The old directory is moved aside rather than deleted before the new one
+/// is made, so a file system that reuses a freed inode cannot hand the new
+/// one the same number: the identity follows the directory, not the path.
+#[test]
+fn file_id_of_a_directory_changes_when_it_is_removed_and_recreated() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("dir");
+    std::fs::create_dir(&path).unwrap();
+    let id = file_id(&path).unwrap();
+    assert_eq!(id, file_id(&path).unwrap());
+    let aside = dir.path().join("aside");
+    std::fs::rename(&path, &aside).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    assert_ne!(id, file_id(&path).unwrap());
+    assert_eq!(id, file_id(&aside).unwrap());
+}
+
+#[test]
+fn file_id_of_a_link_is_the_links_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("target");
+    std::fs::create_dir(&target).unwrap();
+    let link = dir.path().join("link");
+    if !symlink_or_skip(&target, &link) {
+        return;
+    }
+    let id = file_id(&link).unwrap();
+    assert_eq!(id, file_id(&link).unwrap());
+    assert_ne!(id, file_id(&target).unwrap());
 }
 
 #[test]

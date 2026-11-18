@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-//! Files: owner-only permissions, opens that refuse links, atomic replace,
-//! exclusive locks, links with a copy fallback, canonical paths and names
-//! that are valid on every OS.
+//! Files: owner-only permissions, ownership checks, file identity,
+//! owner-only creates, opens that refuse links, atomic replace, exclusive
+//! locks, links with a copy fallback, canonical paths and names that are
+//! valid on every OS.
 
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -36,6 +37,67 @@ pub fn set_owner_only(path: &Path) -> io::Result<()> {
 /// ACE that grants access names the current user.
 pub fn is_owner_only(file: &File) -> io::Result<bool> {
     sys::is_owner_only(file)
+}
+
+/// Whether this user owns the open `file` (open it with [`open_nofollow`],
+/// so a link is never followed), whatever its permissions: on unix its uid
+/// is the effective uid; on Windows its owner SID is the current user's, or
+/// the default owner of what this process creates (for an elevated
+/// administrator, often the Administrators group).
+pub fn is_owned_by_current_user(file: &File) -> io::Result<bool> {
+    sys::is_owned_by_current_user(file)
+}
+
+/// Which file a path or an open file is, whatever its name: on unix the
+/// device and inode; on Windows the volume serial and file index. Two are
+/// equal for the same file while it exists; a file that replaces another at
+/// the same path has its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FileId {
+    volume: u64,
+    index: u64,
+}
+
+/// The [`FileId`] of `path` itself: a final link is not followed, so a link
+/// has its own.
+pub fn file_id(path: &Path) -> io::Result<FileId> {
+    sys::file_id(path)
+}
+
+/// The [`FileId`] of an open `file`.
+pub fn file_id_of(file: &File) -> io::Result<FileId> {
+    sys::file_id_of(file)
+}
+
+/// How [`create_owner_only`] treats a final link.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Open {
+    /// Follow it, as a plain open does.
+    Follow,
+    /// Refuse it: unix `O_NOFOLLOW`, with `O_NONBLOCK` so a FIFO never
+    /// blocks the open; on Windows the link itself is opened, then refused.
+    NoFollow,
+}
+
+/// Whether an owner-only create may open a file that already exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Creation {
+    OpenOrCreate,
+    New,
+}
+
+/// Open `path` for reading and writing, creating it readable and writable by
+/// this user only (unix mode 0600; on Windows a protected DACL granting only
+/// the current user, set as it is created). An existing file keeps its bytes
+/// and permissions: it is never truncated.
+pub fn create_owner_only(path: &Path, open: Open) -> io::Result<File> {
+    sys::create_owner_only(path, Creation::OpenOrCreate, open)
+}
+
+/// Create `path` for writing, owner-only as [`create_owner_only`] makes it;
+/// `AlreadyExists` when anything is at `path`, a link included.
+pub fn create_new_owner_only(path: &Path) -> io::Result<File> {
+    sys::create_owner_only(path, Creation::New, Open::Follow)
 }
 
 /// Open `path` with `options`, refusing it when it is a link: `O_NOFOLLOW`
