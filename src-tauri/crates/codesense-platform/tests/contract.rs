@@ -11,7 +11,7 @@ use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use codesense_platform::cli::{candidates, named_in, package_dirs, search_path};
 use codesense_platform::dirs::{codesense_home, lock_dir};
@@ -25,8 +25,8 @@ use codesense_platform::fs::{
 use codesense_platform::ipc::{blocking, Endpoint, LocalListener, LocalStream};
 use codesense_platform::limits::is_descriptor_exhaustion;
 use codesense_platform::process::{
-    exited_unreaped, group_and_foreground, is_alive, kill_hard, terminate, terminate_pid, Pid,
-    ProcessGroup, ProcessTree,
+    exited_unreaped, group_and_foreground, is_alive, kill_hard, terminate, terminate_pid, Identity,
+    Pid, ProcessGroup, ProcessTree,
 };
 use codesense_platform::testutil::{pathext, relative_from_cwd, symlink_or_skip};
 use codesense_platform::user::{current_user, hostname, login_shell};
@@ -283,6 +283,97 @@ fn is_alive_is_false_for_pid_zero_and_true_for_this_process() {
 #[test]
 fn is_alive_is_true_for_a_process_this_user_cannot_signal() {
     assert!(is_alive(expect_unsignallable_pid()));
+}
+
+fn me() -> Identity {
+    Identity::inspect(std::process::id()).expect("this process reads")
+}
+
+/// A fixture child that sleeps, and its identity.
+fn sleeper() -> (std::process::Child, Identity) {
+    let child = fixture(&["sleep"]).spawn().unwrap();
+    let identity = Identity::inspect(child.id()).expect("the child reads");
+    (child, identity)
+}
+
+#[test]
+fn identity_of_this_process_runs_and_is_itself() {
+    let me = me();
+    assert_eq!(me.pid, std::process::id());
+    assert!(me.runs());
+    assert!(me.is(me));
+    assert!(!me.retired());
+    assert!(me.descends_from(me));
+}
+
+#[test]
+fn identity_of_the_parent_started_first_and_holds_this_process() {
+    let me = me();
+    let parent = Identity::inspect(me.parent).expect("the test runner reads");
+    assert!(parent.runs());
+    assert!(me.descends_from(parent));
+    assert!(!parent.descends_from(me));
+    assert!(parent.start <= me.start);
+}
+
+#[test]
+fn a_child_descends_from_this_process_and_an_unrelated_one_does_not() {
+    let (mut child, identity) = sleeper();
+    let (mut other, unrelated) = sleeper();
+    assert_eq!(identity.parent, std::process::id());
+    assert!(identity.descends_from(me()));
+    assert!(!identity.descends_from(unrelated));
+    assert!(!me().descends_from(identity));
+    for child in [&mut child, &mut other] {
+        child.kill().unwrap();
+        child.wait().unwrap();
+    }
+}
+
+#[test]
+fn a_grandchild_descends_from_this_process() {
+    let (tree, grandchild) = spawn_tree();
+    let grandchild = Identity::inspect(grandchild.as_raw()).expect("the grandchild reads");
+    let child = Identity::inspect(tree.pid().as_raw()).expect("the child reads");
+    assert!(grandchild.descends_from(child));
+    assert!(grandchild.descends_from(me()));
+}
+
+#[test]
+fn started_after_orders_a_start_against_wall_time() {
+    let before = SystemTime::now() - Duration::from_secs(5);
+    let (mut child, identity) = sleeper();
+    let later = SystemTime::now() + Duration::from_secs(60);
+    assert!(identity.started_after(before));
+    assert!(!identity.started_after(later));
+    assert!(me().started_after(SystemTime::UNIX_EPOCH));
+    assert!(!me().started_after(later));
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+#[test]
+fn an_exited_child_with_no_handle_left_is_retired() {
+    let (mut child, identity) = sleeper();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    drop(child);
+    assert!(!identity.runs());
+    assert!(identity.retired());
+}
+
+#[test]
+fn an_exited_child_whose_handle_is_open_no_longer_runs() {
+    let (mut child, identity) = sleeper();
+    child.kill().unwrap();
+    assert!(
+        eventually(Duration::from_secs(5), || Identity::inspect(identity.pid)
+            .is_none()),
+        "an exited child still reads"
+    );
+    assert!(!identity.runs());
+    assert_eq!(identity.retired(), expect_retired_while_unreaped());
+    child.wait().unwrap();
 }
 
 #[test]
@@ -1423,4 +1514,10 @@ fn expect_login_shell(shell: Option<String>) {
         let shell = shell.expect("a login shell in the passwd entry");
         assert!(shell.starts_with('/'), "{shell}");
     }
+}
+
+/// Unix: an exited child not yet reaped is a zombie that holds its pid, so it
+/// is not retired. Windows: `is_alive` reads its exit code, so it is.
+fn expect_retired_while_unreaped() -> bool {
+    cfg!(windows)
 }
