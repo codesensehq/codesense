@@ -661,7 +661,7 @@ pub(crate) fn initialize(app: &tauri::AppHandle, home: &Path, path: Option<&OsSt
         path,
         crate::commands::paths::resolve_bundled_resource(app, PIN.resource),
         PIN.clone(),
-        crate::platform_caps::enabled(crate::platform_caps::GIT_AI),
+        supported(std::env::consts::OS, std::env::consts::ARCH),
     );
 }
 /// Background triggers skip an existing flight. Explicit attribution-on waits up to 30s.
@@ -765,6 +765,12 @@ pub(crate) fn capture_status(
     })
 }
 
+/// git-ai is supported where this build has its pin and the capability table turns it on: the
+/// one answer `initialize` and `platform_status` give.
+pub(crate) fn supported(os: &str, arch: &str) -> bool {
+    pin_for(os, arch).is_some()
+        && crate::platform_caps::enabled_for(crate::platform_caps::GIT_AI, os, arch)
+}
 pub(crate) fn platform_status(home: &Path) -> Option<AttributionStatus> {
     #[cfg(test)]
     {
@@ -775,7 +781,7 @@ pub(crate) fn platform_status(home: &Path) -> Option<AttributionStatus> {
     #[cfg(not(test))]
     {
         let _ = home;
-        (!crate::platform_caps::enabled(crate::platform_caps::GIT_AI)).then(|| {
+        (!supported(std::env::consts::OS, std::env::consts::ARCH)).then(|| {
             AttributionStatus::Unsupported {
                 reason: "platform".into(),
             }

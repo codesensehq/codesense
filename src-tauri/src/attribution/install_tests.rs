@@ -161,6 +161,19 @@ fn a_pin_for_another_platform_is_refused() {
     );
 }
 #[test]
+fn supported_needs_a_pin_and_the_capability() {
+    for (os, arch, expected) in [
+        ("macos", "aarch64", true),
+        ("macos", "x86_64", false),
+        ("linux", "x86_64", false),
+        ("linux", "aarch64", false),
+        ("linux", "riscv64", false),
+        ("freebsd", "x86_64", false),
+    ] {
+        assert_eq!(supported(os, arch), expected, "{os} {arch}");
+    }
+}
+#[test]
 fn digest_short_and_oversize_streams_leave_no_executable_or_temp() {
     for bytes in [b"short".to_vec(), vec![0; MAX_BYTES as usize + 1]] {
         let home = tempfile::tempdir().unwrap();
