@@ -61,8 +61,9 @@ pub(crate) struct CurrentUser {
 }
 
 impl CurrentUser {
-    /// The user, read from the token on the first call: a process's user
-    /// does not change.
+    /// The user and default owner, read from the token on the first call: a
+    /// process's user does not change, and this crate never sets its token's
+    /// owner.
     pub(crate) fn read() -> io::Result<&'static Self> {
         static USER: OnceLock<CurrentUser> = OnceLock::new();
         if let Some(user) = USER.get() {
