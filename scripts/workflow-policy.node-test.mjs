@@ -8,7 +8,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
-import { workflowPolicy } from "./workflow-policy.mjs";
+import { smokeImagesPolicy, workflowPolicy } from "./workflow-policy.mjs";
 
 // The workflow set under test: .github/workflows, or CODESENSE_WORKFLOWS_DIR (from the repo root).
 const directory = path.resolve(
@@ -1387,6 +1387,52 @@ test("test build: the Linux job uploads the deb, rpm and AppImage, each one file
   }
 });
 
+test("test build: the Linux smoke tests each build's packages on its own runner", () => {
+  const { jobs } = parse(testBuild());
+  const smoke = jobs["linux-smoke"];
+  assert.equal(smoke.if, "inputs.platform == 'all' || inputs.platform == 'linux'");
+  assert.equal(smoke.needs, "linux-app");
+  assert.equal(smoke["runs-on"], "${{ matrix.runner }}");
+  assert.equal(smoke.strategy["fail-fast"], false);
+  const legs = (job) => job.strategy.matrix.include.map(({ arch, runner }) => ({ arch, runner }));
+  assert.deepEqual(legs(smoke), legs(jobs["linux-app"]));
+  assert.deepEqual(
+    smoke.strategy.matrix.include.map(({ artifacts, deb_images, appimage }) => ({
+      artifacts,
+      deb_images,
+      appimage,
+    })),
+    [
+      {
+        artifacts: "*{_amd64.deb,.x86_64.rpm,_amd64.AppImage}",
+        deb_images: "ubuntu:22.04 ubuntu:24.04",
+        appimage: true,
+      },
+      { artifacts: "*{_arm64.deb,.aarch64.rpm}", deb_images: "ubuntu:24.04", appimage: false },
+    ],
+  );
+  // linux-app uploads each package as one unzipped file, which download-artifact reads from v8.
+  const download = smoke.steps.find((step) => step.uses?.startsWith("actions/download-artifact@"));
+  assert.equal(download.uses, "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333");
+  assert.equal(download.with.pattern, "${{ matrix.artifacts }}");
+  assert.equal(download.with["merge-multiple"], true);
+  const runs = smoke.steps.filter((step) => step.run).map((step) => [step.run, step.if]);
+  assert.match(
+    runs[0][0],
+    /smoke-linux\.sh install deb[\s\S]*install rpm fedora:44[\s\S]*same-resources/,
+  );
+  assert.equal(runs[0][1], undefined);
+  // Only x86_64 builds an AppImage.
+  const appImage = runs.filter(([run]) => /smoke-linux\.sh (run|variant)/.test(run));
+  assert.deepEqual(
+    appImage.map(([run]) => run.match(/smoke-linux\.sh (run|variant \S+)/)[1]),
+    ["run", "variant dmabuf", "variant no-dbus"],
+  );
+  for (const [, condition] of appImage) assert.equal(condition, "matrix.appimage");
+  const check = jobs["linux-app"].steps.find((step) => step.name === "Check scripts");
+  assert.match(check.run, /^shellcheck .*scripts\/ci\/smoke-linux\.sh/);
+});
+
 // The AppImage must carry the emulator the build compiled: linuxdeploy's rewrite breaks it.
 test("test build: every Linux leg checks the AppImage emulator after the build", () => {
   const steps = parse(testBuild()).jobs["linux-app"].steps;
@@ -1425,7 +1471,42 @@ test("test build: the policy rejects a missing platform gate, input or runner", 
     ],
     [testBuild().replace("runner: ubuntu-24.04-arm", "runner: self-hosted"), /matrix must run on/],
     [testBuild().replace("${{ matrix.runner }}", "ubuntu-22.04"), /matrix must run on/],
+    [
+      testBuild().replace("needs: linux-app", "needs: macos-app"),
+      /linux-smoke: needs must be linux-app/,
+    ],
+    [
+      testBuild().replace(
+        /runner: ubuntu-24\.04-arm(?![\s\S]*runner: ubuntu-24\.04-arm)/,
+        "runner: ubuntu-24.04",
+      ),
+      /linux-smoke: the matrix must run on/,
+    ],
+    [
+      testBuild().replace(/(linux-smoke:[\s\S]*?if: )inputs\.platform == 'all' \|\| /, "$1"),
+      /linux-smoke: if must run/,
+    ],
   ];
   for (const [fixture, error] of cases)
     assert.match(workflowPolicy(fixture, testBuildFile).join("\n"), error);
+});
+
+// The packaging smoke's containers come from one list, each pinned by its image index digest.
+const smokeImages = fileURLToPath(new URL("ci/smoke-images.txt", import.meta.url));
+
+test("smoke images: every container is pinned by digest", () => {
+  assert.deepEqual(smokeImagesPolicy(fs.readFileSync(smokeImages, "utf8")), []);
+});
+
+test("smoke images: the policy rejects a bare tag, a short digest, a duplicate or no image", () => {
+  const pin = `@sha256:${"a".repeat(64)}`;
+  const cases = [
+    ["ubuntu:24.04\n", /ubuntu:24\.04: must be <name>:<tag>@sha256:<digest>/],
+    [`ubuntu${pin}\n`, /must be <name>:<tag>@sha256/],
+    ["ubuntu:24.04@sha256:abc\n", /must be <name>:<tag>@sha256/],
+    [`ubuntu:24.04${pin}\nubuntu:24.04${pin}\n`, /ubuntu:24\.04: listed twice/],
+    ["# a comment\n\n", /no images/],
+  ];
+  for (const [fixture, error] of cases) assert.match(smokeImagesPolicy(fixture).join("\n"), error);
+  assert.deepEqual(smokeImagesPolicy(`# a comment\n\nubuntu:24.04${pin}\n`), []);
 });
