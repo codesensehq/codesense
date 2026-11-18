@@ -159,6 +159,33 @@ jobs:
             grep -E "(^|/)usr/bin/$name\$" <<<"$bin_files" || { echo "Error: $name is not in /usr/bin of the deb" >&2; exit 1; }
           done
           [[ $(wc -l <<<"$bin_files") -eq 4 ]] || { echo "Error: expected the app binary and three sidecars in /usr/bin" >&2; exit 1; }
+      - name: Check the bundled starship runs
+        # Each format ships the pinned starship as resources/starship; extract it from each and run it.
+        env:
+          BUNDLES: ${{ matrix.bundles }}
+        run: |
+          pin="src-tauri/pins/starship-linux-$(uname -m).pin"
+          expected="starship $(sed -n 's/^version=//p' "$pin")"
+          for format in ${BUNDLES//,/ }; do
+            dir="$RUNNER_TEMP/extract-$format"
+            mkdir -p "$dir"
+            case "$format" in
+              deb) dpkg-deb -x target/release/bundle/deb/*.deb "$dir" ;;
+              rpm) rpm2cpio target/release/bundle/rpm/*.rpm | (cd "$dir" && cpio -idm --quiet) ;;
+              appimage)
+                appimage=$(realpath target/release/bundle/appimage/*.AppImage)
+                chmod +x "$appimage"
+                (cd "$dir" && "$appimage" --appimage-extract >/dev/null)
+                ;;
+            esac
+            found=$(find "$dir" -path '*/resources/starship' -type f)
+            [[ $(grep -c . <<<"$found") -eq 1 ]] || { echo "Error: expected one resources/starship in the $format, found: $found" >&2; exit 1; }
+            [[ -x "$found" ]] || { echo "Error: $found in the $format is not executable" >&2; exit 1; }
+            version=$("$found" --version)
+            version=${version%%$'\n'*}
+            echo "$format: $found: $version"
+            [[ "$version" == "$expected" ]] || { echo "Error: expected $expected from the $format" >&2; exit 1; }
+          done
       - name: Upload deb
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
