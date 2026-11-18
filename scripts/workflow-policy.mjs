@@ -40,11 +40,14 @@ const COMMIT_EMAILS = {
 // The test build is dispatched by hand: its `platform` input picks which job runs, and each
 // job names the platform it builds. Its x86_64 leg runs on the oldest hosted Linux runner, so
 // the bundle links an older glibc; the arm64 leg runs on ubuntu-24.04-arm, so 24.04 is its floor.
+// The Linux smoke runs after the Linux build, each leg on its build's runner.
 const TEST_BUILD = {
   file: "test-build.yml",
   platforms: ["all", "macos", "windows", "linux"],
-  jobs: { "macos-app": "macos", "linux-app": "linux" },
+  jobs: { "macos-app": "macos", "linux-app": "linux", "linux-smoke": "linux" },
+  linuxJobs: ["linux-app", "linux-smoke"],
   linuxRunners: ["ubuntu-22.04", "ubuntu-24.04-arm"],
+  smoke: { job: "linux-smoke", needs: "linux-app" },
 };
 const JOB_PERMISSIONS = new Map([
   [`${COMMIT_EMAILS.file}:${COMMIT_EMAILS.job}`, { contents: "read" }],
@@ -213,11 +216,14 @@ export function workflowPolicy(text, file = "") {
     for (const [name, os] of Object.entries(TEST_BUILD.jobs))
       if (workflow.jobs?.[name]?.if !== `inputs.platform == 'all' || inputs.platform == '${os}'`)
         errors.push(`${name}: if must run the job for platform all or ${os} only`);
-    if (
-      JSON.stringify(matrixRunners(workflow.jobs?.["linux-app"])) !==
-      JSON.stringify(TEST_BUILD.linuxRunners)
-    )
-      errors.push(`linux-app: the matrix must run on ${TEST_BUILD.linuxRunners.join(" and ")}`);
+    for (const name of TEST_BUILD.linuxJobs)
+      if (
+        JSON.stringify(matrixRunners(workflow.jobs?.[name])) !==
+        JSON.stringify(TEST_BUILD.linuxRunners)
+      )
+        errors.push(`${name}: the matrix must run on ${TEST_BUILD.linuxRunners.join(" and ")}`);
+    const { job: smoke, needs } = TEST_BUILD.smoke;
+    if (workflow.jobs?.[smoke]?.needs !== needs) errors.push(`${smoke}: needs must be ${needs}`);
   }
   if (
     file === COMMIT_EMAILS.file &&
