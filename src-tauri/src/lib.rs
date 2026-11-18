@@ -575,6 +575,9 @@ pub fn run() {
             live_hub::start(app.handle());
             log::info!(target: "system", "CodeSense v{} starting (log_level={:?}, platform={})",
                 env!("CARGO_PKG_VERSION"), log_level, std::env::consts::OS);
+            // The first caps() call, made here so no command or the attribution installer makes it.
+            // It runs the secret store probe (a session bus call, bounded by D-Bus's own timeout)
+            // before anything reads the capability, and logs `secret store: <state>`.
             platform_caps::log_startup();
 
             // SW-PB-22f-3: keep published dashboards in step with their folders.
@@ -787,10 +790,6 @@ pub fn run() {
             let profile_home = commands::paths::codesense_home_dir().ok_or("Local profile home unavailable")?;
             app.manage(commands::local_profile::LocalProfileState::load(&profile_home)?);
             commands::local_profile::LocalProfileState::start_import(handle.clone());
-            // The probe talks to the session bus, so it stays off `.setup()`.
-            std::thread::spawn(|| {
-                commands::credential_store::secret_store_available();
-            });
             app.manage(commands::guest_session::GuestSessionState::load(commands::paths::codesense_home_dir().as_deref()));
             // Local HTML query/routine capabilities remain independent of service access.
             // Registry observation may immediately schedule auto-connect, so
