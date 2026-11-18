@@ -13,7 +13,8 @@
 #   smoke-linux.sh same-resources <listing> <listing>
 #       Both file lists ship the same optional resources (resources/starship, resources/git-ai).
 #   smoke-linux.sh run <package-dir> <out-dir>
-#       Extract the one .AppImage under <package-dir> into <out-dir> and launch it under
+#       Extract the one .AppImage under <package-dir> into <out-dir>, check that every shared
+#       library its executables link resolves on this machine, and launch it under
 #       xvfb-run inside dbus-run-session with an unlocked keyring: it is alive at 30 s, has drawn
 #       a window that is not one colour, logs webview ready, a caps: line that agrees with the
 #       bundle (caps-agree) and secret store: secret-service, and exits within 10 s of SIGTERM.
@@ -168,7 +169,19 @@ run_appimage() {
     # The runners have no FUSE to mount the image, so the smoke runs the extracted tree.
     (cd "$out" && "$appimage" --appimage-extract >/dev/null)
     find "$out/squashfs-root" >"$out/listing"
+    resolve_libs "$out/squashfs-root"
     start_session default "$out"
+}
+
+# The app and its WebKit helper processes find every shared library they link. An AppImage leaves
+# out what every desktop has (GL and EGL among them), so this names whatever the runner lacks,
+# all at once, before a launch fails on the first.
+resolve_libs() {
+    local missing
+    missing=$(find "$1/usr/bin" "$1/usr/lib" -type f \( -path "$1/usr/bin/*" -o -name 'WebKit*Process' \) \
+        -exec ldd {} \; 2>/dev/null | awk '/not found/ {print $1}' | sort -u)
+    [[ -z "$missing" ]] || fail "the runner lacks these libraries the AppImage expects: $(paste -sd ' ' - <<<"$missing")"
+    echo "Every library the app and its WebKit processes link resolves"
 }
 
 # A fresh home and runtime directory for each launch, then the session its mode needs.

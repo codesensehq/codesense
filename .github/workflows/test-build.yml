@@ -233,10 +233,12 @@ jobs:
           bash scripts/ci/smoke-linux.sh install rpm fedora:44 "$RUNNER_TEMP/packages" "$RUNNER_TEMP/smoke"
           bash scripts/ci/smoke-linux.sh same-resources "$RUNNER_TEMP/smoke/deb.list" "$RUNNER_TEMP/smoke/rpm.list"
       - name: Install the desktop session tools
+        # An AppImage leaves out the GL, EGL and Mesa libraries every desktop has.
         if: matrix.appimage
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xvfb xauth dbus gnome-keyring imagemagick
+          sudo apt-get install -y --no-install-recommends xvfb xauth dbus gnome-keyring imagemagick \
+            libegl1 libgl1 libgles2 libgl1-mesa-dri
       - name: Launch the AppImage
         if: matrix.appimage
         run: bash scripts/ci/smoke-linux.sh run "$RUNNER_TEMP/packages" "$RUNNER_TEMP/smoke/appimage"
