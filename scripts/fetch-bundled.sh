@@ -22,7 +22,7 @@ esac
 os="$(uname -s)" arch="$(uname -m)"
 # One entry per binary: name, pin and destination, each relative to the repository root.
 case "$os:$arch" in
-  Darwin:*) bundled=("git-ai src-tauri/git-ai.pin src-tauri/resources/git-ai") ;;
+  Darwin:*) bundled=("git-ai src-tauri/pins/git-ai-macos-arm64.pin src-tauri/resources/git-ai") ;;
   Linux:x86_64|Linux:aarch64)
     bundled=("starship src-tauri/pins/starship-linux-$arch.pin src-tauri/resources/fetched/starship") ;;
   *) printf 'No pinned binaries for this host: %s %s\n' "$os" "$arch" >&2; exit 1 ;;

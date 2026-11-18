@@ -44,7 +44,7 @@ read_pin() {
   done < "$1"
 }
 # The git-ai repository is named in one place, its committed pin.
-read_pin "$root/src-tauri/git-ai.pin"
+read_pin "$root/src-tauri/pins/git-ai-macos-arm64.pin"
 git_ai_repo=$repo
 read_pin "$pin"
 invalid() {
@@ -53,7 +53,7 @@ invalid() {
 }
 [[ -n "$version" && -n "$asset" ]] || invalid 'version and asset are required'
 case "$platform" in
-  macos-arm64|linux-x86_64|linux-aarch64|windows-x86_64) ;;
+  macos-arm64|linux-x86_64|linux-aarch64|windows-x86_64|windows-arm64) ;;
   *) invalid "unknown platform '$platform'" ;;
 esac
 [[ -n "$repo" && ( "$repo" == starship/starship || "$repo" == "$git_ai_repo" ) ]] || invalid "unknown repo '$repo'"

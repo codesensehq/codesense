@@ -62,7 +62,7 @@ test("a raw binary from the git-ai repository installs as is", (t) => {
   const f = fixture(t);
   const file = path.join(f.dir, "tool-macos");
   fs.writeFileSync(file, binary);
-  const gitAi = fs.readFileSync(path.join(root, "src-tauri/git-ai.pin"), "utf8");
+  const gitAi = fs.readFileSync(path.join(root, "src-tauri/pins/git-ai-macos-arm64.pin"), "utf8");
   const pin = f.pin({
     asset: "tool-macos",
     platform: "macos-arm64",
@@ -160,6 +160,22 @@ test("invalid pins are refused", (t) => {
   }
 });
 
+test("every supported platform is accepted", (t) => {
+  for (const platform of [
+    "macos-arm64",
+    "linux-x86_64",
+    "linux-aarch64",
+    "windows-x86_64",
+    "windows-arm64",
+  ]) {
+    const f = fixture(t);
+    const file = path.join(f.dir, "tool");
+    fs.writeFileSync(file, binary);
+    const pin = f.pin({ asset: "tool", platform, sha256: f.sha256(file) });
+    assertInstalled(f, f.run(pin, f.dest, "--from", file));
+  }
+});
+
 test("bad arguments print the usage", (t) => {
   const f = fixture(t);
   for (const args of [[], ["a.pin"], ["a.pin", "dest", "--from"], ["a.pin", "dest", "--force"]]) {
@@ -171,10 +187,9 @@ test("bad arguments print the usage", (t) => {
 
 test("--dry-run prints the URL of every committed pin, given relative to the repository root", (t) => {
   const f = fixture(t);
-  const pins = [
-    "src-tauri/git-ai.pin",
-    ...fs.readdirSync(path.join(root, "src-tauri/pins")).map((name) => `src-tauri/pins/${name}`),
-  ];
+  const pins = fs
+    .readdirSync(path.join(root, "src-tauri/pins"))
+    .map((name) => `src-tauri/pins/${name}`);
   for (const pin of pins) {
     const fields = Object.fromEntries(
       fs
@@ -213,7 +228,10 @@ test("fetch-bundled maps each host to its pins", (t) => {
     );
   };
   const release = "https://github.com/starship/starship/releases/download/v1.24.2";
-  const gitAiPin = fs.readFileSync(path.join(root, "src-tauri/git-ai.pin"), "utf8");
+  const gitAiPin = fs.readFileSync(
+    path.join(root, "src-tauri/pins/git-ai-macos-arm64.pin"),
+    "utf8",
+  );
   const field = (key) => gitAiPin.match(new RegExp(`^${key}=(.*)$`, "m"))[1];
   assert.equal(field("asset"), "git-ai-macos-arm64");
   const gitAi = `https://github.com/${field("repo")}/releases/download/${field("tag")}/git-ai-macos-arm64\n`;
@@ -231,7 +249,14 @@ test("fetch-bundled maps each host to its pins", (t) => {
   // The pin and destination other scripts read from here, by binary, so the mapping lives in
   // one place and a host with several pins is never ambiguous.
   for (const [os, arch, name, other, pin, dest] of [
-    ["Darwin", "arm64", "git-ai", "starship", "src-tauri/git-ai.pin", "src-tauri/resources/git-ai"],
+    [
+      "Darwin",
+      "arm64",
+      "git-ai",
+      "starship",
+      "src-tauri/pins/git-ai-macos-arm64.pin",
+      "src-tauri/resources/git-ai",
+    ],
     [
       "Linux",
       "x86_64",
