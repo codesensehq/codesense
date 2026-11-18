@@ -227,6 +227,19 @@ fn create_new_owner_only_refuses_an_existing_path() {
 }
 
 #[test]
+fn create_new_owner_only_refuses_a_dangling_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("missing");
+    let link = dir.path().join("link");
+    if !symlink_or_skip(&target, &link) {
+        return;
+    }
+    let refused = create_new_owner_only(&link).unwrap_err();
+    assert_eq!(refused.kind(), ErrorKind::AlreadyExists, "{refused}");
+    assert!(!target.exists(), "the link's target was created");
+}
+
+#[test]
 fn file_id_is_stable_and_changes_when_the_file_is_replaced() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("file");

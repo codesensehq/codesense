@@ -286,9 +286,12 @@ pub(super) fn create_owner_only(path: &Path, creation: Creation, open: Open) -> 
         Creation::OpenOrCreate => (GENERIC_READ | GENERIC_WRITE, OPEN_ALWAYS),
         Creation::New => (GENERIC_WRITE, CREATE_NEW),
     };
-    let flags = match open {
-        Open::Follow => FILE_ATTRIBUTE_NORMAL,
-        Open::NoFollow => FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+    // A new file never follows a link, dangling or not, as unix `O_EXCL`
+    // and std's `create_new` refuse one.
+    let flags = if open == Open::NoFollow || creation == Creation::New {
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT
+    } else {
+        FILE_ATTRIBUTE_NORMAL
     };
     let wide_path = wide(path);
     // SAFETY: the path is NUL-terminated; the attributes and the descriptor
