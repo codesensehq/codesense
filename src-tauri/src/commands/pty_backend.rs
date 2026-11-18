@@ -915,7 +915,9 @@ pub async fn resolve_in_process(
 ) -> Result<PtySpec, String> {
     let session = session.to_string();
     await_blocking("spawn_pty.resolve", move || {
-        Ok(intent.resolve(&session, &environment))
+        intent
+            .resolve(&session, &environment)
+            .map_err(|error| error.to_string())
     })
     .await
 }

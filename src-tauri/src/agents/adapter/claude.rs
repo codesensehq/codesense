@@ -16,11 +16,43 @@ use crate::session_usage::event::{Tokens, UsageEvent};
 use crate::session_usage::telemetry::{at_ms, Attrs};
 use codesense_pty_core::agent_cli::AgentCli;
 
-/// Where Claude Code reads managed settings, in the order they are checked.
-pub(crate) const MANAGED_SETTINGS_PATHS: [&str; 2] = [
-    "/Library/Application Support/ClaudeCode/managed-settings.json",
-    "/etc/claude-code/managed-settings.json",
-];
+/// Where Claude Code reads its managed policy files on one OS, each in the order it checks them.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ClaudeManaged {
+    pub(crate) settings: &'static [&'static str],
+    pub(crate) mcp: &'static [&'static str],
+}
+
+/// The managed policy files Claude Code reads on `os`, a [`std::env::consts::OS`] value; none on
+/// an OS it does not support. The paths follow the file-based delivery section of Claude Code's
+/// managed-settings docs: <https://code.claude.com/docs/en/managed-settings>.
+pub(crate) fn claude_managed(os: &str) -> ClaudeManaged {
+    match os {
+        // The `/etc/claude-code` entries are kept from CodeSense's earlier list.
+        "macos" => ClaudeManaged {
+            settings: &[
+                "/Library/Application Support/ClaudeCode/managed-settings.json",
+                "/etc/claude-code/managed-settings.json",
+            ],
+            mcp: &[
+                "/Library/Application Support/ClaudeCode/managed-mcp.json",
+                "/etc/claude-code/managed-mcp.json",
+            ],
+        },
+        "linux" => ClaudeManaged {
+            settings: &["/etc/claude-code/managed-settings.json"],
+            mcp: &["/etc/claude-code/managed-mcp.json"],
+        },
+        "windows" => ClaudeManaged {
+            settings: &[r"C:\Program Files\ClaudeCode\managed-settings.json"],
+            mcp: &[r"C:\Program Files\ClaudeCode\managed-mcp.json"],
+        },
+        _ => ClaudeManaged {
+            settings: &[],
+            mcp: &[],
+        },
+    }
+}
 
 pub(super) fn desktop() -> DesktopCli {
     DesktopCli {
@@ -95,7 +127,7 @@ pub(super) fn desktop() -> DesktopCli {
             restore: crate::commands::agent_accounts::restore_owned_claude_status_line,
         }),
         usage_record,
-        managed_settings: &MANAGED_SETTINGS_PATHS,
+        managed_settings: claude_managed(std::env::consts::OS).settings,
         session_log_usage: Some(|path: &std::path::Path| crate::session_usage::session_log_usage::read(AgentCli::Claude, path)),
     }
 }
@@ -181,4 +213,50 @@ fn usage_record(a: &Attrs) -> Option<UsageEvent> {
             })
             .filter(|c| *c > 0.0 || tokens_total == 0),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{claude_managed, ClaudeManaged};
+
+    #[test]
+    fn each_os_names_where_claude_code_reads_managed_policy() {
+        assert_eq!(
+            claude_managed("macos"),
+            ClaudeManaged {
+                settings: &[
+                    "/Library/Application Support/ClaudeCode/managed-settings.json",
+                    "/etc/claude-code/managed-settings.json",
+                ],
+                mcp: &[
+                    "/Library/Application Support/ClaudeCode/managed-mcp.json",
+                    "/etc/claude-code/managed-mcp.json",
+                ],
+            }
+        );
+        assert_eq!(
+            claude_managed("linux"),
+            ClaudeManaged {
+                settings: &["/etc/claude-code/managed-settings.json"],
+                mcp: &["/etc/claude-code/managed-mcp.json"],
+            }
+        );
+        assert_eq!(
+            claude_managed("windows"),
+            ClaudeManaged {
+                settings: &[r"C:\Program Files\ClaudeCode\managed-settings.json"],
+                mcp: &[r"C:\Program Files\ClaudeCode\managed-mcp.json"],
+            }
+        );
+        for os in ["freebsd", "android", "ios", ""] {
+            assert_eq!(
+                claude_managed(os),
+                ClaudeManaged {
+                    settings: &[],
+                    mcp: &[],
+                },
+                "{os:?}"
+            );
+        }
+    }
 }

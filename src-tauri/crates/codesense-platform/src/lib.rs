@@ -15,7 +15,7 @@
 //! - [`cli`]: finding a command-line tool on `PATH` and in package-manager
 //!   directories.
 //! - [`dirs`]: the codesense home and the shared lock directory.
-//! - [`user`]: the user this process runs as and the host's name.
+//! - [`user`]: the user this process runs as, their login shell and the host's name.
 //! - [`limits`]: the open-file soft limit.
 //! - [`ipc`]: local endpoints, listeners and streams (Unix sockets, named
 //!   pipes) and the pid at the other end.

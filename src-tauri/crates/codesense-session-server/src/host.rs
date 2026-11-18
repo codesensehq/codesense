@@ -1454,7 +1454,9 @@ impl Host {
         if let Some(command) = lock(&self.arm_test_command).clone() {
             let _ = (recipe, prompt, config_dir, desktop);
             return Ok(ArmPrepared {
-                spec: crate::testing::sh(&command).resolve(session.as_str(), &self.environment),
+                spec: crate::testing::sh(&command)
+                    .resolve(session.as_str(), &self.environment)
+                    .expect("the spawn resolves"),
                 registration: crate::testing::registration(session.as_str(), None, false),
                 writer: None,
                 owner: None,
@@ -1477,7 +1479,9 @@ impl Host {
             login_path: None,
         }
         .with_agent_startup(Some(&recipe.agent_startup));
-        let mut spec = intent.resolve(session.as_str(), &self.environment);
+        let mut spec = intent
+            .resolve(session.as_str(), &self.environment)
+            .map_err(|error| not_started(error.to_string()))?;
         let mut startup = recipe.agent_startup.clone();
         startup.prompt = Some(prompt.to_string());
         #[cfg(target_os = "linux")]
@@ -3226,7 +3230,9 @@ impl Host {
                             agent_env: Vec::new(),
                             login_path: None,
                         };
-                        let spec = intent.resolve(session.as_str(), &host.environment);
+                        let spec = intent
+                            .resolve(session.as_str(), &host.environment)
+                            .map_err(|error| PortUnavailable(error.to_string()))?;
                         reverse
                             .prepare(owner, session.as_str(), spec, Some(launch))
                             .map_err(PortUnavailable)?;
@@ -3258,7 +3264,9 @@ impl Host {
                     agent_env: Vec::new(),
                     login_path: None,
                 };
-                let spec = intent.resolve("native-runtime-probe", &host.environment);
+                let spec = intent
+                    .resolve("native-runtime-probe", &host.environment)
+                    .map_err(|error| PortUnavailable(error.to_string()))?;
                 crate::native_launch::runtime_installed(&spec, launch)
                     .map(|value| Reply::Flag { value })
                     .map_err(PortUnavailable)
@@ -4289,7 +4297,9 @@ impl Host {
                     // everything the spawn sets.
                     let intent = intent
                         .with_agent_startup(reverse.agent_startup(&resolving_session).as_ref());
-                    let spec = intent.resolve(&resolving_session, &environment);
+                    let spec = intent
+                        .resolve(&resolving_session, &environment)
+                        .map_err(|error| error.to_string())?;
                     return reverse.prepare(owner, &resolving_session, spec, launch);
                 }
                 // Local managed agents supply their complete argv;
@@ -4301,7 +4311,9 @@ impl Host {
                     return Err("remote launch requires live session MCP provisioning".into());
                 }
                 let _ = owner;
-                Ok::<_, String>(intent.resolve(&resolving_session, &environment))
+                intent
+                    .resolve(&resolving_session, &environment)
+                    .map_err(|error| error.to_string())
             })
             .await
             .map_err(|e| format!("PTY spawn resolution failed: {e}"))??;

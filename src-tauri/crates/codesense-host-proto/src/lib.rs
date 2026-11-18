@@ -25,6 +25,7 @@ pub mod census;
 pub mod control;
 pub mod frame;
 pub mod hello;
+pub mod hook;
 pub mod inbox_wait;
 pub mod machine_stats;
 pub mod nofile;

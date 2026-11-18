@@ -32,7 +32,7 @@ Usage from sessions on your [remote machines](../concepts/remote-machines.md) is
 
 ### When your organization manages Claude settings
 
-Some companies install a managed Claude settings file on every Mac (`/Library/Application Support/ClaudeCode/managed-settings.json`) that sends Claude's usage telemetry to the company's own collector. That file wins over what CodeSense sets at launch, so CodeSense doesn't see the tokens or cost of the Claude sessions it starts. Codex and OpenCode sessions aren't affected.
+Some companies install a managed Claude settings file, `managed-settings.json`, that sends Claude's usage telemetry to the company's own collector. Claude Code reads it from `/Library/Application Support/ClaudeCode/` on macOS, `/etc/claude-code/` on Linux and `C:\Program Files\ClaudeCode\` on Windows. That file wins over what CodeSense sets at launch, so CodeSense doesn't see the tokens or cost of the Claude sessions it starts. Codex and OpenCode sessions aren't affected.
 
 When CodeSense finds that file, it reads the usage of the Claude sessions it launched from Claude's own session log on this Mac instead (under `~/.claude/projects/`). It takes only the token counts, the model, the request and session ids, the time and the working folder from the log. Usage, story cost and spend caps then work as usual, with one difference: a session's usage appears when each turn ends, up to a minute later, not as each call finishes. A spend cap counts that usage once it appears, so the turn in progress can take an agent past its cap before the cap stops it.
 

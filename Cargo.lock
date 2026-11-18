@@ -1028,6 +1028,7 @@ version = "0.1.0"
 dependencies = [
  "codesense-platform",
  "libc",
+ "regex",
  "serde",
  "serde_json",
 ]
@@ -1084,6 +1085,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "codesense-host-proto",
+ "codesense-platform",
  "codesense-pty-core",
  "cron",
  "dirs 5.0.1",

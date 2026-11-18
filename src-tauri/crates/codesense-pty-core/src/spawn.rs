@@ -2,13 +2,15 @@
 //! Spawn resolution, run by the host a session is spawned on. The app sends a
 //! [`SpawnIntent`] — what to run, where, at what size, and what it adds to the
 //! environment — and the host resolves it into the exact child command against
-//! its own [`HostEnvironment`]: the user's shell (zsh, bash or fish,
-//! see [`crate::shell`]), the host's CodeSense bin dir, the managed RC wrappers
-//! written on the host's disk, and the shell-integration and starship resources
-//! shipped with the host. The in-process host and the session-server sidecar
-//! run this same code, so a local spawn resolves identically on either.
+//! its own [`HostEnvironment`]: the user's shell (from the host OS's
+//! [`ShellTable`], see [`crate::shell`]), the host's CodeSense bin dir, the
+//! managed RC wrappers written on the host's disk, and the shell-integration
+//! and starship resources shipped with the host. The in-process host and the
+//! session-server sidecar run this same code, so a local spawn resolves
+//! identically on either.
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use log::warn;
@@ -16,9 +18,26 @@ use portable_pty::{CommandBuilder, PtySize};
 use serde::{Deserialize, Serialize};
 
 use crate::runner::PtySpec;
-use crate::shell::{
-    is_executable_file, passwd_login_shell, resolve_shell_from, ShellKind, UserShell,
-};
+use crate::shell::{resolve_shell_from, ShellKind, ShellTable, UserShell};
+use codesense_platform::{cli, fs, user};
+
+/// Why a [`SpawnIntent`] cannot be resolved on this host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpawnError {
+    /// The intent runs a command line, the user's shell does not run POSIX
+    /// commands, and this OS has no POSIX shell to run it under.
+    NoPosixRunner,
+}
+
+impl std::fmt::Display for SpawnError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoPosixRunner => f.write_str("no POSIX shell to run the command on this OS"),
+        }
+    }
+}
+
+impl std::error::Error for SpawnError {}
 
 /// What the app asks a host to spawn. Everything here is the app's to decide;
 /// everything that depends on where the child runs is resolved by the host.
@@ -31,8 +50,8 @@ pub struct SpawnIntent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_launch: Option<codesense_host_proto::agent_cli::NativeLaunch>,
     /// `None`: the user's interactive login shell. `Some`: the login shell
-    /// running this command line (`-c`) — zsh for a fish user, as the command
-    /// is POSIX shell.
+    /// running this command line (`-c`) — the host's POSIX runner for a user
+    /// whose shell is not zsh or bash, as the command is POSIX shell.
     pub command: Option<String>,
     /// An argv to spawn directly as PID-1 of the PTY — no login
     /// shell wrapper, no `.zshrc`/`.zprofile`, no shell-integration. When set,
@@ -135,7 +154,8 @@ enum Vars {
 
 /// What a host resolves a [`SpawnIntent`] against: its CodeSense home (the
 /// bin dir and the managed shell dir live under it), the directory of the
-/// resources it ships, and the environment variables its children inherit.
+/// resources it ships, the environment variables its children inherit and
+/// its OS's [`ShellTable`].
 #[derive(Clone)]
 pub struct HostEnvironment {
     codesense_home: Option<PathBuf>,
@@ -143,6 +163,7 @@ pub struct HostEnvironment {
     vars: Vars,
     /// Names its children never inherit, whatever `vars` holds.
     env_remove: Vec<String>,
+    shell_table: &'static ShellTable,
 }
 
 impl HostEnvironment {
@@ -155,6 +176,7 @@ impl HostEnvironment {
             resources,
             vars: Vars::Process,
             env_remove: Vec::new(),
+            shell_table: ShellTable::host(),
         }
     }
 
@@ -169,6 +191,7 @@ impl HostEnvironment {
             resources,
             vars: Vars::Given(vars.into_iter().collect()),
             env_remove: Vec::new(),
+            shell_table: ShellTable::host(),
         }
     }
 
@@ -179,15 +202,25 @@ impl HostEnvironment {
         self
     }
 
+    /// This environment resolving shells with `table` instead of its OS's.
+    pub fn with_shell_table(mut self, table: &'static ShellTable) -> Self {
+        self.shell_table = table;
+        self
+    }
+
     /// The directory of the resources this host ships, when it has one.
     pub fn resources(&self) -> Option<&Path> {
         self.resources.as_deref()
     }
 
     fn var(&self, name: &str) -> Option<String> {
+        self.var_os(name).and_then(|v| v.into_string().ok())
+    }
+
+    fn var_os(&self, name: &str) -> Option<OsString> {
         match &self.vars {
-            Vars::Process => std::env::var(name).ok(),
-            Vars::Given(vars) => vars.get(name).cloned(),
+            Vars::Process => std::env::var_os(name),
+            Vars::Given(vars) => vars.get(name).map(OsString::from),
         }
     }
 
@@ -206,15 +239,24 @@ impl HostEnvironment {
         cmd
     }
 
-    /// The shell a session runs: the user's override when usable, else this
-    /// host's `$SHELL`, the account's login shell, then zsh.
+    /// The shell a session runs: the first usable row of this host's
+    /// [`ShellTable`], the user's override first.
     fn shell(&self, override_shell: Option<&str>) -> UserShell {
         resolve_shell_from(
+            self.shell_table,
             override_shell,
             self.var("SHELL").as_deref(),
-            passwd_login_shell,
-            is_executable_file,
+            user::login_shell,
+            |name| self.var_os(name),
+            cli::candidates,
+            fs::is_executable,
         )
+    }
+
+    /// The shell that runs a command line for a user whose own shell does
+    /// not run POSIX commands; `None` when this host's OS has none.
+    fn posix_runner(&self) -> Option<PathBuf> {
+        self.shell_table.posix_runner(fs::is_executable)
     }
 
     /// The shipped resource at `rel`, when it exists.
@@ -325,17 +367,15 @@ fn resolve_spawn_resources(host: &HostEnvironment, intent: &SpawnIntent) -> Reso
                 shell_dir = Some(dir);
             }
             ShellKind::Bash => shell_dir = Some(home.join("shell").join("bash")),
-            ShellKind::Fish => {}
+            ShellKind::Fish | ShellKind::Pwsh | ShellKind::PowerShell | ShellKind::Cmd => {}
         }
     }
 
-    let shell_init = if osc_enabled && !argv_direct {
-        host.resource(&format!(
-            "shell-integration/codesense-shell-init.{}",
-            shell.kind.init_script_ext()
-        ))
-    } else {
-        None
+    let shell_init = match shell.kind.init_script_ext() {
+        Some(ext) if osc_enabled && !argv_direct => {
+            host.resource(&format!("shell-integration/codesense-shell-init.{ext}"))
+        }
+        _ => None,
     };
 
     let mut starship = None;
@@ -468,10 +508,11 @@ set -q __CODESENSE_SHELL_INIT; and source $__CODESENSE_SHELL_INIT";
 ///
 /// - Interactive: zsh `-l` (its RC wrappers come in through `ZDOTDIR`); bash
 ///   `--rcfile <wrapper> -i` when the wrapper was written, else `-l`; fish `-l`
-///   with `--init-command`.
+///   with `--init-command`; PowerShell and cmd with no arguments.
 /// - `-c <command>`: the user's shell as a login shell when it runs POSIX-style
-///   commands (zsh, bash); fish users' commands run under the fallback zsh,
-///   since CodeSense's command strings are POSIX shell.
+///   commands (zsh, bash); other users' commands run under the host table's
+///   POSIX runner, since CodeSense's command strings are POSIX shell, and fail
+///   with [`SpawnError::NoPosixRunner`] where the OS has none.
 ///
 /// A saved Agent's `agent_env` goes under `SHELL`, which is always the shell's.
 fn shell_command(
@@ -480,13 +521,13 @@ fn shell_command(
     command: Option<&str>,
     bash_rcfile: Option<&Path>,
     agent_env: &[(String, String)],
-) -> CommandBuilder {
+) -> Result<CommandBuilder, SpawnError> {
     let mut cmd = match command {
         Some(command) => {
             let program = if shell.kind.runs_posix_commands() {
                 shell.path.clone()
             } else {
-                UserShell::fallback().path
+                host.posix_runner().ok_or(SpawnError::NoPosixRunner)?
             };
             let mut cmd = agent_command(host, &program.to_string_lossy(), agent_env);
             cmd.args(["-l", "-c", command]);
@@ -503,15 +544,16 @@ fn shell_command(
                 (ShellKind::Fish, _) => {
                     cmd.args(["-l", "--init-command", FISH_INIT_COMMAND]);
                 }
-                _ => {
+                (ShellKind::Zsh | ShellKind::Bash, _) => {
                     cmd.arg("-l");
                 }
+                (ShellKind::Pwsh | ShellKind::PowerShell | ShellKind::Cmd, _) => {}
             }
             cmd
         }
     };
     cmd.env("SHELL", shell.path.to_string_lossy().as_ref());
-    cmd
+    Ok(cmd)
 }
 
 /// Assemble the child command — argv, cwd, and the full managed environment
@@ -523,7 +565,7 @@ fn build_spawn_command(
     intent: &SpawnIntent,
     resolved: &ResolvedSpawnResources,
     host: &HostEnvironment,
-) -> CommandBuilder {
+) -> Result<CommandBuilder, SpawnError> {
     let osc_enabled = intent.osc_enabled();
     let preset = intent.starship_preset.as_deref();
 
@@ -549,7 +591,7 @@ fn build_spawn_command(
             intent.command.as_deref(),
             bash_rcfile.as_deref(),
             &intent.agent_env,
-        ),
+        )?,
     };
     match spawn_dir(&intent.cwd) {
         Some(dir) => {
@@ -589,9 +631,10 @@ fn build_spawn_command(
             Some(path) => {
                 cmd.env("__CODESENSE_SHELL_INIT", path.to_string_lossy().as_ref());
             }
-            None => {
+            None if resolved.shell.kind.init_script_ext().is_some() => {
                 warn!(target: "pty", "spawn_pty: shell-init script not found");
             }
+            None => {}
         }
         if preset == Some("plain") {
             cmd.env("__CODESENSE_PLAIN", "1");
@@ -624,7 +667,7 @@ fn build_spawn_command(
         cmd.env(key, value);
     }
 
-    cmd
+    Ok(cmd)
 }
 
 impl SpawnIntent {
@@ -664,18 +707,19 @@ impl SpawnIntent {
 
     /// Resolve the intent into the exact spawn of session `session_id` on the
     /// host `host`. Writes the managed RC wrappers for an interactive shell,
-    /// so it may block on the host's disk.
-    pub fn resolve(&self, session_id: &str, host: &HostEnvironment) -> PtySpec {
+    /// so it may block on the host's disk. Fails only for a command line that
+    /// this host has no POSIX shell to run.
+    pub fn resolve(&self, session_id: &str, host: &HostEnvironment) -> Result<PtySpec, SpawnError> {
         let resolved = resolve_spawn_resources(host, self);
-        PtySpec {
-            command: build_spawn_command(session_id, self, &resolved, host),
+        Ok(PtySpec {
+            command: build_spawn_command(session_id, self, &resolved, host)?,
             size: PtySize {
                 rows: self.rows,
                 cols: self.cols,
                 pixel_width: 0,
                 pixel_height: 0,
             },
-        }
+        })
     }
 }
 
@@ -826,7 +870,9 @@ mod tests {
             ("HOME", "/Users/me"),
         ]);
         let cwd = fx.resources.to_string_lossy().into_owned();
-        let spec = interactive(&cwd).resolve("tab-1", &host);
+        let spec = interactive(&cwd)
+            .resolve("tab-1", &host)
+            .expect("the spawn resolves");
 
         assert_eq!(argv(&spec), ["/bin/zsh", "-l"]);
         assert_eq!(
@@ -898,7 +944,8 @@ mod tests {
             shell: Some("/bin/bash".to_string()),
             ..interactive("")
         }
-        .resolve("tab-2", &host);
+        .resolve("tab-2", &host)
+        .expect("the spawn resolves");
         let rcfile = fx.home.join("shell/bash/bashrc");
         assert_eq!(
             argv(&bash),
@@ -926,7 +973,8 @@ mod tests {
             command: Some("make test".to_string()),
             ..interactive("")
         }
-        .resolve("tab-3", &bare);
+        .resolve("tab-3", &bare)
+        .expect("the spawn resolves");
         assert_eq!(argv(&command), ["/bin/bash", "-l", "-c", "make test"]);
         assert_eq!(
             command.command.get_cwd(),
@@ -960,7 +1008,7 @@ mod tests {
             ],
             ..interactive("")
         };
-        let spec = intent.resolve("tab-4", &host);
+        let spec = intent.resolve("tab-4", &host).expect("the spawn resolves");
         assert_eq!(env(&spec, "__CODESENSE_PLAIN").as_deref(), Some("1"));
         assert_eq!(env(&spec, "STARSHIP_CONFIG"), None);
         assert_eq!(env(&spec, "ANTHROPIC_API_KEY"), None);
@@ -980,7 +1028,7 @@ mod tests {
             ..interactive("")
         };
         assert!(!intent.osc_enabled());
-        let spec = intent.resolve("tab-5", &host);
+        let spec = intent.resolve("tab-5", &host).expect("the spawn resolves");
         assert_eq!(env(&spec, "ZDOTDIR"), None);
         assert_eq!(env(&spec, "__CODESENSE_SHELL_INIT"), None);
         assert!(!fx.home.join("shell").exists());
@@ -996,7 +1044,9 @@ mod tests {
         std::fs::write(&blocked, "").unwrap();
         let host =
             HostEnvironment::with_vars(Some(blocked), None, given(&[("SHELL", "/bin/bash")]));
-        let spec = interactive("").resolve("s", &host);
+        let spec = interactive("")
+            .resolve("s", &host)
+            .expect("the spawn resolves");
         assert_eq!(argv(&spec), ["/bin/bash", "-l"]);
     }
 
@@ -1060,6 +1110,7 @@ mod tests {
                 ..interactive("")
             }
             .resolve("s", &host)
+            .expect("the spawn resolves")
         };
         assert_eq!(argv(&build("/bin/zsh", None)), ["/bin/zsh", "-l"]);
         let bash_c = build("/bin/bash", Some("echo hi"));
@@ -1078,19 +1129,165 @@ mod tests {
                 .map(|a| a.to_string_lossy().into_owned())
                 .collect()
         };
-        let interactive_fish = shell_command(&host, &fish, None, None, &[]);
+        let interactive_fish = shell_command(&host, &fish, None, None, &[]).unwrap();
         assert_eq!(
             words(&interactive_fish)[..3],
             ["/opt/homebrew/bin/fish", "-l", "--init-command"]
         );
-        // Commands run under zsh for fish users: they are POSIX shell.
-        let fish_c = shell_command(&host, &fish, Some("echo hi"), None, &[]);
-        assert_eq!(words(&fish_c)[1..], ["-l", "-c", "echo hi"]);
-        assert!(words(&fish_c)[0].ends_with("zsh"));
+        // On macOS, commands run under zsh for fish users: they are POSIX shell.
+        let macos = host.clone().with_shell_table(&crate::shell::MACOS);
+        let fish_c = shell_command(&macos, &fish, Some("echo hi"), None, &[]).unwrap();
+        let zsh = if codesense_platform::fs::is_executable(Path::new("/bin/zsh")) {
+            "/bin/zsh"
+        } else {
+            "zsh"
+        };
+        assert_eq!(words(&fish_c), [zsh, "-l", "-c", "echo hi"]);
         assert_eq!(
             fish_c.get_env("SHELL").and_then(|v| v.to_str()),
             Some("/opt/homebrew/bin/fish")
         );
+    }
+
+    /// PowerShell and cmd start with no arguments: no `-l`, no init.
+    #[test]
+    fn windows_shells_start_with_no_arguments() {
+        let fx = Fixture::new();
+        let host = fx.host(&[]).with_shell_table(&crate::shell::WINDOWS);
+        for kind in [ShellKind::Pwsh, ShellKind::PowerShell, ShellKind::Cmd] {
+            let shell = UserShell {
+                path: fx.home.join("shell.exe"),
+                kind,
+                source: crate::shell::ShellSource::Override,
+            };
+            let cmd = shell_command(&host, &shell, None, None, &[]).unwrap();
+            assert_eq!(cmd.get_argv().len(), 1, "{kind:?}");
+        }
+        // With nothing usable on the host, the interactive shell is cmd.exe on
+        // PATH, with no init script, wrapper dir or arguments.
+        let spec = interactive("")
+            .resolve("s", &host)
+            .expect("the spawn resolves");
+        assert_eq!(argv(&spec), ["cmd.exe"]);
+        assert_eq!(env(&spec, "__CODESENSE_SHELL_INIT"), None);
+        assert_eq!(env(&spec, "ZDOTDIR"), None);
+    }
+
+    /// Windows has no POSIX shell: a command line is a typed error, while an
+    /// argv-direct spawn still resolves.
+    #[test]
+    fn a_command_line_without_a_posix_runner_is_an_error() {
+        let fx = Fixture::new();
+        let host = fx.host(&[]).with_shell_table(&crate::shell::WINDOWS);
+        let command = SpawnIntent {
+            command: Some("echo hi".into()),
+            ..interactive("")
+        };
+        let Err(error) = command.resolve("s", &host) else {
+            panic!("a command line resolved without a POSIX runner");
+        };
+        assert_eq!(error, SpawnError::NoPosixRunner);
+        assert_eq!(
+            error.to_string(),
+            "no POSIX shell to run the command on this OS"
+        );
+        let direct = SpawnIntent {
+            argv: Some(vec!["agent".into(), "--flag".into()]),
+            ..interactive("")
+        };
+        assert_eq!(
+            argv(&direct.resolve("s", &host).expect("the spawn resolves")),
+            ["agent", "--flag"]
+        );
+    }
+
+    /// An executable file at `path`, with its parent dirs.
+    fn install(path: &Path) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "").unwrap();
+        fs::set_executable(path, fs::Reach::Everyone).unwrap();
+    }
+
+    /// The Windows table reads `ProgramFiles`, `SystemRoot` and `ComSpec`
+    /// from the host's own variables, in that order.
+    #[test]
+    fn the_windows_table_resolves_through_the_hosts_variables() {
+        let fx = Fixture::new();
+        let root = fx.home.join("drive");
+        let program_files = root.join("Program Files");
+        let system_root = root.join("Windows");
+        let pwsh = program_files.join("PowerShell").join("7").join("pwsh.exe");
+        let powershell = system_root
+            .join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe");
+        let comspec = system_root.join("System32").join("cmd.exe");
+        for path in [&pwsh, &powershell, &comspec] {
+            install(path);
+        }
+        let host = fx
+            .host(&[
+                ("ProgramFiles", program_files.to_str().unwrap()),
+                ("SystemRoot", system_root.to_str().unwrap()),
+                ("ComSpec", comspec.to_str().unwrap()),
+            ])
+            .with_shell_table(&crate::shell::WINDOWS);
+        for want in [&pwsh, &powershell, &comspec] {
+            let spec = interactive("")
+                .resolve("s", &host)
+                .expect("the spawn resolves");
+            assert_eq!(argv(&spec)[0], want.to_string_lossy());
+            std::fs::remove_file(want).unwrap();
+        }
+    }
+
+    /// The Windows table's `pwsh` row searches the host's own `PATH`, ahead of
+    /// `ProgramFiles`.
+    #[test]
+    fn the_windows_table_finds_pwsh_on_the_hosts_path() {
+        let fx = Fixture::new();
+        let bin = fx.home.join("bin");
+        let pwsh = cli::named_in(std::slice::from_ref(&bin), "pwsh")
+            .into_iter()
+            .find(|path| crate::shell::shell_kind(path).is_some())
+            .expect("a pwsh file name the table classifies");
+        install(&pwsh);
+        let program_files = fx.home.join("Program Files");
+        install(&program_files.join("PowerShell").join("7").join("pwsh.exe"));
+        let host = fx
+            .host(&[
+                ("PATH", bin.to_str().unwrap()),
+                ("ProgramFiles", program_files.to_str().unwrap()),
+            ])
+            .with_shell_table(&crate::shell::WINDOWS);
+        let spec = interactive("")
+            .resolve("s", &host)
+            .expect("the spawn resolves");
+        assert_eq!(argv(&spec)[0], pwsh.to_string_lossy());
+    }
+
+    /// A host built from given variables resolves with its own OS's table: a
+    /// fish user's command line runs under that table's POSIX runner, or is
+    /// an error where it has none.
+    #[test]
+    fn a_given_host_uses_its_own_oss_table() {
+        let fx = Fixture::new();
+        let fish = fx.home.join("fish");
+        install(&fish);
+        let intent = SpawnIntent {
+            shell: Some(fish.to_string_lossy().into_owned()),
+            command: Some("echo hi".into()),
+            ..interactive("")
+        };
+        let resolved = intent.resolve("s", &fx.host(&[]));
+        match ShellTable::host().posix_runner(fs::is_executable) {
+            Some(runner) => {
+                let spec = resolved.expect("the spawn resolves");
+                assert_eq!(argv(&spec)[0], runner.to_string_lossy());
+            }
+            None => assert!(matches!(resolved, Err(SpawnError::NoPosixRunner))),
+        }
     }
 
     /// Drive `spec` in a real PTY: wait for its first prompt mark, type
@@ -1235,6 +1432,7 @@ mod tests {
             ..interactive(tmp.to_str().unwrap())
         }
         .resolve("shell-test", &host)
+        .expect("the spawn resolves")
     }
 
     /// A foreground job the user suspends (Ctrl-Z) has not ended: the shell
@@ -1386,7 +1584,8 @@ mod tests {
             cols: 200,
             ..interactive(worktree.to_str().unwrap())
         }
-        .resolve("shell-test", &host);
+        .resolve("shell-test", &host)
+        .expect("the spawn resolves");
         let want = format!("M={marker}:{}", worktree.display());
         let out = drive(spec, PROBE, &[&want, "\x1b]133;D;0"]);
         assert!(out.contains(&want), "rc marker / cwd missing: {out:?}");
@@ -1499,7 +1698,8 @@ mod tests {
             env: given(env),
             ..interactive(tmp.to_str().unwrap())
         }
-        .resolve("shell-test", &host);
+        .resolve("shell-test", &host)
+        .expect("the spawn resolves");
         // Ensure the stubs (not a real CLI) answer, even though login rc files may
         // reorder PATH.
         let line = format!(
@@ -1810,7 +2010,9 @@ mod tests {
             !intent.osc_enabled(),
             "argv-direct has no shell integration"
         );
-        let spec = intent.resolve("tab-argv", &host);
+        let spec = intent
+            .resolve("tab-argv", &host)
+            .expect("the spawn resolves");
         assert_eq!(argv(&spec), ["/opt/claude", "--one", "two"]);
         // No ZDOTDIR / shell-init / starship for an argv-direct spawn.
         assert_eq!(env(&spec, "ZDOTDIR"), None);
@@ -1857,7 +2059,9 @@ mod tests {
             ]),
             ..interactive(&cwd)
         };
-        let spec = intent.resolve("tab-agent", &host);
+        let spec = intent
+            .resolve("tab-agent", &host)
+            .expect("the spawn resolves");
         assert_eq!(
             env(&spec, "CLAUDE_CODE_DISABLE_AUTO_MEMORY").as_deref(),
             Some("1")
@@ -1890,7 +2094,9 @@ mod tests {
             ]),
             ..interactive(&cwd)
         };
-        let spec = shell_hosted.resolve("tab-shell", &host);
+        let spec = shell_hosted
+            .resolve("tab-shell", &host)
+            .expect("the spawn resolves");
         assert_eq!(env(&spec, "AGENT_ONLY").as_deref(), Some("yes"));
         assert_eq!(env(&spec, "SHELL").as_deref(), Some("/bin/zsh"));
         assert_eq!(
@@ -1925,7 +2131,9 @@ mod tests {
             ..interactive(&cwd)
         }
         .with_agent_startup(Some(&startup));
-        let spec = remote.resolve("tab-remote", &host);
+        let spec = remote
+            .resolve("tab-remote", &host)
+            .expect("the spawn resolves");
         assert_eq!(
             env(&spec, "CLAUDE_CODE_DISABLE_AUTO_MEMORY").as_deref(),
             Some("1")
@@ -1958,7 +2166,9 @@ mod tests {
             login_path: Some("/opt/homebrew/bin:/usr/bin:/bin".to_string()),
             ..interactive(&cwd)
         };
-        let spec = intent.resolve("tab-login", &host);
+        let spec = intent
+            .resolve("tab-login", &host)
+            .expect("the spawn resolves");
         assert_eq!(
             env(&spec, "PATH").unwrap(),
             format!(
@@ -1982,7 +2192,9 @@ mod tests {
                 login_path: login_path.clone(),
                 ..interactive(&cwd)
             };
-            let spec = intent.resolve("tab-host-path", &host);
+            let spec = intent
+                .resolve("tab-host-path", &host)
+                .expect("the spawn resolves");
             assert_eq!(env(&spec, "PATH").unwrap(), expected, "{login_path:?}");
         }
     }
@@ -1998,7 +2210,9 @@ mod tests {
             login_path: Some("/opt/homebrew/bin:/usr/bin:/bin".to_string()),
             ..interactive(&cwd)
         };
-        let spec = intent.resolve("tab-shell-path", &host);
+        let spec = intent
+            .resolve("tab-shell-path", &host)
+            .expect("the spawn resolves");
         let path = env(&spec, "PATH").unwrap();
         assert!(path.ends_with(":/usr/bin:/bin"), "{path}");
         assert!(!path.contains("/opt/homebrew/bin"), "{path}");
@@ -2019,7 +2233,9 @@ mod tests {
             login_path: Some(format!("{}:/usr/bin:/bin", stale.display())),
             ..interactive(&cwd)
         };
-        let spec = intent.resolve("tab-stale", &host);
+        let spec = intent
+            .resolve("tab-stale", &host)
+            .expect("the spawn resolves");
         assert_eq!(argv(&spec), ["/opt/claude", "--one"]);
         assert!(env(&spec, "PATH")
             .unwrap()
@@ -2041,7 +2257,9 @@ mod tests {
             login_path: Some(format!("{}:/usr/bin:/bin", stale.display())),
             ..interactive(&cwd)
         };
-        let spec = intent.resolve("tab-bare", &host);
+        let spec = intent
+            .resolve("tab-bare", &host)
+            .expect("the spawn resolves");
         assert_eq!(argv(&spec), ["claude", "--one"]);
         assert_eq!(
             env(&spec, "PATH").unwrap(),

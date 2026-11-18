@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! The user this process runs as and the host's name.
+//! The user this process runs as, their login shell and the host's name.
 
 use std::io;
 
@@ -30,6 +30,13 @@ pub fn current_user() -> io::Result<User> {
 /// (`GetComputerNameExW`). `None` when it cannot be read.
 pub fn hostname() -> Option<String> {
     host()
+}
+
+/// The login shell recorded for this user: on unix the passwd entry's shell
+/// (the `dscl` UserShell on macOS); `None` when it is empty or unreadable,
+/// and always on Windows, which has no login shell.
+pub fn login_shell() -> Option<String> {
+    passwd_shell()
 }
 
 #[cfg(unix)]
@@ -70,4 +77,43 @@ fn host() -> Option<String> {
     }
     // On success `size` is the name's length without the NUL.
     Some(String::from_utf16_lossy(&buf[..size as usize]))
+}
+
+#[cfg(unix)]
+fn passwd_shell() -> Option<String> {
+    // SAFETY: `getpwuid_r` writes into our own buffers; `result` is either null
+    // or points at `pwd`, whose string fields point into `buf`, which outlives
+    // every read below.
+    unsafe {
+        let mut pwd: libc::passwd = std::mem::zeroed();
+        let mut buf = vec![0 as libc::c_char; 4096];
+        let mut result: *mut libc::passwd = std::ptr::null_mut();
+        loop {
+            let rc = libc::getpwuid_r(
+                libc::getuid(),
+                &mut pwd,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut result,
+            );
+            // An entry larger than the buffer: grow and retry, within reason.
+            if rc == libc::ERANGE && buf.len() < 1 << 20 {
+                buf.resize(buf.len() * 2, 0);
+                continue;
+            }
+            if rc != 0 || result.is_null() || pwd.pw_shell.is_null() {
+                return None;
+            }
+            break;
+        }
+        let shell = std::ffi::CStr::from_ptr(pwd.pw_shell)
+            .to_string_lossy()
+            .into_owned();
+        (!shell.is_empty()).then_some(shell)
+    }
+}
+
+#[cfg(windows)]
+fn passwd_shell() -> Option<String> {
+    None
 }
