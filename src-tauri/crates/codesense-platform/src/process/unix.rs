@@ -139,3 +139,42 @@ pub(super) fn group_and_foreground(pid: u32) -> Option<(i32, i32)> {
 pub(super) fn group_and_foreground(_pid: u32) -> Option<(i32, i32)> {
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+
+    use super::super::{is_alive, kill_hard, terminate, Pid, ProcessTree};
+
+    /// A tree whose root was reaped behind its back cannot read its exit, and
+    /// from then on signals nothing, not even on drop: the root's pid and
+    /// group may already name someone else's processes.
+    #[test]
+    fn a_tree_whose_exit_cannot_be_read_signals_nothing() {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "sleep 30 & echo $!"])
+            .stdout(Stdio::piped());
+        let mut tree = ProcessTree::spawn(&mut command).unwrap();
+        let mut line = String::new();
+        BufReader::new(tree.child().stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let left = Pid::from_raw(line.trim().parse().unwrap());
+        let mut status = 0;
+        // SAFETY: waits for the tree's own root, which nothing else reaps.
+        let reaped = unsafe { libc::waitpid(tree.pid().as_raw() as libc::pid_t, &mut status, 0) };
+        assert_eq!(reaped, tree.pid().as_raw() as libc::pid_t);
+
+        assert!(tree.wait().is_err(), "the exit was reaped elsewhere");
+        assert!(tree.try_wait().is_err());
+        terminate(&tree).unwrap();
+        kill_hard(&tree).unwrap();
+        drop(tree);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(is_alive(left), "the group was signalled");
+        // SAFETY: ends the test's own leftover sleep.
+        unsafe { libc::kill(left.as_raw() as libc::pid_t, libc::SIGKILL) };
+    }
+}

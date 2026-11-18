@@ -250,7 +250,8 @@ fn run(mut command: Command) -> Result<GitPromptStatus, Miss> {
                 // A `try_wait` that reaps `git` closes the tree, which kills
                 // what it left in its group, as after any exit: the group id
                 // stays reserved while a member lives, and an empty one is
-                // not an error.
+                // not an error. One that can't read the exit either leaves
+                // the tree signalling nothing, now or when it drops.
                 if matches!(tree.try_wait(), Ok(None)) {
                     let _ = kill_hard(&tree);
                     let _ = tree.wait();
@@ -274,7 +275,8 @@ fn run(mut command: Command) -> Result<GitPromptStatus, Miss> {
         // is still reserved, and the kill reaches only that group.
         let _ = kill_hard(&tree);
     }
-    // Reaping `git` kills whatever it left running.
+    // Reaping `git` kills whatever it left running; a wait that can't read
+    // its exit signals nothing, now or when the tree drops.
     let exit = tree.wait().map_err(|_| Miss::NoStatus)?;
     let out = out.ok_or(Miss::TimedOut)?;
     if !exit.success() {

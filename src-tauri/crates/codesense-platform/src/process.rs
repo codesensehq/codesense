@@ -58,12 +58,19 @@ impl std::fmt::Display for Pid {
 /// The tree lives as long as its root: once the root's exit is seen
 /// ([`ProcessTree::try_wait`], [`ProcessTree::wait`]), whatever it left
 /// running is killed then, so the group id is never signalled after it
-/// could name someone else's processes.
+/// could name someone else's processes. When the root's exit cannot be read
+/// (either returns `Err`), the tree signals nothing from then on, not even
+/// on drop: the root may already be reaped, and its pid and group reused.
+/// (On Windows the job still ends what is in it when the tree drops: a job
+/// holds processes, never ids that could be reused.)
 pub struct ProcessTree {
     child: Child,
     group: sys::Group,
-    /// Set once the tree was killed or its root's exit was seen.
+    /// Set once the tree was killed, its root's exit was seen, or that exit
+    /// could not be read.
     closed: AtomicBool,
+    /// Set once the root's exit could not be read: its state is unknown.
+    lost: bool,
 }
 
 impl ProcessTree {
@@ -88,6 +95,7 @@ impl ProcessTree {
                 child,
                 group,
                 closed: AtomicBool::new(false),
+                lost: false,
             }),
             Err(error) => {
                 let _ = child.kill();
@@ -109,20 +117,37 @@ impl ProcessTree {
     }
 
     /// The root's exit status if it has exited; then the rest of the tree is
-    /// killed.
+    /// killed. An `Err` (the exit cannot be read, as when something else
+    /// reaped the root) leaves the tree signalling nothing from then on.
     pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
-        let status = self.child.try_wait()?;
+        let status = match self.child.try_wait() {
+            Ok(status) => status,
+            Err(error) => return Err(self.lose(error)),
+        };
         if status.is_some() {
             self.close();
         }
         Ok(status)
     }
 
-    /// Wait for the root to exit; then the rest of the tree is killed.
+    /// Wait for the root to exit; then the rest of the tree is killed. An
+    /// `Err` leaves the tree signalling nothing from then on, as for
+    /// [`ProcessTree::try_wait`].
     pub fn wait(&mut self) -> io::Result<ExitStatus> {
-        let status = self.child.wait()?;
+        let status = match self.child.wait() {
+            Ok(status) => status,
+            Err(error) => return Err(self.lose(error)),
+        };
         self.close();
         Ok(status)
+    }
+
+    /// The root's exit could not be read (`error`), so its pid and group may
+    /// already name someone else's processes: never signal them again.
+    fn lose(&mut self, error: io::Error) -> io::Error {
+        self.closed.store(true, Ordering::Release);
+        self.lost = true;
+        error
     }
 
     fn close(&self) {
@@ -135,8 +160,10 @@ impl ProcessTree {
 impl Drop for ProcessTree {
     fn drop(&mut self) {
         self.close();
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if !self.lost {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
     }
 }
 
