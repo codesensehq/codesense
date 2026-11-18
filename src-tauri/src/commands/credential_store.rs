@@ -672,9 +672,37 @@ mod secret_service_tests {
 
     const SERVICE: &str = "codesense-secret-service-test";
     const READER_ACCOUNT_ENV: &str = "CODESENSE_TEST_SECRET_ACCOUNT";
+    const NO_BUS_ENV: &str = "CODESENSE_TEST_NO_BUS";
 
     fn unique_account(label: &str) -> String {
         format!("{label}-{}", std::process::id())
+    }
+
+    /// This test binary again, as a fresh process running only `test` (an ignored test in this
+    /// module) with `envs` set for it alone.
+    fn run_child(test: &str, envs: &[(&str, &str)]) -> std::process::Output {
+        let name = format!("{}::{test}", module_path!().split_once("::").unwrap().1);
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command.args(["--ignored", "--exact", &name, "--nocapture"]);
+        for (key, value) in envs {
+            command.env(key, value);
+        }
+        command.output().unwrap()
+    }
+
+    /// The child exited cleanly and ran its one test (a filter that matched nothing also exits
+    /// cleanly). Its output is in the message either way.
+    fn assert_child_passed(test: &str, output: &std::process::Output) {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "{test} failed\nstdout: {stdout}\nstderr: {stderr}"
+        );
+        assert!(
+            stdout.contains("1 passed"),
+            "{test} did not run\nstdout: {stdout}\nstderr: {stderr}"
+        );
     }
 
     #[test]
@@ -697,8 +725,8 @@ mod secret_service_tests {
         store.delete(&account).unwrap();
     }
 
-    /// Run by `a_second_process_reads_what_the_first_wrote`, not on its own: without the
-    /// account variable it has nothing to read and passes.
+    /// Started by `a_second_process_reads_what_the_first_wrote`, and left out of the CI filter:
+    /// without the account variable it has nothing to read and would pass alone.
     #[test]
     #[ignore = "needs a Secret Service session"]
     fn reader_process() {
@@ -717,33 +745,18 @@ mod secret_service_tests {
         store
             .set(&account, &Secret::new("kept across processes"))
             .unwrap();
-
-        // The test binary again, as a fresh process, running only the reader.
-        let reader = format!(
-            "{}::reader_process",
-            module_path!().split_once("::").unwrap().1
-        );
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--ignored", "--exact", &reader, "--nocapture"])
-            .env(READER_ACCOUNT_ENV, &account)
-            .output()
-            .unwrap();
-        let ran = String::from_utf8_lossy(&output.stdout);
+        let output = run_child("reader_process", &[(READER_ACCOUNT_ENV, &account)]);
         store.delete(&account).unwrap();
-        assert!(output.status.success(), "reader failed: {ran}");
-        assert!(ran.contains("1 passed"), "the reader did not run: {ran}");
+        assert_child_passed("reader_process", &output);
     }
 
+    /// Started by `with_no_session_bus_every_call_is_unavailable` with no usable bus, and left
+    /// out of the CI filter: without the variable it would run against the real session.
     #[test]
     #[ignore = "needs a Secret Service session"]
-    fn with_no_session_bus_every_call_is_unavailable() {
-        // SAFETY: nextest runs each test in its own process, and nothing here starts a thread
-        // that reads the environment before this call.
-        unsafe {
-            std::env::set_var(
-                "DBUS_SESSION_BUS_ADDRESS",
-                "unix:path=/nonexistent/codesense-bus",
-            );
+    fn no_bus_child() {
+        if std::env::var(NO_BUS_ENV).is_err() {
+            return;
         }
         assert!(!secret_store_available());
         let store = KeychainStore::new(SERVICE);
@@ -756,5 +769,21 @@ mod secret_service_tests {
             store.delete("any").unwrap_err(),
             CredentialError::Unavailable
         );
+    }
+
+    #[test]
+    #[ignore = "needs a Secret Service session"]
+    fn with_no_session_bus_every_call_is_unavailable() {
+        let output = run_child(
+            "no_bus_child",
+            &[
+                (NO_BUS_ENV, "1"),
+                (
+                    "DBUS_SESSION_BUS_ADDRESS",
+                    "unix:path=/nonexistent/codesense-bus",
+                ),
+            ],
+        );
+        assert_child_passed("no_bus_child", &output);
     }
 }
