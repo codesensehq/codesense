@@ -1042,6 +1042,7 @@ dependencies = [
  "libc",
  "serde",
  "tempfile",
+ "tokio",
  "windows-sys 0.59.0",
 ]
 
