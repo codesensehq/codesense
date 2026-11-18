@@ -93,7 +93,7 @@ pub enum ShellRow {
     EnvShell,
     /// The login shell in the user's passwd entry.
     Passwd,
-    /// The first install of this name on the host's `PATH` whose kind the
+    /// The first usable install of this name on the host's `PATH` whose kind the
     /// table accepts.
     OnPath(&'static str),
     /// This path.
@@ -249,32 +249,37 @@ pub fn resolve_shell_from(
     };
     let mut passwd = Some(passwd);
     for row in table.rows {
-        let (candidate, source) = match *row {
-            ShellRow::Setting => (given(override_shell), ShellSource::Override),
-            ShellRow::EnvShell => (given(env_shell), ShellSource::Env),
+        let (found, source) = match *row {
+            ShellRow::Setting => (
+                given(override_shell).and_then(accept),
+                ShellSource::Override,
+            ),
+            ShellRow::EnvShell => (given(env_shell).and_then(accept), ShellSource::Env),
             ShellRow::Passwd => {
                 let shell = passwd.take().and_then(|passwd| passwd());
-                (given(shell.as_deref()), ShellSource::Passwd)
+                (
+                    given(shell.as_deref()).and_then(accept),
+                    ShellSource::Passwd,
+                )
             }
             ShellRow::OnPath(name) => (
-                env("PATH").and_then(|path| {
-                    candidates(&path, name)
-                        .into_iter()
-                        .find(|found| shell_kind(found).is_some_and(|kind| table.accepts(kind)))
-                }),
+                env("PATH").and_then(|path| candidates(&path, name).into_iter().find_map(accept)),
                 ShellSource::Fallback,
             ),
-            ShellRow::Fixed(path) => (Some(PathBuf::from(path)), ShellSource::Fallback),
+            ShellRow::Fixed(path) => (accept(PathBuf::from(path)), ShellSource::Fallback),
             ShellRow::InVar(var, components) => (
-                env(var).filter(|value| !value.is_empty()).map(|value| {
-                    components
-                        .iter()
-                        .fold(PathBuf::from(value), |p, c| p.join(c))
-                }),
+                env(var)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| {
+                        components
+                            .iter()
+                            .fold(PathBuf::from(value), |p, c| p.join(c))
+                    })
+                    .and_then(accept),
                 ShellSource::Fallback,
             ),
         };
-        if let Some((path, kind)) = candidate.and_then(accept) {
+        if let Some((path, kind)) = found {
             return UserShell { path, kind, source };
         }
     }

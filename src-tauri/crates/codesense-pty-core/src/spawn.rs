@@ -1245,6 +1245,31 @@ mod tests {
         }
     }
 
+    /// The Windows table's `pwsh` row searches the host's own `PATH`, ahead of
+    /// `ProgramFiles`.
+    #[test]
+    fn the_windows_table_finds_pwsh_on_the_hosts_path() {
+        let fx = Fixture::new();
+        let bin = fx.home.join("bin");
+        let pwsh = cli::named_in(std::slice::from_ref(&bin), "pwsh")
+            .into_iter()
+            .find(|path| crate::shell::shell_kind(path).is_some())
+            .expect("a pwsh file name the table classifies");
+        install(&pwsh);
+        let program_files = fx.home.join("Program Files");
+        install(&program_files.join("PowerShell").join("7").join("pwsh.exe"));
+        let host = fx
+            .host(&[
+                ("PATH", bin.to_str().unwrap()),
+                ("ProgramFiles", program_files.to_str().unwrap()),
+            ])
+            .with_shell_table(&crate::shell::WINDOWS);
+        let spec = interactive("")
+            .resolve("s", &host)
+            .expect("the spawn resolves");
+        assert_eq!(argv(&spec)[0], pwsh.to_string_lossy());
+    }
+
     /// A host built from given variables resolves with its own OS's table: a
     /// fish user's command line runs under that table's POSIX runner, or is
     /// an error where it has none.

@@ -160,6 +160,17 @@ describe("GeneralSection — terminal shell row (SW-LN-35)", () => {
     await waitFor(() => expect(setTerminalShellOverride).toHaveBeenCalledWith(undefined));
   });
 
+  it("is found by searching the Windows shell names", () => {
+    const { unmount } = render(<GeneralSection query="no such setting" />);
+    expect(screen.queryByTestId("settings-terminal-shell")).toBeNull();
+    unmount();
+    for (const query of ["pwsh", "powershell", "cmd"]) {
+      const { unmount } = render(<GeneralSection query={query} />);
+      expect(screen.getByTestId("settings-terminal-shell")).toBeTruthy();
+      unmount();
+    }
+  });
+
   it("renders without a backend", () => {
     terminalShellInfo.mockImplementation(() => {
       throw new Error("no tauri");

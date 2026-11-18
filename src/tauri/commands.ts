@@ -723,14 +723,20 @@ export interface TerminalShellInfo {
   path: string;
   kind: ShellKind;
   source: "override" | "env" | "passwd" | "fallback";
-  /** The shell detected without the override (the OS's table, e.g. `$SHELL` → passwd → `/bin/zsh` on macOS). */
+  /**
+   * The shell detected without the override (the OS's table, e.g. `$SHELL` → passwd → `/bin/zsh`
+   * on macOS).
+   */
   detectedPath: string;
   overridePath: string | null;
   /** The override is set but isn't an executable shell of an accepted kind, so it is ignored. */
   overrideRejected: boolean;
   /** A login shell of a kind this OS doesn't accept, which is why the fallback is used. */
   unsupportedShell: string | null;
-  /** The shell kinds this OS accepts from the override or a login shell (zsh, bash and fish on macOS and Linux). */
+  /**
+   * The shell kinds this OS accepts from the override or a login shell (zsh, bash and fish on
+   * macOS and Linux).
+   */
   acceptedKinds: ShellKind[];
 }
 
