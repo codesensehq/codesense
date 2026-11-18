@@ -715,18 +715,23 @@ export const reconfigureWarmPool = (
     shellIntegration,
   });
 
+/** A shell a terminal can run. */
+export type ShellKind = "zsh" | "bash" | "fish" | "pwsh" | "powershell" | "cmd";
+
 /** SW-LN-35: the shell new terminals spawn, and where it came from. */
 export interface TerminalShellInfo {
   path: string;
-  kind: "zsh" | "bash" | "fish";
+  kind: ShellKind;
   source: "override" | "env" | "passwd" | "fallback";
-  /** The shell detected without the override (`$SHELL` → passwd → `/bin/zsh`). */
+  /** The shell detected without the override (the OS's table, e.g. `$SHELL` → passwd → `/bin/zsh` on macOS). */
   detectedPath: string;
   overridePath: string | null;
-  /** The override is set but isn't an executable zsh/bash/fish, so it is ignored. */
+  /** The override is set but isn't an executable shell of an accepted kind, so it is ignored. */
   overrideRejected: boolean;
-  /** A login shell CodeSense can't integrate with, which is why zsh is used. */
+  /** A login shell of a kind this OS doesn't accept, which is why the fallback is used. */
   unsupportedShell: string | null;
+  /** The shell kinds this OS accepts from the override or a login shell (zsh, bash and fish on macOS and Linux). */
+  acceptedKinds: ShellKind[];
 }
 
 export const terminalShellInfo = () => invoke<TerminalShellInfo>("terminal_shell_info");

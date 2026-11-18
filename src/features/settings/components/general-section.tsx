@@ -732,8 +732,8 @@ function TerminalPromptRow() {
 }
 
 // SW-LN-35: the shell terminals run. Shows the detected login shell and takes
-// an optional override (an absolute path to zsh, bash, or fish), committed on
-// blur. The Rust calls go through `Promise.resolve().then` so a missing backend
+// an optional override (an absolute path to a shell of a kind the OS accepts,
+// `acceptedKinds`), committed on blur. The Rust calls go through `Promise.resolve().then` so a missing backend
 // (tests, mock mode) just leaves the detected line blank.
 function TerminalShellRow() {
   const terminalShell = useViewerStore((s) => s.settings.terminalShell);
@@ -794,16 +794,24 @@ function TerminalShellRow() {
   );
 }
 
+/** The kinds as prose: "zsh, bash, or fish". */
+function shellKindList(kinds: readonly string[]): string {
+  if (kinds.length < 2) return kinds.join("");
+  if (kinds.length === 2) return kinds.join(" or ");
+  return `${kinds.slice(0, -1).join(", ")}, or ${kinds.at(-1)}`;
+}
+
 function terminalShellStatus(info: TerminalShellInfo | null): string {
   if (!info) return "New terminals run your login shell. Leave blank to keep it.";
+  const kinds = shellKindList(info.acceptedKinds);
   if (info.overrideRejected) {
-    return `${info.overridePath} isn't an executable zsh, bash, or fish. New terminals use ${info.path}.`;
+    return `${info.overridePath} isn't an executable ${kinds}. New terminals use ${info.path}.`;
   }
   if (info.source === "override") return `New terminals use ${info.path}.`;
   if (info.unsupportedShell) {
     return `Your login shell (${info.unsupportedShell}) isn't supported yet. New terminals use ${info.path}.`;
   }
-  return `Detected ${info.detectedPath}. Leave blank to keep it, or enter a path to zsh, bash, or fish.`;
+  return `Detected ${info.detectedPath}. Leave blank to keep it, or enter a path to ${kinds}.`;
 }
 
 // ---------- Agent CLIs ----------
