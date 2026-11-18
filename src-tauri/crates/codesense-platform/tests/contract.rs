@@ -4,6 +4,8 @@
 //! end. Process tests drive the `platform-fixture` binary, never a shell;
 //! it is the client of the IPC rows.
 
+use std::cell::Cell;
+use std::ffi::{OsStr, OsString};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
@@ -11,6 +13,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use codesense_platform::cli::{candidates, named_in, package_dirs, search_path};
 use codesense_platform::dirs::codesense_home;
 use codesense_platform::fs::{
     atomic_replace, canonicalize, create_new_owner_only, create_owner_only, file_id, file_id_of,
@@ -726,6 +729,87 @@ fn is_executable_accepts_only_an_absolute_executable_file() {
     ));
 }
 
+/// The fixture installs of `tool`: every spelling an OS might run.
+const TOOL_FILES: [&str; 3] = ["tool", "tool.cmd", "tool.exe"];
+
+fn path_of(dirs: &[&Path]) -> OsString {
+    std::env::join_paths(dirs).unwrap()
+}
+
+#[test]
+fn cli_candidates_follow_pathext_order() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = |name: &str| tmp.path().join(name);
+    for install in ["a", "b"] {
+        for file in TOOL_FILES {
+            executable(&dir(install), file);
+        }
+    }
+    // A file this OS would not run, and directories named like the tool.
+    std::fs::create_dir(dir("decoy")).unwrap();
+    std::fs::write(dir("decoy").join("tool"), "x").unwrap();
+    for file in TOOL_FILES {
+        std::fs::create_dir_all(dir("named").join(file)).unwrap();
+    }
+    let path = path_of(&[
+        &dir("a"),
+        Path::new(""),
+        Path::new("relative"),
+        &dir("decoy"),
+        &dir("named"),
+        &dir("b"),
+    ]);
+    let expected = [expect_installs(&dir("a")), expect_installs(&dir("b"))].concat();
+    assert_eq!(candidates(&path, "tool"), expected);
+    assert!(candidates(OsStr::new(""), "tool").is_empty());
+    assert!(candidates(&path, "other").is_empty());
+}
+
+#[test]
+fn cli_candidates_dedupe_by_canonical_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().join("real");
+    for file in TOOL_FILES {
+        executable(&real, file);
+    }
+    // The same directory listed twice is one install.
+    let twice = path_of(&[&real, &real]);
+    assert_eq!(candidates(&twice, "tool"), expect_installs(&real));
+    // A link and its target are one install; the first spelling is kept.
+    let links = tmp.path().join("links");
+    if !symlink_or_skip(&real, &links) {
+        return;
+    }
+    let path = path_of(&[&links, &real]);
+    assert_eq!(candidates(&path, "tool"), expect_installs(&links));
+}
+
+#[test]
+fn cli_named_in_templates_any_name() {
+    let dirs = [PathBuf::from("first"), PathBuf::from("second")];
+    assert_eq!(named_in(&dirs, "zzagent"), expect_named(&dirs, "zzagent"));
+    assert_eq!(
+        named_in(&dirs, "zzagent.exe"),
+        vec![dirs[0].join("zzagent.exe"), dirs[1].join("zzagent.exe")]
+    );
+    assert!(named_in(&[], "zzagent").is_empty());
+}
+
+#[test]
+fn cli_package_dirs_per_os() {
+    assert_eq!(package_dirs(), expect_package_dirs());
+}
+
+#[test]
+fn cli_search_path_per_os() {
+    let probed = Cell::new(false);
+    let found = search_path(|| {
+        probed.set(true);
+        Some("from the probe".to_owned())
+    });
+    expect_search_path(found, probed.get());
+}
+
 /// Write the file `name` in `dir` (made if missing) and make it executable.
 fn executable(dir: &Path, name: &str) -> PathBuf {
     std::fs::create_dir_all(dir).unwrap();
@@ -901,4 +985,91 @@ fn set_executable(path: &Path) {
     }
     #[cfg(windows)]
     let _ = path;
+}
+
+/// `PATHEXT`'s extensions in order, or Windows' default when it is unset.
+fn pathext() -> Vec<String> {
+    std::env::var("PATHEXT")
+        .ok()
+        .filter(|listed| !listed.trim().is_empty())
+        .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".to_owned())
+        .split(';')
+        .map(str::trim)
+        .filter(|ext| !ext.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// What `candidates` finds of [`TOOL_FILES`] in `dir`. Unix: `tool`, the one
+/// named file. Windows: `tool.exe` and `tool.cmd` in `PATHEXT` order, spelled
+/// with its extensions.
+fn expect_installs(dir: &Path) -> Vec<PathBuf> {
+    if cfg!(windows) {
+        pathext()
+            .into_iter()
+            .filter(|ext| {
+                [".exe", ".cmd"]
+                    .iter()
+                    .any(|ours| ext.eq_ignore_ascii_case(ours))
+            })
+            .map(|ext| dir.join(format!("tool{ext}")))
+            .collect()
+    } else {
+        vec![dir.join("tool")]
+    }
+}
+
+/// What `named_in` names for a bare `name`. Unix: `dir/name`. Windows:
+/// `dir/name<ext>` for each `PATHEXT` extension.
+fn expect_named(dirs: &[PathBuf], name: &str) -> Vec<PathBuf> {
+    let files = if cfg!(windows) {
+        pathext().iter().map(|ext| format!("{name}{ext}")).collect()
+    } else {
+        vec![name.to_owned()]
+    };
+    dirs.iter()
+        .flat_map(|dir| files.iter().map(move |file| dir.join(file)))
+        .collect()
+}
+
+/// The package-manager bin directories, in order. Unix: Homebrew, then the
+/// user-local, npm, bun and pnpm directories under the home. Windows: npm,
+/// Scoop, WinGet and bun.
+fn expect_package_dirs() -> Vec<PathBuf> {
+    let var = |name: &str| PathBuf::from(std::env::var_os(name).expect(name));
+    if cfg!(windows) {
+        let home = var("USERPROFILE");
+        vec![
+            var("APPDATA").join("npm"),
+            home.join("scoop").join("shims"),
+            var("LOCALAPPDATA")
+                .join("Microsoft")
+                .join("WinGet")
+                .join("Links"),
+            home.join(".bun").join("bin"),
+        ]
+    } else {
+        let home = var("HOME");
+        vec![
+            PathBuf::from("/opt/homebrew/bin"),
+            PathBuf::from("/usr/local/bin"),
+            home.join(".local/bin"),
+            home.join(".npm-global/bin"),
+            home.join(".bun/bin"),
+            home.join("Library/pnpm"),
+            home.join(".local/share/pnpm"),
+        ]
+    }
+}
+
+/// Unix: the login shell's `$PATH`, so the probe's answer. Windows: the
+/// process `PATH`, and the probe is never called.
+fn expect_search_path(found: Option<String>, probed: bool) {
+    if cfg!(windows) {
+        assert!(!probed, "Windows has no login shell to probe");
+        assert_eq!(found, std::env::var("PATH").ok());
+    } else {
+        assert!(probed);
+        assert_eq!(found.as_deref(), Some("from the probe"));
+    }
 }

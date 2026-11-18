@@ -1,7 +1,7 @@
 [package]
 name = "codesense-platform"
 version = "0.1.0"
-description = "The one place OS-specific mechanisms live: process trees, private and atomic files, locks, links, the codesense home, the current user, the open-file limit and local IPC"
+description = "The one place OS-specific mechanisms live: process trees, private and atomic files, locks, links, the codesense home, the current user, the open-file limit, local IPC and the command-line tool lookup"
 edition = "2021"
 license = "MIT"
 publish = false
