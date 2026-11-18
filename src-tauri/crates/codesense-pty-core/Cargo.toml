@@ -31,6 +31,8 @@ base64 = "0.22"
 blake3 = "1"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 codesense-host-proto = { path = "../codesense-host-proto" }
+# OS mechanisms: executable files, the login shell and the command-line tool lookup.
+codesense-platform = { path = "../codesense-platform" }
 libc = "0.2"
 log = "0.4"
 portable-pty = "0.9.0"

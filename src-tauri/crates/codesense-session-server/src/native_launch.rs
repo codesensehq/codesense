@@ -433,7 +433,7 @@ fn resolve_binary(path: &str, binary: &str) -> Option<PathBuf> {
     std::env::split_paths(path)
         .filter(|directory| directory.is_absolute())
         .map(|directory| directory.join(binary))
-        .find(|candidate| codesense_pty_core::shell::is_executable_file(candidate))
+        .find(|candidate| codesense_platform::fs::is_executable(candidate))
 }
 
 /// The argv that hands `cli` the session's MCP configuration: the file at `config`
@@ -774,7 +774,9 @@ pub(crate) mod tests {
                 ("HOME".into(), root.path().to_str().unwrap().into()),
             ],
         );
-        let mut spec = intent.resolve("controlled-native-test", &environment);
+        let mut spec = intent
+            .resolve("controlled-native-test", &environment)
+            .expect("the spawn resolves");
         spec.command.get_argv_mut()[0] = shell.into_os_string();
         (root, spec, config)
     }
@@ -1152,6 +1154,7 @@ esac
             "shell-tab",
             &HostEnvironment::with_vars(None, None, [("PATH".into(), "/usr/bin:/bin".into())]),
         )
+        .expect("the spawn resolves")
     }
 
     #[test]

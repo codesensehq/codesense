@@ -1864,7 +1864,9 @@ pub(crate) mod attribution_entry {
                 ("PATH".into(), "/usr/bin:/bin".into()),
             ],
         );
-        let mut spec = intent.resolve(&id, &environment);
+        let mut spec = intent
+            .resolve(&id, &environment)
+            .expect("the spawn resolves");
         codesense_session_server::host::prepare_direct_launch_for_test(
             &mut spec,
             AgentCli::Codex,

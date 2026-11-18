@@ -4,11 +4,13 @@
 //! ([`codesense_pty_core::shell`]); the override travels to it in the spawn
 //! intent.
 
-use std::path::Path;
+use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
+use codesense_platform::{cli, fs, user};
 use codesense_pty_core::shell::{
-    is_executable_file, passwd_login_shell, resolve_shell_from, shell_kind, ShellKind, ShellSource,
+    resolve_shell_from, shell_kind, ShellKind, ShellRow, ShellSource, ShellTable,
 };
 use serde::Serialize;
 use tauri::Manager;
@@ -34,40 +36,63 @@ pub struct TerminalShellInfo {
     pub path: String,
     pub kind: ShellKind,
     pub source: ShellSource,
-    /// The shell detected without the override (`$SHELL` → passwd → zsh).
+    /// The shell detected without the override (the host OS's table, e.g.
+    /// `$SHELL` → passwd → zsh on macOS).
     pub detected_path: String,
     /// The override currently set, verbatim.
     pub override_path: Option<String>,
-    /// The override is set but is not an executable zsh/bash/fish, so it is ignored.
+    /// The override is set but is not an executable shell of an accepted kind,
+    /// so it is ignored.
     pub override_rejected: bool,
-    /// A login shell (`$SHELL` or passwd) CodeSense can't integrate with, which
-    /// is why the fallback is in use.
+    /// A login shell (`$SHELL` or passwd) of a kind this OS does not accept,
+    /// which is why the fallback is in use.
     pub unsupported_shell: Option<String>,
+    /// The shell kinds this OS accepts from the override or a login shell.
+    pub accepted_kinds: &'static [ShellKind],
 }
 
 pub(crate) fn shell_info_from(
+    table: &'static ShellTable,
     override_shell: Option<&str>,
     env_shell: Option<&str>,
     passwd: impl Fn() -> Option<String>,
+    env: impl Fn(&str) -> Option<OsString>,
+    candidates: impl Fn(&OsStr, &str) -> Vec<PathBuf>,
     usable: impl Fn(&Path) -> bool,
 ) -> TerminalShellInfo {
-    let effective = resolve_shell_from(override_shell, env_shell, &passwd, &usable);
-    let detected = resolve_shell_from(None, env_shell, &passwd, &usable);
+    let resolve = |override_shell| {
+        resolve_shell_from(
+            table,
+            override_shell,
+            env_shell,
+            &passwd,
+            &env,
+            &candidates,
+            &usable,
+        )
+    };
+    let effective = resolve(override_shell);
+    let detected = resolve(None);
     let override_path = override_shell
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
     let override_rejected = override_path.is_some() && effective.source != ShellSource::Override;
-    // Only a shell CodeSense has no integration for is "unsupported"; a missing
-    // or stale zsh/bash/fish path just falls through to detection.
+    // Only a login shell of a kind the table does not accept is "unsupported";
+    // a missing or stale path of an accepted kind just falls through to
+    // detection. A table that reads no login shell (Windows) has none.
+    let reads = |row| table.rows.contains(&row);
     let unsupported_shell = if detected.source == ShellSource::Fallback {
         env_shell
+            .filter(|_| reads(ShellRow::EnvShell))
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string)
-            .or_else(&passwd)
+            .or_else(|| reads(ShellRow::Passwd).then(&passwd).flatten())
             .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty() && shell_kind(Path::new(s)).is_none())
+            .filter(|s| {
+                !s.is_empty() && shell_kind(Path::new(s)).is_none_or(|kind| !table.accepts(kind))
+            })
     } else {
         None
     };
@@ -79,15 +104,19 @@ pub(crate) fn shell_info_from(
         override_path,
         override_rejected,
         unsupported_shell,
+        accepted_kinds: table.kinds,
     }
 }
 
 fn current_shell_info() -> TerminalShellInfo {
     shell_info_from(
+        ShellTable::host(),
         current_override().as_deref(),
         std::env::var("SHELL").ok().as_deref(),
-        passwd_login_shell,
-        is_executable_file,
+        user::login_shell,
+        |name: &str| std::env::var_os(name),
+        cli::candidates,
+        fs::is_executable,
     )
 }
 
@@ -138,9 +167,29 @@ pub(crate) fn spawn_shell(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codesense_pty_core::shell::{MACOS, WINDOWS};
 
     fn usable_set(paths: &'static [&'static str]) -> impl Fn(&Path) -> bool {
         move |p: &Path| paths.iter().any(|x| Path::new(x) == p)
+    }
+
+    /// Settings' view with the macOS table, whose rows read no variable or
+    /// `PATH`.
+    fn macos_info(
+        override_shell: Option<&str>,
+        env_shell: Option<&str>,
+        passwd: impl Fn() -> Option<String>,
+        usable: impl Fn(&Path) -> bool,
+    ) -> TerminalShellInfo {
+        shell_info_from(
+            &MACOS,
+            override_shell,
+            env_shell,
+            passwd,
+            |_: &str| None,
+            |_: &OsStr, _: &str| Vec::new(),
+            usable,
+        )
     }
 
     #[test]
@@ -168,7 +217,7 @@ mod tests {
 
     #[test]
     fn info_reports_rejected_override_and_unsupported_shell() {
-        let info = shell_info_from(
+        let info = macos_info(
             Some("/nope/bash"),
             Some("/bin/tcsh"),
             || Some("/bin/tcsh".into()),
@@ -183,7 +232,7 @@ mod tests {
     #[test]
     fn info_does_not_call_a_missing_supported_shell_unsupported() {
         // $SHELL names a Homebrew fish that was uninstalled.
-        let info = shell_info_from(
+        let info = macos_info(
             None,
             Some("/opt/homebrew/bin/fish"),
             || None,
@@ -195,7 +244,7 @@ mod tests {
 
     #[test]
     fn info_reports_an_unsupported_passwd_shell_when_env_is_blank() {
-        let info = shell_info_from(
+        let info = macos_info(
             None,
             Some("  "),
             || Some("/bin/tcsh".into()),
@@ -206,11 +255,59 @@ mod tests {
 
     #[test]
     fn info_for_a_plain_bash_user() {
-        let info = shell_info_from(None, Some("/bin/bash"), || None, usable_set(&["/bin/bash"]));
+        let info = macos_info(None, Some("/bin/bash"), || None, usable_set(&["/bin/bash"]));
         assert_eq!(info.path, "/bin/bash");
         assert_eq!(info.detected_path, "/bin/bash");
         assert_eq!(info.kind, ShellKind::Bash);
         assert!(!info.override_rejected);
         assert!(info.unsupported_shell.is_none());
+        assert_eq!(
+            info.accepted_kinds,
+            [ShellKind::Zsh, ShellKind::Bash, ShellKind::Fish]
+        );
+    }
+
+    /// pwsh is a known kind but not one macOS accepts: it is still the
+    /// unsupported login shell, as before it was a kind at all.
+    #[test]
+    fn info_calls_a_pwsh_login_shell_on_macos_unsupported() {
+        let info = macos_info(
+            None,
+            Some("/opt/homebrew/bin/pwsh"),
+            || None,
+            usable_set(&["/opt/homebrew/bin/pwsh", "/bin/zsh"]),
+        );
+        assert_eq!(info.path, "/bin/zsh");
+        assert_eq!(info.source, ShellSource::Fallback);
+        assert_eq!(
+            info.unsupported_shell.as_deref(),
+            Some("/opt/homebrew/bin/pwsh")
+        );
+    }
+
+    #[test]
+    fn info_on_windows_lists_its_kinds_and_reads_no_login_shell() {
+        let info = shell_info_from(
+            &WINDOWS,
+            None,
+            Some("/usr/bin/tcsh"),
+            || panic!("passwd consulted on Windows"),
+            |_: &str| None,
+            |_: &OsStr, _: &str| Vec::new(),
+            |_: &Path| false,
+        );
+        assert_eq!(info.path, "cmd.exe");
+        assert_eq!(info.kind, ShellKind::Cmd);
+        assert!(info.unsupported_shell.is_none());
+        assert_eq!(
+            info.accepted_kinds,
+            [ShellKind::Pwsh, ShellKind::PowerShell, ShellKind::Cmd]
+        );
+        let wire = serde_json::to_value(&info).unwrap();
+        assert_eq!(
+            wire["acceptedKinds"],
+            serde_json::json!(["pwsh", "powershell", "cmd"])
+        );
+        assert_eq!(wire["kind"], "cmd");
     }
 }

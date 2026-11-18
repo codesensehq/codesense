@@ -2356,12 +2356,12 @@ fn resolve_remote_entries(
             requested.to_path_buf()
         } else if requested.components().count() == 1 {
             std::env::split_paths(path).filter(|dir| dir.is_absolute()).map(|dir| dir.join(requested))
-                .find(|file| codesense_pty_core::shell::is_executable_file(file))
+                .find(|file| codesense_platform::fs::is_executable(file))
                 .ok_or("selected remote MCP executable missing; install it explicitly on the remote account")?
         } else {
             return Err("remote MCP executable must be absolute or a remote PATH name".into());
         };
-        if !codesense_pty_core::shell::is_executable_file(&command) {
+        if !codesense_platform::fs::is_executable(&command) {
             return Err("selected remote MCP executable missing or not executable".into());
         }
         let metadata =
