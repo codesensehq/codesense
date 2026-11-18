@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use std::collections::{BTreeMap, HashSet};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
@@ -11,6 +12,8 @@ use serde::Serialize;
 use tauri::{Emitter, Manager};
 
 use crate::agents::launch_check::{cli_version_warning, LaunchWarning};
+use codesense_platform::cli;
+use codesense_platform::fs::is_executable;
 use codesense_pty_core::agent_cli::{by_binary, descriptor, AgentCli};
 
 /// Minimum required git version for Code Sense sync operations.
@@ -149,7 +152,8 @@ pub struct DependencyManager {
     /// of launches right after an uninstall runs one probe.
     stale_resolve: Mutex<()>,
     /// The fixed install locations a lost binary is checked at during its retry cooldown
-    /// ([`DependencyManager::lost_binary_is_back`]). Production uses [`known_agent_locations`];
+    /// ([`DependencyManager::lost_binary_is_back`]). Production names the basename in the package
+    /// directories ([`cli::named_in`] over [`cli::package_dirs`]);
     /// tests inject their own so a CLI installed on the machine cannot change the outcome.
     known_locations: Box<dyn Fn(&str) -> Vec<PathBuf> + Send + Sync>,
 }
@@ -277,7 +281,9 @@ impl DependencyManager {
                 agents,
             }),
             stale_resolve: Mutex::new(()),
-            known_locations: Box::new(known_agent_locations),
+            known_locations: Box::new(|basename: &str| {
+                cli::named_in(&cli::package_dirs(), basename)
+            }),
         }
     }
 
@@ -304,7 +310,7 @@ impl DependencyManager {
         if !basenames.contains(&default_basename) {
             basenames.push(default_basename);
         }
-        let login_path = probe_login_path();
+        let login_path = cli::search_path(probe_login_path);
         self.resolve_gh_with_login_path(login_path.as_deref());
         for basename in &basenames {
             self.resolve_agent_with_login_path(basename, login_path.as_deref(), || {});
@@ -334,7 +340,7 @@ impl DependencyManager {
     /// ([`cached_login_shell_path`]: probed once, then a stat per PATH entry and
     /// `gh --version`). Blocking: call it off the main thread.
     pub fn re_resolve_gh(&self) {
-        let login_path = cached_login_shell_path();
+        let login_path = cli::search_path(cached_login_shell_path);
         self.resolve_gh_with_login_path(login_path.as_deref());
     }
 
@@ -380,7 +386,7 @@ impl DependencyManager {
         self.resolve_agent_with_login_path_with(
             basename,
             login_path,
-            known_agent_locations(basename),
+            cli::named_in(&cli::package_dirs(), basename),
             parse_agent_version,
             after_winner,
         )
@@ -551,7 +557,7 @@ impl DependencyManager {
         };
         (self.known_locations)(basename)
             .iter()
-            .any(|path| is_executable_file(path) && changed_since(path, missed_at))
+            .any(|path| is_executable(path) && changed_since(path, missed_at))
     }
 
     /// The binary a launch of `basename` should spawn, checked against what was
@@ -580,7 +586,7 @@ impl DependencyManager {
         };
         // A fingerprintable file with none recorded is re-resolved once (which
         // records one); a file that can never be fingerprinted matches its `None`.
-        let unchanged = is_executable_file(&path) && binary_fingerprint(&path) == entry.fingerprint;
+        let unchanged = is_executable(&path) && binary_fingerprint(&path) == entry.fingerprint;
         if unchanged {
             LaunchBinaryLookup::Ready(ResolvedAgentBinary {
                 path,
@@ -606,11 +612,11 @@ impl DependencyManager {
         basename: &str,
     ) -> (LaunchBinaryLookup, Option<PendingShadowed>) {
         self.re_resolve_stale_with(basename, || {
-            let login_path = probe_login_path();
+            let login_path = cli::search_path(probe_login_path);
             Self::agent_resolution(
                 basename,
                 login_path.as_deref(),
-                known_agent_locations(basename),
+                cli::named_in(&cli::package_dirs(), basename),
                 parse_agent_version,
             )
         })
@@ -908,27 +914,6 @@ const AGENT_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 /// Timeout for the login-shell `git` probe. Same budget as the claude probe.
 const GIT_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Known filesystem locations a user's agent binary may live, in fallback order.
-/// Consulted only when the login-shell `$PATH` probe fails or yields no install
-/// meeting the floor; their hits off the PATH are also reported as shadowed
-/// installs. SW-AN-2: the install *directories* are generic package-manager bin
-/// dirs (not per-agent knowledge); only the `basename` is descriptor data.
-fn known_agent_locations(basename: &str) -> Vec<PathBuf> {
-    let mut locs = vec![
-        PathBuf::from("/opt/homebrew/bin").join(basename), // Homebrew (Apple silicon)
-        PathBuf::from("/usr/local/bin").join(basename),    // Homebrew (Intel) / manual
-    ];
-    if let Some(home) = dirs::home_dir() {
-        locs.push(home.join(".local/bin").join(basename)); // pipx / user-local
-        locs.push(home.join(".npm-global/bin").join(basename)); // npm -g custom prefix
-        locs.push(home.join(".bun/bin").join(basename)); // bun global
-        locs.push(home.join("Library/pnpm").join(basename)); // pnpm global (macOS)
-        locs.push(home.join(".local/share/pnpm").join(basename)); // pnpm global (xdg)
-    }
-    // SW-OB-12: codesense never places its own agent binary — no ~/.codesense/bin fallback.
-    locs
-}
-
 /// Test default: no fixed install location, so a lost binary retries only after its cooldown.
 #[cfg(test)]
 fn no_known_locations(_basename: &str) -> Vec<PathBuf> {
@@ -969,28 +954,9 @@ fn probe_login_path() -> Option<String> {
     path
 }
 
-/// Whether `path` is a regular file (following symlinks) with an executable bit.
-fn is_executable_file(path: &Path) -> bool {
-    let Ok(meta) = std::fs::metadata(path) else {
-        return false;
-    };
-    if !meta.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        meta.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
-}
-
 /// The canonical target of `path`, or `path` itself when it can't be canonicalized.
 fn canonical_key(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    codesense_platform::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// The canonical target with its mtime, length and inode — what a launch compares
@@ -1013,29 +979,6 @@ fn binary_fingerprint(path: &Path) -> Option<BinaryFingerprint> {
         inode,
         change_time,
     })
-}
-
-/// Every install of `basename` on `path_env` (a `$PATH` value), in PATH order —
-/// `which -a` without a shell. Empty and relative entries are skipped, only
-/// executable regular files count, and installs are de-duplicated by canonical
-/// path (a symlink and its target are one install; the first spelling is kept).
-fn login_path_candidates(path_env: &str, basename: &str) -> Vec<PathBuf> {
-    let mut seen = HashSet::new();
-    let mut candidates = Vec::new();
-    for dir in path_env.split(':') {
-        let dir = Path::new(dir);
-        if dir.as_os_str().is_empty() || !dir.is_absolute() {
-            continue;
-        }
-        let candidate = dir.join(basename);
-        if !is_executable_file(&candidate) {
-            continue;
-        }
-        if seen.insert(canonical_key(&candidate)) {
-            candidates.push(candidate);
-        }
-    }
-    candidates
 }
 
 /// The outcome of resolving one agent basename.
@@ -1066,7 +1009,7 @@ fn resolve_agent_binary(
     meets_floor: impl Fn(&str) -> bool,
 ) -> AgentResolution {
     let path_candidates = login_path
-        .map(|path| login_path_candidates(path, basename))
+        .map(|path| cli::candidates(OsStr::new(path), basename))
         .unwrap_or_default();
     let mut below_floor_version: Option<String> = None;
     let mut pick = |candidates: &mut dyn Iterator<Item = &PathBuf>| {
@@ -1098,7 +1041,7 @@ fn resolve_agent_binary(
         .map(|(path, version, fingerprint)| (path, version, fingerprint, AgentSource::LoginPath))
         .or_else(|| {
             pick(&mut known.iter().filter(|path| {
-                is_executable_file(path) && !checked_on_path.contains(&canonical_key(path))
+                is_executable(path) && !checked_on_path.contains(&canonical_key(path))
             }))
             .map(|(path, version, fingerprint)| {
                 (path, version, fingerprint, AgentSource::KnownLocation)
@@ -1115,7 +1058,7 @@ fn resolve_agent_binary(
             shadowed_candidates.push((path.clone(), true));
         }
     }
-    for path in known.iter().filter(|path| is_executable_file(path)) {
+    for path in known.iter().filter(|path| is_executable(path)) {
         if seen.insert(canonical_key(path)) {
             shadowed_candidates.push((path.clone(), false));
         }
@@ -1140,8 +1083,8 @@ fn resolve_agent_binary(
 }
 
 /// Known filesystem locations a user's `git` may live, in priority order. The
-/// cheap fast-path stats these before spawning a login shell — mirrors
-/// [`known_agent_locations`] but for git: the standard package-manager and
+/// cheap fast-path stats these before spawning a login shell — mirrors the
+/// agents' [`cli::package_dirs`] but for git: the standard package-manager and
 /// system bin dirs (Homebrew, `/usr/bin` for Apple CLT / Xcode git, user-local).
 fn known_git_locations() -> Vec<PathBuf> {
     let mut locs = vec![
@@ -1178,7 +1121,7 @@ fn user_local_gh_locations() -> Vec<PathBuf> {
 fn stat_known_gh(known: &[PathBuf]) -> Option<PathBuf> {
     known
         .iter()
-        .find_map(|path| is_executable_file(path).then(|| path.clone()))
+        .find_map(|path| is_executable(path).then(|| path.clone()))
 }
 
 /// Pick the user's `gh`: the installs on the login-shell `$PATH` (`login_path`) in PATH
@@ -1826,7 +1769,7 @@ pub fn spawn_agent_background_resolve(app: tauri::AppHandle) {
     tauri::async_runtime::spawn_blocking(move || {
         // One login-shell `$PATH` probe for the agent and gh; the agent goes first so
         // the splash clears before gh's version check.
-        let login_path = probe_login_path();
+        let login_path = cli::search_path(probe_login_path);
         let dm = app.state::<DependencyManager>();
         if agent_resolving {
             dm.resolve_agent_with_login_path(&basename, login_path.as_deref(), || {
@@ -1862,7 +1805,8 @@ pub fn spawn_builtin_agents_warm<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
             .map(|cli| descriptor(cli).binary.as_str())
             .filter(|basename| *basename != default_basename)
             .collect();
-        let warmed = dm.warm_builtins_with(&basenames, probe_login_path, |basename, login_path| {
+        let search_path = || cli::search_path(probe_login_path);
+        let warmed = dm.warm_builtins_with(&basenames, search_path, |basename, login_path| {
             // Each winner reaches the frontend before its shadowed installs are checked.
             dm.resolve_agent_with_login_path(basename, login_path, || {
                 let _ = app.emit("dep-status-changed", ());
@@ -2372,7 +2316,10 @@ mod tests {
     // SW-AN-2: the fallback locations are templated from the descriptor's basename.
     #[test]
     fn test_known_agent_locations_includes_expected_for_claude() {
-        let locs = known_agent_locations(crate::agents::builtin::preferred_binary());
+        let locs = cli::named_in(
+            &cli::package_dirs(),
+            crate::agents::builtin::preferred_binary(),
+        );
         assert!(locs.contains(&PathBuf::from("/opt/homebrew/bin/claude")));
         assert!(locs.contains(&PathBuf::from("/usr/local/bin/claude")));
         // A home-relative candidate is present when HOME is set (it is in tests).
@@ -2386,7 +2333,7 @@ mod tests {
     // descriptor DATA — the same location-templating serves any basename, no core edit.
     #[test]
     fn test_known_agent_locations_templates_any_basename() {
-        let locs = known_agent_locations("zzagent");
+        let locs = cli::named_in(&cli::package_dirs(), "zzagent");
         assert!(locs.contains(&PathBuf::from("/opt/homebrew/bin/zzagent")));
         assert!(locs.contains(&PathBuf::from("/usr/local/bin/zzagent")));
         assert!(
@@ -3515,9 +3462,12 @@ mod tests {
             d.display(),
             a.display()
         );
-        assert_eq!(login_path_candidates(&path, "claude"), vec![in_b, in_a]);
-        assert!(login_path_candidates("", "claude").is_empty());
-        assert!(login_path_candidates(&path, "codex").is_empty());
+        assert_eq!(
+            cli::candidates(OsStr::new(&path), "claude"),
+            vec![in_b, in_a]
+        );
+        assert!(cli::candidates(OsStr::new(""), "claude").is_empty());
+        assert!(cli::candidates(OsStr::new(&path), "codex").is_empty());
     }
 
     #[test]
@@ -3531,13 +3481,88 @@ mod tests {
         // The first spelling on PATH is kept.
         let path = path_of(&[&links, &tmp.path().join("real")]);
         assert_eq!(
-            login_path_candidates(&path, "claude"),
+            cli::candidates(OsStr::new(&path), "claude"),
             vec![links.join("claude")]
         );
         // The same directory listed twice is one install.
         let real_dir = tmp.path().join("real");
         let twice = path_of(&[&real_dir, &real_dir]);
-        assert_eq!(login_path_candidates(&twice, "claude"), vec![real]);
+        assert_eq!(cli::candidates(OsStr::new(&twice), "claude"), vec![real]);
+    }
+
+    /// The fixed locations of `basename` in the package directories `dirs`, as
+    /// production names them.
+    fn known_in(dirs: &[PathBuf], basename: &str) -> Vec<PathBuf> {
+        cli::named_in(dirs, basename)
+    }
+
+    /// Golden output of the agent lookup over a temp PATH and fixture package
+    /// directories: the winner, its source and the shadowed installs must not
+    /// change when the lookup moves.
+    #[test]
+    fn resolve_agent_binary_golden_over_path_and_package_dirs() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = |name: &str| tmp.path().join(name);
+        let old_on_path = exec_stub(&dir("p1"), "claude");
+        let new_on_path = exec_stub(&dir("p2"), "claude");
+        // A non-executable decoy and a directory named like the binary.
+        std::fs::create_dir_all(dir("decoy")).unwrap();
+        std::fs::write(dir("decoy").join("claude"), b"x").unwrap();
+        std::fs::create_dir_all(dir("named").join("claude")).unwrap();
+        // A link on PATH to an install already on it.
+        std::fs::create_dir_all(dir("links")).unwrap();
+        std::os::unix::fs::symlink(&new_on_path, dir("links").join("claude")).unwrap();
+        let package_only = exec_stub(&dir("k1"), "claude");
+        // A package directory linking to an install on PATH, and one without it.
+        std::fs::create_dir_all(dir("k2")).unwrap();
+        std::os::unix::fs::symlink(&old_on_path, dir("k2").join("claude")).unwrap();
+        std::fs::create_dir_all(dir("k3")).unwrap();
+        let path = path_of(&[
+            &dir("decoy"),
+            &dir("p1"),
+            &dir("named"),
+            &dir("links"),
+            &dir("p2"),
+        ]);
+        let known = known_in(&[dir("k3"), dir("k2"), dir("k1")], "claude");
+        let meets = |v: &str| check_version_minimum(v, (2, 0));
+        let version = versions(&[
+            ("p1", "1.9.0"),
+            ("links", "2.1.296"),
+            ("p2", "2.1.296"),
+            ("k1", "2.1.300"),
+        ]);
+
+        // The first PATH install meeting the floor wins; the rest are shadowed.
+        let r = resolve_agent_binary("claude", Some(&path), known.clone(), &version, meets);
+        assert_eq!(
+            r.path.as_deref(),
+            Some(dir("links").join("claude").as_path())
+        );
+        assert_eq!(r.version.as_deref(), Some("2.1.296"));
+        assert_eq!(r.source, Some(AgentSource::LoginPath));
+        assert_eq!(
+            r.shadowed_candidates,
+            vec![(old_on_path.clone(), true), (package_only.clone(), false)]
+        );
+
+        // The probe failed: the package directories, in order.
+        let r = resolve_agent_binary("claude", None, known.clone(), &version, meets);
+        assert_eq!(r.path.as_deref(), Some(package_only.as_path()));
+        assert_eq!(r.version.as_deref(), Some("2.1.300"));
+        assert_eq!(r.source, Some(AgentSource::KnownLocation));
+        assert_eq!(
+            r.shadowed_candidates,
+            vec![(dir("k2").join("claude"), false)]
+        );
+
+        // Nothing on PATH meets the floor: a package directory naming a PATH
+        // install is skipped, the next one wins.
+        let low_path = path_of(&[&dir("p1")]);
+        let r = resolve_agent_binary("claude", Some(&low_path), known, &version, meets);
+        assert_eq!(r.path.as_deref(), Some(package_only.as_path()));
+        assert_eq!(r.source, Some(AgentSource::KnownLocation));
+        assert_eq!(r.shadowed_candidates, vec![(old_on_path, true)]);
     }
 
     /// PATH order beats the fixed list, and other installs are shadowed, for one

@@ -9,14 +9,17 @@
 //!
 //! - [`process`]: a [`process::ProcessTree`] ended as a whole, and pid liveness.
 //! - [`fs`]: owner-only files and checks, file identity, no-follow opens,
-//!   atomic replace, exclusive locks, links, canonical paths and portable
-//!   names.
+//!   atomic replace, exclusive locks, links, canonical paths, portable names
+//!   and executable files.
+//! - [`cli`]: finding a command-line tool on `PATH` and in package-manager
+//!   directories.
 //! - [`dirs`]: the codesense home.
 //! - [`user`]: the user this process runs as.
 //! - [`limits`]: the open-file soft limit.
 //! - [`ipc`]: local endpoints, listeners and streams (Unix sockets, named
 //!   pipes) and the pid at the other end.
 
+pub mod cli;
 pub mod dirs;
 pub mod fs;
 pub mod ipc;
