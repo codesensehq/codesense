@@ -633,13 +633,23 @@ mod tests {
         }
     }
 
-    /// A `sleep` the test starts as a tree of its own, and its adopted group:
-    /// a real group for the teardown paths to signal.
+    /// A leader the test starts as a tree of its own, ready once it ignores
+    /// SIGTERM, and its adopted group: a real, live group for the teardown
+    /// paths to signal. It outlives a SIGTERM, so a later SIGKILL meets a live
+    /// group (on macOS a group holding only a zombie answers EPERM).
     #[cfg(unix)]
     fn own_group() -> (ProcessTree, ProcessGroup) {
-        let mut sleep = std::process::Command::new("sleep");
-        sleep.arg("30");
-        let tree = ProcessTree::spawn(&mut sleep).unwrap();
+        use std::io::BufRead;
+        let mut leader = std::process::Command::new("/bin/sh");
+        leader
+            .args(["-c", "trap '' TERM; echo ready; while :; do sleep 1; done"])
+            .stdout(std::process::Stdio::piped());
+        let mut tree = ProcessTree::spawn(&mut leader).unwrap();
+        let mut ready = String::new();
+        std::io::BufReader::new(tree.child().stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(ready.trim(), "ready");
         let group = ProcessGroup::adopt(tree.pid())
             .unwrap()
             .expect("a group of its own");
@@ -679,20 +689,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn group_signals_reach_the_whole_group_and_a_gone_group_is_ok() {
-        use std::io::BufRead;
         use std::os::unix::process::ExitStatusExt;
-        let mut leader = std::process::Command::new("/bin/sh");
-        leader
-            .args(["-c", "trap '' TERM; echo ready; while :; do sleep 1; done"])
-            .stdout(std::process::Stdio::piped());
-        let mut tree = ProcessTree::spawn(&mut leader).unwrap();
-        let mut ready = String::new();
-        std::io::BufReader::new(tree.child().stdout.take().unwrap())
-            .read_line(&mut ready)
-            .unwrap();
-        assert_eq!(ready.trim(), "ready");
-        let group = ProcessGroup::adopt(tree.pid()).unwrap();
-        let child = test_session_child(ExitedChild(Default::default()), group, false);
+        let (mut tree, group) = own_group();
+        let child = test_session_child(ExitedChild(Default::default()), Some(group), false);
 
         child.signal_group(GroupSignal::Terminate).unwrap();
         std::thread::sleep(Duration::from_millis(200));
