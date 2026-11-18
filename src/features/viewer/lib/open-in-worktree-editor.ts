@@ -3,6 +3,7 @@ import { create } from "zustand";
 
 import { readTeamKeyed, useViewerStore } from "@/shared/stores/viewer-store";
 import { isRemoteWorkspace } from "@/shared/lib/workspace-location";
+import { join, relative, split, trimTrailingSeparators } from "@/shared/lib/path";
 
 /**
  * Open a file in a tile's worktree code editor, optionally at a line — THE
@@ -44,16 +45,13 @@ export function openInWorktreeEditor(target: WorktreeEditorTarget): void {
   // An absolute path inside the worktree (what a test failure or an agent's
   // `file:line` usually carries) opens as the worktree file it names.
   const root = worktreeRoot(target.teamKey, target.workspaceId);
-  const relPath =
-    root != null && target.path.startsWith(`${root}/`)
-      ? target.path.slice(root.length + 1)
-      : target.path;
+  const relPath = (root != null && relative(root, target.path)) || target.path;
   // One spelling per file: `./src/a.ts`, `src//a.ts` and `/src/a.ts` all open the
   // same tab as `src/a.ts`.
-  const segments = relPath.split("/").filter((seg) => seg !== "" && seg !== ".");
+  const segments = split(relPath).filter((seg) => seg !== ".");
   // Nothing to open, or a path that climbs out of the worktree: ignore it.
   if (segments.length === 0 || segments.includes("..")) return;
-  const path = segments.join("/");
+  const path = join(...segments);
   const viewer = useViewerStore.getState();
   viewer.setWorktreeEditorFile(target.workspaceId, path);
   useWorktreeEditorRevealStore.getState().request(target.workspaceId, {
@@ -70,13 +68,13 @@ export function openInWorktreeEditor(target: WorktreeEditorTarget): void {
 }
 
 /** The workspace's worktree directory (on its machine, for a remote one),
- *  without a trailing slash; `null` when unknown or the filesystem root. */
+ *  without a trailing separator; `null` when unknown. */
 function worktreeRoot(teamKey: string, workspaceId: string): string | null {
   const s = useViewerStore.getState();
   const ws = readTeamKeyed(s.workspaces, teamKey, []).find((w) => w.id === workspaceId);
   if (!ws) return null;
   const dir = (isRemoteWorkspace(ws) ? ws.location.cwd : ws.cwd) ?? "";
-  const trimmed = dir.replace(/\/+$/, "");
+  const trimmed = trimTrailingSeparators(dir);
   return trimmed === "" ? null : trimmed;
 }
 

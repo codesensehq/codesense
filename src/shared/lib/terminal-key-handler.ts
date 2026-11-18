@@ -21,6 +21,8 @@
  */
 
 import { parseScrollIntent } from "./scroll-keys";
+import { hasAnyModifier, hasCmd, hasCommandModifier, isMac } from "./shortcuts/keystroke";
+import { terminalClipboardAction } from "./shortcuts/terminal-chord";
 
 // ---------------------------------------------------------------------------
 // Key repeat polyfill constants
@@ -85,7 +87,7 @@ export function keyToSequence(
   if (MODIFIER_KEYS.has(event.key)) return null;
 
   // Special keys (unmodified only — modified combos rely on native repeat)
-  if (!event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+  if (!hasAnyModifier(event)) {
     // Arrow keys — mode-aware
     const arrowSuffix = ARROW_KEY_SUFFIX[event.key];
     if (arrowSuffix) {
@@ -98,7 +100,7 @@ export function keyToSequence(
   }
 
   // Printable characters (with or without shift — shift changes event.key)
-  if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+  if (event.key.length === 1 && !hasCommandModifier(event)) {
     return event.key;
   }
 
@@ -123,6 +125,10 @@ export interface TerminalKeyHandlerOptions {
   scrollLines?: (n: number) => void;
   /** Scroll by n pages (negative = up). */
   scrollPages?: (n: number) => void;
+  /** Copy the selection to the clipboard (Ctrl+Shift+C off macOS). */
+  copySelection?: () => void;
+  /** Paste the clipboard into the PTY (Ctrl+Shift+V off macOS). */
+  paste?: () => void;
 }
 
 export interface TerminalKeyHandler {
@@ -173,6 +179,20 @@ export function createTerminalKeyHandler(
       return true;
     }
 
+    // ── Ctrl+Shift+C / Ctrl+Shift+V → copy / paste (off macOS) ─────────
+    // The terminal's own chords: Ctrl+C and Ctrl+V are shell input there. Prevent the default
+    // so the webview does not also paste, and return false so xterm does not see the key.
+    const clipboardAction =
+      event.type === "keydown" && !isMac() ? terminalClipboardAction(event) : null;
+    if (clipboardAction) {
+      event.preventDefault();
+      if (!event.repeat) {
+        if (clipboardAction === "copy") options?.copySelection?.();
+        else options?.paste?.();
+      }
+      return false;
+    }
+
     // ── Scroll shortcuts (Cmd+Up/Down, Alt+Up/Down, PageUp/PageDown) ──
     if (event.type === "keydown") {
       const intent = parseScrollIntent(event);
@@ -221,9 +241,7 @@ export function createTerminalKeyHandler(
       event.type === "keydown" &&
       event.key === "Enter" &&
       event.shiftKey &&
-      !event.ctrlKey &&
-      !event.metaKey &&
-      !event.altKey
+      !hasCommandModifier(event)
     ) {
       clearRepeat();
       if (pendingNewline) return false;
@@ -241,7 +259,7 @@ export function createTerminalKeyHandler(
     // ── Cmd+Left/Right → Ctrl+A / Ctrl+E ─────────────────────────────
     if (
       event.type === "keydown" &&
-      event.metaKey &&
+      hasCmd(event) &&
       !event.shiftKey &&
       !event.altKey &&
       !event.ctrlKey &&

@@ -49,6 +49,7 @@ import {
   type SeedTab,
 } from "@/test/terminal-layout-harness";
 import { resetTestTerminalHost } from "@/test/terminal-layout-source-mock";
+import { restorePlatform, setPlatform } from "@/test/platform";
 
 /**
  * The terminal tab keys, end to end through the real pieces: a keydown in the
@@ -245,11 +246,6 @@ function press(init: KeyboardEventInit) {
   fireEvent.keyDown(document.activeElement ?? document.body, init);
 }
 
-const originalPlatform = navigator.platform;
-function setPlatform(value: string) {
-  Object.defineProperty(navigator, "platform", { value, configurable: true, writable: true });
-}
-
 beforeEach(() => {
   vi.clearAllMocks();
   // The Mac rules are the strict ones (⌘ only; ⌃ chords belong to the shell).
@@ -273,7 +269,7 @@ beforeEach(() => {
 afterEach(async () => {
   // Let a focus the coordinator scheduled for the next frame land in THIS test.
   await act(async () => new Promise((r) => setTimeout(r, 50)));
-  setPlatform(originalPlatform);
+  restorePlatform();
   vi.restoreAllMocks(); // spies on store verbs never outlive their test
   expect(ptyKeys).toEqual([]);
 });
@@ -312,6 +308,49 @@ describe("Control chords stay the shell's on macOS", () => {
     press({ key: "t", metaKey: true });
     await settle();
     expect(tabsIn(WS)).toHaveLength(4);
+  });
+});
+
+describe("Control chords stay the shell's off macOS", () => {
+  beforeEach(() => setPlatform("Win32"));
+
+  it.each(["c", "d", "z", "r", "l", "w", "k", "t", "f"])(
+    "Ctrl+%s reaches the terminal and triggers nothing",
+    async (key) => {
+      render(<TerminalArea />);
+      terminal("t1").focus();
+      press({ key, code: `Key${key.toUpperCase()}`, ctrlKey: true });
+      await settle();
+      expect(ptyKeys).toEqual([key]);
+      ptyKeys = [];
+      expect(tabsIn(WS)).toEqual(["t1", "t2", "t3"]);
+      expect(activeIn(WS)).toBe("t1");
+      expect(terminalHost().opened).toEqual([]);
+      expect(screen.queryByTestId("terminal-find-bar")).toBeNull();
+      expect(cleared).toEqual([]);
+    },
+  );
+
+  it("Ctrl+Shift+T opens a new tab from the terminal", async () => {
+    render(<TerminalArea />);
+    terminal("t1").focus();
+    press({ key: "T", code: "KeyT", ctrlKey: true, shiftKey: true });
+    await settle();
+    expect(tabsIn(WS)).toHaveLength(4);
+    expect(terminalHost().opened).toHaveLength(1);
+  });
+
+  it("Ctrl+Shift+K is not taken by Clear Terminal", async () => {
+    const openWorkspace = vi
+      .spyOn(SHORTCUT_ACTIONS.find((a) => a.id === "nav.open-workspace")!, "run")
+      .mockImplementation(() => {});
+    render(<TerminalArea />);
+    terminal("t1").focus();
+    press({ key: "K", code: "KeyK", ctrlKey: true, shiftKey: true });
+    await settle();
+    expect(cleared).toEqual([]);
+    expect(openWorkspace).toHaveBeenCalledOnce();
+    ptyKeys = [];
   });
 });
 

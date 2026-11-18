@@ -29,8 +29,7 @@ import { buildGroupIndex, buildGroupStoryIdIndex, type FullGroupIndex } from "./
 import { resolveStoryIdRef } from "./story-id-index";
 import { resolveReadiness } from "./resolve-nav-readiness";
 import { getEpicColor, getEpicBadgeBg } from "./epic-colors";
-import { basename } from "../basename";
-import { resolveRelativePath } from "../paths/resolve-relative-path";
+import { basename, resolveRelative } from "../path";
 
 /**
  * Transform the scanner's `DerivedPipelineTree` into React Flow nodes and
@@ -598,7 +597,7 @@ export function derivedTreeToReactFlow(
           const stripped = stripDotSlash(ref);
           if (isCrossDirectoryRef(stripped)) {
             // Cross-directory: resolve to absolute path optimistically.
-            const absPath = resolveRelativePath(node.absoluteDirPath, stripped);
+            const absPath = resolveRelative(node.absoluteDirPath, stripped);
             if (!seenPaths.has(absPath)) {
               seenPaths.add(absPath);
               epicDocs.push({
@@ -866,7 +865,7 @@ export function derivedTreeToReactFlow(
               // F.32: Construct badge from ref string for out-of-scope deps.
               if (filePortion) {
                 const stem = stripPipelineExtension(filePortion);
-                const resolvedPath = resolveRelativePath(node.absoluteDirPath, ref);
+                const resolvedPath = resolveRelative(node.absoluteDirPath, ref);
                 // Append .md only if the ref didn't already have a pipeline extension.
                 const hasExt = filePortion !== stem;
                 // Resolve against the full index so the badge matches the

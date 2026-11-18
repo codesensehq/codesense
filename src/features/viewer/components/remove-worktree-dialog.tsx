@@ -20,6 +20,7 @@ import {
   type WorktreeRow,
 } from "@/tauri/commands";
 import { getErrorMessage } from "@/shared/lib/error-message";
+import { trimTrailingSeparators } from "@/shared/lib/path";
 import type { Workspace } from "@/shared/stores/viewer-store";
 import {
   getViewerState,
@@ -41,8 +42,6 @@ export interface RemoveWorktreeTarget {
   storyFilePath?: string;
 }
 
-const trimSlash = (p: string) => p.replace(/\/+$/, "");
-
 /**
  * The roster row that backs a workspace — a local workspace whose folder is a
  * worktree CodeSense made (a story or epic worktree) with a known clone. `null`
@@ -55,8 +54,8 @@ export function removeWorktreeTargetFor(
   rows: readonly WorktreeRow[] | null,
 ): RemoveWorktreeTarget | null {
   if (ws.location || !ws.cwd || !rows) return null;
-  const cwd = trimSlash(ws.cwd);
-  const row = rows.find((r) => trimSlash(r.path) === cwd);
+  const cwd = trimTrailingSeparators(ws.cwd);
+  const row = rows.find((r) => trimTrailingSeparators(r.path) === cwd);
   if (!row || row.kind === "orphan" || row.kind === "context" || !row.repoPath) return null;
   return {
     teamKey,

@@ -41,6 +41,7 @@ import {
   type ReportNext,
 } from "../lib/add-machine-steps";
 import { TONE_CLASS } from "../lib/machine-status";
+import { passphraseSaveError } from "../lib/passphrase-error";
 import { reloadMachines } from "../stores/machines-store";
 
 /** Runtime warnings remain visible while allowing the machine to run other agents. */
@@ -442,7 +443,7 @@ export function QuickAddMachine({ teamKey, onClose }: { teamKey: string; onClose
         edited();
       }
     } catch (e) {
-      toast.error(`Couldn't keep the passphrase: ${getErrorMessage(e)}`);
+      toast.error(passphraseSaveError(e));
     } finally {
       setCapturing(false);
     }

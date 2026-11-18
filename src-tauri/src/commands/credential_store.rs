@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-//! Secret value storage for credentials — the OS keychain on desktop, the
-//! process environment on a headless/cloud runner.
+//! Secret value storage for credentials — the OS keychain on desktop (the macOS
+//! Keychain, or Secret Service on Linux), the process environment on a
+//! headless/cloud runner.
 //!
 //! Salvaged from the retired SW-GT-32 branch (the `Secret` newtype +
 //! `KeychainStore` + `EnvStore` topology switch) and generalized for SW-CN-4:
@@ -22,6 +23,43 @@ pub const AUTH_SERVICE: &str = "codesense-auth";
 
 /// The account under [`AUTH_SERVICE`] holding the serialized `AuthFile` blob.
 pub const AUTH_ACCOUNT: &str = "auth-file";
+
+/// Why a [`CredentialStore`] call failed. `Unavailable` is the one case callers
+/// handle on its own: the OS has no secret store to talk to (on Linux, no Secret
+/// Service on the session bus), so nothing can be saved and nothing was saved
+/// before. Everything else is `Failed` with a message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CredentialError {
+    Unavailable,
+    Failed(String),
+}
+
+impl fmt::Display for CredentialError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unavailable => write!(f, "no secret store is available"),
+            Self::Failed(message) => write!(f, "{message}"),
+        }
+    }
+}
+
+impl From<String> for CredentialError {
+    fn from(message: String) -> Self {
+        Self::Failed(message)
+    }
+}
+
+impl From<&str> for CredentialError {
+    fn from(message: &str) -> Self {
+        Self::Failed(message.to_string())
+    }
+}
+
+impl From<CredentialError> for String {
+    fn from(error: CredentialError) -> Self {
+        error.to_string()
+    }
+}
 
 /// An opaque secret value. Its [`fmt::Debug`] / [`fmt::Display`] **redact**, so a
 /// stray `{:?}` in a log line or an error can never leak it. The plaintext is
@@ -67,60 +105,177 @@ pub trait CredentialStore: Send + Sync {
     /// access-denied keychain). Callers MUST distinguish the two: a read error
     /// must not be treated as "no credentials" and trigger a destructive
     /// migrate/overwrite/reap — the entry may still hold the user's secret.
-    fn get(&self, account: &str) -> Result<Option<Secret>, String>;
+    fn get(&self, account: &str) -> Result<Option<Secret>, CredentialError>;
     /// Write `value` under `account`, overwriting any existing entry.
-    fn set(&self, account: &str, value: &Secret) -> Result<(), String>;
+    fn set(&self, account: &str, value: &Secret) -> Result<(), CredentialError>;
     /// Writes `value` and replaces a store that cannot be read. Only the activation path uses
     /// this; every other write goes through `set`, which never repairs. The default is `set`.
-    fn set_repairing(&self, account: &str, value: &Secret) -> Result<(), String> {
+    fn set_repairing(&self, account: &str, value: &Secret) -> Result<(), CredentialError> {
         self.set(account, value)
     }
     /// Remove the entry under `account`; an absent entry is already removed.
     /// A source that cannot remove (the provisioned environment) says so.
-    fn delete(&self, _account: &str) -> Result<(), String> {
-        Err("this credential source does not remove entries".to_string())
+    fn delete(&self, _account: &str) -> Result<(), CredentialError> {
+        Err("this credential source does not remove entries".into())
     }
 }
 
-/// The local value source: the OS keychain (macOS Keychain via `keyring`). Holds
-/// only the service namespace — each call opens a fresh keyring `Entry`.
+/// The local value source: the OS keychain via `keyring` (the macOS Keychain, or Secret Service on
+/// Linux). Holds only the service namespace — each call opens a fresh keyring `Entry`.
 pub struct KeychainStore {
     service: &'static str,
+}
+
+/// What the OS secret store looks like from here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Probe {
+    /// Reachable, named for the log line.
+    Present(&'static str),
+    /// Definitely absent: no session bus, no Secret Service on it, no default collection.
+    Absent,
+    /// Couldn't tell: a timeout while the service starts, or any other failure.
+    Unknown,
+    /// The deployment injects secrets through the environment, so there is no store to probe.
+    Env,
+}
+
+/// Turn a keyring failure into the store's error, in this one place. `Unavailable` means there
+/// is no store at all: a keyring `NoStorageAccess` or `PlatformFailure` while `probe` finds the
+/// store definitely absent. A locked store, a dismissed prompt, a probe that can't tell and any
+/// other failure stay `Failed`, and the text of a `Failed` is the same on every platform.
+fn classify(error: keyring::Error, what: &str, probe: impl FnOnce() -> Probe) -> CredentialError {
+    let no_store = matches!(
+        error,
+        keyring::Error::NoStorageAccess(_) | keyring::Error::PlatformFailure(_)
+    ) && probe() == Probe::Absent;
+    if no_store {
+        CredentialError::Unavailable
+    } else {
+        CredentialError::Failed(format!("keychain {what} failed: {error}"))
+    }
 }
 
 impl KeychainStore {
     pub fn new(service: &'static str) -> Self {
         Self { service }
     }
+
+    fn entry(&self, account: &str) -> Result<keyring::Entry, CredentialError> {
+        keyring::Entry::new(self.service, account)
+            .map_err(|e| classify(e, "entry open", store_probe))
+    }
 }
 
 impl CredentialStore for KeychainStore {
-    fn get(&self, account: &str) -> Result<Option<Secret>, String> {
-        let entry = keyring::Entry::new(self.service, account)
-            .map_err(|e| format!("keychain entry open failed: {e}"))?;
-        match entry.get_password() {
+    fn get(&self, account: &str) -> Result<Option<Secret>, CredentialError> {
+        match self.entry(account)?.get_password() {
             Ok(v) => Ok(Some(Secret::new(v))),
             Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(format!("keychain read failed: {e}")),
+            Err(e) => Err(classify(e, "read", store_probe)),
         }
     }
 
-    fn set(&self, account: &str, value: &Secret) -> Result<(), String> {
-        let entry = keyring::Entry::new(self.service, account)
-            .map_err(|e| format!("keychain entry open failed: {e}"))?;
-        entry
+    fn set(&self, account: &str, value: &Secret) -> Result<(), CredentialError> {
+        self.entry(account)?
             .set_password(value.expose())
-            .map_err(|e| format!("keychain write failed: {e}"))
+            .map_err(|e| classify(e, "write", store_probe))
     }
 
-    fn delete(&self, account: &str) -> Result<(), String> {
-        let entry = keyring::Entry::new(self.service, account)
-            .map_err(|e| format!("keychain entry open failed: {e}"))?;
-        match entry.delete_credential() {
+    fn delete(&self, account: &str) -> Result<(), CredentialError> {
+        match self.entry(account)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(format!("keychain delete failed: {e}")),
+            Err(e) => Err(classify(e, "delete", store_probe)),
         }
     }
+}
+
+static SECRET_STORE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// Whether the app can keep secrets in an OS store. The first call probes and logs
+/// `secret store: <state>`; the app makes it at startup, later calls read the result. The probe
+/// only asks that the Secret Service bus name and its default collection exist: it never unlocks
+/// anything, so no prompt can appear. An app with no Secret Service keeps running; saving a
+/// secret then fails with [`CredentialError::Unavailable`]. With `CODESENSE_CRED_SOURCE=env`
+/// secrets are read from the environment and never saved, so it is `false` and the bus is not
+/// touched.
+pub fn secret_store_available() -> bool {
+    *SECRET_STORE.get_or_init(|| {
+        let state = secret_store_state(&cred_source(), platform_probe);
+        match state {
+            Probe::Present(backend) => log::info!(target: "auth", "secret store: {backend}"),
+            Probe::Env => log::info!(target: "auth", "secret store: env (read-only)"),
+            Probe::Absent | Probe::Unknown => {
+                log::info!(target: "auth", "secret store: unavailable")
+            }
+        }
+        matches!(state, Probe::Present(_))
+    })
+}
+
+/// The state for a credential source (`CODESENSE_CRED_SOURCE`) and the OS probe, which the
+/// environment source never runs.
+fn secret_store_state(source: &CredSource, os: impl FnOnce() -> Probe) -> Probe {
+    if matches!(source, CredSource::Env) {
+        Probe::Env
+    } else {
+        os()
+    }
+}
+
+/// The OS probe a failed keyring call asks, uncached: the store may have appeared or gone since
+/// the startup probe.
+fn store_probe() -> Probe {
+    platform_probe()
+}
+
+#[cfg(target_os = "macos")]
+fn platform_probe() -> Probe {
+    Probe::Present("keychain")
+}
+
+#[cfg(target_os = "linux")]
+fn platform_probe() -> Probe {
+    use dbus_secret_service::{EncryptionType, SecretService};
+    // A zero prompt timeout cancels any prompt at once, so a probe can never ask.
+    let service = match SecretService::connect_with_max_prompt_timeout(EncryptionType::Plain, 0) {
+        Ok(service) => service,
+        Err(error) => return absence_of(&error),
+    };
+    match service.get_default_collection() {
+        Ok(_) => Probe::Present("secret-service"),
+        Err(error) => absence_of(&error),
+    }
+}
+
+/// Only a definite absence is `Absent`; anything else the probe can't be sure of is `Unknown`.
+#[cfg(target_os = "linux")]
+fn absence_of(error: &dbus_secret_service::Error) -> Probe {
+    match error {
+        dbus_secret_service::Error::NoResult => Probe::Absent,
+        dbus_secret_service::Error::Dbus(source) => match source.name() {
+            Some(name) if NO_SERVICE_ERRORS.contains(&name) => Probe::Absent,
+            _ => Probe::Unknown,
+        },
+        _ => Probe::Unknown,
+    }
+}
+
+/// D-Bus errors that say there is no session bus or no Secret Service to talk to. A `NoReply`, a
+/// timeout, or a `NameHasNoOwner` (dbus-broker also sends it when activating a service fails) is
+/// not here: a slow or failing daemon is not an absent one.
+#[cfg(target_os = "linux")]
+const NO_SERVICE_ERRORS: [&str; 6] = [
+    "org.freedesktop.DBus.Error.NoServer",
+    "org.freedesktop.DBus.Error.FileNotFound",
+    "org.freedesktop.DBus.Error.BadAddress",
+    "org.freedesktop.DBus.Error.NotSupported",
+    "org.freedesktop.DBus.Error.ServiceUnknown",
+    "org.freedesktop.DBus.Error.Spawn.ExecFailed",
+];
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn platform_probe() -> Probe {
+    Probe::Absent
 }
 
 /// The cloud/CI value source: the process environment, where an always-up
@@ -138,7 +293,7 @@ impl EnvStore {
 }
 
 impl CredentialStore for EnvStore {
-    fn get(&self, account: &str) -> Result<Option<Secret>, String> {
+    fn get(&self, account: &str) -> Result<Option<Secret>, CredentialError> {
         // An unset OR empty injected var is "absent" — an empty secret is a
         // provisioning mistake, not a credential, so don't hand back `Some("")`.
         Ok(std::env::var(env_key_for(self.service, account))
@@ -147,32 +302,52 @@ impl CredentialStore for EnvStore {
             .map(Secret::new))
     }
 
-    fn set(&self, _account: &str, _value: &Secret) -> Result<(), String> {
-        Err("credential source is env (headless) — writes are provisioned by the platform secret manager, not the app".to_string())
+    fn set(&self, _account: &str, _value: &Secret) -> Result<(), CredentialError> {
+        Err("credential source is env (headless) — writes are provisioned by the platform secret manager, not the app".into())
     }
 }
 
 /// The env var that selects the value source for this deployment.
 pub const CRED_SOURCE_ENV: &str = "CODESENSE_CRED_SOURCE";
 
+/// Which credential value source `CODESENSE_CRED_SOURCE` selects.
+#[derive(Debug, PartialEq, Eq)]
+enum CredSource {
+    /// `env`: secrets are injected into the process environment.
+    Env,
+    /// Unset or empty: the OS keychain.
+    Keychain,
+    /// Set to something else, a likely typo; treated as the keychain.
+    Unrecognized(String),
+}
+
+/// The one place the variable is read and parsed.
+fn cred_source() -> CredSource {
+    match std::env::var(CRED_SOURCE_ENV) {
+        Ok(v) if v == "env" => CredSource::Env,
+        Ok(v) if !v.is_empty() => CredSource::Unrecognized(v),
+        _ => CredSource::Keychain,
+    }
+}
+
 /// Select the credential value source for this deployment topology. A desktop
 /// install resolves from the OS keychain; an always-up headless/CI runner sets
 /// `CODESENSE_CRED_SOURCE=env` so the same accounts resolve from injected env /
 /// the platform secret manager instead.
 pub fn default_store(service: &'static str) -> Box<dyn CredentialStore> {
-    match std::env::var(CRED_SOURCE_ENV) {
-        Ok(v) if v == "env" => Box::new(EnvStore::new(service)),
+    match cred_source() {
+        CredSource::Env => Box::new(EnvStore::new(service)),
         // Set-but-unrecognized is a likely misconfiguration (e.g. a typo) that
         // would silently fall back to the keychain — absent on a headless
         // runner. Warn so it is visible.
-        Ok(v) if !v.is_empty() => {
+        CredSource::Unrecognized(v) => {
             log::warn!(
                 target: "auth",
                 "{CRED_SOURCE_ENV}={v:?} is unrecognized — falling back to the OS keychain store"
             );
             Box::new(KeychainStore::new(service))
         }
-        _ => Box::new(KeychainStore::new(service)),
+        CredSource::Keychain => Box::new(KeychainStore::new(service)),
     }
 }
 
@@ -208,7 +383,7 @@ pub(crate) struct FakeStore {
 
 #[cfg(test)]
 impl CredentialStore for FakeStore {
-    fn get(&self, account: &str) -> Result<Option<Secret>, String> {
+    fn get(&self, account: &str) -> Result<Option<Secret>, CredentialError> {
         Ok(self
             .map
             .lock()
@@ -218,7 +393,7 @@ impl CredentialStore for FakeStore {
             .map(Secret::new))
     }
 
-    fn set(&self, account: &str, value: &Secret) -> Result<(), String> {
+    fn set(&self, account: &str, value: &Secret) -> Result<(), CredentialError> {
         self.map
             .lock()
             .unwrap()
@@ -226,9 +401,29 @@ impl CredentialStore for FakeStore {
         Ok(())
     }
 
-    fn delete(&self, account: &str) -> Result<(), String> {
+    fn delete(&self, account: &str) -> Result<(), CredentialError> {
         self.map.lock().unwrap().remove(account);
         Ok(())
+    }
+}
+
+/// A [`CredentialStore`] test double for a machine with no secret store: every call is
+/// [`CredentialError::Unavailable`].
+#[cfg(test)]
+pub(crate) struct UnavailableStore;
+
+#[cfg(test)]
+impl CredentialStore for UnavailableStore {
+    fn get(&self, _account: &str) -> Result<Option<Secret>, CredentialError> {
+        Err(CredentialError::Unavailable)
+    }
+
+    fn set(&self, _account: &str, _value: &Secret) -> Result<(), CredentialError> {
+        Err(CredentialError::Unavailable)
+    }
+
+    fn delete(&self, _account: &str) -> Result<(), CredentialError> {
+        Err(CredentialError::Unavailable)
     }
 }
 
@@ -261,6 +456,177 @@ mod tests {
         assert_eq!(
             store.get(AUTH_ACCOUNT).unwrap().unwrap().expose(),
             "blob-v2"
+        );
+    }
+
+    /// Linux must never fall back to keyring's in-memory mock, which forgets every
+    /// secret on exit.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_uses_secret_service_not_the_mock_store() {
+        let entry = keyring::Entry::new(AUTH_SERVICE, "backend-check").unwrap();
+        let credential = entry.get_credential();
+        assert!(credential
+            .downcast_ref::<keyring::secret_service::SsCredential>()
+            .is_some());
+        assert!(credential
+            .downcast_ref::<keyring::mock::MockCredential>()
+            .is_none());
+    }
+
+    #[test]
+    fn credential_error_converts_to_and_from_strings() {
+        assert_eq!(
+            CredentialError::from("locked"),
+            CredentialError::Failed("locked".into())
+        );
+        assert_eq!(
+            String::from(CredentialError::Failed("locked".into())),
+            "locked"
+        );
+        assert_ne!(CredentialError::Unavailable, CredentialError::from("x"));
+    }
+
+    fn io_failure(message: &str) -> Box<dyn std::error::Error + Send + Sync> {
+        std::io::Error::other(message.to_string()).into()
+    }
+
+    /// Only a no-store failure is `Unavailable`; every other keyring error, and any failure while
+    /// the store is present or can't be told (locked, a dismissed prompt, a slow service), is a
+    /// `Failed` with the same text on every platform.
+    #[test]
+    fn classify_maps_only_a_definitely_absent_store_to_unavailable() {
+        let variants = || {
+            [
+                keyring::Error::PlatformFailure(io_failure("bus gone")),
+                keyring::Error::NoStorageAccess(io_failure("no collection")),
+                keyring::Error::NoEntry,
+                keyring::Error::BadEncoding(vec![0xff]),
+                keyring::Error::TooLong("service".into(), 8),
+                keyring::Error::Invalid("account".into(), "empty".into()),
+                keyring::Error::Ambiguous(Vec::new()),
+            ]
+        };
+        for probe in [Probe::Present("secret-service"), Probe::Unknown, Probe::Env] {
+            for (index, error) in variants().into_iter().enumerate() {
+                let text = error.to_string();
+                assert_eq!(
+                    classify(error, "read", || probe),
+                    CredentialError::Failed(format!("keychain read failed: {text}")),
+                    "variant {index} with {probe:?}"
+                );
+            }
+        }
+        for (index, error) in variants().into_iter().enumerate() {
+            let text = error.to_string();
+            let expected = if index < 2 {
+                CredentialError::Unavailable
+            } else {
+                CredentialError::Failed(format!("keychain write failed: {text}"))
+            };
+            assert_eq!(
+                classify(error, "write", || Probe::Absent),
+                expected,
+                "variant {index} with the store absent"
+            );
+        }
+    }
+
+    /// macOS keeps its exact message text.
+    #[test]
+    fn classify_keeps_the_keychain_failure_text() {
+        let error = keyring::Error::PlatformFailure(io_failure("boom"));
+        assert_eq!(
+            classify(error, "delete", || Probe::Present("keychain")),
+            CredentialError::Failed(
+                "keychain delete failed: Platform secure storage failure: boom".into()
+            )
+        );
+        let error = keyring::Error::NoStorageAccess(io_failure("denied"));
+        assert_eq!(
+            classify(error, "entry open", || Probe::Present("keychain")),
+            CredentialError::Failed(
+                "keychain entry open failed: Couldn't access platform secure storage: denied"
+                    .into()
+            )
+        );
+    }
+
+    /// The probe is not consulted for an error that is never a missing store.
+    #[test]
+    fn classify_does_not_probe_for_other_errors() {
+        let error = keyring::Error::NoEntry;
+        let failed = classify(error, "read", || panic!("no probe for NoEntry"));
+        assert!(matches!(failed, CredentialError::Failed(_)));
+    }
+
+    /// The environment source has no store to probe, so it is reported as read-only and the OS
+    /// probe never runs.
+    #[test]
+    fn the_env_source_is_not_probed_and_is_not_a_store() {
+        assert_eq!(
+            secret_store_state(&CredSource::Env, || {
+                panic!("the env source never probes the OS")
+            }),
+            Probe::Env
+        );
+        for source in [
+            CredSource::Keychain,
+            CredSource::Unrecognized("typo".into()),
+        ] {
+            assert_eq!(
+                secret_store_state(&source, || Probe::Absent),
+                Probe::Absent,
+                "{source:?}"
+            );
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_macos_keychain_is_always_present() {
+        assert_eq!(store_probe(), Probe::Present("keychain"));
+    }
+
+    /// Only the D-Bus errors that say nothing is there count as absent; a timeout or a reply that
+    /// never came does not.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_only_a_definite_dbus_absence_is_absent() {
+        let dbus_error = |name: &str| {
+            dbus_secret_service::Error::Dbus(dbus::Error::new_custom(name, "a message"))
+        };
+        for name in NO_SERVICE_ERRORS {
+            assert_eq!(absence_of(&dbus_error(name)), Probe::Absent, "{name}");
+        }
+        // The name is matched, not searched for in the message: a failure that merely mentions
+        // an absence is still unknown.
+        let mentions_absence = dbus_secret_service::Error::Dbus(dbus::Error::new_custom(
+            "org.freedesktop.DBus.Error.Failed",
+            "org.freedesktop.DBus.Error.ServiceUnknown",
+        ));
+        assert_eq!(absence_of(&mentions_absence), Probe::Unknown);
+        for name in [
+            "org.freedesktop.DBus.Error.NameHasNoOwner",
+            "org.freedesktop.DBus.Error.NoReply",
+            "org.freedesktop.DBus.Error.Timeout",
+            "org.freedesktop.DBus.Error.Failed",
+            "org.freedesktop.DBus.Error.AccessDenied",
+        ] {
+            assert_eq!(absence_of(&dbus_error(name)), Probe::Unknown, "{name}");
+        }
+        assert_eq!(
+            absence_of(&dbus_secret_service::Error::NoResult),
+            Probe::Absent
+        );
+        // A locked collection or a dismissed prompt is not an absent one.
+        assert_eq!(
+            absence_of(&dbus_secret_service::Error::Locked),
+            Probe::Unknown
+        );
+        assert_eq!(
+            absence_of(&dbus_secret_service::Error::Prompt),
+            Probe::Unknown
         );
     }
 

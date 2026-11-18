@@ -2,6 +2,7 @@
 import { useEffect } from "react";
 
 import { matchesKeystroke, parseKeystroke } from "@/shared/lib/shortcuts/keystroke";
+import { isTerminalBracketKey } from "@/shared/lib/shortcuts/terminal-chord";
 import { allShortcutActions, resolveBindings } from "@/shared/lib/shortcuts/registry";
 import { isDispatchable, type DispatchGateState } from "@/shared/lib/shortcuts/is-dispatchable";
 import {
@@ -20,7 +21,7 @@ import { NO_TEAM_SENTINEL, useActiveTeamKey } from "@/shared/lib/team-key";
 /**
  * Global keyboard handler driven by the shortcut action registry +
  * user overrides from `useShortcutsStore`. Replaces the per-shortcut
- * inline `if (e.metaKey && e.key === …)` branches that used to live in
+ * inline Cmd-plus-key branches that used to live in
  * `App.tsx` and `RepoViewerView`.
  *
  * Mount ONCE at the app root. A workspace-scoped action (`scope:
@@ -68,15 +69,7 @@ export function useShortcutHandler(): void {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.isComposing) return;
-      if (
-        e.ctrlKey &&
-        !e.metaKey &&
-        !e.altKey &&
-        !e.shiftKey &&
-        (e.key === "[" || e.key === "]") &&
-        e.target instanceof Element &&
-        e.target.closest(".xterm")
-      )
+      if (isTerminalBracketKey(e) && e.target instanceof Element && e.target.closest(".xterm"))
         return;
       if (e.defaultPrevented && isTextEditorTarget(e.target)) return;
 
@@ -114,7 +107,9 @@ export function matchShortcut(
     textFieldTarget ||
     (e.target instanceof Element && e.target.closest("input, textarea, select") !== null);
   for (const action of allShortcutActions()) {
-    const keystroke = bindings.get(action.id)?.keystroke;
+    const binding = bindings.get(action.id);
+    // In a terminal an action answers to its terminal chord, which keeps shell keys free.
+    const keystroke = terminal ? binding?.terminalKeystroke : binding?.keystroke;
     if (!keystroke) continue;
     // A dashboard command leaves a terminal only on a ⌘ chord, the same rule as
     // `macCmdOnly`: plain, ⌃, ⌥, function-key and Esc keys reach the PTY. In a text

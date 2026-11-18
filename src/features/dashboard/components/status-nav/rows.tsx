@@ -71,6 +71,7 @@ import { resolveFileScope } from "@/features/dashboard/lib/file-scope";
 import { FileKindIcon, fileKindOf, type FileKind } from "@/shared/lib/icons/file-kind";
 import { useNavChange } from "@/features/git-sync/store/use-context-git-store";
 import { CHANGE_KIND_WORD, type NavChange } from "@/features/git-sync/lib/nav-changes";
+import { hasPlatformMod } from "@/shared/lib/shortcuts/keystroke";
 
 // ---------------------------------------------------------------------------
 // Row dispatch
@@ -818,7 +819,7 @@ const FolderHeaderRow = memo(function FolderHeaderRow({
         type="button"
         className={`${NAV_ROW_CLASS} text-left font-[450]`}
         onClick={(e) => {
-          if (e.metaKey) {
+          if (hasPlatformMod(e)) {
             if (!isInstalled) sendTextToTerminal(node.absoluteDirPath);
             return;
           }
@@ -1018,7 +1019,7 @@ const StoryRow = memo(function StoryRow({
         type="button"
         className="flex items-center gap-1.5 min-w-0 flex-1 text-left cursor-pointer outline-none"
         onClick={(e) => {
-          if (e.metaKey) {
+          if (hasPlatformMod(e)) {
             sendTextToTerminal(story.filePath);
             return;
           }
@@ -1200,7 +1201,7 @@ function FileRowBase({
         type="button"
         className="flex min-w-0 flex-1 items-center gap-1.5 text-left cursor-pointer outline-none"
         onClick={(e) => {
-          if (e.metaKey) {
+          if (hasPlatformMod(e)) {
             sendTextToTerminal(filePath);
             return;
           }
@@ -1348,7 +1349,7 @@ const GenericDirRow = memo(function GenericDirRow({
         type="button"
         className={`${NAV_ROW_CLASS} text-left ${onDrillPathChange ? "pr-6" : ""}`}
         onClick={(e) => {
-          if (e.metaKey) {
+          if (hasPlatformMod(e)) {
             sendTextToTerminal(entry.path);
             return;
           }

@@ -28,6 +28,7 @@ import {
   type ReplyRequest,
 } from "./inbox-view-context";
 import type { ConversationMessage } from "../api";
+import { hasMod } from "@/shared/lib/shortcuts/keystroke";
 
 /**
  * The composer every lens shares: a To picker (@sessions with state and machine, #roles with
@@ -394,7 +395,7 @@ export function Composer({
           }}
           onKeyDown={(e) => {
             if (isComposing(e)) return;
-            if (quick && e.key === "Enter" && e.altKey && !e.metaKey && !e.ctrlKey) {
+            if (quick && e.key === "Enter" && e.altKey && !hasMod(e)) {
               // ⌥↵ is a new line in the chat, as ⇧↵ is (the webview would not insert one). Not
               // while the box is read-only, sending; an edit clears a failure or nudge as typing does.
               e.preventDefault();
@@ -402,7 +403,7 @@ export function Composer({
               insertNewline(e.currentTarget, setText);
               clearFailure(draftKey);
               setEmptyNudge(false);
-            } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey || (quick && !e.shiftKey))) {
+            } else if (e.key === "Enter" && (hasMod(e) || (quick && !e.shiftKey))) {
               e.preventDefault();
               void send();
             } else if (e.key === "Escape") {

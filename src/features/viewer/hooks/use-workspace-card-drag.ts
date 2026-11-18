@@ -29,6 +29,7 @@ import {
   type RowBox,
 } from "../lib/agents-pane-drag";
 import type { OrderPlace } from "../lib/workspace-order";
+import { hasAnyModifier } from "@/shared/lib/shortcuts/keystroke";
 
 /** Movement before a press becomes a drag: the right pane's dnd-kit threshold. */
 export const CARD_DRAG_THRESHOLD_PX = 6;
@@ -167,7 +168,7 @@ export function useWorkspaceCardDrag({
   const begin = useCallback(
     (e: React.PointerEvent<HTMLElement>, teamKey: string, workspaceId: string) => {
       // The primary button only, unmodified: a modified press keeps its own meaning.
-      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || press.current) {
+      if (e.button !== 0 || hasAnyModifier(e) || press.current) {
         return;
       }
       // Nowhere to move (over the same cards the drop math reads): the press stays a plain

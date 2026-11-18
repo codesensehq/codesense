@@ -422,3 +422,20 @@ describe("ViewerTabs — team starter page", () => {
     expect(screen.getByTestId("starter-page-current")).toHaveTextContent("Team starter page");
   });
 });
+
+describe("ViewerTabs — Windows paths", () => {
+  beforeEach(() => {
+    mockTitleByPath = {};
+  });
+
+  it("a story under a Windows path still shows its frontmatter title", () => {
+    const path = "C:\\ctx\\epic\\TR-1-api-health-endpoint.md";
+    mockTitleByPath = { [path]: "API health endpoint" };
+    setupState({
+      openTabs: { [REPO]: [{ path, name: "TR-1-api-health-endpoint.md" }] },
+      activeTab: { [REPO]: path },
+    });
+    render(<ViewerTabs repoPath={REPO} />);
+    expect(screen.getByText("TR-1 — API health endpoint")).toBeInTheDocument();
+  });
+});

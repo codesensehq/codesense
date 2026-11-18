@@ -4,7 +4,7 @@ import { GitBranch, GitCommitHorizontal } from "lucide-react";
 import type { GitPromptStatus } from "../hooks/use-session-prompt";
 import { InfoTip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { formatPromptPath, type PromptPath } from "../lib/prompt-path";
+import { formatPromptPath, promptPathPrefix, type PromptPath } from "../lib/prompt-path";
 
 /**
  * The terminal caption's prompt segment, read like a good shell prompt
@@ -39,7 +39,7 @@ export function PromptPathLabel({
   emphasis: "medium" | "semibold";
   className?: string;
 }) {
-  const muted = `${path.head}${path.parent ? `${path.parent}/` : ""}`;
+  const muted = promptPathPrefix(path);
   return (
     <span
       id={id}

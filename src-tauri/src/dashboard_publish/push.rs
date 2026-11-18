@@ -878,7 +878,7 @@ pub(crate) mod tests {
     use super::super::verbs;
     use super::*;
     use super::super::client::TOKEN_ACCOUNT;
-    use crate::commands::credential_store::FakeStore;
+    use crate::commands::credential_store::{CredentialError, FakeStore};
     use std::fs;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::time::Duration;
@@ -1901,14 +1901,14 @@ pub(crate) mod tests {
     }
 
     impl CredentialStore for FlakyStore {
-        fn get(&self, account: &str) -> Result<Option<Secret>, String> {
+        fn get(&self, account: &str) -> Result<Option<Secret>, CredentialError> {
             if self.failing.load(Ordering::SeqCst) {
                 Err("keychain locked".into())
             } else {
                 self.inner.get(account)
             }
         }
-        fn set(&self, account: &str, value: &Secret) -> Result<(), String> {
+        fn set(&self, account: &str, value: &Secret) -> Result<(), CredentialError> {
             self.inner.set(account, value)
         }
     }

@@ -5,9 +5,10 @@ import { focusedWorkspaceOf } from "@/shared/hooks/use-active-workspace-context"
 import { isRowPopupFocused, editorOwnsShortcut } from "@/shared/lib/focus-utils";
 import { isDispatchable } from "@/shared/lib/shortcuts/is-dispatchable";
 import { matchesKeystroke } from "@/shared/lib/shortcuts/keystroke";
-import { SHORTCUT_ACTIONS } from "@/shared/lib/shortcuts/registry";
+import { resolveBindings, SHORTCUT_ACTIONS } from "@/shared/lib/shortcuts/registry";
+import { isTerminalBracketKey } from "@/shared/lib/shortcuts/terminal-chord";
 import { getActiveTeamKey, NO_TEAM_SENTINEL } from "@/shared/lib/team-key";
-import { getEffectiveShortcut } from "@/shared/stores/shortcuts-store";
+import { useShortcutsStore } from "@/shared/stores/shortcuts-store";
 import { useUiStore } from "@/shared/stores/ui-store";
 import { getViewerState } from "@/features/viewer/lib/cli-workspace/store/viewer-access";
 
@@ -82,14 +83,7 @@ export function useWorkspaceCycleIntercept(repoPath: string | null): void {
     const handler = (event: KeyboardEvent) => {
       if (event.isComposing) return;
       // Ctrl+[ is Escape for terminal programs; user overrides must preserve it too.
-      if (
-        event.ctrlKey &&
-        !event.metaKey &&
-        !event.altKey &&
-        !event.shiftKey &&
-        (event.key === "[" || event.key === "]")
-      )
-        return;
+      if (isTerminalBracketKey(event)) return;
       // Only intercept inside terminal host elements belonging to this repo.
       const target = event.target as Element | null;
       const host = target?.closest?.(CLI_HOST_SELECTOR);
@@ -102,11 +96,12 @@ export function useWorkspaceCycleIntercept(repoPath: string | null): void {
         settingsPanelOpen: useUiStore.getState().settingsPanelOpen,
         rowPopupFocused: isRowPopupFocused(),
       };
+      const bindings = resolveBindings(useShortcutsStore.getState().shortcuts);
       for (const id of PTY_INTERCEPTED_ACTION_IDS) {
         const action = SHORTCUT_ACTIONS.find((a) => a.id === id);
         if (!action || !isDispatchable(action, gate) || editorOwnsShortcut(id, event.target))
           continue;
-        const keystroke = getEffectiveShortcut(id);
+        const keystroke = bindings.get(id)?.terminalKeystroke;
         // ⌘ only on macOS: a Control chord from the terminal is shell input.
         if (keystroke && matchesKeystroke(event, keystroke, { macCmdOnly: true })) {
           event.preventDefault();

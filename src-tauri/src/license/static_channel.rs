@@ -24,7 +24,7 @@ use super::updates::{
     endpoint, is_newer, lock, parse_version, Offer, Outcome, Updates, CHECK_TIMEOUT,
 };
 use super::view::{UpdateStatus, View, CHANNEL};
-use crate::commands::credential_store::CredentialStore;
+use crate::commands::credential_store::{CredentialError, CredentialStore};
 
 /// The largest manifest the app reads. The real one is a few hundred bytes.
 pub const MANIFEST_MAX_BYTES: usize = 64 * 1024;
@@ -357,10 +357,15 @@ pub fn remove_license_records(
             .into_iter()
             .chain([keychain::DEACTIVATE_INCOMPLETE]);
         for account in accounts {
-            if let Err(e) = store.delete(account) {
-                log::warn!(target: "license", "could not remove the old license record {account} from {service}: {e}");
-                refused = true;
-                break 'keychain;
+            match store.delete(account) {
+                Ok(()) => {}
+                // No secret store means no old records in it: nothing to remove or retry.
+                Err(CredentialError::Unavailable) => continue 'keychain,
+                Err(e) => {
+                    log::warn!(target: "license", "could not remove the old license record {account} from {service}: {e}");
+                    refused = true;
+                    break 'keychain;
+                }
             }
         }
     }
@@ -416,7 +421,7 @@ mod tests {
     };
     use super::super::updates::Attention;
     use super::*;
-    use crate::commands::credential_store::{FakeStore, Secret};
+    use crate::commands::credential_store::{CredentialError, FakeStore, Secret, UnavailableStore};
 
     const DAY: Duration = Duration::from_secs(24 * 60 * 60);
     const HOUR: u64 = 60 * 60;
@@ -547,13 +552,13 @@ mod tests {
     }
 
     impl CredentialStore for Refusing {
-        fn get(&self, _: &str) -> Result<Option<Secret>, String> {
+        fn get(&self, _: &str) -> Result<Option<Secret>, CredentialError> {
             Ok(None)
         }
-        fn set(&self, _: &str, _: &Secret) -> Result<(), String> {
+        fn set(&self, _: &str, _: &Secret) -> Result<(), CredentialError> {
             Ok(())
         }
-        fn delete(&self, _: &str) -> Result<(), String> {
+        fn delete(&self, _: &str) -> Result<(), CredentialError> {
             self.asks.fetch_add(1, Ordering::SeqCst);
             Err("keychain delete failed: user canceled".into())
         }
@@ -957,6 +962,22 @@ mod tests {
             refusing.asks.load(Ordering::SeqCst),
             MAX_KEYCHAIN_REFUSALS as usize,
             "never asked again"
+        );
+    }
+
+    /// With no secret store there are no old records to remove: the cleanup finishes in one
+    /// launch and does not count a refusal.
+    #[test]
+    fn an_unavailable_secret_store_finishes_the_cleanup_without_a_refusal() {
+        let dir = tempfile::tempdir().unwrap();
+        let records = dir.path().join("updates");
+        let absent = UnavailableStore;
+        let stores: [(&str, &dyn CredentialStore); 1] = [(LICENSE_SERVICES[0], &absent)];
+        assert!(remove_license_records(&stores, dir.path(), &records));
+        assert!(records.join(CLEANUP_DONE_FILE).exists());
+        assert_eq!(
+            std::fs::read_to_string(records.join(CLEANUP_REFUSALS_FILE)).unwrap(),
+            "0"
         );
     }
 

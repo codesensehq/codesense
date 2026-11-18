@@ -37,6 +37,7 @@ import type { CredentialRef } from "@/shared/types/domain";
 import { formatMachineAddress, parseMachineAddress } from "../lib/machine-address";
 import { retireLeftoverLegacyServer } from "../lib/machine-actions";
 import { MB } from "../lib/machine-file-path";
+import { passphraseSaveError } from "../lib/passphrase-error";
 import { TONE_CLASS, type MachineTone } from "../lib/machine-status";
 import { refreshMachine, reloadMachines } from "../stores/machines-store";
 
@@ -317,7 +318,7 @@ export function AddMachinePanel({
         dirty();
       }
     } catch (e) {
-      toast.error(`Couldn't keep the passphrase: ${getErrorMessage(e)}`);
+      toast.error(passphraseSaveError(e));
     } finally {
       setCapturing(false);
     }
