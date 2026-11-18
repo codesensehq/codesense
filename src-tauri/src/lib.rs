@@ -571,10 +571,16 @@ pub fn run() {
         .manage(mcp::state::AskUserRegistry::new())
         .manage(commands::team_resolution_cache::TeamResolutionCache::default())
         .setup(move |app| {
+            // First, so the secret store probe has the whole of setup to finish: it runs on a
+            // background thread, because `.setup()` never blocks on the session bus.
+            commands::credential_store::start_secret_store_probe();
             commands::team_resolution_cache::listen(app.handle());
             live_hub::start(app.handle());
             log::info!(target: "system", "CodeSense v{} starting (log_level={:?}, platform={})",
                 env!("CARGO_PKG_VERSION"), log_level, std::env::consts::OS);
+            // The first caps() call, made here so no command or the attribution installer makes it.
+            // It waits for the secret store probe for at most `credential_store::PROBE_WAIT`
+            // (300 ms); a probe still running then leaves the secret-store row off for the run.
             platform_caps::log_startup();
 
             // SW-PB-22f-3: keep published dashboards in step with their folders.
@@ -787,10 +793,6 @@ pub fn run() {
             let profile_home = commands::paths::codesense_home_dir().ok_or("Local profile home unavailable")?;
             app.manage(commands::local_profile::LocalProfileState::load(&profile_home)?);
             commands::local_profile::LocalProfileState::start_import(handle.clone());
-            // The probe talks to the session bus, so it stays off `.setup()`.
-            std::thread::spawn(|| {
-                commands::credential_store::secret_store_available();
-            });
             app.manage(commands::guest_session::GuestSessionState::load(commands::paths::codesense_home_dir().as_deref()));
             // Local HTML query/routine capabilities remain independent of service access.
             // Registry observation may immediately schedule auto-connect, so
