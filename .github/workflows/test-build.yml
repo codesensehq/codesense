@@ -171,13 +171,15 @@ jobs:
             mkdir -p "$dir"
             case "$format" in
               deb) dpkg-deb -x target/release/bundle/deb/*.deb "$dir" ;;
-              rpm) rpm2cpio target/release/bundle/rpm/*.rpm | (cd "$dir" && cpio -idm --quiet) ;;
+              # Through a file, not a pipe: cpio stops at the archive trailer, and rpm2cpio
+              # writing the rest into a closed pipe fails the step under pipefail.
+              rpm) rpm2cpio target/release/bundle/rpm/*.rpm > "$dir.cpio" && (cd "$dir" && cpio -idm < "$dir.cpio") ;;
               appimage)
                 appimage=$(realpath target/release/bundle/appimage/*.AppImage)
                 chmod +x "$appimage"
                 (cd "$dir" && "$appimage" --appimage-extract >/dev/null)
                 ;;
-            esac
+            esac || { echo "Error: could not extract the $format" >&2; exit 1; }
             found=$(find "$dir" -path '*/resources/starship' -type f)
             [[ $(grep -c . <<<"$found") -eq 1 ]] || { echo "Error: expected one resources/starship in the $format, found: $found" >&2; exit 1; }
             [[ -x "$found" ]] || { echo "Error: $found in the $format is not executable" >&2; exit 1; }
