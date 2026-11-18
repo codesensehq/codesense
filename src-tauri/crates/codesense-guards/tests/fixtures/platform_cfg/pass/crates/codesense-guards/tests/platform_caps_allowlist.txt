@@ -1,2 +1,3 @@
 # <path> <cap key> <removing slug> <reason>
 crates/demo/src/lib.rs bridge port-the-bridge the bridge module is compiled out on Windows
+crates/demo/src/lib.rs bridge-probe port-the-bridge reports the bridge capability as off on Windows (rows equal to sites pass)

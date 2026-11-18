@@ -1370,7 +1370,7 @@ fn the_guard_passes_a_clean_tree_and_reports_to_the_step_summary() {
     let _ = fs::remove_file(&summary);
     assert!(passed, "the passing fixture failed:\n{out}");
     for needle in [
-        "8 OS-specific sites in 6 files",
+        "7 OS-specific sites in 5 files",
         "OS-gated items in test code (report only): 6",
         "| app (src) | 3 |",
         "| demo | 3 |",
