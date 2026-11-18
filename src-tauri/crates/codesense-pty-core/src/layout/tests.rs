@@ -4,6 +4,7 @@
 //! sessions.
 
 use super::*;
+use crate::tests::expect_mode;
 
 /// A model with viewer `v` attached under boot `boot` (as a client attaches by
 /// taking its first snapshot before it opens anything).
@@ -551,25 +552,13 @@ fn the_server_id_is_persisted_and_survives_a_restart() {
 fn the_server_id_file_is_private_and_each_write_replaces_it_whole() {
     let dir = tempfile::tempdir().unwrap();
     ServerIdentity::load_or_create(dir.path(), "host").unwrap();
-    expect_private(&dir.path().join(SERVER_ID_FILE));
+    expect_mode(&dir.path().join(SERVER_ID_FILE), 0o600);
 
     let path = dir.path().join("staged");
     write_owner_only(&path, "a longer first id").unwrap();
     write_owner_only(&path, "short").unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "short");
-    expect_private(&path);
-}
-
-/// Unix: mode 0600. Windows: the owner-only ACL the create sets.
-fn expect_private(path: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600, "{}", path.display());
-    }
-    #[cfg(not(unix))]
-    let _ = path;
+    expect_mode(&path, 0o600);
 }
 
 #[test]

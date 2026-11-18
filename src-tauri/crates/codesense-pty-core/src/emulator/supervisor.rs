@@ -693,7 +693,7 @@ mod tests {
         assert!(name.starts_with(&prefix), "{name}");
         assert_eq!(std::fs::read(&pinned).unwrap(), b"worker bytes");
         for path in [dir.path().join("run"), runtime, pinned] {
-            expect_owner_rwx(&path);
+            crate::tests::expect_mode(&path, 0o700);
         }
     }
 
@@ -704,19 +704,6 @@ mod tests {
         let error = spawn(&missing, dir.path()).unwrap_err();
         let wanted = format!("spawn {}: ", missing.display());
         assert!(error.starts_with(&wanted), "{error}");
-    }
-
-    /// Unix: mode 0700, for each directory the pin made and for the copy.
-    /// Windows: the copy and the directory exist.
-    fn expect_owner_rwx(path: &Path) {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o700, "{}", path.display());
-        }
-        #[cfg(not(unix))]
-        assert!(path.exists(), "{}", path.display());
     }
 
     #[test]

@@ -265,11 +265,8 @@ mod tests {
         assert_eq!(fs::read_to_string(&dest).unwrap(), SOURCE);
         #[cfg(unix)]
         {
-            use std::os::unix::fs::{MetadataExt, PermissionsExt};
-            assert_eq!(
-                fs::metadata(&dest).unwrap().permissions().mode() & 0o777,
-                0o755
-            );
+            use std::os::unix::fs::MetadataExt;
+            crate::tests::expect_mode(&dest, MODE);
             let first = fs::metadata(&dest).unwrap().ino();
             install(tmp.path()).unwrap();
             assert_eq!(fs::metadata(&dest).unwrap().ino(), first, "left as it was");
@@ -290,11 +287,23 @@ mod tests {
             fs::set_permissions(&dest, fs::Permissions::from_mode(mode)).unwrap();
             install(tmp.path()).unwrap();
             assert_eq!(fs::read_to_string(&dest).unwrap(), SOURCE);
-            assert_eq!(
-                fs::metadata(&dest).unwrap().permissions().mode() & 0o777,
-                0o755
-            );
+            crate::tests::expect_mode(&dest, MODE);
         }
+    }
+
+    /// The check takes any execute bit, as `is_executable` does, not only the
+    /// owner's: a byte-identical hook only its group may run is left alone.
+    #[cfg(unix)]
+    #[test]
+    fn a_hook_only_its_group_may_run_counts_as_installed() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempdir().unwrap();
+        let dest = tmp.path().join(NAME);
+        fs::write(&dest, SOURCE).unwrap();
+        fs::set_permissions(&dest, fs::Permissions::from_mode(0o650)).unwrap();
+        assert!(is_installed(&dest, SOURCE));
+        install(tmp.path()).unwrap();
+        crate::tests::expect_mode(&dest, 0o650);
     }
 
     /// A symlink at the path is replaced, never followed, even one whose target holds the

@@ -666,7 +666,6 @@ pub mod removal {
         #[cfg(unix)]
         #[test]
         fn the_fence_is_a_private_file_per_user_and_canonical_path() {
-            use std::os::unix::fs::PermissionsExt;
             let dir = tempfile::tempdir().unwrap();
             let admission = admit_spawn(dir.path().to_str().unwrap()).unwrap();
             let canonical = dir.path().canonicalize().unwrap();
@@ -674,8 +673,7 @@ pub mod removal {
             // SAFETY: geteuid has no preconditions.
             let uid = unsafe { libc::geteuid() };
             let fence = format!("/tmp/codesense-worktree-{uid}-{key}.lock");
-            let mode = std::fs::metadata(&fence).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o600, "{fence}");
+            crate::tests::expect_mode(Path::new(&fence), 0o600);
             drop(admission);
             let _ = std::fs::remove_file(&fence);
         }
