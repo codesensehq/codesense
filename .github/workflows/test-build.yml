@@ -100,8 +100,9 @@ jobs:
           - arch: x86_64
             runner: ubuntu-22.04
             bundles: deb,rpm,appimage
-          # No AppImage on arm64: linuxdeploy rewrites the bundled emulator executable, which
-          # breaks it on aarch64.
+          # Both legs bundle the AppImage without the emulator and insert it untouched afterwards
+          # (scripts/ci/unsigned-bundle.sh): linuxdeploy's rpath rewrite breaks the Bun-compiled
+          # emulator, and on aarch64 aborts the bundle.
           - arch: arm64
             runner: ubuntu-24.04-arm
             bundles: deb,rpm
