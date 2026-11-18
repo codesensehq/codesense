@@ -268,8 +268,8 @@ jobs:
         if: matrix.appimage
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xvfb xauth dbus gnome-keyring imagemagick \
-            libegl1 libgl1 libgles2 libgl1-mesa-dri
+          sudo apt-get install -y --no-install-recommends xvfb xauth x11-utils xdotool dbus \
+            gnome-keyring imagemagick libegl1 libgl1 libgles2 libgl1-mesa-dri
       - name: Launch the AppImage
         if: matrix.appimage
         run: bash scripts/ci/smoke-linux.sh run "$RUNNER_TEMP/packages" "$RUNNER_TEMP/smoke/appimage"

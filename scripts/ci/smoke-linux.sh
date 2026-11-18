@@ -36,6 +36,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 IMAGES="$SCRIPT_DIR/smoke-images.txt"
 SELF="$SCRIPT_DIR/smoke-linux.sh"
+APP_BINARY=codesense
 SIDECARS=(codesense-bridge codesense-session-server codesense-emulator)
 # Resources the bundle carries only where the platform turns them on.
 OPTIONAL_RESOURCES=(starship git-ai)
@@ -66,16 +67,15 @@ image_ref() {
     echo "$ref"
 }
 
-# The app binary and the three sidecars, and nothing else, in /usr/bin. The app binary's name
-# comes from the product, so it is the one other file there.
+# The app binary and the three sidecars, and nothing else, in /usr/bin.
 check_listing() {
     local bin name
     bin=$(grep -E '^/usr/bin/[^/]+$' "$1" || true)
-    for name in "${SIDECARS[@]}"; do
+    for name in "$APP_BINARY" "${SIDECARS[@]}"; do
         grep -qx "/usr/bin/$name" <<<"$bin" || fail "$name is not in /usr/bin of $1"
     done
     [[ $(grep -c . <<<"$bin") -eq 4 ]] ||
-        fail "expected the app binary and three sidecars in /usr/bin of $1, found: $(tr '\n' ' ' <<<"$bin")"
+        fail "expected only $APP_BINARY and its three sidecars in /usr/bin of $1, found: $(tr '\n' ' ' <<<"$bin")"
 }
 
 # Whether file list <listing> holds resources/<name>.
@@ -201,16 +201,17 @@ start_session() {
     case "$mode" in
         default) dbus-run-session -- bash "$SELF" desktop "$mode" "$out" ;;
         dmabuf) WEBKIT_DISABLE_DMABUF_RENDERER=0 dbus-run-session -- bash "$SELF" desktop "$mode" "$out" ;;
-        no-dbus)
-            DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent \
-                xvfb-run -a -s "-screen 0 1280x800x24" bash "$SELF" launch "$mode" "$out"
-            ;;
+        no-dbus) DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent in_xvfb "$mode" "$out" ;;
         *) usage ;;
     esac
 }
 
-# Inside dbus-run-session: an empty password unlocks the login keyring (creating it), which
-# then serves the Secret Service on the session bus.
+# Launch the app (launch <mode> <out-dir>) on a virtual X display of its own.
+in_xvfb() {
+    xvfb-run -a -s "-screen 0 1280x800x24" bash "$SELF" launch "$@"
+}
+
+# Inside dbus-run-session: unlock a login keyring for the Secret Service, then launch.
 desktop() {
     local line
     # The app's store is the Secret Service's default collection: the login keyring, which a
@@ -222,7 +223,7 @@ desktop() {
         if [[ "$line" == *=* ]]; then export "${line?}"; fi
     done < <(printf smoke | gnome-keyring-daemon --unlock --components=secrets)
     default_collection
-    xvfb-run -a -s "-screen 0 1280x800x24" bash "$SELF" launch "$@"
+    in_xvfb "$@"
 }
 
 # A Secret Service call on this session's bus, printing the reply.
@@ -275,6 +276,35 @@ kept_dmabuf() {
     echo "The app and ${#web[@]} WebKit web process(es) keep WEBKIT_DISABLE_DMABUF_RENDERER=0"
 }
 
+# The X window id of the app's largest visible window, and its size as <width>x<height>.
+app_window() {
+    local id size area best="" best_size="" best_area=0
+    for id in $(xdotool search --onlyvisible --pid "$1" 2>/dev/null); do
+        size=$(xwininfo -id "$id" | awk '/Width:/ {w = $2} /Height:/ {h = $2} END {print w "x" h}')
+        area=$((${size%x*} * ${size#*x}))
+        if ((area > best_area)); then best=$id best_size=$size best_area=$area; fi
+    done
+    [[ -n "$best" ]] || {
+        xwininfo -root -tree >&2
+        fail "the app has no visible window"
+    }
+    echo "$best $best_size"
+}
+
+# The app's window is not one colour. It is shot alone: the root window around it is black, so
+# a screen shot would count two colours for a blank window. The window is the webview alone (no
+# window manager draws a frame here, and the app has no menu bar on Linux), so a blank page is
+# one colour and fails; no threshold is needed.
+window_drawn() {
+    local found window size colours
+    found=$(app_window "$1")
+    read -r window size <<<"$found"
+    import -window "$window" "$2"
+    colours=$(identify -format '%k' "$2")
+    echo "The app window ($size) has $colours colours"
+    ((colours > 1)) || fail "the app window is one colour (see $2)"
+}
+
 # Inside xvfb-run: launch the app, check it while it runs, stop it, then check its log.
 launch() {
     local mode="$1" out="$2" log="$1.log" shot="$1.png" pid waited store=secret-service
@@ -288,11 +318,7 @@ launch() {
     sleep 30
     alive "$pid" || fail "the app exited within 30 s"
     echo "The app is alive at 30 s"
-    if [[ "$mode" != no-dbus ]]; then
-        import -window root "$shot"
-        [[ $(identify -format '%k' "$shot") -gt 1 ]] || fail "the screen is one colour (see $shot)"
-        echo "The screen is not one colour"
-    fi
+    if [[ "$mode" != no-dbus ]]; then window_drawn "$pid" "$shot"; fi
     if [[ "$mode" == dmabuf ]]; then kept_dmabuf "$pid"; fi
     kill -TERM "$pid"
     for ((waited = 0; waited < 10; waited++)); do
@@ -304,7 +330,7 @@ launch() {
     echo "The app exited within 10 s of SIGTERM"
     plain_log "$log" >"$mode.txt"
     grep -q "webview ready" "$mode.txt" || fail "the log has no webview ready"
-    caps_agree listing "$log"
+    caps_agree listing "$mode.txt"
     grep -qE "(^| )secret store: $store\$" "$mode.txt" || fail "the log has no secret store: $store"
     echo "The log has webview ready and secret store: $store"
     if [[ "$mode" == dmabuf ]] && grep -qi dmabuf "$mode.txt"; then

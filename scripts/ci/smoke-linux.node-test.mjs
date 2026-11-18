@@ -41,14 +41,22 @@ test("check-listing: the app binary and the three sidecars in /usr/bin pass", ()
   passes(smoke("check-listing", fixture(debListing)));
 });
 
-test("check-listing: a missing sidecar or an extra file in /usr/bin fails", () => {
+test("check-listing: a missing sidecar, a wrong app binary or an extra file in /usr/bin fails", () => {
   fails(
     smoke("check-listing", fixture(debListing.filter((line) => !line.endsWith("-emulator")))),
     /codesense-emulator is not in \/usr\/bin/,
   );
+  // Four files, but the app binary is not the one the product names.
+  fails(
+    smoke(
+      "check-listing",
+      fixture(debListing.map((line) => (line === "/usr/bin/codesense" ? "/usr/bin/other" : line))),
+    ),
+    /codesense is not in \/usr\/bin/,
+  );
   fails(
     smoke("check-listing", fixture([...debListing, "/usr/bin/extra"])),
-    /expected the app binary and three sidecars/,
+    /expected only codesense and its three sidecars/,
   );
 });
 
