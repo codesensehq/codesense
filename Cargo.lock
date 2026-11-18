@@ -901,6 +901,7 @@ dependencies = [
  "chrono-tz",
  "codesense-fs-core",
  "codesense-host-proto",
+ "codesense-platform",
  "codesense-pty-core",
  "codesense-session-server",
  "criterion",

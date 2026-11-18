@@ -5,8 +5,8 @@
 //! stores. At sign-in the askpass serves it from the keychain to `ssh`.
 
 use std::path::Path;
-#[cfg(target_os = "macos")]
-use std::process::{Command, Stdio};
+
+use codesense_platform::dialog::{ask_secret, SecretPrompt};
 
 use crate::commands::credential_store::{CredentialError, CredentialStore, Secret};
 use crate::domain::CredentialRef;
@@ -20,46 +20,20 @@ pub const SSH_PROVIDER: &str = "ssh";
 /// Ask for `key`'s passphrase in a system dialog: `None` when the person
 /// cancelled. The passphrase comes back on the dialog's standard output —
 /// never an argument, never a file.
-#[cfg(target_os = "macos")]
 pub fn prompt(key: &Path) -> Result<Option<Secret>, String> {
-    let script = [
-        "on run argv",
-        "text returned of (display dialog (item 1 of argv) default answer \"\" with hidden answer \
-         with title \"CodeSense\" buttons {\"Cancel\", \"Save to Keychain\"} \
-         default button 2 cancel button 1 with icon caution)",
-        "end run",
-    ];
-    let mut command = Command::new("/usr/bin/osascript");
-    for line in script {
-        command.args(["-e", line]);
+    let text = format!(
+        "Passphrase for {} — CodeSense keeps it in your keychain.",
+        key.display()
+    );
+    let prompt = SecretPrompt {
+        title: "CodeSense",
+        text: &text,
+        ok_label: "Save to Keychain",
+    };
+    match ask_secret(&prompt) {
+        Ok(answer) => Ok(answer.map(Secret::new)),
+        Err(e) => Err(e.to_string()),
     }
-    let output = command
-        .arg("--")
-        .arg(format!(
-            "Passphrase for {} — CodeSense keeps it in your keychain.",
-            key.display()
-        ))
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| format!("open the passphrase dialog: {e}"))?;
-    if !output.status.success() {
-        let said = String::from_utf8_lossy(&output.stderr);
-        return if said.contains("-128") {
-            Ok(None)
-        } else {
-            Err(format!("the passphrase dialog failed: {}", said.trim()))
-        };
-    }
-    let mut text = String::from_utf8(output.stdout).map_err(|_| "the passphrase is not text")?;
-    if text.ends_with('\n') {
-        text.pop();
-    }
-    Ok((!text.is_empty()).then(|| Secret::new(text)))
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn prompt(_key: &Path) -> Result<Option<Secret>, String> {
-    Err("storing a key passphrase needs the macOS keychain".into())
 }
 
 /// The error when there is no secret store to keep a passphrase in. It carries the typed
