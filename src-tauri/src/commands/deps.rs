@@ -3540,6 +3540,81 @@ mod tests {
         assert_eq!(login_path_candidates(&twice, "claude"), vec![real]);
     }
 
+    /// The fixed locations of `basename` in the package directories `dirs`, as
+    /// production names them.
+    fn known_in(dirs: &[PathBuf], basename: &str) -> Vec<PathBuf> {
+        dirs.iter().map(|dir| dir.join(basename)).collect()
+    }
+
+    /// Golden output of the agent lookup over a temp PATH and fixture package
+    /// directories: the winner, its source and the shadowed installs must not
+    /// change when the lookup moves.
+    #[test]
+    fn resolve_agent_binary_golden_over_path_and_package_dirs() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = |name: &str| tmp.path().join(name);
+        let old_on_path = exec_stub(&dir("p1"), "claude");
+        let new_on_path = exec_stub(&dir("p2"), "claude");
+        // A non-executable decoy and a directory named like the binary.
+        std::fs::create_dir_all(dir("decoy")).unwrap();
+        std::fs::write(dir("decoy").join("claude"), b"x").unwrap();
+        std::fs::create_dir_all(dir("named").join("claude")).unwrap();
+        // A link on PATH to an install already on it.
+        std::fs::create_dir_all(dir("links")).unwrap();
+        std::os::unix::fs::symlink(&new_on_path, dir("links").join("claude")).unwrap();
+        let package_only = exec_stub(&dir("k1"), "claude");
+        // A package directory linking to an install on PATH, and one without it.
+        std::fs::create_dir_all(dir("k2")).unwrap();
+        std::os::unix::fs::symlink(&old_on_path, dir("k2").join("claude")).unwrap();
+        std::fs::create_dir_all(dir("k3")).unwrap();
+        let path = path_of(&[
+            &dir("decoy"),
+            &dir("p1"),
+            &dir("named"),
+            &dir("links"),
+            &dir("p2"),
+        ]);
+        let known = known_in(&[dir("k3"), dir("k2"), dir("k1")], "claude");
+        let meets = |v: &str| check_version_minimum(v, (2, 0));
+        let version = versions(&[
+            ("p1", "1.9.0"),
+            ("links", "2.1.296"),
+            ("p2", "2.1.296"),
+            ("k1", "2.1.300"),
+        ]);
+
+        // The first PATH install meeting the floor wins; the rest are shadowed.
+        let r = resolve_agent_binary("claude", Some(&path), known.clone(), &version, meets);
+        assert_eq!(
+            r.path.as_deref(),
+            Some(dir("links").join("claude").as_path())
+        );
+        assert_eq!(r.version.as_deref(), Some("2.1.296"));
+        assert_eq!(r.source, Some(AgentSource::LoginPath));
+        assert_eq!(
+            r.shadowed_candidates,
+            vec![(old_on_path.clone(), true), (package_only.clone(), false)]
+        );
+
+        // The probe failed: the package directories, in order.
+        let r = resolve_agent_binary("claude", None, known.clone(), &version, meets);
+        assert_eq!(r.path.as_deref(), Some(package_only.as_path()));
+        assert_eq!(r.version.as_deref(), Some("2.1.300"));
+        assert_eq!(r.source, Some(AgentSource::KnownLocation));
+        assert_eq!(
+            r.shadowed_candidates,
+            vec![(dir("k2").join("claude"), false)]
+        );
+
+        // Nothing on PATH meets the floor: a package directory naming a PATH
+        // install is skipped, the next one wins.
+        let low_path = path_of(&[&dir("p1")]);
+        let r = resolve_agent_binary("claude", Some(&low_path), known, &version, meets);
+        assert_eq!(r.path.as_deref(), Some(package_only.as_path()));
+        assert_eq!(r.source, Some(AgentSource::KnownLocation));
+        assert_eq!(r.shadowed_candidates, vec![(old_on_path, true)]);
+    }
+
     /// PATH order beats the fixed list, and other installs are shadowed, for one
     /// basename + floor.
     fn path_beats_fixed_list(basename: &str, floor: (u32, u32), new: &str, old: &str) {
