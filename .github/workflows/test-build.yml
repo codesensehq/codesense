@@ -162,13 +162,16 @@ jobs:
             grep -E "(^|/)usr/bin/$name\$" <<<"$bin_files" || { echo "Error: $name is not in /usr/bin of the deb" >&2; exit 1; }
           done
           [[ $(wc -l <<<"$bin_files") -eq 4 ]] || { echo "Error: expected the app binary and three sidecars in /usr/bin" >&2; exit 1; }
-      - name: Check the bundled starship runs
-        # Each format ships the pinned starship as resources/starship; extract it from each and run it.
+      - name: Check the bundled git-ai and starship run
+        # Each format ships the pinned git-ai and starship as resources/git-ai and
+        # resources/starship; extract them from each and run each under its own name (under
+        # another name git-ai acts as git). git-ai prints its bare version, starship its name and
+        # version.
         env:
           BUNDLES: ${{ matrix.bundles }}
         run: |
-          pin=$(bash scripts/fetch-bundled.sh --print-pin starship)
-          expected="starship $(sed -n 's/^version=//p' "$pin")"
+          version() { sed -n 's/^version=//p' "$(bash scripts/fetch-bundled.sh --print-pin "$1")"; }
+          declare -A expected=([git-ai]="$(version git-ai)" [starship]="starship $(version starship)")
           for format in ${BUNDLES//,/ }; do
             dir="$RUNNER_TEMP/extract-$format"
             mkdir -p "$dir"
@@ -184,15 +187,17 @@ jobs:
                 unsquashfs -q -n -d "$dir/squashfs-root" -o "$offset" "$appimage"
                 ;;
             esac || { echo "Error: could not extract the $format" >&2; exit 1; }
-            found=$(find "$dir" -path '*/resources/starship' -type f)
-            [[ $(grep -c . <<<"$found") -eq 1 ]] || { echo "Error: expected one resources/starship in the $format, found: $found" >&2; exit 1; }
-            [[ -x "$found" ]] || { echo "Error: $found in the $format is not executable" >&2; exit 1; }
-            echo "$format: $(sha256sum "$found")"
-            file "$found"
-            version=$("$found" --version) || { echo "Error: $found from the $format failed to run (exit $?)" >&2; exit 1; }
-            version=${version%%$'\n'*}
-            echo "$format: $found: $version"
-            [[ "$version" == "$expected" ]] || { echo "Error: expected $expected from the $format" >&2; exit 1; }
+            for name in git-ai starship; do
+              found=$(find "$dir" -path "*/resources/$name" -type f)
+              [[ $(grep -c . <<<"$found") -eq 1 ]] || { echo "Error: expected one resources/$name in the $format, found: $found" >&2; exit 1; }
+              [[ -x "$found" ]] || { echo "Error: $found in the $format is not executable" >&2; exit 1; }
+              echo "$format: $(sha256sum "$found")"
+              file "$found"
+              version=$("$found" --version) || { echo "Error: $found from the $format failed to run (exit $?)" >&2; exit 1; }
+              version=${version%%$'\n'*}
+              echo "$format: $found: $version"
+              [[ "$version" == "${expected[$name]}" ]] || { echo "Error: expected ${expected[$name]} from $name in the $format" >&2; exit 1; }
+            done
           done
       - name: Check the AppImage emulator
         # A Bun-compiled executable keeps its payload after the ELF image, so the emulator must
