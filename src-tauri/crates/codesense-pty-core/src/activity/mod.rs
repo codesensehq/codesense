@@ -11,7 +11,6 @@ mod launch;
 mod owner;
 #[cfg(all(test, unix))]
 mod peer_tests;
-mod process;
 mod subagents;
 
 pub use codesense_host_proto::activity::*;
@@ -49,14 +48,14 @@ pub const RELEASE_QUALIFIED_ENV: &str = "CODESENSE_ACTIVITY_RELEASE_QUALIFIED";
 /// MCP caller's tool calls act for its own tab only). A pid is never an
 /// identity alone: a process is its pid plus its start time.
 pub mod peer {
-    use std::os::fd::AsRawFd;
+    use codesense_platform::process::Identity;
 
     /// A live process: pid and start time.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct PeerProcess(super::process::Process);
+    pub struct PeerProcess(Identity);
 
     impl PeerProcess {
-        pub(super) fn of(process: super::process::Process) -> Self {
+        pub(super) fn of(process: Identity) -> Self {
             Self(process)
         }
 
@@ -66,61 +65,33 @@ pub mod peer {
 
         /// Compare the kernel process birth time with a managed directory's creation.
         pub fn started_after(&self, time: std::time::SystemTime) -> bool {
-            let Ok(time) = time.duration_since(std::time::UNIX_EPOCH) else {
-                return false;
-            };
-            #[cfg(target_os = "macos")]
-            {
-                return self.0.start as u128 >= time.as_micros();
-            }
-            #[cfg(target_os = "linux")]
-            {
-                let boot = std::fs::read_to_string("/proc/stat").ok().and_then(|stat| {
-                    stat.lines().find_map(|line| {
-                        line.strip_prefix("btime ")
-                            .and_then(|v| v.parse::<u64>().ok())
-                    })
-                });
-                let ticks = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
-                return boot.is_some_and(|boot| {
-                    ticks > 0
-                        && boot as u128 * 1_000_000
-                            + self.0.start as u128 * 1_000_000 / ticks as u128
-                            >= time.as_micros()
-                });
-            }
-            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-            {
-                false
-            }
+            self.0.started_after(time)
         }
     }
 
     /// The process on the other end of `socket`, when it runs as this user.
-    pub fn of_socket(socket: &impl AsRawFd) -> Option<PeerProcess> {
-        super::process::peer(socket).map(PeerProcess)
+    #[cfg(unix)]
+    pub fn of_socket(socket: &impl std::os::fd::AsRawFd) -> Option<PeerProcess> {
+        Identity::of_unix_peer(socket).map(PeerProcess)
     }
 
     /// The live process `pid`.
     pub fn inspect(pid: u32) -> Option<PeerProcess> {
-        super::process::inspect(pid).map(PeerProcess)
+        Identity::inspect(pid).map(PeerProcess)
     }
 
     /// Whether the live `peer` is `root` or currently runs under it. A cached
     /// parent is not proof: verify the original identity and walk fresh ancestry.
     pub fn descends_from(peer: PeerProcess, root: PeerProcess) -> bool {
-        if !runs(peer) {
-            return false;
-        }
-        super::process::inspect(peer.0.pid)
+        Identity::inspect(peer.0.pid)
             .filter(|current| current.is(peer.0))
-            .is_some_and(|current| super::process::descends_from(current, root.0))
+            .is_some_and(|current| current.descends_from(root.0))
     }
 
     /// Whether `process` still runs: its pid reads as a live process (not a zombie) with
     /// the same start time, whatever its parent is now.
     pub fn runs(process: PeerProcess) -> bool {
-        super::process::inspect(process.0.pid).is_some_and(|now| now.start == process.0.start)
+        process.0.runs()
     }
 }
 

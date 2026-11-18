@@ -398,7 +398,7 @@ signal.pause()
         stop(&mut keeper.0, KEEPER_STOP);
         assert!(!endpoint.exists());
         assert!(
-            super::super::process::inspect(pid).is_none(),
+            codesense_platform::process::Identity::inspect(pid).is_none(),
             "engine outlived keeper"
         );
     }

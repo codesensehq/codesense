@@ -17,9 +17,10 @@ use codesense_host_proto::inbox_wait::{self as wire, InboxWait};
 use serde::{Deserialize, Serialize};
 
 use super::owner::InboxAdmission;
-use super::{process, ActivityOwner};
+use super::ActivityOwner;
 use crate::agent_cli::{AgentCli, HandOver, InboxDelivery};
 use crate::inbox_waiters::{WaitArm, REASK_GRACE};
+use codesense_platform::process::Identity as Process;
 
 /// What an inbox hook's helper asks its host.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,7 +57,7 @@ const MAX_PROMPT: usize = 2 * 1024;
 pub(super) fn serve(
     owner: &ActivityOwner,
     stream: UnixStream,
-    peer: process::Process,
+    peer: Process,
     token: &str,
     ask: Ask,
 ) {
