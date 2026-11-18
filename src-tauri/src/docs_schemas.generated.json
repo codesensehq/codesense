@@ -2396,7 +2396,7 @@
   },
   "sources": {
     "src-tauri/crates/codesense-host-proto/src/agent_cli.rs": "347a6af97cd7ffa3206fc00c7972bbb89a04e954f679269182674f86a4c54ef5",
-    "src-tauri/src/agents/adapter.rs": "287a53b4d7717a707deb5758963907aae1c8132d14fac744a8d666bd66151ece",
+    "src-tauri/src/agents/adapter.rs": "80003db03796f5c1698e79530b23f818e24e44e9ce8f02a138539bc514a7ad04",
     "src-tauri/src/agents/adapter/claude.rs": "6d4c8effe4b7bfc7f9934414e7668b7d7f596847df5788c1b555ae81f6ab2f37",
     "src-tauri/src/agents/adapter/codex.rs": "cd69dd05bb20827e1fcddfb0f43770560db24234bf0521d9a95bf6989ed36925",
     "src-tauri/src/agents/adapter/hermes.rs": "fcb81270aa7bf270d56f8cf20c3fc6297d9a89f2c03fdd6e6d9017ba63c45922",

@@ -290,7 +290,7 @@ pub fn cli_of_provider(provider: AgentProvider) -> AgentCli {
 }
 
 mod claude;
-pub(crate) use claude::{claude_managed, ClaudeManaged};
+pub(crate) use claude::claude_managed;
 mod codex;
 pub(crate) mod hermes;
 mod opencode;
