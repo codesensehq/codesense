@@ -255,6 +255,7 @@ jobs:
           name: linux-smoke-${{ matrix.arch }}
           path: |
             ${{ runner.temp }}/smoke/*.list
+            ${{ runner.temp }}/smoke/appimage/listing
             ${{ runner.temp }}/smoke/appimage/*.log
             ${{ runner.temp }}/smoke/appimage/*.png
           retention-days: 7

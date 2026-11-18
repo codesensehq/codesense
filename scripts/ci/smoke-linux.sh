@@ -175,13 +175,17 @@ run_appimage() {
 
 # The app and its WebKit helper processes find every shared library they link. An AppImage leaves
 # out what every desktop has (GL and EGL among them), so this names whatever the runner lacks,
-# all at once, before a launch fails on the first.
+# all at once, before a launch fails on the first. A bare ldd does not see the library paths the
+# AppImage sets up, so a library the extracted tree holds counts as found; the launch shows
+# whether it loads.
 resolve_libs() {
     local missing
-    missing=$(find "$1/usr/bin" "$1/usr/lib" -type f \( -path "$1/usr/bin/*" -o -name 'WebKit*Process' \) \
-        -exec ldd {} \; 2>/dev/null | awk '/not found/ {print $1}' | sort -u)
+    missing=$(comm -23 \
+        <(find "$1/usr/bin" "$1/usr/lib" -type f \( -path "$1/usr/bin/*" -o -name 'WebKit*Process' \) \
+            -exec ldd {} \; 2>/dev/null | awk '/not found/ {print $1}' | sort -u) \
+        <(find "$1" -name '*.so*' -printf '%f\n' | sort -u))
     [[ -z "$missing" ]] || fail "the runner lacks these libraries the AppImage expects: $(paste -sd ' ' - <<<"$missing")"
-    echo "Every library the app and its WebKit processes link resolves"
+    echo "Every library the app and its WebKit processes link resolves, or is in the AppImage"
 }
 
 # A fresh home and runtime directory for each launch, then the session its mode needs.
