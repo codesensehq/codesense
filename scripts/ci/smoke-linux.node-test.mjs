@@ -131,3 +131,31 @@ test("caps-agree: a missing caps: line, a second one or a missing key fails", ()
   );
   fails(capsAgree(extracted(), "caps: git-ai=off"), /starship=<none>/);
 });
+
+// A home where the app installed a git-ai that prints `version`, and a pin naming `pinned`.
+const installedGitAi = (listing, version, pinned = "1.7.5-cs.5") => {
+  const home = fs.mkdtempSync(path.join(dir, "home-"));
+  if (version !== undefined) {
+    const bin = path.join(home, ".codesense/bin");
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, "git-ai"), `#!/bin/sh\necho ${version}\n`, { mode: 0o755 });
+  }
+  const pin = fixture([`version=${pinned}`, "asset=git-ai-linux-x86_64"]);
+  return smoke("installed-git-ai", fixture(listing), home, pin);
+};
+
+test("installed-git-ai: a bundled git-ai is installed at the pinned version", () => {
+  passes(installedGitAi(extracted("starship", "git-ai"), "1.7.5-cs.5"));
+  // Without the bundled binary the app installs none.
+  passes(installedGitAi(extracted("starship"), undefined));
+});
+
+test("installed-git-ai: a missing install, another version or an unbundled install fails", () => {
+  fails(installedGitAi(extracted("git-ai"), undefined), /did not install git-ai/);
+  fails(
+    installedGitAi(extracted("git-ai"), "1.7.5-cs.4"),
+    /prints 1\.7\.5-cs\.4, not the pinned 1\.7\.5-cs\.5/,
+  );
+  fails(installedGitAi(extracted(), "1.7.5-cs.5"), /resources\/git-ai is not bundled/);
+  fails(installedGitAi(extracted("git-ai"), "1.7.5-cs.5", ""), /has no version/);
+});
