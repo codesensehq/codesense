@@ -557,7 +557,7 @@ jobs:
           save-if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}
           cache-on-failure: true
       - name: Fetch bundled binaries
-        # The Linux bundle's pinned starship, which tauri-build needs in place.
+        # The Linux bundle's pinned git-ai and starship, which tauri-build needs in place.
         run: bash scripts/fetch-bundled.sh
       - name: Build sidecars
         # The app's build script needs the bundled sidecars to exist.
@@ -624,7 +624,7 @@ jobs:
           save-if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}
           cache-on-failure: true
       - name: Fetch bundled binaries
-        # The Linux bundle's pinned starship, which tauri-build needs in place.
+        # The Linux bundle's pinned git-ai and starship, which tauri-build needs in place.
         run: bash scripts/fetch-bundled.sh
       - name: Build sidecars
         # The app's build script needs the bundled sidecars to exist.
