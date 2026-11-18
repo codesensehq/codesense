@@ -100,7 +100,18 @@ const GENERAL_ROW_SPECS: Record<string, SettingRowSpec> = {
   terminalShell: {
     key: "terminalShell",
     label: "Terminal shell",
-    keywords: ["terminal", "shell", "zsh", "bash", "fish", "login", "$SHELL"],
+    keywords: [
+      "terminal",
+      "shell",
+      "zsh",
+      "bash",
+      "fish",
+      "pwsh",
+      "powershell",
+      "cmd",
+      "login",
+      "$SHELL",
+    ],
   },
   terminalServer: {
     key: "terminalServer",
@@ -732,9 +743,10 @@ function TerminalPromptRow() {
 }
 
 // SW-LN-35: the shell terminals run. Shows the detected login shell and takes
-// an optional override (an absolute path to zsh, bash, or fish), committed on
-// blur. The Rust calls go through `Promise.resolve().then` so a missing backend
-// (tests, mock mode) just leaves the detected line blank.
+// an optional override (an absolute path to a shell of a kind the OS accepts,
+// `acceptedKinds`), committed on blur. The Rust calls go through
+// `Promise.resolve().then` so a missing backend (tests, mock mode) just leaves
+// the detected line blank.
 function TerminalShellRow() {
   const terminalShell = useViewerStore((s) => s.settings.terminalShell);
   const updateSettings = useViewerStore((s) => s.updateSettings);
@@ -794,16 +806,20 @@ function TerminalShellRow() {
   );
 }
 
+/** Joins the kinds as prose: "zsh, bash, or fish". */
+const shellKindList = new Intl.ListFormat("en", { type: "disjunction" });
+
 function terminalShellStatus(info: TerminalShellInfo | null): string {
   if (!info) return "New terminals run your login shell. Leave blank to keep it.";
+  const kinds = shellKindList.format(info.acceptedKinds);
   if (info.overrideRejected) {
-    return `${info.overridePath} isn't an executable zsh, bash, or fish. New terminals use ${info.path}.`;
+    return `${info.overridePath} isn't an executable ${kinds}. New terminals use ${info.path}.`;
   }
   if (info.source === "override") return `New terminals use ${info.path}.`;
   if (info.unsupportedShell) {
     return `Your login shell (${info.unsupportedShell}) isn't supported yet. New terminals use ${info.path}.`;
   }
-  return `Detected ${info.detectedPath}. Leave blank to keep it, or enter a path to zsh, bash, or fish.`;
+  return `Detected ${info.detectedPath}. Leave blank to keep it, or enter a path to ${kinds}.`;
 }
 
 // ---------- Agent CLIs ----------

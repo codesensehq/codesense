@@ -20,6 +20,7 @@ import {
 } from "../fixtures";
 import type { MockScenario } from "../scenario";
 import type { LocalProfileStatus } from "@/shared/stores/local-profile-store";
+import type { ShellKind, TerminalShellInfo } from "@/tauri/commands";
 
 /** Project the org's team list from the scenario: no team past the
  *  NoTeamInOrg rung, otherwise the single default team carrying
@@ -167,22 +168,28 @@ export function bootHandlers(scenario: MockScenario): HandlerRegistry {
     resize_pty: () => undefined,
 
     // SW-LN-35: Settings → Terminal shell. Mock mode has no login shell to read,
-    // so it reports the macOS default and echoes back whatever override is set.
+    // so it reports the macOS default and its accepted kinds, and echoes back
+    // whatever override is set.
     terminal_shell_info: () => mockShellInfo(undefined),
     set_terminal_shell_override: (args) => mockShellInfo(args.shell as string | null | undefined),
   };
 }
 
-function mockShellInfo(override: string | null | undefined) {
+function mockShellInfo(override: string | null | undefined): TerminalShellInfo {
+  const acceptedKinds: ShellKind[] = ["zsh", "bash", "fish"];
   const overridePath = override?.trim() || null;
-  const usable = overridePath != null && /^\/(.*\/)?(zsh|bash|fish)$/.test(overridePath);
+  const overrideKind = overridePath?.startsWith("/")
+    ? acceptedKinds.find((kind) => overridePath.split("/").pop() === kind)
+    : undefined;
+  const usable = overridePath != null && overrideKind != null;
   return {
     path: usable ? overridePath : "/bin/zsh",
-    kind: usable ? (overridePath.split("/").pop() as "zsh" | "bash" | "fish") : "zsh",
+    kind: overrideKind ?? "zsh",
     source: usable ? "override" : "env",
     detectedPath: "/bin/zsh",
     overridePath,
     overrideRejected: overridePath != null && !usable,
     unsupportedShell: null,
+    acceptedKinds,
   };
 }
