@@ -1937,3 +1937,10 @@ fn snapshot_then_live_check_catches_a_snapshot_after_unlock() {
     let error = check_snapshot_then_live(true).unwrap_err();
     assert!(error.contains("also in the snapshot"), "{error}");
 }
+
+#[test]
+fn caps_off_is_unsupported_and_names_the_capability() {
+    let error = crate::caps_off("agent-cli-sockets");
+    assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+    assert!(error.to_string().contains("agent-cli-sockets"), "{error}");
+}
