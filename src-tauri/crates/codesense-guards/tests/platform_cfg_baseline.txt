@@ -18,7 +18,6 @@ crates/codesense-pty-core/src/activity/inbox.rs 6
 crates/codesense-pty-core/src/activity/ingress.rs 17
 crates/codesense-pty-core/src/activity/launch.rs 18
 crates/codesense-pty-core/src/activity/mod.rs 5
-crates/codesense-pty-core/src/activity/owner.rs 2
 crates/codesense-pty-core/src/activity/process.rs 25
 crates/codesense-pty-core/src/agent_cli/codex.rs 15
 crates/codesense-pty-core/src/agent_cli/hermes/channel.rs 2

@@ -96,10 +96,10 @@ impl Drop for Engine {
     /// Forgotten (its invocation is), it is ended if it still runs, and its socket goes.
     fn drop(&mut self) {
         if process::inspect(self.process.pid) == Some(self.process) {
-            // SAFETY: signalling the process just identified as this engine.
-            unsafe {
-                libc::kill(self.process.pid as i32, libc::SIGTERM);
-            }
+            // The process just identified as this engine, and it alone.
+            let _ = codesense_platform::process::terminate_pid(
+                codesense_platform::process::Pid::from_raw(self.process.pid),
+            );
         }
         super::engine::remove_socket(&self.endpoint);
     }
