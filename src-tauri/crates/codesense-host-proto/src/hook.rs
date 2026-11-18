@@ -345,14 +345,17 @@ impl Matcher {
         }
         let base = basename(path);
         let unglobbed = base.replace(['*', '?', '[', ']', '{', '}'], "");
-        [&*base, unglobbed.as_str()]
-            .into_iter()
-            .filter(|name| !name.is_empty())
-            .any(|name| {
-                self.families.iter().any(|(family, except)| {
-                    family.is_match(name) && !except.iter().any(|e| e.is_match(name))
-                })
+        let in_family = |name: &str| {
+            self.families.iter().any(|(family, except)| {
+                family.is_match(name) && !except.iter().any(|e| e.is_match(name))
             })
+        };
+        // Bound before it is returned: as a tail expression the array's iterator would outlive
+        // `base` and `unglobbed`.
+        let denied = [&*base, unglobbed.as_str()]
+            .into_iter()
+            .any(|name| !name.is_empty() && in_family(name));
+        denied
     }
 }
 
