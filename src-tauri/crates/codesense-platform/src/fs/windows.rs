@@ -24,16 +24,16 @@ use windows_sys::Win32::Security::Authorization::{
 };
 use windows_sys::Win32::Security::{
     EqualSid, GetAce, InitializeSecurityDescriptor, SetSecurityDescriptorControl,
-    SetSecurityDescriptorDacl, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, CONTAINER_INHERIT_ACE,
-    DACL_SECURITY_INFORMATION, OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION,
-    PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
-    SECURITY_DESCRIPTOR, SE_DACL_PROTECTED,
+    SetSecurityDescriptorDacl, ACCESS_ALLOWED_ACE, ACE_FLAGS, ACE_HEADER, ACL,
+    CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, OBJECT_INHERIT_ACE,
+    OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
+    SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, SE_DACL_PROTECTED,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FileIdInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
-    BY_HANDLE_FILE_INFORMATION, CREATE_NEW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL,
-    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO, FILE_READ_ATTRIBUTES,
-    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_ALWAYS,
+    CreateDirectoryW, CreateFileW, FileIdInfo, GetFileInformationByHandle,
+    GetFileInformationByHandleEx, BY_HANDLE_FILE_INFORMATION, CREATE_NEW, FILE_ALL_ACCESS,
+    FILE_ATTRIBUTE_NORMAL, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO,
+    FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_ALWAYS,
 };
 
 use super::{portable_name, Creation, FileId, Linked, Open, Reach, ReplaceError};
@@ -52,12 +52,7 @@ const FIRST_RETRY_DELAY: Duration = Duration::from_millis(10);
 
 pub(super) fn set_owner_only(path: &Path, is_dir: bool) -> io::Result<()> {
     let user = CurrentUser::read()?;
-    let inherit = if is_dir {
-        OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE
-    } else {
-        0
-    };
-    let acl = SingleUserAcl::new(user.sid(), inherit, FILE_ALL_ACCESS)?;
+    let acl = SingleUserAcl::new(user.sid(), inheritance(is_dir), FILE_ALL_ACCESS)?;
     let path = wide(path);
     // SAFETY: `path` is NUL-terminated; the ACL lives across the call.
     let status = unsafe {
@@ -247,14 +242,30 @@ fn file_id_from(volume: u64, index: u128) -> io::Result<FileId> {
     Ok(FileId { volume, index })
 }
 
-pub(super) fn create_owner_only(path: &Path, creation: Creation, open: Open) -> io::Result<File> {
+/// The owner-only ACE's inheritance: a directory's new files and
+/// directories inherit it; a file has nothing to pass it on to.
+fn inheritance(is_dir: bool) -> ACE_FLAGS {
+    if is_dir {
+        OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE
+    } else {
+        0
+    }
+}
+
+/// Call `create` with security attributes that give what it creates
+/// [`set_owner_only`]'s protected DACL from the start, so it is never
+/// readable by anyone else, not even for a moment.
+fn with_owner_only_attributes<T>(
+    is_dir: bool,
+    create: impl FnOnce(&SECURITY_ATTRIBUTES) -> io::Result<T>,
+) -> io::Result<T> {
     let user = CurrentUser::read()?;
-    let acl = SingleUserAcl::new(user.sid(), 0, FILE_ALL_ACCESS)?;
+    let acl = SingleUserAcl::new(user.sid(), inheritance(is_dir), FILE_ALL_ACCESS)?;
     // SAFETY: all-zero is a valid SECURITY_DESCRIPTOR to initialize.
     let mut descriptor: SECURITY_DESCRIPTOR = unsafe { std::mem::zeroed() };
     let descriptor_ptr: PSECURITY_DESCRIPTOR = std::ptr::addr_of_mut!(descriptor).cast();
     // SAFETY: `descriptor` is an absolute descriptor of the full size; the
-    // ACL it points to outlives the CreateFileW call below.
+    // ACL it points to outlives the `create` call below.
     let made = unsafe {
         InitializeSecurityDescriptor(descriptor_ptr, SECURITY_DESCRIPTOR_REVISION) != 0
             && SetSecurityDescriptorDacl(descriptor_ptr, 1, acl.as_ptr(), 0) != 0
@@ -269,6 +280,26 @@ pub(super) fn create_owner_only(path: &Path, creation: Creation, open: Open) -> 
         lpSecurityDescriptor: descriptor_ptr,
         bInheritHandle: 0,
     };
+    create(&attributes)
+}
+
+pub(super) fn create_owner_only(path: &Path, creation: Creation, open: Open) -> io::Result<File> {
+    let file = with_owner_only_attributes(false, |attributes| {
+        create_file(path, creation, open, attributes)
+    })?;
+    match open {
+        Open::Follow => Ok(file),
+        Open::NoFollow => refuse_link(file, path),
+    }
+}
+
+/// `CreateFileW` for [`create_owner_only`], with its `attributes`.
+fn create_file(
+    path: &Path,
+    creation: Creation,
+    open: Open,
+    attributes: &SECURITY_ATTRIBUTES,
+) -> io::Result<File> {
     let (access, disposition) = match creation {
         Creation::OpenOrCreate => (GENERIC_READ | GENERIC_WRITE, OPEN_ALWAYS),
         Creation::New => (GENERIC_WRITE, CREATE_NEW),
@@ -288,7 +319,7 @@ pub(super) fn create_owner_only(path: &Path, creation: Creation, open: Open) -> 
             wide_path.as_ptr(),
             access,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            &attributes,
+            attributes,
             disposition,
             flags,
             std::ptr::null_mut(),
@@ -298,11 +329,7 @@ pub(super) fn create_owner_only(path: &Path, creation: Creation, open: Open) -> 
         return Err(io::Error::last_os_error());
     }
     // SAFETY: CreateFileW returned an open handle that nothing else owns.
-    let file = unsafe { File::from_raw_handle(raw) };
-    match open {
-        Open::Follow => Ok(file),
-        Open::NoFollow => refuse_link(file, path),
-    }
+    Ok(unsafe { File::from_raw_handle(raw) })
 }
 
 pub(super) fn create_dir_owner_only(path: &Path, recursive: bool) -> io::Result<()> {
@@ -324,12 +351,16 @@ pub(super) fn create_dir_owner_only(path: &Path, recursive: bool) -> io::Result<
     Ok(())
 }
 
-/// Create the one directory `dir` and give it the owner-only DACL, removing
-/// it again when that fails.
+/// Create the one directory `dir` with the owner-only DACL already on it.
 fn create_one_dir_owner_only(dir: &Path) -> io::Result<()> {
-    std::fs::create_dir(dir)?;
-    set_owner_only(dir, true).inspect_err(|_| {
-        let _ = std::fs::remove_dir(dir);
+    let wide_dir = wide(dir);
+    with_owner_only_attributes(true, |attributes| {
+        // SAFETY: the path is NUL-terminated; the attributes and the
+        // descriptor and ACL they point to live across the call.
+        if unsafe { CreateDirectoryW(wide_dir.as_ptr(), attributes) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
     })
 }
 
