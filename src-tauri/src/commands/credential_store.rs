@@ -212,14 +212,18 @@ fn probe_slot() -> &'static std::sync::Arc<ProbeSlot> {
             done: std::sync::Condvar::new(),
         });
         let running = std::sync::Arc::clone(&slot);
-        std::thread::spawn(move || finish_probe(&running));
+        std::thread::spawn(move || {
+            finish_probe(&running, || {
+                secret_store_state(&cred_source(), platform_probe)
+            })
+        });
         slot
     })
 }
 
-/// Runs the probe, logs the real state (`secret store: <state>`), and wakes the waiter.
-fn finish_probe(slot: &ProbeSlot) {
-    let state = secret_store_state(&cred_source(), platform_probe);
+/// Runs `probe`, logs the real state (`secret store: <state>`), and wakes the waiter.
+fn finish_probe(slot: &ProbeSlot, probe: impl FnOnce() -> Probe) {
+    let state = probe();
     log_probe(&state);
     *slot.state.lock().unwrap() = Some(state);
     slot.done.notify_all();
@@ -741,21 +745,32 @@ mod tests {
         assert!(started.elapsed() < std::time::Duration::from_secs(5));
     }
 
-    /// A probe that finishes while the waiter sleeps wakes it with the real state.
+    /// The production `finish_probe` wakes a sleeping waiter as soon as the probe answers: the
+    /// waiter returns in well under half its deadline (it would sleep the whole deadline if the
+    /// notification were missing).
     #[test]
-    fn a_probe_finishing_during_the_wait_wakes_the_waiter() {
+    fn a_probe_finishing_during_the_wait_wakes_the_waiter_at_once() {
         let slot = std::sync::Arc::new(ProbeSlot {
             state: std::sync::Mutex::new(None),
             done: std::sync::Condvar::new(),
         });
         let running = std::sync::Arc::clone(&slot);
         let handle = std::thread::spawn(move || {
-            *running.state.lock().unwrap() = Some(Probe::Present("secret-service"));
-            running.done.notify_all();
+            finish_probe(&running, || {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                Probe::Present("secret-service")
+            })
         });
+        let deadline = std::time::Duration::from_secs(4);
+        let started = std::time::Instant::now();
         assert_eq!(
-            probe_result(&slot, std::time::Duration::from_secs(60)),
+            probe_result(&slot, deadline),
             Some(Probe::Present("secret-service"))
+        );
+        assert!(
+            started.elapsed() < deadline / 2,
+            "the waiter slept {:?} of its {deadline:?}",
+            started.elapsed()
         );
         handle.join().unwrap();
     }
