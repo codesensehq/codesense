@@ -191,3 +191,41 @@ test("--dry-run prints the URL of every committed pin, given relative to the rep
     );
   }
 });
+
+test("fetch-bundled maps each host to its pins", (t) => {
+  const f = fixture(t);
+  const bin = path.join(f.dir, "bin");
+  fs.mkdirSync(bin);
+  const host = (os, arch) => {
+    fs.writeFileSync(
+      path.join(bin, "uname"),
+      `#!/bin/sh\ncase "$1" in -s) echo ${os} ;; -m) echo ${arch} ;; esac\n`,
+      { mode: 0o755 },
+    );
+    return spawnSync("bash", [path.join(root, "scripts/fetch-git-ai.sh"), "--dry-run"], {
+      cwd: f.dir,
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+    });
+  };
+  const release = "https://github.com/starship/starship/releases/download/v1.24.2";
+  for (const [os, arch, url] of [
+    ["Darwin", "arm64", /\/git-ai\/releases\/download\/.*\/git-ai-macos-arm64\n$/],
+    ["Darwin", "x86_64", /\/git-ai-macos-arm64\n$/],
+    ["Linux", "x86_64", `${release}/starship-x86_64-unknown-linux-musl.tar.gz\n`],
+    ["Linux", "aarch64", `${release}/starship-aarch64-unknown-linux-musl.tar.gz\n`],
+  ]) {
+    const run = host(os, arch);
+    assert.equal(run.status, 0, `${os} ${arch}: ${run.stderr}`);
+    if (typeof url === "string") assert.equal(run.stdout, url);
+    else assert.match(run.stdout, url);
+  }
+  for (const [os, arch] of [
+    ["Linux", "riscv64"],
+    ["FreeBSD", "amd64"],
+  ]) {
+    const run = host(os, arch);
+    assert.equal(run.status, 1);
+    assert.equal(run.stderr, `No pinned binaries for this host: ${os} ${arch}\n`);
+  }
+});

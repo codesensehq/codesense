@@ -10,7 +10,7 @@
 #   - macOS fetches git-ai, signs ad hoc (Apple silicon needs a signature to launch the app),
 #     builds the app and dmg, and zips the app to $RUNNER_TEMP/CodeSense.app.zip. The dmg
 #     stays in target/release/bundle/dmg.
-#   - Linux builds the formats in `bundles` (a comma list of deb, rpm and appimage; all three
+#   - Linux fetches starship, builds the formats in `bundles` (a comma list of deb, rpm and appimage; all three
 #     by default), and checks that each of them is exactly one file under
 #     target/release/bundle. The arm64 job leaves out appimage: linuxdeploy rewrites the
 #     bundled emulator executable, which breaks it on aarch64.
@@ -51,6 +51,8 @@ case "$PLATFORM" in
         export NODE_OPTIONS=--max-old-space-size=6144
         ;;
     linux)
+        # The bundle ships resources/starship from the pinned, checksummed download.
+        bash scripts/fetch-bundled.sh
         # linuxdeploy is itself an AppImage, and a runner has no FUSE to mount one.
         export APPIMAGE_EXTRACT_AND_RUN=1
         # --verbose shows linuxdeploy's own output, which a failed AppImage otherwise hides.

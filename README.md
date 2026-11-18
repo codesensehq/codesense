@@ -49,7 +49,7 @@ git clone https://github.com/codesensehq/codesense.git
 cd codesense
 corepack enable
 pnpm install --frozen-lockfile
-bash scripts/fetch-git-ai.sh     # the pinned, checksummed git-ai binary
+bash scripts/fetch-bundled.sh    # the pinned, checksummed binaries this OS bundles
 pnpm build:emulator              # the terminal emulator worker
 pnpm run tauri dev               # run it
 pnpm tauri:build:unsigned        # or build a debug app, no signing or updater keys
@@ -58,9 +58,11 @@ pnpm tauri:build:unsigned        # or build a debug app, no signing or updater k
 A signed release build (`pnpm run tauri build`) needs your own Apple signing
 identity and your own updater signing key; none are included here.
 
-`scripts/fetch-git-ai.sh` downloads the pinned git-ai release over HTTPS, with
-no GitHub login, and refuses it unless its SHA-256 matches `src-tauri/git-ai.pin`.
-`bash scripts/fetch-git-ai.sh --dry-run` prints the URL it would fetch. If a step
+`scripts/fetch-bundled.sh` downloads the third-party binaries the app bundles on
+this OS (git-ai on macOS, `src-tauri/git-ai.pin`; starship on Linux,
+`src-tauri/pins/`) over HTTPS, with no GitHub login, and refuses each unless its
+SHA-256 matches its pin. `bash scripts/fetch-bundled.sh --dry-run` prints the URL
+it would fetch. If a step
 fails on a clean checkout, please open an issue.
 
 A build from source uses the `internal` update channel by default and leaves out

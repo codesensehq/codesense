@@ -91,8 +91,9 @@ src-tauri/resources/codesense-docs.tar.gz
 
 tsconfig.node.tsbuildinfo
 
-# Signed release asset fetched by scripts/fetch-git-ai.sh.
+# Pinned release assets fetched by scripts/fetch-bundled.sh.
 src-tauri/resources/git-ai
+src-tauri/resources/fetched/
 
 # a handbook snapshot refresh stages pages here (removed when it finishes)
 /.handbook-refresh-*/

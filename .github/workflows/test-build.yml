@@ -144,7 +144,7 @@ jobs:
         run: rustup toolchain install stable --profile minimal
       - name: Check scripts
         # The bundle and fetch scripts, here: macOS runners ship no shellcheck.
-        run: shellcheck -x scripts/ci/unsigned-bundle.sh scripts/ci/bundle-manifest.sh scripts/fetch-pinned.sh
+        run: shellcheck -x scripts/ci/unsigned-bundle.sh scripts/ci/bundle-manifest.sh scripts/fetch-pinned.sh scripts/fetch-bundled.sh
       - name: Build app
         env:
           BUNDLES: ${{ matrix.bundles }}
