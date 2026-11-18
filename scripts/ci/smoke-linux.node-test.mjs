@@ -69,3 +69,55 @@ test("same-resources: the deb and the rpm must ship the same starship and git-ai
     /resources\/git-ai/,
   );
 });
+
+// The app's stdout log: a coloured timestamp, level and target before each message.
+const logLine = (message, target = "system") =>
+  `\x1b[32m05:21:09 [INFO ]\x1b[0m \x1b[37m[${target}]\x1b[0m ${message}`;
+const appLog = (caps) => [
+  logLine("webview ready"),
+  ...(caps === undefined ? [] : [logLine(caps)]),
+  logLine("secret store: secret-service", "auth"),
+];
+// What `find squashfs-root` lists for the extracted AppImage.
+const extracted = (...resources) => [
+  "squashfs-root/AppRun",
+  "squashfs-root/usr/bin/codesense",
+  "squashfs-root/usr/lib/CodeSense/resources/starship-compact.toml",
+  ...resources.map((name) => `squashfs-root/usr/lib/CodeSense/resources/${name}`),
+];
+const capsAgree = (listing, caps) => smoke("caps-agree", fixture(listing), fixture(appLog(caps)));
+
+test("caps-agree: a capability is on exactly when its binary is bundled", () => {
+  passes(capsAgree(extracted(), "caps: git-ai=off starship=off"));
+  passes(capsAgree(extracted("starship", "git-ai"), "caps: git-ai=on starship=on"));
+  passes(capsAgree(extracted("starship"), "caps: git-ai=off starship=on"));
+  // Other capabilities on the line are not this check's.
+  passes(capsAgree(extracted(), "caps: bridge=on git-ai=off secret-store=on starship=off"));
+});
+
+test("caps-agree: a bundled binary that is off, or an absent one that is on, fails", () => {
+  fails(
+    capsAgree(extracted("starship"), "caps: git-ai=off starship=off"),
+    /starship=off.*resources\/starship is bundled/,
+  );
+  fails(
+    capsAgree(extracted(), "caps: git-ai=on starship=off"),
+    /git-ai=on.*resources\/git-ai is not bundled/,
+  );
+});
+
+test("caps-agree: a missing caps: line, a second one or a missing key fails", () => {
+  fails(capsAgree(extracted(), undefined), /expected one caps: line, found 0/);
+  fails(
+    smoke(
+      "caps-agree",
+      fixture(extracted()),
+      fixture([
+        ...appLog("caps: git-ai=off starship=off"),
+        logLine("caps: git-ai=off starship=off"),
+      ]),
+    ),
+    /expected one caps: line, found 2/,
+  );
+  fails(capsAgree(extracted(), "caps: git-ai=off"), /starship=<none>/);
+});

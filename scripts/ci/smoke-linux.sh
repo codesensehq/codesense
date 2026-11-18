@@ -1,6 +1,8 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Packaging smoke for the Linux test build: install the deb and the rpm in clean containers.
+# Packaging smoke for the Linux test build: install the deb and the rpm in clean containers, and
+# launch the extracted AppImage headless. Release builds carry no WebDriver, so the launch checks
+# read the process, the screen and the app's log.
 #
 # Usage:
 #   smoke-linux.sh install <deb|rpm> <image> <package-dir> <out-dir>
@@ -10,12 +12,22 @@
 #       hold the app binary and its three sidecars.
 #   smoke-linux.sh same-resources <listing> <listing>
 #       Both file lists ship the same optional resources (resources/starship, resources/git-ai).
+#   smoke-linux.sh run <package-dir> <out-dir>
+#       Extract the one .AppImage under <package-dir> into <out-dir> and launch it under
+#       xvfb-run inside dbus-run-session with an unlocked keyring: it is alive at 30 s, has drawn
+#       a window that is not one colour, logs webview ready, a caps: line that agrees with the
+#       bundle (caps-agree) and secret store: secret-service, and exits within 10 s of SIGTERM.
+#       Each launch leaves <mode>.log and <mode>.png in <out-dir>.
+#   smoke-linux.sh caps-agree <listing> <log>
+#       The log has one caps: line, and its starship and git-ai are on exactly when the file
+#       list holds resources/starship and resources/git-ai.
 #   smoke-linux.sh check-listing <listing>
 #       The /usr/bin check install runs on a file list.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 IMAGES="$SCRIPT_DIR/smoke-images.txt"
+SELF="$SCRIPT_DIR/smoke-linux.sh"
 SIDECARS=(codesense-bridge codesense-session-server codesense-emulator)
 # Resources the bundle carries only where the platform turns them on.
 OPTIONAL_RESOURCES=(starship git-ai)
@@ -58,11 +70,16 @@ check_listing() {
         fail "expected the app binary and three sidecars in /usr/bin of $1, found: $(tr '\n' ' ' <<<"$bin")"
 }
 
+# Whether file list <listing> holds resources/<name>.
+bundled() {
+    grep -Eq "(^|/)resources/$1\$" "$2"
+}
+
 # The optional resources a file list holds, one resources/<name> a line.
 resources_in() {
     local name
     for name in "${OPTIONAL_RESOURCES[@]}"; do
-        if grep -Eq "(^|/)resources/$name\$" "$1"; then echo "resources/$name"; fi
+        if bundled "$name" "$1"; then echo "resources/$name"; fi
     done
 }
 
@@ -72,6 +89,29 @@ same_resources() {
     second=$(resources_in "$2" | paste -sd ' ' -)
     [[ "$first" == "$second" ]] || fail "$1 lists ${first:-no optional resources}, $2 lists ${second:-none}"
     echo "Both list: ${first:-no optional resources}"
+}
+
+# The log as plain text: the console log colours each line.
+plain_log() {
+    sed "s/$(printf '\033')\[[0-9;]*m//g" "$1"
+}
+
+# A capability the bundle can only have with its binary is on exactly when the binary is there,
+# so the check holds whichever of them a build turns on.
+caps_agree() {
+    local listing="$1" line count name state
+    line=$(plain_log "$2" | grep -E '(^| )caps:( [[:alnum:]-]+=(on|off))+ *$' || true)
+    count=$(grep -c . <<<"$line" || true)
+    [[ "$count" -eq 1 ]] || fail "expected one caps: line, found $count"
+    for name in "${OPTIONAL_RESOURCES[@]}"; do
+        state=$(grep -oE " $name=(on|off)" <<<"$line" | cut -d= -f2 || true)
+        if bundled "$name" "$listing"; then
+            [[ "$state" == on ]] || fail "caps: $name=${state:-<none>}, but resources/$name is bundled"
+        else
+            [[ "$state" == off ]] || fail "caps: $name=${state:-<none>}, but resources/$name is not bundled"
+        fi
+    done
+    echo "The caps: line agrees with the bundle: ${line#*caps:}"
 }
 
 install_package() {
@@ -107,6 +147,73 @@ in_container() {
     esac
 }
 
+# Whether <pid> is running: a child that has exited stays a zombie until it is reaped.
+alive() {
+    [[ -e "/proc/$1" ]] && ! grep -q '^State:[[:space:]]*Z' "/proc/$1/status"
+}
+
+run_appimage() {
+    local appimage out="$2"
+    appimage=$(realpath "$(only_file "$1" "*.AppImage")")
+    rm -rf "$out"
+    mkdir -p "$out"
+    out=$(realpath "$out")
+    chmod +x "$appimage"
+    # The runners have no FUSE to mount the image, so the smoke runs the extracted tree.
+    (cd "$out" && "$appimage" --appimage-extract >/dev/null)
+    find "$out/squashfs-root" >"$out/listing"
+    start_session default "$out"
+}
+
+# A fresh home and runtime directory for each launch, then the session its mode needs.
+start_session() {
+    local mode="$1" out="$2"
+    export HOME="$out/$mode-home" XDG_RUNTIME_DIR="$out/$mode-runtime"
+    mkdir -p "$HOME"
+    mkdir -m 700 "$XDG_RUNTIME_DIR"
+    case "$mode" in
+        default) dbus-run-session -- bash "$SELF" desktop "$mode" "$out" ;;
+    esac
+}
+
+# Inside dbus-run-session: an empty password unlocks the login keyring (creating it), which
+# then serves the Secret Service on the session bus.
+desktop() {
+    printf '' | gnome-keyring-daemon --unlock --components=secrets >/dev/null
+    xvfb-run -a -s "-screen 0 1280x800x24" bash "$SELF" launch "$@"
+}
+
+# Inside xvfb-run: launch the app, check it while it runs, stop it, then check its log.
+launch() {
+    local mode="$1" out="$2" log="$1.log" shot="$1.png" pid waited
+    cd "$out"
+    "$out/squashfs-root/AppRun" >"$log" 2>&1 &
+    pid=$!
+    # Nothing the launch started outlives it, and a failed launch shows its log.
+    # shellcheck disable=SC2064 # expand now: the trap runs after these locals are gone
+    trap "status=\$?; pkill -KILL -f '$out/squashfs-root/' || true; ((status == 0)) || tail -n 200 '$log' >&2" EXIT
+    sleep 30
+    alive "$pid" || fail "the app exited within 30 s"
+    echo "The app is alive at 30 s"
+    import -window root "$shot"
+    [[ $(identify -format '%k' "$shot") -gt 1 ]] || fail "the screen is one colour (see $shot)"
+    echo "The screen is not one colour"
+    kill -TERM "$pid"
+    for ((waited = 0; waited < 10; waited++)); do
+        alive "$pid" || break
+        sleep 1
+    done
+    if alive "$pid"; then fail "the app is still running 10 s after SIGTERM"; fi
+    wait "$pid" || true
+    echo "The app exited within 10 s of SIGTERM"
+    plain_log "$log" >"$mode.txt"
+    grep -q "webview ready" "$mode.txt" || fail "the log has no webview ready"
+    caps_agree listing "$log"
+    grep -qE "(^| )secret store: secret-service\$" "$mode.txt" ||
+        fail "the log has no secret store: secret-service"
+    echo "The log has webview ready and secret store: secret-service"
+}
+
 [[ $# -ge 1 ]] || usage
 command="$1"
 shift
@@ -122,6 +229,18 @@ case "$command" in
     same-resources)
         [[ $# -eq 2 ]] || usage
         same_resources "$@"
+        ;;
+    run)
+        [[ $# -eq 2 ]] || usage
+        run_appimage "$@"
+        ;;
+    desktop | launch)
+        [[ $# -eq 2 ]] || usage
+        "$command" "$@"
+        ;;
+    caps-agree)
+        [[ $# -eq 2 ]] || usage
+        caps_agree "$@"
         ;;
     check-listing)
         [[ $# -eq 1 ]] || usage
