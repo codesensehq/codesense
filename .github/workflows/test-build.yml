@@ -170,8 +170,15 @@ jobs:
         env:
           BUNDLES: ${{ matrix.bundles }}
         run: |
-          version() { sed -n 's/^version=//p' "$(bash scripts/fetch-bundled.sh --print-pin "$1")"; }
-          declare -A expected=([git-ai]="$(version git-ai)" [starship]="starship $(version starship)")
+          # Plain assignments, so a failed --print-pin stops the step here.
+          declare -A expected
+          for name in git-ai starship; do
+            pin=$(bash scripts/fetch-bundled.sh --print-pin "$name")
+            version=$(sed -n 's/^version=//p' "$pin")
+            [[ -n "$version" ]] || { echo "Error: $pin has no version" >&2; exit 1; }
+            expected[$name]=$version
+          done
+          expected[starship]="starship ${expected[starship]}"
           for format in ${BUNDLES//,/ }; do
             dir="$RUNNER_TEMP/extract-$format"
             mkdir -p "$dir"
