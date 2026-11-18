@@ -147,7 +147,7 @@ jobs:
         run: rustup toolchain install stable --profile minimal
       - name: Check scripts
         # The bundle and fetch scripts, here: macOS runners ship no shellcheck.
-        run: shellcheck -x scripts/ci/unsigned-bundle.sh scripts/ci/bundle-manifest.sh scripts/fetch-pinned.sh scripts/fetch-bundled.sh scripts/ci/appimage-offset.sh
+        run: shellcheck -x scripts/ci/unsigned-bundle.sh scripts/ci/bundle-manifest.sh scripts/fetch-pinned.sh scripts/fetch-bundled.sh scripts/ci/appimage-offset.sh scripts/ci/repair-appimage.sh
       - name: Build app
         env:
           BUNDLES: ${{ matrix.bundles }}
@@ -176,8 +176,8 @@ jobs:
               deb) dpkg-deb -x target/release/bundle/deb/*.deb "$dir" ;;
               # libarchive reads the rpm payload itself; rpm2cpio fails on this rpm without a message.
               rpm) bsdtar -xf target/release/bundle/rpm/*.rpm -C "$dir" ;;
-              # The squashfs image after the AppImage's runtime, read without running the runtime
-              # (its --appimage-extract crashes on the runner).
+              # The squashfs image after the AppImage's runtime, read the way repair-appimage.sh
+              # reads it, so the check sees the image the repair wrote.
               appimage)
                 appimage=$(echo target/release/bundle/appimage/*.AppImage)
                 offset=$(bash scripts/ci/appimage-offset.sh "$appimage")

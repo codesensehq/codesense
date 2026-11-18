@@ -55,6 +55,11 @@ pnpm run tauri dev               # run it
 pnpm tauri:build:unsigned        # or build a debug app, no signing or updater keys
 ```
 
+On Linux, use the deb or rpm from a Tauri build, or build an AppImage with
+`bash scripts/ci/unsigned-bundle.sh linux appimage`: the AppImage packer rewrites every
+executable it bundles, which breaks the bundled starship and the terminal emulator, and that
+script bundles it without the emulator and then repairs it with `scripts/ci/repair-appimage.sh`.
+
 A signed release build (`pnpm run tauri build`) needs your own Apple signing
 identity and your own updater signing key; none are included here.
 

@@ -16,8 +16,8 @@
 #     terminal emulator: linuxdeploy sets an rpath on every executable in the AppDir, and the
 #     emulator is a Bun-compiled executable whose payload sits after the ELF image, which the
 #     rewrite breaks (on aarch64 the bundle aborts). The same rewrite corrupts the static-pie
-#     starship. The script then inserts the untouched emulator, puts the pinned starship back
-#     and rebuilds the image from Tauri's own AppImage runtime plus a new squashfs.
+#     starship. scripts/ci/repair-appimage.sh then inserts the untouched emulator, puts the
+#     pinned starship back and rebuilds the image from its own runtime plus a new squashfs.
 # `pnpm exec tauri` runs the CLI directly: the `tauri` script in package.json is POSIX shell
 # and does not run on a Windows runner.
 set -euo pipefail
@@ -113,36 +113,8 @@ case "$PLATFORM" in
             fi
         done
         if [[ ",$LINUX_BUNDLES," == *,appimage,* ]]; then
-            # Insert the emulator byte for byte, and put back the pinned starship the deb and rpm
-            # ship, which linuxdeploy's rpath rewrite corrupted. An AppImage is its runtime
-            # followed by a squashfs, so the new image is Tauri's runtime bytes plus a squashfs of
-            # the extracted tree, made with the original's compressor; no appimagetool is needed.
-            # The image is read without running the runtime.
-            appimage=$(realpath "$BUNDLE_DIR"/appimage/*.AppImage)
-            emulator="$PROJECT_ROOT/src-tauri/binaries/codesense-emulator-$(rustc -vV | sed -n 's/^host: //p')"
-            work=$(mktemp -d "$OUT_DIR/appimage.XXXXXX")
-            offset=$(bash scripts/ci/appimage-offset.sh "$appimage")
-            compressor=$(unsquashfs -s -o "$offset" "$appimage" | sed -n 's/^Compression //p')
-            unsquashfs -q -n -d "$work/squashfs-root" -o "$offset" "$appimage"
-            if [[ -e "$work/squashfs-root/usr/bin/codesense-emulator" ]]; then
-                echo "Error: the AppImage was bundled with the emulator" >&2
-                exit 1
-            fi
-            install -m 755 "$emulator" "$work/squashfs-root/usr/bin/codesense-emulator"
-            starship=$(find "$work/squashfs-root" -path '*/resources/starship' -type f)
-            if [[ -z "$starship" || "$starship" == *$'\n'* ]]; then
-                echo "Error: expected one resources/starship in $appimage, found: $starship" >&2
-                exit 1
-            fi
-            install -m 755 "$(bash scripts/fetch-bundled.sh --print-dest)" "$starship"
-            mksquashfs "$work/squashfs-root" "$work/fs.sqfs" -root-owned -noappend -no-progress \
-                -comp "$compressor"
-            # A temp file, then mv: a redirect onto the original would truncate it before head reads.
-            head -c "$offset" "$appimage" >"$work/rebuilt.AppImage"
-            cat "$work/fs.sqfs" >>"$work/rebuilt.AppImage"
-            chmod +x "$work/rebuilt.AppImage"
-            mv "$work/rebuilt.AppImage" "$appimage"
-            rm -rf "$work"
+            # Bundled without the emulator, and with the starship linuxdeploy broke; put both right.
+            bash scripts/ci/repair-appimage.sh "$BUNDLE_DIR"/appimage/*.AppImage
         fi
         ;;
 esac
