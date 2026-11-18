@@ -24,9 +24,11 @@ pub(crate) struct ClaudeManaged {
 }
 
 /// The managed policy files Claude Code reads on `os`, a [`std::env::consts::OS`] value; none on
-/// an OS it does not support.
+/// an OS it does not support. The paths follow the file-based delivery section of Claude Code's
+/// managed-settings docs: <https://code.claude.com/docs/en/managed-settings>.
 pub(crate) fn claude_managed(os: &str) -> ClaudeManaged {
     match os {
+        // The `/etc/claude-code` entries are kept from CodeSense's earlier list.
         "macos" => ClaudeManaged {
             settings: &[
                 "/Library/Application Support/ClaudeCode/managed-settings.json",
