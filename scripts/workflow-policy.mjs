@@ -414,6 +414,23 @@ export function workflowPolicy(text, file = "") {
   return errors;
 }
 
+// The packaging smoke's containers (scripts/ci/smoke-images.txt): one <name>:<tag>@sha256:<digest>
+// a line, besides comments and blank lines. The tag names the image the workflow asks for; the
+// digest is what runs, so a retagged image cannot change the smoke.
+export function smokeImagesPolicy(text) {
+  const errors = [];
+  const names = new Set();
+  for (const line of text.split("\n").map((l) => l.trim())) {
+    if (!line || line.startsWith("#")) continue;
+    const match = /^([^\s:@]+:[^\s:@]+)@sha256:[0-9a-f]{64}$/.exec(line);
+    if (!match) errors.push(`${line}: must be <name>:<tag>@sha256:<digest>`);
+    else if (names.has(match[1])) errors.push(`${match[1]}: listed twice`);
+    else names.add(match[1]);
+  }
+  if (!names.size && !errors.length) errors.push("no images");
+  return errors;
+}
+
 const workflowFiles = (directory) =>
   fs
     .readdirSync(directory)

@@ -8,7 +8,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
-import { workflowPolicy } from "./workflow-policy.mjs";
+import { smokeImagesPolicy, workflowPolicy } from "./workflow-policy.mjs";
 
 // The workflow set under test: .github/workflows, or CODESENSE_WORKFLOWS_DIR (from the repo root).
 const directory = path.resolve(
@@ -1408,4 +1408,24 @@ test("test build: the policy rejects a missing platform gate, input or runner", 
   ];
   for (const [fixture, error] of cases)
     assert.match(workflowPolicy(fixture, testBuildFile).join("\n"), error);
+});
+
+// The packaging smoke's containers come from one list, each pinned by its image index digest.
+const smokeImages = fileURLToPath(new URL("ci/smoke-images.txt", import.meta.url));
+
+test("smoke images: every container is pinned by digest", () => {
+  assert.deepEqual(smokeImagesPolicy(fs.readFileSync(smokeImages, "utf8")), []);
+});
+
+test("smoke images: the policy rejects a bare tag, a short digest, a duplicate or no image", () => {
+  const pin = `@sha256:${"a".repeat(64)}`;
+  const cases = [
+    ["ubuntu:24.04\n", /ubuntu:24\.04: must be <name>:<tag>@sha256:<digest>/],
+    [`ubuntu${pin}\n`, /must be <name>:<tag>@sha256/],
+    ["ubuntu:24.04@sha256:abc\n", /must be <name>:<tag>@sha256/],
+    [`ubuntu:24.04${pin}\nubuntu:24.04${pin}\n`, /ubuntu:24\.04: listed twice/],
+    ["# a comment\n\n", /no images/],
+  ];
+  for (const [fixture, error] of cases) assert.match(smokeImagesPolicy(fixture).join("\n"), error);
+  assert.deepEqual(smokeImagesPolicy(`# a comment\n\nubuntu:24.04${pin}\n`), []);
 });

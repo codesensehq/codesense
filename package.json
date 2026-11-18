@@ -81,7 +81,7 @@
     "gen:verbs": "node scripts/generate-verb-registry.mjs --export",
     "gen:verbs:check": "node scripts/generate-verb-registry.mjs --check",
     "test:verbs-codegen": "node --test scripts/generate-verb-registry.node-test.mjs",
-    "test:node-scripts": "node --test scripts/*.node-test.mjs src-tauri/resources/opencode/*.test.mjs",
+    "test:node-scripts": "node --test scripts/*.node-test.mjs scripts/ci/*.node-test.mjs src-tauri/resources/opencode/*.test.mjs",
     "format:files": "prettier --write",
     "lint:files": "eslint",
     "test:dashboard-kit": "playwright test -c playwright.dashboard-kit.config.ts",
