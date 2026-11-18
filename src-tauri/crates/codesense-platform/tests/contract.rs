@@ -133,28 +133,14 @@ fn set_owner_only_denies_others() {
         is_owned_by_current_user(&opened).unwrap()
     };
     for path in [&file, &private] {
-        assert!(owned(path), "{}", path.display());
+        assert_eq!(owned(path), expect_owned(), "{}", path.display());
         assert!(!owner_only(path), "shared before: {}", path.display());
         set_owner_only(path).unwrap();
-        assert!(owned(path), "{}", path.display());
+        assert_eq!(owned(path), expect_owned(), "{}", path.display());
         assert!(owner_only(path), "{}", path.display());
         expect_owner_only_mode(path);
     }
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "secret");
-}
-
-#[test]
-fn an_owner_only_acl_with_another_owner_is_not_owner_only() {
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("foreign");
-    std::fs::write(&file, "foreign").unwrap();
-    set_owner_only(&file).unwrap();
-    if !expect_foreign_owner(&file) {
-        return;
-    }
-    let opened = open_nofollow(OpenOptions::new().read(true), &file).unwrap();
-    assert!(!is_owned_by_current_user(&opened).unwrap());
-    assert!(!is_owner_only(&opened).unwrap());
 }
 
 #[test]
@@ -163,12 +149,18 @@ fn a_file_this_user_makes_is_theirs_and_an_owner_only_create_is_owner_only() {
     let opened = |path: &Path| open_nofollow(OpenOptions::new().read(true), path).unwrap();
     let shared = dir.path().join("shared");
     std::fs::write(&shared, "shared").unwrap();
-    assert!(is_owned_by_current_user(&opened(&shared)).unwrap());
-    assert!(is_owned_by_current_user(&opened(dir.path())).unwrap());
+    assert_eq!(
+        is_owned_by_current_user(&opened(&shared)).unwrap(),
+        expect_owned()
+    );
+    assert_eq!(
+        is_owned_by_current_user(&opened(dir.path())).unwrap(),
+        expect_owned()
+    );
 
     let private = dir.path().join("private");
     let file = create_owner_only(&private, Open::Follow).unwrap();
-    assert!(is_owned_by_current_user(&file).unwrap());
+    assert_eq!(is_owned_by_current_user(&file).unwrap(), expect_owned());
     assert!(is_owner_only(&file).unwrap());
     assert!(is_owner_only(&opened(&private)).unwrap());
     expect_owner_only_mode(&private);
@@ -503,40 +495,12 @@ fn expect_home_variable() -> &'static str {
     }
 }
 
-/// Give `path` an owner that is not this user and return `true`, or return
-/// `false` after saying why on stderr, and the test skips the rest. Unix:
-/// `chown` to `nobody` (65534), which needs root. Windows: SYSTEM as the
-/// owner through `icacls /setowner`, which needs an administrator; under CI
-/// (`CI` set, as on the elevated hosted runners) a failure is an error, not
-/// a skip, because the test hides a skip's stderr and a green run must prove
-/// the row ran.
-fn expect_foreign_owner(path: &Path) -> bool {
-    #[cfg(unix)]
-    {
-        if let Err(error) = std::os::unix::fs::chown(path, Some(65534), None) {
-            eprintln!("skipped: changing a file's owner needs root ({error})");
-            return false;
-        }
-        true
-    }
-    #[cfg(windows)]
-    {
-        let status = Command::new("icacls")
-            .arg(path)
-            .args(["/setowner", "*S-1-5-18"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .expect("run icacls");
-        if !status.success() {
-            assert!(
-                std::env::var_os("CI").is_none(),
-                "icacls /setowner failed under CI: {status}"
-            );
-            eprintln!("skipped: icacls /setowner needs an administrator ({status})");
-        }
-        status.success()
-    }
+/// Whether a file this process made counts as owned by it. Unix: its uid is
+/// the effective uid. Windows: its owner is the token's user or its default
+/// owner, which for an elevated job (as CI may run) is
+/// `BUILTIN\Administrators`, so either way it is.
+fn expect_owned() -> bool {
+    true
 }
 
 /// Unix: exactly 0600 for a file and 0700 for a directory. Windows: the

@@ -138,17 +138,24 @@ impl Security {
         })
     }
 
-    /// Whether the owner is `user`'s token user or its default owner
-    /// (`TokenOwner`), and no other SID.
+    /// Whether the owner is `user`'s token user or its default owner.
     fn owned_by(&self, user: &CurrentUser) -> bool {
-        // SAFETY: the owner SID points into the descriptor `self` holds; the
-        // user's SIDs are valid while `user` lives.
-        !self.owner.is_null()
-            && unsafe {
-                EqualSid(self.owner, user.sid()) != 0
-                    || EqualSid(self.owner, user.default_owner()) != 0
-            }
+        // SAFETY: the owner SID is null or points into the descriptor `self`
+        // holds; the user's SIDs are valid while `user` lives.
+        unsafe { owner_is_current(self.owner, user.sid(), user.default_owner()) }
     }
+}
+
+/// Whether `owner` is the token's user or its default owner (`TokenOwner`),
+/// and no other SID. An elevated token's default owner is
+/// `BUILTIN\Administrators`, which then owns the files it creates.
+///
+/// # Safety
+///
+/// `owner` is null or a valid SID; `token_user` and `token_owner` are valid
+/// SIDs.
+unsafe fn owner_is_current(owner: PSID, token_user: PSID, token_owner: PSID) -> bool {
+    !owner.is_null() && (EqualSid(owner, token_user) != 0 || EqualSid(owner, token_owner) != 0)
 }
 
 impl Drop for Security {
@@ -410,7 +417,54 @@ pub(super) fn link_or_copy(target: &Path, link: &Path) -> io::Result<Linked> {
 mod tests {
     use std::path::PathBuf;
 
-    use super::plain_unc;
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
+    use windows_sys::Win32::Security::PSID;
+
+    use super::{owner_is_current, plain_unc};
+
+    /// A SID parsed from its string form, freed on drop.
+    struct Sid(PSID);
+
+    impl Sid {
+        fn parse(text: &str) -> Self {
+            let wide: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
+            let mut sid: PSID = std::ptr::null_mut();
+            // SAFETY: `wide` is NUL-terminated; `sid` is writable.
+            let parsed = unsafe { ConvertStringSidToSidW(wide.as_ptr(), &mut sid) };
+            assert_ne!(parsed, 0, "{text}: {}", std::io::Error::last_os_error());
+            Self(sid)
+        }
+    }
+
+    impl Drop for Sid {
+        fn drop(&mut self) {
+            // SAFETY: ConvertStringSidToSidW allocated the SID with LocalAlloc.
+            unsafe { LocalFree(self.0) };
+        }
+    }
+
+    #[test]
+    fn the_owner_is_current_for_the_token_user_or_its_default_owner_only() {
+        let user = Sid::parse("S-1-5-21-1000-2000-3000-1001");
+        let administrators = Sid::parse("S-1-5-32-544");
+        let system = Sid::parse("S-1-5-18");
+        let same_user = Sid::parse("S-1-5-21-1000-2000-3000-1001");
+        // SAFETY: every SID lives to the end of the test.
+        unsafe {
+            assert!(owner_is_current(user.0, user.0, administrators.0));
+            assert!(owner_is_current(same_user.0, user.0, administrators.0));
+            assert!(owner_is_current(administrators.0, user.0, administrators.0));
+            assert!(owner_is_current(user.0, user.0, user.0));
+            assert!(!owner_is_current(system.0, user.0, administrators.0));
+            assert!(!owner_is_current(administrators.0, user.0, user.0));
+            assert!(!owner_is_current(
+                std::ptr::null_mut(),
+                user.0,
+                administrators.0
+            ));
+        }
+    }
 
     #[test]
     fn a_verbatim_unc_path_becomes_plain() {
