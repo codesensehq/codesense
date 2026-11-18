@@ -2698,7 +2698,9 @@ mod shell_tests {
             assert!(!resources.contains_key(key), "{key} must not ship on Linux");
         }
         assert_eq!(
-            resources.get("resources/fetched/starship").and_then(|v| v.as_str()),
+            resources
+                .get("resources/fetched/starship")
+                .and_then(|v| v.as_str()),
             Some("resources/starship"),
             "the fetched starship ships as resources/starship"
         );
