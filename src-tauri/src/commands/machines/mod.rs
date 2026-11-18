@@ -2312,6 +2312,7 @@ pub(crate) fn capture_passphrase(
     unlocks: impl FnOnce(&Path, &Secret) -> Result<(), String>,
 ) -> Result<Option<CredentialRef>, String> {
     env.prepare_dirs()?;
+    passphrase::ensure_available(store)?;
     let key = env.expand(key_path.trim());
     let Some(secret) = prompt(&key)? else {
         return Ok(None);

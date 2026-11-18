@@ -2432,7 +2432,10 @@ const MAX_UNRESOLVED_PATHS: usize = 279;
 /// `.get_mut(..)`, `.remove(..)` and `.retain(..)` in `TopicRegistry::release`,
 /// `release_owner` and `hold_count`, and `.is_ok_and(..)` on the two map locks in
 /// `DashboardStreamHub`. All of them are std map and lock calls; none calls a write primitive.
-const MAX_UNRESOLVED_METHODS: usize = 6_557;
+/// The Secret Service probe adds 1 more, as CI measured: `source.name()` on a D-Bus error in
+/// `absence_of` (commands/credential_store.rs), which reads an error's name string and calls no
+/// write primitive.
+const MAX_UNRESOLVED_METHODS: usize = 6_558;
 
 /// X1: no unattended root reaches a write primitive; every reviewed entry is
 /// still needed; the walk still sees the app.

@@ -7,7 +7,7 @@
  */
 
 import type { DerivedPipelineTree } from "@/shared/lib/pipeline-graph/types";
-import { basename } from "@/shared/lib/basename";
+import { basename } from "@/shared/lib/path";
 
 export interface RelateCandidate {
   filePath: string;

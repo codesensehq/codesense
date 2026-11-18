@@ -139,6 +139,8 @@ import { getEffectiveTreeFontPx } from "@/shared/lib/font-sizes";
 import { useTrailingDebounce } from "@/shared/lib/use-trailing-debounce";
 import { PaneCollapseDivider, type PaneSize } from "../components/pane-collapse-divider";
 import type { DragResizeOptions } from "./use-drag-resize";
+import { hasCmd, hasMod } from "@/shared/lib/shortcuts/keystroke";
+import { basename } from "@/shared/lib/path";
 
 const EMPTY_PATHS: string[] = [];
 
@@ -629,7 +631,7 @@ export function TeamWorkspaceView({ teamKey }: TeamWorkspaceViewProps) {
       // tab: find, pane cycling and tab cycling do nothing there.
       const inPopup = isRowPopupFocused();
 
-      if ((e.metaKey || e.ctrlKey) && e.key === "f" && !inPopup) {
+      if (hasMod(e) && e.key === "f" && !inPopup) {
         e.preventDefault();
         // SW-VE-8: single-owner ⌘F. When a SEARCH-CAPABLE CM6 editor holds focus
         // (the deliberate-edit inset — marked `data-cm-search`) its own in-editor
@@ -646,7 +648,7 @@ export function TeamWorkspaceView({ teamKey }: TeamWorkspaceViewProps) {
       // registry as `nav.open-workspace` (discoverable + rebindable). It now
       // opens via `ui-store.workspacePaletteOpen`; the handler below is gone.
       // Cmd+` — cycle focus through visible panes: viewer → terminal → scratch note
-      if (e.metaKey && e.key === "`" && !inPopup) {
+      if (hasCmd(e) && e.key === "`" && !inPopup) {
         e.preventDefault();
         const state = useViewerStore.getState();
         const mode = state.layoutMode ?? "shared";
@@ -701,7 +703,7 @@ export function TeamWorkspaceView({ teamKey }: TeamWorkspaceViewProps) {
       // Skip when a modal (quick-open, find bar) is open — don't cycle tabs behind it
       if (
         !e.defaultPrevented &&
-        e.metaKey &&
+        hasCmd(e) &&
         e.shiftKey &&
         !e.altKey &&
         getActivePaneType() !== "terminal" &&
@@ -1743,7 +1745,7 @@ export function TeamWorkspaceView({ teamKey }: TeamWorkspaceViewProps) {
                   ) : (
                     <FileWarningPlaceholder
                       message="No preview available"
-                      filename={p.split("/").pop() ?? p}
+                      filename={basename(p) || p}
                       testId="nav-no-preview"
                     />
                   );

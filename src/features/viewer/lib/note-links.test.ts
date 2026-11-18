@@ -166,4 +166,8 @@ describe("toContentRelative", () => {
   it("leaves a path outside the root as-is (sans leading slash)", () => {
     expect(toContentRelative("/other/x.md", CONTENT)).toBe("other/x.md");
   });
+  it("strips a Windows content root and a trailing separator", () => {
+    expect(toContentRelative("C:\\ctx\\epic\\x.md", "C:\\ctx")).toBe("epic/x.md");
+    expect(toContentRelative("C:\\ctx\\epic\\x.md", "C:\\ctx\\")).toBe("epic/x.md");
+  });
 });

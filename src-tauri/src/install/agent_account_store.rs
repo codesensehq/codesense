@@ -1303,6 +1303,28 @@ mod tests {
         Principal::from(42u64)
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn an_exclusive_lock_refuses_a_second_handle_until_the_holder_closes() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("lock");
+        let open = || {
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(&path)
+                .unwrap()
+        };
+        let first = open();
+        assert!(try_lock_exclusive(&first).unwrap());
+        let second = open();
+        assert!(!try_lock_exclusive(&second).unwrap());
+        drop(first);
+        assert!(try_lock_exclusive(&second).unwrap());
+    }
+
     #[test]
     fn create_list_detach_restart_and_reattach_preserve_home() {
         let temp = TempDir::new().unwrap();

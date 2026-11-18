@@ -5,6 +5,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { cn } from "@/lib/utils";
 
 import { useInboxComposeDraftStore } from "../stores/inbox-compose-draft-store";
+import { hasMod } from "@/shared/lib/shortcuts/keystroke";
 
 /**
  * SW-IB1-A5 — the one compose box both inboxes mount (push pane + human
@@ -173,7 +174,7 @@ export function InboxCompose({
     // dismiss, which matches a user's intuition that they've "moved on."
     if (errorVisible) setErrorDismissed(true);
 
-    const isCmd = e.metaKey || e.ctrlKey;
+    const isCmd = hasMod(e);
     const isShift = e.shiftKey;
     // IME composition safety — if the user is mid-composition (CJK, dead
     // keys), Enter commits the IME, not the send. React doesn't type the

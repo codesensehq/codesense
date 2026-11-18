@@ -668,6 +668,39 @@ mod tests {
         assert!(calls.lock().unwrap().is_empty());
     }
 
+    /// The group signal is `kill(-pgid, signal)`: SIGTERM is a request the
+    /// group may ignore, SIGKILL ends it, and a gone group is not an error.
+    #[cfg(unix)]
+    #[test]
+    fn group_signals_reach_the_whole_group_and_a_gone_group_is_ok() {
+        use std::io::BufRead;
+        use std::os::unix::process::{CommandExt, ExitStatusExt};
+        let mut leader = std::process::Command::new("/bin/sh")
+            .args(["-c", "trap '' TERM; echo ready; while :; do sleep 1; done"])
+            .stdout(std::process::Stdio::piped())
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let mut ready = String::new();
+        std::io::BufReader::new(leader.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(ready.trim(), "ready");
+        let pgid = leader.id() as libc::pid_t;
+
+        signal_group(pgid, libc::SIGTERM).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(leader.try_wait().unwrap().is_none(), "SIGTERM was ignored");
+        signal_group(pgid, libc::SIGKILL).unwrap();
+        assert_eq!(leader.wait().unwrap().signal(), Some(libc::SIGKILL));
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while unsafe { libc::kill(-pgid, 0) } == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(signal_group(pgid, libc::SIGKILL), Ok(()));
+    }
+
     #[cfg(unix)]
     fn test_session_child(
         child: impl Child + Send + 'static,

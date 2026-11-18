@@ -11,7 +11,7 @@ import {
 } from "@/shared/stores/use-managed-session-store";
 import type { TerminalTab } from "@/shared/stores/viewer-store";
 import { useEffectiveShortcut } from "@/shared/stores/shortcuts-store";
-import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
+import { formatKeystrokeDisplay, hasCommandModifier } from "@/shared/lib/shortcuts/keystroke";
 import { focusWorkspaceTerminal } from "../lib/focus-cascade";
 import {
   TILE_QUESTION_ASK_ATTR,
@@ -167,7 +167,7 @@ export function TileNeedsYouSlot({
       backToTerminal();
       return;
     }
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (hasCommandModifier(e)) return;
     // Focus parked on the strip itself (after a question was withdrawn under you):
     // keys you were still typing must not answer the next question.
     if (el === root && ARROW_STEP[e.key] === undefined) return;

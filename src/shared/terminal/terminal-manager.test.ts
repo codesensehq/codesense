@@ -63,6 +63,28 @@ vi.mock(
   }),
 );
 
+const clipboard = vi.hoisted(() => ({
+  copySelectionToClipboard: vi.fn(async () => {}),
+  pasteFromClipboard: vi.fn(async () => {}),
+}));
+vi.mock("./terminal-clipboard", () => clipboard);
+
+const keyHandlers = vi.hoisted(() => ({
+  options: [] as Array<
+    import("@/shared/lib/terminal-key-handler").TerminalKeyHandlerOptions | undefined
+  >,
+}));
+vi.mock("@/shared/lib/terminal-key-handler", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/shared/lib/terminal-key-handler")>();
+  return {
+    ...original,
+    createTerminalKeyHandler: (...args: Parameters<typeof original.createTerminalKeyHandler>) => {
+      keyHandlers.options.push(args[1]);
+      return original.createTerminalKeyHandler(...args);
+    },
+  };
+});
+
 const FAKE_TIMERS: Parameters<typeof vi.useFakeTimers>[0] = {
   toFake: [
     "setTimeout",
@@ -169,6 +191,20 @@ afterEach(() => {
   managers = [];
   document.body.innerHTML = "";
   vi.useRealTimers();
+});
+
+describe("terminal clipboard keys", () => {
+  it("wires the shared clipboard helpers into the key handler", async () => {
+    keyHandlers.options.length = 0;
+    const m = newManager();
+    await open(m);
+    const term = m.terminal("s1")!;
+    const options = keyHandlers.options.at(-1);
+    options?.copySelection?.();
+    expect(clipboard.copySelectionToClipboard).toHaveBeenCalledWith(term);
+    options?.paste?.();
+    expect(clipboard.pasteFromClipboard).toHaveBeenCalledWith(term);
+  });
 });
 
 describe("one display per session (I2)", () => {

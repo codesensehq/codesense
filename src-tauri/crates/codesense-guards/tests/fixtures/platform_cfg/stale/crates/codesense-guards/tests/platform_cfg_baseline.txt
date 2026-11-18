@@ -1,0 +1,3 @@
+# <path> <count>
+src/gone.rs 2
+src/main.rs 1

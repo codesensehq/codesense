@@ -7,6 +7,7 @@ import { isInHiddenTeam } from "@/shared/lib/warm-scopes";
 import { getActivePaneType } from "@/shared/lib/focus-utils";
 import { parseScrollIntent } from "@/shared/lib/scroll-keys";
 import { useViewerStore } from "@/shared/stores/viewer-store";
+import { hasMod } from "@/shared/lib/shortcuts/keystroke";
 
 /**
  * Shared viewer chrome — the scroll container styling, content-width / theme /
@@ -75,7 +76,7 @@ export function useViewerScrollKeys(
       if (getActivePaneType() !== "file") return;
       if (scrollRef.current && isInHiddenTeam(scrollRef.current)) return;
 
-      const cmd = e.metaKey || e.ctrlKey;
+      const cmd = hasMod(e);
 
       // Cmd+A owns the keystroke whenever the viewer pane has focus.
       if (cmd && !e.shiftKey && !e.altKey && (e.key === "a" || e.key === "A")) {

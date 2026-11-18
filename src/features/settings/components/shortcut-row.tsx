@@ -3,7 +3,13 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { AppButton } from "@/shared/components/app-button";
-import { formatKeystrokeDisplay, keystrokeFromEvent } from "@/shared/lib/shortcuts/keystroke";
+import {
+  formatKeystrokeDisplay,
+  hasAnyModifier,
+  hasCommandModifier,
+  hasMod,
+  keystrokeFromEvent,
+} from "@/shared/lib/shortcuts/keystroke";
 import {
   findConflict,
   shortcutLabelById,
@@ -80,7 +86,7 @@ function unboundNote(action: ShortcutAction, binding: ResolvedBinding): string |
  * inline beneath the row until the user retries or Escapes.
  */
 export function ShortcutRow({ action, humanOnly }: ShortcutRowProps) {
-  const binding = useResolvedBinding(action.id) ?? { keystroke: "" };
+  const binding = useResolvedBinding(action.id) ?? { keystroke: "", terminalKeystroke: "" };
   const current = binding.keystroke;
   const hasOverride = useShortcutsStore((s) => action.id in s.shortcuts);
   const setShortcut = useShortcutsStore((s) => s.setShortcut);
@@ -114,7 +120,7 @@ export function ShortcutRow({ action, humanOnly }: ShortcutRowProps) {
     // user gets feedback that their modifier is registered.
     if (e.key === "Meta" || e.key === "Control" || e.key === "Shift" || e.key === "Alt") {
       const parts: string[] = [];
-      if (e.metaKey || e.ctrlKey) parts.push("⌘");
+      if (hasMod(e)) parts.push("⌘");
       if (e.shiftKey) parts.push("⇧");
       if (e.altKey) parts.push("⌥");
       setPendingModifiers(parts.join(""));
@@ -131,13 +137,7 @@ export function ShortcutRow({ action, humanOnly }: ShortcutRowProps) {
     }
 
     // ⌫ or Delete alone removes the chord: "explicitly no shortcut".
-    if (
-      (e.key === "Backspace" || e.key === "Delete") &&
-      !e.metaKey &&
-      !e.ctrlKey &&
-      !e.altKey &&
-      !e.shiftKey
-    ) {
+    if ((e.key === "Backspace" || e.key === "Delete") && !hasAnyModifier(e)) {
       clearShortcut(action.id);
       closeEditor();
       return;
@@ -146,7 +146,7 @@ export function ShortcutRow({ action, humanOnly }: ShortcutRowProps) {
     // Bare Tab (no modifier) traps keyboard users — a shortcut bound
     // to Tab would break tab navigation app-wide. Require a modifier
     // to bind Tab.
-    if (e.key === "Tab" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    if (e.key === "Tab" && !hasCommandModifier(e)) {
       setError({ detail: "Tab alone would break keyboard navigation — add a modifier" });
       return;
     }

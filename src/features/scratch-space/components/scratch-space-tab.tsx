@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { InlineAlert } from "@/components/ui/inline-alert";
 import { AppButton as Button } from "@/shared/components/app-button";
-import { basename } from "@/shared/lib/basename";
+import { basename } from "@/shared/lib/path";
 import type { CommonViewerProps } from "@/shared/lib/viewer-file-type";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";

@@ -50,6 +50,7 @@ import {
   HostAgentRowMenu,
   useHostAgentMenu,
 } from "./host-agent-menu";
+import { isAbsolute, join } from "@/shared/lib/path";
 
 function MenuGlyph({ glyph }: { glyph: HostMenuGlyph }) {
   if (typeof glyph === "string") {
@@ -247,9 +248,9 @@ function RequestedMenu({ request, finish }: { request: ActiveRequest; finish: Fi
     if (
       request.nativeSurface === "nav-status" &&
       typeof row.path === "string" &&
-      !row.path.startsWith("/")
+      !isAbsolute(row.path)
     ) {
-      row.path = `${request.contentRoot ?? ""}/${row.path}`;
+      row.path = join(request.contentRoot ?? "/", row.path);
     }
     const closeNative = openNativeMenu({
       row,
