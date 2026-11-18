@@ -144,12 +144,17 @@ fn a_target_without_a_pin_has_none() {
 }
 #[test]
 fn the_running_pin_is_the_hosts_or_else_the_macos_one() {
-    let expected = pin_for(std::env::consts::OS, std::env::consts::ARCH)
-        .or_else(|| pin_for("macos", "aarch64"))
-        .unwrap();
-    assert_eq!(PIN.platform, expected.platform);
-    assert_eq!(PIN.expected_version, expected.expected_version);
-    assert_eq!(PIN.sha256, expected.sha256);
+    let (platform, version, asset) = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => ("linux-x86_64", "1.7.5-cs.5", "git-ai-linux-x86_64"),
+        ("linux", "aarch64") => ("linux-aarch64", "1.7.5-cs.5", "git-ai-linux-arm64"),
+        ("windows", "x86_64") => ("windows-x86_64", "1.7.5-cs.5", "git-ai-windows-x86_64.exe"),
+        ("windows", "aarch64") => ("windows-arm64", "1.7.5-cs.5", "git-ai-windows-arm64.exe"),
+        // macOS arm64, and any target without a pin of its own.
+        _ => ("macos-arm64", "1.7.5-cs.4", "git-ai-macos-arm64"),
+    };
+    assert_eq!(PIN.platform, platform);
+    assert_eq!(PIN.expected_version, version);
+    assert_eq!(PIN.asset, asset);
 }
 #[test]
 fn a_pin_for_another_platform_is_refused() {
