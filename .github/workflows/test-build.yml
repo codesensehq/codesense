@@ -187,7 +187,9 @@ jobs:
             found=$(find "$dir" -path '*/resources/starship' -type f)
             [[ $(grep -c . <<<"$found") -eq 1 ]] || { echo "Error: expected one resources/starship in the $format, found: $found" >&2; exit 1; }
             [[ -x "$found" ]] || { echo "Error: $found in the $format is not executable" >&2; exit 1; }
-            version=$("$found" --version)
+            echo "$format: $(sha256sum "$found")"
+            file "$found"
+            version=$("$found" --version) || { echo "Error: $found from the $format failed to run (exit $?)" >&2; exit 1; }
             version=${version%%$'\n'*}
             echo "$format: $found: $version"
             [[ "$version" == "$expected" ]] || { echo "Error: expected $expected from the $format" >&2; exit 1; }

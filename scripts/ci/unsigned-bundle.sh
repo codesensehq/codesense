@@ -55,6 +55,8 @@ case "$PLATFORM" in
         bash scripts/fetch-bundled.sh
         # linuxdeploy is itself an AppImage, and a runner has no FUSE to mount one.
         export APPIMAGE_EXTRACT_AND_RUN=1
+        # linuxdeploy strips every ELF file it bundles, which breaks the static starship binary.
+        export NO_STRIP=1
         # --verbose shows linuxdeploy's own output, which a failed AppImage otherwise hides.
         tauri_args+=(--verbose --bundles "$LINUX_BUNDLES")
         ;;
