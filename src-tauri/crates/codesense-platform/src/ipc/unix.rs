@@ -7,13 +7,13 @@
 
 use std::ffi::OsStr;
 use std::io;
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
@@ -26,8 +26,6 @@ const MCP_SOCKET: &str = "mcp.sock";
 const ACTIVITY_SOCKET: &str = "activity.sock";
 /// The session server's socket in its instance's root.
 const SESSION_SERVER_SOCKET: &str = "pty-server.sock";
-/// How long a bind waits on a socket already there before it counts it live.
-const PROBE_TIMEOUT: Duration = Duration::from_millis(50);
 
 pub(super) fn address(endpoint: &Endpoint) -> io::Result<PathBuf> {
     Ok(match endpoint {
@@ -89,9 +87,9 @@ fn bind(endpoint: &Endpoint) -> io::Result<(net::UnixListener, BoundSocket)> {
 }
 
 /// Remove a socket left at `path` by a listener that is gone. Anything else
-/// there stays: a live listener, or one too busy to answer the probe in
-/// time, is `AddrInUse`, and a file that is not a socket of this user's is
-/// `PermissionDenied`. A socket gone meanwhile needs no removing.
+/// there stays: a live listener is `AddrInUse`, and a file that is not a
+/// socket of this user's is `PermissionDenied`. A socket gone meanwhile needs
+/// no removing.
 fn remove_stale(path: &Path) -> io::Result<()> {
     let previous = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -105,25 +103,70 @@ fn remove_stale(path: &Path) -> io::Result<()> {
             format!("{} is not a socket of this user's", path.display()),
         ));
     }
-    let probe = socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None)?;
-    let removed = match probe.connect_timeout(&socket2::SockAddr::unix(path)?, PROBE_TIMEOUT) {
+    let removed = match probe(path) {
         Ok(()) => return Err(in_use(path)),
-        Err(error) => match error.kind() {
-            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => return Err(in_use(path)),
-            io::ErrorKind::ConnectionRefused => match file_identity(path) {
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Err(in_use(path)),
+        Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => {
+            match file_identity(path) {
                 Ok(identity) if identity != (previous.dev(), previous.ino()) => {
                     return Err(in_use(path));
                 }
                 Ok(_) => std::fs::remove_file(path),
                 Err(error) => Err(error),
-            },
-            _ => Err(error),
-        },
+            }
+        }
+        Err(error) => Err(error),
     };
     match removed {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         removed => removed,
     }
+}
+
+/// Connect to the socket at `path` without waiting. Linux answers a listener
+/// whose backlog is full with `WouldBlock`; macOS answers it with
+/// `ConnectionRefused`, as it does a socket no one listens on, so there a
+/// listener that busy reads as gone and its socket is replaced.
+fn probe(path: &Path) -> io::Result<()> {
+    // SAFETY: socket has no preconditions; a negative result is its error.
+    let fd = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: the descriptor is open and owned by nothing else.
+    let socket = unsafe { OwnedFd::from_raw_fd(fd) };
+    // SAFETY: fcntl reads and sets the open descriptor's flags.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: an all-zero sockaddr_un is a valid value.
+    let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    address.sun_family = libc::AF_UNIX as libc::sa_family_t;
+    let bytes = path.as_os_str().as_bytes();
+    // The path and its NUL must fit.
+    if bytes.len() >= address.sun_path.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} is too long for a socket path", path.display()),
+        ));
+    }
+    for (slot, &byte) in address.sun_path.iter_mut().zip(bytes) {
+        *slot = byte as libc::c_char;
+    }
+    let length = std::mem::size_of_val(&address) as libc::socklen_t;
+    // SAFETY: the address is a whole sockaddr_un of `length` bytes.
+    let connected = unsafe {
+        libc::connect(
+            socket.as_raw_fd(),
+            std::ptr::addr_of!(address).cast(),
+            length,
+        )
+    };
+    if connected != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 fn in_use(path: &Path) -> io::Error {

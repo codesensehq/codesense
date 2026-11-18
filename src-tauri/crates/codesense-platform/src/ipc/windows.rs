@@ -4,8 +4,10 @@
 //! blocking form: a DACL that grants the current user alone, remote clients
 //! refused, the current user as owner, and `FILE_FLAG_FIRST_PIPE_INSTANCE`
 //! on a listener's first instance. Clients open with identification-only
-//! impersonation and refuse a pipe another user owns; either end refuses a
-//! peer process of another user.
+//! impersonation and refuse a pipe another user owns. Those two are the user
+//! boundary: the DACL keeps other users' clients out of a listener, and the
+//! owner check keeps a client off another user's listener. A peer's pid is
+//! only looked up.
 
 use std::ffi::OsStr;
 use std::io;
@@ -34,11 +36,10 @@ use windows_sys::Win32::System::Pipes::{
     CreateNamedPipeW, GetNamedPipeClientProcessId, GetNamedPipeServerProcessId, PIPE_READMODE_BYTE,
     PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
-use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
 
 use super::Endpoint;
 use crate::process::Pid;
-use crate::win::{wide, CurrentUser, Handle, SingleUserAcl};
+use crate::win::{wide, CurrentUser, SingleUserAcl};
 
 /// The start of every CodeSense pipe name.
 const PIPE_PREFIX: &str = r"\\.\pipe\codesense-";
@@ -111,6 +112,18 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 /// created it.
 fn create_instance(name: &Path, first: bool, overlapped: bool) -> io::Result<OwnedHandle> {
     let user = CurrentUser::read()?;
+    create_instance_owned_by(name, first, overlapped, user.sid())
+}
+
+/// [`create_instance`] with `owner` as the pipe's owner; the DACL still
+/// grants the current user alone.
+fn create_instance_owned_by(
+    name: &Path,
+    first: bool,
+    overlapped: bool,
+    owner: PSID,
+) -> io::Result<OwnedHandle> {
+    let user = CurrentUser::read()?;
     let acl = SingleUserAcl::new(user.sid(), 0, FILE_ALL_ACCESS)?;
     // SAFETY: an all-zero SECURITY_DESCRIPTOR is a valid value to initialize.
     let mut descriptor: SECURITY_DESCRIPTOR = unsafe { std::mem::zeroed() };
@@ -125,9 +138,9 @@ fn create_instance(name: &Path, first: bool, overlapped: bool) -> io::Result<Own
     }
     // An explicit owner: an elevated token's default owner is Administrators,
     // which a client could not tell from another user's.
-    // SAFETY: the descriptor points at the user's SID, which outlives the
+    // SAFETY: the descriptor points at the owner's SID, which outlives the
     // create below.
-    if unsafe { SetSecurityDescriptorOwner(descriptor_ptr, user.sid(), 0) } == 0 {
+    if unsafe { SetSecurityDescriptorOwner(descriptor_ptr, owner, 0) } == 0 {
         return Err(io::Error::last_os_error());
     }
     let attributes = SECURITY_ATTRIBUTES {
@@ -181,13 +194,6 @@ impl Drop for LocalDescriptor {
     }
 }
 
-fn another_user(peer: &str) -> io::Error {
-    io::Error::new(
-        io::ErrorKind::PermissionDenied,
-        format!("the {peer} runs as another user"),
-    )
-}
-
 /// Refuse the pipe `handle` unless the current user owns it. Another
 /// account could create a pipe under this user's name first; it cannot make
 /// this user its owner.
@@ -214,28 +220,17 @@ fn check_owner(handle: HANDLE) -> io::Result<()> {
     // The owner points into the descriptor, freed on return.
     let _descriptor = LocalDescriptor(descriptor);
     if owner.is_null() || !CurrentUser::read()?.is(owner) {
-        return Err(another_user("pipe's server"));
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "another user owns the pipe",
+        ));
     }
     Ok(())
 }
 
-/// Refuse the process `pid` unless its token is the current user's.
-fn check_process_user(pid: u32) -> io::Result<()> {
-    // SAFETY: OpenProcess has no preconditions; a null handle is its error.
-    let raw = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-    let process = Handle::new(raw).map_err(|error| match error.kind() {
-        io::ErrorKind::PermissionDenied => another_user("peer"),
-        _ => error,
-    })?;
-    if !CurrentUser::read()?.is(CurrentUser::of_process(process.raw())?.sid()) {
-        return Err(another_user("peer"));
-    }
-    Ok(())
-}
-
-/// The pid of the other end of the pipe `handle`, when it runs as this
-/// user: the client's on a listener's instance, the listener's on a
-/// client's handle.
+/// The pid of the other end of the pipe `handle`: the client's on a
+/// listener's instance, the listener's on a client's handle. It checks no
+/// user: the DACL and the client's owner check have already.
 fn peer_pid(handle: HANDLE, is_server: bool) -> io::Result<Pid> {
     let mut pid = 0u32;
     // SAFETY: the handle is an open pipe; `pid` is writable.
@@ -249,10 +244,6 @@ fn peer_pid(handle: HANDLE, is_server: bool) -> io::Result<Pid> {
     if read == 0 {
         return Err(io::Error::last_os_error());
     }
-    if !is_server {
-        check_owner(handle)?;
-    }
-    check_process_user(pid)?;
     Ok(Pid::from_raw(pid))
 }
 
@@ -474,8 +465,10 @@ pub(crate) mod blocking {
 mod tests {
     use std::ffi::c_void;
 
+    use windows_sys::Win32::Foundation::ERROR_INVALID_OWNER;
     use windows_sys::Win32::Security::{
-        GetAce, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION,
+        CreateWellKnownSid, GetAce, WinBuiltinAdministratorsSid, ACCESS_ALLOWED_ACE, ACE_HEADER,
+        ACL, DACL_SECURITY_INFORMATION,
     };
 
     use super::*;
@@ -544,6 +537,39 @@ mod tests {
         // Every later instance carries the same DACL.
         assert_current_user_only(listener.pending_instance());
         drop(accepted);
+    }
+
+    #[test]
+    fn a_pipe_another_user_owns_is_refused() {
+        // BUILTIN\Administrators: an owner other than the current user that
+        // an elevated process may give its pipe. SECURITY_MAX_SID_SIZE bytes.
+        let mut admins = [0u32; 17];
+        let mut size = std::mem::size_of_val(&admins) as u32;
+        // SAFETY: the buffer is writable and `size` bytes long.
+        let made = unsafe {
+            CreateWellKnownSid(
+                WinBuiltinAdministratorsSid,
+                std::ptr::null_mut(),
+                admins.as_mut_ptr().cast(),
+                &mut size,
+            )
+        };
+        assert_ne!(made, 0, "{}", io::Error::last_os_error());
+        let endpoint = unique("owner");
+        let name = endpoint.address().unwrap();
+        let owned = create_instance_owned_by(&name, true, false, admins.as_mut_ptr().cast());
+        let _instance = match owned {
+            Ok(instance) => instance,
+            Err(error) if error.raw_os_error() == Some(ERROR_INVALID_OWNER as i32) => {
+                eprintln!("skipped: this token may not name Administrators as an owner");
+                return;
+            }
+            Err(error) => panic!("{error}"),
+        };
+        match blocking::Stream::connect(&endpoint) {
+            Err(error) => assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}"),
+            Ok(_) => panic!("connected to a pipe another user owns"),
+        }
     }
 
     #[test]

@@ -6,6 +6,7 @@
 use std::io;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
+use std::sync::OnceLock;
 
 use windows_sys::core::PWSTR;
 use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, HANDLE};
@@ -47,24 +48,29 @@ impl Drop for Handle {
     }
 }
 
-/// The current process token's user, read once; or another process's, read
-/// the same way.
+/// The current process token's user, read once.
 pub(crate) struct CurrentUser {
     /// The `TOKEN_USER` and the SID it points to, 8-byte aligned.
     buffer: Vec<u64>,
 }
 
 impl CurrentUser {
-    pub(crate) fn read() -> io::Result<Self> {
-        // SAFETY: the current-process pseudo handle needs no closing.
-        Self::of_process(unsafe { GetCurrentProcess() })
+    /// The user, read from the token on the first call: a process's user
+    /// does not change.
+    pub(crate) fn read() -> io::Result<&'static Self> {
+        static USER: OnceLock<CurrentUser> = OnceLock::new();
+        if let Some(user) = USER.get() {
+            return Ok(user);
+        }
+        let user = Self::read_token()?;
+        Ok(USER.get_or_init(|| user))
     }
 
-    /// The user of the open process `process`'s token.
-    pub(crate) fn of_process(process: HANDLE) -> io::Result<Self> {
+    fn read_token() -> io::Result<Self> {
         let mut token: HANDLE = std::ptr::null_mut();
-        // SAFETY: the process handle is open; `token` is writable.
-        if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } == 0 {
+        // SAFETY: the current-process pseudo handle needs no closing; `token`
+        // is writable.
+        if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
             return Err(io::Error::last_os_error());
         }
         let token = Handle::new(token)?;

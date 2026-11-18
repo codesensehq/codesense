@@ -8,9 +8,11 @@
 //! is replaced, a live one is [`io::ErrorKind::AddrInUse`]. On Windows it is
 //! the named pipe `\\.\pipe\codesense-<user>-<endpoint>[-<root>]` (`<user>`
 //! and `<root>` are hashes of the user's SID and the root path), whose every
-//! instance grants only the current user and which refuses remote clients;
-//! the first instance is created with `FILE_FLAG_FIRST_PIPE_INSTANCE`, so a
-//! name already served, by this user or another, is `AddrInUse`.
+//! instance grants only the current user, names the current user as its
+//! owner and refuses remote clients; the first instance is created with
+//! `FILE_FLAG_FIRST_PIPE_INSTANCE`, so a name already served, by this user or
+//! another, is `AddrInUse`. A client refuses a pipe another user owns with
+//! [`io::ErrorKind::PermissionDenied`].
 //!
 //! [`LocalStream::peer_pid`] is the one place that says which process is at
 //! the other end of a connection.
@@ -114,7 +116,8 @@ pub struct LocalStream(sys::Stream);
 
 impl LocalStream {
     /// Connect to the listener serving `endpoint`. On Windows a connection
-    /// waits, up to a few seconds, while every pipe instance is busy.
+    /// waits, up to a few seconds, while every pipe instance is busy, and a
+    /// pipe another user owns is [`io::ErrorKind::PermissionDenied`].
     pub async fn connect(endpoint: &Endpoint) -> io::Result<Self> {
         sys::Stream::connect(endpoint).await.map(Self)
     }
@@ -122,7 +125,10 @@ impl LocalStream {
     /// The process at the other end: the client, on a stream a listener
     /// accepted; the listener's process, on a stream that connected. On
     /// unix a peer running as another user is
-    /// [`io::ErrorKind::PermissionDenied`].
+    /// [`io::ErrorKind::PermissionDenied`]. On Windows it is only the pid:
+    /// the user was checked on the way in, by the listener's DACL, which
+    /// lets no other user's client open it, and by `connect`, which refuses
+    /// a pipe another user owns.
     pub fn peer_pid(&self) -> io::Result<Pid> {
         self.0.peer_pid()
     }
@@ -185,9 +191,10 @@ pub mod blocking {
     pub struct LocalStream(sys::blocking::Stream);
 
     impl LocalStream {
-        /// Connect to the listener serving `endpoint`. On Windows a
-        /// connection waits, up to a few seconds, while every pipe instance
-        /// is busy.
+        /// Connect to the listener serving `endpoint`; as
+        /// [`super::LocalStream::connect`]. On Windows a connection waits, up
+        /// to a few seconds, while every pipe instance is busy, and a pipe
+        /// another user owns is [`io::ErrorKind::PermissionDenied`].
         pub fn connect(endpoint: &Endpoint) -> io::Result<Self> {
             sys::blocking::Stream::connect(endpoint).map(Self)
         }
