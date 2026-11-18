@@ -148,8 +148,7 @@ impl PtySpawnSetupFixture {
     }
 
     pub fn run(&self) {
-        let _ = self
-            .intent
+        self.intent
             .resolve("bench-session", &self.environment)
             .expect("the bench spawn resolves");
     }

@@ -430,10 +430,9 @@ pub(crate) fn runtime_installed(spec: &PtySpec, launch: NativeLaunch) -> Result<
 }
 
 fn resolve_binary(path: &str, binary: &str) -> Option<PathBuf> {
-    std::env::split_paths(path)
-        .filter(|directory| directory.is_absolute())
-        .map(|directory| directory.join(binary))
-        .find(|candidate| codesense_platform::fs::is_executable(candidate))
+    codesense_platform::cli::candidates(std::ffi::OsStr::new(path), binary)
+        .into_iter()
+        .next()
 }
 
 /// The argv that hands `cli` the session's MCP configuration: the file at `config`

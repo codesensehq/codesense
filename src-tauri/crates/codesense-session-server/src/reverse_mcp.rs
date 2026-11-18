@@ -2355,8 +2355,9 @@ fn resolve_remote_entries(
         let command = if requested.is_absolute() {
             requested.to_path_buf()
         } else if requested.components().count() == 1 {
-            std::env::split_paths(path).filter(|dir| dir.is_absolute()).map(|dir| dir.join(requested))
-                .find(|file| codesense_platform::fs::is_executable(file))
+            codesense_platform::cli::candidates(std::ffi::OsStr::new(path), &entry.command)
+                .into_iter()
+                .next()
                 .ok_or("selected remote MCP executable missing; install it explicitly on the remote account")?
         } else {
             return Err("remote MCP executable must be absolute or a remote PATH name".into());
