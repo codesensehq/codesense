@@ -126,12 +126,13 @@ jobs:
           fetch-depth: 0
       - name: Install system libraries
         # What rust.yml's Linux check installs, plus file (linuxdeploy), rpm (the rpm bundle) and
-        # libarchive-tools (bsdtar, to check the rpm's contents).
+        # libarchive-tools and squashfs-tools (bsdtar and unsquashfs, to check the rpm's and the
+        # AppImage's contents).
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev libxdo-dev libssl-dev \
-            file rpm libarchive-tools
+            file rpm libarchive-tools squashfs-tools
       - name: Set up pnpm
         uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - name: Set up Node
@@ -174,10 +175,13 @@ jobs:
               deb) dpkg-deb -x target/release/bundle/deb/*.deb "$dir" ;;
               # libarchive reads the rpm payload itself; rpm2cpio fails on this rpm without a message.
               rpm) bsdtar -xf target/release/bundle/rpm/*.rpm -C "$dir" ;;
+              # The squashfs image after the AppImage's ELF runtime, read without running the
+              # runtime (its --appimage-extract crashes on the runner). The ELF ends after its
+              # section header table: e_shoff + e_shentsize * e_shnum.
               appimage)
-                appimage=$(realpath target/release/bundle/appimage/*.AppImage)
-                chmod +x "$appimage"
-                (cd "$dir" && "$appimage" --appimage-extract >/dev/null)
+                appimage=$(echo target/release/bundle/appimage/*.AppImage)
+                offset=$(python3 -c 'import struct, sys; h = open(sys.argv[1], "rb").read(64); print(struct.unpack_from("<Q", h, 0x28)[0] + struct.unpack_from("<H", h, 0x3A)[0] * struct.unpack_from("<H", h, 0x3C)[0])' "$appimage")
+                unsquashfs -q -n -d "$dir/squashfs-root" -o "$offset" "$appimage"
                 ;;
             esac || { echo "Error: could not extract the $format" >&2; exit 1; }
             found=$(find "$dir" -path '*/resources/starship' -type f)
