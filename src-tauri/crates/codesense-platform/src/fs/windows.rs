@@ -20,9 +20,9 @@ use windows_sys::Win32::Security::Authorization::{
     GetSecurityInfo, SetNamedSecurityInfoW, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    AddAccessAllowedAceEx, EqualSid, GetAce, GetLengthSid, InitializeAcl, ACCESS_ALLOWED_ACE,
-    ACE_HEADER, ACL, ACL_REVISION, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION,
-    OBJECT_INHERIT_ACE, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
+    EqualSid, GetAce, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, CONTAINER_INHERIT_ACE,
+    DACL_SECURITY_INFORMATION, OBJECT_INHERIT_ACE, PROTECTED_DACL_SECURITY_INFORMATION,
+    PSECURITY_DESCRIPTOR, PSID,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_ALL_ACCESS, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
@@ -30,7 +30,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 
 use super::{portable_name, Linked, ReplaceError};
-use crate::win::{wide, CurrentUser};
+use crate::win::{wide, CurrentUser, SingleUserAcl};
 
 /// `ACCESS_ALLOWED_ACE_TYPE`: an ACE that grants access to one SID.
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
@@ -45,28 +45,12 @@ const FIRST_RETRY_DELAY: Duration = Duration::from_millis(10);
 
 pub(super) fn set_owner_only(path: &Path, is_dir: bool) -> io::Result<()> {
     let user = CurrentUser::read()?;
-    let sid = user.sid();
-    // SAFETY: the SID is valid while `user` lives.
-    let sid_length = unsafe { GetLengthSid(sid) } as usize;
-    // The ACL header and one ACE, whose SID takes the place of `SidStart`.
-    let acl_length = std::mem::size_of::<ACL>() + std::mem::size_of::<ACCESS_ALLOWED_ACE>()
-        - std::mem::size_of::<u32>()
-        + sid_length;
-    let mut buffer = vec![0u32; acl_length.div_ceil(4)];
-    let acl = buffer.as_mut_ptr().cast::<ACL>();
     let inherit = if is_dir {
         OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE
     } else {
         0
     };
-    // SAFETY: `acl` points to a DWORD-aligned buffer of the size given.
-    if unsafe { InitializeAcl(acl, (buffer.len() * 4) as u32, ACL_REVISION) } == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: the ACL was sized for this one ACE; the SID is valid.
-    if unsafe { AddAccessAllowedAceEx(acl, ACL_REVISION, inherit, FILE_ALL_ACCESS, sid) } == 0 {
-        return Err(io::Error::last_os_error());
-    }
+    let acl = SingleUserAcl::new(user.sid(), inherit, FILE_ALL_ACCESS)?;
     let path = wide(path);
     // SAFETY: `path` is NUL-terminated; the ACL lives across the call.
     let status = unsafe {
@@ -76,7 +60,7 @@ pub(super) fn set_owner_only(path: &Path, is_dir: bool) -> io::Result<()> {
             DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            acl,
+            acl.as_ptr(),
             std::ptr::null(),
         )
     };

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Windows helpers shared by the modules' Windows arms: an owned kernel
-//! handle, the current user's SID and wide path strings.
+//! handle, the current user's SID, a DACL that grants one SID and wide path
+//! strings.
 
 use std::io;
 use std::os::windows::ffi::OsStrExt;
@@ -9,7 +10,10 @@ use std::path::Path;
 use windows_sys::core::PWSTR;
 use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, HANDLE};
 use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
-use windows_sys::Win32::Security::{GetTokenInformation, TokenUser, PSID, TOKEN_QUERY, TOKEN_USER};
+use windows_sys::Win32::Security::{
+    AddAccessAllowedAceEx, GetLengthSid, GetTokenInformation, InitializeAcl, TokenUser,
+    ACCESS_ALLOWED_ACE, ACE_FLAGS, ACL, ACL_REVISION, PSID, TOKEN_QUERY, TOKEN_USER,
+};
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
 /// An open kernel handle, closed on drop.
@@ -106,6 +110,40 @@ impl CurrentUser {
             sid
         };
         Ok(sid)
+    }
+}
+
+/// A DACL with one ACE, granting `access` to one SID: no one else is let in.
+pub(crate) struct SingleUserAcl {
+    /// The ACL header and its ACE, DWORD-aligned.
+    buffer: Vec<u32>,
+}
+
+impl SingleUserAcl {
+    /// Grant `access` to `sid` alone, with the ACE's `inherit` flags.
+    pub(crate) fn new(sid: PSID, inherit: ACE_FLAGS, access: u32) -> io::Result<Self> {
+        // SAFETY: the caller's SID is valid.
+        let sid_length = unsafe { GetLengthSid(sid) } as usize;
+        // The ACL header and one ACE, whose SID takes the place of `SidStart`.
+        let acl_length = std::mem::size_of::<ACL>() + std::mem::size_of::<ACCESS_ALLOWED_ACE>()
+            - std::mem::size_of::<u32>()
+            + sid_length;
+        let mut buffer = vec![0u32; acl_length.div_ceil(4)];
+        let acl = buffer.as_mut_ptr().cast::<ACL>();
+        // SAFETY: `acl` points to a DWORD-aligned buffer of the size given.
+        if unsafe { InitializeAcl(acl, (buffer.len() * 4) as u32, ACL_REVISION) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: the ACL was sized for this one ACE, which copies the SID.
+        if unsafe { AddAccessAllowedAceEx(acl, ACL_REVISION, inherit, access, sid) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self { buffer })
+    }
+
+    /// The ACL, valid while `self` lives.
+    pub(crate) fn as_ptr(&self) -> *const ACL {
+        self.buffer.as_ptr().cast()
     }
 }
 

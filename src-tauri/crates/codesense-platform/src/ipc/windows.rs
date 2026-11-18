@@ -1,0 +1,518 @@
+// SPDX-License-Identifier: MIT
+//! Windows: named pipes `\\.\pipe\codesense-<user>-<endpoint>[-<root>]`.
+//! One function creates every instance, overlapped for tokio or not for the
+//! blocking form: a DACL that grants the current user alone, remote clients
+//! refused, and `FILE_FLAG_FIRST_PIPE_INSTANCE` on a listener's first
+//! instance. Clients open with identification-only impersonation.
+
+use std::ffi::OsStr;
+use std::io;
+use std::os::windows::io::{AsRawHandle, FromRawHandle, IntoRawHandle, OwnedHandle};
+use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::sync::OnceLock;
+use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
+
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient, NamedPipeServer};
+use windows_sys::Win32::Foundation::{
+    ERROR_ACCESS_DENIED, ERROR_PIPE_BUSY, HANDLE, INVALID_HANDLE_VALUE,
+};
+use windows_sys::Win32::Security::{
+    InitializeSecurityDescriptor, SetSecurityDescriptorDacl, SECURITY_ATTRIBUTES,
+    SECURITY_DESCRIPTOR,
+};
+use windows_sys::Win32::Storage::FileSystem::{
+    FILE_ALL_ACCESS, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, PIPE_ACCESS_DUPLEX,
+};
+use windows_sys::Win32::System::Pipes::{
+    CreateNamedPipeW, GetNamedPipeClientProcessId, GetNamedPipeServerProcessId, PIPE_READMODE_BYTE,
+    PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+};
+
+use super::Endpoint;
+use crate::process::Pid;
+use crate::win::{wide, CurrentUser, SingleUserAcl};
+
+/// The start of every CodeSense pipe name.
+const PIPE_PREFIX: &str = r"\\.\pipe\codesense-";
+/// What each instance asks for its in and out buffers.
+const BUFFER_SIZE: u32 = 64 * 1024;
+/// How long a connection waits while every instance is busy.
+const BUSY_WAIT: Duration = Duration::from_secs(5);
+/// How often an async connection retries a busy pipe.
+const BUSY_RETRY: Duration = Duration::from_millis(10);
+/// `SECURITY_DESCRIPTOR_REVISION`.
+const SECURITY_DESCRIPTOR_REVISION: u32 = 1;
+
+pub(super) fn address(endpoint: &Endpoint) -> io::Result<PathBuf> {
+    let suffix = match endpoint {
+        Endpoint::Mcp => "mcp".to_owned(),
+        Endpoint::Activity(root) => format!("activity-{}", root_hash(root)),
+        Endpoint::SessionServer(root) => format!("session-server-{}", root_hash(root)),
+        Endpoint::Ephemeral { name, .. } => name.clone(),
+    };
+    Ok(PathBuf::from(format!("{}{suffix}", user_prefix()?)))
+}
+
+pub(super) fn from_wire(wire: &OsStr) -> io::Result<Endpoint> {
+    let prefix = user_prefix()?;
+    let name = wire
+        .to_str()
+        .and_then(|wire| wire.strip_prefix(prefix))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{} is not a pipe of this user's", Path::new(wire).display()),
+            )
+        })?;
+    Ok(Endpoint::Ephemeral {
+        dir: PathBuf::new(),
+        name: name.to_owned(),
+    })
+}
+
+/// `\\.\pipe\codesense-<user>-`: the start of this user's pipe names.
+fn user_prefix() -> io::Result<&'static str> {
+    static PREFIX: OnceLock<String> = OnceLock::new();
+    if let Some(prefix) = PREFIX.get() {
+        return Ok(prefix);
+    }
+    let sid = CurrentUser::read()?.sid_string()?;
+    Ok(PREFIX.get_or_init(|| format!("{PIPE_PREFIX}{:016x}-", fnv1a(sid.as_bytes()))))
+}
+
+/// The root as a hash. The same directory written with either separator, in
+/// another case, with a trailing separator or a verbatim prefix hashes the
+/// same.
+fn root_hash(root: &Path) -> String {
+    let plain: PathBuf = dunce::simplified(root).components().collect();
+    let text = plain.to_string_lossy().to_lowercase();
+    format!("{:016x}", fnv1a(text.as_bytes()))
+}
+
+/// 64-bit FNV-1a: the same in every build and release, as std's hasher is
+/// not. It keeps names apart; it hides nothing.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
+/// Create an instance of the pipe `name` that only the current user may
+/// open. The `first` of a listener fails with `AddrInUse` when the name
+/// already exists, whoever created it.
+fn create_instance(name: &Path, first: bool, overlapped: bool) -> io::Result<OwnedHandle> {
+    let user = CurrentUser::read()?;
+    let acl = SingleUserAcl::new(user.sid(), 0, FILE_ALL_ACCESS)?;
+    // SAFETY: an all-zero SECURITY_DESCRIPTOR is a valid value to initialize.
+    let mut descriptor: SECURITY_DESCRIPTOR = unsafe { std::mem::zeroed() };
+    let descriptor_ptr = std::ptr::addr_of_mut!(descriptor).cast();
+    // SAFETY: the descriptor is writable and the size InitializeSecurityDescriptor expects.
+    if unsafe { InitializeSecurityDescriptor(descriptor_ptr, SECURITY_DESCRIPTOR_REVISION) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: the descriptor points at the ACL, which outlives the create below.
+    if unsafe { SetSecurityDescriptorDacl(descriptor_ptr, 1, acl.as_ptr(), 0) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor_ptr,
+        bInheritHandle: 0,
+    };
+    let mut open_mode = PIPE_ACCESS_DUPLEX;
+    if first {
+        open_mode |= FILE_FLAG_FIRST_PIPE_INSTANCE;
+    }
+    if overlapped {
+        open_mode |= FILE_FLAG_OVERLAPPED;
+    }
+    let wide_name = wide(name);
+    // SAFETY: the name is NUL-terminated; the attributes, descriptor and ACL
+    // live across the call.
+    let handle = unsafe {
+        CreateNamedPipeW(
+            wide_name.as_ptr(),
+            open_mode,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+            PIPE_UNLIMITED_INSTANCES,
+            BUFFER_SIZE,
+            BUFFER_SIZE,
+            0,
+            &attributes,
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        let error = io::Error::last_os_error();
+        if first && error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32) {
+            return Err(io::Error::new(
+                io::ErrorKind::AddrInUse,
+                format!("a listener already serves {}", name.display()),
+            ));
+        }
+        return Err(error);
+    }
+    // SAFETY: the handle is open and owned by nothing else.
+    Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
+}
+
+/// The pid of the other end of the pipe `handle`: the client's on a
+/// listener's instance, the listener's on a client's handle.
+fn peer_pid(handle: HANDLE, is_server: bool) -> io::Result<Pid> {
+    let mut pid = 0u32;
+    // SAFETY: the handle is an open pipe; `pid` is writable.
+    let read = unsafe {
+        if is_server {
+            GetNamedPipeClientProcessId(handle, &mut pid)
+        } else {
+            GetNamedPipeServerProcessId(handle, &mut pid)
+        }
+    };
+    if read == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(Pid::from_raw(pid))
+}
+
+fn is_busy(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(ERROR_PIPE_BUSY as i32)
+}
+
+pub(crate) struct Listener {
+    name: PathBuf,
+    /// The instance the next client connects to.
+    next: NamedPipeServer,
+}
+
+impl Listener {
+    pub(crate) fn bind(endpoint: &Endpoint) -> io::Result<Self> {
+        let name = endpoint.address()?;
+        let next = server(create_instance(&name, true, true)?)?;
+        Ok(Self { name, next })
+    }
+
+    pub(crate) async fn accept(&mut self) -> io::Result<Stream> {
+        self.next.connect().await?;
+        let following = server(create_instance(&self.name, false, true)?)?;
+        Ok(Stream::Server(std::mem::replace(&mut self.next, following)))
+    }
+}
+
+/// An overlapped instance as tokio's server end, registered with the
+/// current runtime.
+fn server(handle: OwnedHandle) -> io::Result<NamedPipeServer> {
+    // SAFETY: the handle is an overlapped pipe instance, passed on whole.
+    unsafe { NamedPipeServer::from_raw_handle(handle.into_raw_handle()) }
+}
+
+pub(crate) enum Stream {
+    Server(NamedPipeServer),
+    Client(NamedPipeClient),
+}
+
+impl Stream {
+    pub(crate) async fn connect(endpoint: &Endpoint) -> io::Result<Self> {
+        let name = endpoint.address()?;
+        let start = Instant::now();
+        loop {
+            // tokio's client asks for identification-only impersonation.
+            match ClientOptions::new().open(&name) {
+                Err(error) if is_busy(&error) && start.elapsed() < BUSY_WAIT => {
+                    tokio::time::sleep(BUSY_RETRY).await;
+                }
+                result => return result.map(Self::Client),
+            }
+        }
+    }
+
+    pub(crate) fn peer_pid(&self) -> io::Result<Pid> {
+        match self {
+            Self::Server(pipe) => peer_pid(pipe.as_raw_handle(), true),
+            Self::Client(pipe) => peer_pid(pipe.as_raw_handle(), false),
+        }
+    }
+}
+
+impl AsyncRead for Stream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            Self::Server(pipe) => Pin::new(pipe).poll_read(cx, buf),
+            Self::Client(pipe) => Pin::new(pipe).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for Stream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        match self.get_mut() {
+            Self::Server(pipe) => Pin::new(pipe).poll_write(cx, buf),
+            Self::Client(pipe) => Pin::new(pipe).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            Self::Server(pipe) => Pin::new(pipe).poll_flush(cx),
+            Self::Client(pipe) => Pin::new(pipe).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            Self::Server(pipe) => Pin::new(pipe).poll_shutdown(cx),
+            Self::Client(pipe) => Pin::new(pipe).poll_shutdown(cx),
+        }
+    }
+}
+
+pub(crate) mod blocking {
+    use std::fs::{File, OpenOptions};
+    use std::io::{Read, Write};
+    use std::os::windows::fs::OpenOptionsExt;
+
+    use windows_sys::Win32::Foundation::{ERROR_NO_DATA, ERROR_PIPE_CONNECTED};
+    use windows_sys::Win32::Storage::FileSystem::SECURITY_IDENTIFICATION;
+    use windows_sys::Win32::System::Pipes::{ConnectNamedPipe, WaitNamedPipeW};
+
+    use super::*;
+
+    pub(crate) struct Listener {
+        name: PathBuf,
+        /// The instance the next client connects to.
+        next: OwnedHandle,
+    }
+
+    impl Listener {
+        pub(crate) fn bind(endpoint: &Endpoint) -> io::Result<Self> {
+            let name = endpoint.address()?;
+            let next = create_instance(&name, true, false)?;
+            Ok(Self { name, next })
+        }
+
+        pub(crate) fn accept(&mut self) -> io::Result<Stream> {
+            // SAFETY: the instance is open and not overlapped, so the call
+            // waits for a client.
+            if unsafe { ConnectNamedPipe(self.next.as_raw_handle(), std::ptr::null_mut()) } == 0 {
+                let error = io::Error::last_os_error();
+                // Already connected, or connected and gone again (its bytes
+                // are still read): either way a connection, as tokio counts it.
+                let connected = [ERROR_PIPE_CONNECTED, ERROR_NO_DATA]
+                    .iter()
+                    .any(|&code| error.raw_os_error() == Some(code as i32));
+                if !connected {
+                    return Err(error);
+                }
+            }
+            let following = create_instance(&self.name, false, false)?;
+            Ok(Stream {
+                pipe: File::from(std::mem::replace(&mut self.next, following)),
+                is_server: true,
+            })
+        }
+
+        #[cfg(test)]
+        pub(super) fn pending_instance(&self) -> HANDLE {
+            self.next.as_raw_handle()
+        }
+    }
+
+    pub(crate) struct Stream {
+        pipe: File,
+        is_server: bool,
+    }
+
+    impl Stream {
+        pub(crate) fn connect(endpoint: &Endpoint) -> io::Result<Self> {
+            let name = endpoint.address()?;
+            let start = Instant::now();
+            loop {
+                let opened = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .security_qos_flags(SECURITY_IDENTIFICATION)
+                    .open(&name);
+                match opened {
+                    Err(error) if is_busy(&error) => {
+                        let left = BUSY_WAIT.saturating_sub(start.elapsed());
+                        if left.is_zero() {
+                            return Err(error);
+                        }
+                        let wide_name = wide(&name);
+                        // SAFETY: the name is NUL-terminated. A timeout or a
+                        // pipe gone meanwhile shows in the next open.
+                        unsafe { WaitNamedPipeW(wide_name.as_ptr(), left.as_millis() as u32) };
+                    }
+                    result => {
+                        return result.map(|pipe| Self {
+                            pipe,
+                            is_server: false,
+                        })
+                    }
+                }
+            }
+        }
+
+        pub(crate) fn peer_pid(&self) -> io::Result<Pid> {
+            peer_pid(self.pipe.as_raw_handle(), self.is_server)
+        }
+    }
+
+    impl Read for Stream {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.pipe.read(buf)
+        }
+    }
+
+    impl Write for Stream {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.pipe.write(buf)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.pipe.flush()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::c_void;
+
+    use windows_sys::Win32::Foundation::{LocalFree, ERROR_SUCCESS};
+    use windows_sys::Win32::Security::Authorization::{GetSecurityInfo, SE_KERNEL_OBJECT};
+    use windows_sys::Win32::Security::{
+        EqualSid, GetAce, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION,
+        PSECURITY_DESCRIPTOR,
+    };
+
+    use super::*;
+
+    /// `ACCESS_ALLOWED_ACE_TYPE`.
+    const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
+
+    fn unique(name: &str) -> Endpoint {
+        Endpoint::Ephemeral {
+            dir: PathBuf::new(),
+            name: format!("test-{name}-{}", std::process::id()),
+        }
+    }
+
+    /// Read the DACL of the pipe instance `handle` back and find one ACE,
+    /// granting the current user.
+    fn assert_current_user_only(handle: HANDLE) {
+        let user = CurrentUser::read().unwrap();
+        let mut dacl: *mut ACL = std::ptr::null_mut();
+        let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        // SAFETY: the instance's handle has READ_CONTROL (a duplex pipe's
+        // generic read); the out pointers are writable.
+        let status = unsafe {
+            GetSecurityInfo(
+                handle,
+                SE_KERNEL_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut dacl,
+                std::ptr::null_mut(),
+                &mut descriptor,
+            )
+        };
+        assert_eq!(status, ERROR_SUCCESS);
+        assert!(!dacl.is_null(), "a null DACL lets everyone in");
+        // SAFETY: the DACL lives in `descriptor`, freed after these reads.
+        unsafe {
+            assert_eq!((*dacl).AceCount, 1, "no ACE but the current user's");
+            let mut ace: *mut c_void = std::ptr::null_mut();
+            assert_ne!(GetAce(dacl, 0, &mut ace), 0);
+            assert_eq!((*ace.cast::<ACE_HEADER>()).AceType, ACCESS_ALLOWED_ACE_TYPE);
+            let sid = std::ptr::addr_of_mut!((*ace.cast::<ACCESS_ALLOWED_ACE>()).SidStart);
+            assert_ne!(
+                EqualSid(sid.cast(), user.sid()),
+                0,
+                "the ACE names the current user"
+            );
+            LocalFree(descriptor);
+        }
+    }
+
+    #[test]
+    fn pipe_dacl_is_current_user_only() {
+        let endpoint = unique("dacl");
+        let mut listener = blocking::Listener::bind(&endpoint).unwrap();
+        assert_current_user_only(listener.pending_instance());
+        let client = std::thread::spawn({
+            let endpoint = endpoint.clone();
+            move || blocking::Stream::connect(&endpoint).unwrap()
+        });
+        let accepted = listener.accept().unwrap();
+        let _client = client.join().unwrap();
+        // Every later instance carries the same DACL.
+        assert_current_user_only(listener.pending_instance());
+        drop(accepted);
+    }
+
+    #[test]
+    fn pipe_names_carry_the_user_and_root_hashes() {
+        let prefix = user_prefix().unwrap();
+        let hex = prefix
+            .strip_prefix(r"\\.\pipe\codesense-")
+            .and_then(|rest| rest.strip_suffix('-'))
+            .unwrap();
+        assert_eq!(hex.len(), 16);
+        assert!(hex.bytes().all(|b| b.is_ascii_hexdigit()), "{prefix}");
+
+        let name = |endpoint: Endpoint| {
+            endpoint
+                .address()
+                .unwrap()
+                .into_os_string()
+                .into_string()
+                .unwrap()
+        };
+        assert_eq!(name(Endpoint::Mcp), format!("{prefix}mcp"));
+        let root = PathBuf::from(r"C:\Data\Instances\Codesense");
+        let activity = name(Endpoint::Activity(root.clone()));
+        let rest = activity
+            .strip_prefix(&format!("{prefix}activity-"))
+            .unwrap();
+        assert_eq!(rest.len(), 16, "{activity}");
+        let session = name(Endpoint::SessionServer(root.clone()));
+        assert!(
+            session.starts_with(&format!("{prefix}session-server-")),
+            "{session}"
+        );
+        assert!(session.ends_with(rest), "the same root hash: {session}");
+        for same in [
+            r"c:\data\instances\codesense",
+            r"C:/Data/Instances/Codesense/",
+            r"\\?\C:\Data\Instances\Codesense",
+        ] {
+            assert_eq!(name(Endpoint::Activity(same.into())), activity, "{same}");
+        }
+        assert_ne!(
+            name(Endpoint::Activity(root.join("other"))),
+            activity,
+            "another root"
+        );
+        let ephemeral = |dir: &str| Endpoint::Ephemeral {
+            dir: dir.into(),
+            name: "relay-7".into(),
+        };
+        assert_eq!(name(ephemeral(r"C:\a")), format!("{prefix}relay-7"));
+        assert_eq!(
+            name(ephemeral(r"C:\b")),
+            format!("{prefix}relay-7"),
+            "dir is not used"
+        );
+    }
+}
