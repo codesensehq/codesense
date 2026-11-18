@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Files: owner-only permissions, ownership checks, file identity,
 //! owner-only creates, opens that refuse links, atomic replace, exclusive
-//! locks, links with a copy fallback, canonical paths and names that are
-//! valid on every OS.
+//! locks, links with a copy fallback, canonical paths, names that are
+//! valid on every OS and whether a file is executable.
 
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -251,6 +251,14 @@ pub enum Linked {
 /// taken from `link`'s directory, as a symlink resolves it.
 pub fn link_or_copy(target: &Path, link: &Path) -> io::Result<Linked> {
     sys::link_or_copy(target, link)
+}
+
+/// Whether `path` is an absolute path to a file this OS would run, after
+/// following links: on unix a regular file with an execute bit set; on
+/// Windows a file whose extension `PATHEXT` lists (`.COM;.EXE;.BAT;.CMD`
+/// when unset), ignoring case.
+pub fn is_executable(path: &Path) -> bool {
+    sys::is_executable(path)
 }
 
 /// The canonical, absolute form of `path`, with links resolved. On Windows

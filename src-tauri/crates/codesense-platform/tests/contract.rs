@@ -14,8 +14,9 @@ use std::time::{Duration, Instant};
 use codesense_platform::dirs::codesense_home;
 use codesense_platform::fs::{
     atomic_replace, canonicalize, create_new_owner_only, create_owner_only, file_id, file_id_of,
-    is_owned_by_current_user, is_owner_only, link_or_copy, lock_exclusive, open_nofollow,
-    portable_name, set_owner_only, try_lock_exclusive, Linked, NonPortableName, Open,
+    is_executable, is_owned_by_current_user, is_owner_only, link_or_copy, lock_exclusive,
+    open_nofollow, portable_name, set_owner_only, try_lock_exclusive, Linked, NonPortableName,
+    Open,
 };
 use codesense_platform::ipc::{blocking, Endpoint, LocalListener, LocalStream};
 use codesense_platform::process::{is_alive, kill_hard, terminate, Pid, ProcessTree};
@@ -707,6 +708,33 @@ fn stale_endpoint_rebinds() {
     assert!(eventually(Duration::from_secs(5), rebinds));
 }
 
+#[test]
+fn is_executable_accepts_only_an_absolute_executable_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let name = expect_executable_name("tool");
+    let tool = executable(dir.path(), &name);
+    assert!(is_executable(&tool), "{}", tool.display());
+    let plain = dir.path().join("plain");
+    std::fs::write(&plain, "x").unwrap();
+    assert!(!is_executable(&plain), "a file this OS would not run");
+    let directory = dir.path().join(expect_executable_name("named"));
+    std::fs::create_dir(&directory).unwrap();
+    assert!(!is_executable(&directory), "a directory");
+    assert!(!is_executable(Path::new(&name)), "a relative path");
+    assert!(!is_executable(
+        &dir.path().join(expect_executable_name("missing"))
+    ));
+}
+
+/// Write the file `name` in `dir` (made if missing) and make it executable.
+fn executable(dir: &Path, name: &str) -> PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    let path = dir.join(name);
+    std::fs::write(&path, "#!/bin/sh\n").unwrap();
+    set_executable(&path);
+    path
+}
+
 /// How many `.tmp.` siblings an atomic write left in `dir`.
 fn temp_siblings(dir: &Path) -> usize {
     std::fs::read_dir(dir)
@@ -852,4 +880,25 @@ fn expect_canonical(path: &Path, canonical: &Path) {
     if cfg!(unix) {
         assert_eq!(canonical, std::fs::canonicalize(path).unwrap());
     }
+}
+
+/// The file name of an executable `stem`: unix needs no extension; Windows
+/// runs a file by its extension.
+fn expect_executable_name(stem: &str) -> String {
+    if cfg!(windows) {
+        format!("{stem}.exe")
+    } else {
+        stem.to_owned()
+    }
+}
+
+/// Unix: set the execute bits (0755). Windows: the extension is enough.
+fn set_executable(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    #[cfg(windows)]
+    let _ = path;
 }
