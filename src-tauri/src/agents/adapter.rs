@@ -290,7 +290,7 @@ pub fn cli_of_provider(provider: AgentProvider) -> AgentCli {
 }
 
 mod claude;
-pub(crate) use claude::MANAGED_SETTINGS_PATHS as CLAUDE_MANAGED_SETTINGS_PATHS;
+pub(crate) use claude::{claude_managed, ClaudeManaged};
 mod codex;
 pub(crate) mod hermes;
 mod opencode;
