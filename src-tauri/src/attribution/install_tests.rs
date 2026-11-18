@@ -82,18 +82,15 @@ fn a_staged_binary_is_invoked_as_git_ai_and_installs() {
 
 #[test]
 fn pin_and_unsupported_platform_never_fetches() {
-    let parsed = Pin::parse(include_str!("../../pins/git-ai-macos-arm64.pin"))
-        .expect("invalid bundled git-ai pin");
-    assert_eq!(PIN.expected_version, parsed.expected_version);
-    assert_eq!(PIN.expected_version, "1.7.5-cs.4");
+    let macos = pin_for("macos", "aarch64").unwrap();
+    assert_eq!(macos.expected_version, "1.7.5-cs.4");
     assert_eq!(
-        PIN.sha256,
+        macos.sha256,
         "ebcd7fd565c09ac8df86d3aff828325e6d4428606bd184c438b467e94902a87c"
     );
-    assert_eq!(PIN.asset, "git-ai-macos-arm64");
-    assert_eq!(PIN.platform, "macos-arm64");
+    assert_eq!(macos.asset, "git-ai-macos-arm64");
+    assert_eq!(macos.platform, "macos-arm64");
     assert_eq!(PIN.resource, "resources/git-ai");
-    assert_eq!(PIN.sha256, parsed.sha256);
     let home = tempfile::tempdir().unwrap();
     let (fetch, pin) = fake("echo 1.7.5");
     let fetch = Arc::new(fetch);
@@ -106,6 +103,62 @@ fn pin_and_unsupported_platform_never_fetches() {
     );
     assert_eq!(fetch.calls.load(Ordering::SeqCst), 0);
     assert!(!home.path().join("bin/git-ai").exists());
+}
+#[test]
+fn every_target_pin_parses_and_names_its_own_platform() {
+    for (os, arch, platform, _) in TARGET_PINS {
+        let pin = pin_for(os, arch).unwrap_or_else(|| panic!("{os} {arch}"));
+        assert_eq!(pin.platform, platform, "{os} {arch}");
+        assert_eq!(pin.resource, "resources/git-ai");
+    }
+}
+#[test]
+fn linux_targets_pin_the_cs5_release() {
+    for (arch, asset, sha256) in [
+        (
+            "x86_64",
+            "git-ai-linux-x86_64",
+            "93c2f0e10b9242503ab53043d1f27ce360bc1dc7514c7b4a270cafd5a1b8b7c8",
+        ),
+        (
+            "aarch64",
+            "git-ai-linux-arm64",
+            "e111e154d00b0fe29dee4b9967f555888a26211bc2ff25bc8df5997ecf28a5ce",
+        ),
+    ] {
+        let pin = pin_for("linux", arch).unwrap();
+        assert_eq!(pin.expected_version, "1.7.5-cs.5", "{arch}");
+        assert_eq!(pin.asset, asset);
+        assert_eq!(pin.sha256, sha256);
+    }
+}
+#[test]
+fn a_target_without_a_pin_has_none() {
+    for (os, arch) in [
+        ("macos", "x86_64"),
+        ("linux", "riscv64"),
+        ("freebsd", "x86_64"),
+    ] {
+        assert!(pin_for(os, arch).is_none(), "{os} {arch}");
+    }
+}
+#[test]
+fn the_running_pin_is_the_hosts_or_else_the_macos_one() {
+    let expected = pin_for(std::env::consts::OS, std::env::consts::ARCH)
+        .or_else(|| pin_for("macos", "aarch64"))
+        .unwrap();
+    assert_eq!(PIN.platform, expected.platform);
+    assert_eq!(PIN.expected_version, expected.expected_version);
+    assert_eq!(PIN.sha256, expected.sha256);
+}
+#[test]
+fn a_pin_for_another_platform_is_refused() {
+    let macos = include_str!("../../pins/git-ai-macos-arm64.pin");
+    assert!(Pin::parse(macos, "macos-arm64").is_ok());
+    assert_eq!(
+        Pin::parse(macos, "linux-x86_64").err(),
+        Some("pin platform does not match its target")
+    );
 }
 #[test]
 fn digest_short_and_oversize_streams_leave_no_executable_or_temp() {
@@ -1138,7 +1191,7 @@ fn bundled_replacement_changes_no_notes_managed_config_or_user_files() {
 fn invalid_checked_in_pin_is_a_tested_panic() {
     for invalid in ["", "version=garbage", "version=1.7.5\nversion=1.7.5"] {
         assert!(std::panic::catch_unwind(
-            || Pin::parse(invalid).expect("invalid bundled git-ai pin")
+            || Pin::parse(invalid, "macos-arm64").expect("invalid bundled git-ai pin")
         )
         .is_err());
     }
