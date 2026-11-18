@@ -127,7 +127,8 @@ case "$PLATFORM" in
             mksquashfs "$work/squashfs-root" "$work/fs.sqfs" -root-owned -noappend -no-progress \
                 -comp "$compressor"
             # A temp file, then mv: a redirect onto the original would truncate it before head reads.
-            { head -c "$offset" "$appimage" && cat "$work/fs.sqfs"; } >"$work/rebuilt.AppImage"
+            head -c "$offset" "$appimage" >"$work/rebuilt.AppImage"
+            cat "$work/fs.sqfs" >>"$work/rebuilt.AppImage"
             chmod +x "$work/rebuilt.AppImage"
             mv "$work/rebuilt.AppImage" "$appimage"
             rm -rf "$work"
