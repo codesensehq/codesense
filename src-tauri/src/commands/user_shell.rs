@@ -9,9 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
 use codesense_platform::{cli, fs, user};
-use codesense_pty_core::shell::{
-    resolve_shell_from, shell_kind, ShellKind, ShellRow, ShellSource, ShellTable,
-};
+use codesense_pty_core::shell::{resolve_shell_from, ShellKind, ShellRow, ShellSource, ShellTable};
 use serde::Serialize;
 use tauri::Manager;
 
@@ -90,9 +88,7 @@ pub(crate) fn shell_info_from(
             .map(str::to_string)
             .or_else(|| reads(ShellRow::Passwd).then(&passwd).flatten())
             .map(|s| s.trim().to_string())
-            .filter(|s| {
-                !s.is_empty() && shell_kind(Path::new(s)).is_none_or(|kind| !table.accepts(kind))
-            })
+            .filter(|s| !s.is_empty() && table.accepted_kind(Path::new(s)).is_none())
     } else {
         None
     };

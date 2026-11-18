@@ -214,10 +214,7 @@ impl HostEnvironment {
     }
 
     fn var(&self, name: &str) -> Option<String> {
-        match &self.vars {
-            Vars::Process => std::env::var(name).ok(),
-            Vars::Given(vars) => vars.get(name).cloned(),
-        }
+        self.var_os(name).and_then(|v| v.into_string().ok())
     }
 
     fn var_os(&self, name: &str) -> Option<OsString> {

@@ -195,6 +195,11 @@ impl ShellTable {
         self.kinds.contains(&kind)
     }
 
+    /// The kind `path` names, if this table accepts it.
+    pub fn accepted_kind(&self, path: &Path) -> Option<ShellKind> {
+        shell_kind(path).filter(|kind| self.accepts(*kind))
+    }
+
     /// The shell that runs a command line for a user whose own shell does
     /// not run POSIX commands; `None` when this OS has none.
     pub fn posix_runner(&self, usable: impl Fn(&Path) -> bool) -> Option<PathBuf> {
@@ -244,7 +249,7 @@ pub fn resolve_shell_from(
         if !path.is_absolute() {
             return None;
         }
-        let kind = shell_kind(&path).filter(|kind| table.accepts(*kind))?;
+        let kind = table.accepted_kind(&path)?;
         usable(&path).then_some((path, kind))
     };
     let mut passwd = Some(passwd);
@@ -296,7 +301,7 @@ mod tests {
     use super::*;
 
     fn usable_set(paths: &'static [&'static str]) -> impl Fn(&Path) -> bool {
-        move |p: &Path| paths.iter().any(|x| Path::new(x) == p)
+        usable_paths(paths.iter().map(PathBuf::from).collect())
     }
 
     fn usable_paths(paths: Vec<PathBuf>) -> impl Fn(&Path) -> bool {
@@ -330,9 +335,9 @@ mod tests {
         )
     }
 
-    fn shell(path: &str, kind: ShellKind, source: ShellSource) -> UserShell {
+    fn shell(path: impl Into<PathBuf>, kind: ShellKind, source: ShellSource) -> UserShell {
         UserShell {
-            path: PathBuf::from(path),
+            path: path.into(),
             kind,
             source,
         }
@@ -713,10 +718,6 @@ mod tests {
         }
     }
 
-    fn found(path: PathBuf, kind: ShellKind, source: ShellSource) -> UserShell {
-        UserShell { path, kind, source }
-    }
-
     #[test]
     fn windows_table_rows_in_order() {
         let host = WindowsHost::new();
@@ -729,18 +730,18 @@ mod tests {
         for skip in 0..all.len() {
             let usable = all[skip..].to_vec();
             let want = match skip {
-                0 => found(host.pwsh_on_path(), ShellKind::Pwsh, ShellSource::Fallback),
-                1 => found(
+                0 => shell(host.pwsh_on_path(), ShellKind::Pwsh, ShellSource::Fallback),
+                1 => shell(
                     host.program_files_pwsh(),
                     ShellKind::Pwsh,
                     ShellSource::Fallback,
                 ),
-                2 => found(
+                2 => shell(
                     host.windows_powershell(),
                     ShellKind::PowerShell,
                     ShellSource::Fallback,
                 ),
-                _ => found(host.comspec(), ShellKind::Cmd, ShellSource::Fallback),
+                _ => shell(host.comspec(), ShellKind::Cmd, ShellSource::Fallback),
             };
             assert_eq!(host.resolve(None, usable), want, "row {skip}");
         }
@@ -764,7 +765,7 @@ mod tests {
             },
             usable_paths(vec![shim.clone(), pwsh.clone()]),
         );
-        assert_eq!(got, found(pwsh, ShellKind::Pwsh, ShellSource::Fallback));
+        assert_eq!(got, shell(pwsh, ShellKind::Pwsh, ShellSource::Fallback));
     }
 
     #[test]
@@ -774,14 +775,14 @@ mod tests {
         let got = host.resolve(setting.to_str(), vec![setting.clone(), host.pwsh_on_path()]);
         assert_eq!(
             got,
-            found(setting, ShellKind::PowerShell, ShellSource::Override)
+            shell(setting, ShellKind::PowerShell, ShellSource::Override)
         );
         // A bash setting, or $SHELL, is not a Windows shell.
         let bash = host.root.join("Git").join("bin").join("bash.exe");
         let got = host.resolve(bash.to_str(), vec![bash.clone(), host.pwsh_on_path()]);
         assert_eq!(
             got,
-            found(host.pwsh_on_path(), ShellKind::Pwsh, ShellSource::Fallback)
+            shell(host.pwsh_on_path(), ShellKind::Pwsh, ShellSource::Fallback)
         );
     }
 

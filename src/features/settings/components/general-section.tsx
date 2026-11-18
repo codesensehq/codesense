@@ -806,16 +806,12 @@ function TerminalShellRow() {
   );
 }
 
-/** The kinds as prose: "zsh, bash, or fish". */
-function shellKindList(kinds: readonly string[]): string {
-  if (kinds.length < 2) return kinds.join("");
-  if (kinds.length === 2) return kinds.join(" or ");
-  return `${kinds.slice(0, -1).join(", ")}, or ${kinds.at(-1)}`;
-}
+/** Joins the kinds as prose: "zsh, bash, or fish". */
+const shellKindList = new Intl.ListFormat("en", { type: "disjunction" });
 
 function terminalShellStatus(info: TerminalShellInfo | null): string {
   if (!info) return "New terminals run your login shell. Leave blank to keep it.";
-  const kinds = shellKindList(info.acceptedKinds);
+  const kinds = shellKindList.format(info.acceptedKinds);
   if (info.overrideRejected) {
     return `${info.overridePath} isn't an executable ${kinds}. New terminals use ${info.path}.`;
   }
