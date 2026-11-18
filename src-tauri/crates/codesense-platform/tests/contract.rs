@@ -506,7 +506,10 @@ fn expect_home_variable() -> &'static str {
 /// Give `path` an owner that is not this user and return `true`, or return
 /// `false` after saying why on stderr, and the test skips the rest. Unix:
 /// `chown` to `nobody` (65534), which needs root. Windows: SYSTEM as the
-/// owner through `icacls /setowner`, which needs an administrator.
+/// owner through `icacls /setowner`, which needs an administrator; under CI
+/// (`CI` set, as on the elevated hosted runners) a failure is an error, not
+/// a skip, because the test hides a skip's stderr and a green run must prove
+/// the row ran.
 fn expect_foreign_owner(path: &Path) -> bool {
     #[cfg(unix)]
     {
@@ -526,6 +529,10 @@ fn expect_foreign_owner(path: &Path) -> bool {
             .status()
             .expect("run icacls");
         if !status.success() {
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "icacls /setowner failed under CI: {status}"
+            );
             eprintln!("skipped: icacls /setowner needs an administrator ({status})");
         }
         status.success()
