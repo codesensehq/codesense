@@ -39,8 +39,8 @@ const TABLE: &[Row] = &[
     Row {
         key: STARSHIP,
         macos: Support::OnFor(&["aarch64"]),
-        linux: Support::Off,
-        reason: "the bundled starship binary is only shipped for macOS on Apple silicon",
+        linux: Support::OnFor(&["x86_64", "aarch64"]),
+        reason: "the bundled starship binary is shipped for macOS on Apple silicon and Linux on x86_64 and aarch64",
     },
 ];
 
@@ -120,9 +120,9 @@ mod tests {
     }
 
     #[test]
-    fn linux_has_no_git_ai_or_starship() {
+    fn linux_has_starship_but_no_git_ai() {
         for arch in ["x86_64", "aarch64"] {
-            assert_eq!(line("linux", arch), "caps: git-ai=off starship=off");
+            assert_eq!(line("linux", arch), "caps: git-ai=off starship=on");
         }
     }
 
@@ -173,14 +173,22 @@ mod tests {
         assert!(!on("linux", "x86_64", GIT_AI));
         assert!(on("macos", "aarch64", STARSHIP));
         assert!(!on("macos", "x86_64", STARSHIP));
-        assert!(!on("linux", "x86_64", STARSHIP));
+        assert!(on("linux", "x86_64", STARSHIP));
+        assert!(on("linux", "aarch64", STARSHIP));
+        assert!(!on("linux", "riscv64", STARSHIP));
     }
 
     #[test]
     fn enabled_matches_the_live_host() {
-        let apple_silicon = cfg!(all(target_os = "macos", target_arch = "aarch64"));
-        assert_eq!(enabled(GIT_AI), apple_silicon);
-        assert_eq!(enabled(STARSHIP), apple_silicon);
+        let host = (std::env::consts::OS, std::env::consts::ARCH);
+        assert_eq!(enabled(GIT_AI), host == ("macos", "aarch64"));
+        assert_eq!(
+            enabled(STARSHIP),
+            matches!(
+                host,
+                ("macos", "aarch64") | ("linux", "x86_64") | ("linux", "aarch64")
+            )
+        );
         assert!(!enabled("no-such-capability"));
     }
 }

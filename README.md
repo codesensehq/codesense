@@ -109,8 +109,8 @@ chmod +x CodeSense_*.AppImage && ./CodeSense_*.AppImage
 If the AppImage will not start for want of FUSE, install it (`sudo apt install libfuse2`,
 or `libfuse2t64` on Ubuntu 24.04) or run it with `--appimage-extract-and-run`.
 
-Some things are off on Linux for now: git-ai attribution, the bundled starship
-prompt, and keeping saved secrets (SSH passphrases and the like) between runs.
+Some things are off on Linux for now: git-ai attribution and keeping saved
+secrets (SSH passphrases and the like) between runs.
 
 Every test build is a source build like the one above: the `internal` channel,
 no update checks and no dashboard publishing.
