@@ -515,6 +515,12 @@ fn create_dir_owner_only_makes_every_missing_directory_owner_only() {
         assert!(is_owner_only(&opened).unwrap(), "{}", path.display());
         expect_owner_only_mode(path);
     }
+    let inner_file = leaf.join("file");
+    std::fs::write(&inner_file, "x").unwrap();
+    let inner_dir = leaf.join("dir");
+    std::fs::create_dir(&inner_dir).unwrap();
+    expect_inherits_owner_only(&inner_file);
+    expect_inherits_owner_only(&inner_dir);
     create_dir_owner_only(&leaf).unwrap();
     let file = dir.path().join("file");
     std::fs::write(&file, "x").unwrap();
@@ -1245,12 +1251,26 @@ fn expect_unsignallable_pid() -> Pid {
     Pid::from_raw(if cfg!(windows) { 4 } else { 1 })
 }
 
-/// Unix: `/tmp`. Windows: `locks` in the codesense home.
+/// A directory either way. Unix: `/tmp`. Windows: `locks` in the codesense
+/// home, owner-only.
 fn expect_lock_dir(dir: &Path) {
+    assert!(dir.is_dir(), "{}", dir.display());
     if cfg!(windows) {
         assert_eq!(dir, codesense_home().unwrap().join("locks"));
+        let opened = open_nofollow(OpenOptions::new().read(true), dir).unwrap();
+        assert!(is_owner_only(&opened).unwrap(), "{}", dir.display());
     } else {
         assert_eq!(dir, Path::new("/tmp"));
+    }
+}
+
+/// What a plain file or directory made inside an owner-only directory gets.
+/// Windows: the directory's inheritable ACE, so it is owner-only too. Unix:
+/// its mode comes from the umask, not the directory, so nothing to check.
+fn expect_inherits_owner_only(path: &Path) {
+    if cfg!(windows) {
+        let opened = open_nofollow(OpenOptions::new().read(true), path).unwrap();
+        assert!(is_owner_only(&opened).unwrap(), "{}", path.display());
     }
 }
 
