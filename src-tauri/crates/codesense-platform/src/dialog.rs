@@ -16,7 +16,6 @@
 //! stderr) and the pure [`argv`] and [`outcome`] helpers, which compile on
 //! every OS so their tests run everywhere.
 
-use std::ffi::OsString;
 use std::fmt;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -99,8 +98,8 @@ pub const OSASCRIPT: &str = "/usr/bin/osascript";
 pub const ASKPASS_DEFAULT: &str = "/usr/bin/ssh-askpass";
 
 /// The arguments `program` is run with to ask `prompt`.
-pub fn argv(program: Program, prompt: &SecretPrompt) -> Vec<OsString> {
-    let items = match program {
+pub fn argv(program: Program, prompt: &SecretPrompt) -> Vec<String> {
+    match program {
         Program::Zenity => vec![
             "--entry".to_owned(),
             "--hide-text".to_owned(),
@@ -121,8 +120,7 @@ pub fn argv(program: Program, prompt: &SecretPrompt) -> Vec<OsString> {
             .chain(["--", prompt.text, prompt.title, prompt.ok_label])
             .map(str::to_owned)
             .collect(),
-    };
-    items.into_iter().map(OsString::from).collect()
+    }
 }
 
 /// zenity (3.x and 4.x) shows `--text` with `g_strcompress` and then as a
@@ -180,7 +178,7 @@ pub fn outcome(
 
 /// The one runner: `path` with `argv`, stdin null, stdout and stderr captured.
 #[cfg_attr(windows, allow(dead_code))]
-fn run(path: &Path, argv: &[OsString]) -> Result<(Option<i32>, Vec<u8>, Vec<u8>), DialogError> {
+fn run(path: &Path, argv: &[String]) -> Result<(Option<i32>, Vec<u8>, Vec<u8>), DialogError> {
     let output = Command::new(path)
         .args(argv)
         .stdin(Stdio::null())
@@ -277,16 +275,10 @@ mod tests {
         ok_label: "Save",
     };
 
-    fn strings(argv: Vec<OsString>) -> Vec<String> {
-        argv.into_iter()
-            .map(|item| item.into_string().unwrap())
-            .collect()
-    }
-
     #[test]
     fn zenity_asks_with_hidden_entry_and_escaped_text() {
         assert_eq!(
-            strings(argv(Program::Zenity, &PROMPT)),
+            argv(Program::Zenity, &PROMPT),
             [
                 "--entry",
                 "--hide-text",
@@ -301,7 +293,7 @@ mod tests {
     fn zenity_text_shows_underscores_backslashes_and_ampersands_as_typed() {
         fn text_arg(text: &str) -> String {
             let prompt = SecretPrompt { text, ..PROMPT };
-            strings(argv(Program::Zenity, &prompt)).pop().unwrap()
+            argv(Program::Zenity, &prompt).pop().unwrap()
         }
         assert_eq!(text_arg("my_key_rsa"), "--text=my__key__rsa");
         assert_eq!(text_arg(r"C:\keys\n"), r"--text=C:\\keys\\n");
@@ -311,7 +303,7 @@ mod tests {
     #[test]
     fn kdialog_asks_for_a_password() {
         assert_eq!(
-            strings(argv(Program::Kdialog, &PROMPT)),
+            argv(Program::Kdialog, &PROMPT),
             [
                 "--title",
                 "CodeSense",
@@ -324,7 +316,7 @@ mod tests {
     #[test]
     fn askpass_gets_the_text_alone() {
         assert_eq!(
-            strings(argv(Program::Askpass, &PROMPT)),
+            argv(Program::Askpass, &PROMPT),
             ["Passphrase for /home/me/.ssh/id_ed25519"]
         );
     }
@@ -332,7 +324,7 @@ mod tests {
     #[test]
     fn osascript_gets_the_script_then_text_title_and_button() {
         assert_eq!(
-            strings(argv(Program::Osascript, &PROMPT)),
+            argv(Program::Osascript, &PROMPT),
             [
                 "-e",
                 "on run argv",
@@ -527,7 +519,7 @@ mod tests {
     #[cfg(unix)]
     mod fakes {
         use super::*;
-        use std::ffi::OsStr;
+        use std::ffi::{OsStr, OsString};
         use std::os::unix::fs::{symlink, PermissionsExt};
         use std::path::PathBuf;
 
@@ -538,6 +530,8 @@ mod tests {
         /// supervisor does. The run is a throwaway: each test's own run rewrites
         /// the argv file.
         fn runnable(path: &Path) {
+            const TEXT_BUSY_RETRIES: u32 = 50;
+            const TEXT_BUSY_WAIT: std::time::Duration = std::time::Duration::from_millis(10);
             let mut busy = 0;
             loop {
                 match Command::new(path)
@@ -547,9 +541,11 @@ mod tests {
                     .status()
                 {
                     Ok(_) => return,
-                    Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) && busy < 50 => {
+                    Err(e)
+                        if e.raw_os_error() == Some(libc::ETXTBSY) && busy < TEXT_BUSY_RETRIES =>
+                    {
                         busy += 1;
-                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        std::thread::sleep(TEXT_BUSY_WAIT);
                     }
                     Err(e) => panic!("run {}: {e}", path.display()),
                 }
@@ -587,6 +583,11 @@ mod tests {
                 self.dir.path().join("ssh-askpass")
             }
 
+            /// Write a fake at `path` that records its argv, then runs `body`.
+            /// An executable fake runs once on creation ([`runnable`]), so its
+            /// body must have no side effect beyond printing, exiting or
+            /// signalling itself: the argv file it writes is rewritten by the
+            /// test's own run.
             fn script(&self, path: &Path, body: &str, mode: u32) -> PathBuf {
                 let script = format!(
                     "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n{body}\n",
@@ -633,10 +634,7 @@ mod tests {
             let askpass = fakes.elsewhere("askpass", "printf 'from askpass\\n'");
             let answer = fakes.ask(Some(askpass.as_os_str()), &fakes.no_default());
             assert_eq!(answer, Ok(Some("from zenity".into())));
-            assert_eq!(
-                fakes.argv_received(),
-                strings(argv(Program::Zenity, &PROMPT))
-            );
+            assert_eq!(fakes.argv_received(), argv(Program::Zenity, &PROMPT));
         }
 
         #[test]
@@ -649,10 +647,7 @@ mod tests {
                 fakes.ask(Some(askpass.as_os_str()), &default),
                 Ok(Some("from kdialog".into()))
             );
-            assert_eq!(
-                fakes.argv_received(),
-                strings(argv(Program::Kdialog, &PROMPT))
-            );
+            assert_eq!(fakes.argv_received(), argv(Program::Kdialog, &PROMPT));
         }
 
         #[test]
