@@ -57,6 +57,12 @@ anyhow = "1"
 tempfile = "3"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
 
+# The process tree the tree-kill test (`tests/process_tree.rs`) starts in a
+# pty, so it needs no shell.
+[[bin]]
+name = "pty-tree-fixture"
+path = "tests/bin/tree_fixture.rs"
+
 [[example]]
 name = "tui_fixture"
 required-features = ["tui-fixture"]
