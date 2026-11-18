@@ -100,7 +100,18 @@ const GENERAL_ROW_SPECS: Record<string, SettingRowSpec> = {
   terminalShell: {
     key: "terminalShell",
     label: "Terminal shell",
-    keywords: ["terminal", "shell", "zsh", "bash", "fish", "login", "$SHELL"],
+    keywords: [
+      "terminal",
+      "shell",
+      "zsh",
+      "bash",
+      "fish",
+      "pwsh",
+      "powershell",
+      "cmd",
+      "login",
+      "$SHELL",
+    ],
   },
   terminalServer: {
     key: "terminalServer",
@@ -733,8 +744,9 @@ function TerminalPromptRow() {
 
 // SW-LN-35: the shell terminals run. Shows the detected login shell and takes
 // an optional override (an absolute path to a shell of a kind the OS accepts,
-// `acceptedKinds`), committed on blur. The Rust calls go through `Promise.resolve().then` so a missing backend
-// (tests, mock mode) just leaves the detected line blank.
+// `acceptedKinds`), committed on blur. The Rust calls go through
+// `Promise.resolve().then` so a missing backend (tests, mock mode) just leaves
+// the detected line blank.
 function TerminalShellRow() {
   const terminalShell = useViewerStore((s) => s.settings.terminalShell);
   const updateSettings = useViewerStore((s) => s.updateSettings);
