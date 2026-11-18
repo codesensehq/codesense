@@ -107,8 +107,9 @@ chmod +x CodeSense_*.AppImage && ./CodeSense_*.AppImage
 If the AppImage will not start for want of FUSE, install it (`sudo apt install libfuse2`,
 or `libfuse2t64` on Ubuntu 24.04) or run it with `--appimage-extract-and-run`.
 
-Some things are off on Linux for now: git-ai attribution and the bundled starship
-prompt. Saved secrets are kept in Secret Service (GNOME Keyring or KWallet) when one is
+Some things are off on Linux for now: git-ai attribution, the bundled starship prompt,
+and remembering an SSH key passphrase (it needs a passphrase prompt Linux doesn't have yet).
+Other saved secrets are kept in Secret Service (GNOME Keyring or KWallet) when one is
 running, and CodeSense says so when none is.
 
 Every test build is a source build like the one above: the `internal` channel,

@@ -133,8 +133,8 @@ enum Probe {
     Present(&'static str),
     /// Definitely absent: no session bus, no Secret Service on it, no default collection.
     Absent,
-    /// Couldn't tell: a timeout while the service starts, or any other failure. Holds the
-    /// error's name.
+    /// Couldn't tell: a timeout while the service starts, a probe still running, or any other
+    /// failure. Holds the error's description, which is its D-Bus error name when it has one.
     Unknown(String),
     /// The deployment injects secrets through the environment, so there is no store to probe.
     Env,
@@ -190,22 +190,92 @@ impl CredentialStore for KeychainStore {
     }
 }
 
-static SECRET_STORE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+/// How long the startup capability resolution waits for the probe. D-Bus I/O never runs on the
+/// thread that waits: a probe that is still running at the deadline leaves the store off for the
+/// run.
+pub const PROBE_WAIT: std::time::Duration = std::time::Duration::from_millis(300);
 
-/// Whether the app can keep secrets in an OS store. The first call probes and logs
-/// `secret store: <state>`; the app makes it at startup, later calls read the result. The probe
-/// only asks that the Secret Service bus name and its default collection exist: it never unlocks
-/// anything, so no prompt can appear. An app with no Secret Service keeps running; saving a
-/// secret then fails with [`CredentialError::Unavailable`]. With `CODESENSE_CRED_SOURCE=env`
-/// secrets are read from the environment and never saved, so it is `false` and the bus is not
-/// touched.
-pub fn secret_store_available() -> bool {
-    *SECRET_STORE.get_or_init(|| {
-        let state = secret_store_state(&cred_source(), platform_probe);
-        let (level, line) = probe_log(&state);
-        log::log!(target: "auth", level, "{line}");
-        matches!(state, Probe::Present(_))
+/// Where the probe's result lands, with the condition variable its waiter sleeps on.
+struct ProbeSlot {
+    state: std::sync::Mutex<Option<Probe>>,
+    done: std::sync::Condvar,
+}
+
+static PROBE: std::sync::OnceLock<std::sync::Arc<ProbeSlot>> = std::sync::OnceLock::new();
+
+/// The probe's slot. The first call starts the probe: on a background thread, except on macOS,
+/// where it is a constant.
+fn probe_slot() -> &'static std::sync::Arc<ProbeSlot> {
+    PROBE.get_or_init(|| {
+        let slot = std::sync::Arc::new(ProbeSlot {
+            state: std::sync::Mutex::new(None),
+            done: std::sync::Condvar::new(),
+        });
+        let running = std::sync::Arc::clone(&slot);
+        if cfg!(target_os = "macos") {
+            finish_probe(&running);
+        } else {
+            std::thread::spawn(move || finish_probe(&running));
+        }
+        slot
     })
+}
+
+/// Runs the probe, logs the real state (`secret store: <state>`), and wakes the waiter.
+fn finish_probe(slot: &ProbeSlot) {
+    let state = secret_store_state(&cred_source(), platform_probe);
+    log_probe(&state);
+    *slot.state.lock().unwrap() = Some(state);
+    slot.done.notify_all();
+}
+
+/// Waits up to `wait` for the slot's result; `None` when it is still running.
+fn probe_result(slot: &ProbeSlot, wait: std::time::Duration) -> Option<Probe> {
+    let guard = slot.state.lock().unwrap();
+    let (guard, _) = slot
+        .done
+        .wait_timeout_while(guard, wait, |state| state.is_none())
+        .unwrap();
+    guard.clone()
+}
+
+/// The result when the probe was still running at the deadline.
+fn probe_timed_out(wait: std::time::Duration) -> Probe {
+    Probe::Unknown(format!("probe still running after {} ms", wait.as_millis()))
+}
+
+fn log_probe(state: &Probe) {
+    let (level, line) = probe_log(state);
+    log::log!(target: "auth", level, "{line}");
+}
+
+/// Whether a probe result means the app can keep secrets: only a present store does. An absent
+/// store, one the probe couldn't tell about and the environment source all mean no.
+fn available(state: &Probe) -> bool {
+    matches!(state, Probe::Present(_))
+}
+
+/// Starts the secret store probe in the background, so a later `secret_store_available` finds it
+/// done. The app calls it first in setup.
+pub fn start_secret_store_probe() {
+    probe_slot();
+}
+
+/// Whether the app can keep secrets in an OS store, waiting at most [`PROBE_WAIT`] for the probe
+/// (which logs `secret store: <state>` itself when it finishes). The probe only asks that the
+/// Secret Service bus name and its default collection exist: it never unlocks anything, so no
+/// prompt can appear. An app with no Secret Service keeps running; saving a secret then fails
+/// with [`CredentialError::Unavailable`]. With `CODESENSE_CRED_SOURCE=env` secrets are read from
+/// the environment and never saved, so it is `false` and the bus is not touched. A probe still
+/// running at the deadline is unknown, logged as a warning, and `false`.
+pub fn secret_store_available() -> bool {
+    match probe_result(probe_slot(), PROBE_WAIT) {
+        Some(state) => available(&state),
+        None => {
+            log_probe(&probe_timed_out(PROBE_WAIT));
+            false
+        }
+    }
 }
 
 /// The startup log line for a probe result and its level: an indeterminate probe is a warning
@@ -620,8 +690,78 @@ mod tests {
                 "secret store: env (read-only)".to_string()
             )
         );
-        // Only a present store counts, so the capability is off for an unknown one.
-        assert!(!matches!(unknown, Probe::Present(_)));
+    }
+
+    /// Only a present store lets the app keep secrets: an absent one, one the probe couldn't tell
+    /// about and the environment source are all off.
+    #[test]
+    fn only_a_present_store_is_available() {
+        assert!(available(&Probe::Present("secret-service")));
+        assert!(available(&Probe::Present("keychain")));
+        assert!(!available(&Probe::Absent));
+        assert!(!available(&Probe::Unknown("NoReply".into())));
+        assert!(!available(&Probe::Env));
+    }
+
+    /// A probe that never answers is unknown at the deadline, and the wait is the deadline, not
+    /// the probe: the test gives it a few milliseconds.
+    #[test]
+    fn a_probe_that_never_answers_is_unknown_at_the_deadline() {
+        let slot = ProbeSlot {
+            state: std::sync::Mutex::new(None),
+            done: std::sync::Condvar::new(),
+        };
+        let wait = std::time::Duration::from_millis(5);
+        let started = std::time::Instant::now();
+        assert_eq!(probe_result(&slot, wait), None);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        let unknown = probe_timed_out(wait);
+        assert_eq!(
+            unknown,
+            Probe::Unknown("probe still running after 5 ms".into())
+        );
+        assert!(!available(&unknown));
+        assert_eq!(
+            probe_log(&probe_timed_out(PROBE_WAIT)),
+            (
+                log::Level::Warn,
+                "secret store: unknown (probe still running after 300 ms)".to_string()
+            )
+        );
+    }
+
+    /// A probe that has answered is returned at once, however long the deadline.
+    #[test]
+    fn a_finished_probe_is_returned_without_waiting() {
+        let slot = ProbeSlot {
+            state: std::sync::Mutex::new(Some(Probe::Absent)),
+            done: std::sync::Condvar::new(),
+        };
+        let started = std::time::Instant::now();
+        assert_eq!(
+            probe_result(&slot, std::time::Duration::from_secs(60)),
+            Some(Probe::Absent)
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    /// A probe that finishes while the waiter sleeps wakes it with the real state.
+    #[test]
+    fn a_probe_finishing_during_the_wait_wakes_the_waiter() {
+        let slot = std::sync::Arc::new(ProbeSlot {
+            state: std::sync::Mutex::new(None),
+            done: std::sync::Condvar::new(),
+        });
+        let running = std::sync::Arc::clone(&slot);
+        let handle = std::thread::spawn(move || {
+            *running.state.lock().unwrap() = Some(Probe::Present("secret-service"));
+            running.done.notify_all();
+        });
+        assert_eq!(
+            probe_result(&slot, std::time::Duration::from_secs(60)),
+            Some(Probe::Present("secret-service"))
+        );
+        handle.join().unwrap();
     }
 
     #[cfg(target_os = "macos")]
@@ -647,7 +787,10 @@ mod tests {
             "org.freedesktop.DBus.Error.Failed",
             "org.freedesktop.DBus.Error.ServiceUnknown",
         ));
-        assert!(matches!(absence_of(&mentions_absence), Probe::Unknown(_)));
+        assert_eq!(
+            absence_of(&mentions_absence),
+            Probe::Unknown("org.freedesktop.DBus.Error.Failed".into())
+        );
         for name in [
             "org.freedesktop.DBus.Error.NameHasNoOwner",
             "org.freedesktop.DBus.Error.NoReply",
@@ -666,14 +809,14 @@ mod tests {
             Probe::Absent
         );
         // A locked collection or a dismissed prompt is not an absent one.
-        assert!(matches!(
+        assert_eq!(
             absence_of(&dbus_secret_service::Error::Locked),
-            Probe::Unknown(_)
-        ));
-        assert!(matches!(
+            Probe::Unknown("Secret Service: object locked".into())
+        );
+        assert_eq!(
             absence_of(&dbus_secret_service::Error::Prompt),
-            Probe::Unknown(_)
-        ));
+            Probe::Unknown("Secret Service: unlock prompt was dismissed".into())
+        );
     }
 
     #[test]

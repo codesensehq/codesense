@@ -50,7 +50,7 @@ const TABLE: &[Row] = &[
         key: SECRET_STORE,
         macos: Support::Probe(crate::commands::credential_store::secret_store_available),
         linux: Support::Probe(crate::commands::credential_store::secret_store_available),
-        reason: "no secret store can be reached: on Linux a Secret Service must be running, and values injected through the process environment are never saved",
+        reason: "needs a system secret store that can be reached; values injected through the process environment are never saved",
     },
 ];
 
@@ -265,6 +265,10 @@ mod tests {
         let apple_silicon = cfg!(all(target_os = "macos", target_arch = "aarch64"));
         assert_eq!(enabled(GIT_AI), apple_silicon);
         assert_eq!(enabled(STARSHIP), apple_silicon);
+        // The macOS Keychain is always there (unless the environment source is selected).
+        if cfg!(target_os = "macos") && std::env::var("CODESENSE_CRED_SOURCE").is_err() {
+            assert!(enabled(SECRET_STORE));
+        }
         assert!(!enabled("no-such-capability"));
     }
 }
