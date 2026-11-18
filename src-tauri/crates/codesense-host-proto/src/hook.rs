@@ -310,10 +310,10 @@ const PREFIX: &[&str] = &[
 ///   and `\s` mean the same in every Perl.
 /// - A segment holding any character at or above 0x80 is read as a superset of every reading
 ///   any Perl could make of it, whatever its Unicode tables: every word counts as read (write
-///   targets and a write-only verb's operands too), split with and without redirections, and
-///   with each way of handing trailing digits or non-ASCII characters to a redirection. It
-///   relies on no Unicode property but White_Space, which splitting words needs anyway. Such a
-///   segment may be denied where the script allows it.
+///   targets and a write-only verb's operands too), split at redirections, each also without
+///   the trailing digits or non-ASCII characters a redirection may take. It relies on no Unicode
+///   property but White_Space, which splitting words needs anyway, and does linear work. Such
+///   a segment may be denied where the script allows it.
 fn bash_reads(cmd: &str) -> Vec<String> {
     static SEGMENT: LazyLock<Regex> = LazyLock::new(|| regex(r"&&|\|\||;|\||\n"));
     static OPTION_VALUE: LazyLock<Regex> = LazyLock::new(|| regex(r"^-[^=]*=(.+)$"));
@@ -393,22 +393,23 @@ fn exact_reads(segment: &str) -> Vec<String> {
 }
 
 /// Every word any Perl could read in a segment holding non-ASCII text. The script spaces out
-/// `\d*[<>]+&?` before splitting, and which characters its `\d` takes depends on its Unicode
-/// version; a digit is ASCII `0-9` or non-ASCII. So the words are the plain split, the split
-/// that also cuts at `[<>]+&?`, and each of those with any number of characters dropped from
-/// its trailing run of `0-9` and non-ASCII characters.
+/// `\d*[<>]+&?` before splitting, so none of its words holds `<` or `>`, and which characters its
+/// `\d` takes depends on its Unicode version: a digit is ASCII `0-9` or non-ASCII. So the words
+/// are the pieces between whitespace, quotes, parentheses and `[<>]+&?`, each also without its
+/// whole trailing run of `0-9` and non-ASCII characters. A word the script could cut inside
+/// that run ends in such a character, so it can only match a family whose glob ends in `*`, which
+/// the whole piece then matches too, and no exception or directory name ends in one
+/// (`protected_names_end_where_a_cut_word_cannot`); trying each cut would be quadratic in a long
+/// run.
 fn superset_reads(segment: &str) -> Vec<String> {
     static CUT: LazyLock<Regex> = LazyLock::new(|| regex(r#"(?:[\s"'`()]|[<>]+&?)+"#));
 
     let mut read: Vec<String> = Vec::new();
-    for word in WORDS.split(segment).chain(CUT.split(segment)) {
-        let mut rest = word;
-        while !rest.is_empty() {
-            read.push(rest.to_string());
-            match rest.char_indices().next_back() {
-                Some((i, c)) if c.is_ascii_digit() || !c.is_ascii() => rest = &rest[..i],
-                _ => break,
-            }
+    for piece in CUT.split(segment).filter(|w| !w.is_empty()) {
+        read.push(piece.to_string());
+        let stem = piece.trim_end_matches(|c: char| c.is_ascii_digit() || !c.is_ascii());
+        if !stem.is_empty() && stem.len() < piece.len() {
+            read.push(stem.to_string());
         }
     }
     read
@@ -713,8 +714,6 @@ pub(crate) mod tests {
         }
     }
 
-    /// The script reads JSON nested up to 512 deep and numbers of any size; past that depth it
-    /// cannot parse the input and allows it.
     /// An all-ASCII segment is read as the script's loop reads it, so the word after `<` is read
     /// whatever it looks like. A segment with non-ASCII text is read as a superset of any Perl's
     /// reading: a trailing digit any Unicode version may hand to a redirection is dropped as well
@@ -736,6 +735,47 @@ pub(crate) mod tests {
         }
     }
 
+    /// A word the superset reader could cut inside its trailing run of digits or non-ASCII
+    /// characters ends in one, so trying only the whole piece and the piece without that run is
+    /// enough while every family glob ends in `*` or an ASCII letter and every exception and
+    /// directory name ends in an ASCII letter. Not `k` or `s`: the Kelvin sign and the long s
+    /// fold to them in the case-insensitive form.
+    #[test]
+    fn protected_names_end_where_a_cut_word_cannot() {
+        let letter =
+            |c: char| c.is_ascii_alphabetic() && !matches!(c.to_ascii_lowercase(), 'k' | 's');
+        let last = |name: &str| name.chars().last().unwrap();
+        for family in FAMILIES {
+            assert!(
+                last(family.glob) == '*' || letter(last(family.glob)),
+                "{}",
+                family.glob
+            );
+            for except in family.except {
+                assert!(letter(last(except)), "{except}");
+            }
+        }
+        for dir in PROTECTED_DIRS {
+            assert!(letter(last(dir)), "{dir}");
+        }
+    }
+
+    /// A long run of non-ASCII text beside a credential file is still read, and in linear time.
+    #[test]
+    fn a_long_non_ascii_run_is_read_in_linear_time() {
+        let run = "\u{e9}".repeat(100_000);
+        for command in [
+            format!("cat /repo/.env; echo {run}"),
+            format!("cat /repo/.env {run}"),
+            format!("cat /repo/.env{run}>x"),
+        ] {
+            let payload = call("Bash", json!({ "command": command }));
+            assert!(verdict(&payload).is_some());
+        }
+    }
+
+    /// The script reads JSON nested up to 512 deep and numbers of any size; past that depth it
+    /// cannot parse the input and allows it.
     #[test]
     fn deep_nesting_and_huge_numbers_are_read_as_the_script_reads_them() {
         let read = |extra: &str| {
