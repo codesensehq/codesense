@@ -1332,8 +1332,10 @@ describe("Tauri IPC Contract", () => {
     // +2 on both sides for liveHubRelease/live_hub_release and
     // liveHubReleaseOwner/live_hub_release_owner (the host stops sending deltas for views the
     // webview no longer caches), so 538/557.
-    const EXPECTED_TS_COMMAND_COUNT = 538;
-    const EXPECTED_RUST_COMMAND_COUNT = 557;
+    // +1 on both sides for getPlatformCaps/get_platform_caps (which optional features this
+    // OS supports), so 539/558.
+    const EXPECTED_TS_COMMAND_COUNT = 539;
+    const EXPECTED_RUST_COMMAND_COUNT = 558;
     // The Rust count runs ahead of the TS count by the RUST_ONLY_COMMANDS that have no
     // renderer IPC wrapper (the access revocation and two session watchers plus the WV-B5/C6
     // scope-layer and harvest-norm Tauri commands whose FE wrappers land in later WV stories):

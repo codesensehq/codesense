@@ -88,7 +88,7 @@ src/agents/workspace_trust.rs 16
 src/attribution/checkpoints.rs 1
 src/attribution/detect.rs 2
 src/attribution/history.rs 5
-src/attribution/install.rs 7
+src/attribution/install.rs 5
 src/attribution/managed.rs 5
 src/avatars/store.rs 2
 src/commands/agent_accounts.rs 12

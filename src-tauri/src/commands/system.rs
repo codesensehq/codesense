@@ -286,6 +286,12 @@ pub fn get_http_api_port(app: tauri::AppHandle) -> Option<u16> {
     app.try_state::<crate::http::HttpApiPort>().map(|p| p.0)
 }
 
+/// The features this OS and architecture support, resolved lazily, once, on first use.
+#[tauri::command]
+pub fn get_platform_caps() -> &'static [crate::platform_caps::Cap] {
+    crate::platform_caps::caps()
+}
+
 #[tauri::command]
 pub async fn get_log_file_path(app: tauri::AppHandle) -> Result<String, String> {
     await_blocking("get_log_file_path", move || {
