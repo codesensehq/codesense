@@ -1,0 +1,10 @@
+# Capability gates: a subsystem not yet ported to an OS, compiled out behind
+# one module-level gate. Each row exempts one OS-specific site in its file
+# from the platform cfg ratchet (platform_cfg_ratchet_guard.rs).
+#
+# Format: <path> <cap key> <removing slug> <reason>
+#   path          the file holding the gate, relative to the app root (src-tauri)
+#   cap key       the capability the gate reports as off
+#   removing slug the change that ports the subsystem and deletes the row
+#   reason        what the gate compiles out
+# A file with two gates has two rows. A row with no reason fails.
