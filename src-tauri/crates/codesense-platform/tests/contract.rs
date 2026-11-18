@@ -731,8 +731,10 @@ fn is_executable_accepts_only_an_absolute_executable_file() {
 }
 
 /// A temp dir under cargo's target directory, so it shares a volume with the
-/// working directory and [`relative_from_cwd`] can reach it.
+/// working directory and [`relative_from_cwd`] can reach it. The directory is
+/// created first: an archived test run starts without it.
 fn same_volume_tempdir() -> tempfile::TempDir {
+    std::fs::create_dir_all(env!("CARGO_TARGET_TMPDIR")).unwrap();
     tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap()
 }
 
