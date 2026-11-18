@@ -548,8 +548,9 @@ jobs:
           shared-key: rust-check-linux
           save-if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}
           cache-on-failure: true
-      - name: Fetch git-ai
-        run: bash scripts/fetch-git-ai.sh
+      - name: Fetch bundled binaries
+        # The Linux bundle's pinned starship, which tauri-build needs in place.
+        run: bash scripts/fetch-bundled.sh
       - name: Build sidecars
         # The app's build script needs the bundled sidecars to exist.
         run: bash scripts/build-session-server.sh
@@ -614,8 +615,9 @@ jobs:
           shared-key: rust-linux-app
           save-if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}
           cache-on-failure: true
-      - name: Fetch git-ai
-        run: bash scripts/fetch-git-ai.sh
+      - name: Fetch bundled binaries
+        # The Linux bundle's pinned starship, which tauri-build needs in place.
+        run: bash scripts/fetch-bundled.sh
       - name: Build sidecars
         # The app's build script needs the bundled sidecars to exist.
         run: bash scripts/build-session-server.sh
