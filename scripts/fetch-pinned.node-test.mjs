@@ -196,17 +196,21 @@ test("fetch-bundled maps each host to its pins", (t) => {
   const f = fixture(t);
   const bin = path.join(f.dir, "bin");
   fs.mkdirSync(bin);
-  const host = (os, arch, flag = "--dry-run") => {
+  const host = (os, arch, ...flags) => {
     fs.writeFileSync(
       path.join(bin, "uname"),
       `#!/bin/sh\ncase "$1" in -s) echo ${os} ;; -m) echo ${arch} ;; esac\n`,
       { mode: 0o755 },
     );
-    return spawnSync("bash", [path.join(root, "scripts/fetch-git-ai.sh"), flag], {
-      cwd: f.dir,
-      encoding: "utf8",
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
-    });
+    return spawnSync(
+      "bash",
+      [path.join(root, "scripts/fetch-git-ai.sh"), ...(flags.length ? flags : ["--dry-run"])],
+      {
+        cwd: f.dir,
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      },
+    );
   };
   const release = "https://github.com/starship/starship/releases/download/v1.24.2";
   for (const [os, arch, url] of [
@@ -220,18 +224,23 @@ test("fetch-bundled maps each host to its pins", (t) => {
     if (typeof url === "string") assert.equal(run.stdout, url);
     else assert.match(run.stdout, url);
   }
-  // The pin and destination other scripts read from here, so the mapping lives in one place.
-  for (const [os, arch, pin, dest] of [
-    ["Darwin", "arm64", "src-tauri/git-ai.pin", "src-tauri/resources/git-ai"],
+  // The pin and destination other scripts read from here, by binary, so the mapping lives in
+  // one place and a host with several pins is never ambiguous.
+  for (const [os, arch, name, other, pin, dest] of [
+    ["Darwin", "arm64", "git-ai", "starship", "src-tauri/git-ai.pin", "src-tauri/resources/git-ai"],
     [
       "Linux",
       "x86_64",
+      "starship",
+      "git-ai",
       "src-tauri/pins/starship-linux-x86_64.pin",
       "src-tauri/resources/fetched/starship",
     ],
     [
       "Linux",
       "aarch64",
+      "starship",
+      "git-ai",
       "src-tauri/pins/starship-linux-aarch64.pin",
       "src-tauri/resources/fetched/starship",
     ],
@@ -240,9 +249,16 @@ test("fetch-bundled maps each host to its pins", (t) => {
       ["--print-pin", pin],
       ["--print-dest", dest],
     ]) {
-      const run = host(os, arch, flag);
-      assert.equal(run.status, 0, `${os} ${arch} ${flag}: ${run.stderr}`);
+      const run = host(os, arch, flag, name);
+      assert.equal(run.status, 0, `${os} ${arch} ${flag} ${name}: ${run.stderr}`);
       assert.equal(run.stdout, `${expected}\n`);
+      // A binary this host does not bundle is refused, not answered with another's pin.
+      for (const unknown of [other, "no-such-tool"]) {
+        const refused = host(os, arch, flag, unknown);
+        assert.equal(refused.status, 1, `${os} ${arch} ${flag} ${unknown}`);
+        assert.equal(refused.stdout, "");
+        assert.equal(refused.stderr, `This host does not bundle ${unknown}: ${os} ${arch}\n`);
+      }
     }
     assert.ok(fs.existsSync(path.join(root, pin)), pin);
   }
@@ -253,11 +269,14 @@ test("fetch-bundled maps each host to its pins", (t) => {
     const run = host(os, arch);
     assert.equal(run.status, 1);
     assert.equal(run.stderr, `No pinned binaries for this host: ${os} ${arch}\n`);
-    assert.equal(host(os, arch, "--print-pin").status, 1);
+    assert.equal(host(os, arch, "--print-pin", "starship").status, 1);
   }
-  const bad = host("Linux", "x86_64", "--print");
-  assert.equal(bad.status, 2);
-  assert.match(bad.stderr, /^Usage: /);
+  // A print flag needs exactly one name.
+  for (const flags of [["--print"], ["--print-pin"], ["--print-dest", "starship", "git-ai"]]) {
+    const bad = host("Linux", "x86_64", ...flags);
+    assert.equal(bad.status, 2, flags.join(" "));
+    assert.match(bad.stderr, /^Usage: /);
+  }
 });
 
 test("the checksum uses sha256sum or shasum, whichever the host has, and needs one", (t) => {

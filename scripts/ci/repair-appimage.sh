@@ -25,7 +25,7 @@ appimage=$(realpath "$1")
 PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$PROJECT_ROOT"
 emulator="$PROJECT_ROOT/src-tauri/binaries/codesense-emulator-$(rustc -vV | sed -n 's/^host: //p')"
-starship_src=$(bash scripts/fetch-bundled.sh --print-dest)
+starship_src=$(bash scripts/fetch-bundled.sh --print-dest starship)
 
 work=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/appimage.XXXXXX")
 trap 'rm -rf "$work"' EXIT
