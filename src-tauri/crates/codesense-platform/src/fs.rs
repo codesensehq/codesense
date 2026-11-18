@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-//! Files: owner-only permissions, opens that refuse links, atomic replace,
-//! exclusive locks, links with a copy fallback, canonical paths and names
-//! that are valid on every OS.
+//! Files: owner-only permissions, ownership checks, file identity,
+//! owner-only creates, opens that refuse links, atomic replace, exclusive
+//! locks, links with a copy fallback, canonical paths and names that are
+//! valid on every OS.
 
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -31,11 +32,94 @@ pub fn set_owner_only(path: &Path) -> io::Result<()> {
 }
 
 /// Whether only this user may use the open `file` (open it with
-/// [`open_nofollow`], so a link is never followed): on unix, owned by the
-/// effective uid with no group or other permission bits; on Windows, every
-/// ACE that grants access names the current user.
+/// [`open_nofollow`], so a link is never followed, and with read or write
+/// access: on Windows the check needs `READ_CONTROL`, so a handle with less,
+/// such as only `FILE_READ_ATTRIBUTES`, is an error): on unix, owned by the
+/// effective uid with no group or other permission bits; on Windows, owned
+/// as [`is_owned_by_current_user`] has it, and every ACE that grants access
+/// names the current user. A file made owner-only while elevated is owned by
+/// Administrators, so it is not owner-only to a later run without elevation
+/// (see [`is_owned_by_current_user`]).
 pub fn is_owner_only(file: &File) -> io::Result<bool> {
     sys::is_owner_only(file)
+}
+
+/// Whether this user owns the open `file` (open it with [`open_nofollow`],
+/// so a link is never followed, and with read or write access, as for
+/// [`is_owner_only`]; with less, Windows returns an error), whatever its
+/// permissions.
+///
+/// Unix: strictly `uid == euid`.
+///
+/// Windows: the owner SID is this process token's user SID or its default
+/// owner (`TokenOwner`), and nothing wider. An elevated administrator's
+/// token makes `BUILTIN\Administrators` the default owner, so the files this
+/// process creates carry that group rather than the user. The trust boundary
+/// is therefore the token's own two SIDs: under an elevated token, a file
+/// another member of Administrators created also counts as owned, which that
+/// member could open and change anyway.
+///
+/// The other way round, a file made while elevated is owned by
+/// Administrators, so a later run without elevation finds it not owned (and
+/// not [`is_owner_only`]) and fails closed. Callers treat that as a file to
+/// recreate, not as an attack.
+pub fn is_owned_by_current_user(file: &File) -> io::Result<bool> {
+    sys::is_owned_by_current_user(file)
+}
+
+/// Which file a path or an open file is, whatever its name: on unix the
+/// device and inode; on Windows the volume serial and the 128-bit file id.
+/// Two are equal for the same file. A file that replaces another at the same
+/// path has a different id only while the old file still exists or is held
+/// open: once a file is deleted, its id may be given to a new one. On FAT,
+/// whose fallback index is a directory slot a rename can reuse, identity is
+/// best-effort; a file system that reports no id at all is `Unsupported`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FileId {
+    volume: u64,
+    index: u128,
+}
+
+/// The [`FileId`] of `path` itself: a final link is not followed, so a link
+/// has its own.
+pub fn file_id(path: &Path) -> io::Result<FileId> {
+    sys::file_id(path)
+}
+
+/// The [`FileId`] of an open `file`.
+pub fn file_id_of(file: &File) -> io::Result<FileId> {
+    sys::file_id_of(file)
+}
+
+/// How [`create_owner_only`] treats a final link.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Open {
+    /// Follow it, as a plain open does.
+    Follow,
+    /// Refuse it: unix `O_NOFOLLOW`, with `O_NONBLOCK` so a FIFO never
+    /// blocks the open; on Windows the link itself is opened, then refused.
+    NoFollow,
+}
+
+/// Whether an owner-only create may open a file that already exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Creation {
+    OpenOrCreate,
+    New,
+}
+
+/// Open `path` for reading and writing, creating it readable and writable by
+/// this user only (unix mode 0600; on Windows a protected DACL granting only
+/// the current user, set as it is created). An existing file keeps its bytes
+/// and permissions: it is never truncated.
+pub fn create_owner_only(path: &Path, open: Open) -> io::Result<File> {
+    sys::create_owner_only(path, Creation::OpenOrCreate, open)
+}
+
+/// Create `path` for writing, owner-only as [`create_owner_only`] makes it;
+/// `AlreadyExists` when anything is at `path`, a link included.
+pub fn create_new_owner_only(path: &Path) -> io::Result<File> {
+    sys::create_owner_only(path, Creation::New, Open::Follow)
 }
 
 /// Open `path` with `options`, refusing it when it is a link: `O_NOFOLLOW`
