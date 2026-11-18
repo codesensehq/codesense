@@ -148,6 +148,10 @@ jobs:
         run: |
           git config --global user.name "CodeSense CI"
           git config --global user.email "security@codesense.ai"
+      - name: Test sidecar naming with bash 3.2
+        # macOS's own /bin/bash, the oldest bash the build scripts run under; once per run.
+        if: matrix.part == 'rest'
+        run: /bin/bash scripts/lib/sidecar.test.sh
       - name: Prepare logs
         run: mkdir -p "$RUNNER_TEMP/rust-ci-logs"
       - name: Set up pnpm
@@ -653,6 +657,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Test sidecar naming in Git Bash
+        # The .exe suffix, and paths in Git Bash's /d/a/... form.
+        run: bash scripts/lib/sidecar.test.sh
       - name: Set up Rust
         # Matches ci.yml; rustup's proxies read the channel in rust-toolchain.toml.
         run: rustup toolchain install stable --profile minimal

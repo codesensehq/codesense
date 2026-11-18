@@ -55,6 +55,7 @@
     "pretest:docs-gate": "bash scripts/dev-worktree.test.sh",
     "test:docs-gate": "sh -c 'vitest run scripts/ $(git ls-files \"*.guard.test.ts\" | grep -v \"^scripts/\") --maxWorkers=4 && pnpm test:node-scripts'",
     "test:dev-worktree": "bash scripts/dev-worktree.test.sh",
+    "test:sidecar": "bash scripts/lib/sidecar.test.sh",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
