@@ -144,6 +144,20 @@ fn set_owner_only_denies_others() {
 }
 
 #[test]
+fn a_path_the_os_owns_is_neither_owned_nor_owner_only() {
+    let Some(path) = expect_foreign_owned_path() else {
+        return;
+    };
+    let opened = open_nofollow(OpenOptions::new().read(true), &path).unwrap();
+    assert!(
+        !is_owned_by_current_user(&opened).unwrap(),
+        "{}",
+        path.display()
+    );
+    assert!(!is_owner_only(&opened).unwrap(), "{}", path.display());
+}
+
+#[test]
 fn a_file_this_user_makes_is_theirs_and_an_owner_only_create_is_owner_only() {
     let dir = tempfile::tempdir().unwrap();
     let opened = |path: &Path| open_nofollow(OpenOptions::new().read(true), path).unwrap();
@@ -492,6 +506,27 @@ fn expect_home_variable() -> &'static str {
         "USERPROFILE"
     } else {
         "HOME"
+    }
+}
+
+/// A directory that exists and that another account owns. Unix: `/`, owned
+/// by root; `None` (and the test skips) when this process runs as root.
+/// Windows: the system root (`C:\Windows`), owned by TrustedInstaller, so
+/// not by the user or an elevated token's Administrators.
+fn expect_foreign_owned_path() -> Option<PathBuf> {
+    #[cfg(unix)]
+    {
+        // SAFETY: geteuid has no preconditions.
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!("skipped: running as root, which owns /");
+            return None;
+        }
+        Some(PathBuf::from("/"))
+    }
+    #[cfg(windows)]
+    {
+        let root = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
+        Some(PathBuf::from(root))
     }
 }
 
