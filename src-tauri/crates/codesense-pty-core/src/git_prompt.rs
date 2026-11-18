@@ -222,7 +222,12 @@ fn read(path: &Path) -> Result<GitPromptStatus, Miss> {
     if !path.is_dir() {
         return Err(Miss::NoStatus);
     }
-    let mut command = git_status_command(path);
+    run(git_status_command(path))
+}
+
+/// Run a prompt read's `command` (see [`git_status_command`]) and parse what it
+/// prints.
+fn run(mut command: Command) -> Result<GitPromptStatus, Miss> {
     // Its own process group, so a timeout reaps a helper `git` started (a
     // filter, a credential helper) along with it.
     #[cfg(unix)]
@@ -606,5 +611,86 @@ u AA N... 100644 100644 100644 100644 a b c added.txt
         }
         let fresh = cached_with(&plain, |_| Ok(GitPromptStatus::default()));
         assert_eq!(fresh, Some(GitPromptStatus::default()));
+    }
+
+    /// Poll `done` every 20 ms for up to 5 s.
+    fn eventually(mut done: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !done() {
+            if Instant::now() > deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        true
+    }
+
+    /// A `git` stand-in: `script` run by `sh` with `$0` naming the file it
+    /// writes its helper's pid to, piped as the prompt's `git` is.
+    fn stand_in(script: &str, pid_file: &Path) -> Command {
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg(script)
+            .arg(pid_file)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        command
+    }
+
+    /// The helper pid the stand-in wrote.
+    fn helper_pid(pid_file: &Path) -> u32 {
+        let mut pid = None;
+        assert!(eventually(|| {
+            pid = std::fs::read_to_string(pid_file)
+                .ok()
+                .and_then(|text| text.trim().parse().ok());
+            pid.is_some()
+        }));
+        pid.unwrap()
+    }
+
+    fn running(pid: u32) -> bool {
+        // SAFETY: signal 0 only checks the pid exists.
+        unsafe { libc::kill(pid as i32, 0) == 0 }
+    }
+
+    /// The exit check sees `git` exit and leaves it to be reaped, with its
+    /// status.
+    #[test]
+    fn an_exit_is_seen_without_reaping() {
+        let mut running_child = Command::new("sleep").arg("30").spawn().unwrap();
+        assert!(!exited_unreaped(&running_child).unwrap());
+        running_child.kill().unwrap();
+        running_child.wait().unwrap();
+
+        let mut child = Command::new("sh").args(["-c", "exit 3"]).spawn().unwrap();
+        assert!(eventually(|| exited_unreaped(&child).unwrap()));
+        assert!(exited_unreaped(&child).unwrap(), "still unreaped");
+        assert_eq!(child.wait().unwrap().code(), Some(3));
+    }
+
+    /// A `git` that outlives the timeout is killed with its whole group.
+    #[test]
+    fn a_timed_out_read_kills_the_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("helper.pid");
+        let command = stand_in("sleep 30 & echo $! > \"$0\"; wait", &pid_file);
+        assert_eq!(run(command), Err(Miss::TimedOut));
+        let helper = helper_pid(&pid_file);
+        assert!(eventually(|| !running(helper)), "the helper outlived it");
+    }
+
+    /// A helper that still holds the output after `git` exits is killed with
+    /// the group once the timeout passes.
+    #[test]
+    fn a_helper_holding_the_output_is_killed() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("helper.pid");
+        let command = stand_in("sleep 30 & echo $! > \"$0\"", &pid_file);
+        assert_eq!(run(command), Err(Miss::TimedOut));
+        let helper = helper_pid(&pid_file);
+        assert!(eventually(|| !running(helper)), "the helper outlived it");
     }
 }

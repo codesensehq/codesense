@@ -827,6 +827,28 @@ mod tests {
         assert!(!ProcessIndex::build().has_named_process(sh.pid, "claude"));
     }
 
+    /// A process's group is read from the process table: this process's own,
+    /// a child's that leads its own group, and nothing once a pid is gone.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_process_group_is_read_from_the_process_table() {
+        use std::os::unix::process::CommandExt;
+        let (own, _) = pgid_and_tpgid(std::process::id()).expect("this process");
+        // SAFETY: getpgrp has no preconditions.
+        assert_eq!(own, unsafe { libc::getpgrp() });
+        let mut led = std::process::Command::new("sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .expect("spawn sleep");
+        let pid = led.id();
+        let (group, _) = pgid_and_tpgid(pid).expect("a running child");
+        assert_eq!(group, pid as i32, "it leads its own group");
+        led.kill().unwrap();
+        led.wait().unwrap();
+        assert_eq!(pgid_and_tpgid(pid), None, "a reaped child");
+    }
+
     /// A bare leaf process (no children) is idle.
     #[test]
     fn idle_true_for_leaf_process() {

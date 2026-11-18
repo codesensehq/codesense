@@ -701,6 +701,31 @@ mod tests {
         assert_eq!(signal_group(pgid, libc::SIGKILL), Ok(()));
     }
 
+    /// A child's group is recorded only when it leads one other than this
+    /// process's own: a plain child shares the test's group and gets none, so
+    /// teardown never signals the test's own group.
+    #[cfg(unix)]
+    #[test]
+    fn only_a_child_in_another_group_has_its_group_recorded() {
+        use std::os::unix::process::CommandExt;
+        let sleep = || {
+            let mut command = std::process::Command::new("sleep");
+            command.arg("30");
+            command
+        };
+        let shared = SessionChild::new(Box::new(sleep().spawn().unwrap()));
+        assert_eq!(shared.process_group, None);
+        let leader = sleep().process_group(0).spawn().unwrap();
+        let pid = leader.id();
+        let leader = SessionChild::new(Box::new(leader));
+        assert_eq!(leader.process_group, Some(pid as libc::pid_t));
+        for child in [shared, leader] {
+            let child = ChildHandle(Arc::new(Mutex::new(child)));
+            child.terminate();
+            child.wait();
+        }
+    }
+
     #[cfg(unix)]
     fn test_session_child(
         child: impl Child + Send + 'static,

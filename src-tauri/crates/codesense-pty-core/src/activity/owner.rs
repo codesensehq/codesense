@@ -4402,6 +4402,30 @@ mod tests {
         other.wait().unwrap();
     }
 
+    /// A forgotten engine that still runs is asked to stop, it alone and never its
+    /// group (it shares this test's), and its socket goes.
+    #[test]
+    fn a_forgotten_engine_is_terminated_alone_and_its_socket_removed() {
+        use std::os::unix::process::ExitStatusExt;
+        let dir = tempfile::tempdir().unwrap();
+        let endpoint = dir.path().join("engine.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&endpoint).unwrap();
+        let mut engine = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let process = process::inspect(engine.id()).unwrap();
+        drop(Engine {
+            home: None,
+            process,
+            keeper: process,
+            end_on_loss: false,
+            endpoint: endpoint.clone(),
+        });
+        assert_eq!(engine.wait().unwrap().signal(), Some(libc::SIGTERM));
+        assert!(!endpoint.exists(), "the socket is removed");
+    }
+
     #[test]
     fn a_hand_typed_cli_claims_its_shell_by_ancestry_once_at_a_time() {
         let owner = ActivityOwner::new();
