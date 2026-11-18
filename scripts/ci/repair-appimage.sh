@@ -18,9 +18,31 @@
 #
 # Any build that ships an AppImage needs this step, a release one too.
 #
+# It needs python3 (scripts/ci/appimage-offset.sh), unsquashfs and mksquashfs (squashfs-tools)
+# and rustc. `--check-tools` checks for them and exits, so a build can fail before it starts.
+#
 # Usage: bash scripts/ci/repair-appimage.sh <file.AppImage>
+#        bash scripts/ci/repair-appimage.sh --check-tools
 set -euo pipefail
-[[ $# -eq 1 && -f "$1" ]] || { echo "usage: $0 <file.AppImage>" >&2; exit 1; }
+
+check_tools() {
+    local tool missing=()
+    for tool in python3 unsquashfs mksquashfs rustc; do
+        command -v "$tool" >/dev/null || missing+=("$tool")
+    done
+    if ((${#missing[@]})); then
+        echo "Error: the AppImage repair needs tools that are not installed: ${missing[*]}" >&2
+        echo "(unsquashfs and mksquashfs come with squashfs-tools)" >&2
+        exit 1
+    fi
+}
+
+if [[ $# -eq 1 && "$1" == --check-tools ]]; then
+    check_tools
+    exit 0
+fi
+[[ $# -eq 1 && -f "$1" ]] || { echo "usage: $0 <file.AppImage> | --check-tools" >&2; exit 1; }
+check_tools
 appimage=$(realpath "$1")
 PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$PROJECT_ROOT"
