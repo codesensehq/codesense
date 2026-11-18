@@ -194,6 +194,7 @@ const COMMANDS: &[&str] = &[
     "A\u{10570}=1 rm {p}",
     "\u{16d70}>x rm {p}",
     "cat \u{16d70}< {p}",
+    "A\u{e9}=/bin/rm B\u{105c0}=1 rm {p}",
 ];
 
 /// The corpus: the moved tests' cases plus the generated variants, each in every encoding.

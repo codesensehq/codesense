@@ -307,100 +307,104 @@ const PREFIX: &[&str] = &[
 /// written, created, deleted or the destination of a copy is not read.
 ///
 /// The script's `\d` and `\w` follow its Perl's Unicode version, which the `regex` crate's need
-/// not match: one may class a newer character as a digit or letter and the other not, and that
-/// moves the verb (`A<new letter>=1 rm x` is an assignment then `rm`, or a verb that reads `x`).
-/// So the command is read with Unicode classes and again with ASCII ones, and every path either
-/// reading finds counts; a character the script classes either way is covered. Splitting words
-/// keeps Unicode `\s` in both.
+/// not match: one may class a newer letter or digit as one and the other not, and that moves the
+/// verb (`A<new letter>=1 rm x` is an assignment then `rm`, or a verb that reads `x`), and a
+/// command can mix letters from different versions. So a segment holding any non-ASCII letter or
+/// digit is not parsed for its verb: every word in it that is not a write target counts as read,
+/// with redirections spaced by either meaning of a digit. That reads at least what any version
+/// of the script reads. An all-ASCII segment means the same to every version and is parsed
+/// exactly. Splitting words keeps Unicode `\s`.
 fn bash_reads(cmd: &str) -> Vec<String> {
-    static READERS: LazyLock<[BashReader; 2]> = LazyLock::new(|| {
-        [
-            BashReader::new(r"\d", r"\w"),
-            BashReader::new("[0-9]", "[A-Za-z0-9_]"),
-        ]
-    });
-    let mut read: Vec<String> = READERS.iter().flat_map(|r| r.reads(cmd)).collect();
-    read.sort();
-    read.dedup();
+    static SEGMENT: LazyLock<Regex> = LazyLock::new(|| regex(r"&&|\|\||;|\||\n"));
+    static NON_ASCII_WORD: LazyLock<Regex> = LazyLock::new(|| regex(r"[\w&&[^\x00-\x7F]]"));
+    static REDIRECT: LazyLock<Regex> = LazyLock::new(|| regex(r"(\d*[<>]+&?)"));
+    static ASCII_REDIRECT: LazyLock<Regex> = LazyLock::new(|| regex(r"([0-9]*[<>]+&?)"));
+    static OPTION_VALUE: LazyLock<Regex> = LazyLock::new(|| regex(r"^-[^=]*=(.+)$"));
+
+    let mut read: Vec<String> = Vec::new();
+    for segment in SEGMENT.split(cmd) {
+        if NON_ASCII_WORD.is_match(segment) {
+            for redirect in [&*REDIRECT, &*ASCII_REDIRECT] {
+                read.extend(every_word_read(&redirect.replace_all(segment, " ${1} ")));
+            }
+        } else {
+            read.extend(parsed_reads(&REDIRECT.replace_all(segment, " ${1} ")));
+        }
+    }
+    // A value after = in an option (--env-file=FILE) is an operand too.
+    read.into_iter()
+        .flat_map(|word| {
+            let value = OPTION_VALUE.captures(&word).map(|c| c[1].to_string());
+            std::iter::once(word).chain(value)
+        })
+        .collect()
+}
+
+static WORDS: LazyLock<Regex> = LazyLock::new(|| regex(r#"[\s"'`()]+"#));
+static WRITE: LazyLock<Regex> = LazyLock::new(|| regex(r"^\d*>"));
+
+/// The words of a segment (redirections spaced out), past any `>` and its target.
+fn words(spaced: &str) -> impl Iterator<Item = &str> {
+    let mut words = WORDS.split(spaced).filter(|w| !w.is_empty());
+    std::iter::from_fn(move || loop {
+        let w = words.next()?;
+        if !WRITE.is_match(w) {
+            return Some(w);
+        }
+        // A write target.
+        words.next();
+    })
+}
+
+/// Every word of a segment but its write targets: what any reading of it could read.
+fn every_word_read(spaced: &str) -> Vec<String> {
+    words(spaced).map(str::to_string).collect()
+}
+
+/// What the script reads in one all-ASCII segment: redirected reads, and the operands its verb
+/// reads.
+fn parsed_reads(spaced: &str) -> Vec<String> {
+    static READ: LazyLock<Regex> = LazyLock::new(|| regex(r"^\d*<"));
+    static ASSIGN: LazyLock<Regex> = LazyLock::new(|| regex(r"^[A-Za-z_]\w*="));
+
+    let mut read: Vec<String> = Vec::new();
+    let mut words = words(spaced);
+    let mut verb: Option<std::borrow::Cow<'_, str>> = None;
+    let mut operands: Vec<&str> = Vec::new();
+    while let Some(w) = words.next() {
+        if READ.is_match(w) {
+            // A redirected read.
+            read.extend(words.next().map(str::to_string));
+            continue;
+        }
+        if verb.is_none() && ASSIGN.is_match(w) {
+            // VAR=value before the verb.
+            continue;
+        }
+        if verb.is_none() {
+            let base = basename(w);
+            if !PREFIX.contains(&&*base) {
+                verb = Some(base);
+            }
+            continue;
+        }
+        operands.push(w);
+    }
+    let Some(verb) = verb else { return read };
+    if WRITE_ONLY.contains(&&*verb) {
+        return read;
+    }
+    if TO_DESTINATION.contains(&&*verb) {
+        let mut args: Vec<&str> = operands
+            .into_iter()
+            .filter(|a| !a.starts_with('-'))
+            .collect();
+        args.pop();
+        read.extend(args.into_iter().map(str::to_string));
+        return read;
+    }
+    read.extend(operands.into_iter().map(str::to_string));
     read
-}
-
-/// The script's word parser with one meaning of digit and word character.
-struct BashReader {
-    redirect: Regex,
-    write: Regex,
-    read: Regex,
-    assign: Regex,
-}
-
-impl BashReader {
-    fn new(digit: &str, word: &str) -> Self {
-        Self {
-            redirect: regex(&format!("({digit}*[<>]+&?)")),
-            write: regex(&format!("^{digit}*>")),
-            read: regex(&format!("^{digit}*<")),
-            assign: regex(&format!("^[A-Za-z_]{word}*=")),
-        }
-    }
-
-    fn reads(&self, cmd: &str) -> Vec<String> {
-        static SEGMENT: LazyLock<Regex> = LazyLock::new(|| regex(r"&&|\|\||;|\||\n"));
-        static WORDS: LazyLock<Regex> = LazyLock::new(|| regex(r#"[\s"'`()]+"#));
-        static OPTION_VALUE: LazyLock<Regex> = LazyLock::new(|| regex(r"^-[^=]*=(.+)$"));
-
-        let mut read: Vec<String> = Vec::new();
-        for segment in SEGMENT.split(cmd) {
-            let spaced = self.redirect.replace_all(segment, " ${1} ");
-            let mut words = WORDS.split(&spaced).filter(|w| !w.is_empty());
-            let mut verb: Option<std::borrow::Cow<'_, str>> = None;
-            let mut operands: Vec<&str> = Vec::new();
-            while let Some(w) = words.next() {
-                if self.write.is_match(w) {
-                    // A write target.
-                    words.next();
-                    continue;
-                }
-                if self.read.is_match(w) {
-                    // A redirected read.
-                    read.extend(words.next().map(str::to_string));
-                    continue;
-                }
-                if verb.is_none() && self.assign.is_match(w) {
-                    // VAR=value before the verb.
-                    continue;
-                }
-                if verb.is_none() {
-                    let base = basename(w);
-                    if !PREFIX.contains(&&*base) {
-                        verb = Some(base);
-                    }
-                    continue;
-                }
-                operands.push(w);
-            }
-            let Some(verb) = verb else { continue };
-            if WRITE_ONLY.contains(&&*verb) {
-                continue;
-            }
-            if TO_DESTINATION.contains(&&*verb) {
-                let mut args: Vec<&str> = operands
-                    .into_iter()
-                    .filter(|a| !a.starts_with('-'))
-                    .collect();
-                args.pop();
-                read.extend(args.into_iter().map(str::to_string));
-                continue;
-            }
-            read.extend(operands.into_iter().map(str::to_string));
-        }
-        // A value after = in an option (--env-file=.env) is an operand too.
-        read.into_iter()
-            .flat_map(|word| {
-                let value = OPTION_VALUE.captures(&word).map(|c| c[1].to_string());
-                std::iter::once(word).chain(value)
-            })
-            .collect()
-    }
 }
 
 /// Perl's `$` as the last thing in a pattern: the end, or just before a final newline.
@@ -685,7 +689,9 @@ pub(crate) mod tests {
     /// A character one Unicode version calls a letter or digit and another does not still
     /// leaves the read found: `regex` and Perl may disagree on new characters, and ASCII
     /// classes alone would miss `é`, which Perl calls a letter. The characters arrive as `\u`
-    /// escapes (U+10570, U+16D70, U+00E9, U+0663): raw, their UTF-8 bytes are other characters.
+    /// escapes (U+10570, U+16D70, U+00E9, U+0663, U+105C0): raw, their UTF-8 bytes are other
+    /// characters. The last row mixes an old letter with a Unicode 16 one, so no single class
+    /// reading finds the script's verb.
     #[test]
     fn a_command_is_read_with_either_letter_and_digit_class() {
         for command in [
@@ -693,6 +699,7 @@ pub(crate) mod tests {
             r"\ud81b\udd70>x rm /repo/.env",
             r"A\u00e9=/bin/rm cat /repo/.env",
             r"cat \u0663< /repo/.env",
+            r"A\u00e9=/bin/rm B\ud801\uddc0=1 rm /repo/.env",
         ] {
             let input = format!(r#"{{"tool_name":"Bash","tool_input":{{"command":"{command}"}}}}"#);
             assert!(secret_guard(input.as_bytes()).is_some(), "{command}");
