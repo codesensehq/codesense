@@ -1358,7 +1358,7 @@ test("test build: the platform input and the jobs it gates", () => {
   assert.equal(linux["runs-on"], "${{ matrix.runner }}");
   assert.deepEqual(linux.strategy.matrix.include, [
     { arch: "x86_64", runner: "ubuntu-22.04", bundles: "deb,rpm,appimage" },
-    { arch: "arm64", runner: "ubuntu-24.04-arm", bundles: "deb,rpm" },
+    { arch: "arm64", runner: "ubuntu-24.04-arm", bundles: "deb,rpm,appimage" },
   ]);
   assert.equal(linux.strategy["fail-fast"], false);
 });
@@ -1375,16 +1375,30 @@ test("test build: the Linux job uploads the deb, rpm and AppImage, each one file
       "target/release/bundle/appimage/*.AppImage",
     ],
   );
-  // Only the AppImage upload is conditional: the arm64 leg builds no AppImage.
+  // Every leg builds all three formats, so no upload is conditional.
   assert.deepEqual(
     uploads.map((step) => step.if),
-    [undefined, undefined, "contains(matrix.bundles, 'appimage')"],
+    [undefined, undefined, undefined],
   );
   for (const { with: inputs } of uploads) {
     assert.equal(inputs.archive, false);
     assert.equal(inputs["retention-days"], 7);
     assert.equal(inputs["if-no-files-found"], "error");
   }
+});
+
+// The AppImage must carry the emulator the build compiled: linuxdeploy's rewrite breaks it.
+test("test build: every Linux leg checks the AppImage emulator after the build", () => {
+  const steps = parse(testBuild()).jobs["linux-app"].steps;
+  const names = steps.map((step) => step.name);
+  const check = steps.find((step) => step.name === "Check the AppImage emulator");
+  assert.ok(check, "the emulator check step is missing");
+  assert.ok(names.indexOf(check.name) > names.indexOf("Build app"));
+  assert.ok(names.indexOf(check.name) < names.indexOf("Upload AppImage"));
+  assert.equal(check.if, undefined);
+  assert.match(check.run, /--appimage-extract/);
+  assert.match(check.run, /sha256sum <"\$emulator"\) == \$\(sha256sum <"\$built"\)/);
+  assert.match(check.run, /timeout 10 "\.\/\$emulator" <\/dev\/null/);
 });
 
 test("test build: the policy rejects a missing platform gate, input or runner", () => {
@@ -1398,7 +1412,7 @@ test("test build: the policy rejects a missing platform gate, input or runner", 
     ],
     [
       testBuild().replace(
-        "          - arch: arm64\n            runner: ubuntu-24.04-arm\n            bundles: deb,rpm\n",
+        "          - arch: arm64\n            runner: ubuntu-24.04-arm\n            bundles: deb,rpm,appimage\n",
         "",
       ),
       /matrix must run on/,
