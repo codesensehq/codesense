@@ -290,7 +290,9 @@ launch() {
     if alive "$pid"; then fail "the app is still running 10 s after SIGTERM"; fi
     wait "$pid" || true
     echo "The app exited within 10 s of SIGTERM"
-    plain_log "$log" >"$mode.txt"
+    # The launch's own directories ($mode-home, $mode-runtime) lose their mode in the plain log,
+    # so a path never reads as the app mentioning it.
+    plain_log "$log" | sed "s|$out/$mode-|$out/|g" >"$mode.txt"
     grep -q "webview ready" "$mode.txt" || fail "the log has no webview ready"
     caps_agree listing "$log"
     grep -qE "(^| )secret store: " "$mode.txt" || fail "the log has no secret store: line"
