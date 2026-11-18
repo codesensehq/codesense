@@ -261,6 +261,15 @@ pub fn is_executable(path: &Path) -> bool {
     sys::is_executable(path)
 }
 
+/// Whether this process may run `path` as a program: on unix the effective
+/// user's `access(X_OK)` answer for a regular file, as `exec` decides (a
+/// relative path is taken against the working directory); on Windows
+/// [`is_executable`]. [`is_executable`] stays the check for "is this an
+/// executable file".
+pub fn can_execute(path: &Path) -> bool {
+    sys::can_execute(path)
+}
+
 /// The canonical, absolute form of `path`, with links resolved. On Windows
 /// it has no `\\?\` prefix where the plain form means the same (so text
 /// handed to agents and shells stays usable): `C:\…` for a disk (dunce) and

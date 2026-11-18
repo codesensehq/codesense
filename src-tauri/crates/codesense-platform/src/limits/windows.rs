@@ -4,7 +4,12 @@
 
 use std::ffi::{OsStr, OsString};
 
+use windows_sys::Win32::Foundation::ERROR_TOO_MANY_OPEN_FILES;
+
 use super::Usage;
+
+/// The OS error for a process out of handles.
+pub(super) const TOO_MANY_OPEN_FILES: i32 = ERROR_TOO_MANY_OPEN_FILES as i32;
 
 /// No soft limit to raise: `None`.
 pub fn raise(_wanted: u64) -> Option<(u64, u64)> {

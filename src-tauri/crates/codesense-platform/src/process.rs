@@ -9,6 +9,9 @@
 //! suspended and runs only once it is in the job, so nothing it starts escapes
 //! (this replaces the command's creation flags). A process with no console has
 //! no polite stop there, so [`terminate`] ends the job too.
+//!
+//! A [`ProcessGroup`] is the same group for a process something else started
+//! (a pty child), adopted from its pid and never signalled on drop.
 
 use std::io;
 use std::process::{Child, Command, ExitStatus};
@@ -67,6 +70,18 @@ impl ProcessTree {
     /// Spawn `command` as the root of a new tree.
     pub fn spawn(command: &mut Command) -> io::Result<Self> {
         sys::prepare(command);
+        Self::start(command)
+    }
+
+    /// [`ProcessTree::spawn`] with no console window: on Windows a console
+    /// program started from a windowed one would otherwise open one. The same
+    /// as `spawn` on unix.
+    pub fn spawn_hidden(command: &mut Command) -> io::Result<Self> {
+        sys::prepare_hidden(command);
+        Self::start(command)
+    }
+
+    fn start(command: &mut Command) -> io::Result<Self> {
         let mut child = command.spawn()?;
         match sys::Group::adopt(&child) {
             Ok(group) => Ok(Self {
@@ -143,6 +158,65 @@ pub fn kill_hard(tree: &ProcessTree) -> io::Result<()> {
     tree.group.kill()?;
     tree.closed.store(true, Ordering::Release);
     Ok(())
+}
+
+/// The process group of a process something else started (a pty child), to
+/// signal as a whole. Unlike a [`ProcessTree`] it owns no child and never
+/// signals by itself: dropping it sends nothing.
+///
+/// Unix: the group the process is in, signalled with `kill(-pgid, …)`.
+/// Windows: a Job Object the process is assigned to on adoption, without
+/// kill-on-close, so what it starts from then on is in the group too.
+pub struct ProcessGroup(sys::Group);
+
+impl ProcessGroup {
+    /// The group of the running process `pid`. Unix: `None` when it is in
+    /// this process's own group, which is never ours to signal, or its group
+    /// cannot be read. Windows: always a group.
+    pub fn adopt(pid: Pid) -> io::Result<Option<Self>> {
+        Ok(sys::Group::adopt_pid(pid.0)?.map(Self))
+    }
+
+    /// Ask every process in the group to stop: SIGTERM on unix, which a
+    /// process may ignore; on Windows the job is ended, as by
+    /// [`ProcessGroup::kill`]. A group that is gone is not an error.
+    pub fn terminate(&self) -> io::Result<()> {
+        self.0.terminate()
+    }
+
+    /// Kill every process in the group: SIGKILL on unix, the job ended on
+    /// Windows. A group that is gone is not an error.
+    pub fn kill(&self) -> io::Result<()> {
+        self.0.kill()
+    }
+}
+
+/// Ask the one process `pid` to stop, never its group or what it started:
+/// SIGTERM on unix, `TerminateProcess` on Windows. Pid 0 is refused.
+pub fn terminate_pid(pid: Pid) -> io::Result<()> {
+    if pid.0 == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "pid 0 names no single process",
+        ));
+    }
+    sys::terminate_pid(pid.0)
+}
+
+/// Whether `child` has exited, without reaping it: until it is reaped its pid
+/// (and the group it leads) cannot be reused, so its group can still be
+/// signalled safely. Unix: `waitid` with `WNOWAIT`. Windows: whether its
+/// handle is signalled.
+pub fn exited_unreaped(child: &Child) -> io::Result<bool> {
+    sys::exited_unreaped(child)
+}
+
+/// The process `pid`'s `(process group, terminal foreground process group)`,
+/// raw and signed as the OS reports them (a tpgid of -1: no terminal). Read
+/// from the process table on macOS and Linux; `None` when the process is gone
+/// and on other OSes, which have no such groups.
+pub fn group_and_foreground(pid: Pid) -> Option<(i32, i32)> {
+    sys::group_and_foreground(pid.0)
 }
 
 /// Whether `pid` names a running process. One this user may not inspect

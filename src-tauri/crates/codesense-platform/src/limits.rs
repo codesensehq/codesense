@@ -20,15 +20,21 @@
 //! and [`watch`] do nothing; [`exec_with_limit`] returns an `Unsupported`
 //! error, which no Windows path reaches because nothing passes [`EXEC_ARG`]
 //! there.
+//!
+//! [`is_descriptor_exhaustion`] tells an error that hit the limit, on every OS.
 
 #[cfg(unix)]
 mod unix;
+#[cfg(unix)]
+use self::unix as sys;
 #[cfg(unix)]
 pub use self::unix::{
     child_argv, exec_with_limit, inherit_original_limit, raise, serve_child_limit, usage, watch,
 };
 #[cfg(windows)]
 mod windows;
+#[cfg(windows)]
+use self::windows as sys;
 #[cfg(windows)]
 pub use self::windows::{
     child_argv, exec_with_limit, inherit_original_limit, raise, serve_child_limit, usage, watch,
@@ -116,6 +122,22 @@ pub fn limit_reached(process: &str) -> String {
         "open-file limit reached in {process} (pid {}): {counts}",
         std::process::id()
     )
+}
+
+/// Whether `error`, or any error in its `source()` chain, is this process
+/// running out of descriptors: the OS error `EMFILE` on unix,
+/// `ERROR_TOO_MANY_OPEN_FILES` on Windows, as an [`std::io::Error`] or as the
+/// `code: <n>,` that `openpty` reports it with only in its message.
+pub fn is_descriptor_exhaustion(error: &(dyn std::error::Error + 'static)) -> bool {
+    let code = sys::TOO_MANY_OPEN_FILES;
+    std::iter::successors(Some(error), |cause| cause.source()).any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::raw_os_error)
+            == Some(code)
+            // `openpty` reports its errno only in its message (`{:?}` of it).
+            || str::contains(&cause.to_string(), &format!("code: {code},"))
+    })
 }
 
 #[cfg(test)]
