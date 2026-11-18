@@ -195,6 +195,13 @@ const COMMANDS: &[&str] = &[
     "\u{16d70}>x rm {p}",
     "cat \u{16d70}< {p}",
     "A\u{e9}=/bin/rm B\u{105c0}=1 rm {p}",
+    "cat '<' '>' {p}",
+    "cat '<' '>' {p} \u{e9}",
+    "A\u{323b0}=/bin/rm cat {p}",
+    "cat {p}\u{663}>x",
+    "cat {p}\u{1e4f0}>x",
+    "cat {p}\u{e9}9>x",
+    "echo \u{e9} > {p}",
 ];
 
 /// The corpus: the moved tests' cases plus the generated variants, each in every encoding.

@@ -303,32 +303,27 @@ const PREFIX: &[&str] = &[
     "sudo", "env", "command", "exec", "time", "nohup", "nice", "xargs",
 ];
 
-/// The paths a Bash command reads, word for word as the script finds them. A path that is only
-/// written, created, deleted or the destination of a copy is not read.
+/// The paths a Bash command reads. A path that is only written, created, deleted or the
+/// destination of a copy is not read. Two invariants, one per kind of segment:
 ///
-/// The script's `\d` and `\w` follow its Perl's Unicode version, which the `regex` crate's need
-/// not match: one may class a newer letter or digit as one and the other not, and that moves the
-/// verb (`A<new letter>=1 rm x` is an assignment then `rm`, or a verb that reads `x`), and a
-/// command can mix letters from different versions. So a segment holding any non-ASCII letter or
-/// digit is not parsed for its verb: every word in it that is not a write target counts as read,
-/// with redirections spaced by either meaning of a digit. That reads at least what any version
-/// of the script reads. An all-ASCII segment means the same to every version and is parsed
-/// exactly. Splitting words keeps Unicode `\s`.
+/// - An all-ASCII segment is read exactly as the script's loop reads it: on ASCII, `\d`, `\w`
+///   and `\s` mean the same in every Perl.
+/// - A segment holding any character at or above 0x80 is read as a superset of every reading
+///   any Perl could make of it, whatever its Unicode tables: every word counts as read (write
+///   targets and a write-only verb's operands too), split with and without redirections, and
+///   with each way of handing trailing digits or non-ASCII characters to a redirection. It
+///   relies on no Unicode property but White_Space, which splitting words needs anyway. Such a
+///   segment may be denied where the script allows it.
 fn bash_reads(cmd: &str) -> Vec<String> {
     static SEGMENT: LazyLock<Regex> = LazyLock::new(|| regex(r"&&|\|\||;|\||\n"));
-    static NON_ASCII_WORD: LazyLock<Regex> = LazyLock::new(|| regex(r"[\w&&[^\x00-\x7F]]"));
-    static REDIRECT: LazyLock<Regex> = LazyLock::new(|| regex(r"(\d*[<>]+&?)"));
-    static ASCII_REDIRECT: LazyLock<Regex> = LazyLock::new(|| regex(r"([0-9]*[<>]+&?)"));
     static OPTION_VALUE: LazyLock<Regex> = LazyLock::new(|| regex(r"^-[^=]*=(.+)$"));
 
     let mut read: Vec<String> = Vec::new();
     for segment in SEGMENT.split(cmd) {
-        if NON_ASCII_WORD.is_match(segment) {
-            for redirect in [&*REDIRECT, &*ASCII_REDIRECT] {
-                read.extend(every_word_read(&redirect.replace_all(segment, " ${1} ")));
-            }
+        if segment.is_ascii() {
+            read.extend(exact_reads(segment));
         } else {
-            read.extend(parsed_reads(&REDIRECT.replace_all(segment, " ${1} ")));
+            read.extend(superset_reads(segment));
         }
     }
     // A value after = in an option (--env-file=FILE) is an operand too.
@@ -340,38 +335,27 @@ fn bash_reads(cmd: &str) -> Vec<String> {
         .collect()
 }
 
+/// The script's words: split on whitespace, quotes, backquotes and parentheses.
 static WORDS: LazyLock<Regex> = LazyLock::new(|| regex(r#"[\s"'`()]+"#));
-static WRITE: LazyLock<Regex> = LazyLock::new(|| regex(r"^\d*>"));
 
-/// The words of a segment (redirections spaced out), past any `>` and its target.
-fn words(spaced: &str) -> impl Iterator<Item = &str> {
-    let mut words = WORDS.split(spaced).filter(|w| !w.is_empty());
-    std::iter::from_fn(move || loop {
-        let w = words.next()?;
-        if !WRITE.is_match(w) {
-            return Some(w);
-        }
-        // A write target.
-        words.next();
-    })
-}
-
-/// Every word of a segment but its write targets: what any reading of it could read.
-fn every_word_read(spaced: &str) -> Vec<String> {
-    words(spaced).map(str::to_string).collect()
-}
-
-/// What the script reads in one all-ASCII segment: redirected reads, and the operands its verb
-/// reads.
-fn parsed_reads(spaced: &str) -> Vec<String> {
+/// What the script reads in one all-ASCII segment, statement for statement as its loop.
+fn exact_reads(segment: &str) -> Vec<String> {
+    static REDIRECT: LazyLock<Regex> = LazyLock::new(|| regex(r"(\d*[<>]+&?)"));
+    static WRITE: LazyLock<Regex> = LazyLock::new(|| regex(r"^\d*>"));
     static READ: LazyLock<Regex> = LazyLock::new(|| regex(r"^\d*<"));
     static ASSIGN: LazyLock<Regex> = LazyLock::new(|| regex(r"^[A-Za-z_]\w*="));
 
+    let spaced = REDIRECT.replace_all(segment, " ${1} ");
+    let mut words = WORDS.split(&spaced).filter(|w| !w.is_empty());
     let mut read: Vec<String> = Vec::new();
-    let mut words = words(spaced);
     let mut verb: Option<std::borrow::Cow<'_, str>> = None;
     let mut operands: Vec<&str> = Vec::new();
     while let Some(w) = words.next() {
+        if WRITE.is_match(w) {
+            // A write target.
+            words.next();
+            continue;
+        }
         if READ.is_match(w) {
             // A redirected read.
             read.extend(words.next().map(str::to_string));
@@ -383,9 +367,10 @@ fn parsed_reads(spaced: &str) -> Vec<String> {
         }
         if verb.is_none() {
             let base = basename(w);
-            if !PREFIX.contains(&&*base) {
-                verb = Some(base);
+            if PREFIX.contains(&&*base) {
+                continue;
             }
+            verb = Some(base);
             continue;
         }
         operands.push(w);
@@ -404,6 +389,28 @@ fn parsed_reads(spaced: &str) -> Vec<String> {
         return read;
     }
     read.extend(operands.into_iter().map(str::to_string));
+    read
+}
+
+/// Every word any Perl could read in a segment holding non-ASCII text. The script spaces out
+/// `\d*[<>]+&?` before splitting, and which characters its `\d` takes depends on its Unicode
+/// version; a digit is ASCII `0-9` or non-ASCII. So the words are the plain split, the split
+/// that also cuts at `[<>]+&?`, and each of those with any number of characters dropped from
+/// its trailing run of `0-9` and non-ASCII characters.
+fn superset_reads(segment: &str) -> Vec<String> {
+    static CUT: LazyLock<Regex> = LazyLock::new(|| regex(r#"(?:[\s"'`()]|[<>]+&?)+"#));
+
+    let mut read: Vec<String> = Vec::new();
+    for word in WORDS.split(segment).chain(CUT.split(segment)) {
+        let mut rest = word;
+        while !rest.is_empty() {
+            read.push(rest.to_string());
+            match rest.char_indices().next_back() {
+                Some((i, c)) if c.is_ascii_digit() || !c.is_ascii() => rest = &rest[..i],
+                _ => break,
+            }
+        }
+    }
     read
 }
 
@@ -708,6 +715,27 @@ pub(crate) mod tests {
 
     /// The script reads JSON nested up to 512 deep and numbers of any size; past that depth it
     /// cannot parse the input and allows it.
+    /// An all-ASCII segment is read as the script's loop reads it, so the word after `<` is read
+    /// whatever it looks like. A segment with non-ASCII text is read as a superset of any Perl's
+    /// reading: a trailing digit any Unicode version may hand to a redirection is dropped as well
+    /// as kept, and a write target counts too (the last row is denied where the script allows
+    /// it, the accepted cost). The characters arrive as `\u` escapes.
+    #[test]
+    fn a_segment_is_read_exactly_or_as_a_superset() {
+        for command in [
+            r"cat '<' '>' /repo/.env",
+            r"cat '<' '>' /repo/.env \u00e9",
+            r"A\ud888\udfb0=/bin/rm cat /repo/.env",
+            r"cat /repo/.env\u0663>x",
+            r"cat /repo/.env\ud839\udcf0>x",
+            r"cat /repo/.env\u00e99>x",
+            r"echo \u00e9 > /repo/.env",
+        ] {
+            let input = format!(r#"{{"tool_name":"Bash","tool_input":{{"command":"{command}"}}}}"#);
+            assert!(secret_guard(input.as_bytes()).is_some(), "{command}");
+        }
+    }
+
     #[test]
     fn deep_nesting_and_huge_numbers_are_read_as_the_script_reads_them() {
         let read = |extra: &str| {
