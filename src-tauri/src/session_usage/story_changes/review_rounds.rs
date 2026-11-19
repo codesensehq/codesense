@@ -243,7 +243,7 @@ pub(super) fn team_of_story_file(
 
 /// That the story's team is not known here, worded for `os`.
 fn no_team_for(os: &str) -> &'static str {
-    if machine_wording::machine_kind(os) == "Mac" {
+    if machine_wording::is_mac(os) {
         "the story's team is not known on this Mac, so its review-rounds markers cannot be read"
     } else {
         "the story's team is not known on this computer, so its review-rounds markers cannot be read"
@@ -256,7 +256,7 @@ pub(super) fn no_team() -> &'static str {
 
 /// That the story's team declares no review-rounds collection here, worded for `os`.
 fn no_collection_for(os: &str) -> &'static str {
-    if machine_wording::machine_kind(os) == "Mac" {
+    if machine_wording::is_mac(os) {
         "the story's team declares no review-rounds collection on this Mac"
     } else {
         "the story's team declares no review-rounds collection on this computer"

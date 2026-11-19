@@ -18,8 +18,6 @@ const PRIVATE_FILE: &str = "machine-private-bindings-v1.json";
 const SCHEMA: &str = "codesense.machine.private-account/v1";
 /// A private declaration whose bytes no longer match what this Mac recorded,
 /// worded for `os`.
-/// A private declaration whose bytes no longer match what this machine recorded,
-/// worded for `os`.
 fn private_declaration_changed_for(os: &str) -> String {
     format!(
         "This private machine's configuration changed outside {}. Remove it and set it up again, or restore the previous configuration.",

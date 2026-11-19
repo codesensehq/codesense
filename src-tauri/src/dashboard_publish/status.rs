@@ -134,11 +134,13 @@ pub struct Capability {
     pub available: bool,
     pub detail: String,
 }
+
 /// When a published dashboard's live data is available, worded for `os`.
 fn live_data_available_for(os: &str) -> &'static str {
-    match machine_wording::machine_kind(os) {
-        "Mac" => "Available while this Mac is online",
-        _ => "Available while this computer is online",
+    if machine_wording::is_mac(os) {
+        "Available while this Mac is online"
+    } else {
+        "Available while this computer is online"
     }
 }
 

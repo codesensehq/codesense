@@ -18,9 +18,10 @@ use crate::shared::machine_wording;
 /// Why a Claude session's usage is missing when its logs go elsewhere, worded for `os`. Two
 /// literals rather than a format, so the reason stays `&'static str`.
 pub(crate) fn usage_redirected_for(os: &str) -> &'static str {
-    match machine_wording::machine_kind(os) {
-        "Mac" => "usage not recorded: this Mac's managed Claude settings send session telemetry to your organization's collector",
-        _ => "usage not recorded: this computer's managed Claude settings send session telemetry to your organization's collector",
+    if machine_wording::is_mac(os) {
+        "usage not recorded: this Mac's managed Claude settings send session telemetry to your organization's collector"
+    } else {
+        "usage not recorded: this computer's managed Claude settings send session telemetry to your organization's collector"
     }
 }
 

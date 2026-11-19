@@ -77,6 +77,19 @@ const SYNC_BACKOFF: [std::time::Duration; 5] = [
     std::time::Duration::from_secs(300),
 ];
 
+/// The local terminal server is not running, named in "Wakes are unavailable
+/// on …" for `os`.
+fn local_server_down_for(os: &str) -> HostLookup {
+    HostLookup::Unavailable {
+        machine: machine_wording::machine_noun(os).into(),
+        detail: "its terminal server is not running".into(),
+    }
+}
+
+fn local_server_down() -> HostLookup {
+    local_server_down_for(machine_wording::RUNNING_OS)
+}
+
 /// This Mac's session server, or a connected machine's.
 struct AppResolver<R: Runtime>(AppHandle<R>);
 
@@ -89,10 +102,7 @@ impl<R: Runtime> HostResolver for AppResolver<R> {
                 .and_then(|state| state.connected())
             {
                 Some(client) => HostLookup::Ready(client),
-                None => HostLookup::Unavailable {
-                    machine: machine_wording::machine_noun(machine_wording::RUNNING_OS).into(),
-                    detail: "its terminal server is not running".into(),
-                },
+                None => local_server_down(),
             };
         }
         let Some(manager) = self.0.try_state::<HostConnectionManager>() else {
@@ -253,6 +263,24 @@ fn record_wake_run(outcome: &super::RoutedOutcome) {
                 outcome,
                 &crate::routines::wake::NoNotify,
             ),
+        }
+    }
+}
+
+#[cfg(test)]
+mod machine_wording_tests {
+    use super::*;
+
+    #[test]
+    fn machine_wording_follows_the_os() {
+        for (os, name) in [("macos", "This Mac"), ("linux", "This computer")] {
+            let HostLookup::Unavailable { machine, detail } = local_server_down_for(os) else {
+                panic!("{os}: not unavailable");
+            };
+            assert_eq!(
+                (machine.as_str(), detail.as_str()),
+                (name, "its terminal server is not running")
+            );
         }
     }
 }

@@ -208,9 +208,10 @@ impl NotReady {
 
 /// That the staged update is no longer offered here, worded for `os`.
 fn update_withdrawn_for(os: &str) -> &'static str {
-    match machine_wording::machine_kind(os) {
-        "Mac" => "This update is no longer offered to this Mac.",
-        _ => "This update is no longer offered to this computer.",
+    if machine_wording::is_mac(os) {
+        "This update is no longer offered to this Mac."
+    } else {
+        "This update is no longer offered to this computer."
     }
 }
 

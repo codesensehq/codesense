@@ -143,7 +143,7 @@ mod tests {
             agent: None,
             machine_id: None,
             workspace_handle: None,
-            machine: Some(crate::mcp::terminal_tabs::THIS_MAC.into()),
+            machine: Some("This Mac".into()),
             unread: Some(0),
             oldest_unread_at: None,
             mail_notice: None,
@@ -204,10 +204,56 @@ mod tests {
         );
     }
 
-    /// who_am_i's `machine` for a local tab is the value "This Mac", on every OS.
+    /// who_am_i's `machine` for a local tab is the value "This Mac", on every OS:
+    /// read from a live local layout the way list_sessions reads it.
     #[test]
     fn a_local_tab_is_on_this_mac_on_every_os() {
-        let me = who_am_i_in(&rows(), "pty-hand").unwrap();
+        use crate::commands::dashboard_launch::{derive_status, LaunchMeta, SessionRow};
+        use crate::commands::machines::LOCAL_MACHINE_ID;
+        use crate::mcp::session_list::session_list_rows_with_tabs;
+        use crate::mcp::terminal_tabs::{tests::reply, LiveTabs};
+        let row = SessionRow {
+            chat_workspace_id: None,
+            group_unread: 0,
+            group_read_id: 0,
+            output_run_id: None,
+            handle: "pty-local".into(),
+            session_id: Some("pty-local".into()),
+            kind: "registered".into(),
+            alive: true,
+            status: derive_status(true, None, false),
+            backgrounded: false,
+            started_with: None,
+            started_at_ms: None,
+            launcher: None,
+            account_provenance: None,
+            provenance: None,
+            last_output_ms: None,
+            meta: LaunchMeta::default(),
+            workspace: None,
+            agent_revision: None,
+            deadline_at_ms: None,
+            expiring: false,
+            machine_id: None,
+            launch_team_key: None,
+        };
+        let live = LiveTabs::of(
+            &[reply(
+                LOCAL_MACHINE_ID,
+                &[(
+                    "acme:default|root:repo",
+                    &[("pty-local", "Terminal 2", None)],
+                )],
+            )],
+            Default::default(),
+        );
+        let listed = session_list_rows_with_tabs(
+            vec![row],
+            |_| None,
+            None,
+            |row| live.view(&row.handle, row.session_id.as_deref(), None),
+        );
+        let me = who_am_i_in(&listed, "pty-local").unwrap();
         assert_eq!(me.machine.as_deref(), Some("This Mac"));
     }
 

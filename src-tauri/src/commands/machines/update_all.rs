@@ -1606,7 +1606,8 @@ mod tests {
             machines: vec!["local".into()],
             current: None,
             outcomes: vec![UpdateOutcome {
-                label: "This Mac".into(),
+                // What `label_of` gives the local machine.
+                label: "local".into(),
                 message: "This Mac: 2 tabs reopened.".into(),
                 ..outcome("local", OutcomeKind::Updated, false, false)
             }],

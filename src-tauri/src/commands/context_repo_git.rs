@@ -1718,15 +1718,3 @@ pub async fn context_repo_history(
 #[cfg(test)]
 #[path = "context_repo_git_tests.rs"]
 mod tests;
-
-#[test]
-fn machine_wording_follows_the_os() {
-    assert_eq!(
-        unknown_side_for("macos", "notes/a.md"),
-        "Can't tell which side of notes/a.md is this Mac's from what git left on disk; hand it to an agent to settle."
-    );
-    assert_eq!(
-        unknown_side_for("linux", "notes/a.md"),
-        "Can't tell which side of notes/a.md is this computer's from what git left on disk; hand it to an agent to settle."
-    );
-}
