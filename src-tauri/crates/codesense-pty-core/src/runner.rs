@@ -576,21 +576,20 @@ fn open_local_session(spec: PtySpec) -> Result<PtySession, PtyRunnerError> {
             PtyRunnerError::Message(format!("Failed to spawn: {}", plainly(&*error)))
         })?;
     let mut session = PtySession::new(pair.master, child, reader, writer);
-    // A Windows pseudo console asks where the cursor is as it starts, and
-    // serves its child only once answered: answer it here, so no session
-    // waits on a viewer (see `cursor_reply`). A unix pty asks nothing.
+    // Two things a Windows pseudo console needs that a unix pty does not:
+    // - It asks where the cursor is as it starts, and serves its child only
+    //   once answered: answer it here, so no session waits on a viewer (see
+    //   `cursor_reply`). A unix pty asks nothing.
+    // - It keeps its output pipe open after its child exits, until the
+    //   console is closed, so the reader would never reach end-of-stream and
+    //   the exit would never be reported. Close it once the child is gone. A
+    //   unix pty's reader reaches end-of-stream by itself, and closing its
+    //   master early would drop output still unread.
     if std::env::consts::OS == "windows" {
         let writer = session.writer();
         session.reader = session.reader.take().map(|reader| {
             Box::new(cursor_reply::CursorReply::new(reader, writer)) as Box<dyn Read + Send>
         });
-    }
-    // A Windows pseudo console keeps its output pipe open after its child
-    // exits, until the console is closed, so the reader would never reach
-    // end-of-stream and the exit would never be reported. Close it once the
-    // child is gone. A unix pty's reader reaches end-of-stream by itself, and
-    // closing its master early would drop output still unread.
-    if std::env::consts::OS == "windows" {
         let child = session.child();
         let master = Arc::downgrade(&session.master);
         let watcher = std::thread::Builder::new()
