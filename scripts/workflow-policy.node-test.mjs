@@ -1544,29 +1544,38 @@ test("the cache prune deletes all but the newest macOS build cache per part", (t
     .map((row) => row.join("\t"))
     .join("\n");
   fs.writeFileSync(path.join(dir, "listing"), `${listing}\n`);
-  // The listing comes back already through --jq; a delete is logged, and cache 12 was evicted
-  // between the listing and its delete (gh fails with a 404).
+  // The listing comes back already through --jq; a delete is logged, and the one named by FAIL_ID
+  // fails with FAIL_STATUS.
   fs.writeFileSync(
     path.join(bin, "gh"),
-    `#!/bin/bash\nif [[ "$*" == *DELETE* ]]; then echo "\${@: -1}" >> "${dir}/deleted"; if [[ "$*" == */12 ]]; then echo "HTTP 404: Not Found" >&2; exit 1; fi; else cat "${dir}/listing"; fi\n`,
+    `#!/bin/bash\nif [[ "$*" == *DELETE* ]]; then echo "\${@: -1}" >> "${dir}/deleted"; if [[ -n "$FAIL_ID" && "$*" == */$FAIL_ID ]]; then echo "gh: HTTP $FAIL_STATUS" >&2; exit 1; fi; else cat "${dir}/listing"; fi\n`,
     { mode: 0o755 },
   );
-  const output = execFileSync(
-    "bash",
-    ["--noprofile", "--norc", "-eo", "pipefail", "-c", step.run],
-    {
+  const prune = (failure = {}) => {
+    fs.rmSync(path.join(dir, "deleted"), { force: true });
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", step.run], {
       cwd: dir,
       encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GH_REPO: "o/r" },
-    },
-  );
-  assert.match(output, /::notice::cache 12 already gone/);
-  assert.deepEqual(fs.readFileSync(path.join(dir, "deleted"), "utf8").trim().split("\n").sort(), [
-    "repos/o/r/actions/caches/11",
-    "repos/o/r/actions/caches/12",
-    "repos/o/r/actions/caches/21",
-  ]);
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GH_REPO: "o/r", ...failure },
+    });
+    const deleted = fs.readFileSync(path.join(dir, "deleted"), "utf8").trim().split("\n").sort();
+    return { status: result.status, stdout: result.stdout, deleted };
+  };
+  const stale = ["11", "12", "21"].map((id) => `repos/o/r/actions/caches/${id}`);
+  const clean = prune();
+  assert.equal(clean.status, 0);
+  assert.deepEqual(clean.deleted, stale);
+  // A cache evicted between the listing and its delete is already gone: the prune goes on.
+  const evicted = prune({ FAIL_ID: "12", FAIL_STATUS: "404" });
+  assert.equal(evicted.status, 0);
+  assert.match(evicted.stdout, /::notice::cache 12 already gone/);
+  assert.deepEqual(evicted.deleted, stale);
+  // Any other failure, a lost permission or a server error, fails the step.
+  for (const status of ["403", "500"]) {
+    const failed = prune({ FAIL_ID: "12", FAIL_STATUS: status });
+    assert.notEqual(failed.status, 0, status);
+    assert.doesNotMatch(failed.stdout, /already gone/, status);
+  }
 });
 
 const flakyIssues = good

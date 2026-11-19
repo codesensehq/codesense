@@ -387,9 +387,13 @@ jobs:
           # Newest first; the part is the key's fourth field (rust-macos-build-<part>-...).
           sort -t $'\t' -k3,3r caches.tsv | awk -F '\t' '{ split($2, k, "-"); if (seen[k[4]]++) print $1 }' > stale.txt
           echo "$(wc -l < caches.tsv) build caches; deleting $(wc -l < stale.txt)"
-          # An entry GitHub evicted since the listing is already gone.
+          # An entry GitHub evicted since the listing is already gone (404); any other failure fails.
           while read -r id; do
-            gh api -X DELETE "repos/$GH_REPO/actions/caches/$id" || echo "::notice::cache $id already gone"
+            if ! gh api -X DELETE "repos/$GH_REPO/actions/caches/$id" 2> error.txt; then
+              cat error.txt >&2
+              grep -q 'HTTP 404' error.txt || exit 1
+              echo "::notice::cache $id already gone"
+            fi
           done < stale.txt
 
   rust-macos-test:
