@@ -104,101 +104,106 @@ fn pin_and_unsupported_platform_never_fetches() {
     assert_eq!(fetch.calls.load(Ordering::SeqCst), 0);
     assert!(!home.path().join("bin/git-ai").exists());
 }
-#[test]
-fn every_target_pin_parses_and_names_its_own_platform() {
-    for (os, arch, platform, _) in TARGET_PINS {
-        let pin = pin_for(os, arch).unwrap_or_else(|| panic!("{os} {arch}"));
-        assert_eq!(pin.platform, platform, "{os} {arch}");
-        assert_eq!(pin.resource, "resources/git-ai");
+/// The pure tests of the pins and of `supported`, which the Linux CI job selects by this
+/// module's path, so a test added or renamed here runs there too.
+mod pins {
+    use super::*;
+    #[test]
+    fn every_target_pin_parses_and_names_its_own_platform() {
+        for (os, arch, platform, _) in TARGET_PINS {
+            let pin = pin_for(os, arch).unwrap_or_else(|| panic!("{os} {arch}"));
+            assert_eq!(pin.platform, platform, "{os} {arch}");
+            assert_eq!(pin.resource, "resources/git-ai");
+        }
     }
-}
-#[test]
-fn every_git_ai_pin_file_has_a_target_and_every_target_a_file() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("pins");
-    let mut files: Vec<String> = std::fs::read_dir(&dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-        .filter(|name| name.starts_with("git-ai-") && name.ends_with(".pin"))
-        .collect();
-    files.sort();
-    let mut targets: Vec<String> = TARGET_PINS
-        .iter()
-        .map(|(_, _, platform, _)| format!("git-ai-{platform}.pin"))
-        .collect();
-    targets.sort();
-    assert_eq!(files, targets);
-}
-#[test]
-fn linux_targets_pin_the_cs5_release() {
-    for (arch, asset, sha256) in [
-        (
-            "x86_64",
-            "git-ai-linux-x86_64",
-            "93c2f0e10b9242503ab53043d1f27ce360bc1dc7514c7b4a270cafd5a1b8b7c8",
-        ),
-        (
-            "aarch64",
-            "git-ai-linux-arm64",
-            "e111e154d00b0fe29dee4b9967f555888a26211bc2ff25bc8df5997ecf28a5ce",
-        ),
-    ] {
-        let pin = pin_for("linux", arch).unwrap();
-        assert_eq!(pin.expected_version, "1.7.5-cs.5", "{arch}");
-        assert_eq!(pin.asset, asset);
-        assert_eq!(pin.sha256, sha256);
+    #[test]
+    fn every_git_ai_pin_file_has_a_target_and_every_target_a_file() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("pins");
+        let mut files: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|name| name.starts_with("git-ai-") && name.ends_with(".pin"))
+            .collect();
+        files.sort();
+        let mut targets: Vec<String> = TARGET_PINS
+            .iter()
+            .map(|(_, _, platform, _)| format!("git-ai-{platform}.pin"))
+            .collect();
+        targets.sort();
+        assert_eq!(files, targets);
     }
-}
-#[test]
-fn a_target_without_a_pin_has_none() {
-    for (os, arch) in [
-        ("macos", "x86_64"),
-        ("linux", "riscv64"),
-        ("freebsd", "x86_64"),
-    ] {
-        assert!(pin_for(os, arch).is_none(), "{os} {arch}");
+    #[test]
+    fn linux_targets_pin_the_cs5_release() {
+        for (arch, asset, sha256) in [
+            (
+                "x86_64",
+                "git-ai-linux-x86_64",
+                "93c2f0e10b9242503ab53043d1f27ce360bc1dc7514c7b4a270cafd5a1b8b7c8",
+            ),
+            (
+                "aarch64",
+                "git-ai-linux-arm64",
+                "e111e154d00b0fe29dee4b9967f555888a26211bc2ff25bc8df5997ecf28a5ce",
+            ),
+        ] {
+            let pin = pin_for("linux", arch).unwrap();
+            assert_eq!(pin.expected_version, "1.7.5-cs.5", "{arch}");
+            assert_eq!(pin.asset, asset);
+            assert_eq!(pin.sha256, sha256);
+        }
     }
-}
-#[test]
-fn the_running_pin_is_the_hosts_or_else_the_macos_one() {
-    let (platform, version, asset) = match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("linux", "x86_64") => ("linux-x86_64", "1.7.5-cs.5", "git-ai-linux-x86_64"),
-        ("linux", "aarch64") => ("linux-aarch64", "1.7.5-cs.5", "git-ai-linux-arm64"),
-        ("windows", "x86_64") => ("windows-x86_64", "1.7.5-cs.5", "git-ai-windows-x86_64.exe"),
-        ("windows", "aarch64") => ("windows-arm64", "1.7.5-cs.5", "git-ai-windows-arm64.exe"),
-        // macOS arm64, and any target without a pin of its own.
-        _ => ("macos-arm64", "1.7.5-cs.4", "git-ai-macos-arm64"),
-    };
-    assert_eq!(PIN.platform, platform);
-    assert_eq!(PIN.expected_version, version);
-    assert_eq!(PIN.asset, asset);
-}
-#[test]
-fn a_pin_for_another_platform_is_refused() {
-    let macos = include_str!("../../pins/git-ai-macos-arm64.pin");
-    assert!(Pin::parse(macos, "macos-arm64").is_ok());
-    assert_eq!(
-        Pin::parse(macos, "linux-x86_64").err(),
-        Some("pin platform does not match its target")
-    );
-}
-#[test]
-fn supported_needs_a_pin_and_the_capability() {
-    for (os, arch, expected) in [
-        ("macos", "aarch64", true),
-        ("macos", "x86_64", false),
-        ("linux", "x86_64", true),
-        ("linux", "aarch64", true),
-        ("linux", "riscv64", false),
-        // A pin, but the capability is off.
-        ("windows", "x86_64", false),
-        ("windows", "aarch64", false),
-        ("freebsd", "x86_64", false),
-    ] {
-        assert_eq!(supported(os, arch), expected, "{os} {arch}");
+    #[test]
+    fn a_target_without_a_pin_has_none() {
+        for (os, arch) in [
+            ("macos", "x86_64"),
+            ("linux", "riscv64"),
+            ("freebsd", "x86_64"),
+        ] {
+            assert!(pin_for(os, arch).is_none(), "{os} {arch}");
+        }
     }
-    // The Windows targets above have a pin, so the capability alone turns them off.
-    for arch in ["x86_64", "aarch64"] {
-        assert!(pin_for("windows", arch).is_some(), "windows {arch}");
+    #[test]
+    fn the_running_pin_is_the_hosts_or_else_the_macos_one() {
+        let (platform, version, asset) = match (std::env::consts::OS, std::env::consts::ARCH) {
+            ("linux", "x86_64") => ("linux-x86_64", "1.7.5-cs.5", "git-ai-linux-x86_64"),
+            ("linux", "aarch64") => ("linux-aarch64", "1.7.5-cs.5", "git-ai-linux-arm64"),
+            ("windows", "x86_64") => ("windows-x86_64", "1.7.5-cs.5", "git-ai-windows-x86_64.exe"),
+            ("windows", "aarch64") => ("windows-arm64", "1.7.5-cs.5", "git-ai-windows-arm64.exe"),
+            // macOS arm64, and any target without a pin of its own.
+            _ => ("macos-arm64", "1.7.5-cs.4", "git-ai-macos-arm64"),
+        };
+        assert_eq!(PIN.platform, platform);
+        assert_eq!(PIN.expected_version, version);
+        assert_eq!(PIN.asset, asset);
+    }
+    #[test]
+    fn a_pin_for_another_platform_is_refused() {
+        let macos = include_str!("../../pins/git-ai-macos-arm64.pin");
+        assert!(Pin::parse(macos, "macos-arm64").is_ok());
+        assert_eq!(
+            Pin::parse(macos, "linux-x86_64").err(),
+            Some("pin platform does not match its target")
+        );
+    }
+    #[test]
+    fn supported_needs_a_pin_and_the_capability() {
+        for (os, arch, expected) in [
+            ("macos", "aarch64", true),
+            ("macos", "x86_64", false),
+            ("linux", "x86_64", true),
+            ("linux", "aarch64", true),
+            ("linux", "riscv64", false),
+            // A pin, but the capability is off.
+            ("windows", "x86_64", false),
+            ("windows", "aarch64", false),
+            ("freebsd", "x86_64", false),
+        ] {
+            assert_eq!(supported(os, arch), expected, "{os} {arch}");
+        }
+        // The Windows targets above have a pin, so the capability alone turns them off.
+        for arch in ["x86_64", "aarch64"] {
+            assert!(pin_for("windows", arch).is_some(), "windows {arch}");
+        }
     }
 }
 #[test]

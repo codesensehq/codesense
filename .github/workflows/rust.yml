@@ -633,10 +633,11 @@ jobs:
         run: cargo nextest run --profile ci --locked -p codesense --lib --no-run
       - name: Test the git-ai pins and the capability table
         # The pure tests of the pin each target installs and of where git-ai and the other
-        # capabilities are on, so Linux checks the pin and answer its own target runs with.
+        # capabilities are on, so Linux checks the pin and answer its own target runs with. Each
+        # is selected by its module, so a test added or renamed there runs here too.
         run: >-
           cargo nextest run --profile ci --locked -p codesense --lib --retries 0
-          -E 'test(/^platform_caps::tests::/) | test(/^attribution::install::tests::(every_target_pin_parses_and_names_its_own_platform|every_git_ai_pin_file_has_a_target_and_every_target_a_file|linux_targets_pin_the_cs5_release|a_target_without_a_pin_has_none|the_running_pin_is_the_hosts_or_else_the_macos_one|a_pin_for_another_platform_is_refused|supported_needs_a_pin_and_the_capability)$/)'
+          -E 'test(/^platform_caps::tests::/) | test(/^attribution::install::tests::pins::/)'
       - name: Test the credential store against Secret Service
         # A private session bus; the script unlocks the keyring, checks it, and runs the tests.
         run: dbus-run-session -- bash scripts/run-secret-service-tests.sh
