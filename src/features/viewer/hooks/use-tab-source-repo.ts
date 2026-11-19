@@ -27,8 +27,9 @@ export type { TabSourceFolder, TabSourceRepo, TabSourceResolution };
  *     when resolved to a non-git dir, a `TabSourceRepo` otherwise. The Diff
  *     icon waits for `repo != null` so a non-git tab never flashes it.
  *
- * The `story` kind short-circuits the repo signal — its cwd is a worktree by
- * construction, no round-trip needed. Kinds that aren't `diffCapable` (`epic`)
+ * The `story` kind seeds the repo signal while the tab is at the workspace's
+ * own folder (a worktree root by construction), so the Diff icon needs no
+ * round-trip there; after a `cd` it waits for the resolver like any tab. Kinds that aren't `diffCapable` (`epic`)
  * skip the resolver entirely and report `repo: null`.
  *
  * DESIGN-remote-source.md §3.4 — remote branch. When
