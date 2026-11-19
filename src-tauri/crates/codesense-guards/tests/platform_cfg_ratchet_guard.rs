@@ -1684,6 +1684,7 @@ fn the_passing_fixture_scans_as_expected() {
             ("src/mac_ui.rs", 1),
             ("src/main.rs", 1),
             ("src/orphan.rs", 1),
+            ("src/test_fixture.rs", 1),
             ("src/unix_bits.rs", 3),
         ]),
         "the platform crate, vendor/ and every test-only file are skipped (bin roots and `#[path]` in an \
