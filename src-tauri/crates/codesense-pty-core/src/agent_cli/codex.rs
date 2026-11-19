@@ -2187,6 +2187,16 @@ mod tests {
     }
 
     #[test]
+    fn cx4_native_record_reads_a_rollout_with_a_second_name() {
+        let home = tempfile::tempdir().unwrap();
+        let file = cx4_write(home.path(), CX4_ID, CX4_ID, CX4_RECORD);
+        std::fs::hard_link(&file, home.path().join("kept.jsonl")).unwrap();
+        let read = Codex.output().session_record.unwrap();
+        let record = read(home.path(), CX4_ID).expect("only a link is refused, not a link count");
+        assert_eq!(record.session_id, CX4_ID);
+    }
+
+    #[test]
     fn cx4_output_declares_a_captured_session_record() {
         let output = Codex.output();
         assert!(output
@@ -2614,6 +2624,64 @@ mod tests {
             .parse()
             .unwrap();
         assert_eq!(value["hooks"]["state"].as_table().unwrap().len(), 8);
+    }
+
+    #[test]
+    fn cx2_a_symlinked_home_the_user_owns_keeps_its_trust() {
+        let real = tempfile::tempdir().unwrap();
+        let links = tempfile::tempdir().unwrap();
+        let home = links.path().join("codex-home");
+        std::os::unix::fs::symlink(real.path(), &home).unwrap();
+        let grants = vec![("owned:linked".to_owned(), "hash-linked".to_owned())];
+        save_hook_trust(&home, &grants).unwrap();
+        let value: toml::Value = std::fs::read_to_string(real.path().join("config.toml"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            value["hooks"]["state"]["owned:linked"]["trusted_hash"].as_str(),
+            Some("hash-linked")
+        );
+        let lock = std::fs::File::open(real.path().join(".codesense-hook-trust.lock")).unwrap();
+        assert!(
+            codesense_platform::fs::is_owner_only(&lock).unwrap(),
+            "the trust lock is private"
+        );
+    }
+
+    #[test]
+    fn cx2_trust_refuses_a_linked_config_or_lock_without_damage() {
+        let grants = vec![("owned:x".to_owned(), "hash-x".to_owned())];
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join("config.toml");
+        let other = home.path().join("other.toml");
+        std::fs::write(&other, "model=\"shared\"\n").unwrap();
+        std::fs::hard_link(&other, &config).unwrap();
+        assert!(
+            save_hook_trust(home.path(), &grants).is_err(),
+            "a config with a second name"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&other).unwrap(),
+            "model=\"shared\"\n"
+        );
+
+        let home = tempfile::tempdir().unwrap();
+        let lock = home.path().join(".codesense-hook-trust.lock");
+        let other = home.path().join("other.lock");
+        std::fs::write(&other, "").unwrap();
+        std::fs::hard_link(&other, &lock).unwrap();
+        assert!(
+            save_hook_trust(home.path(), &grants).is_err(),
+            "a lock with a second name"
+        );
+        std::fs::remove_file(&lock).unwrap();
+        std::os::unix::fs::symlink(&other, &lock).unwrap();
+        assert!(
+            save_hook_trust(home.path(), &grants).is_err(),
+            "a linked lock"
+        );
+        assert!(!home.path().join("config.toml").exists());
     }
 
     #[test]

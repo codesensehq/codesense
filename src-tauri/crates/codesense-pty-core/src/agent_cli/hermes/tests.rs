@@ -247,6 +247,36 @@ fn gateway_connect_mints_a_private_ticket_and_queued_is_not_consumption_or_readi
 }
 
 #[test]
+fn gateway_connect_refuses_a_control_socket_or_home_others_may_reach() {
+    use super::gateway_fixture::{GatewayFixture, McpServer};
+    use std::os::unix::fs::PermissionsExt;
+    let home = tempfile::tempdir_in("/tmp").unwrap();
+    let endpoint = home.path().join("engine.sock");
+    let _gateway = GatewayFixture::start(home.path(), &endpoint, || McpServer {
+        connected: true,
+        tools: 1,
+    });
+    let control = home.path().join("gateway.sock");
+    let set = |path: &std::path::Path, mode| {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap()
+    };
+    assert!(channel::resolve(home.path()).is_ok());
+    for mode in [0o660, 0o606] {
+        set(&control, mode);
+        assert!(channel::resolve(home.path()).is_err(), "socket {mode:o}");
+        assert!(
+            channel::connect(&endpoint, None, Some(home.path())).is_err(),
+            "socket {mode:o}"
+        );
+    }
+    set(&control, 0o600);
+    set(home.path(), 0o750);
+    assert!(channel::resolve(home.path()).is_err(), "home 750");
+    set(home.path(), 0o700);
+    assert!(channel::connect(&endpoint, None, Some(home.path())).is_ok());
+}
+
+#[test]
 fn probed_policy_and_hook_folding_are_pinned() {
     let control = Hermes.control();
     assert!(control.native_readiness && control.bracketed_paste);

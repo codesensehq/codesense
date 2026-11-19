@@ -653,6 +653,74 @@ mod tests {
         native(&file);
         assert!(RuntimeIdentity::from_prepared_install((0, 22, 5), "0123456789ab", &file).is_err());
     }
+    /// A prepared runtime directory for `identity`: named by its key and marked ready.
+    fn prepared_root(parent: &Path, identity: &RuntimeIdentity) -> PathBuf {
+        let root = parent.join(identity.key());
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("READY"), b"").unwrap();
+        root
+    }
+
+    #[test]
+    fn a_runtime_lock_is_owner_only_and_held_until_the_runtime_is_dropped() {
+        use codesense_platform::fs::{is_owner_only, try_lock_exclusive, unlock};
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = identity(dir.path());
+        let root = prepared_root(dir.path(), &runtime);
+        let held = LockedRuntime::acquire(&root, runtime.clone()).unwrap();
+        let other = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(root.with_extension("lock"))
+            .unwrap();
+        assert!(is_owner_only(&other).unwrap(), "the lock file is private");
+        assert!(
+            !try_lock_exclusive(&other).unwrap(),
+            "held while the runtime lives"
+        );
+        drop(held);
+        assert!(try_lock_exclusive(&other).unwrap(), "released with it");
+        unlock(&other).unwrap();
+        assert!(
+            LockedRuntime::acquire(&dir.path().join("elsewhere"), runtime).is_err(),
+            "a root its identity does not name"
+        );
+    }
+
+    #[test]
+    fn a_bound_home_links_to_its_runtime_and_finds_it_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = identity(dir.path());
+        let root = prepared_root(dir.path(), &runtime);
+        let home = dir.path().join("home");
+        std::fs::create_dir(&home).unwrap();
+        let held = LockedRuntime::acquire(&root, runtime.clone()).unwrap();
+        held.bind_home(&home).unwrap();
+        held.bind_home(&home).unwrap();
+        assert_eq!(std::fs::read_link(home.join(RUNTIME_LINK)).unwrap(), root);
+        drop(held);
+
+        let found = LockedRuntime::for_home(&home).expect("the bound runtime");
+        assert_eq!(found.root(), std::fs::canonicalize(&root).unwrap());
+        assert_eq!(found.identity(), &runtime);
+        drop(found);
+
+        let install = dir.path().join("other");
+        std::fs::create_dir(&install).unwrap();
+        let other = identity(&install);
+        let other_root = prepared_root(dir.path(), &other);
+        let held = LockedRuntime::acquire(&other_root, other).unwrap();
+        assert!(
+            held.bind_home(&home).is_err(),
+            "a home belongs to one runtime"
+        );
+        std::fs::remove_file(other_root.join("READY")).unwrap();
+        let fresh = dir.path().join("fresh");
+        std::fs::create_dir(&fresh).unwrap();
+        assert!(held.bind_home(&fresh).is_err(), "only a ready runtime");
+        assert!(LockedRuntime::for_home(&fresh).is_none());
+    }
+
     #[test]
     fn probe_environment_skips_unresolved_runtime() {
         let values = [
