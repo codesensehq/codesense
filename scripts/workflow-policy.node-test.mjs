@@ -768,7 +768,8 @@ test("rust.yml's macOS build skips a push that main has moved past", (t) => {
   assert.equal(build.outputs.superseded, "${{ steps.superseded.outputs.superseded }}");
   const check = build.steps.findIndex((step) => step.id === "superseded");
   assert.ok(build.steps[check - 1].uses.startsWith("actions/checkout@"));
-  assert.equal(build.steps[check].if, "github.event_name == 'push'");
+  // A re-run, asked for after main moved on, builds rather than report a superseded green.
+  assert.equal(build.steps[check].if, "github.event_name == 'push' && github.run_attempt == 1");
   for (const step of build.steps.slice(check + 1))
     assert.ok(topLevelConjuncts(String(step.if ?? "")).includes(notSuperseded), step.name);
   assert.equal(workflow.jobs["rust-macos-test"].if, shardsNotSuperseded);
@@ -874,12 +875,19 @@ test("rust.yml caches the macOS workspace build from the nightly, dated by commi
   const gitAi = named("Fetch git-ai");
   const docsData = named("Generate docs data");
   const compile = index((step) => step.id === "compile", "compile");
-  // Restored after the dependency cache (so it wins), and dated before any cargo command; the
-  // inputs pinned after every step that writes them; recorded after the build, then saved.
-  assert.ok(rustCache < key && key < restore && restore < dates);
+  const tracked = index((step) => step.id === "tracked", "tracked");
+  // Restored before the dependency cache, which runs only on a miss, and dated before any cargo
+  // command; the inputs pinned after every step that writes them; recorded right after the
+  // build, and saved once the tracked files are checked.
+  assert.ok(key < restore && restore < rustCache && rustCache < dates);
+  assert.equal(
+    steps[rustCache].if,
+    `steps.build-cache.outputs.cache-matched-key == '' && ${notSuperseded}`,
+  );
   assert.ok(dates < gitAi && dates < sidecar && dates < docsData);
   assert.ok(gitAi < pin && sidecar < pin && docsData < pin && pin < compile);
-  assert.ok(compile < record && record < save);
+  assert.equal(record, compile + 1);
+  assert.ok(tracked < save);
   assert.ok(
     steps.slice(0, dates).every((step) => !/(?:^|[\s;&|(])cargo(?=\s|$)/m.test(step.run ?? "")),
   );
@@ -899,9 +907,15 @@ test("rust.yml caches the macOS workspace build from the nightly, dated by commi
       steps[i].if,
       `steps.build-cache.outputs.cache-matched-key != '' && ${notSuperseded}`,
     );
-  // The nightly on main saves, once its tests compiled, under a key no other run has.
-  const nightlyBuilt = `github.event_name == 'schedule' && github.ref == 'refs/heads/main' && !cancelled() && steps.compile.outcome == 'success' && ${notSuperseded}`;
-  for (const i of [record, save]) assert.equal(steps[i].if, nightlyBuilt);
+  // The nightly on main records once its tests compiled, and saves, whatever the tests did, once
+  // the record and the tracked files check succeeded, under a key no other run has.
+  const nightly = "github.event_name == 'schedule' && github.ref == 'refs/heads/main'";
+  assert.equal(steps[record].id, "record");
+  assert.equal(steps[record].if, `${nightly} && ${notSuperseded}`);
+  assert.equal(
+    steps[save].if,
+    `${nightly} && !cancelled() && steps.record.outcome == 'success' && steps.tracked.outcome == 'success' && ${notSuperseded}`,
+  );
   assert.equal(
     steps[save].with.key,
     "${{ steps.build-cache-key.outputs.manifests }}-${{ github.run_id }}-${{ github.run_attempt }}",
@@ -1469,6 +1483,82 @@ test("rust.yml generates every docs file build.rs writes before the first cargo 
   });
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(fs.readFileSync(ran, "utf8").trim().split("\n"), calls);
+});
+
+// The nightly deletes its older macOS build caches: only that job may write actions, and only on
+// the nightly on main in the base repository.
+const cachePrune = good
+  .replace("on: [pull_request, workflow_dispatch]", "on: [pull_request, merge_group, schedule]")
+  .replace(
+    "  static:\n",
+    "  rust-macos-cache-prune:\n    if: ${{ !cancelled() && github.event_name == 'schedule' && github.ref == 'refs/heads/main' && !github.event.repository.fork }}\n",
+  )
+  .replace("      contents: read", "      actions: write");
+test("actions write is limited to rust.yml's nightly cache prune", () => {
+  assert.deepEqual(workflowPolicy(cachePrune, "rust.yml"), []);
+  for (const file of ["ci.yml", "test-build.yml", ""])
+    assert.match(workflowPolicy(cachePrune, file).join("\n"), /permissions must grant exactly/);
+  for (const [from, to, error] of [
+    ["  rust-macos-cache-prune:", "  rust-macos-build:", /permissions must grant exactly/],
+    [
+      "      actions: write",
+      "      actions: write\n      contents: read",
+      /permissions must grant exactly/,
+    ],
+    ["github.event_name == 'schedule' && ", "", /if must require/],
+    ["github.ref == 'refs/heads/main' && ", "", /if must require github\.ref/],
+    [" && !github.event.repository.fork", "", /if must require !github\.event\.repository\.fork/],
+  ])
+    assert.match(
+      workflowPolicy(cachePrune.replace(from, to), "rust.yml").join("\n"),
+      error,
+      `${from} -> ${to}`,
+    );
+  // The macOS build itself keeps contents: read.
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  assert.deepEqual(workflow.jobs["rust-macos-build"].permissions, { contents: "read" });
+  const prune = workflow.jobs["rust-macos-cache-prune"];
+  assert.deepEqual(prune.permissions, { actions: "write" });
+  assert.equal(prune.needs, "rust-macos-build");
+  assert.equal(
+    prune.if,
+    "${{ !cancelled() && github.event_name == 'schedule' && github.ref == 'refs/heads/main' && !github.event.repository.fork }}",
+  );
+});
+
+// The prune step, run with a stand-in gh: the newest cache per part stays, every older one goes.
+test("the cache prune deletes all but the newest macOS build cache per part", (t) => {
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  const step = workflow.jobs["rust-macos-cache-prune"].steps[0];
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rust-cache-prune-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const bin = path.join(dir, "bin");
+  fs.mkdirSync(bin);
+  const listing = [
+    [11, "rust-macos-build-lib-macOS-ARM64-aaaa-1111-100-1", "2026-11-17T06:40:00Z"],
+    [12, "rust-macos-build-rest-macOS-ARM64-aaaa-1111-100-1", "2026-11-17T06:50:00Z"],
+    [21, "rust-macos-build-lib-macOS-ARM64-aaaa-2222-200-1", "2026-11-18T06:40:00Z"],
+    [22, "rust-macos-build-rest-macOS-ARM64-aaaa-2222-200-1", "2026-11-18T06:50:00Z"],
+    [31, "rust-macos-build-lib-macOS-ARM64-bbbb-2222-300-1", "2026-11-19T06:40:00Z"],
+  ]
+    .map((row) => row.join("\t"))
+    .join("\n");
+  fs.writeFileSync(path.join(dir, "listing"), `${listing}\n`);
+  // The listing comes back already through --jq; a delete is logged.
+  fs.writeFileSync(
+    path.join(bin, "gh"),
+    `#!/bin/bash\nif [[ "$*" == *DELETE* ]]; then echo "\${@: -1}" >> "${dir}/deleted"; else cat "${dir}/listing"; fi\n`,
+    { mode: 0o755 },
+  );
+  execFileSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", step.run], {
+    cwd: dir,
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GH_REPO: "o/r" },
+  });
+  assert.deepEqual(fs.readFileSync(path.join(dir, "deleted"), "utf8").trim().split("\n").sort(), [
+    "repos/o/r/actions/caches/11",
+    "repos/o/r/actions/caches/12",
+    "repos/o/r/actions/caches/21",
+  ]);
 });
 
 const flakyIssues = good

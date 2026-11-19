@@ -93,11 +93,10 @@ test("touchesMacos skips only changes confined to the OS-only files", () => {
   assert.equal(touchesMacos([], RUST_PATHS), true);
 });
 
-// A listed file must be one the macOS build never compiles or reads: every module declaration of
-// it sits under a Windows or Linux cfg, and no include, #[path] attribute or other path literal
-// names it. (A test that walks a whole source tree can still read one; the nightly covers that.)
-test("each OS-only file is a module only Windows or Linux declares, and nothing includes it", () => {
-  const root = fileURLToPath(new URL("..", import.meta.url));
+// Why each listed file might be one the macOS build compiles or reads: a module declaration of it
+// without a Windows or Linux cfg, or an include, #[path] attribute or other path literal naming
+// it. (A test that walks a whole source tree can still read one; the nightly covers that.)
+function osOnlyProblems(root, list) {
   const sources = [];
   const walk = (directory) => {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
@@ -110,9 +109,9 @@ test("each OS-only file is a module only Windows or Linux declares, and nothing 
   walk(path.join(root, "src-tauri"));
   const relative = (file) => path.relative(root, file).split(path.sep).join("/");
   const osOnly = /^#\[cfg\((?:windows|target_os = "windows"|target_os = "linux")\)\]$/;
-  const declared = new Map(OS_ONLY_PATHS.map((file) => [file, []]));
-  const named = [];
-  const tails = OS_ONLY_PATHS.map((file) => file.split("/").slice(-2).join("/"));
+  const declared = new Map(list.map((file) => [file, []]));
+  const problems = [];
+  const tails = list.map((file) => file.split("/").slice(-2).join("/"));
   for (const source of sources) {
     const lines = fs.readFileSync(source, "utf8").split("\n");
     // A non-mod-rs file's submodules live in a directory of its own name.
@@ -120,6 +119,7 @@ test("each OS-only file is a module only Windows or Linux declares, and nothing 
       ? path.dirname(source)
       : source.slice(0, -".rs".length);
     lines.forEach((line, i) => {
+      const at = `${relative(source)}:${i + 1}`;
       const declaration = /^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;/.exec(line);
       if (declaration) {
         const target = [`${declaration[1]}.rs`, `${declaration[1]}/mod.rs`]
@@ -131,34 +131,88 @@ test("each OS-only file is a module only Windows or Linux declares, and nothing 
           const attributes = [];
           while (above >= 0 && /^\s*(?:#\[|\/\/)/.test(lines[above]))
             attributes.push(lines[above--].trim());
-          declared.get(target).push({ at: `${relative(source)}:${i + 1}`, attributes });
+          declared.get(target).push(at);
+          if (!attributes.some((attribute) => osOnly.test(attribute)))
+            problems.push(`${at} declares ${target} without a Windows or Linux cfg`);
         }
       }
       for (const [, literal] of line.matchAll(
-        /(?:include_(?:str|bytes)!\(\s*(?:concat!\(\s*)?|#\[path\s*=\s*)"([^"]+)"/g,
+        /(?:include(?:_str|_bytes)?!\(\s*(?:concat!\(\s*)?|#\[path\s*=\s*)"([^"]+)"/g,
       )) {
         const candidates = [path.dirname(source), base].map((dir) =>
           relative(path.join(dir, literal)),
         );
-        if (candidates.some((file) => declared.has(file)))
-          named.push(`${relative(source)}:${i + 1}`);
+        const file = candidates.find((candidate) => declared.has(candidate));
+        if (file) problems.push(`${at} includes ${file}`);
       }
       // Nor a path a test reads it by, such as "src/fs/windows.rs".
       for (const [, literal] of line.matchAll(/"([^"\\]+)"/g))
         if (tails.some((tail) => literal === tail || literal.endsWith(`/${tail}`)))
-          named.push(`${relative(source)}:${i + 1}`);
+          problems.push(`${at} names "${literal}"`);
     });
   }
   for (const [file, declarations] of declared) {
-    assert.ok(fs.existsSync(path.join(root, file)), `${file} exists`);
-    assert.ok(declarations.length, `${file} is declared as a module`);
-    for (const { at, attributes } of declarations)
-      assert.ok(
-        attributes.some((attribute) => osOnly.test(attribute)),
-        `${at} declares ${file} without a Windows or Linux cfg`,
-      );
+    if (!fs.existsSync(path.join(root, file))) problems.push(`${file} does not exist`);
+    else if (!declarations.length) problems.push(`${file} is not declared as a module`);
   }
-  assert.deepEqual(named, [], "an include, #[path] or path literal names an OS-only file");
+  return problems;
+}
+
+test("each OS-only file is a module only Windows or Linux declares, and nothing includes it", () => {
+  assert.deepEqual(
+    osOnlyProblems(fileURLToPath(new URL("..", import.meta.url)), OS_ONLY_PATHS),
+    [],
+  );
+});
+
+test("the OS-only guard refuses a file macOS could compile or read", () => {
+  const list = [
+    "src-tauri/crates/a/src/fs/windows.rs",
+    "src-tauri/crates/a/src/net/linux.rs",
+    "src-tauri/crates/a/src/io/windows.rs",
+  ];
+  const files = {
+    ...Object.fromEntries(list.map((file) => [file, "fn f() {}\n"])),
+    "src-tauri/crates/a/src/lib.rs": "mod fs;\nmod net;\nmod io;\n",
+    "src-tauri/crates/a/src/fs.rs": "#[cfg(windows)]\nmod windows;\n",
+    "src-tauri/crates/a/src/net.rs":
+      '/// Doc.\n#[cfg(target_os = "linux")]\n#[allow(dead_code)]\nmod linux;\n',
+    "src-tauri/crates/a/src/io.rs": '#[cfg(target_os = "windows")]\npub(crate) mod windows;\n',
+  };
+  const good = tree(files);
+  assert.deepEqual(osOnlyProblems(good, list), []);
+  for (const [file, text, problem] of [
+    ["src-tauri/crates/a/src/fs.rs", "mod windows;\n", /declares .*fs\/windows\.rs without/],
+    ["src-tauri/crates/a/src/fs.rs", "#[cfg(unix)]\nmod windows;\n", /without a Windows/],
+    [
+      "src-tauri/crates/a/src/fs.rs",
+      '#[cfg(windows)]\nmod windows;\ninclude!("fs/windows.rs");\n',
+      /includes/,
+    ],
+    [
+      "src-tauri/crates/a/src/lib.rs",
+      'mod fs;\nmod net;\nmod io;\nconst W: &str = include_str!("fs/windows.rs");\n',
+      /includes/,
+    ],
+    [
+      "src-tauri/crates/a/src/lib.rs",
+      'mod fs;\nmod net;\nmod io;\n#[path = "net/linux.rs"]\nmod other;\n',
+      /includes/,
+    ],
+    ["src-tauri/src/tests.rs", 'let p = "crates/a/src/io/windows.rs";\n', /names/],
+  ]) {
+    const root = tree({ ...files, [file]: text });
+    assert.match(osOnlyProblems(root, list).join("\n"), problem, text);
+  }
+  assert.match(
+    osOnlyProblems(good, [...list, "src-tauri/crates/a/src/gone.rs"]).join("\n"),
+    /does not exist/,
+  );
+  fs.writeFileSync(path.join(good, "src-tauri/crates/a/src/stray.rs"), "");
+  assert.match(
+    osOnlyProblems(good, [...list, "src-tauri/crates/a/src/stray.rs"]).join("\n"),
+    /not declared/,
+  );
 });
 
 test("every script rust.yml runs is Rust-relevant, so changing one runs the Rust jobs", () => {

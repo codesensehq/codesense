@@ -31,6 +31,10 @@ const HOSTED_RUNNERS = new Set([
 // Exact grants are scoped by file and job; each exception also needs its own constraints.
 const SCORECARD = { file: "scorecard.yml", job: "scorecard" };
 const FLAKY_ISSUES = { file: "rust.yml", job: "flaky-issues" };
+// Deletes the nightly's superseded macOS build caches, the only job that may write actions.
+const CACHE_PRUNE = { file: "rust.yml", job: "rust-macos-cache-prune" };
+// The jobs that write something, and so run only on main outside requests (below).
+const MAIN_WRITERS = [FLAKY_ISSUES, CACHE_PRUNE];
 // The commit email audit runs nightly and on main, never on pull requests.
 const COMMIT_EMAILS = {
   file: "commit-emails.yml",
@@ -67,6 +71,7 @@ const JOB_PERMISSIONS = new Map([
   ["dco.yml:dco", { contents: "read", "pull-requests": "read" }],
   ["quarantine.yml:quarantine-issues", { contents: "read", issues: "read" }],
   [`${FLAKY_ISSUES.file}:${FLAKY_ISSUES.job}`, { contents: "read", issues: "write" }],
+  [`${CACHE_PRUNE.file}:${CACHE_PRUNE.job}`, { actions: "write" }],
   [
     `${SCORECARD.file}:${SCORECARD.job}`,
     { contents: "read", "security-events": "write", "id-token": "write" },
@@ -334,10 +339,10 @@ export function workflowPolicy(text, file = "") {
       }
     }
     const scorecard = scorecardWorkflow && name === SCORECARD.job;
-    const flakyIssues = file === FLAKY_ISSUES.file && name === FLAKY_ISSUES.job;
+    const mainWriter = MAIN_WRITERS.some((writer) => file === writer.file && name === writer.job);
     if (
       NEVER_SKIPPED_ON.some((t) => triggers.includes(t)) &&
-      !flakyIssues &&
+      !mainWriter &&
       Object.hasOwn(job, "if")
     ) {
       let condition = String(job.if)
@@ -389,9 +394,9 @@ export function workflowPolicy(text, file = "") {
           `${name}: if must begin with ${OFF_PULL_REQUESTS} so merge_group, push and schedule always run it`,
         );
     }
-    // Issue writes run only for pushes or scheduled runs on main in the base repository, never
-    // pull requests, merge groups or forks.
-    if (flakyIssues) {
+    // Issue and cache writes run only for pushes or scheduled runs on main in the base repository,
+    // never pull requests, merge groups or forks.
+    if (mainWriter) {
       const terms = topLevelConjuncts(String(job.if ?? ""));
       if (!terms.includes(PUSH_ONLY) && !terms.includes(SCHEDULED))
         errors.push(`${name}: if must require ${PUSH_ONLY} or ${SCHEDULED} at the top level`);

@@ -159,8 +159,9 @@ jobs:
           persist-credentials: false
       - name: Check main's head
         id: superseded
-        # A push whose commit is no longer main's head skips its build. A failed lookup builds.
-        if: github.event_name == 'push'
+        # A push whose commit is no longer main's head skips its build. A failed lookup builds,
+        # and so does a re-run, which someone asked for after main moved on.
+        if: github.event_name == 'push' && github.run_attempt == 1
         env:
           SHA: ${{ github.sha }}
         run: |
@@ -215,18 +216,12 @@ jobs:
         with:
           path: ${{ runner.temp }}/scanner-archives
           key: ${{ steps.scanner-cache.outputs.cache-primary-key }}
-      - name: Cache Rust dependencies
-        if: steps.superseded.outputs.superseded != 'true'
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          shared-key: rust-macos
-          save-if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}
-          cache-on-failure: true
       - name: Key the workspace build cache
         id: build-cache-key
-        # The dependency cache above leaves out the workspace crates, most of the compile. The
-        # nightly saves this part's whole target/ under a key of its own; other runs restore the
-        # newest for this toolchain, for this Cargo.lock when there is one.
+        # The dependency cache below leaves out the workspace crates, most of the compile. The
+        # nightly saves this part's whole target/ under a key of its own (rust-macos-cache-prune
+        # then deletes the older ones); other runs restore the newest for this toolchain, for
+        # this Cargo.lock when there is one.
         if: steps.superseded.outputs.superseded != 'true'
         env:
           MANIFESTS: ${{ hashFiles('Cargo.lock', 'Cargo.toml', 'src-tauri/Cargo.toml', 'src-tauri/crates/*/Cargo.toml') }}
@@ -246,6 +241,15 @@ jobs:
           restore-keys: |
             ${{ steps.build-cache-key.outputs.manifests }}-
             ${{ steps.build-cache-key.outputs.toolchain }}-
+      - name: Cache Rust dependencies
+        # Only when no workspace build was restored: that has the dependencies too. The nightly
+        # restores none, so it saves this cache as before.
+        if: steps.build-cache.outputs.cache-matched-key == '' && steps.superseded.outputs.superseded != 'true'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: rust-macos
+          save-if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
       - name: Date the checkout for the cached build
         # Before the first cargo command, the sidecar build: the files unchanged since the cached
         # build get an old date, so cargo rebuilds only what changed (build-cache-dates.sh).
@@ -296,6 +300,12 @@ jobs:
           cargo nextest archive "${packages[@]}" "${targets[@]}" \
             --archive-file "$RUNNER_TEMP/nextest-archive-$PART.tar.zst" \
           2>&1 | tee "$RUNNER_TEMP/rust-ci-logs/cargo-compile.log"
+      - name: Record the build's commit and inputs
+        # Right after the compile: the untracked files the build read, then the commit, so a later
+        # run knows what changed since.
+        id: record
+        if: github.event_name == 'schedule' && github.ref == 'refs/heads/main' && steps.superseded.outputs.superseded != 'true'
+        run: bash scripts/build-cache-dates.sh record
       - name: Collect test runtime files
         # The untracked files the tests read beside the archives: sidecars, bundled resources and
         # generated docs data. Both parts make the same ones; the rest part ships them.
@@ -329,15 +339,12 @@ jobs:
           cargo test --doc "${packages[@]}" --no-fail-fast \
           2>&1 | tee "$RUNNER_TEMP/rust-ci-logs/cargo-doctest.log"
       - name: Check tracked files are unchanged
+        id: tracked
         if: (success() || failure()) && steps.superseded.outputs.superseded != 'true'
         run: git diff --exit-code 2>&1 | tee "$RUNNER_TEMP/rust-ci-logs/tracked-files.log"
-      - name: Record the build's commit and inputs
-        # Once the tests compiled, whatever the tests did: the commit, so a later run knows what
-        # changed since, and the untracked files the build read.
-        if: github.event_name == 'schedule' && github.ref == 'refs/heads/main' && !cancelled() && steps.compile.outcome == 'success' && steps.superseded.outputs.superseded != 'true'
-        run: bash scripts/build-cache-dates.sh record
       - name: Save the workspace build
-        if: github.event_name == 'schedule' && github.ref == 'refs/heads/main' && !cancelled() && steps.compile.outcome == 'success' && steps.superseded.outputs.superseded != 'true'
+        # Whatever the tests did, once the build was recorded and left tracked files as they were.
+        if: github.event_name == 'schedule' && github.ref == 'refs/heads/main' && !cancelled() && steps.record.outcome == 'success' && steps.tracked.outcome == 'success' && steps.superseded.outputs.superseded != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: target
@@ -357,6 +364,30 @@ jobs:
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: node scripts/flaky-tests.mjs failed target/nextest/ci/junit.xml --run-url "$RUN_URL"
+
+  rust-macos-cache-prune:
+    name: Prune the macOS build caches
+    # Each nightly saves a workspace build per part, some GB together, so the older ones are
+    # deleted once it has: the newest per part stays. The only job here that writes caches'
+    # metadata; the macOS build keeps contents: read. Only the nightly on main in this repository.
+    needs: rust-macos-build
+    if: ${{ !cancelled() && github.event_name == 'schedule' && github.ref == 'refs/heads/main' && !github.event.repository.fork }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: write
+    steps:
+      - name: Delete all but the newest build cache per part
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh api --paginate "repos/$GH_REPO/actions/caches?key=rust-macos-build-&ref=refs/heads/main&per_page=100" \
+            --jq '.actions_caches[] | [.id, .key, .created_at] | @tsv' > caches.tsv
+          # Newest first; the part is the key's fourth field (rust-macos-build-<part>-...).
+          sort -t $'\t' -k3,3r caches.tsv | awk -F '\t' '{ split($2, k, "-"); if (seen[k[4]]++) print $1 }' > stale.txt
+          echo "$(wc -l < caches.tsv) build caches; deleting $(wc -l < stale.txt)"
+          while read -r id; do gh api -X DELETE "repos/$GH_REPO/actions/caches/$id"; done < stale.txt
 
   rust-macos-test:
     name: Rust (macOS arm64) tests ${{ matrix.shard }}/3

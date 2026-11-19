@@ -39,27 +39,30 @@ date_tree() {
 }
 
 record() {
+    rm -rf "$state"
     mkdir -p "$state"
-    git rev-parse HEAD >"$state/source-sha"
     # The untracked files the build read: git-ai, the sidecars, the docs data and archives.
     git ls-files -z --others --ignored --exclude-standard -- src-tauri codesense-docs >"$state/inputs.list"
     tar --null -T "$state/inputs.list" -cf "$state/inputs.tar"
     xargs -0 -r shasum -a 256 <"$state/inputs.list" >"$state/inputs.sha256"
+    # Last, so a record cut short names no commit and the next run builds cold.
+    git rev-parse HEAD >"$state/source-sha"
 }
 
 restore() {
     local cached log
     cached=$(cat "$state/source-sha" 2>/dev/null || true)
-    if [[ -z "$cached" ]] || ! git cat-file -e "$cached^{commit}" 2>/dev/null; then
-        echo "The cached build names no commit in this checkout, so it is removed: a cold build."
+    if [[ -z "$cached" || ! -f "$state/inputs.tar" || ! -f "$state/inputs.sha256" ]] ||
+        ! git cat-file -e "$cached^{commit}" 2>/dev/null; then
+        echo "The cached build names no commit in this checkout, or lacks its inputs, so it is removed: a cold build."
         rm -rf target
         return
     fi
     echo "The cached build is of $cached; what changed since then is dated now."
-    # Its untracked inputs, with their dates, except any file tracked since.
-    tar -tf "$state/inputs.tar" | sort >"$state/inputs.names"
-    git ls-files | sort | comm -23 "$state/inputs.names" - >"$state/inputs.extract"
-    if [[ -s "$state/inputs.extract" ]]; then tar -xf "$state/inputs.tar" -T "$state/inputs.extract"; fi
+    # Its untracked inputs, with their dates. A file tracked since gets the checkout's content back
+    # (git compares names as it stores them, which a list of tar's names may not match).
+    tar -xf "$state/inputs.tar"
+    git checkout -q -- .
     git ls-files -z | xargs -0 -r touch -h -t "$old"
     # session-server's build script reruns when HEAD moves (it watches the reflog), so its build
     # stamp in these test builds names the cached build's commit.

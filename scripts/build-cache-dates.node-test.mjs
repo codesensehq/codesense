@@ -44,6 +44,7 @@ function nightly(t) {
   git(origin, "commit", "-qm", "base");
   write(origin, "src-tauri/gen/schema.json", "generated\n");
   write(origin, "src-tauri/gen/later.json", "generated\n");
+  write(origin, "src-tauri/gen/ünï.json", "generated\n");
   write(origin, "target/debug/app", "built\n");
   dates(origin, "record");
   return origin;
@@ -69,9 +70,10 @@ test("record keeps the commit, the untracked inputs and their digests in target/
     /src-tauri\/gen\/schema\.json/,
   );
   const names = execFileSync("tar", ["-tf", path.join(state, "inputs.tar")], { encoding: "utf8" });
-  assert.deepEqual(names.trim().split("\n").sort(), [
+  assert.deepEqual(names.normalize("NFC").trim().split("\n").sort(), [
     "src-tauri/gen/later.json",
     "src-tauri/gen/schema.json",
+    "src-tauri/gen/ünï.json",
   ]);
 });
 
@@ -96,6 +98,7 @@ test("restore dates old what the cached build saw, and now what changed since, w
   write(origin, "src-tauri/new/mod.rs", "a\n");
   // A file the cached build had untracked, tracked since with other content.
   write(origin, "src-tauri/gen/later.json", "tracked\n");
+  write(origin, "src-tauri/gen/ünï.json", "tracked\n");
   git(origin, "add", "-A", "-f");
   git(origin, "commit", "-qm", "later");
   const work = later(t, origin);
@@ -118,6 +121,7 @@ test("restore dates old what the cached build saw, and now what changed since, w
     "generated\n",
   );
   assert.equal(fs.readFileSync(path.join(work, "src-tauri/gen/later.json"), "utf8"), "tracked\n");
+  assert.equal(fs.readFileSync(path.join(work, "src-tauri/gen/ünï.json"), "utf8"), "tracked\n");
   assert.equal(git(work, "status", "--porcelain"), "");
   assert.ok(fs.existsSync(path.join(work, "target/debug/app")));
 });
@@ -153,6 +157,14 @@ test("a cached build without a commit this checkout has is removed, for a cold b
   fs.rmSync(path.join(unrecorded, "target/ci-cache"), { recursive: true });
   dates(unrecorded, "restore");
   assert.ok(!fs.existsSync(path.join(unrecorded, "target")));
+
+  // A cache whose inputs are missing builds cold too, rather than failing.
+  for (const input of ["inputs.tar", "inputs.sha256"]) {
+    const partial = later(t, origin);
+    fs.rmSync(path.join(partial, "target/ci-cache", input));
+    dates(partial, "restore");
+    assert.ok(!fs.existsSync(path.join(partial, "target")), input);
+  }
 });
 
 test("the script refuses an unknown command", () => {
