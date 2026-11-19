@@ -2,7 +2,8 @@
 //! One verified gateway teardown for host engine loss and desktop home removal.
 use crate::activity::peer;
 use codesense_platform::process::{Pid, ProcessGroup};
-#[cfg(test)]
+// Unix only: the gateway tests start their gateway in a process group of its own.
+#[cfg(all(test, unix))]
 use std::os::unix::process::CommandExt;
 use std::{
     path::Path,
@@ -47,7 +48,8 @@ pub(crate) fn teardown_home(home: &Path, wait_for_replacement: bool) {
     }
 }
 
-#[cfg(test)]
+// Unix only: the gateway's lock and process group are the unix ones `lifecycle/unix.rs` reads.
+#[cfg(all(test, unix))]
 mod gateway_tests {
     use super::*;
     use std::io::BufRead;
@@ -180,5 +182,6 @@ while True: time.sleep(.05)
     }
 }
 
-#[cfg(test)]
+// Unix only, as the gateway tests that use it are.
+#[cfg(all(test, unix))]
 use std::process::Stdio;

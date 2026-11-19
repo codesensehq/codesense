@@ -177,6 +177,8 @@ fn only_main_turn_start_native_message_receipts_confirm_a_notice() {
     }
 }
 
+// Unix only: the gateway fixture serves Unix sockets.
+#[cfg(unix)]
 #[test]
 fn gateway_connect_mints_a_private_ticket_and_queued_is_not_consumption_or_readiness() {
     use super::gateway_fixture::{GatewayFixture, McpServer, ADMISSION_ID, TICKET};
@@ -246,6 +248,8 @@ fn gateway_connect_mints_a_private_ticket_and_queued_is_not_consumption_or_readi
     }
 }
 
+// Unix only: the gateway fixture serves Unix sockets, and the test sets unix modes.
+#[cfg(unix)]
 #[test]
 fn gateway_connect_refuses_a_control_socket_or_home_others_may_reach() {
     use super::gateway_fixture::{GatewayFixture, McpServer};
@@ -298,6 +302,8 @@ fn a_fifo_at_the_socket_pointer_is_refused_without_waiting() {
     );
 }
 
+// Unix only: the gateway fixture serves Unix sockets, and the test makes symlinks.
+#[cfg(unix)]
 #[test]
 fn gateway_resolve_refuses_a_linked_home_and_a_linked_or_shared_pointer() {
     use super::gateway_fixture::{GatewayFixture, McpServer};

@@ -680,6 +680,8 @@ mod tests {
         assert!(dir.path().join("unrelated").exists());
     }
 
+    // Unix only: it reads unix modes through `expect_mode`.
+    #[cfg(unix)]
     #[test]
     fn a_pin_is_an_owner_executable_copy_in_a_private_directory() {
         let dir = tempfile::tempdir().unwrap();

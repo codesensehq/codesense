@@ -3,6 +3,10 @@
 //! (`scripts/build-emulator.sh` builds it into `src-tauri/binaries/`, or
 //! `CODESENSE_EMULATOR_WORKER` names one) and against shell stubs that answer
 //! `hello` with chosen versions.
+//!
+//! Unix only: the stubs are made executable with a unix mode, and the worker is
+//! killed with a signal.
+#![cfg(unix)]
 
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;

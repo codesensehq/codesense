@@ -1642,6 +1642,8 @@ mod tests {
     /// `codex` first on `PATH` (each logs its argv to `<tmp>/argv.log`, one
     /// `<arg>` per argument, a line per run) and the tab's variables `env`; types
     /// `line`, then returns the log lines.
+    // Unix only: the stub CLIs are made executable with a unix mode.
+    #[cfg(unix)]
     fn typed_agents(
         shell: &str,
         tmp: &Path,
@@ -1724,6 +1726,8 @@ mod tests {
     /// In a CodeSense tab, `claude` and `codex` typed by hand start connected to
     /// CodeSense; the user's own flags, a project's own `codesense` server,
     /// subcommands, `--remote` and `command claude` are left as they are.
+    // Unix only: the stub helper is made executable with a unix mode.
+    #[cfg(unix)]
     fn assert_agents_auto_connect(shell: &str) {
         let tmp = tempfile::tempdir().unwrap();
         let tmp = tmp.path().canonicalize().unwrap();
@@ -1841,6 +1845,8 @@ mod tests {
 
     /// Outside a CodeSense tab's variables (or with their files gone), and with
     /// the user's own `claude` function, nothing is added.
+    // Unix only: it types through the unix-only `typed_agents`.
+    #[cfg(unix)]
     fn assert_agents_untouched_without_the_tab(shell: &str, rc: (&str, &str)) {
         let tmp = tempfile::tempdir().unwrap();
         let tmp = tmp.path().canonicalize().unwrap();
@@ -1873,6 +1879,8 @@ mod tests {
         );
     }
 
+    // Unix only: it types through the unix-only `typed_agents`.
+    #[cfg(unix)]
     #[test]
     fn zsh_agents_auto_connect() {
         assert_agents_auto_connect("/bin/zsh");
@@ -1885,6 +1893,8 @@ mod tests {
         );
     }
 
+    // Unix only: it types through the unix-only `typed_agents`.
+    #[cfg(unix)]
     #[test]
     fn bash_agents_auto_connect() {
         assert_agents_auto_connect("/bin/bash");
@@ -1897,6 +1907,8 @@ mod tests {
         );
     }
 
+    // Unix only: it types through the unix-only `typed_agents`.
+    #[cfg(unix)]
     #[test]
     fn fish_agents_auto_connect() {
         let Some(fish) = find_fish() else {

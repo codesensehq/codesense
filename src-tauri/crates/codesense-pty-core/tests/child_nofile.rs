@@ -9,13 +9,22 @@
 //! binary has no libtest harness: like the app and the session server, its
 //! entry point serves the shim first (`run_helper`), so it can be its PTY
 //! children's shim too.
+//!
+//! Unix only: the open-file limit is a unix rlimit (`libc`), so off unix the
+//! binary has no tests and only an empty `main`.
+#[cfg(unix)]
 use codesense_pty_core::runner::{LocalPtyRunner, PtyRunner, PtySession, PtySpec};
+#[cfg(unix)]
 use portable_pty::{CommandBuilder, PtySize};
+#[cfg(unix)]
 use std::path::Path;
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
 const STAGE: &str = "CODESENSE_NOFILE_TEST_STAGE";
 
+#[cfg(unix)]
 const TESTS: &[(&str, fn())] = &[
     (
         "a_pty_child_gets_the_original_open_file_limit",
@@ -39,6 +48,10 @@ const TESTS: &[(&str, fn())] = &[
     ),
 ];
 
+#[cfg(not(unix))]
+fn main() {}
+
+#[cfg(unix)]
 fn main() {
     if codesense_pty_core::activity::run_helper() {
         return;
@@ -103,6 +116,7 @@ fn main() {
     assert!(Vec::is_empty(&failed), "failed: {failed:?}");
 }
 
+#[cfg(unix)]
 fn limit() -> libc::rlimit {
     let mut limit = libc::rlimit {
         rlim_cur: 0,
@@ -116,6 +130,7 @@ fn limit() -> libc::rlimit {
     limit
 }
 
+#[cfg(unix)]
 fn soft_limit() -> u64 {
     #[allow(clippy::unnecessary_cast)]
     let soft = limit().rlim_cur as u64;
@@ -124,6 +139,7 @@ fn soft_limit() -> u64 {
 
 /// Start from a soft limit of 256, as launchd gives an app, and raise it and
 /// serve the shim the way a host does at startup. Returns the raised limit.
+#[cfg(unix)]
 fn host_from_256() -> u64 {
     let mut lowered = limit();
     lowered.rlim_cur = 256;
@@ -137,6 +153,7 @@ fn host_from_256() -> u64 {
 }
 
 /// Run `script` in a PTY through the local runner.
+#[cfg(unix)]
 fn spawn_sh(script: String, cwd: Option<&Path>) -> Result<PtySession, String> {
     let mut command = CommandBuilder::new("sh");
     command.arg("-c");
@@ -161,6 +178,7 @@ fn spawn_sh(script: String, cwd: Option<&Path>) -> Result<PtySession, String> {
         .map_err(String::from)
 }
 
+#[cfg(unix)]
 fn read_when_written(out: &Path) -> String {
     let deadline = Instant::now() + Duration::from_secs(20);
     while !Path::exists(out) && Instant::now() < deadline {
@@ -170,6 +188,7 @@ fn read_when_written(out: &Path) -> String {
 }
 
 /// `ulimit -Sn` as the PTY child sees it.
+#[cfg(unix)]
 fn child_soft_limit() -> Result<String, String> {
     let temp = tempfile::tempdir().unwrap();
     let out = Path::join(temp.path(), "limit");
@@ -185,16 +204,19 @@ fn child_soft_limit() -> Result<String, String> {
     Ok(limit.trim().to_string())
 }
 
+#[cfg(unix)]
 fn assert_pty_limit(expected: u64, raised: u64) {
     assert_eq!(child_soft_limit().unwrap(), expected.to_string());
     assert_eq!(soft_limit(), raised, "the host keeps its raised limit");
 }
 
+#[cfg(unix)]
 fn a_pty_child_gets_the_original_open_file_limit() {
     let raised = host_from_256();
     assert_pty_limit(256, raised);
 }
 
+#[cfg(unix)]
 fn app_sidecar_and_pty_preserve_the_original_limit() {
     let raised = host_from_256();
     let mut sidecar = std::process::Command::new(std::env::current_exe().unwrap());
@@ -204,6 +226,7 @@ fn app_sidecar_and_pty_preserve_the_original_limit() {
     assert_eq!(soft_limit(), raised, "app retains its raised budget");
 }
 
+#[cfg(unix)]
 fn sidecar_stage() {
     assert_eq!(soft_limit(), 256, "the sidecar starts with the original limit");
     let (_, raised) = codesense_pty_core::nofile::raise(10_240).unwrap();
@@ -217,6 +240,7 @@ fn sidecar_stage() {
 /// original limit spawned with that limit back in force (`with_child_limit`),
 /// so the spawn's own pipe and slave dups failed: `Failed to spawn: Too many
 /// open files (os error 24)`. Now the spawn runs under the raised limit.
+#[cfg(unix)]
 fn a_host_holding_more_than_the_original_limit_still_spawns() {
     let raised = host_from_256();
     let held: Vec<_> = (0..300)
@@ -236,6 +260,7 @@ fn a_host_holding_more_than_the_original_limit_still_spawns() {
 /// While spawns run, another thread holding the host near the original
 /// limit keeps opening descriptors. The old window lowered the whole process to
 /// 256 during each fork, so that thread's opens failed with EMFILE.
+#[cfg(unix)]
 fn another_thread_never_gets_emfile_during_spawns() {
     host_from_256();
     let held: Vec<_> = (0..250)
@@ -273,6 +298,7 @@ fn another_thread_never_gets_emfile_during_spawns() {
 
 /// The shim execs the command in its own place: the argv the host built (not
 /// the shim's), its working directory and its environment.
+#[cfg(unix)]
 fn the_shim_keeps_argv_cwd_and_environment() {
     host_from_256();
     let temp = tempfile::tempdir().unwrap();

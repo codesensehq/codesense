@@ -1130,6 +1130,8 @@ mod tests {
 
     /// EMFILE names the process and its counts; any other
     /// error reads exactly as before.
+    // Unix only: EMFILE is the unix errno for descriptor exhaustion.
+    #[cfg(unix)]
     #[test]
     fn an_emfile_spawn_error_says_the_open_file_limit_was_reached() {
         let emfile = std::io::Error::from_raw_os_error(libc::EMFILE);
