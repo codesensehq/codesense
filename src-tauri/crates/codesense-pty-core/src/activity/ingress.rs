@@ -61,7 +61,7 @@ struct Envelope {
 }
 
 impl Envelope {
-    /// The one operation it carries, as [`connect_and_send`] put it: `None` for none or
+    /// The one operation it carries, as `connect_and_send` put it: `None` for none or
     /// more than one, or a one-shot mark on an engine.
     fn into_operation(self) -> Option<Operation> {
         let batch = self.batch;
