@@ -11,6 +11,7 @@ import {
   ZERO_LATENCY,
 } from "../__test-utils__/machines-backend";
 import { readBuffer, rememberBuffer } from "../lib/remote-buffers";
+import { restorePlatform, setPlatform } from "@/test/platform";
 import {
   __resetMachineAppearanceForTest,
   restoreMachineAppearance,
@@ -35,6 +36,23 @@ beforeEach(() => {
 });
 
 describe("machines store", () => {
+  describe("the local machine's label", () => {
+    afterEach(restorePlatform);
+
+    it.each([
+      ["MacIntel", "This Mac"],
+      ["Win32", "This computer"],
+      ["Linux x86_64", "This computer"],
+    ])("on %s reads %s, and a remote machine keeps its own", async (platform, label) => {
+      setPlatform(platform);
+      installMachinesBackend("demo", machineHandlers("demo", ZERO_LATENCY));
+      expect(await loadTeamMachines(TEAM_KEY)).toBe(true);
+      const machines = useMachinesStore.getState().byTeam[TEAM_KEY] ?? [];
+      expect(machines.find((m) => m.kind === "local")?.label).toBe(label);
+      expect(machines.find((m) => m.machineId === "gpu-box-2")?.label).not.toMatch(/^This /);
+    });
+  });
+
   it("a machine a teammate removed or unshared takes its file contents along", async () => {
     const base = machineHandlers("demo", ZERO_LATENCY);
     let gone = false;
