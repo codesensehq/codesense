@@ -157,7 +157,7 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
-            crate::tests::expect_mode(&dest, MODE);
+            crate::test_support::expect_mode(&dest, MODE);
             let first = fs::metadata(&dest).unwrap().ino();
             install(tmp.path()).unwrap();
             assert_eq!(fs::metadata(&dest).unwrap().ino(), first, "left as it was");
@@ -178,7 +178,7 @@ mod tests {
             fs::set_permissions(&dest, fs::Permissions::from_mode(mode)).unwrap();
             install(tmp.path()).unwrap();
             assert_eq!(fs::read_to_string(&dest).unwrap(), SOURCE);
-            crate::tests::expect_mode(&dest, MODE);
+            crate::test_support::expect_mode(&dest, MODE);
         }
     }
 
@@ -194,7 +194,7 @@ mod tests {
         fs::set_permissions(&dest, fs::Permissions::from_mode(0o650)).unwrap();
         assert!(is_installed(&dest, SOURCE));
         install(tmp.path()).unwrap();
-        crate::tests::expect_mode(&dest, 0o650);
+        crate::test_support::expect_mode(&dest, 0o650);
     }
 
     /// A symlink at the path is replaced, never followed, even one whose target holds the

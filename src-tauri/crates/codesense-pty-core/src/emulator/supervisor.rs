@@ -680,8 +680,6 @@ mod tests {
         assert!(dir.path().join("unrelated").exists());
     }
 
-    // Unix only: it reads unix modes through `expect_mode`.
-    #[cfg(unix)]
     #[test]
     fn a_pin_is_an_owner_executable_copy_in_a_private_directory() {
         let dir = tempfile::tempdir().unwrap();
@@ -695,7 +693,7 @@ mod tests {
         assert!(name.starts_with(&prefix), "{name}");
         assert_eq!(std::fs::read(&pinned).unwrap(), b"worker bytes");
         for path in [dir.path().join("run"), runtime, pinned] {
-            crate::tests::expect_mode(&path, 0o700);
+            crate::test_support::expect_mode(&path, 0o700);
         }
     }
 
