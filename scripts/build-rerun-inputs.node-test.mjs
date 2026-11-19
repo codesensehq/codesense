@@ -83,9 +83,14 @@ for (const [name, source] of [
 test("configure_caps reruns when the capability override changes", () => {
   const source = readFileSync(resolve(manifest, "build_caps.rs"), "utf8");
   assert.ok(source.includes('pub const CAPS_OFF_ENV: &str = "CODESENSE_CAPS_OFF";'));
-  const configure = source.slice(source.indexOf("pub fn configure_caps("));
+  const start = source.indexOf("pub fn configure_caps(");
+  assert.notEqual(start, -1, "build_caps.rs defines configure_caps");
+  const end = source.indexOf("\n}\n", start);
+  assert.notEqual(end, -1, "configure_caps has a body");
+  const configure = source.slice(start, end);
   assert.ok(configure.includes('println!("cargo:rerun-if-env-changed={CAPS_OFF_ENV}");'));
-  assert.ok(configure.includes("std::env::var(CAPS_OFF_ENV)"));
+  // Read through caps_off_list, which refuses a value that is not UTF-8 (not unwrap_or_default).
+  assert.ok(configure.includes("caps_off_list(std::env::var(CAPS_OFF_ENV))"));
 });
 for (const crate of [".", "crates/codesense-session-server"]) {
   test(`${crate}/build.rs watches the capability table it reads`, () => {
