@@ -13,7 +13,7 @@
 //!
 //! Without passthrough mode, ConPTY answers a child's own queries itself, so
 //! the startup query is the only one that reaches the reader. Only the first
-//! [`WINDOW`] bytes are searched; past them, or once answered, every byte
+//! `WINDOW` bytes are searched; past them, or once answered, every byte
 //! passes through unchanged.
 
 use std::io::{self, Read, Write};
@@ -26,7 +26,7 @@ const QUERY: &[u8] = b"\x1b[6n";
 /// The answer: row 1, column 1.
 const ANSWER: &[u8] = b"\x1b[1;1R";
 /// How far into the output a query may start. ConPTY may set modes first.
-pub(super) const WINDOW: usize = 512;
+const WINDOW: usize = 512;
 
 /// The session's writer, as [`super::PtySession::writer`] shares it.
 type SessionWriter = Arc<Mutex<Box<dyn Write + Send>>>;
@@ -262,6 +262,13 @@ mod tests {
     }
 
     #[test]
+    fn a_held_query_start_that_is_not_a_query_passes_through() {
+        let (mut reply, _writer, written) = wrap(&[&b"ab\x1b["[..], &b"?25h\x1b[6nz"[..]]);
+        assert_eq!(drain(&mut reply), b"ab\x1b[?25hz");
+        assert_eq!(*written.lock().unwrap(), ANSWER);
+    }
+
+    #[test]
     fn the_answer_is_written_once_and_the_writer_let_go() {
         let (mut reply, writer, written) = wrap(&[&b"a\x1b[6n"[..], &b"b\x1b[6nc"[..]]);
         let mut buf = [0u8; 16];
@@ -299,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn a_query_starting_at_the_windows_edge_is_answered() {
+    fn a_query_starting_at_the_window_edge_is_answered() {
         let filler = vec![b'x'; WINDOW - 1];
         let (mut reply, _writer, written) = wrap(&[&filler[..], &b"\x1b["[..], &b"6nok"[..]]);
         let mut expected = filler.clone();
