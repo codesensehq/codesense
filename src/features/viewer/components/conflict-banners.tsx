@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
 // ---------------------------------------------------------------------------
 // SW-VE-4 — the shared concurrent-write conflict UI, rendered identically by the
 // source-worktree editor (`source-editor-inset.tsx`) and the context editor
@@ -9,6 +8,8 @@ import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
 // passes its own `testIdPrefix` (`worktree` | `context-editor`) so the existing
 // per-surface test hooks are preserved.
 // ---------------------------------------------------------------------------
+
+import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
 
 const AMBER_BAR =
   "flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-[0.7rem] text-amber-700 dark:text-amber-400";

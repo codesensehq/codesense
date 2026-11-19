@@ -2,7 +2,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useViewerStore, type Workspace } from "./viewer-store";
+import * as shortcutsStore from "./shortcuts-store";
 import { useShortcutsStore } from "./shortcuts-store";
+import { logger } from "@/shared/lib/logger";
 import { installTerminalLayoutHarness } from "@/test/terminal-layout-harness";
 import { restorePlatform, setPlatform } from "@/test/platform";
 
@@ -55,7 +57,10 @@ beforeEach(() => {
     softClosedWorkspaces: {},
   });
 });
-afterEach(restorePlatform);
+afterEach(() => {
+  restorePlatform();
+  vi.restoreAllMocks();
+});
 
 describe("the toast for a terminal in a workspace on another machine", () => {
   it("names ⌘T on macOS, where the terminal answers to it too", async () => {
@@ -80,6 +85,21 @@ describe("the toast for a terminal in a workspace on another machine", () => {
     useShortcutsStore.setState({ shortcuts: { "viewer.new-terminal-tab": "" } });
     expect(await refusedToast()).toBe(
       "This workspace lives on a machine: open its terminals with the new-terminal menu",
+    );
+  });
+
+  it("still shows the toast, without a chord, and logs when the chord lookup fails", async () => {
+    setPlatform("MacIntel");
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    vi.spyOn(shortcutsStore, "getToastShortcut").mockImplementation(() => {
+      throw new Error("chunk load failed");
+    });
+    expect(await refusedToast()).toBe(
+      "This workspace lives on a machine: open its terminals with the new-terminal menu",
+    );
+    expect(warn).toHaveBeenCalledWith(
+      "terminal",
+      expect.stringContaining("open terminal tab failed: chunk load failed"),
     );
   });
 });

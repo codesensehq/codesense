@@ -9,6 +9,7 @@ import { agentCliLabel } from "@/shared/lib/agent-clis";
 import { seedAgentListFixture } from "@/features/viewer/lib/agent-list-test-fixture";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { pickOption } from "./pick-option";
+import { restorePlatform, setPlatform } from "@/test/platform";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -331,6 +332,20 @@ describe("launch sheet", () => {
       isAgentRuntime("hermes"),
     );
     expect(launchCalls()).toHaveLength(0);
+  });
+
+  it.each([
+    ["MacIntel", ["⌘", "⏎"]],
+    ["Win32", ["Ctrl", "⏎"]],
+  ])("names the launch chord in two keycaps on %s", async (platform, keycaps) => {
+    setPlatform(platform);
+    const { sheet } = renderSheet({ teamKey: TEAM, agentKey: TRIAGE });
+    await waitFor(() => expect(sheet.getByTestId("launch-agent")).toHaveTextContent("Triage"));
+    const sheetEl = screen.getByTestId("agent-launch-sheet");
+    expect(Array.from(sheetEl.querySelectorAll("kbd.ls-kbd"), (k) => k.textContent)).toEqual(
+      keycaps,
+    );
+    restorePlatform();
   });
 
   it("previews a listed no-login CLI version and launches with a selected queue role", async () => {
