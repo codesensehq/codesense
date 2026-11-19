@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { htmlToPlain, markdownToPlain, messagePreview } from "./message-preview";
 
@@ -71,5 +71,18 @@ describe("messagePreview", () => {
     expect(p).toBe(`${"a".repeat(8)}😀…`);
     // No lone surrogate before the ellipsis.
     expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(p)).toBe(false);
+  });
+});
+
+describe("htmlToPlain without a DOM parser", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("decodes each entity once, so an escaped entity stays as written", () => {
+    vi.stubGlobal("DOMParser", undefined);
+    expect(htmlToPlain("<p>Use &amp;lt;b&amp;gt; for bold, &amp;amp; for &amp;</p>")).toBe(
+      "Use &lt;b&gt; for bold, &amp; for &",
+    );
   });
 });
