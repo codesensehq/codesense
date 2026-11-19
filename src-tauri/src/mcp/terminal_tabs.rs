@@ -735,18 +735,20 @@ pub(crate) mod tests {
         assert!(live.view("h", Some("local-x"), None).is_none());
     }
 
-    #[test]
-    fn list_sessions_shows_a_live_remote_tab_running_under_its_current_name() {
+    /// A registered session's registry row, as the launch registry lists it
+    /// before its tab is read.
+    pub(crate) fn registered_row(
+        handle: &str,
+        session_id: Option<&str>,
+    ) -> crate::commands::dashboard_launch::SessionRow {
         use crate::commands::dashboard_launch::{derive_status, LaunchMeta, SessionRow};
-        use crate::mcp::session_list::{session_list_rows_with_tabs, SessionState};
-        // A remote tab's registry row has no local session: alone it reads exited.
-        let row = SessionRow {
+        SessionRow {
             chat_workspace_id: None,
             group_unread: 0,
             group_read_id: 0,
             output_run_id: None,
-            handle: "remote-tab-a".into(),
-            session_id: None,
+            handle: handle.into(),
+            session_id: session_id.map(Into::into),
             kind: "registered".into(),
             alive: false,
             status: derive_status(false, None, false),
@@ -757,17 +759,37 @@ pub(crate) mod tests {
             account_provenance: None,
             provenance: None,
             last_output_ms: None,
-            meta: LaunchMeta {
-                display_name: Some("name when opened".into()),
-                ..LaunchMeta::default()
-            },
+            meta: LaunchMeta::default(),
             workspace: None,
             agent_revision: None,
             deadline_at_ms: None,
             expiring: false,
             machine_id: None,
             launch_team_key: None,
-        };
+        }
+    }
+
+    /// `row` listed the way list_sessions lists it, its tab read from `live`
+    /// (`remote`: its machine and workspace id).
+    pub(crate) fn listed(
+        row: crate::commands::dashboard_launch::SessionRow,
+        live: &LiveTabs,
+        remote: Option<(&str, &str)>,
+    ) -> Vec<crate::mcp::session_list::SessionListRow> {
+        crate::mcp::session_list::session_list_rows_with_tabs(
+            vec![row],
+            |_| None,
+            None,
+            |row| live.view(&row.handle, row.session_id.as_deref(), remote),
+        )
+    }
+
+    #[test]
+    fn list_sessions_shows_a_live_remote_tab_running_under_its_current_name() {
+        use crate::mcp::session_list::SessionState;
+        // A remote tab's registry row has no local session: alone it reads exited.
+        let mut row = registered_row("remote-tab-a", None);
+        row.meta.display_name = Some("name when opened".into());
         let labels = BTreeMap::from([("droplet".to_string(), "codesense-test-1".to_string())]);
         let live = LiveTabs::of(
             &[reply(
@@ -779,18 +801,7 @@ pub(crate) mod tests {
             )],
             labels,
         );
-        let listed = session_list_rows_with_tabs(
-            vec![row],
-            |_| None,
-            None,
-            |row| {
-                live.view(
-                    &row.handle,
-                    row.session_id.as_deref(),
-                    Some(("droplet", "root:repo")),
-                )
-            },
-        );
+        let listed = listed(row, &live, Some(("droplet", "root:repo")));
         assert_eq!(listed[0].state, SessionState::Running);
         let wire = serde_json::to_value(&listed[0]).unwrap();
         assert_eq!(wire["displayName"], "Terminal 2");

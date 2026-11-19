@@ -58,10 +58,12 @@ mod tests {
             ("windows", "This computer", "this computer", "computer"),
         ];
         for (os, noun, lower, kind) in table {
-            assert_eq!(is_mac(os), os == "macos", "is_mac({os})");
             assert_eq!(machine_noun(os), noun, "machine_noun({os})");
             assert_eq!(machine_noun_lower(os), lower, "machine_noun_lower({os})");
             assert_eq!(machine_kind(os), kind, "machine_kind({os})");
+        }
+        for (os, mac) in [("macos", true), ("linux", false), ("windows", false)] {
+            assert_eq!(is_mac(os), mac, "is_mac({os})");
         }
     }
 }

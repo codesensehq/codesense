@@ -50,7 +50,7 @@ pub fn same_server(
 }
 
 /// "<machine>'s terminal server <state>", worded for `os`.
-fn server_sentence(os: &str, state: &str) -> String {
+pub(super) fn server_sentence(os: &str, state: &str) -> String {
     format!(
         "{}'s terminal server {state}",
         machine_wording::machine_noun(os)

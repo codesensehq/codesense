@@ -295,10 +295,7 @@ pub(crate) fn refuse_while_running() -> Result<(), String> {
 
 /// The local server is already this app's build, worded for `os`.
 fn already_this_build_for(os: &str) -> String {
-    format!(
-        "{}'s terminal server is already this app's build",
-        machine_wording::machine_noun(os)
-    )
+    super::local_update::server_sentence(os, "is already this app's build")
 }
 
 fn already_this_build() -> String {
