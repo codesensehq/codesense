@@ -8,6 +8,7 @@
 import { Terminal, type IDisposable } from "@xterm/xterm";
 import type { WebglAddon } from "@xterm/addon-webgl";
 
+import { TERMINAL_THEME } from "@/features/viewer/components/terminal-constants";
 import type { RenderProbeVerdict } from "./terminal-renderer";
 
 /** How long the probe waits, from its first frame, for a frame with lit pixels. */
@@ -15,15 +16,26 @@ export const RENDER_PROBE_TIMEOUT_MS = 2_000;
 /** How long it waits for a first frame at all once the page is visible. */
 export const RENDER_PROBE_FIRST_FRAME_MS = 10_000;
 
-/** Whether any pixel of the context's drawing buffer has a bright channel. */
-function anyLit(gl: WebGL2RenderingContext): boolean {
+/** How far a channel must be from the background's for a pixel to count as drawn. */
+const LIT_DISTANCE = 64;
+
+/** `#rrggbb` as channels; anything else reads as black. */
+function rgb(color: string | undefined): [number, number, number] {
+  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(color ?? "");
+  return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [0, 0, 0];
+}
+
+/** Whether any pixel of the context's drawing buffer is far from `background`. */
+function anyLit(gl: WebGL2RenderingContext, background: [number, number, number]): boolean {
   const w = gl.drawingBufferWidth;
   const h = gl.drawingBufferHeight;
   if (!w || !h) return false;
   const pixels = new Uint8Array(w * h * 4);
   gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
   for (let i = 0; i < pixels.length; i += 4) {
-    if (pixels[i] > 127 || pixels[i + 1] > 127 || pixels[i + 2] > 127) return true;
+    for (let c = 0; c < 3; c++) {
+      if (Math.abs(pixels[i + c] - background[c]) > LIT_DISTANCE) return true;
+    }
   }
   return false;
 }
@@ -52,11 +64,11 @@ function whenVisible(): Promise<void> {
 }
 
 /**
- * Draw white glyphs on black in a scratch terminal through a WebGL addon from
+ * Draw glyphs in the terminals' theme colours in a scratch terminal through a WebGL addon from
  * `createAddon`, and read its canvas back inside the frame that drew them
  * (`onRender` fires in the same task as the draw, so the drawing buffer still
- * holds it). The cursor is hidden so only glyphs from the atlas can light a
- * pixel. The scratch terminal is on screen but invisible (opacity 0), because
+ * holds it), looking for a pixel far from the background. The cursor is hidden
+ * so only glyphs from the atlas can make one. The scratch terminal is on screen but invisible (opacity 0), because
  * xterm pauses rendering for an element that is out of view, and the probe
  * starts only once the page is visible.
  *
@@ -89,8 +101,14 @@ export async function probeWebglRender(
     fontSize: 16,
     fontFamily: "monospace",
     cursorInactiveStyle: "none",
-    theme: { background: "#000000", foreground: "#ffffff", cursor: "#000000" },
+    // The terminals' own colours; the cursor, hidden anyway, takes the background.
+    theme: {
+      background: TERMINAL_THEME.background,
+      foreground: TERMINAL_THEME.foreground,
+      cursor: TERMINAL_THEME.background,
+    },
   });
+  const background = rgb(TERMINAL_THEME.background);
   let gl = null as WebGL2RenderingContext | null;
   try {
     term.open(host);
@@ -118,7 +136,7 @@ export async function probeWebglRender(
           timer = setTimeout(() => finish("blank"), timeoutMs);
         }
         try {
-          if (anyLit(context)) finish("ok");
+          if (anyLit(context, background)) finish("ok");
         } catch {
           finish("error");
         }
