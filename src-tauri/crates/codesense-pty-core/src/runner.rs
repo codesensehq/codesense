@@ -973,9 +973,11 @@ mod tests {
         while waits.load(std::sync::atomic::Ordering::SeqCst) == 0 {
             std::thread::sleep(Duration::from_millis(1));
         }
-        // The session goes while the watcher waits on its child.
-        let at_drop = waits.load(std::sync::atomic::Ordering::SeqCst);
+        // The session goes while the watcher waits on its child. Read after
+        // the drop: no wait starts once the watcher sees it, so at most the
+        // one it may have begun just before can follow.
         drop(slot);
+        let at_drop = waits.load(std::sync::atomic::Ordering::SeqCst);
         // Returns although the child never exits, after the slice in hand.
         watcher.join().unwrap();
         assert!(waits.load(std::sync::atomic::Ordering::SeqCst) <= at_drop + 1);
