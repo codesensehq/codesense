@@ -64,7 +64,7 @@ import {
 import { attachTerminal } from "@/features/viewer/lib/terminal-attach";
 import { acquireInstance } from "@/shared/lib/fe-instance-registry";
 import { terminalFrameScheduler } from "@/shared/lib/frame-budget-scheduler";
-import { logger } from "@/shared/lib/logger";
+import { initLogging, logger } from "@/shared/lib/logger";
 import { beginOpenSpan } from "@/shared/lib/open-path-timing";
 import {
   createTerminalKeyHandler,
@@ -95,6 +95,14 @@ import {
   type LeaseRenderer,
   type WebglLeaseReading,
 } from "./webgl-lease-pool";
+import {
+  createTerminalRendererGate,
+  isLinuxPlatform,
+  parseRendererOverride,
+  type RenderProbeVerdict,
+  type TerminalRendererChoice,
+  type TerminalRendererGate,
+} from "./terminal-renderer";
 
 import {
   currentTerminalDisplay,
@@ -198,6 +206,105 @@ export function loadWebglRenderer(
       return addon !== null;
     },
   };
+}
+
+/** How long the probe waits for a frame with lit pixels. */
+export const RENDER_PROBE_TIMEOUT_MS = 2_000;
+
+/** Whether any pixel of the context's drawing buffer has a bright channel. */
+function anyLit(gl: WebGL2RenderingContext): boolean {
+  const w = gl.drawingBufferWidth;
+  const h = gl.drawingBufferHeight;
+  if (!w || !h) return false;
+  const pixels = new Uint8Array(w * h * 4);
+  gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+  for (let i = 0; i < pixels.length; i += 4) {
+    if (pixels[i] > 127 || pixels[i + 1] > 127 || pixels[i + 2] > 127) return true;
+  }
+  return false;
+}
+
+/**
+ * Draw white glyphs on black in a scratch terminal through a WebGL addon from
+ * `createAddon`, and read its canvas back inside the frame that drew them
+ * (`onRender` fires in the same task as the draw, so the drawing buffer still
+ * holds it). The cursor is hidden so only glyphs from the atlas can light a
+ * pixel. The scratch terminal is on screen but invisible (opacity 0), because
+ * xterm pauses rendering for an element that is out of view.
+ */
+export async function probeWebglRender(
+  createAddon: () => WebglAddon,
+  timeoutMs = RENDER_PROBE_TIMEOUT_MS,
+): Promise<RenderProbeVerdict> {
+  const host = document.createElement("div");
+  host.setAttribute("aria-hidden", "true");
+  Object.assign(host.style, {
+    position: "fixed",
+    left: "0",
+    top: "0",
+    width: "160px",
+    height: "48px",
+    opacity: "0",
+    pointerEvents: "none",
+    zIndex: "-1",
+  });
+  document.body.appendChild(host);
+  const term = new Terminal({
+    cols: 8,
+    rows: 2,
+    fontSize: 16,
+    fontFamily: "monospace",
+    cursorInactiveStyle: "none",
+    theme: { background: "#000000", foreground: "#ffffff", cursor: "#000000" },
+  });
+  try {
+    term.open(host);
+    const addon = createAddon();
+    let lost = false;
+    addon.onContextLoss(() => (lost = true));
+    term.loadAddon(addon);
+    const gl = webglContextIn(host);
+    if (!gl) return "error";
+    return await new Promise<RenderProbeVerdict>((resolve) => {
+      let rendered = false;
+      const finish = (verdict: RenderProbeVerdict) => {
+        clearTimeout(timer);
+        sub.dispose();
+        resolve(verdict);
+      };
+      const timer = setTimeout(() => finish(rendered && !lost ? "blank" : "error"), timeoutMs);
+      const sub = term.onRender(() => {
+        if (lost) return finish("error");
+        rendered = true;
+        try {
+          if (anyLit(gl)) finish("ok");
+        } catch {
+          finish("error");
+        }
+      });
+      // Hide the cursor, then a full block and letters.
+      term.write("\x1b[?25l██WM\r\n██WM");
+    });
+  } catch {
+    return "error";
+  } finally {
+    try {
+      term.dispose();
+    } catch {
+      // The addon may already be torn down.
+    }
+    host.remove();
+  }
+}
+
+/** The WebGL2 context of the canvas the addon added under `host`. */
+function webglContextIn(host: HTMLElement): WebGL2RenderingContext | null {
+  for (const canvas of host.querySelectorAll("canvas")) {
+    // Asking again for the same kind returns the context the addon created.
+    const gl = canvas.getContext("webgl2");
+    if (gl) return gl;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -360,6 +467,9 @@ export interface TerminalManager {
   /** The last parsed stream offset of the session's display. */
   appliedSeq(sessionId: TerminalDisplayReference): number | null;
   focus(sessionId: TerminalDisplayReference, policy?: FocusPolicy): void;
+  /** Decide this webview's renderer now if it is not decided (and log it).
+   *  The decision, or `null` when no gate is set. */
+  chooseRenderer(): TerminalRendererChoice | null;
   /** The display's WebGL lease and the pool's fill, or `null` (no display). */
   webglLease(sessionId: TerminalDisplayReference): WebglLeaseReading | null;
   setAppearance(
@@ -507,6 +617,8 @@ export interface TerminalManagerDeps {
   /** Apply one output item to xterm and call `parsed` once xterm parsed it. */
   applyOutput?: (term: Terminal, data: string, parsed: () => void) => void;
   createWebgl?: () => WebglAddon;
+  /** Whether this webview may use WebGL at all. Default: always. */
+  rendererGate?: TerminalRendererGate;
   maxDisplays?: number;
   maxBytes?: number;
   /** Leak faults the collectability test must catch: keep each evicted
@@ -621,8 +733,10 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
   let budgetPending = false;
   let lastOutputBudgetCheck = 0;
   const sessions = new Map<string, SessionEntry>();
+  const rendererGate = deps.rendererGate;
   const leases = createWebglLeasePool({
     schedule: (task) => terminalFrameScheduler.schedule(task),
+    enabled: rendererGate && (() => rendererGate.allowsWebgl()),
   });
   let globalsInstalled = false;
   const shownListeners = new Map<string, Set<() => void>>();
@@ -1845,6 +1959,11 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
       }
     },
 
+    chooseRenderer() {
+      rendererGate?.allowsWebgl();
+      return rendererGate?.choice ?? null;
+    },
+
     webglLease(reference) {
       const sessionId = terminalDisplayKey(reference);
       const d = sessions.get(sessionId)?.display;
@@ -1913,8 +2032,22 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
   return manager;
 }
 
+const linuxWebview = typeof navigator !== "undefined" && isLinuxPlatform(navigator.platform);
+/** WebKitGTK shows a WebGL canvas one draw behind unless the drawing buffer is
+ *  preserved, so on Linux it is. Elsewhere the addon's default, as before. */
+const createAppWebgl = () => (linuxWebview ? new WebglAddon(true) : new WebglAddon());
+
 /** The app's one terminal manager. */
-export const terminalManager = createTerminalManager();
+export const terminalManager = createTerminalManager({
+  createWebgl: createAppWebgl,
+  rendererGate: createTerminalRendererGate({
+    override: () => parseRendererOverride(window.__CODESENSE_TERMINAL_RENDERER__),
+    linux: () => linuxWebview,
+    probe: () => probeWebglRender(createAppWebgl),
+    // After the log plugin loads, so the line reaches the log file, not just the console.
+    log: (line) => void initLogging().finally(() => logger.info("terminal", line)),
+  }),
+});
 
 export interface HarnessTerminalEntry {
   readonly instanceId: string | null;

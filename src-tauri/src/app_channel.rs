@@ -11,13 +11,32 @@ const CHANNEL: &str = "beta";
 #[cfg(cs_channel = "beta-staging")]
 const CHANNEL: &str = "beta-staging";
 
-/// The script every webview runs before the page: sets `window.__CODESENSE_CHANNEL__`
-/// and `window.__CODESENSE_PUBLIC_HOST__`.
+/// Forces the terminal renderer (`dom` or `webgl`) and skips the front end's render probe.
+const TERMINAL_RENDERER_VAR: &str = "CODESENSE_TERMINAL_RENDERER";
+
+/// The script every webview runs before the page: sets `window.__CODESENSE_CHANNEL__`,
+/// `window.__CODESENSE_PUBLIC_HOST__`, `window.__CODESENSE_DASHBOARD_PUBLISH__` and
+/// `window.__CODESENSE_TERMINAL_RENDERER__` (the override, or `null`). Built once at startup,
+/// so the override is read once.
 pub fn init_script() -> String {
     let channel = serde_json::to_string(CHANNEL).expect("channel serializes");
     let host = serde_json::to_string(env!("CODESENSE_PUBLIC_HOST")).expect("host serializes");
     let publishing = cfg!(feature = "dashboard-publish");
-    format!("window.__CODESENSE_CHANNEL__={channel};window.__CODESENSE_PUBLIC_HOST__={host};window.__CODESENSE_DASHBOARD_PUBLISH__={publishing};")
+    let renderer = serde_json::to_string(&terminal_renderer_override(
+        std::env::var(TERMINAL_RENDERER_VAR).ok().as_deref(),
+    ))
+    .expect("renderer serializes");
+    format!("window.__CODESENSE_CHANNEL__={channel};window.__CODESENSE_PUBLIC_HOST__={host};window.__CODESENSE_DASHBOARD_PUBLISH__={publishing};window.__CODESENSE_TERMINAL_RENDERER__={renderer};")
+}
+
+/// The renderer the variable forces: `dom` or `webgl`, in any case and with spaces around it.
+/// Anything else forces nothing.
+fn terminal_renderer_override(value: Option<&str>) -> Option<&'static str> {
+    match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+        Some("dom") => Some("dom"),
+        Some("webgl") => Some("webgl"),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -34,5 +53,15 @@ mod tests {
             cfg!(feature = "dashboard-publish")
         )));
         assert!(matches!(CHANNEL, "internal" | "beta" | "beta-staging"));
+        assert!(script.contains("window.__CODESENSE_TERMINAL_RENDERER__="));
+    }
+
+    #[test]
+    fn the_terminal_renderer_override_takes_dom_or_webgl_only() {
+        assert_eq!(terminal_renderer_override(Some("dom")), Some("dom"));
+        assert_eq!(terminal_renderer_override(Some(" WebGL ")), Some("webgl"));
+        assert_eq!(terminal_renderer_override(Some("canvas")), None);
+        assert_eq!(terminal_renderer_override(Some("")), None);
+        assert_eq!(terminal_renderer_override(None), None);
     }
 }

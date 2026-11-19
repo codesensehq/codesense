@@ -13,6 +13,7 @@
  * - A lost context (or a failed load) falls back to DOM and re-requests a lease
  *   on the next frame. {@link WEBGL_LOSS_PIN_COUNT} losses within
  *   {@link WEBGL_LOSS_WINDOW_MS} pin the display to DOM until its next attach.
+ * - While `enabled` says no (the webview's renderer is DOM), no lease is granted.
  *
  * The pool only decides who holds a lease. Swapping renderers is the
  * {@link LeaseRenderer}'s job, and never touches geometry or content.
@@ -66,6 +67,8 @@ export interface WebglLeasePoolDeps {
   /** Run `task` on a coming frame. */
   schedule: (task: () => void) => void;
   now?: () => number;
+  /** Whether WebGL may be used at all. Default: always. */
+  enabled?: () => boolean;
 }
 
 interface Lessee {
@@ -141,6 +144,7 @@ export function createWebglLeasePool(deps: WebglLeasePoolDeps): WebglLeasePool {
   const byRank = (a: Lessee, b: Lessee) => b.focusedAt - a.focusedAt || a.shownAt - b.shownAt;
 
   function reconcile(): void {
+    if (deps.enabled && !deps.enabled()) return;
     const wanted = [...lessees.values()]
       .filter((l) => l.visible && !l.pinned)
       .sort(byRank)
