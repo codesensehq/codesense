@@ -62,7 +62,7 @@ test("a raw binary from the git-ai repository installs as is", (t) => {
   const f = fixture(t);
   const file = path.join(f.dir, "tool-macos");
   fs.writeFileSync(file, binary);
-  const gitAi = fs.readFileSync(path.join(root, "src-tauri/git-ai.pin"), "utf8");
+  const gitAi = fs.readFileSync(path.join(root, "src-tauri/pins/git-ai-macos-arm64.pin"), "utf8");
   const pin = f.pin({
     asset: "tool-macos",
     platform: "macos-arm64",
@@ -160,6 +160,22 @@ test("invalid pins are refused", (t) => {
   }
 });
 
+test("every supported platform is accepted", (t) => {
+  for (const platform of [
+    "macos-arm64",
+    "linux-x86_64",
+    "linux-aarch64",
+    "windows-x86_64",
+    "windows-arm64",
+  ]) {
+    const f = fixture(t);
+    const file = path.join(f.dir, "tool");
+    fs.writeFileSync(file, binary);
+    const pin = f.pin({ asset: "tool", platform, sha256: f.sha256(file) });
+    assertInstalled(f, f.run(pin, f.dest, "--from", file));
+  }
+});
+
 test("bad arguments print the usage", (t) => {
   const f = fixture(t);
   for (const args of [[], ["a.pin"], ["a.pin", "dest", "--from"], ["a.pin", "dest", "--force"]]) {
@@ -171,10 +187,9 @@ test("bad arguments print the usage", (t) => {
 
 test("--dry-run prints the URL of every committed pin, given relative to the repository root", (t) => {
   const f = fixture(t);
-  const pins = [
-    "src-tauri/git-ai.pin",
-    ...fs.readdirSync(path.join(root, "src-tauri/pins")).map((name) => `src-tauri/pins/${name}`),
-  ];
+  const pins = fs
+    .readdirSync(path.join(root, "src-tauri/pins"))
+    .map((name) => `src-tauri/pins/${name}`);
   for (const pin of pins) {
     const fields = Object.fromEntries(
       fs
@@ -213,41 +228,70 @@ test("fetch-bundled maps each host to its pins", (t) => {
     );
   };
   const release = "https://github.com/starship/starship/releases/download/v1.24.2";
-  const gitAiPin = fs.readFileSync(path.join(root, "src-tauri/git-ai.pin"), "utf8");
-  const field = (key) => gitAiPin.match(new RegExp(`^${key}=(.*)$`, "m"))[1];
-  assert.equal(field("asset"), "git-ai-macos-arm64");
-  const gitAi = `https://github.com/${field("repo")}/releases/download/${field("tag")}/git-ai-macos-arm64\n`;
-  // Each host prints exactly one URL: its one pinned binary, so an extra pin fails here.
-  for (const [os, arch, url] of [
-    ["Darwin", "arm64", gitAi],
-    ["Darwin", "x86_64", gitAi],
-    ["Linux", "x86_64", `${release}/starship-x86_64-unknown-linux-musl.tar.gz\n`],
-    ["Linux", "aarch64", `${release}/starship-aarch64-unknown-linux-musl.tar.gz\n`],
-  ]) {
-    const run = host(os, arch);
-    assert.equal(run.status, 0, `${os} ${arch}: ${run.stderr}`);
-    assert.equal(run.stdout, url);
-  }
-  // The pin and destination other scripts read from here, by binary, so the mapping lives in
-  // one place and a host with several pins is never ambiguous.
-  for (const [os, arch, name, other, pin, dest] of [
-    ["Darwin", "arm64", "git-ai", "starship", "src-tauri/git-ai.pin", "src-tauri/resources/git-ai"],
+  // A git-ai URL from its pin, so the test names the git-ai repository nowhere but the pin.
+  const gitAi = (platform, asset) => {
+    const pin = fs.readFileSync(path.join(root, `src-tauri/pins/git-ai-${platform}.pin`), "utf8");
+    const field = (key) => pin.match(new RegExp(`^${key}=(.*)$`, "m"))[1];
+    assert.equal(field("asset"), asset);
+    return `https://github.com/${field("repo")}/releases/download/${field("tag")}/${asset}`;
+  };
+  const macGitAi = gitAi("macos-arm64", "git-ai-macos-arm64");
+  assert.match(macGitAi, /\/v1\.7\.5-cs\.4\//);
+  // Each host prints exactly one URL per pinned binary, in order, so an extra pin fails here:
+  // macOS bundles git-ai; Linux bundles git-ai and starship.
+  for (const [os, arch, urls] of [
+    ["Darwin", "arm64", [macGitAi]],
+    ["Darwin", "x86_64", [macGitAi]],
     [
       "Linux",
       "x86_64",
-      "starship",
-      "git-ai",
-      "src-tauri/pins/starship-linux-x86_64.pin",
-      "src-tauri/resources/fetched/starship",
+      [
+        gitAi("linux-x86_64", "git-ai-linux-x86_64"),
+        `${release}/starship-x86_64-unknown-linux-musl.tar.gz`,
+      ],
     ],
     [
       "Linux",
       "aarch64",
-      "starship",
-      "git-ai",
-      "src-tauri/pins/starship-linux-aarch64.pin",
-      "src-tauri/resources/fetched/starship",
+      [
+        gitAi("linux-aarch64", "git-ai-linux-arm64"),
+        `${release}/starship-aarch64-unknown-linux-musl.tar.gz`,
+      ],
     ],
+  ]) {
+    const run = host(os, arch);
+    assert.equal(run.status, 0, `${os} ${arch}: ${run.stderr}`);
+    assert.equal(run.stdout, urls.map((url) => `${url}\n`).join(""));
+  }
+  // The pin and destination other scripts read from here, by binary, so the mapping lives in
+  // one place and a host with several pins is never ambiguous.
+  for (const [os, arch, name, unknowns, pin, dest] of [
+    [
+      "Darwin",
+      "arm64",
+      "git-ai",
+      ["starship"],
+      "src-tauri/pins/git-ai-macos-arm64.pin",
+      "src-tauri/resources/git-ai",
+    ],
+    ...["x86_64", "aarch64"].flatMap((arch) => [
+      [
+        "Linux",
+        arch,
+        "git-ai",
+        [],
+        `src-tauri/pins/git-ai-linux-${arch}.pin`,
+        "src-tauri/resources/git-ai",
+      ],
+      [
+        "Linux",
+        arch,
+        "starship",
+        [],
+        `src-tauri/pins/starship-linux-${arch}.pin`,
+        "src-tauri/resources/fetched/starship",
+      ],
+    ]),
   ]) {
     for (const [flag, expected] of [
       ["--print-pin", pin],
@@ -257,7 +301,7 @@ test("fetch-bundled maps each host to its pins", (t) => {
       assert.equal(run.status, 0, `${os} ${arch} ${flag} ${name}: ${run.stderr}`);
       assert.equal(run.stdout, `${expected}\n`);
       // A binary this host does not bundle is refused, not answered with another's pin.
-      for (const unknown of [other, "no-such-tool"]) {
+      for (const unknown of [...unknowns, "no-such-tool"]) {
         const refused = host(os, arch, flag, unknown);
         assert.equal(refused.status, 1, `${os} ${arch} ${flag} ${unknown}`);
         assert.equal(refused.stdout, "");

@@ -1,11 +1,12 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # Repair a CodeSense AppImage after linuxdeploy has packed it. linuxdeploy sets an $ORIGIN rpath
-# on every ELF file in the AppDir, and that patchelf rewrite breaks two of them: the static-pie
-# starship crashes, and the Bun-compiled emulator, whose payload sits after its ELF image, loses
-# it (on aarch64 the bundle aborts). So the image must be bundled without the emulator (see
-# scripts/ci/unsigned-bundle.sh), and this script then inserts the emulator the build compiled
-# and puts back the pinned starship that the deb and rpm ship, both byte for byte.
+# on every ELF file in the AppDir, and that patchelf rewrite breaks three of them: the static
+# git-ai and starship crash, and the Bun-compiled emulator, whose payload sits after its ELF
+# image, loses it (on aarch64 the bundle aborts). So the image must be bundled without the
+# emulator (see scripts/ci/unsigned-bundle.sh), and this script then inserts the emulator the
+# build compiled and puts back the pinned git-ai and starship that the deb and rpm ship, all
+# byte for byte.
 #
 # An AppImage is its runtime followed by a squashfs, so the new image is the original runtime
 # bytes plus a squashfs of the repaired tree, made with the original's compressor; no
@@ -55,7 +56,6 @@ appimage=$(realpath "$1")
 PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$PROJECT_ROOT"
 emulator="$PROJECT_ROOT/src-tauri/binaries/codesense-emulator-$(rustc -vV | sed -n 's/^host: //p')"
-starship_src=$(bash scripts/fetch-bundled.sh --print-dest starship)
 
 work=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/appimage.XXXXXX")
 trap 'rm -rf "$work"' EXIT
@@ -67,12 +67,15 @@ if [[ -e "$work/squashfs-root/usr/bin/codesense-emulator" ]]; then
     exit 1
 fi
 install -m 755 "$emulator" "$work/squashfs-root/usr/bin/codesense-emulator"
-starship=$(find "$work/squashfs-root" -path '*/resources/starship' -type f)
-if [[ -z "$starship" || "$starship" == *$'\n'* ]]; then
-    echo "Error: expected one resources/starship in $appimage, found: $starship" >&2
-    exit 1
-fi
-install -m 755 "$starship_src" "$starship"
+for name in git-ai starship; do
+    src=$(bash scripts/fetch-bundled.sh --print-dest "$name")
+    found=$(find "$work/squashfs-root" -path "*/resources/$name" -type f)
+    if [[ -z "$found" || "$found" == *$'\n'* ]]; then
+        echo "Error: expected one resources/$name in $appimage, found: $found" >&2
+        exit 1
+    fi
+    install -m 755 "$src" "$found"
+done
 mksquashfs "$work/squashfs-root" "$work/fs.sqfs" -root-owned -noappend -no-progress \
     -comp "$compressor"
 # A temp file, then mv: a redirect onto the original would truncate it before head reads.

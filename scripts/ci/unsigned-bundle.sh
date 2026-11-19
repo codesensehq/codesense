@@ -10,14 +10,15 @@
 #   - macOS fetches git-ai, signs ad hoc (Apple silicon needs a signature to launch the app),
 #     builds the app and dmg, and zips the app to $RUNNER_TEMP/CodeSense.app.zip. The dmg
 #     stays in target/release/bundle/dmg.
-#   - Linux fetches starship, builds the formats in `bundles` (a comma list of deb, rpm and
-#     appimage; all three by default), and checks that each of them is exactly one file under
-#     target/release/bundle. The AppImage is bundled apart from the others, without the
+#   - Linux fetches git-ai and starship, builds the formats in `bundles` (a comma list of deb,
+#     rpm and appimage; all three by default), and checks that each of them is exactly one
+#     file under target/release/bundle. The AppImage is bundled apart from the others, without the
 #     terminal emulator: linuxdeploy sets an rpath on every executable in the AppDir, and the
 #     emulator is a Bun-compiled executable whose payload sits after the ELF image, which the
-#     rewrite breaks (on aarch64 the bundle aborts). The same rewrite corrupts the static-pie
-#     starship. scripts/ci/repair-appimage.sh then inserts the untouched emulator, puts the
-#     pinned starship back and rebuilds the image from its own runtime plus a new squashfs.
+#     rewrite breaks (on aarch64 the bundle aborts). The same rewrite corrupts the static
+#     git-ai and starship. scripts/ci/repair-appimage.sh then inserts the untouched emulator,
+#     puts the pinned git-ai and starship back and rebuilds the image from its own runtime
+#     plus a new squashfs.
 # `pnpm exec tauri` runs the CLI directly: the `tauri` script in package.json is POSIX shell
 # and does not run on a Windows runner.
 set -euo pipefail
@@ -44,7 +45,8 @@ tauri_args=(--config src-tauri/tauri.unsigned.conf.json)
 # Platform preparation.
 case "$PLATFORM" in
     macos)
-        # The bundle ships resources/git-ai; the script verifies it against src-tauri/git-ai.pin.
+        # The bundle ships resources/git-ai, which the script verifies against its pin in
+        # src-tauri/pins/.
         bash scripts/fetch-git-ai.sh
         # An inline config merged over the unsigned one: signingIdentity "-" signs ad hoc,
         # and no Apple identity or updater key is involved.
@@ -55,7 +57,8 @@ case "$PLATFORM" in
         export NODE_OPTIONS=--max-old-space-size=6144
         ;;
     linux)
-        # The bundle ships resources/starship from the pinned, checksummed download.
+        # The bundle ships resources/git-ai and resources/starship from the pinned, checksummed
+        # downloads.
         bash scripts/fetch-bundled.sh
         # linuxdeploy is itself an AppImage, and a runner has no FUSE to mount one.
         export APPIMAGE_EXTRACT_AND_RUN=1
@@ -118,7 +121,8 @@ case "$PLATFORM" in
             fi
         done
         if [[ ",$LINUX_BUNDLES," == *,appimage,* ]]; then
-            # Bundled without the emulator, and with the starship linuxdeploy broke; put both right.
+            # Bundled without the emulator, and with the git-ai and starship linuxdeploy broke; put
+            # them right.
             bash scripts/ci/repair-appimage.sh "$BUNDLE_DIR"/appimage/*.AppImage
         fi
         ;;

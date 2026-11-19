@@ -68,9 +68,9 @@ A signed release build (`pnpm run tauri build`) needs your own Apple signing
 identity and your own updater signing key; none are included here.
 
 `scripts/fetch-bundled.sh` downloads the third-party binaries the app bundles on
-this OS (git-ai on macOS, `src-tauri/git-ai.pin`; starship on Linux,
-`src-tauri/pins/`) over HTTPS, with no GitHub login, and refuses each unless its
-SHA-256 matches its pin. `bash scripts/fetch-bundled.sh --dry-run` prints the URL
+this OS (git-ai on macOS and Linux; starship on Linux), each from its pin in
+`src-tauri/pins/`, over HTTPS, with no GitHub login, and refuses each unless its
+SHA-256 matches its pin. `bash scripts/fetch-bundled.sh --dry-run` prints the URLs
 it would fetch. If a step
 fails on a clean checkout, please open an issue.
 
@@ -118,8 +118,8 @@ chmod +x CodeSense_*.AppImage && ./CodeSense_*.AppImage
 If the AppImage will not start for want of FUSE, install it (`sudo apt install libfuse2`,
 or `libfuse2t64` on Ubuntu 24.04) or run it with `--appimage-extract-and-run`.
 
-Some things are off on Linux for now: git-ai attribution and remembering an SSH key
-passphrase (it needs a passphrase prompt Linux doesn't have yet). Other saved secrets
+Remembering an SSH key passphrase is off on Linux for now (it needs a passphrase
+prompt Linux doesn't have yet). Other saved secrets
 are kept in Secret Service (GNOME Keyring or KWallet) when one is running, and
 CodeSense says so when none is.
 
