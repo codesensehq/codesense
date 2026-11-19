@@ -183,7 +183,7 @@ install_package() {
         echo "apt archives: $(find "$SMOKE_APT_CACHE" -name '*.deb' | wc -l) cached in $SMOKE_APT_CACHE"
     fi
     echo "Installing $(basename "$package") in $ref"
-    docker run --rm -e SMOKE_APT_MIRROR "${cache[@]}" \
+    docker run --rm -e SMOKE_APT_MIRROR ${cache[@]+"${cache[@]}"} \
         -v "$(dirname "$package"):/package:ro" -v "$SCRIPT_DIR:/smoke:ro" -v "$out:/out" \
         "$ref" bash /smoke/smoke-linux.sh in-container "$type" "/package/$(basename "$package")" "/out/$type.list"
     check_listing "$out/$type.list"

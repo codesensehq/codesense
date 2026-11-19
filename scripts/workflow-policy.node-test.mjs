@@ -1482,7 +1482,13 @@ test("test build: a deb leg restores its apt archives, and saves them even after
   assert.equal(restore.with["restore-keys"], "${{ steps.apt-key.outputs.restore }}");
   assert.match(save.uses, /^actions\/cache\/save@[0-9a-f]{40}$/);
   assert.equal(save.with.path, restore.with.path);
-  assert.equal(save.with.key, restore.with.key);
+  // A failed or timed-out install saves under a key of its own, which the week's exact key never
+  // hits, so the next run still restores it by prefix, finishes and saves the full set.
+  assert.equal(
+    save.with.key,
+    "${{ steps.install.outcome == 'success' && steps.apt-key.outputs.key || format('{0}-partial-{1}-{2}', steps.apt-key.outputs.key, github.run_id, github.run_attempt) }}",
+  );
+  assert.equal(step("Install the package in a clean container").id, "install");
   const onMiss =
     "always() && matrix.type == 'deb' && steps.apt-key.outcome == 'success' && steps.apt-restore.outputs.cache-hit != 'true'";
   assert.equal(hand.if, onMiss);
@@ -1508,8 +1514,12 @@ test("test build: each arch's deb listings are compared with its rpm's after the
   // Each listing keeps its own directory: every leg's file is deb.list or rpm.list.
   assert.equal(download.with["merge-multiple"], undefined);
   const compare = job.steps.find((step) => /same-resources/.test(step.run ?? ""));
-  assert.match(compare.run, /for arch in x86_64 arm64/);
-  assert.match(compare.run, /linux-install-\$arch-rpm-fedora-44\/rpm\.list/);
+  // Every install leg's listing, by name, and a count that catches a leg the matrix gains.
+  assert.match(compare.run, /^\s*compare x86_64 ubuntu-22\.04 ubuntu-24\.04$/m);
+  assert.match(compare.run, /^\s*compare arm64 ubuntu-24\.04$/m);
+  assert.match(compare.run, /\[\[ \$found -eq 5 \]\]/);
+  const legs = parse(testBuild()).jobs["linux-install"].strategy.matrix.include;
+  assert.equal(legs.length, 5);
 });
 
 test("test build: the AppImage launches beside the installs, on the x86_64 build's runner", () => {

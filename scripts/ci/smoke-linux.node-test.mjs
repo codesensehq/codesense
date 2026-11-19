@@ -273,3 +273,60 @@ test("apt-keep: docker-clean goes and apt keeps the packages it downloads", () =
     'APT::Keep-Downloaded-Packages "true";\nBinary::apt::APT::Keep-Downloaded-Packages "true";\n',
   );
 });
+
+// install runs the container with docker; a stand-in on PATH records its arguments in
+// DOCKER_ARGS, one a line, and writes the listing the container would to the /out mount.
+fs.writeFileSync(
+  path.join(fakeBin, "docker"),
+  [
+    "#!/bin/bash",
+    'printf "%s\\n" "$@" >"$DOCKER_ARGS"',
+    'for arg in "$@"; do if [[ "$arg" == *:/out ]]; then out="${arg%:/out}"; fi; done',
+    'cp "$FAKE_LISTING" "$out/$(basename "${!#}")"',
+    "",
+  ].join("\n"),
+  { mode: 0o755 },
+);
+fs.writeFileSync(path.join(packages, "CodeSense-0.1.0-1.x86_64.rpm"), "");
+const install = (type, image, cache) => {
+  const args = path.join(dir, `docker-args-${fixtures++}`);
+  const result = spawnSync(
+    "bash",
+    [script, "install", type, image, packages, path.join(dir, `out-${fixtures++}`)],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}:${process.env.PATH}`,
+        DOCKER_ARGS: args,
+        FAKE_LISTING: fixture(debListing),
+        SMOKE_APT_CACHE: cache,
+      },
+    },
+  );
+  passes(result);
+  return fs.readFileSync(args, "utf8").split("\n").slice(0, -1);
+};
+// The arguments that follow <flag> in <argv>.
+const flagged = (argv, flag) => argv.flatMap((arg, i) => (argv[i - 1] === flag ? [arg] : []));
+
+test("install: a deb container mounts SMOKE_APT_CACHE as its apt archives and keeps them", () => {
+  const cache = path.join(dir, "apt-archives");
+  const argv = install("deb", "ubuntu:22.04", cache);
+  assert.ok(fs.statSync(cache).isDirectory());
+  assert.ok(flagged(argv, "-v").includes(`${cache}:/var/cache/apt/archives`));
+  assert.ok(flagged(argv, "-e").includes("SMOKE_KEEP_ARCHIVES=1"));
+  assert.ok(argv.some((arg) => arg.startsWith(`ubuntu:22.04@sha256:${jammy}`)));
+});
+
+test("install: an rpm container, or a deb one without SMOKE_APT_CACHE, gets no archive mount", () => {
+  for (const argv of [
+    install("rpm", "fedora:44", path.join(dir, "rpm-archives")),
+    install("deb", "ubuntu:24.04", ""),
+  ]) {
+    assert.ok(!flagged(argv, "-v").some((mount) => mount.endsWith(":/var/cache/apt/archives")));
+    assert.ok(!flagged(argv, "-e").includes("SMOKE_KEEP_ARCHIVES=1"));
+    assert.deepEqual(flagged(argv, "-e"), ["SMOKE_APT_MIRROR"]);
+  }
+  assert.ok(!fs.existsSync(path.join(dir, "rpm-archives")));
+});

@@ -330,6 +330,7 @@ jobs:
           key: ${{ steps.apt-key.outputs.key }}
           restore-keys: ${{ steps.apt-key.outputs.restore }}
       - name: Install the package in a clean container
+        id: install
         # A healthy install takes about 2 minutes, less with the archives cached. The timeout is
         # a backstop: a crawling mirror fails here, by name, before the job's timeout.
         timeout-minutes: 30
@@ -351,12 +352,14 @@ jobs:
           rm -rf "$SMOKE_APT_CACHE/partial" "$SMOKE_APT_CACHE/lock"
           echo "apt archives: $(find "$SMOKE_APT_CACHE" -name '*.deb' | wc -l) packages, $(du -sh "$SMOKE_APT_CACHE" | cut -f1)"
       - name: Save the apt archives
-        # Even after a failed or timed-out install, so a slow first run still warms the next.
+        # Even after a failed or timed-out install, so a slow first run still warms the next. Its
+        # archives may be partial, so they go under a key of their own that only the restore
+        # prefix finds: the week's key waits for an install that finishes.
         if: always() && matrix.type == 'deb' && steps.apt-key.outcome == 'success' && steps.apt-restore.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/apt-archives
-          key: ${{ steps.apt-key.outputs.key }}
+          key: ${{ steps.install.outcome == 'success' && steps.apt-key.outputs.key || format('{0}-partial-{1}-{2}', steps.apt-key.outputs.key, github.run_id, github.run_attempt) }}
       - name: Name the listing
         id: listing
         env:
@@ -392,15 +395,23 @@ jobs:
           pattern: linux-install-*
           path: ${{ runner.temp }}/listings
       - name: Compare each deb's listing with its architecture's rpm
+        # Each listing by name, and no others, so a leg the matrix gains or loses fails here.
         run: |
-          for arch in x86_64 arm64; do
-            rpm="$RUNNER_TEMP/listings/linux-install-$arch-rpm-fedora-44/rpm.list"
-            debs=("$RUNNER_TEMP/listings/linux-install-$arch-deb-"*/deb.list)
-            [[ -f "$rpm" && -f "${debs[0]}" ]] || { echo "Error: $arch lacks a deb or rpm listing" >&2; exit 1; }
-            for deb in "${debs[@]}"; do
+          listings="$RUNNER_TEMP/listings"
+          compare() {
+            local arch="$1" rpm="$listings/linux-install-$1-rpm-fedora-44/rpm.list" image deb
+            shift
+            [[ -f "$rpm" ]] || { echo "Error: no $arch rpm listing" >&2; exit 1; }
+            for image in "$@"; do
+              deb="$listings/linux-install-$arch-deb-$image/deb.list"
+              [[ -f "$deb" ]] || { echo "Error: no $arch deb listing from $image" >&2; exit 1; }
               bash scripts/ci/smoke-linux.sh same-resources "$deb" "$rpm"
             done
-          done
+          }
+          compare x86_64 ubuntu-22.04 ubuntu-24.04
+          compare arm64 ubuntu-24.04
+          found=$(find "$listings" -name '*.list' | wc -l)
+          [[ $found -eq 5 ]] || { echo "Error: expected 5 listings, found $found" >&2; exit 1; }
 
   linux-smoke:
     name: Linux AppImage smoke (x86_64)
