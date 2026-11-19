@@ -18,7 +18,7 @@
 //! never parks a runtime worker on the fork.
 
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -30,6 +30,13 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 /// child to become reapable so `pty-exit` can carry its real status. A shell's
 /// slave fds close as it exits, so the status is normally ready at once.
 const EXIT_STATUS_GRACE: Duration = Duration::from_millis(100);
+
+/// How often a pseudo console's watcher checks whether its child exited.
+const CONSOLE_EXIT_POLL: Duration = Duration::from_millis(50);
+
+/// How long a pseudo console stays open after its child exits, so the output
+/// the child wrote last still reaches the reader before the console closes.
+const CONSOLE_CLOSE_GRACE: Duration = Duration::from_millis(250);
 
 /// Runner error surface: a driver returns [`PtyRunnerError::Unsupported`] for a
 /// capability it lacks so the surface can **hide** the affordance rather than
@@ -349,8 +356,12 @@ impl ChildHandle {
 /// kill, expressed in neutral terms over `portable-pty` handles.
 pub struct PtySession {
     /// Master side — drives resize; a `LocalPtyRunner` owns a real local master
-    /// fd, a remote driver owns a wire proxy.
-    master: Box<dyn MasterPty + Send>,
+    /// fd, a remote driver owns a wire proxy. `None` once a Windows pseudo
+    /// console was closed after its child exited (see [`close_after_exit`]).
+    master: Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
+    /// The size last asked for, as `(cols, rows)`: what [`Self::size`]
+    /// answers once the master is closed.
+    size: Mutex<(u16, u16)>,
     child: ChildHandle,
     /// PID of the spawned shell, captured once at spawn (stable for the
     /// session's life). Source for the idle / agent-liveness process-tree checks.
@@ -374,8 +385,12 @@ impl PtySession {
         writer: Box<dyn Write + Send>,
     ) -> Self {
         let pid = child.process_id();
+        let size = master
+            .get_size()
+            .map_or((80, 24), |size| (size.cols, size.rows));
         Self {
-            master,
+            master: Arc::new(Mutex::new(Some(master))),
+            size: Mutex::new(size),
             child: ChildHandle(Arc::new(Mutex::new(SessionChild::new(child)))),
             pid,
             reader: Some(reader),
@@ -396,28 +411,52 @@ impl PtySession {
         // portable-pty declares `process_group_leader` on unix only; this
         // e2e-dump read is the one OS gate the runner keeps.
         #[cfg(unix)]
-        return self.master.process_group_leader();
+        return self.master().as_ref()?.process_group_leader();
         None
     }
 
-    /// The PTY's size as `(cols, rows)`; 80×24 when the driver cannot say.
-    pub fn size(&self) -> (u16, u16) {
+    fn master(&self) -> MutexGuard<'_, Option<Box<dyn MasterPty + Send>>> {
         self.master
-            .get_size()
-            .map_or((80, 24), |size| (size.cols, size.rows))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn last_size(&self) -> MutexGuard<'_, (u16, u16)> {
+        self.size
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// The PTY's size as `(cols, rows)`; 80×24 when the driver cannot say. Once
+    /// the master is closed, the size last asked for.
+    pub fn size(&self) -> (u16, u16) {
+        match self.master().as_ref() {
+            Some(master) => master
+                .get_size()
+                .map_or((80, 24), |size| (size.cols, size.rows)),
+            None => *self.last_size(),
+        }
     }
 
     /// Resize the underlying PTY. Delegates to the master handle — the local
-    /// driver's real resize, a remote driver's wire resize.
+    /// driver's real resize, a remote driver's wire resize. Once the master is
+    /// closed (a Windows session whose child exited) there is no PTY left to
+    /// size: the size is only recorded, as an ended unix session's resize
+    /// succeeds with no child to see it.
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), PtyRunnerError> {
-        self.master
-            .resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|error| PtyRunnerError::Message(error.to_string()))
+        let master = self.master();
+        if let Some(master) = master.as_ref() {
+            master
+                .resize(PtySize {
+                    rows,
+                    cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+                .map_err(|error| PtyRunnerError::Message(error.to_string()))?;
+        }
+        *self.last_size() = (cols, rows);
+        Ok(())
     }
 
     /// Kill the session's child: a still-running child has its process group
@@ -534,7 +573,51 @@ fn open_local_session(spec: PtySpec) -> Result<PtySession, PtyRunnerError> {
             error!(target: "pty", "spawn_pty: failed to spawn command: {}", error);
             PtyRunnerError::Message(format!("Failed to spawn: {}", plainly(&*error)))
         })?;
-    Ok(PtySession::new(pair.master, child, reader, writer))
+    let session = PtySession::new(pair.master, child, reader, writer);
+    // A Windows pseudo console keeps its output pipe open after its child
+    // exits, until the console is closed, so the reader would never reach
+    // end-of-stream and the exit would never be reported. Close it once the
+    // child is gone. A unix pty's reader reaches end-of-stream by itself, and
+    // closing its master early would drop output still unread.
+    if std::env::consts::OS == "windows" {
+        let child = session.child();
+        let master = Arc::downgrade(&session.master);
+        let watcher = std::thread::Builder::new()
+            .name("pty-console-close".into())
+            .spawn(move || {
+                close_after_exit(&child, &master, CONSOLE_EXIT_POLL, CONSOLE_CLOSE_GRACE)
+            });
+        if let Err(error) = watcher {
+            warn!(target: "pty", "spawn_pty: pseudo console watcher not started: {error}");
+        }
+    }
+    Ok(session)
+}
+
+/// Wait for `child` to exit, polling every `poll`, then after `grace` drop
+/// what `slot` holds (a session's master: dropping a Windows one closes its
+/// pseudo console, which ends the reader's stream). Returns early, closing
+/// nothing, once the session itself is gone.
+fn close_after_exit<T>(
+    child: &ChildHandle,
+    slot: &Weak<Mutex<Option<T>>>,
+    poll: Duration,
+    grace: Duration,
+) {
+    while child.is_alive() {
+        if slot.strong_count() == 0 {
+            return;
+        }
+        std::thread::sleep(poll);
+    }
+    std::thread::sleep(grace);
+    if let Some(slot) = slot.upgrade() {
+        let closed = slot
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        drop(closed);
+    }
 }
 
 /// `command` run through this host's child-limit shim
@@ -604,6 +687,154 @@ fn plainly(error: &(dyn std::error::Error + 'static)) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A child that runs until `exited` is set.
+    #[derive(Clone, Debug, Default)]
+    struct ExitsOnCue {
+        exited: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl portable_pty::ChildKiller for ExitsOnCue {
+        fn kill(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
+            Box::new(self.clone())
+        }
+    }
+
+    impl Child for ExitsOnCue {
+        fn try_wait(&mut self) -> std::io::Result<Option<portable_pty::ExitStatus>> {
+            Ok(self
+                .exited
+                .load(std::sync::atomic::Ordering::SeqCst)
+                .then(|| portable_pty::ExitStatus::with_exit_code(3)))
+        }
+        fn wait(&mut self) -> std::io::Result<portable_pty::ExitStatus> {
+            Ok(portable_pty::ExitStatus::with_exit_code(3))
+        }
+        fn process_id(&self) -> Option<u32> {
+            None
+        }
+        #[cfg(windows)]
+        fn as_raw_handle(&self) -> Option<std::os::windows::io::RawHandle> {
+            None
+        }
+    }
+
+    /// Records that it was dropped.
+    struct Closes(Arc<std::sync::atomic::AtomicBool>);
+
+    impl Drop for Closes {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    fn cued_child() -> (ChildHandle, ExitsOnCue) {
+        let cue = ExitsOnCue::default();
+        let child = ChildHandle(Arc::new(Mutex::new(SessionChild {
+            child: Box::new(cue.clone()),
+            process_group: None,
+            process_group_kill: None,
+            fail_group_signals: false,
+        })));
+        (child, cue)
+    }
+
+    #[test]
+    fn the_console_closes_once_its_child_exits_and_its_exit_still_reads() {
+        let (child, cue) = cued_child();
+        let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let slot = Arc::new(Mutex::new(Some(Closes(closed.clone()))));
+        let watcher = {
+            let (child, slot) = (child.clone(), Arc::downgrade(&slot));
+            std::thread::spawn(move || {
+                close_after_exit(&child, &slot, Duration::from_millis(1), Duration::ZERO)
+            })
+        };
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(
+            !closed.load(std::sync::atomic::Ordering::SeqCst),
+            "closed while running"
+        );
+        cue.exited.store(true, std::sync::atomic::Ordering::SeqCst);
+        watcher.join().unwrap();
+        assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(slot.lock().unwrap().is_none());
+        // The reader's end-of-stream then reports the real status.
+        assert_eq!(
+            child.exit_info_after_eof(),
+            Some(ExitInfo {
+                exit_code: Some(3),
+                signal: None
+            })
+        );
+    }
+
+    /// A master of a fixed size that cannot be read from or written to.
+    struct SizedMaster(Mutex<PtySize>);
+
+    impl MasterPty for SizedMaster {
+        fn resize(&self, size: PtySize) -> Result<(), anyhow::Error> {
+            *self.0.lock().unwrap() = size;
+            Ok(())
+        }
+        fn get_size(&self) -> Result<PtySize, anyhow::Error> {
+            Ok(*self.0.lock().unwrap())
+        }
+        fn try_clone_reader(&self) -> Result<Box<dyn Read + Send>, anyhow::Error> {
+            anyhow::bail!("no reader")
+        }
+        fn take_writer(&self) -> Result<Box<dyn Write + Send>, anyhow::Error> {
+            anyhow::bail!("no writer")
+        }
+        #[cfg(unix)]
+        fn process_group_leader(&self) -> Option<libc::pid_t> {
+            None
+        }
+        #[cfg(unix)]
+        fn as_raw_fd(&self) -> Option<std::os::unix::io::RawFd> {
+            None
+        }
+        #[cfg(unix)]
+        fn tty_name(&self) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+
+    #[test]
+    fn a_closed_master_resizes_ok_and_keeps_the_last_size() {
+        let master = SizedMaster(Mutex::new(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        }));
+        let session = PtySession::new(
+            Box::new(master),
+            Box::new(ExitsOnCue::default()),
+            Box::new(std::io::empty()),
+            Box::new(std::io::sink()),
+        );
+        session.resize(100, 30).unwrap();
+        assert_eq!(session.size(), (100, 30));
+        // As the console watcher closes it.
+        drop(session.master.lock().unwrap().take());
+        assert_eq!(session.size(), (100, 30));
+        assert_eq!(session.resize(120, 40), Ok(()));
+        assert_eq!(session.size(), (120, 40));
+    }
+
+    #[test]
+    fn a_gone_session_stops_the_console_watcher() {
+        let (child, _running) = cued_child();
+        let slot = Arc::new(Mutex::new(Some(())));
+        let weak = Arc::downgrade(&slot);
+        drop(slot);
+        // Returns although the child never exits.
+        close_after_exit(&child, &weak, Duration::from_millis(1), Duration::ZERO);
+    }
     // Unix only, as the group tests that use it are.
     #[cfg(unix)]
     use codesense_platform::process::ProcessTree;

@@ -60,11 +60,11 @@ anyhow = "1"
 tempfile = "3"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
 
-# The process tree the tree-kill test (`tests/process_tree.rs`) starts in a
-# pty, so it needs no shell.
+# The child the pty tests (`tests/pty_contract.rs`, `tests/process_tree.rs`)
+# start in a pty, so they need no shell.
 [[bin]]
-name = "pty-tree-fixture"
-path = "tests/bin/tree_fixture.rs"
+name = "pty-fixture"
+path = "tests/bin/pty_fixture.rs"
 
 [[example]]
 name = "tui_fixture"

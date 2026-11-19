@@ -369,7 +369,22 @@ test("rust.yml runs the Windows check on a pull request only with ci:windows, ne
       "cargo check --locked -p codesense-platform -p codesense-host-proto -p codesense-fs-core -p codesense-pty-core --all-targets",
       "cargo test --locked -p codesense-platform",
       "cargo test --locked -p codesense-host-proto --lib hook::",
+      "cargo test --locked --no-fail-fast -p codesense-pty-core --test pty_contract --test process_tree",
     ],
+  );
+  // The pty tests run the Windows worker, built after Rust (the script asks rustc for the triple)
+  // from the installed packages, and named to them.
+  const names = steps.map((s) => s.name);
+  const worker = names.indexOf("Build the emulator worker");
+  const install = names.indexOf("Install dependencies");
+  const rust = names.indexOf("Set up Rust");
+  const pty = steps.findIndex((s) => s.run?.includes("--test pty_contract"));
+  for (const index of [worker, install, rust, pty]) assert.ok(index >= 0);
+  assert.equal(steps[worker].run, "pnpm run build:emulator");
+  assert.ok(install < worker && rust < worker && worker < pty);
+  assert.equal(
+    steps[pty].env.CODESENSE_EMULATOR_WORKER,
+    "${{ github.workspace }}/src-tauri/binaries/codesense-emulator-x86_64-pc-windows-msvc.exe",
   );
   // The ci:windows label's run gets a group of its own, so it never cancels a ci:macos run.
   assert.doesNotMatch(workflow.concurrency.group, /ci:windows/);
@@ -444,6 +459,21 @@ test("rust.yml's Linux app job runs the credential store tests under a session b
   // The helper tests the others start as child processes pass alone, so they are left out.
   assert.match(runs[0], /- test\(~::reader_process\) - test\(~::no_bus_child\)/);
   assert.match(runs[1], /test\(~credential_store::tests::linux_\)/);
+  // The pty contract runs here on Linux, against the worker the sidecar build makes.
+  const names = job.steps.map((step) => step.name);
+  const sidecars = names.indexOf("Build sidecars");
+  const pty = names.indexOf("Test the pty contract");
+  assert.equal(job.steps[sidecars].run, "bash scripts/build-session-server.sh");
+  assert.ok(sidecars >= 0 && pty >= 0 && sidecars < pty);
+  const sidecarScript = fs.readFileSync(
+    new URL("build-session-server.sh", import.meta.url),
+    "utf8",
+  );
+  assert.match(sidecarScript, /^bash "\$SCRIPT_DIR\/build-emulator\.sh"/m);
+  assert.equal(
+    job.steps[pty].run,
+    "cargo nextest run --profile ci --locked -p codesense-pty-core --test pty_contract",
+  );
   assert.ok(!workflow.jobs["flaky-issues"].needs.includes("rust-linux-app"));
 });
 

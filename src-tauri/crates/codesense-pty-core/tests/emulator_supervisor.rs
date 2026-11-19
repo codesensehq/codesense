@@ -8,6 +8,8 @@
 //! killed with a signal.
 #![cfg(unix)]
 
+mod support;
+
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -17,39 +19,12 @@ use std::time::{Duration, Instant};
 use codesense_pty_core::domain::{PortUnavailable, TerminalDomainEvent, TerminalEventSink};
 use codesense_pty_core::emulator::{
     EmulatorConfig, EmulatorError, EmulatorLink, EmulatorStatus, EmulatorSupervisor,
-    SessionEmulator, WORKER_BIN,
+    SessionEmulator,
 };
 use codesense_pty_core::layout::ServerIdentity;
 use codesense_pty_core::TerminalHost;
 
 const START: Duration = Duration::from_secs(15);
-
-/// The Rust triple of the machine running the tests, as the build scripts name
-/// artifacts.
-fn host_triple() -> &'static str {
-    match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("macos", "aarch64") => "aarch64-apple-darwin",
-        ("macos", "x86_64") => "x86_64-apple-darwin",
-        ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
-        ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
-        other => panic!("no emulator worker is built for {other:?}"),
-    }
-}
-
-fn bundled_worker() -> PathBuf {
-    if let Some(path) = std::env::var_os("CODESENSE_EMULATOR_WORKER") {
-        return PathBuf::from(path);
-    }
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../binaries")
-        .join(format!("{WORKER_BIN}-{}", host_triple()));
-    assert!(
-        path.is_file(),
-        "no emulator worker at {} — build it with `pnpm run build:emulator`",
-        path.display()
-    );
-    path
-}
 
 /// The `@xterm/headless` version the root package pins.
 fn pinned_xterm_version() -> String {
@@ -177,9 +152,11 @@ fn runs(path: &Path) -> usize {
 fn spawn_hello_roundtrip() {
     log_lines();
     let dir = tempfile::tempdir().unwrap();
-    let supervisor =
-        EmulatorSupervisor::start(config(&bundled_worker(), dir.path()), EmulatorLink::new())
-            .unwrap();
+    let supervisor = EmulatorSupervisor::start(
+        config(&support::required_worker(), dir.path()),
+        EmulatorLink::new(),
+    )
+    .unwrap();
     let EmulatorStatus::Running { pid, info } = supervisor.status() else {
         panic!("worker not running: {:?}", supervisor.status());
     };
@@ -201,9 +178,11 @@ fn spawn_hello_roundtrip() {
 fn restarts_after_kill() {
     log_lines();
     let dir = tempfile::tempdir().unwrap();
-    let supervisor =
-        EmulatorSupervisor::start(config(&bundled_worker(), dir.path()), EmulatorLink::new())
-            .unwrap();
+    let supervisor = EmulatorSupervisor::start(
+        config(&support::required_worker(), dir.path()),
+        EmulatorLink::new(),
+    )
+    .unwrap();
     let (first, version) = running(&supervisor.status());
     assert_eq!(
         command_of(first),
@@ -334,14 +313,14 @@ fn a_host_runs_one_worker() {
         Arc::new(NoSink),
         runtime.handle().clone(),
     );
-    host.start_emulator(config(&bundled_worker(), dir.path()))
+    host.start_emulator(config(&support::required_worker(), dir.path()))
         .unwrap();
     assert!(matches!(
         host.emulator_status(),
         Some(EmulatorStatus::Running { .. })
     ));
     assert!(matches!(
-        host.start_emulator(config(&bundled_worker(), dir.path())),
+        host.start_emulator(config(&support::required_worker(), dir.path())),
         Err(EmulatorError::AlreadyStarted)
     ));
 }
@@ -350,9 +329,11 @@ fn a_host_runs_one_worker() {
 fn dropping_the_supervisor_stops_the_worker_and_removes_its_copy() {
     log_lines();
     let dir = tempfile::tempdir().unwrap();
-    let supervisor =
-        EmulatorSupervisor::start(config(&bundled_worker(), dir.path()), EmulatorLink::new())
-            .unwrap();
+    let supervisor = EmulatorSupervisor::start(
+        config(&support::required_worker(), dir.path()),
+        EmulatorLink::new(),
+    )
+    .unwrap();
     let (pid, _) = running(&supervisor.status());
     let pinned = supervisor.worker_path().to_path_buf();
     assert!(pinned.is_file());

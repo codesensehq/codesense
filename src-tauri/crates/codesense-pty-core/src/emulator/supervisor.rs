@@ -483,18 +483,25 @@ fn log_started(pid: u32, info: &WorkerInfo) {
 }
 
 /// Copy `worker` into `runtime_dir` as this host's private file, named
-/// `codesense-emulator.<machine>.<pid>.<n>`. On macOS the copy is a clone (no
+/// `codesense-emulator.<machine>.<pid>.<n>` plus the worker's extension, so an
+/// `.exe` worker stays one Windows will run. On macOS the copy is a clone (no
 /// data is duplicated); the signature travels with the file.
 fn pin(worker: &Path, runtime_dir: &Path) -> Result<PathBuf, String> {
     create_dir_owner_only(runtime_dir)
         .map_err(|e| format!("create {}: {e}", runtime_dir.display()))?;
     let machine = machine_tag();
     remove_stale_pins(runtime_dir, &machine);
-    let pinned = runtime_dir.join(format!(
+    let mut pinned = runtime_dir.join(format!(
         "{WORKER_BIN}.{machine}.{}.{}",
         std::process::id(),
         PIN_SEQ.fetch_add(1, Ordering::Relaxed)
     ));
+    if let Some(extension) = worker.extension() {
+        let mut name = pinned.into_os_string();
+        name.push(".");
+        name.push(extension);
+        pinned = PathBuf::from(name);
+    }
     std::fs::copy(worker, &pinned)
         .map_err(|e| format!("copy {} to {}: {e}", worker.display(), pinned.display()))?;
     set_executable(&pinned, Reach::Owner)
@@ -592,12 +599,39 @@ fn spawn(path: &Path, cwd: &Path) -> Result<Child, String> {
 /// The host's environment variables a worker gets. Everything else is
 /// dropped: `BUN_*`, `NODE_*` and the like would change how the runtime behaves,
 /// and the rest (tokens, a user's shell settings) is none of its business.
-const WORKER_ENV: [&str; 7] = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "TZ"];
+const WORKER_ENV: &[&str] = &["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "TZ"];
+
+/// [`WORKER_ENV`] on Windows: also the system directory (a Bun binary does not
+/// start without `SystemRoot`), the temporary directory and the user's
+/// profile and local application data.
+const WORKER_ENV_WINDOWS: &[&str] = &[
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TZ",
+    "SystemRoot",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "LOCALAPPDATA",
+];
+
+/// The variables a worker gets on the OS named `os` (`std::env::consts::OS`).
+fn worker_env_keys(os: &str) -> &'static [&'static str] {
+    if os == "windows" {
+        WORKER_ENV_WINDOWS
+    } else {
+        WORKER_ENV
+    }
+}
 
 fn worker_env() -> impl Iterator<Item = (&'static str, std::ffi::OsString)> {
-    WORKER_ENV
-        .into_iter()
-        .filter_map(|key| std::env::var_os(key).map(|value| (key, value)))
+    worker_env_keys(std::env::consts::OS)
+        .iter()
+        .filter_map(|&key| std::env::var_os(key).map(|value| (key, value)))
 }
 
 /// Send `hello` and wait for the answer. Returns the worker's stdin, its
@@ -666,13 +700,30 @@ mod tests {
         // A pid far above any real one is not alive here.
         let dead = format!("{WORKER_BIN}.{machine}.999999999.0");
         let live = format!("{WORKER_BIN}.{machine}.{}.0", std::process::id());
+        let dead_exe = format!("{WORKER_BIN}.{machine}.999999999.1.exe");
+        let live_exe = format!("{WORKER_BIN}.{machine}.{}.1.exe", std::process::id());
         let elsewhere = format!("{WORKER_BIN}.other-box.999999999.0");
-        for name in [&dead, &live, &elsewhere, &"unrelated".to_string()] {
+        for name in [
+            &dead,
+            &live,
+            &dead_exe,
+            &live_exe,
+            &elsewhere,
+            &"unrelated".to_string(),
+        ] {
             std::fs::write(dir.path().join(name), b"").unwrap();
         }
         remove_stale_pins(dir.path(), &machine);
         assert!(!dir.path().join(&dead).exists());
         assert!(dir.path().join(&live).exists());
+        assert!(
+            !dir.path().join(&dead_exe).exists(),
+            "a dead host's .exe pin"
+        );
+        assert!(
+            dir.path().join(&live_exe).exists(),
+            "a live host's .exe pin"
+        );
         assert!(
             dir.path().join(&elsewhere).exists(),
             "another machine's pin"
@@ -698,6 +749,26 @@ mod tests {
     }
 
     #[test]
+    fn a_pin_keeps_the_workers_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let worker = dir
+            .path()
+            .join(format!("{WORKER_BIN}-x86_64-pc-windows-msvc.exe"));
+        std::fs::write(&worker, b"worker bytes").unwrap();
+        let runtime = dir.path().join("run");
+        let pinned = pin(&worker, &runtime).unwrap();
+        assert_eq!(pinned.parent(), Some(runtime.as_path()));
+        let name = pinned.file_name().unwrap().to_str().unwrap();
+        let prefix = format!("{WORKER_BIN}.{}.{}.", machine_tag(), std::process::id());
+        let seq = name
+            .strip_prefix(&prefix)
+            .and_then(|rest| rest.strip_suffix(".exe"))
+            .unwrap_or_else(|| panic!("{name}"));
+        assert!(seq.parse::<u64>().is_ok(), "{name}");
+        assert_eq!(std::fs::read(&pinned).unwrap(), b"worker bytes");
+    }
+
+    #[test]
     fn a_spawn_refused_for_another_reason_is_reported() {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("missing");
@@ -708,10 +779,29 @@ mod tests {
 
     #[test]
     fn a_worker_sees_only_the_allowed_environment() {
-        assert!(worker_env().all(|(key, _)| WORKER_ENV.contains(&key)));
-        assert!(!WORKER_ENV
-            .iter()
-            .any(|key| key.starts_with("BUN_") || key.starts_with("NODE_")));
+        let unix = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "TZ"];
+        for os in ["macos", "linux"] {
+            assert_eq!(worker_env_keys(os), unix, "{os}");
+        }
+        assert_eq!(
+            worker_env_keys("windows"),
+            [
+                "PATH",
+                "HOME",
+                "TMPDIR",
+                "LANG",
+                "LC_ALL",
+                "LC_CTYPE",
+                "TZ",
+                "SystemRoot",
+                "TEMP",
+                "TMP",
+                "USERPROFILE",
+                "LOCALAPPDATA",
+            ]
+        );
+        let allowed = worker_env_keys(std::env::consts::OS);
+        assert!(worker_env().all(|(key, _)| allowed.contains(&key)));
     }
 
     #[test]

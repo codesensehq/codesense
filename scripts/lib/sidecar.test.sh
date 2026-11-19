@@ -167,6 +167,9 @@ dry_run "$(session_server_lines "$HOST" "$MUSL" "$ARM_MUSL")" \
 dry_run "$(emulator_lines "$HOST")" build-emulator.sh
 dry_run "$(emulator_lines "$MUSL" "$ARM_MUSL" aarch64-apple-darwin)" \
     build-emulator.sh --release --target "$MUSL" --target "$ARM_MUSL" --target aarch64-apple-darwin
+WINDOWS="x86_64-pc-windows-msvc"
+dry_run "$(printf '%s\n' "$BINARIES/codesense-emulator-$WINDOWS.exe" "$BINARIES/codesense-emulator-$WINDOWS.exe.sha256")" \
+    build-emulator.sh --target "$WINDOWS"
 
 # The emulator's dry run comes after its runtime check: a triple with no Bun
 # runtime still fails, and prints no path.
