@@ -6,7 +6,7 @@
  * each surface matches a committed snapshot of the formatter's output. The
  * attention pill is covered by `attention-alerts-controller.test.tsx`.
  */
-import { cleanup, render } from "@/test-utils";
+import { act, cleanup, fireEvent, render, screen } from "@/test-utils";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -14,12 +14,15 @@ import { Composer } from "@/features/inbox/components/composer";
 import { InboxViewProvider, type InboxView } from "@/features/inbox/components/inbox-view-context";
 import { HUMAN, buildDirectory } from "@/features/inbox/model";
 import { NotesChrome } from "@/features/notes/components/notes-chrome";
+import { NotesList } from "@/features/notes/components/notes-list";
 import { NotesEmpty } from "@/features/notes/components/notes-empty";
 import { SendPicker } from "@/features/notes/components/send-picker";
+import { ShortcutRow } from "@/features/settings/components/shortcut-row";
 import { ShortcutsSection } from "@/features/settings/components/shortcuts-section";
 import { EmptyWorkbench } from "@/features/viewer/components/source-editor-inset";
 import { EditorStatusBar } from "@/features/viewer/components/worktree-editor/editor-status-bar";
 import type { PaneStatus } from "@/features/viewer/components/worktree-editor/worktree-file-pane";
+import { SHORTCUT_ACTIONS } from "@/shared/lib/shortcuts/registry";
 import { useShortcutsStore } from "@/shared/stores/shortcuts-store";
 import { restorePlatform, setPlatform } from "@/test/platform";
 
@@ -185,5 +188,46 @@ describe("shortcut labels on macOS", () => {
     const current = (id: string) =>
       document.body.querySelector(`[data-testid="shortcut-row-${id}-current"]`)?.textContent;
     expect([current("nav.open-note-switcher"), current("nav.goto-heading")]).toMatchSnapshot();
+  });
+});
+
+describe.each([
+  ["MacIntel", "⌘O", "⌘⇧"],
+  ["Win32", "Ctrl+O", "Ctrl+Shift+"],
+])("logic-bearing hints on %s", (platform, switcher, captured) => {
+  beforeEach(() => setPlatform(platform));
+
+  it("the wide notes list's search names the note switcher", () => {
+    render(
+      <NotesList
+        notes={[]}
+        activeNoteId={null}
+        summaries={new Map()}
+        now={0}
+        variant="column"
+        onSelect={noop}
+        onCreate={noop}
+        onRename={noop}
+        onRequestDelete={noop}
+        onTogglePin={noop}
+      />,
+    );
+    expect(document.body.querySelector(".nt-list-search")).toHaveTextContent(switcher);
+  });
+
+  it("the Settings capture preview names the held modifiers", () => {
+    const action = SHORTCUT_ACTIONS.find((a) => a.id === "settings.open");
+    if (!action) throw new Error("no settings.open action");
+    render(<ShortcutRow action={action} />);
+    fireEvent.click(screen.getByTestId("shortcut-row-settings.open-edit"));
+    act(() => {
+      fireEvent.keyDown(screen.getByTestId("shortcut-row-settings.open-capture"), {
+        key: "Control",
+        ctrlKey: true,
+        metaKey: platform === "MacIntel",
+        shiftKey: true,
+      });
+    });
+    expect(screen.getByTestId("shortcut-row-settings.open-capture")).toHaveTextContent(captured);
   });
 });
