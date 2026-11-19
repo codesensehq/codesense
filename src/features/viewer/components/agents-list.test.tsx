@@ -15,6 +15,7 @@ import { agentRowKey, sessionPinId } from "@/shared/lib/agent-pins";
 import { clearInboxDrafts } from "@/features/inbox/components/inbox-view-context";
 import { REMOTE_LAYOUT_WAIT_MS } from "@/shared/lib/terminal-layout-projection";
 import { projectSessionStatus } from "@/test/session-projection-fixture";
+import { restorePlatform, setPlatform } from "@/test/platform";
 import { REGISTERED_AGENT_CLIS } from "@/shared/lib/agent-runtimes";
 import { agentCliLabel } from "@/shared/lib/agent-clis";
 import { NEW_WORKSPACE_TERMINAL_EVENT } from "../lib/new-workspace-terminal";
@@ -34,6 +35,9 @@ const avatarDefaultPackSet = vi.fn((_pack: string | null) => Promise.resolve());
 const avatarPacksListForTeam = vi.fn((teamKey: string) =>
   Promise.resolve({ packs: [], warnings: [], default_pack: null, agent_avatars: {}, teamKey }),
 );
+
+afterEach(restorePlatform);
+
 vi.mock("@/tauri/commands", () => ({
   LOCAL_MACHINE_ID: "local",
   listBuiltinPanes: async () => ({ contentRoot: "/ctx", chain: [], panes: [] }),
@@ -1886,45 +1890,55 @@ describe("AgentsList", () => {
     expect(helper).toHaveAttribute("title", expect.stringContaining("This Mac"));
   });
 
-  it("names the machine of a remote agent whose tab has not arrived yet, from its roster row", async () => {
-    // The machine's layout is still loading: no tab carries the agent's origin, only the
-    // roster's launch record names its machine.
-    useMachinesStore.setState({
-      byTeam: {
-        "team-1": [
-          {
-            machineId: "box",
-            label: "Build box",
-            kind: "ssh",
-            status: { state: "connected" },
-          } as never,
-        ],
-      },
-    });
-    workspaces = { "team-1": [{ id: "ws-a" }] };
-    terminalTabIndex = { "team-1": { "ws-a": [{ id: "tab-here", sessionId: "sid-here" }] } };
-    listResult = [
-      row({ handle: "here", sessionId: "sid-here" }),
-      row({
-        handle: "remote-tab-1",
-        sessionId: "remote-sess-1",
-        kind: "registered",
-        status: "running",
-        displayName: "Worker 1",
-        role: "reviewer",
-        machineId: "box",
-      }),
-    ];
-    renderList();
-    const remote = await screen.findByRole("button", { name: agentRow(/Worker 1/) });
-    expect(within(remote).getByTestId("agent-row-machine")).not.toHaveAttribute("data-offline");
-    expect(within(remote).getByTestId("agent-detail")).toHaveTextContent(/Build box$/);
-    expect(remote).toHaveAttribute("title", expect.not.stringContaining("This Mac"));
-    // A local row beside it still reads This Mac.
-    const here = await screen.findByRole("button", { name: agentRow(/here/) });
-    expect(within(here).queryByTestId("agent-row-machine")).toBeNull();
-    expect(here).toHaveAttribute("title", expect.stringContaining("This Mac"));
-  });
+  it.each([
+    ["MacIntel", "This Mac"],
+    ["Win32", "This computer"],
+  ])(
+    "on %s names the machine of a remote agent whose tab has not arrived yet, from its roster row",
+    async (platform, local) => {
+      setPlatform(platform);
+      // The machine's layout is still loading: no tab carries the agent's origin, only the
+      // roster's launch record names its machine.
+      useMachinesStore.setState({
+        byTeam: {
+          "team-1": [
+            {
+              machineId: "box",
+              label: "Build box",
+              kind: "ssh",
+              status: { state: "connected" },
+            } as never,
+          ],
+        },
+      });
+      workspaces = { "team-1": [{ id: "ws-a" }] };
+      terminalTabIndex = { "team-1": { "ws-a": [{ id: "tab-here", sessionId: "sid-here" }] } };
+      listResult = [
+        row({ handle: "here", sessionId: "sid-here" }),
+        row({
+          handle: "remote-tab-1",
+          sessionId: "remote-sess-1",
+          kind: "registered",
+          status: "running",
+          displayName: "Worker 1",
+          role: "reviewer",
+          machineId: "box",
+        }),
+      ];
+      renderList();
+      const remote = await screen.findByRole("button", { name: agentRow(/Worker 1/) });
+      expect(within(remote).getByTestId("agent-row-machine")).not.toHaveAttribute("data-offline");
+      expect(within(remote).getByTestId("agent-detail")).toHaveTextContent(/Build box$/);
+      expect(remote).toHaveAttribute("title", expect.not.stringContaining(local));
+      // A local row beside it names no machine on line two, and its tooltip names this machine.
+      const here = await screen.findByRole("button", { name: agentRow(/here/) });
+      expect(within(here).queryByTestId("agent-row-machine")).toBeNull();
+      expect(within(here).getByTestId("agent-detail")).not.toHaveTextContent(
+        /This Mac|This computer/,
+      );
+      expect(here).toHaveAttribute("title", expect.stringContaining(local));
+    },
+  );
 
   it.each(["unreachable", "disconnected"])(
     "a remote agent whose tab has not arrived, on a machine that is %s, reads offline and unknown and needs no one",
