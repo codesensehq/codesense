@@ -387,7 +387,10 @@ jobs:
           # Newest first; the part is the key's fourth field (rust-macos-build-<part>-...).
           sort -t $'\t' -k3,3r caches.tsv | awk -F '\t' '{ split($2, k, "-"); if (seen[k[4]]++) print $1 }' > stale.txt
           echo "$(wc -l < caches.tsv) build caches; deleting $(wc -l < stale.txt)"
-          while read -r id; do gh api -X DELETE "repos/$GH_REPO/actions/caches/$id"; done < stale.txt
+          # An entry GitHub evicted since the listing is already gone.
+          while read -r id; do
+            gh api -X DELETE "repos/$GH_REPO/actions/caches/$id" || echo "::notice::cache $id already gone"
+          done < stale.txt
 
   rust-macos-test:
     name: Rust (macOS arm64) tests ${{ matrix.shard }}/3
