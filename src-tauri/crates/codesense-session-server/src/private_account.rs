@@ -711,6 +711,7 @@ impl Drop for Bootstrap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codesense_platform::process::{is_alive, terminate_pid, Pid};
 
     fn failure(code: Option<i32>, stderr: &[u8]) -> (String, String) {
         step_failure(UPLOAD_STEP, code, stderr, Duration::from_millis(31244))
@@ -944,19 +945,20 @@ mod tests {
             "the step took {:?}",
             started.elapsed()
         );
-        let pid: libc::pid_t = std::fs::read_to_string(&pid_file)
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
+        let pid = Pid::from_raw(
+            std::fs::read_to_string(&pid_file)
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap(),
+        );
         let deadline = Instant::now() + Duration::from_secs(5);
-        // kill(pid, 0) reports ESRCH only after the descendant is gone.
-        while unsafe { libc::kill(pid, 0) } == 0 && Instant::now() < deadline {
+        while is_alive(pid) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
         }
-        let gone = unsafe { libc::kill(pid, 0) } != 0;
+        let gone = !is_alive(pid);
         if !gone {
-            unsafe { libc::kill(pid, libc::SIGKILL) };
+            let _ = terminate_pid(pid);
         }
         (ran, gone)
     }

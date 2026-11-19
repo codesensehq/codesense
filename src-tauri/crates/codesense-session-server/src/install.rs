@@ -629,7 +629,8 @@ mod build_identity_tests {
     }
 
     /// The running build is read from the real install directory, also when
-    /// the executable was reached through a descriptor link.
+    /// the executable was reached through a descriptor link (a unix link).
+    #[cfg(unix)]
     #[test]
     fn the_running_build_is_resolved_through_links() {
         let temp = tempfile::tempdir().unwrap();
@@ -652,6 +653,18 @@ mod build_identity_tests {
 #[cfg(test)]
 mod timeout_tests {
     use super::*;
+    use codesense_platform::process::{is_alive, terminate_pid, Pid};
+
+    /// The pid a test's script wrote to `file`.
+    fn pid_in(file: &Path) -> Pid {
+        Pid::from_raw(
+            std::fs::read_to_string(file)
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap(),
+        )
+    }
 
     #[test]
     fn timeout_kills_and_reaps_the_owned_process_group() {
@@ -665,14 +678,11 @@ mod timeout_tests {
             .arg(&pid_file);
         let error = run_within(&mut command, std::time::Duration::from_millis(250)).unwrap_err();
         assert!(error.contains("did not finish"), "{error}");
-        let pid: libc::pid_t = std::fs::read_to_string(pid_file)
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
-        // kill(pid, 0) reports ESRCH only after the descendant is gone.
-        let alive = unsafe { libc::kill(pid, 0) } == 0;
-        assert!(!alive, "descendant {pid} survived its owner's timeout");
+        let pid = pid_in(&pid_file);
+        assert!(
+            !is_alive(pid),
+            "descendant {pid} survived its owner's timeout"
+        );
     }
 
     /// What a command that finished in time left running is left running:
@@ -690,14 +700,10 @@ mod timeout_tests {
         let output = run_within(&mut command, std::time::Duration::from_secs(10)).unwrap();
         assert!(output.status.success());
         assert_eq!(output.stdout, b"ok\n");
-        let pid: libc::pid_t = std::fs::read_to_string(pid_file)
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
+        let pid = pid_in(&pid_file);
         std::thread::sleep(std::time::Duration::from_millis(200));
-        let alive = unsafe { libc::kill(pid, 0) } == 0;
-        unsafe { libc::kill(pid, libc::SIGKILL) };
+        let alive = is_alive(pid);
+        let _ = terminate_pid(pid);
         assert!(alive, "the helper {pid} did not outlive its finished owner");
     }
 
