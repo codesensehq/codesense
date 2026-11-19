@@ -33,7 +33,7 @@ import {
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import { basename, relative } from "@/shared/lib/path";
+import { basename } from "@/shared/lib/path";
 import { useTrailingDebounce } from "@/shared/lib/use-trailing-debounce";
 import { useRecentActivity } from "@/shared/lib/use-recent-activity";
 import type { SourceDiffMode, Workspace } from "@/shared/stores/viewer-store";
@@ -84,6 +84,7 @@ import { useRepoWorktreeWatch } from "../lib/use-repo-worktree-watch";
 import { useRemoteWatchNonce } from "../lib/use-remote-worktree-watch";
 import { workspaceSourceRepo, isRemoteWorkspace } from "@/shared/lib/workspace-location";
 import { useFocusWhenShown, useScopeActive } from "@/shared/lib/warm-scopes";
+import { rootWatchKey } from "@/shared/lib/worktree-watch-key";
 import { isRoutable, routeStateFromOutcome, type RouteState } from "../lib/route-to-context";
 import {
   buildFileTree,
@@ -216,14 +217,6 @@ export function SourceDiffOverlay({
   // and `liveCwd` is the single source of truth for the local-tab fetch
   // keys below. Remote tabs ignore the reading — the local probe can't
   // address a machine shell.
-  //
-  // TODO (deferred from SW-VE-12 R3-M5): the editor's and overlay's
-  // worktree watchers both key `worktreeChangedPath[ws.id]`. Now that
-  // liveCwd mutates mid-session the two can observe different dirs under
-  // one key → crossed events. A follow-up may need a composite id
-  // `${ws.id}|${effectiveCwd}` for the watcher-key join. Not surfaced in
-  // practice yet (overlay + editor share the same effectiveCwd per tab);
-  // revisit if a seam test or real-app observation flags a cross.
   const cwdRevision = useSessionCwdRevision(activeTabSessionId);
   const liveCwd = useSessionCwd(activeTabSessionId, cwdRevision);
   const shown = useViewerStore((s) =>
@@ -294,12 +287,13 @@ export function SourceDiffOverlay({
   // meanwhile, so the rail never names nothing.
   const machine = useMachine(remoteWorkspace ? ws.location.machineId : "");
   const machineLabel = remoteWorkspace ? machine?.label || ws.location.machineId : null;
-  // Live refresh: a local worktree bumps the store's per-workspace nonce from
-  // the OS watcher; a remote one ticks through the machine's polling watcher.
-  // Either drives the open redline's re-fetch (the change list also refreshes
-  // through the seam's own tick).
-  const localNonce = useViewerStore((s) => s.worktreeChangedPath[ws.id]?.nonce ?? 0);
-  const resumeNonce = useViewerStore((s) => s.worktreeChangedPath[ws.id]?.resumed ?? 0);
+  // Live refresh: a local worktree bumps the store's nonce from the OS watcher
+  // of the repo root (under its own key, below); a remote one ticks through the
+  // machine's polling watcher. Either drives the open redline's re-fetch (the
+  // change list also refreshes through the seam's own tick).
+  const watchKey = rootWatchKey(ws.id);
+  const localNonce = useViewerStore((s) => s.worktreeChangedPath[watchKey]?.nonce ?? 0);
+  const resumeNonce = useViewerStore((s) => s.worktreeChangedPath[watchKey]?.resumed ?? 0);
   const remoteNonce = useRemoteWatchNonce(
     repo?.kind === "remote" ? repo.machineId : null,
     repo?.kind === "remote" ? repo.handle : null,
@@ -391,7 +385,27 @@ export function SourceDiffOverlay({
   // null=non-git, {root,isRoot}=working tree). Fetching needs BOTH: a known
   // working tree AND a repo descriptor.
   const effectiveActive = active && repo !== null && tabRepo != null;
-  useRepoWorktreeWatch(ws.id, repo, effectiveActive, teamKey);
+  // A local tab watches the whole repo root, not the folder it sits in, so an
+  // edit anywhere in the repo refreshes the diff. The last root is held while
+  // the resolver answers a `cd` in the same tab, so a move inside the repo
+  // keeps the watch attached; a non-git folder or another tab releases it.
+  // While the editor is open it watches its own folder under `ws.id` too, and
+  // the two overlap harmlessly.
+  const [heldRoot, setHeldRoot] = useState<{ scope: string; root: string } | null>(null);
+  const watchRoot =
+    tabRepo != null
+      ? tabRepo.root
+      : tabRepo === undefined && heldRoot?.scope === viewScope
+        ? heldRoot.root
+        : null;
+  const nextHeld = watchRoot === null ? null : { scope: viewScope, root: watchRoot };
+  if (nextHeld?.root !== heldRoot?.root || nextHeld?.scope !== heldRoot?.scope) {
+    setHeldRoot(nextHeld);
+  }
+  const watchRepo =
+    repo?.kind === "local" ? (watchRoot !== null ? { ...repo, cwd: watchRoot } : null) : repo;
+  const watchActive = repo?.kind === "local" ? active && watchRepo !== null : effectiveActive;
+  useRepoWorktreeWatch(watchKey, watchRepo, watchActive, teamKey);
   // A local repo passes the working-tree root the resolver found for the live
   // cwd (the hooks' back-compat path); a remote one passes the SourceRepo so
   // the seam routes to the machine. The diff commands open the repo without
@@ -768,10 +782,15 @@ export function SourceDiffOverlay({
   // The diff's paths are relative to the repo root, but the tile's editor is
   // rooted at the live cwd (`effectiveCwd`, as the editor surface reads it),
   // which can be a folder inside it: a context worktree's `<team>/content`, or
-  // wherever a `cd` landed. `editorPath` maps a diff path into the editor, or
-  // gives null for a file outside the editor's folder.
-  const editorPrefix = remoteWorkspace || !repoRoot ? "" : (relative(repoRoot, effectiveCwd) ?? "");
+  // wherever a `cd` landed. The resolver reports that folder's place in the
+  // repo from canonical paths, so a symlinked cwd or a Windows verbatim root
+  // still maps. `editorPath` maps a diff path into the editor, or gives null
+  // for a file outside the editor's folder, or for every file when the
+  // folder's place is unknown: the editor then opens with no file, never a
+  // wrong one.
+  const editorPrefix = remoteWorkspace ? "" : tabRepo?.isRoot ? "" : (tabRepo?.prefix ?? null);
   const editorPath = (path: string): string | null => {
+    if (editorPrefix === null) return null;
     if (editorPrefix === "") return path;
     return path.startsWith(`${editorPrefix}/`) ? path.slice(editorPrefix.length + 1) : null;
   };

@@ -291,6 +291,7 @@ import {
 } from "@/shared/lib/worktree/background-setup-fanout";
 import { findWorkspaceRepoBySlug } from "@/shared/lib/build-synthetic-repo";
 import { trackWorktreeEstablish } from "@/shared/lib/worktree/pending-establish";
+import { rootWatchKey } from "@/shared/lib/worktree-watch-key";
 import {
   checkBranchExists,
   checkWorktreeDirty,
@@ -4065,6 +4066,7 @@ function captureSoftCloseShadow(
   const sourceDiffMode = dropBySid(s.sourceDiffMode);
   const worktreeChangedPath = { ...s.worktreeChangedPath };
   delete worktreeChangedPath[workspaceId];
+  delete worktreeChangedPath[rootWatchKey(workspaceId)];
   const softClosedWorkspaces = keepRunning
     ? {
         ...s.softClosedWorkspaces,
