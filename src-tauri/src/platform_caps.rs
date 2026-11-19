@@ -21,7 +21,8 @@ const TABLE_JSON: &str = include_str!("../platform-caps.json");
 
 /// The table's one parser, the build scripts' too, so the gates and the runtime answers read the
 /// table alike.
-// `configure_caps` and `compiled_caps` are the build scripts'.
+// The build scripts use `configure_caps` (and through it `compiled_rows`); `compiled_caps` is
+// for the tests below.
 #[allow(dead_code)]
 mod caps_table {
     include!("../build_caps.rs");
