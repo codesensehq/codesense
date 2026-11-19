@@ -85,4 +85,12 @@ describe("htmlToPlain without a DOM parser", () => {
       "Use &lt;b&gt; for bold, &amp; for &",
     );
   });
+
+  it("decodes entities in the title the same way as in the body, as the DOM path does", () => {
+    const html = "<title>Q&amp;A: &amp;lt;tags&amp;gt;</title><p>Fish &amp; chips</p>";
+    const withDom = htmlToPlain(html);
+    vi.stubGlobal("DOMParser", undefined);
+    expect(htmlToPlain(html)).toBe("Q&A: &lt;tags&gt; — Fish & chips");
+    expect(htmlToPlain(html)).toBe(withDom);
+  });
 });
