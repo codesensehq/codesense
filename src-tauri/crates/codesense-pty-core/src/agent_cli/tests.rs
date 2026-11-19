@@ -1514,3 +1514,33 @@ fn an_unprobeable_release_gets_no_hooks_no_engine_and_a_stated_reason_for_every_
         "the table covers the version-qualified CLIs"
     );
 }
+
+#[test]
+fn an_engine_channel_that_cannot_connect_is_skipped_as_unreachable() {
+    let dir = tempfile::tempdir().unwrap();
+    let endpoint = dir.path().join("engine.sock");
+    for cli in [AgentCli::Codex, AgentCli::Hermes] {
+        let connect = adapter(cli)
+            .control()
+            .channel
+            .expect("a host-submitted CLI's channel");
+        // Its callers take a channel with `.ok()`, so any error reads as no engine.
+        let reached = connect(&endpoint, None, Some(dir.path()))
+            .ok()
+            .and_then(|mut channel| channel.ready_session());
+        assert_eq!(reached, None, "{cli}");
+    }
+}
+
+#[test]
+fn a_home_with_no_verified_gateway_is_left_alone_at_teardown() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(home.path().join("gateway.pid"), "{\"pid\":1}").unwrap();
+    adapter(AgentCli::Hermes).teardown_home(home.path(), false);
+    let mut names: Vec<_> = std::fs::read_dir(home.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["gateway.pid"]);
+}
