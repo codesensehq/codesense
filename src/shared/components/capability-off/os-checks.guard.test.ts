@@ -21,7 +21,7 @@ const OS_CHECKS: readonly RegExp[] = [
   /\b(isMac|isLinuxPlatform)\b/,
   /\bnavigator\s*\.\s*platform\b/,
   /\buserAgent(Data)?\b/,
-  /\}\s*=\s*(globalThis\.|window\.)?navigator\b/,
+  /\{[^}]*\b(platform|userAgent(Data)?)\b[^}]*\}\s*=\s*(globalThis\.|window\.)?navigator\b/,
   /\bprocess\s*\.\s*platform\b/,
   /\/[^/\n]*\b(mac|macos|win|win32|windows|linux|darwin)\b[^/\n]*\/[a-z]*\s*\.\s*test\s*\(/i,
   /[!=]==?\s*["'`](darwin|win32|windows|linux|macos|mac)["'`]/i,
@@ -136,6 +136,7 @@ describe("the guard's fixtures", () => {
       `/* navigator.platform is the shared layer's to read */`,
       `if (!remote.on) return <CapabilityOff cap="remote-machines" />;`,
       `const url = "https://example.com/linux";`,
+      `const { clipboard } = navigator;`,
     ].join("\n");
     expect(violations({ [NEW_FILE]: source }, ALLOWED)).toEqual([]);
   });
