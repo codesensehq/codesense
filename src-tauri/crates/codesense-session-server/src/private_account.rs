@@ -257,7 +257,9 @@ fn bounded_output_within(
         feed,
         OnExit::EndRest,
     )
-    .map_err(|error| broken(step, format_args!("ssh did not start: {error}")))?;
+    // ssh did not start, or its exit could not be read: a broken step, not
+    // one that ran out of time.
+    .map_err(|error| broken(step, format_args!("running ssh: {error}")))?;
     let read = |output: std::io::Result<Vec<u8>>| {
         output.map_err(|error| broken(step, format_args!("reading its output: {error}")))
     };
@@ -923,7 +925,8 @@ mod tests {
 
     /// Run `script` (`$1` is a file it writes a background `sleep`'s pid to)
     /// as a step with a 0.2 s limit; its result, and whether that `sleep` is
-    /// gone within 5 s.
+    /// gone within 5 s. The `sleep` must not hold the step's pipes, so only
+    /// the group kill can end it.
     fn step_with_descendant(script: &str) -> (Result<Ran, String>, bool) {
         let dir = tempfile::tempdir().unwrap();
         let pid_file = dir.path().join("descendant-pid");
@@ -953,7 +956,8 @@ mod tests {
     /// A step that overruns ends its whole tree, not just ssh.
     #[test]
     fn a_step_that_overruns_ends_its_descendants() {
-        let (ran, gone) = step_with_descendant("sleep 30 & echo $! > \"$1\"; wait");
+        let (ran, gone) =
+            step_with_descendant("sleep 30 </dev/null >/dev/null 2>&1 & echo $! > \"$1\"; wait");
         assert_eq!(
             ran.err().unwrap(),
             format!("{TIMED_OUT} after 2 seconds while {STAGE_STEP}")
@@ -962,9 +966,13 @@ mod tests {
     }
 
     /// A step that prints past the limit is stopped there, whole tree and all.
+    /// Its ssh stays alive after printing, so only the overflow kill (not a
+    /// writer's SIGPIPE, nor the timeout) ends it in time to be `UNAVAILABLE`.
     #[test]
     fn a_step_that_prints_too_much_ends_its_descendants() {
-        let (ran, gone) = step_with_descendant("sleep 30 & echo $! > \"$1\"; exec yes");
+        let (ran, gone) = step_with_descendant(
+            "sleep 30 </dev/null >/dev/null 2>&1 & echo $! > \"$1\"; head -c 20000 /dev/zero; exec sleep 30",
+        );
         assert_eq!(ran.err().unwrap(), UNAVAILABLE);
         assert!(gone, "a descendant survived the output limit");
     }
