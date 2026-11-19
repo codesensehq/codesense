@@ -3,12 +3,16 @@ import { describe, expect, it } from "vitest";
 
 import {
   basename,
+  canonicalPath,
   dirname,
   isAbsolute,
+  isWithin,
   join,
+  normalize,
   relative,
   resolveRelative,
   root,
+  samePath,
   separator,
   split,
   trimTrailingSeparators,
@@ -243,5 +247,78 @@ describe("trimTrailingSeparators", () => {
     expect(trimTrailingSeparators("C:/")).toBe("C:/");
     expect(trimTrailingSeparators("\\\\server\\share")).toBe("\\\\server\\share");
     expect(trimTrailingSeparators("\\\\server\\share\\")).toBe("\\\\server\\share");
+  });
+});
+
+describe("canonicalPath", () => {
+  it.each([
+    ["\\\\s\\h\\a\\\\b\\", "\\\\s\\h\\a\\b"],
+    ["c:/a//b", "C:\\a\\b"],
+    ["//foo//bar/", "/foo/bar"],
+    ["a\\\\b/", "a\\b"],
+    ["/a/b", "/a/b"],
+    ["/", "/"],
+    ["C:\\", "C:\\"],
+    ["c:/", "C:\\"],
+    ["\\\\server\\share\\", "\\\\server\\share"],
+    ["\\\\server/share/a", "\\\\server\\share\\a"],
+    ["a/b", "a/b"],
+    ["", ""],
+  ])("is %j → %j", (input, expected) => {
+    expect(canonicalPath(input)).toBe(expected);
+  });
+
+  it("is idempotent", () => {
+    for (const p of ["c:/a//b", "\\\\s\\h\\a\\\\b\\", "//foo//bar/", "a\\\\b/"]) {
+      expect(canonicalPath(canonicalPath(p))).toBe(canonicalPath(p));
+    }
+  });
+});
+
+describe("samePath", () => {
+  it.each([
+    ["C:\\a\\b", "c:/a/b/", true],
+    ["/a//b/", "/a/b", true],
+    ["\\\\s\\h\\a", "\\\\s\\h\\a\\", true],
+    ["/a/b", "/a/B", false],
+    ["C:\\a", "D:\\a", false],
+    ["C:\\A\\b", "C:\\a\\b", false],
+    ["a/b", "/a/b", false],
+  ])("%j vs %j is %s", (a, b, expected) => {
+    expect(samePath(a, b)).toBe(expected);
+  });
+});
+
+describe("isWithin", () => {
+  it.each([
+    ["/a", "/a", true],
+    ["/a", "/a/b", true],
+    ["/a/", "/a/b", true],
+    ["/a", "/ab", false],
+    ["/a/b", "/a", false],
+    ["C:\\a", "C:/a/b", true],
+    ["C:\\a", "c:\\a", true],
+    ["C:\\a", "C:\\a2\\b", false],
+    ["C:\\a", "D:\\a\\b", false],
+    ["\\\\s\\h\\a", "\\\\s\\h\\a\\b", true],
+    ["\\\\s\\h\\a", "\\\\s\\h2\\a\\b", false],
+  ])("%j holds %j: %s", (dir, p, expected) => {
+    expect(isWithin(dir, p)).toBe(expected);
+  });
+});
+
+describe("normalize", () => {
+  it.each([
+    ["/r/a/../b.html", "/r/b.html"],
+    ["/r/./a//b/", "/r/a/b"],
+    ["/../x", "/x"],
+    ["C:\\r\\a\\..\\b.html", "C:\\r\\b.html"],
+    ["C:/r/a/../b.html", "C:/r/b.html"],
+    ["C:\\..\\x", "C:\\x"],
+    ["\\\\s\\h\\a\\..\\..\\b", "\\\\s\\h\\b"],
+    ["a/./b/../c", "a/c"],
+    ["a\\b\\..\\c", "a\\c"],
+  ])("is %j → %j", (input, expected) => {
+    expect(normalize(input)).toBe(expected);
   });
 });

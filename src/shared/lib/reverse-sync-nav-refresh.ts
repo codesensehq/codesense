@@ -3,6 +3,7 @@ import { useOrgStore } from "@/shared/stores/org-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 import { firstRepoPathForTeam } from "@/shared/lib/build-synthetic-repo";
 import { bumpFileRefreshForSourceRepo } from "@/shared/lib/refresh-for-source-repo";
+import { samePath } from "@/shared/lib/path";
 
 /**
  * SW-NR-1: route a completed reverse-sync wave's writes to the team/epic
@@ -44,7 +45,8 @@ export function bumpTeamNavForWorktrees(worktreePaths: readonly string[]): void 
 }
 
 /** Find the teamKey whose open-workspace registry contains a workspace rooted
- *  at `worktree` (`ws.cwd === worktree`). Returns null when no open workspace
+ *  at `worktree` (`samePath(ws.cwd, worktree)`: the wave reports git's `C:/…`
+ *  form where a workspace may hold `C:\…`). Returns null when no open workspace
  *  matches (e.g. a reverse write from a worktree this app instance isn't
  *  showing). */
 function teamKeyForWorktree(
@@ -52,7 +54,7 @@ function teamKeyForWorktree(
   worktree: string,
 ): string | null {
   for (const [teamKey, wss] of Object.entries(workspaces)) {
-    if (wss.some((w) => w.cwd === worktree)) return teamKey;
+    if (wss.some((w) => samePath(w.cwd, worktree))) return teamKey;
   }
   return null;
 }

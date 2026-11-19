@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import type { DerivedPipelineTree } from "./types";
+import { isWithin } from "@/shared/lib/path";
 
 /**
  * SW-SC-12: resolve the enclosing *epic* subtree for the file at `targetPath`
@@ -32,13 +33,4 @@ export function findEnclosingEpic(
   }
 
   return bestEpic ?? tree;
-}
-
-/**
- * True when `targetPath` is `dir` itself or nested under it. Separator-guarded
- * so a sibling whose path is a string-prefix (`/a/epic-foo` vs
- * `/a/epic-foobar`) does not falsely match.
- */
-function isWithin(dir: string, targetPath: string): boolean {
-  return targetPath === dir || targetPath.startsWith(dir.endsWith("/") ? dir : `${dir}/`);
 }

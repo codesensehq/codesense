@@ -23,7 +23,7 @@ const RETIRED_WORDS =
 // the folders in PATH_HELPER_FOLDERS use it instead of splitting on a forward slash.
 // The receiver must look like a path (`relPath`, `file.path`, `cwd`, `rootDir`), so keys,
 // slugs and URLs that split on `/` stay quiet. Widen the folder list as folders migrate.
-const PATH_HELPER_FOLDERS = ["src/features/viewer/**", "src/features/shell/**"];
+const PATH_HELPER_FOLDERS = ["src/features/viewer/**", "src/features/shell/**", "src/shared/**"];
 const PATH_SPLIT_CALL =
   "CallExpression[callee.property.name=/^(split|lastIndexOf|indexOf)$/][arguments.0.value='/']";
 const PATH_RECEIVER = "/path|cwd|dir|root/i";
@@ -130,10 +130,17 @@ export default tseslint.config(
 
   // File-system paths in these folders go through the shared path helper. Before the
   // first-use block, which appends PATH_SPLIT_SELECTORS to its own list: the last block
-  // that sets `no-restricted-syntax` for a file wins whole.
+  // that sets `no-restricted-syntax` for a file wins whole. The helper itself splits on
+  // both separators; the viewer store stays out until it migrates to the helper.
   {
     files: PATH_HELPER_FOLDERS,
-    ignores: ["**/*.test.*", "**/__fixtures__/**"],
+    ignores: [
+      "**/*.test.*",
+      "**/__fixtures__/**",
+      "**/test-fixtures/**",
+      "src/shared/lib/path.ts",
+      "src/shared/stores/viewer-store.ts",
+    ],
     rules: {
       "no-restricted-syntax": ["error", ...PATH_SPLIT_SELECTORS],
     },

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import { split } from "@/shared/lib/path";
 /**
  * SS.8: Match a watcher-emitted `file_path` against the two locations
  * worktree.yaml can live during the SS.12 transition window:
@@ -20,8 +21,10 @@
  */
 export function isWorktreeYamlChangeEvent(changedPath: string): boolean {
   if (!changedPath || !changedPath.endsWith(".yaml")) return false;
+  const segments = split(changedPath);
+  const last = segments.length - 1;
   return (
-    changedPath.endsWith("/.codesense/worktree.yaml") ||
-    changedPath.includes("/_codesense/worktree/")
+    (segments[last - 1] === ".codesense" && segments[last] === "worktree.yaml") ||
+    segments.some((s, i) => s === "_codesense" && segments[i + 1] === "worktree" && i + 1 < last)
   );
 }

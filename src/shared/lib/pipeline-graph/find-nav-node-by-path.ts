@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import type { DerivedPipelineTree, DocRef, StoryRef } from "./types";
+import { canonicalPath } from "@/shared/lib/path";
 
 /**
  * The nav node found for a given `filePath`: the matching `StoryRef` (a story
@@ -44,8 +45,9 @@ export function visitNavTree<T>(
 }
 
 /**
- * Find the first `StoryRef`/`DocRef` whose `filePath` equals `filePath`.
- * Stories are matched before docs within a node. Returns `null` when the path
+ * Find the first `StoryRef`/`DocRef` whose `filePath` names the same path as
+ * `filePath` (compared by `canonicalPath`, so `C:/…` matches `C:\…`). Stories
+ * are matched before docs within a node. Returns `null` when the path
  * is not a known story/doc row (e.g. a generic file). Callers derive their own
  * field from the found node (`metadataValid`, `installedSourceRepo`, …).
  */
@@ -54,12 +56,13 @@ export function findNavNodeByPath(
   filePath: string,
 ): NavNodeMatch | null {
   if (!filePath) return null;
+  const want = canonicalPath(filePath);
   return visitNavTree(tree, (node) => {
     for (const s of node.stories ?? []) {
-      if (s.filePath === filePath) return { story: s };
+      if (canonicalPath(s.filePath) === want) return { story: s };
     }
     for (const d of node.docs ?? []) {
-      if (d.filePath === filePath) return { doc: d };
+      if (canonicalPath(d.filePath) === want) return { doc: d };
     }
     return null;
   });
