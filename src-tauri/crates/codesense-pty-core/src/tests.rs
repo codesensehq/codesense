@@ -2,6 +2,8 @@
 //! Registry tests over real PTYs: spawn → stream → exit through the sink, the
 //! teardown/reap family, the dead-session cap, the exit-time complement kill,
 //! warm handoff, and the liveness / replay queries.
+//! Unix only: uses the unix-only test fixtures (real PTYs through `sh`).
+#![cfg(unix)]
 
 use std::collections::{HashMap, HashSet};
 use std::io::Write;

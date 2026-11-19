@@ -3,6 +3,8 @@
 //! isolated sessions built on the [`LocalPtyRunner`], a process-lifetime
 //! blocking pool, sinks, and the process-census helpers that prove a child and
 //! its process group are gone.
+//! Unix only: test and leak-gate code whose process census reads unix process groups.
+#![cfg(unix)]
 
 use std::sync::{Arc, Mutex, OnceLock};
 

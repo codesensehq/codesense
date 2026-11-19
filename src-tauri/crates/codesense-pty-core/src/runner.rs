@@ -1008,11 +1008,14 @@ mod tests {
         assert!(killed.signal.is_some(), "a signal death names its signal");
     }
 
+    // Unix only, as the test that uses it is (it uses the unix-only test fixtures).
+    #[cfg(unix)]
     #[derive(Debug, Clone)]
     struct BlockingWaitChild {
         release: Arc<(Mutex<bool>, std::sync::Condvar)>,
     }
 
+    #[cfg(unix)]
     impl portable_pty::ChildKiller for BlockingWaitChild {
         fn kill(&mut self) -> std::io::Result<()> {
             Ok(())
@@ -1023,6 +1026,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     impl Child for BlockingWaitChild {
         fn try_wait(&mut self) -> std::io::Result<Option<portable_pty::ExitStatus>> {
             Ok(None)
@@ -1042,6 +1046,8 @@ mod tests {
         }
     }
 
+    // Unix only: uses the unix-only test fixtures.
+    #[cfg(unix)]
     #[test]
     fn child_reaper_enqueue_returns_before_wait_completes() {
         let release = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
