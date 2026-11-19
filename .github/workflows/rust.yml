@@ -570,8 +570,9 @@ jobs:
     # The app crate's Linux-relevant tests, starting with the credential store against a real
     # Secret Service (GNOME Keyring on a private session bus). Not a required check. The tests are
     # `#[ignore]`d everywhere else, so only this job runs them. It widens as more of the app's
-    # Linux tests move here. Like the macOS and Windows jobs it skips merge groups, and runs on pull
-    # requests, main and the nightly run.
+    # Linux tests move here. It also runs pty-core's pty contract against the unix pty. Like the
+    # macOS and Windows jobs it skips merge groups, and runs on pull requests, main and the nightly
+    # run.
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' && github.event_name != 'merge_group' }}
     runs-on: ubuntu-24.04
@@ -646,10 +647,9 @@ jobs:
       - name: Test the credential store against Secret Service
         # A private session bus; the script unlocks the keyring, checks it, and runs the tests.
         run: dbus-run-session -- bash scripts/run-secret-service-tests.sh
-      - name: Build the emulator worker
-        run: pnpm run build:emulator
       - name: Test the pty contract
-        # A real pty behind a host running the emulator worker, as on Windows (ConPTY).
+        # A real pty behind a host running the emulator worker (built with the sidecars above), as
+        # on Windows (ConPTY).
         run: cargo nextest run --profile ci --locked -p codesense-pty-core --test pty_contract
 
   rust-check-windows:
