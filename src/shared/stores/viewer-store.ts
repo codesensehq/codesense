@@ -140,7 +140,7 @@ import { DEFAULT_NOTE_TITLE, UNTITLED_NOTE_TITLE, isBlankNote } from "@/shared/l
 import { summarize } from "@/features/notes/lib/note-summary";
 import type { Phase } from "@/shared/lib/roles";
 import { startOpenTimer } from "@/shared/lib/open-path-timing";
-import { basename, isWithin, trimTrailingSeparators } from "@/shared/lib/path";
+import { basename, isWithin, samePath, trimTrailingSeparators } from "@/shared/lib/path";
 import { planReveal } from "@/shared/lib/reveal-plan";
 import { createDebouncedAction } from "@/shared/lib/debounced-action";
 import { fireWorkspaceOpened, fireWorkspaceClosed } from "@/shared/lib/workspace-watch-hooks";
@@ -11778,7 +11778,6 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
         logger.warn("viewer", `reconcile re-link failed (non-fatal): ${getErrorMessage(e)}`);
       });
 
-    const samePath = (a: string, b: string) => a.replace(/\/+$/, "") === b.replace(/\/+$/, "");
     const worktrees = await listWorktrees(sourceRepoPath);
     const entry = worktrees.find((w) => samePath(w.path, oldPath));
 
