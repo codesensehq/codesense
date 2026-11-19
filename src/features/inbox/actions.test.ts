@@ -153,6 +153,30 @@ describe("sendFromInbox", () => {
     );
   });
 
+  it("says its machine, not a blank, when an offline session's machine is unknown", async () => {
+    sendAsHuman.mockResolvedValue({ status: "sent", messageId: 1 });
+    const unknown = buildDirectory(
+      [
+        {
+          handle: FX.impl,
+          displayName: "impl",
+          state: "offline",
+          role: null,
+          launchedBy: null,
+          unread: 0,
+          oldestUnreadAt: null,
+        } as never,
+      ],
+      messages,
+      {},
+    );
+    vi.mocked(toast).mockClear();
+    expect(await send({ quiet: true, dir: unknown })).toBe(true);
+    expect(toast).toHaveBeenCalledExactlyOnceWith(
+      "Queued for impl. It's delivered once its machine reconnects.",
+    );
+  });
+
   it("names This Mac by its label, never as a remote machine", () => {
     const dir = offlineDir("This Mac");
     expect(dir.get(FX.impl)).toMatchObject({ where: "local" });
