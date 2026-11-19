@@ -4,6 +4,11 @@
 use super::*;
 use tungstenite::handshake::client::Request;
 
+/// The capability is off, so `connect` and `resolve` answer with it before discovery.
+pub(super) fn available() -> io::Result<()> {
+    Err(crate::caps_off("agent-cli-sockets"))
+}
+
 pub(super) fn call(_path: &Path, _home: &fs::File, _request: &[u8]) -> io::Result<String> {
     Err(crate::caps_off("agent-cli-sockets"))
 }

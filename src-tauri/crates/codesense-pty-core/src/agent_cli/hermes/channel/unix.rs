@@ -15,6 +15,11 @@ use tungstenite::{handshake::client::Request, protocol::WebSocketConfig, Message
 const BUDGET: Duration = Duration::from_secs(10);
 const MAX_MESSAGE: usize = 4 * 1024 * 1024;
 
+/// Unix sockets are available here.
+pub(super) fn available() -> io::Result<()> {
+    Ok(())
+}
+
 /// One control `request` line to the socket at `path`, and its reply line, once the
 /// private directory holding the socket passed. `home` is the verified home, opened.
 pub(super) fn call(path: &Path, home: &fs::File, request: &[u8]) -> io::Result<String> {

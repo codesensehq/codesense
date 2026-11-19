@@ -1516,7 +1516,7 @@ fn an_unprobeable_release_gets_no_hooks_no_engine_and_a_stated_reason_for_every_
 }
 
 #[test]
-fn an_engine_channel_that_cannot_connect_is_skipped_as_unreachable() {
+fn a_channel_to_an_absent_engine_is_an_error() {
     let dir = tempfile::tempdir().unwrap();
     let endpoint = dir.path().join("engine.sock");
     for cli in [AgentCli::Codex, AgentCli::Hermes] {
@@ -1524,11 +1524,9 @@ fn an_engine_channel_that_cannot_connect_is_skipped_as_unreachable() {
             .control()
             .channel
             .expect("a host-submitted CLI's channel");
-        // Its callers take a channel with `.ok()`, so any error reads as no engine.
-        let reached = connect(&endpoint, None, Some(dir.path()))
-            .ok()
-            .and_then(|mut channel| channel.ready_session());
-        assert_eq!(reached, None, "{cli}");
+        // Its callers take a channel with `.ok()`; this pins only that the connect fails
+        // (off unix with the capability-off error), not what a caller does next.
+        assert!(connect(&endpoint, None, Some(dir.path())).is_err(), "{cli}");
     }
 }
 

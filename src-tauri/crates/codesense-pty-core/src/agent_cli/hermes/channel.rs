@@ -34,6 +34,8 @@ fn private_node(path: &Path) -> io::Result<fs::File> {
 }
 
 fn control(home: &Path, verb: &str, params: Value) -> io::Result<Value> {
+    // Off unix this is the capability-off error, before any node is looked at.
+    transport::available()?;
     let home_node = private_node(home)?;
     let mut path = home.join("gateway.sock");
     if !path.exists() {
