@@ -31,6 +31,12 @@ describe("stripOrgRoot", () => {
     expect(stripOrgRoot("/root-sibling/a.md", "/root")).toBeNull(); // prefix-but-not-segment
     expect(stripOrgRoot("/root/a.md", null)).toBeNull();
   });
+
+  it("strips a Windows root into a /-joined relative path", () => {
+    expect(stripOrgRoot("C:\\root\\a\\b.md", "C:\\root\\")).toBe("a/b.md");
+    expect(stripOrgRoot("C:\\root", "C:\\root")).toBe("");
+    expect(stripOrgRoot("C:\\root-sibling\\a.md", "C:\\root")).toBeNull();
+  });
 });
 
 describe("getFileRedline seam", () => {

@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { getRepoColor } from "@/shared/lib/pipeline-graph/epic-colors";
 import { useNavModelProjection } from "../lib/use-nav-model-projection";
 import { fileSurfaceCall } from "@/tauri/commands";
-import { dirname } from "@/shared/lib/path";
+import { basename, dirname, isAbsolute, isWithin, join } from "@/shared/lib/path";
 import { useAgentRows } from "@/features/agents/lib/agent-names";
 import { liveHub } from "@/features/dashboard/lib/live-hub";
 import { registerNativeMenu, type NativeMenuRequest } from "@/features/shell/native-menu-openers";
@@ -381,7 +381,7 @@ export function NavFileActionsOwner({
       useViewerStore.setState((state) => {
         const previous = state.statusNavExpandedPaths[teamKey] ?? [];
         const expanded = previous.includes(absolutePath)
-          ? previous.filter((p) => p !== absolutePath && !p.startsWith(`${absolutePath}/`))
+          ? previous.filter((p) => !isWithin(absolutePath, p))
           : [...previous, absolutePath];
         return { statusNavExpandedPaths: { ...state.statusNavExpandedPaths, [teamKey]: expanded } };
       });
@@ -683,7 +683,7 @@ export function NavFileActionsOwner({
   // descendant of root — shouldn't happen in production), show the drilled
   // folder's basename derived locally from the scoped tree. The breadcrumb owns
   // this label in the normal path (SW-EW-36), so no `drillFolderName` prop.
-  const drillLeafLabel = tree.absoluteDirPath.split("/").filter(Boolean).pop() ?? "";
+  const drillLeafLabel = basename(tree.absoluteDirPath);
 
   // The breadcrumb row only exists while drilled in: at the root it would just restate the
   // org name the title bar already shows. Drilled, it carries "up one level" + the crumbs.
@@ -823,7 +823,7 @@ export function NavFileActionsOwner({
               ...(tree.docs ?? []),
               {
                 filePath: resolvedFile.path,
-                fileName: resolvedFile.path.split("/").pop()!,
+                fileName: basename(resolvedFile.path),
                 sourceTeam: resolvedFile.inheritedFrom,
               },
             ],
@@ -875,9 +875,9 @@ export function NavFileActionsOwner({
           typeof request.row.path === "string" &&
           ["file", "story", "epic"].includes(String(request.row.kind))
         ) {
-          const path = request.row.path.startsWith("/")
+          const path = isAbsolute(request.row.path)
             ? request.row.path
-            : `${rootAnchor}/${request.row.path}`;
+            : join(rootAnchor, request.row.path);
           void fileSurfaceCall("list", { dir: dirname(path) })
             .then((value) => {
               if (cancelled) return;

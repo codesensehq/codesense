@@ -20,6 +20,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { DocSummary } from "@/shared/lib/doc-query/types";
 import type { ContextGroupCount } from "@/shared/lib/context-query/types";
 import { subscribeContext } from "@/shared/lib/context-query/subscribe-context";
+import { isAbsolute } from "@/shared/lib/path";
 import { rowToDocSummary } from "@/shared/lib/context-query/to-doc-summary";
 import type { DerivedPipelineTree } from "@/shared/lib/pipeline-graph/types";
 import { parseCsQuery } from "@/shared/lib/csquery/parse-csquery";
@@ -140,7 +141,7 @@ function CsQueryView({
         unknown: false,
       };
     const node = tree ? findSubtreeByScope(tree, raw) : null;
-    const absolute = raw.startsWith("/");
+    const absolute = isAbsolute(raw);
     return {
       root: node?.absoluteDirPath ?? raw,
       label: raw,

@@ -20,10 +20,10 @@ const ERROR_NAME = "/^(e|err|error|cause)$/";
 const RETIRED_WORDS =
   "/\\b[Ww]orkspaces?\\b|Codesense|[Ss]ample epic|Invite a teammate|[Ss]ample pipeline/";
 // Hand-rolled file-system path splitting. `src/shared/lib/path.ts` is the one path helper;
-// the folders in PATH_HELPER_FOLDERS use it instead of splitting on a forward slash.
+// all of src/ uses it instead of splitting on a forward slash.
 // The receiver must look like a path (`relPath`, `file.path`, `cwd`, `rootDir`), so keys,
-// slugs and URLs that split on `/` stay quiet. Widen the folder list as folders migrate.
-const PATH_HELPER_FOLDERS = ["src/features/viewer/**", "src/features/shell/**", "src/shared/**"];
+// slugs and URLs that split on `/` stay quiet.
+const PATH_HELPER_FOLDERS = ["src/**"];
 const PATH_SPLIT_CALL =
   "CallExpression[callee.property.name=/^(split|lastIndexOf|indexOf)$/][arguments.0.value='/']";
 const PATH_RECEIVER = "/path|cwd|dir|root/i";
@@ -128,13 +128,20 @@ export default tseslint.config(
     },
   },
 
-  // File-system paths in these folders go through the shared path helper. Before the
+  // File-system paths anywhere in src/ go through the shared path helper. Before the
   // first-use block, which appends PATH_SPLIT_SELECTORS to its own list: the last block
   // that sets `no-restricted-syntax` for a file wins whole. The helper itself splits on
   // both separators.
   {
     files: PATH_HELPER_FOLDERS,
-    ignores: ["**/*.test.*", "**/__fixtures__/**", "**/test-fixtures/**", "src/shared/lib/path.ts"],
+    ignores: [
+      "**/*.test.*",
+      "**/__fixtures__/**",
+      "**/test-fixtures/**",
+      "src/shared/lib/path.ts",
+      // The browser mock backend serves a POSIX fixture tree, never a real disk.
+      "src/app/mock/**",
+    ],
     rules: {
       "no-restricted-syntax": ["error", ...PATH_SPLIT_SELECTORS],
     },

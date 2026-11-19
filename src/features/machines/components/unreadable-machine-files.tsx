@@ -5,6 +5,7 @@ import { FileWarning } from "lucide-react";
 
 import { RowAction } from "@/features/shell/components/connections-reserve";
 import { getErrorMessage } from "@/shared/lib/error-message";
+import { basename } from "@/shared/lib/path";
 import { parseTeamKey, teamKeyHasTeam } from "@/shared/lib/team-key";
 import {
   listUnreadableMachineFiles,
@@ -17,7 +18,7 @@ import {
 import { reloadMachines } from "../stores/machines-store";
 
 function fileName(path: string): string {
-  return path.split("/").pop() || path;
+  return basename(path) || path;
 }
 
 /** The team's machine files that can't be read: named, so a machine never

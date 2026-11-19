@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { baseName, ingestFile } from "@/features/dashboard/lib/structural-ops";
-import { dirname } from "@/shared/lib/path";
+import { dirname, join, relative, trimTrailingSeparators } from "@/shared/lib/path";
 
 // ---------------------------------------------------------------------------
 // SW-XS-20 — a file a team inherits from a parent team lives at its real path in
@@ -14,9 +14,9 @@ import { dirname } from "@/shared/lib/path";
 /** `team`'s content root in the same org as the active team's content root
  *  (`{org_root}/{active}/content` → `{org_root}/{team}/content`). */
 export function teamContentRoot(activeContentRoot: string, team: string): string | null {
-  const active = activeContentRoot.replace(/\/+$/, "");
+  const active = trimTrailingSeparators(activeContentRoot);
   const orgRoot = dirname(dirname(active));
-  return orgRoot && orgRoot !== active ? `${orgRoot}/${team}/content` : null;
+  return orgRoot && orgRoot !== active ? join(orgRoot, team, "content") : null;
 }
 
 /** `filePath`'s path relative to `team`'s content root, or `null` when it is
@@ -27,7 +27,7 @@ export function pathInTeamContent(
   activeContentRoot: string,
 ): string | null {
   const root = teamContentRoot(activeContentRoot, team);
-  return root && filePath.startsWith(`${root}/`) ? filePath.slice(root.length + 1) : null;
+  return root ? relative(root, filePath) || null : null;
 }
 
 /** Where a copy of `filePath` (inherited from `team`) goes in the active team:
@@ -38,7 +38,7 @@ export function teamCopyPath(
   activeContentRoot: string,
 ): string | null {
   const rel = pathInTeamContent(filePath, team, activeContentRoot);
-  return rel ? `${activeContentRoot.replace(/\/+$/, "")}/${rel}` : null;
+  return rel ? join(activeContentRoot, rel) : null;
 }
 
 /** For a menu move of a file inherited from `team`: the folder in the PARENT's
@@ -51,8 +51,8 @@ export function parentMoveDir(
   activeContentRoot: string,
 ): string | null {
   const root = teamContentRoot(activeContentRoot, team);
-  if (!root || !filePath.startsWith(`${root}/`)) return null;
-  return toDirRel ? `${root}/${toDirRel.replace(/^\/+|\/+$/g, "")}` : root;
+  if (!root || !relative(root, filePath)) return null;
+  return toDirRel ? join(root, toDirRel) : root;
 }
 
 export type CopyIntoTeamResult =

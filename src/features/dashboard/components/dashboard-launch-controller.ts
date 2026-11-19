@@ -83,6 +83,7 @@ import {
   type EpicOpenTarget,
 } from "@/features/viewer/lib/epic-workspace-opener";
 import { syntheticRepoKey } from "@/shared/lib/build-synthetic-repo";
+import { basename, dirname, join } from "@/shared/lib/path";
 import { resolveRealRepoPath } from "@/shared/lib/resolve-source-repo-path";
 import { publishReviewOpenPhase } from "./review-open-progress";
 import {
@@ -1191,25 +1192,17 @@ export async function resolveWorkspaceStatusForStory(storyId: string): Promise<W
 }
 
 export function resolveEpicHandleForDoc(docPath: string): string | null {
-  const docDir = dirOfPath(docPath);
+  const docDir = dirname(docPath);
   const { workspaces } = useViewerStore.getState();
   for (const teamWs of Object.values(workspaces)) {
     for (const ws of teamWs) {
-      if (ws.kind === "epic" && ws.epicDocPath && dirOfPath(ws.epicDocPath) === docDir) {
+      if (ws.kind === "epic" && ws.epicDocPath && dirname(ws.epicDocPath) === docDir) {
         return ws.epicDocPath;
       }
     }
   }
   return null;
 }
-
-// The parent-directory of a path; `""` for a slash-less input (NOT `slice(0,-1)`,
-// which would drop the last char and could false-match — review r1). The single
-// dir-of helper for this module (epic-handle match + the doc's own dir anchor).
-const dirOfPath = (p: string) => {
-  const i = p.lastIndexOf("/");
-  return i < 0 ? "" : p.slice(0, i);
-};
 
 // SW-DX-15: the epic mainDoc precedence — an EXACT mirror of the scanner's
 // `MAIN_DOC_DEFAULTS` (pipeline_scanner.rs:703), case-insensitive first-match:
@@ -1259,9 +1252,9 @@ export async function resolveOwnEpicTarget(
 ): Promise<EpicOpenTarget | null> {
   const activeTeamKey = getActiveTeamKey();
   if (!activeTeamKey) return null;
-  const epicDir = dirOfPath(docPath);
+  const epicDir = dirname(docPath);
   if (!epicDir) return null;
-  const epicDirName = epicDir.replace(/\/+$/, "").split("/").pop() || epicDir;
+  const epicDirName = basename(epicDir) || epicDir;
   let entries;
   try {
     entries = (await readWorkspaceFile(docPath, "./", [...READ_WORKSPACE_EXTS], frameId)).entries;
@@ -1290,7 +1283,7 @@ export async function resolveOwnEpicTarget(
     orgSlug,
     team: teamName ?? "_none",
     epicDirName,
-    epicFilePath: `${epicDir}/${mainDocName}`,
+    epicFilePath: join(epicDir, mainDocName),
   };
 }
 
@@ -1558,9 +1551,9 @@ export function makeDashboardLaunchController(docPath: string): DashboardLaunchC
     getEpicHandle: () => resolveEpicHandleForDoc(docPath),
     // SW-DX-14: the dashboard's own absolute directory, resolved trusted-side —
     // the anchor a board uses to build an absolute sibling-story path for
-    // `runSkill` without needing an open epic workspace. Reuses `dirOfPath` but
-    // keeps the `null`-for-slashless contract (a doc with no dir has no anchor).
-    getDocDir: () => (docPath.includes("/") ? dirOfPath(docPath) : null),
+    // `runSkill` without needing an open epic workspace. `null` for a
+    // separator-less path (a doc with no dir has no anchor).
+    getDocDir: () => dirname(docPath) || null,
   };
 }
 

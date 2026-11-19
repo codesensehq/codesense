@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { toast } from "sonner";
 
+import { join } from "@/shared/lib/path";
 import { buildTeamKey } from "@/shared/lib/team-key";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
@@ -88,7 +89,7 @@ export function openCodesenseDocsLanding(path: string): void {
  * False when the page can't open; a reopen (not a landing) says why in a toast.
  */
 export function openCodesenseSetup(options: { resume?: boolean; landing?: boolean } = {}): boolean {
-  const result = openDocsPage((root) => `${root.replace(/[/\\]+$/, "")}/${CODESENSE_DOCS_SETUP}`, {
+  const result = openDocsPage((root) => join(root, CODESENSE_DOCS_SETUP), {
     keepLayout: options.landing,
     hash: options.resume ? "#resume" : undefined,
   });

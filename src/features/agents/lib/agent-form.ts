@@ -375,6 +375,7 @@ function checkContentPath(raw: string, what: string): { path: string } | { error
 }
 
 function vcsSegment(path: string): string | undefined {
+  // eslint-disable-next-line no-restricted-syntax -- logical path: checkStartupPath refuses backslashes
   return path.split("/").find((s) => VCS_DIRS.has(s.toLowerCase()));
 }
 
