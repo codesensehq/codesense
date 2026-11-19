@@ -1514,3 +1514,55 @@ fn an_unprobeable_release_gets_no_hooks_no_engine_and_a_stated_reason_for_every_
         "the table covers the version-qualified CLIs"
     );
 }
+
+#[test]
+fn a_channel_to_an_absent_engine_is_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let endpoint = dir.path().join("engine.sock");
+    for cli in [AgentCli::Codex, AgentCli::Hermes] {
+        let connect = adapter(cli)
+            .control()
+            .channel
+            .expect("a host-submitted CLI's channel");
+        // Its callers take a channel with `.ok()`; this pins only that the connect fails
+        // (off unix with the capability-off error), not what a caller does next.
+        assert!(connect(&endpoint, None, Some(dir.path())).is_err(), "{cli}");
+    }
+}
+
+/// Started by `a_home_with_no_verified_gateway_is_left_alone_at_teardown` as a live
+/// process that is not the home's gateway.
+#[test]
+#[ignore = "a process another test starts"]
+fn a_process_that_is_not_a_gateway() {
+    std::thread::sleep(std::time::Duration::from_secs(30));
+}
+
+#[test]
+fn a_home_with_no_verified_gateway_is_left_alone_at_teardown() {
+    use codesense_platform::process::{is_alive, kill_hard, ProcessTree};
+    use std::process::{Command, Stdio};
+    let home = tempfile::tempdir().unwrap();
+    let mut tree = ProcessTree::spawn(
+        Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "agent_cli::tests::a_process_that_is_not_a_gateway",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null()),
+    )
+    .unwrap();
+    let pid = tree.pid();
+    std::fs::write(
+        home.path().join("gateway.pid"),
+        format!("{{\"pid\":{pid}}}"),
+    )
+    .unwrap();
+    adapter(AgentCli::Hermes).teardown_home(home.path(), false);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let running = tree.try_wait().unwrap().is_none() && is_alive(pid);
+    kill_hard(&tree).unwrap();
+    assert!(running, "a live process the home names is not its gateway");
+}

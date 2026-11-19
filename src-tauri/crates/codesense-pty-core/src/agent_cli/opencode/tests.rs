@@ -143,10 +143,6 @@ impl Host {
         self.try_report(event, "main", fields).unwrap()
     }
 
-    fn state(&self) -> State {
-        self.owner.snapshot("S1").unwrap().state
-    }
-
     fn started() -> Self {
         let host = rig();
         assert_eq!(

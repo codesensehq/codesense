@@ -16,11 +16,12 @@ use std::time::{Duration, Instant, SystemTime};
 use codesense_platform::cli::{candidates, named_in, package_dirs, search_path};
 use codesense_platform::dirs::{codesense_home, lock_dir};
 use codesense_platform::fs::{
-    atomic_replace, can_execute, canonicalize, create_dir_new_owner_only, create_dir_owner_only,
-    create_new_owner_only, create_owner_only, file_id, file_id_of, is_executable,
-    is_owned_by_current_user, is_owner_only, is_text_busy, link_or_copy, lock_exclusive,
-    open_nofollow, portable_name, set_executable, set_owner_only, try_lock_exclusive,
-    try_lock_shared, unlock, Linked, NonPortableName, Open, Reach,
+    atomic_replace, can_execute, canonicalize, change_stamp, create_dir_new_owner_only,
+    create_dir_owner_only, create_new_owner_only, create_owner_only, file_id, file_id_of,
+    is_executable, is_owned_by_current_user, is_owner_only, is_text_busy, is_world_writable,
+    link_count, link_or_copy, lock_exclusive, open_nofollow, open_nofollow_nonblocking,
+    portable_name, set_executable, set_owner_only, try_lock_exclusive, try_lock_shared, unlock,
+    Linked, NonPortableName, Open, Reach,
 };
 use codesense_platform::ipc::{blocking, Endpoint, LocalListener, LocalStream};
 use codesense_platform::limits::is_descriptor_exhaustion;
@@ -28,7 +29,10 @@ use codesense_platform::process::{
     exited_unreaped, group_and_foreground, is_alive, kill_hard, terminate, terminate_pid, Identity,
     Pid, ProcessGroup, ProcessTree,
 };
-use codesense_platform::testutil::{pathext, relative_from_cwd, symlink_or_skip};
+use codesense_platform::testutil::{
+    fifo_or_skip, make_group_writable, make_world_writable, pathext, relative_from_cwd,
+    symlink_or_skip, Anyone,
+};
 use codesense_platform::user::{current_user, hostname, login_shell};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 
@@ -1219,6 +1223,124 @@ fn cli_search_path_per_os() {
     expect_search_path(found, probed.get());
 }
 
+/// An owner-only directory `home` under `dir`.
+fn owner_only_dir(dir: &Path) -> PathBuf {
+    let home = dir.join("home");
+    std::fs::create_dir(&home).unwrap();
+    set_owner_only(&home).unwrap();
+    home
+}
+
+#[test]
+fn is_world_writable_once_any_broad_group_may_write() {
+    for anyone in [Anyone::Everyone, Anyone::Users, Anyone::AuthenticatedUsers] {
+        let dir = tempfile::tempdir().unwrap();
+        let home = owner_only_dir(dir.path());
+        let opened = || open_nofollow(OpenOptions::new().read(true), &home).unwrap();
+        assert!(
+            !is_world_writable(&opened()).unwrap(),
+            "{anyone:?}: owner-only"
+        );
+        make_world_writable(&home, anyone);
+        assert!(
+            is_world_writable(&opened()).unwrap(),
+            "{anyone:?} may write"
+        );
+    }
+}
+
+#[test]
+fn a_group_writable_directory_is_not_world_writable() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = owner_only_dir(dir.path());
+    make_group_writable(&home);
+    let opened = open_nofollow(OpenOptions::new().read(true), &home).unwrap();
+    assert!(!is_world_writable(&opened).unwrap());
+}
+
+#[test]
+fn link_count_counts_every_hard_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("first");
+    std::fs::write(&first, "bytes").unwrap();
+    let opened = |path: &Path| open_nofollow(OpenOptions::new().read(true), path).unwrap();
+    assert_eq!(link_count(&opened(&first)).unwrap(), 1);
+    let second = dir.path().join("second");
+    std::fs::hard_link(&first, &second).unwrap();
+    assert_eq!(link_count(&opened(&first)).unwrap(), 2);
+    assert_eq!(link_count(&opened(&second)).unwrap(), 2);
+}
+
+#[test]
+fn open_nofollow_nonblocking_opens_a_file_and_refuses_a_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("target");
+    std::fs::write(&target, "bytes").unwrap();
+    let mut read = String::new();
+    open_nofollow_nonblocking(OpenOptions::new().read(true), &target)
+        .unwrap()
+        .read_to_string(&mut read)
+        .unwrap();
+    assert_eq!(read, "bytes");
+    let link = dir.path().join("link");
+    if !symlink_or_skip(&target, &link) {
+        return;
+    }
+    assert!(open_nofollow_nonblocking(OpenOptions::new().read(true), &link).is_err());
+}
+
+#[test]
+fn open_nofollow_nonblocking_opens_a_fifo_without_waiting_for_a_writer() {
+    let dir = tempfile::tempdir().unwrap();
+    let fifo = dir.path().join("fifo");
+    if !fifo_or_skip(&fifo) {
+        return;
+    }
+    let (done, opened) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = done.send(open_nofollow_nonblocking(OpenOptions::new().read(true), &fifo).is_ok());
+    });
+    assert_eq!(opened.recv_timeout(Duration::from_secs(5)), Ok(true));
+}
+
+#[test]
+fn change_stamp_sees_an_in_place_rewrite_that_keeps_length_and_mtime() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("program");
+    std::fs::write(&path, "old!").unwrap();
+    let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+    let stamp = change_stamp(&path).unwrap();
+    // Past the file system's timestamp granularity.
+    std::thread::sleep(Duration::from_millis(50));
+    let mut file = OpenOptions::new().write(true).open(&path).unwrap();
+    file.write_all(b"new!").unwrap();
+    file.set_modified(modified).unwrap();
+    drop(file);
+    let metadata = std::fs::metadata(&path).unwrap();
+    assert_eq!(
+        (metadata.len(), metadata.modified().unwrap()),
+        (4, modified)
+    );
+    assert_eq!(
+        stamp != change_stamp(&path).unwrap(),
+        expect_in_place_rewrite_changes_the_stamp()
+    );
+}
+
+#[test]
+fn change_stamp_holds_for_an_untouched_file_and_changes_when_it_is_rewritten() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("program");
+    std::fs::write(&path, "old").unwrap();
+    let stamp = change_stamp(&path).unwrap();
+    assert_eq!(stamp, change_stamp(&path).unwrap(), "untouched");
+    atomic_replace(&path, b"new").unwrap();
+    let rewritten = change_stamp(&path).unwrap();
+    assert_ne!(stamp, rewritten, "rewritten");
+    assert_eq!(rewritten, change_stamp(&path).unwrap(), "untouched since");
+    assert!(change_stamp(&dir.path().join("missing")).is_err());
+}
+
 /// Write the file `name` in `dir` (made if missing) and make it executable.
 fn executable(dir: &Path, name: &str) -> PathBuf {
     std::fs::create_dir_all(dir).unwrap();
@@ -1238,6 +1360,13 @@ fn temp_siblings(dir: &Path) -> usize {
 }
 
 // Per-OS expectations.
+
+/// Unix: the stamp holds the inode change time, which the write and the
+/// restored mtime both move. Windows: it holds the last-write time, which
+/// the restore puts back, so the same file id and time read as untouched.
+fn expect_in_place_rewrite_changes_the_stamp() -> bool {
+    cfg!(unix)
+}
 
 /// Unix: SIGTERM is a request a process may ignore. Windows: terminate ends
 /// the job outright.

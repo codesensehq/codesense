@@ -3,7 +3,8 @@
 //! owner-only creates of files and directories, opens that refuse links,
 //! atomic replace, exclusive and shared locks, links with a copy fallback,
 //! canonical paths, names that are valid on every OS, execute bits, busy
-//! files and whether a file is executable.
+//! files, whether a file is executable, world-writable files, link counts
+//! and change stamps.
 
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -384,6 +385,50 @@ pub fn portable_name(name: &str) -> Result<(), NonPortableName> {
         return Err(NonPortableName::Reserved);
     }
     Ok(())
+}
+
+/// Whether anyone may write to the open `file` (open it with
+/// [`open_nofollow`] and read access, as for [`is_owner_only`]): on unix
+/// the other-write bit (`mode & 0o002`), so a group-writable file is not;
+/// on Windows its DACL allows a write, delete or permission change to
+/// Everyone, Users or Authenticated Users (a null DACL allows everyone
+/// everything). An ACE that only takes access away is not weighed, so a file
+/// with both reads as world-writable.
+pub fn is_world_writable(file: &File) -> io::Result<bool> {
+    sys::is_world_writable(file)
+}
+
+/// How many names (hard links) the open `file` has: `st_nlink` on unix,
+/// `nNumberOfLinks` on Windows.
+pub fn link_count(file: &File) -> io::Result<u64> {
+    sys::link_count(file)
+}
+
+/// [`open_nofollow`] that never waits for the file: on unix also
+/// `O_NONBLOCK`, so a FIFO at `path` opens at once instead of blocking for a
+/// writer. On Windows exactly [`open_nofollow`], as a path never names a
+/// FIFO there.
+pub fn open_nofollow_nonblocking(options: &mut OpenOptions, path: &Path) -> io::Result<File> {
+    sys::open_nofollow_nonblocking(options, path)
+}
+
+/// What a file last was, to tell a file rewritten or replaced at a path from
+/// one left untouched. Two stamps of an untouched file are equal. Unix: the
+/// inode and the inode change time (ctime), to the nanosecond. Windows: the
+/// [`FileId`] and the last-write time, as a file renamed over another gets
+/// a new id there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ChangeStamp {
+    /// Unix: `(0, inode)`. Windows: the [`FileId`]'s volume and index.
+    file: (u64, u128),
+    /// Unix: the ctime's seconds and nanoseconds. Windows: the last-write
+    /// time's seconds and nanoseconds since 1601.
+    changed: (i64, i64),
+}
+
+/// The [`ChangeStamp`] of the file at `path`, following links.
+pub fn change_stamp(path: &Path) -> io::Result<ChangeStamp> {
+    sys::change_stamp(path)
 }
 
 #[cfg(test)]

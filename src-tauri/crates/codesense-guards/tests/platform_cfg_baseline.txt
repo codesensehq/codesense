@@ -17,11 +17,10 @@ crates/codesense-pty-core/src/activity/hook_block.rs 4
 crates/codesense-pty-core/src/activity/inbox.rs 6
 crates/codesense-pty-core/src/activity/ingress.rs 17
 crates/codesense-pty-core/src/activity/launch.rs 18
-crates/codesense-pty-core/src/agent_cli/codex.rs 15
+crates/codesense-pty-core/src/agent_cli/codex.rs 2
 crates/codesense-pty-core/src/agent_cli/hermes/channel.rs 2
-crates/codesense-pty-core/src/agent_cli/hermes/gateway_fixture.rs 4
-crates/codesense-pty-core/src/agent_cli/hermes/lifecycle.rs 9
-crates/codesense-pty-core/src/agent_cli/version_cache.rs 18
+crates/codesense-pty-core/src/agent_cli/hermes/gateway_fixture.rs 1
+crates/codesense-pty-core/src/agent_cli/hermes/lifecycle.rs 2
 crates/codesense-pty-core/src/fixtures.rs 23
 crates/codesense-pty-core/src/inbox_host.rs 4
 crates/codesense-pty-core/src/leak_gate.rs 14
