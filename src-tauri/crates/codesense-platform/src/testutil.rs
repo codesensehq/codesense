@@ -35,6 +35,13 @@ pub fn relative_from_cwd(path: &Path) -> PathBuf {
     relative
 }
 
+/// Let anyone write to the directory or file at `path`, for a test of a
+/// check that refuses it. Unix: mode 0777. Windows: an ACE granting
+/// Everyone modify, added with `icacls`.
+pub fn make_world_writable(path: &Path) {
+    sys::make_world_writable(path)
+}
+
 /// The extensions `PATHEXT` names as executable, as the lookup reads them:
 /// on Windows `PATHEXT`'s, each with a leading dot; elsewhere Windows'
 /// default list.
@@ -48,6 +55,11 @@ mod sys {
 
     pub(super) fn pathext() -> Vec<String> {
         [".COM", ".EXE", ".BAT", ".CMD"].map(str::to_owned).to_vec()
+    }
+
+    pub(super) fn make_world_writable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o777)).unwrap();
     }
 
     pub(super) fn symlink_or_skip(target: &Path, link: &Path) -> bool {
@@ -70,6 +82,17 @@ mod sys {
 
     pub(super) fn pathext() -> Vec<String> {
         crate::win::pathext()
+    }
+
+    pub(super) fn make_world_writable(path: &Path) {
+        // S-1-1-0 is Everyone; M is modify.
+        let status = std::process::Command::new("icacls")
+            .arg(path)
+            .args(["/grant", "*S-1-1-0:M"])
+            .stdout(std::process::Stdio::null())
+            .status()
+            .expect("run icacls");
+        assert!(status.success(), "icacls {}: {status}", path.display());
     }
 
     pub(super) fn symlink_or_skip(target: &Path, link: &Path) -> bool {

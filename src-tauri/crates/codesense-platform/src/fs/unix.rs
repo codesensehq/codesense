@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-//! Unix: permission modes, uid and (dev, ino), `O_NOFOLLOW`, `rename`,
-//! `flock` and `ETXTBSY`.
+//! Unix: permission modes, uid, (dev, ino), link counts and ctime,
+//! `O_NOFOLLOW`, `rename`, `flock` and `ETXTBSY`.
 
 use std::fs::{File, Metadata, OpenOptions};
 use std::io;
@@ -8,7 +8,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-use super::{Creation, FileId, Linked, Open, Reach, ReplaceError};
+use super::{ChangeStamp, Creation, FileId, Linked, Open, Reach, ReplaceError};
 
 pub(super) fn set_owner_only(path: &Path, is_dir: bool) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -81,9 +81,25 @@ pub(super) fn is_text_busy(error: &io::Error) -> bool {
 }
 
 pub(super) fn open_nofollow(options: &mut OpenOptions, path: &Path) -> io::Result<File> {
+    open_nofollow_with(options, path, 0)
+}
+
+pub(super) fn open_nofollow_nonblocking(
+    options: &mut OpenOptions,
+    path: &Path,
+) -> io::Result<File> {
+    open_nofollow_with(options, path, libc::O_NONBLOCK)
+}
+
+/// `O_NOFOLLOW | O_CLOEXEC`, with the `extra` flags.
+fn open_nofollow_with(
+    options: &mut OpenOptions,
+    path: &Path,
+    extra: libc::c_int,
+) -> io::Result<File> {
     use std::os::unix::fs::OpenOptionsExt;
     options
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | extra)
         .open(path)
 }
 
@@ -162,4 +178,20 @@ pub(super) fn can_execute(path: &Path) -> bool {
 pub(super) fn link_or_copy(target: &Path, link: &Path) -> io::Result<Linked> {
     std::os::unix::fs::symlink(target, link)?;
     Ok(Linked::Symlink)
+}
+
+pub(super) fn is_world_writable(file: &File) -> io::Result<bool> {
+    Ok(file.metadata()?.mode() & 0o002 != 0)
+}
+
+pub(super) fn link_count(file: &File) -> io::Result<u64> {
+    Ok(file.metadata()?.nlink())
+}
+
+pub(super) fn change_stamp(path: &Path) -> io::Result<ChangeStamp> {
+    let metadata = std::fs::metadata(path)?;
+    Ok(ChangeStamp {
+        file: (0, u128::from(metadata.ino())),
+        changed: (metadata.ctime(), metadata.ctime_nsec()),
+    })
 }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Windows: a protected owner-only DACL, set on a path or at creation; DACL
-//! and owner checks; volume serial and 128-bit file id; reparse-point refusal;
+//! and owner checks, and writes the DACL allows anyone; volume serial and
+//! 128-bit file id, link counts and change stamps; reparse-point refusal;
 //! std's rename with a bounded retry, std's file locks, sharing violations,
 //! and a copy where symlinks need Developer Mode. Execute bits do not exist:
 //! the extension decides.
@@ -23,11 +24,12 @@ use windows_sys::Win32::Security::Authorization::{
     GetSecurityInfo, SetNamedSecurityInfoW, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    EqualSid, GetAce, InitializeSecurityDescriptor, SetSecurityDescriptorControl,
-    SetSecurityDescriptorDacl, ACCESS_ALLOWED_ACE, ACE_FLAGS, ACE_HEADER, ACL,
-    CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, OBJECT_INHERIT_ACE,
-    OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
-    SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, SE_DACL_PROTECTED,
+    EqualSid, GetAce, InitializeSecurityDescriptor, IsWellKnownSid, SetSecurityDescriptorControl,
+    SetSecurityDescriptorDacl, WinAuthenticatedUserSid, WinBuiltinUsersSid, WinWorldSid,
+    ACCESS_ALLOWED_ACE, ACE_FLAGS, ACE_HEADER, ACL, CONTAINER_INHERIT_ACE,
+    DACL_SECURITY_INFORMATION, INHERIT_ONLY_ACE, OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION,
+    PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
+    SECURITY_DESCRIPTOR, SE_DACL_PROTECTED,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateDirectoryW, CreateFileW, FileIdInfo, GetFileInformationByHandle,
@@ -36,7 +38,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_ALWAYS,
 };
 
-use super::{portable_name, Creation, FileId, Linked, Open, Reach, ReplaceError};
+use super::{portable_name, ChangeStamp, Creation, FileId, Linked, Open, Reach, ReplaceError};
 use crate::win::{wide, CurrentUser, SingleUserAcl, SECURITY_DESCRIPTOR_REVISION};
 
 /// `ACCESS_ALLOWED_ACE_TYPE`: an ACE that grants access to one SID.
@@ -218,16 +220,22 @@ pub(super) fn file_id_of(file: &File) -> io::Result<FileId> {
 
 /// The 64-bit file index, where the file system has no 128-bit id.
 fn file_index_of(file: &File) -> io::Result<FileId> {
+    let info = handle_information(file)?;
+    file_id_from(
+        u64::from(info.dwVolumeSerialNumber),
+        u128::from((u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow)),
+    )
+}
+
+/// `GetFileInformationByHandle` of the open `file`.
+fn handle_information(file: &File) -> io::Result<BY_HANDLE_FILE_INFORMATION> {
     // SAFETY: all-zero is a valid BY_HANDLE_FILE_INFORMATION.
     let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
     // SAFETY: the file's handle is open; `info` is writable.
     if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
         return Err(io::Error::last_os_error());
     }
-    file_id_from(
-        u64::from(info.dwVolumeSerialNumber),
-        u128::from((u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow)),
-    )
+    Ok(info)
 }
 
 /// A [`FileId`], or `Unsupported` for a zero index: some virtual and
@@ -376,6 +384,13 @@ pub(super) fn open_nofollow(options: &mut OpenOptions, path: &Path) -> io::Resul
     refuse_link(open_itself(options, path)?, path)
 }
 
+pub(super) fn open_nofollow_nonblocking(
+    options: &mut OpenOptions,
+    path: &Path,
+) -> io::Result<File> {
+    open_nofollow(options, path)
+}
+
 /// Open `path` itself with `options`, a link or a directory included, shared
 /// for read, write and delete.
 fn open_itself(options: &mut OpenOptions, path: &Path) -> io::Result<File> {
@@ -516,6 +531,89 @@ pub(super) fn link_or_copy(target: &Path, link: &Path) -> io::Result<Linked> {
         }
         Err(error) => Err(error),
     }
+}
+
+/// The rights that change a file or a directory's entries: write and append
+/// data (add a file or a subdirectory), extended attributes, attributes,
+/// delete a child or the file itself, the DACL and the owner, and the
+/// generic write and all rights.
+const WRITE_RIGHTS: u32 = 0x0000_0002 // FILE_WRITE_DATA, FILE_ADD_FILE
+    | 0x0000_0004 // FILE_APPEND_DATA, FILE_ADD_SUBDIRECTORY
+    | 0x0000_0010 // FILE_WRITE_EA
+    | 0x0000_0040 // FILE_DELETE_CHILD
+    | 0x0000_0100 // FILE_WRITE_ATTRIBUTES
+    | 0x0001_0000 // DELETE
+    | 0x0004_0000 // WRITE_DAC
+    | 0x0008_0000 // WRITE_OWNER
+    | 0x1000_0000 // GENERIC_ALL
+    | 0x4000_0000; // GENERIC_WRITE
+
+pub(super) fn is_world_writable(file: &File) -> io::Result<bool> {
+    let security = Security::of(file)?;
+    // SAFETY: `dacl` is null or points into the descriptor `security` holds.
+    Ok(unsafe { grants_anyone_write(security.dacl) })
+}
+
+/// Whether `dacl` allows one of [`WRITE_RIGHTS`] to Everyone, Users or
+/// Authenticated Users on the object itself (an inherit-only ACE is for its
+/// children). A null DACL grants everyone everything; deny ACEs are not
+/// weighed, so the answer errs towards writable.
+///
+/// # Safety
+///
+/// `dacl` is null or a valid ACL.
+unsafe fn grants_anyone_write(dacl: *const ACL) -> bool {
+    if dacl.is_null() {
+        return true;
+    }
+    for index in 0..u32::from((*dacl).AceCount) {
+        let mut ace: *mut c_void = std::ptr::null_mut();
+        if GetAce(dacl, index, &mut ace) == 0 {
+            return true;
+        }
+        let header = &*ace.cast::<ACE_HEADER>();
+        if header.AceType != ACCESS_ALLOWED_ACE_TYPE
+            || u32::from(header.AceFlags) & INHERIT_ONLY_ACE != 0
+        {
+            continue;
+        }
+        let allowed = &*ace.cast::<ACCESS_ALLOWED_ACE>();
+        if allowed.Mask & WRITE_RIGHTS == 0 {
+            continue;
+        }
+        let sid: PSID = std::ptr::addr_of!(allowed.SidStart).cast_mut().cast();
+        if [WinWorldSid, WinBuiltinUsersSid, WinAuthenticatedUserSid]
+            .into_iter()
+            .any(|anyone| IsWellKnownSid(sid, anyone) != 0)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+pub(super) fn link_count(file: &File) -> io::Result<u64> {
+    Ok(u64::from(handle_information(file)?.nNumberOfLinks))
+}
+
+/// The last-write time's 100 ns ticks in a second.
+const TICKS_PER_SECOND: u64 = 10_000_000;
+
+pub(super) fn change_stamp(path: &Path) -> io::Result<ChangeStamp> {
+    use std::os::windows::fs::MetadataExt;
+    let file = OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)?;
+    let id = file_id_of(&file)?;
+    let written = file.metadata()?.last_write_time();
+    Ok(ChangeStamp {
+        file: (id.volume, id.index),
+        changed: (
+            (written / TICKS_PER_SECOND) as i64,
+            (written % TICKS_PER_SECOND * 100) as i64,
+        ),
+    })
 }
 
 #[cfg(test)]
