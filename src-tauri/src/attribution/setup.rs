@@ -103,7 +103,9 @@ pub(crate) fn shared(doctor: &Doctor) -> Value {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::attribution::catch_up::{self, Capture};
+    #[cfg(cap_git_ai)]
+    use crate::attribution::catch_up;
+    use crate::attribution::facade::Capture;
     use crate::attribution::{AttributionStatus, OffReason};
     use std::collections::BTreeSet;
 
@@ -130,7 +132,7 @@ pub(crate) mod tests {
             git_ai_version: Some("1.7.5".into()),
             daemon_reachable: true,
             warnings: vec![format!("could not write {SECRET}")],
-            previous_binary: Some(crate::attribution::install::PreviousBinary {
+            previous_binary: Some(crate::attribution::facade::PreviousBinary {
                 version: "1.7.4".into(),
                 replacement: "bundled".into(),
                 path: SECRET.into(),
@@ -359,6 +361,7 @@ pub(crate) mod tests {
 
     /// A real sweep and a failed one reach the projection through the same `capture()` read
     /// `describe_setup` uses, per home (this Mac's values only, never another's).
+    #[cfg(cap_git_ai)]
     #[test]
     fn capture_comes_from_this_homes_own_sweep() {
         let swept = tempfile::tempdir().unwrap();
@@ -373,7 +376,7 @@ pub(crate) mod tests {
             shared(&crate::mcp::setup_tools::local_doctor(
                 home,
                 std::env::var_os("PATH").as_deref(),
-                crate::attribution::install::ReplacementNotice::Peek,
+                crate::attribution::facade::ReplacementNotice::Peek,
             ))["attribution"]["capture"]
                 .clone()
         };
@@ -405,7 +408,7 @@ pub(crate) mod tests {
     /// consuming it; only the `describe_setup` mode acknowledges it, once.
     #[test]
     fn setup_reads_peek_at_the_replacement_notice_and_describe_setup_acknowledges_once() {
-        use crate::attribution::install::ReplacementNotice::{Acknowledge, Peek};
+        use crate::attribution::facade::ReplacementNotice::{Acknowledge, Peek};
         let home = tempfile::tempdir().unwrap();
         let receipt = plant_pending_notice(home.path());
         let before = std::fs::read(&receipt).unwrap();

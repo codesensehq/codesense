@@ -110,13 +110,13 @@ pub(crate) fn remote_status() -> AttributionStatus {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, cap_git_ai))]
 mod context_capture_tests;
 #[cfg(test)]
 mod guard_tests;
-#[cfg(test)]
+#[cfg(all(test, cap_git_ai))]
 mod notes_tests;
-#[cfg(test)]
+#[cfg(all(test, cap_git_ai))]
 mod repo_roots_tests;
-#[cfg(test)]
+#[cfg(all(test, cap_git_ai))]
 pub(crate) mod unsupported_tests;

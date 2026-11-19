@@ -5,6 +5,7 @@ use super::*;
 use crate::agents::launch::{forget_launch_env, project_and_apply_for_cli};
 use crate::agents::resolve::tests::alice;
 use crate::attribution::prefs::{AttributionMode, AttributionPrefs};
+#[cfg(cap_git_ai)]
 use crate::attribution::testing::Launch;
 use crate::attribution::{AttributionStatus, OffReason};
 use crate::commands::{mcp_scope, pty_backend};
@@ -88,6 +89,7 @@ impl Drop for HostHandshake {
     }
 }
 
+#[cfg(cap_git_ai)]
 #[test]
 fn saved_agent_hook_trust_follows_host_hello_before_or_during_preparation() {
     let _home = crate::routines::test_support::TempHome::new();
@@ -163,6 +165,7 @@ fn saved_agent_hook_trust_follows_host_hello_before_or_during_preparation() {
     }
 }
 
+#[cfg(cap_git_ai)]
 #[test]
 fn saved_agent_restart_rechecks_host_hello_and_removes_checkpoint_wiring() {
     let _home = crate::routines::test_support::TempHome::new();

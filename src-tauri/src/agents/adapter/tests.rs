@@ -579,6 +579,7 @@ fn only_a_qualified_opencode_adds_its_plugin_and_other_adapters_ignore_the_flag(
     assert!(!installed.contains("/* @waiter */ null"));
 }
 
+#[cfg(cap_git_ai)]
 #[test]
 fn hermes_is_listed_and_available_to_users() {
     let runtime = AgentCli::Hermes;

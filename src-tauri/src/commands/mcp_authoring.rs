@@ -391,6 +391,7 @@ pub(crate) mod tests {
         dir
     }
 
+    #[cfg(cap_git_ai)]
     #[test]
     fn r4_respawn_reads_current_capture_preferences_for_both_clis() {
         use crate::agents::launch::{forget_launch_env, project_and_apply_for_cli};
@@ -549,6 +550,7 @@ pub(crate) mod tests {
         }
     }
 
+    #[cfg(cap_git_ai)]
     pub(crate) fn attribution_respawn(
         fixture: &crate::attribution::testing::Launch,
         runtime: AgentCli,
@@ -591,6 +593,7 @@ pub(crate) mod tests {
         crate::agents::launch::forget_launch_env(&session);
     }
 
+    #[cfg(cap_git_ai)]
     #[test]
     fn r3_claude_and_codex_respawns_keep_the_generated_attribution_environment() {
         use crate::agents::launch::{forget_launch_env, project_and_apply_for_cli};
@@ -666,6 +669,7 @@ pub(crate) mod tests {
         }
     }
 
+    #[cfg(cap_git_ai)]
     #[test]
     fn an_opencode_respawn_sets_its_reflog_marker_once_and_fresh() {
         use crate::agents::launch::{forget_launch_env, project_and_apply_for_cli};

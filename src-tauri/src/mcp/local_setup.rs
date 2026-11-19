@@ -209,6 +209,7 @@ pub(crate) mod tests {
         app
     }
 
+    #[cfg(cap_git_ai)]
     #[tokio::test]
     async fn attribution_on_dispatch_waits_for_the_injected_installer() {
         let temp = tempfile::tempdir().unwrap();
@@ -233,6 +234,7 @@ pub(crate) mod tests {
         assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
+    #[cfg(cap_git_ai)]
     #[tokio::test]
     async fn attribution_on_dispatch_releases_a_user_pinned_native_bundle() {
         let temp = tempfile::tempdir().unwrap();

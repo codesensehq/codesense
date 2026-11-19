@@ -424,6 +424,7 @@ fn codex_keys_become_overrides_in_the_launch_recipe() {
     );
 }
 
+#[cfg(cap_git_ai)]
 #[test]
 fn unsupported_attribution_is_unwired_on_initial_launch_and_refresh() {
     use crate::attribution::testing::{assert_unwired, logged_calls, Launch};

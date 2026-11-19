@@ -284,9 +284,12 @@ pub(crate) fn check_notes(checkout: &str, notes: Option<NotesMode>) -> Result<()
 mod tests {
     use super::*;
     use crate::agents::resolve::tests::alice;
+    #[cfg(cap_git_ai)]
     use crate::attribution::testing::Launch;
+    #[cfg(cap_git_ai)]
     use codesense_pty_core::agent_cli::AgentCli;
 
+    #[cfg(cap_git_ai)]
     #[test]
     fn save_choices_keep_omitted_fields_and_auto_clears_only_the_mode() {
         let fixture = Launch::new(AgentCli::Claude);

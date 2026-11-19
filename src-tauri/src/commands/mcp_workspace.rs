@@ -3850,6 +3850,7 @@ mod managed_launch_dir_tests {
     }
 }
 
+#[cfg(cap_git_ai)]
 #[cfg(test)]
 pub(crate) mod attribution_entry_tests {
     //! SV-CDE-7: the MCP / `open_workspace` launch's scope step switches git-ai capture on

@@ -506,6 +506,7 @@ fn same_origin(a: &LineRange, b: &LineRange) -> bool {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    #[cfg(cap_git_ai)]
     #[test]
     fn a_renamed_drain_binary_runs_as_git_ai() {
         let dir = tempfile::tempdir().unwrap();
@@ -552,6 +553,7 @@ pub(crate) mod tests {
         std::fs::read_to_string(log).unwrap_or_default().lines().filter(|line| line.starts_with("await")).count()
     }
 
+    #[cfg(cap_git_ai)]
     #[test]
     fn the_stub_git_ai_logs_a_drain() {
         let home = tempfile::tempdir().unwrap();
