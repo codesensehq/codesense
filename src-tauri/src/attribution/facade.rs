@@ -90,7 +90,10 @@ pub(crate) fn off_status() -> AttributionStatus {
 /// Logs, once per entry point in this process, that `entry` did nothing because git-ai is off.
 pub(crate) fn skipped(entry: &'static str) {
     static LOGGED: Mutex<BTreeSet<&'static str>> = Mutex::new(BTreeSet::new());
-    let first = LOGGED.lock().unwrap_or_else(|e| e.into_inner()).insert(entry);
+    let first = LOGGED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(entry);
     if first {
         log::info!(target: "attribution", "git-ai is off on this platform; {entry} does nothing");
     }
@@ -231,4 +234,92 @@ pub(crate) fn notes_source(caps: &Caps<'_>, home: &Path, drain: bool) -> GitAiSo
         GitAiSource::default()
     };
     source
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::attribution::launch::{self, Reapplied};
+    use crate::platform_caps::caps_with_off;
+
+    /// Every file under `dir`, so a test can show nothing was written there.
+    fn files(dir: &Path) -> Vec<PathBuf> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect()
+    }
+
+    /// With git-ai off a read answers "not available" from the caps answer alone, on any host.
+    #[test]
+    fn with_git_ai_off_a_read_reports_it_not_available() {
+        let off = caps_with_off(&[GIT_AI]);
+        let caps = Caps(&off);
+        let home = tempfile::tempdir().unwrap();
+        let doctor = launch::doctor_with_caps(&caps, home.path(), None, ReplacementNotice::Peek);
+        assert_eq!(doctor.status, off_status());
+        assert_eq!(doctor.binary, None);
+        assert!(!doctor.daemon_reachable);
+        assert!(doctor.warnings.is_empty());
+        assert_eq!(doctor.capture, Capture::default());
+        let usage = tempfile::tempdir().unwrap();
+        let mut store = UsageStore::open(&usage.path().join("usage.sqlite")).unwrap();
+        assert_eq!(
+            covered(
+                &caps,
+                home.path(),
+                "github.com/acme/api",
+                "0123abcd",
+                &store
+            ),
+            Ok(false)
+        );
+        assert_eq!(
+            repository_key(&caps, home.path(), Some("github.com/acme/api"), &mut store),
+            Ok(None)
+        );
+        assert!(files(home.path()).is_empty(), "a read writes nothing");
+    }
+
+    /// With git-ai off a write does nothing (no install, no config, no import, no watcher) and
+    /// still answers.
+    #[test]
+    fn with_git_ai_off_a_write_does_nothing() {
+        let off = caps_with_off(&[GIT_AI]);
+        let caps = Caps(&off);
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(
+            ensure_installed(&caps, home.path(), None, Trigger::OnDemand),
+            Some(off_status())
+        );
+        assert_eq!(
+            launch::reapply_config_with_caps(&caps, home.path()),
+            Reapplied::Pending
+        );
+        refresh_watcher(&caps, home.path());
+        shutdown(&caps);
+        let usage = tempfile::tempdir().unwrap();
+        let mut store = UsageStore::open(&usage.path().join("usage.sqlite")).unwrap();
+        let stats = harvest(
+            &caps,
+            home.path(),
+            "github.com/acme/api",
+            &mut store,
+            &BTreeSet::from(["0123abcd".to_owned()]),
+        )
+        .unwrap();
+        assert_eq!((stats.records, stats.rows_stored), (0, 0));
+        assert!(files(home.path()).is_empty(), "nothing was written");
+    }
+
+    /// The hook constants outside callers use do not depend on git-ai being compiled in.
+    #[test]
+    fn the_hook_constants_are_there_without_git_ai() {
+        assert_eq!(launch::HOOK_TIMEOUT, 5);
+        assert_eq!(
+            launch::CODEX_HOOK_EVENTS,
+            ["PreToolUse", "PostToolUse", "Stop"]
+        );
+        assert_eq!(super::super::git_ai::NOTES_REF, "sense");
+    }
 }
