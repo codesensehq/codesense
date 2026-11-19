@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! An agent's inbox hook and its host: the hook runs the host's helper
-//! (`--inbox-wait <cli> <event> <agent pid>`, see
+//! (`--inbox-wait <cli> <event> <agent>`, see
 //! [`inbox_hook_command`](crate::agent_cli::inbox_hook_command)), which asks this host's
 //! activity ingress, with its CLI's writer token, to be handed the agent's mail notice.
 //! The host admits it only from the agent process it named for that invocation
@@ -24,7 +24,8 @@ mod transport;
 pub(super) struct Ask {
     /// The CLI hook event that ran it.
     event: String,
-    /// The CLI process that ran the hook (`$PPID`): the session's agent, or refused.
+    /// The CLI process that ran the hook (`$PPID`, or the parent of the shell that ran
+    /// the helper): the session's agent, or refused.
     agent: u32,
     /// The prompt the hook's CLI submitted, when the hook carries one: it settles a
     /// submitted notice whose delivery was uncertain.
@@ -51,8 +52,9 @@ pub(super) fn serve(
     transport::serve(owner, stream, peer, token, ask)
 }
 
-/// Helper side, from the hook's argv (`<cli> <event> <agent pid>`): waits for the
-/// agent's mail notice at the host its tab runs on (a host-submitted CLI's hook only
+/// Helper side, from the hook's argv (`<cli> <event> <agent>`, the agent a pid,
+/// [`INBOX_AGENT_OF_SHELL`](crate::agent_cli::INBOX_AGENT_OF_SHELL), or by default the
+/// helper's parent): waits for the agent's mail notice at the host its tab runs on (a host-submitted CLI's hook only
 /// looks once), and hands it to the CLI as its inbox port says. Returns the hook's exit
 /// status: 2 for a notice handed over as a rewake, 0 for anything else. A CLI with no
 /// CodeSense invocation (no activity token, as a run with no terminal) has no waiter.

@@ -499,6 +499,11 @@ pub(crate) const WAITER_REPLACE_EVENTS: &[&str] = &["SessionStart", "Stop", "Sto
 /// The helper option an inbox hook runs (see [`inbox_hook_command`]).
 pub const INBOX_WAIT_ARG: &str = "--inbox-wait";
 
+/// The agent an inbox hook names when it runs the helper through a shell that does not
+/// `exec` it: the shell's parent, checked by start time
+/// ([`agent_of_shell`](codesense_platform::process::agent_of_shell)).
+pub const INBOX_AGENT_OF_SHELL: &str = "parent-of-shell";
+
 /// What a waiter prints, with exit status 2, to renew itself before its hook times out. It
 /// is not mail: a host that runs the helper itself (a plugin) re-spawns it and hands over
 /// nothing.
