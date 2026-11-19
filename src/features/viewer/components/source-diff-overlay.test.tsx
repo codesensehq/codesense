@@ -400,6 +400,24 @@ describe("SourceDiffOverlay — changed-file list + states (AC-2)", () => {
     expect(reload).toHaveBeenCalled();
   });
 
+  it("shows a long error in full, wrapping its path instead of clamping it", () => {
+    const deep = Array.from({ length: 24 }, (_, i) => `folder-${i}`).join("/");
+    const message = `open repo: could not find repository at '/srv/guest/${deep}/content'; class=Repository (6); code=NotFound (-3)`;
+    stubChangeset({ files: null, error: message });
+    render(
+      <SourceDiffOverlay
+        workspace={storyWs}
+        teamKey="team-a"
+        activeTabSessionId="sid-ws"
+        isFocused
+      />,
+    );
+    const shown = screen.getByTestId("source-diff-error-w1");
+    expect(shown).toHaveTextContent(message);
+    expect(shown.className).not.toMatch(/line-clamp|truncate/);
+    expect(shown.className).toContain("[overflow-wrap:anywhere]");
+  });
+
   it("shows a skeleton on first fetch (loading + no files)", () => {
     stubChangeset({ files: null, loading: true });
     render(
@@ -3718,12 +3736,15 @@ describe("SourceDiffOverlay — SW-VE-12 always-on empty-state matrix", () => {
     expect(screen.getByTestId("source-diff-overlay-no-repo-gw")).toBeInTheDocument();
     expect(screen.queryByTestId("source-diff-overlay-expanded-gw")).not.toBeInTheDocument();
     // The new body state owns the "no working tree" message.
-    expect(screen.getByTestId("source-diff-no-repo")).toHaveTextContent(/no git repo/i);
+    expect(screen.getByTestId("source-diff-no-repo")).toHaveTextContent(
+      "No repository for this workspace yet.",
+    );
     // And when there's no repo the rail is not rendered — a 0-row rail next to
     // the message would double-signal (impeccable finding 1.1).
     expect(screen.queryByTestId("source-diff-rail-gw")).not.toBeInTheDocument();
-    // No seam call either — effectiveActive stays false, so no spurious fetch.
-    expect(changesetMock).toHaveBeenCalledWith("/home/user", undefined, false, 0);
+    // No seam call either — effectiveActive stays false and no repo root is
+    // known, so no spurious fetch.
+    expect(changesetMock).toHaveBeenCalledWith("", undefined, false, 0);
   });
 
   it("AC-1 / AC-6: a `generic` cwd that IS a worktree gets the full rail + diff pane", () => {
@@ -3933,9 +3954,69 @@ describe("SourceDiffOverlay — SW-VE-12 always-on empty-state matrix", () => {
     );
     expect(screen.getByTestId("source-diff-overlay-no-repo-gw")).toBeInTheDocument();
     expect(screen.queryByTestId("source-diff-overlay-expanded-gw")).not.toBeInTheDocument();
-    expect(screen.getByTestId("source-diff-no-repo")).toHaveTextContent(/no git repo/i);
+    expect(screen.getByTestId("source-diff-no-repo")).toHaveTextContent(
+      "No repository for this workspace yet.",
+    );
     // The resolver was asked with the new cwd (seam: `useTabSourceRepo` is
     // keyed on `liveCwd`, so a cwd mutation changes the resolver's input).
     expect(tabSourceRepoMock).toHaveBeenCalledWith(expect.anything(), "/home/user");
+  });
+});
+
+// A guest with no context or source repo of its own: its context worktree
+// launches the agent in `<team>/content`, a folder inside the working tree. The
+// resolver finds the tree's root by searching upward; the diff commands don't
+// search, so they must be given that root, never the launch folder.
+describe("SourceDiffOverlay — a guest's context worktree launch folder", () => {
+  const ROOT = "/srv/guest/wt/getting-started";
+  const LAUNCH = `${ROOT}/getting-started/content`;
+  const guestWs: Workspace = {
+    id: "cw",
+    kind: "context",
+    cwd: LAUNCH,
+    status: "ready",
+  };
+  const overlay = () => (
+    <SourceDiffOverlay workspace={guestWs} teamKey="team-a" activeTabSessionId="sid-ws" isFocused />
+  );
+
+  beforeEach(() => {
+    useViewerStore.setState({
+      sourceDiffShownBySession: { "sid-ws": true },
+      sourceDiffSelectedFile: { "sid-ws": "src/mod.ts" },
+    });
+    sessionCwdMock.mockReturnValue(LAUNCH);
+  });
+
+  it("lists and diffs the files from the resolved root, not the launch folder", () => {
+    tabSourceRepoMock.mockReturnValue({
+      folder: { kind: "folder", cwd: LAUNCH },
+      repo: { root: ROOT, isRoot: false },
+    });
+    render(overlay());
+    expect(screen.getByTestId("source-diff-overlay-expanded-cw")).toBeInTheDocument();
+    expect(changesetMock).toHaveBeenCalledWith(ROOT, undefined, true, 0);
+    expect(redlineMock).toHaveBeenCalledWith(ROOT, "src/mod.ts", undefined, undefined, 0);
+    for (const call of [...changesetMock.mock.calls, ...redlineMock.mock.calls]) {
+      expect(call[0]).not.toBe(LAUNCH);
+    }
+    expect(screen.getByTestId("mock-code-diff-review")).toHaveTextContent("old→new");
+  });
+
+  it("reads nothing while the resolver is still out", () => {
+    tabSourceRepoMock.mockReturnValue({ folder: { kind: "folder", cwd: LAUNCH }, repo: undefined });
+    render(overlay());
+    for (const call of [...changesetMock.mock.calls, ...redlineMock.mock.calls]) {
+      expect(call[0]).toBe("");
+    }
+  });
+
+  it("shows the calm no-repository state when the folder has no repository", () => {
+    tabSourceRepoMock.mockReturnValue({ folder: { kind: "folder", cwd: LAUNCH }, repo: null });
+    render(overlay());
+    expect(screen.getByTestId("source-diff-no-repo")).toHaveTextContent(
+      "No repository for this workspace yet.",
+    );
+    expect(screen.queryByText(/couldn.t load the source diff/i)).not.toBeInTheDocument();
   });
 });

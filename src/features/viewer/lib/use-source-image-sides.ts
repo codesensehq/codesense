@@ -38,7 +38,8 @@ export function useSourceImageSides(
   const cwd = typeof repo === "string" ? repo : repo.kind === "local" ? repo.cwd : null;
   const raster = filePath != null && isRasterImage(filePath);
   const remoteAtCommit = remote != null && sha != null;
-  const wanted = raster && (cwd != null || (remote != null && sha == null));
+  // An empty local path names no repository yet (the overlay's resolver is still out).
+  const wanted = raster && (!!cwd || (remote != null && sha == null));
   const where = remote ? ["remote", remote.machineId, remote.handle] : ["local", cwd];
   const subject = JSON.stringify([...where, sha, filePath, oldPath, sha ? null : baseRef]);
   const [read, setRead] = useState<{ subject: string; sides: SourceImageSides }>();

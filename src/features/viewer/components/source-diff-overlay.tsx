@@ -282,9 +282,9 @@ export function SourceDiffOverlay({
   // History reads local git only: a remembered History choice never applies to
   // a machine's workspace (it has no way back to Working there).
   const inHistory = historyMode === true && !remoteWorkspace;
-  // SW-VE-14: local-tab fetch keys read from `effectiveCwd`, which tracks
-  // `liveCwd` on every OSC 7 bump — the change-set + file redline retarget
-  // automatically on a `cd`. Remote tabs stay anchored to their machine-
+  // `effectiveCwd` tracks `liveCwd` on every OSC 7 bump, and the local fetch
+  // keys read the repo root resolved from it (`repoRoot` below), so the
+  // change-set + file redline retarget on a `cd`. Remote tabs stay anchored to their machine-
   // side handle (the local cwd probe can't speak to a remote shell).
   const effectiveCwd = remoteWorkspace ? ws.cwd : (liveCwd ?? ws.cwd);
   const repo = remoteWorkspace
@@ -392,12 +392,14 @@ export function SourceDiffOverlay({
   // working tree AND a repo descriptor.
   const effectiveActive = active && repo !== null && tabRepo != null;
   useRepoWorktreeWatch(ws.id, repo, effectiveActive, teamKey);
-  // A local repo passes its plain cwd (the hooks' back-compat path); a remote
-  // one passes the SourceRepo so the seam routes to the machine. The local
-  // branch uses `effectiveCwd` so `liveCwd` is the single source of truth —
-  // the OSC 7 event that bumps liveCwd mid-session flows through here for
-  // free.
-  const changesetKey = repo?.kind === "remote" ? repo : effectiveCwd;
+  // A local repo passes the working-tree root the resolver found for the live
+  // cwd (the hooks' back-compat path); a remote one passes the SourceRepo so
+  // the seam routes to the machine. The diff commands open the repo without
+  // searching upward, so a cwd inside the tree (a context worktree launches in
+  // `<team>/content`) must not reach them. Empty until the resolver answers:
+  // the hooks fetch nothing for an empty key.
+  const repoRoot = tabRepo?.root ?? "";
+  const changesetKey = repo?.kind === "remote" ? repo : repoRoot;
   const { files, loading, error, reload } = useSourceChangeset(
     changesetKey,
     baseRef,
@@ -851,7 +853,7 @@ export function SourceDiffOverlay({
             {hideButton}
           </div>
           <CommitGraphRail
-            ws={ws}
+            ws={{ id: ws.id, cwd: repoRoot }}
             worktreeNonce={liveNonce}
             activeTabSessionId={activeTabSessionId}
           />
@@ -859,7 +861,7 @@ export function SourceDiffOverlay({
         <section className="flex min-w-0 flex-1 flex-col">
           <CommitDetailPane
             ws={ws}
-            effectiveCwd={effectiveCwd}
+            repoRoot={repoRoot}
             sha={selectedSha}
             baseRef={baseRef}
             worktreeNonce={liveNonce}
@@ -1070,7 +1072,7 @@ export function SourceDiffOverlay({
             }
           />
           <OverlayCenteredState role="status" testId="source-diff-no-repo">
-            No git repo at this path.
+            No repository for this workspace yet.
           </OverlayCenteredState>
         </section>
       </OverlayShell>
@@ -1646,7 +1648,7 @@ export function SourceDiffPane({
  */
 function CommitDetailPane({
   ws,
-  effectiveCwd,
+  repoRoot,
   sha,
   baseRef,
   worktreeNonce,
@@ -1663,12 +1665,10 @@ function CommitDetailPane({
   workingError,
 }: {
   ws: Workspace;
-  /** SW-VE-12 R3-B2: the local-tab fetch cwd (`liveCwd ?? ws.cwd`). Threaded
-   *  from the parent so `effectiveCwd` is the ONE local-cwd read, and the
-   *  History-mode fetches pick up SW-VE-14's revision-bumped liveCwd when
-   *  that story lands. Remote tabs ignore this (`workspaceSourceRepo(ws)`
-   *  stays source of truth for the remote branch upstream). */
-  effectiveCwd: string;
+  /** The working-tree root the parent resolved for the live cwd, so the
+   *  History fetches read the same repo as the Working list. Remote tabs never
+   *  reach History. */
+  repoRoot: string;
   sha: string | null;
   baseRef: string | undefined;
   worktreeNonce: number;
@@ -1684,7 +1684,7 @@ function CommitDetailPane({
   workingLoading: boolean;
   workingError: string | null;
 }) {
-  const commit = useSourceCommitChangeset(effectiveCwd, sha);
+  const commit = useSourceCommitChangeset(repoRoot, sha);
   const { modes: fileDiffModes, setMode: setFileDiffMode } = useFileDiffModes();
   const markdownMode = fileDiffModes.markdown;
   const files = sha === null ? workingFiles : commit.files;
@@ -1704,21 +1704,21 @@ function CommitDetailPane({
 
   const selected = selectedFile ? (files?.find((f) => f.path === selectedFile) ?? null) : null;
   const workingRedline = useSourceFileRedline(
-    effectiveCwd,
+    repoRoot,
     sha === null ? selectedFile : null,
     selected?.renamedFrom,
     baseRef,
     worktreeNonce,
   );
   const commitRedline = useSourceCommitRedline(
-    effectiveCwd,
+    repoRoot,
     sha,
     sha !== null ? selectedFile : null,
     selected?.renamedFrom,
   );
   const redline = sha === null ? workingRedline.redline : commitRedline.redline;
   const imageSides = useSourceImageSides(
-    effectiveCwd,
+    repoRoot,
     sha,
     selectedFile,
     selected?.renamedFrom,
