@@ -40,14 +40,27 @@ const COMMIT_EMAILS = {
 // The test build is dispatched by hand: its `platform` input picks which job runs, and each
 // job names the platform it builds. Its x86_64 leg runs on the oldest hosted Linux runner, so
 // the bundle links an older glibc; the arm64 leg runs on ubuntu-24.04-arm, so 24.04 is its floor.
-// The Linux smoke runs after the Linux build, each leg on its build's runner.
+// After the Linux build, each package installs in its own clean container on its build's runner,
+// one leg per package and image; the deb and rpm listings are then compared, and the x86_64
+// AppImage launches beside the installs.
 const TEST_BUILD = {
   file: "test-build.yml",
   platforms: ["all", "macos", "windows", "linux"],
-  jobs: { "macos-app": "macos", "linux-app": "linux", "linux-smoke": "linux" },
-  linuxJobs: ["linux-app", "linux-smoke"],
+  jobs: {
+    "macos-app": "macos",
+    "linux-app": "linux",
+    "linux-install": "linux",
+    "linux-resources": "linux",
+    "linux-smoke": "linux",
+  },
+  linuxJobs: ["linux-app"],
   linuxRunners: ["ubuntu-22.04", "ubuntu-24.04-arm"],
-  smoke: { job: "linux-smoke", needs: "linux-app" },
+  install: "linux-install",
+  needs: {
+    "linux-install": "linux-app",
+    "linux-resources": "linux-install",
+    "linux-smoke": "linux-app",
+  },
 };
 const JOB_PERMISSIONS = new Map([
   [`${COMMIT_EMAILS.file}:${COMMIT_EMAILS.job}`, { contents: "read" }],
@@ -222,8 +235,17 @@ export function workflowPolicy(text, file = "") {
         JSON.stringify(TEST_BUILD.linuxRunners)
       )
         errors.push(`${name}: the matrix must run on ${TEST_BUILD.linuxRunners.join(" and ")}`);
-    const { job: smoke, needs } = TEST_BUILD.smoke;
-    if (workflow.jobs?.[smoke]?.needs !== needs) errors.push(`${smoke}: needs must be ${needs}`);
+    // Every install leg runs on a build's runner, and each build has a leg.
+    const install = matrixRunners(workflow.jobs?.[TEST_BUILD.install]) ?? [];
+    if (
+      !install.every((runner) => TEST_BUILD.linuxRunners.includes(runner)) ||
+      !TEST_BUILD.linuxRunners.every((runner) => install.includes(runner))
+    )
+      errors.push(
+        `${TEST_BUILD.install}: the matrix must run on ${TEST_BUILD.linuxRunners.join(" and ")}`,
+      );
+    for (const [name, needs] of Object.entries(TEST_BUILD.needs))
+      if (workflow.jobs?.[name]?.needs !== needs) errors.push(`${name}: needs must be ${needs}`);
   }
   if (
     file === COMMIT_EMAILS.file &&

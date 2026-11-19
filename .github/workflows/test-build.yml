@@ -258,29 +258,157 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-  linux-smoke:
-    name: Linux packaging smoke (${{ matrix.arch }})
+  linux-install:
+    name: Linux package install (${{ matrix.arch }}, ${{ matrix.type }} on ${{ matrix.image }})
     if: inputs.platform == 'all' || inputs.platform == 'linux'
-    # A matrix job is needed whole, so both legs wait for both builds.
+    # A matrix job is needed whole, so every leg waits for both builds.
     needs: linux-app
-    # Each leg runs on its build's runner and picks that build's packages by the architecture
-    # in their names. scripts/ci/smoke-linux.sh says what each step checks.
+    # One leg per package and clean container, in parallel, each on its build's runner, so a slow
+    # mirror holds up only its own leg. The arm64 build runs on 24.04, so 24.04 is the oldest
+    # Ubuntu it installs on. scripts/ci/smoke-linux.sh says what an install checks.
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: x86_64
             runner: ubuntu-22.04
-            artifacts: "*{_amd64.deb,.x86_64.rpm,_amd64.AppImage}"
-            deb_images: ubuntu:22.04 ubuntu:24.04
-            appimage: true
-          # The arm64 build runs on 24.04, so 24.04 is the oldest Ubuntu it installs on.
+            type: deb
+            image: ubuntu:22.04
+            package: "*_amd64.deb"
+          - arch: x86_64
+            runner: ubuntu-22.04
+            type: deb
+            image: ubuntu:24.04
+            package: "*_amd64.deb"
+          - arch: x86_64
+            runner: ubuntu-22.04
+            type: rpm
+            image: fedora:44
+            package: "*.x86_64.rpm"
           - arch: arm64
             runner: ubuntu-24.04-arm
-            artifacts: "*{_arm64.deb,.aarch64.rpm}"
-            deb_images: ubuntu:24.04
-            appimage: false
+            type: deb
+            image: ubuntu:24.04
+            package: "*_arm64.deb"
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            type: rpm
+            image: fedora:44
+            package: "*.aarch64.rpm"
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download the package
+        # v8 is the first to read the unzipped files linux-app uploads.
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: ${{ matrix.package }}
+          path: ${{ runner.temp }}/packages
+          merge-multiple: true
+      - name: Key the apt archive cache
+        id: apt-key
+        # The ISO week rolls the key, so the packages the archive updates are saved again weekly.
+        if: matrix.type == 'deb'
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: bash scripts/ci/smoke-linux.sh cache-key "$IMAGE" "$RUNNER_TEMP/packages" "$(date -u +%G-W%V)" | tee -a "$GITHUB_OUTPUT"
+      - name: Restore the apt archives
+        id: apt-restore
+        if: matrix.type == 'deb'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/apt-archives
+          key: ${{ steps.apt-key.outputs.key }}
+          restore-keys: ${{ steps.apt-key.outputs.restore }}
+      - name: Install the package in a clean container
+        # A healthy install takes about 2 minutes, less with the archives cached. The timeout is
+        # a backstop: a crawling mirror fails here, by name, before the job's timeout.
+        timeout-minutes: 30
+        env:
+          TYPE: ${{ matrix.type }}
+          IMAGE: ${{ matrix.image }}
+          # A deb leg's container uses this as its /var/cache/apt/archives, which the cache keeps.
+          SMOKE_APT_CACHE: ${{ runner.temp }}/apt-archives
+        run: bash scripts/ci/smoke-linux.sh install "$TYPE" "$IMAGE" "$RUNNER_TEMP/packages" "$RUNNER_TEMP/smoke"
+      - name: Hand the apt archives to the runner
+        # The container's apt wrote them as root, with a lock and a partial directory the cache
+        # cannot read. A timed-out install can leave its container running, so stop it first.
+        if: always() && matrix.type == 'deb' && steps.apt-key.outcome == 'success' && steps.apt-restore.outputs.cache-hit != 'true'
+        env:
+          SMOKE_APT_CACHE: ${{ runner.temp }}/apt-archives
+        run: |
+          docker ps -q | xargs -r docker kill
+          sudo chown -R "$(id -u):$(id -g)" "$SMOKE_APT_CACHE"
+          rm -rf "$SMOKE_APT_CACHE/partial" "$SMOKE_APT_CACHE/lock"
+          echo "apt archives: $(find "$SMOKE_APT_CACHE" -name '*.deb' | wc -l) packages, $(du -sh "$SMOKE_APT_CACHE" | cut -f1)"
+      - name: Save the apt archives
+        # Even after a failed or timed-out install, so a slow first run still warms the next.
+        if: always() && matrix.type == 'deb' && steps.apt-key.outcome == 'success' && steps.apt-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/apt-archives
+          key: ${{ steps.apt-key.outputs.key }}
+      - name: Name the listing
+        id: listing
+        env:
+          LEG: ${{ matrix.arch }}-${{ matrix.type }}-${{ matrix.image }}
+        run: echo "name=linux-install-${LEG//:/-}" >>"$GITHUB_OUTPUT"
+      - name: Upload the listing
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.listing.outputs.name }}
+          path: ${{ runner.temp }}/smoke/${{ matrix.type }}.list
+          retention-days: 7
+          if-no-files-found: error
+
+  linux-resources:
+    name: Linux deb and rpm ship the same resources
+    if: inputs.platform == 'all' || inputs.platform == 'linux'
+    needs: linux-install
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download the listings
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: linux-install-*
+          path: ${{ runner.temp }}/listings
+      - name: Compare each deb's listing with its architecture's rpm
+        run: |
+          for arch in x86_64 arm64; do
+            rpm="$RUNNER_TEMP/listings/linux-install-$arch-rpm-fedora-44/rpm.list"
+            debs=("$RUNNER_TEMP/listings/linux-install-$arch-deb-"*/deb.list)
+            [[ -f "$rpm" && -f "${debs[0]}" ]] || { echo "Error: $arch lacks a deb or rpm listing" >&2; exit 1; }
+            for deb in "${debs[@]}"; do
+              bash scripts/ci/smoke-linux.sh same-resources "$deb" "$rpm"
+            done
+          done
+
+  linux-smoke:
+    name: Linux AppImage smoke (x86_64)
+    if: inputs.platform == 'all' || inputs.platform == 'linux'
+    # Only the build, so the launches run beside the container installs. Only the x86_64
+    # AppImage launches. scripts/ci/smoke-linux.sh says what each step checks.
+    needs: linux-app
+    runs-on: ubuntu-22.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -292,51 +420,33 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Download packages
+      - name: Download the AppImage
         # v8 is the first to read the unzipped files linux-app uploads.
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: ${{ matrix.artifacts }}
+          pattern: "*_amd64.AppImage"
           path: ${{ runner.temp }}/packages
           merge-multiple: true
-      - name: Install the deb and rpm in clean containers
-        # A healthy run takes about 5 minutes. A crawling mirror fails here, by name, before
-        # the job's timeout cancels the whole run.
-        timeout-minutes: 20
-        env:
-          DEB_IMAGES: ${{ matrix.deb_images }}
-        run: |
-          for image in $DEB_IMAGES; do
-            bash scripts/ci/smoke-linux.sh install deb "$image" "$RUNNER_TEMP/packages" "$RUNNER_TEMP/smoke"
-          done
-          bash scripts/ci/smoke-linux.sh install rpm fedora:44 "$RUNNER_TEMP/packages" "$RUNNER_TEMP/smoke"
-          bash scripts/ci/smoke-linux.sh same-resources "$RUNNER_TEMP/smoke/deb.list" "$RUNNER_TEMP/smoke/rpm.list"
       - name: Install the desktop session tools
         # An AppImage leaves out the GL, EGL and Mesa libraries every desktop has.
-        if: matrix.appimage
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends xvfb xauth x11-utils xdotool dbus \
             gnome-keyring imagemagick libegl1 libgl1 libgles2 libgl1-mesa-dri
       - name: Launch the AppImage
-        if: matrix.appimage
         run: bash scripts/ci/smoke-linux.sh run "$RUNNER_TEMP/packages" "$RUNNER_TEMP/smoke/appimage"
       - name: Launch the AppImage with DMABUF kept
-        if: matrix.appimage
         run: bash scripts/ci/smoke-linux.sh variant dmabuf "$RUNNER_TEMP/smoke/appimage"
       - name: Launch the AppImage with no session bus
-        if: matrix.appimage
         run: bash scripts/ci/smoke-linux.sh variant no-dbus "$RUNNER_TEMP/smoke/appimage"
       - name: Launch the AppImage with the WebGL terminal renderer forced
-        if: matrix.appimage
         run: bash scripts/ci/smoke-linux.sh variant webgl "$RUNNER_TEMP/smoke/appimage"
       - name: Upload logs and screenshots
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: linux-smoke-${{ matrix.arch }}
+          name: linux-smoke-x86_64
           path: |
-            ${{ runner.temp }}/smoke/*.list
             ${{ runner.temp }}/smoke/appimage/listing
             ${{ runner.temp }}/smoke/appimage/*.log
             ${{ runner.temp }}/smoke/appimage/*.png
