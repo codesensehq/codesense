@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useCallback, useEffect, useRef, useState } from "react";
+import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
 
 /** Error strings the engine (`workspace_chat_send`) carries. SW-WC-2 handoff:
  *  the Tauri path emits `workspace archived` as its one distinguished refusal;
@@ -107,10 +108,10 @@ export function WorkspaceChatCompose({
         <div className="wc-compose__foot">
           <span className="wc-compose__hint">
             <span>
-              <kbd>↵</kbd> send
+              <kbd>{formatKeystrokeDisplay("Enter")}</kbd> send
             </span>
             <span>
-              <kbd>⇧↵</kbd> newline
+              <kbd>{formatKeystrokeDisplay("Shift+Enter")}</kbd> newline
             </span>
           </span>
           {errorMessage && (

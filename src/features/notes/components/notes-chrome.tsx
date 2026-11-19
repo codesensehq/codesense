@@ -19,6 +19,7 @@ import {
 
 import { NtPopover, NtPopoverContent, NtPopoverTrigger } from "./nt-popover";
 import { ActionKbd } from "./action-kbd";
+import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
 
 export interface AgentMenuActions {
   onOrganize: () => void;
@@ -134,7 +135,12 @@ export function NoteActionsMenu({
         </button>
       </NtPopoverTrigger>
       <NtPopoverContent style={{ minWidth: 176 }} aria-label="Note actions">
-        <MenuRow icon={<Plus size={14} />} onClick={pick(onNew)} sub="⌘N" autoFocus>
+        <MenuRow
+          icon={<Plus size={14} />}
+          onClick={pick(onNew)}
+          sub={formatKeystrokeDisplay("CmdOrCtrl+N")}
+          autoFocus
+        >
           New note
         </MenuRow>
         {hasNote && (
@@ -189,7 +195,7 @@ export function NotesChrome({
             type="button"
             className="nt-ib"
             aria-label="Notes list"
-            title="Notes list (⌘B)"
+            title={`Notes list (${formatKeystrokeDisplay("CmdOrCtrl+B")})`}
             aria-pressed={listOpen}
             onClick={onToggleList}
           >

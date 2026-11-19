@@ -5,7 +5,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { cn } from "@/lib/utils";
 
 import { useInboxComposeDraftStore } from "../stores/inbox-compose-draft-store";
-import { hasMod } from "@/shared/lib/shortcuts/keystroke";
+import { formatKeystrokeDisplay, hasMod } from "@/shared/lib/shortcuts/keystroke";
 
 /**
  * SW-IB1-A5 — the one compose box both inboxes mount (push pane + human
@@ -28,11 +28,15 @@ const MAX_HEIGHT_PX = 240;
 
 /** Exact microcopy from EXPERIENCE § Voice and Tone § Compose. One canonical
  *  string per surface — alternates do not ship. */
+/** The chord that sends (`hasMod` + Enter). */
+const SEND_CHORD = "CmdOrCtrl+Enter";
+
 export const INBOX_COMPOSE_COPY = {
-  sendDefault: "Send ⌘↩",
+  sendDefault: () => `Send ${formatKeystrokeDisplay(SEND_CHORD)}`,
   sendSending: "Sending...",
-  sendError: "Couldn't send. Press ⌘↩ to try again.",
-  discardPrompt: "Discard draft? · ⌘⇧D discards, Esc keeps",
+  sendError: () => `Couldn't send. Press ${formatKeystrokeDisplay(SEND_CHORD)} to try again.`,
+  discardPrompt: () =>
+    `Discard draft? · ${formatKeystrokeDisplay("CmdOrCtrl+Shift+D")} discards, Esc keeps`,
 } as const;
 
 export type InboxComposeSendState = "idle" | "sending" | "error";
@@ -248,7 +252,7 @@ export function InboxCompose({
           className="inline-flex items-center bg-destructive/10 px-2 py-1 text-xs text-destructive"
           style={{ borderRadius: "var(--ib-radius-sm, 4px)" }}
         >
-          {INBOX_COMPOSE_COPY.sendError}
+          {INBOX_COMPOSE_COPY.sendError()}
         </p>
       )}
       {showDiscardPrompt && (
@@ -262,7 +266,7 @@ export function InboxCompose({
           className="inline-flex items-center bg-muted px-2 py-1 text-xs text-muted-foreground"
           style={{ borderRadius: "var(--ib-radius-sm, 4px)" }}
         >
-          {INBOX_COMPOSE_COPY.discardPrompt}
+          {INBOX_COMPOSE_COPY.discardPrompt()}
         </p>
       )}
       <textarea
@@ -305,14 +309,18 @@ export function InboxCompose({
             sendDisabled && "pointer-events-none opacity-50",
           )}
           style={{ borderRadius: "var(--ib-radius-sm, 4px)" }}
-          title={sending ? INBOX_COMPOSE_COPY.sendSending : "Send message (⌘↩)"}
+          title={
+            sending
+              ? INBOX_COMPOSE_COPY.sendSending
+              : `Send message (${formatKeystrokeDisplay(SEND_CHORD)})`
+          }
         >
           <span
             className="transition-opacity"
             style={{ transitionDuration: "120ms" }}
             data-sending={sending ? "true" : undefined}
           >
-            {sending ? INBOX_COMPOSE_COPY.sendSending : INBOX_COMPOSE_COPY.sendDefault}
+            {sending ? INBOX_COMPOSE_COPY.sendSending : INBOX_COMPOSE_COPY.sendDefault()}
           </span>
         </button>
       </div>

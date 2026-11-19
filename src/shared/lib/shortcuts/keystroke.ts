@@ -217,20 +217,20 @@ export function formatKeystroke(parts: KeystrokeParts): string {
 export function formatKeystrokeDisplay(str: string): string {
   if (!str) return "";
   const parts = parseKeystroke(str);
-  const key = displayKey(parts.key);
+  return formatModifiersDisplay(parts) + displayKey(parts.key);
+}
 
-  if (isMac()) {
-    const mods = [parts.cmdOrCtrl ? "⌘" : "", parts.shift ? "⇧" : "", parts.alt ? "⌥" : ""].join(
-      "",
-    );
-    return mods + key;
-  }
-
-  const mods: string[] = [];
-  if (parts.cmdOrCtrl) mods.push("Ctrl");
-  if (parts.shift) mods.push("Shift");
-  if (parts.alt) mods.push("Alt");
-  return [...mods, key].join("+");
+/**
+ * The modifiers of a chord, ready to prefix its key: `⌘⇧` on macOS,
+ * `Ctrl+Shift+` elsewhere; `""` when none is held.
+ */
+export function formatModifiersDisplay(mods: Omit<KeystrokeParts, "key">): string {
+  if (isMac()) return `${mods.cmdOrCtrl ? "⌘" : ""}${mods.shift ? "⇧" : ""}${mods.alt ? "⌥" : ""}`;
+  const names: string[] = [];
+  if (mods.cmdOrCtrl) names.push("Ctrl");
+  if (mods.shift) names.push("Shift");
+  if (mods.alt) names.push("Alt");
+  return names.map((n) => `${n}+`).join("");
 }
 
 /**
@@ -242,9 +242,16 @@ export function formatKeystrokeDisplay(str: string): string {
 export function formatControlDisplay(str: string): string {
   if (!str) return "";
   const parts = parseKeystroke(str);
-  const key = displayKey(parts.key);
-  if (isMac()) return `⌃${parts.shift ? "⇧" : ""}${parts.alt ? "⌥" : ""}${key}`;
-  return ["Ctrl", ...(parts.shift ? ["Shift"] : []), ...(parts.alt ? ["Alt"] : []), key].join("+");
+  const control = isMac() ? "⌃" : "Ctrl+";
+  return control + formatModifiersDisplay({ ...parts, cmdOrCtrl: false }) + displayKey(parts.key);
+}
+
+/**
+ * A hint for a key only the Meta key serves (`hasCmd`, `isCmdW`): the chord on
+ * macOS, and `""` elsewhere, where Ctrl would do nothing and no hint shows.
+ */
+export function formatMetaOnlyDisplay(str: string): string {
+  return isMac() ? formatKeystrokeDisplay(str) : "";
 }
 
 /** A modifier a click hint names. */

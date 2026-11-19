@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
 // ---------------------------------------------------------------------------
 // SW-VE-4 — the shared concurrent-write conflict UI, rendered identically by the
 // source-worktree editor (`source-editor-inset.tsx`) and the context editor
@@ -105,8 +106,8 @@ export function ReconcileBar({
       className={AMBER_BAR}
     >
       <span className="min-w-[12rem] flex-1">
-        Left: the file {where} now. Right: your edits — change them as needed, then ⌘S to save the
-        merge.
+        Left: the file {where} now. Right: your edits — change them as needed, then{" "}
+        {formatKeystrokeDisplay("CmdOrCtrl+S")} to save the merge.
         {diskMoved && " The file changed again since — refresh to see the latest."}
       </span>
       {diskMoved && onRefresh && (

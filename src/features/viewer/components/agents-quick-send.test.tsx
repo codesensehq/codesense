@@ -7,6 +7,7 @@ import {
   type QuickSendProps,
 } from "@/features/viewer/components/agents-quick-send";
 import type { TerminalManager } from "@/shared/terminal/terminal-manager";
+import { restorePlatform, setPlatform } from "@/test/platform";
 
 vi.mock("@/shared/terminal/terminal-slot", () => ({
   TerminalSlot: ({ sessionId }: { sessionId: string }) => (
@@ -63,6 +64,20 @@ describe("QuickSendPopover", () => {
     expect(screen.getByRole("dialog", { name: "Quick view of Worker" })).toBeInTheDocument();
     expect(screen.getByText(/Click the terminal to type to Worker.*⌘W closes/)).toBeInTheDocument();
   });
+
+  it.each(["Win32", "Linux x86_64"])(
+    "on %s names no close chord, since only ⌘W closes it",
+    (platform) => {
+      setPlatform(platform);
+      try {
+        setup();
+        expect(screen.getByText("Click the terminal to type to Worker")).toBeInTheDocument();
+        expect(document.body.textContent).not.toMatch(/[⌘⌥⇧⌃↵↩]|Ctrl\+W/);
+      } finally {
+        restorePlatform();
+      }
+    },
+  );
 
   it("keeps Open tab and Close in the header before the terminal", () => {
     const props = setup({ nativeSubagents: 3 });

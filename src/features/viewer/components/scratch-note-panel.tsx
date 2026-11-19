@@ -89,7 +89,7 @@ import { NoteOutline } from "./note-outline";
 import { StickyNoteHeaders } from "./sticky-note-headers";
 import { useNoteHeadings } from "./use-note-headings";
 import { scrollToHeadingBySlug } from "../lib/note-headings";
-import { hasMod } from "@/shared/lib/shortcuts/keystroke";
+import { formatKeystrokeDisplay, hasMod } from "@/shared/lib/shortcuts/keystroke";
 import { join } from "@/shared/lib/path";
 import { ActionKbd } from "@/features/notes/components/action-kbd";
 
@@ -1092,8 +1092,8 @@ function NotesPane() {
                 <button
                   type="button"
                   className="nt-line-send"
-                  aria-label="Send to… (⌘↵)"
-                  title="Send to… ⌘↵"
+                  aria-label={`Send to… (${formatKeystrokeDisplay("CmdOrCtrl+Enter")})`}
+                  title={`Send to… ${formatKeystrokeDisplay("CmdOrCtrl+Enter")}`}
                   style={{ top: hoverLine.top, left: hoverLine.left }}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={(e) => {

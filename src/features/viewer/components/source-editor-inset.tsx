@@ -45,7 +45,12 @@ import { EditorBreadcrumbs } from "./worktree-editor/editor-breadcrumbs";
 import { EditorQuickOpen } from "./worktree-editor/editor-quick-open";
 import { EditorStateMessage, Kbd } from "./worktree-editor/editor-states";
 import { isViewToggleChord } from "./worktree-editor/worktree-view-mode";
-import { hasCmd, hasMod } from "@/shared/lib/shortcuts/keystroke";
+import {
+  formatControlDisplay,
+  formatKeystrokeDisplay,
+  hasCmd,
+  hasMod,
+} from "@/shared/lib/shortcuts/keystroke";
 
 /** A pending discard confirmation: closing a dirty tab, or the whole editor
  *  while any tab is dirty. Held until confirmed or cancelled — unsaved edits
@@ -838,7 +843,7 @@ export function SourceEditorInset({
                     ariaLabel="Quick open"
                     tooltip={
                       <span className="flex items-center gap-1.5">
-                        Quick open <Kbd>⌘P</Kbd>
+                        Quick open <Kbd>{formatKeystrokeDisplay("CmdOrCtrl+P")}</Kbd>
                       </span>
                     }
                     tooltipSide="bottom"
@@ -852,7 +857,7 @@ export function SourceEditorInset({
                       ariaLabel="Save"
                       tooltip={
                         <span className="flex items-center gap-1.5">
-                          Save <Kbd>⌘S</Kbd>
+                          Save <Kbd>{formatKeystrokeDisplay("CmdOrCtrl+S")}</Kbd>
                         </span>
                       }
                       tooltipSide="bottom"
@@ -1066,16 +1071,16 @@ function EmptyWorkbench({ onQuickOpen }: { onQuickOpen: () => void }) {
         >
           Quick open
         </button>
-        <Kbd>⌘P</Kbd>
+        <Kbd>{formatKeystrokeDisplay("CmdOrCtrl+P")}</Kbd>
         <span className="justify-self-end">Go to line</span>
-        <Kbd>⌃G</Kbd>
+        <Kbd>{formatControlDisplay("G")}</Kbd>
         <span className="justify-self-end">Find and replace</span>
         <span className="flex gap-1">
-          <Kbd>⌘F</Kbd>
-          <Kbd>⌥⌘F</Kbd>
+          <Kbd>{formatKeystrokeDisplay("CmdOrCtrl+F")}</Kbd>
+          <Kbd>{formatKeystrokeDisplay("CmdOrCtrl+Alt+F")}</Kbd>
         </span>
         <span className="justify-self-end">Next tab</span>
-        <Kbd>⌃Tab</Kbd>
+        <Kbd>{formatControlDisplay("Tab")}</Kbd>
       </div>
     </EditorStateMessage>
   );

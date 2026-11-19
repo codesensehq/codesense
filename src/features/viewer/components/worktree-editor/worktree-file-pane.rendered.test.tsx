@@ -474,7 +474,7 @@ describe("WorktreeFilePane Rendered | Source", () => {
     await screen.findByTestId("stub-markdown");
     expect(screen.getByRole("radiogroup", { name: "File view" })).toHaveAttribute(
       "title",
-      expect.stringContaining("⇧⌘V"),
+      expect.stringContaining("⌘⇧V"),
     );
 
     act(() => chrome.api?.toggleView());

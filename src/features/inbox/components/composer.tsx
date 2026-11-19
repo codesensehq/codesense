@@ -28,7 +28,7 @@ import {
   type ReplyRequest,
 } from "./inbox-view-context";
 import type { ConversationMessage } from "../api";
-import { hasMod } from "@/shared/lib/shortcuts/keystroke";
+import { formatKeystrokeDisplay, hasMod } from "@/shared/lib/shortcuts/keystroke";
 
 /**
  * The composer every lens shares: a To picker (@sessions with state and machine, #roles with
@@ -421,7 +421,7 @@ export function Composer({
             aria-busy={sending || undefined}
             // Kept enabled on an empty box: a click says to write a message first.
             disabled={!to || !!ended || sending}
-            title={ended?.reason ?? "Send (↵)"}
+            title={ended?.reason ?? `Send (${formatKeystrokeDisplay("Enter")})`}
             onClick={() => void send()}
           >
             <Ico icon={sending ? Loader2 : ArrowUp} sm />
@@ -435,7 +435,7 @@ export function Composer({
             onClick={() => void send()}
           >
             <Ico icon={Send} sm />
-            Send <kbd>⌘↵</kbd>
+            Send <kbd>{formatKeystrokeDisplay("CmdOrCtrl+Enter")}</kbd>
           </button>
         )}
       </div>
@@ -444,7 +444,9 @@ export function Composer({
           {failed !== null && (
             <span className="ibx-comp-err" role="alert" data-testid="ibx-send-failed">
               Not sent: {failed}. Your message is still here
-              {failedNow?.retryable ? "; press ↵ to try again." : "."}
+              {failedNow?.retryable
+                ? `; press ${formatKeystrokeDisplay("Enter")} to try again.`
+                : "."}
             </span>
           )}
           {emptyNudge && failed === null && (
@@ -460,7 +462,8 @@ export function Composer({
           )}
           {!compact && (
             <span className="ibx-comp-keys" aria-hidden>
-              <kbd>↵</kbd> send <kbd>⇧↵</kbd> new line
+              <kbd>{formatKeystrokeDisplay("Enter")}</kbd> send{" "}
+              <kbd>{formatKeystrokeDisplay("Shift+Enter")}</kbd> new line
             </span>
           )}
         </div>

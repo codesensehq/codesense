@@ -1,7 +1,13 @@
 // SPDX-License-Identifier: MIT
 import { afterEach, describe, expect, it } from "vitest";
 
-import { formatControlDisplay, formatKeystrokeDisplay, formatModifierClick } from "./keystroke";
+import {
+  formatControlDisplay,
+  formatKeystrokeDisplay,
+  formatMetaOnlyDisplay,
+  formatModifiersDisplay,
+  formatModifierClick,
+} from "./keystroke";
 import { restorePlatform, setPlatform } from "@/test/platform";
 
 afterEach(restorePlatform);
@@ -48,5 +54,33 @@ describe("the workspace tray's reorder hint", () => {
     expect(formatKeystrokeDisplay("Alt+ArrowLeft")).toBe("⌥←");
     setPlatform("Win32");
     expect(formatKeystrokeDisplay("Alt+ArrowLeft")).toBe("Alt+←");
+  });
+});
+
+describe("formatMetaOnlyDisplay (a hint for a key only Cmd serves)", () => {
+  it("formats the chord on macOS", () => {
+    setPlatform("MacIntel");
+    expect(formatMetaOnlyDisplay("CmdOrCtrl+W")).toBe("⌘W");
+    expect(formatMetaOnlyDisplay("CmdOrCtrl+Alt+Enter")).toBe("⌘⌥⏎");
+  });
+
+  it.each(["Win32", "Linux x86_64"])("is empty on %s, where Ctrl would do nothing", (platform) => {
+    setPlatform(platform);
+    expect(formatMetaOnlyDisplay("CmdOrCtrl+W")).toBe("");
+  });
+});
+
+describe("formatModifiersDisplay (the held modifiers before a key)", () => {
+  const held = { cmdOrCtrl: true, shift: true, alt: false };
+
+  it("renders glyphs on macOS", () => {
+    setPlatform("MacIntel");
+    expect(formatModifiersDisplay(held)).toBe("⌘⇧");
+  });
+
+  it.each(["Win32", "Linux x86_64"])("renders names ending in + on %s", (platform) => {
+    setPlatform(platform);
+    expect(formatModifiersDisplay(held)).toBe("Ctrl+Shift+");
+    expect(formatModifiersDisplay({ cmdOrCtrl: false, shift: false, alt: false })).toBe("");
   });
 });
