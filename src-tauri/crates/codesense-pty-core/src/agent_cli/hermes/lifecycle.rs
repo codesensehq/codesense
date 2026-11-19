@@ -34,6 +34,10 @@ pub(crate) fn teardown_home(home: &Path, wait_for_replacement: bool) {
     let Ok(Some(group)) = ProcessGroup::adopt(Pid::from_raw(process.pid())) else {
         return;
     };
+    // Gone since it was verified: its group id may already name someone else's.
+    if !peer::runs(process) {
+        return;
+    }
     let _ = group.terminate();
     while peer::runs(process) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
@@ -126,6 +130,10 @@ while True: time.sleep(.05)
         use codesense_platform::process::is_alive;
         let tmp = tempfile::tempdir().unwrap();
         let mut gateway = Gateway::spawn_with(tmp.path(), true, &["stubborn-child"]);
+        assert!(
+            verified_gateway(tmp.path()).is_some(),
+            "the teardown has a gateway to stop"
+        );
         let child: u32 = fs::read_to_string(tmp.path().join("child.pid"))
             .unwrap()
             .parse()
