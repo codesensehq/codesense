@@ -1530,15 +1530,39 @@ fn a_channel_to_an_absent_engine_is_an_error() {
     }
 }
 
+/// Started by `a_home_with_no_verified_gateway_is_left_alone_at_teardown` as a live
+/// process that is not the home's gateway.
+#[test]
+#[ignore = "a process another test starts"]
+fn a_process_that_is_not_a_gateway() {
+    std::thread::sleep(std::time::Duration::from_secs(30));
+}
+
 #[test]
 fn a_home_with_no_verified_gateway_is_left_alone_at_teardown() {
+    use codesense_platform::process::{is_alive, kill_hard, ProcessTree};
+    use std::process::{Command, Stdio};
     let home = tempfile::tempdir().unwrap();
-    std::fs::write(home.path().join("gateway.pid"), "{\"pid\":1}").unwrap();
+    let mut tree = ProcessTree::spawn(
+        Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "agent_cli::tests::a_process_that_is_not_a_gateway",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null()),
+    )
+    .unwrap();
+    let pid = tree.pid();
+    std::fs::write(
+        home.path().join("gateway.pid"),
+        format!("{{\"pid\":{pid}}}"),
+    )
+    .unwrap();
     adapter(AgentCli::Hermes).teardown_home(home.path(), false);
-    let mut names: Vec<_> = std::fs::read_dir(home.path())
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name())
-        .collect();
-    names.sort();
-    assert_eq!(names, ["gateway.pid"]);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let running = tree.try_wait().unwrap().is_none() && is_alive(pid);
+    kill_hard(&tree).unwrap();
+    assert!(running, "a live process the home names is not its gateway");
 }
