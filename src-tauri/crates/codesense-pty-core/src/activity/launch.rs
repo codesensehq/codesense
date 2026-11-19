@@ -1298,4 +1298,52 @@ mod tests {
         let arguments = vec![OsString::from_vec(flag)];
         assert!(claude_arguments(&arguments, directory.path()).is_err());
     }
+
+    /// The managed-shell helper's first steps: it takes the bootstrap its host wrote, once,
+    /// and binds the invocation through the host's socket. A bootstrap replaced by a link
+    /// or opened to others is refused.
+    #[test]
+    fn a_managed_shell_bootstrap_is_taken_once_and_a_replaced_or_shared_one_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let owner = std::sync::Arc::new(ActivityOwner::new());
+        let service = crate::activity::ActivityService::start(root.path(), &owner).unwrap();
+        // This test process is the CLI; its parent stands in for the shell the host spawned.
+        owner.register("shell", Some(std::os::unix::process::parent_id()));
+        let launch = || {
+            let launch = prepare_shell_launch(
+                &owner,
+                "shell",
+                AgentCli::Claude,
+                service.path(),
+                Path::new("/helper"),
+            )
+            .unwrap();
+            PathBuf::from(launch.bootstrap)
+        };
+
+        let replaced = launch();
+        let elsewhere = root.path().join("elsewhere.json");
+        std::fs::rename(&replaced, &elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &replaced).unwrap();
+        assert!(read_bootstrap(&replaced).is_err());
+        assert!(elsewhere.exists(), "the file a link names is not taken");
+
+        let shared = launch();
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(read_bootstrap(&shared).is_err());
+        assert!(shared.exists());
+
+        let path = launch();
+        let bootstrap = read_bootstrap(&path).unwrap();
+        assert_eq!(bootstrap.provider, AgentCli::Claude);
+        assert_eq!(Path::new(&bootstrap.writer.socket), service.path());
+        assert!(!path.exists(), "taken once");
+        assert!(read_bootstrap(&path).is_err());
+        let socket = Path::new(&bootstrap.writer.socket);
+        super::super::ingress::bind_shell(socket, &bootstrap.writer.token, false).unwrap();
+        // Committed: a second bind of the same invocation is refused.
+        assert!(super::super::ingress::bind_shell(socket, &bootstrap.writer.token, false).is_err());
+    }
 }
