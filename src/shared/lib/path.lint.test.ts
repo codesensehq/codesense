@@ -44,14 +44,29 @@ describe("path splitting lint rule", () => {
     expect(await lint(code, VIEWER)).toHaveLength(2);
   });
 
-  it("passes outside the two folders", async () => {
+  it("rejects split in feature folders across src", async () => {
     const code = 'export const f = (relPath: string) => relPath.split("/");\n';
-    expect(await lint(code, "src/features/dashboard/x.ts")).toEqual([]);
+    for (const file of ["src/features/dashboard/x.ts", "src/features/agents/lib/x.ts"]) {
+      const messages = await lint(code, file);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toMatch(PATH_RULE);
+    }
   });
 
-  it("passes a dashboard file path split on a content-repo logical path (AC 3)", async () => {
-    const code = 'export const f = (file: { path: string }) => file.path.split("/");\n';
-    expect(await lint(code, "src/features/dashboard/x.ts")).toEqual([]);
+  it("passes the POSIX mock backend", async () => {
+    const code = 'export const f = (relPath: string) => relPath.split("/");\n';
+    expect(await lint(code, "src/app/mock/handlers/x.ts")).toEqual([]);
+  });
+
+  it("passes a logical content path split only with its reason comment (AC 3)", async () => {
+    const split = 'export const f = (file: { path: string }) => file.path.split("/");\n';
+    const kept =
+      "// eslint-disable-next-line no-restricted-syntax -- logical path: content-relative\n" +
+      split;
+    expect(await lint(kept, "src/features/dashboard/x.ts")).toEqual([]);
+    const messages = await lint(split, "src/features/dashboard/x.ts");
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatch(PATH_RULE);
   });
 
   it("passes a receiver whose name does not look like a path", async () => {
