@@ -1516,3 +1516,23 @@ test("smoke images: the policy rejects a bare tag, a short digest, a duplicate o
   for (const [fixture, error] of cases) assert.match(smokeImagesPolicy(fixture).join("\n"), error);
   assert.deepEqual(smokeImagesPolicy(`# a comment\n\nubuntu:24.04${pin}\n`), []);
 });
+
+// Linux compiles the code a platform without git-ai builds (the facade's off arms, with the
+// gated parts left out), and the Linux app job runs the facade's tests with git-ai off.
+test("rust.yml checks the app with git-ai off and runs the git-ai facade's tests", () => {
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  const steps = workflow.jobs["rust-check-linux"].steps;
+  const off = steps.filter((step) => step.env?.CODESENSE_CAPS_OFF !== undefined);
+  assert.equal(off.length, 1, "one cap-off check step");
+  assert.equal(off[0].name, "Check the desktop app with git-ai off");
+  assert.equal(off[0].env.CODESENSE_CAPS_OFF, "git-ai");
+  assert.equal(
+    off[0].run,
+    "cargo check --locked -p codesense --lib --tests --features dashboard-publish",
+  );
+  const pins = workflow.jobs["rust-linux-app"].steps.find(
+    (step) => step.name === "Test the git-ai pins and the capability table",
+  );
+  for (const module of ["platform_caps::tests", "attribution::facade::tests"])
+    assert.ok(pins.run.includes(`test(/^${module}::/)`), module);
+});
