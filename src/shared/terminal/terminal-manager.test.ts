@@ -10,8 +10,8 @@ import { chunked, paneSteps } from "./__test-utils__/pane-feed";
 import {
   buildTerminalOptions,
   createTerminalManager,
+  appRendererDeps,
   loadWebglRenderer,
-  probeWebglRender,
   type DisplayDump,
   type TerminalManager,
   type TerminalManagerDeps,
@@ -1273,85 +1273,58 @@ describe("WebGL lease (I7)", () => {
       expect(m.webglLease("s1")?.leased).toBe(true);
     });
 
-    /** The pane's text as the user would see it from DOM rows: what a
-     *  WebGL renderer that draws nothing leaves on screen is none. */
-    async function shownText(rendererGate?: ReturnType<typeof gate>) {
+    it("Linux: the written text is in the pane's DOM rows, and no WebGL addon replaces them", async () => {
       installFakeCanvasContexts();
       try {
-        const m = newManager({ createWebgl: () => new WebglAddon(), rendererGate });
+        const created = vi.fn(() => new WebglAddon());
+        const m = newManager({ createWebgl: created, rendererGate: gate(true) });
         await open(m);
         const target = slot();
         m.attach("s1", target, { focus: false });
         fake.server.produce("s1", "visible on linux\r\n");
         await dumped(m, "s1");
         await frames();
-        return target.querySelector(".xterm-rows")?.textContent ?? "";
+        expect(created).not.toHaveBeenCalled();
+        expect(target.querySelector(".xterm-rows")?.textContent).toContain("visible on linux");
       } finally {
         restoreCanvasContexts();
       }
-    }
-
-    it("blank pane: on the real WebGL addon the text is only in the GL canvas", async () => {
-      // What every Linux pane did before: when that canvas shows nothing, the pane is blank.
-      expect(await shownText()).not.toContain("visible on linux");
     });
 
-    it("Linux: the text is in the DOM rows", async () => {
-      expect(await shownText(gate(true))).toContain("visible on linux");
-    });
-  });
-});
+    describe("the app's renderer deps", () => {
+      function deps(platform: string, override: unknown = null) {
+        const log = vi.fn();
+        return { log, ...appRendererDeps({ platform, override: () => override, log }) };
+      }
+      /** The addon's own record of whether it preserves its drawing buffer. */
+      const preserves = (addon: WebglAddon) =>
+        (addon as unknown as { _preserveDrawingBuffer?: boolean })._preserveDrawingBuffer;
 
-describe("the render probe (the real WebGL addon over a stub GL context)", () => {
-  /** What the stub drawing buffer reads back: lit (a glyph drew) or all black. */
-  let lit = false;
-  beforeEach(() => {
-    // The probe waits on xterm's frames and its own timeout: real time.
-    vi.useRealTimers();
-    installFakeCanvasContexts();
-    const fakeGetContext = HTMLCanvasElement.prototype.getContext;
-    HTMLCanvasElement.prototype.getContext = function (
-      this: HTMLCanvasElement,
-      kind: string,
-      ...rest: unknown[]
-    ) {
-      const ctx = (fakeGetContext as (...a: unknown[]) => unknown).call(this, kind, ...rest);
-      if (kind !== "webgl2" || !ctx) return ctx;
-      return new Proxy(ctx as object, {
-        get(target, prop) {
-          if (prop === "drawingBufferWidth" || prop === "drawingBufferHeight") return 4;
-          if (prop === "readPixels")
-            return (_x: number, _y: number, _w: number, _h: number, ...a: unknown[]) => {
-              const out = a[2] as Uint8Array;
-              if (lit) out[5] = 255;
-            };
-          return Reflect.get(target, prop);
-        },
+      it("Linux: the addon preserves its drawing buffer, and DOM is the renderer", () => {
+        const d = deps("Linux aarch64");
+        expect(preserves(d.createWebgl())).toBe(true);
+        expect(d.rendererGate.allowsWebgl()).toBe(false);
+        expect(d.rendererGate.choice).toMatchObject({ renderer: "dom" });
       });
-    } as typeof HTMLCanvasElement.prototype.getContext;
-  });
-  afterEach(() => {
-    lit = false;
-    restoreCanvasContexts();
-  });
 
-  it("ok when a frame lights a pixel, and it leaves nothing behind", async () => {
-    lit = true;
-    await expect(probeWebglRender(() => new WebglAddon())).resolves.toBe("ok");
-    expect(document.body.children).toHaveLength(0);
-  });
+      it("macOS: the addon's default buffer, WebGL, no probe", () => {
+        const d = deps("MacIntel");
+        expect(preserves(d.createWebgl())).toBeFalsy();
+        expect(d.rendererGate.allowsWebgl()).toBe(true);
+        expect(d.log.mock.calls).toEqual([["terminal renderer: webgl (probe: skipped)"]]);
+      });
 
-  it("blank when frames draw and nothing is lit", async () => {
-    await expect(probeWebglRender(() => new WebglAddon(), 300)).resolves.toBe("blank");
-    expect(document.body.children).toHaveLength(0);
-  });
-
-  it("error when the addon throws", async () => {
-    const verdict = await probeWebglRender(() => {
-      throw new Error("no WebGL2");
+      it.each([
+        ["Linux aarch64", "webgl", true],
+        ["MacIntel", "dom", false],
+        ["Linux aarch64", "canvas", false],
+      ] as const)("%s reads the override %s", (platform, override, webgl) => {
+        const d = deps(platform, override);
+        expect(d.rendererGate.allowsWebgl()).toBe(webgl);
+        if (override !== "canvas")
+          expect(d.rendererGate.choice).toEqual({ renderer: override, probe: "skipped", override });
+      });
     });
-    expect(verdict).toBe("error");
-    expect(document.body.children).toHaveLength(0);
   });
 });
 

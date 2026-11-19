@@ -20,8 +20,10 @@
 #       webview ready, a caps: line that agrees with the bundle (caps-agree) and secret store:
 #       secret-service, and exits within 10 s of SIGTERM, having installed the bundled git-ai
 #       at the pinned version (installed-git-ai), and logs terminal renderer: dom with the
-#       render probe's verdict (ok, blank or error: what WebGL drew under xvfb). Each launch
-#       leaves <mode>.log and <mode>.png in <out-dir>.
+#       render probe's verdict (ok, blank, no-frame or error: what WebGL drew under xvfb).
+#       Release builds carry no WebDriver, so no launch opens a terminal tab: that terminals
+#       show text is proven by the front end's Vitest rows. Each launch leaves <mode>.log and
+#       <mode>.png in <out-dir>.
 #   smoke-linux.sh variant <dmabuf|no-dbus|webgl> <out-dir>
 #       Launch the AppImage run extracted into <out-dir> again. dmabuf: with the user's
 #       WEBKIT_DISABLE_DMABUF_RENDERER=0, which the app keeps (the WebKit web process has it, and
@@ -377,7 +379,7 @@ terminal_renderer() {
     if [[ "$mode" == webgl ]]; then
         want="^terminal renderer: webgl \(probe: skipped\), CODESENSE_TERMINAL_RENDERER=webgl\$"
     else
-        want="^terminal renderer: dom \(probe: (ok|blank|error)\)\$"
+        want="^terminal renderer: dom \(probe: (ok|blank|no-frame|error)\)\$"
     fi
     grep -qE "$want" <<<"$lines" || fail "unexpected terminal renderer line: $lines"
     echo "The log has $lines"

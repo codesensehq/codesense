@@ -2,7 +2,7 @@
 
 _A terminal per worktree with your login shell and dotfiles: tabs, tiles, the overlays over them, and sessions that outlive the app._
 
-Every workspace in CodeSense has real terminals: a full PTY with xterm.js, clickable links and WebGL rendering. It isn't a simulated console. Anything you run in Terminal.app or iTerm runs here, including `make`, your scripts and any agent CLI.
+Every workspace in CodeSense has real terminals: a full PTY with xterm.js, clickable links and WebGL rendering. It isn't a simulated console. Anything you run in Terminal.app or iTerm runs here, including `make`, your scripts and any agent CLI. On Linux, terminals draw with xterm.js's DOM renderer instead of WebGL; start CodeSense with `CODESENSE_TERMINAL_RENDERER=webgl` to try WebGL there, or `CODESENSE_TERMINAL_RENDERER=dom` to use the DOM renderer anywhere.
 
 ## Your shell, your config
 

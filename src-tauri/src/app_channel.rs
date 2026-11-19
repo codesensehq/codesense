@@ -22,10 +22,15 @@ pub fn init_script() -> String {
     let channel = serde_json::to_string(CHANNEL).expect("channel serializes");
     let host = serde_json::to_string(env!("CODESENSE_PUBLIC_HOST")).expect("host serializes");
     let publishing = cfg!(feature = "dashboard-publish");
-    let renderer = serde_json::to_string(&terminal_renderer_override(
-        std::env::var(TERMINAL_RENDERER_VAR).ok().as_deref(),
-    ))
-    .expect("renderer serializes");
+    let value = std::env::var(TERMINAL_RENDERER_VAR).ok();
+    let forced = terminal_renderer_override(value.as_deref());
+    if let (Some(value), None) = (&value, forced) {
+        // Built once, before the log plugin is up: say it on stderr, as early startup does.
+        crate::console_log::write_stderr_line(&format!(
+            "{TERMINAL_RENDERER_VAR}={value:?} is not dom or webgl; ignored"
+        ));
+    }
+    let renderer = serde_json::to_string(&forced).expect("renderer serializes");
     format!("window.__CODESENSE_CHANNEL__={channel};window.__CODESENSE_PUBLIC_HOST__={host};window.__CODESENSE_DASHBOARD_PUBLISH__={publishing};window.__CODESENSE_TERMINAL_RENDERER__={renderer};")
 }
 

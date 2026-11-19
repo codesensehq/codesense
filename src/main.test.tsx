@@ -27,6 +27,10 @@ vi.mock("./app/App", () => ({ default: () => null }));
 vi.mock("./app/install-global-error-handlers", () => ({ installGlobalErrorHandlers: vi.fn() }));
 vi.mock("./app/renderer-heartbeat", () => ({ startRendererHeartbeat: vi.fn() }));
 vi.mock("./app/mock/install", () => ({ installMockBackend: vi.fn() }));
+const chooseRenderer = vi.fn();
+vi.mock("@/shared/terminal/terminal-manager", () => ({
+  terminalManager: { chooseRenderer },
+}));
 vi.mock("@/shared/lib/logger", () => ({
   initLogging: vi.fn(async () => {}),
   logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -42,5 +46,10 @@ describe("main", () => {
     resolveHome("/Users/me");
     await vi.waitFor(() => expect(render).toHaveBeenCalledTimes(1));
     expect(homeAtRender).toBe("/Users/me/.codesense");
+  });
+
+  it("decides the terminal renderer at startup, before any terminal opens", async () => {
+    await import("./main");
+    await vi.waitFor(() => expect(chooseRenderer).toHaveBeenCalledTimes(1));
   });
 });

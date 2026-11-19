@@ -7,7 +7,7 @@
  * text. Two known ways: glyph texture sampling fails on WebKit's WebGL2, and
  * WebKitGTK shows a WebGL canvas one draw behind unless `preserveDrawingBuffer`
  * is set. Neither throws, so on Linux the DOM renderer is the default. A render
- * probe still runs there (`probeWebglRender` in the terminal manager): a
+ * probe still runs there (`terminal-render-probe.ts`): a
  * scratch terminal draws known glyphs through the addon and its canvas is read
  * back. Its verdict goes to the log only, as evidence of the first kind; it
  * reads back within the frame that drew, so it cannot see the second.
@@ -26,9 +26,9 @@ declare global {
 }
 
 export type TerminalRendererKind = "webgl" | "dom";
-/** `ok`: a glyph drew. `blank`: frames rendered and nothing was lit. `error`:
- *  no context, a throw, a lost context or no frame at all. */
-export type RenderProbeVerdict = "ok" | "blank" | "error";
+/** `ok`: a glyph drew. `blank`: frames rendered and nothing was lit.
+ *  `no-frame`: no frame came. `error`: no context, a throw or a lost context. */
+export type RenderProbeVerdict = "ok" | "blank" | "no-frame" | "error";
 
 export interface TerminalRendererChoice {
   renderer: TerminalRendererKind;
