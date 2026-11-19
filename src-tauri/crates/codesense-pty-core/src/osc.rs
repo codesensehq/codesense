@@ -178,7 +178,10 @@ fn parse_osc_payload(payload: &[u8]) -> Option<OscEvent> {
         let after = rest.strip_prefix("file://")?;
         let slash = after.find('/')?;
         let path = percent_decode(&after[slash..]);
-        return Some(OscEvent::Cwd(PathBuf::from(without_drive_slash(&path))));
+        return Some(OscEvent::Cwd(PathBuf::from(without_drive_slash(
+            &path,
+            std::env::consts::OS,
+        ))));
     }
 
     if let Some(rest) = s.strip_prefix("133;") {
@@ -200,9 +203,13 @@ fn parse_osc_payload(payload: &[u8]) -> Option<OscEvent> {
 }
 
 /// A Windows path in a `file:` URL keeps the slash before its drive letter
-/// (`file://host/C:/x`), so the URL path is `/C:/x`; drop it to get `C:/x`.
-/// Any other path is returned as is.
-fn without_drive_slash(path: &str) -> &str {
+/// (`file://host/C:/x`), so the URL path is `/C:/x`; on Windows (`os`, a
+/// [`std::env::consts::OS`] value) drop it to get `C:/x`. Elsewhere `/C:/x` is
+/// a real path, and every path is returned as is.
+fn without_drive_slash<'a>(path: &'a str, os: &str) -> &'a str {
+    if os != "windows" {
+        return path;
+    }
     match path.as_bytes() {
         [b'/', drive, b':'] | [b'/', drive, b':', b'/', ..] if drive.is_ascii_alphabetic() => {
             &path[1..]
@@ -331,29 +338,36 @@ mod tests {
     }
 
     #[test]
-    fn osc7_windows_drive_path_loses_the_slash_before_the_drive() {
-        for (osc, cwd) in [
-            ("\x1b]7;file://host/C:/x\x07", "C:/x"),
-            ("\x1b]7;file:///d:/me/my%20dir\x1b\\", "d:/me/my dir"),
-            ("\x1b]7;file://host/C%3A/x\x07", "C:/x"),
-            ("\x1b]7;file://host/C:\x07", "C:"),
+    fn osc7_drive_slash_is_dropped_on_windows_only() {
+        // (URL path, its Windows cwd); every one is kept as is elsewhere.
+        for (path, windows) in [
+            ("/C:/x", "C:/x"),
+            ("/d:/me/my dir", "d:/me/my dir"),
+            ("/C:", "C:"),
+            ("/C", "/C"),
+            ("/Cx:/y", "/Cx:/y"),
+            ("/1:/y", "/1:/y"),
+            ("/C:x", "/C:x"),
+            ("/srv/C:/x", "/srv/C:/x"),
         ] {
-            assert_eq!(
-                parse_all(osc.as_bytes()),
-                vec![OscEvent::Cwd(PathBuf::from(cwd))]
-            );
+            assert_eq!(without_drive_slash(path, "windows"), windows, "{path}");
+            for os in ["linux", "macos"] {
+                assert_eq!(without_drive_slash(path, os), path, "{path} on {os}");
+            }
         }
     }
 
     #[test]
-    fn osc7_unix_paths_that_only_look_like_a_drive_are_kept() {
-        for path in ["/C", "/Cx:/y", "/1:/y", "/C:x", "/srv/C:/x"] {
-            let osc = format!("\x1b]7;file://host{path}\x07");
-            assert_eq!(
-                parse_all(osc.as_bytes()),
-                vec![OscEvent::Cwd(PathBuf::from(path))]
-            );
-        }
+    fn osc7_drive_is_checked_after_percent_decoding() {
+        let cwd = if std::env::consts::OS == "windows" {
+            "C:/x"
+        } else {
+            "/C:/x"
+        };
+        assert_eq!(
+            parse_all(b"\x1b]7;file://host/C%3A/x\x07"),
+            vec![OscEvent::Cwd(PathBuf::from(cwd))]
+        );
     }
 
     #[test]
