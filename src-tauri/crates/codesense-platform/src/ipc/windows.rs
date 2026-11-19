@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 //! Windows: named pipes `\\.\pipe\codesense-<user>-<endpoint>[-<root>]`.
-//! One function creates every instance, overlapped for tokio or not for the
-//! blocking form: a DACL that grants the current user alone, remote clients
-//! refused, the current user as owner, and `FILE_FLAG_FIRST_PIPE_INSTANCE`
-//! on a listener's first instance. Clients open with identification-only
-//! impersonation and refuse a pipe another user owns. Those two are the user
-//! boundary: the DACL keeps other users' clients out of a listener, and the
-//! owner check keeps a client off another user's listener. A peer's pid is
-//! only looked up.
+//! One function creates every instance, overlapped for both forms (tokio's,
+//! and the blocking one, which waits on each operation it starts): a DACL
+//! that grants the current user alone, remote clients refused, the current
+//! user as owner, and `FILE_FLAG_FIRST_PIPE_INSTANCE` on a listener's first
+//! instance. Clients open with identification-only impersonation and refuse a
+//! pipe another user owns. Those two are the user boundary: the DACL keeps
+//! other users' clients out of a listener, and the owner check keeps a client
+//! off another user's listener. A peer's pid is only looked up.
 
 use std::ffi::OsStr;
 use std::io;
@@ -422,8 +422,11 @@ pub(crate) mod blocking {
         // SAFETY: cancels this one operation; then wait until it is done, so
         // the caller's buffer and `overlapped` are no longer in use.
         unsafe { CancelIoEx(handle, overlapped) };
-        if unsafe { GetOverlappedResult(handle, overlapped, &mut transferred, 1) } != 0 {
-            // It completed before the cancel reached it.
+        let completed =
+            unsafe { GetOverlappedResult(handle, overlapped, &mut transferred, 1) } != 0;
+        // It completed before the cancel reached it, or moved some bytes
+        // first: those count, as `Read` and `Write` require.
+        if completed || transferred > 0 {
             return Ok(transferred);
         }
         Err(io::Error::new(
