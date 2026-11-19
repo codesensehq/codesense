@@ -277,6 +277,28 @@ fn gateway_connect_refuses_a_control_socket_or_home_others_may_reach() {
 }
 
 #[test]
+fn a_fifo_at_the_socket_pointer_is_refused_without_waiting() {
+    let home = tempfile::tempdir_in("/tmp").unwrap();
+    let pointer = home.path().join("gateway.sock.path");
+    let made = std::process::Command::new("mkfifo")
+        .args(["-m", "600"])
+        .arg(&pointer)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let (done, finished) = std::sync::mpsc::channel();
+    let path = home.path().to_owned();
+    std::thread::spawn(move || {
+        let _ = done.send(channel::resolve(&path).is_err());
+    });
+    assert_eq!(
+        finished.recv_timeout(std::time::Duration::from_secs(5)),
+        Ok(true),
+        "refused at once, not left waiting for a writer"
+    );
+}
+
+#[test]
 fn probed_policy_and_hook_folding_are_pinned() {
     let control = Hermes.control();
     assert!(control.native_readiness && control.bracketed_paste);

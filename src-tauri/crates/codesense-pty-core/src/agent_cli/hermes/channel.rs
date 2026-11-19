@@ -2,7 +2,12 @@
 //! The private control socket grants a ticket; session RPC uses the keeper's relay.
 use super::*;
 use serde_json::{json, Value};
-use std::{fs, io, net::SocketAddr, path::Path};
+use std::{
+    fs,
+    io::{self, Read},
+    net::SocketAddr,
+    path::Path,
+};
 use tungstenite::client::IntoClientRequest;
 
 /// The gateway's control socket and its engine relay: over Unix sockets, or off where
@@ -17,9 +22,11 @@ fn unavailable() -> io::Error {
     io::Error::other("Hermes's authenticated gateway is unavailable")
 }
 
-/// The node at `path`, opened without following a link, when only this user may use it.
+/// The node at `path`, opened without following a link or waiting on a FIFO, when only
+/// this user may use it.
 fn private_node(path: &Path) -> io::Result<fs::File> {
-    let node = codesense_platform::fs::open_nofollow(fs::OpenOptions::new().read(true), path)?;
+    let node =
+        codesense_platform::fs::open_nofollow_nonblocking(fs::OpenOptions::new().read(true), path)?;
     if !codesense_platform::fs::is_owner_only(&node)? {
         return Err(unavailable());
     }
@@ -30,11 +37,13 @@ fn control(home: &Path, verb: &str, params: Value) -> io::Result<Value> {
     let home_node = private_node(home)?;
     let mut path = home.join("gateway.sock");
     if !path.exists() {
-        let pointer = home.join("gateway.sock.path");
-        if !private_node(&pointer)?.metadata()?.is_file() {
+        let mut pointer = private_node(&home.join("gateway.sock.path"))?;
+        if !pointer.metadata()?.is_file() {
             return Err(unavailable());
         }
-        path = fs::read_to_string(pointer)?.trim().into();
+        let mut named = String::new();
+        pointer.read_to_string(&mut named)?;
+        path = named.trim().into();
         private_node(path.parent().ok_or_else(unavailable)?)?;
     }
     let mut request =
