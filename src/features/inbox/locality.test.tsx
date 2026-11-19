@@ -37,7 +37,11 @@ function wireRow(handle: string, extra: Partial<SessionListRow> = {}): SessionLi
 const LOCAL = wireRow("here", { machine: "This Mac" });
 const REMOTE = wireRow("there", { machine: "Build box", machineId: "box" });
 const UNKNOWN = wireRow("nowhere");
-const dir = () => buildDirectory([LOCAL, REMOTE, UNKNOWN], []);
+// The label never decides: a remote row can carry the local label, and a local row any other.
+const REMOTE_LABELLED_LOCAL = wireRow("far", { machine: "This Mac", machineId: "box" });
+const LOCAL_LABELLED_OTHER = wireRow("near", { machine: "Build box" });
+const dir = () =>
+  buildDirectory([LOCAL, REMOTE, UNKNOWN, REMOTE_LABELLED_LOCAL, LOCAL_LABELLED_OTHER], []);
 
 /** The machine tag the inbox and the chat show beside a session's name. */
 function tags(handle: string): { inbox: string | null; chat: string | null } {
@@ -81,6 +85,16 @@ describe.each([
     expect(participant(dir(), "there")).toMatchObject({ where: "remote", machine: "Build box" });
     expect(tags("there")).toEqual({ inbox: "Build box", chat: "Build box" });
     expect(machineLabel(participant(dir(), "there"))).toBe("Build box");
+  });
+
+  it("a remote row labelled This Mac is remote, and a local row with another label is local", () => {
+    setPlatform(platform);
+    expect(participant(dir(), "far")).toMatchObject({ where: "remote", machine: "This Mac" });
+    expect(tags("far")).toEqual({ inbox: "This Mac", chat: "This Mac" });
+    expect(participant(dir(), "near")).toMatchObject({ where: "local" });
+    expect(participant(dir(), "near").machine).toBeUndefined();
+    expect(tags("near")).toEqual({ inbox: null, chat: null });
+    expect(machineLabel(participant(dir(), "near"))).toBe(local);
   });
 
   it("a session with neither field is unknown and names no machine", () => {
@@ -127,10 +141,18 @@ describe.each([
     expect(participant(d, "gone-1").where).toBe("unknown");
   });
 
-  it("a saved agent's running sessions name only a remote machine", () => {
+  it("a saved agent's running sessions name the local machine by its label and a remote by its name", () => {
     setPlatform(platform);
-    const byAgent = instancesByAgent({ sessions: [LOCAL, REMOTE], startedAt: {} });
+    const byAgent = instancesByAgent({
+      sessions: [LOCAL, REMOTE, REMOTE_LABELLED_LOCAL, LOCAL_LABELLED_OTHER],
+      startedAt: {},
+    });
     const machines = (byAgent.get("builtin/claude") ?? []).map((i) => [i.handle, i.machine]);
-    expect(Object.fromEntries(machines)).toEqual({ here: null, there: "Build box" });
+    expect(Object.fromEntries(machines)).toEqual({
+      here: local,
+      there: "Build box",
+      far: "This Mac",
+      near: local,
+    });
   });
 });
