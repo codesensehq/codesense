@@ -406,17 +406,20 @@ describe("ScratchNotePanel — layout modes", () => {
     ["Win32", "Ctrl+Shift+O"],
   ])("the outline's Go to heading names its chord on %s", (platform, chord) => {
     setPlatform(platform);
-    mockEditor.state.doc.descendants = ((cb: (node: unknown, pos: number) => void) => {
-      cb({ type: { name: "heading" }, attrs: { level: 2 }, textContent: "H0" }, 0);
-    }) as unknown as typeof mockEditor.state.doc.descendants;
-    mockStoreState.activeNoteId = "n1";
-    render(<ScratchNotePanel />);
-    fireEvent.click(screen.getByRole("button", { name: "On this note" }));
-    expect(screen.getByRole("button", { name: /Go to heading/ })).toHaveTextContent(
-      `Go to heading${chord}`,
-    );
-    mockEditor.state.doc.descendants = vi.fn();
-    restorePlatform();
+    try {
+      mockEditor.state.doc.descendants = ((cb: (node: unknown, pos: number) => void) => {
+        cb({ type: { name: "heading" }, attrs: { level: 2 }, textContent: "H0" }, 0);
+      }) as unknown as typeof mockEditor.state.doc.descendants;
+      mockStoreState.activeNoteId = "n1";
+      render(<ScratchNotePanel />);
+      fireEvent.click(screen.getByRole("button", { name: "On this note" }));
+      expect(screen.getByRole("button", { name: /Go to heading/ })).toHaveTextContent(
+        `Go to heading${chord}`,
+      );
+    } finally {
+      mockEditor.state.doc.descendants = vi.fn();
+      restorePlatform();
+    }
   });
 });
 

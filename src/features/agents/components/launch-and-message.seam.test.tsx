@@ -339,13 +339,16 @@ describe("launch sheet", () => {
     ["Win32", ["Ctrl", "⏎"]],
   ])("names the launch chord in two keycaps on %s", async (platform, keycaps) => {
     setPlatform(platform);
-    const { sheet } = renderSheet({ teamKey: TEAM, agentKey: TRIAGE });
-    await waitFor(() => expect(sheet.getByTestId("launch-agent")).toHaveTextContent("Triage"));
-    const sheetEl = screen.getByTestId("agent-launch-sheet");
-    expect(Array.from(sheetEl.querySelectorAll("kbd.ls-kbd"), (k) => k.textContent)).toEqual(
-      keycaps,
-    );
-    restorePlatform();
+    try {
+      const { sheet } = renderSheet({ teamKey: TEAM, agentKey: TRIAGE });
+      await waitFor(() => expect(sheet.getByTestId("launch-agent")).toHaveTextContent("Triage"));
+      const sheetEl = screen.getByTestId("agent-launch-sheet");
+      expect(Array.from(sheetEl.querySelectorAll("kbd.ls-kbd"), (k) => k.textContent)).toEqual(
+        keycaps,
+      );
+    } finally {
+      restorePlatform();
+    }
   });
 
   it("previews a listed no-login CLI version and launches with a selected queue role", async () => {
