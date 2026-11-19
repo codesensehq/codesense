@@ -466,6 +466,24 @@ mod tests {
         );
     }
 
+    /// An unset override is an empty list; one that is not UTF-8 fails the build.
+    #[test]
+    fn the_build_override_is_read_as_utf8() {
+        use std::env::VarError;
+        assert_eq!(
+            caps_table::caps_off_list(Err(VarError::NotPresent)),
+            Ok(String::new())
+        );
+        assert_eq!(
+            caps_table::caps_off_list(Ok("git-ai".into())),
+            Ok("git-ai".to_string())
+        );
+        let error = caps_table::caps_off_list(Err(VarError::NotUnicode("\u{fffd}".into())))
+            .err()
+            .unwrap_or_default();
+        assert!(error.contains(caps_table::CAPS_OFF_ENV), "{error}");
+    }
+
     /// What the build turned off is off at runtime too, with a reason; the rest is untouched.
     #[test]
     fn the_runtime_agrees_with_the_build_override() {

@@ -164,10 +164,8 @@ pub fn caps_off(list: &str, rows: &[Row]) -> Result<Vec<String>, String> {
 }
 
 /// Every key of `table`, in file order, with whether `os` on `arch` compiles
-/// it in: its value is `"on"`, `"probe"` (compiled in, decided at runtime) or
-/// `{"on": [<arch>…]}` listing `arch`, and the `off` list ([`caps_off`]) does
-/// not name it. An OS with no column compiles in nothing. The whole table is
-/// checked, so a bad row fails the build on any target.
+/// it in ([`compiled_rows`]), the `off` list checked by [`caps_off`]. The
+/// whole table is checked, so a bad row fails the build on any target.
 pub fn compiled_caps(
     table: &str,
     os: &str,
@@ -176,8 +174,15 @@ pub fn compiled_caps(
 ) -> Result<Vec<(String, bool)>, String> {
     let rows = parse_caps(table)?;
     let off = caps_off(off, &rows)?;
-    Ok(rows
-        .into_iter()
+    Ok(compiled_rows(&rows, os, arch, &off))
+}
+
+/// Every key of `rows`, in file order, with whether `os` on `arch` compiles
+/// it in: its value is `"on"`, `"probe"` (compiled in, decided at runtime) or
+/// `{"on": [<arch>…]}` listing `arch`, and `off` does not name it. An OS with
+/// no column compiles in nothing.
+pub fn compiled_rows(rows: &[Row], os: &str, arch: &str, off: &[String]) -> Vec<(String, bool)> {
+    rows.iter()
         .map(|row| {
             let on = !off.contains(&row.key)
                 && match row.support(os) {
@@ -185,17 +190,28 @@ pub fn compiled_caps(
                     Some(Support::OnFor(archs)) => archs.iter().any(|on_for| on_for == arch),
                     Some(Support::Off) | None => false,
                 };
-            (row.key, on)
+            (row.key.clone(), on)
         })
-        .collect())
+        .collect()
+}
+
+/// The `CODESENSE_CAPS_OFF` list as the build reads it (the variable lookup's
+/// answer): empty when unset; a value that is not UTF-8 is refused.
+pub fn caps_off_list(var: Result<String, std::env::VarError>) -> Result<String, String> {
+    match var {
+        Ok(list) => Ok(list),
+        Err(std::env::VarError::NotPresent) => Ok(String::new()),
+        Err(std::env::VarError::NotUnicode(_)) => Err(format!("{CAPS_OFF_ENV} is not UTF-8")),
+    }
 }
 
 /// For a build script: reads the table at `path` (relative to the crate),
 /// declares a `cfg` per capability and sets the ones the target being built
 /// compiles in, less those `CODESENSE_CAPS_OFF` turns off. It hands the
 /// effective off list to the crate as the `CODESENSE_CAPS_OFF` env, so the
-/// runtime answers off for them too. The caller prints its own literal
-/// `rerun-if-changed` for the table.
+/// runtime answers off for them too. The table is parsed and the off list
+/// checked once. The caller prints its own literal `rerun-if-changed` for the
+/// table.
 pub fn configure_caps(path: &str) {
     let table =
         std::fs::read_to_string(path).unwrap_or_else(|error| panic!("read {path}: {error}"));
@@ -203,18 +219,17 @@ pub fn configure_caps(path: &str) {
         std::env::var(name).unwrap_or_else(|_| panic!("{name} is set by Cargo for build scripts"))
     };
     println!("cargo:rerun-if-env-changed={CAPS_OFF_ENV}");
-    let off = parse_caps(&table)
-        .and_then(|rows| caps_off(&std::env::var(CAPS_OFF_ENV).unwrap_or_default(), &rows))
-        .unwrap_or_else(|error| panic!("{path}: {error}"))
-        .join(",");
-    println!("cargo:rustc-env={CAPS_OFF_ENV}={off}");
-    let caps = compiled_caps(
-        &table,
+    let rows = parse_caps(&table).unwrap_or_else(|error| panic!("{path}: {error}"));
+    let off = caps_off_list(std::env::var(CAPS_OFF_ENV))
+        .and_then(|list| caps_off(&list, &rows))
+        .unwrap_or_else(|error| panic!("{path}: {error}"));
+    println!("cargo:rustc-env={CAPS_OFF_ENV}={}", off.join(","));
+    let caps = compiled_rows(
+        &rows,
         &target("CARGO_CFG_TARGET_OS"),
         &target("CARGO_CFG_TARGET_ARCH"),
         &off,
-    )
-    .unwrap_or_else(|error| panic!("{path}: {error}"));
+    );
     for (key, on) in caps {
         let cfg = cap_cfg(&key);
         println!("cargo::rustc-check-cfg=cfg({cfg})");
