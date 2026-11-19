@@ -234,6 +234,29 @@ export function formatKeystrokeDisplay(str: string): string {
 }
 
 /**
+ * Render a chord held with the Control key itself, for a handler that reads
+ * `e.ctrlKey` on every platform (`⌃G` on macOS, `Ctrl+G` elsewhere). Display
+ * only: `str` is a canonical keystroke without `CmdOrCtrl` (`"G"`,
+ * `"Shift+Tab"`), and no binding takes a Control modifier.
+ */
+export function formatControlDisplay(str: string): string {
+  if (!str) return "";
+  const parts = parseKeystroke(str);
+  const key = displayKey(parts.key);
+  if (isMac()) return `⌃${parts.shift ? "⇧" : ""}${parts.alt ? "⌥" : ""}${key}`;
+  return ["Ctrl", ...(parts.shift ? ["Shift"] : []), ...(parts.alt ? ["Alt"] : []), key].join("+");
+}
+
+/** A modifier a click hint names. */
+export type ClickModifier = "CmdOrCtrl" | "Shift" | "Alt";
+
+/** A modifier+click gesture for a hint: `⌥-click` on macOS, `Alt+click` elsewhere. */
+export function formatModifierClick(mod: ClickModifier): string {
+  if (isMac()) return `${{ CmdOrCtrl: "⌘", Shift: "⇧", Alt: "⌥" }[mod]}-click`;
+  return `${mod === "CmdOrCtrl" ? "Ctrl" : mod}+click`;
+}
+
+/**
  * A keystroke as an `aria-keyshortcuts` value (`Meta+Shift+P` on macOS,
  * `Control+Shift+P` elsewhere), so assistive tech announces it apart from the
  * control's name. An empty input returns an empty string.
