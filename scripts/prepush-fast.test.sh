@@ -223,19 +223,19 @@ elif [ "$PTY_RC" != 130 ]; then
   bad "INT stops a step's children (exit $PTY_RC, want 130)" "$(cat "$TMP/pty.out")"
 else ok "INT stops a step's children"; fi
 
-# No step runs cargo or rustc: a full run on a clean branch, with fakes first on PATH that record each call.
+# No step runs cargo, rustc or rustup: a full run on a clean branch, with fakes first on PATH that record each call.
 reset
 seed src/prepush-seed.ts "$CLEAN_TS" changes/prepush-seed.md "$FRAGMENT"
-for tool in cargo rustc; do
+for tool in cargo rustc rustup; do
   printf '#!/bin/sh\necho "%s $*" >>"%s"\nexit 1\n' "$tool" "$TMP/rust.calls" >"$TMP/bin/$tool"
   chmod +x "$TMP/bin/$tool"
 done
 rm -f "$TMP/bin/pnpm"
 PATH="$TMP/bin:$PATH" expect pass "a full run on a clean branch" "prepush-fast: all green"
 if [ -s "$TMP/rust.calls" ]; then
-  bad "no step runs cargo or rustc" "$(cat "$TMP/rust.calls")"
-else ok "no step runs cargo or rustc"; fi
-rm -f "$TMP/bin/cargo" "$TMP/bin/rustc"
+  bad "no step runs cargo, rustc or rustup" "$(cat "$TMP/rust.calls")"
+else ok "no step runs cargo, rustc or rustup"; fi
+rm -f "$TMP/bin/cargo" "$TMP/bin/rustc" "$TMP/bin/rustup"
 
 # usage <name> <want exit> <want stream: out|err> <args...>
 usage() {
