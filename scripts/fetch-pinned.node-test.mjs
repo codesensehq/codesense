@@ -327,6 +327,110 @@ test("fetch-bundled maps each host to its pins", (t) => {
   }
 });
 
+test("fetch-bundled names its binaries and checks their versions from the pins alone", (t) => {
+  const f = fixture(t);
+  // A copy of the script in a tree of its own pins, on a PATH whose uname says the host and whose
+  // curl fails, so a mode that reached the network would fail here.
+  const tree = path.join(f.dir, "tree");
+  const bin = path.join(f.dir, "bin");
+  for (const dir of ["scripts", "src-tauri/pins"])
+    fs.mkdirSync(path.join(tree, dir), { recursive: true });
+  fs.mkdirSync(bin);
+  fs.copyFileSync(
+    path.join(root, "scripts/fetch-bundled.sh"),
+    path.join(tree, "scripts/fetch-bundled.sh"),
+  );
+  fs.writeFileSync(path.join(bin, "curl"), "#!/bin/sh\necho curl was run >&2\nexit 1\n", {
+    mode: 0o755,
+  });
+  const write = (name, text) => {
+    fs.writeFileSync(name, text, { mode: 0o755 });
+    return name;
+  };
+  const host = (scriptRoot, os, arch, ...flags) => {
+    write(
+      path.join(bin, "uname"),
+      `#!/bin/sh\ncase "$1" in -s) echo ${os} ;; -m) echo ${arch} ;; esac\n`,
+    );
+    return spawnSync("bash", [path.join(scriptRoot, "scripts/fetch-bundled.sh"), ...flags], {
+      cwd: f.dir,
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+    });
+  };
+  // The repository's own table: each host's names in order, and each pin's version.
+  for (const [os, arch, names] of [
+    ["Darwin", "arm64", ["git-ai"]],
+    ["Linux", "x86_64", ["git-ai", "starship"]],
+    ["Linux", "aarch64", ["git-ai", "starship"]],
+  ]) {
+    const run = host(root, os, arch, "--print-names");
+    assert.equal(run.status, 0, `${os} ${arch}: ${run.stderr}`);
+    assert.equal(run.stdout, names.map((name) => `${name}\n`).join(""));
+    for (const name of names) {
+      const pin = host(root, os, arch, "--print-pin", name).stdout.trim();
+      const version = fs.readFileSync(path.join(root, pin), "utf8").match(/^version=(.+)$/m)[1];
+      const printed = host(root, os, arch, "--print-version", name);
+      assert.equal(printed.status, 0, printed.stderr);
+      assert.equal(printed.stdout, `${version}\n`);
+    }
+  }
+  // The fixture tree: git-ai prints its bare version, starship its name first; only the first
+  // line counts.
+  const pins = path.join(tree, "src-tauri/pins");
+  fs.writeFileSync(path.join(pins, "git-ai-linux-x86_64.pin"), "version=1.7.5-cs.5\n");
+  fs.writeFileSync(path.join(pins, "starship-linux-x86_64.pin"), "version=1.24.2\n");
+  const tool = (name, out, status = 0) =>
+    write(path.join(f.dir, name), `#!/bin/sh\nprintf '${out}'\nexit ${status}\n`);
+  const check = (name, binary) => host(tree, "Linux", "x86_64", "--check-version", name, binary);
+  const gitAi = tool("git-ai", "1.7.5-cs.5\\nmore\\n");
+  const starship = tool("starship", "starship 1.24.2\\nbranch main\\n");
+  for (const [name, binary, line] of [
+    ["git-ai", gitAi, "1.7.5-cs.5"],
+    ["starship", starship, "starship 1.24.2"],
+  ]) {
+    const run = check(name, binary);
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(run.stdout, `${binary}: ${line}\n`);
+  }
+  for (const [name, binary, error] of [
+    // Another version, the other binary's form, a failing binary and an unbundled name.
+    [
+      "git-ai",
+      tool("old", "1.7.5-cs.4\\n"),
+      /prints 1\.7\.5-cs\.4, not 1\.7\.5-cs\.5 as pinned in src-tauri\/pins\/git-ai-linux-x86_64\.pin/,
+    ],
+    ["starship", tool("bare", "1.24.2\\n"), /prints 1\.24\.2, not starship 1\.24\.2/],
+    ["git-ai", tool("broken", "", 3), /broken failed to run \(exit 3\)/],
+    ["no-such-tool", gitAi, /^This host does not bundle no-such-tool: Linux x86_64$/m],
+  ]) {
+    const run = check(name, binary);
+    assert.equal(run.status, 1, `${name} ${binary}`);
+    assert.equal(run.stdout, "");
+    assert.match(run.stderr, error);
+  }
+  // A pin without a version fails both modes.
+  fs.writeFileSync(path.join(pins, "git-ai-linux-x86_64.pin"), "asset=git-ai-linux-x86_64\n");
+  for (const flags of [
+    ["--print-version", "git-ai"],
+    ["--check-version", "git-ai", gitAi],
+  ]) {
+    const run = host(tree, "Linux", "x86_64", ...flags);
+    assert.equal(run.status, 1, flags.join(" "));
+    assert.equal(run.stderr, "src-tauri/pins/git-ai-linux-x86_64.pin has no version\n");
+  }
+  // --print-names takes nothing; --check-version needs a name and a binary.
+  for (const flags of [
+    ["--print-names", "git-ai"],
+    ["--print-version"],
+    ["--check-version", "git-ai"],
+  ]) {
+    const bad = host(tree, "Linux", "x86_64", ...flags);
+    assert.equal(bad.status, 2, flags.join(" "));
+    assert.match(bad.stderr, /^Usage: /);
+  }
+});
+
 test("the checksum uses sha256sum or shasum, whichever the host has, and needs one", (t) => {
   const which = (name) =>
     spawnSync("bash", ["-c", `command -v ${name}`], { encoding: "utf8" }).stdout.trim();
