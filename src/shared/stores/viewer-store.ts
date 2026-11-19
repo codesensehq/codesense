@@ -140,7 +140,8 @@ import { DEFAULT_NOTE_TITLE, UNTITLED_NOTE_TITLE, isBlankNote } from "@/shared/l
 import { summarize } from "@/features/notes/lib/note-summary";
 import type { Phase } from "@/shared/lib/roles";
 import { startOpenTimer } from "@/shared/lib/open-path-timing";
-import { basename } from "@/shared/lib/path";
+import { basename, isWithin } from "@/shared/lib/path";
+import { planReveal } from "@/shared/lib/reveal-plan";
 import { createDebouncedAction } from "@/shared/lib/debounced-action";
 import { fireWorkspaceOpened, fireWorkspaceClosed } from "@/shared/lib/workspace-watch-hooks";
 import { VIEWER_PERF } from "@/shared/lib/viewer-perf-config";
@@ -4278,23 +4279,11 @@ function commitNavTarget(
 }
 
 /**
- * Side-effect helper invoked after `openFile` has committed the new tab.
- *
- * 1. Expand status-nav sub-epic ancestors so the file's row is visible.
- * 2. If the file is outside the current drill path, reset drill to the
- *    viewer root first. Uses direct `drillPaths` mutation (not the
- *    sync callback in repo-viewer-view.tsx) so the pipeline scope is
- *    NOT re-synced from the drill change — we handle scope separately.
- * 3. Pipeline-scope rules (post-R-14: viewerRoot IS the scope base):
- *    - File outside viewerRoot → if drill was reset to root, also
- *      clear pipeline scope so the two slices stay in sync. Otherwise
- *      isDrilledIn becomes false while the scoped tree still shows a
- *      sub-epic, leaking viewerRootEntries into the nav.
- *    - File inside viewerRoot but NOT a story file (README, non-md,
- *      etc.) AND pipeline is currently drilled → reset pipeline scope
- *      to "" so the user sees broader context.
- *    - File inside viewerRoot and IS a story file → do nothing to
- *      scope; `AutoCenterOnActiveTab` handles highlighting/centering.
+ * Side-effect helper invoked after `openFile` has committed the new tab: applies
+ * {@link planReveal} (which folders to expand, and whether the drill and pipeline
+ * scope reset) in one update, and bumps the reveal counter. The drill is written to
+ * `drillPaths` directly, not through the sync callback in repo-viewer-view.tsx, so the
+ * pipeline scope isn't re-synced from the drill change.
  */
 function revealOpenedFile(
   repoPath: string,
@@ -4321,40 +4310,32 @@ function revealOpenedFile(
     null;
   const tree = useTeamSurfaceStore.getState().trees[teamKey];
   const sourceTeam = tree ? owner(tree) : null;
-  const navigationPath = filePath.startsWith(`${treeRoot}/`)
+  const navigationPath = isWithin(treeRoot, filePath)
     ? filePath
     : teamContentNavigationPath(teamKey, filePath, useOrgStore.getState().orgs, sourceTeam);
   if (!navigationPath) return;
 
   const currentDrill = readTeamKeyed(state.drillPaths, teamKey, treeRoot);
-  const effectiveDrill = navigationPath.startsWith(`${currentDrill}/`) ? currentDrill : treeRoot;
+  const currentScope = readTeamKeyed(state.pipelineScope, teamKey, "");
+  const { ancestors, effectiveDrill, resetScope } = planReveal({
+    treeRoot,
+    navigationPath,
+    currentDrill,
+    currentScope,
+    isPipelineFile: isPipelineFileName(basename(filePath)),
+  });
 
   // Build the partial update so it applies atomically.
   const partial: Partial<ViewerState> = {};
-  const currentScope = readTeamKeyed(state.pipelineScope, teamKey, "");
-
   if (effectiveDrill !== currentDrill) {
     partial.drillPaths = updateTeamKeyed(state.drillPaths, teamKey, effectiveDrill);
-    // When drill resets to root, also clear pipeline scope so isDrilledIn
-    // and the scoped tree stay in sync. Without this, opening a file outside
-    // the pipeline root (e.g. docs/) while drilled in leaves scope stale,
-    // causing viewerRootEntries to leak into the scoped nav.
-    if (effectiveDrill === treeRoot && currentScope !== "") {
-      partial.pipelineScope = updateTeamKeyed(state.pipelineScope, teamKey, "");
-    }
+  }
+  if (resetScope) {
+    partial.pipelineScope = updateTeamKeyed(state.pipelineScope, teamKey, "");
   }
 
-  // Walk ancestor dirs between the file and treeRoot, expanding
-  // sub-epic folders in statusNavExpandedPaths so PipelineStatusNav reveals
-  // the file. Files outside the content root produce zero ancestors.
-  const ancestors: string[] = [];
-  let parent = navigationPath.slice(0, navigationPath.lastIndexOf("/"));
-  while (parent.length > treeRoot.length && parent.startsWith(`${treeRoot}/`)) {
-    ancestors.push(parent);
-    const nextSlash = parent.lastIndexOf("/");
-    if (nextSlash < 0) break;
-    parent = parent.slice(0, nextSlash);
-  }
+  // Expand the sub-epic folders between the file and the root so PipelineStatusNav
+  // reveals it. Files outside the content root have no ancestors.
   if (ancestors.length > 0) {
     const existing = readTeamKeyed(state.statusNavExpandedPaths, teamKey, []);
     const merged = Array.from(new Set([...existing, ...ancestors]));
@@ -4364,20 +4345,6 @@ function revealOpenedFile(
         teamKey,
         merged,
       );
-    }
-  }
-  const insideViewerRoot = navigationPath.startsWith(`${treeRoot}/`);
-  const fileName = filePath.slice(filePath.lastIndexOf("/") + 1);
-
-  // Only reset pipeline scope if the opened file is outside the current
-  // scope. Opening a non-story file (e.g. README.md) INSIDE the current
-  // scope should not disrupt the drill/scope context.
-  if (insideViewerRoot && !isPipelineFileName(fileName) && currentScope !== "") {
-    const scopeAbs = `${treeRoot}/${currentScope}`;
-    const fileInsideScope =
-      navigationPath.startsWith(`${scopeAbs}/`) || navigationPath === scopeAbs;
-    if (!fileInsideScope) {
-      partial.pipelineScope = updateTeamKeyed(state.pipelineScope, teamKey, "");
     }
   }
 
