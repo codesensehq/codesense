@@ -647,10 +647,13 @@ jobs:
       - name: Test the credential store against Secret Service
         # A private session bus; the script unlocks the keyring, checks it, and runs the tests.
         run: dbus-run-session -- bash scripts/run-secret-service-tests.sh
-      - name: Test the pty contract
+      - name: Test the pty contract, the cursor-query answer and a session with no viewer
         # A real pty behind a host running the emulator worker (built with the sidecars above), as
-        # on Windows (ConPTY).
-        run: cargo nextest run --profile ci --locked -p codesense-pty-core --test pty_contract
+        # on Windows (ConPTY), a session that reports its exit with no viewer, and the runner's
+        # answer to a pseudo console's cursor query. nextest fails a run that matches no test.
+        run: |
+          cargo nextest run --profile ci --locked -p codesense-pty-core --test pty_contract --test headless_session
+          cargo nextest run --profile ci --locked -p codesense-pty-core --lib -E 'test(/^runner::cursor_reply::/)'
 
   rust-check-windows:
     name: Rust check (Windows)

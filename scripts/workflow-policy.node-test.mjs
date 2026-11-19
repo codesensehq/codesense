@@ -470,10 +470,13 @@ test("rust.yml's Linux app job runs the credential store tests under a session b
   // The helper tests the others start as child processes pass alone, so they are left out.
   assert.match(runs[0], /- test\(~::reader_process\) - test\(~::no_bus_child\)/);
   assert.match(runs[1], /test\(~credential_store::tests::linux_\)/);
-  // The pty contract runs here on Linux, against the worker the sidecar build makes.
+  // The pty contract runs here on Linux, against the worker the sidecar build makes, with the
+  // session with no viewer and the cursor-query answer.
   const names = job.steps.map((step) => step.name);
   const sidecars = names.indexOf("Build sidecars");
-  const pty = names.indexOf("Test the pty contract");
+  const pty = names.indexOf(
+    "Test the pty contract, the cursor-query answer and a session with no viewer",
+  );
   assert.equal(job.steps[sidecars].run, "bash scripts/build-session-server.sh");
   assert.ok(sidecars >= 0 && pty >= 0 && sidecars < pty);
   const sidecarScript = fs.readFileSync(
@@ -483,7 +486,8 @@ test("rust.yml's Linux app job runs the credential store tests under a session b
   assert.match(sidecarScript, /^bash "\$SCRIPT_DIR\/build-emulator\.sh"/m);
   assert.equal(
     job.steps[pty].run,
-    "cargo nextest run --profile ci --locked -p codesense-pty-core --test pty_contract",
+    "cargo nextest run --profile ci --locked -p codesense-pty-core --test pty_contract --test headless_session\n" +
+      "cargo nextest run --profile ci --locked -p codesense-pty-core --lib -E 'test(/^runner::cursor_reply::/)'\n",
   );
   assert.ok(!workflow.jobs["flaky-issues"].needs.includes("rust-linux-app"));
 });
