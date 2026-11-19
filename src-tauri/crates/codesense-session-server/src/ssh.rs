@@ -301,8 +301,14 @@ fn write_pin(dir: &Path, alias: &str, key: &HostKey) -> Result<(), String> {
     static PIN_FILES: std::sync::Mutex<()> = std::sync::Mutex::new(());
     static STAGE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let _held = PIN_FILES.lock().unwrap_or_else(|e| e.into_inner());
-    std::fs::create_dir_all(dir).map_err(|e| format!("create {dir:?}: {e}"))?;
-    let _ = codesense_platform::fs::set_owner_only(dir);
+    // Missing directories are created owner-only; one already there is made
+    // so, and a failure there is logged rather than fatal, as the pin file
+    // itself is always created owner-only.
+    codesense_platform::fs::create_dir_owner_only(dir)
+        .map_err(|e| format!("create {dir:?}: {e}"))?;
+    if let Err(error) = codesense_platform::fs::set_owner_only(dir) {
+        log::warn!(target: "machines", "host-key pins in {dir:?} are not owner-only: {error}");
+    }
     let target = dir.join(alias);
     let staged = dir.join(format!(
         ".{alias}.incoming-{}-{}",
@@ -813,7 +819,8 @@ impl Drop for TempDir {
 }
 
 fn tempfile_dir(parent: &Path) -> Result<TempDir, String> {
-    std::fs::create_dir_all(parent).map_err(|e| format!("create {parent:?}: {e}"))?;
+    codesense_platform::fs::create_dir_owner_only(parent)
+        .map_err(|e| format!("create {parent:?}: {e}"))?;
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -1164,6 +1171,22 @@ mod tests {
         assert_eq!(text, format!("codesense-devbox-1a2b {}\n", key.to_line()));
         let pin = open_nofollow(std::fs::OpenOptions::new().read(true), &c.known_hosts()).unwrap();
         assert!(is_owner_only(&pin).unwrap());
+    }
+
+    /// The directories a pin creates are owner-only, not the umask's mode.
+    #[test]
+    fn a_pin_creates_its_directories_owner_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("new").join("known_hosts");
+        let key = HostKey::parse(
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl",
+        )
+        .unwrap();
+        write_pin(&dir, "codesense-devbox-1a2b", &key).unwrap();
+        for created in [dir.parent().unwrap(), dir.as_path()] {
+            let opened = open_nofollow(std::fs::OpenOptions::new().read(true), created).unwrap();
+            assert!(is_owner_only(&opened).unwrap(), "{created:?}");
+        }
     }
 
     /// The fingerprint is `ssh-keygen -l`'s.
