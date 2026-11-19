@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { ReloadStateCapture } from "../lib/reload-state";
 import { useOwningScope } from "@/shared/lib/warm-scopes";
+import { basename, isAbsolute, join } from "@/shared/lib/path";
 import { FrameOutbox } from "../lib/frame-outbox";
 import {
   bridgeTiming,
@@ -500,7 +501,7 @@ export function HtmlViewer({
     hostedFrame ? Number(new URL(hostedFrame.origin).port) : undefined,
   );
   const frameDocumentPath = baselineSource
-    ? `${baselineSource.orgRoot.replace(/\/$/, "")}/${baselineSource.relPath.replace(/^\/+/, "")}`
+    ? join(baselineSource.orgRoot, baselineSource.relPath)
     : filePath;
   const slotId = baselineSource
     ? "baseline"
@@ -1044,9 +1045,9 @@ export function HtmlViewer({
   // message anchors in its own team's content root the same way, so `context()`,
   // `queryContext` and `openFile` resolve to the message's team.
   const queryAnchor = pane
-    ? `${paneContentRoot}/${pane.fileName}`
+    ? join(paneContentRoot!, pane.fileName)
     : messageId !== undefined && teamContentPath
-      ? `${teamContentPath}/inbox-message-${messageId}.html`
+      ? join(teamContentPath, `inbox-message-${messageId}.html`)
       : undefined;
   // SW-DNS-2: which dashboard instance this is, for its own `prefs`: a pane's own
   // file (a team and a private pane of one id differ), a message's id, else the
@@ -2183,7 +2184,7 @@ export function HtmlViewer({
         // PTS-2: pass teamContentPath as the fallback root for absolute hrefs.
         // A pane lives beside content/, not in it, and sees content the way a
         // dashboard at its root does, so its links resolve from there.
-        const linkOwner = embedded ? `${teamContentPath}/index.html` : filePath;
+        const linkOwner = embedded ? join(teamContentPath, "index.html") : filePath;
         const resolved = resolveViewerLinkPath(href, linkOwner, teamContentPath);
         if (!resolved) return;
         const fragment = href.split("#")[1];
@@ -2197,7 +2198,7 @@ export function HtmlViewer({
         // another team) opens in that team when it is inside a known team content
         // root; anything else resolves against this doc's root as before.
         const hrefPath = href.split("#")[0];
-        if (live && hrefPath.startsWith("/") && resolved !== hrefPath) {
+        if (live && isAbsolute(hrefPath) && resolved !== hrefPath) {
           bridgeResolveOpenTarget(queryAnchor ?? filePath, hrefPath)
             .then((target) => {
               const org = useOrgStore.getState();
@@ -2418,7 +2419,7 @@ export function HtmlViewer({
 
   if (fileDeleted) {
     if (renderMissing) return <>{renderMissing()}</>;
-    const fileName = filePath.split("/").pop() ?? "File";
+    const fileName = basename(filePath);
     return <FileDeletedPlaceholder fileName={fileName} onClose={handleClose} />;
   }
 
@@ -2484,7 +2485,7 @@ export function HtmlViewer({
       )}
       <iframe
         inert={inputBlocked || undefined}
-        title={frameTitle ?? filePath.split("/").pop() ?? "Dashboard"}
+        title={frameTitle ?? basename(filePath)}
         ref={attachIframe}
         // The sandbox/origin are fixed at load time, so toggling the baseline view
         // remounts the frame rather than swapping `sandbox` on a live frame.

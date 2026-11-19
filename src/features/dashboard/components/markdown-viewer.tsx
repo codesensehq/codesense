@@ -7,6 +7,7 @@ import { Copy, Check } from "lucide-react";
 import { InfoTip } from "@/components/ui/tooltip";
 import { FileDeletedPlaceholder } from "@/shared/components/file-deleted-placeholder";
 import { resolveViewerLinkPath, type CommonViewerProps } from "@/shared/lib/viewer-file-type";
+import { basename } from "@/shared/lib/path";
 import { useEffectiveRefreshKey } from "@/shared/hooks/use-effective-refresh-key";
 import ReactMarkdown from "react-markdown";
 import { VIEWER_REMARK_PLUGINS, VIEWER_REHYPE_PLUGINS } from "@/shared/lib/markdown-render-plugins";
@@ -1272,7 +1273,7 @@ export const MarkdownViewer = memo(function MarkdownViewer({
     const isFileDeleted = isFileMissingError(error);
     if (isFileDeleted) {
       logger.info("viewer", `file deleted from disk: ${filePath}`);
-      const fileName = filePath?.split("/").pop() ?? "File";
+      const fileName = filePath == null ? "File" : basename(filePath);
       return (
         <FileDeletedPlaceholder
           fileName={fileName}

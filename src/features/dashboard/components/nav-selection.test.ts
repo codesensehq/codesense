@@ -226,6 +226,37 @@ describe("resolveNavSelection", () => {
     expect(deps.query).not.toHaveBeenCalled();
   });
 
+  it("confines a Windows path to its own content root and reports a /-joined relPath", async () => {
+    const winRoot = "C:\\ctx\\acme\\a\\content";
+    const deps: NavSelectionDeps = {
+      docContext: vi.fn(async () => ({
+        org: "acme",
+        team: "a",
+        layer: "team" as const,
+        contentRoot: winRoot,
+      })),
+      query: vi.fn(async () => ({ rows: [], total: 0 }) as never),
+    };
+    const sel = await resolveNavSelection(
+      team,
+      { activePath: `${winRoot}\\notes\\todo.txt`, drillPath: `${winRoot}\\` },
+      "/page.html",
+      deps,
+    );
+    expect(sel?.file).toMatchObject({
+      path: `${winRoot}\\notes\\todo.txt`,
+      relPath: "notes/todo.txt",
+    });
+    expect(sel?.drill).toBeNull();
+    const outside = await resolveNavSelection(
+      team,
+      { activePath: "C:\\ctx\\acme\\a\\content-x\\y.md", drillPath: null },
+      "/page.html",
+      deps,
+    );
+    expect(outside.file).toBeNull();
+  });
+
   it("caches the epic list per content root until cleared", async () => {
     const deps = makeDeps();
     const inputs = { activePath: null, drillPath: `${ROOT_A}/epics/billing` };

@@ -986,6 +986,17 @@ describe("draft action verb", () => {
     expect(content).toContain("e.md"); // backlink to `from`
   });
 
+  it("drafts beside a Windows `from` in its own directory", async () => {
+    mockCreateFile.mockResolvedValue(undefined);
+    const res = (await runBridgeCommand("draft", {
+      level: "story",
+      from: "C:\\ctx\\epics\\e.md",
+    })) as { path: string };
+    expect(res.path).toMatch(/^C:\\ctx\\epics\\story-draft-[a-z0-9]+\.md$/);
+    const [, content] = mockCreateFile.mock.calls.at(-1)!;
+    expect(content).toContain("  - e.md\n");
+  });
+
   it("surfaces the Rust context-path rejection verbatim (unmanaged from)", async () => {
     mockCreateFile.mockRejectedValue(new Error("path is not within the context repo"));
     await expect(runBridgeCommand("draft", { level: "story", from: "/etc/x.md" })).rejects.toThrow(

@@ -23,6 +23,7 @@ import {
   House,
 } from "lucide-react";
 import { type FileEntry } from "@/tauri/commands";
+import { basename } from "@/shared/lib/path";
 import type {
   StoryRef,
   DerivedPipelineTree,
@@ -1291,7 +1292,7 @@ const DocRow = memo(function DocRow({
   // so hand it the extension-bearing basename from the path — NOT `label`, which
   // is extension-stripped for display (`movable-doc` vs `movable-doc.md`) and
   // would make the move backend join `content/<stem>` (a file that isn't on disk).
-  const moveControl = moveAction?.(filePath, filePath.split("/").pop() ?? label);
+  const moveControl = moveAction?.(filePath, basename(filePath));
   const rightSlot =
     shadows || overrides || metadataValid === false || scopeRenders || moveControl ? (
       <span className="ml-auto flex flex-shrink-0 items-center gap-1.5">
@@ -1428,9 +1429,7 @@ const GenericFileRow = memo(function GenericFileRow({
   // not the display `label` (which strips `.excalidraw`) — see the DocRow note.
   // A deleted file has nothing on disk to move.
   const moveControl =
-    change?.kind === "deleted"
-      ? null
-      : moveAction?.(entry.path, entry.path.split("/").pop() ?? label);
+    change?.kind === "deleted" ? null : moveAction?.(entry.path, basename(entry.path));
   const rightSlot =
     mergeMarked || moveControl ? (
       <span className="ml-auto flex flex-shrink-0 items-center gap-1.5">

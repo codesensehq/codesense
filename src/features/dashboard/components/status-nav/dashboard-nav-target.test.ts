@@ -52,3 +52,42 @@ it("uses the native epic menu for an epic's listed main document", () => {
     isEpic: true,
   });
 });
+
+it("resolves Windows rows against a Windows content root", () => {
+  const winItems: FlatNavItem[] = [
+    { type: "doc", filePath: "C:\\team\\file.html", label: "File", depth: 0, installed: false },
+  ];
+  expect(dashboardNavTarget({ kind: "file", path: "file.html" }, "C:\\team\\", winItems)).toEqual({
+    path: "C:\\team\\file.html",
+  });
+  expect(
+    dashboardNavTarget({ kind: "file", path: "C:\\team\\deep\\image.png" }, "C:\\team", []),
+  ).toEqual({ path: "C:\\team\\deep\\image.png" });
+  expect(
+    dashboardNavTarget({ kind: "file", path: "C:\\other\\secret.md" }, "C:\\team", []),
+  ).toBeNull();
+});
+
+it("refuses `..` and `.` segments in either separator under POSIX and Windows roots", () => {
+  const escapes = [
+    "a\\..\\..\\x.md",
+    "a/../../x.md",
+    "a/..\\..\\x.md",
+    "a\\../../x.md",
+    ".\\x.md",
+    "/team/a\\..\\..\\x.md",
+    "C:\\team\\a\\..\\..\\x.md",
+  ];
+  for (const root of ["/team", "C:\\team"])
+    for (const path of escapes)
+      expect(dashboardNavTarget({ kind: "file", path }, root, []), `${root} ${path}`).toBeNull();
+});
+
+it("still resolves a plain nested file in either separator", () => {
+  expect(dashboardNavTarget({ kind: "file", path: "a/b/x.md" }, "/team", [])).toEqual({
+    path: "/team/a/b/x.md",
+  });
+  expect(dashboardNavTarget({ kind: "file", path: "a\\b\\x.md" }, "C:\\team", [])).toEqual({
+    path: "C:\\team\\a\\b\\x.md",
+  });
+});

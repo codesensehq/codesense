@@ -21,6 +21,14 @@ import type {
   ContextQueryResult,
   ContextRow,
 } from "@/shared/lib/context-query/types";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  isWithin,
+  relative,
+  trimTrailingSeparators,
+} from "@/shared/lib/path";
 import { buildTeamKey } from "@/shared/lib/team-key";
 import { createListenerGroup } from "@/shared/lib/tauri-listeners";
 import { useOrgStore } from "@/shared/stores/org-store";
@@ -113,13 +121,8 @@ export function navInputsFor(
   return { activePath: state.activeTab[key] || null, drillPath: state.drillPaths[key] || null };
 }
 
-function dirname(p: string): string {
-  const i = p.lastIndexOf("/");
-  return i <= 0 ? "/" : p.slice(0, i);
-}
-
 function relTo(root: string, p: string): string {
-  return p === root ? "" : p.slice(root.length + 1);
+  return relative(root, p) ?? "";
 }
 
 /** Where `path` sits, when that is `team`'s own content root. */
@@ -128,10 +131,10 @@ async function teamLocation(
   team: NavTeam,
   deps: NavSelectionDeps,
 ): Promise<ContentLocation | null> {
-  if (!path || !path.startsWith("/")) return null;
+  if (!path || !isAbsolute(path)) return null;
   const loc = await deps.docContext(path).catch(() => null);
   if (!loc || loc.layer !== "team" || loc.org !== team.org || loc.team !== team.team) return null;
-  if (path !== loc.contentRoot && !path.startsWith(`${loc.contentRoot}/`)) return null;
+  if (!isWithin(loc.contentRoot, path)) return null;
   return loc;
 }
 
@@ -142,10 +145,7 @@ function str(v: unknown): string | null {
 /** An epic main doc's id: its `epic_id` / `sub_epic`, else its folder name. */
 function epicIdOf(row: ContextRow): string {
   return (
-    str(row.fields.sub_epic) ??
-    str(row.fields.epic_id) ??
-    dirname(row.path).split("/").pop() ??
-    row.id
+    (str(row.fields.sub_epic) ?? str(row.fields.epic_id) ?? basename(dirname(row.path))) || row.id
   );
 }
 
@@ -244,7 +244,7 @@ async function resolveUncached(
   }
 
   let drill: NavSelectionDrill | null = null;
-  const drillPath = inputs.drillPath?.replace(/\/+$/, "") ?? null;
+  const drillPath = inputs.drillPath == null ? null : trimTrailingSeparators(inputs.drillPath);
   if (drillLoc && drillPath && drillPath !== drillLoc.contentRoot) {
     const root = drillLoc.contentRoot;
     const docs = await epicDocs(root, page, deps);
@@ -252,7 +252,7 @@ async function resolveUncached(
     let bestDepth = -1;
     for (const r of docs) {
       const dir = dirname(r.path);
-      if (dir === root || !(drillPath === dir || drillPath.startsWith(`${dir}/`))) continue;
+      if (dir === root || !isWithin(dir, drillPath)) continue;
       if (dir.length > bestDepth) {
         best = r;
         bestDepth = dir.length;

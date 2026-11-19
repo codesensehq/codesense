@@ -112,6 +112,7 @@ import {
 import { switchContext } from "@/features/viewer/lib/context-switch";
 import { openFileInTeam } from "@/shared/lib/open-file-in-team";
 import { resolveOpenPath } from "@/shared/lib/resolve-open-path";
+import { basename, dirname, join } from "@/shared/lib/path";
 import { readDashboardPrefs, writeDashboardPrefs } from "../lib/dashboard-prefs";
 import { setActiveDashboardCommands } from "../lib/dashboard-commands";
 import { FRAME_PRESENTATION_UNAVAILABLE } from "../lib/frame-presentation";
@@ -1939,13 +1940,11 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
     if (typeof level !== "string" || !level || typeof from !== "string" || !from) {
       throw new Error("draft: {level, from} must be non-empty strings");
     }
-    const slash = from.lastIndexOf("/");
-    const dir = slash >= 0 ? from.slice(0, slash) : "";
-    const fromName = slash >= 0 ? from.slice(slash + 1) : from;
+    const fromName = basename(from);
     // Nonce so two drafts in the same dir can't collide (create_file refuses to
     // overwrite an existing file). Mirrors the snapshot nonce in html-viewer.
     const nonce = Math.floor(Math.random() * 0x100000000).toString(36);
-    const path = `${dir ? `${dir}/` : ""}${level}-draft-${nonce}.md`;
+    const path = join(dirname(from), `${level}-draft-${nonce}.md`);
     const seed =
       `---\ntype: ${level}\nstatus: todo\nsupporting_docs:\n  - ${fromName}\n---\n\n` +
       `# ${level} draft\n\nDrafted from [${fromName}](${fromName}).\n`;
@@ -2273,7 +2272,7 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
         ctx?.docPath === frame.documentPath &&
         a.org === undefined &&
         team === undefined &&
-        (path === ctx.docPath || path === ctx.docPath.split("/").pop());
+        (path === ctx.docPath || path === basename(ctx.docPath));
       if (self) return { path: frame.documentPath, ...frame.grant.team! };
       // Team-bound file-nav panes and built-ins share their listing's admission.
       // Other pages and explicit team targets retain the general opener's rules.

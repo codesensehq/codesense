@@ -7,6 +7,8 @@
  * hot `dragover` path stays cheap.
  */
 
+import { isWithin } from "@/shared/lib/path";
+
 import { resolveFileScope } from "./file-scope";
 import { itemFilePath, type FlatNavItem } from "./flatten-nav-tree";
 
@@ -49,9 +51,9 @@ export function relatableTargetPath(item: FlatNavItem): string | null {
   }
 }
 
-/** `path` is under `rootDir` (or equals it). Pure prefix compare. */
+/** `path` is under `rootDir` (or equals it). Pure segment compare. */
 export function underRoot(path: string, rootDir: string): boolean {
-  return rootDir.length > 0 && (path === rootDir || path.startsWith(`${rootDir}/`));
+  return rootDir.length > 0 && isWithin(rootDir, path);
 }
 
 /**

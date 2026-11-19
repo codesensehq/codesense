@@ -10,6 +10,7 @@
 // ---------------------------------------------------------------------------
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { basename, join, relative, trimTrailingSeparators } from "@/shared/lib/path";
 import { listDirectory, getTeamNavPins, setTeamNavPin, type FileEntry } from "@/tauri/commands";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 import { useCompositeRefreshStore } from "@/shared/stores/composite-refresh-store";
@@ -260,9 +261,7 @@ export function useNavItems({
   const query = (searchQuery ?? "").trim().toLowerCase();
   const shownChanges = useMemo(
     () =>
-      query
-        ? changes.filter((c) => (c.absPath.split("/").pop() ?? "").toLowerCase().includes(query))
-        : changes,
+      query ? changes.filter((c) => basename(c.absPath).toLowerCase().includes(query)) : changes,
     [changes, query],
   );
 
@@ -324,18 +323,14 @@ export function useNavItems({
   // so a git-shared TEAM pin resolves for every teammate regardless of their clone
   // path; `toRel`/`toAbs` bridge that key space and the nav's absolute paths.
   const rootAnchor = useMemo(
-    () => (rootPath ?? tree.absoluteDirPath).replace(/\/+$/, ""),
+    () => trimTrailingSeparators(rootPath ?? tree.absoluteDirPath),
     [rootPath, tree.absoluteDirPath],
   );
   const toRel = useCallback(
-    (abs: string): string | null => {
-      if (abs === rootAnchor) return "";
-      if (abs.startsWith(rootAnchor + "/")) return abs.slice(rootAnchor.length + 1);
-      return null;
-    },
+    (abs: string): string | null => relative(rootAnchor, abs),
     [rootAnchor],
   );
-  const toAbs = useCallback((rel: string) => `${rootAnchor}/${rel}`, [rootAnchor]);
+  const toAbs = useCallback((rel: string) => join(rootAnchor, rel), [rootAnchor]);
 
   // Personal pins: local per-team app-state (never committed). Team pins: git-shared
   // in `designations.yml`, re-fetched on the SLW-NC-5 composite-refresh nonce so a
