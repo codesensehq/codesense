@@ -137,8 +137,9 @@ step_gitleaks() {
 }
 step_gen-docs() { pnpm -s gen:docs:check:pr; }
 step_colours() { node scripts/check-hardcoded-colors.mjs; }
+# --skip-rust: the terminal guard's other half is a cargo test, which CI's Rust job runs.
 step_node-lints() {
-  node scripts/check-terminal-arch.mjs &&
+  node scripts/check-terminal-arch.mjs --skip-rust &&
     node scripts/check-agent-cli-boundary.mjs &&
     node scripts/check-agent-cli-boundary-ts.mjs &&
     node scripts/check-context-walk.mjs
