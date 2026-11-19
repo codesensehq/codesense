@@ -3833,7 +3833,7 @@ export function rekeyKeyedSlices<K extends keyof ViewerState>(
 
 /**
  * SW-HB-8 / SLW-IN-7: after {@link rekeyKeyedSlices} relocates a team's slices
- * to `newKey`, rewrite the flat `/{old}/` team segment → `/{new}/` inside the
+ * to `newKey`, rewrite the flat `/{old}/` team segment → `/{new}/` (either separator) inside the
  * ABSOLUTE content paths those slices carry (`{org_root}/{team}/content/...`),
  * so open story tabs / drill root / expanded nav re-point at the moved dir
  * instead of rendering a "file deleted" placeholder. Operates ONLY on the
@@ -3850,8 +3850,11 @@ export function rewriteTeamContentPaths(
   oldName: string,
   newName: string,
 ): Partial<ViewerState> {
-  const fromRe = new RegExp(`/${oldName}/(content|install|repos|libraries)(/|$)`);
-  const fix = (p: string): string => p.replace(fromRe, `/${newName}/$1$2`);
+  // Either separator, written back as matched, so a `C:\` path keeps its backslashes.
+  const fromRe = new RegExp(
+    `([\\\\/])${oldName}([\\\\/])(content|install|repos|libraries)([\\\\/]|$)`,
+  );
+  const fix = (p: string): string => p.replace(fromRe, `$1${newName}$2$3$4`);
   const fixTab = (t: TabState): TabState => {
     const path = fix(t.path);
     return path === t.path ? t : { ...t, path };
