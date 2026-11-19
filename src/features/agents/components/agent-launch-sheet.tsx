@@ -139,7 +139,11 @@ import { useAgentsStore, watchAgentList } from "../stores/agents-store";
 import { draftFromDefinition, emptyDraft, formFromDraft } from "../lib/agent-form";
 import { useAgentPreview } from "../lib/use-agent-preview";
 import { FacePicker } from "./face-picker";
-import { formatKeystrokeDisplay, hasMod } from "@/shared/lib/shortcuts/keystroke";
+import {
+  formatKeystrokeDisplay,
+  formatModifiersDisplay,
+  hasMod,
+} from "@/shared/lib/shortcuts/keystroke";
 
 const LOCAL_MACHINE = LOCAL_MACHINE_ID;
 
@@ -1212,7 +1216,13 @@ export function AgentLaunchSheet({
               </p>
             ) : (
               <span className="text-[12px] text-muted-foreground">
-                <kbd className="ls-kbd">{formatKeystrokeDisplay("CmdOrCtrl+Enter")}</kbd> to launch
+                <kbd className="ls-kbd">
+                  {formatModifiersDisplay({ cmdOrCtrl: true, shift: false, alt: false }).replace(
+                    /\+$/,
+                    "",
+                  )}
+                </kbd>
+                <kbd className="ls-kbd">{formatKeystrokeDisplay("Enter")}</kbd> to launch
               </span>
             )}
           </div>
