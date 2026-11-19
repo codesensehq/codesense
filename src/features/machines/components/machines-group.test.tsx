@@ -909,12 +909,11 @@ it("shows the reviewed identity and keeps refusing until the person confirms", a
 });
 
 describe("Machines without remote machines on this OS", () => {
-  const SENTENCE =
-    "Not yet available on Windows: connecting to other machines is not built for this platform.";
+  const SENTENCE = "Not yet available on Windows: CodeSense can't connect to other machines.";
   beforeEach(() => {
     setPlatform("Win32");
     setPlatformCaps({
-      "remote-machines": "connecting to other machines is not built for this platform",
+      "remote-machines": "CodeSense can't connect to other machines",
     });
   });
   afterEach(() => {
@@ -986,6 +985,30 @@ describe("Machines without remote machines on this OS", () => {
         "aria-disabled",
       );
     }
+  });
+
+  it("This computer's terminal server update never depends on remote machines", async () => {
+    const real = machineHandlers("none", ZERO_LATENCY);
+    installMachinesBackend("none", {
+      list_machines: async (args) =>
+        ((await real.list_machines!(args)) as MachineSummary[]).map((m) =>
+          m.machineId === "local"
+            ? {
+                ...m,
+                terminalServer: mockTerminalServer(true, {
+                  serverVersion: "0.0.21",
+                  upToDate: false,
+                  relation: "older",
+                }),
+              }
+            : m,
+        ),
+    });
+    render(<MachinesGroup teamKey={TEAM_KEY} />);
+    const update = await screen.findByTestId("machine-action-restartServer-local");
+    expect(update).toHaveTextContent("Update terminal server");
+    expect(update).not.toHaveAttribute("aria-disabled");
+    expect(update).not.toHaveAttribute("title");
   });
 
   it("with the capability on, the group renders as today", async () => {

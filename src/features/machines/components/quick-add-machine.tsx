@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useEffect, useRef, useState } from "react";
-import { Loader2, Server } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { AppButton as Button } from "@/shared/components/app-button";
@@ -44,6 +44,7 @@ import { TONE_CLASS } from "../lib/machine-status";
 import { passphraseSaveError } from "../lib/passphrase-error";
 import { passphraseDialogHint } from "../lib/passphrase-hint";
 import { reloadMachines } from "../stores/machines-store";
+import { machinePanelHead } from "./machine-panel-head";
 
 /** Runtime warnings remain visible while allowing the machine to run other agents. */
 function checkedReport(report: MachineTestReport): ReportNext {
@@ -534,11 +535,8 @@ export function QuickAddMachine({ teamKey, onClose }: { teamKey: string; onClose
 
   return (
     <ReservePanel
-      testId="add-machine-panel"
-      icon={<Server size={16} aria-hidden="true" />}
-      title="Add machine"
+      {...machinePanelHead(null)}
       subtitle="Type its address. CodeSense signs in, sets up your private account, installs what it needs and opens a shell."
-      closeLabel="Close add-machine panel"
       onClose={() => void closeKeepingDraft()}
       footer={
         <>

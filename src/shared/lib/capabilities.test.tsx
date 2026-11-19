@@ -104,11 +104,10 @@ describe("the not-yet-available sentence", () => {
       const row = TABLE.find((r) => r.key === key)!;
       // The sentence already says "not yet"; a reason that says it again doubles it.
       expect(row.reason).not.toMatch(/\byet\b/i);
-      // No transport or implementation terms, and nothing that names one OS.
+      // No transport or implementation terms, and no OS: the sentence already names it.
       expect(row.reason).not.toMatch(
-        /socket|pipe|MCP|bridge|IPC|sidecar|daemon|unix|windows|linux|macos/i,
+        /socket|pipe|MCP|bridge|IPC|sidecar|daemon|unix|windows|linux|macos|platform/i,
       );
-      expect(row.reason).toMatch(/this platform/);
     }
   });
 });

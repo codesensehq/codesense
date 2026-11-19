@@ -7,12 +7,15 @@ comes from `src-tauri/platform-caps.json`. Every variant says it with the one se
 
 ## How to gate a new feature in 3 lines
 
-1. Add a row to `src-tauri/platform-caps.json` with the key, a value per OS and a `reason` in
-   plain user language. The sentence already says "not yet", so the reason shouldn't, and it
-   names no sockets, pipes or other internals. Add the key to `CAPABILITY_KEYS` in
-   `src/shared/lib/capabilities.ts` too; a test keeps the two in step.
+1. `src-tauri/platform-caps.json`: `{ "key": "my-feature", "macos": "on", "linux": "on", "windows": "off", "reason": "…" }`
+   (and the key in `CAPABILITY_KEYS`, `src/shared/lib/capabilities.ts`)
 2. In the feature: `const myFeature = useCapability("my-feature");`
-3. Render a variant: `<CapabilityOff cap="my-feature">…the feature…</CapabilityOff>`.
+3. `if (!myFeature.on) return <CapabilityOff cap="my-feature" />;` or another variant below.
+
+The reason is plain user language. The sentence already says "not yet" and names the OS, so the
+reason says neither, and it names no sockets, pipes or other internals. A test keeps
+`CAPABILITY_KEYS` in step with the table, and [the guard](#the-guard) keeps OS checks out of
+feature code.
 
 ## The variants
 
@@ -22,7 +25,8 @@ comes from `src-tauri/platform-caps.json`. Every variant says it with the one se
 - **A control that starts the feature.** Put `<CapabilityOffControl cap noteId>` around the
   control and render one `<CapabilityOffNote cap id>`. The control stays visible and focusable but
   does nothing: it gets `aria-disabled`, the sentence as its tooltip, and `aria-describedby`
-  pointing at the note.
+  pointing at the note. The control acts through `onClick` or `onSelect` (a button, a link or a
+  menu item); both are replaced and their default action prevented.
 - **The feature runs with less.** `<CapabilityOffNotice cap>` is an amber notice: what changes,
   then the sentence.
 
@@ -33,6 +37,7 @@ can't do.
 ## The guard
 
 Feature code under `src/features/` doesn't check the OS (`isMac()`, `navigator.platform` and the
-like) to decide whether a feature exists. `os-checks.guard.test.ts` in this folder fails a new OS
-check. Today's presentation uses, such as key names, shortcut glyphs and the title-bar inset, are
-in its allowlist with a reason each. The list only shrinks.
+like) to decide whether a feature exists. [`os-checks.guard.test.ts`](./os-checks.guard.test.ts)
+fails a new OS check, including an aliased import of an OS helper. Today's uses are in its
+allowlist with a reason each: presentation such as key names, shortcut glyphs and the title-bar
+inset, and one macOS-only settings gate still to move to a capability. The list only shrinks.

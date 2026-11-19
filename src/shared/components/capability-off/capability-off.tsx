@@ -58,19 +58,28 @@ export function CapabilityOffNote({
   );
 }
 
-/** The props `CapabilityOffControl` sets on its control. */
+/** What `CapabilityOffControl` sets on its control. */
 interface ControlProps {
-  onClick?: () => void;
+  onClick?: (event?: { preventDefault(): void }) => void;
+  onSelect?: (event?: { preventDefault(): void }) => void;
   className?: string;
   title?: string;
   "aria-disabled"?: boolean;
   "aria-describedby"?: string;
 }
 
+/** Does nothing, and stops what the element would do on its own (a submit, a link, a menu
+ *  item's close). */
+function inert(event?: { preventDefault(): void }): void {
+  event?.preventDefault();
+}
+
 /**
  * The disabled control with a note: while `cap` is off, the one child control stays visible and
  * focusable but does nothing (`aria-disabled`), names the sentence in its tooltip and is described
- * by the `CapabilityOffNote` whose id is `noteId`.
+ * by the `CapabilityOffNote` whose id is `noteId`. The child is a button, a link or a menu item
+ * whose action is its `onClick` or `onSelect`: both are replaced, and their default action is
+ * prevented. A control that acts through any other handler doesn't belong here.
  */
 export function CapabilityOffControl({
   cap,
@@ -84,7 +93,8 @@ export function CapabilityOffControl({
   const capability = useCapability(cap);
   if (capability.on) return children;
   return cloneElement(children, {
-    onClick: () => undefined,
+    onClick: inert,
+    ...(children.props.onSelect ? { onSelect: inert } : {}),
     title: notYetAvailableSentence(capability),
     "aria-disabled": true,
     "aria-describedby": noteId,

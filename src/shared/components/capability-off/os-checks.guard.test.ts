@@ -14,25 +14,28 @@ import { describe, expect, it } from "vitest";
 const ROOT = resolve(__dirname, "../../../..");
 const FEATURES = join(ROOT, "src/features");
 
-/** The direct OS checks: the platform helpers, the browser's platform fields, and an OS
- *  name compared with a value. */
+/** The direct OS checks: the platform helpers (imported, aliased or called), the browser's and
+ *  Node's platform fields (read or destructured), a regex tested for an OS name, and an OS name
+ *  compared with a value. */
 const OS_CHECKS: readonly RegExp[] = [
-  /\bisMac\(/,
-  /\bisLinuxPlatform\(/,
-  /\bnavigator\.platform\b/,
+  /\b(isMac|isLinuxPlatform)\b/,
+  /\bnavigator\s*\.\s*platform\b/,
   /\buserAgent(Data)?\b/,
+  /\}\s*=\s*(globalThis\.|window\.)?navigator\b/,
+  /\bprocess\s*\.\s*platform\b/,
+  /\/[^/\n]*\b(mac|macos|win|win32|windows|linux|darwin)\b[^/\n]*\/[a-z]*\s*\.\s*test\s*\(/i,
   /[!=]==?\s*["'`](darwin|win32|windows|linux|macos|mac)["'`]/i,
   /["'`](darwin|win32|windows|linux|macos|mac)["'`]\s*[!=]==?/i,
 ];
 
 /**
- * Today's presentation uses, by file, with why each is not a capability. Remove a file once it
+ * Today's uses, by file, with why each is there; all but one are presentation. Remove a file once it
  * no longer checks the OS (the guard says when); never add one.
  */
 const ALLOWED: Record<string, string> = {
   "src/features/machines/lib/passphrase-hint.ts": "names the OS dialog that asks for a passphrase",
   "src/features/settings/components/general-section.tsx":
-    "shows the macOS-only window settings (quit on close, the menu bar item)",
+    "a feature gate, not presentation: the macOS-only menu bar item and quit-on-close settings; to move to a capability",
   "src/features/shell/components/title-bar.tsx": "reserves the traffic-light inset only on macOS",
   "src/features/viewer/components/agents-tree-view.tsx": "names the modifier key (Option or Alt)",
   "src/features/viewer/components/tab-context-menu.tsx":
@@ -48,9 +51,12 @@ const ALLOWED: Record<string, string> = {
 /** The ratchet: lower it with each file removed above, never raise it. */
 const MOST_ALLOWED = 10;
 
-/** The source without its comments, so prose about a check isn't one. */
+/** The source without its comments, so prose about a check isn't one. A block comment keeps its
+ *  line breaks, so the lines after it keep their numbers. */
 function code(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\n]/g, ""))
+    .replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
 }
 
 /** The 1-based lines of `source` that check the OS directly. */
@@ -109,9 +115,18 @@ describe("the guard's fixtures", () => {
       `if (navigator.userAgentData?.platform) hide();`,
       `if (os === "windows") return null;`,
       `if ("darwin" !== platform) return null;`,
+      `import { isMac as onApple } from "@/shared/lib/shortcuts/keystroke";`,
+      `const { platform } = navigator;`,
+      `if (/Win/.test(platform)) return null;`,
+      `const linux = process.platform === "linux";`,
     ]) {
       expect(violations({ [NEW_FILE]: source }, ALLOWED), source).toEqual([`${NEW_FILE}:1`]);
     }
+  });
+
+  it("keeps the line of a check after a multi-line block comment", () => {
+    const source = [`/**`, ` * isMac() in prose`, ` */`, `const mac = isMac();`].join("\n");
+    expect(violations({ [NEW_FILE]: source }, ALLOWED)).toEqual([`${NEW_FILE}:4`]);
   });
 
   it("passes useCapability, and an OS check only in a comment", () => {

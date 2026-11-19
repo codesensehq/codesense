@@ -248,12 +248,20 @@ function MachineRow({
   const view = unreachable
     ? { ...described, glyph: "○", word: notYetAvailable(), detail: null, tone: "muted" as const }
     : described;
-  /** A verb that connects to the machine: off, with the group's note, while remote machines are. */
-  const connectVerb = (verb: React.ReactElement<React.ComponentProps<typeof RowAction>>) => (
-    <CapabilityOffControl cap="remote-machines" noteId={remoteOffNoteId}>
-      {verb}
-    </CapabilityOffControl>
-  );
+  /** A verb that connects to a remote machine: off, with the group's note, while remote machines
+   *  are. This computer's verbs (its terminal server's update) never depend on them. */
+  const connectVerb = (verb: React.ReactElement<React.ComponentProps<typeof RowAction>>) =>
+    machine.kind === "ssh" ? (
+      <CapabilityOffControl
+        key={verb.key ?? undefined}
+        cap="remote-machines"
+        noteId={remoteOffNoteId}
+      >
+        {verb}
+      </CapabilityOffControl>
+    ) : (
+      verb
+    );
   const note = agentCallbacksNote(machine);
   const hidden = machine.binding?.hidden === true;
   const shared = machine.scope?.kind === "team";
@@ -567,16 +575,17 @@ function MachineRow({
               onClick={reopenPending}
             />
           )}
-          {statusVerbs.map((a) => (
-            <CapabilityOffControl key={a.id} cap="remote-machines" noteId={remoteOffNoteId}>
+          {statusVerbs.map((a) =>
+            connectVerb(
               <RowAction
+                key={a.id}
                 testid={`machine-action-${a.id}-${id}`}
                 label={a.label}
                 disabled={busy}
                 onClick={() => void runMachineAction(a.id, machine, teamKey)}
-              />
-            </CapabilityOffControl>
-          ))}
+              />,
+            ),
+          )}
           {machine.kind === "ssh" &&
             machine.status.state === "connected" &&
             !needsPrivateAccount(machine) &&

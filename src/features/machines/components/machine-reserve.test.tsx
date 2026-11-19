@@ -13,8 +13,7 @@ import {
 } from "../__test-utils__/machines-backend";
 import { MachineReserve } from "./machine-reserve";
 
-const SENTENCE =
-  "Not yet available on Linux: connecting to other machines is not built for this platform.";
+const SENTENCE = "Not yet available on Linux: CodeSense can't connect to other machines.";
 
 beforeEach(() => {
   resetMachinesUi();
@@ -28,7 +27,7 @@ afterEach(() => {
 describe("the machine reserve without remote machines on this OS", () => {
   beforeEach(() =>
     setPlatformCaps({
-      "remote-machines": "connecting to other machines is not built for this platform",
+      "remote-machines": "CodeSense can't connect to other machines",
     }),
   );
 

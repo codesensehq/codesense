@@ -144,8 +144,11 @@ import {
   hasMod,
 } from "@/shared/lib/shortcuts/keystroke";
 import { localMachineLabel } from "@/shared/lib/local-machine";
-import { useCapability } from "@/shared/lib/capabilities";
-import { CapabilityOffNotice } from "@/shared/components/capability-off/capability-off";
+import { notYetAvailableSentence, useCapability } from "@/shared/lib/capabilities";
+import {
+  CapabilityOffNote,
+  CapabilityOffNotice,
+} from "@/shared/components/capability-off/capability-off";
 
 const LOCAL_MACHINE = LOCAL_MACHINE_ID;
 
@@ -544,10 +547,14 @@ export function AgentLaunchSheet({
   // Without the MCP bridge on this OS the agent still launches, without CodeSense tools: the
   // sheet says so first in its warnings (in branch mode, the run warnings).
   const bridgeOff = !useCapability("mcp-bridge").on;
+  // A story workspace held on another machine can't be reached without remote machines on this
+  // OS: Runs on says why, and Launch refuses rather than target it.
+  const remoteMachines = useCapability("remote-machines");
+  const unreachableMachine = !remoteMachines.on && !branchMode && launchMachine !== LOCAL_MACHINE;
   const bridgeNotice = (className?: string) => (
     <CapabilityOffNotice cap="mcp-bridge" as="li" className={className}>
       <b>{agent?.name ?? "This agent"} starts without CodeSense tools</b>: no inbox, messages or
-      team content from inside the session.
+      team content.
     </CapabilityOffNotice>
   );
   const { warnings, admission: launchAdmission } = useLaunchPreview(
@@ -642,6 +649,10 @@ export function AgentLaunchSheet({
   const launch = () => {
     if (launchAdmission?.allowed === false) {
       setFailure(launchAdmission.reason);
+      return;
+    }
+    if (unreachableMachine) {
+      setFailure(notYetAvailableSentence(remoteMachines));
       return;
     }
     if (busy || phase === "hydrating" || phase === "starting") return;
@@ -1533,9 +1544,16 @@ function MachinePicker({
   // Without remote machines on this OS there is nothing to pick: it runs here.
   if (!remoteMachines.on) {
     return (
-      <span data-testid="launch-machine" className="flex h-[34px] items-center text-[13px]">
-        {picked?.label ?? localMachineLabel()}
-      </span>
+      <div>
+        <span data-testid="launch-machine" className="flex h-[34px] items-center text-[13px]">
+          {value === LOCAL_MACHINE
+            ? (picked?.label ?? localMachineLabel())
+            : (machines?.find((m) => m.machineId === value)?.label ?? value)}
+        </span>
+        {value !== LOCAL_MACHINE && (
+          <CapabilityOffNote cap="remote-machines" className="max-w-48" />
+        )}
+      </div>
     );
   }
   return (

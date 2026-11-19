@@ -101,6 +101,42 @@ describe("CapabilityOffControl with CapabilityOffNote (the disabled control with
   });
 });
 
+describe("CapabilityOffControl stops what the element would do on its own", () => {
+  it("a submit button submits nothing, a link goes nowhere, a menu item's onSelect is replaced", async () => {
+    off();
+    const onSubmit = vi.fn((event: React.FormEvent) => event.preventDefault());
+    const onSelect = vi.fn();
+    const MenuItem = ({ onSelect: select }: { onSelect?: (e?: Event) => void }) => (
+      <button type="button" onClick={() => select?.(new Event("select", { cancelable: true }))}>
+        Connect
+      </button>
+    );
+    render(
+      <>
+        <form onSubmit={onSubmit}>
+          <CapabilityOffControl cap="remote-machines" noteId="why">
+            <button type="submit">Add</button>
+          </CapabilityOffControl>
+        </form>
+        <CapabilityOffControl cap="remote-machines" noteId="why">
+          <a href="#machines">Open</a>
+        </CapabilityOffControl>
+        <CapabilityOffControl cap="remote-machines" noteId="why">
+          <MenuItem onSelect={onSelect} />
+        </CapabilityOffControl>
+      </>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(onSubmit).not.toHaveBeenCalled();
+    const link = screen.getByRole("link", { name: "Open" });
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+    link.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(true);
+    await userEvent.click(screen.getByRole("button", { name: "Connect" }));
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+});
+
 describe("CapabilityOffNotice (the inline amber notice)", () => {
   it("renders nothing while the capability is on", () => {
     setPlatformCaps();

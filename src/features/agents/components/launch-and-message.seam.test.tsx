@@ -1840,7 +1840,7 @@ describe("the launch sheet names the picked CLI honestly", () => {
 });
 
 describe("launch sheet without a capability on this OS", () => {
-  const BRIDGE = "agents can't reach CodeSense from inside a session on this platform";
+  const BRIDGE = "agents can't reach CodeSense from inside a session";
   beforeEach(() => setPlatform("Win32"));
   afterEach(() => {
     resetPlatformCaps();
@@ -1858,7 +1858,7 @@ describe("launch sheet without a capability on this OS", () => {
     expect(first).toHaveClass("ls-warning");
     expect(first).toHaveAttribute("data-code", "capability-mcp-bridge");
     expect(first.textContent).toBe(
-      `Triage starts without CodeSense tools: no inbox, messages or team content from inside the session. Not yet available on Windows: ${BRIDGE}.`,
+      `Triage starts without CodeSense tools: no inbox, messages or team content. Not yet available on Windows: ${BRIDGE}.`,
     );
     expect(second).toHaveAttribute("data-code", UNQUALIFIED.code);
 
@@ -1886,6 +1886,33 @@ describe("launch sheet without a capability on this OS", () => {
     await waitFor(() => expect(calls.some((c) => c.cmd === "agent_preview")).toBe(true));
     expect(sheet.queryByTestId("launch-warnings")).toBeNull();
     expect(sheet.getByTestId("launch-machine").tagName).toBe("BUTTON");
+  });
+
+  it("without remote machines, a story held on a machine says why on Runs on, and Launch refuses", async () => {
+    setPlatformCaps({ "remote-machines": "CodeSense can't connect to other machines" });
+    machines = [machine("box", "connected")];
+    useViewerStore.setState({
+      workspaces: {
+        [TEAM]: [
+          {
+            id: "SW-7-fix",
+            kind: "story",
+            storyId: "SW-7",
+            cwd: "",
+            location: { kind: "machine", machineId: "box", requestId: "r", handle: "h", cwd: "/w" },
+          } as never,
+        ],
+      },
+    });
+    const { sheet, onClose } = renderSheet({ teamKey: TEAM, storyId: "SW-7" });
+    const sentence = "Not yet available on Windows: CodeSense can't connect to other machines.";
+    await waitFor(() => expect(sheet.getByTestId("launch-machine").textContent).toBe("BOX"));
+    expect(sheet.getByRole("note")).toHaveTextContent(sentence);
+    await waitFor(() => expect(sheet.getByTestId("launch-agent").textContent).toContain("Claude"));
+    fireEvent.click(sheet.getByTestId("launch-submit"));
+    expect(sheet.getByTestId("launch-error")).toHaveTextContent(sentence);
+    expect(launchCalls()).toHaveLength(0);
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("without remote machines, the machine is This computer, not a choice", async () => {

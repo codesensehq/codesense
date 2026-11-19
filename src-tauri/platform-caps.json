@@ -25,7 +25,7 @@
     "macos": "on",
     "linux": "on",
     "windows": "off",
-    "reason": "agents can't reach CodeSense from inside a session on this platform"
+    "reason": "agents can't reach CodeSense from inside a session"
   },
   {
     "key": "terminal-server-sidecar",
@@ -39,7 +39,7 @@
     "macos": "on",
     "linux": "on",
     "windows": "off",
-    "reason": "connecting to other machines is not built for this platform"
+    "reason": "CodeSense can't connect to other machines"
   },
   {
     "key": "agent-cli-sockets",

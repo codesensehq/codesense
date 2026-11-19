@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { Server, ShieldAlert } from "lucide-react";
+import { ShieldAlert } from "lucide-react";
 
 import { AppButton as Button } from "@/shared/components/app-button";
 import { ReservePanel } from "@/features/shell/components/connections-reserve";
@@ -11,6 +11,7 @@ import type { MachineSummary } from "@/tauri/commands";
 import { useTeamMachines } from "../stores/machines-store";
 import { AddMachinePanel } from "./add-machine-panel";
 import { QuickAddMachine } from "./quick-add-machine";
+import { machinePanelHead } from "./machine-panel-head";
 
 /**
  * SW-RM-UI-1 — the Connections reserve for machines: Add machine, Set up (Set up /
@@ -35,7 +36,7 @@ export function MachineReserve({
         cap="remote-machines"
         off={(sentence) => (
           <RemoteMachinesOff
-            title="Add machine"
+            machine={null}
             sentence={sentence}
             body="Machines your team shares still show in the list; you can hide them."
             onClose={onClose}
@@ -67,7 +68,7 @@ export function MachineReserve({
       cap="remote-machines"
       off={(sentence) => (
         <RemoteMachinesOff
-          title={machine.binding ? `Edit ${machine.label}` : `Set up ${machine.label}`}
+          machine={machine}
           sentence={sentence}
           body={`${machine.label} stays in your team's list; you can hide it.`}
           onClose={onClose}
@@ -87,23 +88,20 @@ export function MachineReserve({
 
 /** The add or set-up panel without remote machines on this OS: why, what still works, Close. */
 function RemoteMachinesOff({
-  title,
+  machine,
   sentence,
   body,
   onClose,
 }: {
-  title: string;
+  machine: MachineSummary | null;
   sentence: string;
   body: string;
   onClose: () => void;
 }) {
   return (
     <ReservePanel
-      testId="add-machine-panel"
-      icon={<Server size={16} aria-hidden="true" />}
-      title={title}
+      {...machinePanelHead(machine)}
       subtitle={sentence}
-      closeLabel="Close add-machine panel"
       onClose={onClose}
       footer={
         <Button variant="outline" size="sm" onClick={onClose}>
