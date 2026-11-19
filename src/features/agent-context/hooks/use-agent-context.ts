@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 
 import { useAgentsStore, watchAgentList } from "@/features/agents/stores/agents-store";
+import { isWithin, relative } from "@/shared/lib/path";
 import { useTeamSourceRepoSlugs } from "@/shared/lib/pipeline-graph/use-source-repo-selection";
 import { parseTeamKey } from "@/shared/lib/team-key";
 import { useViewerStore } from "@/shared/stores/viewer-store";
@@ -93,16 +94,13 @@ function touchesWantSet(
   inheritedBy?: string,
 ): boolean {
   if (!filePath) return true;
-  if (
-    view.files.some((file) => file.source === filePath || file.source?.startsWith(`${filePath}/`))
-  )
+  if (view.files.some((file) => file.source != null && isWithin(filePath, file.source)))
     return true;
   if (inheritedBy && view.roots.some((root) => root.path === inheritedBy)) return true;
   for (const root of view.roots) {
-    const base = root.path.replace(/\/+$/, "");
-    if (!filePath.startsWith(`${base}/`)) continue;
+    const rel = relative(root.path, filePath);
+    if (!rel) continue;
     if (root.tier.kind === "repo") return true;
-    const rel = filePath.slice(base.length + 1);
     if (view.entries.some((e) => isUnder(rel, e.path) || isUnder(e.path, rel))) return true;
   }
   return false;

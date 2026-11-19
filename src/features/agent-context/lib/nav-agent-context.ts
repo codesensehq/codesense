@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import type { FlatNavItem } from "@/features/dashboard/lib/flatten-nav-tree";
 import { itemFilePath } from "@/features/dashboard/lib/flatten-nav-tree";
+import { join, relative, trimTrailingSeparators } from "@/shared/lib/path";
 import type { AgentContextView } from "@/tauri/commands";
 
 import type { ContextEditAction } from "../hooks/use-agent-context";
@@ -58,7 +59,7 @@ export function navRelResolver(
   teamRoot: string,
   view: Pick<AgentContextView, "files" | "roots"> | null,
 ): (absPath: string) => string | null {
-  const root = teamRoot.replace(/\/+$/, "");
+  const root = trimTrailingSeparators(teamRoot);
   const byPath = new Map<string, string>();
   for (const f of view?.files ?? []) {
     const path = view ? fileAbsPath(view, f) : null;
@@ -74,9 +75,7 @@ export function navRelResolver(
       return parts.length > 3 ? parts.slice(3).join("/") : null;
     }
     if (!root) return null;
-    if (abs === root) return "";
-    if (abs.startsWith(`${root}/`)) return abs.slice(root.length + 1).replace(/\/+$/, "");
-    return null;
+    return relative(root, abs);
   };
 }
 
@@ -87,16 +86,15 @@ export function fileAbsPath(
 ): string | null {
   if (file.source) return file.source;
   const root = file.root === null ? undefined : view.roots[file.root];
-  return root ? `${root.path.replace(/\/+$/, "")}/${file.logical}` : null;
+  return root ? join(root.path, file.logical) : null;
 }
 
 /** The team-content-only resolver: right-click edits never reach repo-tier rows. */
 export function teamRelResolver(teamRoot: string): (absPath: string) => string | null {
-  const root = teamRoot.replace(/\/+$/, "");
+  const root = trimTrailingSeparators(teamRoot);
   return (abs: string) => {
     if (!root || abs.startsWith(INSTALLED_SCHEME)) return null;
-    if (abs === root) return "";
-    return abs.startsWith(`${root}/`) ? abs.slice(root.length + 1).replace(/\/+$/, "") : null;
+    return relative(root, abs);
   };
 }
 

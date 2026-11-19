@@ -334,6 +334,7 @@ function useCommitFiles(
 }
 
 function fileLabel(change: NavChange): string {
+  // eslint-disable-next-line no-restricted-syntax -- logical path: repo-relative path from Rust
   const name = change.relPath.split("/").pop() ?? change.relPath;
   return stripViewerExtension(name);
 }
