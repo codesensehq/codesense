@@ -22,6 +22,7 @@ import {
   liveStoryDashboardDeps,
   openStoryDashboard,
 } from "@/features/dashboard/lib/open-story-dashboard";
+import { STORY_DASHBOARD_ACTION_ID } from "@/features/dashboard/lib/story-dashboard-action-id";
 import { openAppSettings } from "@/features/settings/lib/open-settings";
 import { canExportToPdf, exportViewerToPdf } from "@/features/viewer/lib/export-pdf";
 import {
@@ -538,7 +539,7 @@ const shortcutActions: readonly ShortcutAction[] = [
   {
     // View → Dashboard: the focused story's dashboard (its workspace's story, else the active tab when
     // it is a story file). With no story in focus it says why in a toast, so the item is never silent.
-    id: "viewer.open-story-dashboard",
+    id: STORY_DASHBOARD_ACTION_ID,
     label: "Dashboard",
     menuPath: ["View", "Dashboard"],
     defaultKeystroke: "",

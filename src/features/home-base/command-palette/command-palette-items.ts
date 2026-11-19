@@ -13,6 +13,7 @@
 // pattern mirrors `workspace-picker-items.ts` (a NUL separator that never
 // appears in a name/path); the dialog carries the dispatch kind in `id`.
 
+import { STORY_DASHBOARD_ACTION_ID } from "@/features/dashboard/lib/story-dashboard-action-id";
 import type { QuickPickerItem } from "@/features/viewer/components/quick-open-dialog";
 import { basename } from "@/shared/lib/path";
 import type { Team } from "@/shared/types/domain";
@@ -173,6 +174,8 @@ export interface StaticIndexInputs {
   panes?: PalettePane[];
   /** Active slot-dashboard commands, ranked with the other actions. */
   commands?: PaletteCommand[];
+  /** The story dashboard action's current chord for display; empty when it has none. */
+  storyDashboardChord?: string;
 }
 
 /** An active slot-dashboard command the palette can run. */
@@ -249,6 +252,14 @@ export function buildStaticItems(inputs: StaticIndexInputs): QuickPickerItem[] {
     label: "Agents",
     sublabel: "action · open agents",
     tier: CP_TIER.action,
+  });
+  // View → Dashboard as a row: off macOS there is no app menu and the action has no default key.
+  items.push({
+    id: encodeSelection({ kind: "command", actionId: STORY_DASHBOARD_ACTION_ID }),
+    label: "Story dashboard",
+    sublabel: "action · open the focused story's dashboard",
+    tier: CP_TIER.action,
+    chord: inputs.storyDashboardChord || undefined,
   });
   // The setup tab reopens here and picks up where it left off (the first launch opens it).
   items.push({
