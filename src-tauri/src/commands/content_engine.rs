@@ -3838,7 +3838,7 @@ pub(crate) fn merge_attribution_hooks(
             "command": command,
             "timeout": crate::attribution::launch::HOOK_TIMEOUT,
         }),
-        crate::attribution::managed::HOOK_MARKER,
+        codesense_pty_core::agent_cli::ATTRIBUTION_HOOK_MARKER,
     )
 }
 
@@ -3863,7 +3863,7 @@ pub(crate) fn reconcile_attribution_hooks(
                     !handler
                         .get("command")
                         .and_then(serde_json::Value::as_str)
-                        .is_some_and(|c| c.contains(crate::attribution::managed::HOOK_MARKER))
+                        .is_some_and(|c| c.contains(codesense_pty_core::agent_cli::ATTRIBUTION_HOOK_MARKER))
                 });
                 changed |= handlers.len() != before;
                 !std::vec::Vec::is_empty(handlers)

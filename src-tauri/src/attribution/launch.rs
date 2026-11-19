@@ -3,13 +3,20 @@
 //!
 //! [`prepare_for_host`] never fails a launch: a missing, unsupported or broken git-ai, or a daemon
 //! that will not start, comes back as an [`AttributionStatus`] with nothing wired.
+//!
+//! These entry points are always compiled and decide from a caps answer: with `git-ai` off a
+//! launch is not wired, the doctor reports it not available and a reapply does nothing. The
+//! git-ai half is [`wired`], compiled only with the capability.
 
-use super::detect::{detect, Detection};
-use super::managed::{ConfigError, Managed};
+#[cfg(cap_git_ai)]
+mod wired;
+
+use super::facade::{self, Capture, PreviousBinary, ReplacementNotice};
 use super::prefs::{self, AttributionMode, AttributionPrefs, NotesMode};
 use super::{AttributionState, AttributionStatus, OffReason};
 use crate::agents::adapter::{desktop, Attribution};
 use crate::domain::Principal;
+use crate::platform_caps::Caps;
 use codesense_pty_core::agent_cli::AgentCli;
 use std::ffi::OsStr;
 use std::path::Path;
@@ -76,12 +83,13 @@ impl Plan {
 /// Plan for tests that run the current desktop core directly.
 #[cfg(test)]
 pub(crate) fn prepare(request: &Request<'_>, path_var: Option<&OsStr>) -> Plan {
-    prepare_for_host(request, path_var, true)
+    prepare_for_host(&Caps::live(), request, path_var, true)
 }
 
 /// Decide and wire attribution only when the selected host can trust its injected hooks.
 /// The status is also stored on the worktree record when it has one.
 pub(crate) fn prepare_for_host(
+    caps: &Caps<'_>,
     request: &Request<'_>,
     path_var: Option<&OsStr>,
     attribution_hook_trust: bool,
@@ -106,6 +114,7 @@ pub(crate) fn prepare_for_host(
     }
     let plan = match &context_root {
         Some(root) if Option::is_none(&record) => plan_for(
+            caps,
             &Request {
                 cwd: root,
                 ..*request
@@ -113,7 +122,7 @@ pub(crate) fn prepare_for_host(
             path_var,
             attribution_hook_trust,
         ),
-        _ => plan_for(request, path_var, attribution_hook_trust),
+        _ => plan_for(caps, request, path_var, attribution_hook_trust),
     };
     store(request, &plan);
     plan
@@ -164,7 +173,12 @@ fn store(request: &Request<'_>, plan: &Plan) {
     }
 }
 
-fn plan_for(request: &Request<'_>, path_var: Option<&OsStr>, attribution_hook_trust: bool) -> Plan {
+fn plan_for(
+    caps: &Caps<'_>,
+    request: &Request<'_>,
+    path_var: Option<&OsStr>,
+    attribution_hook_trust: bool,
+) -> Plan {
     if let Attribution::Unsupported(reason) = desktop(request.runtime).attribution {
         // Nothing captures this CLI, so its session's commits are kept out of git-ai's
         // untraced-commit fixup, which would credit them to the person.
@@ -182,100 +196,17 @@ fn plan_for(request: &Request<'_>, path_var: Option<&OsStr>, attribution_hook_tr
         Ok(notes) => notes,
         Err(off) => return Plan::without(AttributionStatus::Off { reason: off }, None),
     };
-    if let Some(status) = super::install::platform_status(request.codesense_home) {
-        return Plan::without(status, None);
+    if !facade::enabled(caps) {
+        return Plan::without(facade::off_status(), None);
     }
-    if codesense_pty_core::agent_cli::descriptor(request.runtime).attribution_hook_trust
-        && !attribution_hook_trust
-    {
-        return Plan::without(
-            AttributionStatus::Error {
-                message: "The terminal server is outdated; restart it to enable line attribution."
-                    .into(),
-            },
-            None,
-        );
-    }
-    let managed = Managed::for_codesense_home(request.codesense_home);
-    let detection = detect(request.codesense_home, path_var, &managed.daemon_env());
-    if super::install::needs_install(request.codesense_home, &detection) {
-        super::install::ensure_installed(
-            request.codesense_home,
-            path_var,
-            super::install::Trigger::Launch,
-        );
-    }
-    let unavailable = |fallback| super::install::status(request.codesense_home).unwrap_or(fallback);
-    let (binary, version) = match detection {
-        Detection::NotInstalled => {
-            return Plan::without(unavailable(AttributionStatus::NotInstalled), None)
-        }
-        Detection::Broken { message, .. } => {
-            return Plan::without(unavailable(AttributionStatus::Error { message }), None)
-        }
-        Detection::Found { path, raw, version } => {
-            if let Some(status) =
-                super::install::capture_status(request.codesense_home, &raw, version)
-            {
-                return Plan::without(status, Some(raw));
-            }
-            (path, raw)
-        }
+    #[cfg(cap_git_ai)]
+    let plan = wired::plan(request, path_var, notes, attribution_hook_trust);
+    #[cfg(not(cap_git_ai))]
+    let plan = {
+        let _ = (path_var, notes, attribution_hook_trust);
+        Plan::without(facade::off_status(), None)
     };
-    let configured = match managed.apply_config(&binary, &version, || {
-        super::managed::lists(request.codesense_home)
-    }) {
-        // A binary that cannot keep notes local still captures a repo whose notes push.
-        Err(ConfigError::LocalNotesUnsupported(_)) if notes == NotesMode::Push => Ok(()),
-        Err(ConfigError::LocalNotesUnsupported(_)) => {
-            return Plan::without(
-                AttributionStatus::Off {
-                    reason: OffReason::NotesWouldPush,
-                },
-                Some(version),
-            )
-        }
-        Err(ConfigError::Failed(message)) => Err(message),
-        // The daemon ignores a repo outside the roots just written (a worktree whose clone is
-        // not attached), so wiring it would record nothing.
-        Ok(lists) if !super::managed::RepoRoots::daemon_tracks(&lists.repo_roots, request.cwd) => {
-            return Plan::without(
-                AttributionStatus::Off {
-                    reason: OffReason::RepoNotAttached,
-                },
-                Some(version),
-            )
-        }
-        Ok(_) => Ok(()),
-    };
-    let ready = configured.and_then(|()| managed.ensure_daemon(&binary, &version));
-    if let Err(message) = ready {
-        let status = if managed.restart_pending(Some(&version)) {
-            AttributionStatus::Off {
-                reason: OffReason::NotesWouldPush,
-            }
-        } else {
-            AttributionStatus::Error { message }
-        };
-        return Plan::without(status, Some(version));
-    }
-    Plan {
-        status: AttributionStatus::Active,
-        git_ai_version: Some(version),
-        // Git's trace events go to the managed daemon only, and a user's own git-ai hook
-        // cannot reach any daemon.
-        env: vec![
-            (
-                "GIT_TRACE2_EVENT".into(),
-                format!("af_unix:stream:{}", Path::display(&managed.trace_socket())),
-            ),
-            ("GIT_TRACE2_EVENT_NESTING".into(), "0".into()),
-        ]
-        .into_iter()
-        .chain(USER_DAEMON_NEUTRALISED.map(|(key, value)| (key.to_owned(), value.to_owned())))
-        .collect(),
-        hook_command: Some(managed.checkpoint_command(&binary, AgentCli::as_str(request.runtime))),
-    }
+    plan
 }
 
 /// Where a user's own git-ai hook would look for its daemon inside a CodeSense session: a
@@ -329,7 +260,7 @@ pub(crate) fn user_hooks_present(settings: &HookSettings<'_>) -> bool {
         std::iter::Iterator::any(&mut str::lines(&text), |line| {
             str::contains(line, "git-ai")
                 && str::contains(line, "checkpoint")
-                && !str::contains(line, super::managed::HOOK_MARKER)
+                && !str::contains(line, codesense_pty_core::agent_cli::ATTRIBUTION_HOOK_MARKER)
         })
     })
 }
@@ -372,15 +303,24 @@ pub(crate) enum Reapplied {
 /// already honours it. Any own copy takes it, so a move back to local reaches a daemon that is
 /// still running on an older binary.
 pub(crate) fn reapply_config(home: &Path) -> Reapplied {
-    let managed = Managed::for_codesense_home(home);
-    let Detection::Found { path, raw, .. } = detect(home, None, &managed.daemon_env()) else {
+    reapply_config_with_caps(&Caps::live(), home)
+}
+
+/// [`reapply_config`] with the caps answer given. Without git-ai there is no config to apply:
+/// the setting is saved and nothing else happens.
+pub(crate) fn reapply_config_with_caps(caps: &Caps<'_>, home: &Path) -> Reapplied {
+    if !facade::enabled(caps) {
+        facade::skipped("config reapply");
         return Reapplied::Pending;
-    };
-    match managed.apply_config(&path, &raw, || super::managed::lists(home)) {
-        Ok(_) => Reapplied::Now,
-        Err(ConfigError::LocalNotesUnsupported(message)) => Reapplied::Unsupported { message },
-        Err(ConfigError::Failed(message)) => Reapplied::Failed { message },
     }
+    #[cfg(cap_git_ai)]
+    let reapplied = wired::reapply(home);
+    #[cfg(not(cap_git_ai))]
+    let reapplied = {
+        let _ = home;
+        Reapplied::Pending
+    };
+    reapplied
 }
 
 /// Generated capture environment is never replayed from a previous capture decision.
@@ -410,10 +350,10 @@ pub struct Doctor {
     pub daemon_reachable: bool,
     pub warnings: Vec<String>,
     /// Last replacement receipt; retained across app restarts and manual reverts.
-    pub previous_binary: Option<super::install::PreviousBinary>,
+    pub previous_binary: Option<PreviousBinary>,
     pub supported_versions: &'static str,
     /// Last checkpoint sweep; in-memory since app start, separate from installation health.
-    pub capture: super::catch_up::Capture,
+    pub capture: Capture,
     /// The notes ref capture writes (`refs/notes/sense`), kept on this machine.
     pub notes_ref: &'static str,
     /// Repos any local profile set `notes: push` (their remote keys); every other repo's notes
@@ -427,104 +367,61 @@ pub struct Doctor {
 /// The doctor as `describe_setup` reads it: the first read acknowledges a pending replacement
 /// notice.
 pub(crate) fn doctor(codesense_home: &Path, path_var: Option<&OsStr>) -> Doctor {
-    doctor_with(
-        codesense_home,
-        path_var,
-        super::install::ReplacementNotice::Acknowledge,
-    )
+    doctor_with(codesense_home, path_var, ReplacementNotice::Acknowledge)
 }
 
 /// [`doctor`] with the notice mode a passive reader chooses ([`ReplacementNotice::Peek`]).
 pub(crate) fn doctor_with(
     codesense_home: &Path,
     path_var: Option<&OsStr>,
-    notice: super::install::ReplacementNotice,
+    notice: ReplacementNotice,
 ) -> Doctor {
-    let managed = Managed::for_codesense_home(codesense_home);
-    let daemon_reachable = managed.daemon_reachable();
-    let done = |status, binary: Option<&Path>, version: Option<String>| {
-        let warnings = super::install::warning(codesense_home, notice)
-            .into_iter()
-            .chain(
-                managed
-                    .restart_pending(version.as_deref())
-                    .then(|| "git-ai daemon restart pending; the next launch restarts it".into()),
-            )
-            .chain(matches!(&status, AttributionStatus::Unsupported { reason } if reason == "user_pinned")
-                .then(|| super::install::USER_PIN_RECOVERY.to_string()))
-            .chain(super::detect::user_copy_present(codesense_home, path_var)
-                .then(|| "user_copy_present: a git-ai on PATH is left untouched and is never used for capture".into()))
-            .chain(user_hooks_present(&HookSettings {
-                user_home: &super::managed::UserGit::current().home,
-                claude_config_dir: std::env::var_os("CLAUDE_CONFIG_DIR").as_deref().map(Path::new),
-                codex_home: std::env::var_os("CODEX_HOME").as_deref().map(Path::new),
-                projects: &prefs::all_attached_checkouts(codesense_home),
-            })
-            .then(|| "user_hooks_present: your own git-ai checkpoint hooks cannot reach a daemon in CodeSense sessions with capture on, so one checkpoint counts".into()))
-            .collect();
-        Doctor {
-            status,
-            binary: binary.map(|p| p.to_string_lossy().into_owned()),
-            git_ai_version: version,
-            daemon_reachable,
-            warnings,
-            previous_binary: super::install::previous_binary(codesense_home),
-            supported_versions: super::install::expected_version(codesense_home),
-            capture: super::catch_up::capture(codesense_home),
-            notes_ref: super::managed::NOTES_REF,
-            notes_push_repos: prefs::push_repos(codesense_home),
-            daemon_repo_roots: super::managed::RepoRoots::listed_count(
-                &super::managed::repo_roots(codesense_home),
-            ),
-        }
-    };
-    if let Some(status) = super::install::platform_status(codesense_home) {
-        return done(status, None, None);
+    doctor_with_caps(&Caps::live(), codesense_home, path_var, notice)
+}
+
+/// [`doctor_with`] with the caps answer given. Without git-ai it reports git-ai not available
+/// on this platform.
+pub(crate) fn doctor_with_caps(
+    caps: &Caps<'_>,
+    codesense_home: &Path,
+    path_var: Option<&OsStr>,
+    notice: ReplacementNotice,
+) -> Doctor {
+    if !facade::enabled(caps) {
+        return unavailable_doctor(codesense_home);
     }
-    match detect(codesense_home, path_var, &managed.daemon_env()) {
-        Detection::NotInstalled => done(
-            super::install::status(codesense_home).unwrap_or(AttributionStatus::NotInstalled),
-            None,
-            None,
-        ),
-        Detection::Broken { path, message } => done(
-            super::install::status(codesense_home).unwrap_or(AttributionStatus::Error { message }),
-            Some(&path),
-            None,
-        ),
-        Detection::Found { path, raw, version } => {
-            if let Some(status) = super::install::capture_status(codesense_home, &raw, version) {
-                return done(status, Some(&path), Some(raw));
-            }
-            if managed.restart_pending(Some(&raw)) {
-                return done(
-                    AttributionStatus::Off {
-                        reason: OffReason::NotesWouldPush,
-                    },
-                    Some(&path),
-                    Some(raw),
-                );
-            }
-            if daemon_reachable {
-                done(AttributionStatus::Active, Some(&path), Some(raw))
-            } else {
-                done(
-                    AttributionStatus::Error {
-                        message: "git-ai daemon is not running; it starts with the next launch"
-                            .into(),
-                    },
-                    Some(&path),
-                    Some(raw),
-                )
-            }
-        }
+    #[cfg(cap_git_ai)]
+    let doctor = wired::doctor(codesense_home, path_var, notice);
+    #[cfg(not(cap_git_ai))]
+    let doctor = {
+        let _ = (path_var, notice);
+        unavailable_doctor(codesense_home)
+    };
+    doctor
+}
+
+/// The doctor where git-ai is off: not available, nothing installed or running.
+fn unavailable_doctor(codesense_home: &Path) -> Doctor {
+    Doctor {
+        status: facade::off_status(),
+        binary: None,
+        git_ai_version: None,
+        daemon_reachable: false,
+        warnings: Vec::new(),
+        previous_binary: None,
+        supported_versions: "",
+        capture: Capture::default(),
+        notes_ref: super::git_ai::NOTES_REF,
+        notes_push_repos: prefs::push_repos(codesense_home),
+        daemon_repo_roots: None,
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, cap_git_ai))]
 mod tests {
     use super::*;
     use crate::agents::resolve::tests::alice;
+    use crate::attribution::managed::Managed;
     use crate::attribution::testing::REMOTE;
     use crate::attribution::testing::{version_script, Launch};
 

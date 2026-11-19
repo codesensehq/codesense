@@ -94,7 +94,7 @@ pub(crate) fn update(
     change(store.entry(key.to_owned()).or_default());
     write_json_atomic(&file_path(home, principal), &store).map_err(|e| e.to_string())?;
     drop(_write);
-    super::watcher::refresh(home);
+    super::facade::refresh_watcher(&crate::platform_caps::Caps::live(), home);
     Ok(())
 }
 

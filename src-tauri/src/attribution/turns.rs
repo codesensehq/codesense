@@ -100,7 +100,8 @@ where
             } else {
                 if !coverage.contains_key(&commit) {
                     let covered = if let Some(repo) = &context {
-                        super::checkpoints::covered(
+                        super::facade::covered(
+                            &crate::platform_caps::Caps::live(),
                             Path::new(repo.local_path.as_deref().unwrap()),
                             &repo.remote_key,
                             &commit,

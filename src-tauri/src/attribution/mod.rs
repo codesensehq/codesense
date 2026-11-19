@@ -5,20 +5,32 @@
 //! (git-ai, in [`git_ai`]) can change without touching a caller. The launch side
 //! ([`launch`]) switches capture on for the managed worktrees CodeSense launches agents
 //! into and records whether it is working ([`AttributionStatus`]).
+//!
+//! The parts that run the git-ai binary or need a unix host compile only with the `git-ai`
+//! capability (`cfg(cap_git_ai)`); everything else reaches them through [`facade`], which
+//! answers "not available" without it.
 
 pub(crate) mod authorship;
+#[cfg(cap_git_ai)]
 pub(crate) mod catch_up;
+#[cfg(cap_git_ai)]
 pub(crate) mod watcher;
+#[cfg(cap_git_ai)]
 pub(crate) mod checkpoints;
+#[cfg(cap_git_ai)]
 pub(crate) mod detect;
 pub(crate) mod diff;
+pub(crate) mod facade;
 pub(crate) mod git_ai;
 pub(crate) mod history;
+#[cfg(cap_git_ai)]
 pub(crate) mod install;
 pub(crate) mod launch;
+#[cfg(cap_git_ai)]
 pub(crate) mod managed;
+#[cfg(cap_git_ai)]
 pub(crate) mod metrics_db;
-#[cfg(test)]
+#[cfg(all(test, cap_git_ai))]
 mod metrics_db_tests;
 #[cfg(test)]
 mod measurement;

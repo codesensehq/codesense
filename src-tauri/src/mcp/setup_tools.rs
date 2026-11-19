@@ -158,7 +158,7 @@ pub(crate) fn emit_active_team_switch<R: tauri::Runtime>(
 pub(crate) fn local_doctor(
     home: &std::path::Path,
     path: Option<&std::ffi::OsStr>,
-    notice: crate::attribution::install::ReplacementNotice,
+    notice: crate::attribution::facade::ReplacementNotice,
 ) -> crate::attribution::launch::Doctor {
     crate::attribution::launch::doctor_with(home, path, notice)
 }
@@ -173,7 +173,7 @@ pub(crate) async fn read_local_doctor<R: tauri::Runtime>(
         Ok(local_doctor(
             &home,
             std::env::var_os("PATH").as_deref(),
-            crate::attribution::install::ReplacementNotice::Peek,
+            crate::attribution::facade::ReplacementNotice::Peek,
         ))
     })
     .await
@@ -211,7 +211,7 @@ pub(crate) async fn describe_setup_at<R: tauri::Runtime>(
             let attribution_doctor = local_doctor(
                 &home,
                 path.as_deref(),
-                crate::attribution::install::ReplacementNotice::Acknowledge,
+                crate::attribution::facade::ReplacementNotice::Acknowledge,
             );
             let orgs = describe_orgs(&home, &principal)?;
             let scratch = describe_scratch(&home, &principal, &synced_org_slugs(&home, user_id)?);

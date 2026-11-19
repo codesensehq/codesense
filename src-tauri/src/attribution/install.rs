@@ -170,14 +170,7 @@ impl Fetch for Bundled {
     }
 }
 
-/// Persisted rollback facts, also returned by the attribution doctor.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PreviousBinary {
-    pub version: String,
-    pub replacement: String,
-    pub path: PathBuf,
-}
+pub use super::facade::PreviousBinary;
 #[derive(Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Notice {
@@ -201,13 +194,7 @@ fn previous(home: &Path) -> Option<Previous> {
 pub(crate) fn previous_binary(home: &Path) -> Option<PreviousBinary> {
     previous(home).map(|previous| previous.binary)
 }
-/// Who is reading the one-time replacement notice: `describe_setup` acknowledges it; a passive
-/// read (the dashboards' `setup` query) peeks and leaves the receipt untouched.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ReplacementNotice {
-    Acknowledge,
-    Peek,
-}
+pub(crate) use super::facade::ReplacementNotice;
 fn notice_text(previous: &Previous) -> String {
     format!(
         "replaced git-ai {} → {} (previous kept at {})",
@@ -489,12 +476,7 @@ async fn install_locked(
     Ok(())
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Trigger {
-    Startup,
-    Launch,
-    OnDemand,
-}
+pub(crate) use super::facade::Trigger;
 #[derive(Default)]
 struct State {
     running: bool,

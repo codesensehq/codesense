@@ -5,7 +5,7 @@
 //! (shared) dashboard gets [`shared`], an explicit allow-list: nothing is passed through by
 //! default, so a field added to [`Doctor`] or [`Capture`] stays out until it is classified here.
 
-use super::catch_up::Capture;
+use super::facade::Capture;
 use super::launch::Doctor;
 use super::AttributionStatus;
 use serde_json::{json, Value};

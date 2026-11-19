@@ -868,12 +868,15 @@ pub(super) fn collect_refs(
                         .and_then(|_| crate::commands::attachments::attachment_key(row))
                     })
             });
-        if let Some(key) = crate::attribution::checkpoints::repository_key(
+        let caps = crate::platform_caps::Caps::live();
+        if let Some(key) = crate::attribution::facade::repository_key(
+            &caps,
             root,
             bound_key.as_deref(),
             &mut checkpoint_store,
         )? {
-            crate::attribution::checkpoints::harvest(
+            crate::attribution::facade::harvest(
+                &caps,
                 root,
                 &key,
                 &mut checkpoint_store,

@@ -16,6 +16,7 @@ use std::process::{Command, Stdio};
 
 /// How to make git-ai finish the work it queued before a read: its daemon records commits
 /// asynchronously, so a note written a moment ago may not exist yet.
+#[cfg_attr(not(cap_git_ai), allow(dead_code))]
 #[derive(Debug, Clone)]
 pub(crate) struct Drain {
     pub binary: PathBuf,
@@ -23,8 +24,12 @@ pub(crate) struct Drain {
     pub env: Vec<(String, String)>,
 }
 
+/// The notes ref CodeSense's git-ai writes (`refs/notes/sense`), apart from the `ai` ref a
+/// user's own git-ai writes and pushes. Readers try it first.
+pub(crate) const NOTES_REF: &str = "sense";
+
 /// The notes refs read, first match wins: CodeSense's local-only ref, then git-ai's default.
-pub(crate) const NOTES_REFS: [&str; 2] = [super::managed::NOTES_REF, "ai"];
+pub(crate) const NOTES_REFS: [&str; 2] = [NOTES_REF, "ai"];
 
 pub(crate) fn is_missing_object(error: &git2::Error) -> bool {
     git2::Error::code(error) == git2::ErrorCode::NotFound
@@ -32,6 +37,7 @@ pub(crate) fn is_missing_object(error: &git2::Error) -> bool {
 }
 
 /// How long a drain may wait, in seconds.
+#[cfg_attr(not(cap_git_ai), allow(dead_code))]
 const DRAIN_SECONDS: &str = "5";
 
 #[derive(Debug, Clone)]
@@ -118,6 +124,9 @@ impl GitAiSource {
         }
     }
 
+    /// A source that drains `home`'s managed git-ai before each read, when it is installed.
+    /// Only with git-ai compiled in; the facade's `notes_source` is the way in.
+    #[cfg(cap_git_ai)]
     pub(crate) fn for_home(home: &Path) -> Self {
         let source = Self::default();
         let binary = home.join("bin/git-ai");
@@ -182,6 +191,12 @@ impl GitAiSource {
         Ok(output)
     }
 
+    /// Has git-ai finish what it queued for `repo`. Without git-ai compiled in no source drains
+    /// ([`Self::for_home`] is the only one that sets a drain outside tests).
+    #[cfg(not(cap_git_ai))]
+    pub(crate) fn drain(&self, _repo: &Path) {}
+
+    #[cfg(cap_git_ai)]
     pub(crate) fn drain(&self, repo: &Path) {
         let Some(drain) = &self.drain else { return };
         let mut command = super::detect::git_ai_command(&drain.binary);
