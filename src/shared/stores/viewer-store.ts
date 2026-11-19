@@ -8566,9 +8566,16 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     const record = workspaceRecord(s, teamKey, wsId);
     if (isRemoteWorkspace(record)) {
       // Its terminals open on its machine (remoteWorkspaceDriver), never here.
-      toast(
-        "This workspace lives on a machine: open its terminals with ⌘T or the new-terminal menu",
-      );
+      // Imported late: the shortcut modules import this store.
+      void Promise.all([
+        import("@/shared/stores/shortcuts-store"),
+        import("@/shared/lib/shortcuts/keystroke"),
+      ]).then(([{ getToastShortcut }, { formatKeystrokeDisplay }]) => {
+        const chord = getToastShortcut("viewer.new-terminal-tab");
+        toast(
+          `This workspace lives on a machine: open its terminals with ${chord ? `${formatKeystrokeDisplay(chord)} or ` : ""}the new-terminal menu`,
+        );
+      });
       const refused = Promise.reject(
         new Error(`workspace ${wsId} lives on a remote machine; open its terminals there`),
       );

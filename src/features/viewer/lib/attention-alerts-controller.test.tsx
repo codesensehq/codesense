@@ -4,6 +4,7 @@ import { installUserNavigationCapture } from "@/shared/lib/context-navigation";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, renderHook } from "@testing-library/react";
 import { Toaster } from "sonner";
+import { restorePlatform, setPlatform } from "@/test/platform";
 
 import { hideTab } from "@/features/viewer/lib/terminal-close";
 import { resetDotSinceForTests } from "@/features/viewer/lib/cli-workspace/store/terminal-tab-selectors";
@@ -761,6 +762,22 @@ describe("the return after a notification", () => {
       expect(toaster.getAttribute("data-x-position")).toBe("center");
       expect(screen.getByText("Jump there (⌘⇧J)")).toBeInTheDocument();
     });
+
+    it.each(["Win32", "Linux x86_64"])(
+      "on %s shows no chord, since the terminal's Ctrl+Shift+J toggles the right pane, and keeps Jump",
+      async (platform) => {
+        setPlatform(platform);
+        try {
+          await notifyThenReturn(() => setStatus("sid-c", "needs-permission"), late);
+          await expectPillNotMoved();
+          expect(screen.queryByText(/Jump there/)).toBeNull();
+          expect(document.body.textContent).not.toMatch(/[⌘⌥⇧⌃↵]|Ctrl\+/);
+          expect(screen.getByRole("button", { name: "Jump" })).toBeInTheDocument();
+        } finally {
+          restorePlatform();
+        }
+      },
+    );
 
     it("Jump selects the tab and parks focus on its tile frame, never the terminal", async () => {
       const { frame, input } = mountTile("w2");

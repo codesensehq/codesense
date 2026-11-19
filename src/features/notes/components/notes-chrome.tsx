@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 
 import { NtPopover, NtPopoverContent, NtPopoverTrigger } from "./nt-popover";
+import { ActionKbd } from "./action-kbd";
 
 export interface AgentMenuActions {
   onOrganize: () => void;
@@ -197,7 +198,7 @@ export function NotesChrome({
           <button type="button" className="nt-find" onClick={onFind} aria-label="Find a note">
             <Search size={14} aria-hidden />
             <span className="nt-find-text">Find a note</span>
-            <kbd className="nt-kbd">⌘O</kbd>
+            <ActionKbd action="nav.open-note-switcher" />
           </button>
           {outline}
           <span className="nt-hair-v" aria-hidden />

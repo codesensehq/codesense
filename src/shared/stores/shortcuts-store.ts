@@ -425,6 +425,16 @@ export function getEffectiveShortcut(actionId: string): string {
  * the component re-renders when the user rebinds the action. Used by
  * tooltip labels that must track overrides live.
  */
+/**
+ * The action's chord for a hint that can show while a terminal has focus (a toast):
+ * `""` unless the terminal answers to the same chord, so the hint never advertises
+ * one the terminal reassigns, nor one that is unbound.
+ */
+export function getToastShortcut(actionId: string): string {
+  const binding = resolveBindings(useShortcutsStore.getState().shortcuts).get(actionId);
+  return binding && binding.terminalKeystroke === binding.keystroke ? binding.keystroke : "";
+}
+
 export function useEffectiveShortcut(actionId: string): string {
   // Primitive selectors, so a rebind elsewhere or a dashboard's commands changing
   // re-renders only the components whose chord actually changed.

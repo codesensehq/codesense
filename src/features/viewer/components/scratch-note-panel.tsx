@@ -91,6 +91,7 @@ import { useNoteHeadings } from "./use-note-headings";
 import { scrollToHeadingBySlug } from "../lib/note-headings";
 import { hasMod } from "@/shared/lib/shortcuts/keystroke";
 import { join } from "@/shared/lib/path";
+import { ActionKbd } from "@/features/notes/components/action-kbd";
 
 const lowlight = createLowlight(all);
 
@@ -932,7 +933,7 @@ function NotesPane() {
             </span>
             Go to heading
             <span className="nt-row-sub">
-              <kbd className="nt-kbd">⌘⇧O</kbd>
+              <ActionKbd action="nav.goto-heading" />
             </span>
           </button>
         </NtPopoverContent>
