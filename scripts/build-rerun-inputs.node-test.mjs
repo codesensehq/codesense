@@ -51,6 +51,41 @@ test("build.rs declares no broad Rust source directories", () => {
   assertBuildInputs(readFileSync(resolve(manifest, "build.rs"), "utf8"));
 });
 
+// `configure_caps(path)` reads the capability table but leaves its rerun watch
+// to the caller, so each caller must name the same path in a literal
+// `rerun-if-changed` line, and the path must be the table.
+function assertTableWatch(source, dir) {
+  const calls = [...source.matchAll(/configure_caps\("([^"]+)"\)/g)].map(([, path]) => path);
+  assert.equal(calls.length, 1, "one configure_caps call with a literal path");
+  const [table] = calls;
+  assert.ok(
+    source.includes(`println!("cargo:rerun-if-changed=${table}");`),
+    `no literal rerun-if-changed for ${table}`,
+  );
+  assert.equal(resolve(dir, table), resolve(manifest, "platform-caps.json"));
+}
+for (const [name, source] of [
+  ["no watch", 'configure_caps("platform-caps.json");'],
+  [
+    "another path watched",
+    'println!("cargo:rerun-if-changed=other.json");\nconfigure_caps("platform-caps.json");',
+  ],
+  [
+    "an interpolated watch",
+    'println!("cargo:rerun-if-changed={}", t);\nconfigure_caps("platform-caps.json");',
+  ],
+  ["not the table", 'println!("cargo:rerun-if-changed=caps.json");\nconfigure_caps("caps.json");'],
+]) {
+  test(`table watch guard rejects ${name}`, () =>
+    assert.throws(() => assertTableWatch(source, manifest)));
+}
+for (const crate of [".", "crates/codesense-session-server"]) {
+  test(`${crate}/build.rs watches the capability table it reads`, () => {
+    const dir = resolve(manifest, crate);
+    assertTableWatch(readFileSync(resolve(dir, "build.rs"), "utf8"), dir);
+  });
+}
+
 import { spawnSync } from "node:child_process";
 const generators = [
   ["recipes-manifest", "codesense-docs/getting-started/content/examples"],
