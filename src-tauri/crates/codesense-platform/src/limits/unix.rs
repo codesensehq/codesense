@@ -10,6 +10,9 @@ use std::sync::OnceLock;
 
 use super::{warning, Alarm, Usage, EXEC_ARG};
 
+/// The OS error for a process out of descriptors.
+pub(super) const TOO_MANY_OPEN_FILES: i32 = libc::EMFILE;
+
 /// The soft limit before this process raised it (0: never raised).
 static ORIGINAL: AtomicU64 = AtomicU64::new(0);
 /// This process's own executable, when its entry point serves [`EXEC_ARG`].

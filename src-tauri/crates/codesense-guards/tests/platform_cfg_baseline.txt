@@ -18,7 +18,6 @@ crates/codesense-pty-core/src/activity/inbox.rs 6
 crates/codesense-pty-core/src/activity/ingress.rs 17
 crates/codesense-pty-core/src/activity/launch.rs 18
 crates/codesense-pty-core/src/activity/mod.rs 5
-crates/codesense-pty-core/src/activity/owner.rs 2
 crates/codesense-pty-core/src/activity/process.rs 25
 crates/codesense-pty-core/src/agent_cli/codex.rs 15
 crates/codesense-pty-core/src/agent_cli/hermes/channel.rs 2
@@ -27,15 +26,13 @@ crates/codesense-pty-core/src/agent_cli/hermes/lifecycle.rs 9
 crates/codesense-pty-core/src/agent_cli/version_cache.rs 18
 crates/codesense-pty-core/src/emulator/supervisor.rs 8
 crates/codesense-pty-core/src/fixtures.rs 23
-crates/codesense-pty-core/src/git_prompt.rs 16
 crates/codesense-pty-core/src/inbox_host.rs 4
 crates/codesense-pty-core/src/layout.rs 1
 crates/codesense-pty-core/src/leak_gate.rs 14
 crates/codesense-pty-core/src/notify_hook.rs 6
-crates/codesense-pty-core/src/process.rs 10
 crates/codesense-pty-core/src/protocol.rs 3
 crates/codesense-pty-core/src/remote_workspace.rs 9
-crates/codesense-pty-core/src/runner.rs 26
+crates/codesense-pty-core/src/runner.rs 1
 crates/codesense-pty-core/src/tui_fixture.rs 18
 crates/codesense-session-server/src/askpass.rs 3
 crates/codesense-session-server/src/attach.rs 5

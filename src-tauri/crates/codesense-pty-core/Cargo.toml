@@ -31,7 +31,8 @@ base64 = "0.22"
 blake3 = "1"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 codesense-host-proto = { path = "../codesense-host-proto" }
-# OS mechanisms: executable files, the login shell and the command-line tool lookup.
+# OS mechanisms: process groups and trees, executable files, descriptor exhaustion, the
+# login shell and the command-line tool lookup.
 codesense-platform = { path = "../codesense-platform" }
 libc = "0.2"
 log = "0.4"
@@ -58,6 +59,12 @@ codesense-platform = { path = "../codesense-platform", features = ["testutil"] }
 anyhow = "1"
 tempfile = "3"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
+
+# The process tree the tree-kill test (`tests/process_tree.rs`) starts in a
+# pty, so it needs no shell.
+[[bin]]
+name = "pty-tree-fixture"
+path = "tests/bin/tree_fixture.rs"
 
 [[example]]
 name = "tui_fixture"

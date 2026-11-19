@@ -96,10 +96,10 @@ impl Drop for Engine {
     /// Forgotten (its invocation is), it is ended if it still runs, and its socket goes.
     fn drop(&mut self) {
         if process::inspect(self.process.pid) == Some(self.process) {
-            // SAFETY: signalling the process just identified as this engine.
-            unsafe {
-                libc::kill(self.process.pid as i32, libc::SIGTERM);
-            }
+            // The process just identified as this engine, and it alone.
+            let _ = codesense_platform::process::terminate_pid(
+                codesense_platform::process::Pid::from_raw(self.process.pid),
+            );
         }
         super::engine::remove_socket(&self.endpoint);
     }
@@ -4400,6 +4400,30 @@ mod tests {
         assert_eq!(reach(), None);
         other.kill().unwrap();
         other.wait().unwrap();
+    }
+
+    /// A forgotten engine that still runs is asked to stop, it alone and never its
+    /// group (it shares this test's), and its socket goes.
+    #[test]
+    fn a_forgotten_engine_is_terminated_alone_and_its_socket_removed() {
+        use std::os::unix::process::ExitStatusExt;
+        let dir = tempfile::tempdir().unwrap();
+        let endpoint = dir.path().join("engine.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&endpoint).unwrap();
+        let mut engine = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let process = process::inspect(engine.id()).unwrap();
+        drop(Engine {
+            home: None,
+            process,
+            keeper: process,
+            end_on_loss: false,
+            endpoint: endpoint.clone(),
+        });
+        assert_eq!(engine.wait().unwrap().signal(), Some(libc::SIGTERM));
+        assert!(!endpoint.exists(), "the socket is removed");
     }
 
     #[test]
