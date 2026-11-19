@@ -13,11 +13,11 @@ pub fn codesense_home() -> Option<PathBuf> {
     ::dirs::home_dir().map(|h| h.join(".codesense"))
 }
 
-/// The directory where lock files that several processes of this user meet
-/// on live (the app and its session server, say), there to use. Unix:
-/// `/tmp`. Windows: `<codesense home>\locks`, made owner-only when it is
-/// missing (a fresh install has none), never the temp directory, which
-/// follows `TMP` and `TEMP` and so could differ between two processes.
+/// The directory for the lock files that several processes of this user
+/// share, such as the app and its session server. It exists once this
+/// returns. Unix: `/tmp`. Windows: `<codesense home>\locks`, made owner-only
+/// when it is missing (a fresh install has none), never the temp directory,
+/// which follows `TMP` and `TEMP` and so could differ between two processes.
 /// `NotFound` when the home directory cannot be found.
 pub fn lock_dir() -> io::Result<PathBuf> {
     shared_lock_dir()

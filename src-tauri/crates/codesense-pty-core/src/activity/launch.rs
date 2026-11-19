@@ -5,6 +5,7 @@ use crate::agent_cli::{
     find_settings_flag, ActivityProbe, AgentCli, AgentCliAdapter, LaunchSettings, Prepare,
     SettingsFlagError, ARGV_SLOT,
 };
+use codesense_platform::process::Identity as Process;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
 use std::io::{self, Read, Write};
@@ -74,7 +75,7 @@ fn private_root(socket: &Path) -> Result<&Path, String> {
 /// `peer` runs under, and the private directory for its generated settings.
 pub(super) fn claim_shell_launch(
     owner: &ActivityOwner,
-    peer: super::process::Process,
+    peer: Process,
     provider: AgentCli,
     batch: bool,
 ) -> Result<super::ingress::Claimed, String> {

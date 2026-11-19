@@ -1,10 +1,19 @@
 // SPDX-License-Identifier: MIT
 //! Unix: a process group per tree or adopted group, signalled with
-//! `kill(-pgid, signal)`.
+//! `kill(-pgid, signal)`; process identity from `/proc` on Linux and
+//! `proc_pidinfo` on macOS.
 
 use std::io;
+use std::os::fd::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command};
+use std::time::Duration;
+
+use super::Identity;
+
+/// A live process's parent is live or it was re-parented, so the parent it
+/// reads is never a stale record.
+pub(super) const PARENT_MAY_BE_STALE: bool = false;
 
 /// Put the child in a fresh process group (pgid == its own pid) so the whole
 /// tree can be signalled, not just the leader.
@@ -137,6 +146,129 @@ pub(super) fn group_and_foreground(pid: u32) -> Option<(i32, i32)> {
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub(super) fn group_and_foreground(_pid: u32) -> Option<(i32, i32)> {
+    None
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn inspect(pid: u32) -> Option<Identity> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let fields: Vec<_> = stat.rsplit_once(") ")?.1.split_whitespace().collect();
+    if matches!(*fields.first()?, "Z" | "X") {
+        return None;
+    }
+    Some(Identity {
+        pid,
+        parent: fields.get(1)?.parse().ok()?,
+        start: fields.get(19)?.parse().ok()?,
+    })
+}
+
+#[cfg(target_os = "macos")]
+pub(super) fn inspect(pid: u32) -> Option<Identity> {
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of_val(&info) as i32;
+    // SAFETY: the kernel writes a correctly sized proc_bsdinfo buffer.
+    let read = unsafe {
+        libc::proc_pidinfo(
+            pid as i32,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            (&mut info as *mut libc::proc_bsdinfo).cast(),
+            size,
+        )
+    };
+    (read == size && info.pbi_status != 5).then_some(Identity {
+        pid,
+        parent: info.pbi_ppid,
+        start: info
+            .pbi_start_tvsec
+            .saturating_mul(1_000_000)
+            .saturating_add(info.pbi_start_tvusec),
+    })
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub(super) fn inspect(_: u32) -> Option<Identity> {
+    None
+}
+
+/// Compare the kernel process birth time with `time` since the epoch.
+#[cfg(target_os = "macos")]
+pub(super) fn started_after(start: u64, time: Duration) -> bool {
+    start as u128 >= time.as_micros()
+}
+
+/// Compare the kernel process birth time with `time` since the epoch.
+#[cfg(target_os = "linux")]
+pub(super) fn started_after(start: u64, time: Duration) -> bool {
+    let boot = std::fs::read_to_string("/proc/stat").ok().and_then(|stat| {
+        stat.lines().find_map(|line| {
+            line.strip_prefix("btime ")
+                .and_then(|v| v.parse::<u64>().ok())
+        })
+    });
+    let ticks = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+    boot.is_some_and(|boot| {
+        ticks > 0
+            && boot as u128 * 1_000_000 + start as u128 * 1_000_000 / ticks as u128
+                >= time.as_micros()
+    })
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub(super) fn started_after(_: u64, _: Duration) -> bool {
+    false
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn peer(stream: &impl AsRawFd) -> Option<Identity> {
+    let mut credentials: libc::ucred = unsafe { std::mem::zeroed() };
+    let mut len = std::mem::size_of_val(&credentials) as libc::socklen_t;
+    // SAFETY: SO_PEERCRED fills the bounded credentials buffer.
+    let result = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&mut credentials as *mut libc::ucred).cast(),
+            &mut len,
+        )
+    };
+    if result != 0 || credentials.uid != unsafe { libc::geteuid() } {
+        return None;
+    }
+    inspect(credentials.pid as u32)
+}
+
+#[cfg(target_os = "macos")]
+pub(super) fn peer(stream: &impl AsRawFd) -> Option<Identity> {
+    let (mut uid, mut gid) = (0, 0);
+    // SAFETY: getpeereid writes the two scalar credentials.
+    if unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) } != 0
+        || uid != unsafe { libc::geteuid() }
+    {
+        return None;
+    }
+    let mut pid: libc::pid_t = 0;
+    let mut len = std::mem::size_of_val(&pid) as libc::socklen_t;
+    // Darwin LOCAL_PEERPID is a kernel-authenticated pid (sys/un.h).
+    let result = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            0,
+            2,
+            (&mut pid as *mut libc::pid_t).cast(),
+            &mut len,
+        )
+    };
+    if result != 0 || pid <= 0 {
+        return None;
+    }
+    inspect(pid as u32)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub(super) fn peer(_: &impl AsRawFd) -> Option<Identity> {
     None
 }
 

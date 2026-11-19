@@ -125,10 +125,9 @@ pub fn create_new_owner_only(path: &Path) -> io::Result<File> {
 
 /// Create the directory `path` and any missing parent, each one readable,
 /// writable and searchable by this user only: on unix a recursive
-/// `DirBuilder` with mode 0700; on Windows each directory it creates is
-/// created with [`set_owner_only`]'s protected DACL already on it. A
-/// directory already at `path` or on the way is left as it is; anything else
-/// there is an error.
+/// `DirBuilder` with mode 0700; on Windows each new directory starts out
+/// with [`set_owner_only`]'s protected DACL. A directory already at `path`
+/// or on the way is left as it is; anything else there is an error.
 pub fn create_dir_owner_only(path: &Path) -> io::Result<()> {
     sys::create_dir_owner_only(path, true)
 }

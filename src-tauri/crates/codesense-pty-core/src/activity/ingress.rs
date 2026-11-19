@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-use super::{process, ActivityOwner, Report};
+use super::{ActivityOwner, Report};
 use codesense_host_proto::inbox_wait as wire_inbox;
+use codesense_platform::process::Identity as Process;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
@@ -405,7 +406,7 @@ fn write_all_until(stream: &mut UnixStream, mut bytes: &[u8], deadline: Instant)
 fn receive(mut stream: UnixStream, owner: Arc<ActivityOwner>) -> io::Result<()> {
     let accepted = Instant::now();
     let receive_deadline = accepted + BUDGET;
-    let peer = process::peer(&stream).ok_or_else(invalid)?;
+    let peer = Process::of_unix_peer(&stream).ok_or_else(invalid)?;
     let mut length = [0; 4];
     read_exact_until(&mut stream, &mut length, receive_deadline)?;
     let length = u32::from_be_bytes(length) as usize;
@@ -472,7 +473,7 @@ fn receive(mut stream: UnixStream, owner: Arc<ActivityOwner>) -> io::Result<()> 
 fn serve_inbox(
     mut stream: UnixStream,
     owner: Arc<ActivityOwner>,
-    peer: process::Process,
+    peer: Process,
     token: String,
     ask: super::inbox::Ask,
 ) -> io::Result<()> {
@@ -938,7 +939,7 @@ mod tests {
             .prepare_native("session", AgentCli::Claude, "unused")
             .unwrap();
         owner.register("session", Some(std::process::id()));
-        let peer = process::inspect(std::process::id()).unwrap();
+        let peer = Process::inspect(std::process::id()).unwrap();
         let before = owner.snapshots();
         assert!(owner
             .report(

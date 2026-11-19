@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Process trees: start a command as the root of a tree that is ended as a
 //! whole, ask the tree to stop, kill it, and check whether a pid still runs.
+//! Process identities ([`Identity`]): a pid with its start time and parent.
 //!
 //! Unix: the root leads a fresh process group (its pgid is its pid) and the
 //! tree is signalled through the group, SIGTERM to ask and SIGKILL to end, as
@@ -17,6 +18,7 @@ use std::io;
 use std::process::{Child, Command, ExitStatus};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+mod identity;
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
@@ -25,6 +27,8 @@ use self::unix as sys;
 mod windows;
 #[cfg(windows)]
 use self::windows as sys;
+
+pub use self::identity::Identity;
 
 /// A process id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
