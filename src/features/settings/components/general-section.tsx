@@ -52,7 +52,7 @@ import {
 } from "@/tauri/commands";
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
 import { logger } from "@/shared/lib/logger";
-import { useCapability } from "@/shared/lib/capabilities";
+import { useCapability, type CapabilityKey } from "@/shared/lib/capabilities";
 import { rowMatches, type SettingRowSpec } from "@/features/settings/lib/row-matches";
 import {
   useDashboardProfileStore,
@@ -424,6 +424,31 @@ const GENERAL_ROW_SPECS: Record<string, SettingRowSpec> = {
 
 export const GENERAL_ROW_SPEC_LIST: SettingRowSpec[] = Object.values(GENERAL_ROW_SPECS);
 
+/** The rows whose feature exists only where a capability is on; elsewhere they are hidden. */
+export const GENERAL_ROW_CAPABILITY: Partial<Record<string, CapabilityKey>> = {
+  quitOnClose: "background-on-close",
+  terminalServerMenuBar: "terminal-server-tray",
+};
+
+/**
+ * The General rows this OS has: `GENERAL_ROW_SPEC_LIST` without the rows whose capability is
+ * off. The section, the settings sidebar and the search auto-switch all match against it, so a
+ * hidden row never counts as a match.
+ */
+export function useGeneralRowSpecs(): SettingRowSpec[] {
+  const backgroundOnClose = useCapability("background-on-close").on;
+  const terminalServerTray = useCapability("terminal-server-tray").on;
+  return useMemo(() => {
+    const off = new Set<CapabilityKey>();
+    if (!backgroundOnClose) off.add("background-on-close");
+    if (!terminalServerTray) off.add("terminal-server-tray");
+    return GENERAL_ROW_SPEC_LIST.filter((spec) => {
+      const cap = GENERAL_ROW_CAPABILITY[spec.key];
+      return cap === undefined || !off.has(cap);
+    });
+  }, [backgroundOnClose, terminalServerTray]);
+}
+
 // ---------- General section ----------
 
 export function GeneralSection({ query }: { query: string }) {
@@ -433,17 +458,10 @@ export function GeneralSection({ query }: { query: string }) {
   // Each row's label + keywords is curated for predictable substring hits.
   // A row whose feature doesn't exist on this OS is dropped before counting, so
   // a search for it shows the empty state and announces the right count.
-  const backgroundOnClose = useCapability("background-on-close").on;
-  const terminalServerTray = useCapability("terminal-server-tray").on;
+  const specs = useGeneralRowSpecs();
   const visibleKeys = useMemo(
-    () =>
-      GENERAL_ROW_SPEC_LIST.filter(
-        (spec) =>
-          (spec.key !== "quitOnClose" || backgroundOnClose) &&
-          (spec.key !== "terminalServerMenuBar" || terminalServerTray) &&
-          rowMatches(spec, query),
-      ).map((spec) => spec.key),
-    [query, backgroundOnClose, terminalServerTray],
+    () => specs.filter((spec) => rowMatches(spec, query)).map((spec) => spec.key),
+    [specs, query],
   );
   const visibleCount = visibleKeys.length;
   const visibleSet = new Set(visibleKeys);
@@ -1346,7 +1364,7 @@ function ShellIntegrationRow() {
 // ---------- Publish mode (SW-GS-17) ----------
 
 function QuitOnCloseRow() {
-  // SW-AU-34 (AC-5): default OFF → closing the window hides the app (macOS
+  // Default OFF → closing the window hides the app (macOS
   // dock-resident) and keeps the MCP host + engine alive so an agent can
   // keep driving codesense with no window on screen. On → a window close quits.
   // undefined means "use default (off / background-on-close)".
@@ -1376,7 +1394,7 @@ function QuitOnCloseRow() {
   );
 }
 
-// ---------- Terminal server in the menu bar (SV-8) ----------
+// ---------- Terminal server in the menu bar ----------
 
 function TerminalServerMenuBarRow() {
   // Off by default; undefined reads as off. The push to Rust lives in

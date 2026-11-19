@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /**
- * SV-8: the "Show terminal server in the menu bar" row — off by default, an
+ * The "Show terminal server in the menu bar" row — off by default, an
  * On | Off radio writing `updateSettings({ terminalServerMenuBar })`, shown
  * only where the tray capability is on.
  */
@@ -25,7 +25,7 @@ vi.mock("@/app/update-toast", () => ({ runUpdateCheck: vi.fn() }));
 
 import { GeneralSection } from "./general-section";
 
-describe("GeneralSection — terminal server in the menu bar (SV-8)", () => {
+describe("GeneralSection — terminal server in the menu bar", () => {
   beforeEach(() => {
     setPlatformCaps();
     useViewerStore.setState({

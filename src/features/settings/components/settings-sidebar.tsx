@@ -18,7 +18,7 @@ import { WORKSPACE_ROW_SPECS } from "@/features/settings/components/workspace-se
 import type { SectionKey } from "@/features/settings/lib/types";
 import { rowMatches, type SettingRowSpec } from "@/features/settings/lib/row-matches";
 import { DASHBOARDS_SECTION_SPEC } from "./dashboards-section";
-import { GENERAL_ROW_SPEC_LIST } from "./general-section";
+import { GENERAL_ROW_SPEC_LIST, useGeneralRowSpecs } from "./general-section";
 import { IDENTITY_SECTION_SPECS } from "./identity-section";
 import { REPO_SECTION_SPEC } from "./repo-section";
 import { shortcutRowSpecs } from "./shortcuts-section";
@@ -69,10 +69,16 @@ const SECTION_ROW_SPECS: Record<SectionKey, readonly SettingRowSpec[]> = {
   account: [ACCOUNT_SECTION_SPEC],
 };
 
-/** Returns true if the section has at least one row that matches the query. */
-export function sectionHasContent(key: SectionKey, query: string): boolean {
+/** Returns true if the section has at least one row that matches the query. Pass
+ *  `generalSpecs` (from `useGeneralRowSpecs`) so General's hidden rows never match. */
+export function sectionHasContent(
+  key: SectionKey,
+  query: string,
+  generalSpecs?: readonly SettingRowSpec[],
+): boolean {
   if (!query.trim()) return true;
-  return SECTION_ROW_SPECS[key].some((spec) => rowMatches(spec, query));
+  const specs = key === "general" && generalSpecs ? generalSpecs : SECTION_ROW_SPECS[key];
+  return specs.some((spec) => rowMatches(spec, query));
 }
 
 // ---------- Component ----------
@@ -90,9 +96,10 @@ export function SettingsSidebar({
   query,
   collapsed,
 }: SettingsSidebarProps) {
+  const generalSpecs = useGeneralRowSpecs();
   const enabledItems = SECTION_NAV_ITEMS.map((item) => ({
     ...item,
-    enabled: sectionHasContent(item.key, query),
+    enabled: sectionHasContent(item.key, query, generalSpecs),
   }));
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {

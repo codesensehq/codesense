@@ -63,6 +63,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { checkForUpdate } from "@/tauri/commands";
 import { SettingsPanel } from "./settings-panel";
 import { resetDetectedEditorsCache } from "@/shared/hooks/use-detected-editors";
+import { resetPlatformCaps, setPlatformCaps } from "@/shared/lib/__test-utils__/platform-caps";
 
 const realUpdateSettings = useViewerStore.getState().updateSettings;
 
@@ -1068,5 +1069,34 @@ describe("C.6d — legacy reference sweep (AC-15)", () => {
 
     walk(ROOT);
     expect(offenders).toEqual([]);
+  });
+});
+
+describe("SettingsPanel — search with General rows hidden by a capability", () => {
+  afterEach(() => resetPlatformCaps());
+
+  async function searchFromAppearance(value: string) {
+    useUiStore.setState({ settingsInitialSection: "appearance" });
+    await act(async () => {
+      render(<SettingsPanel />);
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("settings-search-input"), { target: { value } });
+    });
+  }
+
+  it("a hidden row neither lights General nor pulls the search there", async () => {
+    setPlatformCaps({ "background-on-close": "r", "terminal-server-tray": "r" });
+    await searchFromAppearance("quit");
+    expect(screen.getByTestId("settings-nav-general")).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByTestId("settings-nav-appearance")).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("with the capability on, the same search switches to General", async () => {
+    setPlatformCaps();
+    await searchFromAppearance("quit");
+    expect(screen.getByTestId("settings-nav-general")).not.toHaveAttribute("aria-disabled");
+    expect(screen.getByTestId("settings-nav-general")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("settings-quit-on-close")).toBeInTheDocument();
   });
 });
