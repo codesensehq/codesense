@@ -5281,6 +5281,12 @@ mod tests {
             )),
             Path::new("/home/dev/.codesense/host/v1/codesense-emulator")
         );
+        assert_eq!(
+            emulator_worker_beside(Path::new(
+                "/repo/src-tauri/binaries/codesense-session-server-x86_64-pc-windows-msvc.exe"
+            )),
+            Path::new("/repo/src-tauri/binaries/codesense-emulator-x86_64-pc-windows-msvc.exe")
+        );
     }
 
     #[test]
