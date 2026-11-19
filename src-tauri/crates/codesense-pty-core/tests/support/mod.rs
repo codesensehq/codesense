@@ -36,11 +36,15 @@ pub fn worker_path() -> PathBuf {
         ))
 }
 
-/// Whether a missing worker fails the tests rather than skipping them:
-/// `CI=1` (or `true`), or `CODESENSE_REQUIRE_EMULATOR=1`.
-pub fn worker_required() -> bool {
+/// Whether the tests run under CI: `CI=1` (or `true`).
+pub fn in_ci() -> bool {
     std::env::var_os("CI").is_some_and(|v| v == "1" || v == "true")
-        || std::env::var_os("CODESENSE_REQUIRE_EMULATOR").is_some_and(|v| v == "1")
+}
+
+/// Whether a missing worker fails the tests rather than skipping them: under
+/// CI, or with `CODESENSE_REQUIRE_EMULATOR=1`.
+pub fn worker_required() -> bool {
+    in_ci() || std::env::var_os("CODESENSE_REQUIRE_EMULATOR").is_some_and(|v| v == "1")
 }
 
 /// The worker, or `None` (with a note) when this machine has none and nothing
