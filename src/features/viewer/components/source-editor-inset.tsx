@@ -1057,7 +1057,7 @@ function shallowEqualStatus(a: PaneStatus, b: PaneStatus): boolean {
 
 /** No file open: say what the editor does and how to start, rather than an
  *  empty pane. */
-function EmptyWorkbench({ onQuickOpen }: { onQuickOpen: () => void }) {
+export function EmptyWorkbench({ onQuickOpen }: { onQuickOpen: () => void }) {
   return (
     <EditorStateMessage title="No file open" testId="worktree-empty">
       <p className="max-w-[36ch] text-xs text-muted-foreground">
