@@ -26,6 +26,8 @@ use codesense_platform::process::{Pid, ProcessGroup};
 use log::{error, warn};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
+mod cursor_reply;
+
 /// How long the exit seam waits, after the reader reaches end-of-stream, for the
 /// child to become reapable so `pty-exit` can carry its real status. A shell's
 /// slave fds close as it exits, so the status is normally ready at once.
@@ -573,7 +575,16 @@ fn open_local_session(spec: PtySpec) -> Result<PtySession, PtyRunnerError> {
             error!(target: "pty", "spawn_pty: failed to spawn command: {}", error);
             PtyRunnerError::Message(format!("Failed to spawn: {}", plainly(&*error)))
         })?;
-    let session = PtySession::new(pair.master, child, reader, writer);
+    let mut session = PtySession::new(pair.master, child, reader, writer);
+    // A Windows pseudo console asks where the cursor is as it starts, and
+    // serves its child only once answered: answer it here, so no session
+    // waits on a viewer (see `cursor_reply`). A unix pty asks nothing.
+    if std::env::consts::OS == "windows" {
+        let writer = session.writer();
+        session.reader = session.reader.take().map(|reader| {
+            Box::new(cursor_reply::CursorReply::new(reader, writer)) as Box<dyn Read + Send>
+        });
+    }
     // A Windows pseudo console keeps its output pipe open after its child
     // exits, until the console is closed, so the reader would never reach
     // end-of-stream and the exit would never be reported. Close it once the
