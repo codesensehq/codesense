@@ -63,10 +63,6 @@ export const BYTE_SENSITIVE = new Map([
     "a fragment spliced verbatim into kit.js and cs-live.js",
   ],
   [
-    "src-tauri/src/http/routes/dashboard_kit/editor.js",
-    "build:kit-editor output; line 1 is its digest stamp",
-  ],
-  [
     "src-tauri/src/http/routes/dashboard_kit/editor.css",
     "build:kit-editor output; line 1 is its digest stamp",
   ],

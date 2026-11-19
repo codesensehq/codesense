@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { expect, it } from "vitest";
 
@@ -9,7 +9,10 @@ it("keeps the committed editor current, standalone, CSP-compatible and within bu
     execFileSync("pnpm", ["build:kit-editor", "--check"], { cwd: process.cwd(), stdio: "pipe" }),
   ).not.toThrow();
   const path = "src-tauri/src/http/routes/dashboard_kit/";
-  const js = readFileSync(path + "editor.js", "utf8"),
+  // The bundle is third-party library code; the .min.js name keeps code scanning's
+  // JavaScript extractor from analyzing it. It is still served as /kit/v1/editor.js.
+  expect(existsSync(path + "editor.js")).toBe(false);
+  const js = readFileSync(path + "editor.min.js", "utf8"),
     css = readFileSync(path + "editor.css", "utf8");
   expect(js.split("\n")[0]).toBe(css.split("\n")[0]);
   expect(js).not.toMatch(/\beval\s*\(|\bnew\s+Function\s*\(/);
