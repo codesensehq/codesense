@@ -787,79 +787,67 @@ fn session_hook_trust(
 /// serialize on an owner-only lock; a native config rewrite is detected and retried.
 /// Never follow a replaced/symlinked config or truncate a malformed file.
 fn save_hook_trust(home: &Path, grants: &[(String, String)]) -> io::Result<()> {
+    use codesense_platform::fs::{self as platform_fs, FileId, Open};
     use std::fs::{self, OpenOptions};
     use std::io::{Read, Write};
-    use std::os::fd::AsRawFd;
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     let invalid = || io::Error::other("Codex hook trust config is not an owned regular TOML file");
     fs::create_dir_all(home)?;
-    let directory = fs::metadata(home)?;
+    // The home's links are followed, so a symlinked home (a dotfile manager's) is checked
+    // where it leads, as the user's own.
+    let directory = platform_fs::open_nofollow(
+        OpenOptions::new().read(true),
+        &platform_fs::canonicalize(home)?,
+    )?;
     // Native homes commonly inherit umask 002 (0775). Group writability alone
     // does not invalidate the account-owned config; each file is checked below.
-    if !directory.is_dir()
-        || directory.uid() != unsafe { libc::geteuid() }
-        || directory.mode() & 0o002 != 0
+    if !directory.metadata()?.is_dir()
+        || !platform_fs::is_owned_by_current_user(&directory)?
+        || platform_fs::is_world_writable(&directory)?
     {
         return Err(invalid());
     }
     let config = home.join("config.toml");
-    let lock = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(home.join(".codesense-hook-trust.lock"))?;
-    let meta = lock.metadata()?;
-    if !meta.is_file() || meta.uid() != unsafe { libc::geteuid() } || meta.nlink() != 1 {
+    let lock =
+        platform_fs::create_owner_only(&home.join(".codesense-hook-trust.lock"), Open::NoFollow)?;
+    if !lock.metadata()?.is_file()
+        || !platform_fs::is_owned_by_current_user(&lock)?
+        || platform_fs::link_count(&lock)? != 1
+    {
         return Err(invalid());
     }
     let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        // SAFETY: flock borrows this live descriptor; closing it releases our lock.
-        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-            break;
-        }
-        let error = io::Error::last_os_error();
-        if error.kind() != io::ErrorKind::WouldBlock || Instant::now() >= deadline {
-            return Err(error);
+    // Closing the lock file releases the lock.
+    while !platform_fs::try_lock_exclusive(&lock)? {
+        if Instant::now() >= deadline {
+            return Err(io::ErrorKind::WouldBlock.into());
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    let stamp = |metadata: &fs::Metadata| {
-        (
-            metadata.dev(),
-            metadata.ino(),
-            metadata.len(),
-            metadata.modified().ok(),
-        )
-    };
+    let stamp =
+        |id: FileId, metadata: &fs::Metadata| (id, metadata.len(), metadata.modified().ok());
     for _ in 0..3 {
-        let (text, previous) = match OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(&config)
-        {
-            Ok(file) => {
-                let metadata = file.metadata()?;
-                if !metadata.is_file()
-                    || metadata.uid() != unsafe { libc::geteuid() }
-                    || metadata.nlink() != 1
-                    || metadata.len() > 1024 * 1024
-                {
-                    return Err(invalid());
+        let (text, previous) =
+            match platform_fs::open_nofollow_nonblocking(OpenOptions::new().read(true), &config) {
+                Ok(file) => {
+                    let metadata = file.metadata()?;
+                    if !metadata.is_file()
+                        || !platform_fs::is_owned_by_current_user(&file)?
+                        || platform_fs::link_count(&file)? != 1
+                        || metadata.len() > 1024 * 1024
+                    {
+                        return Err(invalid());
+                    }
+                    let id = platform_fs::file_id_of(&file)?;
+                    let mut text = String::new();
+                    file.take(1024 * 1024 + 1).read_to_string(&mut text)?;
+                    if text.len() > 1024 * 1024 {
+                        return Err(invalid());
+                    }
+                    (text, Some(stamp(id, &metadata)))
                 }
-                let mut text = String::new();
-                file.take(1024 * 1024 + 1).read_to_string(&mut text)?;
-                if text.len() > 1024 * 1024 {
-                    return Err(invalid());
-                }
-                (text, Some(stamp(&metadata)))
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => (String::new(), None),
-            Err(error) => return Err(error),
-        };
+                Err(error) if error.kind() == io::ErrorKind::NotFound => (String::new(), None),
+                Err(error) => return Err(error),
+            };
         let mut document: toml_edit::Document = text.parse().map_err(|_| invalid())?;
         for (key, hash) in grants {
             let mut table: &mut dyn toml_edit::TableLike = document.as_table_mut();
@@ -882,15 +870,11 @@ fn save_hook_trust(home: &Path, grants: &[(String, String)]) -> io::Result<()> {
         }
         let temporary = home.join(format!(".codesense-hooks-{}.tmp", uuid::Uuid::new_v4()));
         let result = (|| {
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&temporary)?;
+            let mut file = platform_fs::create_new_owner_only(&temporary)?;
             file.write_all(next.as_bytes())?;
             file.sync_all()?;
-            let current = match fs::symlink_metadata(&config) {
-                Ok(metadata) => Some(stamp(&metadata)),
+            let current = match platform_fs::file_id(&config) {
+                Ok(id) => Some(stamp(id, &fs::symlink_metadata(&config)?)),
                 Err(error) if error.kind() == io::ErrorKind::NotFound => None,
                 Err(error) => return Err(error),
             };
@@ -961,13 +945,10 @@ pub(super) fn locate_rollout(home: &Path, session_id: &str) -> Option<std::path:
 fn session_record(home: &Path, session_id: &str) -> Option<output::SessionRecord> {
     use std::fs;
     use std::io::{BufRead, Read, Seek, SeekFrom};
-    use std::os::unix::fs::OpenOptionsExt;
     let path = locate_rollout(home, session_id)?;
-    let mut file = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-        .ok()?;
+    let mut file =
+        codesense_platform::fs::open_nofollow_nonblocking(fs::OpenOptions::new().read(true), &path)
+            .ok()?;
     if !file.metadata().ok()?.is_file() {
         return None;
     }
