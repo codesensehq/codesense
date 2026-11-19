@@ -122,7 +122,7 @@ fn parent_of(
     if child.parent == 0 || child.parent == child.pid {
         return None;
     }
-    inspect(child.parent).filter(|parent| !(may_be_stale && parent.start > child.start))
+    inspect(child.parent).filter(|parent| !may_be_stale || parent.start <= child.start)
 }
 
 /// Walk from `peer` up through the parents `inspect` reads until `root`, each read as

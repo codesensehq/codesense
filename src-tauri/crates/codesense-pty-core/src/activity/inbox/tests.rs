@@ -148,7 +148,7 @@ fn under_shells(depth: u32) -> Shell {
     use std::io::BufRead;
     const CHAIN: &str = r#"if [ "$1" -gt 0 ]; then /bin/sh -c "$0" "$0" $(($1 - 1)) & wait; else sleep 30 & echo $!; wait; fi"#;
     let mut shell = std::process::Command::new("/bin/sh")
-        .args(["-c", CHAIN, CHAIN, &depth.to_string()])
+        .args(["-c", CHAIN, CHAIN, depth.to_string().as_str()])
         .stdout(std::process::Stdio::piped())
         .spawn()
         .unwrap();
