@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: MIT
+// Declared by the unix transport, a `cfg_attr` path the cfg ratchet guard does not
+// follow; the attribute below tells it this file is test code.
+#![cfg(test)]
 use super::*;
 use crate::activity::ActivityService;
 use crate::domain::InboxWaiterState;

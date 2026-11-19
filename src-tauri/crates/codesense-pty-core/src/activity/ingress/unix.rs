@@ -16,7 +16,6 @@ use std::sync::{
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-/// The helper's connection to its host once it asked for its agent's inbox notice.
 pub(crate) type Connection = UnixStream;
 
 /// RAII lifetime is the owning host, not any desktop transport connection.

@@ -13,6 +13,8 @@ use std::time::Duration;
 mod transport;
 
 pub use transport::ActivityService;
+/// A helper's connection to its host, once it asked for its agent's inbox notice.
+pub(super) use transport::Connection;
 
 pub const SOCKET_ENV: &str = "CODESENSE_ACTIVITY_SOCKET";
 pub const TOKEN_ENV: &str = "CODESENSE_ACTIVITY_TOKEN";
@@ -176,6 +178,6 @@ pub(super) fn ask_inbox(
     socket: &Path,
     token: &str,
     ask: super::inbox::Ask,
-) -> io::Result<transport::Connection> {
+) -> io::Result<Connection> {
     transport::ask_inbox(socket, token, ask)
 }
