@@ -4,7 +4,9 @@ import { describe, expect, it } from "vitest";
 import type { TeamFileEdit, TeamFileEditsStatus, TeamFileEditsWorkspace } from "@/tauri/commands";
 
 import {
+  baseName,
   counterSentence,
+  dirName,
   counterVisible,
   discardSentence,
   fileActions,
@@ -181,4 +183,20 @@ it("does not count conflicts lost with a missing folder", () => {
   expect(counterSentence(status([missing, local([file("a.md", "changed")])], 1))).not.toContain(
     "changed here and in the team too",
   );
+});
+
+describe("baseName and dirName", () => {
+  it.each([
+    ["notes/plan.md", "plan.md", "notes"],
+    ["a/b/c.md", "c.md", "a/b"],
+    ["plan.md", "plan.md", ""],
+    ["/plan.md", "plan.md", ""],
+    ["", "", ""],
+    ["notes\\plan.md", "plan.md", "notes"],
+    ["C:\\work\\notes\\plan.md", "plan.md", "C:\\work\\notes"],
+    ["C:\\plan.md", "plan.md", ""],
+  ])("%s → %s in %s", (path, name, dir) => {
+    expect(baseName(path)).toBe(name);
+    expect(dirName(path)).toBe(dir);
+  });
 });

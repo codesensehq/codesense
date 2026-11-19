@@ -9,6 +9,7 @@ import {
 } from "@/features/dashboard/components/viewer-chrome";
 import { useWorktreeRosterStore } from "@/features/viewer/stores/worktree-roster-store";
 import { useFileDiffModes } from "@/shared/hooks/use-file-diff-modes";
+import { relative } from "@/shared/lib/path";
 import { renderFileDiff, type FileDiffState } from "@/shared/lib/render-file-diff";
 import { getViewerFileType } from "@/shared/lib/viewer-file-type";
 import { useFileRefreshStore } from "@/shared/stores/file-refresh-store";
@@ -81,7 +82,7 @@ export function MarkdownRedlineViewer({
     (s): Set<string> | null => s.lastChangedContextFile[navRepoPath] ?? null,
   );
   const contextWorktree = useWorktreeRosterStore((s) =>
-    s.rows?.find((row) => row.kind === "context" && absPath.startsWith(`${row.path}/`)),
+    s.rows?.find((row) => row.kind === "context" && !!relative(row.path, absPath)),
   );
   const { modes, setMode } = useFileDiffModes();
   const scrollRef = useRef<HTMLDivElement>(null);

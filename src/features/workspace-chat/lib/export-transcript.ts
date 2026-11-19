@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import { join } from "@/shared/lib/path";
 import type { WorkspaceChatMessage } from "@/tauri/commands";
 import { writeContentFile } from "@/tauri/commands";
 
@@ -76,9 +77,7 @@ export async function exportTranscript(options: ExportTranscriptOptions): Promis
   const body = renderTranscript(options);
   const filename = transcriptFilename(options.workspaceId);
   // The content root is the team's content path (e.g. codesense-context/.../content).
-  // Join with "/" — paths on both macOS and Windows accept forward slashes under
-  // writeContentFile's path validation.
-  const path = `${options.teamContentPath.replace(/\/+$/, "")}/transcripts/${filename}`;
+  const path = join(options.teamContentPath, "transcripts", filename);
   await writeContentFile(path, body);
   return path;
 }

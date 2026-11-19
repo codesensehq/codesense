@@ -42,6 +42,11 @@ describe("computeChildTarget", () => {
     expect(computeChildTarget("/team/content/impl", "new.md")).toBe("/team/content/impl/new.md");
     expect(computeChildTarget("/team/content/impl/", "new.md")).toBe("/team/content/impl/new.md");
   });
+  it("joins a Windows dir with its own separator", () => {
+    expect(computeChildTarget("C:\\team\\content\\impl\\", "new.md")).toBe(
+      "C:\\team\\content\\impl\\new.md",
+    );
+  });
   it("returns null for an invalid name", () => {
     expect(computeChildTarget("/x", "sub/b.md")).toBeNull();
     expect(computeChildTarget("/x", "")).toBeNull();
@@ -59,6 +64,9 @@ describe("computeRenameTarget", () => {
   });
   it("renames a directory (trailing slash tolerated)", () => {
     expect(computeRenameTarget("/x/epic-old/", "epic-new")).toBe("/x/epic-new");
+  });
+  it("renames a Windows path in its own directory", () => {
+    expect(computeRenameTarget("C:\\x\\epic-old\\", "epic-new")).toBe("C:\\x\\epic-new");
   });
   it("rejects names with separators or traversal", () => {
     expect(computeRenameTarget("/x/a.md", "sub/b.md")).toBeNull();

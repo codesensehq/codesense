@@ -140,6 +140,7 @@ function StartupPicker({
     setTypedFilter("");
     setFilter("");
   };
+  // eslint-disable-next-line no-restricted-syntax -- logical path: content-relative, never has backslashes
   const crumbs = dir ? dir.split("/") : [];
   return (
     <div
@@ -188,6 +189,7 @@ function StartupPicker({
             </li>
           )}
           {catalog.entries.map((entry) => {
+            // eslint-disable-next-line no-restricted-syntax -- logical path: content-relative, never has backslashes
             const name = entry.path.slice(entry.path.lastIndexOf("/") + 1);
             return (
               <li

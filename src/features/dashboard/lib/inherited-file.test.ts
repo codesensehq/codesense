@@ -35,6 +35,23 @@ describe("inherited-file paths (SW-XS-20)", () => {
     expect(parentMoveDir(FILE, "platform", "", ACTIVE)).toBe("/u/orgs/acme/platform/content");
     expect(parentMoveDir(FILE, "other", "", ACTIVE)).toBeNull();
   });
+
+  it("maps Windows paths with their own separator", () => {
+    const winFile = "C:\\u\\orgs\\acme\\platform\\content\\rules\\deep\\r.md";
+    const winActive = "C:\\u\\orgs\\acme\\default\\content";
+    expect(teamContentRoot(`${winActive}\\`, "platform")).toBe(
+      "C:\\u\\orgs\\acme\\platform\\content",
+    );
+    expect(pathInTeamContent(winFile, "platform", winActive)).toBe("rules/deep/r.md");
+    expect(pathInTeamContent(winFile, "other", winActive)).toBeNull();
+    expect(teamCopyPath(winFile, "platform", winActive)).toBe(`${winActive}\\rules\\deep\\r.md`);
+    expect(parentMoveDir(winFile, "platform", "notes/a", winActive)).toBe(
+      "C:\\u\\orgs\\acme\\platform\\content\\notes\\a",
+    );
+    expect(
+      parentMoveDir("C:\\u\\orgs\\acme\\platform\\content", "platform", "", winActive),
+    ).toBeNull();
+  });
 });
 
 describe("copyIntoTeam (SW-XS-20)", () => {

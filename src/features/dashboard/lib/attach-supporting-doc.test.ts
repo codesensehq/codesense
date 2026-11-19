@@ -25,6 +25,14 @@ describe("relativeSupportingDocPath", () => {
       "../other/d.excalidraw",
     );
   });
+  it("works on Windows drive paths and keeps the ref `/`-joined", () => {
+    expect(
+      relativeSupportingDocPath("C:\\ctx\\epic\\story.md", "C:\\ctx\\epic\\art\\d.excalidraw"),
+    ).toBe("./art/d.excalidraw");
+    expect(
+      relativeSupportingDocPath("C:\\ctx\\epic\\story.md", "C:\\ctx\\other\\d.excalidraw"),
+    ).toBe("../other/d.excalidraw");
+  });
 });
 
 describe("upsertSupportingDoc", () => {

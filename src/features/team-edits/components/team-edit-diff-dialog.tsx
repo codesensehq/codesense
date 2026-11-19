@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { useFileDiffModes } from "@/shared/hooks/use-file-diff-modes";
 import { getErrorMessage } from "@/shared/lib/error-message";
+import { join } from "@/shared/lib/path";
 import {
   IMAGE_UNAVAILABLE,
   renderFileDiff,
@@ -74,8 +75,7 @@ function readThisMacSide(path: string): Promise<Side> {
 function readWorkspaceSide(ws: TeamFileEditsWorkspace, file: TeamFileEdit): Promise<Side> {
   if (file.kind === "removed") return Promise.resolve({ missing: true });
   if (ws.target.kind === "local") {
-    const root = ws.target.codeRepoPath.replace(/\/+$/, "");
-    return readThisMacSide(`${root}/${file.path}`);
+    return readThisMacSide(join(ws.target.codeRepoPath, file.path));
   }
   const { machineId, workspaceHandle } = ws.target;
   const read = () => sourceRemoteFileRead(machineId, workspaceHandle, file.path);

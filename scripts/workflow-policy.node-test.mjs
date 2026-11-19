@@ -1432,7 +1432,7 @@ test("test build: the Linux smoke tests each build's packages on its own runner"
   const appImage = runs.filter(([run]) => /smoke-linux\.sh (run|variant)/.test(run));
   assert.deepEqual(
     appImage.map(([run]) => run.match(/smoke-linux\.sh (run|variant \S+)/)[1]),
-    ["run", "variant dmabuf", "variant no-dbus"],
+    ["run", "variant dmabuf", "variant no-dbus", "variant webgl"],
   );
   for (const [, condition] of appImage) assert.equal(condition, "matrix.appimage");
   const check = jobs["linux-app"].steps.find((step) => step.name === "Check scripts");

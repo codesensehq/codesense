@@ -247,6 +247,103 @@ fn gateway_connect_mints_a_private_ticket_and_queued_is_not_consumption_or_readi
 }
 
 #[test]
+fn gateway_connect_refuses_a_control_socket_or_home_others_may_reach() {
+    use super::gateway_fixture::{GatewayFixture, McpServer};
+    use std::os::unix::fs::PermissionsExt;
+    let home = tempfile::tempdir_in("/tmp").unwrap();
+    let endpoint = home.path().join("engine.sock");
+    let _gateway = GatewayFixture::start(home.path(), &endpoint, || McpServer {
+        connected: true,
+        tools: 1,
+    });
+    let control = home.path().join("gateway.sock");
+    let set = |path: &std::path::Path, mode| {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap()
+    };
+    assert!(channel::resolve(home.path()).is_ok());
+    for mode in [0o660, 0o606] {
+        set(&control, mode);
+        assert!(channel::resolve(home.path()).is_err(), "socket {mode:o}");
+        assert!(
+            channel::connect(&endpoint, None, Some(home.path())).is_err(),
+            "socket {mode:o}"
+        );
+    }
+    set(&control, 0o600);
+    set(home.path(), 0o750);
+    assert!(channel::resolve(home.path()).is_err(), "home 750");
+    set(home.path(), 0o700);
+    assert!(channel::connect(&endpoint, None, Some(home.path())).is_ok());
+}
+
+#[test]
+fn a_fifo_at_the_socket_pointer_is_refused_without_waiting() {
+    let home = tempfile::tempdir_in("/tmp").unwrap();
+    let pointer = home.path().join("gateway.sock.path");
+    let made = std::process::Command::new("mkfifo")
+        .args(["-m", "600"])
+        .arg(&pointer)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let (done, finished) = std::sync::mpsc::channel();
+    let path = home.path().to_owned();
+    std::thread::spawn(move || {
+        let _ = done.send(channel::resolve(&path).is_err());
+    });
+    assert_eq!(
+        finished.recv_timeout(std::time::Duration::from_secs(5)),
+        Ok(true),
+        "refused at once, not left waiting for a writer"
+    );
+}
+
+#[test]
+fn gateway_resolve_refuses_a_linked_home_and_a_linked_or_shared_pointer() {
+    use super::gateway_fixture::{GatewayFixture, McpServer};
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let set = |path: &std::path::Path, mode| {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap()
+    };
+    let home = tempfile::tempdir_in("/tmp").unwrap();
+    let endpoint = home.path().join("engine.sock");
+    let _gateway = GatewayFixture::start(home.path(), &endpoint, || McpServer {
+        connected: true,
+        tools: 1,
+    });
+    assert!(channel::resolve(home.path()).is_ok());
+    let links = tempfile::tempdir_in("/tmp").unwrap();
+    let linked = links.path().join("home");
+    symlink(home.path(), &linked).unwrap();
+    assert!(channel::resolve(&linked).is_err(), "a linked home");
+
+    // The control socket moved to a private directory that a pointer names.
+    let control = home.path().join("gateway.sock");
+    let sockets = home.path().join("sockets");
+    std::fs::create_dir(&sockets).unwrap();
+    set(&sockets, 0o700);
+    let moved = sockets.join("gateway.sock");
+    std::fs::rename(&control, &moved).unwrap();
+    let pointer = home.path().join("gateway.sock.path");
+    std::fs::write(&pointer, moved.to_str().unwrap()).unwrap();
+    set(&pointer, 0o600);
+    assert!(channel::resolve(home.path()).is_ok(), "a private pointer");
+    set(&pointer, 0o644);
+    assert!(
+        channel::resolve(home.path()).is_err(),
+        "a pointer others may read"
+    );
+    std::fs::remove_file(&pointer).unwrap();
+    let target = home.path().join("pointer-target");
+    std::fs::write(&target, moved.to_str().unwrap()).unwrap();
+    set(&target, 0o600);
+    symlink(&target, &pointer).unwrap();
+    assert!(channel::resolve(home.path()).is_err(), "a linked pointer");
+    // Back where the fixture's drop reaches it.
+    std::fs::rename(&moved, &control).unwrap();
+}
+
+#[test]
 fn probed_policy_and_hook_folding_are_pinned() {
     let control = Hermes.control();
     assert!(control.native_readiness && control.bracketed_paste);

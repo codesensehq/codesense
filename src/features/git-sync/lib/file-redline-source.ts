@@ -8,6 +8,7 @@
  * viewer (and any git-sync consumer) never touches `invoke` directly.
  */
 
+import { relative } from "@/shared/lib/path";
 import { getFileRedline as invokeGetFileRedline } from "@/tauri/commands";
 
 import type { FileRedline } from "./types";
@@ -20,10 +21,7 @@ import type { FileRedline } from "./types";
  */
 export function stripOrgRoot(absPath: string, orgRoot: string | null): string | null {
   if (!orgRoot) return null;
-  const root = orgRoot.endsWith("/") ? orgRoot.slice(0, -1) : orgRoot;
-  if (absPath === root) return "";
-  const prefix = `${root}/`;
-  return absPath.startsWith(prefix) ? absPath.slice(prefix.length) : null;
+  return relative(orgRoot, absPath);
 }
 
 /**

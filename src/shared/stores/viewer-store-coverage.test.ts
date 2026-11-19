@@ -1041,6 +1041,56 @@ describe("viewer-store coverage", () => {
       expect(expanded).toContain(PIPELINE_ROOT_ABS);
     });
 
+    describe("on a C:\\ content root", () => {
+      const root = "C:\\ctx\\default\\content";
+      const drill = `${root}\\stories`;
+
+      beforeEach(() => {
+        // The org lives on C:\ too, so the team's own content dir is `root`.
+        useOrgStore.setState((s) => ({
+          orgs: s.orgs.map((o) => (o.slug === "test-org" ? { ...o, org_root: "C:\\ctx" } : o)),
+        }));
+        useConfigStore.setState({
+          repos: [
+            {
+              repoPath: REPO,
+              repoName: "repo",
+              contextRepoPath: "C:\\ctx",
+              teamContentPath: root,
+              hasRemote: false,
+              remoteUrl: null,
+              mainDoc: "",
+            },
+          ],
+        });
+        useViewerStore.setState({
+          drillPaths: { [REPO]: drill },
+          statusNavExpandedPaths: { [REPO]: [] },
+        });
+      });
+
+      it("openFile keeps the drill and expands the file's folders", () => {
+        useViewerStore.getState().openFile(REPO, REPO, `${drill}\\epic\\a.md`);
+
+        expect(useViewerStore.getState().drillPaths[REPO]).toBe(drill);
+        expect(useViewerStore.getState().statusNavExpandedPaths[REPO]).toEqual([
+          `${drill}\\epic`,
+          drill,
+        ]);
+      });
+
+      it("openFile of a README outside the scope clears the scope", () => {
+        useViewerStore.setState({
+          drillPaths: { [REPO]: root },
+          pipelineScope: { [REPO]: "stories/epic" },
+        });
+
+        useViewerStore.getState().openFile(REPO, REPO, `${root}\\docs\\README.md`);
+
+        expect(useViewerStore.getState().pipelineScope[REPO]).toBe("");
+      });
+    });
+
     it("toggleStatusNavPinPersonal adds then removes a personal pin, per team", () => {
       const TEAM = "org:team-pin";
       useViewerStore.setState({ statusNavPinnedPaths: {} });

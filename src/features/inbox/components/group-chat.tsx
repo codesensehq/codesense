@@ -13,6 +13,7 @@ import { useWorkspaceChatActions } from "@/features/workspace-chat/hooks/use-wor
 import { useWorkspaceChat } from "@/features/workspace-chat/hooks/use-workspace-chat";
 import { useChatHumanView } from "@/features/workspace-chat/hooks/use-chat-human-view";
 import { useInboxSessions } from "../hooks/use-inbox-sessions";
+import { roomName } from "../lib/room-label";
 import { initials, middleTruncate, participant } from "../model";
 import { inboxDrafts, useInboxView } from "./inbox-view-context";
 import { Ico, navRow } from "./primitives";
@@ -57,13 +58,7 @@ export function useRoomLabel(workspaceId: string) {
           chatIdForWorkspace(w) === workspaceId ||
           (storyId && w.storyId === storyId),
       );
-    const name =
-      ws?.storyTitle ||
-      ws?.storyId ||
-      ws?.epicDocPath ||
-      ws?.cwd?.split("/").filter(Boolean).at(-1) ||
-      storyId ||
-      workspaceId.replace(/^generic:/, "");
+    const name = roomName(ws, storyId, workspaceId);
     return { name, short: ws?.storyId || storyId || middleTruncate(name, 24) };
   }, [workspaces, workspaceId]);
 }

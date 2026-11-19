@@ -2,6 +2,7 @@
 import { toast as sonnerToast } from "sonner";
 
 import { readFile, writeBinaryFile } from "@/tauri/commands";
+import { basename } from "@/shared/lib/path";
 import { stripViewerExtension } from "@/shared/lib/viewer-file-type";
 import { blobToBase64 } from "@/shared/lib/blob-to-base64";
 import {
@@ -83,17 +84,12 @@ const defaultDeps: ExportCanvasDeps = {
   toast: sonnerToast as unknown as ToastLike,
 };
 
-function basenameOf(path: string): string {
-  const slash = path.lastIndexOf("/");
-  return slash >= 0 ? path.slice(slash + 1) : path;
-}
-
 /**
  * AC-4: the canvas basename with its `.excalidraw` extension swapped for the
  * export format — `…/design.excalidraw` → `design.png` / `design.svg`.
  */
 export function exportDefaultFilename(canvasPath: string, format: ExportCanvasFormat): string {
-  return `${stripViewerExtension(basenameOf(canvasPath))}.${format}`;
+  return `${stripViewerExtension(basename(canvasPath))}.${format}`;
 }
 
 async function renderBase64(
