@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { applyFieldPatch } from "@/shared/lib/field-patch";
+import { CAPABILITY_KEYS } from "@/shared/lib/capabilities";
 import { CODESENSE_DOCS_README, CODESENSE_DOCS_TEAM } from "@/shared/lib/codesense-docs";
 import type { HandlerRegistry } from "../mock-router";
 import type { Org, Team } from "@/shared/types/domain";
@@ -71,6 +72,8 @@ export function bootHandlers(scenario: MockScenario): HandlerRegistry {
     // The mock user is the selected local profile, so every principal-scoped read
     // (persisted state, shortcuts, watchers) resolves to them.
     local_profile_status: () => mockLocalProfileStatus,
+    // Which optional features this OS supports: macOS, every one on.
+    get_platform_caps: () => CAPABILITY_KEYS.map((key) => ({ key, on: true, reason: null })),
     get_dependency_status: () => mockDependencyStatus,
     // SW-UX (app-flow redesign): a brand-new user with NO org of their own
     // (`!hasOrg`) lands IN the default CodeSense reference org (help content);

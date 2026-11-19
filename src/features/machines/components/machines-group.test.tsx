@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
@@ -29,6 +29,9 @@ import { runMachineAction } from "../lib/machine-actions";
 import { getTeamMachines } from "../stores/machines-store";
 import { MachinesGroup } from "./machines-group";
 import { TerminalServerPrompt } from "@/features/shell/components/terminal-server-prompt";
+import { restorePlatform, setPlatform } from "@/test/platform";
+import { MOCK_ORG_SLUG, MOCK_TEAM_NAME } from "@/app/mock/fixtures";
+import { resetPlatformCaps, setPlatformCaps } from "@/shared/lib/__test-utils__/platform-caps";
 
 beforeEach(() => {
   resetMachinesUi();
@@ -903,4 +906,136 @@ it("shows the reviewed identity and keeps refusing until the person confirms", a
     ).toBe(true),
   );
   await waitFor(() => expect(within(row).queryByRole("button", { name: "Confirm" })).toBeNull());
+});
+
+describe("Machines without remote machines on this OS", () => {
+  const SENTENCE = "Not yet available on Windows: CodeSense can't connect to other machines.";
+  beforeEach(() => {
+    setPlatform("Win32");
+    setPlatformCaps({
+      "remote-machines": "CodeSense can't connect to other machines",
+    });
+  });
+  afterEach(() => {
+    resetPlatformCaps();
+    restorePlatform();
+  });
+
+  it("explains it once under the header; Add machine stays, focusable but inert", async () => {
+    installMachinesBackend("none");
+    render(<MachinesGroup teamKey={TEAM_KEY} />);
+    const group = await screen.findByTestId("connections-machines-group");
+    const note = within(group).getByRole("note");
+    expect(note).toHaveTextContent(SENTENCE);
+    const add = within(group).getByTestId("connections-add-machine");
+    expect(add).toHaveAttribute("aria-disabled", "true");
+    expect(add).toHaveAttribute("aria-describedby", note.id);
+    expect(add).toHaveAttribute("title", SENTENCE);
+    await userEvent.click(add);
+    expect(useUiStore.getState().machinesPanel).toBeNull();
+  });
+
+  it("a team-shared row still lists: its connect verbs are off, Hide still works", async () => {
+    const { calls } = installMachinesBackend("shared");
+    render(<MachinesGroup teamKey={TEAM_KEY} />);
+    const row = await screen.findByTestId("machine-row-build-farm");
+    expect(screen.getByTestId("machine-row-status-build-farm").textContent).toBe(
+      "○Not yet available on Windows",
+    );
+    const note = screen.getByRole("note");
+    const setUp = within(row).getByTestId("machine-action-setUp-build-farm");
+    expect(setUp).toHaveAttribute("aria-disabled", "true");
+    expect(setUp).toHaveAttribute("aria-describedby", note.id);
+    await userEvent.click(setUp);
+    expect(useUiStore.getState().machinesPanel).toBeNull();
+
+    const hide = within(row).getByTestId("machine-action-hide-build-farm");
+    expect(hide).not.toHaveAttribute("aria-disabled");
+    await userEvent.click(hide);
+    await waitFor(() => expect(calls.some((c) => c.cmd === "set_machine_hidden")).toBe(true));
+  });
+
+  it("a publisher's row keeps Unshare and Remove; Edit, Open shell and Disconnect are off", async () => {
+    installMachinesBackend("none", {
+      list_machines: () => [
+        {
+          machineId: "box",
+          kind: "ssh",
+          label: "Box",
+          scope: { kind: "team", orgSlug: MOCK_ORG_SLUG, team: MOCK_TEAM_NAME },
+          declaration: null,
+          binding: null,
+          canPublish: true,
+          status: { state: "connected", workspaces: null },
+          attention: 0,
+          capabilities: { agentCallbacks: true },
+        },
+      ],
+    });
+    render(<MachinesGroup teamKey={TEAM_KEY} />);
+    const row = await screen.findByTestId("machine-row-box");
+    for (const verb of ["edit", "openShell", "disconnect"]) {
+      expect(within(row).getByTestId(`machine-action-${verb}-box`)).toHaveAttribute(
+        "aria-disabled",
+        "true",
+      );
+    }
+    for (const verb of ["unshare", "remove"]) {
+      expect(within(row).getByTestId(`machine-action-${verb}-box`)).not.toHaveAttribute(
+        "aria-disabled",
+      );
+    }
+  });
+
+  it("This computer's terminal server update never depends on remote machines", async () => {
+    const real = machineHandlers("none", ZERO_LATENCY);
+    installMachinesBackend("none", {
+      list_machines: async (args) =>
+        ((await real.list_machines!(args)) as MachineSummary[]).map((m) =>
+          m.machineId === "local"
+            ? {
+                ...m,
+                terminalServer: mockTerminalServer(true, {
+                  serverVersion: "0.0.21",
+                  upToDate: false,
+                  relation: "older",
+                }),
+              }
+            : m,
+        ),
+    });
+    render(<MachinesGroup teamKey={TEAM_KEY} />);
+    const update = await screen.findByTestId("machine-action-restartServer-local");
+    expect(update).toHaveTextContent("Update terminal server");
+    expect(update).not.toHaveAttribute("aria-disabled");
+    expect(update).not.toHaveAttribute("title");
+  });
+
+  it("with the capability on, the group renders as today", async () => {
+    setPlatformCaps();
+    installMachinesBackend("shared");
+    render(<MachinesGroup teamKey={TEAM_KEY} />);
+    const row = await screen.findByTestId("machine-row-build-farm");
+    expect(screen.queryByRole("note")).toBeNull();
+    expect(screen.getByTestId("connections-add-machine")).not.toHaveAttribute("aria-disabled");
+    expect(within(row).getByTestId("machine-action-setUp-build-farm")).not.toHaveAttribute(
+      "aria-disabled",
+    );
+    expect(screen.getByTestId("machine-row-status-build-farm")).not.toHaveTextContent(
+      "Not yet available",
+    );
+  });
+
+  it("the local row names the terminal server only where terminals run in it", async () => {
+    installMachinesBackend("none");
+    const { unmount } = render(<MachinesGroup teamKey={TEAM_KEY} />);
+    expect(await screen.findByTestId("machine-row-local")).toHaveTextContent(
+      "This computer · Terminal server",
+    );
+    unmount();
+    setPlatformCaps({ "terminal-server-sidecar": "terminals run inside the app" });
+    render(<MachinesGroup teamKey={TEAM_KEY} />);
+    const local = await screen.findByTestId("machine-row-local");
+    expect(local).not.toHaveTextContent("· Terminal server");
+  });
 });

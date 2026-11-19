@@ -387,6 +387,7 @@ function setDefaultStoreValues(overrides?: {
 }) {
   configStoreValues = {
     loadState: mockLoadState,
+    loadPlatformCaps: () => Promise.resolve(),
     initialized: false,
     repos: [],
     ...overrides?.config,

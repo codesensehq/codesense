@@ -3,6 +3,7 @@ import { ShieldAlert } from "lucide-react";
 
 import { AppButton as Button } from "@/shared/components/app-button";
 import { ReservePanel } from "@/features/shell/components/connections-reserve";
+import { CapabilityOff } from "@/shared/components/capability-off/capability-off";
 import { useCopyToClipboard } from "@/shared/hooks/use-copy-to-clipboard";
 import type { MachinesPanel } from "@/shared/stores/ui-store";
 import type { MachineSummary } from "@/tauri/commands";
@@ -10,11 +11,14 @@ import type { MachineSummary } from "@/tauri/commands";
 import { useTeamMachines } from "../stores/machines-store";
 import { AddMachinePanel } from "./add-machine-panel";
 import { QuickAddMachine } from "./quick-add-machine";
+import { machinePanelHead } from "./machine-panel-head";
 
 /**
  * SW-RM-UI-1 — the Connections reserve for machines: Add machine, Set up (Set up /
  * Reconnect / Edit address / Install, prefilled), or Review key. Resolves the
  * machine from the team registry; a machine that disappeared says so, with Close.
+ * Without remote machines on this OS, Add machine and Set up show why instead of the
+ * form, whichever entry point opened them.
  */
 export function MachineReserve({
   panel,
@@ -26,7 +30,23 @@ export function MachineReserve({
   onClose: () => void;
 }) {
   const machines = useTeamMachines(teamKey);
-  if (panel.mode === "add") return <QuickAddMachine teamKey={teamKey} onClose={onClose} />;
+  if (panel.mode === "add") {
+    return (
+      <CapabilityOff
+        cap="remote-machines"
+        off={(sentence) => (
+          <RemoteMachinesOff
+            machine={null}
+            sentence={sentence}
+            body="Machines your team shares still show in the list; you can hide them."
+            onClose={onClose}
+          />
+        )}
+      >
+        <QuickAddMachine teamKey={teamKey} onClose={onClose} />
+      </CapabilityOff>
+    );
+  }
   if (!machines) return null;
   const machine = machines.find((m) => m.machineId === panel.machineId);
   if (!machine) {
@@ -44,13 +64,55 @@ export function MachineReserve({
   return panel.mode === "reviewKey" ? (
     <HostKeyReviewPanel machine={machine} onClose={onClose} />
   ) : (
-    <AddMachinePanel
-      key={machine.machineId}
-      teamKey={teamKey}
-      machine={machine}
-      initialMode={panel.mode === "setUp" && panel.privateAccount ? "private-account" : undefined}
+    <CapabilityOff
+      cap="remote-machines"
+      off={(sentence) => (
+        <RemoteMachinesOff
+          machine={machine}
+          sentence={sentence}
+          body={`${machine.label} stays in your team's list; you can hide it.`}
+          onClose={onClose}
+        />
+      )}
+    >
+      <AddMachinePanel
+        key={machine.machineId}
+        teamKey={teamKey}
+        machine={machine}
+        initialMode={panel.mode === "setUp" && panel.privateAccount ? "private-account" : undefined}
+        onClose={onClose}
+      />
+    </CapabilityOff>
+  );
+}
+
+/** The add or set-up panel without remote machines on this OS: why, what still works, Close. */
+function RemoteMachinesOff({
+  machine,
+  sentence,
+  body,
+  onClose,
+}: {
+  machine: MachineSummary | null;
+  sentence: string;
+  body: string;
+  onClose: () => void;
+}) {
+  return (
+    <ReservePanel
+      {...machinePanelHead(machine)}
+      subtitle={sentence}
       onClose={onClose}
-    />
+      footer={
+        <Button variant="outline" size="sm" onClick={onClose}>
+          Close
+        </Button>
+      }
+    >
+      <p data-testid="add-machine-off" className="mt-4 max-w-[420px] text-xs text-muted-foreground">
+        {body}
+      </p>
+    </ReservePanel>
   );
 }
 

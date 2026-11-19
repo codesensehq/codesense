@@ -429,6 +429,9 @@ function App() {
         logger.warn("App", `shortcuts loadPersistedState failed — ${e}`);
       });
 
+    // Which optional features this OS supports: read once, fixed for the run (`useCapability`).
+    void useConfigStore.getState().loadPlatformCaps();
+
     (async () => {
       await initLogging();
       loadState();

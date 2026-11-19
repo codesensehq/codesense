@@ -144,6 +144,11 @@ import {
   hasMod,
 } from "@/shared/lib/shortcuts/keystroke";
 import { localMachineLabel } from "@/shared/lib/local-machine";
+import { notYetAvailableSentence, useCapability } from "@/shared/lib/capabilities";
+import {
+  CapabilityOffNote,
+  CapabilityOffNotice,
+} from "@/shared/components/capability-off/capability-off";
 
 const LOCAL_MACHINE = LOCAL_MACHINE_ID;
 
@@ -539,6 +544,19 @@ export function AgentLaunchSheet({
         machineId: launchMachine,
         cwd: effective.where === "story" ? storyWorkspace?.cwd : selectedWorktree?.launchCwd,
       };
+  // Without the MCP bridge on this OS the agent still launches, without CodeSense tools: the
+  // sheet says so first in its warnings (in branch mode, the run warnings).
+  const bridgeOff = !useCapability("mcp-bridge").on;
+  // A story workspace held on another machine can't be reached without remote machines on this
+  // OS: Runs on says why, and Launch refuses rather than target it.
+  const remoteMachines = useCapability("remote-machines");
+  const unreachableMachine = !remoteMachines.on && !branchMode && launchMachine !== LOCAL_MACHINE;
+  const bridgeNotice = (className?: string) => (
+    <CapabilityOffNotice cap="mcp-bridge" as="li" className={className}>
+      <b>{agent?.name ?? "This agent"} starts without CodeSense tools</b>: no inbox, messages or
+      team content.
+    </CapabilityOffNotice>
+  );
   const { warnings, admission: launchAdmission } = useLaunchPreview(
     agentKey,
     request.teamKey,
@@ -631,6 +649,10 @@ export function AgentLaunchSheet({
   const launch = () => {
     if (launchAdmission?.allowed === false) {
       setFailure(launchAdmission.reason);
+      return;
+    }
+    if (unreachableMachine) {
+      setFailure(notYetAvailableSentence(remoteMachines));
       return;
     }
     if (busy || phase === "hydrating" || phase === "starting") return;
@@ -926,12 +948,13 @@ export function AgentLaunchSheet({
               </div>
             )}
 
-            {warnings.length > 0 && (
+            {(warnings.length > 0 || (bridgeOff && !branchMode)) && (
               <ul
                 className="ls-warnings"
                 data-testid="launch-warnings"
                 aria-label="Launch warnings"
               >
+                {!branchMode && bridgeNotice("ls-warning")}
                 {warnings.map((w) => (
                   <li key={w.code} className="ls-warning" data-code={w.code}>
                     <TriangleAlert className="mt-px size-3.5 shrink-0" aria-hidden />
@@ -1167,8 +1190,9 @@ export function AgentLaunchSheet({
                 </p>
               </>
             )}
-            {branchMode && branchWarnings.length > 0 && (
+            {branchMode && (branchWarnings.length > 0 || bridgeOff) && (
               <ul data-testid="launch-run-warnings" className="space-y-1">
+                {bridgeNotice()}
                 {branchWarnings.map((w) => (
                   <li
                     key={`${w.code}:${w.message}`}
@@ -1516,6 +1540,22 @@ function MachinePicker({
   const local = visible.find((m) => m.kind === "local");
   const now = useNow(true, 30_000);
   const remote = workspaceMachineChoices(machines, now);
+  const remoteMachines = useCapability("remote-machines");
+  // Without remote machines on this OS there is nothing to pick: it runs here.
+  if (!remoteMachines.on) {
+    return (
+      <div>
+        <span data-testid="launch-machine" className="flex h-[34px] items-center text-[13px]">
+          {value === LOCAL_MACHINE
+            ? (picked?.label ?? localMachineLabel())
+            : (machines?.find((m) => m.machineId === value)?.label ?? value)}
+        </span>
+        {value !== LOCAL_MACHINE && (
+          <CapabilityOffNote cap="remote-machines" className="max-w-48" />
+        )}
+      </div>
+    );
+  }
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild disabled={lock !== null}>
