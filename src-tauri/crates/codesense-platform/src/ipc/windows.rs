@@ -349,15 +349,88 @@ impl AsyncWrite for Stream {
 }
 
 pub(crate) mod blocking {
-    use std::fs::{File, OpenOptions};
+    use std::fs::OpenOptions;
     use std::io::{Read, Write};
     use std::os::windows::fs::OpenOptionsExt;
 
-    use windows_sys::Win32::Foundation::{ERROR_NO_DATA, ERROR_PIPE_CONNECTED};
-    use windows_sys::Win32::Storage::FileSystem::SECURITY_IDENTIFICATION;
+    use windows_sys::Win32::Foundation::{
+        ERROR_BROKEN_PIPE, ERROR_IO_PENDING, ERROR_NO_DATA, ERROR_PIPE_CONNECTED, WAIT_TIMEOUT,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{ReadFile, WriteFile, SECURITY_IDENTIFICATION};
     use windows_sys::Win32::System::Pipes::{ConnectNamedPipe, WaitNamedPipeW};
+    use windows_sys::Win32::System::Threading::{CreateEventW, INFINITE};
+    use windows_sys::Win32::System::IO::{
+        CancelIoEx, GetOverlappedResult, GetOverlappedResultEx, OVERLAPPED,
+    };
 
     use super::*;
+
+    // Every handle here is overlapped, and every call waits for its own
+    // completion, so the stream still blocks; the wait is what bounds a
+    // timeout. A timed-out operation is cancelled with `CancelIoEx`, which
+    // names that one operation, and waited out before its buffer is let go.
+
+    /// A manual-reset event an operation's `OVERLAPPED` signals.
+    fn new_event() -> io::Result<OwnedHandle> {
+        // SAFETY: no attributes or name; a null return is an error.
+        let event = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
+        if event.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: a fresh handle this function owns.
+        Ok(unsafe { OwnedHandle::from_raw_handle(event) })
+    }
+
+    /// An `OVERLAPPED` for one operation, signalling `event`.
+    fn overlapped(event: &OwnedHandle) -> OVERLAPPED {
+        // SAFETY: all zeros is a valid OVERLAPPED (offset 0, no event).
+        let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
+        overlapped.hEvent = event.as_raw_handle();
+        overlapped
+    }
+
+    /// The outcome of the operation `started` on `handle` with `overlapped`
+    /// (whether its call returned true), waiting up to `timeout`, for ever
+    /// when `None`: its byte count. One still pending then is cancelled and
+    /// waited out, and is [`io::ErrorKind::TimedOut`].
+    fn finish(
+        handle: HANDLE,
+        overlapped: &OVERLAPPED,
+        started: bool,
+        timeout: Option<Duration>,
+    ) -> io::Result<u32> {
+        if !started {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() != Some(ERROR_IO_PENDING as i32) {
+                return Err(error);
+            }
+        }
+        let millis = timeout.map_or(INFINITE, |timeout| {
+            u32::try_from(timeout.as_millis())
+                .map_or(INFINITE - 1, |millis| millis.clamp(1, INFINITE - 1))
+        });
+        let mut transferred: u32 = 0;
+        // SAFETY: the operation was started on `handle` with `overlapped`,
+        // which outlives this wait.
+        if unsafe { GetOverlappedResultEx(handle, overlapped, &mut transferred, millis, 0) } != 0 {
+            return Ok(transferred);
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(WAIT_TIMEOUT as i32) {
+            return Err(error);
+        }
+        // SAFETY: cancels this one operation; then wait until it is done, so
+        // the caller's buffer and `overlapped` are no longer in use.
+        unsafe { CancelIoEx(handle, overlapped) };
+        if unsafe { GetOverlappedResult(handle, overlapped, &mut transferred, 1) } != 0 {
+            // It completed before the cancel reached it.
+            return Ok(transferred);
+        }
+        Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "the pipe timed out",
+        ))
+    }
 
     pub(crate) struct Listener {
         name: PathBuf,
@@ -368,15 +441,18 @@ pub(crate) mod blocking {
     impl Listener {
         pub(crate) fn bind(endpoint: &Endpoint) -> io::Result<Self> {
             let name = endpoint.address()?;
-            let next = create_instance(&name, true, false)?;
+            let next = create_instance(&name, true, true)?;
             Ok(Self { name, next })
         }
 
         pub(crate) fn accept(&mut self) -> io::Result<Stream> {
-            // SAFETY: the instance is open and not overlapped, so the call
-            // waits for a client.
-            if unsafe { ConnectNamedPipe(self.next.as_raw_handle(), std::ptr::null_mut()) } == 0 {
-                let error = io::Error::last_os_error();
+            let event = new_event()?;
+            let mut connecting = overlapped(&event);
+            let handle = self.next.as_raw_handle();
+            // SAFETY: the instance is open and overlapped; `connecting` lives
+            // until `finish` has seen the operation through.
+            let started = unsafe { ConnectNamedPipe(handle, &mut connecting) } != 0;
+            if let Err(error) = finish(handle, &connecting, started, None) {
                 // Already connected, or connected and gone again (its bytes
                 // are still read): either way a connection, as tokio counts it.
                 let connected = [ERROR_PIPE_CONNECTED, ERROR_NO_DATA]
@@ -386,11 +462,12 @@ pub(crate) mod blocking {
                     return Err(error);
                 }
             }
-            let following = create_instance(&self.name, false, false)?;
-            Ok(Stream {
-                pipe: File::from(std::mem::replace(&mut self.next, following)),
-                is_server: true,
-            })
+            let following = create_instance(&self.name, false, true)?;
+            Ok(Stream::new(
+                std::mem::replace(&mut self.next, following),
+                event,
+                true,
+            ))
         }
 
         #[cfg(test)]
@@ -400,11 +477,25 @@ pub(crate) mod blocking {
     }
 
     pub(crate) struct Stream {
-        pipe: File,
+        pipe: OwnedHandle,
+        /// Signalled as each operation on `pipe` completes; one at a time.
+        event: OwnedHandle,
         is_server: bool,
+        read_timeout: Option<Duration>,
+        write_timeout: Option<Duration>,
     }
 
     impl Stream {
+        fn new(pipe: OwnedHandle, event: OwnedHandle, is_server: bool) -> Self {
+            Self {
+                pipe,
+                event,
+                is_server,
+                read_timeout: None,
+                write_timeout: None,
+            }
+        }
+
         pub(crate) fn connect(endpoint: &Endpoint) -> io::Result<Self> {
             let name = endpoint.address()?;
             let start = Instant::now();
@@ -412,6 +503,7 @@ pub(crate) mod blocking {
                 let opened = OpenOptions::new()
                     .read(true)
                     .write(true)
+                    .custom_flags(FILE_FLAG_OVERLAPPED)
                     .security_qos_flags(SECURITY_IDENTIFICATION)
                     .open(&name);
                 match opened {
@@ -428,10 +520,7 @@ pub(crate) mod blocking {
                     Err(error) => return Err(error),
                     Ok(pipe) => {
                         check_owner(pipe.as_raw_handle())?;
-                        return Ok(Self {
-                            pipe,
-                            is_server: false,
-                        });
+                        return Ok(Self::new(OwnedHandle::from(pipe), new_event()?, false));
                     }
                 }
             }
@@ -440,21 +529,74 @@ pub(crate) mod blocking {
         pub(crate) fn peer_pid(&self) -> io::Result<Pid> {
             peer_pid(self.pipe.as_raw_handle(), self.is_server)
         }
+
+        pub(crate) fn set_read_timeout(&mut self, timeout: Option<Duration>) -> io::Result<()> {
+            self.read_timeout = checked(timeout)?;
+            Ok(())
+        }
+
+        pub(crate) fn set_write_timeout(&mut self, timeout: Option<Duration>) -> io::Result<()> {
+            self.write_timeout = checked(timeout)?;
+            Ok(())
+        }
+    }
+
+    /// A zero timeout is refused, as std's sockets refuse it.
+    fn checked(timeout: Option<Duration>) -> io::Result<Option<Duration>> {
+        if timeout == Some(Duration::ZERO) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cannot set a 0 duration timeout",
+            ));
+        }
+        Ok(timeout)
     }
 
     impl Read for Stream {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-            self.pipe.read(buf)
+            let len = u32::try_from(buf.len()).unwrap_or(u32::MAX);
+            let mut reading = overlapped(&self.event);
+            let handle = self.pipe.as_raw_handle();
+            // SAFETY: `buf` and `reading` outlive the operation: `finish`
+            // returns only once it completed or was cancelled.
+            let started = unsafe {
+                ReadFile(
+                    handle,
+                    buf.as_mut_ptr(),
+                    len,
+                    std::ptr::null_mut(),
+                    &mut reading,
+                )
+            } != 0;
+            match finish(handle, &reading, started, self.read_timeout) {
+                Ok(read) => Ok(read as usize),
+                // The other end closed: the end of the stream.
+                Err(error) if error.raw_os_error() == Some(ERROR_BROKEN_PIPE as i32) => Ok(0),
+                Err(error) => Err(error),
+            }
         }
     }
 
     impl Write for Stream {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.pipe.write(buf)
+            let len = u32::try_from(buf.len()).unwrap_or(u32::MAX);
+            let mut writing = overlapped(&self.event);
+            let handle = self.pipe.as_raw_handle();
+            // SAFETY: as for `read`.
+            let started = unsafe {
+                WriteFile(
+                    handle,
+                    buf.as_ptr(),
+                    len,
+                    std::ptr::null_mut(),
+                    &mut writing,
+                )
+            } != 0;
+            finish(handle, &writing, started, self.write_timeout).map(|written| written as usize)
         }
 
         fn flush(&mut self) -> io::Result<()> {
-            self.pipe.flush()
+            Ok(())
         }
     }
 }

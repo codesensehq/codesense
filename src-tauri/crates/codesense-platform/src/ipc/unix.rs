@@ -312,6 +312,7 @@ impl AsyncWrite for Stream {
 
 pub(crate) mod blocking {
     use std::io::{Read, Write};
+    use std::time::Duration;
 
     use super::*;
 
@@ -345,17 +346,34 @@ pub(crate) mod blocking {
         pub(crate) fn peer_pid(&self) -> io::Result<Pid> {
             peer_pid(self.0.as_raw_fd())
         }
+
+        pub(crate) fn set_read_timeout(&mut self, timeout: Option<Duration>) -> io::Result<()> {
+            self.0.set_read_timeout(timeout)
+        }
+
+        pub(crate) fn set_write_timeout(&mut self, timeout: Option<Duration>) -> io::Result<()> {
+            self.0.set_write_timeout(timeout)
+        }
+    }
+
+    /// A blocking socket's timeout shows as `WouldBlock`; say what it is.
+    fn timed_out(error: io::Error) -> io::Error {
+        if error.kind() == io::ErrorKind::WouldBlock {
+            io::Error::new(io::ErrorKind::TimedOut, error)
+        } else {
+            error
+        }
     }
 
     impl Read for Stream {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-            self.0.read(buf)
+            self.0.read(buf).map_err(timed_out)
         }
     }
 
     impl Write for Stream {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.0.write(buf)
+            self.0.write(buf).map_err(timed_out)
         }
 
         fn flush(&mut self) -> io::Result<()> {

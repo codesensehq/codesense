@@ -1057,6 +1057,77 @@ fn wire_form_round_trips() {
     assert!(exits_within(&mut client, Duration::from_secs(5)));
 }
 
+/// A blocking client and the server end the listener accepted for it.
+fn blocking_pair(endpoint: &Endpoint) -> (blocking::LocalStream, blocking::LocalStream) {
+    let listener = blocking::LocalListener::bind(endpoint).unwrap();
+    let client = blocking::LocalStream::connect(endpoint).unwrap();
+    let (_listener, server) = accept_blocking_within(listener);
+    (client, server)
+}
+
+#[test]
+fn a_blocking_read_and_write_time_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut client, mut server) = blocking_pair(&ephemeral(dir.path(), "timeout"));
+
+    // A zero timeout is refused, as std's sockets refuse it.
+    for refused in [
+        client.set_read_timeout(Some(Duration::ZERO)),
+        client.set_write_timeout(Some(Duration::ZERO)),
+    ] {
+        assert_eq!(refused.unwrap_err().kind(), ErrorKind::InvalidInput);
+    }
+
+    // A read with nothing to read fails at its timeout.
+    client
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
+    let started = Instant::now();
+    let error = client.read(&mut [0; 16]).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::TimedOut, "{error}");
+    let waited = started.elapsed();
+    assert!(
+        waited >= Duration::from_millis(150) && waited < Duration::from_secs(5),
+        "{waited:?}"
+    );
+
+    // The stream still works after it: what comes next is read whole.
+    server.write_all(b"after").unwrap();
+    let mut after = [0; 5];
+    client.read_exact(&mut after).unwrap();
+    assert_eq!(&after, b"after");
+
+    // A write the other end never reads fails at its timeout once the
+    // buffers between them are full.
+    server
+        .set_write_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
+    let chunk = vec![0u8; 64 * 1024];
+    let started = Instant::now();
+    let error = loop {
+        if let Err(error) = server.write(&chunk) {
+            break error;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the buffers never filled"
+        );
+    };
+    assert_eq!(error.kind(), ErrorKind::TimedOut, "{error}");
+}
+
+#[test]
+fn a_blocking_read_gets_what_was_written_before_the_other_end_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut client, mut server) = blocking_pair(&ephemeral(dir.path(), "closed"));
+    client.set_read_timeout(Some(CONNECT_LIMIT)).unwrap();
+    server.write_all(b"last words").unwrap();
+    drop(server);
+    let mut heard = Vec::new();
+    client.read_to_end(&mut heard).unwrap();
+    assert_eq!(heard, b"last words");
+}
+
 #[test]
 fn peer_pid_is_the_client() {
     let dir = tempfile::tempdir().unwrap();
