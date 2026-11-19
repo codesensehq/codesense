@@ -366,7 +366,7 @@ test("rust.yml runs the Windows check on a pull request only with ci:windows, ne
   assert.deepEqual(
     steps.filter((s) => /\bcargo\b/.test(s.run ?? "")).map((s) => s.run),
     [
-      "cargo check --locked -p codesense-platform -p codesense-host-proto -p codesense-fs-core --all-targets",
+      "cargo check --locked -p codesense-platform -p codesense-host-proto -p codesense-fs-core -p codesense-pty-core --all-targets",
       "cargo test --locked -p codesense-platform",
       "cargo test --locked -p codesense-host-proto --lib hook::",
     ],

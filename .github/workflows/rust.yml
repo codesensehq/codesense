@@ -682,7 +682,7 @@ jobs:
           save-if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}
           cache-on-failure: true
       - name: Check the Windows crates
-        run: cargo check --locked -p codesense-platform -p codesense-host-proto -p codesense-fs-core --all-targets
+        run: cargo check --locked -p codesense-platform -p codesense-host-proto -p codesense-fs-core -p codesense-pty-core --all-targets
       - name: Test the platform crate
         run: cargo test --locked -p codesense-platform
       - name: Test Claude's hooks
