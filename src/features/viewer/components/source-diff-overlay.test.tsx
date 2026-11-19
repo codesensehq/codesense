@@ -121,7 +121,7 @@ vi.mock("../lib/use-source-image-sides", () => ({
 }));
 
 // SW-VE-12: the per-tab resolver that answers "is this cwd a git working tree?"
-// — threaded into the overlay to drive the "No git repo at this path." body
+// — threaded into the overlay to drive the "No repository for this workspace yet." body
 // state. Default is a resolved local worktree so existing suites unchanged.
 type TabRepoResolution = {
   folder: { kind: "folder"; cwd: string } | null;
@@ -285,7 +285,7 @@ describe("SourceDiffOverlay — render gates (AC-1/AC-5/RD-6)", () => {
   });
 
   // SW-VE-12 (AC-6): the overlay mounts on every folder-rooted kind, not just
-  // `story`. Non-git kinds surface the "No git repo" body state (see the new
+  // `story`. Non-git kinds surface the "No repository" body state (see the new
   // suite below) instead of hiding the whole overlay.
   it("renders the overlay chrome for a non-story kind whose cwd resolves to a repo", () => {
     const genericWs: Workspace = { ...storyWs, id: "gw", kind: "generic", cwd: "/wt/plain" };
@@ -3707,7 +3707,7 @@ describe("SourceDiffOverlay — review round 3", () => {
 
 // ────────────────────────────────────────────────────────────────────────────
 // SW-VE-12 — source editor + diff visible from every tab. Covers the new body
-// state matrix: a non-git cwd shows "No git repo at this path." instead of
+// state matrix: a non-git cwd shows "No repository for this workspace yet." instead of
 // hiding the overlay. Loading / No-changes / Load-failed states are owned by
 // the rail (its own suite covers them); the overlay-level body state we added
 // is the one the rail CANNOT express (there's no working tree to list).
@@ -3716,7 +3716,7 @@ describe("SourceDiffOverlay — review round 3", () => {
 describe("SourceDiffOverlay — SW-VE-12 always-on empty-state matrix", () => {
   beforeEach(() => useViewerStore.setState({ sourceDiffShownBySession: { "sid-ws": true } }));
 
-  it("AC-2: cwd resolved to a non-git dir renders the 'No git repo at this path.' body", () => {
+  it("a cwd resolved to a non-git dir renders the 'No repository for this workspace yet.' body", () => {
     const generic: Workspace = { ...storyWs, id: "gw", kind: "generic", cwd: "/home/user" };
     tabSourceRepoMock.mockReturnValue({
       folder: { kind: "folder", cwd: "/home/user" },
@@ -3788,7 +3788,7 @@ describe("SourceDiffOverlay — SW-VE-12 always-on empty-state matrix", () => {
     const generic: Workspace = { ...storyWs, id: "gw", kind: "generic", cwd: "/wt/unknown" };
     tabSourceRepoMock.mockReturnValue({
       folder: { kind: "folder", cwd: "/wt/unknown" },
-      // undefined = still resolving. We don't jump straight to "No git repo"
+      // undefined = still resolving. We don't jump straight to "No repository"
       // — the rail's own skeleton/loading surface handles the in-flight read.
       repo: undefined,
     });
@@ -3903,7 +3903,7 @@ describe("SourceDiffOverlay — SW-VE-12 always-on empty-state matrix", () => {
   });
 
   // SW-VE-14: a terminal `cd` from a git worktree to a non-git dir retargets
-  // both the resolver (populated → "No git repo") and the local fetch key
+  // both the resolver (populated → "No repository") and the local fetch key
   // (ws.cwd → the new cwd). Drives the real seam: the revision counter is
   // the hook's parameter, so bumping it bumps `useSessionCwd`'s read, which
   // this overlay then threads through `effectiveCwd` into the resolver + the
@@ -3942,7 +3942,7 @@ describe("SourceDiffOverlay — SW-VE-12 always-on empty-state matrix", () => {
 
     // Post-cd: bump the OSC 7 revision counter — the overlay re-reads cwd
     // (now `/home/user`), the resolver drops to null, and the body swaps
-    // to the "No git repo at this path." state.
+    // to the "No repository for this workspace yet." state.
     sessionCwdRevisionMock.mockReturnValue(1);
     rerender(
       <SourceDiffOverlay
@@ -4001,6 +4001,36 @@ describe("SourceDiffOverlay — a guest's context worktree launch folder", () =>
       expect(call[0]).not.toBe(LAUNCH);
     }
     expect(screen.getByTestId("mock-code-diff-review")).toHaveTextContent("old→new");
+  });
+
+  it("opens the editor on the file's path inside the launch folder, not the repo-root path", () => {
+    const notes = "getting-started/content/notes.md";
+    stubChangeset({ files: [...FILES, { path: notes, status: "modified" }] });
+    useViewerStore.setState({
+      sourceDiffSelectedFile: { "sid-ws": notes },
+      worktreeEditorFile: {},
+    });
+    tabSourceRepoMock.mockReturnValue({
+      folder: { kind: "folder", cwd: LAUNCH },
+      repo: { root: ROOT, isRoot: false },
+    });
+    render(overlay());
+    fireEvent.click(screen.getByTestId("source-diff-open-editor-cw"));
+    // The editor is rooted at the launch folder: `<launch>/notes.md`.
+    expect(useViewerStore.getState().worktreeEditorFile.cw).toBe("notes.md");
+    expect(useViewerStore.getState().worktreeEditorOpenBySession["sid-ws"]).toBe(true);
+  });
+
+  it("opens the editor without a file when the change is outside the launch folder", () => {
+    useViewerStore.setState({ worktreeEditorFile: {} });
+    tabSourceRepoMock.mockReturnValue({
+      folder: { kind: "folder", cwd: LAUNCH },
+      repo: { root: ROOT, isRoot: false },
+    });
+    render(overlay());
+    fireEvent.click(screen.getByTestId("source-diff-open-editor-cw"));
+    expect(useViewerStore.getState().worktreeEditorFile.cw).toBeUndefined();
+    expect(useViewerStore.getState().worktreeEditorOpenBySession["sid-ws"]).toBe(true);
   });
 
   it("reads nothing while the resolver is still out", () => {

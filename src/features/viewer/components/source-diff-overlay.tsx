@@ -33,7 +33,7 @@ import {
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import { basename } from "@/shared/lib/path";
+import { basename, relative } from "@/shared/lib/path";
 import { useTrailingDebounce } from "@/shared/lib/use-trailing-debounce";
 import { useRecentActivity } from "@/shared/lib/use-recent-activity";
 import type { SourceDiffMode, Workspace } from "@/shared/stores/viewer-store";
@@ -765,12 +765,24 @@ export function SourceDiffOverlay({
         onDismiss: (f) => setRouteState(f.path, null),
       };
 
+  // The diff's paths are relative to the repo root, but the tile's editor is
+  // rooted at `ws.cwd`, which can be a folder inside it (a context worktree's
+  // `<team>/content`). `editorPath` maps a diff path into the editor, or gives
+  // null for a file outside the editor's folder.
+  const editorPrefix = remoteWorkspace || !repoRoot ? "" : (relative(repoRoot, ws.cwd) ?? "");
+  const editorPath = (path: string): string | null => {
+    if (editorPrefix === "") return path;
+    return path.startsWith(`${editorPrefix}/`) ? path.slice(editorPrefix.length + 1) : null;
+  };
+
+  /** `path` is relative to the editor's root (see `editorPath`). */
   const openEditor = (path: string | null) => {
     if (!activeTabSessionId) return;
     // With no file to open, the editor resumes where the user was.
     if (path != null) setEditorFile(ws.id, path);
     // Land on the change being read, when the open file is the one in the pane.
-    const line = path != null && path === paneFile ? (navRef.current?.currentLine() ?? null) : null;
+    const inPane = path != null && paneFile != null && path === editorPath(paneFile);
+    const line = inPane ? (navRef.current?.currentLine() ?? null) : null;
     setEditorRevealLine(ws.id, path != null && line != null ? { path, line } : null);
     toggleEditorOpen({ sessionId: activeTabSessionId, workspaceId: ws.id, teamKey, open: true });
   };
@@ -883,9 +895,12 @@ export function SourceDiffOverlay({
   }
 
   // The code editor opens on a file that exists in the worktree: never a
-  // deleted one, nor a selection that has left the change set.
+  // deleted one, a selection that has left the change set, or a file outside
+  // the editor's folder. Relative to the editor's root.
   const editableFile =
-    paneFile != null && selected != null && selected.status !== "deleted" ? paneFile : null;
+    paneFile != null && selected != null && selected.status !== "deleted"
+      ? editorPath(paneFile)
+      : null;
 
   const structuralAvailable = paneFile != null && isStructuralLanguage(detectLanguageId(paneFile));
 
@@ -1023,7 +1038,7 @@ export function SourceDiffOverlay({
   // KNOWN AMBIGUITY (reviewer §Deferred): `useTabSourceRepo`'s resolver
   // `.catch` collapses a transient error to `setRepo(null)` (see
   // `use-tab-source-repo.ts:122-126`), so a flaky probe reads here as
-  // "no git repo" instead of surfacing a load failure. Low priority, but
+  // "no repository" instead of surfacing a load failure. Low priority, but
   // a probe-level error channel + a separate body state would un-mask it.
   if (tabRepo === null) {
     // SW-VE-12 R3-M4: the no-repo body renders no filter input, no rail

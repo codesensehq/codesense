@@ -67,7 +67,7 @@ export function useTabSourceRepo(
     return cwd ? { kind: "folder", cwd } : null;
   })();
 
-  const [repo, setRepo] = useState<TabSourceRepo | null | undefined>(() => {
+  const initialRepo = (): TabSourceRepo | null | undefined => {
     if (!canDiff) return null;
     if (workspace.kind === "story") {
       if (remote && handle) {
@@ -76,7 +76,16 @@ export function useTabSourceRepo(
       return { root: cwd, isRoot: true };
     }
     return undefined;
-  });
+  };
+  const [repo, setRepo] = useState<TabSourceRepo | null | undefined>(initialRepo);
+  // A new cwd (a `cd`, another tab) drops the last answer in the render that
+  // sees it, so nothing reads the old folder's repo while the new one resolves.
+  const resolveKey = JSON.stringify([canDiff, cwd, workspace.kind, machineId, handle]);
+  const [seenKey, setSeenKey] = useState(resolveKey);
+  if (seenKey !== resolveKey) {
+    setSeenKey(resolveKey);
+    setRepo(initialRepo());
+  }
 
   useEffect(() => {
     if (!canDiff) {
