@@ -17,8 +17,9 @@
 # $CODESENSE_BUN_CACHE (default target/bun). A Linux target gets Bun's glibc
 # build: the musl build still needs libstdc++, so it is no more portable.
 #
-# Each artifact lands at src-tauri/binaries/codesense-emulator-<triple>, with
-# <artifact>.sha256 in `sha256sum` format ("<hex>  <file name>"). The worker's
+# Each artifact lands at src-tauri/binaries/codesense-emulator-<triple>, plus
+# .exe for Windows (scripts/lib/sidecar.sh), with <artifact>.sha256 in
+# `sha256sum` format ("<hex>  <file name>"). The worker's
 # notices (codesense-emulator-NOTICE.md) and its JavaScript bundle
 # (codesense-emulator.cjs, shipped so the LGPL runtime can be relinked) are
 # copied beside them.
@@ -82,6 +83,7 @@ bun_asset() {
         # baseline: runs on x86_64 CPUs without AVX2, which remote hosts may be.
         x86_64-unknown-linux-gnu | x86_64-unknown-linux-musl) echo "bun-linux-x64-baseline" ;;
         aarch64-unknown-linux-gnu | aarch64-unknown-linux-musl) echo "bun-linux-aarch64" ;;
+        x86_64-pc-windows-msvc) echo "bun-windows-x64-baseline" ;;
         *) return 1 ;;
     esac
 }
@@ -93,6 +95,8 @@ bun_compile_target() {
         bun-darwin-x64) echo "bun-darwin-x64" ;;
         bun-linux-x64-baseline) echo "bun-linux-x64-baseline" ;;
         bun-linux-aarch64) echo "bun-linux-arm64" ;;
+        bun-windows-x64-baseline) echo "bun-windows-x64-baseline" ;;
+        *) return 1 ;;
     esac
 }
 
@@ -103,6 +107,15 @@ bun_sha256() {
         bun-darwin-x64) echo "80520d7e17526308c9185d261679ac6d27798d3803a0e9f7ff9121ab8affb012" ;;
         bun-linux-x64-baseline) echo "c678040f14fe0440eb839d37cbd0ce4c051a32da72806ac97de6a6aab6bf728f" ;;
         bun-linux-aarch64) echo "54328bbc2d9c8e0c9f892c544d66c57a83b84139e34909e5ee81758f1ac8fda7" ;;
+        bun-windows-x64-baseline) echo "78c221c2376f79731ccf4e4af0b3bb46d81fefa3296c5abee09ad8a1b21e68c6" ;;
+    esac
+}
+
+# The Bun executable's name inside a release asset's zip.
+bun_binary() {
+    case "$1" in
+        bun-windows-*) echo "bun.exe" ;;
+        *) echo "bun" ;;
     esac
 }
 
@@ -118,7 +131,8 @@ sha256_hex() {
 # verifying it on first use.
 fetch_bun() {
     local asset="$1"
-    local binary="$BUN_CACHE/$asset/bun"
+    local binary
+    binary="$BUN_CACHE/$asset/$(bun_binary "$asset")"
     if [[ -x "$binary" ]]; then
         echo "$binary"
         return
@@ -145,18 +159,13 @@ fetch_bun() {
     echo "$binary"
 }
 
-# The Bun that runs the compiler on this machine.
+# The Bun that runs the compiler on this machine: the one for rustc's host
+# triple, which names the platform under Git Bash too, where `uname` does not.
 compiler_asset() {
-    case "$(uname -sm)" in
-        "Darwin arm64") echo "bun-darwin-aarch64" ;;
-        "Darwin x86_64") echo "bun-darwin-x64" ;;
-        "Linux x86_64") echo "bun-linux-x64-baseline" ;;
-        "Linux aarch64" | "Linux arm64") echo "bun-linux-aarch64" ;;
-        *)
-            echo "Error: no Bun to compile with on $(uname -sm)" >&2
-            exit 1
-            ;;
-    esac
+    if ! bun_asset "$HOST_TRIPLE"; then
+        echo "Error: no Bun to compile with on $HOST_TRIPLE" >&2
+        exit 1
+    fi
 }
 
 cd "$PROJECT_ROOT"
@@ -195,12 +204,23 @@ for triple in "${TARGETS[@]}"; do
     asset="$(bun_asset "$triple")"
     runtime="$(fetch_bun "$asset")"
     out="$(sidecar_path "$BIN_NAME" "$triple")"
+    # Bun adds .exe to a Windows executable's name itself, so it is given the
+    # name without it; whichever name it writes ends up at $out.
+    stem="${out%"$(sidecar_exe_suffix "$triple")"}"
     echo "Compiling $BIN_NAME for $triple (Bun $BUN_VERSION, $asset)..."
+    rm -f "$out" "$stem"
     # A worker must never pick up a .env or bunfig.toml from its working directory.
     "$COMPILER" build --compile --target="$(bun_compile_target "$asset")" \
         --compile-executable-path="$runtime" \
         --no-compile-autoload-dotenv --no-compile-autoload-bunfig \
-        "$BUNDLE" --outfile "$out" >/dev/null
+        "$BUNDLE" --outfile "$stem" >/dev/null
+    if [[ ! -f "$out" && -f "$stem" ]]; then
+        mv "$stem" "$out"
+    fi
+    if [[ ! -f "$out" ]]; then
+        echo "Error: Bun wrote no $out" >&2
+        exit 1
+    fi
     sidecar_sha256_line "$out" >"$out.sha256"
     echo "Built: $out ($(cut -d' ' -f1 "$out.sha256"))"
     if [[ "$triple" == *-apple-darwin ]]; then
