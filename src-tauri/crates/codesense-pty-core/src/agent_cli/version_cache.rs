@@ -657,7 +657,18 @@ mod tests {
         let found = LockedRuntime::for_home(&home).expect("the bound runtime");
         assert_eq!(found.root(), std::fs::canonicalize(&root).unwrap());
         assert_eq!(found.identity(), &runtime);
+        let other = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(root.with_extension("lock"))
+            .unwrap();
+        assert!(
+            !codesense_platform::fs::try_lock_exclusive(&other).unwrap(),
+            "held while the found runtime lives"
+        );
         drop(found);
+        assert!(codesense_platform::fs::try_lock_exclusive(&other).unwrap());
+        codesense_platform::fs::unlock(&other).unwrap();
 
         let install = dir.path().join("other");
         std::fs::create_dir(&install).unwrap();
