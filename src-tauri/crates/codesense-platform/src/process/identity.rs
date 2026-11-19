@@ -42,10 +42,16 @@ impl Identity {
         descends_with(self, root, sys::PARENT_MAY_BE_STALE, Self::inspect)
     }
 
-    /// The live process that is this one's parent: `None` when it records none, none
-    /// reads, or (where a recorded parent may be stale) it started after this one.
+    /// This process's parent, if it is still running. `None` when no parent is recorded
+    /// or the parent cannot be read, and where a recorded parent may be stale, when it
+    /// started after this process.
     pub fn parent(self) -> Option<Self> {
-        parent_of(self, sys::PARENT_MAY_BE_STALE, &Self::inspect)
+        self.parent_read_by(Self::inspect)
+    }
+
+    /// [`Identity::parent`], with the parent read through `inspect`.
+    pub fn parent_read_by(self, inspect: impl Fn(u32) -> Option<Self>) -> Option<Self> {
+        parent_of(self, sys::PARENT_MAY_BE_STALE, &inspect)
     }
 
     /// Whether this process has certainly gone: its pid now names another
@@ -82,10 +88,10 @@ impl Identity {
 }
 
 /// The agent whose hook shell ran `helper`: the shell is `helper`'s parent as `inspect`
-/// reads it, and the agent is the shell's. `None` when either does not read, or either
-/// started after its child: the shell's pid, or the agent's, is a dead parent's since
-/// reused (Windows never re-parents). The check holds on every OS, as this resolution is
-/// for hooks run through a shell that does not `exec` the helper.
+/// reads it, and the agent is the shell's parent. `None` when either cannot be read, or
+/// when either started after its child, which means its pid belonged to a parent that
+/// exited and was reused (Windows never re-parents). The check applies on every OS, since
+/// this is only for hooks whose shell does not `exec` the helper.
 pub fn agent_of_shell(
     helper: Identity,
     inspect: impl Fn(u32) -> Option<Identity>,
@@ -323,7 +329,7 @@ mod tests {
     /// parent pid is still the one captured.
     #[cfg(unix)]
     #[test]
-    fn attached_to_this_processs_parent_agrees_with_the_unix_parent_pid() {
+    fn this_processs_live_parent_is_the_unix_parent_pid_and_attached() {
         let me = Identity::inspect(std::process::id()).expect("this process reads");
         let parent = me.parent().expect("its parent reads");
         assert_eq!(parent.pid, std::os::unix::process::parent_id());

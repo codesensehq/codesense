@@ -147,7 +147,7 @@ impl Attachment {
         arg: Option<&str>,
         inspect: fn(u32) -> Option<Process>,
     ) -> Option<Self> {
-        let parent = helper.parent()?;
+        let parent = helper.parent_read_by(inspect)?;
         let agent = match arg {
             None => parent,
             Some(crate::agent_cli::INBOX_AGENT_OF_SHELL) => agent_of_shell(helper, inspect)?,

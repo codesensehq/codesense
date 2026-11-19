@@ -59,10 +59,11 @@ pub(super) fn serve(
     transport::serve(owner, stream, peer, token, ask)
 }
 
-/// Helper side, from the hook's argv (`<cli> <event> <agent>`, the agent a pid,
+/// Helper side, from the hook's argv (`<cli> <event> <agent>`, where the agent is a pid,
 /// [`INBOX_AGENT_OF_SHELL`](crate::agent_cli::INBOX_AGENT_OF_SHELL), or by default the
-/// helper's parent): waits for the agent's mail notice at the host its tab runs on (a host-submitted CLI's hook only
-/// looks once), and hands it to the CLI as its inbox port says. Returns the hook's exit
+/// helper's parent): waits for the agent's mail notice at the host its tab runs on (a
+/// host-submitted CLI's hook only looks once), and hands it to the CLI as its inbox port
+/// says. Returns the hook's exit
 /// status: 2 for a notice handed over as a rewake, 0 for anything else. A CLI with no
 /// CodeSense invocation (no activity token, as a run with no terminal) has no waiter.
 pub fn wait_from_hook(args: &[std::ffi::OsString]) -> i32 {
