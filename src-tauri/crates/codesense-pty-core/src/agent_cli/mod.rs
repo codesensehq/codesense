@@ -44,6 +44,7 @@ pub mod version_cache;
 pub use codesense_host_proto::agent_cli::{AgentCli, NativeLaunch};
 use codesense_host_proto::reverse_mcp::AgentStartup;
 pub use descriptor::*;
+#[cfg(test)]
 pub(crate) use hooks::read_check;
 pub use hooks::CheckInput;
 
