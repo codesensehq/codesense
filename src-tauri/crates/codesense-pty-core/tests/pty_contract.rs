@@ -85,7 +85,6 @@ impl Terminal {
         let session = PtySessionId::new("contract");
         host.register(pty, registration(session.as_str(), osc_enabled))
             .expect("register the session");
-        support::answer_cursor_request(&host, &session);
         Self {
             host,
             events,

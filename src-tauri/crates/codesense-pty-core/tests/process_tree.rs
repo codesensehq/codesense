@@ -57,7 +57,6 @@ fn killing_a_session_ends_the_child_and_its_grandchild() {
     let session = PtySessionId::new("tree");
     host.register(pty, registration(session.as_str(), false))
         .expect("register the session");
-    support::answer_cursor_request(&host, &session);
     // The runner adopted the child into its process group as it spawned it.
     host.write(&session, b"go\r").expect("send go");
 
