@@ -98,6 +98,44 @@ fn dropping_the_tree_kills_child_and_grandchild() {
     assert!(eventually(Duration::from_secs(5), gone));
 }
 
+/// A tree whose root starts a grandchild, prints its pid and exits.
+fn spawn_tree_then_exit() -> (ProcessTree, Pid) {
+    let mut tree = ProcessTree::spawn(&mut fixture(&["tree-then-exit"])).unwrap();
+    let grandchild = Pid::from_raw(first_line(&mut tree).parse().unwrap());
+    (tree, grandchild)
+}
+
+#[test]
+fn a_root_that_exits_takes_the_rest_of_its_tree_with_it() {
+    let (mut tree, grandchild) = spawn_tree_then_exit();
+    assert!(exits_within(&mut tree, Duration::from_secs(5)));
+    assert!(
+        eventually(Duration::from_secs(5), || !is_alive(grandchild)),
+        "the grandchild outlived its root's exit"
+    );
+}
+
+#[test]
+fn try_wait_leaving_rest_leaves_what_the_root_left_running() {
+    let (mut tree, grandchild) = spawn_tree_then_exit();
+    assert!(eventually(Duration::from_secs(5), || tree
+        .try_wait_leaving_rest()
+        .unwrap()
+        .is_some_and(|status| status.success())));
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(is_alive(grandchild), "the root's exit ended the grandchild");
+    // Nor does the tree end it when it drops: on Windows its job was
+    // closed without kill-on-close.
+    drop(tree);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        is_alive(grandchild),
+        "dropping the tree ended the grandchild"
+    );
+    terminate_pid(grandchild).unwrap();
+    assert!(eventually(Duration::from_secs(5), || !is_alive(grandchild)));
+}
+
 #[test]
 fn an_exit_waiter_times_out_while_its_process_runs_and_sees_it_exit() {
     let mut tree = ProcessTree::spawn(fixture(&["exit", "0"]).stdin(Stdio::piped())).unwrap();
@@ -1081,6 +1119,77 @@ fn wire_form_round_trips() {
     BufReader::new(stream).read_line(&mut line).unwrap();
     assert_eq!(line.trim(), "by wire");
     assert!(exits_within(&mut client, Duration::from_secs(5)));
+}
+
+/// A blocking client and the server end the listener accepted for it.
+fn blocking_pair(endpoint: &Endpoint) -> (blocking::LocalStream, blocking::LocalStream) {
+    let listener = blocking::LocalListener::bind(endpoint).unwrap();
+    let client = blocking::LocalStream::connect(endpoint).unwrap();
+    let (_listener, server) = accept_blocking_within(listener);
+    (client, server)
+}
+
+#[test]
+fn a_blocking_read_and_write_time_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut client, mut server) = blocking_pair(&ephemeral(dir.path(), "timeout"));
+
+    // A zero timeout is refused, as std's sockets refuse it.
+    for refused in [
+        client.set_read_timeout(Some(Duration::ZERO)),
+        client.set_write_timeout(Some(Duration::ZERO)),
+    ] {
+        assert_eq!(refused.unwrap_err().kind(), ErrorKind::InvalidInput);
+    }
+
+    // A read with nothing to read fails at its timeout.
+    client
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
+    let started = Instant::now();
+    let error = client.read(&mut [0; 16]).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::TimedOut, "{error}");
+    let waited = started.elapsed();
+    assert!(
+        waited >= Duration::from_millis(150) && waited < Duration::from_secs(5),
+        "{waited:?}"
+    );
+
+    // The stream still works after it: what comes next is read whole.
+    server.write_all(b"after").unwrap();
+    let mut after = [0; 5];
+    client.read_exact(&mut after).unwrap();
+    assert_eq!(&after, b"after");
+
+    // A write the other end never reads fails at its timeout once the
+    // buffers between them are full.
+    server
+        .set_write_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
+    let chunk = vec![0u8; 64 * 1024];
+    let started = Instant::now();
+    let error = loop {
+        if let Err(error) = server.write(&chunk) {
+            break error;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the buffers never filled"
+        );
+    };
+    assert_eq!(error.kind(), ErrorKind::TimedOut, "{error}");
+}
+
+#[test]
+fn a_blocking_read_gets_what_was_written_before_the_other_end_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut client, mut server) = blocking_pair(&ephemeral(dir.path(), "closed"));
+    client.set_read_timeout(Some(CONNECT_LIMIT)).unwrap();
+    server.write_all(b"last words").unwrap();
+    drop(server);
+    let mut heard = Vec::new();
+    client.read_to_end(&mut heard).unwrap();
+    assert_eq!(heard, b"last words");
 }
 
 #[test]

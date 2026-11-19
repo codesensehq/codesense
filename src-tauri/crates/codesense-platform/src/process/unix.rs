@@ -48,6 +48,11 @@ impl Group {
     pub(super) fn kill(&self) -> io::Result<()> {
         signal_group(self.0, libc::SIGKILL)
     }
+
+    /// Nothing to undo: a process group ends nothing when it is let go.
+    pub(super) fn release(&self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Unix has no handle to wait on a process this one did not start.

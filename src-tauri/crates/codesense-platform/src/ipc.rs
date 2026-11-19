@@ -165,6 +165,7 @@ impl AsyncWrite for LocalStream {
 /// The same listener and stream for callers without a runtime.
 pub mod blocking {
     use std::io::{self, Read, Write};
+    use std::time::Duration;
 
     use super::{sys, Endpoint};
     use crate::process::Pid;
@@ -202,6 +203,19 @@ pub mod blocking {
         /// The process at the other end; as [`super::LocalStream::peer_pid`].
         pub fn peer_pid(&self) -> io::Result<Pid> {
             self.0.peer_pid()
+        }
+
+        /// Bound each later read to `timeout`: one that waits longer fails
+        /// with [`io::ErrorKind::TimedOut`]. `None` waits for ever; a zero
+        /// timeout is [`io::ErrorKind::InvalidInput`].
+        pub fn set_read_timeout(&mut self, timeout: Option<Duration>) -> io::Result<()> {
+            self.0.set_read_timeout(timeout)
+        }
+
+        /// Bound each later write to `timeout`, as
+        /// [`LocalStream::set_read_timeout`] bounds a read.
+        pub fn set_write_timeout(&mut self, timeout: Option<Duration>) -> io::Result<()> {
+            self.0.set_write_timeout(timeout)
         }
     }
 
