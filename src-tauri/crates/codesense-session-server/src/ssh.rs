@@ -297,20 +297,20 @@ impl Paths {
 
 /// Write `alias`'s known-hosts file in `dir`: `key`, and nothing else.
 fn write_pin(dir: &Path, alias: &str, key: &HostKey) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
+    use std::io::Write;
     static PIN_FILES: std::sync::Mutex<()> = std::sync::Mutex::new(());
     static STAGE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let _held = PIN_FILES.lock().unwrap_or_else(|e| e.into_inner());
     std::fs::create_dir_all(dir).map_err(|e| format!("create {dir:?}: {e}"))?;
-    let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    let _ = codesense_platform::fs::set_owner_only(dir);
     let target = dir.join(alias);
     let staged = dir.join(format!(
         ".{alias}.incoming-{}-{}",
         std::process::id(),
         STAGE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
-    let result = std::fs::write(&staged, format!("{alias} {}\n", key.to_line()))
-        .and_then(|()| std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o600)))
+    let result = codesense_platform::fs::create_new_owner_only(&staged)
+        .and_then(|mut file| file.write_all(format!("{alias} {}\n", key.to_line()).as_bytes()))
         .and_then(|()| std::fs::rename(&staged, &target))
         .map_err(|e| format!("pin the host key in {target:?}: {e}"));
     if result.is_err() {
@@ -813,15 +813,14 @@ impl Drop for TempDir {
 }
 
 fn tempfile_dir(parent: &Path) -> Result<TempDir, String> {
-    use std::os::unix::fs::PermissionsExt;
     std::fs::create_dir_all(parent).map_err(|e| format!("create {parent:?}: {e}"))?;
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or_default();
     let path = parent.join(format!("scan-{:x}-{nanos:x}", std::process::id()));
-    std::fs::create_dir(&path).map_err(|e| format!("create {path:?}: {e}"))?;
-    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700));
+    codesense_platform::fs::create_dir_new_owner_only(&path)
+        .map_err(|e| format!("create {path:?}: {e}"))?;
     Ok(TempDir { path })
 }
 

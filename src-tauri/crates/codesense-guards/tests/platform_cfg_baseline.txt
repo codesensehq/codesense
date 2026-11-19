@@ -60,7 +60,6 @@ crates/codesense-session-server/src/reverse_mcp.rs 15
 crates/codesense-session-server/src/routine_arm/host_port.rs 2
 crates/codesense-session-server/src/server.rs 8
 crates/codesense-session-server/src/session_wake/mod.rs 6
-crates/codesense-session-server/src/ssh.rs 2
 crates/codesense-session-server/src/testing.rs 6
 crates/codesense-session-server/src/usage_receiver.rs 4
 crates/codesense-session-server/src/usage_spool.rs 2
