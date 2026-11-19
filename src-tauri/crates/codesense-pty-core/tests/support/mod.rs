@@ -1,11 +1,54 @@
 // SPDX-License-Identifier: MIT
-//! Shared by the integration tests that run the real emulator worker: where
-//! `scripts/build-emulator.sh` put it for this machine.
+//! Shared by the integration tests that run sessions on a host: where
+//! `scripts/build-emulator.sh` put the emulator worker for this machine, the
+//! runtime a host runs on, event sinks and a session's registration.
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
+use codesense_pty_core::domain::{PortUnavailable, TerminalDomainEvent, TerminalEventSink};
 use codesense_pty_core::emulator::WORKER_BIN;
+use codesense_pty_core::{SessionMeta, SessionRegistration};
+
+/// The runtime every host in the test binary runs on.
+pub fn runtime() -> &'static tokio::runtime::Runtime {
+    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    RUNTIME.get_or_init(|| tokio::runtime::Runtime::new().unwrap())
+}
+
+/// Drops every event.
+pub struct NoopSink;
+
+impl TerminalEventSink for NoopSink {
+    fn emit(&self, _: TerminalDomainEvent) -> Result<(), PortUnavailable> {
+        Ok(())
+    }
+}
+
+/// Keeps every event.
+#[derive(Default)]
+pub struct RecordingSink(pub Mutex<Vec<TerminalDomainEvent>>);
+
+impl TerminalEventSink for RecordingSink {
+    fn emit(&self, event: TerminalDomainEvent) -> Result<(), PortUnavailable> {
+        self.0.lock().unwrap().push(event);
+        Ok(())
+    }
+}
+
+/// An ordinary session `session_id`, with xterm's default scrollback, and the
+/// OSC side-tap on when `osc_enabled`.
+pub fn registration(session_id: &str, osc_enabled: bool) -> SessionRegistration {
+    SessionRegistration {
+        session_id: session_id.to_string(),
+        meta: SessionMeta::default(),
+        home_cwd: None,
+        osc_enabled,
+        is_pool_member: false,
+        scrollback: 1000,
+    }
+}
 
 /// The Rust triple of the machine running the tests, as the build scripts name
 /// artifacts.

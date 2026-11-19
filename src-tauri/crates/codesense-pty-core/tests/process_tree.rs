@@ -7,17 +7,18 @@
 //! Object on Windows). On Windows the grandchild is detached from the console,
 //! so closing the pseudo console does not end it: only the job does.
 
-use std::sync::{Arc, OnceLock};
+mod support;
+
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use codesense_platform::process::{is_alive, Pid};
-use codesense_pty_core::domain::{
-    PortUnavailable, PtySessionId, TerminalDomain, TerminalDomainEvent, TerminalEventSink,
-};
+use codesense_pty_core::domain::{PtySessionId, TerminalDomain};
 use codesense_pty_core::layout::ServerIdentity;
 use codesense_pty_core::runner::{LocalPtyRunner, PtyRunner, PtySpec};
-use codesense_pty_core::{SessionMeta, SessionRegistration, TerminalHost};
+use codesense_pty_core::TerminalHost;
 use portable_pty::{CommandBuilder, PtySize};
+use support::{registration, runtime, NoopSink};
 
 /// Poll `done` every 20 ms until it holds or `limit` passes.
 fn eventually(limit: Duration, mut done: impl FnMut() -> bool) -> bool {
@@ -30,19 +31,6 @@ fn eventually(limit: Duration, mut done: impl FnMut() -> bool) -> bool {
             return false;
         }
         std::thread::sleep(Duration::from_millis(20));
-    }
-}
-
-fn runtime() -> &'static tokio::runtime::Runtime {
-    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-    RUNTIME.get_or_init(|| tokio::runtime::Runtime::new().unwrap())
-}
-
-struct NoopSink;
-
-impl TerminalEventSink for NoopSink {
-    fn emit(&self, _: TerminalDomainEvent) -> Result<(), PortUnavailable> {
-        Ok(())
     }
 }
 
@@ -67,18 +55,8 @@ fn killing_a_session_ends_the_child_and_its_grandchild() {
         runtime().handle().clone(),
     );
     let session = PtySessionId::new("tree");
-    host.register(
-        pty,
-        SessionRegistration {
-            session_id: session.to_string(),
-            meta: SessionMeta::default(),
-            home_cwd: None,
-            osc_enabled: false,
-            is_pool_member: false,
-            scrollback: 1000,
-        },
-    )
-    .expect("register the session");
+    host.register(pty, registration(session.as_str(), false))
+        .expect("register the session");
     // The runner adopted the child into its process group as it spawned it.
     host.write(&session, b"go\r").expect("send go");
 

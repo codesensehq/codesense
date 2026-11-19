@@ -115,10 +115,11 @@ fn osc() {
 
 /// The alternate screen, cleared, with `row one` on row 1, `at 3,5` from
 /// column 5 of row 3, 100 `x`s on row 5 with autowrap off (so the row ends in
-/// the last column), and `done` on row 7 with autowrap back on.
+/// the last column), and, with autowrap back on, `done` on row 7 and `wrap`
+/// from column 79 of row 9, which wraps to row 10.
 fn dec_screen() -> String {
     format!(
-        "\x1b[?1049h\x1b[2J\x1b[H\x1b[?7lrow one\x1b[3;5Hat 3,5\x1b[5;1H{}\x1b[?7h\x1b[7;1Hdone",
+        "\x1b[?1049h\x1b[2J\x1b[H\x1b[?7lrow one\x1b[3;5Hat 3,5\x1b[5;1H{}\x1b[?7h\x1b[7;1Hdone\x1b[9;79Hwrap",
         "x".repeat(100)
     )
 }

@@ -13,41 +13,24 @@
 mod support;
 
 use std::path::Path;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use codesense_pty_core::domain::{
-    PortUnavailable, PtySessionId, TerminalDomain, TerminalDomainEvent, TerminalEventSink, ViewerId,
-};
+use codesense_pty_core::domain::{PtySessionId, TerminalDomain, TerminalDomainEvent, ViewerId};
 use codesense_pty_core::emulator::{EmulatorConfig, EmulatorText, TextMode};
 use codesense_pty_core::layout::ServerIdentity;
 use codesense_pty_core::osc::OscEvent;
 use codesense_pty_core::runner::{LocalPtyRunner, PtyRunner, PtySpec};
 use codesense_pty_core::shell::{shell_kind, ShellKind};
 use codesense_pty_core::spawn::{HostEnvironment, SpawnIntent};
-use codesense_pty_core::{SessionMeta, SessionRegistration, TerminalHost};
+use codesense_pty_core::TerminalHost;
 use portable_pty::{CommandBuilder, PtySize};
+use support::{registration, runtime, RecordingSink};
 
 /// How long anything the tests wait for may take.
 const WAIT: Duration = Duration::from_secs(20);
 const COLS: u16 = 80;
 const ROWS: u16 = 24;
-
-fn runtime() -> &'static tokio::runtime::Runtime {
-    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-    RUNTIME.get_or_init(|| tokio::runtime::Runtime::new().unwrap())
-}
-
-/// Keeps every event.
-#[derive(Default)]
-struct RecordingSink(Mutex<Vec<TerminalDomainEvent>>);
-
-impl TerminalEventSink for RecordingSink {
-    fn emit(&self, event: TerminalDomainEvent) -> Result<(), PortUnavailable> {
-        self.0.lock().unwrap().push(event);
-        Ok(())
-    }
-}
 
 /// One session in a pty, on a host running the emulator worker.
 struct Terminal {
@@ -100,18 +83,8 @@ impl Terminal {
             .block_on(LocalPtyRunner.spawn(spec))
             .expect("local spawn succeeds");
         let session = PtySessionId::new("contract");
-        host.register(
-            pty,
-            SessionRegistration {
-                session_id: session.to_string(),
-                meta: SessionMeta::default(),
-                home_cwd: None,
-                osc_enabled,
-                is_pool_member: false,
-                scrollback: 1000,
-            },
-        )
-        .expect("register the session");
+        host.register(pty, registration(session.as_str(), osc_enabled))
+            .expect("register the session");
         Self {
             host,
             events,
@@ -216,6 +189,13 @@ impl Terminal {
     }
 }
 
+impl Drop for Terminal {
+    /// End the child with the test, passed or failed.
+    fn drop(&mut self) {
+        let _ = self.host.kill(&self.session);
+    }
+}
+
 fn has_row(screen: &EmulatorText, text: &str) -> bool {
     screen.lines.iter().any(|row| row.trim_end() == text)
 }
@@ -280,10 +260,23 @@ fn screen_matches_after_dec_modes() {
     terminal.wait_for_row("ready");
     terminal.type_line("dec");
     let screen = terminal.wait_for_screen("the alternate screen", |screen| {
-        screen.alt_screen && row(screen, 6) == "done"
+        screen.alt_screen && row(screen, 9) == "ap"
     });
     let x_row = "x".repeat(usize::from(COLS));
-    let expected = ["row one", "", "    at 3,5", "", x_row.as_str(), "", "done"];
+    // `wrap` written from the second-to-last column wraps once autowrap is back on.
+    let wrapped = format!("{}wr", " ".repeat(usize::from(COLS) - 2));
+    let expected = [
+        "row one",
+        "",
+        "    at 3,5",
+        "",
+        x_row.as_str(),
+        "",
+        "done",
+        "",
+        wrapped.as_str(),
+        "ap",
+    ];
     for (index, text) in expected.iter().enumerate() {
         assert_eq!(row(&screen, index), *text, "row {}", index + 1);
     }
@@ -358,19 +351,33 @@ fn default_shell_smoke() {
         .expect("an interactive shell resolves");
     let program = spec.command.get_argv()[0].clone();
     let kind = shell_kind(Path::new(&program));
-    let line = match kind {
-        Some(ShellKind::Pwsh | ShellKind::PowerShell) => "Write-Output hi; exit 3",
-        Some(ShellKind::Bash | ShellKind::Zsh | ShellKind::Fish) => "echo hi; exit 3",
-        _ => {
-            // Windows' table always ends in cmd.exe, which CI must not settle for.
-            assert!(
-                !support::in_ci(),
-                "the default shell is {program:?} ({kind:?}); CI needs PowerShell"
-            );
-            eprintln!("skipping: no smoke line for the default shell {program:?} ({kind:?})");
-            return;
-        }
+    // The shells this OS's smoke runs, and the line it types in them.
+    let (expected, line): (&[ShellKind], &str) = match std::env::consts::OS {
+        "windows" => (
+            &[ShellKind::Pwsh, ShellKind::PowerShell],
+            "Write-Output hi; exit 3",
+        ),
+        "linux" => (&[ShellKind::Bash], "echo hi; exit 3"),
+        _ => (
+            &[ShellKind::Zsh, ShellKind::Bash, ShellKind::Fish],
+            "echo hi; exit 3",
+        ),
     };
+    if !kind.is_some_and(|kind| expected.contains(&kind)) {
+        let reason =
+            format!("the default shell is {program:?} ({kind:?}), not one of {expected:?}");
+        match std::env::consts::OS {
+            // The table always ends in cmd.exe, which CI must not settle for.
+            "windows" => assert!(!support::in_ci(), "{reason}; CI needs PowerShell"),
+            "linux" => assert!(
+                Path::new("/bin/bash").is_file(),
+                "{reason}, and bash is missing"
+            ),
+            _ => {}
+        }
+        eprintln!("skipping: {reason}");
+        return;
+    }
 
     let terminal = Terminal::start(&worker, spec, false, dir);
     // Typed once the shell's start-up output (its prompt) has settled.

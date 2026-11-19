@@ -24,8 +24,7 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use codesense_pty_core::domain::{
-    PortUnavailable, PtySessionId, TerminalDomain, TerminalDomainEvent, TerminalEventSink,
-    ViewerId, ViewportId,
+    PtySessionId, TerminalDomain, TerminalDomainEvent, TerminalEventSink, ViewerId, ViewportId,
 };
 use codesense_pty_core::emulator::{
     EmulatorConfig, EmulatorLink, EmulatorStatus, EmulatorSupervisor, SessionEmulator, TextMode,
@@ -33,45 +32,21 @@ use codesense_pty_core::emulator::{
 use codesense_pty_core::layout::ServerIdentity;
 use codesense_pty_core::runner::PtySession;
 use codesense_pty_core::term_state::StreamId;
-use codesense_pty_core::{SessionMeta, SessionRegistration, TerminalHost};
+use codesense_pty_core::TerminalHost;
 use portable_pty::{Child, ChildKiller, ExitStatus, MasterPty, PtySize};
 
 const ANSWER: Duration = Duration::from_secs(20);
 
-struct NoopSink;
-
-impl TerminalEventSink for NoopSink {
-    fn emit(&self, _: TerminalDomainEvent) -> Result<(), PortUnavailable> {
-        Ok(())
-    }
-}
-
-fn runtime() -> &'static tokio::runtime::Runtime {
-    static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
-    RUNTIME.get_or_init(|| tokio::runtime::Runtime::new().unwrap())
-}
-
-/// Keeps every event.
-#[derive(Default)]
-struct RecordingSink(Mutex<Vec<TerminalDomainEvent>>);
-
-impl TerminalEventSink for RecordingSink {
-    fn emit(&self, event: TerminalDomainEvent) -> Result<(), PortUnavailable> {
-        self.0.lock().unwrap().push(event);
-        Ok(())
-    }
-}
-
 /// A host running the real worker from `dir`.
 fn host(worker: &Path, dir: &Path) -> TerminalHost {
-    host_with_sink(worker, dir, Arc::new(NoopSink))
+    host_with_sink(worker, dir, Arc::new(support::NoopSink))
 }
 
 fn host_with_sink(worker: &Path, dir: &Path, sink: Arc<dyn TerminalEventSink>) -> TerminalHost {
     let host = TerminalHost::new(
         ServerIdentity::ephemeral("emulator-integration"),
         sink,
-        runtime().handle().clone(),
+        support::runtime().handle().clone(),
     );
     host.start_emulator(EmulatorConfig::new(
         worker.to_path_buf(),
@@ -165,19 +140,9 @@ fn fake_session(host: &TerminalHost, session: &str, (cols, rows): (u16, u16)) ->
         Box::new(reader),
         Box::new(std::io::sink()),
     );
-    host.register(
-        pty,
-        SessionRegistration {
-            session_id: session.to_string(),
-            meta: SessionMeta::default(),
-            home_cwd: None,
-            osc_enabled: false,
-            is_pool_member: false,
-            // The reference terminals keep xterm's default scrollback.
-            scrollback: 1000,
-        },
-    )
-    .expect("register the fake session");
+    // The reference terminals keep xterm's default scrollback.
+    host.register(pty, support::registration(session, false))
+        .expect("register the fake session");
     output
 }
 
@@ -507,7 +472,7 @@ fn subscribe_snapshot_then_live_no_gap() {
         return;
     };
     let dir = tempfile::tempdir().unwrap();
-    let sink = Arc::new(RecordingSink::default());
+    let sink = Arc::new(support::RecordingSink::default());
     let host = host_with_sink(&worker, dir.path(), sink.clone());
     let viewer = ViewerId::new("app");
 
