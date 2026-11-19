@@ -52,7 +52,8 @@ import {
 } from "@/tauri/commands";
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
 import { logger } from "@/shared/lib/logger";
-import { useCapability, type CapabilityKey } from "@/shared/lib/capabilities";
+import type { CapabilityKey } from "@/shared/lib/capabilities";
+import { useConfigStore } from "@/shared/stores/config-store";
 import { rowMatches, type SettingRowSpec } from "@/features/settings/lib/row-matches";
 import {
   useDashboardProfileStore,
@@ -86,7 +87,7 @@ import { localMachineNoun } from "@/shared/lib/local-machine";
 
 // ---------- Row specs ----------
 
-const GENERAL_ROW_SPECS: Record<string, SettingRowSpec> = {
+const GENERAL_ROW_SPECS = {
   editor: {
     key: "editor",
     label: "Editor",
@@ -420,15 +421,18 @@ const GENERAL_ROW_SPECS: Record<string, SettingRowSpec> = {
     label: "About",
     keywords: ["about", "version", "update", "updates", "check", "release", "codesense"],
   },
-};
+} satisfies Record<string, SettingRowSpec>;
 
 export const GENERAL_ROW_SPEC_LIST: SettingRowSpec[] = Object.values(GENERAL_ROW_SPECS);
 
 /** The rows whose feature exists only where a capability is on; elsewhere they are hidden. */
-export const GENERAL_ROW_CAPABILITY: Partial<Record<string, CapabilityKey>> = {
+export const GENERAL_ROW_CAPABILITY: Partial<
+  Record<keyof typeof GENERAL_ROW_SPECS, CapabilityKey>
+> = {
   quitOnClose: "background-on-close",
   terminalServerMenuBar: "terminal-server-tray",
 };
+const GATED_ROWS = Object.entries(GENERAL_ROW_CAPABILITY) as [string, CapabilityKey][];
 
 /**
  * The General rows this OS has: `GENERAL_ROW_SPEC_LIST` without the rows whose capability is
@@ -436,17 +440,17 @@ export const GENERAL_ROW_CAPABILITY: Partial<Record<string, CapabilityKey>> = {
  * hidden row never counts as a match.
  */
 export function useGeneralRowSpecs(): SettingRowSpec[] {
-  const backgroundOnClose = useCapability("background-on-close").on;
-  const terminalServerTray = useCapability("terminal-server-tray").on;
+  // The hidden row keys, joined so the selector returns a stable string. A capability reads as
+  // on until the startup read lands (or if it failed), like `useCapability`.
+  const hidden = useConfigStore((s) =>
+    GATED_ROWS.filter(([, cap]) => s.platformCaps?.[cap]?.on === false)
+      .map(([row]) => row)
+      .join(" "),
+  );
   return useMemo(() => {
-    const off = new Set<CapabilityKey>();
-    if (!backgroundOnClose) off.add("background-on-close");
-    if (!terminalServerTray) off.add("terminal-server-tray");
-    return GENERAL_ROW_SPEC_LIST.filter((spec) => {
-      const cap = GENERAL_ROW_CAPABILITY[spec.key];
-      return cap === undefined || !off.has(cap);
-    });
-  }, [backgroundOnClose, terminalServerTray]);
+    const off = new Set(hidden.split(" "));
+    return GENERAL_ROW_SPEC_LIST.filter((spec) => !off.has(spec.key));
+  }, [hidden]);
 }
 
 // ---------- General section ----------
