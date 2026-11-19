@@ -131,16 +131,10 @@ export default tseslint.config(
   // File-system paths in these folders go through the shared path helper. Before the
   // first-use block, which appends PATH_SPLIT_SELECTORS to its own list: the last block
   // that sets `no-restricted-syntax` for a file wins whole. The helper itself splits on
-  // both separators; the viewer store stays out until it migrates to the helper.
+  // both separators.
   {
     files: PATH_HELPER_FOLDERS,
-    ignores: [
-      "**/*.test.*",
-      "**/__fixtures__/**",
-      "**/test-fixtures/**",
-      "src/shared/lib/path.ts",
-      "src/shared/stores/viewer-store.ts",
-    ],
+    ignores: ["**/*.test.*", "**/__fixtures__/**", "**/test-fixtures/**", "src/shared/lib/path.ts"],
     rules: {
       "no-restricted-syntax": ["error", ...PATH_SPLIT_SELECTORS],
     },
