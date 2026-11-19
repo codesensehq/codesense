@@ -579,7 +579,6 @@ fn only_a_qualified_opencode_adds_its_plugin_and_other_adapters_ignore_the_flag(
     assert!(!installed.contains("/* @waiter */ null"));
 }
 
-#[cfg(cap_git_ai)]
 #[test]
 fn hermes_is_listed_and_available_to_users() {
     let runtime = AgentCli::Hermes;
@@ -613,6 +612,14 @@ fn hermes_is_listed_and_available_to_users() {
         desktop(runtime).attribution,
         Attribution::Unsupported("hermes")
     );
+    assert!(codesense_pty_core::agent_cli::known_label("hermes").is_none());
+}
+
+/// A Hermes launch into a managed worktree is unwired and sets its reflog marker.
+#[cfg(cap_git_ai)]
+#[test]
+fn a_hermes_launch_is_unwired_with_its_reflog_marker() {
+    let runtime = AgentCli::Hermes;
     let fixture = crate::attribution::testing::Launch::new(AgentCli::Claude);
     let plan = crate::attribution::launch::prepare(
         &crate::attribution::launch::Request {
@@ -634,5 +641,4 @@ fn hermes_is_listed_and_available_to_users() {
         plan.env,
         crate::attribution::unsupported::launch_env("hermes")
     );
-    assert!(codesense_pty_core::agent_cli::known_label("hermes").is_none());
 }

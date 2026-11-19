@@ -283,6 +283,7 @@ pub(crate) fn check_notes(checkout: &str, notes: Option<NotesMode>) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(cap_git_ai)]
     use crate::agents::resolve::tests::alice;
     #[cfg(cap_git_ai)]
     use crate::attribution::testing::Launch;
@@ -314,6 +315,11 @@ mod tests {
         set_for_checkout(home, &alice(), &path, None, Some(NotesMode::Local)).unwrap();
         let local = read(home, &alice(), &key).unwrap();
         assert_eq!(AttributionPrefs::notes_mode(&local), NotesMode::Local);
+    }
+
+    /// A repo with no notes setting keeps its notes local, with or without git-ai.
+    #[test]
+    fn notes_stay_local_by_default() {
         assert_eq!(
             AttributionPrefs::notes_mode(&AttributionPrefs::default()),
             NotesMode::Local
