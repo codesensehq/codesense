@@ -28,7 +28,7 @@ mod windows;
 #[cfg(windows)]
 use self::windows as sys;
 
-pub use self::identity::Identity;
+pub use self::identity::{agent_of_shell, still_attached, Identity};
 
 /// A process id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
