@@ -20,3 +20,12 @@ export function localMachinePhrase(): string {
 export function localMachineNoun(): string {
   return isMac() ? "Mac" : "computer";
 }
+
+/**
+ * What "each ___ keeps its own count" ranges over: "Mac and machine" on macOS, where
+ * the Mac is this install and a machine is a remote one, and "machine" elsewhere,
+ * where "computer and machine" would say the same thing twice.
+ */
+export function localMachineAndRemoteNoun(): string {
+  return isMac() ? "Mac and machine" : "machine";
+}

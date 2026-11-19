@@ -38,6 +38,7 @@ import {
 } from "./routine-command-fields";
 import {
   localMachineLabel,
+  localMachineAndRemoteNoun,
   localMachineNoun,
   localMachinePhrase,
 } from "@/shared/lib/local-machine";
@@ -529,7 +530,7 @@ function Limits({
       <p data-testid="routine-limits-hint" className="mt-2 max-w-[60ch] text-muted-foreground">
         {fresh
           ? "These count wakes into a running agent. This routine starts a new agent each time, so they don't apply; “If still running” under Options decides overlaps."
-          : `Optional, and only for waking a running agent. A quick check can wake it every time it fires; set these when a wake starts heavy work that should not repeat or overlap. Each ${localMachineNoun()} and machine keeps its own count.`}
+          : `Optional, and only for waking a running agent. A quick check can wake it every time it fires; set these when a wake starts heavy work that should not repeat or overlap. Each ${localMachineAndRemoteNoun()} keeps its own count.`}
       </p>
       <fieldset
         aria-label="Limits"
