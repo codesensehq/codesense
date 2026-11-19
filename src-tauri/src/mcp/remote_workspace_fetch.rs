@@ -26,7 +26,6 @@ use codesense_pty_core::{
 use rmcp::schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -630,12 +629,8 @@ fn import(
         .tempdir_in(&common)
         .map_err(|_| "local staging for the fetched commits unavailable")?;
     let payload = staging.path().join("objects.bundle");
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(&payload)
+    // A create-new never follows a link: one at `payload` already exists.
+    let mut file = codesense_platform::fs::create_new_owner_only(&payload)
         .map_err(|_| "local staging for the fetched commits unavailable")?;
     let mut offset = 0;
     while offset < descriptor.bundle.size {
@@ -1101,10 +1096,10 @@ impl IndexLock {
     /// `None` when another Git command holds the lock.
     fn acquire(index: &Path) -> Result<Option<Self>, String> {
         let path = Self::path_for(index);
+        // std's default mode, 0666 less the umask, as Git makes its own.
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .mode(0o666)
             .open(&path)
         {
             Ok(_) => Ok(Some(Self {

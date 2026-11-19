@@ -117,10 +117,6 @@ src/mcp/probe_environment.rs 2
 src/mcp/remote_agent_task/claude.rs 8
 src/mcp/remote_agent_task/harness.rs 4
 src/mcp/remote_agent_task/registry.rs 10
-src/mcp/remote_workspace.rs 9
-src/mcp/remote_workspace_bundle.rs 15
-src/mcp/remote_workspace_fetch.rs 2
-src/mcp/remote_workspace_target.rs 4
 src/mcp/socket_server.rs 10
 src/packs/risk.rs 3
 src/packs/validate.rs 6

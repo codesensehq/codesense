@@ -14,7 +14,6 @@ use rmcp::schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Mutex,
@@ -334,20 +333,20 @@ async fn prepare_inner(
     let read_path = path.clone();
     let prior_result: Result<Option<IntentReceipt>, String> =
         crate::commands::await_blocking("read_workspace_intent", move || {
-            match std::fs::OpenOptions::new()
-                .read(true)
-                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-                .open(&read_path)
-                .and_then(|file| {
-                    if !file.metadata()?.is_file() {
-                        return Err(std::io::Error::other(
-                            "workspace receipt is not a regular file",
-                        ));
-                    }
-                    let mut bytes = Vec::new();
-                    file.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
-                    Ok(bytes)
-                }) {
+            match codesense_platform::fs::open_nofollow_nonblocking(
+                std::fs::OpenOptions::new().read(true),
+                &read_path,
+            )
+            .and_then(|file| {
+                if !file.metadata()?.is_file() {
+                    return Err(std::io::Error::other(
+                        "workspace receipt is not a regular file",
+                    ));
+                }
+                let mut bytes = Vec::new();
+                file.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
+                Ok(bytes)
+            }) {
                 Ok(bytes) => serde_json::from_slice(&bytes)
                     .map(Some)
                     .map_err(|_| "workspace intent requires reconciliation".into()),
@@ -486,25 +485,17 @@ async fn prepare_inner(
             let _serial = RECEIPTS
                 .lock()
                 .map_err(|_| "workspace receipt lock unavailable")?;
-            std::fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(&root)
+            codesense_platform::fs::create_dir_owner_only(&root)
                 .map_err(|_| "workspace receipt root unavailable")?;
-            let mut file = match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .custom_flags(libc::O_NOFOLLOW)
-                .open(&path)
-            {
+            // A create-new never follows a link: one at `path` already exists.
+            let mut file = match codesense_platform::fs::create_new_owner_only(&path) {
                 Ok(file) => file,
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    let file = std::fs::OpenOptions::new()
-                        .read(true)
-                        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-                        .open(&path)
-                        .map_err(|_| "workspace receipt unavailable")?;
+                    let file = codesense_platform::fs::open_nofollow_nonblocking(
+                        std::fs::OpenOptions::new().read(true),
+                        &path,
+                    )
+                    .map_err(|_| "workspace receipt unavailable")?;
                     if !file
                         .metadata()
                         .map_err(|_| "workspace receipt unavailable")?
@@ -673,11 +664,11 @@ pub(crate) fn transfer(
         return Err("original bundle identity changed".into());
     }
     validate()?;
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(bundle_path)
-        .map_err(|_| "original bundle unavailable")?;
+    let file = codesense_platform::fs::open_nofollow_nonblocking(
+        std::fs::OpenOptions::new().read(true),
+        bundle_path,
+    )
+    .map_err(|_| "original bundle unavailable")?;
     if peer.pipelined() {
         let status = peer.upload_status(request.clone())?;
         // The machine names its chunk size; any within the protocol's bounds
@@ -696,12 +687,11 @@ pub(crate) fn transfer(
         if !status.sealed && !received.is_complete() {
             let mut pipe = peer.chunk_pipe(request.clone());
             let mut read = |index: u32| -> Result<Vec<u8>, String> {
-                use std::os::unix::fs::FileExt;
                 validate()?;
                 let (offset, len) =
                     chunk_range_in(size, index, chunk).ok_or("bundle chunk out of range")?;
                 let mut bytes = vec![0; len];
-                file.read_exact_at(&mut bytes, offset)
+                codesense_platform::fs::read_exact_at(&file, &mut bytes, offset)
                     .map_err(|_| "bundle read failed")?;
                 Ok(bytes)
             };

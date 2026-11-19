@@ -3,15 +3,12 @@
 use super::remote_workspace::PrepareProgress;
 use crate::commands::{attachments, route_to_context::ActiveContext};
 use crate::domain::SourceRepoSlug;
+use codesense_platform::fs::{self as platform_fs, Open};
+use codesense_platform::process::ProcessTree;
 use codesense_pty_core::remote_workspace::{GitBundle, RepositoryKnowledge, MAX_BUNDLE_BYTES};
 use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::{Read, Write};
-use std::os::fd::AsRawFd;
-use std::os::unix::{
-    fs::{DirBuilderExt, OpenOptionsExt},
-    process::CommandExt,
-};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -39,14 +36,7 @@ pub(super) fn lock_operation(
     alive: &dyn Fn() -> bool,
     deadline: Instant,
 ) -> Result<File, String> {
-    let lock = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
+    let lock = platform_fs::create_owner_only(path, Open::NoFollow)
         .map_err(|_| "bundle operation lock unavailable")?;
     if !lock
         .metadata()
@@ -56,8 +46,8 @@ pub(super) fn lock_operation(
         return Err("bundle lock is not regular".into());
     }
     loop {
-        // SAFETY: live owned descriptor; lock releases on File drop.
-        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        // The lock releases when the file drops.
+        if matches!(platform_fs::try_lock_exclusive(&lock), Ok(true)) {
             return Ok(lock);
         }
         if !alive() || Instant::now() >= deadline {
@@ -66,21 +56,10 @@ pub(super) fn lock_operation(
         std::thread::sleep(Duration::from_millis(20));
     }
 }
-#[allow(
-    clippy::unnecessary_cast,
-    reason = "statvfs field widths differ between supported Unix targets"
-)]
 pub(super) fn headroom(path: &Path, bytes: u64) -> Result<(), String> {
-    let file = File::open(path).map_err(|_| "local disk unavailable")?;
-    let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
-    // SAFETY: held file descriptor and valid output storage.
-    if unsafe { libc::fstatvfs(file.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
-        return Err("local disk headroom unavailable".into());
-    }
-    let stat = unsafe { stat.assume_init() };
-    if (stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64)
-        < bytes.saturating_add(256 * 1024 * 1024)
-    {
+    let available =
+        platform_fs::available_space(path).map_err(|_| "local disk headroom unavailable")?;
+    if available < bytes.saturating_add(256 * 1024 * 1024) {
         return Err("local disk lacks bundle preparation headroom".into());
     }
     Ok(())
@@ -109,10 +88,7 @@ fn save_state(dir: &Path, state: &BundleState) -> Result<(), String> {
         .map_err(|_| "bundle directory not durable".into())
 }
 fn read_state(path: &Path) -> Result<BundleState, String> {
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
+    let file = platform_fs::open_nofollow_nonblocking(std::fs::OpenOptions::new().read(true), path)
         .map_err(|_| "bundle state unavailable")?;
     if !file
         .metadata()
@@ -126,16 +102,6 @@ fn read_state(path: &Path) -> Result<BundleState, String> {
         .read_to_end(&mut bytes)
         .map_err(|_| "bundle state unreadable")?;
     serde_json::from_slice(&bytes).map_err(|_| "bundle state invalid".into())
-}
-struct GitChild(std::process::Child);
-impl Drop for GitChild {
-    fn drop(&mut self) {
-        // SAFETY: this child was spawned into its own process group.
-        unsafe {
-            libc::kill(-(self.0.id() as i32), libc::SIGKILL);
-        }
-        let _ = self.0.wait();
-    }
 }
 pub(super) fn run(
     command: Command,
@@ -264,26 +230,15 @@ fn run_inner(
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE");
-    // SAFETY: setpgid is async-signal-safe; only this subprocess group is cancelled.
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setpgid(0, 0) == 0 {
-                Ok(())
-            } else {
-                Err(std::io::Error::last_os_error())
-            }
-        });
-    }
     if !alive() || Instant::now() >= deadline {
         return Err("local Git preparation cancelled".into());
     }
-    let mut child = GitChild(
-        command
-            .spawn()
-            .map_err(|_| "local Git executable unavailable")?,
-    );
+    // Git leads a tree of its own (on unix a fresh process group): dropping
+    // it kills everything Git started, and an exit ends what Git left behind.
+    let mut tree =
+        ProcessTree::spawn(&mut command).map_err(|_| "local Git executable unavailable")?;
     // Git rewrites one progress line with `\r`; each rewrite is a reading.
-    let lines = child.0.stderr.take().map(|stderr| {
+    let lines = tree.child().stderr.take().map(|stderr| {
         let (tx, rx) = std::sync::mpsc::channel::<String>();
         std::thread::spawn(move || {
             let mut stderr = stderr;
@@ -351,8 +306,7 @@ fn run_inner(
         if let Some(path) = payload {
             headroom(path.parent().ok_or("bundle directory unavailable")?, 0)?;
         }
-        if let Some(status) = child
-            .0
+        if let Some(status) = tree
             .try_wait()
             .map_err(|_| "local Git process unavailable")?
         {
@@ -476,11 +430,7 @@ pub(crate) fn build_reporting(
     let (url, base_ref) = (url.as_str(), base_ref.as_str());
     let deadline = Instant::now() + Duration::from_secs(30 * 60);
     let dir = root.join(format!("bundle-{key}"));
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&dir)
-        .map_err(|_| "private bundle directory unavailable")?;
+    platform_fs::create_dir_owner_only(&dir).map_err(|_| "private bundle directory unavailable")?;
     let _lock = lock_operation(&dir.join("operation.lock"), &alive, deadline)?;
     let state_path = dir.join("intent.json");
     let mut state = if state_path.exists() {
@@ -529,10 +479,7 @@ pub(crate) fn build_reporting(
         "repository-{:x}",
         Sha256::digest(repository_key.as_bytes())
     ));
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&cache_root)
+    platform_fs::create_dir_owner_only(&cache_root)
         .map_err(|_| "repository cache directory unavailable")?;
     let _cache_lock = lock_operation(&cache_root.join("operation.lock"), &alive, deadline)?;
     headroom(&cache_root, 0)?;
@@ -805,11 +752,9 @@ pub(crate) fn settle(path: &Path, expected: &GitBundle) -> Result<(), String> {
 }
 
 pub(crate) fn inspect(path: &Path) -> Result<(u64, String), String> {
-    let mut file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-        .map_err(|_| "original bundle unavailable")?;
+    let mut file =
+        platform_fs::open_nofollow_nonblocking(std::fs::OpenOptions::new().read(true), path)
+            .map_err(|_| "original bundle unavailable")?;
     let meta = file.metadata().map_err(|_| "original bundle unavailable")?;
     if !meta.is_file() || meta.len() == 0 || meta.len() > MAX_BUNDLE_BYTES {
         return Err("Git bundle must be a regular file no larger than 64 GiB".into());
