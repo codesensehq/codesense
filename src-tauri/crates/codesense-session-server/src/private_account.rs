@@ -935,7 +935,15 @@ mod tests {
             "set -- {}; {script}",
             shell_quote(&pid_file.to_string_lossy())
         );
+        let started = Instant::now();
         let ran = bounded_output_within(&shell, STAGE_STEP, &script, Stdio::null(), None, 2);
+        // A step that killed nothing would return only when the 30 s `sleep`
+        // let go of it.
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the step took {:?}",
+            started.elapsed()
+        );
         let pid: libc::pid_t = std::fs::read_to_string(&pid_file)
             .unwrap()
             .trim()
