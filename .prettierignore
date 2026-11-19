@@ -40,6 +40,8 @@ tests/fixtures/terminal/**/*.json
 tests/fixtures/private-reconnect-replay.json
 # Docs API lint fixtures: quote styles, fence lengths and line numbers are the test input.
 scripts/fixtures/docs-api-examples/
+# The pane-text lint fixture: its line numbers are the test input.
+scripts/fixtures/pane-text/
 scripts/tests/fixtures/rm4f-docker28-*.json
 # The shipped docs context repo (codesense-docs/) is docs output, like docs/
 # and site/: authored HTML/CSS pages, Excalidraw sketches, recorded visual

@@ -2345,11 +2345,22 @@
               .join(" · ")
           : null;
       }
+      // A session is local when it has no machine id (or the local one); only a remote tab
+      // carries one. The machine label is wording, never the test.
+      function remoteMachine(s) {
+        return s.machineId && s.machineId !== "local" ? s.machine || s.machineId : null;
+      }
+      // Read when shown, so a hint built before the slot context still names the person's keys.
+      function moveHint() {
+        const up = cs.formatKeys?.("Alt+ArrowUp") || "Alt+↑",
+          down = cs.formatKeys?.("Alt+ArrowDown") || "Alt+↓";
+        return `drag to move, or ${up} / ${down}`;
+      }
       function tooltipOf(row, live) {
         const { s, text } = row,
           offline = s.state === "offline",
           role = s.rowNames?.secondary || s.role || s.queueRole || "",
-          details = [s.machine !== "This Mac" ? s.machine : null, s.model]
+          details = [remoteMachine(s), s.model]
             .filter(Boolean)
             .join(" · ");
         return [
@@ -2371,7 +2382,7 @@
           text.ask,
           offline
             ? "Click, Enter or Space to show it · M for its inbox"
-            : "Click for terminal · Enter, Space, Q or Option-click for Quick view · M for inbox",
+            : `Click for terminal · Enter, Space, Q or ${cs.formatModifierClick?.("Alt") || "Alt+click"} for Quick view · M for inbox`,
           offline ? `${s.machine || "Machine"} is offline. CodeSense is reconnecting.` : null,
         ]
           .filter(Boolean)
@@ -3311,7 +3322,8 @@
           if (row.workspace) {
             head.addEventListener("pointerdown", (e) => beginCardDrag(e, row));
             head.setAttribute("aria-keyshortcuts", "Alt+ArrowUp Alt+ArrowDown");
-            head.title = "drag to move, or Option+↑ / Option+↓";
+            head.title = moveHint();
+            head.addEventListener("pointerenter", () => (head.title = moveHint()));
             if (row.movable) {
               const grip = h("span", { class: "al-ws-grip", "aria-hidden": "true" });
               grip.innerHTML = GRIP;
@@ -3428,7 +3440,7 @@
         }
         const second = h("span", { class: "al-l2" }),
           role = s.rowNames?.secondary || s.role || s.queueRole || "",
-          details = [s.machine !== "This Mac" ? s.machine : null, s.model]
+          details = [remoteMachine(s), s.model]
             .filter(Boolean)
             .join(" · ");
         // The via pill reveals the launcher wherever it isn't the visible tree parent.

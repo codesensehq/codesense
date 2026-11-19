@@ -5,6 +5,7 @@ import type { Event as DocEvent } from "happy-dom";
 import { resolve } from "node:path";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, onTestFailed, vi } from "vitest";
+import { restorePlatform, setPlatform } from "@/test/platform";
 
 vi.mock("@/shared/lib/open-management-tab", () => ({ openManagementTab: vi.fn() }));
 import {
@@ -1761,7 +1762,7 @@ describe("paste into the active terminal", () => {
     await open();
     await agentPicker();
     const reason = () => p!.doc.querySelector<HTMLElement>("#send-paste-reason")!;
-    expect(pasteRow().textContent).toBe("Paste into focused terminal⌥⌘↵");
+    expect(pasteRow().textContent).toBe("Paste into focused terminal⌘⌥⏎");
     expect(pasteRow().getAttribute("aria-disabled")).toBe("true");
     expect(pasteRow().title).toBe("Focus a terminal to paste into it");
     // The reason shows under the row and is its accessible description, not only a tooltip.
@@ -1801,6 +1802,48 @@ describe("paste into the active terminal", () => {
     );
     await waitFor(() => expect(terminal.paste).toHaveBeenCalledTimes(1));
     expect(ipc.mock.calls.some(([cmd]) => cmd === "send_prompt_to_agent")).toBe(false);
+  });
+
+  describe("off macOS", () => {
+    beforeEach(() => setPlatform("Win32"));
+    afterEach(() => restorePlatform());
+    /** Ctrl+Alt+Enter, or AltGr+Enter, which a webview reports as Ctrl and Alt with AltGraph. */
+    const ctrlAltEnter = (altGraph: boolean) => {
+      const event = new p!.win.KeyboardEvent("keydown", {
+        key: "Enter",
+        ctrlKey: true,
+        altKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      // happy-dom answers AltGraph from the Alt key, so pin the answer a webview gives.
+      Object.defineProperty(event, "getModifierState", {
+        value: (name: string) =>
+          name === "AltGraph" ? altGraph : name === "Control" || name === "Alt",
+      });
+      return event;
+    };
+
+    it("the send menu names Ctrl+Alt+Enter, and Ctrl+Alt+Enter in its search pastes", async () => {
+      terminal.can = true;
+      sessionRows = [sender()];
+      await open();
+      await agentPicker();
+      expect(pasteRow().textContent).toBe("Paste into focused terminalCtrl+Alt+⏎");
+      await act(async () => el(p!, "send-search").dispatchEvent(ctrlAltEnter(false) as never));
+      await waitFor(() => expect(terminal.paste).toHaveBeenCalledTimes(1));
+      expect(ipc.mock.calls.some(([cmd]) => cmd === "send_prompt_to_agent")).toBe(false);
+    });
+
+    it("AltGr+Enter in the send menu's search does not paste", async () => {
+      terminal.can = true;
+      sessionRows = [sender()];
+      await open();
+      await agentPicker();
+      await act(async () => el(p!, "send-search").dispatchEvent(ctrlAltEnter(true) as never));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(terminal.paste).not.toHaveBeenCalled();
+    });
   });
 
   it("a page without the sendPrompt grant has no paste", async () => {
