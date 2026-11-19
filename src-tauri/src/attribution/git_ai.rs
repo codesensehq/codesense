@@ -43,6 +43,7 @@ const DRAIN_SECONDS: &str = "5";
 #[derive(Debug, Clone)]
 pub(crate) struct GitAiSource {
     git: String,
+    #[cfg_attr(not(cap_git_ai), allow(dead_code))]
     drain: Option<Drain>,
 }
 

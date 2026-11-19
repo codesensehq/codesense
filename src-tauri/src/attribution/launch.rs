@@ -197,6 +197,7 @@ fn plan_for(
         Err(off) => return Plan::without(AttributionStatus::Off { reason: off }, None),
     };
     if !facade::enabled(caps) {
+        facade::skipped("launch wiring");
         return Plan::without(facade::off_status(), None);
     }
     #[cfg(cap_git_ai)]
@@ -220,6 +221,7 @@ pub(crate) const USER_DAEMON_NEUTRALISED: [(&str, &str); 3] = [
 ];
 
 /// Where Claude and Codex keep hooks a user could have installed git-ai's checkpoint in.
+#[cfg_attr(not(cap_git_ai), allow(dead_code))]
 pub(crate) struct HookSettings<'a> {
     pub user_home: &'a Path,
     /// `CLAUDE_CONFIG_DIR`, when set.
@@ -233,6 +235,7 @@ pub(crate) struct HookSettings<'a> {
 /// Whether the user ran git-ai's own `install-hooks`: a git-ai checkpoint hook that is not
 /// CodeSense's in their Claude settings (user, `CLAUDE_CONFIG_DIR` or project) or Codex config.
 /// Read only, for the doctor.
+#[cfg_attr(not(cap_git_ai), allow(dead_code))]
 pub(crate) fn user_hooks_present(settings: &HookSettings<'_>) -> bool {
     let claude = Option::map_or_else(
         settings.claude_config_dir,
