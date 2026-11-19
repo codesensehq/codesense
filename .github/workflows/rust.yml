@@ -654,12 +654,13 @@ jobs:
 
   rust-check-windows:
     name: Rust check (Windows)
-    # A compile check of the crates that build on Windows, plus the platform crate's tests and the
-    # pty contract against ConPTY with the Windows emulator worker. Not a required check: like the
-    # macOS jobs it never runs on a merge group, runs after the merge on each push to main that
-    # changes something Rust can see, always on the nightly schedule and workflow_dispatch, and on a
-    # pull request only with the ci:windows label (never a Dependabot pull request, and not again
-    # when another label is added). The crate set grows as crates port.
+    # A compile check of the crates that build on Windows, the session server's among them with its
+    # sidecar gated off, plus the platform crate's tests, Claude's hooks, the session server's
+    # portable items and the pty contract against ConPTY with the Windows emulator worker. Not a
+    # required check: like the macOS jobs it never runs on a merge group, runs after the merge on
+    # each push to main that changes something Rust can see, always on the nightly schedule and
+    # workflow_dispatch, and on a pull request only with the ci:windows label (never a Dependabot
+    # pull request, and not again when another label is added). The crate set grows as crates port.
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' && github.event_name != 'merge_group' && (github.event_name != 'pull_request' || (github.event.pull_request.user.login != 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'ci:windows') && (github.event.action != 'labeled' || github.event.label.name == 'ci:windows'))) }}
     runs-on: windows-2025
@@ -704,11 +705,17 @@ jobs:
           save-if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}
           cache-on-failure: true
       - name: Check the Windows crates
-        run: cargo check --locked -p codesense-platform -p codesense-host-proto -p codesense-fs-core -p codesense-pty-core --all-targets
+        run: cargo check --locked -p codesense-platform -p codesense-host-proto -p codesense-fs-core -p codesense-pty-core -p codesense-session-server --all-targets
       - name: Test the platform crate
         run: cargo test --locked -p codesense-platform
       - name: Test Claude's hooks
         run: "cargo test --locked -p codesense-host-proto --lib hook::"
+      - name: Test the session server's portable items
+        # What the app reads from the session server on every target; its sidecar is off here. A
+        # filter that matches no test passes in libtest, so the step fails unless one ran.
+        run: |
+          cargo test --locked -p codesense-session-server --lib portable 2>&1 | tee "$RUNNER_TEMP/portable-tests.log"
+          grep -Eq '^test result: ok\. [1-9][0-9]* passed' "$RUNNER_TEMP/portable-tests.log"
       - name: Build the emulator worker
         # After Rust: the script takes the host triple from rustc.
         run: pnpm run build:emulator

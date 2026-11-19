@@ -366,9 +366,11 @@ test("rust.yml runs the Windows check on a pull request only with ci:windows, ne
   assert.deepEqual(
     steps.filter((s) => /\bcargo\b/.test(s.run ?? "")).map((s) => s.run),
     [
-      "cargo check --locked -p codesense-platform -p codesense-host-proto -p codesense-fs-core -p codesense-pty-core --all-targets",
+      "cargo check --locked -p codesense-platform -p codesense-host-proto -p codesense-fs-core -p codesense-pty-core -p codesense-session-server --all-targets",
       "cargo test --locked -p codesense-platform",
       "cargo test --locked -p codesense-host-proto --lib hook::",
+      'cargo test --locked -p codesense-session-server --lib portable 2>&1 | tee "$RUNNER_TEMP/portable-tests.log"\n' +
+        "grep -Eq '^test result: ok\\. [1-9][0-9]* passed' \"$RUNNER_TEMP/portable-tests.log\"\n",
       "cargo test --locked --no-fail-fast -p codesense-pty-core --test pty_contract --test process_tree",
     ],
   );
@@ -386,6 +388,11 @@ test("rust.yml runs the Windows check on a pull request only with ci:windows, ne
     steps[pty].env.CODESENSE_EMULATOR_WORKER,
     "${{ github.workspace }}/src-tauri/binaries/codesense-emulator-x86_64-pc-windows-msvc.exe",
   );
+  // A filter that matches no test passes in libtest, so the portable step fails unless one ran.
+  const grep = /^grep -Eq '(.+)' /m.exec(steps.find((s) => /--lib portable/.test(s.run ?? "")).run);
+  const ran = new RegExp(grep[1], "m");
+  assert.match("test result: ok. 1 passed; 0 failed; 0 ignored", ran);
+  assert.doesNotMatch("test result: ok. 0 passed; 0 failed; 0 ignored", ran);
   // The ci:windows label's run gets a group of its own, so it never cancels a ci:macos run.
   assert.doesNotMatch(workflow.concurrency.group, /ci:windows/);
   // The platform crate is tested on Linux and macOS too.
