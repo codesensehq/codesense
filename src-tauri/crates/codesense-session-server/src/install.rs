@@ -40,11 +40,14 @@ use sha2::{Digest, Sha256};
 
 use codesense_pty_core::emulator::WORKER_BIN;
 
-use crate::attach::RESOURCES_DIR;
 use crate::survival::{self, Survival};
 
 /// The binary's name, on every machine.
 pub const BINARY: &str = "codesense-session-server";
+
+/// The name of the directory, next to the binary, holding the resources an
+/// installed host ships. `attach` re-exports it for the relay that reads it.
+pub const RESOURCES_DIR: &str = "resources";
 pub const BRIDGE: &str = "codesense-bridge";
 pub fn bridge_artifact_name(triple: &str) -> String {
     format!("{BRIDGE}-{triple}")
