@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { AppButton } from "@/shared/components/app-button";
 import {
   formatKeystrokeDisplay,
+  formatModifiersDisplay,
   hasAnyModifier,
   hasCommandModifier,
   hasMod,
@@ -119,11 +120,9 @@ export function ShortcutRow({ action, humanOnly }: ShortcutRowProps) {
     // Bare modifier presses: update the "waiting for key" hint so the
     // user gets feedback that their modifier is registered.
     if (e.key === "Meta" || e.key === "Control" || e.key === "Shift" || e.key === "Alt") {
-      const parts: string[] = [];
-      if (hasMod(e)) parts.push("⌘");
-      if (e.shiftKey) parts.push("⇧");
-      if (e.altKey) parts.push("⌥");
-      setPendingModifiers(parts.join(""));
+      setPendingModifiers(
+        formatModifiersDisplay({ cmdOrCtrl: hasMod(e), shift: e.shiftKey, alt: e.altKey }),
+      );
       return;
     }
     // Block propagation so the global shortcut handler doesn't also

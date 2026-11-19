@@ -1,4 +1,4 @@
-/* CodeSense kit editor | TipTap 3.32.2 | inputs 06e79a5db0fa08c8b995 */
+/* CodeSense kit editor | TipTap 3.32.2 | inputs c099649af76c49bf1962 */
 var Ec = Object.defineProperty, lh = (t, e) => {
   let n = {};
   for (var r in t) Ec(n, r, {
@@ -40854,11 +40854,61 @@ const VN = [
   "markdown",
   "diff"
 ];
+function GN() {
+  return typeof navigator < "u" && typeof navigator.platform == "string" && /Mac/i.test(navigator.platform);
+}
+function jN(t) {
+  return !!(t.metaKey || t.ctrlKey || t.altKey);
+}
+function JN(t) {
+  const e = t.split("+").map((i) => i.trim()), n = { cmdOrCtrl: !1, shift: !1, alt: !1, key: "" };
+  let r = !1;
+  for (const i of e)
+    if (i === "CmdOrCtrl")
+      n.cmdOrCtrl = !0;
+    else if (i === "Shift")
+      n.shift = !0;
+    else if (i === "Alt")
+      n.alt = !0;
+    else if (i.length > 0) {
+      if (r)
+        throw new Error(`Invalid keystroke "${t}": multiple non-modifier keys`);
+      n.key = XN(i), r = !0;
+    }
+  if (!r)
+    throw new Error(`Invalid keystroke "${t}": missing key`);
+  return n;
+}
+function ZN(t) {
+  const e = JN(t);
+  return YN(e) + QN(e.key);
+}
+function YN(t) {
+  if (GN()) return `${t.cmdOrCtrl ? "⌘" : ""}${t.shift ? "⇧" : ""}${t.alt ? "⌥" : ""}`;
+  const e = [];
+  return t.cmdOrCtrl && e.push("Ctrl"), t.shift && e.push("Shift"), t.alt && e.push("Alt"), e.map((n) => `${n}+`).join("");
+}
+function XN(t) {
+  return t.length === 1 && /[a-z]/.test(t) ? t.toUpperCase() : t === " " ? "Space" : t;
+}
+function QN(t) {
+  return {
+    Enter: "⏎",
+    Escape: "Esc",
+    Tab: "⇥",
+    Backspace: "⌫",
+    Delete: "⌦",
+    ArrowUp: "↑",
+    ArrowDown: "↓",
+    ArrowLeft: "←",
+    ArrowRight: "→"
+  }[t] ?? t;
+}
 function rt(t, e, n) {
   const r = document.createElement(t);
   return r.className = e, n && (r.textContent = n), r;
 }
-function GN(t) {
+function eO(t) {
   const e = /* @__PURE__ */ new Set();
   return { agentRef: ({ node: i }) => {
     let s = i;
@@ -40895,7 +40945,7 @@ function GN(t) {
     const d = rt("div", "scratch-code-block-lang"), f = rt("button", "scratch-code-block-lang-label");
     f.type = "button";
     const h = rt("button", "scratch-code-block-send");
-    h.type = "button", h.title = "Send to an agent", h.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg><span>Send</span><kbd class="nt-kbd">⌘↵</kbd>', h.onmousedown = (b) => b.preventDefault(), h.onclick = (b) => {
+    h.type = "button", h.title = "Send to an agent", h.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg><span>Send</span><kbd class="nt-kbd">' + ZN("CmdOrCtrl+Enter") + "</kbd>", h.onmousedown = (b) => b.preventDefault(), h.onclick = (b) => {
       b.preventDefault(), b.stopPropagation(), a.textContent && t.onCodeSend?.(a.textContent, h.getBoundingClientRect());
     };
     const p = rt("div", "scratch-code-block-content");
@@ -40948,7 +40998,7 @@ function GN(t) {
     };
   }, refreshAgents: () => e.forEach((i) => i()) };
 }
-function jN(t) {
+function tO(t) {
   return t.toLowerCase().trim().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "");
 }
 function Ts(t) {
@@ -40957,7 +41007,7 @@ function Ts(t) {
     if (r.type.name !== "heading") return !0;
     const s = r.textContent.trim();
     if (!s) return !1;
-    const o = jN(s) || "heading", a = (n.get(o) ?? 0) + 1;
+    const o = tO(s) || "heading", a = (n.get(o) ?? 0) + 1;
     return n.set(o, a), e.push({
       level: r.attrs.level ?? 1,
       text: s,
@@ -40966,33 +41016,30 @@ function Ts(t) {
     }), !1;
   }), e;
 }
-function JN(t) {
+function nO(t) {
   return t.view.dom.closest(".nt-scroll") ?? t.view.dom;
 }
-function ZN(t, e, n = JN(t)) {
+function rO(t, e, n = nO(t)) {
   const r = t.view.nodeDOM(e);
   r instanceof HTMLElement && (n.scrollTop += r.getBoundingClientRect().top - n.getBoundingClientRect().top);
 }
-function YN(t) {
+function iO(t) {
   const { from: e, to: n } = t.state.selection;
   if (e === n) return null;
   const r = t.state.doc.textBetween(e, n, `
 `);
   return r.trim() ? { from: e, to: n, text: r } : null;
 }
-function XN(t) {
+function sO(t) {
   return {
     bold: t.isActive("bold"),
     italic: t.isActive("italic"),
     code: t.isActive("code")
   };
 }
-function QN(t) {
-  return !!(t.metaKey || t.ctrlKey || t.altKey);
-}
 const eb = qw($w);
 eb.register("plaintext", () => ({ contains: [] }));
-const eO = "06e79a5db0fa08c8b995";
+const oO = "c099649af76c49bf1962";
 function ah(t, e, n) {
   return t ? {
     ...t,
@@ -41000,9 +41047,9 @@ function ah(t, e, n) {
     setIndex: (r) => n(Math.max(0, Math.min(r, t.items.length - 1)))
   } : null;
 }
-function cO(t, e = {}) {
+function gO(t, e = {}) {
   let n = !1, r = !1, i = !1, s = null, o = null, a = 0, l = 0;
-  const u = GN(e), c = UN({ onLinkClick: () => !1 }), d = () => e.suggestions?.link?.onState?.(
+  const u = eO(e), c = UN({ onLinkClick: () => !1 }), d = () => e.suggestions?.link?.onState?.(
     ah(s, a, (b) => {
       a = b, d();
     })
@@ -41026,9 +41073,9 @@ function cO(t, e = {}) {
     return b.preventDefault(), !0;
   }
   const p = () => {
-    const b = YN(m), x = t.ownerDocument.getSelection(), k = x?.rangeCount ? x.getRangeAt(0) : null, y = k && m.view.dom.contains(k.commonAncestorContainer) ? k.getBoundingClientRect() : null;
+    const b = iO(m), x = t.ownerDocument.getSelection(), k = x?.rangeCount ? x.getRangeAt(0) : null, y = k && m.view.dom.contains(k.commonAncestorContainer) ? k.getBoundingClientRect() : null;
     e.onSelection?.(
-      b && y ? { ...b, rect: y, marks: XN(m) } : null
+      b && y ? { ...b, rect: y, marks: sO(m) } : null
     );
   }, m = new b2({
     element: t,
@@ -41066,7 +41113,7 @@ function cO(t, e = {}) {
         keydown: (b, x) => {
           n = !1;
           const k = r;
-          return x.key !== "Shift" && (r = !1), x.isComposing || QN(x) || Qs.getState(b.state)?.active || ou.getState(b.state)?.active ? !1 : x.key === "Escape" && !x.shiftKey ? (r = !0, !0) : x.key === "Tab" && (k || !m.isActive("codeBlock") && !m.isActive("listItem") && !m.isActive("taskItem"));
+          return x.key !== "Shift" && (r = !1), x.isComposing || jN(x) || Qs.getState(b.state)?.active || ou.getState(b.state)?.active ? !1 : x.key === "Escape" && !x.shiftKey ? (r = !0, !0) : x.key === "Tab" && (k || !m.isActive("codeBlock") && !m.isActive("listItem") && !m.isActive("taskItem"));
         },
         click: (b, x) => {
           const k = x.target?.closest?.("a"), y = k?.getAttribute("href");
@@ -41126,7 +41173,7 @@ function cO(t, e = {}) {
         const w = m.view.nodeDOM(x.pos);
         w instanceof HTMLElement && (y.scrollTop += w.getBoundingClientRect().top);
       } else
-        ZN(m, x.pos, y);
+        rO(m, x.pos, y);
     },
     blockAt: ({ x: b, y: x }) => {
       const k = m.view.posAtCoords({ left: b, top: x }), y = k && jg(m.state.doc, k.pos), w = y && m.view.nodeDOM(y.pos);
@@ -41158,10 +41205,10 @@ function cO(t, e = {}) {
       appendAgentRef: (b, x) => mN(m, b, x),
       sendTarget: () => fN(m)
     },
-    version: eO
+    version: oO
   };
 }
 export {
-  cO as createEditor,
-  eO as version
+  gO as createEditor,
+  oO as version
 };

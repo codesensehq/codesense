@@ -1633,8 +1633,8 @@ export function WorkspaceTray({
         className="absolute bottom-full left-1/2 z-10 mb-1 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded border border-border bg-popover px-2 py-1 text-xs text-muted-foreground shadow-md"
       >
         <span>
-          Click to switch · drag along the bar (or {isMac() ? "⌥←/→" : "Alt+←/→"}) to reorder, onto
-          a pane to split
+          Click to switch · drag along the bar (or {formatKeystrokeDisplay("Alt+ArrowLeft")}/→) to
+          reorder, onto a pane to split
         </span>
         <button
           type="button"

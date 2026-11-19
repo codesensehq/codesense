@@ -24,6 +24,7 @@ import { useFileEditor, useScopedChangeNonce } from "../lib/use-file-editor";
 import { FileWarningPlaceholder } from "./file-warning-placeholder";
 import { ReconcileBar, ReconcileErrorBanner, StaleConflictBanner } from "./conflict-banners";
 import { ChromeIconButton } from "./overlay-shell";
+import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
 
 // ---------------------------------------------------------------------------
 // SW-VE-3/4 — deliberate, concurrent-safe edit mode for a context file. Consumes
@@ -326,7 +327,7 @@ export function ContextEditorInset({
           <ChromeIconButton
             testId="context-editor-save"
             ariaLabel="Save"
-            tooltip="Save · ⌘S"
+            tooltip={`Save · ${formatKeystrokeDisplay("CmdOrCtrl+S")}`}
             onClick={() => void save(buffer)}
           >
             <Save size={13} className={cn(!dirty && "opacity-40")} />

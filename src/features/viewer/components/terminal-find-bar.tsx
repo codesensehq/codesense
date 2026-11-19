@@ -5,6 +5,7 @@ import type { ISearchOptions } from "@xterm/addon-search";
 
 import type { TerminalFindState } from "@/shared/terminal/terminal-manager";
 import { registerTerminalKeyHandle } from "../lib/terminal-tab-keys";
+import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
 
 /** The slice of xterm's `SearchAddon` the find bar drives. */
 export interface TerminalSearch {
@@ -231,7 +232,7 @@ export function TerminalFindBar({
       <button
         type="button"
         aria-label="Previous match"
-        title="Previous match · ⇧⏎"
+        title={`Previous match · ${formatKeystrokeDisplay("Shift+Enter")}`}
         onClick={() => search("prev", query)}
         className={iconButton}
       >
@@ -240,7 +241,7 @@ export function TerminalFindBar({
       <button
         type="button"
         aria-label="Next match"
-        title="Next match · ⏎"
+        title={`Next match · ${formatKeystrokeDisplay("Enter")}`}
         onClick={() => search("next", query)}
         className={iconButton}
       >

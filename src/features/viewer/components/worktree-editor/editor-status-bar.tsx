@@ -16,6 +16,7 @@ import { InfoTip } from "@/components/ui/tooltip";
 import { indentationLabel, languageLabel, lineEndingLabel } from "@/shared/components/code-editor";
 
 import type { PaneStatus } from "./worktree-file-pane";
+import { formatControlDisplay, formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
 
 /**
  * The bottom status bar: where the file lives and its save state on the left,
@@ -91,7 +92,11 @@ export function EditorStatusBar({
       <span className="min-w-2 flex-1" />
 
       {status && editable && status.cursor && (
-        <ItemButton label="Go to line (⌃G)" onClick={onGoToLine} testId="worktree-status-cursor">
+        <ItemButton
+          label={`Go to line (${formatControlDisplay("G")})`}
+          onClick={onGoToLine}
+          testId="worktree-status-cursor"
+        >
           <span className="tabular-nums">
             Ln {status.cursor.line}, Col {status.cursor.column}
           </span>
@@ -127,7 +132,7 @@ export function EditorStatusBar({
         </Item>
       )}
       <ItemButton
-        label={wrap ? "Word wrap on (⌥Z)" : "Word wrap off (⌥Z)"}
+        label={`Word wrap ${wrap ? "on" : "off"} (${formatKeystrokeDisplay("Alt+Z")})`}
         onClick={onToggleWrap}
         pressed={wrap}
         testId="worktree-status-wrap"
@@ -167,7 +172,10 @@ function SaveState({ status, remote }: { status: PaneStatus; remote: boolean }) 
   }
   if (status.dirty) {
     return (
-      <Item label="Unsaved changes — ⌘S to save" testId="worktree-status-save">
+      <Item
+        label={`Unsaved changes — ${formatKeystrokeDisplay("CmdOrCtrl+S")} to save`}
+        testId="worktree-status-save"
+      >
         <span aria-hidden className="size-1.5 rounded-full bg-foreground/70" />
         <span>Unsaved</span>
       </Item>

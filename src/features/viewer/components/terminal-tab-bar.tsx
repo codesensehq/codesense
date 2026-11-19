@@ -22,6 +22,7 @@ import { TERMINAL_TAB_ID_ATTR } from "../lib/terminal-tab-keys";
 import { useEffectiveShortcut } from "@/shared/stores/shortcuts-store";
 import {
   formatKeystrokeDisplay,
+  formatModifierClick,
   hasAnyModifier,
   hasCommandModifier,
   isMac,
@@ -566,7 +567,7 @@ export function TerminalTabBar({
       <InfoTip
         label={
           onNewShellOn
-            ? `New terminal · ${newTabKeystroke} — ⌥-click for another machine${newShellOnKeystroke ? ` (${newShellOnKeystroke})` : ""}`
+            ? `New terminal · ${newTabKeystroke} — ${formatModifierClick("Alt")} for another machine${newShellOnKeystroke ? ` (${newShellOnKeystroke})` : ""}`
             : `New terminal · ${newTabKeystroke}`
         }
         side="top"

@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { act, fireEvent, render, screen } from "@/test-utils";
 
+import { restorePlatform, setPlatform } from "@/test/platform";
+
 import { useInboxComposeDraftStore } from "../stores/inbox-compose-draft-store";
 
 import {
@@ -257,7 +259,7 @@ describe("InboxCompose — Esc behavior", () => {
     fireEvent.change(textarea, { target: { value: "half-written" } });
     fireEvent.keyDown(textarea, { key: "Escape" });
     const prompt = screen.getByTestId("inbox-compose-discard-prompt");
-    expect(prompt).toHaveTextContent(INBOX_COMPOSE_COPY.discardPrompt);
+    expect(prompt).toHaveTextContent(INBOX_COMPOSE_COPY.discardPrompt());
   });
 
   it("Esc on an empty body is silent — no discard prompt renders", () => {
@@ -300,7 +302,7 @@ describe("InboxCompose — error chip", () => {
   it("renders the error chip with the exact canonical copy when sendState=error", () => {
     render(<Harness initialSendState="error" />);
     const chip = screen.getByTestId("inbox-compose-error");
-    expect(chip).toHaveTextContent(INBOX_COMPOSE_COPY.sendError);
+    expect(chip).toHaveTextContent(INBOX_COMPOSE_COPY.sendError());
     // `role="alert"` is self-live (implicit assertive) — we do NOT also set
     // `aria-live` to avoid cross-signaling. See H4 in the review triage.
     expect(chip).toHaveAttribute("role", "alert");
@@ -392,5 +394,29 @@ describe("InboxCompose — a11y", () => {
     render(<Harness placeholder="Message Winston..." />);
     const textarea = screen.getByLabelText("Message Winston...");
     expect(textarea).toBeInTheDocument();
+  });
+});
+
+describe("InboxCompose — chord copy per platform", () => {
+  afterEach(restorePlatform);
+
+  it("names the macOS chords on macOS", () => {
+    setPlatform("MacIntel");
+    expect(INBOX_COMPOSE_COPY.sendDefault()).toBe("Send ⌘⏎");
+    expect(INBOX_COMPOSE_COPY.sendError()).toBe("Couldn't send. Press ⌘⏎ to try again.");
+    expect(INBOX_COMPOSE_COPY.discardPrompt()).toBe("Discard draft? · ⌘⇧D discards, Esc keeps");
+  });
+
+  it.each(["Win32", "Linux x86_64"])("names Ctrl chords on %s", (platform) => {
+    setPlatform(platform);
+    render(<Harness initialSendState="error" />);
+    expect(screen.getByTestId("inbox-compose-error")).toHaveTextContent(
+      "Couldn't send. Press Ctrl+⏎ to try again.",
+    );
+    expect(INBOX_COMPOSE_COPY.sendDefault()).toBe("Send Ctrl+⏎");
+    expect(INBOX_COMPOSE_COPY.discardPrompt()).toBe(
+      "Discard draft? · Ctrl+Shift+D discards, Esc keeps",
+    );
+    expect(document.body.textContent).not.toMatch(/[⌘⌥⇧⌃↵↩]/);
   });
 });

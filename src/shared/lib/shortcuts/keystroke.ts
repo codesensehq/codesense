@@ -233,20 +233,50 @@ export function formatKeystroke(parts: KeystrokeParts): string {
 export function formatKeystrokeDisplay(str: string): string {
   if (!str) return "";
   const parts = parseKeystroke(str);
-  const key = displayKey(parts.key);
+  return formatModifiersDisplay(parts) + displayKey(parts.key);
+}
 
-  if (isMac()) {
-    const mods = [parts.cmdOrCtrl ? "⌘" : "", parts.shift ? "⇧" : "", parts.alt ? "⌥" : ""].join(
-      "",
-    );
-    return mods + key;
-  }
+/**
+ * The modifiers of a chord, ready to prefix its key: `⌘⇧` on macOS,
+ * `Ctrl+Shift+` elsewhere; `""` when none is held.
+ */
+export function formatModifiersDisplay(mods: Omit<KeystrokeParts, "key">): string {
+  if (isMac()) return `${mods.cmdOrCtrl ? "⌘" : ""}${mods.shift ? "⇧" : ""}${mods.alt ? "⌥" : ""}`;
+  const names: string[] = [];
+  if (mods.cmdOrCtrl) names.push("Ctrl");
+  if (mods.shift) names.push("Shift");
+  if (mods.alt) names.push("Alt");
+  return names.map((n) => `${n}+`).join("");
+}
 
-  const mods: string[] = [];
-  if (parts.cmdOrCtrl) mods.push("Ctrl");
-  if (parts.shift) mods.push("Shift");
-  if (parts.alt) mods.push("Alt");
-  return [...mods, key].join("+");
+/**
+ * Render a chord held with the Control key itself, for a handler that reads
+ * `e.ctrlKey` on every platform (`⌃G` on macOS, `Ctrl+G` elsewhere). Display
+ * only: `str` is a canonical keystroke without `CmdOrCtrl` (`"G"`,
+ * `"Shift+Tab"`), and no binding takes a Control modifier.
+ */
+export function formatControlDisplay(str: string): string {
+  if (!str) return "";
+  const parts = parseKeystroke(str);
+  const control = isMac() ? "⌃" : "Ctrl+";
+  return control + formatModifiersDisplay({ ...parts, cmdOrCtrl: false }) + displayKey(parts.key);
+}
+
+/**
+ * A hint for a key only the Meta key serves (`hasCmd`, `isCmdW`): the chord on
+ * macOS, and `""` elsewhere, where Ctrl would do nothing and no hint shows.
+ */
+export function formatMetaOnlyDisplay(str: string): string {
+  return isMac() ? formatKeystrokeDisplay(str) : "";
+}
+
+/** A modifier a click hint names. */
+export type ClickModifier = "CmdOrCtrl" | "Shift" | "Alt";
+
+/** A modifier+click gesture for a hint: `⌥-click` on macOS, `Alt+click` elsewhere. */
+export function formatModifierClick(mod: ClickModifier): string {
+  if (isMac()) return `${{ CmdOrCtrl: "⌘", Shift: "⇧", Alt: "⌥" }[mod]}-click`;
+  return `${mod === "CmdOrCtrl" ? "Ctrl" : mod}+click`;
 }
 
 /**

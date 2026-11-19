@@ -312,7 +312,7 @@ describe("the chat composer's line", () => {
     };
     expect(await fail(false)).toBe("Not sent: no such session. Your message is still here.");
     expect(await fail(true)).toBe(
-      "Not sent: no such session. Your message is still here; press ↵ to try again.",
+      "Not sent: no such session. Your message is still here; press ⏎ to try again.",
     );
   });
 

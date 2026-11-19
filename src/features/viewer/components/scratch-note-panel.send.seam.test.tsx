@@ -138,7 +138,7 @@ describe("Send a line to an agent (real editor)", () => {
     });
 
     fireEvent.mouseMove(item.querySelector("p") ?? item);
-    fireEvent.click(await screen.findByRole("button", { name: "Send to… (⌘↵)" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Send to… (⌘⏎)" }));
 
     // The picker lists the running agent with the shared status words.
     const { result } = renderHook(() => useAgentStatusOf([ROW]));
@@ -188,7 +188,7 @@ describe("Send a line to an agent (real editor)", () => {
       return li;
     });
     fireEvent.mouseMove(item.querySelector("p") ?? item);
-    fireEvent.click(await screen.findByRole("button", { name: "Send to… (⌘↵)" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Send to… (⌘⏎)" }));
     const option = await screen.findByRole("option", { name });
     await act(async () => {
       fireEvent.click(option);

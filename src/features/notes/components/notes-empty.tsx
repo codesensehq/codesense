@@ -3,6 +3,7 @@ import { useRef } from "react";
 import { Clock, Plus } from "lucide-react";
 
 import { useFocusWhenShown, useOwningScope } from "@/shared/lib/warm-scopes";
+import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
 
 /** The first look at notes in an org: what they are, how to start, the four keys
  *  worth knowing, and the offer of a routine to keep them tidy. */
@@ -28,7 +29,7 @@ export function NotesEmpty({
       <button ref={newRef} type="button" className="nt-empty-new" onClick={onNew} autoFocus>
         <Plus size={14} aria-hidden />
         New note
-        <kbd className="nt-kbd">⌘N</kbd>
+        <kbd className="nt-kbd">{formatKeystrokeDisplay("CmdOrCtrl+N")}</kbd>
       </button>
       <div className="nt-empty-keys">
         <kbd className="nt-kbd">- [ ]</kbd>
@@ -37,7 +38,7 @@ export function NotesEmpty({
         <span>inserts a heading, code, checklist…</span>
         <kbd className="nt-kbd">[[</kbd>
         <span>links a note or a story</span>
-        <kbd className="nt-kbd">⌘↵</kbd>
+        <kbd className="nt-kbd">{formatKeystrokeDisplay("CmdOrCtrl+Enter")}</kbd>
         <span>sends the line to an agent</span>
       </div>
       <div className="nt-empty-routine">
