@@ -269,6 +269,8 @@ describe("CommandPaletteMount", () => {
       { name: "alpha-epic.md", relativePath: "e/alpha-epic.md", fullPath: "/a/e/alpha-epic.md" },
     ]);
     const { rerender } = render(<CommandPaletteMount />);
+    // Search for it: at an empty query the always-on rows can push it past the visible cap.
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "alpha-epic" } });
     await waitFor(() => expect(screen.getAllByText("alpha-epic").length).toBeGreaterThan(0));
 
     // Switch to a different org while the palette stays open; the new walk is
