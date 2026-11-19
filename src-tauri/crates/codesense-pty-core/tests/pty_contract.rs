@@ -196,6 +196,12 @@ impl Drop for Terminal {
     }
 }
 
+/// Whether an executable `name` is in a directory on `PATH`.
+fn on_path(name: &str) -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(name).is_file()))
+}
+
 fn has_row(screen: &EmulatorText, text: &str) -> bool {
     screen.lines.iter().any(|row| row.trim_end() == text)
 }
@@ -351,31 +357,32 @@ fn default_shell_smoke() {
         .expect("an interactive shell resolves");
     let program = spec.command.get_argv()[0].clone();
     let kind = shell_kind(Path::new(&program));
-    // The shells this OS's smoke runs, and the line it types in them.
-    let (expected, line): (&[ShellKind], &str) = match std::env::consts::OS {
+    // The shells this OS's smoke runs, the line it types in them, and whether
+    // CI must have one: Windows' table always ends in cmd.exe and Linux's in
+    // bash, which CI must not settle for or lack.
+    let os = std::env::consts::OS;
+    let (expected, line, required): (&[ShellKind], &str, bool) = match os {
         "windows" => (
             &[ShellKind::Pwsh, ShellKind::PowerShell],
             "Write-Output hi; exit 3",
+            support::in_ci(),
         ),
-        "linux" => (&[ShellKind::Bash], "echo hi; exit 3"),
+        "linux" => (&[ShellKind::Bash], "echo hi; exit 3", support::in_ci()),
         _ => (
             &[ShellKind::Zsh, ShellKind::Bash, ShellKind::Fish],
             "echo hi; exit 3",
+            false,
         ),
     };
     if !kind.is_some_and(|kind| expected.contains(&kind)) {
         let reason =
             format!("the default shell is {program:?} ({kind:?}), not one of {expected:?}");
-        match std::env::consts::OS {
-            // The table always ends in cmd.exe, which CI must not settle for.
-            "windows" => assert!(!support::in_ci(), "{reason}; CI needs PowerShell"),
-            "linux" => assert!(
-                Path::new("/bin/bash").is_file(),
-                "{reason}, and bash is missing"
-            ),
-            _ => {}
-        }
+        assert!(!required, "{reason}; CI needs one of them");
         eprintln!("skipping: {reason}");
+        return;
+    }
+    if os == "linux" && !required && !on_path("bash") {
+        eprintln!("skipping: bash is not on PATH");
         return;
     }
 

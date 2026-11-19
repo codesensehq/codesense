@@ -93,29 +93,26 @@ pub fn worker_required() -> bool {
 /// The worker, or `None` (with a note) when this machine has none and nothing
 /// requires one.
 pub fn worker() -> Option<PathBuf> {
-    let path = worker_path();
-    if path.is_file() {
-        return Some(path);
-    }
-    assert!(
-        !worker_required(),
-        "no emulator worker at {} — build it with `pnpm run build:emulator`",
-        path.display()
-    );
-    eprintln!(
-        "skipping: no emulator worker at {} (build it with `pnpm run build:emulator`)",
-        path.display()
-    );
-    None
+    find_worker(worker_required())
 }
 
 /// The worker, failing the test when there is none.
 pub fn required_worker() -> PathBuf {
+    find_worker(true).expect("a required worker")
+}
+
+/// The worker; when there is none, a failure if `required`, else `None` with
+/// a note.
+fn find_worker(required: bool) -> Option<PathBuf> {
     let path = worker_path();
-    assert!(
-        path.is_file(),
-        "no emulator worker at {} — build it with `pnpm run build:emulator`",
+    if path.is_file() {
+        return Some(path);
+    }
+    let missing = format!(
+        "no emulator worker at {} (build it with `pnpm run build:emulator`)",
         path.display()
     );
-    path
+    assert!(!required, "{missing}");
+    eprintln!("skipping: {missing}");
+    None
 }

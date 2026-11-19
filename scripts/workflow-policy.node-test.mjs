@@ -469,7 +469,7 @@ test("rust.yml's Linux app job runs the credential store tests under a session b
     new URL("build-session-server.sh", import.meta.url),
     "utf8",
   );
-  assert.match(sidecarScript, /build-emulator\.sh/);
+  assert.match(sidecarScript, /^bash "\$SCRIPT_DIR\/build-emulator\.sh"/m);
   assert.equal(
     job.steps[pty].run,
     "cargo nextest run --profile ci --locked -p codesense-pty-core --test pty_contract",
