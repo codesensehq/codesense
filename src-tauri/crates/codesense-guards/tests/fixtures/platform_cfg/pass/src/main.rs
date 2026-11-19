@@ -4,6 +4,9 @@
 
 mod mac_ui;
 mod unix_bits;
+// A capability gate is not an OS predicate: not a site, and no row.
+#[cfg(cap_bridge)]
+mod capped;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

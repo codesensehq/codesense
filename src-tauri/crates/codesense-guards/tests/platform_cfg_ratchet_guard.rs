@@ -51,7 +51,9 @@
 //! read std-only), checks the gates: the guard fails a missing table, a
 //! `platform_caps_allowlist.txt` row whose cap key is not in it or is not
 //! `"off"` for Windows, and a `cfg(cap_…)` (in any `cfg`, `cfg_attr` or
-//! `cfg!`, test code too) whose key, with `-` as `_`, is not in it.
+//! `cfg!`, test code too) whose key, with `-` as `_`, is not in it. A
+//! `cfg(cap_…)` outside `src/` and `crates/codesense-session-server/` fails
+//! too: only their build scripts set the gates, so elsewhere it is never on.
 //!
 //! An allowlist row with no reason fails. Every failure is collected and
 //! reported at once. The baseline only goes down. After removing sites, lower
@@ -83,6 +85,8 @@ const BASELINE: &str = "platform_cfg_baseline.txt";
 const MACOS_UI: &str = "platform_macos_ui_allowlist.txt";
 const CAPS: &str = "platform_caps_allowlist.txt";
 const TABLE: &str = "platform-caps.json";
+/// The sources whose build scripts set the `cfg(cap_…)` gates.
+const CAP_CRATES: [&str; 2] = ["src/", "crates/codesense-session-server/"];
 const PLATFORM_CRATE: &str = "crates/codesense-platform";
 const WRITE_BASELINE: &str = "CODESENSE_PLATFORM_CFG_BASELINE_WRITE";
 const OS_KEYS: [&str; 4] = ["unix", "windows", "target_os", "target_family"];
@@ -661,22 +665,36 @@ fn parse(src: &str) -> Parsed {
     }
 }
 
+/// The cfg predicates of a squashed meta item: a `cfg`'s, or a `cfg_attr`'s
+/// own predicate and those of the `cfg`/`cfg_attr` attributes it applies.
+fn cfg_predicates(meta: &str, out: &mut Vec<String>) {
+    if let Some(predicate) = call(meta, "cfg") {
+        out.push(predicate.to_string());
+    } else if let Some(inner) = call(meta, "cfg_attr") {
+        if let Some((predicate, attrs)) = args(inner).split_first() {
+            out.push(predicate.to_string());
+            for attr in attrs {
+                cfg_predicates(attr, out);
+            }
+        }
+    }
+}
+
 /// The keys of the `cfg(cap_<key>)` predicates in `b` (stripped), in `cfg`
-/// and `cfg_attr` attributes and `cfg!`, without `cap_`.
+/// and `cfg_attr` attributes and `cfg!` (with any delimiter), without `cap_`.
 fn cap_gates(b: &[u8]) -> BTreeSet<String> {
     let mut predicates = Vec::new();
     let mut k = 0;
     while k < b.len() {
         if let Some(attr) = attr_at(b, k) {
-            if call(&attr.body, "cfg").is_some() || call(&attr.body, "cfg_attr").is_some() {
-                predicates.push(attr.body);
-            }
+            cfg_predicates(&attr.body, &mut predicates);
             k = attr.end;
         } else if is_ident(b[k]) {
             let end = ident_end(b, k);
             let bang = skip_ws(b, end);
             let open = skip_ws(b, bang + 1);
-            if &b[k..end] == b"cfg" && b.get(bang) == Some(&b'!') && b.get(open) == Some(&b'(') {
+            let delimited = matches!(b.get(open), Some(b'(' | b'[' | b'{'));
+            if &b[k..end] == b"cfg" && b.get(bang) == Some(&b'!') && delimited {
                 let close = close_of(b, open);
                 predicates.push(squash(&b[open + 1..close]));
                 k = close;
@@ -691,6 +709,7 @@ fn cap_gates(b: &[u8]) -> BTreeSet<String> {
         .iter()
         .flat_map(|predicate| predicate.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')))
         .filter_map(|word| word.strip_prefix("cap_"))
+        .filter(|key| !key.is_empty())
         .map(str::to_string)
         .collect()
 }
@@ -954,8 +973,7 @@ impl JsonReader<'_> {
                     .find(|&k| !(self.b[k].is_ascii_alphanumeric() || b"+-.".contains(&self.b[k])))
                     .unwrap_or(self.b.len());
                 let word = &self.b[self.at..end];
-                let number = word[0] == b'-' || word[0].is_ascii_digit();
-                if !number && !matches!(word, b"true" | b"false" | b"null") {
+                if !is_json_number(word) && !matches!(word, b"true" | b"false" | b"null") {
                     return Err(self.error("expected a value"));
                 }
                 self.at = end;
@@ -992,6 +1010,7 @@ impl JsonReader<'_> {
                             let hex = self
                                 .b
                                 .get(self.at + 1..self.at + 5)
+                                .filter(|hex| hex.iter().all(u8::is_ascii_hexdigit))
                                 .and_then(|hex| std::str::from_utf8(hex).ok())
                                 .and_then(|hex| u32::from_str_radix(hex, 16).ok())
                                 .ok_or_else(|| self.error("bad \\u escape"))?;
@@ -1008,6 +1027,37 @@ impl JsonReader<'_> {
         }
         String::from_utf8(out).map_err(|_| self.error("a string that is not UTF-8"))
     }
+}
+
+/// Whether `word` is a JSON number:
+/// `-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?`.
+fn is_json_number(word: &[u8]) -> bool {
+    let digits = |from: usize| {
+        word[from..]
+            .iter()
+            .take_while(|c| c.is_ascii_digit())
+            .count()
+    };
+    let mut at = usize::from(word.first() == Some(&b'-'));
+    match digits(at) {
+        0 => return false,
+        n if n > 1 && word[at] == b'0' => return false,
+        n => at += n,
+    }
+    if word.get(at) == Some(&b'.') {
+        match digits(at + 1) {
+            0 => return false,
+            n => at += 1 + n,
+        }
+    }
+    if matches!(word.get(at), Some(b'e' | b'E')) {
+        at += 1 + usize::from(matches!(word.get(at + 1), Some(b'+' | b'-')));
+        match digits(at) {
+            0 => return false,
+            n => at += n,
+        }
+    }
+    at == word.len()
 }
 
 /// The value of `name` in an object.
@@ -1266,6 +1316,12 @@ fn check_caps(
     }
     let cfgs: BTreeSet<String> = table.keys().map(|key| key.replace('-', "_")).collect();
     for (path, keys) in cap_gates {
+        if !CAP_CRATES.iter().any(|dir| path.starts_with(dir)) {
+            failures.push(format!(
+                "{path}: `cfg(cap_…)` is set only in {}, whose build scripts read {TABLE}; elsewhere it is never on. Gate the code in one of those, or behind a facade there.",
+                CAP_CRATES.join(" and ")
+            ));
+        }
         for key in keys.iter().filter(|key| !cfgs.contains(*key)) {
             failures.push(format!(
                 "{path}: `cfg(cap_{key})` names no capability in {TABLE} (a key's `-` is `_` in its cfg); use a key from the table."
@@ -1621,10 +1677,10 @@ fn the_passing_fixture_scans_as_expected() {
     assert_eq!(
         scanned.sites,
         rows(&[
-            ("crates/demo/src/capped.rs", 1),
             ("crates/demo/src/lib.rs", 2),
             ("src/bin/tool/main.rs", 1),
             ("src/both.rs", 1),
+            ("src/capped.rs", 1),
             ("src/mac_ui.rs", 1),
             ("src/main.rs", 1),
             ("src/orphan.rs", 1),
@@ -1744,6 +1800,22 @@ fn a_cap_gate_whose_key_is_not_in_the_table_fails() {
 }
 
 #[test]
+fn a_cap_gate_outside_the_crates_that_set_it_fails() {
+    let (passed, out) = guard_on("cap_outside", None);
+    assert!(!passed, "the guard should fail on `cap_outside`:\n{out}");
+    assert!(
+        out.contains("crates/demo/src/lib.rs: `cfg(cap_…)` is set only in src/ and crates/codesense-session-server/"),
+        "{out}"
+    );
+    for allowed in [
+        "src/main.rs:",
+        "crates/codesense-session-server/src/lib.rs:",
+    ] {
+        assert!(!out.contains(allowed), "{allowed} sets its gates:\n{out}");
+    }
+}
+
+#[test]
 fn a_missing_table_fails() {
     assert_guard_fails("no_table", &["platform-caps.json is missing"]);
 }
@@ -1780,6 +1852,12 @@ fn g() -> bool {
     cfg!(cap_agent_cli_sockets) && my_cap_thing()
 }
 // cfg(cap_in_a_comment)
+#[cfg_attr(cap_secret_store, cfg_attr(cap_git_ai, cfg(cap_starship)))]
+#[cfg_attr(test, allow(cap_not_a_predicate), path = "x.rs")]
+mod nested;
+fn h() -> bool {
+    cfg![cap_bracketed] || cfg! {cap_braced} || cfg!(cap_)
+}
 #[cfg(test)]
 mod tests {
     #[cfg(cap_shell_integration)]
@@ -1793,13 +1871,19 @@ struct NotACfg { cap_field: u8 }
         found,
         [
             "agent_cli_sockets",
+            "braced",
+            "bracketed",
+            "git_ai",
             "mcp_bridge",
             "pdf_export",
             "remote_machines",
+            "secret_store",
             "shell_integration",
+            "starship",
             "terminal_server_sidecar",
         ],
-        "test code counts; comments, strings and other attributes do not"
+        "test code counts; comments, strings, an empty key and the attributes a `cfg_attr` \
+         applies (other than `cfg`) do not"
     );
 }
 
@@ -1807,7 +1891,8 @@ struct NotACfg { cap_field: u8 }
 fn the_table_reads_each_row_key_and_its_windows_value() {
     let table = r#"[
         {"key": "a-b", "macos": {"on": ["aarch64"]}, "linux": "probe", "windows": "off",
-         "reason": "escapes \" \\ \/ é \n and numbers 1.5e3, -2 true false null"},
+         "reason": "escapes \" \\ \/ é \n \u00e9 \uABcd",
+         "scalars": [0, -0, 12, -1.5, 1.5e3, 2E-7, 6.02e+23, true, false, null]},
         {"key": "on-here", "macos": "on", "linux": "on", "windows": "on", "reason": "r"},
         {"key": "arch", "macos": "on", "linux": "on", "windows": {"on": ["x86_64"]}, "reason": "r"}
     ]"#;
@@ -1829,6 +1914,18 @@ fn the_table_reads_each_row_key_and_its_windows_value() {
         r#"[{"key": "a", "windows": "off"}"#,
         r#"[{"key": "a", "windows": "off"}] trailing"#,
         r#"[{"key": "a\q", "windows": "off"}]"#,
+        r#"[{"key": "a", "windows": "off", "n": -}]"#,
+        r#"[{"key": "a", "windows": "off", "n": 1abc}]"#,
+        r#"[{"key": "a", "windows": "off", "n": 01}]"#,
+        r#"[{"key": "a", "windows": "off", "n": 1.}]"#,
+        r#"[{"key": "a", "windows": "off", "n": .5}]"#,
+        r#"[{"key": "a", "windows": "off", "n": 1e}]"#,
+        r#"[{"key": "a", "windows": "off", "n": +1}]"#,
+        r#"[{"key": "a", "windows": "off", "n": tru}]"#,
+        r#"[{"key": "a", "windows": "off", "n": nulls}]"#,
+        r#"[{"key": "a\u+123", "windows": "off"}]"#,
+        r#"[{"key": "a\u12G4", "windows": "off"}]"#,
+        r#"[{"key": "a\u12", "windows": "off"}]"#,
     ] {
         assert!(table_rows(bad).is_err(), "{bad}");
     }
