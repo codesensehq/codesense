@@ -202,6 +202,8 @@ cp "$NOTICES" "$BINARIES_DIR/$BIN_NAME-NOTICE.md"
 cp "$BUNDLE" "$BINARIES_DIR/$BIN_NAME.cjs"
 for triple in "${TARGETS[@]}"; do
     asset="$(bun_asset "$triple")"
+    # Its own assignment, so an asset with no compile target stops the build under set -e.
+    target="$(bun_compile_target "$asset")"
     runtime="$(fetch_bun "$asset")"
     out="$(sidecar_path "$BIN_NAME" "$triple")"
     # Bun adds .exe to a Windows executable's name itself, so it is given the
@@ -210,7 +212,7 @@ for triple in "${TARGETS[@]}"; do
     echo "Compiling $BIN_NAME for $triple (Bun $BUN_VERSION, $asset)..."
     rm -f "$out" "$stem"
     # A worker must never pick up a .env or bunfig.toml from its working directory.
-    "$COMPILER" build --compile --target="$(bun_compile_target "$asset")" \
+    "$COMPILER" build --compile --target="$target" \
         --compile-executable-path="$runtime" \
         --no-compile-autoload-dotenv --no-compile-autoload-bunfig \
         "$BUNDLE" --outfile "$stem" >/dev/null
