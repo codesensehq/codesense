@@ -43,3 +43,25 @@ describe("bumpWorktreeChangedPath (SLW-WDE-3)", () => {
     expect(map["ws-2"]).toEqual({ path: "/ws/two/b.txt", nonce: 1 });
   });
 });
+
+describe("closing a workspace clears its change signals", () => {
+  it("drops the workspace's entry and its repo-root watch entry", () => {
+    const teamKey = "acme:default";
+    useViewerStore.setState({
+      workspaces: {
+        [teamKey]: [{ id: "w1", kind: "story", cwd: "/wt/w1", status: "ready" }],
+      },
+      activeWorkspace: { [teamKey]: "w1" },
+      softClosedWorkspaces: {},
+      worktreeChangedPath: {
+        w1: { path: "a.ts", nonce: 1 },
+        "w1|root": { path: "b.ts", nonce: 2 },
+        w2: { path: "c.ts", nonce: 3 },
+      },
+    });
+    useViewerStore.getState().closeWorkspace(teamKey, "w1");
+    expect(useViewerStore.getState().worktreeChangedPath).toEqual({
+      w2: { path: "c.ts", nonce: 3 },
+    });
+  });
+});

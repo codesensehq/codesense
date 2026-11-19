@@ -125,7 +125,7 @@ vi.mock("../lib/use-source-image-sides", () => ({
 // state. Default is a resolved local worktree so existing suites unchanged.
 type TabRepoResolution = {
   folder: { kind: "folder"; cwd: string } | null;
-  repo: { root: string; isRoot: boolean } | null | undefined;
+  repo: { root: string; isRoot: boolean; prefix?: string } | null | undefined;
 };
 const tabSourceRepoMock = vi.hoisted(() =>
   vi.fn<(ws: unknown, liveCwd?: string | null) => TabRepoResolution>(() => ({
@@ -170,6 +170,7 @@ vi.mock("@/tauri/commands", async (importOriginal) => ({
 }));
 
 import { SourceDiffOverlay } from "./source-diff-overlay";
+import { useWorktreeWatch } from "../lib/use-worktree-watch";
 import { setSourceDiffReturnFocus } from "./source-diff-return-focus";
 import { useMachinesStore } from "@/features/machines/stores/machines-store";
 
@@ -1310,7 +1311,9 @@ describe("SourceDiffOverlay — live follow + activity (SLW-DV-5)", () => {
 
       // A raw worktree-change bump lights the indicator immediately.
       act(() => {
-        useViewerStore.setState({ worktreeChangedPath: { w1: { path: "src/mod.ts", nonce: 1 } } });
+        useViewerStore.setState({
+          worktreeChangedPath: { "w1|root": { path: "src/mod.ts", nonce: 1 } },
+        });
       });
       rerender(
         <SourceDiffOverlay
@@ -1360,10 +1363,10 @@ describe("SourceDiffOverlay — a hidden team shown again", () => {
     const { rerender } = render(ui);
     expect(reload).not.toHaveBeenCalled();
     // An ordinary file change goes through the debounce; only a resume reloads directly.
-    act(() => useViewerStore.getState().bumpWorktreeChangedPath("w1", "a.ts"));
+    act(() => useViewerStore.getState().bumpWorktreeChangedPath("w1|root", "a.ts"));
     rerender(ui);
     expect(reload).not.toHaveBeenCalled();
-    act(() => useViewerStore.getState().bumpWorktreeChangedPath("w1", "", true));
+    act(() => useViewerStore.getState().bumpWorktreeChangedPath("w1|root", "", true));
     rerender(ui);
     expect(reload).toHaveBeenCalledTimes(1);
   });
@@ -1374,8 +1377,8 @@ describe("SourceDiffOverlay — a workspace switch is not an edit", () => {
     useViewerStore.setState({
       sourceDiffShownBySession: { "sid-ws": true },
       worktreeChangedPath: {
-        w1: { path: "a.ts", nonce: 5 },
-        w2: { path: "b.ts", nonce: 2 },
+        "w1|root": { path: "a.ts", nonce: 5 },
+        "w2|root": { path: "b.ts", nonce: 2 },
       },
     }),
   );
@@ -1393,7 +1396,7 @@ describe("SourceDiffOverlay — a workspace switch is not an edit", () => {
     expect(screen.queryByTestId("source-diff-activity-w2")).not.toBeInTheDocument();
     act(() => {
       useViewerStore.setState({
-        worktreeChangedPath: { w2: { path: "b.ts", nonce: 3 } },
+        worktreeChangedPath: { "w2|root": { path: "b.ts", nonce: 3 } },
       });
     });
     rerender(el("w2"));
@@ -4012,7 +4015,7 @@ describe("SourceDiffOverlay — a guest's context worktree launch folder", () =>
     });
     tabSourceRepoMock.mockReturnValue({
       folder: { kind: "folder", cwd: LAUNCH },
-      repo: { root: ROOT, isRoot: false },
+      repo: { root: ROOT, isRoot: false, prefix: "getting-started/content" },
     });
     render(overlay());
     fireEvent.click(screen.getByTestId("source-diff-open-editor-cw"));
@@ -4032,7 +4035,7 @@ describe("SourceDiffOverlay — a guest's context worktree launch folder", () =>
     sessionCwdMock.mockReturnValue(`${LAUNCH}/docs`);
     tabSourceRepoMock.mockReturnValue({
       folder: { kind: "folder", cwd: `${LAUNCH}/docs` },
-      repo: { root: ROOT, isRoot: false },
+      repo: { root: ROOT, isRoot: false, prefix: "getting-started/content/docs" },
     });
     render(overlay());
     fireEvent.click(screen.getByTestId("source-diff-open-editor-cw"));
@@ -4043,7 +4046,7 @@ describe("SourceDiffOverlay — a guest's context worktree launch folder", () =>
     useViewerStore.setState({ worktreeEditorFile: {} });
     tabSourceRepoMock.mockReturnValue({
       folder: { kind: "folder", cwd: LAUNCH },
-      repo: { root: ROOT, isRoot: false },
+      repo: { root: ROOT, isRoot: false, prefix: "getting-started/content" },
     });
     render(overlay());
     fireEvent.click(screen.getByTestId("source-diff-open-editor-cw"));
@@ -4066,5 +4069,188 @@ describe("SourceDiffOverlay — a guest's context worktree launch folder", () =>
       "No repository for this workspace yet.",
     );
     expect(screen.queryByText(/couldn.t load the source diff/i)).not.toBeInTheDocument();
+  });
+});
+
+// A tab inside the working tree watches the repo root under its own key, so an
+// edit anywhere in the repo refreshes the diff, apart from the editor's watch of
+// its own folder under the bare workspace id.
+describe("SourceDiffOverlay — the repo-root watch", () => {
+  const ROOT = "/work/repo";
+  const LAUNCH = `${ROOT}/team/content`;
+  const ws: Workspace = { id: "w1", kind: "context", cwd: LAUNCH, status: "ready" };
+  const watchMock = vi.mocked(useWorktreeWatch);
+  const overlay = (sid = "sid-ws") => (
+    <SourceDiffOverlay workspace={ws} teamKey="team-a" activeTabSessionId={sid} isFocused />
+  );
+  const resolved = (cwd: string, prefix: string) => ({
+    folder: { kind: "folder" as const, cwd },
+    repo: { root: ROOT, isRoot: false, prefix },
+  });
+  const liveNonce = () => changesetMock.mock.lastCall?.[3];
+
+  beforeEach(() => {
+    useViewerStore.setState({
+      sourceDiffShownBySession: { "sid-ws": true, "sid-b": true },
+      worktreeChangedPath: {},
+    });
+    sessionCwdMock.mockReturnValue(LAUNCH);
+    tabSourceRepoMock.mockReturnValue(resolved(LAUNCH, "team/content"));
+  });
+
+  it("watches the resolved root under the root key, never the launch folder", () => {
+    render(overlay());
+    expect(watchMock).toHaveBeenCalledWith("w1|root", ROOT, true, "team-a");
+    for (const call of watchMock.mock.calls) {
+      expect(call[0]).toBe("w1|root");
+      expect(call[1]).not.toBe(LAUNCH);
+    }
+  });
+
+  it("a change under the root key re-diffs after the debounce, leaving the editor's key alone", () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(overlay());
+      const before = liveNonce();
+      act(() => useViewerStore.getState().bumpWorktreeChangedPath("w1|root", "README.md"));
+      rerender(overlay());
+      expect(liveNonce()).toBe(before);
+      act(() => {
+        vi.advanceTimersByTime(150);
+      });
+      rerender(overlay());
+      expect(liveNonce()).not.toBe(before);
+      expect(useViewerStore.getState().worktreeChangedPath.w1).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a change under the bare workspace id does not re-diff", () => {
+    vi.useFakeTimers();
+    try {
+      const reload = vi.fn();
+      stubChangeset({ reload });
+      const { rerender } = render(overlay());
+      const before = liveNonce();
+      act(() => useViewerStore.getState().bumpWorktreeChangedPath("w1", "notes.md"));
+      act(() => useViewerStore.getState().bumpWorktreeChangedPath("w1", "", true));
+      act(() => {
+        vi.advanceTimersByTime(600);
+      });
+      rerender(overlay());
+      expect(liveNonce()).toBe(before);
+      expect(reload).not.toHaveBeenCalled();
+      expect(screen.queryByTestId("source-diff-activity-w1")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps one watch on the root across a `cd` inside the repo", () => {
+    const { rerender } = render(overlay());
+    // The `cd` lands; the resolver is out for the new folder.
+    sessionCwdMock.mockReturnValue(`${LAUNCH}/docs`);
+    tabSourceRepoMock.mockReturnValue({
+      folder: { kind: "folder", cwd: `${LAUNCH}/docs` },
+      repo: undefined,
+    });
+    rerender(overlay());
+    tabSourceRepoMock.mockReturnValue(resolved(`${LAUNCH}/docs`, "team/content/docs"));
+    rerender(overlay());
+    // Every render asked for the same watch, so its effect attached once.
+    const distinct = new Set(watchMock.mock.calls.map((c) => JSON.stringify(c)));
+    expect([...distinct]).toEqual([JSON.stringify(["w1|root", ROOT, true, "team-a"])]);
+  });
+
+  it("waits for a story's canonical root rather than watching its seeded folder", () => {
+    const story: Workspace = { ...storyWs, cwd: "/work/repo" };
+    const storyOverlay = () => (
+      <SourceDiffOverlay workspace={story} teamKey="team-a" activeTabSessionId="sid-ws" isFocused />
+    );
+    sessionCwdMock.mockReturnValue(null);
+    tabSourceRepoMock.mockReturnValue({
+      folder: { kind: "folder", cwd: "/work/repo" },
+      repo: { root: "/work/repo", isRoot: true },
+    });
+    const { rerender } = render(storyOverlay());
+    tabSourceRepoMock.mockReturnValue({
+      folder: { kind: "folder", cwd: "/work/repo" },
+      repo: { root: "/private/work/repo", isRoot: true, prefix: "" },
+    });
+    rerender(storyOverlay());
+    const attached = new Set(
+      watchMock.mock.calls.filter((c) => c[2]).map((c) => JSON.stringify(c)),
+    );
+    expect([...attached]).toEqual([
+      JSON.stringify(["w1|root", "/private/work/repo", true, "team-a"]),
+    ]);
+  });
+
+  it("releases the watch on a `cd` to a folder with no repository", () => {
+    const { rerender } = render(overlay());
+    sessionCwdMock.mockReturnValue("/home/user");
+    tabSourceRepoMock.mockReturnValue({
+      folder: { kind: "folder", cwd: "/home/user" },
+      repo: undefined,
+    });
+    rerender(overlay());
+    tabSourceRepoMock.mockReturnValue({
+      folder: { kind: "folder", cwd: "/home/user" },
+      repo: null,
+    });
+    rerender(overlay());
+    expect(watchMock.mock.lastCall).toEqual(["w1|root", "", false, "team-a"]);
+  });
+
+  it("does not carry the root over to another tab while its resolver is out", () => {
+    const { rerender } = render(overlay());
+    tabSourceRepoMock.mockReturnValue({
+      folder: { kind: "folder", cwd: "/elsewhere" },
+      repo: undefined,
+    });
+    rerender(overlay("sid-b"));
+    expect(watchMock.mock.lastCall).toEqual(["w1|root", "", false, "team-a"]);
+  });
+});
+
+// The resolver reports where the tab's folder sits in the repo from canonical
+// paths, so the editor maps diff paths even when the cwd and the root are
+// spelled differently (a symlinked cwd, a Windows verbatim root).
+describe("SourceDiffOverlay — editor paths from the resolver's prefix", () => {
+  const ws: Workspace = { id: "w1", kind: "context", cwd: "/tmp/r/a/b", status: "ready" };
+  const overlay = () => (
+    <SourceDiffOverlay workspace={ws} teamKey="team-a" activeTabSessionId="sid-ws" isFocused />
+  );
+
+  beforeEach(() => {
+    stubChangeset({ files: [...FILES, { path: "a/b/x.ts", status: "modified" }] });
+    useViewerStore.setState({
+      sourceDiffShownBySession: { "sid-ws": true },
+      sourceDiffSelectedFile: { "sid-ws": "a/b/x.ts" },
+      worktreeEditorFile: {},
+    });
+    sessionCwdMock.mockReturnValue("/tmp/r/a/b");
+  });
+
+  it("opens the file under the prefix when the root is spelled differently from the cwd", () => {
+    tabSourceRepoMock.mockReturnValue({
+      folder: { kind: "folder", cwd: "/tmp/r/a/b" },
+      repo: { root: "/private/tmp/r", isRoot: false, prefix: "a/b" },
+    });
+    render(overlay());
+    fireEvent.click(screen.getByTestId("source-diff-open-editor-w1"));
+    expect(useViewerStore.getState().worktreeEditorFile.w1).toBe("x.ts");
+  });
+
+  it("opens the editor with no file when the folder's place in the repo is unknown", () => {
+    tabSourceRepoMock.mockReturnValue({
+      folder: { kind: "folder", cwd: "/tmp/r/a/b" },
+      repo: { root: "/private/tmp/r", isRoot: false },
+    });
+    render(overlay());
+    fireEvent.click(screen.getByTestId("source-diff-open-editor-w1"));
+    expect(useViewerStore.getState().worktreeEditorFile.w1).toBeUndefined();
+    expect(useViewerStore.getState().worktreeEditorOpenBySession["sid-ws"]).toBe(true);
   });
 });

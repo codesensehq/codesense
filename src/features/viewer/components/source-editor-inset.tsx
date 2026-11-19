@@ -1146,14 +1146,6 @@ export function WorktreeEditorSurface({
   // For local tabs the non-null reading overrides `ws.cwd`; remote tabs
   // keep `location.cwd` since the local resolver can't address a remote
   // shell (SW-VE-15 wires the remote path).
-  //
-  // TODO (deferred from SW-VE-12 R3-M5): `localChangedNonce` above still
-  // keys `worktreeChangedPath[ws.id]` on raw ws.id. Now that liveCwd
-  // mutates mid-session the editor + overlay watchers can observe
-  // different dirs under one key → crossed events. Revisit with a
-  // composite id `${ws.id}|${effectiveWs.cwd}` if a seam test or
-  // real-app observation flags a cross (overlay + editor share the
-  // same effectiveCwd per tab today, so not surfaced in practice).
   const cwdRevision = useSessionCwdRevision(activeTabSessionId);
   const liveCwd = useSessionCwd(activeTabSessionId, cwdRevision);
   const effectiveWs = useMemo<Workspace>(() => {

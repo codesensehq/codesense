@@ -5131,6 +5131,9 @@ export interface TabSourceRepo {
   root: string;
   /** `true` iff the cwd itself is the working-tree root (not a subdir of it). */
   isRoot: boolean;
+  /** The cwd relative to `root`, `/`-joined (`""` at the root). Absent when the
+   *  cwd is not under the root, and from the remote resolver. */
+  prefix?: string;
 }
 
 /** A tab's resolved source folder — the per-tab primitives toolbar's Source

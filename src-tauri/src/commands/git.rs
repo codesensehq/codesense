@@ -241,6 +241,37 @@ pub struct TabSourceRepo {
     /// resolves the same root but needs the live-tab-cwd follow-up to be
     /// safe for the editor, which keys the tree off `ws.cwd`).
     pub is_root: bool,
+    /// `cwd` relative to `root`, joined with `/` on every OS (`""` at the
+    /// root). Both sides are canonical, so a symlinked cwd or a Windows
+    /// verbatim root still maps. `None` when the cwd is not under the
+    /// working-tree root (e.g. `core.worktree` points elsewhere).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+}
+
+/// `cwd`'s path inside `root`, `/`-joined; `None` when it is not inside.
+fn repo_relative_prefix(root: &std::path::Path, cwd: &std::path::Path) -> Option<String> {
+    let rel = cwd.strip_prefix(root).ok()?;
+    Some(
+        rel.components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/"),
+    )
+}
+
+/// The synchronous body of `resolve_tab_source_repo`.
+fn tab_source_repo_of(path: &std::path::Path) -> Option<TabSourceRepo> {
+    if !path.is_dir() {
+        return None;
+    }
+    let root = working_tree_root_of(path)?;
+    let canonical_cwd = path.canonicalize().ok()?;
+    Some(TabSourceRepo {
+        is_root: canonical_cwd == root,
+        prefix: repo_relative_prefix(&root, &canonical_cwd),
+        root: root.display().to_string(),
+    })
 }
 
 /// Resolve the source repo for a tab's cwd. Returns `None` for a cwd that is
@@ -248,21 +279,10 @@ pub struct TabSourceRepo {
 /// Synchronous git I/O: callers run it on the blocking pool via `spawn_blocking`.
 #[tauri::command]
 pub async fn resolve_tab_source_repo(cwd: String) -> Option<TabSourceRepo> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let path = std::path::Path::new(&cwd);
-        if !path.is_dir() {
-            return None;
-        }
-        let root = working_tree_root_of(path)?;
-        let canonical_cwd = path.canonicalize().ok()?;
-        Some(TabSourceRepo {
-            is_root: canonical_cwd == root,
-            root: root.display().to_string(),
-        })
-    })
-    .await
-    .ok()
-    .flatten()
+    tauri::async_runtime::spawn_blocking(move || tab_source_repo_of(std::path::Path::new(&cwd)))
+        .await
+        .ok()
+        .flatten()
 }
 
 #[cfg(test)]
@@ -304,6 +324,69 @@ mod tests {
         assert!(repo.find_remote("origin").is_err());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- resolve_tab_source_repo ---
+
+    #[test]
+    fn tab_source_repo_at_the_root_has_an_empty_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        git2::Repository::init(tmp.path()).unwrap();
+        let repo = tab_source_repo_of(tmp.path()).unwrap();
+        assert!(repo.is_root);
+        assert_eq!(repo.prefix.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn tab_source_repo_in_a_nested_folder_joins_the_prefix_with_slashes() {
+        let tmp = tempfile::tempdir().unwrap();
+        git2::Repository::init(tmp.path()).unwrap();
+        let nested = tmp.path().join("a").join("b");
+        std::fs::create_dir_all(&nested).unwrap();
+        let repo = tab_source_repo_of(&nested).unwrap();
+        assert!(!repo.is_root);
+        assert_eq!(repo.prefix.as_deref(), Some("a/b"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tab_source_repo_through_a_symlink_maps_the_canonical_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        std::fs::create_dir_all(real.join("sub")).unwrap();
+        git2::Repository::init(&real).unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let repo = tab_source_repo_of(&link.join("sub")).unwrap();
+        assert!(!repo.is_root);
+        assert_eq!(repo.prefix.as_deref(), Some("sub"));
+    }
+
+    #[test]
+    fn repo_relative_prefix_is_none_outside_the_root() {
+        let root = std::path::Path::new("/work/repo");
+        assert_eq!(
+            repo_relative_prefix(root, std::path::Path::new("/work/other")),
+            None
+        );
+        assert_eq!(
+            repo_relative_prefix(root, std::path::Path::new("/work/repo/a/b")).as_deref(),
+            Some("a/b")
+        );
+    }
+
+    #[test]
+    fn tab_source_repo_omits_a_missing_prefix_when_serialized() {
+        let repo = TabSourceRepo {
+            root: "/work/repo".into(),
+            is_root: false,
+            prefix: None,
+        };
+        let json = serde_json::to_value(&repo).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({ "root": "/work/repo", "isRoot": false })
+        );
     }
 
     // --- read_source_repo_origin_url ---
