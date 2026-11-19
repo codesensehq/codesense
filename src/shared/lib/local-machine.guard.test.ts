@@ -16,7 +16,8 @@ import { copyStrings, sourceFiles } from "./__test-utils__/copy-strings";
 
 const ROOT = resolve(__dirname, "../../..");
 const HELPER = join(ROOT, "src/shared/lib/local-machine.ts");
-const MAC = /\bthis mac\b|\bMac\b/i;
+const THIS_MAC = /\bthis mac\b/i;
+const MAC_NOUN = /\bMac\b/;
 
 /**
  * Copy that keeps the word on purpose, by file and text, each with its reason.
@@ -27,7 +28,7 @@ const ALLOWED: ReadonlyArray<{ file: string; text: RegExp; why: string }> = [];
 function macHits(path: string, text?: string): string[] {
   const file = relative(ROOT, path);
   return copyStrings(path, text)
-    .filter(({ text: copy }) => MAC.test(copy))
+    .filter(({ text: copy }) => THIS_MAC.test(copy) || MAC_NOUN.test(copy))
     .filter(({ text: copy }) => !ALLOWED.some((a) => a.file === file && a.text.test(copy)))
     .map(({ line, text: copy }) => `${file}:${line}: ${copy.replace(/\s+/g, " ")}`);
 }
@@ -40,13 +41,13 @@ describe("the local machine is named only through local-machine.ts", () => {
     expect(hits).toEqual([]);
   });
 
-  it("catches a planted literal in any case, but not a comment or another word", () => {
+  it('catches "this Mac" in any case and the noun "Mac", but not a comment or another word', () => {
     const planted = [
       "// kept on this Mac (a comment)",
       'const a = "Kept on This Mac";',
       "const b = `runs on each teammate's Mac`;",
       "const c = <span>THIS MAC</span>;",
-      'const d = "this machine, macOS, isMac, each_mac, Macintosh";',
+      'const d = "this machine, macOS, isMac, each_mac, Macintosh, MAC address";',
     ].join("\n");
     expect(macHits(join(ROOT, "src/planted.tsx"), planted)).toEqual([
       "src/planted.tsx:2: Kept on This Mac",
