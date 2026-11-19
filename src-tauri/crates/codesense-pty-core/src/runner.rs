@@ -604,6 +604,8 @@ fn plainly(error: &(dyn std::error::Error + 'static)) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Unix only, as the group tests that use it are.
+    #[cfg(unix)]
     use codesense_platform::process::ProcessTree;
 
     #[derive(Clone, Debug)]
@@ -761,6 +763,8 @@ mod tests {
         );
     }
 
+    // Unix only, as the group tests that use it are.
+    #[cfg(unix)]
     fn test_session_child(
         child: impl Child + Send + 'static,
         process_group: Option<ProcessGroup>,
