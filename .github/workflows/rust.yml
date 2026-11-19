@@ -646,14 +646,20 @@ jobs:
       - name: Test the credential store against Secret Service
         # A private session bus; the script unlocks the keyring, checks it, and runs the tests.
         run: dbus-run-session -- bash scripts/run-secret-service-tests.sh
+      - name: Build the emulator worker
+        run: pnpm run build:emulator
+      - name: Test the pty contract
+        # A real pty behind a host running the emulator worker, as on Windows (ConPTY).
+        run: cargo nextest run --profile ci --locked -p codesense-pty-core --test pty_contract
 
   rust-check-windows:
     name: Rust check (Windows)
-    # A compile check of the crates that build on Windows, plus the platform crate's tests. Not a
-    # required check: like the macOS jobs it never runs on a merge group, runs after the merge on
-    # each push to main that changes something Rust can see, always on the nightly schedule and
-    # workflow_dispatch, and on a pull request only with the ci:windows label (never a Dependabot
-    # pull request, and not again when another label is added). The crate set grows as crates port.
+    # A compile check of the crates that build on Windows, plus the platform crate's tests and the
+    # pty contract against ConPTY with the Windows emulator worker. Not a required check: like the
+    # macOS jobs it never runs on a merge group, runs after the merge on each push to main that
+    # changes something Rust can see, always on the nightly schedule and workflow_dispatch, and on a
+    # pull request only with the ci:windows label (never a Dependabot pull request, and not again
+    # when another label is added). The crate set grows as crates port.
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' && github.event_name != 'merge_group' && (github.event_name != 'pull_request' || (github.event.pull_request.user.login != 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'ci:windows') && (github.event.action != 'labeled' || github.event.label.name == 'ci:windows'))) }}
     runs-on: windows-2025
@@ -678,6 +684,16 @@ jobs:
       - name: Test sidecar naming in Git Bash
         # The .exe suffix, and paths in Git Bash's /d/a/... form.
         run: bash scripts/lib/sidecar.test.sh
+      - name: Set up pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: ${{ github.event_name != 'merge_group' && 'pnpm' || '' }}
+      - name: Install dependencies
+        # The emulator worker's build runs tsc and esbuild.
+        run: pnpm install --frozen-lockfile
       - name: Set up Rust
         # Matches ci.yml; rustup's proxies read the channel in rust-toolchain.toml.
         run: rustup toolchain install stable --profile minimal
@@ -693,6 +709,14 @@ jobs:
         run: cargo test --locked -p codesense-platform
       - name: Test Claude's hooks
         run: "cargo test --locked -p codesense-host-proto --lib hook::"
+      - name: Build the emulator worker
+        # After Rust: the script takes the host triple from rustc.
+        run: pnpm run build:emulator
+      - name: Test the pty contract and the tree kill
+        # ConPTY behind a host running the emulator worker, and the Job Object ending a session's tree.
+        env:
+          CODESENSE_EMULATOR_WORKER: ${{ github.workspace }}/src-tauri/binaries/codesense-emulator-x86_64-pc-windows-msvc.exe
+        run: cargo test --locked -p codesense-pty-core --test pty_contract --test process_tree
 
   flaky-issues:
     name: Track flaky Rust tests

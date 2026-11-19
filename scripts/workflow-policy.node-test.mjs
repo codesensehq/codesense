@@ -369,7 +369,21 @@ test("rust.yml runs the Windows check on a pull request only with ci:windows, ne
       "cargo check --locked -p codesense-platform -p codesense-host-proto -p codesense-fs-core -p codesense-pty-core --all-targets",
       "cargo test --locked -p codesense-platform",
       "cargo test --locked -p codesense-host-proto --lib hook::",
+      "cargo test --locked -p codesense-pty-core --test pty_contract --test process_tree",
     ],
+  );
+  // The pty tests run the Windows worker, built after Rust (the script asks rustc for the triple)
+  // from the installed packages, and named to them.
+  const names = steps.map((s) => s.name);
+  const worker = names.indexOf("Build the emulator worker");
+  assert.equal(steps[worker].run, "pnpm run build:emulator");
+  assert.ok(names.indexOf("Install dependencies") < worker);
+  assert.ok(names.indexOf("Set up Rust") < worker);
+  const pty = steps.find((s) => s.run?.includes("--test pty_contract"));
+  assert.ok(worker < steps.indexOf(pty));
+  assert.equal(
+    pty.env.CODESENSE_EMULATOR_WORKER,
+    "${{ github.workspace }}/src-tauri/binaries/codesense-emulator-x86_64-pc-windows-msvc.exe",
   );
   // The ci:windows label's run gets a group of its own, so it never cancels a ci:macos run.
   assert.doesNotMatch(workflow.concurrency.group, /ci:windows/);
@@ -444,6 +458,16 @@ test("rust.yml's Linux app job runs the credential store tests under a session b
   // The helper tests the others start as child processes pass alone, so they are left out.
   assert.match(runs[0], /- test\(~::reader_process\) - test\(~::no_bus_child\)/);
   assert.match(runs[1], /test\(~credential_store::tests::linux_\)/);
+  // The pty contract runs here on Linux, against the worker built in the job.
+  const names = job.steps.map((step) => step.name);
+  const worker = names.indexOf("Build the emulator worker");
+  const pty = names.indexOf("Test the pty contract");
+  assert.equal(job.steps[worker].run, "pnpm run build:emulator");
+  assert.ok(worker >= 0 && worker < pty);
+  assert.equal(
+    job.steps[pty].run,
+    "cargo nextest run --profile ci --locked -p codesense-pty-core --test pty_contract",
+  );
   assert.ok(!workflow.jobs["flaky-issues"].needs.includes("rust-linux-app"));
 });
 
