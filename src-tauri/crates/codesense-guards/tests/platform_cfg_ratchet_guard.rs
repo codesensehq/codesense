@@ -30,6 +30,10 @@
 //!   `test` and `feature = …` predicates are not sites. Comments and the
 //!   contents of string, byte-string, raw-string and char literals are blanked
 //!   before anything is matched.
+//! - **A capability gate is not a site.** `cfg(cap_<key>)`, which the build
+//!   scripts set from `platform-caps.json` (`build_caps.rs`), is not an OS
+//!   predicate: it is not counted and needs no allowlist row. The OS-specific
+//!   code inside a cap-gated module still counts.
 //!
 //! The lists live beside this file (under the guard root's
 //! `crates/codesense-guards/tests/`, so a fixture tree carries its own):
@@ -42,6 +46,12 @@
 //!   WebKit/AppKit UI files, exempt as a whole.
 //! - `platform_caps_allowlist.txt`, `<path> <cap key> <removing slug> <reason>`:
 //!   one capability gate per row, each exempting one site in its file.
+//!
+//! The capability table, `platform-caps.json` at the guard root (the app's,
+//! read std-only), checks the gates: the guard fails a missing table, a
+//! `platform_caps_allowlist.txt` row whose cap key is not in it or is not
+//! `"off"` for Windows, and a `cfg(cap_…)` (in any `cfg`, `cfg_attr` or
+//! `cfg!`, test code too) whose key, with `-` as `_`, is not in it.
 //!
 //! An allowlist row with no reason fails. Every failure is collected and
 //! reported at once. The baseline only goes down. After removing sites, lower
@@ -72,6 +82,7 @@ const LISTS: &str = "crates/codesense-guards/tests";
 const BASELINE: &str = "platform_cfg_baseline.txt";
 const MACOS_UI: &str = "platform_macos_ui_allowlist.txt";
 const CAPS: &str = "platform_caps_allowlist.txt";
+const TABLE: &str = "platform-caps.json";
 const PLATFORM_CRATE: &str = "crates/codesense-platform";
 const WRITE_BASELINE: &str = "CODESENSE_PLATFORM_CFG_BASELINE_WRITE";
 const OS_KEYS: [&str; 4] = ["unix", "windows", "target_os", "target_family"];
@@ -612,6 +623,9 @@ fn std_os_paths(b: &[u8], at: usize, parent: &[u8]) -> (usize, usize) {
 struct Parsed {
     /// Every OS attribute and site, test code included.
     all: Counts,
+    /// The capability keys its `cfg(cap_…)` predicates name, test code
+    /// included, as written (`-` is `_`).
+    caps: BTreeSet<String>,
     /// What remains once the test-gated items are blanked (nothing for a
     /// file `#![cfg(test)]` gates as a whole).
     kept: Counts,
@@ -639,7 +653,46 @@ fn parse(src: &str) -> Parsed {
         }
         count(&kept)
     };
-    Parsed { all, kept, mods }
+    Parsed {
+        all,
+        kept,
+        mods,
+        caps: cap_gates(b),
+    }
+}
+
+/// The keys of the `cfg(cap_<key>)` predicates in `b` (stripped), in `cfg`
+/// and `cfg_attr` attributes and `cfg!`, without `cap_`.
+fn cap_gates(b: &[u8]) -> BTreeSet<String> {
+    let mut predicates = Vec::new();
+    let mut k = 0;
+    while k < b.len() {
+        if let Some(attr) = attr_at(b, k) {
+            if call(&attr.body, "cfg").is_some() || call(&attr.body, "cfg_attr").is_some() {
+                predicates.push(attr.body);
+            }
+            k = attr.end;
+        } else if is_ident(b[k]) {
+            let end = ident_end(b, k);
+            let bang = skip_ws(b, end);
+            let open = skip_ws(b, bang + 1);
+            if &b[k..end] == b"cfg" && b.get(bang) == Some(&b'!') && b.get(open) == Some(&b'(') {
+                let close = close_of(b, open);
+                predicates.push(squash(&b[open + 1..close]));
+                k = close;
+            } else {
+                k = end;
+            }
+        } else {
+            k += 1;
+        }
+    }
+    predicates
+        .iter()
+        .flat_map(|predicate| predicate.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')))
+        .filter_map(|word| word.strip_prefix("cap_"))
+        .map(str::to_string)
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -652,6 +705,8 @@ fn parse(src: &str) -> Parsed {
 struct Scan {
     sites: BTreeMap<String, usize>,
     test_gates: BTreeMap<String, usize>,
+    /// Per file, the capability keys its `cfg(cap_…)` predicates name.
+    cap_gates: BTreeMap<String, BTreeSet<String>>,
 }
 
 fn scan(root: &Path) -> Scan {
@@ -686,6 +741,10 @@ fn scan(root: &Path) -> Scan {
         let gates = file_parsed.all.os_attrs - kept.os_attrs;
         if gates > 0 {
             *out.test_gates.entry(crate_of(&label)).or_default() += gates;
+        }
+        if !file_parsed.caps.is_empty() {
+            out.cap_gates
+                .insert(label.clone(), file_parsed.caps.clone());
         }
         if kept.sites > 0 {
             out.sites.insert(label, kept.sites);
@@ -816,6 +875,184 @@ fn crate_of(label: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// The capability table, read std-only.
+
+/// As much of a JSON value as the table needs.
+#[derive(Debug, PartialEq)]
+enum Json {
+    Scalar,
+    Str(String),
+    Arr(Vec<Json>),
+    Obj(Vec<(String, Json)>),
+}
+
+struct JsonReader<'a> {
+    b: &'a [u8],
+    at: usize,
+}
+
+impl JsonReader<'_> {
+    fn error(&self, what: &str) -> String {
+        format!("{what} at byte {}", self.at)
+    }
+
+    fn ws(&mut self) {
+        self.at = skip_ws(self.b, self.at);
+    }
+
+    /// Past `byte` (after any whitespace), if it is next.
+    fn eat(&mut self, byte: u8) -> bool {
+        self.ws();
+        let next = self.b.get(self.at) == Some(&byte);
+        self.at += usize::from(next);
+        next
+    }
+
+    fn value(&mut self) -> Result<Json, String> {
+        self.ws();
+        match self.b.get(self.at).copied() {
+            Some(b'"') => self.string().map(Json::Str),
+            Some(b'[') => {
+                self.at += 1;
+                let mut items = Vec::new();
+                if !self.eat(b']') {
+                    loop {
+                        items.push(self.value()?);
+                        if self.eat(b']') {
+                            break;
+                        }
+                        if !self.eat(b',') {
+                            return Err(self.error("expected `,` or `]`"));
+                        }
+                    }
+                }
+                Ok(Json::Arr(items))
+            }
+            Some(b'{') => {
+                self.at += 1;
+                let mut fields = Vec::new();
+                if !self.eat(b'}') {
+                    loop {
+                        self.ws();
+                        let name = self.string()?;
+                        if !self.eat(b':') {
+                            return Err(self.error("expected `:`"));
+                        }
+                        fields.push((name, self.value()?));
+                        if self.eat(b'}') {
+                            break;
+                        }
+                        if !self.eat(b',') {
+                            return Err(self.error("expected `,` or `}`"));
+                        }
+                    }
+                }
+                Ok(Json::Obj(fields))
+            }
+            Some(c) if c == b'-' || c.is_ascii_alphanumeric() => {
+                let end = (self.at..self.b.len())
+                    .find(|&k| !(self.b[k].is_ascii_alphanumeric() || b"+-.".contains(&self.b[k])))
+                    .unwrap_or(self.b.len());
+                let word = &self.b[self.at..end];
+                let number = word[0] == b'-' || word[0].is_ascii_digit();
+                if !number && !matches!(word, b"true" | b"false" | b"null") {
+                    return Err(self.error("expected a value"));
+                }
+                self.at = end;
+                Ok(Json::Scalar)
+            }
+            _ => Err(self.error("expected a value")),
+        }
+    }
+
+    fn string(&mut self) -> Result<String, String> {
+        if self.b.get(self.at) != Some(&b'"') {
+            return Err(self.error("expected a string"));
+        }
+        self.at += 1;
+        let mut out = Vec::new();
+        loop {
+            let Some(&c) = self.b.get(self.at) else {
+                return Err(self.error("unterminated string"));
+            };
+            self.at += 1;
+            match c {
+                b'"' => break,
+                b'\\' => {
+                    let escaped = match self.b.get(self.at).copied() {
+                        Some(b'"') => '"',
+                        Some(b'\\') => '\\',
+                        Some(b'/') => '/',
+                        Some(b'b') => '\u{8}',
+                        Some(b'f') => '\u{c}',
+                        Some(b'n') => '\n',
+                        Some(b'r') => '\r',
+                        Some(b't') => '\t',
+                        Some(b'u') => {
+                            let hex = self
+                                .b
+                                .get(self.at + 1..self.at + 5)
+                                .and_then(|hex| std::str::from_utf8(hex).ok())
+                                .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+                                .ok_or_else(|| self.error("bad \\u escape"))?;
+                            self.at += 4;
+                            char::from_u32(hex).unwrap_or(char::REPLACEMENT_CHARACTER)
+                        }
+                        _ => return Err(self.error("bad escape")),
+                    };
+                    self.at += 1;
+                    out.extend_from_slice(escaped.encode_utf8(&mut [0; 4]).as_bytes());
+                }
+                c => out.push(c),
+            }
+        }
+        String::from_utf8(out).map_err(|_| self.error("a string that is not UTF-8"))
+    }
+}
+
+/// The value of `name` in an object.
+fn field<'a>(object: &'a Json, name: &str) -> Option<&'a Json> {
+    match object {
+        Json::Obj(fields) => fields
+            .iter()
+            .find_map(|(key, value)| (key == name).then_some(value)),
+        _ => None,
+    }
+}
+
+/// Each row's key, with whether its Windows value is `"off"`.
+fn table_rows(text: &str) -> Result<BTreeMap<String, bool>, String> {
+    let mut reader = JsonReader {
+        b: text.as_bytes(),
+        at: 0,
+    };
+    let value = reader.value()?;
+    reader.ws();
+    if reader.at != text.len() {
+        return Err(reader.error("text after the table"));
+    }
+    let Json::Arr(rows) = value else {
+        return Err("it is not an array of rows".to_string());
+    };
+    rows.iter()
+        .map(|row| match (field(row, "key"), field(row, "windows")) {
+            (Some(Json::Str(key)), Some(windows)) => {
+                Ok((key.clone(), *windows == Json::Str("off".into())))
+            }
+            _ => Err("a row has no string `key` or no `windows` value".to_string()),
+        })
+        .collect()
+}
+
+/// The table at the guard root.
+fn load_table(root: &Path) -> Result<BTreeMap<String, bool>, String> {
+    let text = fs::read_to_string(root.join(TABLE)).map_err(|e| {
+        format!("{TABLE} is missing at the app root ({e}); the capability gates are checked against it.")
+    })?;
+    table_rows(&text).map_err(|e| format!("{TABLE} cannot be read: {e}."))
+}
+
+// ---------------------------------------------------------------------------
 // The lists and the check.
 
 struct Lists {
@@ -825,6 +1062,8 @@ struct Lists {
     macos_ui: BTreeMap<String, usize>,
     /// path -> the lines of its gate rows
     gates: BTreeMap<String, Vec<usize>>,
+    /// Each gate row: (line, path, cap key).
+    gate_keys: Vec<(usize, String, String)>,
     failures: Vec<String>,
 }
 
@@ -900,6 +1139,7 @@ fn load_lists(root: &Path) -> Lists {
         }
     }
     let mut gates: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    let mut gate_keys = Vec::new();
     for (line, words) in list_rows(root, CAPS, &mut failures) {
         if words.len() < 3 {
             failures.push(format!(
@@ -914,11 +1154,13 @@ fn load_lists(root: &Path) -> Lists {
             ));
         }
         gates.entry(words[0].clone()).or_default().push(line);
+        gate_keys.push((line, words[0].clone(), words[1].clone()));
     }
     Lists {
         baseline,
         macos_ui,
         gates,
+        gate_keys,
         failures,
     }
 }
@@ -946,6 +1188,10 @@ fn check(root: &Path) -> Report {
                 lines.len()
             ));
         }
+    }
+    match load_table(root) {
+        Ok(table) => check_caps(&table, &lists.gate_keys, &scan.cap_gates, &mut failures),
+        Err(failure) => failures.push(failure),
     }
     let computed: BTreeMap<String, usize> = scan
         .sites
@@ -995,6 +1241,36 @@ fn check(root: &Path) -> Report {
             .map(|(path, &(_, count))| (path.clone(), count))
             .collect(),
         test_gates: scan.test_gates,
+    }
+}
+
+/// The gates against the table (key -> whether it is `"off"` for Windows):
+/// each allowlist row's cap key is in it and off for Windows, and each
+/// `cfg(cap_…)` names a key in it.
+fn check_caps(
+    table: &BTreeMap<String, bool>,
+    gate_keys: &[(usize, String, String)],
+    cap_gates: &BTreeMap<String, BTreeSet<String>>,
+    failures: &mut Vec<String>,
+) {
+    for (line, path, key) in gate_keys {
+        match table.get(key) {
+            None => failures.push(format!(
+                "{CAPS}:{line}: `{path}` names the cap key `{key}`, which is not in {TABLE}; use a key from the table."
+            )),
+            Some(false) => failures.push(format!(
+                "{CAPS}:{line}: `{path}` names the cap key `{key}`, which is not \"off\" for Windows in {TABLE}; a gate exempts code Windows compiles out, so delete the row once the subsystem is ported."
+            )),
+            Some(true) => {}
+        }
+    }
+    let cfgs: BTreeSet<String> = table.keys().map(|key| key.replace('-', "_")).collect();
+    for (path, keys) in cap_gates {
+        for key in keys.iter().filter(|key| !cfgs.contains(*key)) {
+            failures.push(format!(
+                "{path}: `cfg(cap_{key})` names no capability in {TABLE} (a key's `-` is `_` in its cfg); use a key from the table."
+            ));
+        }
     }
 }
 
@@ -1345,6 +1621,7 @@ fn the_passing_fixture_scans_as_expected() {
     assert_eq!(
         scanned.sites,
         rows(&[
+            ("crates/demo/src/capped.rs", 1),
             ("crates/demo/src/lib.rs", 2),
             ("src/bin/tool/main.rs", 1),
             ("src/both.rs", 1),
@@ -1355,7 +1632,7 @@ fn the_passing_fixture_scans_as_expected() {
         ]),
         "the platform crate, vendor/ and every test-only file are skipped (bin roots and `#[path]` in an \
          inline module are followed); a file reached by a test and a production route, or by none, \
-         is scanned"
+         is scanned; a capability gate is not a site, the OS code under it is"
     );
     assert_eq!(scanned.test_gates, rows(&[("app (src)", 3), ("demo", 3)]));
 }
@@ -1370,7 +1647,7 @@ fn the_guard_passes_a_clean_tree_and_reports_to_the_step_summary() {
     let _ = fs::remove_file(&summary);
     assert!(passed, "the passing fixture failed:\n{out}");
     for needle in [
-        "7 OS-specific sites in 5 files",
+        "8 OS-specific sites in 6 files",
         "OS-gated items in test code (report only): 6",
         "| app (src) | 3 |",
         "| demo | 3 |",
@@ -1429,6 +1706,132 @@ fn more_gate_rows_than_sites_fails() {
         "extra_gate",
         &["platform_caps_allowlist.txt:2: `src/main.rs` has 2 gate rows but 1 sites; delete the rows whose gate is gone"],
     );
+}
+
+#[test]
+fn a_gate_row_whose_cap_key_is_not_in_the_table_fails() {
+    assert_guard_fails(
+        "cap_unknown_row",
+        &["platform_caps_allowlist.txt:2: `src/main.rs` names the cap key `no-such-cap`, which is not in platform-caps.json"],
+    );
+}
+
+#[test]
+fn a_gate_row_whose_cap_is_not_off_on_windows_fails() {
+    assert_guard_fails(
+        "cap_on_windows",
+        &["platform_caps_allowlist.txt:2: `src/main.rs` names the cap key `bridge`, which is not \"off\" for Windows in platform-caps.json"],
+    );
+}
+
+#[test]
+fn a_cap_gate_whose_key_is_not_in_the_table_fails() {
+    let (passed, out) = guard_on("cap_unknown_gate", None);
+    assert!(
+        !passed,
+        "the guard should fail on `cap_unknown_gate`:\n{out}"
+    );
+    for needle in [
+        "src/main.rs: `cfg(cap_no_such_capability)` names no capability in platform-caps.json",
+        "src/main.rs: `cfg(cap_also_missing)` names no capability in platform-caps.json",
+    ] {
+        assert!(out.contains(needle), "expected {needle:?} in:\n{out}");
+    }
+    assert!(
+        !out.contains("cap_terminal_server_sidecar"),
+        "a key in the table, with `-` as `_`, passes:\n{out}"
+    );
+}
+
+#[test]
+fn a_missing_table_fails() {
+    assert_guard_fails("no_table", &["platform-caps.json is missing"]);
+}
+
+/// `cfg(cap_…)` is not an OS predicate: it is never a site and needs no row,
+/// while the OS code it gates still counts.
+#[test]
+fn a_capability_gate_is_not_a_site() {
+    for (src, n) in [
+        ("#[cfg(cap_mcp_bridge)] mod bridge;", 0),
+        ("#[cfg(not(cap_terminal_server_sidecar))] fn f() {}", 0),
+        ("#[cfg_attr(cap_pdf_export, allow(unused))] fn f() {}", 0),
+        ("fn f() -> bool { cfg!(cap_remote_machines) }", 0),
+        (
+            "#[cfg(cap_mcp_bridge)]\nmod m {\n    #[cfg(unix)]\n    fn f() {}\n}\n",
+            1,
+        ),
+        ("#[cfg(all(cap_mcp_bridge, unix))] fn f() {}", 1),
+    ] {
+        assert_eq!(sites(src), n, "{src}");
+    }
+}
+
+#[test]
+fn capability_gates_are_read_from_every_cfg() {
+    let src = r#"
+#[cfg(cap_mcp_bridge)]
+mod bridge;
+#[cfg(any(not(cap_terminal_server_sidecar), all(unix, cap_remote_machines)))]
+fn f() {}
+#[cfg_attr(cap_pdf_export, path = "cap_in_a_string.rs")]
+mod pdf;
+fn g() -> bool {
+    cfg!(cap_agent_cli_sockets) && my_cap_thing()
+}
+// cfg(cap_in_a_comment)
+#[cfg(test)]
+mod tests {
+    #[cfg(cap_shell_integration)]
+    fn t() {}
+}
+#[serde(rename = "x")]
+struct NotACfg { cap_field: u8 }
+"#;
+    let found: Vec<String> = parse(src).caps.into_iter().collect();
+    assert_eq!(
+        found,
+        [
+            "agent_cli_sockets",
+            "mcp_bridge",
+            "pdf_export",
+            "remote_machines",
+            "shell_integration",
+            "terminal_server_sidecar",
+        ],
+        "test code counts; comments, strings and other attributes do not"
+    );
+}
+
+#[test]
+fn the_table_reads_each_row_key_and_its_windows_value() {
+    let table = r#"[
+        {"key": "a-b", "macos": {"on": ["aarch64"]}, "linux": "probe", "windows": "off",
+         "reason": "escapes \" \\ \/ é \n and numbers 1.5e3, -2 true false null"},
+        {"key": "on-here", "macos": "on", "linux": "on", "windows": "on", "reason": "r"},
+        {"key": "arch", "macos": "on", "linux": "on", "windows": {"on": ["x86_64"]}, "reason": "r"}
+    ]"#;
+    let rows = table_rows(table).expect("a valid table");
+    assert_eq!(
+        rows,
+        BTreeMap::from([
+            ("a-b".to_string(), true),
+            ("arch".to_string(), false),
+            ("on-here".to_string(), false),
+        ])
+    );
+    for bad in [
+        "",
+        "{}",
+        r#"[{"key": "a"}]"#,
+        r#"[{"windows": "off"}]"#,
+        r#"[{"key": 1, "windows": "off"}]"#,
+        r#"[{"key": "a", "windows": "off"}"#,
+        r#"[{"key": "a", "windows": "off"}] trailing"#,
+        r#"[{"key": "a\q", "windows": "off"}]"#,
+    ] {
+        assert!(table_rows(bad).is_err(), "{bad}");
+    }
 }
 
 #[test]

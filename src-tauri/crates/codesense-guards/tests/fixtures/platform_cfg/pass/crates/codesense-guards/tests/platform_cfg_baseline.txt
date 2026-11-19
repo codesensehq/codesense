@@ -1,4 +1,5 @@
 # <path> <count>
+crates/demo/src/capped.rs 1
 crates/demo/src/lib.rs 1
 src/bin/tool/main.rs 1
 src/both.rs 1

@@ -1,0 +1,9 @@
+[
+  {
+    "key": "some-cap",
+    "macos": "on",
+    "linux": "on",
+    "windows": "off",
+    "reason": "the fixture's capability"
+  }
+]

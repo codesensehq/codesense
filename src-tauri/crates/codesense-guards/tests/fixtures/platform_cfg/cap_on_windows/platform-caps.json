@@ -1,0 +1,9 @@
+[
+  {
+    "key": "bridge",
+    "macos": "on",
+    "linux": "on",
+    "windows": "on",
+    "reason": "the fixture's bridge"
+  }
+]

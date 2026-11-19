@@ -1,0 +1,16 @@
+[
+  {
+    "key": "bridge",
+    "macos": "on",
+    "linux": "on",
+    "windows": "off",
+    "reason": "the fixture's bridge"
+  },
+  {
+    "key": "orphan",
+    "macos": "on",
+    "linux": "on",
+    "windows": "off",
+    "reason": "the fixture's orphan helper"
+  }
+]
