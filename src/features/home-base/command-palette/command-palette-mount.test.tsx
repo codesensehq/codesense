@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: MIT
 import { resetContentFileIndexForTests } from "@/shared/lib/pipeline-graph/content-scan-queue";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { NO_STORY_IN_FOCUS } from "@/features/dashboard/lib/open-story-dashboard";
+import { STORY_DASHBOARD_ACTION_ID } from "@/features/dashboard/lib/story-dashboard-action-id";
 import { useMachinesStore } from "@/features/machines/stores/machines-store";
 import { useLocalProfileStore, type LocalProfile } from "@/shared/stores/local-profile-store";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useUiStore } from "@/shared/stores/ui-store";
+import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
 import { setDynamicShortcutActions, type ShortcutAction } from "@/shared/lib/shortcuts/registry";
+import { useShortcutsStore } from "@/shared/stores/shortcuts-store";
 import { EMPTY_CONTEXT_HISTORY, useViewerStore } from "@/shared/stores/viewer-store";
 import type { Org, Team } from "@/shared/types/domain";
 import type { MachineSummary } from "@/tauri/commands";
@@ -27,6 +31,13 @@ vi.mock("@tauri-apps/api/event", async () => {
   const actual =
     await vi.importActual<typeof import("@tauri-apps/api/event")>("@tauri-apps/api/event");
   return { ...actual, listen: vi.fn(async () => () => {}) };
+});
+// Spy the story dashboard's toast at the `sonner` boundary, as
+// registry.open-story-dashboard.test.ts does; every other toast stays real.
+const toastInfo = vi.hoisted(() => vi.fn());
+vi.mock("sonner", async () => {
+  const actual = await vi.importActual<typeof import("sonner")>("sonner");
+  return { ...actual, toast: Object.assign(actual.toast, { info: toastInfo }) };
 });
 const mockToastError = vi.fn();
 vi.mock("@/shared/lib/with-error-toast", async () => {
@@ -114,6 +125,8 @@ beforeEach(() => {
   mockListAttachmentsByRemote.mockReset().mockResolvedValue(new Map());
   mockToastError.mockReset();
   mockOpenAppSettings.mockReset();
+  toastInfo.mockReset();
+  useShortcutsStore.setState({ shortcuts: {} });
   seed();
 });
 
@@ -326,6 +339,32 @@ describe("CommandPaletteMount", () => {
     render(<CommandPaletteMount />);
     expect(screen.getByText("Open pane: Board")).toBeInTheDocument();
     expect(screen.queryByText("Open pane: Agents")).not.toBeInTheDocument();
+  });
+
+  describe("story dashboard", () => {
+    const row = () => {
+      fireEvent.change(screen.getByRole("combobox"), { target: { value: "story dashboard" } });
+      return screen.getByText("Story dashboard").closest("button")!;
+    };
+
+    it("with no story in focus, selecting Story dashboard says so in a toast", async () => {
+      render(<CommandPaletteMount />);
+      fireEvent.click(row());
+      await waitFor(() => expect(toastInfo).toHaveBeenCalledWith(NO_STORY_IN_FOCUS));
+    });
+
+    it("shows no chord by default", () => {
+      render(<CommandPaletteMount />);
+      expect(row().querySelector("kbd")).toBeNull();
+    });
+
+    it("shows the chord once one is bound", () => {
+      useShortcutsStore.setState({ shortcuts: { [STORY_DASHBOARD_ACTION_ID]: "CmdOrCtrl+Alt+D" } });
+      render(<CommandPaletteMount />);
+      // test-setup.ts pins navigator.platform to MacIntel; format through the same helper.
+      const chord = formatKeystrokeDisplay("CmdOrCtrl+Alt+D");
+      expect(within(row()).getByText(chord).tagName).toBe("KBD");
+    });
   });
 
   describe("machines", () => {
