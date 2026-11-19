@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! Which optional features exist on this OS and architecture.
 //!
-//! One static table holds a row per capability. `caps()` resolves it once for the running
-//! platform; every consumer (the startup log line, the attribution installer, the
-//! `get_platform_caps` command) reads only that resolved list, and `enabled_for` answers for
-//! any other platform from the same table.
+//! `platform-caps.json` holds a row per capability. The build scripts read the same file for the
+//! `cfg(cap_…)` gates (`build_caps.rs`), so a gate and its runtime answer cannot drift. `caps()`
+//! resolves it once for the running platform; every consumer (the startup log line, the
+//! attribution installer, the `get_platform_caps` command) reads only that resolved list, and
+//! `enabled_for` answers for any other platform from the same table.
 
 use serde::Serialize;
 use std::fmt::Write;
@@ -13,47 +14,42 @@ use std::sync::OnceLock;
 pub const GIT_AI: &str = "git-ai";
 pub const STARSHIP: &str = "starship";
 pub const SECRET_STORE: &str = "secret-store";
+pub const TERMINAL_SERVER_SIDECAR: &str = "terminal-server-sidecar";
 
-/// Whether a capability exists on one OS.
-#[derive(Clone, Copy)]
-enum Support {
-    On,
-    Off,
-    /// On only for the listed architectures (`std::env::consts::ARCH` values).
-    OnFor(&'static [&'static str]),
-    /// On when the probe says so. The probe is run by whoever resolves the table, so tests
-    /// stub it and never touch the host.
-    Probe(fn() -> bool),
+/// The table: a JSON array of rows, in the order of the `caps:` line.
+const TABLE_JSON: &str = include_str!("../platform-caps.json");
+
+/// The table's one parser, the build scripts' too, so the gates and the runtime answers read the
+/// table alike.
+// `configure_caps` and `compiled_caps` are the build scripts'.
+#[allow(dead_code)]
+mod caps_table {
+    include!("../build_caps.rs");
+}
+use caps_table::{Row, Scope, Support};
+
+/// The runtime table: the product rows, parsed once. Test-scope rows are gates for test and
+/// diagnostic code only, so `caps()`, the `caps:` line and `enabled_for` never name them. The
+/// build scripts parse the same bytes with the same parser and fail the build on a bad table, so
+/// a built app never panics on it.
+fn table() -> &'static [Row] {
+    static TABLE: OnceLock<Vec<Row>> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let rows = caps_table::parse_caps(TABLE_JSON)
+            .unwrap_or_else(|error| panic!("platform-caps.json: {error}"));
+        rows.into_iter()
+            .filter(|row| row.scope == Scope::Product)
+            .collect()
+    })
 }
 
-struct Row {
-    key: &'static str,
-    macos: Support,
-    linux: Support,
-    /// Why the capability is off on a platform that lacks it.
-    reason: &'static str,
+/// The probe a `"probe"` value runs, by key. A probe value whose key has no arm here is off.
+fn probe_for(key: &str) -> Option<fn() -> bool> {
+    match key {
+        SECRET_STORE => Some(crate::commands::credential_store::secret_store_available),
+        _ => None,
+    }
 }
-
-const TABLE: &[Row] = &[
-    Row {
-        key: GIT_AI,
-        macos: Support::OnFor(&["aarch64"]),
-        linux: Support::OnFor(&["x86_64", "aarch64"]),
-        reason: "the bundled git-ai binary is shipped for macOS on Apple silicon and Linux on x86_64 and aarch64",
-    },
-    Row {
-        key: STARSHIP,
-        macos: Support::OnFor(&["aarch64"]),
-        linux: Support::OnFor(&["x86_64", "aarch64"]),
-        reason: "the bundled starship binary is shipped for macOS on Apple silicon and Linux on x86_64 and aarch64",
-    },
-    Row {
-        key: SECRET_STORE,
-        macos: Support::Probe(crate::commands::credential_store::secret_store_available),
-        linux: Support::Probe(crate::commands::credential_store::secret_store_available),
-        reason: "needs a system secret store that can be reached; values injected through the process environment are never saved",
-    },
-];
 
 /// One resolved capability.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -63,26 +59,26 @@ pub struct Cap {
     pub reason: Option<&'static str>,
 }
 
-/// Resolves `table` for one platform. `run` evaluates a probe row's probe.
-fn resolve(table: &[Row], os: &str, arch: &str, run: &dyn Fn(fn() -> bool) -> bool) -> Vec<Cap> {
+/// Resolves `table` for one platform. `run` evaluates a probe value's probe.
+fn resolve(
+    table: &'static [Row],
+    os: &str,
+    arch: &str,
+    run: &dyn Fn(fn() -> bool) -> bool,
+) -> Vec<Cap> {
     table
         .iter()
         .map(|row| {
-            let support = match os {
-                "macos" => row.macos,
-                "linux" => row.linux,
-                _ => Support::Off,
-            };
-            let on = match support {
+            let on = row.support(os).is_some_and(|support| match support {
                 Support::On => true,
                 Support::Off => false,
-                Support::OnFor(archs) => archs.contains(&arch),
-                Support::Probe(probe) => run(probe),
-            };
+                Support::OnFor(archs) => archs.iter().any(|on_for| on_for == arch),
+                Support::Probe => probe_for(&row.key).is_some_and(run),
+            });
             Cap {
-                key: row.key,
+                key: &row.key,
                 on,
-                reason: (!on).then_some(row.reason),
+                reason: (!on).then_some(&*row.reason),
             }
         })
         .collect()
@@ -94,7 +90,7 @@ pub fn caps() -> &'static [Cap] {
     static CAPS: OnceLock<Vec<Cap>> = OnceLock::new();
     CAPS.get_or_init(|| {
         resolve(
-            TABLE,
+            table(),
             std::env::consts::OS,
             std::env::consts::ARCH,
             &|probe| probe(),
@@ -102,14 +98,50 @@ pub fn caps() -> &'static [Cap] {
     })
 }
 
+/// A resolved answer, handed to code that branches on a capability so that code stays pure:
+/// `Caps::live()` at the call site, an injected list in tests.
+#[derive(Clone, Copy, Debug)]
+pub struct Caps<'a>(pub &'a [Cap]);
+
+impl Caps<'static> {
+    /// The running platform's capabilities, `caps()`.
+    pub fn live() -> Self {
+        Caps(caps())
+    }
+}
+
+impl Caps<'_> {
+    /// Whether `key` is on; an unknown key is off.
+    pub fn enabled(&self, key: &str) -> bool {
+        self.0.iter().any(|cap| cap.key == key && cap.on)
+    }
+}
+
+/// Every capability in the table on except the `off` keys, which are off with their reasons:
+/// the list a test hands to `Caps`.
+#[cfg(test)]
+pub(crate) fn caps_with_off(off: &[&str]) -> Vec<Cap> {
+    table()
+        .iter()
+        .map(|row| {
+            let on = !off.contains(&row.key.as_str());
+            Cap {
+                key: &row.key,
+                on,
+                reason: (!on).then_some(&*row.reason),
+            }
+        })
+        .collect()
+}
+
 /// Whether the named capability is on for one platform; an unknown key is off. The running
 /// platform reads `caps()`, so its probes run once; any other resolves only the key's row. A
 /// probe row is off there: a probe can only answer for the host it runs on.
 pub fn enabled_for(key: &str, os: &str, arch: &str) -> bool {
     if (os, arch) == (std::env::consts::OS, std::env::consts::ARCH) {
-        return caps().iter().any(|cap| cap.key == key && cap.on);
+        return Caps::live().enabled(key);
     }
-    TABLE
+    table()
         .iter()
         .find_map(|row| (row.key == key).then_some(row))
         .is_some_and(|row| resolve(std::slice::from_ref(row), os, arch, &|_| false)[0].on)
@@ -136,7 +168,7 @@ mod tests {
 
     /// The table resolved with every probe answering `probe`, never the host's own.
     fn resolved(os: &str, arch: &str, probe: bool) -> Vec<Cap> {
-        resolve(TABLE, os, arch, &|_| probe)
+        resolve(table(), os, arch, &|_| probe)
     }
 
     fn line(os: &str, arch: &str, probe: bool) -> String {
@@ -147,7 +179,8 @@ mod tests {
     fn macos_apple_silicon_has_everything_on() {
         assert_eq!(
             line("macos", "aarch64", true),
-            "caps: git-ai=on starship=on secret-store=on"
+            "caps: git-ai=on starship=on secret-store=on mcp-bridge=on terminal-server-sidecar=on \
+             remote-machines=on agent-cli-sockets=on shell-integration=on pdf-export=on"
         );
     }
 
@@ -155,7 +188,8 @@ mod tests {
     fn macos_intel_has_no_bundled_binaries() {
         assert_eq!(
             line("macos", "x86_64", true),
-            "caps: git-ai=off starship=off secret-store=on"
+            "caps: git-ai=off starship=off secret-store=on mcp-bridge=on terminal-server-sidecar=on \
+             remote-machines=on agent-cli-sockets=on shell-integration=on pdf-export=on"
         );
     }
 
@@ -164,7 +198,9 @@ mod tests {
         for arch in ["x86_64", "aarch64"] {
             assert_eq!(
                 line("linux", arch, true),
-                "caps: git-ai=on starship=on secret-store=on"
+                "caps: git-ai=on starship=on secret-store=on mcp-bridge=on \
+                 terminal-server-sidecar=on remote-machines=on agent-cli-sockets=on \
+                 shell-integration=on pdf-export=off"
             );
         }
     }
@@ -200,14 +236,31 @@ mod tests {
     /// A probe row asks its probe only on the platforms that name it.
     #[test]
     fn a_probe_is_not_run_for_an_unlisted_os() {
-        let table = [Row {
-            key: "probed",
+        let table: &'static [Row] = Vec::leak(vec![Row {
+            key: SECRET_STORE.into(),
             macos: Support::Off,
-            linux: Support::Probe(|| panic!("never run")),
-            reason: "r",
-        }];
-        let caps = resolve(&table, "windows", "x86_64", &|probe| probe());
-        assert!(!caps[0].on);
+            linux: Support::Probe,
+            windows: Support::Off,
+            reason: "r".into(),
+            scope: Scope::Product,
+        }]);
+        for os in ["windows", "freebsd"] {
+            let caps = resolve(table, os, "x86_64", &|_| panic!("never run"));
+            assert!(!caps[0].on);
+        }
+    }
+
+    /// Every `"probe"` value names a key `probe_for` binds; one without an arm would be off for
+    /// good.
+    #[test]
+    fn every_probe_row_has_a_probe() {
+        for row in table() {
+            for os in ["macos", "linux", "windows"] {
+                if row.support(os) == Some(&Support::Probe) {
+                    assert!(probe_for(&row.key).is_some(), "{} {os}", row.key);
+                }
+            }
+        }
     }
 
     #[test]
@@ -229,18 +282,251 @@ mod tests {
 
     #[test]
     fn an_unlisted_os_is_off() {
-        assert_eq!(
-            line("windows", "x86_64", true),
-            "caps: git-ai=off starship=off secret-store=off"
-        );
+        let all_off = "caps: git-ai=off starship=off secret-store=off mcp-bridge=off \
+                       terminal-server-sidecar=off remote-machines=off agent-cli-sockets=off \
+                       shell-integration=off pdf-export=off";
+        assert_eq!(line("windows", "x86_64", true), all_off);
+        assert_eq!(line("freebsd", "x86_64", true), all_off);
     }
 
     #[test]
     fn the_table_keys_are_unique() {
-        let mut keys: Vec<_> = TABLE.iter().map(|row| row.key).collect();
+        let mut keys: Vec<_> = table().iter().map(|row| row.key.as_str()).collect();
         keys.sort_unstable();
         keys.dedup();
-        assert_eq!(keys.len(), TABLE.len());
+        assert_eq!(keys.len(), table().len());
+    }
+
+    /// The `caps:` line and `get_platform_caps` keep the file's order.
+    #[test]
+    fn the_table_keeps_its_file_order() {
+        let keys: Vec<_> = table().iter().map(|row| row.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            [
+                GIT_AI,
+                STARSHIP,
+                SECRET_STORE,
+                "mcp-bridge",
+                "terminal-server-sidecar",
+                "remote-machines",
+                "agent-cli-sockets",
+                "shell-integration",
+                "pdf-export",
+            ]
+        );
+    }
+
+    #[test]
+    fn each_value_form_parses() {
+        let value = |json: &str| caps_table::parse_support(&serde_json::from_str(json).unwrap());
+        assert_eq!(value(r#""on""#), Some(Support::On));
+        assert_eq!(value(r#""off""#), Some(Support::Off));
+        assert_eq!(value(r#""probe""#), Some(Support::Probe));
+        assert_eq!(
+            value(r#"{"on": ["x86_64", "aarch64"]}"#),
+            Some(Support::OnFor(vec!["x86_64".into(), "aarch64".into()]))
+        );
+        for bad in [
+            r#""yes""#,
+            "true",
+            r#"["aarch64"]"#,
+            r#"{"on": "aarch64"}"#,
+            r#"{"on": [1]}"#,
+            r#"{"off": ["aarch64"]}"#,
+            r#"{"on": [], "off": []}"#,
+            r#"{"on": []}"#,
+            r#"{"on": [""]}"#,
+            r#"{"on": ["X86_64"]}"#,
+            r#"{"on": ["x86-64"]}"#,
+        ] {
+            assert!(value(bad).is_none(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_malformed_table_is_refused() {
+        for bad in [
+            r#"{"key": "x"}"#,
+            r#"[{"key": "x", "macos": "on", "linux": "on", "reason": "r"}]"#,
+            r#"[{"key": "x", "macos": "on", "linux": "on", "windows": "maybe", "reason": "r"}]"#,
+            r#"[{"macos": "on", "linux": "on", "windows": "off", "reason": "r"}]"#,
+            r#"[{"key": "x", "macos": "on", "linux": "on", "windows": "off"}]"#,
+            r#"[{"key": "x", "macos": "on", "linux": "on", "windows": "off", "reason": " "}]"#,
+            r#"[{"key": "x", "macos": "on", "linux": "on", "windows": "off", "reason": 1}]"#,
+        ] {
+            assert!(caps_table::parse_caps(bad).is_err(), "{bad}");
+        }
+        assert_eq!(
+            caps_table::parse_caps(TABLE_JSON).map(|rows| rows.len()),
+            Ok(12)
+        );
+        assert_eq!(table().len(), 9, "the product rows");
+    }
+
+    /// The keys `table` compiles in for one target, in file order.
+    fn compiled(table: &str, os: &str, arch: &str) -> Vec<String> {
+        caps_table::compiled_caps(table, os, arch)
+            .unwrap()
+            .into_iter()
+            .filter_map(|(key, on)| on.then_some(key))
+            .collect()
+    }
+
+    #[test]
+    fn the_build_compiles_in_each_value_form() {
+        let table = r#"[
+            {"key": "always", "macos": "on", "linux": "on", "windows": "on", "reason": "r"},
+            {"key": "never", "macos": "off", "linux": "off", "windows": "off", "reason": "r"},
+            {"key": "probed", "macos": "probe", "linux": "off", "windows": "off", "reason": "r"},
+            {"key": "some-arch", "macos": {"on": ["aarch64"]},
+             "linux": {"on": ["x86_64", "aarch64"]}, "windows": "off", "reason": "r"}
+        ]"#;
+        assert_eq!(
+            compiled(table, "macos", "aarch64"),
+            ["always", "probed", "some-arch"]
+        );
+        assert_eq!(compiled(table, "macos", "x86_64"), ["always", "probed"]);
+        assert_eq!(compiled(table, "linux", "aarch64"), ["always", "some-arch"]);
+        assert_eq!(compiled(table, "linux", "riscv64"), ["always"]);
+        assert_eq!(compiled(table, "windows", "x86_64"), ["always"]);
+        assert!(compiled(table, "freebsd", "x86_64").is_empty());
+        let declared: Vec<_> = caps_table::compiled_caps(table, "windows", "x86_64")
+            .unwrap()
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect();
+        assert_eq!(
+            declared,
+            ["always", "never", "probed", "some-arch"],
+            "every key is declared, in file order"
+        );
+    }
+
+    /// A bad value fails the build for every target, not only the one it names.
+    #[test]
+    fn the_build_refuses_a_malformed_table() {
+        for bad in [
+            r#"{"key": "x"}"#,
+            r#"[{"macos": "on", "linux": "on", "windows": "off", "reason": "r"}]"#,
+            r#"[{"key": "x", "macos": "on", "linux": "on", "reason": "r"}]"#,
+            r#"[{"key": "x", "macos": "on", "linux": "on", "windows": "maybe", "reason": "r"}]"#,
+            r#"[{"key": "x", "macos": "on", "linux": {"on": "x86_64"}, "windows": "off", "reason": "r"}]"#,
+            r#"[{"key": "x", "macos": "on", "linux": {"on": [1]}, "windows": "off", "reason": "r"}]"#,
+            r#"[{"key": "x", "macos": "on", "linux": {"off": []}, "windows": "off", "reason": "r"}]"#,
+        ] {
+            assert!(
+                caps_table::compiled_caps(bad, "macos", "aarch64").is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    /// The table's test-scope rows: gates for test and diagnostic code.
+    const TEST_SCOPE_KEYS: [&str; 3] = ["pty-test-fixtures", "pty-leak-gate", "tui-fixture"];
+
+    #[test]
+    fn a_row_scope_is_product_or_test() {
+        let scoped = |scope: &str| {
+            let table = format!(
+                r#"[{{"key": "x", "macos": "on", "linux": "on", "windows": "off", "reason": "r"{scope}}}]"#
+            );
+            caps_table::parse_caps(&table).map(|rows| rows[0].scope)
+        };
+        assert_eq!(scoped(""), Ok(Scope::Product), "the default");
+        assert_eq!(scoped(r#", "scope": "product""#), Ok(Scope::Product));
+        assert_eq!(scoped(r#", "scope": "test""#), Ok(Scope::Test));
+        for bad in [
+            r#", "scope": "fixture""#,
+            r#", "scope": "Test""#,
+            r#", "scope": 1"#,
+        ] {
+            assert!(scoped(bad).is_err(), "{bad}");
+        }
+    }
+
+    /// Test-scope rows compile their gates like any row but stay out of the runtime table.
+    #[test]
+    fn test_scope_rows_stay_out_of_the_runtime_table() {
+        let rows = caps_table::parse_caps(TABLE_JSON).unwrap();
+        let test_rows: Vec<_> = rows
+            .iter()
+            .filter(|row| row.scope == Scope::Test)
+            .map(|row| row.key.as_str())
+            .collect();
+        assert_eq!(test_rows, TEST_SCOPE_KEYS);
+        assert!(rows[rows.len() - 3..]
+            .iter()
+            .all(|row| row.scope == Scope::Test));
+        for (os, arch) in [
+            ("macos", "aarch64"),
+            ("linux", "x86_64"),
+            ("windows", "x86_64"),
+        ] {
+            let compiled = compiled(TABLE_JSON, os, arch);
+            for key in TEST_SCOPE_KEYS {
+                assert_eq!(
+                    compiled.iter().any(|on| on == key),
+                    os != "windows",
+                    "{os} {key}"
+                );
+                assert!(!enabled_for(key, os, arch), "{os} {key}");
+                assert!(resolved(os, arch, true).iter().all(|cap| cap.key != key));
+            }
+        }
+        assert!(caps().iter().all(|cap| !TEST_SCOPE_KEYS.contains(&cap.key)));
+    }
+
+    /// A key is `[a-z0-9-]+` and appears once, so each one has its own `cfg`.
+    #[test]
+    fn a_key_is_lowercase_and_unique() {
+        let row = |key: &str| {
+            format!(
+                r#"{{"key": "{key}", "macos": "on", "linux": "on", "windows": "off", "reason": "r"}}"#
+            )
+        };
+        for key in ["", "Git-ai", "git_ai", "git ai", "git.ai", "gît"] {
+            let table = format!("[{}]", row(key));
+            assert!(caps_table::parse_caps(&table).is_err(), "{key:?}");
+        }
+        let twice = format!("[{}, {}]", row("git-ai"), row("git-ai"));
+        let error = caps_table::parse_caps(&twice).err().unwrap_or_default();
+        assert!(error.contains("second row"), "{error}");
+        let fine = format!("[{}, {}]", row("git-ai"), row("pdf-export2"));
+        assert_eq!(caps_table::parse_caps(&fine).map(|rows| rows.len()), Ok(2));
+    }
+
+    #[test]
+    fn a_cap_cfg_is_its_key_with_underscores() {
+        assert_eq!(
+            caps_table::cap_cfg("terminal-server-sidecar"),
+            "cap_terminal_server_sidecar"
+        );
+        assert_eq!(caps_table::cap_cfg(GIT_AI), "cap_git_ai");
+        assert_eq!(caps_table::cap_cfg("pdf-export"), "cap_pdf_export");
+    }
+
+    /// The build and the runtime read the same bytes: a target compiles in exactly what resolves
+    /// on there when every probe answers yes.
+    #[test]
+    fn the_build_gates_match_the_runtime_table() {
+        for (os, arch) in [
+            ("macos", "aarch64"),
+            ("macos", "x86_64"),
+            ("linux", "x86_64"),
+            ("linux", "aarch64"),
+            ("windows", "x86_64"),
+        ] {
+            let runtime: Vec<_> = resolved(os, arch, true)
+                .into_iter()
+                .filter_map(|cap| cap.on.then_some(cap.key))
+                .collect();
+            let product: Vec<_> = compiled(TABLE_JSON, os, arch)
+                .into_iter()
+                .filter(|key| !TEST_SCOPE_KEYS.contains(&key.as_str()))
+                .collect();
+            assert_eq!(product, runtime, "{os} {arch}");
+        }
     }
 
     #[test]
@@ -271,6 +557,42 @@ mod tests {
         assert!(on("linux", "x86_64", STARSHIP));
         assert!(on("linux", "aarch64", STARSHIP));
         assert!(!on("linux", "riscv64", STARSHIP));
+    }
+
+    #[test]
+    fn caps_answer_from_the_list_they_are_given() {
+        let all_on = caps_with_off(&[]);
+        assert_eq!(all_on.len(), table().len());
+        assert!(all_on
+            .iter()
+            .all(|cap| Caps(&all_on).enabled(cap.key) && cap.reason.is_none()));
+        let off = caps_with_off(&[TERMINAL_SERVER_SIDECAR]);
+        let off_caps = Caps(&off);
+        assert!(!off_caps.enabled(TERMINAL_SERVER_SIDECAR));
+        assert!(off
+            .iter()
+            .find(|cap| cap.key == TERMINAL_SERVER_SIDECAR)
+            .is_some_and(|cap| cap.reason.is_some()));
+        assert!(off_caps.enabled(GIT_AI));
+        assert!(!off_caps.enabled("no-such-capability"));
+        assert_eq!(Caps::live().0, caps());
+    }
+
+    /// The app's terminal-server state follows the capability: a root (so a
+    /// sidecar can be launched) only with it on. Here, so the Linux app job runs
+    /// it too.
+    #[test]
+    fn the_local_session_state_follows_the_sidecar_capability() {
+        use crate::commands::pty_backend::local_session_state;
+        let home = std::path::PathBuf::from("/instance");
+        let on = caps_with_off(&[]);
+        let off = caps_with_off(&[TERMINAL_SERVER_SIDECAR]);
+        assert_eq!(
+            local_session_state(&Caps(&on), Some(home.clone())).root(),
+            Some(home.as_path())
+        );
+        assert_eq!(local_session_state(&Caps(&off), Some(home)).root(), None);
+        assert_eq!(local_session_state(&Caps(&on), None).root(), None);
     }
 
     /// Whether `key` is on for the running platform.

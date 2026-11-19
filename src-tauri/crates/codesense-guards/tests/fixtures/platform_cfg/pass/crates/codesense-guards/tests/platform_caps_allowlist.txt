@@ -1,3 +1,4 @@
 # <path> <cap key> <removing slug> <reason>
 crates/demo/src/lib.rs bridge port-the-bridge the bridge module is compiled out on Windows
 src/orphan.rs orphan port-the-orphan the orphan helper is compiled for Windows only (rows equal to sites pass)
+src/test_fixture.rs test-fixture port-the-fixture a test-scope gate: the unix-only test helper, compiled out on Windows
