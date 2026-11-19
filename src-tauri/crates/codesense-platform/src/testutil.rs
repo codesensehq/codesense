@@ -58,9 +58,9 @@ pub fn make_group_writable(path: &Path) {
     sys::make_group_writable(path)
 }
 
-/// Make a FIFO at `path` and return `true`, or return `false` after saying
-/// why on stderr, and the test skips the rest. Unix: `mkfifo`, mode 0600.
-/// Windows has no FIFO at a path.
+/// Make a FIFO at `path` and return `true`. Unix: `mkfifo`, mode 0600; a
+/// failure panics. Windows has no FIFO at a path: `false`, after saying so on
+/// stderr, and the test skips the rest.
 pub fn fifo_or_skip(path: &Path) -> bool {
     sys::fifo_or_skip(path)
 }
