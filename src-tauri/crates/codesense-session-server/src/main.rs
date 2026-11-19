@@ -21,7 +21,8 @@
 //! so a client reaches a remote host over `ssh <host> … attach --stdio`.
 //!
 //! With `CODESENSE_ASKPASS_SOCK` set it is `ssh`'s askpass program instead,
-//! answering a key's passphrase prompt from that socket (see `askpass`).
+//! answering a key's passphrase prompt from the endpoint it names (see
+//! `askpass`).
 //!
 //! Where the app's `terminal-server-sidecar` capability is off, it is a stub
 //! that says so and exits 1.
@@ -99,11 +100,18 @@ fn main() {
         return;
     }
     // `ssh` runs this binary as its SSH_ASKPASS, with the prompt as the only
-    // argument (not always valid text) and the passphrase's socket in the
-    // environment.
-    if let Some(socket) = std::env::var_os(askpass::SOCKET_ENV) {
+    // argument (not always valid text) and the wire form of the passphrase's
+    // endpoint in the environment.
+    if let Some(wire) = std::env::var_os(askpass::SOCKET_ENV) {
         let prompt: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
-        std::process::exit(askpass::run_client(&prompt, std::path::Path::new(&socket)));
+        let code = match codesense_platform::ipc::Endpoint::from_wire(&wire) {
+            Ok(endpoint) => askpass::run_client(&prompt, &endpoint),
+            Err(err) => {
+                eprintln!("codesense-session-server askpass: {err}");
+                1
+            }
+        };
+        std::process::exit(code);
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
     #[cfg(target_os = "linux")]

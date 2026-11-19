@@ -31,7 +31,6 @@ crates/codesense-pty-core/src/inbox_host/unix.rs 3
 crates/codesense-pty-core/src/leak_gate.rs 14
 crates/codesense-pty-core/src/runner.rs 1
 crates/codesense-pty-core/src/tui_fixture.rs 18
-crates/codesense-session-server/src/askpass.rs 3
 crates/codesense-session-server/src/attach.rs 5
 crates/codesense-session-server/src/detach.rs 3
 crates/codesense-session-server/src/disconnect_log.rs 1
