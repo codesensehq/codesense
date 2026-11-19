@@ -14,7 +14,13 @@
 use std::path::Path;
 use std::process::Command;
 
-include!("../../build_caps.rs");
+// The capability table's parser; a build script reads only the gates, not the
+// runtime's fields (reason, scope).
+#[allow(dead_code)]
+mod caps_table {
+    include!("../../build_caps.rs");
+}
+use caps_table::configure_caps;
 
 fn main() {
     println!("cargo:rerun-if-changed=../../platform-caps.json");

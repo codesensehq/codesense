@@ -26,15 +26,20 @@ const TABLE_JSON: &str = include_str!("../platform-caps.json");
 mod caps_table {
     include!("../build_caps.rs");
 }
-use caps_table::{Row, Support};
+use caps_table::{Row, Scope, Support};
 
-/// The table, parsed once. The build scripts parse the same bytes with the same parser and fail
-/// the build on a bad table, so a built app never panics on it.
+/// The runtime table: the product rows, parsed once. Test-scope rows are gates for test and
+/// diagnostic code only, so `caps()`, the `caps:` line and `enabled_for` never name them. The
+/// build scripts parse the same bytes with the same parser and fail the build on a bad table, so
+/// a built app never panics on it.
 fn table() -> &'static [Row] {
     static TABLE: OnceLock<Vec<Row>> = OnceLock::new();
     TABLE.get_or_init(|| {
-        caps_table::parse_caps(TABLE_JSON)
-            .unwrap_or_else(|error| panic!("platform-caps.json: {error}"))
+        let rows = caps_table::parse_caps(TABLE_JSON)
+            .unwrap_or_else(|error| panic!("platform-caps.json: {error}"));
+        rows.into_iter()
+            .filter(|row| row.scope == Scope::Product)
+            .collect()
     })
 }
 
@@ -237,6 +242,7 @@ mod tests {
             linux: Support::Probe,
             windows: Support::Off,
             reason: "r".into(),
+            scope: Scope::Product,
         }]);
         for os in ["windows", "freebsd"] {
             let caps = resolve(table, os, "x86_64", &|_| panic!("never run"));
@@ -353,8 +359,9 @@ mod tests {
         }
         assert_eq!(
             caps_table::parse_caps(TABLE_JSON).map(|rows| rows.len()),
-            Ok(9)
+            Ok(12)
         );
+        assert_eq!(table().len(), 9, "the product rows");
     }
 
     /// The keys `table` compiles in for one target, in file order.
@@ -415,6 +422,61 @@ mod tests {
         }
     }
 
+    /// The table's test-scope rows: gates for test and diagnostic code.
+    const TEST_SCOPE_KEYS: [&str; 3] = ["pty-test-fixtures", "pty-leak-gate", "tui-fixture"];
+
+    #[test]
+    fn a_row_scope_is_product_or_test() {
+        let scoped = |scope: &str| {
+            let table = format!(
+                r#"[{{"key": "x", "macos": "on", "linux": "on", "windows": "off", "reason": "r"{scope}}}]"#
+            );
+            caps_table::parse_caps(&table).map(|rows| rows[0].scope)
+        };
+        assert_eq!(scoped(""), Ok(Scope::Product), "the default");
+        assert_eq!(scoped(r#", "scope": "product""#), Ok(Scope::Product));
+        assert_eq!(scoped(r#", "scope": "test""#), Ok(Scope::Test));
+        for bad in [
+            r#", "scope": "fixture""#,
+            r#", "scope": "Test""#,
+            r#", "scope": 1"#,
+        ] {
+            assert!(scoped(bad).is_err(), "{bad}");
+        }
+    }
+
+    /// Test-scope rows compile their gates like any row but stay out of the runtime table.
+    #[test]
+    fn test_scope_rows_stay_out_of_the_runtime_table() {
+        let rows = caps_table::parse_caps(TABLE_JSON).unwrap();
+        let test_rows: Vec<_> = rows
+            .iter()
+            .filter(|row| row.scope == Scope::Test)
+            .map(|row| row.key.as_str())
+            .collect();
+        assert_eq!(test_rows, TEST_SCOPE_KEYS);
+        assert!(rows[rows.len() - 3..]
+            .iter()
+            .all(|row| row.scope == Scope::Test));
+        for (os, arch) in [
+            ("macos", "aarch64"),
+            ("linux", "x86_64"),
+            ("windows", "x86_64"),
+        ] {
+            let compiled = compiled(TABLE_JSON, os, arch);
+            for key in TEST_SCOPE_KEYS {
+                assert_eq!(
+                    compiled.iter().any(|on| on == key),
+                    os != "windows",
+                    "{os} {key}"
+                );
+                assert!(!enabled_for(key, os, arch), "{os} {key}");
+                assert!(resolved(os, arch, true).iter().all(|cap| cap.key != key));
+            }
+        }
+        assert!(caps().iter().all(|cap| !TEST_SCOPE_KEYS.contains(&cap.key)));
+    }
+
     /// A key is `[a-z0-9-]+` and appears once, so each one has its own `cfg`.
     #[test]
     fn a_key_is_lowercase_and_unique() {
@@ -459,7 +521,11 @@ mod tests {
                 .into_iter()
                 .filter_map(|cap| cap.on.then_some(cap.key))
                 .collect();
-            assert_eq!(compiled(TABLE_JSON, os, arch), runtime, "{os} {arch}");
+            let product: Vec<_> = compiled(TABLE_JSON, os, arch)
+                .into_iter()
+                .filter(|key| !TEST_SCOPE_KEYS.contains(&key.as_str()))
+                .collect();
+            assert_eq!(product, runtime, "{os} {arch}");
         }
     }
 

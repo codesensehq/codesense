@@ -61,5 +61,29 @@
     "linux": "off",
     "windows": "off",
     "reason": "PDF export prints through the macOS web view"
+  },
+  {
+    "key": "pty-test-fixtures",
+    "macos": "on",
+    "linux": "on",
+    "windows": "off",
+    "reason": "the real-PTY test fixtures read unix process groups",
+    "scope": "test"
+  },
+  {
+    "key": "pty-leak-gate",
+    "macos": "on",
+    "linux": "on",
+    "windows": "off",
+    "reason": "the leak-gate PTY lifecycle diagnostic runs on unix only",
+    "scope": "test"
+  },
+  {
+    "key": "tui-fixture",
+    "macos": "on",
+    "linux": "on",
+    "windows": "off",
+    "reason": "the seeded TUI test fixture redraws on unix signals",
+    "scope": "test"
   }
 ]

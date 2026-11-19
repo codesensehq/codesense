@@ -15,6 +15,16 @@ pub enum Support {
     Probe,
 }
 
+/// Who a capability is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scope {
+    /// The app's: in the runtime table (`caps()`, the `caps:` line). The default.
+    Product,
+    /// Test and diagnostic code only (`"scope": "test"`): a gate and nothing
+    /// more, left out of the runtime table.
+    Test,
+}
+
 /// One row of the table.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Row {
@@ -24,6 +34,7 @@ pub struct Row {
     pub windows: Support,
     /// Why the capability is off on a platform that lacks it.
     pub reason: String,
+    pub scope: Scope,
 }
 
 impl Row {
@@ -70,8 +81,9 @@ pub fn parse_support(value: &serde_json::Value) -> Option<Support> {
 }
 
 /// The rows of `table`, in file order. Every row is an object with a key
-/// (`[a-z0-9-]+`, unique, and so a unique `cfg`), a value per OS and a reason
-/// that is not empty.
+/// (`[a-z0-9-]+`, unique, and so a unique `cfg`), a value per OS, a reason
+/// that is not empty and an optional `scope`, `"product"` (the default) or
+/// `"test"`.
 pub fn parse_caps(table: &str) -> Result<Vec<Row>, String> {
     let rows: Vec<serde_json::Value> =
         serde_json::from_str(table).map_err(|error| error.to_string())?;
@@ -99,12 +111,25 @@ pub fn parse_caps(table: &str) -> Result<Vec<Row>, String> {
                 .and_then(|reason| reason.as_str())
                 .filter(|reason| !reason.trim().is_empty())
                 .ok_or_else(|| format!("`{key}` has no `reason`"))?;
+            let scope = match row.get("scope") {
+                None => Scope::Product,
+                Some(scope) => match scope.as_str() {
+                    Some("product") => Scope::Product,
+                    Some("test") => Scope::Test,
+                    _ => {
+                        return Err(format!(
+                            "`{key}`.scope: {scope} is not \"product\" or \"test\""
+                        ))
+                    }
+                },
+            };
             Ok(Row {
                 key: key.to_string(),
                 macos: column("macos")?,
                 linux: column("linux")?,
                 windows: column("windows")?,
                 reason: reason.to_string(),
+                scope,
             })
         })
         .collect()
