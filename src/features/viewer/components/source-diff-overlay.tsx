@@ -390,12 +390,17 @@ export function SourceDiffOverlay({
   // the resolver answers a `cd` in the same tab, so a move inside the repo
   // keeps the watch attached; a non-git folder or another tab releases it.
   // While the editor is open it watches its own folder under `ws.id` too, and
-  // the two overlap harmlessly.
+  // the two overlap harmlessly. A local story's seeded answer (its own folder,
+  // no prefix) counts as still resolving here: the resolver's canonical root
+  // can be spelled differently (a symlink, a Windows verbatim path), and
+  // watching the seed first would attach twice.
+  const seeded = !remoteWorkspace && tabRepo?.isRoot === true && tabRepo.prefix === undefined;
+  const watchTabRepo = seeded ? undefined : tabRepo;
   const [heldRoot, setHeldRoot] = useState<{ scope: string; root: string } | null>(null);
   const watchRoot =
-    tabRepo != null
-      ? tabRepo.root
-      : tabRepo === undefined && heldRoot?.scope === viewScope
+    watchTabRepo != null
+      ? watchTabRepo.root
+      : watchTabRepo === undefined && heldRoot?.scope === viewScope
         ? heldRoot.root
         : null;
   const nextHeld = watchRoot === null ? null : { scope: viewScope, root: watchRoot };

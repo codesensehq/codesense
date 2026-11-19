@@ -2474,7 +2474,8 @@ export interface ViewerState {
    *  RELATIVE to `ws.cwd` — retained for diagnostics only; the reconcile does not
    *  read it. `resumed` counts the bumps that mean "a hidden team is shown again" rather than
    *  a file changed, so a consumer behind a debounce can catch up at once. Keyed by workspace
-   *  id. Runtime-only — NOT persisted. */
+   *  id; the source diff's watch of the repo root has its own entry under `rootWatchKey(id)`,
+   *  whose paths are relative to the repo root. Runtime-only — NOT persisted. */
   worktreeChangedPath: Record<string, { path: string; nonce: number; resumed?: number }>;
   /**
    * F-6 AC-8: when non-null, the no-local-clone-attached modal is open
@@ -3202,7 +3203,8 @@ export interface ViewerState {
    *  (when its overlay first opens). Never overwrites the session's own mode. */
   seedSourceDiffMode: (sessionId: string) => void;
   /** SLW-WDE-3: signal an external worktree change for a workspace's open editor
-   *  inset (bumps `worktreeChangedPath[workspaceId]` with a fresh nonce). Driven
+   *  inset (bumps `worktreeChangedPath[workspaceId]` with a fresh nonce), or for the
+   *  source diff's repo-root watch when `workspaceId` is a `rootWatchKey`. Driven
    *  by the App-level `worktree-file-change` listener. */
   bumpWorktreeChangedPath: (workspaceId: string, path: string, resumed?: boolean) => void;
   /** Publish the open-file lifecycle for `path` (normalized). A non-`active` value records it;

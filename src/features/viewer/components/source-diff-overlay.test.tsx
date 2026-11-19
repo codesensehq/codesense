@@ -4163,6 +4163,30 @@ describe("SourceDiffOverlay — the repo-root watch", () => {
     expect([...distinct]).toEqual([JSON.stringify(["w1|root", ROOT, true, "team-a"])]);
   });
 
+  it("waits for a story's canonical root rather than watching its seeded folder", () => {
+    const story: Workspace = { ...storyWs, cwd: "/work/repo" };
+    const storyOverlay = () => (
+      <SourceDiffOverlay workspace={story} teamKey="team-a" activeTabSessionId="sid-ws" isFocused />
+    );
+    sessionCwdMock.mockReturnValue(null);
+    tabSourceRepoMock.mockReturnValue({
+      folder: { kind: "folder", cwd: "/work/repo" },
+      repo: { root: "/work/repo", isRoot: true },
+    });
+    const { rerender } = render(storyOverlay());
+    tabSourceRepoMock.mockReturnValue({
+      folder: { kind: "folder", cwd: "/work/repo" },
+      repo: { root: "/private/work/repo", isRoot: true, prefix: "" },
+    });
+    rerender(storyOverlay());
+    const attached = new Set(
+      watchMock.mock.calls.filter((c) => c[2]).map((c) => JSON.stringify(c)),
+    );
+    expect([...attached]).toEqual([
+      JSON.stringify(["w1|root", "/private/work/repo", true, "team-a"]),
+    ]);
+  });
+
   it("releases the watch on a `cd` to a folder with no repository", () => {
     const { rerender } = render(overlay());
     sessionCwdMock.mockReturnValue("/home/user");
