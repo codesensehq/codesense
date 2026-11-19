@@ -8,6 +8,7 @@
 //! - `ignore-terminate`: ignore the polite stop, print `ready`, then sleep.
 //! - `try-lock <path>`: print `locked` or `busy` for an exclusive lock on
 //!   `path`, then exit.
+//! - `lock-dir`: print the shared lock directory, then exit.
 //! - `console`: print `console window` or `no console window`, then exit.
 //! - `sleep`: sleep.
 //!
@@ -93,6 +94,10 @@ fn main() {
             let _listener = LocalListener::bind(&endpoint(args.next())).expect("bind");
             say("ready");
             sleep_forever()
+        }
+        Some("lock-dir") => {
+            let dir = codesense_platform::dirs::lock_dir().expect("a lock directory");
+            say(&dir.display().to_string());
         }
         Some("console") => say(if has_console_window() {
             "console window"

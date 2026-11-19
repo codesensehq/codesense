@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -1926,4 +1926,24 @@ fn subscribe_snapshot_then_live_no_gap() {
 fn snapshot_then_live_check_catches_a_snapshot_after_unlock() {
     let error = check_snapshot_then_live(true).unwrap_err();
     assert!(error.contains("also in the snapshot"), "{error}");
+}
+
+#[test]
+fn caps_off_is_unsupported_and_names_the_capability() {
+    let error = crate::caps_off("agent-cli-sockets");
+    assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+    assert!(error.to_string().contains("agent-cli-sockets"), "{error}");
+}
+
+/// Unix: `path`'s permission bits are exactly `mode`. Windows has no mode,
+/// so nothing is checked there.
+pub(crate) fn expect_mode(path: &Path, mode: u32) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let actual = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(actual, mode, "{}: {actual:o}", path.display());
+    }
+    #[cfg(not(unix))]
+    let _ = (path, mode);
 }

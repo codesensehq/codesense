@@ -203,8 +203,6 @@ tauri = { version = "~2.12.0", features = ["test"] }
 # The session-server sidecar as a library, so the sidecar client's tests run a
 # real sidecar in-process on a temp instance root.
 codesense-session-server = { path = "crates/codesense-session-server", features = ["test-support"] }
-# The platform crate's test helpers (executable fixtures for the CLI lookup).
-codesense-platform = { path = "crates/codesense-platform", features = ["testutil"] }
 
 # Attribution source guards still parse tokens inside the app test suite.
 proc-macro2 = "1"

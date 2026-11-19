@@ -1205,7 +1205,7 @@ mod tests {
     fn install(path: &Path) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, "").unwrap();
-        codesense_platform::testutil::set_executable(path);
+        fs::set_executable(path, fs::Reach::Everyone).unwrap();
     }
 
     /// The Windows table reads `ProgramFiles`, `SystemRoot` and `ComSpec`

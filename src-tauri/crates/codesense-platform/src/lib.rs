@@ -10,13 +10,14 @@
 //! - [`process`]: a [`process::ProcessTree`] ended as a whole, the group of a
 //!   process started elsewhere, single-process stops, exit checks, process
 //!   groups and pid liveness.
-//! - [`fs`]: owner-only files and checks, file identity, no-follow opens,
-//!   atomic replace, exclusive locks, links, canonical paths, portable names,
-//!   executable files and whether this process may run one.
+//! - [`fs`]: owner-only files, directories and checks, file identity,
+//!   no-follow opens, atomic replace, exclusive and shared locks, links,
+//!   canonical paths, portable names, execute bits, busy files, executable
+//!   files and whether this process may run one.
 //! - [`cli`]: finding a command-line tool on `PATH` and in package-manager
 //!   directories.
-//! - [`dirs`]: the codesense home.
-//! - [`user`]: the user this process runs as and their login shell.
+//! - [`dirs`]: the codesense home and the shared lock directory.
+//! - [`user`]: the user this process runs as, their login shell and the host's name.
 //! - [`limits`]: the open-file soft limit and running out of descriptors.
 //! - [`ipc`]: local endpoints, listeners and streams (Unix sockets, named
 //!   pipes) and the pid at the other end.

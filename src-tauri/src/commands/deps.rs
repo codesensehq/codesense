@@ -3608,7 +3608,8 @@ mod tests {
         std::fs::create_dir_all(dir).unwrap();
         let git = cli::named_in(&[dir.to_path_buf()], "git")[0].clone();
         std::fs::write(&git, b"").unwrap();
-        codesense_platform::testutil::set_executable(&git);
+        codesense_platform::fs::set_executable(&git, codesense_platform::fs::Reach::Everyone)
+            .unwrap();
         git
     }
 

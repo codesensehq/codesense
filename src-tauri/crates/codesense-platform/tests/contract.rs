@@ -14,12 +14,13 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use codesense_platform::cli::{candidates, named_in, package_dirs, search_path};
-use codesense_platform::dirs::codesense_home;
+use codesense_platform::dirs::{codesense_home, lock_dir};
 use codesense_platform::fs::{
-    atomic_replace, can_execute, canonicalize, create_new_owner_only, create_owner_only, file_id,
-    file_id_of, is_executable, is_owned_by_current_user, is_owner_only, link_or_copy,
-    lock_exclusive, open_nofollow, portable_name, set_owner_only, try_lock_exclusive, Linked,
-    NonPortableName, Open,
+    atomic_replace, can_execute, canonicalize, create_dir_new_owner_only, create_dir_owner_only,
+    create_new_owner_only, create_owner_only, file_id, file_id_of, is_executable,
+    is_owned_by_current_user, is_owner_only, is_text_busy, link_or_copy, lock_exclusive,
+    open_nofollow, portable_name, set_executable, set_owner_only, try_lock_exclusive,
+    try_lock_shared, unlock, Linked, NonPortableName, Open, Reach,
 };
 use codesense_platform::ipc::{blocking, Endpoint, LocalListener, LocalStream};
 use codesense_platform::limits::is_descriptor_exhaustion;
@@ -27,8 +28,8 @@ use codesense_platform::process::{
     exited_unreaped, group_and_foreground, is_alive, kill_hard, terminate, terminate_pid, Pid,
     ProcessGroup, ProcessTree,
 };
-use codesense_platform::testutil::{pathext, relative_from_cwd, set_executable, symlink_or_skip};
-use codesense_platform::user::{current_user, login_shell};
+use codesense_platform::testutil::{pathext, relative_from_cwd, symlink_or_skip};
+use codesense_platform::user::{current_user, hostname, login_shell};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 
 fn fixture(args: &[&str]) -> Command {
@@ -280,6 +281,11 @@ fn is_alive_is_false_for_pid_zero_and_true_for_this_process() {
 }
 
 #[test]
+fn is_alive_is_true_for_a_process_this_user_cannot_signal() {
+    assert!(is_alive(expect_unsignallable_pid()));
+}
+
+#[test]
 fn current_user_is_stable() {
     let user = current_user().unwrap();
     assert_eq!(user, current_user().unwrap());
@@ -293,6 +299,29 @@ fn home_is_dot_codesense() {
         codesense_home().unwrap(),
         PathBuf::from(home).join(".codesense")
     );
+}
+
+#[test]
+fn hostname_is_a_stable_name() {
+    let name = hostname().expect("a host name");
+    assert!(!name.is_empty());
+    assert!(!name.contains('\0'), "{name:?}");
+    assert_eq!(hostname(), Some(name));
+}
+
+#[test]
+fn lock_dir_ignores_the_temp_variables() {
+    let dir = lock_dir().expect("a lock directory");
+    expect_lock_dir(&dir);
+    let elsewhere = tempfile::tempdir().unwrap();
+    let mut command = fixture(&["lock-dir"]);
+    for variable in ["TMP", "TEMP", "TMPDIR"] {
+        command.env(variable, elsewhere.path());
+    }
+    let output = command.output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let theirs = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(Path::new(theirs.trim_end()), dir);
 }
 
 #[test]
@@ -362,6 +391,63 @@ fn a_file_this_user_makes_is_theirs_and_an_owner_only_create_is_owner_only() {
     assert!(is_owner_only(&file).unwrap());
     assert!(is_owner_only(&opened(&new)).unwrap());
     expect_owner_only_mode(&new);
+}
+
+#[test]
+fn create_dir_owner_only_makes_every_missing_directory_owner_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join("parent");
+    let leaf = parent.join("leaf");
+    create_dir_owner_only(&leaf).unwrap();
+    for path in [&parent, &leaf] {
+        let opened = open_nofollow(OpenOptions::new().read(true), path).unwrap();
+        assert!(is_owner_only(&opened).unwrap(), "{}", path.display());
+        expect_owner_only_mode(path);
+    }
+    create_dir_owner_only(&leaf).unwrap();
+    let file = dir.path().join("file");
+    std::fs::write(&file, "x").unwrap();
+    assert!(
+        create_dir_owner_only(&file).is_err(),
+        "a file is in the way"
+    );
+    assert!(create_dir_owner_only(&file.join("below")).is_err());
+}
+
+#[test]
+fn create_dir_new_owner_only_makes_exactly_one_new_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let new = dir.path().join("new");
+    create_dir_new_owner_only(&new).unwrap();
+    let opened = open_nofollow(OpenOptions::new().read(true), &new).unwrap();
+    assert!(is_owner_only(&opened).unwrap());
+    expect_owner_only_mode(&new);
+    assert_eq!(
+        create_dir_new_owner_only(&new).unwrap_err().kind(),
+        ErrorKind::AlreadyExists
+    );
+    let missing = dir.path().join("missing");
+    assert!(create_dir_new_owner_only(&missing.join("leaf")).is_err());
+    assert!(!missing.exists(), "never a parent");
+}
+
+#[test]
+fn set_executable_makes_a_file_this_os_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    for (stem, reach) in [("owner", Reach::Owner), ("everyone", Reach::Everyone)] {
+        let path = dir.path().join(expect_executable_name(stem));
+        std::fs::write(&path, "x").unwrap();
+        set_executable(&path, reach).unwrap();
+        assert!(is_executable(&path), "{}", path.display());
+        expect_executable_mode(&path, reach);
+    }
+}
+
+#[test]
+fn is_text_busy_is_only_a_busy_file() {
+    assert!(is_text_busy(&expect_text_busy_error()));
+    assert!(!is_text_busy(&std::io::Error::from(ErrorKind::NotFound)));
+    assert!(!is_text_busy(&std::io::Error::other("busy")));
 }
 
 #[test]
@@ -502,15 +588,7 @@ fn atomic_replace_reports_busy_for_foreign_handle() {
 fn lock_exclusive_blocks_second_holder() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("lock");
-    let open = || {
-        OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&path)
-            .unwrap()
-    };
+    let open = || open_lock_file(&path);
     let first = open();
     lock_exclusive(&first).unwrap();
     let second = open();
@@ -520,6 +598,39 @@ fn lock_exclusive_blocks_second_holder() {
     assert!(try_lock_exclusive(&second).unwrap(), "released on drop");
     drop(second);
     assert_eq!(lock_in_another_process(&path), "locked");
+}
+
+#[test]
+fn shared_locks_coexist_and_hold_off_an_exclusive_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lock");
+    let (first, second, third) = (
+        open_lock_file(&path),
+        open_lock_file(&path),
+        open_lock_file(&path),
+    );
+    assert!(try_lock_shared(&first).unwrap());
+    assert!(try_lock_shared(&second).unwrap(), "a second shared holder");
+    assert!(!try_lock_exclusive(&third).unwrap(), "both hold it");
+    assert_eq!(lock_in_another_process(&path), "busy");
+    unlock(&first).unwrap();
+    assert!(!try_lock_exclusive(&third).unwrap(), "one still holds it");
+    unlock(&second).unwrap();
+    assert!(try_lock_exclusive(&third).unwrap(), "both released");
+    assert!(!try_lock_shared(&first).unwrap(), "an exclusive holder");
+    unlock(&third).unwrap();
+    assert!(try_lock_shared(&first).unwrap(), "released");
+}
+
+/// Open the lock file at `path`, creating it.
+fn open_lock_file(path: &Path) -> File {
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .unwrap()
 }
 
 fn lock_in_another_process(path: &Path) -> String {
@@ -996,7 +1107,7 @@ fn executable(dir: &Path, name: &str) -> PathBuf {
     std::fs::create_dir_all(dir).unwrap();
     let path = dir.join(name);
     std::fs::write(&path, "#!/bin/sh\n").unwrap();
-    set_executable(&path);
+    set_executable(&path, Reach::Everyone).unwrap();
     path
 }
 
@@ -1015,6 +1126,48 @@ fn temp_siblings(dir: &Path) -> usize {
 /// the job outright.
 fn expect_terminate_can_be_ignored() -> bool {
     cfg!(unix)
+}
+
+/// A live process this user may not signal. Unix: pid 1, the init process
+/// (root's). Windows: pid 4, the System process.
+fn expect_unsignallable_pid() -> Pid {
+    Pid::from_raw(if cfg!(windows) { 4 } else { 1 })
+}
+
+/// Unix: `/tmp`. Windows: `locks` in the codesense home.
+fn expect_lock_dir(dir: &Path) {
+    if cfg!(windows) {
+        assert_eq!(dir, codesense_home().unwrap().join("locks"));
+    } else {
+        assert_eq!(dir, Path::new("/tmp"));
+    }
+}
+
+/// The error a busy file gives. Unix: `ETXTBSY`. Windows:
+/// `ERROR_SHARING_VIOLATION`.
+fn expect_text_busy_error() -> std::io::Error {
+    #[cfg(unix)]
+    let code = libc::ETXTBSY;
+    #[cfg(windows)]
+    let code = windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION as i32;
+    std::io::Error::from_raw_os_error(code)
+}
+
+/// Unix: mode 0700 for the owner and 0755 for everyone. Windows: no mode;
+/// the extension made it executable.
+fn expect_executable_mode(path: &Path, reach: Reach) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        let wanted = match reach {
+            Reach::Owner => 0o700,
+            Reach::Everyone => 0o755,
+        };
+        assert_eq!(mode, wanted, "{}", path.display());
+    }
+    #[cfg(windows)]
+    let _ = (path, reach);
 }
 
 /// Unix: a plain child shares this process's group, which is never adopted.

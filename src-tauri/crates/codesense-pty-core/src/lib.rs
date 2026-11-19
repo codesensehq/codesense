@@ -48,6 +48,16 @@ pub mod term_state;
 pub mod tui_fixture;
 mod warm;
 
+/// The error a capability this build or OS lacks returns: kind
+/// `Unsupported`, naming the capability `key`. A transport that is gated off
+/// keeps its signatures and answers every call with it.
+pub fn caps_off(key: &str) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        format!("{key} is not available in this build"),
+    )
+}
+
 pub use host::TerminalHost;
 pub use state::{LeftoverReap, SessionFacts, SessionMeta, SessionRegistration};
 pub use warm::{is_warm_safe_cwd, shell_quote};

@@ -15,6 +15,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use codesense_platform::fs::{is_executable, set_executable, Reach};
+
 /// The reference hook, embedded in the app binary. The repo copy at
 /// `scripts/codesense-notify.reference.sh` is the single source of truth;
 /// edits there flow in on the next build.
@@ -23,8 +25,8 @@ pub const SOURCE: &str = include_str!("../../../../scripts/codesense-notify.refe
 /// The installed hook's file name in a host's activity root.
 pub const NAME: &str = "codesense-notify.sh";
 
-/// Mode the installed hook lands with (executable for owner, read + exec
-/// for group and other).
+/// Mode the installed hook lands with on unix (executable for owner, read + exec
+/// for group and other): [`Reach::Everyone`].
 pub const MODE: u32 = 0o755;
 
 /// The installed guard's file name in a host's activity root.
@@ -77,25 +79,22 @@ fn install_one(root: &Path, name: &str, source: &str) -> io::Result<()> {
     if is_installed(&dest, source) {
         return Ok(());
     }
-    atomic_write_mode(&dest, source.as_bytes(), MODE)
+    atomic_write_mode(&dest, source.as_bytes())
 }
 
-/// Whether `dest` is a regular, owner-executable file holding `source`.
+/// Whether `dest` is a regular file this OS would run, holding `source`. On
+/// Windows a `.sh` file never is, so the hook is rewritten on every install.
 fn is_installed(dest: &Path, source: &str) -> bool {
     let Ok(meta) = fs::symlink_metadata(dest) else {
         return false;
     };
-    #[cfg(unix)]
-    let executable = {
-        use std::os::unix::fs::PermissionsExt;
-        meta.permissions().mode() & 0o100 != 0
-    };
-    #[cfg(not(unix))]
-    let executable = true;
-    meta.is_file() && executable && fs::read(dest).is_ok_and(|bytes| bytes == source.as_bytes())
+    meta.is_file()
+        && is_executable(dest)
+        && fs::read(dest).is_ok_and(|bytes| bytes == source.as_bytes())
 }
 
-fn atomic_write_mode(dest: &Path, bytes: &[u8], mode: u32) -> io::Result<()> {
+/// Write `bytes` to `dest` through a tmp file given [`MODE`] before the rename.
+fn atomic_write_mode(dest: &Path, bytes: &[u8]) -> io::Result<()> {
     let parent = dest.parent().unwrap_or_else(|| Path::new("."));
     let file_name = dest.file_name().ok_or_else(|| {
         io::Error::new(
@@ -115,15 +114,7 @@ fn atomic_write_mode(dest: &Path, bytes: &[u8], mode: u32) -> io::Result<()> {
         f.write_all(bytes)?;
         f.sync_all()?;
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&tmp, fs::Permissions::from_mode(mode))?;
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = mode;
-    }
+    set_executable(&tmp, Reach::Everyone)?;
     if let Err(e) = fs::rename(&tmp, dest) {
         let _ = fs::remove_file(&tmp);
         return Err(e);
@@ -165,11 +156,8 @@ mod tests {
         assert_eq!(fs::read_to_string(&dest).unwrap(), SOURCE);
         #[cfg(unix)]
         {
-            use std::os::unix::fs::{MetadataExt, PermissionsExt};
-            assert_eq!(
-                fs::metadata(&dest).unwrap().permissions().mode() & 0o777,
-                0o755
-            );
+            use std::os::unix::fs::MetadataExt;
+            crate::tests::expect_mode(&dest, MODE);
             let first = fs::metadata(&dest).unwrap().ino();
             install(tmp.path()).unwrap();
             assert_eq!(fs::metadata(&dest).unwrap().ino(), first, "left as it was");
@@ -190,11 +178,23 @@ mod tests {
             fs::set_permissions(&dest, fs::Permissions::from_mode(mode)).unwrap();
             install(tmp.path()).unwrap();
             assert_eq!(fs::read_to_string(&dest).unwrap(), SOURCE);
-            assert_eq!(
-                fs::metadata(&dest).unwrap().permissions().mode() & 0o777,
-                0o755
-            );
+            crate::tests::expect_mode(&dest, MODE);
         }
+    }
+
+    /// The check takes any execute bit, as `is_executable` does, not only the
+    /// owner's: a byte-identical hook only its group may run is left alone.
+    #[cfg(unix)]
+    #[test]
+    fn a_hook_only_its_group_may_run_counts_as_installed() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempdir().unwrap();
+        let dest = tmp.path().join(NAME);
+        fs::write(&dest, SOURCE).unwrap();
+        fs::set_permissions(&dest, fs::Permissions::from_mode(0o650)).unwrap();
+        assert!(is_installed(&dest, SOURCE));
+        install(tmp.path()).unwrap();
+        crate::tests::expect_mode(&dest, 0o650);
     }
 
     /// A symlink at the path is replaced, never followed, even one whose target holds the
@@ -216,6 +216,16 @@ mod tests {
             assert_eq!(fs::read_to_string(&dest).unwrap(), SOURCE);
         }
         assert!(!tmp.path().join("nowhere.sh").exists(), "never followed");
+    }
+
+    /// The right bytes without an execute bit are not an install: on Windows,
+    /// where a `.sh` file is never executable, `install` rewrites the hook.
+    #[test]
+    fn a_byte_identical_hook_without_an_execute_bit_is_not_installed() {
+        let tmp = tempdir().unwrap();
+        let dest = tmp.path().join(NAME);
+        fs::write(&dest, SOURCE).unwrap();
+        assert!(!is_installed(&dest, SOURCE));
     }
 
     #[test]

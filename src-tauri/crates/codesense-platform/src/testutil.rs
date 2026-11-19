@@ -35,12 +35,6 @@ pub fn relative_from_cwd(path: &Path) -> PathBuf {
     relative
 }
 
-/// Make the file at `path` executable for a test's setup: the execute bits
-/// (mode 0755) on unix; nothing on Windows, where the extension decides.
-pub fn set_executable(path: impl AsRef<Path>) {
-    sys::set_executable(path.as_ref())
-}
-
 /// The extensions `PATHEXT` names as executable, as the lookup reads them:
 /// on Windows `PATHEXT`'s, each with a leading dot; elsewhere Windows'
 /// default list.
@@ -54,12 +48,6 @@ mod sys {
 
     pub(super) fn pathext() -> Vec<String> {
         [".COM", ".EXE", ".BAT", ".CMD"].map(str::to_owned).to_vec()
-    }
-
-    pub(super) fn set_executable(path: &Path) {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
-            .unwrap_or_else(|error| panic!("chmod 755 {}: {error}", path.display()));
     }
 
     pub(super) fn symlink_or_skip(target: &Path, link: &Path) -> bool {
@@ -83,8 +71,6 @@ mod sys {
     pub(super) fn pathext() -> Vec<String> {
         crate::win::pathext()
     }
-
-    pub(super) fn set_executable(_path: &Path) {}
 
     pub(super) fn symlink_or_skip(target: &Path, link: &Path) -> bool {
         if target.is_dir() {

@@ -541,9 +541,7 @@ mod tests {
                     .status()
                 {
                     Ok(_) => return,
-                    Err(e)
-                        if e.raw_os_error() == Some(libc::ETXTBSY) && busy < TEXT_BUSY_RETRIES =>
-                    {
+                    Err(e) if crate::fs::is_text_busy(&e) && busy < TEXT_BUSY_RETRIES => {
                         busy += 1;
                         std::thread::sleep(TEXT_BUSY_WAIT);
                     }
