@@ -266,7 +266,8 @@ default_collection() {
     local login=/org/freedesktop/secrets/collection/login alias collections
     echo "Secret Service owner: $(dbus-send --session --print-reply --dest=org.freedesktop.DBus \
         /org/freedesktop/DBus org.freedesktop.DBus.GetNameOwner string:org.freedesktop.secrets 2>&1)"
-    ls -la "$XDG_DATA_HOME/keyrings"
+    # Logged only: the daemon renames its temp files here, and one that vanishes mid-listing fails ls.
+    ls -la "$XDG_DATA_HOME/keyrings" || true
     collections=$(secret_service org.freedesktop.DBus.Properties.Get \
         string:org.freedesktop.Secret.Service string:Collections)
     echo "Secret Service collections: $collections"
