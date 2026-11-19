@@ -6,7 +6,12 @@ import type { FlatNavItem } from "@/features/dashboard/lib/flatten-nav-tree";
 import type { AgentContextView } from "@/tauri/commands";
 
 import { buildContextMembership } from "../lib/agent-context-model";
-import { navRelResolver, teamRelResolver, type NavAgentContext } from "../lib/nav-agent-context";
+import {
+  fileAbsPath,
+  navRelResolver,
+  teamRelResolver,
+  type NavAgentContext,
+} from "../lib/nav-agent-context";
 import { withAgentContext } from "./agent-context-row";
 
 const ROOT = "/ctx/default/content";
@@ -137,5 +142,32 @@ describe("withAgentContext — the nav overlay (SW-XS-15 AC-1)", () => {
     const pinned = { type: "pinned-header", depth: 0, count: 1, collapsed: false } as FlatNavItem;
     render(<>{withAgentContext(pinned, <div data-testid="pin">p</div>, ctx)}</>);
     expect(screen.getByTestId("pin").parentElement).not.toHaveAttribute("data-agent-context");
+  });
+});
+
+describe("nav path resolvers on Windows paths", () => {
+  const winRoot = "C:\\ctx\\default\\content";
+  const winRepo = "C:\\ctx\\default\\repos\\github.com\\alderco\\codesense\\content";
+  const winView = {
+    ...view,
+    roots: [
+      { ...view.roots[0], path: winRepo },
+      { ...view.roots[1], path: winRoot },
+    ],
+  } as AgentContextView;
+
+  it("joins a want-set file onto its tier root with the root's separator", () => {
+    expect(fileAbsPath(winView, winView.files[1])).toBe(`${winRepo}\\docs\\repo-adr.md`);
+  });
+
+  it("maps team content and repo-tier files to content-relative paths", () => {
+    const relOf = navRelResolver(`${winRoot}\\`, winView);
+    expect(relOf(winRoot)).toBe("");
+    expect(relOf(`${winRoot}\\notes\\a.md`)).toBe("notes/a.md");
+    expect(relOf(`${winRepo}\\docs\\repo-adr.md`)).toBe("docs/repo-adr.md");
+    expect(relOf("C:\\elsewhere\\a.md")).toBeNull();
+    const editRelOf = teamRelResolver(winRoot);
+    expect(editRelOf(`${winRoot}\\notes\\`)).toBe("notes");
+    expect(editRelOf(`${winRepo}\\docs\\repo-adr.md`)).toBeNull();
   });
 });

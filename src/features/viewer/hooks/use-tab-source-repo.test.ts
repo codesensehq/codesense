@@ -151,6 +151,40 @@ describe("useTabSourceRepo — split folder vs repo", () => {
     expect(result.current.folder).toEqual({ kind: "folder", cwd: "/Users/dev/wt" });
   });
 
+  it("a new cwd drops the old answer at once, so nothing reads the old root meanwhile", async () => {
+    resolveLocalMock.mockResolvedValueOnce({ root: "/wt/a", isRoot: true });
+    const { result, rerender } = renderHook(({ cwd }) => useTabSourceRepo(localGeneric, cwd), {
+      initialProps: { cwd: "/wt/a" },
+    });
+    await waitFor(() => expect(result.current.repo).toEqual({ root: "/wt/a", isRoot: true }));
+
+    let answer: (v: unknown) => void = () => {};
+    resolveLocalMock.mockReturnValueOnce(new Promise((r) => (answer = r)));
+    rerender({ cwd: "/wt/b/sub" });
+    // The first render with the new cwd already reads "resolving", not /wt/a.
+    expect(result.current.repo).toBe(undefined);
+    answer({ root: "/wt/b", isRoot: false });
+    await waitFor(() => expect(result.current.repo).toEqual({ root: "/wt/b", isRoot: false }));
+    expect(resolveLocalMock).toHaveBeenLastCalledWith("/wt/b/sub");
+  });
+
+  it("a local story tab after a `cd` waits for the resolver instead of taking the subfolder as root", async () => {
+    const story = { ...localGeneric, kind: "story", cwd: "/wt/story" } as Workspace;
+    resolveLocalMock.mockResolvedValue({ root: "/wt/story", isRoot: true });
+    const { result, rerender } = renderHook(({ cwd }) => useTabSourceRepo(story, cwd), {
+      initialProps: { cwd: null as string | null },
+    });
+    // At the workspace's own folder the story shortcut answers at once.
+    expect(result.current.repo).toEqual({ root: "/wt/story", isRoot: true });
+
+    let answer: (v: unknown) => void = () => {};
+    resolveLocalMock.mockReturnValueOnce(new Promise((r) => (answer = r)));
+    rerender({ cwd: "/wt/story/src" });
+    expect(result.current.repo).toBe(undefined);
+    answer({ root: "/wt/story", isRoot: false });
+    await waitFor(() => expect(result.current.repo).toEqual({ root: "/wt/story", isRoot: false }));
+  });
+
   it("epic kind is sourceCapable but NOT diffCapable — folder reports, resolver never runs", () => {
     const { result } = renderHook(() => useTabSourceRepo(localEpic));
     expect(result.current).toEqual({

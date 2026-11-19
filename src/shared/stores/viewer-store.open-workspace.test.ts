@@ -356,6 +356,10 @@ describe("openOrFocusGenericWorkspace (SW-GW-1)", () => {
     expect(normalizeWorkspaceDir("/Users/me/scratch/")).toBe("/Users/me/scratch");
     expect(normalizeWorkspaceDir("/Users/me/scratch///")).toBe("/Users/me/scratch");
     expect(normalizeWorkspaceDir("/")).toBe("/");
+    // Drive-letter dirs trim either separator, and a drive root stays itself.
+    expect(normalizeWorkspaceDir("C:\\a\\")).toBe("C:\\a");
+    expect(normalizeWorkspaceDir("C:/a//")).toBe("C:/a");
+    expect(normalizeWorkspaceDir("C:\\")).toBe("C:\\");
     expect(genericWorkspaceId("/Users/me/scratch")).toBe("generic:/Users/me/scratch");
     // The same dir with/without a trailing slash mints the SAME id (AC-5 dedupe).
     expect(genericWorkspaceId("/Users/me/scratch/")).toBe(genericWorkspaceId("/Users/me/scratch"));

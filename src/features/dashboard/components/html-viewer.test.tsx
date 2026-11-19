@@ -19,6 +19,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { StrictMode } from "react";
 import { render, screen, waitFor, cleanup, fireEvent, act } from "@testing-library/react";
 import { HtmlViewer, NETWORK_PROBLEM_GRACE_MS } from "./html-viewer";
+import { restorePlatform, setPlatform } from "@/test/platform";
 
 // All mocks referenced inside `vi.mock` factories are created via `vi.hoisted`
 // so they're initialized before the (hoisted) factories run.
@@ -95,6 +96,11 @@ const { shortcutActions } = vi.hoisted(() => ({
       macCmdOnly: true,
     },
     { id: "viewer.focus-pane-right", defaultKeystroke: "CmdOrCtrl+Alt+ArrowRight", scope: "team" },
+    {
+      id: "viewer.cycle-workspace-prev",
+      defaultKeystroke: "CmdOrCtrl+Alt+[",
+      scope: "workspace",
+    },
     { id: "nav.switch-org", defaultKeystroke: "CmdOrCtrl+Shift+G", scope: "global" },
     { id: "nav.quick-open", defaultKeystroke: "CmdOrCtrl+P", scope: "global", macCmdOnly: true },
     { id: "nav.context-back", defaultKeystroke: "CmdOrCtrl+[", scope: "global", macCmdOnly: true },
@@ -815,6 +821,41 @@ describe("HtmlViewer codesense:shortcut router", () => {
     dispatchIframeMessage(chord("G", true));
     expect(mockDispatchMenuAction).toHaveBeenCalledWith("nav.quick-open");
     expect(mockDispatchMenuAction).toHaveBeenCalledWith("nav.switch-org");
+  });
+
+  describe("AltGr", () => {
+    afterEach(restorePlatform);
+    // German AltGr+8 types "[": Windows reports it as Ctrl+Alt, macOS chords are ⌘⌥.
+    const offMac = { ...chord("["), code: "Digit8", metaKey: false, ctrlKey: true, altKey: true };
+    const mac = { ...chord("["), code: "Digit8", altKey: true };
+
+    it.each(["Win32", "Linux x86_64"])(
+      "on %s, an AltGr key fires no shortcut and a Ctrl+Alt chord still does",
+      async (platform) => {
+        setPlatform(platform);
+        await renderWithShortcuts();
+        dispatchIframeMessage({ ...offMac, altGraph: true });
+        expect(mockDispatchMenuAction).not.toHaveBeenCalled();
+        dispatchIframeMessage({ ...offMac, altGraph: false });
+        expect(mockDispatchMenuAction).toHaveBeenLastCalledWith("viewer.cycle-workspace-prev");
+        // A frame shim that sends no AltGr state counts as no AltGr.
+        dispatchIframeMessage(offMac);
+        expect(mockDispatchMenuAction).toHaveBeenLastCalledWith("viewer.cycle-workspace-prev");
+        expect(mockDispatchMenuAction).toHaveBeenCalledTimes(2);
+      },
+    );
+
+    it.each([true, false, undefined])(
+      "on macOS, ⌘⌥[ cycles the workspace with altGraph %s",
+      async (altGraph) => {
+        setPlatform("MacIntel");
+        await renderWithShortcuts();
+        dispatchIframeMessage(altGraph === undefined ? mac : { ...mac, altGraph });
+        expect(mockDispatchMenuAction).toHaveBeenCalledExactlyOnceWith(
+          "viewer.cycle-workspace-prev",
+        );
+      },
+    );
   });
 
   it("ignores a shortcut from a foreign (non-iframe) source (AC-7)", async () => {

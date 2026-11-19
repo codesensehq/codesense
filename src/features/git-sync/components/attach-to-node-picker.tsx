@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import type { Node } from "@xyflow/react";
 
-import { basename } from "@/shared/lib/path";
+import { basename, dirname } from "@/shared/lib/path";
 import type { GroupNodeData, StoryNodeData } from "@/shared/lib/pipeline-graph";
 import { QuickOpenDialog } from "@/features/viewer/components/quick-open-dialog";
 
@@ -51,9 +51,7 @@ export function buildAttachTargets(nodes: Node[]): AttachTarget[] {
     } else if (isGroupNode(n)) {
       const md = n.data.mainDocFilePath;
       if (!md) continue;
-      const slash = md.lastIndexOf("/");
-      const dir = slash >= 0 ? md.slice(0, slash) : "";
-      push({ mdPath: md, label: n.data.title, sublabel: basename(dir) || "epic" });
+      push({ mdPath: md, label: n.data.title, sublabel: basename(dirname(md)) || "epic" });
     }
   }
   return targets;

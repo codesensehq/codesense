@@ -124,3 +124,7 @@ jobs:
         run: pnpm test:node-scripts
       - name: Run dev-worktree tests
         run: pnpm test:dev-worktree
+      - name: Run sidecar naming tests
+        run: pnpm test:sidecar
+      - name: Check sidecar naming scripts
+        run: shellcheck -x scripts/lib/sidecar.sh scripts/lib/sidecar.test.sh

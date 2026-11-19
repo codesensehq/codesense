@@ -2,10 +2,13 @@
 //! A Hermes gateway for tests: the private control socket that grants tickets, and the
 //! relay at an engine's endpoint that speaks `hermes-gateway-v1`. What the gateway says
 //! of its MCP servers comes from the caller, so a test derives it from real traffic.
+//! Unix only, as the gateway's sockets are (`channel/unix.rs`).
+#![cfg(unix)]
 use super::*;
+use codesense_platform::fs::set_owner_only;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
-use std::os::unix::{fs::PermissionsExt, net::UnixListener};
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -63,10 +66,10 @@ impl GatewayFixture {
         endpoint: &Path,
         mcp: impl Fn() -> McpServer + Send + Sync + 'static,
     ) -> Self {
-        std::fs::set_permissions(home, std::fs::Permissions::from_mode(0o700)).unwrap();
+        set_owner_only(home).unwrap();
         let control_path = home.join("gateway.sock");
         let control = UnixListener::bind(&control_path).unwrap();
-        std::fs::set_permissions(&control_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        set_owner_only(&control_path).unwrap();
         let relay = UnixListener::bind(endpoint).unwrap();
         let mut prepared = Prepare::new(vec![], json!({}), "/test/helper");
         Hermes.prepare(&mut prepared).unwrap();
@@ -119,12 +122,12 @@ impl Drop for GatewayFixture {
         self.done.store(true, Ordering::SeqCst);
         // Unblocks each accept loop, which then sees `done`.
         for socket in &self.sockets {
-            let _ = std::os::unix::net::UnixStream::connect(socket);
+            let _ = UnixStream::connect(socket);
         }
     }
 }
 
-fn control_call(stream: std::os::unix::net::UnixStream, observed: &Mutex<Observed>, home: &Path) {
+fn control_call(stream: UnixStream, observed: &Mutex<Observed>, home: &Path) {
     let mut line = String::new();
     let Ok(clone) = stream.try_clone() else {
         return;
@@ -153,11 +156,7 @@ fn control_call(stream: std::os::unix::net::UnixStream, observed: &Mutex<Observe
     );
 }
 
-fn relay_session(
-    stream: std::os::unix::net::UnixStream,
-    observed: &Mutex<Observed>,
-    mcp: &dyn Fn() -> McpServer,
-) {
+fn relay_session(stream: UnixStream, observed: &Mutex<Observed>, mcp: &dyn Fn() -> McpServer) {
     let Ok(mut socket) = tungstenite::accept_hdr(
         stream,
         |request: &tungstenite::handshake::server::Request,

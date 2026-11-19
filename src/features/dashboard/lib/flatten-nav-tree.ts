@@ -5,6 +5,7 @@ import type { DerivedPipelineTree, StoryRef } from "@/shared/lib/pipeline-graph/
 import type { PipelineGraph } from "@/shared/lib/pipeline-graph/pipeline-graph";
 import type { BlockedDep } from "@/shared/lib/pipeline-graph/resolve-nav-readiness";
 import { isInstalledNavPath } from "@/shared/lib/pipeline-graph/composite-to-repo-scan";
+import { basename } from "@/shared/lib/path";
 import { stripViewerExtension } from "@/shared/lib/viewer-file-type";
 import { storyMetadataTitle } from "@/shared/lib/pipeline-graph/story-display-title";
 import { compareNavNames, navTextMatches, orderSubEpics, type NodeCounts } from "./nav-ordering";
@@ -241,7 +242,7 @@ export function buildNavSearchFilter(args: {
       }
     }
     if (node.mainDoc) {
-      const mdName = node.mainDoc.filePath.split("/").pop() ?? "";
+      const mdName = basename(node.mainDoc.filePath);
       if (fileMatches(mdName)) {
         matchedFilePaths.add(node.mainDoc.filePath);
         markAncestors(parents);
@@ -383,7 +384,7 @@ function walkSubEpic(
       items.push({
         type: "main-doc",
         filePath: mdPath,
-        label: mdPath.split("/").pop() ?? "README.md",
+        label: basename(mdPath),
         depth,
         installed,
       });
@@ -529,7 +530,7 @@ export function collectTreePinTargets(
   const walk = (node: DerivedPipelineTree) => {
     for (const d of node.docs ?? []) put(d.filePath, false, stripViewerExtension(d.fileName));
     if (node.mainDoc) {
-      put(node.mainDoc.filePath, false, node.mainDoc.filePath.split("/").pop() ?? "README.md");
+      put(node.mainDoc.filePath, false, basename(node.mainDoc.filePath));
     }
     for (const sub of node.subEpics) {
       put(sub.absoluteDirPath, true, sub.dirName);

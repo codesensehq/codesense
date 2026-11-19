@@ -2051,11 +2051,12 @@ const EVENT_META = {
   },
   "codesense:shortcut": {
     direction: "doc-to-parent",
-    payload: "{ key, code, metaKey, ctrlKey, shiftKey, altKey, editorTarget, textFieldTarget }",
+    payload:
+      "{ key, code, metaKey, ctrlKey, shiftKey, altKey, editorTarget, textFieldTarget, altGraph }",
     timing:
       "On an unhandled Command, Control or Option chord, or a function key (excluding composition)",
     description:
-      "Forward a key description for the host shortcut registry (built-ins and slot dashboards' commands) and user bindings; editorTarget and textFieldTarget preserve editor-owned navigation and split keys; generic chords retain browser defaults.",
+      "Forward a key description for the host shortcut registry (built-ins and slot dashboards' commands) and user bindings; editorTarget and textFieldTarget preserve editor-owned navigation and split keys; altGraph marks an AltGr key, which off macOS types a character and never fires a shortcut; generic chords retain browser defaults.",
     example: "// Emitted automatically by the shim.",
   },
   "codesense:snapshot": {

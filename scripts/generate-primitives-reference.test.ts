@@ -231,6 +231,11 @@ describe("generate-primitives-reference manifest shape", () => {
     }
   });
 
+  it("documents the AltGr state a forwarded frame key carries", () => {
+    const shortcut = doc.events.find((e) => e.name === "codesense:shortcut");
+    expect(shortcut?.payload).toMatch(/\baltGraph\b/);
+  });
+
   it("contexts documents centre / pane / message + baseline with detection snippets (AC-5)", () => {
     const names = doc.contexts.map((c) => c.name);
     expect(names).toContain("centre-tab");

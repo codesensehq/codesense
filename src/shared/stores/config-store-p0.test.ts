@@ -176,5 +176,18 @@ describe("useConfigStore @P0", () => {
       expect(repos[0].contextRepoPath).toBe("");
       expect(repos[0].hasRemote).toBe(false);
     });
+
+    it.each([
+      ["a legacy string entry", "C:\\Users\\a\\My_Repo"],
+      ["an object entry with no repoName", { repo_path: "C:\\Users\\a\\My_Repo" }],
+    ])("loadState names %s on a Windows path from its folder", async (_label, entry) => {
+      mockLoadAppState.mockResolvedValue(JSON.stringify({ repos: [entry] }));
+
+      await useConfigStore.getState().loadState();
+
+      const repos = useConfigStore.getState().repos;
+      expect(repos).toHaveLength(1);
+      expect(repos[0].repoName).toBe("my-repo");
+    });
   });
 });

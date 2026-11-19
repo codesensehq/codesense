@@ -10,6 +10,7 @@ import {
   runWorktreeSetup,
 } from "@/tauri/commands";
 import { logger } from "@/shared/lib/logger";
+import { samePath } from "@/shared/lib/path";
 import { safeUnlisten } from "../tauri-listeners";
 import { branchRefMatches } from "./resolve";
 import type {
@@ -150,7 +151,8 @@ export async function createWorktree(
 
   // ── pre-flight: rehydrate or orphan-detect ─────────────────────────────
   const existing = await listWorktrees(repoPath).catch(() => []);
-  const matching = existing.find((w) => w.path === worktreePath);
+  // git for Windows lists `C:/…` where the front end builds `C:\…`.
+  const matching = existing.find((w) => samePath(w.path, worktreePath));
   if (matching) {
     const matchesBranch = branchRefMatches(matching.branch, branchName);
     if (matchesBranch) {

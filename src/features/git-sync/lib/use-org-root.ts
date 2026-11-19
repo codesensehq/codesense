@@ -3,6 +3,7 @@ import { useMemo } from "react";
 import { useOrgStore } from "@/shared/stores/org-store";
 
 import { deriveOrgRoot } from "@/shared/lib/codesense-home";
+import { isWithin } from "@/shared/lib/path";
 import { useContentSource } from "@/shared/hooks/use-content-source";
 
 /**
@@ -18,9 +19,7 @@ export function useOrgRoot(navRepoPath: string): string | null {
   const contextPath = useContentSource(navRepoPath)?.contextRepoPath;
   const registeredRoot = useOrgStore(
     (s) =>
-      s.orgs.find(
-        (org) => contextPath === org.org_root || contextPath?.startsWith(`${org.org_root}/`),
-      )?.org_root,
+      s.orgs.find((org) => contextPath != null && isWithin(org.org_root, contextPath))?.org_root,
   );
   return useMemo(
     () => registeredRoot ?? (contextPath ? deriveOrgRoot(contextPath) : null),

@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: MIT
+// Declared by the unix transport, a `cfg_attr` path the cfg ratchet guard does not
+// follow; the attribute below tells it this file is test code.
+#![cfg(test)]
 use super::*;
 use crate::activity::ActivityService;
 use crate::domain::InboxWaiterState;
@@ -88,8 +91,8 @@ fn me() -> u32 {
     std::process::id()
 }
 
-fn this() -> process::Process {
-    process::inspect(me()).unwrap()
+fn this() -> Process {
+    Process::inspect(me()).unwrap()
 }
 
 fn ask(event: &str, agent: u32) -> Ask {
@@ -119,8 +122,8 @@ impl Child {
         self.0.id()
     }
 
-    fn process(&self) -> process::Process {
-        process::inspect(self.pid()).unwrap()
+    fn process(&self) -> Process {
+        Process::inspect(self.pid()).unwrap()
     }
 }
 
@@ -137,19 +140,19 @@ fn under_a_shell() -> Shell {
     std::io::BufReader::new(shell.stdout.take().unwrap())
         .read_line(&mut line)
         .unwrap();
-    let run = process::inspect(line.trim().parse().expect("the shell names its run")).unwrap();
+    let run = Process::inspect(line.trim().parse().expect("the shell names its run")).unwrap();
     Shell(Child(shell), run)
 }
 
 /// A shell from [`under_a_shell`] and the process it runs.
-struct Shell(Child, process::Process);
+struct Shell(Child, Process);
 
 impl Shell {
     fn pid(&self) -> u32 {
         self.0.pid()
     }
 
-    fn run(&self) -> process::Process {
+    fn run(&self) -> Process {
         self.1
     }
 }
@@ -983,7 +986,7 @@ fn codex_in_its_session() -> (Host, crate::activity::Writer) {
 #[test]
 fn a_program_under_the_agent_is_the_agent_only_by_the_agents_own_session() {
     let (host, writer) = codex_in_its_session();
-    let admit = |run: process::Process, session| {
+    let admit = |run: Process, session| {
         host.owner
             .inbox_admission(&writer.token, run, run.pid, session)
     };
@@ -1307,7 +1310,7 @@ fn a_hermes_check_is_admitted_under_its_gateway_and_never_from_outside_the_cli()
         .unwrap();
     let hook = gateway.run();
     // The CLI's tree, and a process of the harness that is not in it.
-    let outside = process::inspect(std::os::unix::process::parent_id()).unwrap();
+    let outside = Process::inspect(std::os::unix::process::parent_id()).unwrap();
     for (who, run, session, admitted_as) in [
         (
             "the gateway's hook, naming the agent's session",

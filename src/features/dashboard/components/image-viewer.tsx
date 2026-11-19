@@ -7,6 +7,7 @@ import {
   type CommonViewerProps,
 } from "@/shared/lib/viewer-file-type";
 import { FileDeletedPlaceholder } from "@/shared/components/file-deleted-placeholder";
+import { basename, join } from "@/shared/lib/path";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 import { getActiveWorkspaceContext } from "@/shared/hooks/use-active-workspace-context";
 import { useFrameRecord } from "./use-frame-record";
@@ -44,7 +45,7 @@ export function ImageViewer({
   const [port, setPort] = useState<PortState>(undefined);
   const [failed, setFailed] = useState(false);
   const frameDocumentPath = baselineSource
-    ? `${baselineSource.orgRoot.replace(/\/$/, "")}/${baselineSource.relPath.replace(/^\/+/, "")}`
+    ? join(baselineSource.orgRoot, baselineSource.relPath)
     : filePath;
   const { frameRecord: frame, frameError } = useFrameRecord(
     port,
@@ -123,9 +124,9 @@ export function ImageViewer({
   }
 
   if (failed || frameError) {
-    // `||` (not `??`) so a trailing-slash path whose `pop()` is "" still
+    // `||` (not `??`) so a bare root whose basename is "" still
     // falls back to a label rather than rendering empty.
-    const fileName = filePath.split("/").pop() || "Image";
+    const fileName = basename(filePath) || "Image";
     return <FileDeletedPlaceholder fileName={fileName} onClose={handleClose} />;
   }
 
@@ -161,7 +162,7 @@ export function ImageViewer({
     >
       <img
         src={url}
-        alt={filePath.split("/").pop() || "image"}
+        alt={basename(filePath) || "image"}
         onError={() => setFailed(true)}
         className="max-h-full max-w-full object-contain rounded-sm shadow-sm"
       />

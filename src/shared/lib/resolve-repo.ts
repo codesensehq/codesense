@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { useConfigStore, type RepoState } from "@/shared/stores/config-store";
 import { useOrgStore } from "@/shared/stores/org-store";
+import { samePath } from "@/shared/lib/path";
 
 /** Resolve a RepoState by repoPath — checks org-store.workspaceRepos (active
  *  synthetic workspace repos) first, then config-store (legacy repos), then
@@ -15,7 +16,7 @@ export function resolveRepo(repoPath: string): RepoState | undefined {
   const orgState = useOrgStore.getState();
   const activeMatch = orgState.workspaceRepos[repoPath];
   if (activeMatch) return activeMatch;
-  const configMatch = useConfigStore.getState().repos.find((r) => r.repoPath === repoPath);
+  const configMatch = useConfigStore.getState().repos.find((r) => samePath(r.repoPath, repoPath));
   if (configMatch) return configMatch;
   // F-19: check suspended workspaces so resolveRepo still works for
   // repos hidden during org/team switch (F-16 guard, etc.).
@@ -45,13 +46,13 @@ export function findRepoBySourcePath(sourcePath: string): RepoState | undefined 
   if (!sourcePath) return undefined;
   const orgState = useOrgStore.getState();
   for (const repo of Object.values(orgState.workspaceRepos)) {
-    if (repo.localPath && repo.localPath === sourcePath) return repo;
+    if (repo.localPath && samePath(repo.localPath, sourcePath)) return repo;
   }
-  const configMatch = useConfigStore.getState().repos.find((r) => r.repoPath === sourcePath);
+  const configMatch = useConfigStore.getState().repos.find((r) => samePath(r.repoPath, sourcePath));
   if (configMatch) return configMatch;
   for (const suspended of Object.values(orgState.suspendedWorkspaceRepos)) {
     for (const repo of Object.values(suspended)) {
-      if (repo.localPath && repo.localPath === sourcePath) return repo;
+      if (repo.localPath && samePath(repo.localPath, sourcePath)) return repo;
     }
   }
   return undefined;

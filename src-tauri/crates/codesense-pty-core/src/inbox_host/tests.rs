@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::agent_cli::orion::Orion;
+use crate::inbox_waiters::{Owner, WaitArm};
+use codesense_host_proto::inbox_wait as wire;
 use std::io::Read;
+use std::os::unix::net::UnixStream;
 
 #[derive(Default)]
 struct Outlet {

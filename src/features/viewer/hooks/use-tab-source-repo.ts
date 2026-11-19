@@ -27,8 +27,9 @@ export type { TabSourceFolder, TabSourceRepo, TabSourceResolution };
  *     when resolved to a non-git dir, a `TabSourceRepo` otherwise. The Diff
  *     icon waits for `repo != null` so a non-git tab never flashes it.
  *
- * The `story` kind short-circuits the repo signal — its cwd is a worktree by
- * construction, no round-trip needed. Kinds that aren't `diffCapable` (`epic`)
+ * The `story` kind seeds the repo signal while the tab is at the workspace's
+ * own folder (a worktree root by construction), so the Diff icon needs no
+ * round-trip there; after a `cd` it waits for the resolver like any tab. Kinds that aren't `diffCapable` (`epic`)
  * skip the resolver entirely and report `repo: null`.
  *
  * DESIGN-remote-source.md §3.4 — remote branch. When
@@ -67,16 +68,27 @@ export function useTabSourceRepo(
     return cwd ? { kind: "folder", cwd } : null;
   })();
 
-  const [repo, setRepo] = useState<TabSourceRepo | null | undefined>(() => {
+  const initialRepo = (): TabSourceRepo | null | undefined => {
     if (!canDiff) return null;
     if (workspace.kind === "story") {
       if (remote && handle) {
         return { root: `remote://${remote.machineId}/${handle}`, isRoot: true };
       }
-      return { root: cwd, isRoot: true };
+      // Only the workspace's own folder is its worktree root; after a `cd`
+      // the resolver answers.
+      if (!remote && cwd === workspace.cwd) return { root: cwd, isRoot: true };
     }
     return undefined;
-  });
+  };
+  const [repo, setRepo] = useState<TabSourceRepo | null | undefined>(initialRepo);
+  // A new cwd (a `cd`, another tab) drops the last answer in the render that
+  // sees it, so nothing reads the old folder's repo while the new one resolves.
+  const resolveKey = JSON.stringify([canDiff, cwd, workspace.kind, machineId, handle]);
+  const [seenKey, setSeenKey] = useState(resolveKey);
+  if (seenKey !== resolveKey) {
+    setSeenKey(resolveKey);
+    setRepo(initialRepo());
+  }
 
   useEffect(() => {
     if (!canDiff) {

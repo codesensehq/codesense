@@ -112,6 +112,10 @@ describe("joinOrgPath", () => {
     expect(joinOrgPath("/ctx", "a/b.md")).toBe("/ctx/a/b.md");
     expect(joinOrgPath("/ctx/", "/a/b.md")).toBe("/ctx/a/b.md");
   });
+
+  it("joins onto a Windows root with its separator", () => {
+    expect(joinOrgPath("C:\\ctx\\", "a/b.md")).toBe("C:\\ctx\\a\\b.md");
+  });
 });
 
 describe("buildNodeIndex", () => {

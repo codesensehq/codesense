@@ -300,10 +300,7 @@ mod tests {
         assert!(redirectable(AgentCli::Claude));
         assert_eq!(
             crate::agents::adapter::desktop(AgentCli::Claude).managed_settings,
-            [
-                "/Library/Application Support/ClaudeCode/managed-settings.json",
-                "/etc/claude-code/managed-settings.json",
-            ]
+            crate::agents::adapter::claude_managed(std::env::consts::OS).settings
         );
         for cli in AgentCli::ALL.into_iter().filter(|cli| *cli != AgentCli::Claude) {
             assert!(crate::agents::adapter::desktop(cli).managed_settings.is_empty(), "{cli:?}");

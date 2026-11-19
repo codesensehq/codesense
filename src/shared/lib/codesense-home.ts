@@ -3,6 +3,7 @@ import { homeDir } from "@tauri-apps/api/path";
 
 import { LAYER_MARKER_DIRS } from "@/shared/lib/team-content-path";
 import { logger } from "@/shared/lib/logger";
+import { join, root, split } from "@/shared/lib/path";
 
 /** The CodeSense home, `~/.codesense`: the same `dirs::home_dir()` join as
  *  Rust's `codesense_home_dir()` (Tauri's `homeDir()` reads the same $HOME).
@@ -18,7 +19,7 @@ export function initCodesenseHome(): Promise<string | null> {
   if (!homeRequest) {
     homeRequest = homeDir()
       .then((dir) => {
-        home = `${dir.replace(/\/+$/, "")}/.codesense`;
+        home = join(dir, ".codesense");
         return home;
       })
       .catch((e: unknown) => {
@@ -55,18 +56,16 @@ export function setCodesenseHomeForTests(value: string | null): void {
  *  marker name appearing inside the org slug; a team named like a marker is
  *  reserved at creation (Rust `validate_team_name_full` D-1 Class B). */
 export function deriveOrgRoot(contextRepoPath: string): string {
-  const parts = contextRepoPath.split("/");
-  const markerIdx = parts.findIndex((p) => (LAYER_MARKER_DIRS as readonly string[]).includes(p));
-  // Need `[…org…, team, marker]` — the team is `parts[markerIdx - 1]` and the
-  // org root (everything before it) must be non-empty.
-  if (markerIdx >= 2) {
-    const orgRoot = parts.slice(0, markerIdx - 1).join("/");
-    if (orgRoot !== "" && orgRoot !== "/") return orgRoot;
-  }
+  const segments = split(contextRepoPath);
+  const markerIdx = segments.findIndex((s) => (LAYER_MARKER_DIRS as readonly string[]).includes(s));
+  // Need `[…org…, team, marker]` — the team is `segments[markerIdx - 1]` and the
+  // org root (the path's root plus everything before the team) must keep at
+  // least one segment.
+  if (markerIdx >= 2) return join(root(contextRepoPath), ...segments.slice(0, markerIdx - 1));
   // Most callers pass an already-stripped org root, so don't warn for paths
   // that look like one (`.../orgs/{slug}` at the tail). Only warn when neither
   // pattern holds — that's the genuinely suspicious case worth surfacing.
-  if (!/\/orgs\/[^/]+\/?$/.test(contextRepoPath)) {
+  if (segments.at(-2) !== "orgs") {
     logger.warn(
       "codesense-home",
       `deriveOrgRoot: path "${contextRepoPath}" has no layer marker nor a trailing "orgs/{slug}" — returning unchanged`,

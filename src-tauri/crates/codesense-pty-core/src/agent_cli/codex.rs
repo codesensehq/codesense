@@ -2,18 +2,21 @@
 //! OpenAI Codex.
 
 use std::io;
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::Instant;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tungstenite::protocol::WebSocketConfig;
-use tungstenite::{Message, WebSocket};
 
 use super::hooks::HookInput;
 use super::*;
+
+/// Codex's engine transport: its app-server over a Unix socket, or off where those are
+/// not available yet.
+#[cfg_attr(unix, path = "codex/app_server/unix.rs")]
+#[cfg_attr(not(unix), path = "codex/app_server/off.rs")]
+mod app_server;
 
 pub(super) struct Codex;
 
@@ -787,79 +790,70 @@ fn session_hook_trust(
 /// serialize on an owner-only lock; a native config rewrite is detected and retried.
 /// Never follow a replaced/symlinked config or truncate a malformed file.
 fn save_hook_trust(home: &Path, grants: &[(String, String)]) -> io::Result<()> {
+    use codesense_platform::fs::{self as platform_fs, FileId, Open};
     use std::fs::{self, OpenOptions};
     use std::io::{Read, Write};
-    use std::os::fd::AsRawFd;
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     let invalid = || io::Error::other("Codex hook trust config is not an owned regular TOML file");
     fs::create_dir_all(home)?;
-    let directory = fs::metadata(home)?;
+    // The home's links are followed, so a symlinked home (a dotfile manager's) is checked
+    // where it leads, as the user's own.
+    let directory = platform_fs::open_nofollow(
+        OpenOptions::new().read(true),
+        &platform_fs::canonicalize(home)?,
+    )?;
     // Native homes commonly inherit umask 002 (0775). Group writability alone
     // does not invalidate the account-owned config; each file is checked below.
-    if !directory.is_dir()
-        || directory.uid() != unsafe { libc::geteuid() }
-        || directory.mode() & 0o002 != 0
+    if !directory.metadata()?.is_dir()
+        || !platform_fs::is_owned_by_current_user(&directory)?
+        || platform_fs::is_world_writable(&directory)?
     {
         return Err(invalid());
     }
     let config = home.join("config.toml");
-    let lock = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(home.join(".codesense-hook-trust.lock"))?;
-    let meta = lock.metadata()?;
-    if !meta.is_file() || meta.uid() != unsafe { libc::geteuid() } || meta.nlink() != 1 {
+    let lock =
+        platform_fs::create_owner_only(&home.join(".codesense-hook-trust.lock"), Open::NoFollow)?;
+    if !lock.metadata()?.is_file()
+        || !platform_fs::is_owned_by_current_user(&lock)?
+        || platform_fs::link_count(&lock)? != 1
+    {
         return Err(invalid());
     }
     let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        // SAFETY: flock borrows this live descriptor; closing it releases our lock.
-        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-            break;
-        }
-        let error = io::Error::last_os_error();
-        if error.kind() != io::ErrorKind::WouldBlock || Instant::now() >= deadline {
-            return Err(error);
+    // Closing the lock file releases the lock.
+    while !platform_fs::try_lock_exclusive(&lock)? {
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "Codex hook trust lock busy",
+            ));
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    let stamp = |metadata: &fs::Metadata| {
-        (
-            metadata.dev(),
-            metadata.ino(),
-            metadata.len(),
-            metadata.modified().ok(),
-        )
-    };
+    let stamp =
+        |id: FileId, metadata: &fs::Metadata| (id, metadata.len(), metadata.modified().ok());
     for _ in 0..3 {
-        let (text, previous) = match OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(&config)
-        {
-            Ok(file) => {
-                let metadata = file.metadata()?;
-                if !metadata.is_file()
-                    || metadata.uid() != unsafe { libc::geteuid() }
-                    || metadata.nlink() != 1
-                    || metadata.len() > 1024 * 1024
-                {
-                    return Err(invalid());
+        let (text, previous) =
+            match platform_fs::open_nofollow_nonblocking(OpenOptions::new().read(true), &config) {
+                Ok(file) => {
+                    let metadata = file.metadata()?;
+                    if !metadata.is_file()
+                        || !platform_fs::is_owned_by_current_user(&file)?
+                        || platform_fs::link_count(&file)? != 1
+                        || metadata.len() > 1024 * 1024
+                    {
+                        return Err(invalid());
+                    }
+                    let id = platform_fs::file_id_of(&file)?;
+                    let mut text = String::new();
+                    file.take(1024 * 1024 + 1).read_to_string(&mut text)?;
+                    if text.len() > 1024 * 1024 {
+                        return Err(invalid());
+                    }
+                    (text, Some(stamp(id, &metadata)))
                 }
-                let mut text = String::new();
-                file.take(1024 * 1024 + 1).read_to_string(&mut text)?;
-                if text.len() > 1024 * 1024 {
-                    return Err(invalid());
-                }
-                (text, Some(stamp(&metadata)))
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => (String::new(), None),
-            Err(error) => return Err(error),
-        };
+                Err(error) if error.kind() == io::ErrorKind::NotFound => (String::new(), None),
+                Err(error) => return Err(error),
+            };
         let mut document: toml_edit::Document = text.parse().map_err(|_| invalid())?;
         for (key, hash) in grants {
             let mut table: &mut dyn toml_edit::TableLike = document.as_table_mut();
@@ -882,15 +876,15 @@ fn save_hook_trust(home: &Path, grants: &[(String, String)]) -> io::Result<()> {
         }
         let temporary = home.join(format!(".codesense-hooks-{}.tmp", uuid::Uuid::new_v4()));
         let result = (|| {
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&temporary)?;
+            let mut file = platform_fs::create_new_owner_only(&temporary)?;
             file.write_all(next.as_bytes())?;
             file.sync_all()?;
-            let current = match fs::symlink_metadata(&config) {
-                Ok(metadata) => Some(stamp(&metadata)),
+            // A config removed between the two lookups reads as missing, as one removed
+            // before them does.
+            let current = match platform_fs::file_id(&config)
+                .and_then(|id| Ok(stamp(id, &fs::symlink_metadata(&config)?)))
+            {
+                Ok(current) => Some(current),
                 Err(error) if error.kind() == io::ErrorKind::NotFound => None,
                 Err(error) => return Err(error),
             };
@@ -961,13 +955,10 @@ pub(super) fn locate_rollout(home: &Path, session_id: &str) -> Option<std::path:
 fn session_record(home: &Path, session_id: &str) -> Option<output::SessionRecord> {
     use std::fs;
     use std::io::{BufRead, Read, Seek, SeekFrom};
-    use std::os::unix::fs::OpenOptionsExt;
     let path = locate_rollout(home, session_id)?;
-    let mut file = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-        .ok()?;
+    let mut file =
+        codesense_platform::fs::open_nofollow_nonblocking(fs::OpenOptions::new().read(true), &path)
+            .ok()?;
     if !file.metadata().ok()?.is_file() {
         return None;
     }
@@ -1436,11 +1427,6 @@ fn flag_of<'a>(option: &'a str, flags: &[&[&str]]) -> Option<Option<&'a str>> {
         .find_map(|flag| super::descriptor::flag_value(option, flag))
 }
 
-/// How long the engine has to answer a request.
-const ENGINE_DEADLINE: Duration = Duration::from_secs(10);
-/// The largest message read from the engine.
-const MAX_MESSAGE: usize = 4 * 1024 * 1024;
-
 /// The subcommands that run its TUI, besides none: one that resumes or forks a session.
 const TUI_SUBCOMMANDS: &[&str] = &["resume", "fork"];
 /// Its options that take a value: [`ENGINE_FLAGS`] and [`SESSION_VALUE_FLAGS`].
@@ -1485,240 +1471,6 @@ fn runs_tui(options: &[String]) -> bool {
     true
 }
 
-/// Codex's engine, its app-server, spoken to in JSON-RPC over the WebSocket it serves on a
-/// Unix socket: one connection, and the thread its session's TUI shows.
-struct AppServer {
-    socket: WebSocket<UnixStream>,
-    endpoint: PathBuf,
-    /// The thread its TUI shows, and whether it was idle (no turn running) as connected;
-    /// `None` when which one it shows is unclear.
-    shown: Option<(String, bool)>,
-    next_id: u64,
-}
-
-/// Why a request got no result.
-#[derive(Debug, PartialEq, Eq)]
-enum RequestError {
-    /// The engine answered it with an error: it had no effect.
-    Refused,
-    /// The connection failed, or no answer came, once it may have been sent.
-    Lost,
-}
-
-impl AppServer {
-    /// A connection to the engine at `endpoint`, on the thread its TUI shows for
-    /// `session` (see [`Self::shown_thread`]).
-    fn connect(endpoint: &Path, session: Option<&str>) -> io::Result<Self> {
-        let mut server = Self::open(endpoint)?;
-        server.shown = server.shown_thread(session)?;
-        Ok(server)
-    }
-
-    /// A connection to the engine at `endpoint`, initialized, on no thread yet.
-    fn open(endpoint: &Path) -> io::Result<Self> {
-        let stream = UnixStream::connect(endpoint)?;
-        stream.set_read_timeout(Some(ENGINE_DEADLINE))?;
-        stream.set_write_timeout(Some(ENGINE_DEADLINE))?;
-        let config = WebSocketConfig::default()
-            .max_message_size(Some(MAX_MESSAGE))
-            .max_frame_size(Some(MAX_MESSAGE));
-        let (socket, _) =
-            tungstenite::client::client_with_config("ws://localhost/", stream, Some(config))
-                .map_err(|_| io::Error::other("the engine refused the connection"))?;
-        let mut server = Self {
-            socket,
-            endpoint: endpoint.to_path_buf(),
-            shown: None,
-            next_id: 0,
-        };
-        let refused = |_| io::Error::other("the engine refused the session");
-        server
-            .request(
-                "initialize",
-                json!({"clientInfo": {"name": "codesense", "version": env!("CARGO_PKG_VERSION")}}),
-            )
-            .map_err(refused)?;
-        server.notify("initialized")?;
-        Ok(server)
-    }
-
-    /// The thread the session's TUI shows: the one its hooks last named (`session`, a
-    /// thread id), or with no session named the only root, and in either case the one
-    /// a person was latest in. After `/new` the TUI shows a newer, unnamed thread, while the old one
-    /// stays loaded: that reads as unclear, and nothing is started where no one sees it.
-    /// The engine's own threads (ephemeral ones, such as its reviewer's) and subagents'
-    /// are never a TUI's. With it, whether it is idle; `Ok(None)` when it is unclear, an
-    /// error when the engine could not be read.
-    fn shown_thread(&mut self, session: Option<&str>) -> io::Result<Option<(String, bool)>> {
-        let lost = |_| io::Error::other("the engine's threads could not be read");
-        let loaded = self
-            .request("thread/loaded/list", json!({}))
-            .map_err(lost)?;
-        // A list that goes on past this page leaves the latest unknown.
-        let (Some(ids), true) = (loaded["data"].as_array(), loaded["nextCursor"].is_null()) else {
-            return Ok(None);
-        };
-        let mut threads = Vec::new();
-        for id in ids.iter().filter_map(Value::as_str) {
-            let read = self
-                .request("thread/read", json!({"threadId": id}))
-                .map_err(lost)?;
-            let thread = &read["thread"];
-            if thread["ephemeral"] == true || !thread["parentThreadId"].is_null() {
-                continue;
-            }
-            let idle = thread.pointer("/status/type") == Some(&json!("idle"));
-            threads.push((
-                id.to_owned(),
-                thread["recencyAt"].as_i64().unwrap_or(0),
-                idle,
-            ));
-        }
-        let shown = match session {
-            Some(session) => threads.iter().find(|(id, ..)| id == session),
-            None => match threads.as_slice() {
-                [only] => Some(only),
-                _ => None,
-            },
-        };
-        Ok(shown
-            .filter(|(shown, at, _)| {
-                threads
-                    .iter()
-                    .all(|(id, other, _)| id == shown || other < at)
-            })
-            .map(|(id, _, idle)| (id.clone(), *idle)))
-    }
-
-    /// The request seam: sends `method` with `params` and returns its result, passing
-    /// over the notifications, and the requests, the engine sends meanwhile (its TUI
-    /// answers those).
-    fn request(&mut self, method: &str, params: Value) -> Result<Value, RequestError> {
-        self.next_id += 1;
-        let id = self.next_id;
-        let request = json!({"id": id, "method": method, "params": params});
-        self.socket
-            .send(Message::text(request.to_string()))
-            .map_err(|_| RequestError::Lost)?;
-        let deadline = Instant::now() + ENGINE_DEADLINE;
-        loop {
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() || self.socket.get_ref().set_read_timeout(Some(left)).is_err() {
-                return Err(RequestError::Lost);
-            }
-            // A ping is answered by the socket itself; only text carries replies.
-            let text = match self.socket.read() {
-                Ok(Message::Text(text)) => text,
-                Ok(Message::Close(_)) | Err(_) => return Err(RequestError::Lost),
-                Ok(_) => continue,
-            };
-            let Ok(reply) = serde_json::from_str::<Value>(text.as_str()) else {
-                continue;
-            };
-            if reply.get("method").is_some() || reply.get("id").and_then(Value::as_u64) != Some(id)
-            {
-                continue;
-            }
-            return reply.get("result").cloned().ok_or(RequestError::Refused);
-        }
-    }
-
-    fn notify(&mut self, method: &str) -> io::Result<()> {
-        self.socket
-            .send(Message::text(json!({"method": method}).to_string()))
-            .map_err(io::Error::other)
-    }
-
-    /// Whether `thread` holds a user message sent under `client_id`, among its latest
-    /// items (where one just sent is); `None` when that can't be read.
-    fn holds_message(&mut self, thread: &str, client_id: &str) -> Option<bool> {
-        let params = json!({"threadId": thread, "limit": 100, "sortDirection": "desc"});
-        let page = self.request("thread/items/list", params).ok()?;
-        Some(page["data"].as_array()?.iter().any(|entry| {
-            entry["item"]["type"] == "userMessage" && entry["item"]["clientId"] == client_id
-        }))
-    }
-}
-
-impl Channel for AppServer {
-    fn ready_session(&mut self) -> Option<String> {
-        let (thread, true) = self.shown.clone()? else {
-            return None;
-        };
-        let read = self
-            .request("thread/read", json!({"threadId": thread}))
-            .ok()?;
-        let cwd = read["thread"]["cwd"].as_str()?;
-        if !Path::new(cwd).is_absolute() {
-            return None;
-        }
-        let list = self.request("hooks/list", json!({"cwds": [cwd]})).ok()?;
-        let entries = list["data"].as_array()?;
-        let [entry] = entries.as_slice() else {
-            return None;
-        };
-        if entry["cwd"] != cwd || !entry["errors"].as_array()?.is_empty() {
-            return None;
-        }
-        let hooks = entry["hooks"].as_array()?;
-        // A custom untrusted hook can still put a review menu in front of the TUI.
-        // Managed hooks are trusted by policy; unknown flags/statuses fail closed.
-        if hooks.iter().any(|hook| match hook["enabled"].as_bool() {
-            Some(false) => false,
-            Some(true) => !matches!(hook["trustStatus"].as_str(), Some("trusted" | "managed")),
-            None => true,
-        }) {
-            return None;
-        }
-        let command = observer_command();
-        for event in OBSERVER_EVENTS {
-            let mut name = event.to_string();
-            name[..1].make_ascii_lowercase();
-            if !hooks.iter().any(|hook| {
-                hook["eventName"] == name
-                    && hook["command"] == command
-                    && hook["handlerType"] == "command"
-                    && hook["enabled"] == true
-                    && hook["source"] == "sessionFlags"
-                    && hook["matcher"].is_null()
-                    && hook["async"].as_bool() != Some(true)
-            }) {
-                return None;
-            }
-        }
-        Some(thread)
-    }
-
-    /// Only the thread its TUI shows is started a turn, and only while idle: one started
-    /// while a turn runs would join it. A person pressing Enter at that moment shares the
-    /// new turn; neither prompt is lost.
-    fn start_turn(&mut self, text: &str, client_id: &str) -> SubmitOutcome {
-        let Some((thread, true)) = self.shown.clone() else {
-            return SubmitOutcome::RefusedNoEffect;
-        };
-        let params = json!({
-            "threadId": thread,
-            "clientUserMessageId": client_id,
-            "input": [{"type": "text", "text": text}],
-        });
-        match self.request("turn/start", params) {
-            Ok(started) if started.pointer("/turn/id").is_some() => SubmitOutcome::Accepted,
-            Err(RequestError::Refused) => SubmitOutcome::RefusedNoEffect,
-            // Its answer was lost or unreadable: whether the turn started is read back, by
-            // its client id, on a connection of its own.
-            _ => {
-                let held = Self::open(&self.endpoint)
-                    .ok()
-                    .and_then(|mut fresh| fresh.holds_message(&thread, client_id));
-                match held {
-                    Some(true) => SubmitOutcome::Accepted,
-                    _ => SubmitOutcome::Uncertain,
-                }
-            }
-        }
-    }
-}
-
 /// [`Control::channel`]: its engine at `endpoint`, on the thread its TUI shows for
 /// `session`.
 fn connect(
@@ -1726,7 +1478,7 @@ fn connect(
     session: Option<&str>,
     _home: Option<&Path>,
 ) -> io::Result<Box<dyn Channel>> {
-    Ok(Box::new(AppServer::connect(endpoint, session)?))
+    app_server::connect(endpoint, session)
 }
 
 impl AgentCliAdapter for Codex {
@@ -1899,8 +1651,10 @@ impl AgentCliAdapter for Codex {
 
 #[cfg(test)]
 mod tests {
+    use super::app_server::AppServer;
     use super::*;
     use crate::activity::Scope;
+    use tungstenite::Message;
 
     #[test]
     fn attribution_edit_transports_only_owned_hooks_and_preserves_user_arguments() {
@@ -2184,6 +1938,16 @@ mod tests {
             record.format.parse_native(&record.raw).is_none(),
             "bounded text fallback remains available"
         );
+    }
+
+    #[test]
+    fn cx4_native_record_reads_a_rollout_with_a_second_name() {
+        let home = tempfile::tempdir().unwrap();
+        let file = cx4_write(home.path(), CX4_ID, CX4_ID, CX4_RECORD);
+        std::fs::hard_link(&file, home.path().join("kept.jsonl")).unwrap();
+        let read = Codex.output().session_record.unwrap();
+        let record = read(home.path(), CX4_ID).expect("only a link is refused, not a link count");
+        assert_eq!(record.session_id, CX4_ID);
     }
 
     #[test]
@@ -2614,6 +2378,64 @@ mod tests {
             .parse()
             .unwrap();
         assert_eq!(value["hooks"]["state"].as_table().unwrap().len(), 8);
+    }
+
+    #[test]
+    fn cx2_a_symlinked_home_the_user_owns_keeps_its_trust() {
+        let real = tempfile::tempdir().unwrap();
+        let links = tempfile::tempdir().unwrap();
+        let home = links.path().join("codex-home");
+        std::os::unix::fs::symlink(real.path(), &home).unwrap();
+        let grants = vec![("owned:linked".to_owned(), "hash-linked".to_owned())];
+        save_hook_trust(&home, &grants).unwrap();
+        let value: toml::Value = std::fs::read_to_string(real.path().join("config.toml"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            value["hooks"]["state"]["owned:linked"]["trusted_hash"].as_str(),
+            Some("hash-linked")
+        );
+        let lock = std::fs::File::open(real.path().join(".codesense-hook-trust.lock")).unwrap();
+        assert!(
+            codesense_platform::fs::is_owner_only(&lock).unwrap(),
+            "the trust lock is private"
+        );
+    }
+
+    #[test]
+    fn cx2_trust_refuses_a_linked_config_or_lock_without_damage() {
+        let grants = vec![("owned:x".to_owned(), "hash-x".to_owned())];
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join("config.toml");
+        let other = home.path().join("other.toml");
+        std::fs::write(&other, "model=\"shared\"\n").unwrap();
+        std::fs::hard_link(&other, &config).unwrap();
+        assert!(
+            save_hook_trust(home.path(), &grants).is_err(),
+            "a config with a second name"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&other).unwrap(),
+            "model=\"shared\"\n"
+        );
+
+        let home = tempfile::tempdir().unwrap();
+        let lock = home.path().join(".codesense-hook-trust.lock");
+        let other = home.path().join("other.lock");
+        std::fs::write(&other, "").unwrap();
+        std::fs::hard_link(&other, &lock).unwrap();
+        assert!(
+            save_hook_trust(home.path(), &grants).is_err(),
+            "a lock with a second name"
+        );
+        std::fs::remove_file(&lock).unwrap();
+        std::os::unix::fs::symlink(&other, &lock).unwrap();
+        assert!(
+            save_hook_trust(home.path(), &grants).is_err(),
+            "a linked lock"
+        );
+        assert!(!home.path().join("config.toml").exists());
     }
 
     #[test]

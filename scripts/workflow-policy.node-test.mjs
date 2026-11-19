@@ -368,6 +368,7 @@ test("rust.yml runs the Windows check on a pull request only with ci:windows, ne
     [
       "cargo check --locked -p codesense-platform -p codesense-host-proto -p codesense-fs-core --all-targets",
       "cargo test --locked -p codesense-platform",
+      "cargo test --locked -p codesense-host-proto --lib hook::",
     ],
   );
   // The ci:windows label's run gets a group of its own, so it never cancels a ci:macos run.
@@ -1051,9 +1052,14 @@ test("Rust jobs preserve package coverage for nextest and doctests and always up
   };
 
   const linux = workflow.jobs["rust-linux"];
-  assert.deepEqual(packages(linux.env.RUST_PACKAGES), [...portable].sort());
+  assert.deepEqual(packages(linux.env.RUST_PACKAGES), [...portable, "codesense-bridge"].sort());
   const runs = linux.steps.filter((step) => step.run?.includes("cargo nextest run"));
   assert.equal(runs.length, 2, "compile and run both use nextest");
+  // The secret guard's oracle against its Perl script, until the script is deleted.
+  assert.deepEqual(
+    linux.steps.filter((step) => /\bcargo test\b(?! --doc)/.test(step.run ?? "")).map((s) => s.run),
+    ["cargo test --locked -p codesense-host-proto --lib hook:: -- --ignored"],
+  );
   for (const step of runs) {
     assert.match(step.run, /--profile ci/);
     assert.match(step.run, /\$RUST_PACKAGES/);
@@ -1426,7 +1432,7 @@ test("test build: the Linux smoke tests each build's packages on its own runner"
   const appImage = runs.filter(([run]) => /smoke-linux\.sh (run|variant)/.test(run));
   assert.deepEqual(
     appImage.map(([run]) => run.match(/smoke-linux\.sh (run|variant \S+)/)[1]),
-    ["run", "variant dmabuf", "variant no-dbus"],
+    ["run", "variant dmabuf", "variant no-dbus", "variant webgl"],
   );
   for (const [, condition] of appImage) assert.equal(condition, "matrix.appimage");
   const check = jobs["linux-app"].steps.find((step) => step.name === "Check scripts");

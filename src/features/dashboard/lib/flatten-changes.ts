@@ -1,5 +1,13 @@
 // SPDX-License-Identifier: MIT
 import type { FileEntry } from "@/tauri/commands";
+import {
+  basename,
+  dirname,
+  join,
+  relative,
+  split,
+  trimTrailingSeparators,
+} from "@/shared/lib/path";
 import type { DerivedPipelineTree } from "@/shared/lib/pipeline-graph/types";
 import type { PipelineGraph } from "@/shared/lib/pipeline-graph/pipeline-graph";
 import { stripViewerExtension } from "@/shared/lib/viewer-file-type";
@@ -25,7 +33,7 @@ function emptyDir(path: string, node: DerivedPipelineTree | null): ChangeDir {
 /** A synthetic listing entry for a changed path the scan doesn't list (a deleted file, or one
  *  in a folder no one has expanded yet). */
 function entryFor(path: string, isDir: boolean): FileEntry {
-  const name = path.split("/").pop() ?? path;
+  const name = basename(path);
   const dot = name.lastIndexOf(".");
   return {
     name,
@@ -74,7 +82,7 @@ function indexTree(
         item: (depth) => ({
           type: "main-doc",
           filePath: mdPath,
-          label: mdPath.split("/").pop() ?? "README.md",
+          label: basename(mdPath),
           depth,
           installed: false,
         }),
@@ -131,11 +139,11 @@ export function flattenChanges(args: {
   collapsed: ReadonlySet<string>;
 }): FlatNavItem[] {
   const { tree, changes } = args;
-  const rootPath = tree.absoluteDirPath.replace(/\/+$/, "");
+  const rootPath = trimTrailingSeparators(tree.absoluteDirPath);
   const index = indexTree(tree, args.graph);
   const nodeByPath = new Map<string, DerivedPipelineTree>();
   const collectNodes = (n: DerivedPipelineTree) => {
-    nodeByPath.set(n.absoluteDirPath.replace(/\/+$/, ""), n);
+    nodeByPath.set(trimTrailingSeparators(n.absoluteDirPath), n);
     n.subEpics.forEach(collectNodes);
   };
   collectNodes(tree);
@@ -143,10 +151,9 @@ export function flattenChanges(args: {
   const root = emptyDir(rootPath, tree);
   const dirAt = (absDir: string): ChangeDir => {
     let cur = root;
-    const rel = absDir === rootPath ? "" : absDir.slice(rootPath.length + 1);
     let path = rootPath;
-    for (const seg of rel.split("/").filter(Boolean)) {
-      path = `${path}/${seg}`;
+    for (const seg of split(relative(rootPath, absDir) ?? "")) {
+      path = join(path, seg);
       let next = cur.dirs.get(path);
       if (!next) cur.dirs.set(path, (next = emptyDir(path, nodeByPath.get(path) ?? null)));
       cur = next;
@@ -155,13 +162,11 @@ export function flattenChanges(args: {
   };
 
   for (const c of changes) {
-    const pathInTree = args.cloneRoot
-      ? `${args.cloneRoot.replace(/\/+$/, "")}/${c.relPath}`
-      : c.absPath;
-    if (!pathInTree.startsWith(`${rootPath}/`)) continue;
+    const pathInTree = args.cloneRoot ? join(args.cloneRoot, c.relPath) : c.absPath;
+    if (!relative(rootPath, pathInTree)) continue;
     const known = index.get(pathInTree);
-    const parent = pathInTree.slice(0, pathInTree.lastIndexOf("/"));
-    const dir = dirAt(known ? known.dir.absoluteDirPath.replace(/\/+$/, "") : parent);
+    const parent = dirname(pathInTree);
+    const dir = dirAt(known ? trimTrailingSeparators(known.dir.absoluteDirPath) : parent);
     const item = known?.item(0);
     if (item?.type === "story")
       dir.files.push({ ...item, story: { ...item.story, filePath: c.absPath } });
@@ -188,12 +193,12 @@ export function flattenChanges(args: {
     }
     for (let sub of plain) {
       // A plain folder holding just one plain folder folds into it: `repos › widgets`.
-      const names = [sub.path.split("/").pop()!];
+      const names = [basename(sub.path)];
       while (sub.files.length === 0 && sub.dirs.size === 1) {
         const only = [...sub.dirs.values()][0];
         if (only.node) break;
         sub = only;
-        names.push(sub.path.split("/").pop()!);
+        names.push(basename(sub.path));
       }
       const expanded = !args.collapsed.has(sub.path);
       items.push({

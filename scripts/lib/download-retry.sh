@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Shared by the scripts that download pinned CI tools (install-scanners.sh, fetch-git-ai.sh, build-emulator.sh).
+# Shared by the scripts that download pinned CI tools (install-scanners.sh, fetch-pinned.sh, build-emulator.sh).
 # Source it, then: download_with_retry <out> <url> [extra curl args...]
 #
 # GitHub release downloads can answer 5xx for minutes at a time, and curl's own --retry misses some of

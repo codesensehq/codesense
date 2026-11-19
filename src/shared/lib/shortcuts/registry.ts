@@ -22,6 +22,7 @@ import {
   liveStoryDashboardDeps,
   openStoryDashboard,
 } from "@/features/dashboard/lib/open-story-dashboard";
+import { STORY_DASHBOARD_ACTION_ID } from "@/features/dashboard/lib/story-dashboard-action-id";
 import { openAppSettings } from "@/features/settings/lib/open-settings";
 import { canExportToPdf, exportViewerToPdf } from "@/features/viewer/lib/export-pdf";
 import {
@@ -68,6 +69,7 @@ import {
   stepExpand,
   jumpToWhatNeedsYou,
 } from "@/features/viewer/lib/terminal-tab-keys";
+import { samePath } from "@/shared/lib/path";
 
 /**
  * Canonical action registry for every configurable keyboard shortcut +
@@ -537,7 +539,7 @@ const shortcutActions: readonly ShortcutAction[] = [
   {
     // View → Dashboard: the focused story's dashboard (its workspace's story, else the active tab when
     // it is a story file). With no story in focus it says why in a toast, so the item is never silent.
-    id: "viewer.open-story-dashboard",
+    id: STORY_DASHBOARD_ACTION_ID,
     label: "Dashboard",
     menuPath: ["View", "Dashboard"],
     defaultKeystroke: "",
@@ -985,7 +987,9 @@ const shortcutActions: readonly ShortcutAction[] = [
         toast.error("Couldn't export — workspace has no source repo");
         return;
       }
-      const fromConfig = useConfigStore.getState().repos.find((r) => r.repoPath === lookupKey);
+      const fromConfig = useConfigStore
+        .getState()
+        .repos.find((r) => samePath(r.repoPath, lookupKey));
       const fromWorkspace = useOrgStore.getState().workspaceRepos[lookupKey];
       const resolved = fromConfig ?? fromWorkspace;
       // Surface feedback on empty teamContentPath — the earlier silent

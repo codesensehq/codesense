@@ -5,6 +5,7 @@
  * commands, so every sentence is unit-testable.
  */
 import { logger } from "@/shared/lib/logger";
+import { basename, dirname, root } from "@/shared/lib/path";
 import type {
   ForgetMissingWorkspaceResult,
   TeamFileEdit,
@@ -187,11 +188,11 @@ export function workspaceLine(ws: TeamFileEditsWorkspace, nowMs: number): string
 
 /** Split a path into its name and the folder it sits in. */
 export function baseName(path: string): string {
-  return path.split("/").pop() ?? path;
+  return basename(path);
 }
 export function dirName(path: string): string {
-  const i = path.lastIndexOf("/");
-  return i > 0 ? path.slice(0, i) : "";
+  const dir = dirname(path);
+  return dir === root(path) ? "" : dir;
 }
 
 /** A stable key for a workspace. */

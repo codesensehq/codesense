@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 use super::subagents::OpenSubagents;
 use super::{
-    process, Action, Event, Exit, Identity, Mutation, Outcome, Report, Scope, Snapshot, State,
-    Writer,
+    Action, Event, Exit, Identity, Mutation, Outcome, Report, Scope, Snapshot, State, Writer,
 };
 use crate::agent_cli::{AgentCli, AgentCliAdapter, InboxDelivery, Subagents};
 use crate::inbox_host::{Fate, HostInbox, InboxOutlet, Repeat};
+use codesense_platform::process::Identity as Process;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -21,7 +21,7 @@ pub const QUIET_TURN: std::time::Duration = std::time::Duration::from_secs(25);
 struct Session {
     pending_native: bool,
     incarnation: String,
-    process: Option<process::Process>,
+    process: Option<Process>,
     invocation: Option<Invocation>,
     child: Option<crate::runner::ChildHandle>,
 }
@@ -61,7 +61,7 @@ struct Invocation {
     batch: bool,
     snapshot: Snapshot,
     token: String,
-    process: Option<process::Process>,
+    process: Option<Process>,
     reports: VecDeque<String>,
     provider_session: Option<String>,
     retired_provider_sessions: HashSet<String>,
@@ -86,8 +86,8 @@ struct Invocation {
 #[derive(Debug)]
 struct Engine {
     home: Option<PathBuf>,
-    process: process::Process,
-    keeper: process::Process,
+    process: Process,
+    keeper: Process,
     end_on_loss: bool,
     endpoint: PathBuf,
 }
@@ -95,11 +95,11 @@ struct Engine {
 impl Drop for Engine {
     /// Forgotten (its invocation is), it is ended if it still runs, and its socket goes.
     fn drop(&mut self) {
-        if process::inspect(self.process.pid) == Some(self.process) {
-            // SAFETY: signalling the process just identified as this engine.
-            unsafe {
-                libc::kill(self.process.pid as i32, libc::SIGTERM);
-            }
+        if Process::inspect(self.process.pid) == Some(self.process) {
+            // The process just identified as this engine, and it alone.
+            let _ = codesense_platform::process::terminate_pid(
+                codesense_platform::process::Pid::from_raw(self.process.pid),
+            );
         }
         super::engine::remove_socket(&self.endpoint);
     }
@@ -160,10 +160,10 @@ impl Invocation {
         let connect = adapter.control().channel?;
         // Its engine still runs, under the CLI the invocation committed.
         let engine = self.engine.as_ref().filter(|engine| {
-            process::inspect(engine.process.pid) == Some(engine.process)
+            Process::inspect(engine.process.pid) == Some(engine.process)
                 && self
                     .process
-                    .is_some_and(|cli| process::descends_from(engine.process, cli))
+                    .is_some_and(|cli| Process::descends_from(engine.process, cli))
         })?;
         Some(Reach {
             cli: self.snapshot.provider,
@@ -420,7 +420,7 @@ impl ActivityOwner {
     pub(super) fn inbox_admission(
         &self,
         token: &str,
-        peer: process::Process,
+        peer: Process,
         agent: u32,
         hook_session: Option<&str>,
     ) -> InboxAdmission {
@@ -453,7 +453,7 @@ impl ActivityOwner {
         let Some(process) = process else {
             return InboxAdmission::Pending { delivery };
         };
-        let Some(running) = process::inspect(agent).filter(|_| !exited) else {
+        let Some(running) = Process::inspect(agent).filter(|_| !exited) else {
             return InboxAdmission::Refused;
         };
         // The agent that runs its hooks: the CLI itself, or the engine it runs on, under it;
@@ -464,16 +464,16 @@ impl ActivityOwner {
         let named = if running.is(process) {
             process
         } else if let Some(engine) =
-            engine.filter(|engine| running.is(*engine) && process::descends_from(*engine, process))
+            engine.filter(|engine| running.is(*engine) && Process::descends_from(*engine, process))
         {
             engine
-        } else if its_own && process::descends_from(running, process) {
+        } else if its_own && Process::descends_from(running, process) {
             process
         } else {
             return InboxAdmission::Refused;
         };
         // Under the agent, which is (or is under) `named`.
-        if !process::descends_from(peer, running) {
+        if !Process::descends_from(peer, running) {
             return InboxAdmission::Refused;
         }
         InboxAdmission::Admitted {
@@ -490,7 +490,7 @@ impl ActivityOwner {
     pub(super) fn bind_engine(
         &self,
         token: &str,
-        peer: process::Process,
+        peer: Process,
         pid: u32,
         endpoint: PathBuf,
         home: Option<PathBuf>,
@@ -498,8 +498,8 @@ impl ActivityOwner {
         if home.as_ref().is_some_and(|home| !home.is_absolute()) {
             return Err("native home must be absolute");
         }
-        let engine = process::inspect(pid).ok_or("activity engine unavailable")?;
-        if process::inspect(peer.pid) != Some(peer) || !process::descends_from(engine, peer) {
+        let engine = Process::inspect(pid).ok_or("activity engine unavailable")?;
+        if Process::inspect(peer.pid) != Some(peer) || !Process::descends_from(engine, peer) {
             return Err("activity engine is not its launch's");
         }
         // Its socket is an engine's, beside the host's own in the host's private root.
@@ -524,7 +524,7 @@ impl ActivityOwner {
             end_on_loss: self
                 .adapter(invocation.snapshot.provider)
                 .end_on_engine_loss(),
-            keeper: process::inspect(engine.parent).ok_or("activity keeper unavailable")?,
+            keeper: Process::inspect(engine.parent).ok_or("activity keeper unavailable")?,
             process: engine,
             endpoint,
         });
@@ -917,13 +917,13 @@ impl ActivityOwner {
             .get_mut(session)
             .ok_or("activity shell unavailable")?;
         let shell = entry.process.ok_or("activity shell unavailable")?;
-        if entry.pending_native || process::inspect(shell.pid) != Some(shell) {
+        if entry.pending_native || Process::inspect(shell.pid) != Some(shell) {
             return Err("activity shell unavailable");
         }
         if let Some(previous) = &entry.invocation {
             if previous
                 .process
-                .is_some_and(|process| !process::retired(process))
+                .is_some_and(|process| !Process::retired(process))
             {
                 return Err("activity invocation still running");
             }
@@ -946,13 +946,13 @@ impl ActivityOwner {
     /// PTY shell of this host is the whole admission: no token, no grant.
     pub(super) fn claim_shell(
         &self,
-        peer: process::Process,
+        peer: Process,
         provider: AgentCli,
         socket: &str,
         batch: bool,
     ) -> Result<(String, Writer), &'static str> {
         let mut sessions = self.sessions.lock().unwrap_or_else(|p| p.into_inner());
-        let shells: HashMap<u32, (&String, process::Process)> = sessions
+        let shells: HashMap<u32, (&String, Process)> = sessions
             .iter()
             .filter(|(_, entry)| !entry.pending_native)
             .filter_map(|(session, entry)| entry.process.map(|shell| (shell.pid, (session, shell))))
@@ -963,7 +963,7 @@ impl ActivityOwner {
             if current.parent <= 1 || current.parent == current.pid {
                 break;
             }
-            let Some(parent) = process::inspect(current.parent) else {
+            let Some(parent) = Process::inspect(current.parent) else {
                 break;
             };
             if let Some((session, shell)) = shells.get(&parent.pid) {
@@ -981,7 +981,7 @@ impl ActivityOwner {
         if let Some(previous) = &entry.invocation {
             if previous
                 .process
-                .is_some_and(|process| !process::retired(process))
+                .is_some_and(|process| !Process::retired(process))
             {
                 return Err("activity invocation still running");
             }
@@ -1035,7 +1035,7 @@ impl ActivityOwner {
     pub(super) fn bind_shell(
         &self,
         token: &str,
-        peer: process::Process,
+        peer: Process,
         deadline: Instant,
         batch: bool,
     ) -> Result<(), &'static str> {
@@ -1053,9 +1053,9 @@ impl ActivityOwner {
         if Instant::now() >= deadline
             || entry.pending_native
             || peer == shell
-            || process::inspect(shell.pid) != Some(shell)
-            || process::inspect(peer.pid) != Some(peer)
-            || !process::descends_from(peer, shell)
+            || Process::inspect(shell.pid) != Some(shell)
+            || Process::inspect(peer.pid) != Some(peer)
+            || !Process::descends_from(peer, shell)
         {
             return Err("activity launch provenance mismatch");
         }
@@ -1084,7 +1084,7 @@ impl ActivityOwner {
         ) || invocation.snapshot.exit.is_some()
             || helper_pid.is_some_and(|pid| {
                 invocation.process.is_none_or(|process| {
-                    process.pid != pid || process::inspect(pid) != Some(process)
+                    process.pid != pid || Process::inspect(pid) != Some(process)
                 })
             })
         {
@@ -1101,7 +1101,7 @@ impl ActivityOwner {
     /// Commits the PID of `session`'s reserved launch `incarnation` once it started; a
     /// reservation already removed (its run ended first) stays removed.
     pub fn commit(&self, session: &str, incarnation: &str, pid: u32) -> bool {
-        let process = process::inspect(pid);
+        let process = Process::inspect(pid);
         let mut sessions = self.sessions.lock().unwrap_or_else(|p| p.into_inner());
         let Some(entry) = sessions
             .get_mut(session)
@@ -1119,7 +1119,7 @@ impl ActivityOwner {
 
     /// Called at actual PTY creation, never at viewer attachment.
     pub fn register(&self, session: &str, pid: Option<u32>) -> Option<String> {
-        let process = pid.and_then(process::inspect);
+        let process = pid.and_then(Process::inspect);
         let mut sessions = self.sessions.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(entry) = sessions
             .get_mut(session)
@@ -1171,7 +1171,7 @@ impl ActivityOwner {
     pub(super) fn engine_lost(
         &self,
         token: &str,
-        peer: process::Process,
+        peer: Process,
     ) -> Result<(), &'static str> {
         self.end_failed_engine(token, Some(peer))
     }
@@ -1179,7 +1179,7 @@ impl ActivityOwner {
     fn end_failed_engine(
         &self,
         token: &str,
-        peer: Option<process::Process>,
+        peer: Option<Process>,
     ) -> Result<(), &'static str> {
         let (session, identity, home, provider, child, snapshot) = {
             let mut sessions = self.sessions.lock().unwrap_or_else(|p| p.into_inner());
@@ -1203,12 +1203,12 @@ impl ActivityOwner {
                 .ok_or("activity engine unavailable")?;
             let root = invocation.process.ok_or("activity launch not committed")?;
             if !engine.end_on_loss
-                || !process::retired(engine.process)
+                || !Process::retired(engine.process)
                 || entry.process != Some(root)
                 || peer.is_some_and(|peer| {
-                    process::inspect(peer.pid).is_none_or(|current| !current.is(peer))
+                    Process::inspect(peer.pid).is_none_or(|current| !current.is(peer))
                         || !peer.is(engine.keeper)
-                        || !process::descends_from(peer, root)
+                        || !Process::descends_from(peer, root)
                 })
             {
                 return Err("activity engine loss is not its keeper's");
@@ -1383,7 +1383,7 @@ impl ActivityOwner {
         peer_pid: u32,
         report: Report,
     ) -> Result<Snapshot, &'static str> {
-        let peer = process::inspect(peer_pid).ok_or("activity process unavailable")?;
+        let peer = Process::inspect(peer_pid).ok_or("activity process unavailable")?;
         self.report(
             &writer.token,
             peer,
@@ -1440,7 +1440,7 @@ impl ActivityOwner {
             return Err("retired activity invocation");
         }
         let process = invocation.process.ok_or("activity launch not committed")?;
-        if process::inspect(process.pid) != Some(process) {
+        if Process::inspect(process.pid) != Some(process) {
             return Err("activity process unavailable");
         }
         if invocation.operations.contains(&mutation.operation_id) {
@@ -1567,7 +1567,7 @@ impl ActivityOwner {
     pub(super) fn report(
         &self,
         token: &str,
-        peer: process::Process,
+        peer: Process,
         report: Report,
         deadline: Instant,
     ) -> Result<Snapshot, &'static str> {
@@ -1578,9 +1578,9 @@ impl ActivityOwner {
         let invocation = invocation_mut(&mut sessions, token).ok_or("retired activity writer")?;
         let root = invocation.process.ok_or("activity launch not committed")?;
         if invocation.snapshot.exit.is_some()
-            || process::inspect(root.pid) != Some(root)
-            || process::inspect(peer.pid) != Some(peer)
-            || !process::descends_from(peer, root)
+            || Process::inspect(root.pid) != Some(root)
+            || Process::inspect(peer.pid) != Some(peer)
+            || !Process::descends_from(peer, root)
         {
             return Err("activity process unavailable");
         }
@@ -1997,7 +1997,7 @@ impl ActivityOwner {
         };
         if entry.process == Some(process)
             || invocation.snapshot.exit.is_some()
-            || !process::retired(process)
+            || !Process::retired(process)
         {
             return;
         }
@@ -2072,7 +2072,7 @@ impl ActivityOwner {
                 invocation.snapshot.exit.is_none()
                     && !invocation.token.is_empty()
                     && invocation.engine.as_ref().is_some_and(|engine| {
-                        engine.end_on_loss && process::retired(engine.process)
+                        engine.end_on_loss && Process::retired(engine.process)
                     })
             })
             .map(|invocation| invocation.token.clone())
@@ -2096,7 +2096,7 @@ impl ActivityOwner {
                 // The PTY's own process reports its exit itself.
                 if let Some(process) = invocation.process.filter(|process| Some(*process) != shell)
                 {
-                    if process::retired(process) {
+                    if Process::retired(process) {
                         invocation.token.clear();
                         invocation.snapshot.state = State::Idle;
                         invocation.snapshot.exit = Some(Exit {
@@ -2158,7 +2158,7 @@ mod tests {
         let first = owner
             .prepare_shell("shell", AgentCli::Claude, "unused")
             .unwrap();
-        let shell = process::inspect(std::process::id()).unwrap();
+        let shell = Process::inspect(std::process::id()).unwrap();
         assert!(owner
             .bind_shell(
                 &first.token,
@@ -2171,7 +2171,7 @@ mod tests {
             .arg("5")
             .spawn()
             .unwrap();
-        let peer = process::inspect(child.id()).unwrap();
+        let peer = Process::inspect(child.id()).unwrap();
         owner
             .bind_shell(
                 &first.token,
@@ -2367,7 +2367,7 @@ mod tests {
         let report = |event, provider_session: &str| {
             owner.report(
                 &writer.token,
-                process::inspect(std::process::id()).unwrap(),
+                Process::inspect(std::process::id()).unwrap(),
                 Report {
                     provider: AgentCli::Claude,
                     event,
@@ -2469,7 +2469,7 @@ mod tests {
         owner
             .mutate(action(0, "open", Action::AskOpened { id: "ask".into() }))
             .unwrap();
-        let peer = process::inspect(std::process::id()).unwrap();
+        let peer = Process::inspect(std::process::id()).unwrap();
         let report = |event, id: &str| Report {
             provider: AgentCli::Claude,
             event,
@@ -2539,7 +2539,7 @@ mod tests {
             .prepare_native("session", AgentCli::Claude, "unused")
             .unwrap();
         owner.register("session", Some(std::process::id()));
-        let peer = process::inspect(std::process::id()).unwrap();
+        let peer = Process::inspect(std::process::id()).unwrap();
         let report = |event, id: &str| {
             owner
                 .report(
@@ -2628,7 +2628,7 @@ mod tests {
             .prepare_native("session", AgentCli::Claude, "unused")
             .unwrap();
         owner.register("session", Some(std::process::id()));
-        let peer = process::inspect(std::process::id()).unwrap();
+        let peer = Process::inspect(std::process::id()).unwrap();
         let report = |event, tool: Option<&str>| {
             owner
                 .report(
@@ -2695,7 +2695,7 @@ mod tests {
     struct Rig {
         owner: ActivityOwner,
         writer: Writer,
-        peer: process::Process,
+        peer: Process,
     }
 
     impl Rig {
@@ -2708,7 +2708,7 @@ mod tests {
                 .prepare_native("session", AgentCli::Claude, "unused")
                 .unwrap();
             owner.register("session", Some(std::process::id()));
-            let peer = process::inspect(std::process::id()).unwrap();
+            let peer = Process::inspect(std::process::id()).unwrap();
             Self {
                 owner,
                 writer,
@@ -4186,7 +4186,7 @@ mod tests {
             .arg("30")
             .spawn()
             .unwrap();
-        let peer = process::inspect(cli.id()).unwrap();
+        let peer = Process::inspect(cli.id()).unwrap();
         let (_, writer) = owner
             .claim_shell(peer, AgentCli::Claude, "socket", true)
             .unwrap();
@@ -4267,7 +4267,7 @@ mod tests {
             .unwrap();
         let result = owner.bind_engine(
             &writer.token,
-            process::inspect(std::process::id()).unwrap(),
+            Process::inspect(std::process::id()).unwrap(),
             engine.id(),
             host.path().join("engine-test.sock"),
             Some(home.path().into()),
@@ -4334,7 +4334,7 @@ mod tests {
             .prepare_native("S1", AgentCli::Codex, "unused")
             .unwrap();
         owner.register("S1", Some(std::process::id())).unwrap();
-        let launch = process::inspect(std::process::id()).unwrap();
+        let launch = Process::inspect(std::process::id()).unwrap();
         let mut engine = std::process::Command::new("/bin/sleep")
             .arg("30")
             .spawn()
@@ -4351,7 +4351,7 @@ mod tests {
         // Not its launch's: an engine that does not descend from it, a peer that is not the
         // invocation's process, a token that names none, or a socket outside the host.
         assert!(bind(&writer.token, launch, stranger, "/host/engine-1.sock").is_err());
-        let not_launch = process::inspect(other.id()).unwrap();
+        let not_launch = Process::inspect(other.id()).unwrap();
         assert!(bind(&writer.token, not_launch, other.id(), "/host/engine-1.sock").is_err());
         assert!(bind(&"0".repeat(64), launch, engine.id(), "/host/engine-1.sock").is_err());
         assert!(bind(
@@ -4402,6 +4402,30 @@ mod tests {
         other.wait().unwrap();
     }
 
+    /// A forgotten engine that still runs is asked to stop, it alone and never its
+    /// group (it shares this test's), and its socket goes.
+    #[test]
+    fn a_forgotten_engine_is_terminated_alone_and_its_socket_removed() {
+        use std::os::unix::process::ExitStatusExt;
+        let dir = tempfile::tempdir().unwrap();
+        let endpoint = dir.path().join("engine.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&endpoint).unwrap();
+        let mut engine = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let process = Process::inspect(engine.id()).unwrap();
+        drop(Engine {
+            home: None,
+            process,
+            keeper: process,
+            end_on_loss: false,
+            endpoint: endpoint.clone(),
+        });
+        assert_eq!(engine.wait().unwrap().signal(), Some(libc::SIGTERM));
+        assert!(!endpoint.exists(), "the socket is removed");
+    }
+
     #[test]
     fn a_hand_typed_cli_claims_its_shell_by_ancestry_once_at_a_time() {
         let owner = ActivityOwner::new();
@@ -4411,7 +4435,7 @@ mod tests {
             .arg("5")
             .spawn()
             .unwrap();
-        let peer = process::inspect(cli.id()).unwrap();
+        let peer = Process::inspect(cli.id()).unwrap();
         let (session, writer) = owner
             .claim_shell(peer, AgentCli::Claude, "socket", false)
             .unwrap();
@@ -4445,7 +4469,7 @@ mod tests {
         cli.kill().unwrap();
         cli.wait().unwrap();
         // The shell itself is no CLI, and a process outside every shell is refused.
-        let shell = process::inspect(std::process::id()).unwrap();
+        let shell = Process::inspect(std::process::id()).unwrap();
         assert!(owner
             .claim_shell(shell, AgentCli::Claude, "socket", false)
             .is_err());
@@ -4454,7 +4478,7 @@ mod tests {
             .arg("5")
             .spawn()
             .unwrap();
-        let peer = process::inspect(other.id()).unwrap();
+        let peer = Process::inspect(other.id()).unwrap();
         assert!(stranger
             .claim_shell(peer, AgentCli::Codex, "socket", false)
             .is_err());
@@ -4501,7 +4525,7 @@ mod tests {
             owner
                 .bind_engine(
                     &writer.token,
-                    process::inspect(std::process::id()).unwrap(),
+                    Process::inspect(std::process::id()).unwrap(),
                     engine.id(),
                     socket,
                     Some(home.clone()),

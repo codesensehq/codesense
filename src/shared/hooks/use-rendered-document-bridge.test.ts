@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   useRenderedDocumentBridge,
   registerRenderedDocument,
+  renderedDocumentPath,
   runRenderedDocumentRequest,
 } from "./use-rendered-document-bridge";
 
@@ -173,4 +174,25 @@ it("denies an ancestor-authority viewer before asking it for any DOM", async () 
   expect(admit).toHaveBeenCalledWith("child", "parent-frame");
   expect(capture).not.toHaveBeenCalled();
   expect(reply).toHaveBeenCalledWith("child", null, "File not found");
+});
+
+describe("rendered document paths on Windows", () => {
+  it("resolves dots into one canonical key", () => {
+    expect(renderedDocumentPath("C:\\r\\a\\..\\b.html")).toBe("C:\\r\\b.html");
+    expect(renderedDocumentPath("C:/r/a/../b.html")).toBe("C:\\r\\b.html");
+    expect(renderedDocumentPath("/r/a/../b.html")).toBe("/r/b.html");
+  });
+
+  it("reaches a viewer registered with backslashes from a forward-slash request", async () => {
+    const capture = vi
+      .fn()
+      .mockResolvedValue({ content: "ready", capturedAt: "now", truncated: false });
+    cleanups.push(registerRenderedDocument("C:\\r\\b.html", capture));
+    const resolve = vi.fn().mockResolvedValue(undefined);
+    await runRenderedDocumentRequest(
+      { requestId: "win", path: "C:/r/b.html", format: "text" },
+      resolve,
+    );
+    expect(capture).toHaveBeenCalledOnce();
+  });
 });

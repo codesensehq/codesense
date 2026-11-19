@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { describe, expect, it, vi } from "vitest";
 
+import { STORY_DASHBOARD_ACTION_ID } from "@/features/dashboard/lib/story-dashboard-action-id";
 import type { Team } from "@/shared/types/domain";
 
 import {
@@ -163,6 +164,32 @@ describe("buildStaticItems", () => {
     );
     expect(agents?.label).toBe("Agents");
     expect(agents?.tier).toBe(CP_TIER.action);
+  });
+
+  it.each([true, false])(
+    "always offers Story dashboard right after Agents, with or without a team (canAttach %s)",
+    (canAttach) => {
+      const items = buildStaticItems({ ...inputs, canAttach });
+      const row = items.find((i) => i.label === "Story dashboard");
+      expect(row?.tier).toBe(CP_TIER.action);
+      expect(row?.sublabel).toBe("action · open the focused story's dashboard");
+      expect(decodeSelection(row!.id)).toEqual({
+        kind: "command",
+        actionId: STORY_DASHBOARD_ACTION_ID,
+      });
+      const agents = items.findIndex((i) => decodeSelection(i.id)?.kind === "open-agents");
+      expect(items.indexOf(row!)).toBe(agents + 1);
+    },
+  );
+
+  it("shows the Story dashboard chord only when one is bound", () => {
+    const row = (storyDashboardChord?: string) =>
+      buildStaticItems({ ...inputs, storyDashboardChord }).find(
+        (i) => i.label === "Story dashboard",
+      );
+    expect(row("Ctrl+Alt+D")?.chord).toBe("Ctrl+Alt+D");
+    expect(row("")?.chord).toBeUndefined();
+    expect(row()?.chord).toBeUndefined();
   });
 
   it("always offers Set up CodeSense as an action", () => {
@@ -328,6 +355,20 @@ describe("dispatchSelection", () => {
     const h = handlers();
     expect(dispatchSelection("open-agents", h, null)).toBe(true);
     expect(h.calls).toEqual(["openAgents"]);
+  });
+
+  it("runs the story dashboard action when its row is picked", () => {
+    const h = handlers();
+    const row = buildStaticItems({
+      teams: [],
+      accounts: [],
+      recentEpics: [],
+      canAttach: false,
+      canAddMachine: false,
+      routinesNeedingYou: 0,
+    }).find((i) => i.label === "Story dashboard")!;
+    expect(dispatchSelection(row.id, h, null)).toBe(true);
+    expect(h.calls).toEqual([`runCommand:${STORY_DASHBOARD_ACTION_ID}`]);
   });
 
   it("routes the Set up CodeSense entry to its opener", () => {

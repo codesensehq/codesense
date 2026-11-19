@@ -7,8 +7,8 @@
       "binaries/codesense-emulator"
     ],
     "resources": {
-      "resources/git-ai": null,
-      "resources/starship": null
+      "resources/starship": null,
+      "resources/fetched/starship": "resources/starship"
     }
   }
 }

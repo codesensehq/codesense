@@ -1,0 +1,8 @@
+version=1.24.2
+asset=starship-x86_64-pc-windows-msvc.zip
+platform=windows-x86_64
+sha256=d38424c595320e9639a276666347d5e44cb004de3972f40b9a5a1a6b88537f29
+repo=starship/starship
+tag=v1.24.2
+archive=zip
+member=starship.exe

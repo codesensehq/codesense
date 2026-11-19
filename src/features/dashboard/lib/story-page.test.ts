@@ -64,6 +64,9 @@ describe("the team's story page", () => {
     expect(storyPagePath("/ctx/acme/web/content/", "dashboards/story/app.html")).toBe(
       "/ctx/acme/web/content/dashboards/story/app.html",
     );
+    expect(storyPagePath("C:\\ctx\\acme\\web\\content\\", "dashboards/story/app.html")).toBe(
+      "C:\\ctx\\acme\\web\\content\\dashboards\\story\\app.html",
+    );
     expect(storyPageHash("/ctx/acme/web/content/stories/a b.md")).toBe(
       "#story=%2Fctx%2Facme%2Fweb%2Fcontent%2Fstories%2Fa%20b.md",
     );

@@ -144,3 +144,11 @@ describe("pickStartLanding", () => {
     expect(pickStartLanding({ orgs: [docs, acme], openForemanOnStart: false })).toBe("none");
   });
 });
+
+describe("defaultContextRepoLocation on Windows", () => {
+  it("keeps the home's backslashes", () => {
+    expect(defaultContextRepoLocation("C:\\Users\\me\\", "My Repo")).toBe(
+      "C:\\Users\\me\\CodeSense\\my-repo",
+    );
+  });
+});
