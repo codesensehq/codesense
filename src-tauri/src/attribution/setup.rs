@@ -406,6 +406,7 @@ pub(crate) mod tests {
 
     /// Case-table row: a pending replacement notice. The passive `setup` read shows it without
     /// consuming it; only the `describe_setup` mode acknowledges it, once.
+    #[cfg(cap_git_ai)]
     #[test]
     fn setup_reads_peek_at_the_replacement_notice_and_describe_setup_acknowledges_once() {
         use crate::attribution::facade::ReplacementNotice::{Acknowledge, Peek};
