@@ -81,7 +81,8 @@ for (const [name, source] of [
 }
 // configure_caps also reads the CODESENSE_CAPS_OFF override, so it must rerun when that changes.
 test("configure_caps reruns when the capability override changes", () => {
-  const source = readFileSync(resolve(manifest, "build_caps.rs"), "utf8");
+  // A CRLF checkout reads the same as an LF one.
+  const source = readFileSync(resolve(manifest, "build_caps.rs"), "utf8").replace(/\r\n/g, "\n");
   assert.ok(source.includes('pub const CAPS_OFF_ENV: &str = "CODESENSE_CAPS_OFF";'));
   const start = source.indexOf("pub fn configure_caps(");
   assert.notEqual(start, -1, "build_caps.rs defines configure_caps");
