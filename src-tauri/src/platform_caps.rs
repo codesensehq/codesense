@@ -201,7 +201,8 @@ mod tests {
         assert_eq!(
             line("macos", "aarch64", true),
             "caps: git-ai=on starship=on secret-store=on mcp-bridge=on terminal-server-sidecar=on \
-             remote-machines=on agent-cli-sockets=on shell-integration=on pdf-export=on"
+             remote-machines=on agent-cli-sockets=on shell-integration=on pdf-export=on \
+             background-on-close=on terminal-server-tray=on"
         );
     }
 
@@ -210,7 +211,8 @@ mod tests {
         assert_eq!(
             line("macos", "x86_64", true),
             "caps: git-ai=off starship=off secret-store=on mcp-bridge=on terminal-server-sidecar=on \
-             remote-machines=on agent-cli-sockets=on shell-integration=on pdf-export=on"
+             remote-machines=on agent-cli-sockets=on shell-integration=on pdf-export=on \
+             background-on-close=on terminal-server-tray=on"
         );
     }
 
@@ -221,7 +223,8 @@ mod tests {
                 line("linux", arch, true),
                 "caps: git-ai=on starship=on secret-store=on mcp-bridge=on \
                  terminal-server-sidecar=on remote-machines=on agent-cli-sockets=on \
-                 shell-integration=on pdf-export=off"
+                 shell-integration=on pdf-export=off background-on-close=off \
+                 terminal-server-tray=off"
             );
         }
     }
@@ -305,7 +308,8 @@ mod tests {
     fn an_unlisted_os_is_off() {
         let all_off = "caps: git-ai=off starship=off secret-store=off mcp-bridge=off \
                        terminal-server-sidecar=off remote-machines=off agent-cli-sockets=off \
-                       shell-integration=off pdf-export=off";
+                       shell-integration=off pdf-export=off background-on-close=off \
+                       terminal-server-tray=off";
         assert_eq!(line("windows", "x86_64", true), all_off);
         assert_eq!(line("freebsd", "x86_64", true), all_off);
     }
@@ -334,6 +338,8 @@ mod tests {
                 "agent-cli-sockets",
                 "shell-integration",
                 "pdf-export",
+                "background-on-close",
+                "terminal-server-tray",
             ]
         );
     }
@@ -380,9 +386,9 @@ mod tests {
         }
         assert_eq!(
             caps_table::parse_caps(TABLE_JSON).map(|rows| rows.len()),
-            Ok(12)
+            Ok(14)
         );
-        assert_eq!(table().len(), 9, "the product rows");
+        assert_eq!(table().len(), 11, "the product rows");
     }
 
     /// The keys `table` compiles in for one target, in file order.

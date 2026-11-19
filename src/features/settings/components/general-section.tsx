@@ -52,7 +52,7 @@ import {
 } from "@/tauri/commands";
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
 import { logger } from "@/shared/lib/logger";
-import { isMac } from "@/shared/lib/shortcuts/keystroke";
+import { useCapability } from "@/shared/lib/capabilities";
 import { rowMatches, type SettingRowSpec } from "@/features/settings/lib/row-matches";
 import {
   useDashboardProfileStore,
@@ -431,9 +431,19 @@ export function GeneralSection({ query }: { query: string }) {
   // queries like "theme" false-match unrelated rows (e.g. "Content width"
   // via t-h-e-m-e through "con[t]ent wid[t][h]... [e]... nor[m]al... wid[e]").
   // Each row's label + keywords is curated for predictable substring hits.
+  // A row whose feature doesn't exist on this OS is dropped before counting, so
+  // a search for it shows the empty state and announces the right count.
+  const backgroundOnClose = useCapability("background-on-close").on;
+  const terminalServerTray = useCapability("terminal-server-tray").on;
   const visibleKeys = useMemo(
-    () => GENERAL_ROW_SPEC_LIST.filter((spec) => rowMatches(spec, query)).map((spec) => spec.key),
-    [query],
+    () =>
+      GENERAL_ROW_SPEC_LIST.filter(
+        (spec) =>
+          (spec.key !== "quitOnClose" || backgroundOnClose) &&
+          (spec.key !== "terminalServerMenuBar" || terminalServerTray) &&
+          rowMatches(spec, query),
+      ).map((spec) => spec.key),
+    [query, backgroundOnClose, terminalServerTray],
   );
   const visibleCount = visibleKeys.length;
   const visibleSet = new Set(visibleKeys);
@@ -476,11 +486,10 @@ export function GeneralSection({ query }: { query: string }) {
           {visibleSet.has("warmPoolSize") && <WarmPoolSizeRow />}
           {visibleSet.has("worktreeSetupParallelism") && <WorktreeParallelismRow />}
           {visibleSet.has("backgroundAgentLimit") && <BackgroundAgentLimitRow />}
-          {/* SW-AU-34: background-on-close is macOS-only (dock-resident model); hide
-              the toggle off-macOS so it never promises behavior the platform lacks. */}
-          {visibleSet.has("quitOnClose") && isMac() && <QuitOnCloseRow />}
-          {/* SV-8: the menu-bar item is macOS-only. */}
-          {visibleSet.has("terminalServerMenuBar") && isMac() && <TerminalServerMenuBarRow />}
+          {/* Hidden where the capability is off (filtered above), so neither row
+              promises behavior the platform lacks. */}
+          {visibleSet.has("quitOnClose") && <QuitOnCloseRow />}
+          {visibleSet.has("terminalServerMenuBar") && <TerminalServerMenuBarRow />}
           {visibleSet.has("openForemanOnStart") && <OpenForemanOnStartRow />}
           {visibleSet.has("osNotifications") && <OsNotificationsRow />}
           {visibleSet.has("notifyOnFinish") && <NotifyOnFinishRow />}

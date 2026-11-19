@@ -63,6 +63,20 @@
     "reason": "PDF export prints through the macOS web view"
   },
   {
+    "key": "background-on-close",
+    "macos": "on",
+    "linux": "off",
+    "windows": "off",
+    "reason": "closing the window quits CodeSense"
+  },
+  {
+    "key": "terminal-server-tray",
+    "macos": "on",
+    "linux": "off",
+    "windows": "off",
+    "reason": "there is no tray icon for the terminal server"
+  },
+  {
     "key": "pty-test-fixtures",
     "macos": "on",
     "linux": "on",

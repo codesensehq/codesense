@@ -29,13 +29,11 @@ const OS_CHECKS: readonly RegExp[] = [
 ];
 
 /**
- * Today's uses, by file, with why each is there; all but one are presentation. Remove a file once it
+ * Today's uses, by file, with why each is there; all are presentation. Remove a file once it
  * no longer checks the OS (the guard says when); never add one.
  */
 const ALLOWED: Record<string, string> = {
   "src/features/machines/lib/passphrase-hint.ts": "names the OS dialog that asks for a passphrase",
-  "src/features/settings/components/general-section.tsx":
-    "a feature gate, not presentation: the macOS-only menu bar item and quit-on-close settings; to move to a capability",
   "src/features/shell/components/title-bar.tsx": "reserves the traffic-light inset only on macOS",
   "src/features/viewer/components/agents-tree-view.tsx": "names the modifier key (Option or Alt)",
   "src/features/viewer/components/tab-context-menu.tsx":
@@ -49,7 +47,7 @@ const ALLOWED: Record<string, string> = {
   "src/features/viewer/lib/terminal-close.ts": "shows the close key's glyph (⌫ or Del)",
 };
 /** The ratchet: lower it with each file removed above, never raise it. */
-const MOST_ALLOWED = 10;
+const MOST_ALLOWED = 9;
 
 /** The source without its comments, so prose about a check isn't one. A block comment keeps its
  *  line breaks, so the lines after it keep their numbers. */

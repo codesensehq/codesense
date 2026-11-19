@@ -19,6 +19,8 @@ export const CAPABILITY_KEYS = [
   "agent-cli-sockets",
   "shell-integration",
   "pdf-export",
+  "background-on-close",
+  "terminal-server-tray",
 ] as const;
 export type CapabilityKey = (typeof CAPABILITY_KEYS)[number];
 
