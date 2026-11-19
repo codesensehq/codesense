@@ -1270,7 +1270,7 @@ fn pinned_transport_is_raw_duplex_and_explicit_close_reaps_its_process_group() {
         descendant_file.as_os_str().to_owned(),
     )]);
     let (reader, mut writer, child_guard) = spawn_pinned(ssh, "1.0.0", None).unwrap();
-    let child_pid = child_guard.child.as_ref().unwrap().id() as libc::pid_t;
+    let child_pid = child_guard.tree.as_ref().unwrap().pid().as_raw() as libc::pid_t;
     writeln!(writer, "protocol-frame").unwrap();
     writer.flush().unwrap();
     let mut line = String::new();
@@ -1338,7 +1338,7 @@ fn pinned_transport_handles_natural_exit_and_drop_cancellation() {
     std::fs::set_permissions(&sleeping, std::fs::Permissions::from_mode(0o700)).unwrap();
     let (reader, writer, guard) =
         spawn_pinned(install::Ssh::new(&sleeping, Vec::new()), "1.0.0", None).unwrap();
-    let pid = guard.child.as_ref().unwrap().id() as libc::pid_t;
+    let pid = guard.tree.as_ref().unwrap().pid().as_raw() as libc::pid_t;
     drop(reader);
     drop(writer);
     drop(guard);
@@ -1361,7 +1361,7 @@ fn bounded_drop_fallback_eventually_reaps_after_returning() {
     std::fs::set_permissions(&sleeping, std::fs::Permissions::from_mode(0o700)).unwrap();
     let (_, _, guard) =
         spawn_pinned(install::Ssh::new(&sleeping, Vec::new()), "1.0.0", None).unwrap();
-    let pid = guard.child.as_ref().unwrap().id() as libc::pid_t;
+    let pid = guard.tree.as_ref().unwrap().pid().as_raw() as libc::pid_t;
     DEFER_DROP_REAP.with(|defer| defer.set(true));
     drop(guard);
     DEFER_DROP_REAP.with(|defer| defer.set(false));
@@ -1635,7 +1635,7 @@ fn stale_transport_generation_is_closed_before_publication() {
     std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
     let (reader, writer, guard) =
         spawn_pinned(install::Ssh::new(&program, Vec::new()), "1.0.0", None).unwrap();
-    let child_pid = guard.child.as_ref().unwrap().id() as libc::pid_t;
+    let child_pid = guard.tree.as_ref().unwrap().pid().as_raw() as libc::pid_t;
     let env = std::sync::Arc::new(env);
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
@@ -3816,7 +3816,7 @@ pub(super) mod container {
         runtime.block_on(async {
             let transport = open_pinned_saved(&env, store.as_ref(), &machine_id).unwrap();
             let generation = transport.generation.clone();
-            let ssh_pid = transport.child_guard.child.as_ref().unwrap().id() as libc::pid_t;
+            let ssh_pid = transport.child_guard.tree.as_ref().unwrap().pid().as_raw() as libc::pid_t;
             revalidate_transport_generation(&env, &machine_id, &generation).unwrap();
             let pending = RemoteTransportOwner::from_pinned(transport).into_pending();
             let admitted = pending

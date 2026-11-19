@@ -6,9 +6,8 @@ pub mod target;
 use super::*;
 use crate::commands::auth::private_authority::{PrivateAuthorityLease, PrivateAuthoritySnapshot};
 use sha2::{Digest, Sha256};
-use std::fs::{File, OpenOptions, TryLockError};
+use std::fs::{File, TryLockError};
 use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
 use std::time::{Duration, Instant};
 
 use crate::shared::machine_wording;
@@ -356,14 +355,9 @@ impl PrivateRegistry {
         let path = self.legacy.user_file("machine-private-v1.lock");
         let parent = path.parent().ok_or("missing principal directory")?;
         create_directory_durable(parent)?;
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .open(path)
-            .map_err(|e| e.to_string())?;
+        let file =
+            codesense_platform::fs::create_owner_only(&path, codesense_platform::fs::Open::Follow)
+                .map_err(|e| e.to_string())?;
         // A concurrent SSH fork can retain this close-on-exec descriptor until
         // exec, briefly keeping the prior owner's lock alive after its close.
         let deadline = Instant::now() + Duration::from_secs(1);

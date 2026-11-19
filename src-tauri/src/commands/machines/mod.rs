@@ -19,11 +19,12 @@ pub(crate) mod terminal_server_info;
 mod tests;
 
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Stdio};
+use std::process::{ChildStdin, ChildStdout, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use codesense_platform::process::ProcessTree;
 use codesense_session_server::askpass::{self, Askpass};
 use codesense_session_server::check::{self, Bundled, NextStep, Status, StepId, Trust};
 use codesense_session_server::install;
@@ -444,11 +445,10 @@ impl Env {
 
     /// The connector's own directories, owner-only.
     fn prepare_dirs(&self) -> Result<(), String> {
-        use std::os::unix::fs::PermissionsExt;
         let paths = self.paths();
         for dir in [self.ssh_dir(), paths.known_hosts_dir, paths.control_dir] {
             std::fs::create_dir_all(&dir).map_err(|e| format!("create {dir:?}: {e}"))?;
-            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+            codesense_platform::fs::set_owner_only(&dir)
                 .map_err(|e| format!("protect {dir:?}: {e}"))?;
         }
         Ok(())
@@ -696,26 +696,23 @@ impl std::fmt::Display for PinnedTransportGenerationError {
 
 impl std::error::Error for PinnedTransportGenerationError {}
 
-/// Owns one attached SSH process group and the askpass server (when the saved
+/// Owns one attached SSH process tree and the askpass server (when the saved
 /// binding uses one). Normal disconnect/shutdown must call
 /// [`SshProcessGuard::close_and_reap`] on the blocking executor. Drop is a
 /// bounded fail-safe: it kills synchronously and guarantees an eventual
 /// detached reap without blocking an async worker indefinitely.
 pub struct SshProcessGuard {
     private_bootstrap: Option<codesense_session_server::private_account::Bootstrap>,
-    child: Option<Child>,
+    tree: Option<ProcessTree>,
     _askpass: Option<Askpass>,
 }
 
 impl SshProcessGuard {
-    fn signal_group(child: &mut Child) {
-        let pid = child.id();
-        // SAFETY: spawn_pinned creates a fresh process group led by this exact
-        // child. A negative pid addresses only that owned group.
-        unsafe {
-            libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
-        }
-        let _ = child.kill();
+    /// Kill the whole tree spawn_pinned started (on unix SIGKILL to the
+    /// process group its root leads), then the root itself.
+    fn signal_group(tree: &mut ProcessTree) {
+        let _ = codesense_platform::process::kill_hard(tree);
+        let _ = tree.child().kill();
     }
 
     /// Terminate and synchronously reap the SSH process group. RM-4 calls this
@@ -723,11 +720,11 @@ impl SshProcessGuard {
     /// safe after natural child exit. It consumes the guard, making double
     /// close impossible for the owning connection manager.
     pub fn close_and_reap(mut self) -> Result<(), String> {
-        let Some(mut child) = self.child.take() else {
+        let Some(mut tree) = self.tree.take() else {
             return Ok(());
         };
-        Self::signal_group(&mut child);
-        let result = child
+        Self::signal_group(&mut tree);
+        let result = tree
             .wait()
             .map(|_| ())
             .map_err(|e| format!("reap SSH attach: {e}"));
@@ -737,8 +734,11 @@ impl SshProcessGuard {
         result
     }
 
-    fn child_mut(&mut self) -> &mut Child {
-        self.child.as_mut().expect("SSH process guard has a child")
+    fn child_mut(&mut self) -> &mut std::process::Child {
+        self.tree
+            .as_mut()
+            .expect("SSH process guard has a child")
+            .child()
     }
 }
 
@@ -751,20 +751,20 @@ impl Drop for SshProcessGuard {
                 drop(askpass);
             });
         }
-        let Some(mut child) = self.child.take() else {
+        let Some(mut tree) = self.tree.take() else {
             return;
         };
-        Self::signal_group(&mut child);
+        Self::signal_group(&mut tree);
         // Drop may run on an async worker: bound its synchronous fallback.
         // The group is already dead; if reaping is momentarily delayed, a
-        // dedicated owner finishes it rather than leaking the Child handle.
+        // dedicated owner finishes it rather than leaking the tree.
         #[cfg(test)]
         let defer = DEFER_DROP_REAP.with(std::cell::Cell::get);
         #[cfg(not(test))]
         let defer = false;
         let polls = if defer { 0 } else { 100 };
         for _ in 0..polls {
-            match child.try_wait() {
+            match tree.try_wait() {
                 Ok(Some(_)) | Err(_) => return,
                 Ok(None) => std::thread::sleep(std::time::Duration::from_millis(1)),
             }
@@ -774,7 +774,7 @@ impl Drop for SshProcessGuard {
             if defer {
                 std::thread::sleep(std::time::Duration::from_millis(25));
             }
-            let _ = child.wait();
+            let _ = tree.wait();
         });
     }
 }
@@ -797,7 +797,6 @@ fn spawn_pinned_script(
     script: &str,
     askpass: Option<Askpass>,
 ) -> Result<(ChildStdout, ChildStdin, SshProcessGuard), String> {
-    use std::os::unix::process::CommandExt;
     let mut command = ssh.command(script);
     command
         .stdin(Stdio::piped())
@@ -805,24 +804,14 @@ fn spawn_pinned_script(
         // Protocol bytes are stdout-only. Inherited/null stderr also avoids a
         // hidden pipe filling and deadlocking a long-lived transport.
         .stderr(Stdio::null());
-    // SAFETY: pre_exec invokes only the async-signal-safe setpgid syscall.
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setpgid(0, 0) == 0 {
-                Ok(())
-            } else {
-                Err(std::io::Error::last_os_error())
-            }
-        });
-    }
-    let child = command
-        .spawn()
-        .map_err(|e| format!("start SSH attach: {e}"))?;
+    // The root of its own tree (on unix the leader of a fresh process group),
+    // so the guard ends everything ssh starts.
+    let tree = ProcessTree::spawn(&mut command).map_err(|e| format!("start SSH attach: {e}"))?;
     // Establish ownership immediately: every later early return runs Drop and
     // kills/reaps the whole group.
     let mut guard = SshProcessGuard {
         private_bootstrap: None,
-        child: Some(child),
+        tree: Some(tree),
         _askpass: askpass,
     };
     let reader = guard
@@ -845,10 +834,11 @@ pub(crate) fn test_pinned_transport(
     let (reader, writer, child_guard) =
         spawn_pinned(install::Ssh::new(program, Vec::new()), "1.0.0", None)?;
     let pid = child_guard
-        .child
+        .tree
         .as_ref()
         .expect("test guard owns child")
-        .id() as libc::pid_t;
+        .pid()
+        .as_raw() as libc::pid_t;
     Ok((
         PinnedSshTransport {
             reader,
@@ -2166,10 +2156,9 @@ fn agent_identity_file(home: &Path, public_key: &str) -> Option<String> {
             }
         }
     }
-    use std::os::unix::fs::PermissionsExt;
     let dir = home.join(".codesense").join("agent-keys");
     std::fs::create_dir_all(&dir).ok()?;
-    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).ok()?;
+    codesense_platform::fs::set_owner_only(&dir).ok()?;
     let digest: String = Sha256::digest(wanted.1.as_bytes())
         .iter()
         .take(12)
@@ -2182,7 +2171,7 @@ fn agent_identity_file(home: &Path, public_key: &str) -> Option<String> {
         != Some(wanted)
     {
         std::fs::write(&path, format!("{}\n", public_key.trim())).ok()?;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).ok()?;
+        codesense_platform::fs::set_owner_only(&path).ok()?;
     }
     Some(path.to_string_lossy().into_owned())
 }
@@ -3536,12 +3525,8 @@ fn replace_pinned_saved(
     let authorization = authorization_dir.join("authorization");
     std::fs::write(&authorization, proof.authorization_record(nonce, epoch))
         .map_err(|e| fail(format!("write replacement authorization: {e}")))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&authorization, std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| fail(format!("protect replacement authorization: {e}")))?;
-    }
+    codesense_platform::fs::set_owner_only(&authorization)
+        .map_err(|e| fail(format!("protect replacement authorization: {e}")))?;
     let step = install::Step {
         script: install::replace_script(&installed.version).map_err(fail)?,
         upload: Some(authorization),

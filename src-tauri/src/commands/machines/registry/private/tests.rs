@@ -451,7 +451,7 @@ async fn private_lock_survives_a_fork_inheriting_its_close_on_exec_descriptor() 
     drop(wait);
     drop(held);
 
-    let contender = OpenOptions::new()
+    let contender = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .open(legacy.user_file("machine-private-v1.lock"))
