@@ -766,10 +766,11 @@ export function SourceDiffOverlay({
       };
 
   // The diff's paths are relative to the repo root, but the tile's editor is
-  // rooted at `ws.cwd`, which can be a folder inside it (a context worktree's
-  // `<team>/content`). `editorPath` maps a diff path into the editor, or gives
-  // null for a file outside the editor's folder.
-  const editorPrefix = remoteWorkspace || !repoRoot ? "" : (relative(repoRoot, ws.cwd) ?? "");
+  // rooted at the live cwd (`effectiveCwd`, as the editor surface reads it),
+  // which can be a folder inside it: a context worktree's `<team>/content`, or
+  // wherever a `cd` landed. `editorPath` maps a diff path into the editor, or
+  // gives null for a file outside the editor's folder.
+  const editorPrefix = remoteWorkspace || !repoRoot ? "" : (relative(repoRoot, effectiveCwd) ?? "");
   const editorPath = (path: string): string | null => {
     if (editorPrefix === "") return path;
     return path.startsWith(`${editorPrefix}/`) ? path.slice(editorPrefix.length + 1) : null;

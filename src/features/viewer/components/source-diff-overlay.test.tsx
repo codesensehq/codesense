@@ -4021,6 +4021,24 @@ describe("SourceDiffOverlay — a guest's context worktree launch folder", () =>
     expect(useViewerStore.getState().worktreeEditorOpenBySession["sid-ws"]).toBe(true);
   });
 
+  it("maps the editor path from the live cwd when a `cd` moved it off the workspace folder", () => {
+    const notes = "getting-started/content/docs/notes.md";
+    stubChangeset({ files: [...FILES, { path: notes, status: "modified" }] });
+    useViewerStore.setState({
+      sourceDiffSelectedFile: { "sid-ws": notes },
+      worktreeEditorFile: {},
+    });
+    // The tab `cd`-ed into `docs`; the editor is rooted there now.
+    sessionCwdMock.mockReturnValue(`${LAUNCH}/docs`);
+    tabSourceRepoMock.mockReturnValue({
+      folder: { kind: "folder", cwd: `${LAUNCH}/docs` },
+      repo: { root: ROOT, isRoot: false },
+    });
+    render(overlay());
+    fireEvent.click(screen.getByTestId("source-diff-open-editor-cw"));
+    expect(useViewerStore.getState().worktreeEditorFile.cw).toBe("notes.md");
+  });
+
   it("opens the editor without a file when the change is outside the launch folder", () => {
     useViewerStore.setState({ worktreeEditorFile: {} });
     tabSourceRepoMock.mockReturnValue({

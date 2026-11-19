@@ -168,6 +168,23 @@ describe("useTabSourceRepo — split folder vs repo", () => {
     expect(resolveLocalMock).toHaveBeenLastCalledWith("/wt/b/sub");
   });
 
+  it("a local story tab after a `cd` waits for the resolver instead of taking the subfolder as root", async () => {
+    const story = { ...localGeneric, kind: "story", cwd: "/wt/story" } as Workspace;
+    resolveLocalMock.mockResolvedValue({ root: "/wt/story", isRoot: true });
+    const { result, rerender } = renderHook(({ cwd }) => useTabSourceRepo(story, cwd), {
+      initialProps: { cwd: null as string | null },
+    });
+    // At the workspace's own folder the story shortcut answers at once.
+    expect(result.current.repo).toEqual({ root: "/wt/story", isRoot: true });
+
+    let answer: (v: unknown) => void = () => {};
+    resolveLocalMock.mockReturnValueOnce(new Promise((r) => (answer = r)));
+    rerender({ cwd: "/wt/story/src" });
+    expect(result.current.repo).toBe(undefined);
+    answer({ root: "/wt/story", isRoot: false });
+    await waitFor(() => expect(result.current.repo).toEqual({ root: "/wt/story", isRoot: false }));
+  });
+
   it("epic kind is sourceCapable but NOT diffCapable — folder reports, resolver never runs", () => {
     const { result } = renderHook(() => useTabSourceRepo(localEpic));
     expect(result.current).toEqual({

@@ -73,7 +73,9 @@ export function useTabSourceRepo(
       if (remote && handle) {
         return { root: `remote://${remote.machineId}/${handle}`, isRoot: true };
       }
-      return { root: cwd, isRoot: true };
+      // Only the workspace's own folder is its worktree root; after a `cd`
+      // the resolver answers.
+      if (!remote && cwd === workspace.cwd) return { root: cwd, isRoot: true };
     }
     return undefined;
   };
