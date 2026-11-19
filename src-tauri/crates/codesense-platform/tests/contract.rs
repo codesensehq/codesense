@@ -16,12 +16,12 @@ use std::time::{Duration, Instant, SystemTime};
 use codesense_platform::cli::{candidates, named_in, package_dirs, search_path};
 use codesense_platform::dirs::{codesense_home, lock_dir};
 use codesense_platform::fs::{
-    atomic_replace, can_execute, canonicalize, change_stamp, create_dir_new_owner_only,
-    create_dir_owner_only, create_new_owner_only, create_owner_only, file_id, file_id_of,
-    is_executable, is_owned_by_current_user, is_owner_only, is_text_busy, is_world_writable,
-    link_count, link_or_copy, lock_exclusive, open_nofollow, open_nofollow_nonblocking,
-    portable_name, set_executable, set_owner_only, try_lock_exclusive, try_lock_shared, unlock,
-    Linked, NonPortableName, Open, Reach,
+    atomic_replace, available_space, can_execute, canonicalize, change_stamp,
+    create_dir_new_owner_only, create_dir_owner_only, create_new_owner_only, create_owner_only,
+    file_id, file_id_of, is_executable, is_owned_by_current_user, is_owner_only, is_text_busy,
+    is_world_writable, link_count, link_or_copy, lock_exclusive, open_nofollow,
+    open_nofollow_nonblocking, portable_name, read_exact_at, set_executable, set_owner_only,
+    try_lock_exclusive, try_lock_shared, unlock, Linked, NonPortableName, Open, Reach,
 };
 use codesense_platform::ipc::{blocking, Endpoint, LocalListener, LocalStream};
 use codesense_platform::limits::is_descriptor_exhaustion;
@@ -1474,6 +1474,41 @@ fn change_stamp_holds_for_an_untouched_file_and_changes_when_it_is_rewritten() {
     assert_ne!(stamp, rewritten, "rewritten");
     assert_eq!(rewritten, change_stamp(&path).unwrap(), "untouched since");
     assert!(change_stamp(&dir.path().join("missing")).is_err());
+}
+
+#[test]
+fn available_space_reads_the_volume_of_a_directory_or_a_file() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(available_space(dir.path()).unwrap() > 0);
+    let file = dir.path().join("file");
+    std::fs::write(&file, "bytes").unwrap();
+    assert!(available_space(&file).unwrap() > 0);
+    assert_eq!(
+        available_space(&dir.path().join("missing"))
+            .unwrap_err()
+            .kind(),
+        ErrorKind::NotFound
+    );
+}
+
+#[test]
+fn read_exact_at_reads_from_the_offset_whatever_the_cursor() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("file");
+    std::fs::write(&path, "0123456789").unwrap();
+    let mut file = File::open(&path).unwrap();
+    let mut start = [0; 3];
+    file.read_exact(&mut start).unwrap();
+    let mut buf = [0; 4];
+    read_exact_at(&file, &mut buf, 5).unwrap();
+    assert_eq!(&buf, b"5678");
+    read_exact_at(&file, &mut buf, 0).unwrap();
+    assert_eq!(&buf, b"0123");
+    read_exact_at(&file, &mut [], 100).unwrap();
+    assert_eq!(
+        read_exact_at(&file, &mut buf, 8).unwrap_err().kind(),
+        ErrorKind::UnexpectedEof
+    );
 }
 
 /// Write the file `name` in `dir` (made if missing) and make it executable.
