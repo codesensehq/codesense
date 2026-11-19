@@ -66,21 +66,7 @@ pub(super) struct Group(Handle);
 impl Group {
     pub(super) fn adopt(child: &Child) -> io::Result<Self> {
         let job = new_job()?;
-        // SAFETY: all-zero is a valid value of this plain-data struct.
-        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        // SAFETY: the pointer and size describe `limits`, alive for the call.
-        let set = unsafe {
-            SetInformationJobObject(
-                job.raw(),
-                JobObjectExtendedLimitInformation,
-                (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
-                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-            )
-        };
-        if set == 0 {
-            return Err(io::Error::last_os_error());
-        }
+        set_limits(&job, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)?;
         assign(&job, child.as_raw_handle())?;
         resume_main_thread(child.id())?;
         Ok(Self(job))
@@ -109,6 +95,31 @@ impl Group {
         }
         Ok(())
     }
+
+    /// Drop kill-on-close, so closing the job leaves what is in it running.
+    pub(super) fn release(&self) -> io::Result<()> {
+        set_limits(&self.0, 0)
+    }
+}
+
+/// Set `job`'s limit flags to `flags`, and no other limit.
+fn set_limits(job: &Handle, flags: u32) -> io::Result<()> {
+    // SAFETY: all-zero is a valid value of this plain-data struct.
+    let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+    limits.BasicLimitInformation.LimitFlags = flags;
+    // SAFETY: the pointer and size describe `limits`, alive for the call.
+    let set = unsafe {
+        SetInformationJobObject(
+            job.raw(),
+            JobObjectExtendedLimitInformation,
+            (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        )
+    };
+    if set == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 /// A new anonymous job.

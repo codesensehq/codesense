@@ -98,6 +98,44 @@ fn dropping_the_tree_kills_child_and_grandchild() {
     assert!(eventually(Duration::from_secs(5), gone));
 }
 
+/// A tree whose root starts a grandchild, prints its pid and exits.
+fn spawn_tree_then_exit() -> (ProcessTree, Pid) {
+    let mut tree = ProcessTree::spawn(&mut fixture(&["tree-then-exit"])).unwrap();
+    let grandchild = Pid::from_raw(first_line(&mut tree).parse().unwrap());
+    (tree, grandchild)
+}
+
+#[test]
+fn a_root_that_exits_takes_the_rest_of_its_tree_with_it() {
+    let (mut tree, grandchild) = spawn_tree_then_exit();
+    assert!(exits_within(&mut tree, Duration::from_secs(5)));
+    assert!(
+        eventually(Duration::from_secs(5), || !is_alive(grandchild)),
+        "the grandchild outlived its root's exit"
+    );
+}
+
+#[test]
+fn try_wait_leaving_rest_leaves_what_the_root_left_running() {
+    let (mut tree, grandchild) = spawn_tree_then_exit();
+    assert!(eventually(Duration::from_secs(5), || tree
+        .try_wait_leaving_rest()
+        .unwrap()
+        .is_some_and(|status| status.success())));
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(is_alive(grandchild), "the root's exit ended the grandchild");
+    // Nor does the tree end it when it drops: on Windows its job was
+    // closed without kill-on-close.
+    drop(tree);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        is_alive(grandchild),
+        "dropping the tree ended the grandchild"
+    );
+    terminate_pid(grandchild).unwrap();
+    assert!(eventually(Duration::from_secs(5), || !is_alive(grandchild)));
+}
+
 #[test]
 fn kill_hard_ends_a_process_that_ignores_terminate() {
     let mut tree = ProcessTree::spawn(&mut fixture(&["ignore-terminate"])).unwrap();

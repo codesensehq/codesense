@@ -134,6 +134,25 @@ impl ProcessTree {
         Ok(status)
     }
 
+    /// [`ProcessTree::try_wait`], except that once the root has exited, what
+    /// it left running is left running: never signalled, then or when the
+    /// tree drops. For a root whose helpers are meant to outlive it, such as
+    /// a proxy ssh started in its group for a connection it handed off. On
+    /// Windows the job then loses kill-on-close, so closing it ends nothing.
+    /// Before the root exits, [`kill_hard`] still ends the whole tree.
+    pub fn try_wait_leaving_rest(&mut self) -> io::Result<Option<ExitStatus>> {
+        let status = match self.child.try_wait() {
+            Ok(status) => status,
+            Err(error) => return Err(self.lose(error)),
+        };
+        if status.is_some() && !self.closed.swap(true, Ordering::AcqRel) {
+            // Best effort: a job that keeps kill-on-close ends the rest when
+            // the tree drops, as an ordinary tree's would.
+            let _ = self.group.release();
+        }
+        Ok(status)
+    }
+
     /// Wait for the root to exit; then the rest of the tree is killed. An
     /// `Err` leaves the tree signalling nothing from then on, as for
     /// [`ProcessTree::try_wait`].

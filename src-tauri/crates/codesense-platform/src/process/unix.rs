@@ -48,6 +48,11 @@ impl Group {
     pub(super) fn kill(&self) -> io::Result<()> {
         signal_group(self.0, libc::SIGKILL)
     }
+
+    /// Nothing to undo: a process group ends nothing when it is let go.
+    pub(super) fn release(&self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Signal every process in group `pgid`; a group that is already gone is not

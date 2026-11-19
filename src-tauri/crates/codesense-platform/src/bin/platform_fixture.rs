@@ -5,6 +5,7 @@
 //!   then sleep.
 //! - `tree-on-input`: as `tree`, once a line arrives on stdin (so a test can
 //!   adopt this process's group before the grandchild starts).
+//! - `tree-then-exit`: as `tree`, then exit 0, leaving the grandchild running.
 //! - `ignore-terminate`: ignore the polite stop, print `ready`, then sleep.
 //! - `try-lock <path>`: print `locked` or `busy` for an exclusive lock on
 //!   `path`, then exit.
@@ -39,7 +40,7 @@ fn main() {
     let mut args = std::env::args_os().skip(1);
     let mode = args.next().and_then(|mode| mode.into_string().ok());
     match mode.as_deref() {
-        Some(mode @ ("tree" | "tree-on-input")) => {
+        Some(mode @ ("tree" | "tree-on-input" | "tree-then-exit")) => {
             if mode == "tree-on-input" {
                 let mut line = String::new();
                 std::io::stdin().read_line(&mut line).expect("read stdin");
@@ -49,6 +50,9 @@ fn main() {
                 .spawn()
                 .expect("start the grandchild");
             say(&grandchild.id().to_string());
+            if mode == "tree-then-exit" {
+                std::process::exit(0);
+            }
             sleep_forever()
         }
         Some("ignore-terminate") => {
