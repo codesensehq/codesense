@@ -2399,7 +2399,7 @@
     "src-tauri/src/agents/adapter.rs": "80003db03796f5c1698e79530b23f818e24e44e9ce8f02a138539bc514a7ad04",
     "src-tauri/src/agents/adapter/claude.rs": "9a8b87f64686f2b5fe20025aa52318cc4491bbec24fbe17d2ec411c7bfaf7f02",
     "src-tauri/src/agents/adapter/codex.rs": "cd69dd05bb20827e1fcddfb0f43770560db24234bf0521d9a95bf6989ed36925",
-    "src-tauri/src/agents/adapter/hermes.rs": "fcb81270aa7bf270d56f8cf20c3fc6297d9a89f2c03fdd6e6d9017ba63c45922",
+    "src-tauri/src/agents/adapter/hermes.rs": "ed95d203f9bd490f79b195e14f179c53b4cee51afc5cbf236985de03356ba70c",
     "src-tauri/src/agents/adapter/opencode.rs": "a02d792f572e4a8c0aa7506713b85ae4749bd0258c0c9d4710ba03f239d358a1",
     "src-tauri/src/agents/context.rs": "9b2215e069a9c9d859ebbd39f60f12357adb856db393768788ad77fa9fa3d32e",
     "src-tauri/src/agents/model.rs": "6f0aa719802b51b6fb2d1279c96ea7ed125ef94c6600728094380320afb70efa",
@@ -2408,7 +2408,7 @@
     "src-tauri/src/packs/lock.rs": "11d8c045d499420318d3a487b92be97234b63c6172ac1e29b56028b74d04b66c",
     "src-tauri/src/packs/manifest.rs": "cbefe924e32f030e301da71b9162d7d5bff7e98894d1782f7a43bd7a45b35a62",
     "src-tauri/src/queue_roles.rs": "b69b94aa10d5d0fc39d123858ea4cd42fe0d22b5af0c00b5479a3f9e8921b7ff",
-    "src-tauri/src/routines/model.rs": "5bbdf683268ec98f285531eeb0313e051dd165f6ab71aa772127ff6674dd5a24",
+    "src-tauri/src/routines/model.rs": "e6c0ebbe224fe0d13312762e4eb614f8b08549f032c16747f018fff99a3030fd",
     "src-tauri/src/session_usage/spend_caps.rs": "f0fdcc1b2d50cdd71becea9baff2da595dc24e79ba5670b734259093a359e5db"
   }
 }

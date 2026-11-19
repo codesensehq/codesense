@@ -53,6 +53,7 @@ use rusqlite::{params, OptionalExtension};
 
 use crate::coordinator::StoreResult;
 use crate::domain::Principal;
+use crate::shared::machine_wording;
 
 use super::discover::DiscoveredRoutine;
 use super::model::{MissedPolicy, OverlapPolicy, RoutineMode, RoutineTrigger, Variable};
@@ -564,6 +565,79 @@ pub(crate) struct Carried {
     pub wake_budget: u64,
 }
 
+/// That the routine has no agent this machine can see, worded for `os`.
+pub(crate) fn no_visible_agent_for(os: &str) -> String {
+    format!(
+        "the routine has no agent {} can see",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+pub(crate) fn no_visible_agent() -> String {
+    no_visible_agent_for(machine_wording::RUNNING_OS)
+}
+
+/// That a routine's agent cannot be read here, worded for `os`.
+pub(super) fn agent_unreadable_for(os: &str) -> String {
+    format!(
+        "its agent cannot be read on {}",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn agent_unreadable() -> String {
+    agent_unreadable_for(machine_wording::RUNNING_OS)
+}
+
+/// That runs `machine` fired were lost before this machine read them,
+/// worded for `os`.
+pub(super) fn runs_dropped_for(os: &str, machine: &str) -> String {
+    format!(
+        "some routine runs {machine} fired were dropped from its log before {} read them",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn runs_dropped(machine: &str) -> String {
+    runs_dropped_for(machine_wording::RUNNING_OS, machine)
+}
+
+/// That there is no routine `key` here, worded for `os`.
+pub(super) fn no_routine_here_for(os: &str, key: &str) -> String {
+    format!(
+        "no routine {key} on {}",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn no_routine_here(key: &str) -> String {
+    no_routine_here_for(machine_wording::RUNNING_OS, key)
+}
+
+/// That another machine manages routine `key`, worded for `os`.
+pub(super) fn managed_elsewhere_for(os: &str, key: &str) -> String {
+    format!(
+        "routine {key} is managed by another {}: refresh it there",
+        machine_wording::machine_kind(os)
+    )
+}
+
+fn managed_elsewhere(key: &str) -> String {
+    managed_elsewhere_for(machine_wording::RUNNING_OS, key)
+}
+
+/// That `machine` holds a newer arm moved from elsewhere, worded for `os`.
+pub(super) fn moved_elsewhere_for(os: &str, machine: &str) -> String {
+    format!(
+        "{machine} holds a newer arm of it (it was moved from another {})",
+        machine_wording::machine_kind(os)
+    )
+}
+
+fn moved_elsewhere(machine: &str) -> String {
+    moved_elsewhere_for(machine_wording::RUNNING_OS, machine)
+}
+
 /// The arm a routine this Mac manages carries to `machine`: its pinned
 /// revision, under its epoch, with `launch` when its agent is prepared there.
 /// Its task has its declared variables rendered from their defaults (the
@@ -583,10 +657,7 @@ pub(crate) fn desired_arm(
     limits_enforced: bool,
 ) -> Result<RoutineArm, String> {
     let def = &routine.def;
-    let agent_key = routine
-        .agent_key
-        .as_ref()
-        .ok_or("the routine has no agent this Mac can see")?;
+    let agent_key = routine.agent_key.as_ref().ok_or_else(no_visible_agent)?;
     let schedules: Vec<ArmSchedule> = def
         .triggers
         .iter()
@@ -950,9 +1021,7 @@ pub(crate) fn sync_machine(env: &dyn ArmEnv, input: &SyncInput<'_>, machine: &st
             continue;
         }
         let Some(agent) = (input.agent_of)(routine) else {
-            report
-                .errors
-                .push(format!("{key}: its agent cannot be read on this Mac"));
+            report.errors.push(format!("{key}: {}", agent_unreadable()));
             continue;
         };
         let held = armed_now.armed.iter().find(|info| info.key == key);
@@ -973,9 +1042,7 @@ pub(crate) fn sync_machine(env: &dyn ArmEnv, input: &SyncInput<'_>, machine: &st
         Ok((recorded, lost)) => {
             report.recorded = recorded;
             if lost {
-                report.errors.push(format!(
-                    "some routine runs {machine} fired were dropped from its log before this Mac read them"
-                ));
+                report.errors.push(runs_dropped(machine));
             }
         }
         Err(error) => report.errors.push(error),
@@ -1217,16 +1284,14 @@ pub(crate) fn prepare_refresh(
         .routines
         .iter()
         .find(|r| r.key.to_string() == key)
-        .ok_or_else(|| format!("no routine {key} on this Mac"))?;
+        .ok_or_else(|| no_routine_here(key))?;
     let machine = routine
         .def
         .armed_machine()
         .ok_or_else(|| format!("routine {key} is not armed on a machine"))?
         .to_string();
     if !super::host::manages_machine_arm(&routine.def, input.host_id) {
-        return Err(format!(
-            "routine {key} is managed by another Mac: refresh it there"
-        ));
+        return Err(managed_elsewhere(key));
     }
     let stale = |why: String| {
         if let Err(error) = mark_stale(input.store, key, &machine, &why, input.now) {
@@ -1274,8 +1339,7 @@ pub(crate) fn prepare_refresh(
             "{machine}'s terminal server is too old to enforce this routine's wake limits"
         )));
     }
-    let agent = (input.agent_of)(routine)
-        .ok_or_else(|| stale("its agent cannot be read on this Mac".into()))?;
+    let agent = (input.agent_of)(routine).ok_or_else(|| stale(agent_unreadable()))?;
     let prepared_now = env.place(routine, &machine).and_then(|place| {
         if place.handle.is_empty() {
             return Err(format!("its workspace on {machine} is not open"));
@@ -1414,9 +1478,7 @@ pub(crate) fn publish_refresh(
         }
         Ok(ArmAnswer::Refused {
             refusal: ArmRefusal::Stale { .. },
-        }) => Err(stale(format!(
-            "{machine} holds a newer arm of it (it was moved from another Mac)"
-        ))),
+        }) => Err(stale(moved_elsewhere(&machine))),
         Ok(other) => Err(stale(format!("{machine}: {other:?}"))),
         Err(error) => Err(stale(error)),
     }
@@ -1534,7 +1596,7 @@ fn record_runs(
     // routine's view shows it), instead of a silent gap.
     let lost = log.overflow.then_some(input.now);
     if lost.is_some() {
-        log::warn!(target: "routines", "machine {machine}: routine runs after {since} were dropped from its log before this Mac read them");
+        log::warn!(target: "routines", "machine {machine}: routine runs after {since} were dropped from its log before {} read them", machine_wording::machine_noun_lower(machine_wording::RUNNING_OS));
     }
     save_cursor(input.store, machine, next, &log.host_boot_id, lost).map_err(|e| e.to_string())?;
     Ok((recorded, lost.is_some()))

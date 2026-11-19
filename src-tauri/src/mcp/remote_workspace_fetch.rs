@@ -14,6 +14,7 @@
 //! moves, and the refs the bundle names are never read. A pack's size is
 //! capped (`--max-input-size`); how far its deltas expand is not.
 use super::{remote_authority::RemoteAuthority, remote_workspace_bundle as bundle};
+use crate::shared::machine_wording;
 use crate::terminal::session_server::{ExportCallError, SessionServerClient};
 use codesense_pty_core::{
     remote_export::{
@@ -192,12 +193,8 @@ pub(crate) async fn fetch(
         false,
     )
     .await?;
-    let clone = bundle::local_seed(&resolved.context, &resolved.source_repo)?.ok_or_else(|| {
-        format!(
-            "No local clone of {}/{} is attached on this Mac; attach it, then fetch again",
-            resolved.source_repo.owner, resolved.source_repo.repo
-        )
-    })?;
+    let clone = bundle::local_seed(&resolved.context, &resolved.source_repo)?
+        .ok_or_else(|| no_local_clone(&resolved.source_repo.owner, &resolved.source_repo.repo))?;
     let client = resolved.client.clone();
     let target = resolved.target.clone();
     let machine = resolved.machine_id.clone();
@@ -218,6 +215,30 @@ pub(crate) async fn fetch(
         })
     })
     .await
+}
+
+/// That no local clone of `owner`/`repo` is attached here, worded for `os`.
+fn no_local_clone_for(os: &str, owner: &str, repo: &str) -> String {
+    format!(
+        "No local clone of {owner}/{repo} is attached on {}; attach it, then fetch again",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn no_local_clone(owner: &str, repo: &str) -> String {
+    no_local_clone_for(machine_wording::RUNNING_OS, owner, repo)
+}
+
+/// That no workspace on a connected machine matches the request, worded for `os`.
+fn no_machine_workspace_for(os: &str) -> String {
+    format!(
+        "no open workspace on a machine matches; it may live on {}",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn no_machine_workspace() -> String {
+    no_machine_workspace_for(machine_wording::RUNNING_OS)
 }
 
 /// The machine and handle the request names, either directly or through an
@@ -297,7 +318,7 @@ fn locate_in_viewer(
         }
     }
     match found.len() {
-        0 => Err("no open workspace on a machine matches; it may live on this Mac".into()),
+        0 => Err(no_machine_workspace()),
         1 => Ok(found.remove(0)),
         _ => Err("more than one open workspace on a machine matches; pass teamKey".into()),
     }
@@ -739,11 +760,23 @@ fn transfer(
     Err(last)
 }
 
+/// That the attached local clone's folder is gone, worded for `os`.
+fn clone_missing_for(os: &str) -> String {
+    format!(
+        "the attached local clone is missing on {}",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn clone_missing() -> String {
+    clone_missing_for(machine_wording::RUNNING_OS)
+}
+
 /// Bring the commits the machine's checkout is on into the clone.
 pub(crate) fn fetch_into_clone(source: FetchSource<'_>) -> Result<FetchReport, String> {
     (source.valid)()?;
     if !source.clone.is_dir() {
-        return Err("the attached local clone is missing on this Mac".into());
+        return Err(clone_missing());
     }
     let branch = source.prepared_branch.clone();
     if !valid_branch(&branch) {

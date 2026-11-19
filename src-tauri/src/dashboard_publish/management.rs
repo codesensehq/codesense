@@ -5,10 +5,24 @@ use super::{
 use std::path::{Path, PathBuf};
 use tauri::Manager;
 
+use crate::shared::machine_wording;
+
+/// That a dashboard folder must be an absolute local path, worded for `os`.
+fn folder_not_absolute_for(os: &str) -> String {
+    format!(
+        "Dashboard must be an absolute folder path on {}.",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn folder_not_absolute() -> String {
+    folder_not_absolute_for(machine_wording::RUNNING_OS)
+}
+
 pub fn folder(path: &str) -> Result<PathBuf, String> {
     let path = Path::new(path);
     if !path.is_absolute() {
-        return Err("Dashboard must be an absolute folder path on this Mac.".into());
+        return Err(folder_not_absolute());
     }
     Ok(PathBuf::from(state::folder_key(path)))
 }
@@ -574,6 +588,18 @@ mod tests {
         assert_eq!(
             state::load(data.path(), "ai-usage").unwrap().state,
             state::LocalState::Unpublished
+        );
+    }
+
+    #[test]
+    fn machine_wording_follows_the_os() {
+        assert_eq!(
+            folder_not_absolute_for("macos"),
+            "Dashboard must be an absolute folder path on this Mac."
+        );
+        assert_eq!(
+            folder_not_absolute_for("linux"),
+            "Dashboard must be an absolute folder path on this computer."
         );
     }
 }

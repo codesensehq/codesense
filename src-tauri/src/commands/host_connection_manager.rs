@@ -31,6 +31,7 @@ use super::machines::{
     FrozenRuntimeLayout, RuntimeAdmissionBaseline, RuntimeAdmissionRow, RuntimeAdmissionState,
     RuntimeCounter, RuntimeHistoryReason, RuntimeMemberAddress, RuntimeMemberTarget,
 };
+use crate::shared::machine_wording;
 use crate::terminal::session_server::{
     EventNamespace, ManagedRemoteClient, OnLost, RemoteSessionLedger, SessionServerClient,
     SessionServerState,
@@ -860,6 +861,18 @@ impl Default for HostConnectionManager {
         manager.apply_initial_observation(seq, vec![MachineManagerRecord::local()]);
         manager
     }
+}
+
+/// The local machine is not connected as a remote one, worded for `os`.
+fn local_not_remote_for(os: &str) -> String {
+    format!(
+        "{} is resolved by the local connector",
+        machine_wording::machine_noun(os)
+    )
+}
+
+fn local_not_remote() -> String {
+    local_not_remote_for(machine_wording::RUNNING_OS)
 }
 
 impl HostConnectionManager {
@@ -2628,7 +2641,7 @@ impl HostConnectionManager {
         origin: ConnectOrigin,
     ) -> Result<(), String> {
         if machine_id == LOCAL_MACHINE_ID {
-            return Err("This Mac is resolved by the local connector".into());
+            return Err(local_not_remote());
         }
         let replacement_identity = (origin == ConnectOrigin::Restart)
             .then(|| {
@@ -9794,6 +9807,18 @@ mod tests {
                 &codesense_pty_core::domain::ClientBootId::new("boot"),
             ),
             vec![expected]
+        );
+    }
+
+    #[test]
+    fn machine_wording_follows_the_os() {
+        assert_eq!(
+            local_not_remote_for("macos"),
+            "This Mac is resolved by the local connector"
+        );
+        assert_eq!(
+            local_not_remote_for("linux"),
+            "This computer is resolved by the local connector"
         );
     }
 }

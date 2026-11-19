@@ -18,6 +18,7 @@ use tauri::Manager;
 
 use super::restore::RestoreSummary;
 use super::LOCAL_MACHINE_ID;
+use crate::shared::machine_wording;
 
 /// The event every run's progress goes out on (its [`UpdateRun`]).
 pub const UPDATE_RUN_EVENT: &str = "terminal-servers-update";
@@ -130,9 +131,23 @@ pub fn update_order(items: Vec<Planned>, caller_machine: Option<&str>) -> Vec<Pl
     remote.into_iter().chain(local).chain(caller).collect()
 }
 
+/// How text names a machine: the local one by `os`, any other by its label.
+fn machine_name<'a>(os: &str, machine_id: &str, label: &'a str) -> &'a str {
+    if machine_id == LOCAL_MACHINE_ID {
+        machine_wording::machine_noun(os)
+    } else {
+        label
+    }
+}
+
 /// Why `item` is not updated in this run, given what came before: This Mac
 /// waits after a remote machine was (possibly) left without a server.
 pub fn held_back(item: &Planned, before: &[UpdateOutcome]) -> Option<String> {
+    held_back_for(machine_wording::RUNNING_OS, item, before)
+}
+
+/// [`held_back`], worded for `os`.
+fn held_back_for(os: &str, item: &Planned, before: &[UpdateOutcome]) -> Option<String> {
     if item.machine_id != LOCAL_MACHINE_ID {
         return None;
     }
@@ -141,8 +156,9 @@ pub fn held_back(item: &Planned, before: &[UpdateOutcome]) -> Option<String> {
         .find(|outcome| outcome.strands())
         .map(|stranded| {
             format!(
-                "{} may be left without a terminal server; update This Mac after it is fixed",
-                stranded.label
+                "{} may be left without a terminal server; update {} after it is fixed",
+                machine_name(os, &stranded.machine_id, &stranded.label),
+                machine_wording::machine_noun(os)
             )
         })
 }
@@ -277,6 +293,15 @@ pub(crate) fn refuse_while_running() -> Result<(), String> {
     }
 }
 
+/// The local server is already this app's build, worded for `os`.
+fn already_this_build_for(os: &str) -> String {
+    super::local_update::server_sentence(os, "is already this app's build")
+}
+
+fn already_this_build() -> String {
+    already_this_build_for(machine_wording::RUNNING_OS)
+}
+
 /// What the person or agent reviews for one out-of-date machine: its
 /// expectation, or why it cannot be updated now.
 pub(crate) async fn expectation(
@@ -286,7 +311,7 @@ pub(crate) async fn expectation(
     if machine_id == LOCAL_MACHINE_ID {
         let update = super::local_update::local_terminal_server_update(app.clone())
             .await?
-            .ok_or("This Mac's terminal server is already this app's build")?;
+            .ok_or_else(already_this_build)?;
         return Ok(ServerExpectation {
             server_id: update.expected.server_id,
             epoch: update.expected.epoch,
@@ -590,14 +615,34 @@ pub fn replace_outcome(
     }
 }
 
+/// The local machine was not reviewed with its sessions, worded for `os`.
+fn not_reviewed_for(os: &str) -> String {
+    format!(
+        "{} was not reviewed with its server and sessions; review it again",
+        machine_wording::machine_noun(os)
+    )
+}
+
+fn not_reviewed() -> String {
+    not_reviewed_for(machine_wording::RUNNING_OS)
+}
+
+/// The local sessions changed since review, worded for `os`.
+fn sessions_changed_for(os: &str) -> String {
+    format!(
+        "its sessions changed since they were reviewed; update {} on its own",
+        machine_wording::machine_noun(os)
+    )
+}
+
+fn sessions_changed() -> String {
+    sessions_changed_for(machine_wording::RUNNING_OS)
+}
+
 async fn update_local(app: &tauri::AppHandle, item: &Planned) -> UpdateOutcome {
     let (Some(pid), Some(session_ids)) = (item.expected.pid, item.expected.session_ids.clone())
     else {
-        return UpdateOutcome::new(
-            item,
-            OutcomeKind::Skipped,
-            "This Mac was not reviewed with its server and sessions; review it again",
-        );
+        return UpdateOutcome::new(item, OutcomeKind::Skipped, not_reviewed());
     };
     let expected = crate::terminal::session_server::LocalActivityUpgrade {
         server_id: item.expected.server_id.clone(),
@@ -618,11 +663,9 @@ async fn update_local(app: &tauri::AppHandle, item: &Planned) -> UpdateOutcome {
             outcome.restored = done.restored;
             outcome
         }
-        Err(error) if error.changed => UpdateOutcome::new(
-            item,
-            OutcomeKind::Skipped,
-            "its sessions changed since they were reviewed; update This Mac on its own",
-        ),
+        Err(error) if error.changed => {
+            UpdateOutcome::new(item, OutcomeKind::Skipped, sessions_changed())
+        }
         Err(error) => {
             let mut outcome = UpdateOutcome::new(
                 item,
@@ -642,6 +685,11 @@ async fn update_local(app: &tauri::AppHandle, item: &Planned) -> UpdateOutcome {
 /// The run's end as one message: "N updated, N skipped, N failed", then each
 /// machine.
 pub fn run_summary(run: &UpdateRun) -> String {
+    run_summary_for(machine_wording::RUNNING_OS, run)
+}
+
+/// [`run_summary`], naming the local machine for `os`.
+fn run_summary_for(os: &str, run: &UpdateRun) -> String {
     let count = |kind| run.outcomes.iter().filter(|o| o.kind == kind).count();
     let mut counts = Vec::new();
     for (kind, word) in [
@@ -668,12 +716,13 @@ pub fn run_summary(run: &UpdateRun) -> String {
             OutcomeKind::Skipped => "skipped",
             OutcomeKind::Failed => "failed",
         };
-        let prefix = format!("{}: ", outcome.label);
+        let name = machine_name(os, &outcome.machine_id, &outcome.label);
+        let prefix = format!("{name}: ");
         let message = outcome
             .message
             .strip_prefix(&prefix)
             .unwrap_or(&outcome.message);
-        text.push_str(&format!("\n- {} {kind}: {message}", outcome.label));
+        text.push_str(&format!("\n- {name} {kind}: {message}"));
     }
     text
 }
@@ -1510,5 +1559,70 @@ mod tests {
         )
         .unwrap();
         assert_eq!(remote.pid, None);
+    }
+
+    #[test]
+    fn machine_wording_follows_the_os() {
+        assert_eq!(
+            already_this_build_for("macos"),
+            "This Mac's terminal server is already this app's build"
+        );
+        assert_eq!(
+            already_this_build_for("linux"),
+            "This computer's terminal server is already this app's build"
+        );
+        assert_eq!(
+            not_reviewed_for("macos"),
+            "This Mac was not reviewed with its server and sessions; review it again"
+        );
+        assert_eq!(
+            not_reviewed_for("linux"),
+            "This computer was not reviewed with its server and sessions; review it again"
+        );
+        assert_eq!(
+            sessions_changed_for("macos"),
+            "its sessions changed since they were reviewed; update This Mac on its own"
+        );
+        assert_eq!(
+            sessions_changed_for("linux"),
+            "its sessions changed since they were reviewed; update This computer on its own"
+        );
+        let local = planned("local");
+        let stranded = [outcome("box", OutcomeKind::Failed, true, false)];
+        assert_eq!(
+            held_back_for("macos", &local, &stranded).unwrap(),
+            "box may be left without a terminal server; update This Mac after it is fixed"
+        );
+        assert_eq!(
+            held_back_for("linux", &local, &stranded).unwrap(),
+            "box may be left without a terminal server; update This computer after it is fixed"
+        );
+        let run = UpdateRun {
+            op_id: "op1".into(),
+            running: false,
+            machines: vec!["local".into()],
+            current: None,
+            outcomes: vec![UpdateOutcome {
+                // What `label_of` gives the local machine.
+                label: "local".into(),
+                message: "This Mac: 2 tabs reopened.".into(),
+                ..outcome("local", OutcomeKind::Updated, false, false)
+            }],
+        };
+        assert_eq!(
+            run_summary_for("macos", &run),
+            "Terminal server update op1: 1 updated.\n- This Mac updated: 2 tabs reopened."
+        );
+        let run = UpdateRun {
+            outcomes: vec![UpdateOutcome {
+                message: "This computer: 2 tabs reopened.".into(),
+                ..run.outcomes[0].clone()
+            }],
+            ..run
+        };
+        assert_eq!(
+            run_summary_for("linux", &run),
+            "Terminal server update op1: 1 updated.\n- This computer updated: 2 tabs reopened."
+        );
     }
 }

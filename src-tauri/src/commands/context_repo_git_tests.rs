@@ -710,3 +710,15 @@ fn a_rebase_in_progress_keeps_the_branch_and_its_counts() {
     assert_eq!(s.upstream.as_deref(), Some("origin/main"));
     assert_eq!((s.ahead, s.behind), (1, 1));
 }
+
+#[test]
+fn machine_wording_follows_the_os() {
+    assert_eq!(
+        unknown_side_for("macos", "notes/a.md"),
+        "Can't tell which side of notes/a.md is this Mac's from what git left on disk; hand it to an agent to settle."
+    );
+    assert_eq!(
+        unknown_side_for("linux", "notes/a.md"),
+        "Can't tell which side of notes/a.md is this computer's from what git left on disk; hand it to an agent to settle."
+    );
+}

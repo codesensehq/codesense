@@ -28,6 +28,8 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::shared::machine_wording;
+
 use super::catalog::QueryDef;
 use super::manifest::{self, LiveFields, LiveQueries, MANIFEST_FILE, MAX_FILES, MAX_TITLE_CHARS};
 use super::payload::{self, FolderReader, Mode, MAX_FILE_BYTES, MAX_VERSION_BYTES};
@@ -756,14 +758,43 @@ fn starter_query(queries: &LiveQueries, catalog: &[QueryDef]) -> Option<String> 
         })
 }
 
-/// Seed the selected starter query from the already validated pin types.
+/// Where the starter says live answers come from, its owner's computer named
+/// for `os`.
+fn live_answers_from_for(os: &str) -> String {
+    format!(
+        "Live answers come only on codesense.ai, from the owner's {}.",
+        machine_wording::machine_kind(os)
+    )
+}
+
+/// [`APP_JS`] with the owner's computer named for `os` in the text the page
+/// shows: the presence line and the no-answer note.
+fn app_js_for(os: &str) -> String {
+    APP_JS
+        .replace(
+            "\"Owner's Mac: ",
+            &format!("\"Owner's {}: ", machine_wording::machine_kind(os)),
+        )
+        .replace(&live_answers_from_for("macos"), &live_answers_from_for(os))
+}
+
+/// [`starter_app_for`] the OS this build runs on.
 fn starter_app(query: Option<&str>, pins: &manifest::LiveArgs) -> (String, Vec<String>) {
+    starter_app_for(machine_wording::RUNNING_OS, query, pins)
+}
+
+/// Seed the selected starter query from the already validated pin types.
+fn starter_app_for(
+    os: &str,
+    query: Option<&str>,
+    pins: &manifest::LiveArgs,
+) -> (String, Vec<String>) {
     use manifest::{Pin, Selector};
     let Some(pins) = query
         .and_then(|query| pins.get(query))
         .filter(|pins| !pins.is_empty())
     else {
-        return (APP_JS.to_string(), Vec::new());
+        return (app_js_for(os), Vec::new());
     };
     let mut args = serde_json::Map::new();
     let mut next_steps = Vec::new();
@@ -796,14 +827,12 @@ fn starter_app(query: Option<&str>, pins: &manifest::LiveArgs) -> (String, Vec<S
         }
     }
     let args = serde_json::to_string(&args).expect("starter args serialize");
-    let mut script = APP_JS.replace("ask(query, {})", &format!("ask(query, {args})"));
+    let mut script = app_js_for(os).replace("ask(query, {})", &format!("ask(query, {args})"));
     if !next_steps.is_empty() {
-        let hint = format!(
-            "). {} Live answers come only on codesense.ai, from the owner's Mac.",
-            next_steps.join(" ")
-        );
+        let from = live_answers_from_for(os);
+        let hint = format!("). {} {from}", next_steps.join(" "));
         script = script.replace(
-            r#""). Live answers come only on codesense.ai, from the owner's Mac.""#,
+            &format!("\"). {from}\""),
             &serde_json::to_string(&hint).expect("starter guidance serializes"),
         );
     }
@@ -1589,6 +1618,35 @@ mod tests {
             );
             assert!(!created.warnings.iter().any(|w| w.starts_with("Set ")));
         }
+    }
+
+    #[test]
+    fn machine_wording_follows_the_os() {
+        assert_eq!(
+            live_answers_from_for("macos"),
+            "Live answers come only on codesense.ai, from the owner's Mac."
+        );
+        assert_eq!(
+            live_answers_from_for("linux"),
+            "Live answers come only on codesense.ai, from the owner's computer."
+        );
+        assert_eq!(app_js_for("macos"), APP_JS);
+        let linux = app_js_for("linux");
+        for shown in [
+            r#"el("p", "Owner's computer: unknown", "muted")"#,
+            r#"presence.textContent = "Owner's computer: " + m.mac;"#,
+            r#"Live answers come only on codesense.ai, from the owner's computer.", "muted""#,
+        ] {
+            assert!(linux.contains(shown), "{shown}");
+        }
+        let pins: manifest::LiveArgs = serde_json::from_value(
+            serde_json::json!({"storyChanges": {"storyId": [{"team": "emea"}]}}),
+        )
+        .unwrap();
+        let (script, _) = starter_app_for("linux", Some("storyChanges"), &pins);
+        assert!(script.contains(
+            r#""). Set storyId in app.js to a story in team emea. Live answers come only on codesense.ai, from the owner's computer.""#
+        ));
     }
 
     #[test]

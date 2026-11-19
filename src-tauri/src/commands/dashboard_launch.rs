@@ -3816,7 +3816,10 @@ pub(crate) fn record_from_launch(
     // Managed Claude settings send this session's usage elsewhere, so none will be recorded.
     let runtime = record.cli.as_deref().and_then(|cli| cli.parse::<codesense_pty_core::agent_cli::AgentCli>().ok());
     if runtime.is_some_and(crate::session_usage::managed_telemetry::unrecorded) {
-        record.unavailable("usage", crate::session_usage::managed_telemetry::USAGE_REDIRECTED);
+        record.unavailable(
+            "usage",
+            crate::session_usage::managed_telemetry::usage_redirected(),
+        );
     }
     record.missing_as("the launch did not report it");
     record
@@ -9330,7 +9333,7 @@ mod tests {
         let _managed = crate::session_usage::managed_telemetry::Fixture::redirecting_unread();
         assert_eq!(
             usage(&launch_facts(&[])).as_deref(),
-            Some(crate::session_usage::managed_telemetry::USAGE_REDIRECTED)
+            Some(crate::session_usage::managed_telemetry::usage_redirected())
         );
         assert_eq!(usage(&codex), None);
     }

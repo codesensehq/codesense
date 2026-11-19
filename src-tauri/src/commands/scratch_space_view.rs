@@ -18,6 +18,7 @@ use crate::domain::Principal;
 
 use super::async_helpers::await_blocking;
 use super::route_to_context::resolve_ambient;
+use crate::shared::machine_wording;
 
 /// One file in the org's scratch space (`content/`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -206,6 +207,18 @@ pub(crate) struct OnlyMeTarget<'a> {
     pub team_content: &'a Path,
 }
 
+/// `org_slug` is not synced here, worded for `os`.
+fn org_not_synced_for(os: &str, org_slug: &str) -> String {
+    format!(
+        "{org_slug} is not synced on {}",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn org_not_synced(org_slug: &str) -> String {
+    org_not_synced_for(machine_wording::RUNNING_OS, org_slug)
+}
+
 pub(crate) fn create_scratch_file_at(
     home: &Path,
     principal: &Principal,
@@ -223,7 +236,7 @@ pub(crate) fn create_scratch_file_at(
         return Err(format!("'{name}' is not a file name"));
     }
     if !synced_orgs.iter().any(|o| o == org_slug) {
-        return Err(format!("{org_slug} is not synced on this Mac"));
+        return Err(org_not_synced(org_slug));
     }
     let rel = dir.strip_prefix(team_content).map_err(|_| {
         "Only me files go in the team's own files (this folder is somewhere else)".to_string()
@@ -540,5 +553,17 @@ mod tests {
         assert_eq!(json["allOrgs"][0]["logical"], "prompts/fix.md");
         assert_eq!(json["allOrgs"][0]["kind"], "prompt");
         assert!(json["syncedOrgs"].is_array());
+    }
+
+    #[test]
+    fn machine_wording_follows_the_os() {
+        assert_eq!(
+            org_not_synced_for("macos", "acme"),
+            "acme is not synced on this Mac"
+        );
+        assert_eq!(
+            org_not_synced_for("linux", "acme"),
+            "acme is not synced on this computer"
+        );
     }
 }

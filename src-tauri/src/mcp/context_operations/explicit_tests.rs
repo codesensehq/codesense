@@ -300,3 +300,15 @@ fn story_hydration_response_does_not_count_private_ancestor_siblings() {
     assert_eq!(before["filesScoped"], 2);
     assert_eq!(before["outsideTeamContent"], 0);
 }
+
+#[test]
+fn machine_wording_follows_the_os() {
+    assert_eq!(
+        no_longer_team_workspace_for("macos"),
+        "the workspace is no longer one of this team's on this Mac"
+    );
+    assert_eq!(
+        no_longer_team_workspace_for("linux"),
+        "the workspace is no longer one of this team's on this computer"
+    );
+}

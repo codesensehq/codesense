@@ -20,6 +20,8 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::shared::machine_wording;
+
 /// Serializer / lock around `move-workspace-intents-v1/*.json` writes so a
 /// racing boot reaper and a user-driven `move_workspace` call never shred
 /// each other.
@@ -629,6 +631,18 @@ fn with_report(reason: impl std::fmt::Display, report: &MoveSourceReport) -> Str
     )
 }
 
+/// That unpushed commits can't be carried between two other machines, worded for `os`.
+fn carry_between_machines_for(os: &str) -> String {
+    format!(
+        "carryUnpushed between machines is not supported; bring the workspace to {} first",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn carry_between_machines() -> String {
+    carry_between_machines_for(machine_wording::RUNNING_OS)
+}
+
 // Architecture: all refusals precede stopping agents or preparing a target.
 fn check_choices(
     params: &MoveWorkspaceParams,
@@ -652,7 +666,7 @@ fn check_choices(
     } else if report.unpushed_count > 0 && !params.carry_unpushed && !params.discard_unpushed {
         Some("unpushedCommits: choose carryUnpushed or discardUnpushed".into())
     } else if remote_to_remote && params.carry_unpushed {
-        Some("carryUnpushed between machines is not supported; bring the workspace to this Mac first".into())
+        Some(carry_between_machines())
     } else {
         None
     };
@@ -1028,13 +1042,22 @@ pub enum PreflightRefusal {
     Internal(String),
 }
 
+/// That the story has no workspace in the active team, worded for `os`.
+fn no_such_workspace_for(os: &str, story_id: &str) -> String {
+    format!(
+        "no such workspace in the active team: story \"{story_id}\" is not open in the viewer and has no managed worktree in this team's workspace store ({}'s worktree index). Run open_workspace with storyId \"{story_id}\" (it creates and registers the worktree), then retry move_workspace. For a workspace on another machine, open it there with open_workspace and its machineId first",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn no_such_workspace(story_id: &str) -> String {
+    no_such_workspace_for(machine_wording::RUNNING_OS, story_id)
+}
+
 impl std::fmt::Display for PreflightRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NoSuchWorkspace { story_id } => write!(
-                f,
-                "no such workspace in the active team: story \"{story_id}\" is not open in the viewer and has no managed worktree in this team's workspace store (this Mac's worktree index). Run open_workspace with storyId \"{story_id}\" (it creates and registers the worktree), then retry move_workspace. For a workspace on another machine, open it there with open_workspace and its machineId first"
-            ),
+            Self::NoSuchWorkspace { story_id } => write!(f, "{}", no_such_workspace(story_id)),
             Self::SameMachine => write!(f, "workspace already lives on the target machine"),
             Self::TargetUnreachable(why) => write!(f, "target machine unreachable: {why}"),
             Self::DirtyWorktree { paths } => {
@@ -4008,5 +4031,25 @@ mod tests {
         assert!(msg.starts_with("no such workspace in the active team"));
         assert!(msg.contains("open_workspace"));
         assert!(msg.contains("\"SW-9\""));
+    }
+
+    #[test]
+    fn machine_wording_follows_the_os() {
+        assert_eq!(
+            carry_between_machines_for("macos"),
+            "carryUnpushed between machines is not supported; bring the workspace to this Mac first"
+        );
+        assert_eq!(
+            carry_between_machines_for("linux"),
+            "carryUnpushed between machines is not supported; bring the workspace to this computer first"
+        );
+        assert_eq!(
+            no_such_workspace_for("macos", "demo"),
+            "no such workspace in the active team: story \"demo\" is not open in the viewer and has no managed worktree in this team's workspace store (this Mac's worktree index). Run open_workspace with storyId \"demo\" (it creates and registers the worktree), then retry move_workspace. For a workspace on another machine, open it there with open_workspace and its machineId first"
+        );
+        assert_eq!(
+            no_such_workspace_for("linux", "demo"),
+            "no such workspace in the active team: story \"demo\" is not open in the viewer and has no managed worktree in this team's workspace store (this computer's worktree index). Run open_workspace with storyId \"demo\" (it creates and registers the worktree), then retry move_workspace. For a workspace on another machine, open it there with open_workspace and its machineId first"
+        );
     }
 }

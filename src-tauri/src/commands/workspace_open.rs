@@ -32,6 +32,7 @@ pub(crate) use super::mcp_workspace::{LaunchError, LaunchOutcome};
 use crate::agents::adapter;
 use crate::agents::launch::AgentLaunch;
 use crate::agents::launch_check::{LaunchWarning, LaunchWarningCode};
+use crate::shared::machine_wording;
 
 /// What an open with a `target` asks for, as the caller sent it.
 #[derive(Debug, Clone, Default)]
@@ -812,9 +813,7 @@ async fn open_agent_as(
     }
     let requested_machine = non_blank(req.machine_id.as_deref());
     if requested_machine.is_some() && !story_target {
-        return Ok(OpenResult::invalid(
-            "machine_id launches into a story's workspace on that machine; a team folder runs on This Mac",
-        ));
+        return Ok(OpenResult::invalid(&team_folder_runs_here()));
     }
     let planned = match plan_open(host, active, story_target, req, scope).await {
         Ok(planned) => planned,
@@ -994,6 +993,31 @@ async fn open_agent_as(
     })
 }
 
+/// A `machine_id` for a team folder is refused, worded for `os`.
+fn team_folder_runs_here_for(os: &str) -> String {
+    format!(
+        "machine_id launches into a story's workspace on that machine; a team folder runs on {}",
+        machine_wording::machine_noun(os)
+    )
+}
+
+fn team_folder_runs_here() -> String {
+    team_folder_runs_here_for(machine_wording::RUNNING_OS)
+}
+
+/// `story_id`'s workspace already lives at `at`, worded for `os`.
+fn already_lives_on_for(os: &str, story_id: &str, at: &WorkspacePlace) -> String {
+    let at = match at {
+        WorkspacePlace::ThisMac => machine_wording::machine_noun(os).to_string(),
+        WorkspacePlace::Machine(id) => format!("machine {id}"),
+    };
+    format!("{story_id}'s workspace already lives on {at}; a workspace stays where it was created")
+}
+
+fn already_lives_on(story_id: &str, at: &WorkspacePlace) -> String {
+    already_lives_on_for(machine_wording::RUNNING_OS, story_id, at)
+}
+
 /// The machine a story launch runs on, or `None` for This Mac. A workspace stays where it
 /// was created: with no machine asked for, the launch goes where the workspace lives; a
 /// machine asked for must be where it lives, or where a new one is created. `Err` is why
@@ -1004,15 +1028,7 @@ pub(crate) fn story_machine(
     requested: Option<&str>,
 ) -> Result<Option<String>, String> {
     let requested = requested.map(str::trim).filter(|m| !m.is_empty());
-    let lives = |at: &WorkspacePlace| {
-        let at = match at {
-            WorkspacePlace::ThisMac => "This Mac".to_string(),
-            WorkspacePlace::Machine(id) => format!("machine {id}"),
-        };
-        format!(
-            "{story_id}'s workspace already lives on {at}; a workspace stays where it was created"
-        )
-    };
+    let lives = |at: &WorkspacePlace| already_lives_on(story_id, at);
     match (requested, place) {
         (None, Some(WorkspacePlace::Machine(at))) => Ok(Some(at)),
         (None, _) => Ok(None),
@@ -1595,9 +1611,7 @@ pub(crate) fn machine_open_conflict(
         Some(at) => Some(format!(
             "{story_id}'s workspace already lives on machine {at}; a workspace stays where it was created"
         )),
-        None => Some(format!(
-            "{story_id}'s workspace already lives on This Mac; a workspace stays where it was created"
-        )),
+        None => Some(already_lives_on(story_id, &WorkspacePlace::ThisMac)),
     }
 }
 

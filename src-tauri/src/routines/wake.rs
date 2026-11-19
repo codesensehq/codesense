@@ -52,6 +52,7 @@ use crate::delivery::events::WakeOrigin;
 use crate::delivery::run_status::WakeRunStatus;
 use crate::delivery::{DeliveryError, DeliveryReceipt, WakeDelivery};
 use crate::domain::Principal;
+use crate::shared::machine_wording;
 
 use super::admit::RoutinePointer;
 use super::finish::{self, Ending};
@@ -1221,7 +1222,7 @@ pub(crate) fn wake_limits_of(
     }
     if install.trim().is_empty() {
         // Never one budget shared by every install that has no id.
-        log::warn!(target: "routines", "routine {routine_key}: this Mac's install id is unreadable; its wake limits are not sent");
+        log::warn!(target: "routines", "routine {routine_key}: {}'s install id is unreadable; its wake limits are not sent", machine_wording::machine_noun_lower(machine_wording::RUNNING_OS));
         return None;
     }
     Some(WakeLimits {
@@ -1582,6 +1583,42 @@ async fn defer(home: &Path, plan: &WakePlan, env: &Arc<dyn WakeEnv>, why: String
     Fired::Deferred
 }
 
+/// That machine `id` is not one this machine knows, worded for `os`.
+pub(super) fn machine_unknown_for(os: &str, id: &str) -> String {
+    format!(
+        "{id} isn't a machine {} knows or shares with this team",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn machine_unknown(id: &str) -> String {
+    machine_unknown_for(machine_wording::RUNNING_OS, id)
+}
+
+/// That this machine's sessions were still being restored, worded for `os`.
+pub(super) fn still_restoring_for(os: &str) -> String {
+    format!(
+        "CodeSense was still restoring {}'s sessions, so it could not tell whether the agent runs",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn still_restoring() -> String {
+    still_restoring_for(machine_wording::RUNNING_OS)
+}
+
+/// That this machine's sessions could not be restored, worded for `os`.
+pub(super) fn restore_gave_up_for(os: &str) -> String {
+    format!(
+        "CodeSense could not restore {}'s sessions after a restart, so it could not tell whether the agent runs",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn restore_gave_up() -> String {
+    restore_gave_up_for(machine_wording::RUNNING_OS)
+}
+
 /// Fire `plan` as a wake. The run stays `queued` until its delivery says
 /// otherwise; [`Fired::LaunchHere`] hands a launch back to the caller. It
 /// never waits: whatever has to, is deferred.
@@ -1597,10 +1634,7 @@ pub(crate) async fn fire(home: &Path, plan: &WakePlan, env: Arc<dyn WakeEnv>) ->
             end(
                 home,
                 &run_id,
-                undelivered(
-                    UndeliveredReason::MachineUnknown,
-                    format!("{id} isn't a machine this Mac knows or shares with this team"),
-                ),
+                undelivered(UndeliveredReason::MachineUnknown, machine_unknown(id)),
             )
             .await;
             return Fired::Ended;
@@ -1608,23 +1642,12 @@ pub(crate) async fn fire(home: &Path, plan: &WakePlan, env: Arc<dyn WakeEnv>) ->
     }
     match env.restore() {
         Restore::Settled => {}
-        Restore::Pending => {
-            return defer(
-                home,
-                plan,
-                &env,
-                "CodeSense was still restoring this Mac's sessions, so it could not tell whether the agent runs".into(),
-            )
-            .await
-        }
+        Restore::Pending => return defer(home, plan, &env, still_restoring()).await,
         Restore::GaveUp => {
             end(
                 home,
                 &run_id,
-                undelivered(
-                    UndeliveredReason::Unobservable,
-                    "CodeSense could not restore this Mac's sessions after a restart, so it could not tell whether the agent runs",
-                ),
+                undelivered(UndeliveredReason::Unobservable, restore_gave_up()),
             )
             .await;
             return Fired::Ended;

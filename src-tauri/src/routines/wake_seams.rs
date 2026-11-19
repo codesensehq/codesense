@@ -4852,3 +4852,33 @@ async fn a_wake_that_launches_honors_directives_over_policy_defaults_after_enric
     assert_eq!(task.status, "done");
     assert_eq!(task.closed_at_ms, before.closed_at_ms, "enrichment never reopens a delivery");
 }
+
+#[test]
+fn machine_wording_follows_the_os() {
+    use super::wake::{machine_unknown_for, restore_gave_up_for, still_restoring_for};
+
+    assert_eq!(
+        machine_unknown_for("macos", "m-1"),
+        "m-1 isn't a machine this Mac knows or shares with this team"
+    );
+    assert_eq!(
+        machine_unknown_for("linux", "m-1"),
+        "m-1 isn't a machine this computer knows or shares with this team"
+    );
+    assert_eq!(
+        still_restoring_for("macos"),
+        "CodeSense was still restoring this Mac's sessions, so it could not tell whether the agent runs"
+    );
+    assert_eq!(
+        still_restoring_for("linux"),
+        "CodeSense was still restoring this computer's sessions, so it could not tell whether the agent runs"
+    );
+    assert_eq!(
+        restore_gave_up_for("macos"),
+        "CodeSense could not restore this Mac's sessions after a restart, so it could not tell whether the agent runs"
+    );
+    assert_eq!(
+        restore_gave_up_for("linux"),
+        "CodeSense could not restore this computer's sessions after a restart, so it could not tell whether the agent runs"
+    );
+}

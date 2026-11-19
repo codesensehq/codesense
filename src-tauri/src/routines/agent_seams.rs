@@ -912,3 +912,25 @@ async fn a_team_routine_runs_the_builtin_claude_and_records_its_revision() {
         Err(crate::agents::AgentError::ReadOnly(starter.clone()))
     );
 }
+
+#[test]
+fn machine_wording_follows_the_os() {
+    use super::agents::{agent_not_here_for, agent_team_missing_for};
+
+    assert_eq!(
+        agent_team_missing_for("macos", &"no agent", "acme", "api"),
+        "no agent: this agent lives in team acme/api, which this Mac may not have"
+    );
+    assert_eq!(
+        agent_team_missing_for("linux", &"no agent", "acme", "api"),
+        "no agent: this agent lives in team acme/api, which this computer may not have"
+    );
+    assert_eq!(
+        agent_not_here_for("macos", &"no agent"),
+        "no agent — its runs will fail until it names an agent this Mac has"
+    );
+    assert_eq!(
+        agent_not_here_for("linux", &"no agent"),
+        "no agent — its runs will fail until it names an agent this computer has"
+    );
+}

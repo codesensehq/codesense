@@ -37,6 +37,8 @@ use serde::Serialize;
 use tauri::{AppHandle, Runtime, Url};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
+use crate::shared::machine_wording;
+
 /// Locks a mutex, taking the value a panic left behind: the updater never panics on a lock.
 pub(super) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
@@ -192,7 +194,7 @@ impl NotReady {
     pub fn message(self) -> &'static str {
         match self {
             NotReady::NothingStaged | NotReady::NotNewer => "No update is ready to install.",
-            NotReady::Withdrawn => "This update is no longer offered to this Mac.",
+            NotReady::Withdrawn => update_withdrawn(),
             NotReady::Closing => "CodeSense is already closing.",
             NotReady::NotRecorded => {
                 "The update records can't be written, so CodeSense won't restart itself."
@@ -202,6 +204,19 @@ impl NotReady {
             }
         }
     }
+}
+
+/// That the staged update is no longer offered here, worded for `os`.
+fn update_withdrawn_for(os: &str) -> &'static str {
+    if machine_wording::is_mac(os) {
+        "This update is no longer offered to this Mac."
+    } else {
+        "This update is no longer offered to this computer."
+    }
+}
+
+fn update_withdrawn() -> &'static str {
+    update_withdrawn_for(machine_wording::RUNNING_OS)
 }
 
 /// SW-PB-23: whether the staged build may be installed and the app relaunched now. The same
@@ -3143,5 +3158,17 @@ pub(super) mod tests {
     fn nothing_staged_installs_nothing_at_quit() {
         let updates = Updates::new("https://updates.codesense.ai", RUNNING.into(), DAY).unwrap();
         assert!(updates.install_on_exit().is_none());
+    }
+
+    #[test]
+    fn machine_wording_follows_the_os() {
+        assert_eq!(
+            update_withdrawn_for("macos"),
+            "This update is no longer offered to this Mac."
+        );
+        assert_eq!(
+            update_withdrawn_for("linux"),
+            "This update is no longer offered to this computer."
+        );
     }
 }

@@ -25,8 +25,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use codesense_host_proto::{
-    agent_cli::NativeLaunch, Capability, Census, EmulatorHello, Frame, Hello, PeerHello,
-    FIRST_STREAM_CHANNEL, PROTO_MAJOR, PROTO_MINOR,
+    agent_cli::NativeLaunch, machine_wording, Capability, Census, EmulatorHello, Frame, Hello,
+    PeerHello, FIRST_STREAM_CHANNEL, PROTO_MAJOR, PROTO_MINOR,
 };
 use codesense_pty_core::domain::{
     PortUnavailable, PtySessionId, RespawnStart, TerminalDomain, TerminalDomainEvent,
@@ -1129,9 +1129,7 @@ impl Host {
     /// a desktop: an agent it started could not report its run done. It
     /// says so, and refuses every arm with that reason.
     pub fn start_arms(self: &Arc<Self>, root: &Path) -> Result<(), String> {
-        let unsupported = (!cfg!(target_os = "linux")).then(|| {
-            "routines run without a desktop only on Linux machines: on this machine an agent the routine started could not report its run done (routine_done needs reverse MCP, which macOS terminal servers do not run yet). Arm it on this Mac or on a Linux machine.".to_string()
-        });
+        let unsupported = (!cfg!(target_os = "linux")).then(arms_unsupported);
         self.start_arms_on(
             root,
             Arc::new(crate::session_wake::SystemClock),
@@ -4570,6 +4568,46 @@ impl Host {
 /// account lives, never derived from a name.
 fn account_home() -> Option<PathBuf> {
     crate::remote_workspace::resolved_account_home()
+}
+
+/// Why a terminal server off Linux refuses every routine arm, naming its OS's
+/// terminal servers and the computer to arm the routine on, worded for `os`.
+fn arms_unsupported_for(os: &str) -> String {
+    let servers = match os {
+        "macos" => "macOS",
+        "linux" => "Linux",
+        "windows" => "Windows",
+        other => other,
+    };
+    format!(
+        "routines run without a desktop only on Linux machines: on this machine an agent the routine started could not report its run done (routine_done needs reverse MCP, which {servers} terminal servers do not run yet). Arm it on {} or on a Linux machine.",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn arms_unsupported() -> String {
+    arms_unsupported_for(machine_wording::RUNNING_OS)
+}
+
+#[cfg(test)]
+mod machine_wording_tests {
+    use super::*;
+
+    #[test]
+    fn machine_wording_follows_the_os() {
+        assert_eq!(
+            arms_unsupported_for("macos"),
+            "routines run without a desktop only on Linux machines: on this machine an agent the routine started could not report its run done (routine_done needs reverse MCP, which macOS terminal servers do not run yet). Arm it on this Mac or on a Linux machine."
+        );
+        assert_eq!(
+            arms_unsupported_for("linux"),
+            "routines run without a desktop only on Linux machines: on this machine an agent the routine started could not report its run done (routine_done needs reverse MCP, which Linux terminal servers do not run yet). Arm it on this computer or on a Linux machine."
+        );
+        assert_eq!(
+            arms_unsupported_for("windows"),
+            "routines run without a desktop only on Linux machines: on this machine an agent the routine started could not report its run done (routine_done needs reverse MCP, which Windows terminal servers do not run yet). Arm it on this computer or on a Linux machine."
+        );
+    }
 }
 
 #[cfg(test)]

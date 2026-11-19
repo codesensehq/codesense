@@ -33,6 +33,7 @@ use crate::agents::prepare::{self, publish, step3, Destination, PrepareProgress}
 use crate::commands::route_to_context::ActiveContext;
 use crate::content_engine::destination::{DestinationIdentity, DestinationIo};
 use crate::domain::Principal;
+use crate::shared::machine_wording;
 
 fn invalid(error: impl std::fmt::Display) -> ErrorData {
     ErrorData::invalid_params(error.to_string(), None)
@@ -585,7 +586,7 @@ impl Bound {
             Place::Local { admission, facts } => admission.validate(facts.as_ref()),
             Place::LocalApp { root, team } => {
                 if !crate::mcp::team_file_edits::local_workspaces(team).contains(root) {
-                    return Err("the workspace is no longer one of this team's on this Mac".into());
+                    return Err(no_longer_team_workspace());
                 }
                 if super::local_repository(&self.ctx, root).map_err(|e| e.message.to_string())?
                     != self.slug
@@ -792,6 +793,18 @@ async fn bind(
     Ok(bound)
 }
 
+/// That an admitted workspace left the team's local workspaces, worded for `os`.
+fn no_longer_team_workspace_for(os: &str) -> String {
+    format!(
+        "the workspace is no longer one of this team's on {}",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn no_longer_team_workspace() -> String {
+    no_longer_team_workspace_for(machine_wording::RUNNING_OS)
+}
+
 /// A local workspace the app asked for, admitted: it must be one
 /// of `team`'s workspaces on this Mac and resolve to a repository.
 fn bound_app_local(
@@ -801,10 +814,7 @@ fn bound_app_local(
     let root = std::fs::canonicalize(requested)
         .map_err(|e| format!("{} is unavailable: {e}", requested.display()))?;
     if !crate::mcp::team_file_edits::local_workspaces(&team).contains(&root) {
-        return Err(format!(
-            "{} is not one of this team's workspaces on this Mac",
-            root.display()
-        ));
+        return Err(crate::mcp::team_file_edits::not_team_workspace(&root));
     }
     let (ctx, manifest) = crate::commands::watch::workspace_target(&team, &root)?;
     let slug = manifest

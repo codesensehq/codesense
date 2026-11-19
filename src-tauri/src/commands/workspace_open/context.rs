@@ -2,6 +2,7 @@
 use super::*;
 use crate::domain::Principal;
 use crate::install::worktree_index::{self, ContextWorktreeRecord};
+use crate::shared::machine_wording;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ContextDestination {
@@ -60,6 +61,18 @@ fn git(cwd: &Path, args: &[&str]) -> Result<String, String> {
     Ok(output.trim().to_string())
 }
 
+/// The team's context repo is missing here, worded for `os`.
+fn no_context_repo_for(os: &str) -> String {
+    format!(
+        "The team's context repo isn't set up on {}, so there's nowhere to make a worktree",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn no_context_repo() -> String {
+    no_context_repo_for(machine_wording::RUNNING_OS)
+}
+
 pub(crate) fn resolve(
     home: &Path,
     principal: &Principal,
@@ -106,9 +119,8 @@ pub(crate) fn resolve(
     if name.is_empty() || name.chars().count() > 64 || !name.chars().any(char::is_alphanumeric) {
         return Err("Name the worktree with a letter or digit, using at most 64 characters".into());
     }
-    let repo = crate::content_engine::git_worktree::GitWorktree::discover(content)?.ok_or(
-        "The team's context repo isn't set up on this Mac, so there's nowhere to make a worktree",
-    )?;
+    let repo = crate::content_engine::git_worktree::GitWorktree::discover(content)?
+        .ok_or_else(no_context_repo)?;
     // Held from the duplicate check through the record write, so two opens of one name
     // can't both pick the same root and branch.
     crate::context_repo::branch_common::with_clone_lock(&repo.root, || {
@@ -952,6 +964,18 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(legacy.join("notes.txt")).unwrap(),
             "old work"
+        );
+    }
+
+    #[test]
+    fn machine_wording_follows_the_os() {
+        assert_eq!(
+            no_context_repo_for("macos"),
+            "The team's context repo isn't set up on this Mac, so there's nowhere to make a worktree"
+        );
+        assert_eq!(
+            no_context_repo_for("linux"),
+            "The team's context repo isn't set up on this computer, so there's nowhere to make a worktree"
         );
     }
 }

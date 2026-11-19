@@ -17,6 +17,7 @@ use crate::agents::launch::{self, AgentLaunch, PrepareOptions};
 use crate::agents::launch_check::{LaunchWarning, LaunchWarningCode};
 use crate::agents::{AgentKey, AgentReferrers};
 use crate::domain::Principal;
+use crate::shared::machine_wording;
 
 use super::discover::discover_routines;
 use super::model::{AgentRef, RoutineDef, RoutineKey, RoutineTrigger};
@@ -204,13 +205,27 @@ fn unreadable(
             .is_ok_and(|dir| dir.is_dir())
     };
     if other_team && !team_here() {
-        format!(
-            "{error}: this agent lives in team {}/{}, which this Mac may not have",
-            agent.org, agent.team
-        )
+        agent_team_missing(&error, &agent.org, &agent.team)
     } else {
         error.to_string()
     }
+}
+
+/// `error`, plus that the agent's team may be missing here, worded for `os`.
+pub(super) fn agent_team_missing_for(
+    os: &str,
+    error: &dyn std::fmt::Display,
+    org: &str,
+    team: &str,
+) -> String {
+    format!(
+        "{error}: this agent lives in team {org}/{team}, which {} may not have",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn agent_team_missing(error: &dyn std::fmt::Display, org: &str, team: &str) -> String {
+    agent_team_missing_for(machine_wording::RUNNING_OS, error, org, team)
 }
 
 /// The key of the agent `agent` names for routine `routine`, when
@@ -299,6 +314,19 @@ pub(crate) fn prepare_run_for(
     })
 }
 
+/// `why`, plus that the routine's runs fail until its agent is here, worded
+/// for `os`.
+pub(super) fn agent_not_here_for(os: &str, why: &dyn std::fmt::Display) -> String {
+    format!(
+        "{why} — its runs will fail until it names an agent {} has",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn agent_not_here(why: &dyn std::fmt::Display) -> String {
+    agent_not_here_for(machine_wording::RUNNING_OS, why)
+}
+
 /// What a run of routine `routine` would be warned about, for its task
 /// against its agent in the mode the routine runs in (a leading `/command`
 /// the agent does not start with, among others), and that its agent does not
@@ -326,7 +354,7 @@ pub(crate) fn save_warnings_for(
         Ok(prepared) => prepared.warnings,
         Err(why) => vec![LaunchWarning {
             code: LaunchWarningCode::AgentUnavailable,
-            message: format!("{why} — its runs will fail until it names an agent this Mac has"),
+            message: agent_not_here(&why),
         }],
     };
     // SW-AGR-2 (§9.5): a wake into an agent that skips permission checks needs

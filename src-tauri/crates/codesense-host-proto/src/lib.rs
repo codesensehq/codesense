@@ -28,6 +28,7 @@ pub mod hello;
 pub mod hook;
 pub mod inbox_wait;
 pub mod machine_stats;
+pub mod machine_wording;
 pub mod nofile;
 
 pub use census::Census;

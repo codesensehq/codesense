@@ -1111,3 +1111,15 @@ fn metadata_form_creates_without_schedule_and_replaces_only_metadata() {
     assert_eq!(crons(&get(&me, &key).unwrap()), vec!["*/5 * * * *"]);
     assert_eq!(get(&me, &key).unwrap().def.triggers.len(), 1);
 }
+
+#[test]
+fn machine_wording_follows_the_os() {
+    assert_eq!(
+        team_not_synced_for("macos"),
+        "that team is not synced on this Mac"
+    );
+    assert_eq!(
+        team_not_synced_for("linux"),
+        "that team is not synced on this computer"
+    );
+}

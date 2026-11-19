@@ -45,3 +45,10 @@ paths = [
   # shortcut identifiers (`defaultKeystroke` values), not credentials
   '''(^|/)src/shared/lib/shortcuts/registry\.ts$''',
 ]
+
+[[allowlists]]
+description = "a test line in a commit that is already published, with a fake routine identifier and no credential"
+condition = "AND"
+commits = ["39d8ebd872d81d499bd304e7ca840da6dd73e16f"]
+paths = ['''(^|/)src-tauri/src/routines/machine_arm_app\.rs$''']
+regexes = ['''acme/api/nightly''']

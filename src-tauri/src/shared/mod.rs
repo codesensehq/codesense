@@ -7,6 +7,7 @@ pub(crate) mod hash;
 pub mod invoke_stats;
 pub mod json_io;
 pub mod lock_ext;
+pub use codesense_host_proto::machine_wording;
 pub mod panic_guard;
 pub mod proc_capture;
 pub mod revisioned_defs;

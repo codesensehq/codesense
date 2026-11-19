@@ -33,6 +33,7 @@ use tauri::Manager;
 
 use crate::commands::credential_store::{default_store, CredentialStore, Secret};
 use crate::domain::{CredentialRef, Principal};
+use crate::shared::machine_wording;
 use registry::{Binding, Declaration, Registry, Scope};
 
 /// This Mac's id: local is a machine like any other, always first.
@@ -340,7 +341,29 @@ impl RuntimeWorkspaceReference {
 /// The id a machine being added connects as, until it is saved.
 const DRAFT_ID: &str = "draft";
 
-const CANT_PUBLISH: &str = "You can't publish to that team's context from this Mac";
+/// Publishing to that team's context is refused here, worded for `os`.
+fn cant_publish_for(os: &str) -> String {
+    format!(
+        "You can't publish to that team's context from {}",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn cant_publish() -> String {
+    cant_publish_for(machine_wording::RUNNING_OS)
+}
+
+/// The local machine has no auto-connect binding, worded for `os`.
+fn no_local_auto_connect_for(os: &str) -> String {
+    format!(
+        "{} has no remote-machine auto-connect binding",
+        machine_wording::machine_noun(os)
+    )
+}
+
+fn no_local_auto_connect() -> String {
+    no_local_auto_connect_for(machine_wording::RUNNING_OS)
+}
 
 /// Whether `input` reaches a machine at the address it was saved at:
 /// `host:port`, via `jump`. Both sides compare trimmed, with an empty jump host
@@ -1980,7 +2003,7 @@ fn save_as(
         _ => share.clone(),
     };
     if !env.registry.can_publish(&target) && publisher {
-        return Err(CANT_PUBLISH.into());
+        return Err(cant_publish());
     }
     // What was set up stays set up only while nothing about reaching the
     // machine changed: its address, its jump host, and how this person signs in.
@@ -2213,7 +2236,7 @@ pub(crate) fn set_auto_connect(
     auto_connect: bool,
 ) -> Result<(), String> {
     if machine_id == LOCAL_MACHINE_ID {
-        return Err("This Mac has no remote-machine auto-connect binding".into());
+        return Err(no_local_auto_connect());
     }
     if private_setup::claims(env, machine_id)? {
         return private_setup::preferences(env, machine_id, None, Some(auto_connect));

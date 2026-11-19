@@ -204,6 +204,28 @@ mod tests {
         );
     }
 
+    /// who_am_i's `machine` for a local tab is the value "This Mac", on every OS:
+    /// read from a live local layout the way list_sessions reads it.
+    #[test]
+    fn a_local_tab_is_on_this_mac_on_every_os() {
+        use crate::commands::machines::LOCAL_MACHINE_ID;
+        use crate::mcp::terminal_tabs::tests::{listed, registered_row, reply};
+        use crate::mcp::terminal_tabs::LiveTabs;
+        let live = LiveTabs::of(
+            &[reply(
+                LOCAL_MACHINE_ID,
+                &[(
+                    "acme:default|root:repo",
+                    &[("pty-local", "Terminal 2", None)],
+                )],
+            )],
+            Default::default(),
+        );
+        let listed = listed(registered_row("pty-local", Some("pty-local")), &live, None);
+        let me = who_am_i_in(&listed, "pty-local").unwrap();
+        assert_eq!(me.machine.as_deref(), Some("This Mac"));
+    }
+
     #[test]
     fn who_am_i_answers_for_a_remote_tab_by_its_remote_shell_session_or_handle() {
         for id in ["remote-shell-7", "remote-tab-7"] {

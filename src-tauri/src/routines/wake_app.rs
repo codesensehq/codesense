@@ -858,9 +858,9 @@ pub(crate) async fn durable_place(
     {
         crate::commands::route_to_context::ContextResolution::Ok(ctx) => ctx,
         _ => {
-            return Err(PlaceError::NeedsPreparation(format!(
-                "{org}/{team} is not available on this Mac"
-            )))
+            return Err(PlaceError::NeedsPreparation(
+                super::machine_arm_app::team_unavailable(org, team),
+            ))
         }
     };
     let server = app

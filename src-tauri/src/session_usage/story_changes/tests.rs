@@ -3913,7 +3913,7 @@ fn review_task_count_is_never_a_zero_that_recorded_rounds_contradict() {
     assert_eq!(review_task_count(&set(&[]), &rounds(0, &[])), (Some(0), None));
     assert_eq!(review_task_count(&set(&[]), &Err("unreadable")), (None, None));
     // Nothing to read (unknown team, or no collection) is a true 0; only a failed read is unknown.
-    for absent in [review_rounds::NO_TEAM, review_rounds::NO_COLLECTION] {
+    for absent in [review_rounds::no_team(), review_rounds::no_collection()] {
         assert_eq!(review_task_count(&set(&[]), &Err(absent)), (Some(0), None));
     }
 }
