@@ -1,17 +1,15 @@
 // SPDX-License-Identifier: MIT
 //! Restricted native account bootstrap over an already authenticated, pinned SSH connection.
-use crate::install::{shell_quote, Bundle, Ssh, BINARY};
+use crate::install::{run_tree, shell_quote, Bundle, Feed, OnExit, Ssh, BINARY};
 use crate::machine_owner::BootstrapOwner;
 use crate::private_account_data::{
     encode_install, parse, InstallData, InstallFile, Marker, OTHER_PROFILE,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
-use codesense_platform::process::{kill_hard, ProcessTree};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::Stdio;
-use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 const UNAVAILABLE: &str = "private account unavailable; check account enrollment";
@@ -230,35 +228,9 @@ fn bounded_output_within(
 ) -> Result<Ran, String> {
     let started = Instant::now();
     let mut command = ssh.command(script);
-    command
-        .stdin(input)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    // ssh runs as the root of its own process tree; every exit path ends the
-    // whole tree, never just ssh.
-    let mut tree = ProcessTree::spawn(&mut command)
-        .map_err(|error| broken(step, format_args!("ssh did not start: {error}")))?;
-    let stdout = tree.child().stdout.take().ok_or(UNAVAILABLE)?;
-    let stderr = tree.child().stderr.take().ok_or(UNAVAILABLE)?;
-    let stdin = bytes
-        .is_some()
-        .then(|| tree.child().stdin.take().expect("piped bootstrap input"));
-    let tree = Arc::new(Mutex::new(tree));
-    let reader = |stream: Box<dyn Read + Send>| {
-        let tree = tree.clone();
-        std::thread::spawn(move || {
-            let mut result = Vec::new();
-            let read = stream.take((LIMIT + 1) as u64).read_to_end(&mut result);
-            if result.len() > LIMIT {
-                let _ = kill_hard(&locked(&tree));
-            }
-            read.map(|_| result)
-        })
-    };
-    let stdout = reader(Box::new(stdout));
-    let stderr = reader(Box::new(stderr));
-    let writer = bytes.zip(stdin).map(|(bytes, mut stdin)| {
-        std::thread::spawn(move || match bytes {
+    command.stdin(input);
+    let feed = bytes.map(|bytes| -> Feed {
+        Box::new(move |mut stdin: std::process::ChildStdin| match bytes {
             Upload::Bytes(bytes) => stdin.write_all(&bytes),
             Upload::Files { header, files } => {
                 stdin.write_all(&header)?;
@@ -275,33 +247,23 @@ fn bounded_output_within(
             }
         })
     });
-    let deadline = started + seconds(limit);
-    // Once ssh exits its tree ends what it left running, so a descendant
-    // holding a pipe never keeps the capture threads alive.
-    let status = loop {
-        let mut tree = locked(&tree);
-        match tree.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) if Instant::now() < deadline => {
-                drop(tree);
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            _ => {
-                let _ = kill_hard(&tree);
-                let _ = tree.wait();
-                break None;
-            }
-        }
+    // Every exit path ends ssh's whole tree, as it always has here: a step's
+    // ssh runs its script and nothing of it is meant to outlive the step, and
+    // a descendant holding a pipe must not keep the capture threads alive.
+    let ran = run_tree(
+        &mut command,
+        seconds(limit),
+        Some(LIMIT),
+        feed,
+        OnExit::EndRest,
+    )
+    .map_err(|error| broken(step, format_args!("ssh did not start: {error}")))?;
+    let read = |output: std::io::Result<Vec<u8>>| {
+        output.map_err(|error| broken(step, format_args!("reading its output: {error}")))
     };
-    let joined = |stream: std::thread::JoinHandle<std::io::Result<Vec<u8>>>| {
-        stream
-            .join()
-            .map_err(|_| broken(step, "an output reader panicked"))?
-            .map_err(|error| broken(step, format_args!("reading its output: {error}")))
-    };
-    let out = joined(stdout)?;
-    let err = joined(stderr)?;
-    let written = writer.map(|writer| writer.join());
+    let out = read(ran.stdout)?;
+    let err = read(ran.stderr)?;
+    let (status, written) = (ran.status, ran.fed);
     let Some(status) = status else {
         log::warn!(
             target: "machines",
@@ -327,22 +289,11 @@ fn bounded_output_within(
         elapsed: started.elapsed(),
     };
     // A failed step explains a failed upload better than the broken pipe does.
-    if ran.output.status.success() {
-        match written {
-            Some(Err(_)) => return Err(broken(step, "an input writer panicked")),
-            Some(Ok(Err(error))) => {
-                return Err(broken(step, format_args!("sending its input: {error}")))
-            }
-            _ => {}
-        }
+    if let (true, Some(Err(error))) = (ran.output.status.success(), written) {
+        return Err(broken(step, format_args!("sending its input: {error}")));
     }
     Ok(ran)
 }
-/// The tree behind `tree`'s lock, whether or not a thread holding it panicked.
-fn locked(tree: &Mutex<ProcessTree>) -> MutexGuard<'_, ProcessTree> {
-    tree.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
 fn bounded(
     ssh: &Ssh,
     step: &'static str,
@@ -968,6 +919,54 @@ mod tests {
             run(HelperUpload::Connect).unwrap_err(),
             "private account setup timed out after 30 seconds while uploading the private bootstrap helper"
         );
+    }
+
+    /// Run `script` (`$1` is a file it writes a background `sleep`'s pid to)
+    /// as a step with a 0.2 s limit; its result, and whether that `sleep` is
+    /// gone within 5 s.
+    fn step_with_descendant(script: &str) -> (Result<Ran, String>, bool) {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("descendant-pid");
+        let shell = Ssh::new("/bin/sh", vec!["-c".into()]);
+        let script = format!(
+            "set -- {}; {script}",
+            shell_quote(&pid_file.to_string_lossy())
+        );
+        let ran = bounded_output_within(&shell, STAGE_STEP, &script, Stdio::null(), None, 2);
+        let pid: libc::pid_t = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        // kill(pid, 0) reports ESRCH only after the descendant is gone.
+        while unsafe { libc::kill(pid, 0) } == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let gone = unsafe { libc::kill(pid, 0) } != 0;
+        if !gone {
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+        (ran, gone)
+    }
+
+    /// A step that overruns ends its whole tree, not just ssh.
+    #[test]
+    fn a_step_that_overruns_ends_its_descendants() {
+        let (ran, gone) = step_with_descendant("sleep 30 & echo $! > \"$1\"; wait");
+        assert_eq!(
+            ran.err().unwrap(),
+            format!("{TIMED_OUT} after 2 seconds while {STAGE_STEP}")
+        );
+        assert!(gone, "a descendant survived the step's timeout");
+    }
+
+    /// A step that prints past the limit is stopped there, whole tree and all.
+    #[test]
+    fn a_step_that_prints_too_much_ends_its_descendants() {
+        let (ran, gone) = step_with_descendant("sleep 30 & echo $! > \"$1\"; exec yes");
+        assert_eq!(ran.err().unwrap(), UNAVAILABLE);
+        assert!(gone, "a descendant survived the output limit");
     }
 
     /// A banner that mentions the words is not ssh refusing the key.

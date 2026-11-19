@@ -33,6 +33,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use codesense_platform::process::{kill_hard, ProcessTree};
 use sha2::{Digest, Sha256};
@@ -442,40 +443,86 @@ pub fn run_within(
     command: &mut Command,
     timeout: std::time::Duration,
 ) -> Result<std::process::Output, String> {
-    // The command runs as the root of its own process tree. ssh may start
-    // helpers (and a remote-command transport); a timeout owns and ends the
-    // whole tree, never just the immediate child.
-    let mut tree = ProcessTree::spawn(command.stdout(Stdio::piped()).stderr(Stdio::piped()))
+    let ran = run_tree(command, timeout, None, None, OnExit::LeaveRest)
         .map_err(|e| format!("run {:?}: {e}", command.get_program()))?;
-    type Pipe = Option<Box<dyn Read + Send>>;
-    let drain = |pipe: Pipe| {
-        std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            if let Some(mut pipe) = pipe {
-                pipe.read_to_end(&mut bytes)?;
-            }
-            Ok::<_, std::io::Error>(bytes)
-        })
+    let Some(status) = ran.status else {
+        return Err(format!(
+            "{:?} did not finish within {} s",
+            command.get_program(),
+            timeout.as_secs()
+        ));
     };
-    let stdout: Pipe = tree
-        .child()
-        .stdout
-        .take()
-        .map(|pipe| -> Box<dyn Read + Send> { Box::new(pipe) });
-    let stderr: Pipe = tree
-        .child()
-        .stderr
-        .take()
-        .map(|pipe| -> Box<dyn Read + Send> { Box::new(pipe) });
-    let (stdout, stderr) = (drain(stdout), drain(stderr));
+    Ok(std::process::Output {
+        status,
+        stdout: ran.stdout.map_err(|e| e.to_string())?,
+        stderr: ran.stderr.map_err(|e| e.to_string())?,
+    })
+}
+
+/// What a root that exits on its own does to the rest of its tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OnExit {
+    /// End what it left running, so nothing it started keeps an output
+    /// reader waiting.
+    EndRest,
+    /// Leave what it left running. ssh starts a `ProxyCommand` (or `-J`'s
+    /// `ssh -W`) in its own group, and a connection master that ssh handed off
+    /// keeps using it: ending it would make every later connection sign in
+    /// again.
+    LeaveRest,
+}
+
+/// How a [`run_tree`] run went.
+pub(crate) struct TreeRun {
+    /// The root's exit status; `None` when it outlived its time and the whole
+    /// tree was killed.
+    pub(crate) status: Option<std::process::ExitStatus>,
+    pub(crate) stdout: std::io::Result<Vec<u8>>,
+    pub(crate) stderr: std::io::Result<Vec<u8>>,
+    /// What the stdin writer returned, when there was one.
+    pub(crate) fed: Option<std::io::Result<()>>,
+}
+
+/// What writes a run's piped stdin, on a thread of its own.
+pub(crate) type Feed = Box<dyn FnOnce(std::process::ChildStdin) -> std::io::Result<()> + Send>;
+
+/// Run `command` as the root of its own process tree, its output captured,
+/// for up to `timeout`. ssh may start helpers (and a remote-command
+/// transport): a timeout, or an output passing `limit` bytes (each output
+/// then keeps `limit` + 1), ends the whole tree, never just the root, and
+/// the root is reaped before this returns. `feed` writes a piped stdin; with
+/// none, a piped stdin is closed at once. `on_exit` says what a root that
+/// exits on its own does to the rest.
+pub(crate) fn run_tree(
+    command: &mut Command,
+    timeout: std::time::Duration,
+    limit: Option<usize>,
+    feed: Option<Feed>,
+    on_exit: OnExit,
+) -> std::io::Result<TreeRun> {
+    let mut tree = ProcessTree::spawn(command.stdout(Stdio::piped()).stderr(Stdio::piped()))?;
+    let stdin = tree.child().stdin.take();
+    let stdout = tree.child().stdout.take();
+    let stderr = tree.child().stderr.take();
+    let tree = Arc::new(Mutex::new(tree));
+    let stdout = drain(stdout, limit, tree.clone());
+    let stderr = drain(stderr, limit, tree.clone());
+    // Without a feed the piped stdin drops here, closed.
+    let fed = feed
+        .zip(stdin)
+        .map(|(feed, stdin)| std::thread::spawn(move || feed(stdin)));
     let deadline = std::time::Instant::now() + timeout;
-    // Once the root exits the tree ends what it left running, so a
-    // descendant holding a pipe never keeps the readers waiting.
     let status = loop {
-        match tree.try_wait() {
-            Ok(Some(status)) => break Ok(status),
+        let mut tree = locked(&tree);
+        let exited = match on_exit {
+            OnExit::EndRest => tree.try_wait(),
+            OnExit::LeaveRest => tree.try_wait_leaving_rest(),
+        };
+        match exited {
+            Ok(Some(status)) => break Some(status),
             Ok(None) if std::time::Instant::now() < deadline => {
-                std::thread::sleep(std::time::Duration::from_millis(10))
+                drop(tree);
+                std::thread::sleep(std::time::Duration::from_millis(10));
             }
             Ok(None) => {
                 let _ = kill_hard(&tree);
@@ -483,27 +530,53 @@ pub fn run_within(
                 // descendants remain live makes retries accumulate leaked
                 // processes.
                 let _ = tree.wait();
-                break Err(format!(
-                    "{:?} did not finish within {} s",
-                    command.get_program(),
-                    timeout.as_secs()
-                ));
+                break None;
             }
-            Err(error) => break Err(error.to_string()),
+            Err(error) => return Err(error),
         }
     };
-    let joined = |reader: std::thread::JoinHandle<std::io::Result<Vec<u8>>>| {
-        reader
-            .join()
-            .map_err(|_| "an output reader panicked".to_string())?
-            .map_err(|e| e.to_string())
-    };
-    let (stdout, stderr) = (joined(stdout), joined(stderr));
-    Ok(std::process::Output {
-        status: status?,
-        stdout: stdout?,
-        stderr: stderr?,
+    Ok(TreeRun {
+        status,
+        stdout: joined(stdout, "an output reader"),
+        stderr: joined(stderr, "an output reader"),
+        fed: fed.map(|writer| joined(writer, "an input writer")),
     })
+}
+
+/// What `thread` returned, or an error naming `what` when it panicked.
+fn joined<T>(
+    thread: std::thread::JoinHandle<std::io::Result<T>>,
+    what: &str,
+) -> std::io::Result<T> {
+    thread
+        .join()
+        .unwrap_or_else(|_| Err(std::io::Error::other(format!("{what} panicked"))))
+}
+
+/// Read `pipe` to its end on a thread of its own, keeping at most `limit` + 1
+/// bytes; past `limit`, end `tree`.
+fn drain(
+    pipe: Option<impl Read + Send + 'static>,
+    limit: Option<usize>,
+    tree: Arc<Mutex<ProcessTree>>,
+) -> std::thread::JoinHandle<std::io::Result<Vec<u8>>> {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let Some(pipe) = pipe else {
+            return Ok(bytes);
+        };
+        let keep = limit.map_or(u64::MAX, |limit| limit as u64 + 1);
+        let read = pipe.take(keep).read_to_end(&mut bytes);
+        if limit.is_some_and(|limit| bytes.len() > limit) {
+            let _ = kill_hard(&locked(&tree));
+        }
+        read.map(|_| bytes)
+    })
+}
+
+/// The tree behind `tree`'s lock, whether or not a thread holding it panicked.
+fn locked(tree: &Mutex<ProcessTree>) -> MutexGuard<'_, ProcessTree> {
+    tree.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 #[cfg(test)]
@@ -597,6 +670,42 @@ mod timeout_tests {
         // kill(pid, 0) reports ESRCH only after the descendant is gone.
         let alive = unsafe { libc::kill(pid, 0) } == 0;
         assert!(!alive, "descendant {pid} survived its owner's timeout");
+    }
+
+    /// What a command that finished in time left running is left running:
+    /// ssh's proxy serves the connection master it handed off.
+    #[test]
+    fn a_command_that_finishes_leaves_what_it_started_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("helper-pid");
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg("(sleep 30 </dev/null >/dev/null 2>&1 & echo $! > \"$1\"); echo ok")
+            .arg("codesense-leave-test")
+            .arg(&pid_file);
+        let output = run_within(&mut command, std::time::Duration::from_secs(10)).unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"ok\n");
+        let pid: libc::pid_t = std::fs::read_to_string(pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let alive = unsafe { libc::kill(pid, 0) } == 0;
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+        assert!(alive, "the helper {pid} did not outlive its finished owner");
+    }
+
+    /// A piped stdin nobody feeds is closed, as `wait_with_output` closed it,
+    /// so a command reading it to its end finishes.
+    #[test]
+    fn a_piped_stdin_is_closed() {
+        let mut command = Command::new("cat");
+        command.stdin(Stdio::piped());
+        let output = run_within(&mut command, std::time::Duration::from_secs(10)).unwrap();
+        assert!(output.status.success());
     }
 }
 
