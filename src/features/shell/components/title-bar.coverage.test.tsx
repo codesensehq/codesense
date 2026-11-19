@@ -4,7 +4,8 @@ import { screen } from "@testing-library/react";
 import { renderWithProviders as render } from "../../../../tests/support/helpers/render-with-providers";
 import userEvent from "@testing-library/user-event";
 
-import { TitleBar } from "./title-bar";
+import { TitleBar, TRAFFIC_LIGHT_WIDTH } from "./title-bar";
+import { restorePlatform, setPlatform } from "@/test/platform";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 
 // ---------- Mocks ----------
@@ -293,6 +294,44 @@ describe("TitleBar", () => {
       row.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, clientX: 200, button: 0 }));
       expect(mockStartDragging).toHaveBeenCalled();
     });
+  });
+
+  describe("the traffic-light inset only on macOS", () => {
+    beforeEach(() => {
+      mockStartDragging.mockClear();
+    });
+    afterEach(() => {
+      restorePlatform();
+    });
+
+    const row = (container: HTMLElement) =>
+      container.querySelector("[data-testid='title-bar'] > div") as HTMLElement;
+
+    it("on macOS reserves the traffic lights' width, and a mousedown inside it does not drag", () => {
+      setPlatform("MacIntel");
+      const { container } = render(<TitleBar />);
+      const spacer = screen.getByTestId("title-bar-traffic-lights");
+      expect(spacer.style.width).toBe(`${TRAFFIC_LIGHT_WIDTH}px`);
+      expect(row(container)).not.toHaveClass("pl-3");
+      row(container).dispatchEvent(
+        new MouseEvent("mousedown", { bubbles: true, clientX: 10, button: 0 }),
+      );
+      expect(mockStartDragging).not.toHaveBeenCalled();
+    });
+
+    it.each(["Win32", "Linux x86_64"])(
+      "on %s has no spacer, starts at the 12px gutter, and a mousedown at x=10 drags",
+      (platform) => {
+        setPlatform(platform);
+        const { container } = render(<TitleBar />);
+        expect(screen.queryByTestId("title-bar-traffic-lights")).toBeNull();
+        expect(row(container)).toHaveClass("pl-3");
+        row(container).dispatchEvent(
+          new MouseEvent("mousedown", { bubbles: true, clientX: 10, button: 0 }),
+        );
+        expect(mockStartDragging).toHaveBeenCalledOnce();
+      },
+    );
   });
 
   describe("middle slot (tabs)", () => {

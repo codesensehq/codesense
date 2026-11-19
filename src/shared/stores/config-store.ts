@@ -14,6 +14,8 @@ import {
   createContextRepo,
   loadWorkspaceConfig,
   saveWorkspaceConfig,
+  getPlatformCaps,
+  type PlatformCap,
 } from "@/tauri/commands";
 import type { ContextRepoInfo } from "@/shared/types";
 import { normalizeMainDoc } from "@/shared/lib/pipeline-graph/normalize";
@@ -98,6 +100,18 @@ interface ConfigState {
   /** SW-WT-9: remember an approval (RMW to app-state, preserves other keys). */
   recordSetupApproval: (repoPath: string, configHash: string) => Promise<void>;
   loadState: () => Promise<void>;
+  /** Which optional features this OS supports, by key, read once at startup (`loadPlatformCaps`);
+   *  null until that read lands. Fixed for the app's run. Read it through `useCapability`. */
+  platformCaps: Record<string, PlatformCap> | null;
+  /** Reads the capabilities from the backend: the first call asks, every later one shares it. */
+  loadPlatformCaps: () => Promise<void>;
+}
+
+let platformCapsLoad: Promise<void> | null = null;
+/** Tests only: forget the read, so the next `loadPlatformCaps` asks again. */
+export function resetPlatformCapsForTest(): void {
+  platformCapsLoad = null;
+  useConfigStore.setState({ platformCaps: null });
 }
 
 export const useConfigStore = create<ConfigState>((set, get) => {
@@ -318,6 +332,19 @@ export const useConfigStore = create<ConfigState>((set, get) => {
     setMainDoc: async (repoPath, value) => {
       const normalized = normalizeMainDoc(value);
       await updateRepo(repoPath, { mainDoc: normalized });
+    },
+
+    platformCaps: null,
+    loadPlatformCaps: () => {
+      // A failed read leaves `platformCaps` null, so every capability reads as on: today's UI,
+      // and the backend still refuses what this OS can't do.
+      platformCapsLoad ??= Promise.resolve()
+        .then(() => getPlatformCaps())
+        .then(
+          (caps) => set({ platformCaps: Object.fromEntries(caps.map((cap) => [cap.key, cap])) }),
+          (e) => logger.warn("config-store", `get_platform_caps failed: ${e}`),
+        );
+      return platformCapsLoad;
     },
 
     loadState: async () => {

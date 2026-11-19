@@ -10,6 +10,7 @@ import { seedAgentListFixture } from "@/features/viewer/lib/agent-list-test-fixt
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { pickOption } from "./pick-option";
 import { restorePlatform, setPlatform } from "@/test/platform";
+import { resetPlatformCaps, setPlatformCaps } from "@/shared/lib/__test-utils__/platform-caps";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -1836,4 +1837,64 @@ describe("the launch sheet names the picked CLI honestly", () => {
       }
     },
   );
+});
+
+describe("launch sheet without a capability on this OS", () => {
+  const BRIDGE = "agents can't reach CodeSense from inside a session on this platform";
+  beforeEach(() => setPlatform("Win32"));
+  afterEach(() => {
+    resetPlatformCaps();
+    restorePlatform();
+  });
+
+  it("without the MCP bridge, says first that the agent starts without CodeSense tools, and still launches", async () => {
+    setPlatformCaps({ "mcp-bridge": BRIDGE });
+    previewWarnings = { [TRIAGE]: [UNQUALIFIED] };
+    const { sheet, onClose } = renderSheet({ teamKey: TEAM, agentKey: TRIAGE });
+    await waitFor(() =>
+      expect(sheet.getByTestId("launch-warnings").querySelectorAll("li")).toHaveLength(2),
+    );
+    const [first, second] = sheet.getByTestId("launch-warnings").querySelectorAll("li");
+    expect(first).toHaveClass("ls-warning");
+    expect(first).toHaveAttribute("data-code", "capability-mcp-bridge");
+    expect(first.textContent).toBe(
+      `Triage starts without CodeSense tools: no inbox, messages or team content from inside the session. Not yet available on Windows: ${BRIDGE}.`,
+    );
+    expect(second).toHaveAttribute("data-code", UNQUALIFIED.code);
+
+    fireEvent.change(sheet.getByTestId("launch-name"), { target: { value: "Docs" } });
+    expect(sheet.getByTestId("launch-submit")).not.toBeDisabled();
+    fireEvent.click(sheet.getByTestId("launch-submit"));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(launchCalls()).toHaveLength(1);
+  });
+
+  it("in branch mode the notice leads the run warnings instead", async () => {
+    setPlatformCaps({ "mcp-bridge": BRIDGE });
+    const { sheet } = renderSheet({ teamKey: TEAM, agentKey: TRIAGE });
+    await waitFor(() => expect(sheet.getByTestId("launch-agent").textContent).toContain("Triage"));
+    fireEvent.click(sheet.getByTestId("launch-where-branch"));
+    const run = sheet.getByTestId("launch-run-warnings");
+    expect(run.querySelector("li")).toHaveAttribute("data-code", "capability-mcp-bridge");
+    expect(sheet.queryByTestId("launch-warnings")).toBeNull();
+  });
+
+  it("with every capability on, there is no notice and the machine is a choice", async () => {
+    setPlatformCaps();
+    machines = [machine("box", "connected")];
+    const { sheet } = renderSheet({ teamKey: TEAM, agentKey: TRIAGE, storyId: "SW-8" });
+    await waitFor(() => expect(calls.some((c) => c.cmd === "agent_preview")).toBe(true));
+    expect(sheet.queryByTestId("launch-warnings")).toBeNull();
+    expect(sheet.getByTestId("launch-machine").tagName).toBe("BUTTON");
+  });
+
+  it("without remote machines, the machine is This computer, not a choice", async () => {
+    setPlatformCaps({ "remote-machines": "connecting to other machines is not built here" });
+    machines = [machine("box", "connected")];
+    const { sheet } = renderSheet({ teamKey: TEAM, agentKey: TRIAGE, storyId: "SW-8" });
+    await waitFor(() => expect(calls.some((c) => c.cmd === "agent_preview")).toBe(true));
+    const where = sheet.getByTestId("launch-machine");
+    expect(where.tagName).toBe("SPAN");
+    expect(where).toHaveTextContent("This computer");
+  });
 });
