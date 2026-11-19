@@ -660,11 +660,9 @@ pub fn run() {
             // it refuses. Where the platform has no terminal-server sidecar the
             // state has no root, so nothing launches one and the app hosts its
             // terminals itself: decided here, once.
-            let local_sessions = terminal::session_server::SessionServerState::at(
-                commands::pty_backend::local_sidecar_root(
-                    &platform_caps::Caps::live(),
-                    commands::paths::codesense_home_dir(),
-                ),
+            let local_sessions = commands::pty_backend::local_session_state(
+                &platform_caps::Caps::live(),
+                commands::paths::codesense_home_dir(),
             );
             let identity = commands::pty_backend::in_process_identity(app.handle())
                 .map_err(std::io::Error::other)?;

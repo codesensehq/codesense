@@ -512,6 +512,23 @@ mod tests {
         assert_eq!(Caps::live().0, caps());
     }
 
+    /// The app's terminal-server state follows the capability: a root (so a
+    /// sidecar can be launched) only with it on. Here, so the Linux app job runs
+    /// it too.
+    #[test]
+    fn the_local_session_state_follows_the_sidecar_capability() {
+        use crate::commands::pty_backend::local_session_state;
+        let home = std::path::PathBuf::from("/instance");
+        let on = caps_with_off(&[]);
+        let off = caps_with_off(&[TERMINAL_SERVER_SIDECAR]);
+        assert_eq!(
+            local_session_state(&Caps(&on), Some(home.clone())).root(),
+            Some(home.as_path())
+        );
+        assert_eq!(local_session_state(&Caps(&off), Some(home)).root(), None);
+        assert_eq!(local_session_state(&Caps(&on), None).root(), None);
+    }
+
     /// Whether `key` is on for the running platform.
     fn enabled(key: &str) -> bool {
         enabled_for(key, std::env::consts::OS, std::env::consts::ARCH)

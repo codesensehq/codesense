@@ -677,6 +677,12 @@ pub fn local_sidecar_root(caps: &Caps<'_>, home: Option<PathBuf>) -> Option<Path
     home.filter(|_| caps.enabled(TERMINAL_SERVER_SIDECAR))
 }
 
+/// The app's connection to its own terminal server, rooted where
+/// [`local_sidecar_root`] says: with no root, nothing launches one.
+pub fn local_session_state(caps: &Caps<'_>, home: Option<PathBuf>) -> SessionServerState {
+    SessionServerState::at(local_sidecar_root(caps, home))
+}
+
 pub fn resolve_terminal_backend<R: Runtime>(
     app: &AppHandle<R>,
     machine_id: &str,
