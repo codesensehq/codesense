@@ -2815,6 +2815,20 @@ describe("reconcileWorktreeBranch (SW-WB-1)", () => {
     expect(establishLinkMock).toHaveBeenCalled();
   });
 
+  it("finds the worktree when git spells its path C:/x/ and the workspace has C:\\x", async () => {
+    seedWorkspace();
+    useViewerStore.setState((s) => ({
+      workspaces: { [repo]: s.workspaces[repo].map((w) => ({ ...w, cwd: "C:\\x" })) },
+    }));
+    listWorktreesMock.mockResolvedValue([{ path: "C:/x/", branch: INTENT, head_sha: "abc" }]);
+
+    const res = await useViewerStore.getState().reconcileWorktreeBranch(repo, storyFile);
+
+    // Found and already on the intended branch, so nothing is recreated.
+    expect(res).toEqual({ path: "C:\\x", mode: "noop" });
+    expect(removeWorktreeMock).not.toHaveBeenCalled();
+  });
+
   it("migrates in place (git switch, WIP preserved) when the tree is dirty", async () => {
     seedWorkspace();
     listWorktreesMock.mockResolvedValue([{ path: OLD_PATH, branch: "feat/old", head_sha: "abc" }]);

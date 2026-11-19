@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 import { describe, it, expect } from "vitest";
-import { patchWorkspaceSetupList, setWorkspaceBackgroundSetup } from "./viewer-store";
+import {
+  patchWorkspaceSetupList,
+  setWorkspaceBackgroundSetup,
+  useViewerStore,
+} from "./viewer-store";
 import type { Workspace } from "./viewer-store";
 import type { WorkspaceSetupState } from "@/features/viewer/lib/workspace-setup-state";
 
@@ -281,5 +285,28 @@ describe("setWorkspaceBackgroundSetup — SW-WT-12 checklist steps (S2)", () => 
       steps: steps([{ index: 0, command: "npm ci", status: "running" }]),
     });
     expect(again).toBe(running); // unchanged checklist ⇒ RF-perf-14c no-churn preserved
+  });
+});
+
+describe("applyAgentPrepareProgress: which workspace a Step 2 event names", () => {
+  it("matches a local C:\\ workspace when the event's path ends in a backslash", () => {
+    const TEAM = "acme:core";
+    useViewerStore.setState({
+      workspaces: { [TEAM]: [creatingWorkspace({ cwd: "C:\\wt\\x", status: "ready" })] },
+    });
+
+    useViewerStore.getState().applyAgentPrepareProgress({
+      workspace: "C:\\wt\\x\\",
+      agent: "Barb",
+      phase: "diff",
+      files: 0,
+      bytes: 0,
+      total: 3,
+      settled: false,
+    });
+
+    expect(useViewerStore.getState().workspaces[TEAM][0].agentRuns?.Barb).toMatchObject({
+      kind: "running",
+    });
   });
 });
