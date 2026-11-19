@@ -2,6 +2,7 @@
 include!("build_caps.rs");
 
 fn main() {
+    println!("cargo:rerun-if-changed=platform-caps.json");
     configure_caps("platform-caps.json");
     configure_beta_channel();
     configure_site_contract_tests();

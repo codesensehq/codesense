@@ -137,10 +137,10 @@ pub fn compiled_caps(table: &str, os: &str, arch: &str) -> Result<Vec<(String, b
 }
 
 /// For a build script: reads the table at `path` (relative to the crate),
-/// reruns when it changes, declares a `cfg` per capability and sets the ones
-/// the target being built compiles in.
+/// declares a `cfg` per capability and sets the ones the target being built
+/// compiles in. The caller prints its own literal `rerun-if-changed` for the
+/// table.
 pub fn configure_caps(path: &str) {
-    println!("cargo:rerun-if-changed={path}");
     let table =
         std::fs::read_to_string(path).unwrap_or_else(|error| panic!("read {path}: {error}"));
     let target = |name: &str| {

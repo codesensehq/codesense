@@ -17,6 +17,7 @@ use std::process::Command;
 include!("../../build_caps.rs");
 
 fn main() {
+    println!("cargo:rerun-if-changed=../../platform-caps.json");
     configure_caps("../../platform-caps.json");
 
     let app_manifest = Path::new("../../Cargo.toml");
