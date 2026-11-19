@@ -66,7 +66,8 @@ describe("runningInstances", () => {
   it("names a remote machine, and leaves This Mac out", () => {
     const machine = (over: Partial<SessionListRow>) =>
       runningInstances({ agentKey: KEY, sessions: [session(over)], startedAt: {} })[0].machine;
-    expect(machine({ machine: "Build box" })).toBe("Build box");
+    expect(machine({ machine: "Build box", machineId: "box" })).toBe("Build box");
+    expect(machine({ machine: "This Mac" })).toBeNull();
     expect(machine({})).toBeNull();
   });
 

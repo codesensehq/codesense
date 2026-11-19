@@ -102,7 +102,6 @@ describe("sendFromInbox", () => {
           handle: FX.impl,
           displayName: "impl",
           state: "idle",
-          machine: null,
           role: null,
           launchedBy: null,
           unread: 0,
@@ -123,7 +122,8 @@ describe("sendFromInbox", () => {
     expect(toast).toHaveBeenCalledExactlyOnceWith("Could not send: offline");
   });
 
-  const offlineDir = (machine: string) =>
+  /** A roster row as the wire sends it: a remote one carries its machine id. */
+  const offlineDir = (machine: string, machineId?: string) =>
     buildDirectory(
       [
         {
@@ -131,6 +131,7 @@ describe("sendFromInbox", () => {
           displayName: "impl",
           state: "offline",
           machine,
+          ...(machineId ? { machineId } : {}),
           role: null,
           launchedBy: null,
           unread: 0,
@@ -146,7 +147,7 @@ describe("sendFromInbox", () => {
     vi.mocked(toast).mockClear();
     expect(await send({ quiet: true })).toBe(true);
     expect(toast).not.toHaveBeenCalled();
-    expect(await send({ quiet: true, dir: offlineDir("build-box") })).toBe(true);
+    expect(await send({ quiet: true, dir: offlineDir("build-box", "box") })).toBe(true);
     expect(toast).toHaveBeenCalledExactlyOnceWith(
       "Queued for impl. It's delivered once build-box reconnects.",
     );
@@ -154,7 +155,8 @@ describe("sendFromInbox", () => {
 
   it("names This Mac by its label, never as a remote machine", () => {
     const dir = offlineDir("This Mac");
-    expect(dir.get(FX.impl)?.machine).toBeNull();
+    expect(dir.get(FX.impl)).toMatchObject({ where: "local" });
+    expect(dir.get(FX.impl)?.machine).toBeUndefined();
   });
 
   it("confirms a message to a session whose machine is offline as queued until it reconnects", async () => {
@@ -166,6 +168,7 @@ describe("sendFromInbox", () => {
           displayName: "impl",
           state: "offline",
           machine: "build-box",
+          machineId: "box",
           role: null,
           launchedBy: null,
           unread: 0,

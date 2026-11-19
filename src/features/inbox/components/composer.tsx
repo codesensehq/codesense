@@ -41,6 +41,13 @@ import { formatKeystrokeDisplay, hasMod } from "@/shared/lib/shortcuts/keystroke
  * thread), the draft belongs to it: switching threads keeps each one's draft and never carries
  * text written for one party over to another. Without one the draft simply stays in the box.
  */
+/** A session's line in the mention list: its state, then where it runs when that is known. */
+export function sessionMentionDetail(p: Participant): string {
+  return [p.state === "exited" ? "ended" : stateLabel(p.state), machineLabel(p)]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 export function Composer({
   defaultTo,
   scope,
@@ -609,7 +616,7 @@ function RecipientPicker({
     team: undefined,
     label: `@${p.name}`,
     // A session id names one launch: an ended one never reads its mail again.
-    detail: `${p.state === "exited" ? "ended" : stateLabel(p.state)} · ${machineLabel(p)}`,
+    detail: sessionMentionDetail(p),
     group: "Sessions",
     ended: p.state === "exited",
   });

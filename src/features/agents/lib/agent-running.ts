@@ -82,7 +82,7 @@ export function instancesByAgent(opts: {
       state,
       stateWord: WORD[state],
       where: s.story ? `Story ${s.story}` : s.workspace || "Team folder",
-      machine: s.machine || null,
+      machine: s.machineId ? s.machine || s.machineId : null,
       since: typeof started === "number" ? formatClock(started) : null,
       unread: s.unread ?? 0,
     });
