@@ -31,7 +31,6 @@ const SEND_CHORD = "CmdOrCtrl+Enter";
 
 /** Exact microcopy from EXPERIENCE § Voice and Tone § Compose. One canonical
  *  string per surface — alternates do not ship. */
-
 export const INBOX_COMPOSE_COPY = {
   sendDefault: () => `Send ${formatKeystrokeDisplay(SEND_CHORD)}`,
   sendSending: "Sending...",
