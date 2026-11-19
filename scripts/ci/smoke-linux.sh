@@ -9,7 +9,11 @@
 #       Install the one .deb or .rpm under <package-dir> in <image>, a <name>:<tag> listed in
 #       smoke-images.txt and run by its pinned digest. The distribution's resolver must find
 #       every dependency, and the package's file list (kept as <out-dir>/<deb|rpm>.list) must
-#       hold the app binary and its three sidecars.
+#       hold the app binary and its three sidecars. A deb image's apt fetches from
+#       SMOKE_APT_MIRROR (apt-mirror), with retries and short timeouts.
+#   smoke-linux.sh apt-mirror <mirror> <sources-file>...
+#       Point every archive.ubuntu.com and security.ubuntu.com source in the files that exist at
+#       <mirror>, an Ubuntu archive URL. ports.ubuntu.com, which arm64 uses, is left as it is.
 #   smoke-linux.sh same-resources <listing> <listing>
 #       Both file lists ship the same optional resources (resources/starship, resources/git-ai).
 #   smoke-linux.sh run <package-dir> <out-dir>
@@ -47,6 +51,9 @@ IMAGES="$SCRIPT_DIR/smoke-images.txt"
 SELF="$SCRIPT_DIR/smoke-linux.sh"
 APP_BINARY=codesense
 SIDECARS=(codesense-bridge codesense-session-server codesense-emulator)
+# The Ubuntu archive mirror a deb image's apt uses. GitHub's runners are on Azure, and their own
+# apt uses this mirror; archive.ubuntu.com can crawl from there. Exported for the container.
+export SMOKE_APT_MIRROR="${SMOKE_APT_MIRROR:-http://azure.archive.ubuntu.com/ubuntu/}"
 # Resources the bundle carries only where the platform turns them on.
 OPTIONAL_RESOURCES=(starship git-ai)
 
@@ -156,11 +163,23 @@ install_package() {
     package=$(only_file "$package_dir" "*.$type")
     mkdir -p "$out"
     echo "Installing $(basename "$package") in $ref"
-    docker run --rm \
+    docker run --rm -e SMOKE_APT_MIRROR \
         -v "$(dirname "$package"):/package:ro" -v "$SCRIPT_DIR:/smoke:ro" -v "$out:/out" \
         "$ref" bash /smoke/smoke-linux.sh in-container "$type" "/package/$(basename "$package")" "/out/$type.list"
     check_listing "$out/$type.list"
     echo "$(basename "$package") installs in $image"
+}
+
+# Ubuntu 22.04 lists its sources in sources.list, 24.04 in ubuntu.sources (deb822); one pattern
+# rewrites both.
+apt_mirror() {
+    local mirror="$1" file text
+    shift
+    for file in "$@"; do
+        [[ -f "$file" ]] || continue
+        text=$(sed -E "s#https?://(archive|security)\.ubuntu\.com/ubuntu/?#${mirror%/}/#g" "$file")
+        printf '%s\n' "$text" >"$file"
+    done
 }
 
 # Runs inside the clean container: install with the distribution's resolver, then list the
@@ -170,6 +189,11 @@ in_container() {
     case "$type" in
         deb)
             export DEBIAN_FRONTEND=noninteractive
+            apt_mirror "$SMOKE_APT_MIRROR" /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources
+            grep -hE '^(deb |URIs:)' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+            # A slow or dropped fetch is retried rather than waited on (apt waits 120 s by default).
+            printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
+                >/etc/apt/apt.conf.d/80smoke-retries
             apt-get update
             apt-get install -y --no-install-recommends "$package"
             dpkg -L "$(dpkg-deb --field "$package" Package)" >"$listing"
@@ -397,6 +421,10 @@ case "$command" in
     in-container)
         [[ $# -eq 3 ]] || usage
         in_container "$@"
+        ;;
+    apt-mirror)
+        [[ $# -ge 2 ]] || usage
+        apt_mirror "$@"
         ;;
     same-resources)
         [[ $# -eq 2 ]] || usage

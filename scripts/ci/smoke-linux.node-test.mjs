@@ -159,3 +159,36 @@ test("installed-git-ai: a missing install, another version or an unbundled insta
   fails(installedGitAi(extracted(), "1.7.5-cs.5"), /resources\/git-ai is not bundled/);
   fails(installedGitAi(extracted("git-ai"), "1.7.5-cs.5", ""), /has no version/);
 });
+
+test("apt-mirror: the archive and security sources of 22.04 and 24.04 move to the mirror", () => {
+  const mirror = "http://azure.archive.ubuntu.com/ubuntu/";
+  const list = fixture([
+    "deb http://archive.ubuntu.com/ubuntu/ jammy main restricted",
+    "deb http://security.ubuntu.com/ubuntu/ jammy-security main restricted",
+  ]);
+  const sources = fixture([
+    "Types: deb",
+    "URIs: http://archive.ubuntu.com/ubuntu",
+    "Suites: noble noble-updates",
+    "",
+    "Types: deb",
+    "URIs: http://security.ubuntu.com/ubuntu/",
+    "Suites: noble-security",
+  ]);
+  passes(smoke("apt-mirror", mirror, list, path.join(dir, "absent"), sources));
+  assert.equal(
+    fs.readFileSync(list, "utf8"),
+    `deb ${mirror} jammy main restricted\ndeb ${mirror} jammy-security main restricted\n`,
+  );
+  assert.deepEqual(
+    fs.readFileSync(sources, "utf8").split("\n").filter((line) => line.startsWith("URIs:")),
+    [`URIs: ${mirror}`, `URIs: ${mirror}`],
+  );
+});
+
+test("apt-mirror: ports.ubuntu.com, which arm64 uses, is left as it is", () => {
+  const ports = ["URIs: http://ports.ubuntu.com/ubuntu-ports/", "Suites: noble"];
+  const sources = fixture(ports);
+  passes(smoke("apt-mirror", "http://azure.archive.ubuntu.com/ubuntu/", sources));
+  assert.equal(fs.readFileSync(sources, "utf8"), ports.map((line) => `${line}\n`).join(""));
+});
