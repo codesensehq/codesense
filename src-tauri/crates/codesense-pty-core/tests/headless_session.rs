@@ -7,9 +7,9 @@
 mod support;
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use codesense_pty_core::domain::{PtySessionId, TerminalDomainEvent};
+use codesense_pty_core::domain::PtySessionId;
 use codesense_pty_core::layout::ServerIdentity;
 use codesense_pty_core::runner::{LocalPtyRunner, PtyRunner, PtySpec};
 use codesense_pty_core::TerminalHost;
@@ -40,26 +40,13 @@ fn a_session_with_no_viewer_runs_and_reports_its_exit() {
     host.register(pty, registration(session.as_str(), false))
         .expect("register the session");
 
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let status = loop {
-        let exit = events.0.lock().unwrap().iter().find_map(|event| match event {
-            TerminalDomainEvent::Exit {
-                session: exited,
-                status,
-                ..
-            } if *exited == session => Some(status.clone()),
-            _ => None,
+    let status =
+        support::reported_exit(&events, &session, Duration::from_secs(10)).unwrap_or_else(|| {
+            panic!(
+                "the session never reported its exit (the pty had written {} bytes)",
+                host.output_seq(&session).unwrap_or(0)
+            )
         });
-        if let Some(status) = exit {
-            break status;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "the session never reported its exit (the pty had written {:?} bytes)",
-            host.output_seq(&session)
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    };
     assert_eq!(status.and_then(|status| status.exit_code), Some(0));
     assert_eq!(std::fs::read_to_string(&mark).unwrap(), "marked");
 }

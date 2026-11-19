@@ -6,9 +6,13 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
-use codesense_pty_core::domain::{PortUnavailable, TerminalDomainEvent, TerminalEventSink};
+use codesense_pty_core::domain::{
+    PortUnavailable, PtySessionId, TerminalDomainEvent, TerminalEventSink,
+};
 use codesense_pty_core::emulator::WORKER_BIN;
+use codesense_pty_core::runner::ExitInfo;
 use codesense_pty_core::{SessionMeta, SessionRegistration};
 
 /// The runtime every host in the test binary runs on.
@@ -34,6 +38,35 @@ impl TerminalEventSink for RecordingSink {
     fn emit(&self, event: TerminalDomainEvent) -> Result<(), PortUnavailable> {
         self.0.lock().unwrap().push(event);
         Ok(())
+    }
+}
+
+/// The exit `session` reported to `events` (its status, `None` when unknown),
+/// polled every 20 ms for up to `limit`; `None` if it never came.
+pub fn reported_exit(
+    events: &RecordingSink,
+    session: &PtySessionId,
+    limit: Duration,
+) -> Option<Option<ExitInfo>> {
+    let deadline = Instant::now() + limit;
+    loop {
+        let exit = events
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|event| match event {
+                TerminalDomainEvent::Exit {
+                    session: exited,
+                    status,
+                    ..
+                } if exited == session => Some(status.clone()),
+                _ => None,
+            });
+        if exit.is_some() || Instant::now() >= deadline {
+            return exit;
+        }
+        std::thread::sleep(Duration::from_millis(20));
     }
 }
 
