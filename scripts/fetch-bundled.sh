@@ -57,6 +57,8 @@ read_entry() {
     exit 1
   fi
 }
+# Every entry is parsed before any mode runs, so every mode refuses a bad table.
+for entry in "${bundled[@]}"; do read_entry "$entry"; done
 # Sets the fields of this host's entry for $1, or refuses a name it doesn't ship.
 find_entry() {
   for entry in "${bundled[@]}"; do
@@ -73,13 +75,10 @@ pin_version() {
 }
 case "${1:-}" in
   --print-names)
-    # Every entry is parsed before any name is printed, so a bad one prints nothing.
-    names=()
     for entry in "${bundled[@]}"; do
       read_entry "$entry"
-      names+=("$name")
+      printf '%s\n' "$name"
     done
-    printf '%s\n' "${names[@]}"
     exit 0
     ;;
   --print-pin) find_entry "$2"; printf '%s\n' "$pin"; exit 0 ;;

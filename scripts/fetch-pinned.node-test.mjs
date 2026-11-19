@@ -396,18 +396,27 @@ test("fetch-bundled names its binaries and checks their versions from the pins a
     assert.equal(print(), calls.map((call) => `2 ${call}\n`).join(""));
     assert.equal(print("--dry-run"), calls.map((call) => `3 ${call} --dry-run\n`).join(""));
   }
-  // An entry with a field too many, or without a pin and destination, is refused by every mode.
+  // An entry with a field too many, or without a pin and destination, is refused by every mode,
+  // also one that asks only for another entry.
   const script = fs.readFileSync(path.join(root, "scripts/fetch-bundled.sh"), "utf8");
-  for (const [label, from, to] of [
+  for (const [label, badName, from, to] of [
     [
       "a fifth field",
+      "git-ai",
       '"git-ai $pins/git-ai-linux-$arch.pin $resources/git-ai"',
       '"git-ai $pins/git-ai-linux-$arch.pin $resources/git-ai git-ai extra"',
     ],
     [
       "no destination",
+      "git-ai",
       '"git-ai $pins/git-ai-linux-$arch.pin $resources/git-ai"',
       '"git-ai src-tauri/pins/git-ai-linux-$arch.pin"',
+    ],
+    [
+      "a bad starship",
+      "starship",
+      '$resources/fetched/starship starship"',
+      '$resources/fetched/starship starship extra"',
     ],
   ]) {
     const bad = path.join(f.dir, `bad-${label.replaceAll(" ", "-")}`);
@@ -415,11 +424,22 @@ test("fetch-bundled names its binaries and checks their versions from the pins a
     assert.ok(script.includes(from), label);
     write(path.join(bad, "scripts/fetch-bundled.sh"), script.replace(from, to));
     write(path.join(bad, "scripts/fetch-pinned.sh"), '#!/bin/sh\necho "$# $*"\n');
-    for (const flags of [[], ["--print-names"], ["--print-dest", "starship"]]) {
+    for (const flags of [
+      [],
+      ["--print-names"],
+      ["--print-pin", "git-ai"],
+      ["--print-dest", "git-ai"],
+      ["--print-version", "git-ai"],
+      ["--print-dest", "starship"],
+      ["--check-version", "git-ai", path.join(bad, "no-such-binary")],
+    ]) {
       const run = host(bad, "Linux", "x86_64", ...flags);
       assert.equal(run.status, 1, `${label} ${flags.join(" ")}`);
       assert.equal(run.stdout, "", `${label} ${flags.join(" ")}`);
-      assert.match(run.stderr, /^bad bundled entry: git-ai /, `${label} ${flags.join(" ")}`);
+      assert.ok(
+        run.stderr.startsWith(`bad bundled entry: ${badName} `),
+        `${label} ${flags.join(" ")}: ${run.stderr}`,
+      );
     }
   }
   // The fixture tree: git-ai prints its bare version, starship its name first; only the first
