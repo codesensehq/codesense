@@ -650,21 +650,22 @@ mod build_identity_tests {
     }
 }
 
+/// The pid a test's script wrote to `file`.
+#[cfg(test)]
+pub(crate) fn pid_in(file: &Path) -> codesense_platform::process::Pid {
+    codesense_platform::process::Pid::from_raw(
+        std::fs::read_to_string(file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap(),
+    )
+}
+
 #[cfg(test)]
 mod timeout_tests {
     use super::*;
-    use codesense_platform::process::{is_alive, terminate_pid, Pid};
-
-    /// The pid a test's script wrote to `file`.
-    fn pid_in(file: &Path) -> Pid {
-        Pid::from_raw(
-            std::fs::read_to_string(file)
-                .unwrap()
-                .trim()
-                .parse()
-                .unwrap(),
-        )
-    }
+    use codesense_platform::process::{is_alive, terminate_pid};
 
     #[test]
     fn timeout_kills_and_reaps_the_owned_process_group() {

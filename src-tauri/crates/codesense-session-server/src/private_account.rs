@@ -15,7 +15,8 @@ use std::time::{Duration, Instant};
 const UNAVAILABLE: &str = "private account unavailable; check account enrollment";
 /// The start of the refusal when a step runs out of time. The add-machine screen matches it.
 const TIMED_OUT: &str = "private account setup timed out";
-pub use crate::portable::UPLOAD_STEP;
+/// The connect step that re-sends the helper, after an app update.
+pub const UPLOAD_STEP: &str = "uploading the private bootstrap helper";
 const STAGE_STEP: &str = "staging the private bootstrap helper";
 const INSTALL_STEP: &str = "installing the terminal server";
 const CLEANUP_STEP: &str = "removing the bootstrap helper";
@@ -711,7 +712,7 @@ impl Drop for Bootstrap {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codesense_platform::process::{is_alive, terminate_pid, Pid};
+    use codesense_platform::process::{is_alive, terminate_pid};
 
     fn failure(code: Option<i32>, stderr: &[u8]) -> (String, String) {
         step_failure(UPLOAD_STEP, code, stderr, Duration::from_millis(31244))
@@ -945,13 +946,7 @@ mod tests {
             "the step took {:?}",
             started.elapsed()
         );
-        let pid = Pid::from_raw(
-            std::fs::read_to_string(&pid_file)
-                .unwrap()
-                .trim()
-                .parse()
-                .unwrap(),
-        );
+        let pid = crate::install::pid_in(&pid_file);
         let deadline = Instant::now() + Duration::from_secs(5);
         while is_alive(pid) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
