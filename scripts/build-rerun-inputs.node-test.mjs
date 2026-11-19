@@ -51,6 +51,55 @@ test("build.rs declares no broad Rust source directories", () => {
   assertBuildInputs(readFileSync(resolve(manifest, "build.rs"), "utf8"));
 });
 
+// `configure_caps(path)` reads the capability table but leaves its rerun watch
+// to the caller, so each caller must name the same path in a literal
+// `rerun-if-changed` line, and the path must be the table.
+function assertTableWatch(source, dir) {
+  const calls = [...source.matchAll(/configure_caps\("([^"]+)"\)/g)].map(([, path]) => path);
+  assert.equal(calls.length, 1, "one configure_caps call with a literal path");
+  const [table] = calls;
+  assert.ok(
+    source.includes(`println!("cargo:rerun-if-changed=${table}");`),
+    `no literal rerun-if-changed for ${table}`,
+  );
+  assert.equal(resolve(dir, table), resolve(manifest, "platform-caps.json"));
+}
+for (const [name, source] of [
+  ["no watch", 'configure_caps("platform-caps.json");'],
+  [
+    "another path watched",
+    'println!("cargo:rerun-if-changed=other.json");\nconfigure_caps("platform-caps.json");',
+  ],
+  [
+    "an interpolated watch",
+    'println!("cargo:rerun-if-changed={}", t);\nconfigure_caps("platform-caps.json");',
+  ],
+  ["not the table", 'println!("cargo:rerun-if-changed=caps.json");\nconfigure_caps("caps.json");'],
+]) {
+  test(`table watch guard rejects ${name}`, () =>
+    assert.throws(() => assertTableWatch(source, manifest)));
+}
+// configure_caps also reads the CODESENSE_CAPS_OFF override, so it must rerun when that changes.
+test("configure_caps reruns when the capability override changes", () => {
+  // A CRLF checkout reads the same as an LF one.
+  const source = readFileSync(resolve(manifest, "build_caps.rs"), "utf8").replace(/\r\n/g, "\n");
+  assert.ok(source.includes('pub const CAPS_OFF_ENV: &str = "CODESENSE_CAPS_OFF";'));
+  const start = source.indexOf("pub fn configure_caps(");
+  assert.notEqual(start, -1, "build_caps.rs defines configure_caps");
+  const end = source.indexOf("\n}\n", start);
+  assert.notEqual(end, -1, "configure_caps has a body");
+  const configure = source.slice(start, end);
+  assert.ok(configure.includes('println!("cargo:rerun-if-env-changed={CAPS_OFF_ENV}");'));
+  // Read through caps_off_list, which refuses a value that is not UTF-8 (not unwrap_or_default).
+  assert.ok(configure.includes("caps_off_list(std::env::var(CAPS_OFF_ENV))"));
+});
+for (const crate of [".", "crates/codesense-session-server"]) {
+  test(`${crate}/build.rs watches the capability table it reads`, () => {
+    const dir = resolve(manifest, crate);
+    assertTableWatch(readFileSync(resolve(dir, "build.rs"), "utf8"), dir);
+  });
+}
+
 import { spawnSync } from "node:child_process";
 const generators = [
   ["recipes-manifest", "codesense-docs/getting-started/content/examples"],

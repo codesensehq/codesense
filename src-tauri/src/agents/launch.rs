@@ -651,6 +651,7 @@ pub fn apply_generated(
         runtime: launch.runtime,
     };
     let mut attribution = crate::attribution::launch::prepare_for_host(
+        &crate::platform_caps::Caps::live(),
         &attribution_request,
         std::env::var_os("PATH").as_deref(),
         attribution_hook_trust,
@@ -806,6 +807,7 @@ pub(crate) fn refresh_attribution(
     String,
 > {
     let mut plan = crate::attribution::launch::prepare_for_host(
+        &crate::platform_caps::Caps::live(),
         request,
         std::env::var_os("PATH").as_deref(),
         attribution_hook_trust,

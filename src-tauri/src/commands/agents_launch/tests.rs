@@ -1809,6 +1809,7 @@ fn a_saved_agents_pty_launch_exports_usage_for_its_session_before_bind() {
     }
 }
 
+#[cfg(cap_git_ai)]
 pub(crate) mod attribution_entry {
     //! SV-CDE-7: the renderer's launch entry (`apply_for_session`) switches git-ai capture
     //! on for a managed worktree, and a git-ai that is missing, the wrong version or broken

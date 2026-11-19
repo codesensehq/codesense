@@ -606,6 +606,7 @@ fn only_installer_owns_binary_publication_and_no_global_hooks_are_run() {
         "lib.rs",
         "agents/launch.rs",
         "attribution/launch.rs",
+        "attribution/launch/wired.rs",
         "mcp/local_setup.rs",
         "attribution/managed.rs",
     ] {
@@ -615,22 +616,27 @@ fn only_installer_owns_binary_publication_and_no_global_hooks_are_run() {
                 && !source.contains(".arg(\"install-hooks\")")
         );
     }
-    let startup = std::fs::read_to_string(src.join("lib.rs")).unwrap();
-    let initialize = startup
-        .find("attribution::install::initialize(")
+    // Startup reaches the install through the git-ai facade's `start`.
+    let facade = std::fs::read_to_string(src.join("attribution/facade.rs")).unwrap();
+    let initialize = facade
+        .find("super::install::initialize(")
         .expect("startup registers bundled git-ai");
-    let ensure = startup
-        .find("attribution::install::ensure_installed")
+    let ensure = facade
+        .find("super::install::ensure_installed(")
         .expect("startup starts installation");
     assert!(
         initialize < ensure,
         "register bundled resource before requesting installation"
     );
+    let startup = std::fs::read_to_string(src.join("lib.rs")).unwrap();
+    let start = startup
+        .find("attribution::facade::start(")
+        .expect("startup starts git-ai");
     let mcp_start = startup
         .find("mcp::start_mcp_server(")
         .expect("startup starts the MCP server");
     assert!(
-        initialize < mcp_start && ensure < mcp_start,
+        start < mcp_start,
         "register and request bundled installation before accepting MCP requests"
     );
     assert!(publish.contains("register_bundle("));

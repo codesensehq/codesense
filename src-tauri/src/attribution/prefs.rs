@@ -94,7 +94,7 @@ pub(crate) fn update(
     change(store.entry(key.to_owned()).or_default());
     write_json_atomic(&file_path(home, principal), &store).map_err(|e| e.to_string())?;
     drop(_write);
-    super::watcher::refresh(home);
+    super::facade::refresh_watcher(&crate::platform_caps::Caps::live(), home);
     Ok(())
 }
 
@@ -283,10 +283,14 @@ pub(crate) fn check_notes(checkout: &str, notes: Option<NotesMode>) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(cap_git_ai)]
     use crate::agents::resolve::tests::alice;
+    #[cfg(cap_git_ai)]
     use crate::attribution::testing::Launch;
+    #[cfg(cap_git_ai)]
     use codesense_pty_core::agent_cli::AgentCli;
 
+    #[cfg(cap_git_ai)]
     #[test]
     fn save_choices_keep_omitted_fields_and_auto_clears_only_the_mode() {
         let fixture = Launch::new(AgentCli::Claude);
@@ -311,6 +315,11 @@ mod tests {
         set_for_checkout(home, &alice(), &path, None, Some(NotesMode::Local)).unwrap();
         let local = read(home, &alice(), &key).unwrap();
         assert_eq!(AttributionPrefs::notes_mode(&local), NotesMode::Local);
+    }
+
+    /// A repo with no notes setting keeps its notes local, with or without git-ai.
+    #[test]
+    fn notes_stay_local_by_default() {
         assert_eq!(
             AttributionPrefs::notes_mode(&AttributionPrefs::default()),
             NotesMode::Local

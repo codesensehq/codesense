@@ -146,7 +146,7 @@ pub(crate) async fn resolve_at_observed(
     params: &Params,
     scope: &CallerScope,
     stories: HashMap<String, String>,
-    observer: impl FnOnce(super::checkpoints::Stats) + Send + 'static,
+    observer: impl FnOnce(super::facade::Stats) + Send + 'static,
 ) -> Result<WhyLine, String> {
     resolve_at_holding(
         home,
@@ -172,7 +172,7 @@ async fn resolve_at_holding(
     scope: &CallerScope,
     launch_stories: HashMap<String, String>,
     hold: ReadHold,
-    observer: Option<Box<dyn FnOnce(super::checkpoints::Stats) + Send>>,
+    observer: Option<Box<dyn FnOnce(super::facade::Stats) + Send>>,
     drain: bool,
 ) -> Result<WhyLine, String> {
     let (read_home, read_principal, read_store, read_params, read_scope) = (
@@ -193,8 +193,8 @@ async fn resolve_at_holding(
             &read_store,
             launch_stories,
             |repo, rev, path| {
-                let source =
-                    if drain { GitAiSource::for_home(&read_home) } else { GitAiSource::default() };
+                let caps = crate::platform_caps::Caps::live();
+                let source = super::facade::notes_source(&caps, &read_home, drain);
                 AttributionSource::ranges(&source, repo, rev, path)
             },
         ))?;
@@ -214,7 +214,8 @@ async fn resolve_at_holding(
             })
         {
             let mut usage = crate::session_usage::UsageStore::open(&read_store)?;
-            let stats = super::checkpoints::harvest(
+            let stats = super::facade::harvest(
+                &crate::platform_caps::Caps::live(),
                 Path::new(repo.local_path.as_deref().unwrap()),
                 &repo.remote_key,
                 &mut usage,

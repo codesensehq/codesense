@@ -1567,6 +1567,7 @@ async fn promised_note_blobs_stay_offline_and_keep_durable_story_facts() {
             && commit["rangesBasis"] == "unknown"
             && commit["rangesReason"] == "objects not in local copy"));
 }
+#[cfg(cap_git_ai)]
 #[tokio::test]
 async fn empty_branch_history_skips_managed_drain_and_checkpoint_work_for_story_and_tasks() {
     let (home, mut store) = store();
@@ -3265,6 +3266,7 @@ async fn fallback_checkpoint_secondary_native_alias_links_story_and_why_line_to_
     assert_eq!(result["commits"][0]["sessionIds"], json!(["alias-launch"]));
 }
 
+#[cfg(cap_git_ai)]
 #[tokio::test]
 async fn identity_forms_agree_across_notes_tasks_events_records_and_aliases() {
     use crate::attribution::git_ai::tests::git;
@@ -3526,16 +3528,19 @@ async fn sweep_story_and_why_line_share_canonical_checkpoint_coverage_after_prun
     assert_eq!(why["ranges"][0]["turn"]["toolUseId"], "toolu_01CDE55Edit");
 }
 
+#[cfg(cap_git_ai)]
 #[tokio::test]
 async fn review_local_linked_shares_attachment_cursor_identity() {
     review_attachment_cursor_identity(true).await;
 }
 
+#[cfg(cap_git_ai)]
 #[tokio::test]
 async fn review_upstream_fork_shares_attachment_cursor_identity() {
     review_attachment_cursor_identity(false).await;
 }
 
+#[cfg(cap_git_ai)]
 async fn review_attachment_cursor_identity(local_linked: bool) {
     use crate::attribution::git_ai::tests::git;
     use crate::attribution::turns::tests::{replay_log, replay_repo};
@@ -3720,6 +3725,7 @@ async fn line_totals_cover_every_commit_for_any_page_and_survive_a_warm_read() {
 
 /// SV-CDE-73: five lines an OpenCode session commits on the story branch, after git-ai's fixup
 /// ran, are unattributed, never the person's, and the commit's reason names the CLI.
+#[cfg(cap_git_ai)]
 #[tokio::test]
 async fn an_unsupported_cli_commit_counts_unattributed_and_names_the_cli() {
     use crate::attribution::unsupported_tests::{commit_and_fixup, opencode_session_env};
@@ -3743,6 +3749,7 @@ async fn an_unsupported_cli_commit_counts_unattributed_and_names_the_cli() {
 }
 
 /// SV-CDE-73: one read of the reflogs serves every noteless commit of a story read.
+#[cfg(cap_git_ai)]
 #[tokio::test]
 async fn one_reflog_pass_serves_every_noteless_commit_of_a_story_read() {
     use crate::attribution::unsupported::passes;

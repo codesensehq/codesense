@@ -3354,6 +3354,7 @@ pub(crate) fn open_tab_pinned(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(cap_git_ai)]
     #[path = "hook_trust_respawn_tests.rs"]
     mod hook_trust_respawn_tests;
     use super::*;

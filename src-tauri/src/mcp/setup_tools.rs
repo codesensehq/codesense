@@ -158,7 +158,7 @@ pub(crate) fn emit_active_team_switch<R: tauri::Runtime>(
 pub(crate) fn local_doctor(
     home: &std::path::Path,
     path: Option<&std::ffi::OsStr>,
-    notice: crate::attribution::install::ReplacementNotice,
+    notice: crate::attribution::facade::ReplacementNotice,
 ) -> crate::attribution::launch::Doctor {
     crate::attribution::launch::doctor_with(home, path, notice)
 }
@@ -173,7 +173,7 @@ pub(crate) async fn read_local_doctor<R: tauri::Runtime>(
         Ok(local_doctor(
             &home,
             std::env::var_os("PATH").as_deref(),
-            crate::attribution::install::ReplacementNotice::Peek,
+            crate::attribution::facade::ReplacementNotice::Peek,
         ))
     })
     .await
@@ -211,7 +211,7 @@ pub(crate) async fn describe_setup_at<R: tauri::Runtime>(
             let attribution_doctor = local_doctor(
                 &home,
                 path.as_deref(),
-                crate::attribution::install::ReplacementNotice::Acknowledge,
+                crate::attribution::facade::ReplacementNotice::Acknowledge,
             );
             let orgs = describe_orgs(&home, &principal)?;
             let scratch = describe_scratch(&home, &principal, &synced_org_slugs(&home, user_id)?);
@@ -1355,6 +1355,7 @@ mod tests {
         assert_eq!(status.attachment, AttachmentStatus::Unattached);
         assert_eq!(status.local_path, None);
     }
+    #[cfg(cap_git_ai)]
     #[test]
     fn startup_capture_status_through_describe_setup_is_retained_per_home() {
         use crate::attribution::turns::tests::{replay_log, replay_repo};
@@ -1412,6 +1413,7 @@ mod tests {
         assert_eq!(error, "checkpoint store unavailable");
         assert!(!error.contains(&home.to_string_lossy().to_string()));
     }
+    #[cfg(cap_git_ai)]
     #[test]
     fn review_partial_committed_capture_survives_later_failure_through_describe_setup() {
         use crate::attribution::turns::tests::{replay_log, replay_repo};

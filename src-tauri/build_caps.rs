@@ -141,29 +141,76 @@ pub fn cap_cfg(key: &str) -> String {
     format!("cap_{}", key.replace('-', "_"))
 }
 
-/// Every key of `table`, in file order, with whether `os` on `arch` compiles
-/// it in: its value is `"on"`, `"probe"` (compiled in, decided at runtime) or
-/// `{"on": [<arch>…]}` listing `arch`. An OS with no column compiles in
-/// nothing. The whole table is checked, so a bad row fails the build on any
-/// target.
-pub fn compiled_caps(table: &str, os: &str, arch: &str) -> Result<Vec<(String, bool)>, String> {
-    let rows = parse_caps(table)?;
-    Ok(rows
-        .into_iter()
-        .map(|row| {
-            let on = match row.support(os) {
-                Some(Support::On | Support::Probe) => true,
-                Some(Support::OnFor(archs)) => archs.iter().any(|on_for| on_for == arch),
-                Some(Support::Off) | None => false,
-            };
-            (row.key, on)
+/// The build override that turns capabilities off, so one platform can compile
+/// the code another platform builds without them.
+pub const CAPS_OFF_ENV: &str = "CODESENSE_CAPS_OFF";
+
+/// The keys a `CODESENSE_CAPS_OFF` list turns off, in list order: product
+/// keys of `rows`, separated by commas, blank entries ignored. A key that is
+/// not in the table, or is a test-scope one, is refused. It can only turn a
+/// capability off, never on.
+pub fn caps_off(list: &str, rows: &[Row]) -> Result<Vec<String>, String> {
+    list.split(',')
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(|key| match rows.iter().find(|row| row.key == key) {
+            Some(row) if row.scope == Scope::Product => Ok(key.to_string()),
+            Some(_) => Err(format!(
+                "{CAPS_OFF_ENV}: `{key}` is a test-scope capability; only product capabilities can be turned off"
+            )),
+            None => Err(format!("{CAPS_OFF_ENV}: `{key}` is not a capability in the table")),
         })
-        .collect())
+        .collect()
+}
+
+/// Every key of `table`, in file order, with whether `os` on `arch` compiles
+/// it in ([`compiled_rows`]), the `off` list checked by [`caps_off`]. The
+/// whole table is checked, so a bad row fails the build on any target.
+pub fn compiled_caps(
+    table: &str,
+    os: &str,
+    arch: &str,
+    off: &str,
+) -> Result<Vec<(String, bool)>, String> {
+    let rows = parse_caps(table)?;
+    let off = caps_off(off, &rows)?;
+    Ok(compiled_rows(&rows, os, arch, &off))
+}
+
+/// Every key of `rows`, in file order, with whether `os` on `arch` compiles
+/// it in: its value is `"on"`, `"probe"` (compiled in, decided at runtime) or
+/// `{"on": [<arch>…]}` listing `arch`, and `off` does not name it. An OS with
+/// no column compiles in nothing.
+pub fn compiled_rows(rows: &[Row], os: &str, arch: &str, off: &[String]) -> Vec<(String, bool)> {
+    rows.iter()
+        .map(|row| {
+            let on = !off.contains(&row.key)
+                && match row.support(os) {
+                    Some(Support::On | Support::Probe) => true,
+                    Some(Support::OnFor(archs)) => archs.iter().any(|on_for| on_for == arch),
+                    Some(Support::Off) | None => false,
+                };
+            (row.key.clone(), on)
+        })
+        .collect()
+}
+
+/// The `CODESENSE_CAPS_OFF` list as the build reads it (the variable lookup's
+/// answer): empty when unset; a value that is not UTF-8 is refused.
+pub fn caps_off_list(var: Result<String, std::env::VarError>) -> Result<String, String> {
+    match var {
+        Ok(list) => Ok(list),
+        Err(std::env::VarError::NotPresent) => Ok(String::new()),
+        Err(std::env::VarError::NotUnicode(_)) => Err(format!("{CAPS_OFF_ENV} is not UTF-8")),
+    }
 }
 
 /// For a build script: reads the table at `path` (relative to the crate),
 /// declares a `cfg` per capability and sets the ones the target being built
-/// compiles in. The caller prints its own literal `rerun-if-changed` for the
+/// compiles in, less those `CODESENSE_CAPS_OFF` turns off. It hands the
+/// effective off list to the crate as the `CODESENSE_CAPS_OFF` env, so the
+/// runtime answers off for them too. The table is parsed and the off list
+/// checked once. The caller prints its own literal `rerun-if-changed` for the
 /// table.
 pub fn configure_caps(path: &str) {
     let table =
@@ -171,12 +218,18 @@ pub fn configure_caps(path: &str) {
     let target = |name: &str| {
         std::env::var(name).unwrap_or_else(|_| panic!("{name} is set by Cargo for build scripts"))
     };
-    let caps = compiled_caps(
-        &table,
+    println!("cargo:rerun-if-env-changed={CAPS_OFF_ENV}");
+    let rows = parse_caps(&table).unwrap_or_else(|error| panic!("{path}: {error}"));
+    let off = caps_off_list(std::env::var(CAPS_OFF_ENV))
+        .and_then(|list| caps_off(&list, &rows))
+        .unwrap_or_else(|error| panic!("{path}: {error}"));
+    println!("cargo:rustc-env={CAPS_OFF_ENV}={}", off.join(","));
+    let caps = compiled_rows(
+        &rows,
         &target("CARGO_CFG_TARGET_OS"),
         &target("CARGO_CFG_TARGET_ARCH"),
-    )
-    .unwrap_or_else(|error| panic!("{path}: {error}"));
+        &off,
+    );
     for (key, on) in caps {
         let cfg = cap_cfg(&key);
         println!("cargo::rustc-check-cfg=cfg({cfg})");

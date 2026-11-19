@@ -166,10 +166,11 @@ pub(crate) async fn dispatch<R: tauri::Runtime>(
             ) {
                 let install_home = home.to_path_buf();
                 let status = tokio::task::spawn_blocking(move || {
-                    crate::attribution::install::ensure_installed(
+                    crate::attribution::facade::ensure_installed(
+                        &crate::platform_caps::Caps::live(),
                         &install_home,
                         std::env::var_os("PATH").as_deref(),
-                        crate::attribution::install::Trigger::OnDemand,
+                        crate::attribution::facade::Trigger::OnDemand,
                     )
                 })
                 .await
@@ -208,6 +209,7 @@ pub(crate) mod tests {
         app
     }
 
+    #[cfg(cap_git_ai)]
     #[tokio::test]
     async fn attribution_on_dispatch_waits_for_the_injected_installer() {
         let temp = tempfile::tempdir().unwrap();
@@ -232,6 +234,7 @@ pub(crate) mod tests {
         assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
+    #[cfg(cap_git_ai)]
     #[tokio::test]
     async fn attribution_on_dispatch_releases_a_user_pinned_native_bundle() {
         let temp = tempfile::tempdir().unwrap();

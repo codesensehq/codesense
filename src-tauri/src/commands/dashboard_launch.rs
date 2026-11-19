@@ -12808,6 +12808,7 @@ mod context_launcher_tests {
     }
 }
 
+#[cfg(cap_git_ai)]
 #[cfg(test)]
 pub(crate) mod attribution_entry_tests {
     //! SV-CDE-7: the headless (routine) launch's provisioning switches git-ai capture on for

@@ -921,14 +921,12 @@ pub fn run() {
             }
 
             if let Some(home) = commands::paths::codesense_home_dir() {
-                attribution::install::initialize(app.handle(), &home, std::env::var_os("PATH").as_deref());
-                attribution::install::ensure_installed(
-                    &home,
+                attribution::facade::start(
+                    &platform_caps::Caps::live(),
+                    app.handle(),
+                    home,
                     std::env::var_os("PATH").as_deref(),
-                    attribution::install::Trigger::Startup,
                 );
-                attribution::metrics_db::start(&home);
-                attribution::watcher::start(app.handle(), home);
             }
 
             // Start MCP server on Unix domain socket
@@ -1946,7 +1944,7 @@ fn relaunch_after_update(app: &tauri::AppHandle) {
 
 /// The cleanup of a graceful exit: at `RunEvent::Exit`, and before the relaunch after an update.
 fn graceful_exit_cleanup() {
-    attribution::watcher::shutdown();
+    attribution::facade::shutdown(&platform_caps::Caps::live());
     // SS-FU-17 AC-3: exit cleans ONLY codesense's own runtime artifacts — never materialized
     // files, exclude blocks, or lockfiles. See [`app_exit_cleanup`].
     let mcp_socket = mcp::mcp_socket_path();

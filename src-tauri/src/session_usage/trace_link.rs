@@ -153,7 +153,7 @@ impl UsageStore {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, cap_git_ai))]
 mod tests {
     use super::*;
     use crate::attribution::git_ai::tests::{git, rebuild};

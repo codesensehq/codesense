@@ -21,7 +21,8 @@ const TABLE_JSON: &str = include_str!("../platform-caps.json");
 
 /// The table's one parser, the build scripts' too, so the gates and the runtime answers read the
 /// table alike.
-// `configure_caps` and `compiled_caps` are the build scripts'.
+// The build scripts use `configure_caps` (and through it `compiled_rows`); `compiled_caps` is
+// for the tests below.
 #[allow(dead_code)]
 mod caps_table {
     include!("../build_caps.rs");
@@ -84,17 +85,37 @@ fn resolve(
         .collect()
 }
 
+/// The capabilities this build turned off (`CODESENSE_CAPS_OFF`, a comma-separated key list,
+/// usually empty): a check build that compiles the code a platform without them builds.
+const BUILT_OFF: &str = env!("CODESENSE_CAPS_OFF");
+
+/// Why a capability the build turned off is off.
+const BUILT_OFF_REASON: &str = "turned off for this build";
+
+/// `caps` with each key in `off` (a `CODESENSE_CAPS_OFF` list) off, as the build compiled it, so
+/// the runtime never reports on what the build left out.
+fn turned_off(mut caps: Vec<Cap>, off: &str) -> Vec<Cap> {
+    for cap in &mut caps {
+        if cap.on && off.split(',').any(|key| key == cap.key) {
+            cap.on = false;
+            cap.reason = Some(BUILT_OFF_REASON);
+        }
+    }
+    caps
+}
+
 /// The capabilities of the running platform, resolved once, with the real probes. The first call
 /// runs them, so `log_startup` makes it in setup, before anything else asks.
 pub fn caps() -> &'static [Cap] {
     static CAPS: OnceLock<Vec<Cap>> = OnceLock::new();
     CAPS.get_or_init(|| {
-        resolve(
+        let resolved = resolve(
             table(),
             std::env::consts::OS,
             std::env::consts::ARCH,
             &|probe| probe(),
-        )
+        );
+        turned_off(resolved, BUILT_OFF)
     })
 }
 
@@ -366,7 +387,7 @@ mod tests {
 
     /// The keys `table` compiles in for one target, in file order.
     fn compiled(table: &str, os: &str, arch: &str) -> Vec<String> {
-        caps_table::compiled_caps(table, os, arch)
+        caps_table::compiled_caps(table, os, arch, "")
             .unwrap()
             .into_iter()
             .filter_map(|(key, on)| on.then_some(key))
@@ -391,7 +412,7 @@ mod tests {
         assert_eq!(compiled(table, "linux", "riscv64"), ["always"]);
         assert_eq!(compiled(table, "windows", "x86_64"), ["always"]);
         assert!(compiled(table, "freebsd", "x86_64").is_empty());
-        let declared: Vec<_> = caps_table::compiled_caps(table, "windows", "x86_64")
+        let declared: Vec<_> = caps_table::compiled_caps(table, "windows", "x86_64", "")
             .unwrap()
             .into_iter()
             .map(|(key, _)| key)
@@ -400,6 +421,92 @@ mod tests {
             declared,
             ["always", "never", "probed", "some-arch"],
             "every key is declared, in file order"
+        );
+    }
+
+    /// `CODESENSE_CAPS_OFF` turns product capabilities off for a build, whatever their value; it
+    /// never turns one on, and empty or blank entries change nothing.
+    #[test]
+    fn the_build_override_only_turns_capabilities_off() {
+        let table = r#"[
+            {"key": "always", "macos": "on", "linux": "on", "windows": "on", "reason": "r"},
+            {"key": "never", "macos": "off", "linux": "off", "windows": "off", "reason": "r"},
+            {"key": "probed", "macos": "probe", "linux": "off", "windows": "off", "reason": "r"},
+            {"key": "some-arch", "macos": {"on": ["aarch64"]}, "linux": "off", "windows": "off",
+             "reason": "r"},
+            {"key": "fixture", "macos": "on", "linux": "on", "windows": "off", "reason": "r",
+             "scope": "test"}
+        ]"#;
+        let with_off = |off: &str| -> Vec<String> {
+            caps_table::compiled_caps(table, "macos", "aarch64", off)
+                .unwrap()
+                .into_iter()
+                .filter_map(|(key, on)| on.then_some(key))
+                .collect()
+        };
+        let all = ["always", "probed", "some-arch", "fixture"];
+        for nothing in ["", " ", ",", " , "] {
+            assert_eq!(with_off(nothing), all, "{nothing:?}");
+        }
+        assert_eq!(with_off("always"), ["probed", "some-arch", "fixture"]);
+        assert_eq!(with_off("probed, some-arch"), ["always", "fixture"]);
+        assert_eq!(with_off("never"), all, "off stays off; nothing turns on");
+        for refused in ["missing", "always,missing", "fixture", "Always"] {
+            let error = caps_table::compiled_caps(table, "macos", "aarch64", refused)
+                .err()
+                .unwrap_or_default();
+            assert!(
+                error.contains(caps_table::CAPS_OFF_ENV),
+                "{refused}: {error}"
+            );
+        }
+        let rows = caps_table::parse_caps(TABLE_JSON).unwrap();
+        assert_eq!(
+            caps_table::caps_off(" remote-machines ,git-ai,", &rows),
+            Ok(vec!["remote-machines".to_string(), GIT_AI.to_string()])
+        );
+    }
+
+    /// An unset override is an empty list; one that is not UTF-8 fails the build.
+    #[test]
+    fn the_build_override_is_read_as_utf8() {
+        use std::env::VarError;
+        assert_eq!(
+            caps_table::caps_off_list(Err(VarError::NotPresent)),
+            Ok(String::new())
+        );
+        assert_eq!(
+            caps_table::caps_off_list(Ok("git-ai".into())),
+            Ok("git-ai".to_string())
+        );
+        let error = caps_table::caps_off_list(Err(VarError::NotUnicode("\u{fffd}".into())))
+            .err()
+            .unwrap_or_default();
+        assert!(error.contains(caps_table::CAPS_OFF_ENV), "{error}");
+    }
+
+    /// What the build turned off is off at runtime too, with a reason; the rest is untouched.
+    #[test]
+    fn the_runtime_agrees_with_the_build_override() {
+        let all_on = resolved("macos", "aarch64", true);
+        assert_eq!(turned_off(all_on.clone(), ""), all_on);
+        let off = turned_off(all_on.clone(), "remote-machines,git-ai");
+        for (before, after) in all_on.iter().zip(&off) {
+            let turned = [GIT_AI, "remote-machines"].contains(&before.key);
+            assert_eq!(after.on, before.on && !turned, "{}", before.key);
+            assert_eq!(after.reason.is_some(), !after.on, "{}", before.key);
+        }
+        assert_eq!(
+            off.iter()
+                .find(|cap| cap.key == GIT_AI)
+                .and_then(|cap| cap.reason),
+            Some(BUILT_OFF_REASON)
+        );
+        let already_off = resolved("macos", "x86_64", true);
+        assert_eq!(
+            turned_off(already_off.clone(), GIT_AI),
+            already_off,
+            "an off capability keeps its own reason"
         );
     }
 
@@ -416,7 +523,7 @@ mod tests {
             r#"[{"key": "x", "macos": "on", "linux": {"off": []}, "windows": "off", "reason": "r"}]"#,
         ] {
             assert!(
-                caps_table::compiled_caps(bad, "macos", "aarch64").is_err(),
+                caps_table::compiled_caps(bad, "macos", "aarch64", "").is_err(),
                 "{bad}"
             );
         }

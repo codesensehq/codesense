@@ -100,7 +100,8 @@ where
             } else {
                 if !coverage.contains_key(&commit) {
                     let covered = if let Some(repo) = &context {
-                        super::checkpoints::covered(
+                        super::facade::covered(
+                            &crate::platform_caps::Caps::live(),
                             Path::new(repo.local_path.as_deref().unwrap()),
                             &repo.remote_key,
                             &commit,
@@ -948,6 +949,7 @@ pub(crate) mod tests {
         assert!(answer["ranges"][1]["turn"]["turn"].is_number());
         assert!(answer["ranges"][1]["turn"].get("reason").is_none());
     }
+    #[cfg(cap_git_ai)]
     #[test]
     fn many_traces_for_one_tool_use_one_real_index_lookup() {
         let home = tempfile::tempdir().unwrap();
@@ -1003,6 +1005,7 @@ pub(crate) mod tests {
         assert_eq!(calls, 1);
         assert_eq!(value["ranges"][0]["turn"], value["ranges"][1]["turn"]);
     }
+    #[cfg(cap_git_ai)]
     #[tokio::test]
     async fn scoped_queries_read_zero_unchanged_bytes_and_resume_partial_appends() {
         async fn observed(home: &Path) -> crate::attribution::checkpoints::Stats {
