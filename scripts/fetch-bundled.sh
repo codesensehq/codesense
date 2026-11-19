@@ -33,23 +33,34 @@ case "$#:${1:-}" in
   *) usage ;;
 esac
 os="$(uname -s)" arch="$(uname -m)"
-# One entry per binary: name, pin and destination, each relative to the repository root, then
-# the word its `--version` prints before the version, if any.
+# One entry per binary, on one line: name, pin and destination, each relative to the repository
+# root, then the word its `--version` prints before the version, if any. The name is also the
+# file the bundle ships, resources/<name>, which the AppImage repair and the bundle checks rely on.
+pins=src-tauri/pins resources=src-tauri/resources
 case "$os:$arch" in
-  Darwin:*) bundled=("git-ai src-tauri/pins/git-ai-macos-arm64.pin src-tauri/resources/git-ai") ;;
+  Darwin:*) bundled=("git-ai $pins/git-ai-macos-arm64.pin $resources/git-ai") ;;
   Linux:x86_64|Linux:aarch64)
     bundled=(
-      "git-ai src-tauri/pins/git-ai-linux-$arch.pin src-tauri/resources/git-ai"
-      "starship src-tauri/pins/starship-linux-$arch.pin src-tauri/resources/fetched/starship \
-        starship"
+      "git-ai $pins/git-ai-linux-$arch.pin $resources/git-ai"
+      "starship $pins/starship-linux-$arch.pin $resources/fetched/starship starship"
     )
     ;;
   *) printf 'No pinned binaries for this host: %s %s\n' "$os" "$arch" >&2; exit 1 ;;
 esac
-# Sets name, pin, dest and prefix from this host's entry for $1, or refuses a name it doesn't ship.
+# The one parser of an entry: sets name, pin, dest and prefix from $1, or refuses an entry
+# without a pin and destination or with a field too many.
+read_entry() {
+  local extra
+  read -r name pin dest prefix extra <<<"$1"
+  if [[ -z "$pin" || -z "$dest" || -n "$extra" ]]; then
+    printf 'bad bundled entry: %s\n' "$1" >&2
+    exit 1
+  fi
+}
+# Sets the fields of this host's entry for $1, or refuses a name it doesn't ship.
 find_entry() {
   for entry in "${bundled[@]}"; do
-    read -r name pin dest prefix <<<"$entry"
+    read_entry "$entry"
     [[ "$name" == "$1" ]] && return
   done
   printf 'This host does not bundle %s: %s %s\n' "$1" "$os" "$arch" >&2
@@ -62,7 +73,13 @@ pin_version() {
 }
 case "${1:-}" in
   --print-names)
-    for entry in "${bundled[@]}"; do printf '%s\n' "${entry%% *}"; done
+    # Every entry is parsed before any name is printed, so a bad one prints nothing.
+    names=()
+    for entry in "${bundled[@]}"; do
+      read_entry "$entry"
+      names+=("$name")
+    done
+    printf '%s\n' "${names[@]}"
     exit 0
     ;;
   --print-pin) find_entry "$2"; printf '%s\n' "$pin"; exit 0 ;;
@@ -83,6 +100,6 @@ case "${1:-}" in
     ;;
 esac
 for entry in "${bundled[@]}"; do
-  read -r _ pin dest <<<"$entry"
+  read_entry "$entry"
   bash "$(dirname "$0")/fetch-pinned.sh" "$pin" "$dest" "$@"
 done

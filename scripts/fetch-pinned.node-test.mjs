@@ -375,6 +375,53 @@ test("fetch-bundled names its binaries and checks their versions from the pins a
       assert.equal(printed.stdout, `${version}\n`);
     }
   }
+  // The fetch loop reads the same entries: with a stub fetch-pinned.sh that prints its argument
+  // count and arguments, each call is exactly the pin and destination the print modes give, in
+  // --print-names order, and --dry-run is passed through.
+  write(path.join(tree, "scripts/fetch-pinned.sh"), '#!/bin/sh\necho "$# $*"\n');
+  for (const [os, arch] of [
+    ["Darwin", "arm64"],
+    ["Linux", "x86_64"],
+    ["Linux", "aarch64"],
+  ]) {
+    const print = (...flags) => {
+      const run = host(tree, os, arch, ...flags);
+      assert.equal(run.status, 0, `${os} ${arch} ${flags.join(" ")}: ${run.stderr}`);
+      return run.stdout;
+    };
+    const calls = print("--print-names")
+      .trim()
+      .split("\n")
+      .map((name) => `${print("--print-pin", name).trim()} ${print("--print-dest", name).trim()}`);
+    assert.equal(print(), calls.map((call) => `2 ${call}\n`).join(""));
+    assert.equal(print("--dry-run"), calls.map((call) => `3 ${call} --dry-run\n`).join(""));
+  }
+  // An entry with a field too many, or without a pin and destination, is refused by every mode.
+  const script = fs.readFileSync(path.join(root, "scripts/fetch-bundled.sh"), "utf8");
+  for (const [label, from, to] of [
+    [
+      "a fifth field",
+      '"git-ai $pins/git-ai-linux-$arch.pin $resources/git-ai"',
+      '"git-ai $pins/git-ai-linux-$arch.pin $resources/git-ai git-ai extra"',
+    ],
+    [
+      "no destination",
+      '"git-ai $pins/git-ai-linux-$arch.pin $resources/git-ai"',
+      '"git-ai src-tauri/pins/git-ai-linux-$arch.pin"',
+    ],
+  ]) {
+    const bad = path.join(f.dir, `bad-${label.replaceAll(" ", "-")}`);
+    fs.mkdirSync(path.join(bad, "scripts"), { recursive: true });
+    assert.ok(script.includes(from), label);
+    write(path.join(bad, "scripts/fetch-bundled.sh"), script.replace(from, to));
+    write(path.join(bad, "scripts/fetch-pinned.sh"), '#!/bin/sh\necho "$# $*"\n');
+    for (const flags of [[], ["--print-names"], ["--print-dest", "starship"]]) {
+      const run = host(bad, "Linux", "x86_64", ...flags);
+      assert.equal(run.status, 1, `${label} ${flags.join(" ")}`);
+      assert.equal(run.stdout, "", `${label} ${flags.join(" ")}`);
+      assert.match(run.stderr, /^bad bundled entry: git-ai /, `${label} ${flags.join(" ")}`);
+    }
+  }
   // The fixture tree: git-ai prints its bare version, starship its name first; only the first
   // line counts.
   const pins = path.join(tree, "src-tauri/pins");
