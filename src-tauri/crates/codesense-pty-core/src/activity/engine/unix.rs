@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use codesense_platform::process::{still_attached, Identity as Process};
+
 /// The launch helper's side of [`launch_argv`]: starts the CLI's engine and binds it to the
 /// CLI's invocation, then becomes the CLI attached to it; should the engine not come up, it
 /// becomes the CLI on its own.
@@ -121,7 +123,10 @@ fn keep_engine_with(
     args: &[OsString],
     adapters: fn(AgentCli) -> &'static dyn crate::agent_cli::AgentCliAdapter,
 ) -> i32 {
-    let parent = std::os::unix::process::parent_id();
+    // The CLI that started the keeper, as it runs now: the keeper's only attachment.
+    let Some(cli) = Process::inspect(std::process::id()).and_then(Process::parent) else {
+        return 1;
+    };
     let [endpoint, launch] = args else {
         return 2;
     };
@@ -197,7 +202,7 @@ fn keep_engine_with(
             }
             break;
         }
-        if std::os::unix::process::parent_id() != parent
+        if !still_attached(&cli, &cli, Process::inspect)
             || ASKED.load(std::sync::atomic::Ordering::SeqCst)
         {
             stop(&mut engine, ENGINE_STOP);

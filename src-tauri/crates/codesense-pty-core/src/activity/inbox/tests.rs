@@ -95,6 +95,15 @@ fn this() -> Process {
     Process::inspect(me()).unwrap()
 }
 
+/// This process as its own waiter's agent and the parent that ran it.
+fn attached() -> Attachment {
+    Attachment {
+        agent: this(),
+        parent: this(),
+        inspect: Process::inspect,
+    }
+}
+
 fn ask(event: &str, agent: u32) -> Ask {
     Ask {
         receipts: Vec::new(),
@@ -130,9 +139,16 @@ impl Child {
 /// A process run under a shell this process runs, as an agent's tool command runs: ended
 /// with the shell when dropped.
 fn under_a_shell() -> Shell {
+    under_shells(0)
+}
+
+/// A process run under a shell this process runs, with `depth` more shells between them,
+/// each run by the one above: ended with them when dropped.
+fn under_shells(depth: u32) -> Shell {
     use std::io::BufRead;
+    const CHAIN: &str = r#"if [ "$1" -gt 0 ]; then /bin/sh -c "$0" "$0" $(($1 - 1)) & wait; else sleep 30 & echo $!; wait; fi"#;
     let mut shell = std::process::Command::new("/bin/sh")
-        .args(["-c", "sleep 30 & echo $!; wait"])
+        .args(["-c", CHAIN, CHAIN, depth.to_string().as_str()])
         .stdout(std::process::Stdio::piped())
         .spawn()
         .unwrap();
@@ -193,11 +209,32 @@ fn only_a_waiter_run_by_the_invocation_its_host_named_is_admitted() {
     // A `claude` run inside the agent's turn, under the shell its tool runs: its waiter
     // names that nested process.
     let nested = under_a_shell();
-    assert!(matches!(
-        host.owner
-            .inbox_admission(&token, nested.run(), nested.run().pid, None),
-        InboxAdmission::Refused
-    ));
+    for session in [None, Some("nested-1")] {
+        assert!(matches!(
+            host.owner
+                .inbox_admission(&token, nested.run(), nested.run().pid, session),
+            InboxAdmission::Refused
+        ));
+    }
+    // The same nested CLI where its hook runs the helper through a shell (the tool's shell,
+    // the nested CLI, its hook's shell, the helper): the helper names the nested CLI, and
+    // is refused whatever session its hook names.
+    let nested = under_shells(2);
+    let helper = nested.run();
+    let shaped = Attachment::of_hook(
+        helper,
+        Some(crate::agent_cli::INBOX_AGENT_OF_SHELL),
+        Process::inspect,
+    )
+    .expect("the nested CLI reads");
+    assert!(shaped.agent.descends_from(this()) && !shaped.agent.is(this()));
+    for session in [None, Some("nested-1")] {
+        assert!(matches!(
+            host.owner
+                .inbox_admission(&token, helper, shaped.agent.pid, session),
+            InboxAdmission::Refused
+        ));
+    }
     // A waiter outside the agent (detached from it) naming the agent.
     let invocation = Child::spawn();
     let detached_token = host.prepare("S2");
@@ -273,9 +310,8 @@ fn a_restarted_invocation_takes_over_and_an_ended_one_is_refused() {
 /// The helper's side of one wait, run on a thread: the notice it was handed.
 fn helper(host: &Host, token: String, ask: Ask) -> std::thread::JoinHandle<Option<String>> {
     let socket = host.service.path().to_path_buf();
-    let parent = std::os::unix::process::parent_id();
     std::thread::spawn(move || {
-        let (notice, notice_token, mut stream) = ask_once(&socket, &token, ask, parent).ok()?;
+        let (notice, notice_token, mut stream) = ask_once(&socket, &token, ask, attached()).ok()?;
         wire::send_lines(&mut stream, &wire::printed_line(&notice_token)).unwrap();
         Some(notice)
     })
@@ -417,9 +453,8 @@ fn fake_host(dir: &Path, answers: Vec<&'static str>) -> (PathBuf, Served) {
 fn a_waiter_whose_hold_ended_quiet_asks_again_deferring_and_is_handed_its_mail() {
     let dir = tempfile::tempdir().unwrap();
     let (socket, served) = fake_host(dir.path(), vec!["quiet\n", "mail t-1\nYou have mail.\n"]);
-    let parent = std::os::unix::process::parent_id();
     let reask = reask_event(crate::agent_cli::adapter(AgentCli::Claude).inbox()).unwrap();
-    let (notice, token, mut stream) = wait(&socket, "token", parent, QUICK, |first| {
+    let (notice, token, mut stream) = wait(&socket, "token", attached(), QUICK, |first| {
         ask(if first { "Stop" } else { reask }, me())
     })
     .expect("handed its mail");
@@ -435,11 +470,10 @@ fn a_waiter_whose_hold_ended_quiet_asks_again_deferring_and_is_handed_its_mail()
 fn of_waiters_retrying_an_unreachable_host_only_the_newest_keeps_on() {
     let dir = tempfile::tempdir().unwrap();
     let socket = dir.path().join("activity.sock");
-    let parent = std::os::unix::process::parent_id();
     let waiting = {
         let socket = socket.clone();
         std::thread::spawn(move || {
-            wait(&socket, "token", parent, QUICK, |_| ask("Stop", me())).is_none()
+            wait(&socket, "token", attached(), QUICK, |_| ask("Stop", me())).is_none()
         })
     };
     let retrier = retrier_path(&socket, "token");
@@ -450,15 +484,56 @@ fn of_waiters_retrying_an_unreachable_host_only_the_newest_keeps_on() {
     assert_eq!(std::fs::read_to_string(&retrier).unwrap(), "a newer waiter");
 }
 
+/// How many processes [`attached_for_a_while`] has read.
+static READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Reads a process as the OS does for its first six reads (three looks at an attachment
+/// of two), then reads nothing: the waiter's agent goes away while it waits.
+fn attached_for_a_while(pid: u32) -> Option<Process> {
+    let read = READS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    if read < 6 {
+        Process::inspect(pid)
+    } else {
+        None
+    }
+}
+
+#[test]
+fn a_waiter_retrying_an_unreachable_host_ends_once_it_is_no_longer_attached() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("activity.sock");
+    let going = Attachment {
+        inspect: attached_for_a_while,
+        ..attached()
+    };
+    let (done, ended) = std::sync::mpsc::channel();
+    {
+        let socket = socket.clone();
+        std::thread::spawn(move || {
+            let _ =
+                done.send(wait(&socket, "token", going, QUICK, |_| ask("Stop", me())).is_none());
+        });
+    }
+    // It retries the host it cannot reach while attached, then ends at its next look.
+    assert_eq!(ended.recv_timeout(Duration::from_secs(30)), Ok(true));
+    assert!(
+        READS.load(std::sync::atomic::Ordering::SeqCst) > 6,
+        "it looked again after its agent went away"
+    );
+    assert!(
+        !retrier_path(&socket, "token").exists(),
+        "it gave up its record as the newest retrier"
+    );
+}
+
 #[test]
 fn a_retrying_waiter_that_reaches_its_host_again_gives_up_its_record() {
     let dir = tempfile::tempdir().unwrap();
     let socket = dir.path().join("activity.sock");
-    let parent = std::os::unix::process::parent_id();
     let retrier = retrier_path(&socket, "token");
     let waiting = {
         let socket = socket.clone();
-        std::thread::spawn(move || wait(&socket, "token", parent, QUICK, |_| ask("Stop", me())))
+        std::thread::spawn(move || wait(&socket, "token", attached(), QUICK, |_| ask("Stop", me())))
     };
     until(|| retrier.exists());
     let (_, served) = fake_host(dir.path(), vec!["replaced\n"]);
@@ -853,13 +928,60 @@ fn a_one_shot_runs_hook_ends_at_once_and_takes_no_place() {
 fn a_waiter_whose_agent_went_away_prints_nothing_and_says_nothing_printed() {
     let dir = tempfile::tempdir().unwrap();
     let (socket, served) = fake_host(dir.path(), vec!["mail t-1\nYou have mail.\n"]);
-    // Asked for an agent that is not its parent (any more).
+    // Its agent no longer reads once the notice arrives.
+    let gone = Attachment {
+        inspect: |_| None,
+        ..attached()
+    };
     assert_eq!(
-        ask_once(&socket, "token", ask("Stop", me()), 1).map(|_| ()),
+        ask_once(&socket, "token", ask("Stop", me()), gone).map(|_| ()),
         Err(Step::End)
     );
     let (_, back) = served.join().unwrap();
     assert_eq!(back, [String::new()], "no printed line");
+}
+
+/// A host that never answers: each read waits out the read timeout, until it hangs up
+/// after `hang_up_after` reads.
+struct Silent {
+    timeout: Duration,
+    reads: usize,
+    hang_up_after: usize,
+}
+
+impl Read for Silent {
+    fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+        self.reads += 1;
+        if self.reads > self.hang_up_after {
+            return Ok(0);
+        }
+        std::thread::sleep(self.timeout);
+        Err(io::ErrorKind::WouldBlock.into())
+    }
+}
+
+#[test]
+fn a_held_waiter_ends_within_one_read_timeout_once_the_shell_that_ran_it_is_gone() {
+    let shell = Child::spawn();
+    let attached = Attachment {
+        parent: shell.process(),
+        ..attached()
+    };
+    let silent = |hang_up_after| Silent {
+        timeout: Duration::from_millis(20),
+        reads: 0,
+        hang_up_after,
+    };
+    // While its agent and its shell run, a host that never answers is held.
+    let mut host = silent(3);
+    assert_eq!(host_line_until(&mut host, attached, None), Err(Step::Retry));
+    assert_eq!(host.reads, 4);
+    // The CLI kills the hook's shell, not the helper: the next read that times out ends
+    // the hold.
+    drop(shell);
+    let mut host = silent(usize::MAX);
+    assert_eq!(host_line_until(&mut host, attached, None), Err(Step::End));
+    assert_eq!(host.reads, 1);
 }
 
 #[test]
@@ -1032,6 +1154,93 @@ fn a_check_run_by_the_program_its_engine_runs_is_the_agents_by_its_own_session()
     assert!(matches!(admit(None), InboxAdmission::Refused));
 }
 
+/// The agent a helper run by `chain`'s shell names: the shell's parent.
+fn agent_of(chain: &Shell, inspect: fn(u32) -> Option<Process>) -> Option<Process> {
+    Attachment::of_hook(
+        chain.run(),
+        Some(crate::agent_cli::INBOX_AGENT_OF_SHELL),
+        inspect,
+    )
+    .map(|attached| attached.agent)
+}
+
+#[test]
+fn a_helper_its_hooks_shell_runs_names_the_registered_cli_and_is_admitted() {
+    let host = host();
+    let token = host.prepare("S1");
+    // The CLI the host launched and registered, its hook's shell, and the helper.
+    let cli = under_shells(1);
+    host.owner.register("S1", Some(cli.pid()));
+    let agent = agent_of(&cli, Process::inspect).expect("the CLI reads");
+    assert_eq!(agent.pid, cli.pid());
+    assert_eq!(
+        admitted(
+            host.owner
+                .inbox_admission(&token, cli.run(), agent.pid, None)
+        ),
+        Some("S1".into())
+    );
+}
+
+#[test]
+fn a_helper_its_engines_hook_shell_runs_names_the_engine_and_is_admitted() {
+    let (host, writer) = codex_committed();
+    // The engine runs under the CLI, and runs its hook through a shell.
+    let engine = under_shells(1);
+    host.owner
+        .bind_engine(
+            &writer.token,
+            this(),
+            engine.pid(),
+            host.service.path().with_file_name("engine-test.sock"),
+            None,
+        )
+        .unwrap();
+    let agent = agent_of(&engine, Process::inspect).expect("the engine reads");
+    assert_eq!(agent.pid, engine.pid());
+    assert_eq!(
+        admitted(
+            host.owner
+                .inbox_admission(&writer.token, engine.run(), agent.pid, None)
+        ),
+        Some("S1".into())
+    );
+}
+
+#[test]
+fn a_helper_given_no_agent_names_its_parent_as_both() {
+    let shell = under_a_shell();
+    let attached = Attachment::of_hook(shell.run(), None, Process::inspect).expect("it reads");
+    assert!(attached.agent.is(attached.parent));
+    assert_eq!(attached.parent.pid, shell.pid());
+}
+
+/// The pid whose process [`reused`] reads as one that started last.
+static REUSED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Reads a process as the OS does, except [`REUSED`], read as a newer process on that pid.
+fn reused(pid: u32) -> Option<Process> {
+    let now = Process::inspect(pid)?;
+    Some(if pid == REUSED.load(std::sync::atomic::Ordering::SeqCst) {
+        Process {
+            start: u64::MAX,
+            ..now
+        }
+    } else {
+        now
+    })
+}
+
+#[test]
+fn a_helper_whose_shells_parent_pid_was_reused_names_no_agent() {
+    let cli = under_shells(1);
+    assert!(agent_of(&cli, Process::inspect).is_some_and(|agent| agent.pid == cli.pid()));
+    // Its pid now names a process newer than the shell, not the shell's agent: the helper
+    // has no agent to ask the host for.
+    REUSED.store(cli.pid(), std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(agent_of(&cli, reused), None);
+}
+
 #[test]
 fn a_programs_check_before_the_agents_session_was_seen_is_refused() {
     let (host, writer) = codex_committed();
@@ -1065,7 +1274,7 @@ fn waiter_renews_before_its_finite_hook_timeout_including_elapsed_wall_time() {
     let result = wait_with_deadline(
         &dir.path().join("absent.sock"),
         "token",
-        std::os::unix::process::parent_id(),
+        attached(),
         QUICK,
         Some(start),
         |_| ask("Stop", me()),
@@ -1247,12 +1456,11 @@ fn a_notice_its_waiter_never_confirmed_is_handed_again_to_the_next_waiter() {
     let token = host.prepare("S1");
     host.owner.register("S1", Some(me()));
     let socket = host.service.path().to_path_buf();
-    let parent = std::os::unix::process::parent_id();
     // This waiter is handed the notice and ends without saying it printed it.
     let first = {
         let (socket, token) = (socket.clone(), token.clone());
         std::thread::spawn(move || {
-            ask_once(&socket, &token, ask("SessionStart", me()), parent)
+            ask_once(&socket, &token, ask("SessionStart", me()), attached())
                 .ok()
                 .map(|(notice, _, stream)| {
                     drop(stream);

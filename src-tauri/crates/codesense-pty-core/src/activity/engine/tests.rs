@@ -323,15 +323,10 @@ fn keeper_process_fixture() {
     ));
 }
 
-#[test]
-fn the_real_keeper_publishes_unix_and_tcp_and_reaps_its_engine_when_stopped() {
-    struct Keeper(std::process::Child);
-    impl Drop for Keeper {
-        fn drop(&mut self) {
-            stop(&mut self.0, KEEPER_STOP);
-        }
-    }
-    const ENGINE: &str = r#"
+/// An engine that serves on `<home>/orion.sock` (`unix`) or on a TCP port it names in
+/// `<home>/orion.addr` (`tcp`), records its pid in `<home>/engine.pid`, echoes one client
+/// and waits.
+const ENGINE: &str = r#"
 import os, pathlib, signal, socket, sys
 home, kind = pathlib.Path(sys.argv[1]), sys.argv[2]
 s = socket.socket(socket.AF_UNIX if kind == 'unix' else socket.AF_INET)
@@ -344,55 +339,77 @@ c.sendall(c.recv(1024))
 c.close()
 signal.pause()
 "#;
+
+/// The real keeper of [`ENGINE`] serving as `kind` from `home`, at `endpoint`, run by
+/// `cli`: this test binary itself, or a program that runs it as its last arguments.
+fn keeper_run_by(mut cli: Command, home: &Path, kind: &str, endpoint: &Path) -> Command {
+    let launch = EngineLaunch {
+        provider: crate::agent_cli::orion::ORION,
+        serves_at: true,
+        end_on_loss: false,
+        program: "/usr/bin/python3".into(),
+        engine: vec![
+            "-c".into(),
+            ENGINE.into(),
+            home.to_str().unwrap().into(),
+            kind.into(),
+        ],
+        standalone: vec![format!("--serves-at={kind}")],
+        attached: vec![],
+        operands: vec![],
+    };
+    cli.arg(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "activity::engine::transport::tests::keeper_process_fixture",
+            "--nocapture",
+        ])
+        .env(
+            "CODESENSE_TEST_KEEPER_LAUNCH",
+            serde_json::to_string(&launch).unwrap(),
+        )
+        .env("CODESENSE_TEST_KEEPER_ENDPOINT", endpoint)
+        .env("ORION_HOME", home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null());
+    cli
+}
+
+/// The pid of the engine a keeper started from `home` once it is published at `endpoint`,
+/// while `running` says its keeper's CLI still runs.
+fn published(home: &Path, endpoint: &Path, mut running: impl FnMut() -> bool) -> u32 {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !home.join("engine.pid").exists() || !is_socket(endpoint) {
+        assert!(running(), "keeper exited before publishing");
+        assert!(Instant::now() < deadline, "engine never published");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    std::fs::read_to_string(home.join("engine.pid"))
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+#[test]
+fn the_real_keeper_publishes_unix_and_tcp_and_reaps_its_engine_when_stopped() {
+    struct Keeper(std::process::Child);
+    impl Drop for Keeper {
+        fn drop(&mut self) {
+            stop(&mut self.0, KEEPER_STOP);
+        }
+    }
     for kind in ["unix", "tcp"] {
         let dir = tempfile::tempdir_in("/tmp").unwrap();
         let endpoint = dir.path().join("engine-keeper.sock");
-        let launch = EngineLaunch {
-            provider: crate::agent_cli::orion::ORION,
-            serves_at: true,
-            end_on_loss: false,
-            program: "/usr/bin/python3".into(),
-            engine: vec![
-                "-c".into(),
-                ENGINE.into(),
-                dir.path().to_str().unwrap().into(),
-                kind.into(),
-            ],
-            standalone: vec![format!("--serves-at={kind}")],
-            attached: vec![],
-            operands: vec![],
-        };
+        // `env` execs the keeper: this process is its CLI.
         let mut keeper = Keeper(
-            Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "activity::engine::transport::tests::keeper_process_fixture",
-                    "--nocapture",
-                ])
-                .env(
-                    "CODESENSE_TEST_KEEPER_LAUNCH",
-                    serde_json::to_string(&launch).unwrap(),
-                )
-                .env("CODESENSE_TEST_KEEPER_ENDPOINT", &endpoint)
-                .env("ORION_HOME", dir.path())
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
+            keeper_run_by(Command::new("/usr/bin/env"), dir.path(), kind, &endpoint)
                 .spawn()
                 .unwrap(),
         );
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !dir.path().join("engine.pid").exists() || !is_socket(&endpoint) {
-            assert!(
-                keeper.0.try_wait().unwrap().is_none(),
-                "keeper exited before publishing"
-            );
-            assert!(Instant::now() < deadline, "engine never published");
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let pid: u32 = std::fs::read_to_string(dir.path().join("engine.pid"))
-            .unwrap()
-            .parse()
-            .unwrap();
+        let pid = published(dir.path(), &endpoint, || {
+            keeper.0.try_wait().unwrap().is_none()
+        });
         let mut client = peer(&endpoint);
         client.write_all(b"roundtrip").unwrap();
         let mut answer = [0; 9];
@@ -404,5 +421,49 @@ signal.pause()
             codesense_platform::process::Identity::inspect(pid).is_none(),
             "engine outlived keeper"
         );
+    }
+}
+
+#[test]
+fn the_real_keeper_ends_its_engine_once_the_cli_that_started_it_is_gone() {
+    /// The CLI, and the keeper and engine once found: killed when dropped, should the row
+    /// fail before the keeper ends them.
+    struct Left(std::process::Child, Vec<Process>);
+    impl Drop for Left {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+            for process in self.1.iter().filter(|process| process.runs()) {
+                // SAFETY: signalling a process this row started, checked by its start.
+                unsafe {
+                    libc::kill(process.pid as i32, libc::SIGKILL);
+                }
+            }
+        }
+    }
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let endpoint = dir.path().join("engine-keeper.sock");
+    // A CLI that runs the keeper as its child and is killed alone, keeper left running.
+    let mut shell = Command::new("/bin/sh");
+    shell.args(["-c", r#""$0" "$@" & wait"#]);
+    let mut cli = Left(
+        keeper_run_by(shell, dir.path(), "unix", &endpoint)
+            .spawn()
+            .unwrap(),
+        Vec::new(),
+    );
+    let engine = published(dir.path(), &endpoint, || {
+        cli.0.try_wait().unwrap().is_none()
+    });
+    let engine = Process::inspect(engine).expect("the engine runs");
+    let keeper = Process::inspect(engine.parent).expect("the keeper runs");
+    cli.1.extend([keeper, engine]);
+    assert_eq!(keeper.parent, cli.0.id());
+    cli.0.kill().unwrap();
+    cli.0.wait().unwrap();
+    let deadline = Instant::now() + KEEPER_POLL * 4 + KEEPER_STOP;
+    while keeper.runs() || engine.runs() || endpoint.exists() {
+        assert!(Instant::now() < deadline, "the keeper outlived its CLI");
+        std::thread::sleep(Duration::from_millis(10));
     }
 }

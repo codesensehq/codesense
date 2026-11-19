@@ -14,7 +14,7 @@ use crate::activity::owner::InboxAdmission;
 use crate::activity::ActivityOwner;
 use crate::agent_cli::{AgentCli, HandOver, InboxDelivery};
 use crate::inbox_waiters::{WaitArm, REASK_GRACE};
-use codesense_platform::process::Identity as Process;
+use codesense_platform::process::{agent_of_shell, still_attached, Identity as Process};
 
 /// How often a helper that asked before its invocation was committed is looked at again.
 const COMMIT_POLL: Duration = Duration::from_millis(100);
@@ -127,6 +127,45 @@ enum Step {
     Renew,
 }
 
+/// What a waiter waits on, captured at its start: its agent and the parent that ran it,
+/// which is the agent itself where the hook `exec`s the helper, and a shell otherwise.
+#[derive(Debug, Clone, Copy)]
+struct Attachment {
+    agent: Process,
+    parent: Process,
+    /// Reads a process as it runs now.
+    inspect: fn(u32) -> Option<Process>,
+}
+
+impl Attachment {
+    /// The `helper`'s, from its hook's agent argument `arg`: a pid names that process,
+    /// [`INBOX_AGENT_OF_SHELL`](crate::agent_cli::INBOX_AGENT_OF_SHELL) the parent of the
+    /// shell that ran it, and none its parent. `None` when one of them does not read (or
+    /// is newer than its child), and then nothing waits.
+    fn of_hook(
+        helper: Process,
+        arg: Option<&str>,
+        inspect: fn(u32) -> Option<Process>,
+    ) -> Option<Self> {
+        let parent = helper.parent_read_by(inspect)?;
+        let agent = match arg {
+            None => parent,
+            Some(crate::agent_cli::INBOX_AGENT_OF_SHELL) => agent_of_shell(helper, inspect)?,
+            Some(pid) => inspect(pid.parse().ok()?)?,
+        };
+        Some(Self {
+            agent,
+            parent,
+            inspect,
+        })
+    }
+
+    /// Whether the agent and the parent both still run.
+    fn holds(&self) -> bool {
+        still_attached(&self.agent, &self.parent, self.inspect)
+    }
+}
+
 /// How long a waiter pauses between asks.
 #[derive(Debug, Clone, Copy)]
 struct Pauses {
@@ -181,13 +220,11 @@ fn reask_event(delivery: InboxDelivery) -> Option<&'static str> {
 /// CodeSense invocation (no activity token, as a run with no terminal) has no waiter.
 pub fn wait_from_hook(args: &[std::ffi::OsString]) -> i32 {
     let arg = |at: usize| args.get(at).and_then(|value| value.to_str());
-    let (Some(cli), Some(event), Some(agent)) = (
+    let (Some(cli), Some(event), Some(attached)) = (
         arg(0).and_then(|cli| cli.parse::<AgentCli>().ok()),
         arg(1),
-        match arg(2) {
-            Some(pid) => pid.parse::<u32>().ok(),
-            None => Some(std::os::unix::process::parent_id()),
-        },
+        Process::inspect(std::process::id())
+            .and_then(|helper| Attachment::of_hook(helper, arg(2), Process::inspect)),
     ) else {
         return 0;
     };
@@ -206,12 +243,11 @@ pub fn wait_from_hook(args: &[std::ffi::OsString]) -> i32 {
     let ask =
         |event: &str, prompt: Option<String>, session: Option<String>, receipts: Vec<String>| Ask {
             event: event.to_string(),
-            agent,
+            agent: attached.agent.pid,
             prompt,
             session,
             receipts,
         };
-    let parent = std::os::unix::process::parent_id();
     let reask = reask_event(delivery).unwrap_or(event);
     let handed = match delivery {
         InboxDelivery::Waiter { .. } if confirms => {
@@ -224,7 +260,7 @@ pub fn wait_from_hook(args: &[std::ffi::OsString]) -> i32 {
                 &socket,
                 &token,
                 ask(event, input.prompt, input.session, input.receipts),
-                parent,
+                attached,
             );
             None
         }
@@ -239,7 +275,7 @@ pub fn wait_from_hook(args: &[std::ffi::OsString]) -> i32 {
             // It names no session: a waiting CLI runs its hooks itself.
             let renewal = SystemTime::now()
                 + Duration::from_secs(crate::agent_cli::INBOX_WAIT_TIMEOUT_SECS - 300);
-            match wait_with_deadline(&socket, &token, parent, PAUSES, Some(renewal), |first| {
+            match wait_with_deadline(&socket, &token, attached, PAUSES, Some(renewal), |first| {
                 ask(if first { event } else { reask }, None, None, Vec::new())
             }) {
                 Ok(handed) => handed,
@@ -262,7 +298,7 @@ pub fn wait_from_hook(args: &[std::ffi::OsString]) -> i32 {
                 &socket,
                 &token,
                 ask(event, input.prompt, input.session, input.receipts),
-                parent,
+                attached,
             )
             .ok()
         }
@@ -346,22 +382,22 @@ fn handed(notice: &str, event: &str, hand_over: HandOver) -> (String, bool, i32)
 
 /// Asks until mail arrives: a quiet hold asks again (as `ask(false)` says), an
 /// unreachable host after a pause. `None` once the wait ends without mail, or the
-/// waiter's agent (its parent `parent`) is gone.
+/// waiter is no longer `attached`.
 #[cfg(test)]
 fn wait(
     socket: &Path,
     token: &str,
-    parent: u32,
+    attached: Attachment,
     pauses: Pauses,
     ask: impl Fn(bool) -> Ask,
 ) -> Option<(String, String, UnixStream)> {
-    wait_with_deadline(socket, token, parent, pauses, None, ask).unwrap()
+    wait_with_deadline(socket, token, attached, pauses, None, ask).unwrap()
 }
 
 fn wait_with_deadline(
     socket: &Path,
     token: &str,
-    parent: u32,
+    attached: Attachment,
     pauses: Pauses,
     renewal: Option<SystemTime>,
     ask: impl Fn(bool) -> Ask,
@@ -382,12 +418,12 @@ fn wait_with_deadline(
             forget();
             return Err(());
         }
-        if std::os::unix::process::parent_id() != parent {
+        if !attached.holds() {
             forget();
             return Ok(None);
         }
         let asked = Instant::now();
-        let step = ask_until(socket, token, ask(first), parent, renewal);
+        let step = ask_until(socket, token, ask(first), attached, renewal);
         first = false;
         let step = match step {
             Ok(handed) => {
@@ -445,9 +481,9 @@ fn ask_once(
     socket: &Path,
     token: &str,
     ask: Ask,
-    parent: u32,
+    attached: Attachment,
 ) -> Result<(String, String, UnixStream), Step> {
-    ask_until(socket, token, ask, parent, None)
+    ask_until(socket, token, ask, attached, None)
 }
 
 fn renewal_due(deadline: Option<SystemTime>, now: SystemTime) -> bool {
@@ -458,32 +494,33 @@ fn ask_until(
     socket: &Path,
     token: &str,
     ask: Ask,
-    parent: u32,
+    attached: Attachment,
     renewal: Option<SystemTime>,
 ) -> Result<(String, String, UnixStream), Step> {
     let mut stream = ingress::ask_inbox(socket, token, ask).map_err(|_| Step::Retry)?;
     stream
         .set_read_timeout(Some(AGENT_CHECK))
         .map_err(|_| Step::Retry)?;
-    let answer = host_line_until(&mut stream, parent, renewal)?;
+    let answer = host_line_until(&mut stream, attached, renewal)?;
     let notice_token = match wire::parse_answer(&answer) {
         Some(Ok(token)) => token.to_string(),
         Some(Err(InboxWait::Quiet)) => return Err(Step::Again),
         Some(Err(_)) | None => return Err(Step::End),
     };
-    let notice = host_line_until(&mut stream, parent, renewal)?;
+    let notice = host_line_until(&mut stream, attached, renewal)?;
     // An agent that went away is told nothing: the host keeps the notice for the next.
-    if std::os::unix::process::parent_id() != parent {
+    if !attached.holds() {
         return Err(Step::End);
     }
     Ok((notice, notice_token, stream))
 }
 
-/// The next line the host sends, read as it arrives; `Err(End)` once the waiter's agent
-/// (its parent `parent`) is gone, `Err(Retry)` when the host closes the connection.
+/// The next line the host sends, read as it arrives; `Err(End)` once the waiter is no
+/// longer `attached`, looked at each time a read times out, `Err(Retry)` when the host
+/// closes the connection.
 fn host_line_until(
-    stream: &mut UnixStream,
-    parent: u32,
+    stream: &mut impl Read,
+    attached: Attachment,
     renewal: Option<SystemTime>,
 ) -> Result<String, Step> {
     let mut line = Vec::new();
@@ -505,7 +542,7 @@ fn host_line_until(
                         | io::ErrorKind::Interrupted
                 ) =>
             {
-                if std::os::unix::process::parent_id() != parent {
+                if !attached.holds() {
                     return Err(Step::End);
                 }
             }
