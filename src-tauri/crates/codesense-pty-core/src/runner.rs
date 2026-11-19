@@ -608,9 +608,12 @@ mod tests {
     #[cfg(unix)]
     use codesense_platform::process::ProcessTree;
 
+    // Unix only, as the group tests that use it are.
+    #[cfg(unix)]
     #[derive(Clone, Debug)]
     struct ExitedChild(Arc<Mutex<Vec<&'static str>>>);
 
+    #[cfg(unix)]
     impl portable_pty::ChildKiller for ExitedChild {
         fn kill(&mut self) -> std::io::Result<()> {
             self.0.lock().unwrap().push("kill-child");
@@ -621,6 +624,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     impl Child for ExitedChild {
         fn try_wait(&mut self) -> std::io::Result<Option<portable_pty::ExitStatus>> {
             self.0.lock().unwrap().push("try-wait");

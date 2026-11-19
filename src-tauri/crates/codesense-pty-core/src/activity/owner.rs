@@ -1392,7 +1392,8 @@ impl ActivityOwner {
         )
     }
 
-    #[cfg(test)]
+    // Unix only, as its callers, the ingress transport's unix tests, are.
+    #[cfg(all(test, unix))]
     pub(super) fn evidence_at_for_test(&self, session: &str) -> Option<Instant> {
         self.sessions
             .lock()
