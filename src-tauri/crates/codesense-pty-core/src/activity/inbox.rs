@@ -7,6 +7,13 @@
 //! ([`ActivityOwner::inbox_admission`]); a helper that asks before the invocation is
 //! committed is held for the commit, never ranked. The wait itself is the host inbox's
 //! ([`crate::inbox_host::HostInbox::serve`]).
+//!
+//! Trust boundary: admission rests on process ancestry and the invocation's activity
+//! token. A process running as the same user can give a child a parent of its choosing
+//! (on Windows, `PROC_THREAD_ATTRIBUTE_PARENT_PROCESS`) and so pose as running under the
+//! agent, but it still needs the token from the agent's environment. Same-user code is
+//! inside the trust boundary on every OS: it can read the agent's environment and memory
+//! too.
 
 use serde::{Deserialize, Serialize};
 
