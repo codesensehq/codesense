@@ -78,7 +78,7 @@ fn resolve(
             Cap {
                 key: &row.key,
                 on,
-                reason: (!on).then_some(row.reason.as_str()),
+                reason: (!on).then_some(&*row.reason),
             }
         })
         .collect()
@@ -128,7 +128,7 @@ pub(crate) fn caps_with_off(off: &[&str]) -> Vec<Cap> {
             Cap {
                 key: &row.key,
                 on,
-                reason: (!on).then_some(row.reason.as_str()),
+                reason: (!on).then_some(&*row.reason),
             }
         })
         .collect()
@@ -143,7 +143,7 @@ pub fn enabled_for(key: &str, os: &str, arch: &str) -> bool {
     }
     table()
         .iter()
-        .find(|row| row.key == key)
+        .find_map(|row| (row.key == key).then_some(row))
         .is_some_and(|row| resolve(std::slice::from_ref(row), os, arch, &|_| false)[0].on)
 }
 
@@ -567,14 +567,14 @@ mod tests {
             .iter()
             .all(|cap| Caps(&all_on).enabled(cap.key) && cap.reason.is_none()));
         let off = caps_with_off(&[TERMINAL_SERVER_SIDECAR]);
-        let caps = Caps(&off);
-        assert!(!caps.enabled(TERMINAL_SERVER_SIDECAR));
+        let off_caps = Caps(&off);
+        assert!(!off_caps.enabled(TERMINAL_SERVER_SIDECAR));
         assert!(off
             .iter()
             .find(|cap| cap.key == TERMINAL_SERVER_SIDECAR)
             .is_some_and(|cap| cap.reason.is_some()));
-        assert!(caps.enabled(GIT_AI));
-        assert!(!caps.enabled("no-such-capability"));
+        assert!(off_caps.enabled(GIT_AI));
+        assert!(!off_caps.enabled("no-such-capability"));
         assert_eq!(Caps::live().0, caps());
     }
 
