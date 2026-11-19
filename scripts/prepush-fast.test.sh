@@ -133,7 +133,8 @@ printf '#!/bin/sh\necho 0.0.1\n' >"$TMP/bin/gitleaks"
 chmod +x "$TMP/bin/gitleaks"
 pin=$(awk '$1 == "gitleaks" { print $2; exit }' "$REPO/release/scanners.lock")
 PATH="$TMP/bin:$PATH" expect gitleaks "a gitleaks other than the pinned one fails" \
-  "gitleaks 0\.0\.1 does not match ${pin//./\\.} pinned" --only gitleaks
+  "gitleaks 0\.0\.1 does not match ${pin//./\\.} pinned .*install-scanners\.sh <a directory on PATH> --tool gitleaks" \
+  --only gitleaks
 rm "$TMP/bin/gitleaks"
 
 # TERM stops what a step started, not just its subshell: a pnpm that sleeps must be gone afterwards.
@@ -156,6 +157,71 @@ elif kill -0 "$sleeper" 2>/dev/null; then
 elif [ "$rc" != 143 ]; then
   bad "TERM stops a step's children (exit $rc, want 143)"
 else ok "TERM stops a step's children"; fi
+
+# Under a terminal: the steps run in their own process groups, so one that reads stdin from the terminal would be
+# stopped (SIGTTIN) and the run would hang. The fake pnpm reads stdin, then sleeps when asked. Each run is in a pty
+# (script), with a guard that kills it after a timeout.
+cat >"$TMP/bin/pnpm" <<EOF
+#!/bin/sh
+echo \$\$ >"$TMP/pnpm.pid"
+read -r _ || true
+[ -z "\${FAKE_PNPM_SLEEP:-}" ] || exec sleep "\$FAKE_PNPM_SLEEP"
+EOF
+chmod +x "$TMP/bin/pnpm"
+# in_pty <prepush-fast args...>: start it in a pty in the background; sets PTY (the script process). The script's own
+# PID is written to $TMP/pty.pid (exec keeps it). Job control is on for the launch: without it a background job
+# starts with INT ignored, and a script cannot trap a signal ignored on entry.
+in_pty() {
+  local cmd
+  rm -f "$TMP/pty.pid" "$TMP/pnpm.pid"
+  # shellcheck disable=SC2016 # $$, $0 and $@ belong to the inner bash
+  cmd=$(printf '%q ' env PATH="$TMP/bin:$PATH" bash -c 'echo $$ >"$0"; exec bash "$@"' "$TMP/pty.pid" \
+    "$WT/scripts/prepush-fast.sh" --base "$BASE" "$@")
+  set -m
+  if script --version 2>/dev/null | grep -q util-linux; then
+    script -qec "$cmd" /dev/null </dev/null >"$TMP/pty.out" 2>&1 &
+  else
+    script -q /dev/null bash -c "$cmd" </dev/null >"$TMP/pty.out" 2>&1 &
+  fi
+  PTY=$!
+  set +m
+}
+# finish <seconds>: wait for the pty run; sets PTY_RC, or "timeout" after killing what is left.
+finish() {
+  for _ in $(seq $(($1 * 10))); do kill -0 "$PTY" 2>/dev/null || break; sleep 0.1; done
+  if kill -0 "$PTY" 2>/dev/null; then
+    PTY_RC=timeout
+    for f in pty.pid pnpm.pid; do [ ! -s "$TMP/$f" ] || kill -KILL "$(cat "$TMP/$f")" 2>/dev/null || true; done
+    kill -KILL "$PTY" 2>/dev/null || true
+    wait "$PTY" 2>/dev/null || true
+  else
+    PTY_RC=0
+    wait "$PTY" || PTY_RC=$?
+  fi
+}
+in_pty --only gen-docs
+finish 20
+if [ "$PTY_RC" = 0 ]; then ok "under a terminal, a step that reads stdin does not hang"; else
+  bad "under a terminal, a step that reads stdin does not hang (exit $PTY_RC)" "$(cat "$TMP/pty.out")"
+fi
+
+# INT under a terminal: exit 130, and what the step started is gone.
+export FAKE_PNPM_SLEEP=60
+in_pty --only gen-docs
+for _ in $(seq 100); do [ -s "$TMP/pnpm.pid" ] && [ -s "$TMP/pty.pid" ] && break; sleep 0.1; done
+sleeper=$(cat "$TMP/pnpm.pid" 2>/dev/null || echo "")
+[ ! -s "$TMP/pty.pid" ] || kill -INT "$(cat "$TMP/pty.pid")" 2>/dev/null || true
+finish 20
+unset FAKE_PNPM_SLEEP
+sleep 0.5
+if [ -z "$sleeper" ]; then
+  bad "INT stops a step's children (the fake pnpm never started)" "$(cat "$TMP/pty.out")"
+elif kill -0 "$sleeper" 2>/dev/null; then
+  kill -KILL "$sleeper"
+  bad "INT stops a step's children (pnpm $sleeper still running, exit $PTY_RC)"
+elif [ "$PTY_RC" != 130 ]; then
+  bad "INT stops a step's children (exit $PTY_RC, want 130)" "$(cat "$TMP/pty.out")"
+else ok "INT stops a step's children"; fi
 
 if grep -q cargo "$REPO/scripts/prepush-fast.sh"; then
   bad "prepush-fast.sh mentions cargo"

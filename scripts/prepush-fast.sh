@@ -121,13 +121,14 @@ step_gitleaks() {
   local pin have
   pin=$(awk '$1 == "gitleaks" { print $2; exit }' release/scanners.lock)
   command -v gitleaks >/dev/null || {
-    echo "gitleaks is not installed; install $pin with scripts/install-scanners.sh"
+    echo "gitleaks is not installed; install $pin with" \
+      "scripts/install-scanners.sh <a directory on PATH> --tool gitleaks"
     return 1
   }
   have=$(gitleaks version 2>/dev/null | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
   [ -n "$pin" ] && [ "$have" = "$pin" ] || {
     echo "gitleaks ${have:-of unknown version} does not match $pin pinned in release/scanners.lock;" \
-      "install it with scripts/install-scanners.sh"
+      "install it with scripts/install-scanners.sh <a directory on PATH> --tool gitleaks"
     return 1
   }
   [ "$base" != "$head" ] || { echo "no commits to scan"; return 0; }
@@ -148,13 +149,15 @@ LOG=$(mktemp -d "${TMPDIR:-/tmp}/prepush-fast.XXXXXX")
 PIDS=""
 # Job control puts each step in its own process group, so an interrupt also stops the pnpm and node
 # processes a step started, not just its subshell. A step that wrote its .rc file has finished (its
-# PID may already be reused), so only the groups of steps still running are signalled.
+# PID may already be reused), so only the groups of steps still running are signalled; CONT wakes a
+# stopped one so it can act on the TERM. A step's stdin is /dev/null: from a terminal, a background
+# group that read it would be stopped (SIGTTIN) and the wait would hang.
 set -m
 stop_steps() {
   local pid step
   for pid in $PIDS; do
     eval "step=\$step_$pid"
-    [ -e "$LOG/$step.rc" ] || kill -TERM -- "-$pid" 2>/dev/null
+    [ -e "$LOG/$step.rc" ] || { kill -TERM -- "-$pid" && kill -CONT -- "-$pid"; } 2>/dev/null
   done
 }
 trap 'stop_steps; rm -rf "$LOG"' EXIT
@@ -167,7 +170,7 @@ launch() {
     "step_$1" >"$LOG/$1.log" 2>&1
     rc=$?
     echo "$rc $(($(date +%s) - start))" >"$LOG/$1.rc"
-  ) &
+  ) </dev/null &
   PIDS="$PIDS $!"
   eval "pid_${1//-/_}=$! step_$!=$1"
 }
