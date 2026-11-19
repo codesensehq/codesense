@@ -5,10 +5,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
-import { smokeImagesPolicy, workflowPolicy } from "./workflow-policy.mjs";
+import { smokeImagesPolicy, topLevelConjuncts, workflowPolicy } from "./workflow-policy.mjs";
 
 // The workflow set under test: .github/workflows, or CODESENSE_WORKFLOWS_DIR (from the repo root).
 const directory = path.resolve(
@@ -208,8 +208,16 @@ const macosOptIn =
 const pathFilter = "!cancelled() && needs.changes.outputs.rust != 'false'";
 // The macOS result job leads with always() instead, so a cancelled run reports red.
 const resultFilter = "always() && needs.changes.outputs.rust != 'false'";
-const macosFilter = { "rust-macos-build": pathFilter, "rust-macos": resultFilter };
+// The macOS jobs also skip a change only Windows or Linux compiles, right after the path filter.
+const macosOnly = "needs.changes.outputs.macos != 'false'";
+const macosFilter = {
+  "rust-macos-build": `${pathFilter} && ${macosOnly}`,
+  "rust-macos": `${resultFilter} && ${macosOnly}`,
+};
 const offMergeGroups = "github.event_name != 'merge_group'";
+// Each macOS build step after the check of main's head skips when main has moved on.
+const notSuperseded = "steps.superseded.outputs.superseded != 'true'";
+const shardsNotSuperseded = "needs.rust-macos-build.outputs.superseded != 'true'";
 const conditional = (workflow, condition) =>
   workflow.replace(/^ {2}([a-z-]+):\n {4}runs-on/m, `  $1:\n    if: ${condition}\n    runs-on`);
 test("a job is skipped only on pull requests when its workflow runs on merge_group, push or schedule", () => {
@@ -283,10 +291,13 @@ test("rust.yml runs on push to main and nightly, and only the nightly run saves 
       name,
     );
   const nightly = "github.event_name == 'schedule' && github.ref == 'refs/heads/main'";
-  for (const name of ["rust-macos-build", "rust-linux"]) {
+  for (const [name, count] of [
+    ["rust-macos-build", 2],
+    ["rust-linux", 1],
+  ]) {
     const steps = workflow.jobs[name].steps;
     const saves = steps.filter((step) => step.uses?.startsWith("actions/cache/save@"));
-    assert.equal(saves.length, 1, name);
+    assert.equal(saves.length, count, name);
     for (const step of saves) assert.ok(step.if.startsWith(`${nightly} &&`), name);
     const rustCache = steps.filter((step) => step.uses?.startsWith("Swatinem/rust-cache@"));
     assert.equal(rustCache.length, 1, name);
@@ -331,9 +342,9 @@ test("rust.yml runs macOS on a pull request only with ci:macos, and Linux always
       `\${{ ${filter} && ${offMergeGroups} && (${macosOptIn}) }}`,
       name,
     );
-  // The shards follow the build: no if of their own, so they run only when it succeeds.
+  // The shards follow the build: they run only when it succeeds and main had not moved on.
   assert.equal(workflow.jobs["rust-macos-test"].needs, "rust-macos-build");
-  assert.equal(workflow.jobs["rust-macos-test"].if, undefined);
+  assert.equal(workflow.jobs["rust-macos-test"].if, shardsNotSuperseded);
   // Another label's run, ci:windows included, has a group of its own, so it cannot cancel the
   // pull request's run or a ci:macos run.
   assert.equal(
@@ -415,8 +426,12 @@ test("rust.yml skips its test jobs only when the changes job finds nothing Rust-
   assert.equal(changes.if, undefined);
   assert.equal(changes.needs, undefined);
   assert.equal(changes.outputs.rust, "${{ steps.filter.outputs.rust }}");
+  assert.equal(changes.outputs.macos, "${{ steps.filter.outputs.macos }}");
   const filter = changes.steps.find((step) => step.id === "filter");
-  assert.match(filter.run, /^\s*\*\) echo "rust=true" >> "\$GITHUB_OUTPUT"; exit 0 ;;$/m);
+  assert.match(
+    filter.run,
+    /^\s*\*\) printf 'rust=true\\nmacos=true\\n' >> "\$GITHUB_OUTPUT"; exit 0 ;;$/m,
+  );
   assert.match(filter.run, /node scripts\/rust-changes\.mjs "\$range" >> "\$GITHUB_OUTPUT"/);
   for (const name of ["rust-macos-build", "rust-linux", "rust-check-linux", "rust-linux-app"])
     assert.equal(workflow.jobs[name].needs, "changes", name);
@@ -510,7 +525,7 @@ test("rust.yml's changes job tests a push with no before, and diffs one that has
     });
     return { status: result.status, output: fs.readFileSync(output, "utf8") };
   };
-  assert.deepEqual(run("0".repeat(40)), { status: 0, output: "rust=true\n" });
+  assert.deepEqual(run("0".repeat(40)), { status: 0, output: "rust=true\nmacos=true\n" });
   // The failed diff fails the changes job, and the Rust jobs then run.
   assert.notEqual(run("a".repeat(40)).status, 0);
 });
@@ -646,6 +661,251 @@ test("only rust.yml's macOS result job may run on a cancelled run", () => {
       /if must begin with/,
       `${file} ${job}: ${condition}`,
     );
+});
+
+// The macOS filter's term may only follow the path filter's, in the macOS build and result jobs.
+test("only rust.yml's macOS jobs may skip a change only Windows or Linux compiles", () => {
+  const filtered = (condition, job = "rust-macos-build", file = "rust.yml") =>
+    workflowPolicy(
+      queued().replace(
+        "  static:\n",
+        "  changes:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 5\n    permissions:\n      contents: read\n" +
+          `    steps:\n      - run: "true"\n  ${job}:\n    needs: changes\n    if: ${condition}\n`,
+      ),
+      file,
+    ).join("\n");
+  for (const [job, filter] of [
+    ["rust-macos-build", pathFilter],
+    ["rust-macos", resultFilter],
+  ])
+    for (const condition of [
+      `\${{ ${filter} && ${macosOnly} && ${offMergeGroups} && (${macosOptIn}) }}`,
+      `\${{ ${filter} && ${macosOnly} }}`,
+    ])
+      assert.equal(filtered(condition, job), "", `${job}: ${condition}`);
+  for (const job of ["rust-linux", "rust-check-linux", "rust-guards", "rust-macos-test"])
+    assert.match(filtered(`\${{ ${pathFilter} && ${macosOnly} }}`, job), /if must begin with/, job);
+  for (const condition of [
+    `\${{ ${pathFilter} && ${offMergeGroups} && ${macosOnly} && (${macosOptIn}) }}`,
+    `\${{ ${pathFilter} && ${offMergeGroups} && (${macosOptIn}) && ${macosOnly} }}`,
+    `\${{ ${macosOnly} && ${pathFilter} && ${offMergeGroups} && (${macosOptIn}) }}`,
+    `\${{ !cancelled() && ${macosOnly} && needs.changes.outputs.rust != 'false' }}`,
+    `\${{ ${pathFilter} && ${macosOnly} && ${macosOnly} }}`,
+    `\${{ ${pathFilter} && needs.changes.outputs.macos == 'true' }}`,
+  ])
+    assert.match(filtered(condition), /if must begin with/, condition);
+  assert.match(
+    filtered(`\${{ ${pathFilter} && ${macosOnly} }}`, "rust-macos-build", "ci.yml"),
+    /if must begin with/,
+  );
+});
+
+// The shards may skip a superseded build, with exactly that condition and nothing else.
+test("only rust.yml's macOS shards may skip a build that main moved past", () => {
+  const filtered = (
+    condition,
+    job = "rust-macos-test",
+    needs = "rust-macos-build",
+    file = "rust.yml",
+  ) =>
+    workflowPolicy(
+      queued().replace(
+        "  static:\n",
+        "  rust-macos-build:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 5\n    permissions:\n      contents: read\n" +
+          `    steps:\n      - run: "true"\n  ${job}:\n    needs: ${needs}\n    if: ${condition}\n`,
+      ),
+      file,
+    ).join("\n");
+  assert.equal(filtered(shardsNotSuperseded), "");
+  assert.equal(filtered(`\${{ ${shardsNotSuperseded} }}`), "");
+  for (const [condition, job, needs, file] of [
+    [shardsNotSuperseded, "rust-macos", "rust-macos-build", "rust.yml"],
+    [shardsNotSuperseded, "rust-linux", "rust-macos-build", "rust.yml"],
+    [shardsNotSuperseded, "rust-macos-test", "[]", "rust.yml"],
+    [shardsNotSuperseded, "rust-macos-test", "rust-macos-build", "ci.yml"],
+    [`${shardsNotSuperseded} && true`, "rust-macos-test", "rust-macos-build", "rust.yml"],
+    [`${shardsNotSuperseded} || true`, "rust-macos-test", "rust-macos-build", "rust.yml"],
+    [
+      "needs.rust-macos-build.outputs.superseded == 'false'",
+      "rust-macos-test",
+      "rust-macos-build",
+      "rust.yml",
+    ],
+  ])
+    assert.match(
+      filtered(condition, job, needs, file),
+      /if must begin with/,
+      `${file} ${job}: ${condition}`,
+    );
+});
+
+// The merge queue runs the required Rust checks and nothing else.
+test("a merge group runs only rust.yml's required jobs", () => {
+  const jobs = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8")).jobs;
+  const runs = (name) => {
+    const terms = topLevelConjuncts(String(jobs[name].if ?? ""));
+    if (
+      terms.some((t) => t === offMergeGroups || /^github\.event_name == '(?!merge_group')/.test(t))
+    )
+      return false;
+    return [jobs[name].needs ?? []].flat().every(runs);
+  };
+  assert.deepEqual(Object.keys(jobs).filter(runs).sort(), [
+    "changes",
+    "rust-check-linux",
+    "rust-guards",
+    "rust-linux",
+  ]);
+});
+
+// A push to main that is no longer main's head when a macOS build part starts gives its runner
+// back: every later step skips, the shards skip, and rust-macos reports it as superseded.
+test("rust.yml's macOS build skips a push that main has moved past", (t) => {
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  const build = workflow.jobs["rust-macos-build"];
+  assert.equal(build.concurrency, undefined);
+  assert.equal(workflow.jobs["rust-macos-test"].concurrency, undefined);
+  assert.equal(build.outputs.superseded, "${{ steps.superseded.outputs.superseded }}");
+  const check = build.steps.findIndex((step) => step.id === "superseded");
+  assert.ok(build.steps[check - 1].uses.startsWith("actions/checkout@"));
+  assert.equal(build.steps[check].if, "github.event_name == 'push'");
+  for (const step of build.steps.slice(check + 1))
+    assert.ok(topLevelConjuncts(String(step.if ?? "")).includes(notSuperseded), step.name);
+  assert.equal(workflow.jobs["rust-macos-test"].if, shardsNotSuperseded);
+
+  // The check, run against a scratch origin.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rust-superseded-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const git = (cwd, ...args) =>
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "commit.gpgsign=false",
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@example.com",
+        ...args,
+      ],
+      { cwd, encoding: "utf8" },
+    ).trim();
+  const work = path.join(dir, "work");
+  git(dir, "init", "-q", "--bare", "-b", "main", "origin.git");
+  git(dir, "clone", "-q", path.join(dir, "origin.git"), "work");
+  const commit = () => {
+    fs.appendFileSync(path.join(work, "a"), "x\n");
+    git(work, "add", ".");
+    git(work, "commit", "-qm", "a");
+    git(work, "push", "-q", "origin", "HEAD:main");
+    return git(work, "rev-parse", "HEAD");
+  };
+  const output = path.join(dir, "output");
+  const run = (sha) => {
+    fs.writeFileSync(output, "");
+    const result = spawnSync(
+      "bash",
+      ["--noprofile", "--norc", "-eo", "pipefail", "-c", build.steps[check].run],
+      {
+        cwd: work,
+        encoding: "utf8",
+        env: { ...process.env, SHA: sha, GITHUB_OUTPUT: output },
+      },
+    );
+    return { status: result.status, output: fs.readFileSync(output, "utf8") };
+  };
+  const first = commit();
+  assert.deepEqual(run(first), { status: 0, output: "" });
+  commit();
+  assert.deepEqual(run(first), { status: 0, output: "superseded=true\n" });
+  // A failed lookup builds.
+  git(work, "remote", "set-url", "origin", path.join(dir, "missing.git"));
+  assert.deepEqual(run(first), { status: 0, output: "" });
+});
+
+test("rust-macos reports a superseded build as success, and anything else as before", (t) => {
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  const step = workflow.jobs["rust-macos"].steps.find(
+    (s) => s.name === "Check the macOS build and tests",
+  );
+  assert.equal(step.env.SUPERSEDED, "${{ needs.rust-macos-build.outputs.superseded }}");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rust-macos-result-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const summary = path.join(dir, "summary");
+  const run = (BUILD, TESTS, SUPERSEDED) => {
+    fs.writeFileSync(summary, "");
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", step.run], {
+      encoding: "utf8",
+      env: { ...process.env, BUILD, TESTS, SUPERSEDED, GITHUB_STEP_SUMMARY: summary },
+    });
+    return [result.status, fs.readFileSync(summary, "utf8")];
+  };
+  const superseded = "Superseded by a newer push to main; the nightly covers this commit.\n";
+  assert.deepEqual(run("success", "skipped", "true"), [0, superseded]);
+  assert.deepEqual(run("success", "success", ""), [0, ""]);
+  assert.deepEqual(run("success", "failure", ""), [1, ""]);
+  assert.deepEqual(run("failure", "skipped", ""), [1, ""]);
+  assert.deepEqual(run("failure", "skipped", "true"), [1, ""]);
+  assert.deepEqual(run("cancelled", "skipped", "true"), [1, ""]);
+});
+
+// The macOS workspace build is cached: the nightly builds cold and saves target/ with the commit
+// it built; other runs restore it and date the checkout so only what changed since rebuilds.
+test("rust.yml caches the macOS workspace build from the nightly, dated by commit", () => {
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  const steps = workflow.jobs["rust-macos-build"].steps;
+  const index = (predicate, label) => {
+    const i = steps.findIndex(predicate);
+    assert.ok(i >= 0, label);
+    return i;
+  };
+  const named = (name) => index((step) => step.name === name, name);
+  const rustCache = index((step) => step.uses?.startsWith("Swatinem/rust-cache@"), "rust-cache");
+  const key = index((step) => step.id === "build-cache-key", "key");
+  const restore = index((step) => step.id === "build-cache", "restore");
+  const dates = index((step) => step.run === "bash scripts/build-cache-dates.sh restore", "dates");
+  const pin = index((step) => step.run === "bash scripts/build-cache-dates.sh pin", "pin");
+  const record = index((step) => step.run === "bash scripts/build-cache-dates.sh record", "record");
+  const save = index(
+    (step) => step.uses?.startsWith("actions/cache/save@") && step.with.path === "target",
+    "save",
+  );
+  const sidecar = named("Build session-server sidecar");
+  const gitAi = named("Fetch git-ai");
+  const docsData = named("Generate docs data");
+  const compile = index((step) => step.id === "compile", "compile");
+  // Restored after the dependency cache (so it wins), and dated before any cargo command; the
+  // inputs pinned after every step that writes them; recorded after the build, then saved.
+  assert.ok(rustCache < key && key < restore && restore < dates);
+  assert.ok(dates < gitAi && dates < sidecar && dates < docsData);
+  assert.ok(gitAi < pin && sidecar < pin && docsData < pin && pin < compile);
+  assert.ok(compile < record && record < save);
+  assert.ok(
+    steps.slice(0, dates).every((step) => !/(?:^|[\s;&|(])cargo(?=\s|$)/m.test(step.run ?? "")),
+  );
+  // Per part, per toolchain; the newest for this Cargo.lock first, then any.
+  assert.match(steps[key].run, /rust-macos-build-\$PART-/);
+  assert.match(steps[key].run, /rustc -vV/);
+  assert.deepEqual(steps[restore].with, {
+    path: "target",
+    key: "${{ steps.build-cache-key.outputs.manifests }}-${{ github.run_id }}",
+    "restore-keys":
+      "${{ steps.build-cache-key.outputs.manifests }}-\n${{ steps.build-cache-key.outputs.toolchain }}-\n",
+  });
+  // The nightly builds cold; only a restored cache is dated.
+  assert.equal(steps[restore].if, `github.event_name != 'schedule' && ${notSuperseded}`);
+  for (const i of [dates, pin])
+    assert.equal(
+      steps[i].if,
+      `steps.build-cache.outputs.cache-matched-key != '' && ${notSuperseded}`,
+    );
+  // The nightly on main saves, once its tests compiled, under a key no other run has.
+  const nightlyBuilt = `github.event_name == 'schedule' && github.ref == 'refs/heads/main' && !cancelled() && steps.compile.outcome == 'success' && ${notSuperseded}`;
+  for (const i of [record, save]) assert.equal(steps[i].if, nightlyBuilt);
+  assert.equal(
+    steps[save].with.key,
+    "${{ steps.build-cache-key.outputs.manifests }}-${{ github.run_id }}-${{ github.run_attempt }}",
+  );
 });
 
 test("pull-requests read is limited to the DCO job", () => {
@@ -1147,7 +1407,7 @@ test("Rust jobs preserve package coverage for nextest and doctests and always up
   const docsData = build.steps.findIndex((step) => step.name === "Generate docs data");
   assert.ok(docsData >= 0 && docsData < build.steps.indexOf(compile));
   // The rest part builds the libraries the doctests link.
-  doctests(build.steps, `${afterCompile} && matrix.part == 'rest'`);
+  doctests(build.steps, `${afterCompile} && matrix.part == 'rest' && ${notSuperseded}`);
   assert.ok(build.steps.some((step) => step.run?.includes("--tool cargo-nextest")));
 
   const shards = workflow.jobs["rust-macos-test"];
@@ -1286,14 +1546,15 @@ test("Rust test jobs list flaky tests after nextest and only flaky-issues writes
   }
   // A red macOS build or shard on main lists its failed tests and run link in the job summary,
   // read-only.
-  for (const [name, report] of [
-    ["rust-macos-build", "target/nextest/ci/junit.xml"],
-    ["rust-macos-test", '"$RUNNER_TEMP/junit/$part.xml"'],
+  const redOnMain = "(failure() || cancelled()) && github.ref == 'refs/heads/main'";
+  for (const [name, report, condition] of [
+    ["rust-macos-build", "target/nextest/ci/junit.xml", `${redOnMain} && ${notSuperseded}`],
+    ["rust-macos-test", '"$RUNNER_TEMP/junit/$part.xml"', redOnMain],
   ]) {
     const red = workflow.jobs[name].steps.find(
       (step) => step.name === "Summarize a red run on main",
     );
-    assert.equal(red.if, "(failure() || cancelled()) && github.ref == 'refs/heads/main'", name);
+    assert.equal(red.if, condition, name);
     assert.ok(
       red.run.includes(`node scripts/flaky-tests.mjs failed ${report} --run-url "$RUN_URL"`),
       name,
