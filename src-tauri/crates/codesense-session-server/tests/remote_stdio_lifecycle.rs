@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#![cfg(cap_terminal_server_sidecar)]
 #![cfg(target_os = "linux")]
 //! Real supervisor executable, controlled broker handshake and real Linux
 //! descendants. This proves the lifecycle machinery, not provider inference.

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#![cfg(cap_terminal_server_sidecar)]
 //! Guards on how CodeSense reaches other machines: through the system `ssh`
 //! and the `attach --stdio` relay's own stdio — never a port forward, never
 //! an SSH library.

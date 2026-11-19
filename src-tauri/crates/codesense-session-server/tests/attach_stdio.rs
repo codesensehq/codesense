@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#![cfg(cap_terminal_server_sidecar)]
 //! `attach --stdio` against the real built binary on this machine: the relay
 //! launches the host when none runs, pipes the host's own frames through
 //! unchanged, defaults the instance root to `$HOME/.codesense`, and reaches a
