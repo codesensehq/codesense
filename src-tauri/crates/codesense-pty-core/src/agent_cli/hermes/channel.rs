@@ -23,28 +23,34 @@ fn unavailable() -> io::Error {
     io::Error::other("Hermes's authenticated gateway is unavailable")
 }
 
-fn private_node(path: &Path) -> io::Result<()> {
-    let meta = fs::symlink_metadata(path)?;
-    if meta.uid() != unsafe { libc::geteuid() } || meta.mode() & 0o077 != 0 {
+/// The node at `path`, opened without following a link, when only this user may use it.
+fn private_node(path: &Path) -> io::Result<fs::File> {
+    let node = codesense_platform::fs::open_nofollow(fs::OpenOptions::new().read(true), path)?;
+    if !codesense_platform::fs::is_owner_only(&node)? {
         return Err(unavailable());
     }
-    Ok(())
+    Ok(node)
 }
 
 fn control(home: &Path, verb: &str, params: Value) -> io::Result<Value> {
-    private_node(home)?;
+    let home_node = private_node(home)?;
     let mut path = home.join("gateway.sock");
     if !path.exists() {
         let pointer = home.join("gateway.sock.path");
-        private_node(&pointer)?;
-        if !fs::symlink_metadata(&pointer)?.file_type().is_file() {
+        if !private_node(&pointer)?.metadata()?.is_file() {
             return Err(unavailable());
         }
         path = fs::read_to_string(pointer)?.trim().into();
         private_node(path.parent().ok_or_else(unavailable)?)?;
     }
-    private_node(&path)?;
-    if !fs::symlink_metadata(&path)?.file_type().is_socket() {
+    // The socket itself, once the private directory holding it passed: by lstat, as
+    // open(2) on a socket fails (ENXIO), so it cannot go through `private_node`. Its
+    // owner is the verified home's, which `private_node` proved is this user.
+    let meta = fs::symlink_metadata(&path)?;
+    if meta.uid() != home_node.metadata()?.uid() || meta.mode() & 0o077 != 0 {
+        return Err(unavailable());
+    }
+    if !meta.file_type().is_socket() {
         return Err(unavailable());
     }
     let mut stream = UnixStream::connect(path)?;
