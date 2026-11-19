@@ -528,6 +528,8 @@ mod off_transport;
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Unix only, as the tests that read unix modes are.
+    #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
 
     #[test]
@@ -570,6 +572,8 @@ mod tests {
         }
     }
 
+    // Unix only: it reads a unix mode.
+    #[cfg(unix)]
     #[test]
     fn home_config_merge_preserves_other_fields_and_replaces_observer_keys_once() {
         let home = tempfile::tempdir().unwrap();
@@ -593,6 +597,8 @@ mod tests {
         assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 1);
     }
 
+    // Unix only: the stub CLIs are made executable with a unix mode.
+    #[cfg(unix)]
     #[test]
     fn non_cached_adapters_run_the_live_version_probe() {
         use std::os::unix::fs::PermissionsExt;
@@ -625,6 +631,8 @@ mod tests {
         }
     }
 
+    // Unix only: the stub CLIs are made executable with a unix mode.
+    #[cfg(unix)]
     #[test]
     fn hand_typed_release_probes_ignore_poisoned_cache_without_a_managed_identity() {
         use std::os::unix::fs::PermissionsExt;
@@ -667,6 +675,8 @@ mod tests {
         }
     }
 
+    // Unix only: the stub CLI is made executable with a unix mode.
+    #[cfg(unix)]
     #[test]
     fn a_failed_release_probe_does_not_claim_codex_needs_an_update() {
         use std::os::unix::fs::PermissionsExt;
@@ -693,6 +703,8 @@ mod tests {
     }
 
     /// An executable `cli` in `directory` that runs the shell `body`.
+    // Unix only: the stub CLI is made executable with a unix mode.
+    #[cfg(unix)]
     fn fixture_cli(directory: &Path, cli: AgentCli, body: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
         let program = directory.join(cli.as_str());
@@ -757,6 +769,8 @@ mod tests {
     /// A real probe process that is slow to answer still qualifies, however slow: the
     /// fixture answers once this test releases it (after it has demonstrably started), and
     /// the budget is far longer than any machine load, so no clock races.
+    // Unix only: its stub CLI comes from the unix-only `fixture_cli`.
+    #[cfg(unix)]
     #[test]
     fn a_slow_version_probe_qualifies_when_it_answers_within_its_budget() {
         let root = tempfile::tempdir().unwrap();
@@ -802,6 +816,8 @@ mod tests {
 
     /// A probe that does not answer within its budget is unqualified once the budget has
     /// passed, and leaves no child behind.
+    // Unix only: its stub CLI comes from `fixture_cli`, and it probes the child with `libc::kill`.
+    #[cfg(unix)]
     #[test]
     fn version_probe_past_its_budget_is_unqualified_and_reaped() {
         let budget = std::time::Duration::from_millis(1500);
@@ -908,6 +924,8 @@ mod tests {
         assert_eq!(&composed[2..], &arguments[..]);
     }
 
+    // Unix only: it reads a unix mode.
+    #[cfg(unix)]
     #[test]
     fn private_launch_settings_preserve_existing_handlers_and_source_file() {
         let directory = tempfile::tempdir().unwrap();
@@ -1036,6 +1054,8 @@ mod tests {
     }
 
     /// An option that is not UTF-8 goes through unchanged, and the run is still observed.
+    // Unix only: non-UTF-8 arguments are built with `OsStringExt`.
+    #[cfg(unix)]
     #[test]
     fn a_non_utf8_option_keeps_its_place_and_the_observer() {
         use std::os::unix::ffi::OsStringExt;
@@ -1055,6 +1075,8 @@ mod tests {
 
     /// A launch's own settings flag joined to a value that is not UTF-8 cannot be folded
     /// in, so the run is not given a second one.
+    // Unix only: non-UTF-8 arguments are built with `OsStringExt`.
+    #[cfg(unix)]
     #[test]
     fn a_non_utf8_joined_settings_flag_is_refused() {
         use std::os::unix::ffi::OsStringExt;
@@ -1088,6 +1110,8 @@ mod tests {
     /// The managed-shell helper's first steps: it takes the bootstrap its host wrote, once,
     /// and binds the invocation through the host's socket. A bootstrap replaced by a link
     /// or opened to others is refused.
+    // Unix only: it sets unix modes and makes a symlink.
+    #[cfg(unix)]
     #[test]
     fn a_managed_shell_bootstrap_is_taken_once_and_a_replaced_or_shared_one_is_refused() {
         use std::os::unix::fs::PermissionsExt;

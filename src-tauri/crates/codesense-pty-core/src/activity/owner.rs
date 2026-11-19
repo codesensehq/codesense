@@ -2217,6 +2217,8 @@ mod tests {
             .is_err());
     }
 
+    // Unix only: it sets and reads unix modes.
+    #[cfg(unix)]
     #[test]
     fn a_native_launch_gets_a_private_directory_that_goes_with_it() {
         use std::os::unix::fs::PermissionsExt;
@@ -3411,6 +3413,8 @@ mod tests {
         assert_eq!(rig.hook("Stop").state, State::Done);
     }
 
+    // Unix only: uses the unix-only test fixtures.
+    #[cfg(unix)]
     #[test]
     fn subagent_stop_publishes_fresh_activity_without_changing_the_parent_state() {
         let sink = std::sync::Arc::new(crate::fixtures::RecordingSink::default());
@@ -3525,6 +3529,8 @@ mod tests {
         assert_eq!(rig.owner.snapshot("session").unwrap().subagents_open, 1);
     }
 
+    // Unix only: uses the unix-only test fixtures.
+    #[cfg(unix)]
     #[test]
     fn an_exit_a_new_context_a_session_end_or_the_bound_clears_the_count() {
         let open = |rig: &Rig| {
@@ -3742,6 +3748,8 @@ mod tests {
         assert_eq!(rig.hook("Stop").tool_open, Some(false));
     }
 
+    // Unix only: uses the unix-only test fixtures.
+    #[cfg(unix)]
     #[test]
     fn output_activity_is_bounded_and_preserves_holds_and_finished_turns() {
         let sink = std::sync::Arc::new(crate::fixtures::RecordingSink::default());
@@ -3793,6 +3801,8 @@ mod tests {
         assert_eq!(rig.owner.snapshot("session").unwrap().state, stopped.state);
     }
 
+    // Unix only: uses the unix-only test fixtures.
+    #[cfg(unix)]
     #[test]
     fn wrong_incarnation_and_exited_output_do_not_change_activity() {
         let sink = std::sync::Arc::new(crate::fixtures::RecordingSink::default());
@@ -3926,6 +3936,8 @@ mod tests {
         );
     }
 
+    // Unix only: uses the unix-only test fixtures.
+    #[cfg(unix)]
     #[test]
     fn child_tools_refresh_only_the_active_matching_parent_turn() {
         for working in [false, true] {
@@ -4326,6 +4338,8 @@ mod tests {
     /// Only its launch's own process binds an invocation's engine, once: an engine that
     /// descends from it, serving beside the host's socket. Once that engine is gone, its
     /// host reaches the CLI no more.
+    // Unix only: it names a stranger process by `libc::getppid`.
+    #[cfg(unix)]
     #[test]
     fn an_engine_is_bound_only_by_its_launch_and_reaches_only_while_it_runs() {
         let owner = ActivityOwner::new();
@@ -4404,6 +4418,8 @@ mod tests {
 
     /// A forgotten engine that still runs is asked to stop, it alone and never its
     /// group (it shares this test's), and its socket goes.
+    // Unix only: its engine listens on a Unix socket and is ended by SIGTERM.
+    #[cfg(unix)]
     #[test]
     fn a_forgotten_engine_is_terminated_alone_and_its_socket_removed() {
         use std::os::unix::process::ExitStatusExt;

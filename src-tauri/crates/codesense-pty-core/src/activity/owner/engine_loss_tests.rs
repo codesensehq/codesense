@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+//! Unix only: the real keeper loss over its Unix sockets, unix modes and signals.
+#![cfg(unix)]
 use super::*;
 use std::time::Duration;
 
