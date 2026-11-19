@@ -75,6 +75,7 @@ import {
   type SubjectLifecycle,
 } from "@/tauri/commands";
 import { logger } from "@/shared/lib/logger";
+import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
 import {
   NO_WORKSPACE_ID,
   parseWorkspaceKey,
@@ -8566,16 +8567,19 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     const record = workspaceRecord(s, teamKey, wsId);
     if (isRemoteWorkspace(record)) {
       // Its terminals open on its machine (remoteWorkspaceDriver), never here.
-      // Imported late: the shortcut modules import this store.
-      void Promise.all([
-        import("@/shared/stores/shortcuts-store"),
-        import("@/shared/lib/shortcuts/keystroke"),
-      ]).then(([{ getToastShortcut }, { formatKeystrokeDisplay }]) => {
-        const chord = getToastShortcut("viewer.new-terminal-tab");
-        toast(
-          `This workspace lives on a machine: open its terminals with ${chord ? `${formatKeystrokeDisplay(chord)} or ` : ""}the new-terminal menu`,
+      // `shortcuts-store` is imported late: it reaches `panel-menu`, which imports this
+      // store. A failed import or lookup still shows the toast, without a chord.
+      void import("@/shared/stores/shortcuts-store")
+        .then(({ getToastShortcut }) => getToastShortcut("viewer.new-terminal-tab"))
+        .catch((e: unknown) => {
+          logLayoutVerb("open terminal tab")(e);
+          return "";
+        })
+        .then((chord) =>
+          toast(
+            `This workspace lives on a machine: open its terminals with ${chord ? `${formatKeystrokeDisplay(chord)} or ` : ""}the new-terminal menu`,
+          ),
         );
-      });
       const refused = Promise.reject(
         new Error(`workspace ${wsId} lives on a remote machine; open its terminals there`),
       );
