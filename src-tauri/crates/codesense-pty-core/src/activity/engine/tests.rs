@@ -426,23 +426,43 @@ fn the_real_keeper_publishes_unix_and_tcp_and_reaps_its_engine_when_stopped() {
 
 #[test]
 fn the_real_keeper_ends_its_engine_once_the_cli_that_started_it_is_gone() {
+    /// The CLI, and the keeper and engine once found: killed when dropped, should the row
+    /// fail before the keeper ends them.
+    struct Left(std::process::Child, Vec<Process>);
+    impl Drop for Left {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+            for process in self.1.iter().filter(|process| process.runs()) {
+                // SAFETY: signalling a process this row started, checked by its start.
+                unsafe {
+                    libc::kill(process.pid as i32, libc::SIGKILL);
+                }
+            }
+        }
+    }
     let dir = tempfile::tempdir_in("/tmp").unwrap();
     let endpoint = dir.path().join("engine-keeper.sock");
     // A CLI that runs the keeper as its child and is killed alone, keeper left running.
     let mut shell = Command::new("/bin/sh");
     shell.args(["-c", r#""$0" "$@" & wait"#]);
-    let mut cli = keeper_run_by(shell, dir.path(), "unix", &endpoint)
-        .spawn()
-        .unwrap();
-    let engine = published(dir.path(), &endpoint, || cli.try_wait().unwrap().is_none());
-    let keeper = Process::inspect(engine)
-        .and_then(|engine| Process::inspect(engine.parent))
-        .expect("the keeper runs");
-    assert_eq!(keeper.parent, cli.id());
-    cli.kill().unwrap();
-    cli.wait().unwrap();
+    let mut cli = Left(
+        keeper_run_by(shell, dir.path(), "unix", &endpoint)
+            .spawn()
+            .unwrap(),
+        Vec::new(),
+    );
+    let engine = published(dir.path(), &endpoint, || {
+        cli.0.try_wait().unwrap().is_none()
+    });
+    let engine = Process::inspect(engine).expect("the engine runs");
+    let keeper = Process::inspect(engine.parent).expect("the keeper runs");
+    cli.1.extend([keeper, engine]);
+    assert_eq!(keeper.parent, cli.0.id());
+    cli.0.kill().unwrap();
+    cli.0.wait().unwrap();
     let deadline = Instant::now() + KEEPER_POLL * 4 + KEEPER_STOP;
-    while keeper.runs() || Process::inspect(engine).is_some() || endpoint.exists() {
+    while keeper.runs() || engine.runs() || endpoint.exists() {
         assert!(Instant::now() < deadline, "the keeper outlived its CLI");
         std::thread::sleep(Duration::from_millis(10));
     }
