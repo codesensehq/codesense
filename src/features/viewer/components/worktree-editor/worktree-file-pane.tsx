@@ -56,7 +56,7 @@ import {
   renderableType,
   type WorktreeViewMode,
 } from "./worktree-view-mode";
-import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
+import { ariaKeyshortcuts, formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
 
 /** What the workbench chrome (tab strip, status bar, breadcrumbs) shows for a
  *  pane. Reported upward whenever any of it changes. */
@@ -720,7 +720,7 @@ function ViewModeToggle({
         role="radiogroup"
         aria-label="File view"
         aria-disabled={disabled || undefined}
-        aria-keyshortcuts="Meta+Shift+V"
+        aria-keyshortcuts={ariaKeyshortcuts("CmdOrCtrl+Shift+V")}
         title={
           disabled
             ? "Resolve the conflict first"
