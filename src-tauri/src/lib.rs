@@ -657,9 +657,14 @@ pub fn run() {
             // sidecar so the first terminal does not wait for it and the
             // sessions a previous run left there are reachable. An incompatible
             // sidecar is logged there and reported again by the first terminal
-            // it refuses.
+            // it refuses. Where the platform has no terminal-server sidecar the
+            // state has no root, so nothing launches one and the app hosts its
+            // terminals itself: decided here, once.
             let local_sessions = terminal::session_server::SessionServerState::at(
-                commands::paths::codesense_home_dir(),
+                commands::pty_backend::local_sidecar_root(
+                    &platform_caps::Caps::live(),
+                    commands::paths::codesense_home_dir(),
+                ),
             );
             let identity = commands::pty_backend::in_process_identity(app.handle())
                 .map_err(std::io::Error::other)?;

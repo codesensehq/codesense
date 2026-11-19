@@ -72,6 +72,7 @@ use crate::commands::pty_host::{
     StreamIds, StreamItem,
 };
 use crate::commands::pty_layout::app_viewer;
+use crate::platform_caps::{Caps, TERMINAL_SERVER_SIDECAR};
 use crate::terminal::session_server::{
     launch_detached, terminate_sidecar, ConnectError, Continuity, Presence, RemoteSessionLedger,
     SessionServerClient, SessionServerState, SpawnDisposition, SpawnFailure, SIDECAR_BIN,
@@ -666,6 +667,14 @@ pub(crate) fn reserve_spawn_effect_claim<R: Runtime>(
         })?;
     }
     Ok(claim)
+}
+
+/// The root of this instance's terminal server: the instance `home`, where the
+/// platform has the terminal-server sidecar. With it off there is none, so no
+/// path launches a sidecar and the app hosts its terminals itself. The app
+/// decides it once, at startup, with `Caps::live()`.
+pub fn local_sidecar_root(caps: &Caps<'_>, home: Option<PathBuf>) -> Option<PathBuf> {
+    home.filter(|_| caps.enabled(TERMINAL_SERVER_SIDECAR))
 }
 
 pub fn resolve_terminal_backend<R: Runtime>(
@@ -3828,6 +3837,49 @@ mod tests {
             terminal_server_overview(app.handle()).state,
             TerminalServerRun::Running
         );
+    }
+
+    /// The terminal server has a root only where its capability is on.
+    #[test]
+    fn the_sidecar_root_follows_the_terminal_server_capability() {
+        let home = PathBuf::from("/instance");
+        let on = crate::platform_caps::caps_with_off(&[]);
+        let off = crate::platform_caps::caps_with_off(&[TERMINAL_SERVER_SIDECAR]);
+        assert_eq!(
+            local_sidecar_root(&Caps(&on), Some(home.clone())),
+            Some(home.clone())
+        );
+        assert_eq!(local_sidecar_root(&Caps(&off), Some(home)), None);
+        assert_eq!(local_sidecar_root(&Caps(&on), None), None);
+    }
+
+    /// With the terminal server's capability off the state has no root, so
+    /// Start launches nothing and the app hosts its terminals itself.
+    #[test]
+    fn start_launches_nothing_without_a_sidecar_root() {
+        let root = codesense_session_server::testing::short_root();
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock app");
+        app.manage(StreamIds::default());
+        let off = crate::platform_caps::caps_with_off(&[TERMINAL_SERVER_SIDECAR]);
+        app.manage(SessionServerState::at(local_sidecar_root(
+            &Caps(&off),
+            Some(root.path().to_path_buf()),
+        )));
+
+        let launched = std::cell::Cell::new(false);
+        let started =
+            start_terminal_server_with(app.handle(), Arc::new(RecordingSink::default()), |_| {
+                launched.set(true);
+                Ok(())
+            });
+        assert_eq!(
+            started.err().as_deref(),
+            Some("this app hosts its terminals itself")
+        );
+        assert!(!launched.get(), "nothing was launched");
+        assert!(!codesense_pty_core::protocol::socket_path(root.path()).exists());
     }
 
     /// SV-7: a real Stop of a running terminal server: it ends — its session

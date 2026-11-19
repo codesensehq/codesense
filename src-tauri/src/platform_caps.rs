@@ -15,6 +15,7 @@ use std::sync::OnceLock;
 pub const GIT_AI: &str = "git-ai";
 pub const STARSHIP: &str = "starship";
 pub const SECRET_STORE: &str = "secret-store";
+pub const TERMINAL_SERVER_SIDECAR: &str = "terminal-server-sidecar";
 
 /// The table: a JSON array of rows, in the order of the `caps:` line.
 const TABLE_JSON: &str = include_str!("../platform-caps.json");
@@ -170,12 +171,48 @@ pub fn caps() -> &'static [Cap] {
     })
 }
 
+/// A resolved answer, handed to code that branches on a capability so that code stays pure:
+/// `Caps::live()` at the call site, an injected list in tests.
+#[derive(Clone, Copy, Debug)]
+pub struct Caps<'a>(pub &'a [Cap]);
+
+impl Caps<'static> {
+    /// The running platform's capabilities, `caps()`.
+    pub fn live() -> Self {
+        Caps(caps())
+    }
+}
+
+impl Caps<'_> {
+    /// Whether `key` is on; an unknown key is off.
+    pub fn enabled(&self, key: &str) -> bool {
+        self.0.iter().any(|cap| cap.key == key && cap.on)
+    }
+}
+
+/// Every capability in the table on except the `off` keys, which are off with their reasons:
+/// the list a test hands to `Caps`.
+#[cfg(test)]
+pub(crate) fn caps_with_off(off: &[&str]) -> Vec<Cap> {
+    table()
+        .iter()
+        .map(|row| {
+            let on = !off.contains(&row.key.as_str());
+            Cap {
+                key: &row.key,
+                on,
+                reason: (!on).then_some(row.reason.as_str()),
+            }
+        })
+        .collect()
+}
+
 /// Whether the named capability is on for one platform; an unknown key is off. The running
 /// platform reads `caps()`, so its probes run once; any other resolves only the key's row. A
 /// probe row is off there: a probe can only answer for the host it runs on.
 pub fn enabled_for(key: &str, os: &str, arch: &str) -> bool {
     if (os, arch) == (std::env::consts::OS, std::env::consts::ARCH) {
-        return caps().iter().any(|cap| cap.key == key && cap.on);
+        return Caps::live().enabled(key);
     }
     table()
         .iter()
@@ -509,6 +546,25 @@ mod tests {
         assert!(on("linux", "x86_64", STARSHIP));
         assert!(on("linux", "aarch64", STARSHIP));
         assert!(!on("linux", "riscv64", STARSHIP));
+    }
+
+    #[test]
+    fn caps_answer_from_the_list_they_are_given() {
+        let all_on = caps_with_off(&[]);
+        assert_eq!(all_on.len(), table().len());
+        assert!(all_on
+            .iter()
+            .all(|cap| Caps(&all_on).enabled(cap.key) && cap.reason.is_none()));
+        let off = caps_with_off(&[TERMINAL_SERVER_SIDECAR]);
+        let caps = Caps(&off);
+        assert!(!caps.enabled(TERMINAL_SERVER_SIDECAR));
+        assert!(off
+            .iter()
+            .find(|cap| cap.key == TERMINAL_SERVER_SIDECAR)
+            .is_some_and(|cap| cap.reason.is_some()));
+        assert!(caps.enabled(GIT_AI));
+        assert!(!caps.enabled("no-such-capability"));
+        assert_eq!(Caps::live().0, caps());
     }
 
     /// Whether `key` is on for the running platform.
