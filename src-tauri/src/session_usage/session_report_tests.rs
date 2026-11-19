@@ -104,6 +104,9 @@ fn a_report_says_why_while_managed_settings_redirect_usage() {
     drop(read_from_its_log);
     let _managed = managed_telemetry::Fixture::redirecting_unread();
     let redirected = report();
-    assert_eq!(redirected["unavailableReason"], managed_telemetry::USAGE_REDIRECTED);
+    assert_eq!(
+        redirected["unavailableReason"],
+        managed_telemetry::usage_redirected()
+    );
     assert_eq!(redirected["sessions"].as_array().unwrap().len(), 1, "older sessions are still listed");
 }

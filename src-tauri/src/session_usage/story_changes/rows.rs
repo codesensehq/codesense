@@ -6,6 +6,7 @@
 use super::*;
 use std::{cell::RefCell, path::PathBuf};
 use crate::session_usage::contribution::{self, Contribution, EntityAdapter, Of, Op, Reducer, Row, Source, SourceResolver};
+use crate::session_usage::managed_telemetry::usage_redirected;
 use crate::session_usage::{cost_rollup::CostRollup, SessionUsage};
 
 pub(super) const SESSION: &str = "session";
@@ -13,13 +14,11 @@ pub(super) const SESSION: &str = "session";
 pub(super) const COST_UNKNOWN: &str = "one or more sessions have no complete priced usage";
 const TIME_UNKNOWN: &str = "one or more sessions have no observed timing; time covers observed sessions only";
 const COST_NONE: &str = "no sessions with priced usage for this story";
-/// No sessions while managed Claude settings send their usage elsewhere.
-const COST_REDIRECTED: &str = crate::session_usage::managed_telemetry::USAGE_REDIRECTED;
 
 /// A stored `costUsd` reason as it reads now. A kept row says whatever held when it was folded,
 /// so a read swaps a no-sessions reason for the one that holds now; any other reason stays.
 pub(crate) fn current_cost_reason(reason: &str, redirected: bool) -> &str {
-    if reason == COST_NONE || reason == COST_REDIRECTED {
+    if reason == COST_NONE || reason == usage_redirected() {
         no_sessions_cost(redirected)
     } else {
         reason
@@ -28,7 +27,8 @@ pub(crate) fn current_cost_reason(reason: &str, redirected: bool) -> &str {
 
 fn no_sessions_cost(redirected: bool) -> &'static str {
     if redirected {
-        COST_REDIRECTED
+        // No sessions while managed Claude settings send their usage elsewhere.
+        usage_redirected()
     } else {
         COST_NONE
     }

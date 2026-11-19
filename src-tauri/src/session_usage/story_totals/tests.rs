@@ -1649,7 +1649,7 @@ fn a_counting_result_persists_through_store_result() {
 /// again; other reasons are as stored.
 #[test]
 fn a_managed_settings_change_shows_on_the_next_index_read_without_a_fold() {
-    use crate::session_usage::managed_telemetry::{Fixture, USAGE_REDIRECTED};
+    use crate::session_usage::managed_telemetry::{usage_redirected, Fixture};
     const NONE: &str = "no sessions with priced usage for this story";
     let (dir, s) = store();
     let all = ids("SV-MANAGED", 1);
@@ -1677,9 +1677,13 @@ fn a_managed_settings_change_shows_on_the_next_index_read_without_a_fold() {
     assert_eq!(read(), NONE, "Claude's session log is read");
     drop(read_from_its_log);
     let managed = Fixture::redirecting_unread();
-    assert_eq!(read(), USAGE_REDIRECTED, "an install shows on the next read");
-    stored(USAGE_REDIRECTED);
-    assert_eq!(read(), USAGE_REDIRECTED);
+    assert_eq!(
+        read(),
+        usage_redirected(),
+        "an install shows on the next read"
+    );
+    stored(usage_redirected());
+    assert_eq!(read(), usage_redirected());
     drop(managed);
     assert_eq!(read(), NONE, "a removal shows on the next read");
 }
@@ -2588,7 +2592,7 @@ mod b1 {
                 "empty" => (json!([0, null, 0, 0, 0]), Some("no sessions with priced usage for this story"), None),
                 "redirected-empty" => (
                     json!([0, null, 0, 0, 0]),
-                    Some(crate::session_usage::managed_telemetry::USAGE_REDIRECTED),
+                    Some(crate::session_usage::managed_telemetry::usage_redirected()),
                     None,
                 ),
                 "timed" | "redirected-timed" => (json!([2, 4.0, 250, 200, 200]), None, None),
