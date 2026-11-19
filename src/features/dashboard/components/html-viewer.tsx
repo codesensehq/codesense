@@ -87,6 +87,7 @@ import { pageSdk } from "../lib/page-sdk";
 import { FRAME_PRESENTATION_UNAVAILABLE } from "../lib/frame-presentation";
 import { READ_VERBS, resolveFrameCall, type BridgeMessageIdentity } from "./html-bridge";
 import { hasMod, keydownEvent, modifiersFrom } from "@/shared/lib/shortcuts/keystroke";
+import { pageNamesKeysAsMac } from "@/shared/lib/local-machine";
 
 // SW-SD-1: cap the wait for a doc to answer a `codesense:snapshot-request` so a
 // wedged/never-responding doc can't strand a pending correlation entry or leave
@@ -1362,6 +1363,8 @@ export function HtmlViewer({
     type: "codesense:slot-context",
     context: slotContext,
     sdk,
+    // The shim's formatKeys, formatModifierClick and local machine words follow this flag.
+    mac: pageNamesKeysAsMac(),
     declaration: { badge: pane?.badge },
     token: frameRecord?.token,
   };

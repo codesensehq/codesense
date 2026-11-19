@@ -1329,5 +1329,10 @@ export const PAGE_SDK_FEATURES = [
   "theme",
   "kitTokens",
   "virtualList",
-  "inboxThread"
+  "inboxThread",
+  "formatKeys",
+  "fillKeys",
+  "formatModifierClick",
+  "localMachineLabel",
+  "localMachinePhrase"
 ] as const;

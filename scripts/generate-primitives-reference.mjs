@@ -963,6 +963,47 @@ const KIT = [
       'codesense.onTheme((theme) => {\n  if (!theme) return;\n  document.body.classList.toggle(\n    "dark-mode",\n    theme.scheme === "dark"\n  );\n});',
   },
   {
+    name: "codesense.formatKeys",
+    category: "ui",
+    wraps: "the mac flag in codesense:slot-context",
+    description:
+      'A keystroke as the person\'s OS shows it: `CmdOrCtrl+Enter` is `⌘⏎` on macOS and `Ctrl+⏎` elsewhere. Returns "" before the first slot context and for a string that is not a keystroke. Call it as `codesense.formatKeys?.(keys) ?? ""` so an older app shows no hint.',
+    example: 'kbd.textContent = codesense.formatKeys?.("CmdOrCtrl+Alt+Enter") ?? "";',
+  },
+  {
+    name: "codesense.fillKeys",
+    category: "ui",
+    wraps: "the mac flag in codesense:slot-context",
+    description:
+      "Fills `[data-keys]` text and `data-keys-title` / `data-keys-aria-label` templates (one `{keys}` placeholder, keys in `data-keys-keys`) under a root. The shim fills the document on every slot context, or at DOMContentLoaded while it still loads; call it after inserting hints. Keep a key-free static `aria-label`, and hide unfilled hints with `[data-keys]:empty { display: none }`.",
+    example:
+      '<kbd data-keys="CmdOrCtrl+N"></kbd>\n<button aria-label="New note" data-keys-keys="CmdOrCtrl+N" data-keys-aria-label="New note ({keys})"></button>',
+  },
+  {
+    name: "codesense.formatModifierClick",
+    category: "ui",
+    wraps: "the mac flag in codesense:slot-context",
+    description:
+      'A modifier+click gesture: `⌥-click` on macOS and `Alt+click` elsewhere, for `"CmdOrCtrl"`, `"Shift"` or `"Alt"`. Returns "" before the first slot context.',
+    example: 'const gesture = codesense.formatModifierClick?.("Alt") || "Alt+click";',
+  },
+  {
+    name: "codesense.localMachineLabel",
+    category: "ui",
+    wraps: "the mac flag in codesense:slot-context",
+    description:
+      'The machine the app runs on as a label: "This Mac" on macOS, "This computer" elsewhere. Returns "" before the first slot context. Wording only: decide locality by machine id.',
+    example: 'label.textContent = codesense.localMachineLabel?.() || "This computer";',
+  },
+  {
+    name: "codesense.localMachinePhrase",
+    category: "ui",
+    wraps: "the mac flag in codesense:slot-context",
+    description:
+      'The machine the app runs on mid-sentence: "this Mac" on macOS, "this computer" elsewhere. Returns "" before the first slot context.',
+    example: 'where.textContent = codesense.localMachinePhrase?.() || "this computer";',
+  },
+  {
     name: "codesense.onIntent",
     category: "data-read",
     wraps: "codesense:intent postMessage listener",
@@ -1811,10 +1852,10 @@ const EVENT_META = {
   "codesense:slot-context": {
     direction: "parent-to-doc",
     payload:
-      "{context: {slotId, presentation, width, narrow, team, focusedSession?, currentFile?, selection?, theme}}",
+      "{context: {slotId, presentation, width, narrow, team, focusedSession?, currentFile?, selection?, theme}, sdk, mac}",
     timing: "Before theme on ready, and whenever slot context changes",
     description:
-      "The host context includes nav selection; onNavSelectionChange is an alias over this selection. Narrow is true below 300 pixels.",
+      "The host context includes nav selection; onNavSelectionChange is an alias over this selection. Narrow is true below 300 pixels. `mac` drives formatKeys, formatModifierClick and the local machine words, and the shim fills `[data-keys]` hints when it arrives (or at DOMContentLoaded while the document loads).",
     example: "codesense.onSlotContext(context => render(context));",
   },
   "codesense:teardown": {

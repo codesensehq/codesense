@@ -301,6 +301,25 @@ declare namespace CodesenseSdk {
     onIntent(cb: (intent: unknown) => void): Unsubscribe;
     onVisibility(cb: (visible: boolean) => void): Unsubscribe;
     onSlotContext(cb: (context: SlotContext) => void): Unsubscribe;
+    /**
+     * A keystroke such as `CmdOrCtrl+Alt+Enter` as the person's OS shows it: `⌘⌥⏎` on macOS,
+     * `Ctrl+Alt+⏎` elsewhere. `""` before the first slot context and for a string that is not a
+     * keystroke (`CmdOrCtrl`, `Shift` and `Alt` modifiers, one key).
+     */
+    formatKeys(keystroke: string): string;
+    /**
+     * Fill `[data-keys]` text and the `data-keys-title` / `data-keys-aria-label` templates (one
+     * `{keys}` placeholder, keys in `data-keys-keys`) under `root` (default: the document). The
+     * shim fills the document on each slot context, or at DOMContentLoaded while it loads; call
+     * this after inserting hints. Hide an unfilled hint with `[data-keys]:empty { display: none }`.
+     */
+    fillKeys(root?: ParentNode): void;
+    /** A modifier+click gesture: `⌥-click` on macOS, `Alt+click` elsewhere; `""` before slot context. */
+    formatModifierClick(modifier: "CmdOrCtrl" | "Shift" | "Alt"): string;
+    /** The local machine as a label: "This Mac" or "This computer"; `""` before slot context. */
+    localMachineLabel(): string;
+    /** The local machine mid-sentence: "this Mac" or "this computer"; `""` before slot context. */
+    localMachinePhrase(): string;
     /** Receives each `codesense:command` for a command id this page registered. */
     /** Architecture: page-local Open/Reply/Open queue/New message callbacks, including hosted messages. */
     onMenuAction(

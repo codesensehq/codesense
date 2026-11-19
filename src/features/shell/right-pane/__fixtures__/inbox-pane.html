@@ -99,6 +99,10 @@
         stroke-linecap: round;
         stroke-linejoin: round;
       }
+      /* A shortcut hint the app has not filled (an older app) never shows as an empty pill. */
+      [data-keys]:empty {
+        display: none;
+      }
       .ib kbd {
         font: 500 10.5px var(--cs-font-mono);
         color: var(--cs-muted-fg);
@@ -2686,7 +2690,7 @@
               <div class="row">
                 <span>Enter to send · Shift+Enter for a new line</span><span class="sp"></span
                 ><button type="submit" class="ib-btn primary" id="send" disabled>
-                  Send <kbd>⌘↵</kbd>
+                  Send <kbd data-keys="CmdOrCtrl+Enter"></kbd>
                 </button>
               </div>
             </div>
@@ -5676,9 +5680,11 @@
           const s = state(recipient, parentMessage());
           $("recipient-state").textContent = s.text;
           $("recipient-state").className = "ib-rstate " + (s.cls || "");
+          const keys = h("kbd", "", cs.formatKeys?.("CmdOrCtrl+Enter") ?? "");
+          keys.dataset.keys = "CmdOrCtrl+Enter";
           $("send").replaceChildren(
             document.createTextNode(sending ? "Sending…" : s.queue ? "Queue " : "Send "),
-            h("kbd", "", "⌘↵"),
+            keys,
           );
           $("send").disabled = sending || !prefsReady || !!s.disabled || !$("draft").value.trim();
           $("fallback").replaceChildren();
@@ -7346,7 +7352,7 @@
           });
         });
         document.addEventListener("keydown", (e) => {
-          // Enter and ⌘/Ctrl+Enter send, Shift+Enter adds a line; nothing sends while an IME composes.
+          // Enter and Cmd/Ctrl+Enter send, Shift+Enter adds a line; nothing sends while an IME composes.
           if (e.key === "Enter" && e.target === $("draft") && !e.isComposing && e.keyCode !== 229 && !e.altKey && (!e.shiftKey || e.metaKey || e.ctrlKey)) {
             e.preventDefault();
             $("composer").requestSubmit();

@@ -29,3 +29,12 @@ export function localMachineNoun(): string {
 export function localMachineAndRemoteNoun(): string {
   return isMac() ? "Mac and machine" : "machine";
 }
+
+/**
+ * Whether a framed page names keys and this machine as on macOS: the `mac` flag its slot context
+ * carries for `codesense.formatKeys`, `formatModifierClick` and the local machine words, which
+ * equal this module's and the keystroke helpers. Presentation only.
+ */
+export function pageNamesKeysAsMac(): boolean {
+  return isMac();
+}
