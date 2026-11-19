@@ -31,6 +31,10 @@ const HOSTED_RUNNERS = new Set([
 // Exact grants are scoped by file and job; each exception also needs its own constraints.
 const SCORECARD = { file: "scorecard.yml", job: "scorecard" };
 const FLAKY_ISSUES = { file: "rust.yml", job: "flaky-issues" };
+// Deletes the nightly's superseded macOS build caches, the only job that may write actions.
+const CACHE_PRUNE = { file: "rust.yml", job: "rust-macos-cache-prune" };
+// The jobs that write something, and so run only on main outside requests (below).
+const MAIN_WRITERS = [FLAKY_ISSUES, CACHE_PRUNE];
 // The commit email audit runs nightly and on main, never on pull requests.
 const COMMIT_EMAILS = {
   file: "commit-emails.yml",
@@ -67,6 +71,7 @@ const JOB_PERMISSIONS = new Map([
   ["dco.yml:dco", { contents: "read", "pull-requests": "read" }],
   ["quarantine.yml:quarantine-issues", { contents: "read", issues: "read" }],
   [`${FLAKY_ISSUES.file}:${FLAKY_ISSUES.job}`, { contents: "read", issues: "write" }],
+  [`${CACHE_PRUNE.file}:${CACHE_PRUNE.job}`, { actions: "write" }],
   [
     `${SCORECARD.file}:${SCORECARD.job}`,
     { contents: "read", "security-events": "write", "id-token": "write" },
@@ -111,12 +116,27 @@ const RUST_PATH_FILTER = {
 // And one more: rust.yml's non-required jobs skip merge groups (they run on push to main and
 // nightly instead): the macOS build and the result job that reports it (the test shards run only
 // after the build), the Windows check, and the Linux app job. Each may put exactly this term right
-// after the path filter's; what follows must still begin with OFF_PULL_REQUESTS, so push and
-// schedule always run them.
+// after the path filter's (and the macOS filter's, below); what follows must still begin with
+// OFF_PULL_REQUESTS, so push and schedule always run them.
 const OFF_MERGE_GROUPS = {
   file: "rust.yml",
   jobs: ["rust-macos-build", "rust-macos", "rust-check-windows", "rust-linux-app"],
   term: "github.event_name != 'merge_group'",
+};
+// The macOS build and the result job that reports it may also skip a change that only Windows or
+// Linux compiles, as the changes job decides: exactly this term, right after the path filter's.
+const MACOS_PATH_FILTER = {
+  file: "rust.yml",
+  jobs: ["rust-macos-build", "rust-macos"],
+  term: "needs.changes.outputs.macos != 'false'",
+};
+// The macOS test shards skip a push to main whose build found main had moved on (the newer push
+// runs them, and the nightly covers every commit): exactly this condition, and nothing else.
+const SUPERSEDED = {
+  file: "rust.yml",
+  job: "rust-macos-test",
+  needs: "rust-macos-build",
+  condition: "needs.rust-macos-build.outputs.superseded != 'true'",
 };
 // rust.yml's macOS result job may lead with always() in place of the path filter's !cancelled(),
 // so a cancelled run reports red rather than skipped. Only that job: it runs no build or tests.
@@ -319,10 +339,10 @@ export function workflowPolicy(text, file = "") {
       }
     }
     const scorecard = scorecardWorkflow && name === SCORECARD.job;
-    const flakyIssues = file === FLAKY_ISSUES.file && name === FLAKY_ISSUES.job;
+    const mainWriter = MAIN_WRITERS.some((writer) => file === writer.file && name === writer.job);
     if (
       NEVER_SKIPPED_ON.some((t) => triggers.includes(t)) &&
-      !flakyIssues &&
+      !mainWriter &&
       Object.hasOwn(job, "if")
     ) {
       let condition = String(job.if)
@@ -346,6 +366,12 @@ export function workflowPolicy(text, file = "") {
       if (pathFiltered) {
         let rest = terms.slice(RUST_PATH_FILTER.terms.length);
         if (
+          file === MACOS_PATH_FILTER.file &&
+          MACOS_PATH_FILTER.jobs.includes(name) &&
+          rest[0] === MACOS_PATH_FILTER.term
+        )
+          rest = rest.slice(1);
+        if (
           file === OFF_MERGE_GROUPS.file &&
           OFF_MERGE_GROUPS.jobs.includes(name) &&
           rest[0] === OFF_MERGE_GROUPS.term
@@ -358,14 +384,19 @@ export function workflowPolicy(text, file = "") {
             ? topLevelConjuncts(rest[0])[0]
             : "";
       }
-      if (!condition.startsWith(OFF_PULL_REQUESTS))
+      const superseded =
+        file === SUPERSEDED.file &&
+        name === SUPERSEDED.job &&
+        needs.includes(SUPERSEDED.needs) &&
+        condition === SUPERSEDED.condition;
+      if (!superseded && !condition.startsWith(OFF_PULL_REQUESTS))
         errors.push(
           `${name}: if must begin with ${OFF_PULL_REQUESTS} so merge_group, push and schedule always run it`,
         );
     }
-    // Issue writes run only for pushes or scheduled runs on main in the base repository, never
-    // pull requests, merge groups or forks.
-    if (flakyIssues) {
+    // Issue and cache writes run only for pushes or scheduled runs on main in the base repository,
+    // never pull requests, merge groups or forks.
+    if (mainWriter) {
       const terms = topLevelConjuncts(String(job.if ?? ""));
       if (!terms.includes(PUSH_ONLY) && !terms.includes(SCHEDULED))
         errors.push(`${name}: if must require ${PUSH_ONLY} or ${SCHEDULED} at the top level`);

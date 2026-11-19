@@ -35,12 +35,16 @@ jobs:
     # pass (a workflow skipped by a paths filter would leave them pending). The Rust jobs run
     # unless this job says rust=false, so its failure runs them too. A push to main diffs what it
     # added (a new branch tip has no before, so it tests); scheduled and manual runs always test.
+    # It also says macos=false when every Rust-relevant change is a file only Windows or Linux
+    # compiles (rust-changes.mjs lists them), and the macOS jobs then skip; every way out of the
+    # filter step that doesn't diff says macos=true.
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
+      macos: ${{ steps.filter.outputs.macos }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -64,13 +68,13 @@ jobs:
             pull_request) range="$PR_BASE...$PR_HEAD" ;;
             merge_group) range="$GROUP_BASE..$GROUP_HEAD" ;;
             push)
-              if [[ "$PUSH_BEFORE" =~ ^0+$ ]]; then echo "rust=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+              if [[ "$PUSH_BEFORE" =~ ^0+$ ]]; then printf 'rust=true\nmacos=true\n' >> "$GITHUB_OUTPUT"; exit 0; fi
               range="$PUSH_BEFORE..$PUSH_AFTER" ;;
-            *) echo "rust=true" >> "$GITHUB_OUTPUT"; exit 0 ;;
+            *) printf 'rust=true\nmacos=true\n' >> "$GITHUB_OUTPUT"; exit 0 ;;
           esac
           # The filter never judges a change to itself.
           if git diff --name-only "$range" | grep -qE '^(scripts/rust-changes[^/]*|\.github/workflows/rust\.yml)$'; then
-            echo "rust=true" >> "$GITHUB_OUTPUT"
+            printf 'rust=true\nmacos=true\n' >> "$GITHUB_OUTPUT"
             exit 0
           fi
           node scripts/rust-changes.mjs "$range" >> "$GITHUB_OUTPUT"
@@ -108,19 +112,25 @@ jobs:
     name: Rust (macOS arm64) build ${{ matrix.part }}
     # macOS runners are scarce, and the macOS jobs are not a required check: they never run on a
     # merge group, so the queue merges on the Linux and TypeScript checks. They run after the
-    # merge, on each push to main that changes something Rust can see (the changes job), and
-    # always on the nightly schedule and workflow_dispatch; a red run there goes to the next
-    # hardening pass. On a pull request they run only with the ci:macos label, never on a
-    # Dependabot pull request, and not again when another label is added. workflow-policy allows
-    # only this job and rust-macos to skip merge groups, and keeps the
-    # github.event_name != 'pull_request' || so push and schedule run them.
+    # merge, on each push to main that changes something the macOS build can see (the changes
+    # job's rust and macos outputs), and always on the nightly schedule and workflow_dispatch; a
+    # red run there goes to the next hardening pass. On a pull request they run only with the
+    # ci:macos label, never on a Dependabot pull request, and not again when another label is
+    # added. workflow-policy allows only this job and rust-macos to skip merge groups or changes
+    # only Windows or Linux compiles, and keeps the github.event_name != 'pull_request' || so push
+    # and schedule run them.
+    # A push to main waits longest for a macOS runner, and by the time it has one, a newer push
+    # often exists. Each part then checks main's head first: when main has moved on, the part
+    # skips the rest of its steps and gives the runner back, the test shards skip, and rust-macos
+    # reports the run as superseded (the newer push's run builds its commit, and the nightly
+    # builds every commit). Pull requests, the nightly and dispatched runs never skip this way.
     # This job compiles the tests once into two nextest archives, on two runners at once: every
     # crate's lib unit tests (the app's is most of the compile) and everything else (bins,
     # examples, integration tests, doctests). rust-macos-test runs both in shards.
     needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' && github.event_name != 'merge_group' && (github.event_name != 'pull_request' || (github.event.pull_request.user.login != 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'ci:macos') && (github.event.action != 'labeled' || github.event.label.name == 'ci:macos'))) }}
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' && needs.changes.outputs.macos != 'false' && github.event_name != 'merge_group' && (github.event_name != 'pull_request' || (github.event.pull_request.user.login != 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'ci:macos') && (github.event.action != 'labeled' || github.event.label.name == 'ci:macos'))) }}
     runs-on: macos-15
-    # Room for a full compile of each half, most of which the dependency cache does not cover.
+    # Room for a full compile of each half, which a cold workspace cache does not cover.
     timeout-minutes: 150
     strategy:
       fail-fast: false
@@ -128,6 +138,9 @@ jobs:
         part: [lib, rest]
     permissions:
       contents: read
+    outputs:
+      # Set only to true, by either part; matrix legs that leave an output unset don't clear it.
+      superseded: ${{ steps.superseded.outputs.superseded }}
     defaults:
       run:
         shell: bash
@@ -144,71 +157,133 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Check main's head
+        id: superseded
+        # A push whose commit is no longer main's head skips its build. A failed lookup builds,
+        # and so does a re-run, which someone asked for after main moved on.
+        if: github.event_name == 'push' && github.run_attempt == 1
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          if head=$(git ls-remote origin refs/heads/main) && head=${head%%[[:space:]]*} && [[ -n "$head" && "$head" != "$SHA" ]]; then
+            echo "superseded=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::main is now at $head, so this build skips; the nightly covers $SHA."
+          fi
       - name: Configure Git identity
+        if: steps.superseded.outputs.superseded != 'true'
         run: |
           git config --global user.name "CodeSense CI"
           git config --global user.email "security@codesense.ai"
       - name: Test sidecar naming with bash 3.2
         # macOS's own /bin/bash, the oldest bash the build scripts run under; once per run.
-        if: matrix.part == 'rest'
+        if: matrix.part == 'rest' && steps.superseded.outputs.superseded != 'true'
         run: /bin/bash scripts/lib/sidecar.test.sh
       - name: Prepare logs
+        if: steps.superseded.outputs.superseded != 'true'
         run: mkdir -p "$RUNNER_TEMP/rust-ci-logs"
       - name: Set up pnpm
+        if: steps.superseded.outputs.superseded != 'true'
         uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - name: Set up Node
+        if: steps.superseded.outputs.superseded != 'true'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: ${{ github.event_name != 'merge_group' && 'pnpm' || '' }}
       - name: Install dependencies
+        if: steps.superseded.outputs.superseded != 'true'
         run: pnpm install --frozen-lockfile 2>&1 | tee "$RUNNER_TEMP/rust-ci-logs/pnpm-install.log"
       - name: Set up Rust
         # Matches ci.yml; rustup's proxies read the channel in rust-toolchain.toml.
+        if: steps.superseded.outputs.superseded != 'true'
         run: rustup toolchain install stable --profile minimal 2>&1 | tee "$RUNNER_TEMP/rust-ci-logs/rustup.log"
       - name: Restore scanner archives
         # Archives named by their sha256; install-scanners verifies each against the lock before use.
         id: scanner-cache
+        if: steps.superseded.outputs.superseded != 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/scanner-archives
           key: scanner-archives-nextest-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('release/scanners.lock') }}
       - name: Install pinned nextest
+        if: steps.superseded.outputs.superseded != 'true'
         run: |
           bash scripts/install-scanners.sh "$RUNNER_TEMP/rust-ci-tools" --cache "$RUNNER_TEMP/scanner-archives" --tool cargo-nextest
           echo "$RUNNER_TEMP/rust-ci-tools" >> "$GITHUB_PATH"
       - name: Save scanner archives
-        if: github.event_name == 'schedule' && github.ref == 'refs/heads/main' && steps.scanner-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'schedule' && github.ref == 'refs/heads/main' && steps.scanner-cache.outputs.cache-hit != 'true' && steps.superseded.outputs.superseded != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/scanner-archives
           key: ${{ steps.scanner-cache.outputs.cache-primary-key }}
+      - name: Key the workspace build cache
+        id: build-cache-key
+        # The dependency cache below leaves out the workspace crates, most of the compile. The
+        # nightly saves this part's whole target/ under a key of its own (rust-macos-cache-prune
+        # then deletes the older ones); other runs restore the newest for this toolchain, for
+        # this Cargo.lock when there is one.
+        if: steps.superseded.outputs.superseded != 'true'
+        env:
+          MANIFESTS: ${{ hashFiles('Cargo.lock', 'Cargo.toml', 'src-tauri/Cargo.toml', 'src-tauri/crates/*/Cargo.toml') }}
+        run: |
+          toolchain="rust-macos-build-$PART-$RUNNER_OS-$RUNNER_ARCH-$(rustc -vV | shasum -a 256 | cut -c1-16)"
+          echo "toolchain=$toolchain" >> "$GITHUB_OUTPUT"
+          echo "manifests=$toolchain-$MANIFESTS" >> "$GITHUB_OUTPUT"
+      - name: Restore the workspace build
+        id: build-cache
+        # Not on the nightly, which builds cold: a build that kept an older target/ could carry a
+        # crate it no longer builds, dated before a change the next run would trust it for.
+        if: github.event_name != 'schedule' && steps.superseded.outputs.superseded != 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target
+          key: ${{ steps.build-cache-key.outputs.manifests }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ steps.build-cache-key.outputs.manifests }}-
+            ${{ steps.build-cache-key.outputs.toolchain }}-
       - name: Cache Rust dependencies
+        # Only when no workspace build was restored: that has the dependencies too. The nightly
+        # restores none, so it saves this cache as before.
+        if: steps.build-cache.outputs.cache-matched-key == '' && steps.superseded.outputs.superseded != 'true'
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: rust-macos
           save-if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}
           cache-on-failure: true
+      - name: Date the checkout for the cached build
+        # Before the first cargo command, the sidecar build: the files unchanged since the cached
+        # build get an old date, so cargo rebuilds only what changed (build-cache-dates.sh).
+        if: steps.build-cache.outputs.cache-matched-key != '' && steps.superseded.outputs.superseded != 'true'
+        run: bash scripts/build-cache-dates.sh restore
       - name: Fetch git-ai
+        if: steps.superseded.outputs.superseded != 'true'
         run: bash scripts/fetch-git-ai.sh 2>&1 | tee "$RUNNER_TEMP/rust-ci-logs/fetch-git-ai.log"
       - name: Build session-server sidecar
         # This also builds the bridge sidecar, so a separate bridge build is unnecessary.
         # Native host only: build-emulator.sh fetches checksum-pinned Bun itself.
         # Docker is only used for uninstalled cross targets, which are not requested.
+        if: steps.superseded.outputs.superseded != 'true'
         run: bash scripts/build-session-server.sh 2>&1 | tee "$RUNNER_TEMP/rust-ci-logs/build-session-server.log"
       - name: Generate docs data
         # The app's build script writes these untracked files into directories it watches, so on
         # a fresh checkout the next cargo command reran it and recompiled the app. Written before
         # the first cargo command, they are current when the build script runs.
+        if: steps.superseded.outputs.superseded != 'true'
         run: |
           scripts=$(sed -n 's/^ *run_docs_generator("\.\.\/\(scripts\/[^"]*\.mjs\)");$/\1/p' src-tauri/build.rs)
           [[ -n "$scripts" ]] || { echo "::error::no docs generators found in src-tauri/build.rs"; exit 1; }
           for script in $scripts; do node "$script"; done
+      - name: Date the unchanged build inputs
+        # git-ai, the sidecars and the docs data were just written again: each the cached build
+        # read as it is now goes back to the old date, so the app's build script doesn't rerun.
+        if: steps.build-cache.outputs.cache-matched-key != '' && steps.superseded.outputs.superseded != 'true'
+        run: bash scripts/build-cache-dates.sh pin
       - name: Compile macOS tests
         id: compile
         # The two parts together are what a plain cargo test builds. A named --test is explicit,
         # so cargo would refuse one whose required features are off; those are left out, as
         # cargo test leaves them out.
+        if: steps.superseded.outputs.superseded != 'true'
         run: |
           read -r -a packages <<< "$RUST_PACKAGES"
           if [[ "$PART" == lib ]]; then
@@ -225,14 +300,21 @@ jobs:
           cargo nextest archive "${packages[@]}" "${targets[@]}" \
             --archive-file "$RUNNER_TEMP/nextest-archive-$PART.tar.zst" \
           2>&1 | tee "$RUNNER_TEMP/rust-ci-logs/cargo-compile.log"
+      - name: Record the build's commit and inputs
+        # Right after the compile: the untracked files the build read, then the commit, so a later
+        # run knows what changed since.
+        id: record
+        if: github.event_name == 'schedule' && github.ref == 'refs/heads/main' && steps.superseded.outputs.superseded != 'true'
+        run: bash scripts/build-cache-dates.sh record
       - name: Collect test runtime files
         # The untracked files the tests read beside the archives: sidecars, bundled resources and
         # generated docs data. Both parts make the same ones; the rest part ships them.
-        if: matrix.part == 'rest'
+        if: matrix.part == 'rest' && steps.superseded.outputs.superseded != 'true'
         run: |
           git ls-files -z --others --ignored --exclude-standard -- src-tauri codesense-docs \
             | tar --null -T - -cf "$RUNNER_TEMP/test-runtime.tar"
       - name: Upload test archive
+        if: steps.superseded.outputs.superseded != 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           # One name per part for the whole run, not per attempt: re-running only the failed
@@ -251,16 +333,24 @@ jobs:
         # In the rest part, which built the libraries the doctests link. Runs after a failed
         # upload, but not when the test build never ran; on macOS the build script then fails on
         # sidecars an earlier failed step never built, hiding the real failure.
-        if: (success() || failure()) && steps.compile.outcome == 'success' && matrix.part == 'rest'
+        if: (success() || failure()) && steps.compile.outcome == 'success' && matrix.part == 'rest' && steps.superseded.outputs.superseded != 'true'
         run: |
           read -r -a packages <<< "$RUST_PACKAGES"
           cargo test --doc "${packages[@]}" --no-fail-fast \
           2>&1 | tee "$RUNNER_TEMP/rust-ci-logs/cargo-doctest.log"
       - name: Check tracked files are unchanged
-        if: success() || failure()
+        id: tracked
+        if: (success() || failure()) && steps.superseded.outputs.superseded != 'true'
         run: git diff --exit-code 2>&1 | tee "$RUNNER_TEMP/rust-ci-logs/tracked-files.log"
+      - name: Save the workspace build
+        # Whatever the tests did, once the build was recorded and left tracked files as they were.
+        if: github.event_name == 'schedule' && github.ref == 'refs/heads/main' && !cancelled() && steps.record.outcome == 'success' && steps.tracked.outcome == 'success' && steps.superseded.outputs.superseded != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target
+          key: ${{ steps.build-cache-key.outputs.manifests }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Upload failure logs
-        if: failure()
+        if: failure() && steps.superseded.outputs.superseded != 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rust-macos-logs-${{ matrix.part }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -270,16 +360,49 @@ jobs:
       - name: Summarize a red run on main
         # Nothing blocks on the macOS jobs, so a red build on main says so in the job summary for
         # the hardening pass, with the run link. Read-only: no issue is written.
-        if: (failure() || cancelled()) && github.ref == 'refs/heads/main'
+        if: (failure() || cancelled()) && github.ref == 'refs/heads/main' && steps.superseded.outputs.superseded != 'true'
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: node scripts/flaky-tests.mjs failed target/nextest/ci/junit.xml --run-url "$RUN_URL"
 
+  rust-macos-cache-prune:
+    name: Prune the macOS build caches
+    # Each nightly saves a workspace build per part, some GB together, so the older ones are
+    # deleted once it has: the newest per part stays. The only job here that writes caches'
+    # metadata; the macOS build keeps contents: read. Only the nightly on main in this repository.
+    needs: rust-macos-build
+    if: ${{ !cancelled() && github.event_name == 'schedule' && github.ref == 'refs/heads/main' && !github.event.repository.fork }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: write
+    steps:
+      - name: Delete all but the newest build cache per part
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh api --paginate "repos/$GH_REPO/actions/caches?key=rust-macos-build-&ref=refs/heads/main&per_page=100" \
+            --jq '.actions_caches[] | [.id, .key, .created_at] | @tsv' > caches.tsv
+          # Newest first; the part is the key's fourth field (rust-macos-build-<part>-...).
+          sort -t $'\t' -k3,3r caches.tsv | awk -F '\t' '{ split($2, k, "-"); if (seen[k[4]]++) print $1 }' > stale.txt
+          echo "$(wc -l < caches.tsv) build caches; deleting $(wc -l < stale.txt)"
+          # An entry GitHub evicted since the listing is already gone (404); any other failure fails.
+          while read -r id; do
+            if ! gh api -X DELETE "repos/$GH_REPO/actions/caches/$id" 2> error.txt; then
+              cat error.txt >&2
+              grep -q 'HTTP 404' error.txt || exit 1
+              echo "::notice::cache $id already gone"
+            fi
+          done < stale.txt
+
   rust-macos-test:
     name: Rust (macOS arm64) tests ${{ matrix.shard }}/3
     # Runs the build job's two archives, a third of each per shard, so no shard compiles. It runs
-    # only after both parts of that build succeed, and so never on a merge group.
+    # only after both parts of that build succeed, and so never on a merge group, and not when a
+    # part found main had moved on (no archives).
     needs: rust-macos-build
+    if: needs.rust-macos-build.outputs.superseded != 'true'
     runs-on: macos-15
     timeout-minutes: 30
     strategy:
@@ -385,11 +508,12 @@ jobs:
 
   rust-macos:
     name: Rust (macOS arm64)
-    # The one macOS result: green only when the build and every test shard are. It runs when the
-    # build job does (the same if), so a skipped build reports a skip here, and also when the run
-    # is cancelled (always() in place of !cancelled()), so a cancelled run reports red, not skipped.
+    # The one macOS result: green only when the build and every test shard are, or when the build
+    # was superseded by a newer push to main. It runs when the build job does (the same if), so a
+    # skipped build reports a skip here, and also when the run is cancelled (always() in place of
+    # !cancelled()), so a cancelled run reports red, not skipped.
     needs: [changes, rust-macos-build, rust-macos-test]
-    if: ${{ always() && needs.changes.outputs.rust != 'false' && github.event_name != 'merge_group' && (github.event_name != 'pull_request' || (github.event.pull_request.user.login != 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'ci:macos') && (github.event.action != 'labeled' || github.event.label.name == 'ci:macos'))) }}
+    if: ${{ always() && needs.changes.outputs.rust != 'false' && needs.changes.outputs.macos != 'false' && github.event_name != 'merge_group' && (github.event_name != 'pull_request' || (github.event.pull_request.user.login != 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'ci:macos') && (github.event.action != 'labeled' || github.event.label.name == 'ci:macos'))) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -399,8 +523,13 @@ jobs:
         env:
           BUILD: ${{ needs.rust-macos-build.result }}
           TESTS: ${{ needs.rust-macos-test.result }}
+          SUPERSEDED: ${{ needs.rust-macos-build.outputs.superseded }}
         run: |
-          echo "build: $BUILD, tests: $TESTS"
+          echo "build: $BUILD, tests: $TESTS, superseded: ${SUPERSEDED:-false}"
+          if [[ "$BUILD" == success && "$SUPERSEDED" == true ]]; then
+            echo "Superseded by a newer push to main; the nightly covers this commit." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           [[ "$BUILD" == success && "$TESTS" == success ]]
 
   rust-linux:
