@@ -40,3 +40,33 @@ for (const { platform, quickView, move } of [
     await expect(head).toHaveAttribute("title", `drag to move, or ${move}`);
   });
 }
+
+test("in an app without the calls: Alt hints and the same machine details", async ({
+  page,
+  mountPane,
+}) => {
+  // The frame's SDK object loses the shortcut calls the moment the shim assigns it.
+  await page.addInitScript(() => {
+    if (window.top === window) return;
+    Object.defineProperty(window, "codesense", {
+      configurable: true,
+      get: () => undefined,
+      set(sdk: Record<string, unknown>) {
+        delete sdk.formatKeys;
+        delete sdk.formatModifierClick;
+        Object.defineProperty(window, "codesense", {
+          value: sdk,
+          writable: true,
+          configurable: true,
+        });
+      },
+    });
+  });
+  const pane = await mountPane(AGENT_LIST_PANE, fixtures());
+  expect(await pane.frame.evaluate(() => "formatKeys" in (window as any).codesense)).toBe(false);
+  const main = pane.frame.locator('[data-agent-id="s0"] .al-main');
+  await expect(main).toHaveAttribute("title", /Q or Alt\+click for Quick view · M for inbox/);
+  await expect(main).toHaveAttribute("title", /\nDeveloper · opus/);
+  const head = pane.frame.locator('[data-row-id="workspace:fixture:dev|ws0"] .al-ws-head');
+  await expect(head).toHaveAttribute("title", "drag to move, or Alt+↑ / Alt+↓");
+});

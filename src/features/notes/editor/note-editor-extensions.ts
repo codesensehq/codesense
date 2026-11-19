@@ -20,6 +20,7 @@ import {
   serializeWithBlankLines,
   type MarkdownDocSerializer,
 } from "../../viewer/lib/scratch-blank-lines";
+import { hasCmd } from "@/shared/lib/shortcuts/keystroke";
 
 export interface NoteEditorOptions {
   lowlight: NonNullable<Parameters<typeof CodeBlockLowlight.configure>[0]>["lowlight"];
@@ -126,6 +127,11 @@ export function noteEditorProps({
     handleClick(_view, _pos, event) {
       const href = (event.target as HTMLElement | null)?.closest?.("a")?.getAttribute("href");
       return href ? onLinkClick(href) : false;
+    },
+    // Off macOS AltGr reports Ctrl and Alt, so AltGr+Enter would match Mod-Alt-Enter and paste.
+    // Direct props run before the keymap plugins; the macOS chord holds Meta and is left alone.
+    handleKeyDown(_view, event) {
+      return event.key === "Enter" && !hasCmd(event) && !!event.getModifierState?.("AltGraph");
     },
     handlePaste(view, event) {
       if (!view.state.selection.$from.parent.type.spec.code) return false;

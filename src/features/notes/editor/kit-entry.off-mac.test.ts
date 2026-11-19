@@ -29,5 +29,8 @@ it("Ctrl+Enter sends the line and Ctrl+Alt+Enter pastes it; Cmd does neither", a
   expect(onSend.mock.calls).toEqual([[false], [true]]);
   press({ metaKey: true });
   expect(onSend).toHaveBeenCalledTimes(2);
+  // AltGr reports Ctrl and Alt too, but it types a character there and is not the paste chord.
+  press({ ctrlKey: true, altKey: true, modifierAltGraph: true });
+  expect(onSend).toHaveBeenCalledTimes(2);
   editor.destroy();
 });
