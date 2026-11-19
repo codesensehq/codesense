@@ -101,7 +101,7 @@ import json,os,pathlib,socket,struct,subprocess,sys,time,uuid
 h=pathlib.Path(sys.argv[1]); exe,raw,endpoint,activity,token,lock=sys.argv[2:]
 (h/'cli.pid').write_text(str(os.getpid()))
 env=dict(os.environ,CODESENSE_TEST_KEEPER_LAUNCH=raw,CODESENSE_TEST_KEEPER_ENDPOINT=endpoint,ORION_HOME=str(h),CODESENSE_ACTIVITY_SOCKET=activity,CODESENSE_ACTIVITY_TOKEN=token)
-subprocess.Popen([exe,'--exact','activity::engine::tests::keeper_process_fixture','--nocapture'],env=env,stdout=subprocess.DEVNULL)
+subprocess.Popen([exe,'--exact','activity::engine::transport::tests::keeper_process_fixture','--nocapture'],env=env,stdout=subprocess.DEVNULL)
 while not (h/'engine.pid').exists(): time.sleep(.005)
 pid=int((h/'engine.pid').read_text())
 def send(**operation):
