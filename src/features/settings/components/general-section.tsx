@@ -82,6 +82,7 @@ import { UpdatesSection } from "@/features/license/UpdatesSection";
 import { SectionHeader } from "./section-header";
 import { SettingRow } from "./setting-row";
 import { TerminalServerSection } from "./terminal-server-section";
+import { localMachineNoun } from "@/shared/lib/local-machine";
 
 // ---------- Row specs ----------
 
@@ -1663,7 +1664,7 @@ function WorktreeParallelismRow() {
 
   const footerCopy =
     active === "off"
-      ? "Off — no limit. Every queued worktree sets up immediately. Your Mac's own scheduler is the only backstop, so on a slower machine expect a brief burst of disk activity."
+      ? `Off — no limit. Every queued worktree sets up immediately. Your ${localMachineNoun()}'s own scheduler is the only backstop, so on a slower machine expect a brief burst of disk activity.`
       : active === "custom"
         ? "Blank or invalid keeps your last value; 0 or less becomes 1 (use Off for no limit)."
         : `How many worktrees set up at once in the background. Setup is now a light copy — not a full reinstall — so higher values are cheap. Auto sizes to your CPU (${autoResolved} on this machine). Off = no limit — all set up at once.`;

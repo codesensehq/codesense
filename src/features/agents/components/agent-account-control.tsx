@@ -16,6 +16,7 @@ import type { AgentRow } from "@/tauri/commands";
 import { runtimeLabel } from "../lib/agent-display";
 import { useAgentRequest } from "../lib/use-agent-request";
 import { useAgentsStore } from "../stores/agents-store";
+import { localMachinePhrase } from "@/shared/lib/local-machine";
 
 /** The radio value that means "no binding: my default account". */
 const DEFAULT = "";
@@ -71,8 +72,8 @@ export function AccountMenu({
           {mode === "fix" ? "Choose an account" : "Your account (only you)"}
         </DropdownMenuLabel>
         <p data-testid="agent-account-hint" className="px-1.5 pb-1.5 text-xs text-muted-foreground">
-          One of your own {runtimeLabel(row.runtime)} CLI logins on this Mac. Teammates launch it
-          with theirs.
+          One of your own {runtimeLabel(row.runtime)} CLI logins on {localMachinePhrase()}.
+          Teammates launch it with theirs.
         </p>
         {accountsError && (
           <p className="px-1.5 pb-1.5 text-xs text-destructive">

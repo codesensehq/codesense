@@ -19,6 +19,7 @@ import { joinArgs, splitArgs } from "@/shared/lib/tokenize-args";
 
 import type { AgentDraft } from "../lib/agent-form";
 import { AutoApprovesBadge } from "./agent-bits";
+import { localMachinePhrase } from "@/shared/lib/local-machine";
 
 export const FIELD = "bg-background text-foreground placeholder:text-muted-foreground";
 /** The kit select's trigger, at the form fields' height and size. */
@@ -273,7 +274,7 @@ export function AgentRunsOnFields({
       {endpoint && (
         <Field
           label="Local endpoint"
-          hint="Keyless OpenAI-compatible endpoint on this Mac. API-key providers come later."
+          hint={`Keyless OpenAI-compatible endpoint on ${localMachinePhrase()}. API-key providers come later.`}
         >
           <Input
             aria-label="Local endpoint"

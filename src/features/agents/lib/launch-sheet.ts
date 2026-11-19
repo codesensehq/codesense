@@ -7,6 +7,7 @@ import {
   type AgentRow,
   type AgentSessionRow,
 } from "@/tauri/commands";
+import { localMachineLabel } from "@/shared/lib/local-machine";
 
 /**
  * The launch sheet: one place a person launches an agent from, wherever they asked (the
@@ -140,7 +141,7 @@ export function launchMachineLock(
   labelOf: (machineId: string) => string,
 ): MachineLock | null {
   if (where === "team-workspace")
-    return { machineId: LOCAL_MACHINE_ID, reason: "A team folder runs on This Mac." };
+    return { machineId: LOCAL_MACHINE_ID, reason: `A team folder runs on ${localMachineLabel()}.` };
   if (place === null) return null;
   return {
     machineId: place,

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import type { ContextConflictSide, ContextRepoStatus, ContextSyncState } from "@/tauri/commands";
+import { localMachinePhrase } from "@/shared/lib/local-machine";
 
 /** Branch names that read as the repo's main line (drawn plain, not as a filled chip). */
 const MAIN_BRANCHES = new Set(["main", "master"]);
@@ -127,7 +128,7 @@ export function statusButtonModel(
   }
   if (down > 0) parts.push(`${down} new on GitHub`);
   if (conflicts > 0) parts.push(`${plural(conflicts, "conflict")} to settle`);
-  if (unsent) parts.push("nothing on this Mac will send these changes");
+  if (unsent) parts.push(`nothing on ${localMachinePhrase()} will send these changes`);
   const ago = status.sync.lastSyncedAt ? agoText(status.sync.lastSyncedAt, nowMs) : null;
   const since = ago ? `, last synced ${ago}` : "";
   switch (state) {

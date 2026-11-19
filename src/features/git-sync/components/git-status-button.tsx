@@ -33,6 +33,7 @@ import {
   runSyncAction,
   settleConflict,
 } from "../lib/repo-status-source";
+import { localMachinePhrase } from "@/shared/lib/local-machine";
 
 // ---------------------------------------------------------------------------
 // Glyphs: one stroke family, drawn at the button's 10–11px.
@@ -813,7 +814,7 @@ export function PrivateCommitButton({ teamKey, orgRoot }: { teamKey: string; org
   if (!agentNames.length)
     return (
       <span className="text-[11px] font-normal text-muted-foreground">
-        No agent on this Mac to ask.
+        No agent on {localMachinePhrase()} to ask.
       </span>
     );
   return (

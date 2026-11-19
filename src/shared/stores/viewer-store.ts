@@ -331,6 +331,7 @@ import {
   type WorkspaceLocation,
   type WorkspaceLocationChoice,
 } from "@/shared/lib/workspace-location";
+import { localMachineLabel } from "@/shared/lib/local-machine";
 
 export interface TabState {
   path: string;
@@ -6701,10 +6702,10 @@ function whereWorkspaceLives(s: ViewerState, teamKey: string, workspaceId: strin
  *  for a small UX win — deferred). */
 function locationConflictMessage(label: string, at: string, movingTo?: string): string {
   if (movingTo) {
-    const target = movingTo === "local" ? "This Mac" : `machine ${movingTo}`;
+    const target = movingTo === "local" ? localMachineLabel() : `machine ${movingTo}`;
     return `${label}'s workspace is being moved to ${target}; try again shortly`;
   }
-  return `${label}'s workspace already lives on ${at === "local" ? "This Mac" : `machine ${at}`}; a workspace stays where it was created`;
+  return `${label}'s workspace already lives on ${at === "local" ? localMachineLabel() : `machine ${at}`}; a workspace stays where it was created`;
 }
 
 /** SW-WS-1: resolve the "move in progress" target for soft-refusal messaging.

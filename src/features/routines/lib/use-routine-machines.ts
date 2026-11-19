@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { useTeamMachines } from "@/features/machines/stores/machines-store";
 import { buildTeamKey, useActiveTeamKey } from "@/shared/lib/team-key";
 import { LOCAL_MACHINE_ID, type MachineSummary } from "@/tauri/commands";
+import { localMachineLabel } from "@/shared/lib/local-machine";
 
 /** A machine a routine can name, as its machine slot offers it. */
 export interface RoutineMachine {
@@ -49,11 +50,11 @@ export function useRoutineMachines(
       )
       .sort((a, b) => a.label.localeCompare(b.label));
     const options: RoutineMachine[] = [
-      { id: LOCAL_MACHINE_ID, label: "This Mac", offline: false },
+      { id: LOCAL_MACHINE_ID, label: localMachineLabel(), offline: false },
       ...shared.map((m) => ({ id: m.machineId, label: m.label, offline: offline(m) })),
     ];
     const labels = new Map(list.map((m) => [m.machineId, m.label] as const));
-    labels.set(LOCAL_MACHINE_ID, "This Mac");
+    labels.set(LOCAL_MACHINE_ID, localMachineLabel());
     return {
       options,
       labels,
@@ -65,7 +66,7 @@ export function useRoutineMachines(
 
 /** A machine id as people call it. */
 export function machineLabel(id: string | undefined, labels: ReadonlyMap<string, string>): string {
-  if (!id || id === LOCAL_MACHINE_ID) return "This Mac";
+  if (!id || id === LOCAL_MACHINE_ID) return localMachineLabel();
   if (id === "any") return "any connected machine";
   return labels.get(id) ?? id;
 }

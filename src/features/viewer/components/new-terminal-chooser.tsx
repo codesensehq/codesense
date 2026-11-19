@@ -45,6 +45,7 @@ import {
 import { newTerminalTab } from "../lib/terminal-tab-keys";
 import { openRemoteTab } from "../lib/remote-tab-open";
 import { useRemoteWorkspaceLocation } from "@/features/machines/components/machine-location-badge";
+import { localMachineLabel } from "@/shared/lib/local-machine";
 
 const WHERE_KEY = "codesense.new-terminal-where";
 const LOCAL = "local";
@@ -432,7 +433,7 @@ function ChooserDialog({
               className={ROW}
             >
               <Monitor className="size-4 text-[#8b949e]" aria-hidden />
-              This Mac
+              {localMachineLabel()}
             </button>
           </li>
           {machines.map((machine) => {

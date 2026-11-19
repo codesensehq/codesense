@@ -24,6 +24,7 @@ import {
   type MoveWorkspaceParams,
   type MoveWorkspaceResult,
 } from "@/tauri/commands";
+import { localMachineLabel } from "@/shared/lib/local-machine";
 
 interface MachineOption {
   machineId: string;
@@ -53,7 +54,7 @@ function useEligibleMachines(teamKey: string, currentMachineId: string | null): 
   const machines: MachineSummary[] = byTeam[teamKey] ?? [];
   const localHint: MachineOption = {
     machineId: "local",
-    label: "This Mac",
+    label: localMachineLabel(),
     eligible: currentMachineId !== "local" && currentMachineId !== null,
     ineligibleReason: currentMachineId === "local" ? "workspace already lives here" : undefined,
   };

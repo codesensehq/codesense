@@ -2,6 +2,7 @@
 import type { AgentRow, AgentRuntime, RoutineRow, RoutineRun } from "@/tauri/commands";
 import { runsOn } from "@/features/routines/lib/routine-display";
 import { machineLabel } from "@/features/routines/lib/use-routine-machines";
+import { localMachineNoun } from "@/shared/lib/local-machine";
 
 /**
  * SW-AGR-5 (design §4.8, SPEC §10): the Agents tab's Schedule — every agent's routines,
@@ -22,7 +23,7 @@ export function machineOf(row: RoutineRow): string {
 }
 
 function machineName(id: string, labels: ReadonlyMap<string, string>): string {
-  return id === "each" ? "each teammate's Mac" : machineLabel(id, labels);
+  return id === "each" ? `each teammate's ${localMachineNoun()}` : machineLabel(id, labels);
 }
 
 /** This Mac first, then machines by name, then "any", then each teammate's Mac. */

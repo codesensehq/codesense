@@ -3,6 +3,7 @@ import { isRemoteWorkspace } from "@/shared/lib/workspace-location";
 import { storyIdFromPath } from "@/shared/lib/worktree/resolve";
 import { readTeamKeyed, useViewerStore } from "@/shared/stores/viewer-store";
 import { LOCAL_MACHINE_ID } from "@/tauri/commands";
+import { localMachineLabel } from "@/shared/lib/local-machine";
 
 /** Where a story's workspace lives now: `"local"`, a machine id, or `null` when it has
  *  none (open or minimized). */
@@ -39,7 +40,7 @@ export async function placeStoryWorkspace(
   const at = storyWorkspacePlace(teamKey, storyFilePath);
   if (at !== null) {
     if (at === machineId) return;
-    const where = at === LOCAL_MACHINE_ID ? "This Mac" : `machine ${at}`;
+    const where = at === LOCAL_MACHINE_ID ? localMachineLabel() : `machine ${at}`;
     throw new Error(
       `unavailable: ${workspaceId}'s workspace already lives on ${where}; a workspace stays where it was created`,
     );

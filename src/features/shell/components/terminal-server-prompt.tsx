@@ -39,6 +39,7 @@ import {
   confirmMachineTerminalServerReplacement,
   useMachineTerminalServerPrompt,
 } from "../lib/machine-terminal-server";
+import { localMachineLabel } from "@/shared/lib/local-machine";
 
 const INTRO =
   "A terminal server from another version of CodeSense is still running on this machine, so new terminals can't open.";
@@ -142,7 +143,7 @@ function LegacyTerminalServerPrompt() {
           : `Restarting closes ${terminals(target.count)}. Anything still running in ${target.count === 1 ? "it stops" : "them stops"}, and ${target.count === 1 ? "its" : "their"} scrollback is lost.`;
     // This Mac: the confirmation is bound to the sessions it runs now (a
     // changed set is refused, nothing stopped), and they are this app's own.
-    const localCopy = `Updating restarts This Mac's terminal server. ${
+    const localCopy = `Updating restarts ${localMachineLabel()}'s terminal server. ${
       target.count === null || target.count === 0
         ? "Every terminal in this app ends"
         : `The ${terminals(target.count)} it runs now end — every terminal in this app`

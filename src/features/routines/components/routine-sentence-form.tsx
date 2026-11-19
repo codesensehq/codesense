@@ -36,6 +36,11 @@ import {
   RoutineCommandHelp,
   useCommandPreview,
 } from "./routine-command-fields";
+import {
+  localMachineLabel,
+  localMachineNoun,
+  localMachinePhrase,
+} from "@/shared/lib/local-machine";
 
 const PERSONAL: RoutineSpace = { scope: "personal" };
 
@@ -244,7 +249,7 @@ export function RoutineSentenceFields({
         <span>on</span>
         {recipe ? (
           <span data-testid="routine-machine" className="whitespace-nowrap">
-            each teammate&apos;s Mac
+            each teammate&apos;s {localMachineNoun()}
           </span>
         ) : (
           <select
@@ -288,7 +293,8 @@ export function RoutineSentenceFields({
           {draft.where === "team_workspace"
             ? "the team workspace"
             : draft.where.replace("repo:", "")}{" "}
-          on {recipe ? "each teammate’s Mac" : "This Mac"}. No agent and no model.
+          on {recipe ? `each teammate’s ${localMachineNoun()}` : localMachineLabel()}. No agent and
+          no model.
         </p>
       ) : (
         <ModeHint
@@ -403,12 +409,12 @@ function Options({
                 });
               }}
             >
-              <option value="one_mac">once for the team, on one Mac</option>
+              <option value="one_mac">once for the team, on one {localMachineNoun()}</option>
               <option
                 value="each_mac"
                 disabled={!!draft.after || draft.events?.some((e) => e.kind === "metadata_change")}
               >
-                on each teammate's Mac
+                on each teammate&apos;s {localMachineNoun()}
                 {draft.after || draft.events?.some((e) => e.kind === "metadata_change")
                   ? " (schedules only)"
                   : " that turns it on"}
@@ -421,7 +427,7 @@ function Options({
           aria-label="Time zone"
           className={cn("h-7 w-48 max-w-full", FIELD)}
           value={draft.tz}
-          placeholder="this Mac's zone"
+          placeholder={`${localMachinePhrase()}'s zone`}
           onChange={(e) => set("tz", e.target.value)}
         />
         {wake ? (
@@ -523,7 +529,7 @@ function Limits({
       <p data-testid="routine-limits-hint" className="mt-2 max-w-[60ch] text-muted-foreground">
         {fresh
           ? "These count wakes into a running agent. This routine starts a new agent each time, so they don't apply; “If still running” under Options decides overlaps."
-          : "Optional, and only for waking a running agent. A quick check can wake it every time it fires; set these when a wake starts heavy work that should not repeat or overlap. Each Mac and machine keeps its own count."}
+          : `Optional, and only for waking a running agent. A quick check can wake it every time it fires; set these when a wake starts heavy work that should not repeat or overlap. Each ${localMachineNoun()} and machine keeps its own count.`}
       </p>
       <fieldset
         aria-label="Limits"
@@ -631,7 +637,7 @@ function ModeHint({
     ? "Wake needs a saved agent. Use template to make one from Claude."
     : mode === "wake"
       ? any
-        ? `Goes into ${name}'s session on whichever connected machine has one, preferring an idle one. If none is running, a new session starts on This Mac.${suffix}`
+        ? `Goes into ${name}'s session on whichever connected machine has one, preferring an idle one. If none is running, a new session starts on ${localMachineLabel()}.${suffix}`
         : `If ${name} is running on ${machine}, this goes into that session when it's idle. If not, a new session starts with it.${suffix}`
       : `Starts a new ${name} session every time, even if one is already running.${suffix}`;
   return (
