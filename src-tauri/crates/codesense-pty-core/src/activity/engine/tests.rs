@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: MIT
+// Declared by the unix transport, a `cfg_attr` path the cfg ratchet guard does not
+// follow; the attribute below tells it this file is test code.
+#![cfg(test)]
 use super::*;
 use crate::agent_cli::{orion::Orion, AgentCliAdapter};
 use std::io::{Read, Write};
@@ -363,7 +366,7 @@ signal.pause()
             Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
-                    "activity::engine::tests::keeper_process_fixture",
+                    "activity::engine::transport::tests::keeper_process_fixture",
                     "--nocapture",
                 ])
                 .env(
