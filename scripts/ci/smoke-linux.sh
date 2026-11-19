@@ -30,9 +30,10 @@
 #   smoke-linux.sh caps-agree <listing> <log>
 #       The log has one caps: line, and its starship and git-ai are on exactly when the file
 #       list holds resources/starship and resources/git-ai.
-#   smoke-linux.sh installed-git-ai <listing> <home> <pin>
+#   smoke-linux.sh installed-git-ai <listing> <home>
 #       When the file list holds resources/git-ai, the app installed <home>/.codesense/bin/git-ai
-#       and it prints the version= of <pin>; when it does not, the app installed none.
+#       and it prints this host's pinned version (fetch-bundled.sh --check-version); when it does
+#       not, the app installed none.
 #   smoke-linux.sh check-listing <listing>
 #       The /usr/bin check install runs on a file list.
 set -euo pipefail
@@ -130,19 +131,16 @@ caps_agree() {
 # The app installs the bundled git-ai into its home at startup, so its own pin decides the
 # version a running app gets; the caps: line alone would not show that.
 installed_git_ai() {
-    local listing="$1" installed="$2/.codesense/bin/git-ai" pin="$3" expected version
+    local listing="$1" installed="$2/.codesense/bin/git-ai" checked
     if ! bundled git-ai "$listing"; then
         [[ ! -e "$installed" ]] || fail "the app installed $installed, but resources/git-ai is not bundled"
         echo "git-ai is not bundled, and the app installed none"
         return
     fi
-    expected=$(sed -n 's/^version=//p' "$pin")
-    [[ -n "$expected" ]] || fail "$pin has no version"
     [[ -x "$installed" ]] || fail "the app did not install git-ai at $installed"
-    version=$("$installed" --version) || fail "$installed failed to run"
-    version=${version%%$'\n'*}
-    [[ "$version" == "$expected" ]] || fail "the installed git-ai prints $version, not the pinned $expected"
-    echo "The app installed git-ai $version, as pinned in $pin"
+    checked=$(bash "$ROOT/scripts/fetch-bundled.sh" --check-version git-ai "$installed") ||
+        fail "the installed git-ai is not the pinned one"
+    echo "The app installed the pinned git-ai: $checked"
 }
 
 install_package() {
@@ -330,7 +328,7 @@ window_drawn() {
 
 # Inside xvfb-run: launch the app, check it while it runs, stop it, then check its log.
 launch() {
-    local mode="$1" out="$2" log="$1.log" shot="$1.png" pid waited pin store=secret-service
+    local mode="$1" out="$2" log="$1.log" shot="$1.png" pid waited store=secret-service
     if [[ "$mode" == no-dbus ]]; then store=unavailable; fi
     cd "$out"
     "$out/squashfs-root/AppRun" >"$log" 2>&1 &
@@ -354,8 +352,7 @@ launch() {
     plain_log "$log" >"$mode.txt"
     grep -q "webview ready" "$mode.txt" || fail "the log has no webview ready"
     caps_agree listing "$mode.txt"
-    pin=$(cd "$ROOT" && bash scripts/fetch-bundled.sh --print-pin git-ai)
-    installed_git_ai listing "$HOME" "$ROOT/$pin"
+    installed_git_ai listing "$HOME"
     grep -qE "(^| )secret store: $store\$" "$mode.txt" || fail "the log has no secret store: $store"
     echo "The log has webview ready and secret store: $store"
     if [[ "$mode" == dmabuf ]] && grep -qi dmabuf "$mode.txt"; then
@@ -397,7 +394,7 @@ case "$command" in
         caps_agree "$@"
         ;;
     installed-git-ai)
-        [[ $# -eq 3 ]] || usage
+        [[ $# -eq 2 ]] || usage
         installed_git_ai "$@"
         ;;
     check-listing)

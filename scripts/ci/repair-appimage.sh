@@ -67,7 +67,10 @@ if [[ -e "$work/squashfs-root/usr/bin/codesense-emulator" ]]; then
     exit 1
 fi
 install -m 755 "$emulator" "$work/squashfs-root/usr/bin/codesense-emulator"
-for name in git-ai starship; do
+# Every pinned binary the host bundles, from the one list of them; a plain assignment, so a
+# failure stops the repair.
+names=$(bash scripts/fetch-bundled.sh --print-names)
+for name in $names; do
     src=$(bash scripts/fetch-bundled.sh --print-dest "$name")
     found=$(find "$work/squashfs-root" -path "*/resources/$name" -type f)
     if [[ -z "$found" || "$found" == *$'\n'* ]]; then

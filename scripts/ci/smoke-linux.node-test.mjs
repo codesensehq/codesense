@@ -132,20 +132,36 @@ test("caps-agree: a missing caps: line, a second one or a missing key fails", ()
   fails(capsAgree(extracted(), "caps: git-ai=off"), /starship=<none>/);
 });
 
-// A home where the app installed a git-ai that prints `version`, and a pin naming `pinned`.
-const installedGitAi = (listing, version, pinned = "1.7.5-cs.5") => {
+// A home where the app installed a git-ai that prints `version`, checked as a Linux x86_64 host
+// against the repository's own pin, so `pinned` must be that pin's version.
+const pinned = fs
+  .readFileSync(
+    fileURLToPath(new URL("../../src-tauri/pins/git-ai-linux-x86_64.pin", import.meta.url)),
+    "utf8",
+  )
+  .match(/^version=(.+)$/m)[1];
+const uname = path.join(dir, "uname-bin");
+fs.mkdirSync(uname);
+fs.writeFileSync(
+  path.join(uname, "uname"),
+  '#!/bin/sh\ncase "$1" in -s) echo Linux ;; -m) echo x86_64 ;; esac\n',
+  { mode: 0o755 },
+);
+const installedGitAi = (listing, version) => {
   const home = fs.mkdtempSync(path.join(dir, "home-"));
   if (version !== undefined) {
     const bin = path.join(home, ".codesense/bin");
     fs.mkdirSync(bin, { recursive: true });
     fs.writeFileSync(path.join(bin, "git-ai"), `#!/bin/sh\necho ${version}\n`, { mode: 0o755 });
   }
-  const pin = fixture([`version=${pinned}`, "asset=git-ai-linux-x86_64"]);
-  return smoke("installed-git-ai", fixture(listing), home, pin);
+  return spawnSync("bash", [script, "installed-git-ai", fixture(listing), home], {
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${uname}:${process.env.PATH}` },
+  });
 };
 
 test("installed-git-ai: a bundled git-ai is installed at the pinned version", () => {
-  passes(installedGitAi(extracted("starship", "git-ai"), "1.7.5-cs.5"));
+  passes(installedGitAi(extracted("starship", "git-ai"), pinned));
   // Without the bundled binary the app installs none.
   passes(installedGitAi(extracted("starship"), undefined));
 });
@@ -153,9 +169,8 @@ test("installed-git-ai: a bundled git-ai is installed at the pinned version", ()
 test("installed-git-ai: a missing install, another version or an unbundled install fails", () => {
   fails(installedGitAi(extracted("git-ai"), undefined), /did not install git-ai/);
   fails(
-    installedGitAi(extracted("git-ai"), "1.7.5-cs.4"),
-    /prints 1\.7\.5-cs\.4, not the pinned 1\.7\.5-cs\.5/,
+    installedGitAi(extracted("git-ai"), "0.0.1"),
+    new RegExp(`prints 0\\.0\\.1, not ${pinned.replaceAll(".", "\\.")} as pinned`),
   );
-  fails(installedGitAi(extracted(), "1.7.5-cs.5"), /resources\/git-ai is not bundled/);
-  fails(installedGitAi(extracted("git-ai"), "1.7.5-cs.5", ""), /has no version/);
+  fails(installedGitAi(extracted(), pinned), /resources\/git-ai is not bundled/);
 });

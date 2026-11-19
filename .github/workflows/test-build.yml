@@ -162,23 +162,15 @@ jobs:
             grep -E "(^|/)usr/bin/$name\$" <<<"$bin_files" || { echo "Error: $name is not in /usr/bin of the deb" >&2; exit 1; }
           done
           [[ $(wc -l <<<"$bin_files") -eq 4 ]] || { echo "Error: expected the app binary and three sidecars in /usr/bin" >&2; exit 1; }
-      - name: Check the bundled git-ai and starship run
-        # Each format ships the pinned git-ai and starship as resources/git-ai and
-        # resources/starship; extract them from each and run each under its own name (under
-        # another name git-ai acts as git). git-ai prints its bare version, starship its name and
-        # version.
+      - name: Check the bundled binaries run
+        # Each format ships the pinned binaries scripts/fetch-bundled.sh lists (git-ai and
+        # starship) as resources/<name>; extract them from each and run each under its own name
+        # (under another name git-ai acts as git), its --version checked against its pin.
         env:
           BUNDLES: ${{ matrix.bundles }}
         run: |
-          # Plain assignments, so a failed --print-pin stops the step here.
-          declare -A expected
-          for name in git-ai starship; do
-            pin=$(bash scripts/fetch-bundled.sh --print-pin "$name")
-            version=$(sed -n 's/^version=//p' "$pin")
-            [[ -n "$version" ]] || { echo "Error: $pin has no version" >&2; exit 1; }
-            expected[$name]=$version
-          done
-          expected[starship]="starship ${expected[starship]}"
+          # A plain assignment, so a failed --print-names stops the step here.
+          names=$(bash scripts/fetch-bundled.sh --print-names)
           for format in ${BUNDLES//,/ }; do
             dir="$RUNNER_TEMP/extract-$format"
             mkdir -p "$dir"
@@ -194,16 +186,13 @@ jobs:
                 unsquashfs -q -n -d "$dir/squashfs-root" -o "$offset" "$appimage"
                 ;;
             esac || { echo "Error: could not extract the $format" >&2; exit 1; }
-            for name in git-ai starship; do
+            for name in $names; do
               found=$(find "$dir" -path "*/resources/$name" -type f)
               [[ $(grep -c . <<<"$found") -eq 1 ]] || { echo "Error: expected one resources/$name in the $format, found: $found" >&2; exit 1; }
               [[ -x "$found" ]] || { echo "Error: $found in the $format is not executable" >&2; exit 1; }
               echo "$format: $(sha256sum "$found")"
               file "$found"
-              version=$("$found" --version) || { echo "Error: $found from the $format failed to run (exit $?)" >&2; exit 1; }
-              version=${version%%$'\n'*}
-              echo "$format: $found: $version"
-              [[ "$version" == "${expected[$name]}" ]] || { echo "Error: expected ${expected[$name]} from $name in the $format" >&2; exit 1; }
+              bash scripts/fetch-bundled.sh --check-version "$name" "$found" || { echo "Error: $name in the $format is not the pinned one" >&2; exit 1; }
             done
           done
       - name: Check the AppImage emulator
