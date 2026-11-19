@@ -212,6 +212,7 @@ fn plan_for(
 /// Where a user's own git-ai hook would look for its daemon inside a CodeSense session: a
 /// path that can be neither found nor created, so that hook exits without a checkpoint.
 /// CodeSense's own hook sets the managed values in its command, so exactly one counts.
+#[cfg_attr(not(cap_git_ai), allow(dead_code))]
 pub(crate) const USER_DAEMON_NEUTRALISED: [(&str, &str); 3] = [
     ("GIT_AI_DAEMON_HOME", "/dev/null/git-ai"),
     ("GIT_AI_DAEMON_CONTROL_SOCKET", "/dev/null/git-ai.sock"),

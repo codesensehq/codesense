@@ -141,6 +141,7 @@ impl GitAiSource {
     }
 
     /// Run `git-ai await` before each read.
+    #[cfg_attr(not(cap_git_ai), allow(dead_code))]
     pub(crate) fn draining(mut self, drain: Drain) -> Self {
         self.drain = Some(drain);
         self
