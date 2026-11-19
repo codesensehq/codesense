@@ -485,6 +485,29 @@ fn of_waiters_retrying_an_unreachable_host_only_the_newest_keeps_on() {
 }
 
 #[test]
+fn a_waiter_retrying_an_unreachable_host_ends_once_it_is_no_longer_attached() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("activity.sock");
+    let gone = Attachment {
+        inspect: |_| None,
+        ..attached()
+    };
+    let (done, ended) = std::sync::mpsc::channel();
+    {
+        let socket = socket.clone();
+        std::thread::spawn(move || {
+            let _ = done.send(wait(&socket, "token", gone, QUICK, |_| ask("Stop", me())).is_none());
+        });
+    }
+    // It ends before it asks, never retrying the host it cannot reach.
+    assert_eq!(ended.recv_timeout(QUICK.retry_max), Ok(true));
+    assert!(
+        !retrier_path(&socket, "token").exists(),
+        "no record is left"
+    );
+}
+
+#[test]
 fn a_retrying_waiter_that_reaches_its_host_again_gives_up_its_record() {
     let dir = tempfile::tempdir().unwrap();
     let socket = dir.path().join("activity.sock");
@@ -1165,6 +1188,14 @@ fn a_helper_its_engines_hook_shell_runs_names_the_engine_and_is_admitted() {
     );
 }
 
+#[test]
+fn a_helper_given_no_agent_names_its_parent_as_both() {
+    let shell = under_a_shell();
+    let attached = Attachment::of_hook(shell.run(), None, Process::inspect).expect("it reads");
+    assert!(attached.agent.is(attached.parent));
+    assert_eq!(attached.parent.pid, shell.pid());
+}
+
 /// The pid whose process [`reused`] reads as one that started last.
 static REUSED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
@@ -1182,11 +1213,11 @@ fn reused(pid: u32) -> Option<Process> {
 }
 
 #[test]
-fn a_helper_whose_shells_parent_pid_was_reused_names_no_agent_and_never_asks() {
+fn a_helper_whose_shells_parent_pid_was_reused_names_no_agent() {
     let cli = under_shells(1);
     assert!(agent_of(&cli, Process::inspect).is_some_and(|agent| agent.pid == cli.pid()));
     // Its pid now names a process newer than the shell, not the shell's agent: the helper
-    // has no agent to ask the host for, and its wait ends at once.
+    // has no agent to ask the host for.
     REUSED.store(cli.pid(), std::sync::atomic::Ordering::SeqCst);
     assert_eq!(agent_of(&cli, reused), None);
 }
