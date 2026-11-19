@@ -20,6 +20,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { QuickOpenDialog } from "@/features/viewer/components/quick-open-dialog";
 import { logger } from "@/shared/lib/logger";
+import { relative } from "@/shared/lib/path";
 import { buildTeamKey, parseTeamKey, useActiveTeamKey } from "@/shared/lib/team-key";
 import { pathToTeamContentDirSync } from "@/shared/lib/team-content-path";
 import { useActiveOrg } from "@/shared/stores/use-active-org";
@@ -168,12 +169,12 @@ export function CommandPaletteMount() {
     for (const [teamKey, paths] of Object.entries(openedViewerPaths ?? {})) {
       const { orgSlug, teamName } = parseTeamKey(teamKey);
       if (orgSlug !== activeOrg.slug || teamName === null) continue;
-      const prefix = `${pathToTeamContentDirSync(activeOrg.org_root, teamName)}/`;
+      const contentDir = pathToTeamContentDirSync(activeOrg.org_root, teamName);
       for (const fullPath of paths) {
         out.push({
           teamName,
           fullPath,
-          relativePath: fullPath.startsWith(prefix) ? fullPath.slice(prefix.length) : fullPath,
+          relativePath: relative(contentDir, fullPath) || fullPath,
         });
       }
     }
