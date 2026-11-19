@@ -393,6 +393,7 @@ pub(crate) mod tests {
     }
 
     /// Plants a pending replacement receipt, as a bundled replacement leaves it.
+    #[cfg(cap_git_ai)]
     pub(crate) fn plant_pending_notice(home: &std::path::Path) -> std::path::PathBuf {
         std::fs::create_dir_all(home.join("bin")).unwrap();
         let receipt = home.join("bin/.git-ai-previous");
