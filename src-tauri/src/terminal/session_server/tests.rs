@@ -2370,8 +2370,9 @@ fn the_host_socket_path_frames_only_through_host_proto() {
     // reads command output line by line, a test cuts an upload short over
     // `ssh` stdin, and the `attach` relay writes raw bytes by design (its
     // transparency tests pin that it never frames). The SSH connector and the
-    // Add-machine checklist read `ssh` output line by line too, and the
-    // askpass answers on its own one-shot socket, never the host's.
+    // Add-machine checklist read `ssh` output line by line too, the connector
+    // writes its host-key pin file whole, and the askpass answers on its own
+    // one-shot socket, never the host's.
     let write_all = ["write", "_all("].concat();
     let lines = [".lines", "()"].concat();
     let json = ["serde", "_json"].concat();
@@ -2382,6 +2383,7 @@ fn the_host_socket_path_frames_only_through_host_proto() {
         ("src/install.rs", &lines),
         ("src/survival.rs", &lines),
         ("src/ssh.rs", &lines),
+        ("src/ssh.rs", &write_all),
         ("src/check.rs", &lines),
         ("tests/clean_direction.rs", &lines),
         ("tests/remote_host.rs", &write_all),
