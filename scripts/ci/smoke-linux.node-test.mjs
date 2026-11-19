@@ -181,7 +181,10 @@ test("apt-mirror: the archive and security sources of 22.04 and 24.04 move to th
     `deb ${mirror} jammy main restricted\ndeb ${mirror} jammy-security main restricted\n`,
   );
   assert.deepEqual(
-    fs.readFileSync(sources, "utf8").split("\n").filter((line) => line.startsWith("URIs:")),
+    fs
+      .readFileSync(sources, "utf8")
+      .split("\n")
+      .filter((line) => line.startsWith("URIs:")),
     [`URIs: ${mirror}`, `URIs: ${mirror}`],
   );
 });
