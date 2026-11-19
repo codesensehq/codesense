@@ -388,6 +388,99 @@ mod tests {
         assert_eq!(parse_table(TABLE_JSON).map(|rows| rows.len()), Ok(9));
     }
 
+    /// The build scripts' gates. A build script's own tests never run, so they are tested here.
+    #[allow(dead_code)]
+    mod build {
+        include!("../build_caps.rs");
+    }
+
+    /// The keys `table` compiles in for one target, in file order.
+    fn compiled(table: &str, os: &str, arch: &str) -> Vec<String> {
+        build::compiled_caps(table, os, arch)
+            .unwrap()
+            .into_iter()
+            .filter_map(|(key, on)| on.then_some(key))
+            .collect()
+    }
+
+    #[test]
+    fn the_build_compiles_in_each_value_form() {
+        let table = r#"[
+            {"key": "always", "macos": "on", "linux": "on", "windows": "on", "reason": "r"},
+            {"key": "never", "macos": "off", "linux": "off", "windows": "off", "reason": "r"},
+            {"key": "probed", "macos": "probe", "linux": "off", "windows": "off", "reason": "r"},
+            {"key": "some-arch", "macos": {"on": ["aarch64"]},
+             "linux": {"on": ["x86_64", "aarch64"]}, "windows": "off", "reason": "r"}
+        ]"#;
+        assert_eq!(
+            compiled(table, "macos", "aarch64"),
+            ["always", "probed", "some-arch"]
+        );
+        assert_eq!(compiled(table, "macos", "x86_64"), ["always", "probed"]);
+        assert_eq!(compiled(table, "linux", "aarch64"), ["always", "some-arch"]);
+        assert_eq!(compiled(table, "linux", "riscv64"), ["always"]);
+        assert_eq!(compiled(table, "windows", "x86_64"), ["always"]);
+        assert!(compiled(table, "freebsd", "x86_64").is_empty());
+        let declared: Vec<_> = build::compiled_caps(table, "windows", "x86_64")
+            .unwrap()
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect();
+        assert_eq!(
+            declared,
+            ["always", "never", "probed", "some-arch"],
+            "every key is declared, in file order"
+        );
+    }
+
+    /// A bad value fails the build for every target, not only the one it names.
+    #[test]
+    fn the_build_refuses_a_malformed_table() {
+        for bad in [
+            r#"{"key": "x"}"#,
+            r#"[{"macos": "on", "linux": "on", "windows": "off", "reason": "r"}]"#,
+            r#"[{"key": "x", "macos": "on", "linux": "on", "reason": "r"}]"#,
+            r#"[{"key": "x", "macos": "on", "linux": "on", "windows": "maybe", "reason": "r"}]"#,
+            r#"[{"key": "x", "macos": "on", "linux": {"on": "x86_64"}, "windows": "off", "reason": "r"}]"#,
+            r#"[{"key": "x", "macos": "on", "linux": {"on": [1]}, "windows": "off", "reason": "r"}]"#,
+            r#"[{"key": "x", "macos": "on", "linux": {"off": []}, "windows": "off", "reason": "r"}]"#,
+        ] {
+            assert!(
+                build::compiled_caps(bad, "macos", "aarch64").is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cap_cfg_is_its_key_with_underscores() {
+        assert_eq!(
+            build::cap_cfg("terminal-server-sidecar"),
+            "cap_terminal_server_sidecar"
+        );
+        assert_eq!(build::cap_cfg(GIT_AI), "cap_git_ai");
+        assert_eq!(build::cap_cfg("pdf-export"), "cap_pdf_export");
+    }
+
+    /// The build and the runtime read the same bytes: a target compiles in exactly what resolves
+    /// on there when every probe answers yes.
+    #[test]
+    fn the_build_gates_match_the_runtime_table() {
+        for (os, arch) in [
+            ("macos", "aarch64"),
+            ("macos", "x86_64"),
+            ("linux", "x86_64"),
+            ("linux", "aarch64"),
+            ("windows", "x86_64"),
+        ] {
+            let runtime: Vec<_> = resolved(os, arch, true)
+                .into_iter()
+                .filter_map(|cap| cap.on.then_some(cap.key))
+                .collect();
+            assert_eq!(compiled(TABLE_JSON, os, arch), runtime, "{os} {arch}");
+        }
+    }
+
     #[test]
     fn serializes_as_key_on_reason() {
         let json = serde_json::to_value(resolved("linux", "x86_64", false)).unwrap();
