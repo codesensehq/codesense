@@ -58,13 +58,14 @@ import { outOfDateServers } from "../lib/out-of-date-servers";
 import { UnreadableMachineFiles } from "./unreadable-machine-files";
 import { StrayTerminalServers } from "./stray-terminal-servers";
 import { MachineStatsLine } from "./machine-stats-line";
+import { localMachineLabel } from "@/shared/lib/local-machine";
 
 /** Actions that change what this window does with a machine, not the machine
  *  itself — never offered as Connections row verbs. */
 const LENS_ONLY = new Set(["keepReadOnly"]);
 
 function scopeLine(machine: MachineSummary): string {
-  if (machine.kind === "local") return "This Mac · Terminal server";
+  if (machine.kind === "local") return `${localMachineLabel()} · Terminal server`;
   const where = machine.scope?.kind === "team" ? `Shared with ${machine.scope.team}` : "Only me";
   return machine.declaration ? `${where} · ${machine.declaration.host}` : where;
 }

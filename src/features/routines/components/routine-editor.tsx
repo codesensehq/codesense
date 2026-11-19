@@ -29,6 +29,7 @@ import {
 import { useRoutinesStore, type RoutineCreateSeed } from "../stores/routines-store";
 import { RoutineSentenceFields } from "./routine-sentence-form";
 import { machineTeamOf, useRoutineMachines } from "../lib/use-routine-machines";
+import { localMachineLabel } from "@/shared/lib/local-machine";
 
 /** Whether the draft has a machine, limit or trigger problem that blocks saving. */
 function useMachineProblem(
@@ -397,7 +398,7 @@ export function RoutineCreateForm({
         <p data-testid="routine-seed-mode" className="text-xs text-muted-foreground">
           Kept from the timer “{seed.timer?.name ?? draft.name}”: each run{" "}
           <span className="font-medium text-foreground">wakes</span> the agent in its running
-          session on {seed.machineLabel ?? "This Mac"} when it's idle.
+          session on {seed.machineLabel ?? localMachineLabel()} when it's idle.
         </p>
       )}
       {error && (

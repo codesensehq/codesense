@@ -15,14 +15,15 @@ import {
 import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
 import { useAgentsStore } from "../stores/agents-store";
 import { showAgentCap } from "./agents-tab-nav";
+import { localMachinePhrase } from "@/shared/lib/local-machine";
 
 const dollars = (value: number) =>
   `$${value.toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
 const exact = (value: number) => `$${value}`;
 const warning = "inline-flex items-center gap-1 font-medium text-warning-ink";
 /** Why an `unrecorded` cap's spend is not the real spend (the Rust `USAGE_REDIRECTED`). */
-export const USAGE_NOT_RECORDED =
-  "usage not recorded: this Mac's managed Claude settings send session telemetry to your organization's collector";
+export const usageNotRecorded = (): string =>
+  `usage not recorded: ${localMachinePhrase()}'s managed Claude settings send session telemetry to your organization's collector`;
 const link =
   "underline decoration-dotted underline-offset-2 disabled:cursor-wait disabled:opacity-50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
@@ -42,7 +43,7 @@ export function SpendCapChip({ agentKey }: { agentKey: string }) {
         role={state === "reached" ? "status" : undefined}
         title={
           state === "unrecorded"
-            ? USAGE_NOT_RECORDED
+            ? usageNotRecorded()
             : `${exact(today)} today · ${exact(week)} this week; cap ${exact(limit)} ${window}`
         }
         className={cn(
@@ -224,7 +225,7 @@ function CapEditor({
         </p>
       )}
       {value.state === "unrecorded" && (
-        <p className="text-[var(--cs-warning-text)]" title={USAGE_NOT_RECORDED}>
+        <p className="text-[var(--cs-warning-text)]" title={usageNotRecorded()}>
           Usage not recorded
         </p>
       )}

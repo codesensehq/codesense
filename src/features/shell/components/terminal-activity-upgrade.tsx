@@ -20,6 +20,7 @@ import {
   confirmActivityUpgrade,
   useTerminalActivityUpgrade,
 } from "../lib/terminal-activity-upgrade";
+import { localMachineLabel } from "@/shared/lib/local-machine";
 
 export function TerminalActivityUpgradeNotice() {
   const state = useTerminalActivityUpgrade();
@@ -95,7 +96,9 @@ export function TerminalActivityUpgradePrompt() {
       >
         <AlertDialogHeader>
           <AlertDialogTitle>
-            {complete ? "Terminal server updated" : "Update the terminal server on This Mac?"}
+            {complete
+              ? "Terminal server updated"
+              : `Update the terminal server on ${localMachineLabel()}?`}
           </AlertDialogTitle>
           <AlertDialogDescription>
             {complete

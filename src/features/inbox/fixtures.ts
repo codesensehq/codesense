@@ -58,6 +58,7 @@ export function fixtureSessions(): SessionListRow[] {
       launchedBy: FX.ctrl,
       role: "reviewer",
       machine: "buildbox",
+      machineId: "buildbox",
       agent: "builtin/claude",
     }),
     row({
@@ -66,6 +67,7 @@ export function fixtureSessions(): SessionListRow[] {
       state: "exited",
       launchedBy: FX.ctrl,
       machine: "buildbox",
+      machineId: "buildbox",
       agent: "builtin/codex",
     }),
   ];

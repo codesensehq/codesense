@@ -30,6 +30,13 @@ import {
 import type { ConversationMessage } from "../api";
 import { formatKeystrokeDisplay, hasMod } from "@/shared/lib/shortcuts/keystroke";
 
+/** A session's line in the mention list: its state, then where it runs when that is known. */
+export function sessionMentionDetail(p: Participant): string {
+  return [p.state === "exited" ? "ended" : stateLabel(p.state), machineLabel(p)]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 /**
  * The composer every lens shares: a To picker (@sessions with state and machine, #roles with
  * their holder or queue note, @you) above the message box, with a line saying what happens to
@@ -609,7 +616,7 @@ function RecipientPicker({
     team: undefined,
     label: `@${p.name}`,
     // A session id names one launch: an ended one never reads its mail again.
-    detail: `${p.state === "exited" ? "ended" : stateLabel(p.state)} · ${machineLabel(p)}`,
+    detail: sessionMentionDetail(p),
     group: "Sessions",
     ended: p.state === "exited",
   });

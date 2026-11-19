@@ -18,6 +18,7 @@ import { eventTriggerWords, metadataProblem, type SentenceDraft } from "../lib/r
 
 import { useRoutinesStore } from "../stores/routines-store";
 import { afterWords } from "../lib/routine-sentence";
+import { localMachineNoun } from "@/shared/lib/local-machine";
 
 const KINDS: { value: ContextKind | ""; label: string }[] = [
   { value: "story", label: "a story" },
@@ -79,7 +80,7 @@ export function RoutineMetadataTriggers({
   const disabled = armedMachine
     ? `Routines armed on ${armedMachine} run on schedules only.`
     : draft.runsOn === "each_mac"
-      ? "Routines on each teammate's Mac support schedules only for these triggers."
+      ? `Routines on each teammate's ${localMachineNoun()} support schedules only for these triggers.`
       : null;
   const set = (index: number, condition: RoutineMetadataCondition) =>
     onChange({

@@ -69,7 +69,6 @@ import {
 import {
   resolveAgentFace,
   resolveAgentRole,
-  THIS_MAC,
   type AgentFace,
 } from "@/features/viewer/lib/agent-list-view";
 import { useWorktreeRosterStore } from "@/features/viewer/stores/worktree-roster-store";
@@ -144,6 +143,7 @@ import {
   formatModifiersDisplay,
   hasMod,
 } from "@/shared/lib/shortcuts/keystroke";
+import { localMachineLabel } from "@/shared/lib/local-machine";
 
 const LOCAL_MACHINE = LOCAL_MACHINE_ID;
 
@@ -521,7 +521,7 @@ export function AgentLaunchSheet({
       : LOCAL_MACHINE;
   const labelOf = (id: string) =>
     id === LOCAL_MACHINE
-      ? THIS_MAC
+      ? localMachineLabel()
       : ((machines ?? []).find((m) => m.machineId === id)?.label ?? id);
   const lock = launchMachineLock(effective.where, storyId, place, labelOf);
   const launchMachine = lock?.machineId ?? machineId;
@@ -1528,7 +1528,7 @@ function MachinePicker({
         >
           {picked ? <MachineIcon machine={picked} /> : null}
           <span className="min-w-0 flex-1 truncate text-left">
-            {picked?.label ?? (value === LOCAL_MACHINE ? THIS_MAC : value)}
+            {picked?.label ?? (value === LOCAL_MACHINE ? localMachineLabel() : value)}
           </span>
           <ChevronDown className="size-3.5 shrink-0 opacity-60" aria-hidden />
         </button>
@@ -1540,7 +1540,7 @@ function MachinePicker({
           onSelect={() => onChange(LOCAL_MACHINE)}
         >
           {local ? <MachineIcon machine={local} /> : null}
-          <span className="flex-1">{local?.label ?? THIS_MAC}</span>
+          <span className="flex-1">{local?.label ?? localMachineLabel()}</span>
           <Check className={cn("size-3.5", value !== LOCAL_MACHINE && "invisible")} aria-hidden />
         </DropdownMenuItem>
         {remote.length > 0 && (

@@ -17,6 +17,7 @@ import { indentationLabel, languageLabel, lineEndingLabel } from "@/shared/compo
 
 import type { PaneStatus } from "./worktree-file-pane";
 import { formatControlDisplay, formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
+import { localMachineLabel, localMachinePhrase } from "@/shared/lib/local-machine";
 
 /**
  * The bottom status bar: where the file lives and its save state on the left,
@@ -56,7 +57,7 @@ export function EditorStatusBar({
       <Item
         label={
           location !== "remote"
-            ? "On this Mac"
+            ? `On ${localMachinePhrase()}`
             : machineOffline
               ? `Can’t reach ${machineLabel ?? "the machine"} (${machineOffline}) — files can’t be read or saved until it reconnects`
               : `On ${machineLabel ?? "a remote machine"}`
@@ -74,7 +75,7 @@ export function EditorStatusBar({
           <Monitor aria-hidden className="size-3 shrink-0" />
         )}
         <span className="min-w-0 max-w-[12rem] truncate">
-          {location === "remote" ? (machineLabel ?? "Remote") : "This Mac"}
+          {location === "remote" ? (machineLabel ?? "Remote") : localMachineLabel()}
         </span>
         {location === "remote" && machineOffline && (
           <span className="shrink-0">· {machineOffline}</span>

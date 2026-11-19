@@ -12,6 +12,7 @@ import { LiveRequests } from "./live-requests";
 import { useDashboardManager } from "./use-dashboard-manager";
 import { dashboardRowKey, groupDashboardRows, sharedRowsByParent } from "./dashboard-groups";
 import type { InventoryRow, Viewer } from "./types";
+import { localMachineLabel, localMachinePhrase } from "@/shared/lib/local-machine";
 
 type Manager = ReturnType<typeof useDashboardManager>;
 function time(value?: string | null) {
@@ -72,7 +73,7 @@ function dashboardSubline(row: InventoryRow) {
     return [state, `exported by ${row.team.sharedFrom}`, row.team.relativeFolder].join(" · ");
   }
   if (row.team && !isPublished(row)) return row.team.relativeFolder;
-  if (!row.team && !row.folder && isPublished(row)) return "No folder on this Mac";
+  if (!row.team && !row.folder && isPublished(row)) return `No folder on ${localMachinePhrase()}`;
   return publishedSubline(row);
 }
 function Section({ title, children }: { title: string; children: ReactNode }) {
@@ -250,7 +251,7 @@ function KeyPanel({ manager: m }: { manager: Manager }) {
           }}
         >
           Remove the publishing key? Published dashboards stay online. You won't be able to publish,
-          update or manage viewers from this Mac until you add a key.
+          update or manage viewers from {localMachinePhrase()} until you add a key.
         </Confirm>
       )}
     </section>
@@ -381,7 +382,10 @@ function Details({
           data-testid="move-to-key-slot"
           className="space-y-2 rounded-md border border-border p-3"
         >
-          <p>Move this dashboard to the key on this Mac. You'll confirm in your browser.</p>
+          <p>
+            Move this dashboard to the key on {localMachinePhrase()}. You&apos;ll confirm in your
+            browser.
+          </p>
           <Button
             size="sm"
             variant="outline"
@@ -473,7 +477,8 @@ function Details({
         </p>
         {!row.folder && (
           <p className="text-muted-foreground">
-            No folder for this dashboard on this Mac. Open the source folder to update it.
+            No folder for this dashboard on {localMachinePhrase()}. Open the source folder to update
+            it.
           </p>
         )}
         <div className="flex flex-wrap gap-2">
@@ -533,7 +538,7 @@ function Details({
             onConfirm={() => void m.unpublish(row).then(() => setConfirm(null))}
           >
             Unpublish {row.title}? The link stops working and every viewer loses access right away.
-            Your folder on this Mac stays.
+            Your folder on {localMachinePhrase()} stays.
           </Confirm>
         )}
       </Section>
@@ -940,8 +945,8 @@ export function DashboardsTab() {
             {m.inventory?.host
               ? `Publishing to ${m.inventory.host}`
               : "No dashboard host configured in this build"}
-            {readBuildChannel().channel === "beta-staging" && " · staging"} · This Mac · Publishing
-            key scope
+            {readBuildChannel().channel === "beta-staging" && " · staging"} · {localMachineLabel()}{" "}
+            · Publishing key scope
           </p>
         </header>
         <KeyPanel manager={m} />
@@ -966,8 +971,9 @@ export function DashboardsTab() {
           </div>
           {m.inventory?.source === "unsupported" && (
             <p className="mb-3 rounded-md bg-muted p-3">
-              The server list isn't available yet, so this shows only dashboards this Mac has
-              published or opened. Others published with this key won't appear.
+              The server list isn't available yet, so this shows only dashboards{" "}
+              {localMachinePhrase()} has published or opened. Others published with this key won't
+              appear.
             </p>
           )}
           {m.inventory?.error && (

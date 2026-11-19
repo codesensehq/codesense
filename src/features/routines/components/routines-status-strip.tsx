@@ -2,6 +2,7 @@
 import { X } from "lucide-react";
 
 import { useRoutinesStore } from "../stores/routines-store";
+import { localMachineLabel, localMachinePhrase } from "@/shared/lib/local-machine";
 
 /**
  * The honest always-on strip at the top of the Agents tab's Schedule (SW-AGR-5, design
@@ -20,8 +21,11 @@ export function RoutinesStatusStrip() {
       className="flex items-center gap-2 border-b border-border bg-muted/40 px-4 py-2 text-xs text-muted-foreground"
     >
       <span className="min-w-0 flex-1">
-        <span className="text-foreground">Routines on This Mac run while CodeSense is open.</span>{" "}
-        Wakes and timers for sessions on other machines run there, even when this Mac is closed.
+        <span className="text-foreground">
+          Routines on {localMachineLabel()} run while CodeSense is open.
+        </span>{" "}
+        Wakes and timers for sessions on other machines run there, even when {localMachinePhrase()}{" "}
+        is closed.
         {missed > 0 && (
           <span data-testid="routines-missed" className="text-foreground">
             {" "}

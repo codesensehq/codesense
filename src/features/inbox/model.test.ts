@@ -58,8 +58,8 @@ describe("directory", () => {
   });
 
   it("marks a remote machine and keeps local sessions machine-less", () => {
-    expect(dir.get(FX.rev)?.machine).toBe("buildbox");
-    expect(dir.get(FX.t9)?.machine).toBeNull();
+    expect(dir.get(FX.rev)).toMatchObject({ where: "remote", machine: "buildbox" });
+    expect(dir.get(FX.t9)?.machine).toBeUndefined();
   });
 
   it("derives initials the way the mockup draws them", () => {

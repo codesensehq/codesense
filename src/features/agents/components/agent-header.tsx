@@ -44,11 +44,11 @@ import {
   STATE_MARK,
   type AgentRowState,
 } from "../lib/agent-row-state";
-import { THIS_MAC } from "@/features/viewer/lib/agent-list-view";
 import { INK } from "../lib/agent-tones";
 import { useAgentsStore } from "../stores/agents-store";
 import { AccountMenu } from "./agent-account-control";
 import { BuiltinBadge, RuntimeBadge } from "./agent-bits";
+import { localMachineLabel } from "@/shared/lib/local-machine";
 
 function PlaceLine({ row }: { row: AgentRow }) {
   const Icon = row.scope === "personal" ? User : Users;
@@ -315,7 +315,7 @@ export function AgentProfileHeader({ row }: { row: AgentRow }) {
           }
           sub={
             noEndpoint
-              ? `${THIS_MAC} · no endpoint set`
+              ? `${localMachineLabel()} · no endpoint set`
               : row.model
                 ? "Model from --model"
                 : "CLI default model"

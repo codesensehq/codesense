@@ -4,6 +4,7 @@ import { Clock, Plus } from "lucide-react";
 
 import { useFocusWhenShown, useOwningScope } from "@/shared/lib/warm-scopes";
 import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
+import { localMachinePhrase } from "@/shared/lib/local-machine";
 
 /** The first look at notes in an org: what they are, how to start, the four keys
  *  worth knowing, and the offer of a routine to keep them tidy. */
@@ -23,8 +24,8 @@ export function NotesEmpty({
     <div className="nt-empty">
       <h3>Notes for {orgName}</h3>
       <p>
-        Private to you and kept on this Mac, with history. Jot plans, prompts and todos, then hand
-        any line to an agent.
+        Private to you and kept on {localMachinePhrase()}, with history. Jot plans, prompts and
+        todos, then hand any line to an agent.
       </p>
       <button ref={newRef} type="button" className="nt-empty-new" onClick={onNew} autoFocus>
         <Plus size={14} aria-hidden />

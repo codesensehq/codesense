@@ -16,6 +16,7 @@ import {
   routineListLabel,
 } from "@/features/routines/lib/routine-display";
 import { eventTriggerWords, firstSchedule } from "@/features/routines/lib/routine-sentence";
+import { localMachineLabel, localMachineNoun } from "@/shared/lib/local-machine";
 
 /**
  * SW-AGR-5 (design §4.2, §4.4): an agent's routines as the Agents tab reads them — the
@@ -167,8 +168,8 @@ export function machineWords(
   labels: ReadonlyMap<string, string>,
   mode: RoutineRunsOn = "one_mac",
 ): string {
-  if (mode === "each_mac") return "on each teammate's Mac";
-  if (!machine || machine === "local") return "on This Mac";
+  if (mode === "each_mac") return `on each teammate's ${localMachineNoun()}`;
+  if (!machine || machine === "local") return `on ${localMachineLabel()}`;
   if (machine === "any") return "on any connected machine";
   return `on ${labels.get(machine) ?? machine}`;
 }

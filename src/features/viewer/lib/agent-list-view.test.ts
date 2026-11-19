@@ -30,7 +30,6 @@ import {
   pinOfRow,
   rowMarkers,
   passesStatusFilter,
-  THIS_MAC,
   type AgentFace,
   type AgentTreeNode,
   resolveAgentFace,
@@ -41,6 +40,7 @@ import {
 import { BUILTIN_AVATAR_PACKS, BUILTIN_FUNNY_PACK, faceSource } from "@/shared/lib/avatar-packs";
 import { AGENT_STATUSES, type AgentStatus } from "@/shared/lib/agent-status-config";
 import type { AgentSessionRow } from "@/tauri/commands";
+import { restorePlatform, setPlatform } from "@/test/platform";
 
 function row(handle: string, over: Partial<AgentSessionRow> = {}): AgentSessionRow {
   return {
@@ -610,8 +610,18 @@ describe("pins", () => {
     expect(agentMachineLabel("box", machines)).toBe("Studio");
     expect(agentMachineLabel("m-7f3a", machines)).toBe("a remote machine");
     expect(agentMachineLabel("m-7f3a", undefined)).toBe("a remote machine");
-    expect(agentMachineLabel("local", machines)).toBe(THIS_MAC);
-    expect(agentMachineLabel(null, machines)).toBe(THIS_MAC);
+    expect(agentMachineLabel("local", machines)).toBe("This Mac");
+    expect(agentMachineLabel(null, machines)).toBe("This Mac");
+  });
+
+  it("names the local machine by the platform's word", () => {
+    setPlatform("Win32");
+    try {
+      expect(agentMachineLabel("local", [])).toBe("This computer");
+      expect(agentMachineLabel(null, [])).toBe("This computer");
+    } finally {
+      restorePlatform();
+    }
   });
 
   it("keeps one trailing marker in a narrow pane, most urgent first", () => {

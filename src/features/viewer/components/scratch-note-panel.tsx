@@ -92,6 +92,7 @@ import { scrollToHeadingBySlug } from "../lib/note-headings";
 import { formatKeystrokeDisplay, hasMod } from "@/shared/lib/shortcuts/keystroke";
 import { join } from "@/shared/lib/path";
 import { ActionKbd } from "@/features/notes/components/action-kbd";
+import { localMachinePhrase } from "@/shared/lib/local-machine";
 
 const lowlight = createLowlight(all);
 
@@ -187,7 +188,9 @@ function NotesPane() {
   const activeOrgSlug = useOrgStore((s) => s.activeOrgSlug);
   const orgName = useOrgStore(
     (s) =>
-      s.orgs.find((o) => o.slug === s.activeOrgSlug)?.display_name ?? s.activeOrgSlug ?? "this Mac",
+      s.orgs.find((o) => o.slug === s.activeOrgSlug)?.display_name ??
+      s.activeOrgSlug ??
+      localMachinePhrase(),
   );
   const flushNotes = useViewerStore((s) => s.flushNotes);
   const scratchNoteLoadStatus = useViewerStore((s) => s.scratchNoteLoadStatus);

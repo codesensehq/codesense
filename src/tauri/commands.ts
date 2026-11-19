@@ -1444,7 +1444,10 @@ export interface SessionListRow {
   workspace?: string;
   role?: string;
   avatar?: string;
+  /** The machine's name: the app's "This Mac" for a local tab; absent with no tab. */
   machine?: string;
+  /** The remote machine's id; absent for a session on this machine. */
+  machineId?: string;
   /** The saved Agent it runs (an agent id). */
   agent?: string;
   /** Its latest `signal_progress`, once it reported one. */

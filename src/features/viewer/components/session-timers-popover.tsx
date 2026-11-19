@@ -38,6 +38,7 @@ import {
 import { scrollToWakeMarker, wakeKind, wakeName } from "../lib/wake-marker";
 import { useSessionTimersStore, visibleTimers } from "../stores/session-timers-store";
 import { RemindForm } from "./remind-popover";
+import { localMachineLabel } from "@/shared/lib/local-machine";
 
 /** A timer due sooner than this is cancelled at once, with no Undo window
  *  (the 5 s toast would outlive it). */
@@ -59,7 +60,7 @@ export const CHROME_POPOVER =
 /** "This Mac", or the machine's label. */
 export function useMachineLabel(machineId: string | undefined): string {
   const machine = useMachine(machineId ?? "");
-  if (!machineId || machineId === LOCAL_TIMER_MACHINE) return "This Mac";
+  if (!machineId || machineId === LOCAL_TIMER_MACHINE) return localMachineLabel();
   return machine?.label || machineId;
 }
 

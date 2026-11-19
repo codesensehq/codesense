@@ -21,6 +21,7 @@ import { ArgvChips } from "./routine-command-fields";
 import { commandRunLine } from "../lib/routine-display";
 
 import { StatusMark } from "@/shared/components/status-mark";
+import { localMachineLabel } from "@/shared/lib/local-machine";
 
 /** A run's status mark. Always beside its word, so it is hidden from assistive tech. */
 export function RunStatusMark({ view, className }: { view: RunStatusView; className?: string }) {
@@ -194,7 +195,7 @@ export function CommandRunDetails({ run, now }: { run: RoutineRun; now: number }
         </dd>
         <dt className="text-muted-foreground">In</dt>
         <dd className="break-all">
-          {run.cwd ?? "Team workspace"} · {run.launch_machine ?? "This Mac"}
+          {run.cwd ?? "Team workspace"} · {run.launch_machine ?? localMachineLabel()}
         </dd>
         <dt className="text-muted-foreground">{run.started_at === null ? "Reason" : "Exit"}</dt>
         <dd>{commandRunLine(run, now)}</dd>

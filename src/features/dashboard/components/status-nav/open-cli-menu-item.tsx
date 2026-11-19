@@ -10,6 +10,7 @@ import { PositionedMenuItem, PositionedSubmenu } from "@/shared/components/posit
 import type { WorkspaceLocationChoice } from "@/shared/lib/workspace-location";
 import { storyIdFromPath } from "@/shared/lib/worktree/resolve";
 import { readTeamKeyed, useViewerStore } from "@/shared/stores/viewer-store";
+import { localMachineLabel } from "@/shared/lib/local-machine";
 
 /** Whether the story's workspace already exists (open or minimized): it then opens
  *  where it lives, with no choice of machine. */
@@ -75,7 +76,7 @@ export function OpenCliMenuItem({
         onSelect={() => open({ kind: "local" })}
       >
         <Monitor className="size-3.5 text-muted-foreground" aria-hidden />
-        <span className="flex-1">This Mac</span>
+        <span className="flex-1">{localMachineLabel()}</span>
       </DropdownMenuItem>
       {choices.map((choice) => (
         <DropdownMenuItem

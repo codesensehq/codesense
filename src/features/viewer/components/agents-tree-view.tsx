@@ -113,7 +113,6 @@ import {
   resolveAgentFace,
   resolveAgentRole,
   rowMarkers,
-  THIS_MAC,
   type AgentStatusFilter,
   type AgentTreeNode,
   type PinnedEntry,
@@ -188,6 +187,7 @@ import { useManagedSessionStore } from "@/shared/stores/use-managed-session-stor
 import type { SessionProgress } from "@/shared/stores/viewer-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 import { type AgentSessionRow, type RoutineRow } from "@/tauri/commands";
+import { isRemoteMachineId } from "@/features/machines/lib/machine-offline";
 
 /** Left inset of a row. */
 const ROW_INSET_PX = 2;
@@ -3044,6 +3044,7 @@ const AgentListRow = memo(function AgentListRow({
   // Line two keeps the role and workspace even when the machine is offline; the Offline tag and
   // the hint say the rest. A Status row names the team first, since its sections span teams.
   const machine = facts.machine;
+  const local = !isRemoteMachineId(facts.machineId);
   const roleWord = role.label.split(" · ")[0] ?? "";
   const teamWord = showTeam ? facts.teamLabel : null;
   const detail = [teamWord, agentDetailLine({ role: roleWord, workspace: place, machine, model })]
@@ -3065,7 +3066,7 @@ const AgentListRow = memo(function AgentListRow({
       managerView || (inWorkspace && node.workspace && place === node.workspace.label)
         ? null
         : place,
-    machine: machine === THIS_MAC ? null : machine,
+    machine: local ? null : machine,
     model,
     elapsed: stoppedWord ? null : elapsed,
     name: label,
@@ -3080,7 +3081,6 @@ const AgentListRow = memo(function AgentListRow({
   const handTyped = liveRow && isTypedByHand(row);
   const release = liveRow ? releaseWarning(row) : null;
   const unread = row.unread ?? 0;
-  const onThisMac = machine === THIS_MAC;
   // A remote agent's machine shows its colour and icon: the server in its colour, or the amber
   // disconnected glyph while it reads offline (by the same rule as the Offline tag).
   const remoteMachine = facts.remoteMachine;
@@ -3146,7 +3146,7 @@ const AgentListRow = memo(function AgentListRow({
     chosenManagerName && `Chosen manager: ${chosenManagerName}`,
     qualifier,
     handTyped && typedByHandHint(rowCli, unread),
-    release && releaseHint(release, onThisMac),
+    release && releaseHint(release, local),
     activity && (status === "stalled" ? activity : `Doing: ${activity}`),
     elapsed && `Running ${elapsed}`,
     holdsText,
@@ -3468,7 +3468,7 @@ const AgentListRow = memo(function AgentListRow({
             typedByHand={handTyped}
             unread={unread}
             release={release !== null}
-            canCheckVersion={onThisMac}
+            canCheckVersion={local}
             onReveal={() => onReveal(row)}
           />
           {managerView && subagentsShown > 0 && (

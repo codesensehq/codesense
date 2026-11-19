@@ -13,6 +13,7 @@ import {
 } from "@/tauri/commands";
 
 import { plural } from "../lib/machine-status";
+import { localMachineLabel } from "@/shared/lib/local-machine";
 
 /** What a stray is, in the person's words. */
 export function strayKindLine(stray: StrayServer): string {
@@ -136,7 +137,7 @@ function StrayRow({ stray, onStopped }: { stray: StrayServer; onStopped: () => v
       <Server size={14} aria-hidden="true" className="shrink-0 text-muted-foreground" />
       <div className="min-w-0 flex-1">
         <p className="text-sm">
-          Another terminal server on This Mac{" "}
+          Another terminal server on {localMachineLabel()}{" "}
           <span className="text-muted-foreground">· {straySessions(stray)}</span>
         </p>
         <p className="truncate text-xs text-muted-foreground">

@@ -23,6 +23,7 @@ import {
 import { forgetMachineBuffers } from "../lib/remote-buffers";
 import { forgetMachineMemory } from "../lib/machine-memory";
 import { forgetMachineAppearance } from "../lib/machine-appearance";
+import { localMachineLabel } from "@/shared/lib/local-machine";
 
 /**
  * The machine registry per team (This Mac, the team's shared
@@ -62,6 +63,11 @@ export function machineVisibleToTeam(machine: MachineSummary, teamKey: string): 
   );
 }
 
+/** The local machine named once, here, in the platform's word; the list's own label is the
+ *  agent-facing "This Mac". */
+const withLocalLabel = (machine: MachineSummary): MachineSummary =>
+  machine.kind === "local" ? { ...machine, label: localMachineLabel() } : machine;
+
 export const useMachinesStore = create<MachinesState>((set) => ({
   byTeam: {},
   failedTeams: [],
@@ -79,7 +85,7 @@ export const useMachinesStore = create<MachinesState>((set) => ({
           idx === -1
             ? list
             : machineVisibleToTeam(summary, teamKey)
-              ? list.map((m, i) => (i === idx ? summary : m))
+              ? list.map((m, i) => (i === idx ? withLocalLabel(summary) : m))
               : list.filter((m) => m.machineId !== summary.machineId);
       }
       return { byTeam };
@@ -208,7 +214,9 @@ export function loadTeamMachines(teamKey: string): Promise<boolean> {
       useMachinesStore.setState((s) => ({
         byTeam: {
           ...s.byTeam,
-          [teamKey]: machines.filter((machine) => machineVisibleToTeam(machine, teamKey)),
+          [teamKey]: machines
+            .filter((machine) => machineVisibleToTeam(machine, teamKey))
+            .map(withLocalLabel),
         },
         failedTeams: s.failedTeams.filter((key) => key !== teamKey),
       }));

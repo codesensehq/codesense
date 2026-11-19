@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { formatClock } from "@/features/inbox/model";
+import { localMachineLabel } from "@/shared/lib/local-machine";
 import type { SessionListRow } from "@/tauri/commands";
 
 /** What a live instance of a saved agent is doing, for its Running row. */
@@ -13,7 +14,7 @@ export interface RunningInstance {
   stateWord: string;
   /** The story, workspace or team folder it runs in. */
   where: string;
-  /** A machine other than This Mac. */
+  /** Where it runs: the local machine's label or a remote machine's name; null when unknown. */
   machine: string | null;
   /** When it started (`HH:MM`), when known. */
   since: string | null;
@@ -82,7 +83,7 @@ export function instancesByAgent(opts: {
       state,
       stateWord: WORD[state],
       where: s.story ? `Story ${s.story}` : s.workspace || "Team folder",
-      machine: s.machine || null,
+      machine: s.machineId ? s.machine || s.machineId : s.machine ? localMachineLabel() : null,
       since: typeof started === "number" ? formatClock(started) : null,
       unread: s.unread ?? 0,
     });

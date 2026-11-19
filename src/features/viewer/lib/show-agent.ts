@@ -44,6 +44,7 @@ import {
   dashboardForegroundSession,
   dashboardListSessions,
 } from "@/tauri/commands";
+import { localMachinePhrase } from "@/shared/lib/local-machine";
 
 /**
  * One Show for every agent surface: a row click, "Go to terminal", the inbox's open-sender and
@@ -470,7 +471,7 @@ function heldNotice(held: HeldMachine, name: string): string {
 
 /** Why a remote agent with no tab on This Mac yet can't be shown. */
 function remoteTablessReason(name: string, machine: string): string {
-  return `${name} runs on ${machine}, and its tab hasn't reached this Mac yet, so there is nothing to show.`;
+  return `${name} runs on ${machine}, and its tab hasn't reached ${localMachinePhrase()} yet, so there is nothing to show.`;
 }
 
 /** Carry out a resolved plan. */
@@ -544,7 +545,7 @@ export async function runShowPlan(
         if (host?.on !== "here") {
           const reason =
             host === null
-              ? `Can't find ${opts.name} on this Mac. If it runs on another machine, that machine may still be reconnecting.`
+              ? `Can't find ${opts.name} on ${localMachinePhrase()}. If it runs on another machine, that machine may still be reconnecting.`
               : remoteTablessReason(opts.name, machineLabelOf(host.machineId));
           say(reason);
           return { notShown: reason };
@@ -610,7 +611,7 @@ export async function runShowPlan(
       return { notShown: reason };
     }
     case "remote-untiled": {
-      const reason = `${opts.name} runs on ${plan.machine}, in a workspace that isn't open on this Mac, so there is no tab to show.`;
+      const reason = `${opts.name} runs on ${plan.machine}, in a workspace that isn't open on ${localMachinePhrase()}, so there is no tab to show.`;
       say(reason);
       return { notShown: reason };
     }

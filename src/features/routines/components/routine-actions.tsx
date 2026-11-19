@@ -18,6 +18,7 @@ import { agentRefFor, offeredTo, routineSpace } from "../lib/routine-agent-ref";
 import { needsUpstream, upstreamRunReason } from "../lib/routine-sentence";
 import { useRoutinesStore } from "../stores/routines-store";
 import { fireTime } from "./run-status";
+import { localMachinePhrase } from "@/shared/lib/local-machine";
 
 /** Run now (held back after an unknown wake) and the ⋯ menu. */
 export function RoutineActions({ row, agent }: { row: RoutineRow; agent?: AgentRow }) {
@@ -50,7 +51,7 @@ export function RoutineActions({ row, agent }: { row: RoutineRow; agent?: AgentR
         )}
         {!row.armed_here && (
           <DropdownMenuItem onSelect={() => void armHere(row.key)}>
-            Run on this Mac
+            Run on {localMachinePhrase()}
           </DropdownMenuItem>
         )}
         {agent && !row.mine && (
