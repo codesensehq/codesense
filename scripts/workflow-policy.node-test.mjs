@@ -371,7 +371,9 @@ test("rust.yml runs the Windows check on a pull request only with ci:windows, ne
       "cargo test --locked -p codesense-host-proto --lib hook::",
       'cargo test --locked -p codesense-session-server --lib portable 2>&1 | tee "$RUNNER_TEMP/portable-tests.log"\n' +
         "grep -Eq '^test result: ok\\. [1-9][0-9]* passed' \"$RUNNER_TEMP/portable-tests.log\"\n",
-      "cargo test --locked --no-fail-fast -p codesense-pty-core --test pty_contract --test process_tree",
+      'cargo test --locked -p codesense-pty-core --lib runner::cursor_reply:: 2>&1 | tee "$RUNNER_TEMP/cursor-reply-tests.log"\n' +
+        "grep -Eq '^test result: ok\\. [1-9][0-9]* passed' \"$RUNNER_TEMP/cursor-reply-tests.log\"\n",
+      "cargo test --locked --no-fail-fast -p codesense-pty-core --test pty_contract --test process_tree --test headless_session",
     ],
   );
   // The pty tests run the Windows worker, built after Rust (the script asks rustc for the triple)
@@ -388,11 +390,13 @@ test("rust.yml runs the Windows check on a pull request only with ci:windows, ne
     steps[pty].env.CODESENSE_EMULATOR_WORKER,
     "${{ github.workspace }}/src-tauri/binaries/codesense-emulator-x86_64-pc-windows-msvc.exe",
   );
-  // A filter that matches no test passes in libtest, so the portable step fails unless one ran.
-  const grep = /^grep -Eq '(.+)' /m.exec(steps.find((s) => /--lib portable/.test(s.run ?? "")).run);
-  const ran = new RegExp(grep[1], "m");
-  assert.match("test result: ok. 1 passed; 0 failed; 0 ignored", ran);
-  assert.doesNotMatch("test result: ok. 0 passed; 0 failed; 0 ignored", ran);
+  // A filter that matches no test passes in libtest, so each filtered step fails unless one ran.
+  for (const filter of ["--lib portable", "--lib runner::cursor_reply::"]) {
+    const { run } = steps.find((s) => s.run?.includes(filter));
+    const ran = new RegExp(/^grep -Eq '(.+)' /m.exec(run)[1], "m");
+    assert.match("test result: ok. 1 passed; 0 failed; 0 ignored", ran, filter);
+    assert.doesNotMatch("test result: ok. 0 passed; 0 failed; 0 ignored", ran, filter);
+  }
   // The ci:windows label's run gets a group of its own, so it never cancels a ci:macos run.
   assert.doesNotMatch(workflow.concurrency.group, /ci:windows/);
   // The platform crate is tested on Linux and macOS too.
@@ -466,10 +470,13 @@ test("rust.yml's Linux app job runs the credential store tests under a session b
   // The helper tests the others start as child processes pass alone, so they are left out.
   assert.match(runs[0], /- test\(~::reader_process\) - test\(~::no_bus_child\)/);
   assert.match(runs[1], /test\(~credential_store::tests::linux_\)/);
-  // The pty contract runs here on Linux, against the worker the sidecar build makes.
+  // The pty contract runs here on Linux, against the worker the sidecar build makes, with the
+  // session with no viewer and the cursor-query answer.
   const names = job.steps.map((step) => step.name);
   const sidecars = names.indexOf("Build sidecars");
-  const pty = names.indexOf("Test the pty contract");
+  const pty = names.indexOf(
+    "Test the pty contract, the cursor-query answer and a session with no viewer",
+  );
   assert.equal(job.steps[sidecars].run, "bash scripts/build-session-server.sh");
   assert.ok(sidecars >= 0 && pty >= 0 && sidecars < pty);
   const sidecarScript = fs.readFileSync(
@@ -479,7 +486,8 @@ test("rust.yml's Linux app job runs the credential store tests under a session b
   assert.match(sidecarScript, /^bash "\$SCRIPT_DIR\/build-emulator\.sh"/m);
   assert.equal(
     job.steps[pty].run,
-    "cargo nextest run --profile ci --locked -p codesense-pty-core --test pty_contract",
+    "cargo nextest run --profile ci --locked -p codesense-pty-core --test pty_contract --test headless_session\n" +
+      "cargo nextest run --profile ci --locked -p codesense-pty-core --lib -E 'test(/^runner::cursor_reply::/)'\n",
   );
   assert.ok(!workflow.jobs["flaky-issues"].needs.includes("rust-linux-app"));
 });

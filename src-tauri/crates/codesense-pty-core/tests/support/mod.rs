@@ -6,12 +6,14 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use codesense_pty_core::domain::{
-    PortUnavailable, PtySessionId, TerminalDomain, TerminalDomainEvent, TerminalEventSink,
+    PortUnavailable, PtySessionId, TerminalDomainEvent, TerminalEventSink,
 };
 use codesense_pty_core::emulator::WORKER_BIN;
-use codesense_pty_core::{SessionMeta, SessionRegistration, TerminalHost};
+use codesense_pty_core::runner::ExitInfo;
+use codesense_pty_core::{SessionMeta, SessionRegistration};
 
 /// The runtime every host in the test binary runs on.
 pub fn runtime() -> &'static tokio::runtime::Runtime {
@@ -39,16 +41,32 @@ impl TerminalEventSink for RecordingSink {
     }
 }
 
-/// Answer the cursor-position request a Windows pseudo console makes as it
-/// starts. portable-pty creates it with `PSEUDOCONSOLE_INHERIT_CURSOR`, so
-/// ConPTY asks the terminal where the cursor is (`ESC [ 6 n`) and serves the
-/// child's console (its reads and writes) only once the answer comes. In the app a viewer's xterm
-/// answers; a test has no viewer, so it answers itself: the top-left corner.
-/// Elsewhere a pty asks nothing, and nothing is written.
-pub fn answer_cursor_request(host: &TerminalHost, session: &PtySessionId) {
-    if std::env::consts::OS == "windows" {
-        host.write(session, b"\x1b[1;1R")
-            .expect("answer the cursor request");
+/// The exit `session` reported to `events` (its status, `None` when unknown),
+/// polled every 20 ms for up to `limit`; `None` if it never came.
+pub fn reported_exit(
+    events: &RecordingSink,
+    session: &PtySessionId,
+    limit: Duration,
+) -> Option<Option<ExitInfo>> {
+    let deadline = Instant::now() + limit;
+    loop {
+        let exit = events
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|event| match event {
+                TerminalDomainEvent::Exit {
+                    session: exited,
+                    status,
+                    ..
+                } if exited == session => Some(status.clone()),
+                _ => None,
+            });
+        if exit.is_some() || Instant::now() >= deadline {
+            return exit;
+        }
+        std::thread::sleep(Duration::from_millis(20));
     }
 }
 

@@ -654,20 +654,24 @@ jobs:
       - name: Test the credential store against Secret Service
         # A private session bus; the script unlocks the keyring, checks it, and runs the tests.
         run: dbus-run-session -- bash scripts/run-secret-service-tests.sh
-      - name: Test the pty contract
+      - name: Test the pty contract, the cursor-query answer and a session with no viewer
         # A real pty behind a host running the emulator worker (built with the sidecars above), as
-        # on Windows (ConPTY).
-        run: cargo nextest run --profile ci --locked -p codesense-pty-core --test pty_contract
+        # on Windows (ConPTY), a session that reports its exit with no viewer, and the runner's
+        # answer to a pseudo console's cursor query. nextest fails a run that matches no test.
+        run: |
+          cargo nextest run --profile ci --locked -p codesense-pty-core --test pty_contract --test headless_session
+          cargo nextest run --profile ci --locked -p codesense-pty-core --lib -E 'test(/^runner::cursor_reply::/)'
 
   rust-check-windows:
     name: Rust check (Windows)
     # A compile check of the crates that build on Windows, the session server's among them with its
     # sidecar gated off, plus the platform crate's tests, Claude's hooks, the session server's
-    # portable items and the pty contract against ConPTY with the Windows emulator worker. Not a
-    # required check: like the macOS jobs it never runs on a merge group, runs after the merge on
-    # each push to main that changes something Rust can see, always on the nightly schedule and
-    # workflow_dispatch, and on a pull request only with the ci:windows label (never a Dependabot
-    # pull request, and not again when another label is added). The crate set grows as crates port.
+    # portable items, the runner's cursor-query answer, and the pty contract against ConPTY with the
+    # Windows emulator worker. Not a required check: like the macOS jobs it never runs on a merge
+    # group, runs after the merge on each push to main that changes something Rust can see, always
+    # on the nightly schedule and workflow_dispatch, and on a pull request only with the ci:windows
+    # label (never a Dependabot pull request, and not again when another label is added). The crate
+    # set grows as crates port.
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' && github.event_name != 'merge_group' && (github.event_name != 'pull_request' || (github.event.pull_request.user.login != 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'ci:windows') && (github.event.action != 'labeled' || github.event.label.name == 'ci:windows'))) }}
     runs-on: windows-2025
@@ -723,14 +727,21 @@ jobs:
         run: |
           cargo test --locked -p codesense-session-server --lib portable 2>&1 | tee "$RUNNER_TEMP/portable-tests.log"
           grep -Eq '^test result: ok\. [1-9][0-9]* passed' "$RUNNER_TEMP/portable-tests.log"
+      - name: Test the cursor-query answer
+        # The runner answers a pseudo console's startup cursor query itself. A filter that matches no
+        # test passes in libtest, so the step fails unless one ran.
+        run: |
+          cargo test --locked -p codesense-pty-core --lib runner::cursor_reply:: 2>&1 | tee "$RUNNER_TEMP/cursor-reply-tests.log"
+          grep -Eq '^test result: ok\. [1-9][0-9]* passed' "$RUNNER_TEMP/cursor-reply-tests.log"
       - name: Build the emulator worker
         # After Rust: the script takes the host triple from rustc.
         run: pnpm run build:emulator
-      - name: Test the pty contract and the tree kill
-        # ConPTY behind a host running the emulator worker, and the Job Object ending a session's tree.
+      - name: Test the pty contract, the tree kill and a session with no viewer
+        # ConPTY behind a host running the emulator worker, the Job Object ending a session's tree,
+        # and a session's exit reported with no viewer or worker to answer its terminal.
         env:
           CODESENSE_EMULATOR_WORKER: ${{ github.workspace }}/src-tauri/binaries/codesense-emulator-x86_64-pc-windows-msvc.exe
-        run: cargo test --locked --no-fail-fast -p codesense-pty-core --test pty_contract --test process_tree
+        run: cargo test --locked --no-fail-fast -p codesense-pty-core --test pty_contract --test process_tree --test headless_session
 
   flaky-issues:
     name: Track flaky Rust tests

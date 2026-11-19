@@ -5,6 +5,9 @@
 //!   line, then starts one grandchild (itself, asked to `sleep`), on Windows
 //!   detached from the console, writes its own pid and the grandchild's to the
 //!   file, and sleeps.
+//! - `pty-fixture mark <file>` (`tests/headless_session.rs`): prints `marking`,
+//!   so it needs its console served, then writes `marked` to the file and
+//!   exits 0.
 //! - `pty-fixture serve` (`tests/pty_contract.rs`): prints `ready`, reports
 //!   `size <cols>x<rows>` whenever the terminal's size changes (on SIGWINCH on
 //!   unix; Windows has none, so it polls the console's size), and answers each
@@ -22,10 +25,11 @@ use std::time::Duration;
 
 fn main() {
     let mut args = std::env::args_os().skip(1);
-    let mode = args.next().expect("a mode: tree, serve or sleep");
+    let mode = args.next().expect("a mode: tree, mark, serve or sleep");
     match mode.to_str() {
         Some("sleep") => sleep_forever(),
         Some("tree") => tree(args.next().expect("a pid file").into()),
+        Some("mark") => mark(args.next().expect("a file").into()),
         Some("serve") => serve(),
         _ => panic!("unknown mode {mode:?}"),
     }
@@ -58,6 +62,11 @@ fn tree(pid_file: std::path::PathBuf) -> ! {
     .expect("write the pids");
     std::fs::rename(&partial, &pid_file).expect("publish the pids");
     sleep_forever();
+}
+
+fn mark(file: std::path::PathBuf) {
+    say("marking");
+    std::fs::write(file, "marked").expect("write the mark");
 }
 
 fn serve() {

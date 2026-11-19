@@ -60,8 +60,8 @@ anyhow = "1"
 tempfile = "3"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
 
-# The child the pty tests (`tests/pty_contract.rs`, `tests/process_tree.rs`)
-# start in a pty, so they need no shell.
+# The child the pty tests (`tests/pty_contract.rs`, `tests/process_tree.rs`,
+# `tests/headless_session.rs`) start in a pty, so they need no shell.
 [[bin]]
 name = "pty-fixture"
 path = "tests/bin/pty_fixture.rs"

@@ -85,7 +85,6 @@ impl Terminal {
         let session = PtySessionId::new("contract");
         host.register(pty, registration(session.as_str(), osc_enabled))
             .expect("register the session");
-        support::answer_cursor_request(&host, &session);
         Self {
             host,
             events,
@@ -149,26 +148,9 @@ impl Terminal {
 
     /// The child's exit code, once it exited.
     fn exit_code(&self) -> Option<u32> {
-        let deadline = Instant::now() + WAIT;
-        loop {
-            let exit = self
-                .events
-                .0
-                .lock()
-                .unwrap()
-                .iter()
-                .find_map(|event| match event {
-                    TerminalDomainEvent::Exit {
-                        session, status, ..
-                    } if *session == self.session => Some(status.clone()),
-                    _ => None,
-                });
-            if let Some(status) = exit {
-                return status.and_then(|status| status.exit_code);
-            }
-            assert!(Instant::now() < deadline, "the session never exited");
-            std::thread::sleep(Duration::from_millis(20));
-        }
+        support::reported_exit(&self.events, &self.session, WAIT)
+            .expect("the session never exited")
+            .and_then(|status| status.exit_code)
     }
 
     /// The OSC 133 marks the host saw, in order.

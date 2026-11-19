@@ -57,7 +57,6 @@ fn killing_a_session_ends_the_child_and_its_grandchild() {
     let session = PtySessionId::new("tree");
     host.register(pty, registration(session.as_str(), false))
         .expect("register the session");
-    support::answer_cursor_request(&host, &session);
     // The runner adopted the child into its process group as it spawned it.
     host.write(&session, b"go\r").expect("send go");
 
@@ -72,8 +71,8 @@ fn killing_a_session_ends_the_child_and_its_grandchild() {
                 .collect();
             pids.len() == 2
         }),
-        "the fixture never wrote its pids (the pty had written {:?} bytes)",
-        host.output_seq(&session)
+        "the fixture never wrote its pids (the pty had written {} bytes)",
+        host.output_seq(&session).unwrap_or(0)
     );
     assert_eq!(Some(pids[0].as_raw()), child);
     assert!(pids.iter().all(|pid| is_alive(*pid)));
