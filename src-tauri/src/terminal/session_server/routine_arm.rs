@@ -9,10 +9,24 @@ use codesense_pty_core::routine_arm::{
 };
 
 use super::*;
+use crate::shared::machine_wording;
 
 /// SW-AGR-11: the first minor whose server takes the desktop identity on
 /// `RoutineArmBindSecret`.
 pub(crate) const DESKTOP_IDENTITY_PROTO_MINOR: u16 = 14;
+
+/// That `machine`'s terminal server needs an update to run routines without
+/// this machine, worded for `os`.
+pub(crate) fn update_for_routines_for(os: &str, machine: &str) -> String {
+    format!(
+        "Update the terminal server on {machine} to run routines there without {}.",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+pub(crate) fn update_for_routines(machine: &str) -> String {
+    update_for_routines_for(machine_wording::RUNNING_OS, machine)
+}
 
 impl SessionServerClient {
     pub(crate) fn supports_routine_arm(&self) -> bool {
@@ -29,10 +43,7 @@ impl SessionServerClient {
                 self.hello.server_name
             )
         } else {
-            format!(
-                "Update the terminal server on {} to run routines there without this Mac.",
-                self.hello.server_name
-            )
+            update_for_routines(&self.hello.server_name)
         })
     }
 
@@ -211,5 +222,22 @@ impl crate::routines::machine_arm::ArmHost for SessionServerClient {
     }
     fn desktop_identity(&self) -> Option<String> {
         super::lock(&self.reverse_streams.bound_desktop).clone()
+    }
+}
+
+#[cfg(test)]
+mod machine_wording_tests {
+    use super::*;
+
+    #[test]
+    fn machine_wording_follows_the_os() {
+        assert_eq!(
+            update_for_routines_for("macos", "m-1"),
+            "Update the terminal server on m-1 to run routines there without this Mac."
+        );
+        assert_eq!(
+            update_for_routines_for("linux", "m-1"),
+            "Update the terminal server on m-1 to run routines there without this computer."
+        );
     }
 }

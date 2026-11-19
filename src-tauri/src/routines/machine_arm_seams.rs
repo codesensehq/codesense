@@ -2726,3 +2726,60 @@ fn a_slow_refresh_leaves_a_later_mark_alone() {
         "m-test-1 is not connected"
     );
 }
+
+#[test]
+fn machine_wording_follows_the_os() {
+    use super::machine_arm::{
+        agent_unreadable_for, managed_elsewhere_for, moved_elsewhere_for, no_routine_here_for,
+        no_visible_agent_for, runs_dropped_for,
+    };
+
+    assert_eq!(
+        no_visible_agent_for("macos"),
+        "the routine has no agent this Mac can see"
+    );
+    assert_eq!(
+        no_visible_agent_for("linux"),
+        "the routine has no agent this computer can see"
+    );
+    assert_eq!(
+        agent_unreadable_for("macos"),
+        "its agent cannot be read on this Mac"
+    );
+    assert_eq!(
+        agent_unreadable_for("linux"),
+        "its agent cannot be read on this computer"
+    );
+    assert_eq!(
+        runs_dropped_for("macos", "m-1"),
+        "some routine runs m-1 fired were dropped from its log before this Mac read them"
+    );
+    assert_eq!(
+        runs_dropped_for("linux", "m-1"),
+        "some routine runs m-1 fired were dropped from its log before this computer read them"
+    );
+    assert_eq!(
+        no_routine_here_for("macos", "acme/api/nightly"),
+        "no routine acme/api/nightly on this Mac"
+    );
+    assert_eq!(
+        no_routine_here_for("linux", "acme/api/nightly"),
+        "no routine acme/api/nightly on this computer"
+    );
+    assert_eq!(
+        managed_elsewhere_for("macos", "acme/api/nightly"),
+        "routine acme/api/nightly is managed by another Mac: refresh it there"
+    );
+    assert_eq!(
+        managed_elsewhere_for("linux", "acme/api/nightly"),
+        "routine acme/api/nightly is managed by another computer: refresh it there"
+    );
+    assert_eq!(
+        moved_elsewhere_for("macos", "m-1"),
+        "m-1 holds a newer arm of it (it was moved from another Mac)"
+    );
+    assert_eq!(
+        moved_elsewhere_for("linux", "m-1"),
+        "m-1 holds a newer arm of it (it was moved from another computer)"
+    );
+}

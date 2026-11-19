@@ -3,8 +3,8 @@
 use super::*;
 use codesense_session_server::private_account::{Bootstrap, HelperUpload, VerifiedAccount};
 use registry::private::{
-    PrivateAccount, PrivateBinding, PrivateDeclaration, PrivateRegistry, PrivateSetup,
-    PRIVATE_DECLARATION_CHANGED,
+    private_declaration_changed, PrivateAccount, PrivateBinding, PrivateDeclaration,
+    PrivateRegistry, PrivateSetup,
 };
 
 const REFUSED: &str = "private account unavailable; check account enrollment";
@@ -128,7 +128,7 @@ pub(super) fn preflight_switch(
         return Ok(());
     };
     if !env.registry.can_publish(&scope) {
-        return Err(CANT_PUBLISH.into());
+        return Err(cant_publish());
     }
     super::identity::check_base(
         &scope,
@@ -914,7 +914,7 @@ pub(super) fn summaries(env: &Env) -> Result<Vec<MachineSummary>, String> {
             // only this machine; the rest still list.
             result.push(match PrivateRegistry::binding(&registry, &id) {
                 Ok(binding) => private_summary(env, scope, &declaration, binding.as_ref())?,
-                Err(error) if error == PRIVATE_DECLARATION_CHANGED => {
+                Err(error) if error == private_declaration_changed() => {
                     let mut summary = match private_summary(env, scope, &declaration, None) {
                         Ok(summary) => summary,
                         Err(summary_error) => {

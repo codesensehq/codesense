@@ -20,6 +20,7 @@ use super::git_sync::{
     build_ref_label_map, commit_changed_paths, new_sorted_revwalk, ref_kind, RefKind, RefLabel,
 };
 use crate::shared::git_util::open_repo;
+use crate::shared::machine_wording;
 
 /// An operation that has not been touched for this long has stopped, not run.
 const STALLED_AFTER: Duration = Duration::from_secs(10 * 60);
@@ -850,6 +851,19 @@ fn keep_side(
     }
 }
 
+/// Which side of `path` is local can't be told, worded for `os`.
+fn unknown_side_for(os: &str, path: &str) -> String {
+    format!(
+        "Can't tell which side of {path} is {}'s from what git left on disk; \
+         hand it to an agent to settle.",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn unknown_side(path: &str) -> String {
+    unknown_side_for(machine_wording::RUNNING_OS, path)
+}
+
 /// Settle one conflicted file: write the chosen side into the working tree and stage it.
 /// The merge or rebase stays open for the agent doing the sync to finish.
 pub fn resolve_context_conflict_impl(
@@ -879,12 +893,7 @@ pub fn resolve_context_conflict_impl(
     let (mine, theirs) = match mine_stage(&repo) {
         MineStage::Ours => (conflict.our, conflict.their),
         MineStage::Theirs => (conflict.their, conflict.our),
-        MineStage::Unknown => {
-            return Err(format!(
-                "Can't tell which side of {path} is this Mac's from what git left on disk; \
-                 hand it to an agent to settle."
-            ))
-        }
+        MineStage::Unknown => return Err(unknown_side(path)),
     };
     // Checked before anything is touched, so a refused path leaves the conflict as it was.
     checked_dest(&workdir, path)?;
@@ -1709,3 +1718,15 @@ pub async fn context_repo_history(
 #[cfg(test)]
 #[path = "context_repo_git_tests.rs"]
 mod tests;
+
+#[test]
+fn machine_wording_follows_the_os() {
+    assert_eq!(
+        unknown_side_for("macos", "notes/a.md"),
+        "Can't tell which side of notes/a.md is this Mac's from what git left on disk; hand it to an agent to settle."
+    );
+    assert_eq!(
+        unknown_side_for("linux", "notes/a.md"),
+        "Can't tell which side of notes/a.md is this computer's from what git left on disk; hand it to an agent to settle."
+    );
+}

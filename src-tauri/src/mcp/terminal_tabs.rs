@@ -684,6 +684,16 @@ pub(crate) mod tests {
         );
     }
 
+    /// A local tab's machine is the value "This Mac" an agent reads, on every OS.
+    #[test]
+    fn a_local_tab_is_on_this_mac_on_every_os() {
+        assert_eq!(THIS_MAC, "This Mac");
+        assert_eq!(
+            by_handle(&tabs(), "x", Some("local-1")).unwrap().machine,
+            "This Mac"
+        );
+    }
+
     #[test]
     fn a_listed_remote_session_is_live_offline_or_ended_by_its_machines_layout() {
         let labels = BTreeMap::from([("droplet".to_string(), "codesense-test-1".to_string())]);

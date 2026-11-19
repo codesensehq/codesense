@@ -4786,3 +4786,27 @@ async fn a_launch_model_goes_before_the_agents_operands() {
         ["--model", "anthropic/claude-sonnet-4", "--", "/help"]
     );
 }
+
+#[test]
+fn machine_wording_follows_the_os() {
+    assert_eq!(
+        team_folder_runs_here_for("macos"),
+        "machine_id launches into a story's workspace on that machine; a team folder runs on This Mac"
+    );
+    assert_eq!(
+        team_folder_runs_here_for("linux"),
+        "machine_id launches into a story's workspace on that machine; a team folder runs on This computer"
+    );
+    assert_eq!(
+        already_lives_on_for("macos", "demo", &WorkspacePlace::ThisMac),
+        "demo's workspace already lives on This Mac; a workspace stays where it was created"
+    );
+    assert_eq!(
+        already_lives_on_for("linux", "demo", &WorkspacePlace::ThisMac),
+        "demo's workspace already lives on This computer; a workspace stays where it was created"
+    );
+    assert_eq!(
+        already_lives_on_for("linux", "demo", &WorkspacePlace::Machine("box".into())),
+        "demo's workspace already lives on machine box; a workspace stays where it was created"
+    );
+}

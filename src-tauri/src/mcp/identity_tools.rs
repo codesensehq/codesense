@@ -143,7 +143,7 @@ mod tests {
             agent: None,
             machine_id: None,
             workspace_handle: None,
-            machine: Some("This Mac".into()),
+            machine: Some(crate::mcp::terminal_tabs::THIS_MAC.into()),
             unread: Some(0),
             oldest_unread_at: None,
             mail_notice: None,
@@ -202,6 +202,13 @@ mod tests {
             (launched.handle.as_str(), launched.story.as_deref()),
             ("SW-1", Some("SW-1"))
         );
+    }
+
+    /// who_am_i's `machine` for a local tab is the value "This Mac", on every OS.
+    #[test]
+    fn a_local_tab_is_on_this_mac_on_every_os() {
+        let me = who_am_i_in(&rows(), "pty-hand").unwrap();
+        assert_eq!(me.machine.as_deref(), Some("This Mac"));
     }
 
     #[test]

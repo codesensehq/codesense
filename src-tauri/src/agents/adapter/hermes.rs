@@ -5,6 +5,7 @@ use super::{Attribution, DesktopCli, PermissionBlock, RunnerRecipe, Starter, Una
 use crate::agents::manifest::GeneratedTarget;
 use crate::agents::model::{Permissions, ValidationError};
 use crate::install::agent_account_store::AccountRequirement;
+use crate::shared::machine_wording;
 use url::Url as ModelEndpoint;
 use codesense_pty_core::agent_cli::hermes::native_arguments;
 
@@ -212,7 +213,17 @@ fn home_config(
 const MODEL_REQUIRED: &str =
     "Hermes needs a model. Set a local endpoint in Edit → Runs on. API-key providers come later.";
 
-const ADMIN_POLICY: &str = "This Mac has an admin-managed Hermes policy; CodeSense-managed Hermes sessions aren't supported here yet.";
+/// That an admin-managed Hermes policy blocks managed sessions here, worded for `os`.
+fn admin_policy_for(os: &str) -> String {
+    format!(
+        "{} has an admin-managed Hermes policy; CodeSense-managed Hermes sessions aren't supported here yet.",
+        machine_wording::machine_noun(os)
+    )
+}
+
+fn admin_policy() -> String {
+    admin_policy_for(machine_wording::RUNNING_OS)
+}
 
 fn unmanaged_host(system: &std::path::Path, ambient: Option<&std::path::Path>) -> Result<(), String> {
     let ambient_policy = ambient.is_some_and(|path| {
@@ -222,7 +233,7 @@ fn unmanaged_host(system: &std::path::Path, ambient: Option<&std::path::Path>) -
         }
     });
     if std::path::Path::exists(system) || ambient_policy {
-        return Err(ADMIN_POLICY.into());
+        return Err(admin_policy());
     }
     Ok(())
 }
@@ -390,9 +401,24 @@ mod tests {
         std::fs::create_dir_all(&ambient).unwrap();
         assert!(unmanaged_host(&system, Some(&ambient)).is_ok());
         std::fs::write(ambient.join("config.yaml"), "admin: true").unwrap();
-        assert_eq!(unmanaged_host(&system, Some(&ambient)).unwrap_err(), ADMIN_POLICY);
+        assert_eq!(
+            unmanaged_host(&system, Some(&ambient)).unwrap_err(),
+            admin_policy()
+        );
         std::fs::create_dir_all(&system).unwrap();
-        assert_eq!(unmanaged_host(&system, None).unwrap_err(), ADMIN_POLICY);
+        assert_eq!(unmanaged_host(&system, None).unwrap_err(), admin_policy());
+    }
+
+    #[test]
+    fn machine_wording_follows_the_os() {
+        assert_eq!(
+            admin_policy_for("macos"),
+            "This Mac has an admin-managed Hermes policy; CodeSense-managed Hermes sessions aren't supported here yet."
+        );
+        assert_eq!(
+            admin_policy_for("linux"),
+            "This computer has an admin-managed Hermes policy; CodeSense-managed Hermes sessions aren't supported here yet."
+        );
     }
 
     #[test]

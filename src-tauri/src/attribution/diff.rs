@@ -2,6 +2,7 @@
 //! Read a configured source revision again on every diff-tab read. No fetching.
 use crate::context_repo::caller_scope::CallerScope;
 use crate::domain::Principal;
+use crate::shared::machine_wording;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::{Component, Path};
@@ -62,6 +63,42 @@ fn stays_inside(root: &Path, relative: &str) -> bool {
     }
 }
 
+/// That the source repository is not attached here, worded for `os`.
+fn repo_not_attached_for(os: &str) -> String {
+    format!(
+        "Source repository is not attached on {}",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn repo_not_attached() -> String {
+    repo_not_attached_for(machine_wording::RUNNING_OS)
+}
+
+/// That a full commit SHA is not in the local clone yet, worded for `os`.
+fn commit_not_local_for(os: &str) -> String {
+    format!(
+        "This commit isn't on {} yet",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn commit_not_local() -> String {
+    commit_not_local_for(machine_wording::RUNNING_OS)
+}
+
+/// That a short SHA matches nothing in the local clone, worded for `os`.
+fn short_sha_not_local_for(os: &str) -> String {
+    format!(
+        "This short SHA isn't on {}; use the full SHA",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn short_sha_not_local() -> String {
+    short_sha_not_local_for(machine_wording::RUNNING_OS)
+}
+
 /// Revalidates `params` (path, range, revision, the configured attachment and, for
 /// WORKTREE, the one story worktree in the caller's view) and hands the resolved root
 /// and revision to `finish`, or returns the state that stops it.
@@ -110,10 +147,7 @@ fn resolve_then(
         return Ok(state("unavailable", "Source repository is not configured"));
     };
     if configured.attachment != crate::mcp::setup_tools::AttachmentStatus::Attached {
-        return Ok(state(
-            "unavailable",
-            "Source repository is not attached on this Mac",
-        ));
+        return Ok(state("unavailable", repo_not_attached()));
     }
     let root = configured
         .local_path
@@ -161,10 +195,10 @@ fn resolve_then(
             }
             Err(_) if params.rev.len() == 40 => {
                 return Ok(
-                    json!({"status":"commitNotLocal","reason":"This commit isn't on this Mac yet","fetchCommand":format!("git fetch origin {}",params.rev)}),
+                    json!({"status":"commitNotLocal","reason":commit_not_local(),"fetchCommand":format!("git fetch origin {}",params.rev)}),
                 )
             }
-            Err(_) => return Ok(state("refused", "This short SHA isn't on this Mac; use the full SHA")),
+            Err(_) => return Ok(state("refused", short_sha_not_local())),
         };
         (Path::new(&root).to_path_buf(), commit)
     };
@@ -567,4 +601,31 @@ mod tests {
         }
     }
 
+    #[test]
+    fn machine_wording_follows_the_os() {
+        assert_eq!(
+            repo_not_attached_for("macos"),
+            "Source repository is not attached on this Mac"
+        );
+        assert_eq!(
+            repo_not_attached_for("linux"),
+            "Source repository is not attached on this computer"
+        );
+        assert_eq!(
+            commit_not_local_for("macos"),
+            "This commit isn't on this Mac yet"
+        );
+        assert_eq!(
+            commit_not_local_for("linux"),
+            "This commit isn't on this computer yet"
+        );
+        assert_eq!(
+            short_sha_not_local_for("macos"),
+            "This short SHA isn't on this Mac; use the full SHA"
+        );
+        assert_eq!(
+            short_sha_not_local_for("linux"),
+            "This short SHA isn't on this computer; use the full SHA"
+        );
+    }
 }

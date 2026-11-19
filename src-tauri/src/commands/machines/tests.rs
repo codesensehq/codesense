@@ -4178,6 +4178,12 @@ fn remote_mcp_control_is_personal_ready_only_and_revokes_binding_generation() {
     assert!(!this_mac(0).remote_mcp_control);
 }
 
+/// list_machines labels the local machine "This Mac", a value an agent reads, on every OS.
+#[test]
+fn the_local_machine_is_labelled_this_mac_on_every_os() {
+    assert_eq!(this_mac(0).label, "This Mac");
+}
+
 fn heard_machines_changed(
     app: &tauri::App<tauri::test::MockRuntime>,
 ) -> Arc<std::sync::Mutex<Vec<MachinesChanged>>> {
@@ -5124,7 +5130,7 @@ fn private_declaration_edit_reads_the_clear_message() {
     .unwrap()
     .machine_id;
     edit_private_declaration(&env, &Scope::Personal, &id);
-    let message = registry::private::PRIVATE_DECLARATION_CHANGED;
+    let message = registry::private::private_declaration_changed();
 
     let saving = save(
         &env,
@@ -5196,7 +5202,7 @@ fn one_edited_private_machine_does_not_break_the_list() {
     assert_eq!(
         status(edited.as_str()),
         MachineStatus::ConnectionFailed {
-            last_error: registry::private::PRIVATE_DECLARATION_CHANGED.into()
+            last_error: registry::private::private_declaration_changed()
         }
     );
     assert_eq!(status(healthy.as_str()), MachineStatus::NeedsCredential);
@@ -5246,7 +5252,7 @@ async fn an_edited_private_machine_stays_refused_through_the_list_overlay() {
     assert_eq!(
         edited.status,
         MachineStatus::ConnectionFailed {
-            last_error: registry::private::PRIVATE_DECLARATION_CHANGED.into()
+            last_error: registry::private::private_declaration_changed()
         }
     );
 }
@@ -6773,4 +6779,24 @@ fn first_agent_setup_accepts_only_the_validated_snapshot_when_git_changes_the_pi
     .expect("initial setup must use validated A despite a later git pin update");
     assert!(saved.declaration.unwrap().identity_change.is_some());
     assert_git_pin_change_remains_unaccepted(&env, id, &changed_key);
+}
+
+#[test]
+fn machine_wording_follows_the_os() {
+    assert_eq!(
+        cant_publish_for("macos"),
+        "You can't publish to that team's context from this Mac"
+    );
+    assert_eq!(
+        cant_publish_for("linux"),
+        "You can't publish to that team's context from this computer"
+    );
+    assert_eq!(
+        no_local_auto_connect_for("macos"),
+        "This Mac has no remote-machine auto-connect binding"
+    );
+    assert_eq!(
+        no_local_auto_connect_for("linux"),
+        "This computer has no remote-machine auto-connect binding"
+    );
 }

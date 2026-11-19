@@ -27,6 +27,7 @@ use super::agent_inbox::{self, AppInboxHost, Check, InboxHost};
 use super::dashboard_launch::DashboardLaunchState;
 use super::host_connection_manager::{HostConnectionManager, HostConnectionState};
 use super::machines::LOCAL_MACHINE_ID;
+use crate::shared::machine_wording;
 
 /// Retry delay for a failed handoff before the host accepts the notice (for example,
 /// its session is not bound to this app yet, right after a connect).
@@ -265,7 +266,8 @@ async fn local_connected(app: &AppHandle, generation: u64) {
     let mut states = Vec::new();
     let mut read_all = true;
     for host in local_hosts(app) {
-        match read_waiters(|| Some(host.clone()), "this Mac").await {
+        let machine = machine_wording::machine_noun_lower(machine_wording::RUNNING_OS);
+        match read_waiters(|| Some(host.clone()), machine).await {
             Some(read) => states.extend(read),
             None => read_all = false,
         }

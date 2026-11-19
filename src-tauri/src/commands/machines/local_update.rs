@@ -12,6 +12,7 @@ use super::restore::{self, RestoreSummary, UpdateEnd};
 use super::terminal_server_info::{local_info, ServerRelation, TerminalServerInfo};
 use super::LOCAL_MACHINE_ID;
 use crate::commands::pty_backend::RestartError;
+use crate::shared::machine_wording;
 use crate::terminal::session_server::{LocalActivityUpgrade, SessionServerState, SIDECAR_BIN};
 
 /// This Mac's server when it is not this app's build: what the confirmation
@@ -48,6 +49,80 @@ pub fn same_server(
     identity.server_id == client_server_id && identity.epoch == client_epoch
 }
 
+/// "<machine>'s terminal server <state>", worded for `os`.
+fn server_sentence(os: &str, state: &str) -> String {
+    format!(
+        "{}'s terminal server {state}",
+        machine_wording::machine_noun(os)
+    )
+}
+
+/// The local server is not available, worded for `os`.
+fn server_not_available_for(os: &str) -> String {
+    server_sentence(os, "is not available")
+}
+
+fn server_not_available() -> String {
+    server_not_available_for(machine_wording::RUNNING_OS)
+}
+
+/// The local server is not connected, worded for `os`.
+fn server_not_connected_for(os: &str) -> String {
+    server_sentence(os, "is not connected")
+}
+
+fn server_not_connected() -> String {
+    server_not_connected_for(machine_wording::RUNNING_OS)
+}
+
+/// The local server is not running, worded for `os`.
+fn server_not_running_for(os: &str) -> String {
+    server_sentence(os, "is not running")
+}
+
+fn server_not_running() -> String {
+    server_not_running_for(machine_wording::RUNNING_OS)
+}
+
+/// The local server changed before the update was offered, worded for `os`.
+fn server_changed_for(os: &str) -> String {
+    server_sentence(os, "changed; try again")
+}
+
+fn server_changed() -> String {
+    server_changed_for(machine_wording::RUNNING_OS)
+}
+
+/// The server or its sessions changed since review, worded for `os`.
+fn sessions_changed_for(os: &str) -> String {
+    server_sentence(
+        os,
+        "or its sessions changed since you reviewed them; nothing was stopped. Review the update again.",
+    )
+}
+
+fn sessions_changed() -> String {
+    sessions_changed_for(machine_wording::RUNNING_OS)
+}
+
+/// The local server is already this app's build, worded for `os`.
+fn already_this_build_for(os: &str) -> String {
+    server_sentence(os, "is already this app's build.")
+}
+
+fn already_this_build() -> String {
+    already_this_build_for(machine_wording::RUNNING_OS)
+}
+
+/// Another update of the local server is running, worded for `os`.
+fn already_updating_for(os: &str) -> String {
+    server_sentence(os, "is being updated already; wait for it to finish.")
+}
+
+fn already_updating() -> String {
+    already_updating_for(machine_wording::RUNNING_OS)
+}
+
 /// This Mac's connected server and how it compares with this app's build.
 fn connected_info(
     app: &tauri::AppHandle,
@@ -60,10 +135,8 @@ fn connected_info(
 > {
     let state = app
         .try_state::<SessionServerState>()
-        .ok_or("This Mac's terminal server is not available")?;
-    let client = state
-        .connected()
-        .ok_or("This Mac's terminal server is not connected")?;
+        .ok_or_else(server_not_available)?;
+    let client = state.connected().ok_or_else(server_not_connected)?;
     let shipped = crate::commands::deps::resolve_sidecar_source(SIDECAR_BIN).ok();
     let info = local_info(
         client.announced_version(),
@@ -88,10 +161,10 @@ pub async fn local_terminal_server_update(
         let identity = app
             .state::<SessionServerState>()
             .local_server_identity()?
-            .ok_or("This Mac's terminal server is not running")?;
+            .ok_or_else(server_not_running)?;
         // The confirmation binds to the server whose build it shows.
         if !same_server(client.server_id(), client.epoch(), &identity) {
-            return Err("This Mac's terminal server changed; try again".into());
+            return Err(server_changed());
         }
         Ok(Some(LocalServerUpdate {
             expected: identity,
@@ -124,7 +197,7 @@ impl LocalUpdateError {
         Self {
             old_stopped: false,
             changed: true,
-            message: "This Mac's terminal server or its sessions changed since you reviewed them; nothing was stopped. Review the update again.".into(),
+            message: sessions_changed(),
         }
     }
 }
@@ -133,9 +206,7 @@ impl LocalUpdateError {
 fn check(app: &tauri::AppHandle, expected: &LocalActivityUpgrade) -> Result<(), LocalUpdateError> {
     let (client, info) = connected_info(app).map_err(LocalUpdateError::refused)?;
     if !offers_update(info.relation) {
-        return Err(LocalUpdateError::refused(
-            "This Mac's terminal server is already this app's build.",
-        ));
+        return Err(LocalUpdateError::refused(already_this_build()));
     }
     if !same_server(client.server_id(), client.epoch(), expected) {
         return Err(LocalUpdateError::changed());
@@ -195,9 +266,7 @@ pub(crate) async fn update_local_now(
     expected: LocalActivityUpgrade,
 ) -> Result<LocalUpdateResult, LocalUpdateError> {
     let Some(_updating) = Updating::claim() else {
-        return Err(LocalUpdateError::refused(
-            "This Mac's terminal server is being updated already; wait for it to finish.",
-        ));
+        return Err(LocalUpdateError::refused(already_updating()));
     };
     // Still the confirmed server, its sessions, and still one to update.
     let check_app = app.clone();
@@ -229,18 +298,21 @@ pub(crate) async fn update_local_now(
     };
     let restored = match &home {
         Some(home) => {
-            restore::finish(&app, home, LOCAL_MACHINE_ID, "This Mac", recorded, end).await
+            let label = machine_wording::machine_noun(machine_wording::RUNNING_OS);
+            restore::finish(&app, home, LOCAL_MACHINE_ID, label, recorded, end).await
         }
         None => None,
     };
     match &replaced {
         Ok(()) => log::info!(
             target: "machines",
-            "This Mac terminal server updated; {sessions} sessions ended"
+            "{} terminal server updated; {sessions} sessions ended",
+            machine_wording::machine_noun(machine_wording::RUNNING_OS)
         ),
         Err(error) => log::warn!(
             target: "machines",
-            "This Mac terminal server update failed (old stopped: {}): {}",
+            "{} terminal server update failed (old stopped: {}): {}",
+            machine_wording::machine_noun(machine_wording::RUNNING_OS),
             error.old_stopped,
             error.message
         ),
@@ -295,5 +367,50 @@ mod tests {
         let wire = serde_json::to_value(LocalUpdateError::changed()).unwrap();
         assert_eq!(wire["changed"], true);
         assert_eq!(wire["oldStopped"], false);
+    }
+
+    #[test]
+    fn machine_wording_follows_the_os() {
+        let cases: [(fn(&str) -> String, &str, &str); 7] = [
+            (
+                server_not_available_for,
+                "This Mac's terminal server is not available",
+                "This computer's terminal server is not available",
+            ),
+            (
+                server_not_connected_for,
+                "This Mac's terminal server is not connected",
+                "This computer's terminal server is not connected",
+            ),
+            (
+                server_not_running_for,
+                "This Mac's terminal server is not running",
+                "This computer's terminal server is not running",
+            ),
+            (
+                server_changed_for,
+                "This Mac's terminal server changed; try again",
+                "This computer's terminal server changed; try again",
+            ),
+            (
+                sessions_changed_for,
+                "This Mac's terminal server or its sessions changed since you reviewed them; nothing was stopped. Review the update again.",
+                "This computer's terminal server or its sessions changed since you reviewed them; nothing was stopped. Review the update again.",
+            ),
+            (
+                already_this_build_for,
+                "This Mac's terminal server is already this app's build.",
+                "This computer's terminal server is already this app's build.",
+            ),
+            (
+                already_updating_for,
+                "This Mac's terminal server is being updated already; wait for it to finish.",
+                "This computer's terminal server is being updated already; wait for it to finish.",
+            ),
+        ];
+        for (message_for, mac, other) in cases {
+            assert_eq!(message_for("macos"), mac);
+            assert_eq!(message_for("linux"), other);
+        }
     }
 }

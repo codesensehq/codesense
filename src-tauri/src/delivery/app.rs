@@ -21,6 +21,7 @@ use crate::commands::host_connection_manager::{
 use crate::commands::machines::{
     RuntimeAdmissionRow, RuntimeAdmissionState, RuntimeMemberSlot, LOCAL_MACHINE_ID,
 };
+use crate::shared::machine_wording;
 use crate::terminal::session_server::{EventNamespace, SessionServerState};
 
 /// The app's delivery core, managed as tauri state.
@@ -89,7 +90,7 @@ impl<R: Runtime> HostResolver for AppResolver<R> {
             {
                 Some(client) => HostLookup::Ready(client),
                 None => HostLookup::Unavailable {
-                    machine: "This Mac".into(),
+                    machine: machine_wording::machine_noun(machine_wording::RUNNING_OS).into(),
                     detail: "its terminal server is not running".into(),
                 },
             };

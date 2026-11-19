@@ -1113,3 +1113,31 @@ async fn move_carries_unpushed_machine_branch_into_a_mac_worktree_at_the_exact_t
     );
     assert!(fixture.machine.join("private.txt").exists());
 }
+
+#[test]
+fn machine_wording_follows_the_os() {
+    assert_eq!(
+        no_local_clone_for("macos", "acme", "app"),
+        "No local clone of acme/app is attached on this Mac; attach it, then fetch again"
+    );
+    assert_eq!(
+        no_local_clone_for("linux", "acme", "app"),
+        "No local clone of acme/app is attached on this computer; attach it, then fetch again"
+    );
+    assert_eq!(
+        no_machine_workspace_for("macos"),
+        "no open workspace on a machine matches; it may live on this Mac"
+    );
+    assert_eq!(
+        no_machine_workspace_for("linux"),
+        "no open workspace on a machine matches; it may live on this computer"
+    );
+    assert_eq!(
+        clone_missing_for("macos"),
+        "the attached local clone is missing on this Mac"
+    );
+    assert_eq!(
+        clone_missing_for("linux"),
+        "the attached local clone is missing on this computer"
+    );
+}

@@ -1020,3 +1020,17 @@ async fn a_command_run_keeps_its_git_baseline_and_flags_an_edited_test() {
     assert!(tamper.flag);
     assert_eq!(tamper.files, ["tests/a_test.rs"]);
 }
+
+#[test]
+fn machine_wording_follows_the_os() {
+    use super::command::not_on_path_for;
+
+    assert_eq!(
+        not_on_path_for("macos", "python3"),
+        "python3 isn't on This Mac's PATH. Another Mac may have it."
+    );
+    assert_eq!(
+        not_on_path_for("linux", "python3"),
+        "python3 isn't on This computer's PATH. Another computer may have it."
+    );
+}
