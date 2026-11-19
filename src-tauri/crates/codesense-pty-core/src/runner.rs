@@ -955,25 +955,44 @@ mod tests {
         assert_eq!(session.size(), (120, 40));
     }
 
+    /// A wait that always times out, counting its calls.
+    fn timing_out(waits: &Arc<std::sync::atomic::AtomicUsize>) -> ExitWait {
+        let waits = waits.clone();
+        Box::new(move |slice| {
+            waits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            std::thread::sleep(slice);
+            Ok(false)
+        })
+    }
+
     #[test]
     fn a_gone_session_stops_the_console_watcher() {
         let (child, running) = cued_child();
-        let slot = Arc::new(Mutex::new(Some(())));
-        let weak = Arc::downgrade(&slot);
-        drop(slot);
         let waits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let times_out: ExitWait = {
-            let waits = waits.clone();
-            Box::new(move |slice| {
-                waits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                std::thread::sleep(slice);
-                Ok(false)
-            })
-        };
-        // Returns although the child never exits, within one slice.
-        close_after_exit(&child, &weak, Some(times_out), TEST_TIMING);
-        assert!(waits.load(std::sync::atomic::Ordering::SeqCst) <= 1);
+        let (watcher, slot, _closed) = watch(&child, Some(timing_out(&waits)));
+        while waits.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // The session goes while the watcher waits on its child.
+        let at_drop = waits.load(std::sync::atomic::Ordering::SeqCst);
+        drop(slot);
+        // Returns although the child never exits, after the slice in hand.
+        watcher.join().unwrap();
+        assert!(waits.load(std::sync::atomic::Ordering::SeqCst) <= at_drop + 1);
         assert_eq!(running.probes(), 0);
+    }
+
+    /// The exit closes the console whatever the status read after it says:
+    /// an exit code of 259 reads as still running.
+    #[test]
+    fn a_reported_exit_closes_the_console_even_if_the_child_reads_as_running() {
+        let (child, running) = cued_child();
+        let exited: ExitWait = Box::new(|_| Ok(true));
+        let (watcher, slot, closed) = watch(&child, Some(exited));
+        watcher.join().unwrap();
+        assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(slot.lock().unwrap().is_none());
+        assert_eq!(running.probes(), 1, "one status read after the wait");
     }
     // Unix only, as the group tests that use it are.
     #[cfg(unix)]
