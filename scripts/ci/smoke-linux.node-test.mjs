@@ -195,3 +195,138 @@ test("apt-mirror: ports.ubuntu.com, which arm64 uses, is left as it is", () => {
   passes(smoke("apt-mirror", "http://azure.archive.ubuntu.com/ubuntu/", sources));
   assert.equal(fs.readFileSync(sources, "utf8"), ports.map((line) => `${line}\n`).join(""));
 });
+
+// cache-key reads the deb with dpkg-deb; a stand-in on PATH answers from FAKE_ARCH and
+// FAKE_DEPENDS.
+const fakeBin = path.join(dir, "bin");
+fs.mkdirSync(fakeBin);
+fs.writeFileSync(
+  path.join(fakeBin, "dpkg-deb"),
+  '#!/bin/bash\ncase "$3" in Architecture) echo "$FAKE_ARCH" ;; Depends) echo "$FAKE_DEPENDS" ;; esac\n',
+  { mode: 0o755 },
+);
+const packages = path.join(dir, "packages");
+fs.mkdirSync(packages);
+fs.writeFileSync(path.join(packages, "CodeSense_0.1.0_amd64.deb"), "");
+const cacheKey = (image, week, depends, arch = "amd64") => {
+  const result = spawnSync("bash", [script, "cache-key", image, packages, week], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: `${fakeBin}:${process.env.PATH}`,
+      FAKE_ARCH: arch,
+      FAKE_DEPENDS: depends,
+    },
+  });
+  const lines = result.stdout.trim().split("\n");
+  return { result, lines: Object.fromEntries(lines.map((line) => line.split("="))) };
+};
+// The first 16 hex digits of ubuntu:22.04's pinned digest in smoke-images.txt.
+const jammy = "9abcaffc92a5279f";
+
+test("cache-key: the key holds the arch, the image digest, the Depends and the week", () => {
+  const { result, lines } = cacheKey("ubuntu:22.04", "2026-W47", "libwebkit2gtk-4.1-0, libgtk-3-0");
+  passes(result);
+  assert.match(
+    lines.key,
+    new RegExp(`^smoke-apt-amd64-ubuntu-22\\.04-${jammy}-[0-9a-f]{16}-2026-W47$`),
+  );
+  assert.equal(lines.restore, `smoke-apt-amd64-ubuntu-22.04-${jammy}-`);
+  assert.ok(lines.key.startsWith(lines.restore));
+});
+
+test("cache-key: other Depends or another week change the key, not the restore prefix", () => {
+  const base = cacheKey("ubuntu:22.04", "2026-W47", "libgtk-3-0").lines;
+  assert.deepEqual(cacheKey("ubuntu:22.04", "2026-W47", "libgtk-3-0").lines, base);
+  for (const other of [
+    cacheKey("ubuntu:22.04", "2026-W47", "libgtk-3-0, libsoup-3.0-0").lines,
+    cacheKey("ubuntu:22.04", "2026-W48", "libgtk-3-0").lines,
+  ]) {
+    assert.notEqual(other.key, base.key);
+    assert.equal(other.restore, base.restore);
+  }
+  // Another arch or image restores nothing of this one's.
+  assert.notEqual(
+    cacheKey("ubuntu:22.04", "2026-W47", "libgtk-3-0", "arm64").lines.restore,
+    base.restore,
+  );
+  assert.notEqual(cacheKey("ubuntu:24.04", "2026-W47", "libgtk-3-0").lines.restore, base.restore);
+});
+
+test("cache-key: an image not pinned in smoke-images.txt or a malformed week fails", () => {
+  fails(cacheKey("ubuntu:20.04", "2026-W47", "libgtk-3-0").result, /ubuntu:20\.04 is not pinned/);
+  fails(cacheKey("ubuntu:22.04", "2026-47", "libgtk-3-0").result, /not a week as YYYY-Www/);
+});
+
+test("apt-keep: docker-clean goes and apt keeps the packages it downloads", () => {
+  const conf = path.join(dir, "apt.conf.d");
+  fs.mkdirSync(conf);
+  fs.writeFileSync(
+    path.join(conf, "docker-clean"),
+    'DPkg::Post-Invoke { "rm -f /var/cache/apt/archives/*.deb || true"; };\n',
+  );
+  fs.writeFileSync(path.join(conf, "80smoke-retries"), 'Acquire::Retries "3";\n');
+  passes(smoke("apt-keep", conf));
+  assert.deepEqual(fs.readdirSync(conf).sort(), ["80smoke-keep", "80smoke-retries"]);
+  assert.equal(
+    fs.readFileSync(path.join(conf, "80smoke-keep"), "utf8"),
+    'APT::Keep-Downloaded-Packages "true";\nBinary::apt::APT::Keep-Downloaded-Packages "true";\n',
+  );
+});
+
+// install runs the container with docker; a stand-in on PATH records its arguments in
+// DOCKER_ARGS, one a line, and writes the listing the container would to the /out mount.
+fs.writeFileSync(
+  path.join(fakeBin, "docker"),
+  [
+    "#!/bin/bash",
+    'printf "%s\\n" "$@" >"$DOCKER_ARGS"',
+    'for arg in "$@"; do if [[ "$arg" == *:/out ]]; then out="${arg%:/out}"; fi; done',
+    'cp "$FAKE_LISTING" "$out/$(basename "${!#}")"',
+    "",
+  ].join("\n"),
+  { mode: 0o755 },
+);
+fs.writeFileSync(path.join(packages, "CodeSense-0.1.0-1.x86_64.rpm"), "");
+const install = (type, image, cache) => {
+  const args = path.join(dir, `docker-args-${fixtures++}`);
+  const result = spawnSync(
+    "bash",
+    [script, "install", type, image, packages, path.join(dir, `out-${fixtures++}`)],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}:${process.env.PATH}`,
+        DOCKER_ARGS: args,
+        FAKE_LISTING: fixture(debListing),
+        SMOKE_APT_CACHE: cache,
+      },
+    },
+  );
+  passes(result);
+  return fs.readFileSync(args, "utf8").split("\n").slice(0, -1);
+};
+// The arguments that follow <flag> in <argv>.
+const flagged = (argv, flag) => argv.flatMap((arg, i) => (argv[i - 1] === flag ? [arg] : []));
+
+test("install: a deb container mounts SMOKE_APT_CACHE as its apt archives and keeps them", () => {
+  const cache = path.join(dir, "apt-archives");
+  const argv = install("deb", "ubuntu:22.04", cache);
+  assert.ok(fs.statSync(cache).isDirectory());
+  assert.ok(flagged(argv, "-v").includes(`${cache}:/var/cache/apt/archives`));
+  assert.ok(flagged(argv, "-e").includes("SMOKE_KEEP_ARCHIVES=1"));
+  assert.ok(argv.some((arg) => arg.startsWith(`ubuntu:22.04@sha256:${jammy}`)));
+});
+
+test("install: an rpm container, or a deb one without SMOKE_APT_CACHE, gets no archive mount", () => {
+  for (const argv of [
+    install("rpm", "fedora:44", path.join(dir, "rpm-archives")),
+    install("deb", "ubuntu:24.04", ""),
+  ]) {
+    assert.ok(!flagged(argv, "-v").some((mount) => mount.endsWith(":/var/cache/apt/archives")));
+    assert.ok(!flagged(argv, "-e").includes("SMOKE_KEEP_ARCHIVES=1"));
+    assert.deepEqual(flagged(argv, "-e"), ["SMOKE_APT_MIRROR"]);
+  }
+  assert.ok(!fs.existsSync(path.join(dir, "rpm-archives")));
+});

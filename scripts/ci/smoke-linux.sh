@@ -10,7 +10,17 @@
 #       smoke-images.txt and run by its pinned digest. The distribution's resolver must find
 #       every dependency, and the package's file list (kept as <out-dir>/<deb|rpm>.list) must
 #       hold the app binary and its three sidecars. A deb image's apt fetches from
-#       SMOKE_APT_MIRROR (apt-mirror), with retries and short timeouts.
+#       SMOKE_APT_MIRROR (apt-mirror), with retries and short timeouts. When SMOKE_APT_CACHE names
+#       a directory, a deb image uses it as its apt archives and keeps what it fetches there
+#       (apt-keep), so a cache of that directory saves the next run the download.
+#   smoke-linux.sh cache-key <image> <package-dir> <week>
+#       Print key= and restore= lines for the apt archive cache of the one .deb under
+#       <package-dir> in <image>: the key holds the deb's architecture, the image's pinned
+#       digest, a hash of the deb's Depends and <week> (YYYY-Www), so the archives roll weekly;
+#       restore= is the key's prefix up to the digest.
+#   smoke-linux.sh apt-keep <apt.conf.d>
+#       Keep the packages apt downloads: drop the Ubuntu images' docker-clean, which deletes
+#       them after every install, and set APT::Keep-Downloaded-Packages.
 #   smoke-linux.sh apt-mirror <mirror> <sources-file>...
 #       Point every archive.ubuntu.com and security.ubuntu.com source in the files that exist at
 #       <mirror>, an Ubuntu archive URL. ports.ubuntu.com, which arm64 uses, is left as it is.
@@ -73,6 +83,11 @@ only_file() {
     found=$(find "$1" -type f -name "$2")
     [[ -n "$found" && $(wc -l <<<"$found") -eq 1 ]] || fail "expected one $2 under $1, found: ${found:-none}"
     echo "$found"
+}
+
+# The SHA-256 of standard input, in hex.
+sha256() {
+    if command -v sha256sum >/dev/null; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1
 }
 
 # The digest-pinned reference smoke-images.txt holds for <name>:<tag>.
@@ -157,17 +172,41 @@ installed_git_ai() {
 }
 
 install_package() {
-    local type="$1" image="$2" package_dir="$3" out="$4" ref package
+    local type="$1" image="$2" package_dir="$3" out="$4" ref package cache=()
     [[ "$type" == deb || "$type" == rpm ]] || usage
     ref=$(image_ref "$image")
     package=$(only_file "$package_dir" "*.$type")
     mkdir -p "$out"
+    if [[ "$type" == deb && -n "${SMOKE_APT_CACHE:-}" ]]; then
+        mkdir -p "$SMOKE_APT_CACHE"
+        cache=(-v "$SMOKE_APT_CACHE:/var/cache/apt/archives" -e SMOKE_KEEP_ARCHIVES=1)
+        echo "apt archives: $(find "$SMOKE_APT_CACHE" -name '*.deb' | wc -l) cached in $SMOKE_APT_CACHE"
+    fi
     echo "Installing $(basename "$package") in $ref"
-    docker run --rm -e SMOKE_APT_MIRROR \
+    docker run --rm -e SMOKE_APT_MIRROR ${cache[@]+"${cache[@]}"} \
         -v "$(dirname "$package"):/package:ro" -v "$SCRIPT_DIR:/smoke:ro" -v "$out:/out" \
         "$ref" bash /smoke/smoke-linux.sh in-container "$type" "/package/$(basename "$package")" "/out/$type.list"
     check_listing "$out/$type.list"
     echo "$(basename "$package") installs in $image"
+}
+
+cache_key() {
+    local image="$1" week="$3" ref deb arch depends prefix
+    [[ "$week" =~ ^[0-9]{4}-W[0-9]{2}$ ]] || fail "$week is not a week as YYYY-Www"
+    ref=$(image_ref "$image")
+    deb=$(only_file "$2" "*.deb")
+    arch=$(dpkg-deb --field "$deb" Architecture)
+    depends=$(dpkg-deb --field "$deb" Depends)
+    [[ -n "$arch" ]] || fail "$deb has no Architecture"
+    prefix="smoke-apt-$arch-${image/:/-}-$(cut -c1-16 <<<"${ref#*@sha256:}")-"
+    echo "key=$prefix$(sha256 <<<"$depends" | cut -c1-16)-$week"
+    echo "restore=$prefix"
+}
+
+apt_keep() {
+    rm -f "$1/docker-clean"
+    printf 'APT::Keep-Downloaded-Packages "true";\nBinary::apt::APT::Keep-Downloaded-Packages "true";\n' \
+        >"$1/80smoke-keep"
 }
 
 # Ubuntu 22.04 lists its sources in sources.list, 24.04 in ubuntu.sources (deb822); one pattern
@@ -194,8 +233,14 @@ in_container() {
             # A slow or dropped fetch is retried rather than waited on (apt waits 120 s by default).
             printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
                 >/etc/apt/apt.conf.d/80smoke-retries
+            if [[ -n "${SMOKE_KEEP_ARCHIVES:-}" ]]; then
+                apt_keep /etc/apt/apt.conf.d
+                mkdir -p /var/cache/apt/archives/partial
+            fi
             apt-get update
             apt-get install -y --no-install-recommends "$package"
+            # Versions the archive no longer has would only grow the cache.
+            if [[ -n "${SMOKE_KEEP_ARCHIVES:-}" ]]; then apt-get autoclean; fi
             dpkg -L "$(dpkg-deb --field "$package" Package)" >"$listing"
             ;;
         rpm)
@@ -425,6 +470,14 @@ case "$command" in
     apt-mirror)
         [[ $# -ge 2 ]] || usage
         apt_mirror "$@"
+        ;;
+    cache-key)
+        [[ $# -eq 3 ]] || usage
+        cache_key "$@"
+        ;;
+    apt-keep)
+        [[ $# -eq 1 ]] || usage
+        apt_keep "$@"
         ;;
     same-resources)
         [[ $# -eq 2 ]] || usage

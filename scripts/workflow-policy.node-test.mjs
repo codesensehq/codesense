@@ -1423,48 +1423,151 @@ test("test build: the Linux job uploads the deb, rpm and AppImage, each one file
   }
 });
 
-test("test build: the Linux smoke tests each build's packages on its own runner", () => {
+test("test build: each package installs in its own clean container on its build's runner", () => {
+  const { jobs } = parse(testBuild());
+  const install = jobs["linux-install"];
+  assert.equal(install.if, "inputs.platform == 'all' || inputs.platform == 'linux'");
+  assert.equal(install.needs, "linux-app");
+  assert.equal(install["runs-on"], "${{ matrix.runner }}");
+  assert.equal(install.strategy["fail-fast"], false);
+  assert.deepEqual(install.strategy.matrix.include, [
+    {
+      arch: "x86_64",
+      runner: "ubuntu-22.04",
+      type: "deb",
+      image: "ubuntu:22.04",
+      package: "*_amd64.deb",
+    },
+    {
+      arch: "x86_64",
+      runner: "ubuntu-22.04",
+      type: "deb",
+      image: "ubuntu:24.04",
+      package: "*_amd64.deb",
+    },
+    {
+      arch: "x86_64",
+      runner: "ubuntu-22.04",
+      type: "rpm",
+      image: "fedora:44",
+      package: "*.x86_64.rpm",
+    },
+    {
+      arch: "arm64",
+      runner: "ubuntu-24.04-arm",
+      type: "deb",
+      image: "ubuntu:24.04",
+      package: "*_arm64.deb",
+    },
+    {
+      arch: "arm64",
+      runner: "ubuntu-24.04-arm",
+      type: "rpm",
+      image: "fedora:44",
+      package: "*.aarch64.rpm",
+    },
+  ]);
+  // Each leg runs on its arch's build runner.
+  const builds = Object.fromEntries(
+    jobs["linux-app"].strategy.matrix.include.map(({ arch, runner }) => [arch, runner]),
+  );
+  for (const { arch, runner } of install.strategy.matrix.include)
+    assert.equal(runner, builds[arch]);
+  // linux-app uploads each package as one unzipped file, which download-artifact reads from v8.
+  const download = install.steps.find((step) =>
+    step.uses?.startsWith("actions/download-artifact@"),
+  );
+  assert.equal(download.uses, "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333");
+  assert.equal(download.with.pattern, "${{ matrix.package }}");
+  const step = (name) => install.steps.find((s) => s.name === name);
+  const run = step("Install the package in a clean container");
+  assert.match(run.run, /smoke-linux\.sh install "\$TYPE" "\$IMAGE"/);
+  assert.equal(run.if, undefined);
+  // The step timeout is a backstop inside the job's.
+  assert.equal(run["timeout-minutes"], 30);
+  assert.ok(install["timeout-minutes"] > run["timeout-minutes"]);
+  assert.equal(run["env"]["SMOKE_APT_CACHE"], "${{ runner.temp }}/apt-archives");
+  const upload = step("Upload the listing");
+  assert.equal(upload.with.path, "${{ runner.temp }}/smoke/${{ matrix.type }}.list");
+  assert.equal(upload.with["if-no-files-found"], "error");
+});
+
+test("test build: a deb leg restores its apt archives, and saves them even after a failure", () => {
+  const steps = parse(testBuild()).jobs["linux-install"].steps;
+  const names = steps.map((step) => step.name);
+  const step = (name) => steps.find((s) => s.name === name);
+  const key = step("Key the apt archive cache");
+  const restore = step("Restore the apt archives");
+  const hand = step("Hand the apt archives to the runner");
+  const save = step("Save the apt archives");
+  assert.equal(key.if, "matrix.type == 'deb'");
+  assert.match(
+    key.run,
+    /smoke-linux\.sh cache-key "\$IMAGE" "\$RUNNER_TEMP\/packages" "\$\(date -u \+%G-W%V\)"/,
+  );
+  assert.equal(restore.if, "matrix.type == 'deb'");
+  assert.match(restore.uses, /^actions\/cache\/restore@[0-9a-f]{40}$/);
+  assert.equal(restore.with.path, "${{ runner.temp }}/apt-archives");
+  assert.equal(restore.with.key, "${{ steps.apt-key.outputs.key }}");
+  assert.equal(restore.with["restore-keys"], "${{ steps.apt-key.outputs.restore }}");
+  assert.match(save.uses, /^actions\/cache\/save@[0-9a-f]{40}$/);
+  assert.equal(save.with.path, restore.with.path);
+  // A failed or timed-out install saves under a key of its own, which the week's exact key never
+  // hits, so the next run still restores it by prefix, finishes and saves the full set.
+  assert.equal(
+    save.with.key,
+    "${{ steps.install.outcome == 'success' && steps.apt-key.outputs.key || format('{0}-partial-{1}-{2}', steps.apt-key.outputs.key, github.run_id, github.run_attempt) }}",
+  );
+  assert.equal(step("Install the package in a clean container").id, "install");
+  const onMiss =
+    "always() && matrix.type == 'deb' && steps.apt-key.outcome == 'success' && steps.apt-restore.outputs.cache-hit != 'true'";
+  assert.equal(hand.if, onMiss);
+  assert.equal(save.if, onMiss);
+  // The runner owns the archives, with nothing it cannot read, before the cache saves them.
+  assert.match(hand.run, /sudo chown -R/);
+  assert.match(hand.run, /rm -rf "\$SMOKE_APT_CACHE\/partial" "\$SMOKE_APT_CACHE\/lock"/);
+  const order = [key, restore, step("Install the package in a clean container"), hand, save].map(
+    (s) => names.indexOf(s.name),
+  );
+  assert.deepEqual(
+    order,
+    order.toSorted((a, b) => a - b),
+  );
+});
+
+test("test build: each arch's deb listings are compared with its rpm's after the installs", () => {
+  const job = parse(testBuild()).jobs["linux-resources"];
+  assert.equal(job.if, "inputs.platform == 'all' || inputs.platform == 'linux'");
+  assert.equal(job.needs, "linux-install");
+  const download = job.steps.find((step) => step.uses?.startsWith("actions/download-artifact@"));
+  assert.equal(download.with.pattern, "linux-install-*");
+  // Each listing keeps its own directory: every leg's file is deb.list or rpm.list.
+  assert.equal(download.with["merge-multiple"], undefined);
+  const compare = job.steps.find((step) => /same-resources/.test(step.run ?? ""));
+  // Every install leg's listing, by name, and a count that catches a leg the matrix gains.
+  assert.match(compare.run, /^\s*compare x86_64 ubuntu-22\.04 ubuntu-24\.04$/m);
+  assert.match(compare.run, /^\s*compare arm64 ubuntu-24\.04$/m);
+  assert.match(compare.run, /\[\[ \$found -eq 5 \]\]/);
+  const legs = parse(testBuild()).jobs["linux-install"].strategy.matrix.include;
+  assert.equal(legs.length, 5);
+});
+
+test("test build: the AppImage launches beside the installs, on the x86_64 build's runner", () => {
   const { jobs } = parse(testBuild());
   const smoke = jobs["linux-smoke"];
   assert.equal(smoke.if, "inputs.platform == 'all' || inputs.platform == 'linux'");
   assert.equal(smoke.needs, "linux-app");
-  assert.equal(smoke["runs-on"], "${{ matrix.runner }}");
-  assert.equal(smoke.strategy["fail-fast"], false);
-  const legs = (job) => job.strategy.matrix.include.map(({ arch, runner }) => ({ arch, runner }));
-  assert.deepEqual(legs(smoke), legs(jobs["linux-app"]));
-  assert.deepEqual(
-    smoke.strategy.matrix.include.map(({ artifacts, deb_images, appimage }) => ({
-      artifacts,
-      deb_images,
-      appimage,
-    })),
-    [
-      {
-        artifacts: "*{_amd64.deb,.x86_64.rpm,_amd64.AppImage}",
-        deb_images: "ubuntu:22.04 ubuntu:24.04",
-        appimage: true,
-      },
-      { artifacts: "*{_arm64.deb,.aarch64.rpm}", deb_images: "ubuntu:24.04", appimage: false },
-    ],
-  );
-  // linux-app uploads each package as one unzipped file, which download-artifact reads from v8.
+  assert.equal(smoke["runs-on"], "ubuntu-22.04");
   const download = smoke.steps.find((step) => step.uses?.startsWith("actions/download-artifact@"));
-  assert.equal(download.uses, "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333");
-  assert.equal(download.with.pattern, "${{ matrix.artifacts }}");
-  assert.equal(download.with["merge-multiple"], true);
-  const runs = smoke.steps.filter((step) => step.run).map((step) => [step.run, step.if]);
-  assert.match(
-    runs[0][0],
-    /smoke-linux\.sh install deb[\s\S]*install rpm fedora:44[\s\S]*same-resources/,
-  );
-  assert.equal(runs[0][1], undefined);
-  // Only x86_64 builds an AppImage.
-  const appImage = runs.filter(([run]) => /smoke-linux\.sh (run|variant)/.test(run));
+  assert.equal(download.with.pattern, "*_amd64.AppImage");
+  const runs = smoke.steps.filter((step) => step.run).map((step) => step.run);
+  assert.ok(!runs.some((run) => /smoke-linux\.sh install/.test(run)));
   assert.deepEqual(
-    appImage.map(([run]) => run.match(/smoke-linux\.sh (run|variant \S+)/)[1]),
+    runs
+      .filter((run) => /smoke-linux\.sh (run|variant)/.test(run))
+      .map((run) => run.match(/smoke-linux\.sh (run|variant \S+)/)[1]),
     ["run", "variant dmabuf", "variant no-dbus", "variant webgl"],
   );
-  for (const [, condition] of appImage) assert.equal(condition, "matrix.appimage");
   const check = jobs["linux-app"].steps.find((step) => step.name === "Check scripts");
   assert.match(check.run, /^shellcheck .*scripts\/ci\/smoke-linux\.sh/);
 });
@@ -1489,14 +1592,14 @@ test("test build: every Linux leg checks the AppImage emulator after the build",
   );
 });
 
-test("test build: the policy rejects a missing platform gate, input or runner", () => {
+test("test build: the policy rejects a missing platform gate, input, runner or need", () => {
   const cases = [
     [testBuild().replace("inputs.platform == 'linux'", "true"), /linux-app: if must run/],
     [testBuild().replace("default: all", "default: linux"), /platform input must be a choice/],
     [testBuild().replace("          - windows\n", ""), /platform input must be a choice/],
     [
       testBuild().replace("runner: ubuntu-22.04", "runner: ubuntu-24.04"),
-      /matrix must run on ubuntu-22.04 and ubuntu-24.04-arm/,
+      /linux-app: the matrix must run on ubuntu-22.04 and ubuntu-24.04-arm/,
     ],
     [
       testBuild().replace(
@@ -1508,15 +1611,34 @@ test("test build: the policy rejects a missing platform gate, input or runner", 
     [testBuild().replace("runner: ubuntu-24.04-arm", "runner: self-hosted"), /matrix must run on/],
     [testBuild().replace("${{ matrix.runner }}", "ubuntu-22.04"), /matrix must run on/],
     [
-      testBuild().replace("needs: linux-app", "needs: macos-app"),
+      testBuild().replace(/(linux-install:[\s\S]*?needs: )linux-app/, "$1macos-app"),
+      /linux-install: needs must be linux-app/,
+    ],
+    [
+      testBuild().replace("needs: linux-install", "needs: linux-app"),
+      /linux-resources: needs must be linux-install/,
+    ],
+    [
+      testBuild().replace(/(linux-smoke:[\s\S]*?needs: )linux-app/, "$1linux-install"),
       /linux-smoke: needs must be linux-app/,
     ],
+    // An install leg off the build runners, or no install leg on one of them.
     [
       testBuild().replace(
         /runner: ubuntu-24\.04-arm(?![\s\S]*runner: ubuntu-24\.04-arm)/,
         "runner: ubuntu-24.04",
       ),
-      /linux-smoke: the matrix must run on/,
+      /linux-install: the matrix must run on/,
+    ],
+    [
+      testBuild().replace(/linux-install:[\s\S]*/, (install) =>
+        install.replaceAll("runner: ubuntu-24.04-arm", "runner: ubuntu-22.04"),
+      ),
+      /linux-install: the matrix must run on/,
+    ],
+    [
+      testBuild().replace(/(linux-resources:[\s\S]*?if: )inputs\.platform == 'all' \|\| /, "$1"),
+      /linux-resources: if must run/,
     ],
     [
       testBuild().replace(/(linux-smoke:[\s\S]*?if: )inputs\.platform == 'all' \|\| /, "$1"),
