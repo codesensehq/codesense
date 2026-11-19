@@ -3707,6 +3707,7 @@ export { getActiveTeamKey };
  */
 export function deriveSourceRepoSlug(repoPath: string): string {
   const parsed = parseSyntheticRepoKey(repoPath);
+  // A repo slug, `/`-delimited by definition: not a file-system path.
   if (parsed) return `${parsed.owner}/${parsed.repo}`.toLowerCase();
   // T.4 Phase 8 review (Cluster H / D3): legacy real-path fallback retires
   // in T.6. `composeWorktreeKey` uses `::` as a separator and does not
@@ -3740,6 +3741,7 @@ export function promptIdentityFromRepoPath(
   if (!parsed) return null;
   return {
     teamKey: buildTeamKey(parsed.orgSlug, parsed.team),
+    // A repo slug, `/`-delimited by definition: not a file-system path.
     sourceRepoSlug:
       `${parsed.host ? `${parsed.host}/` : ""}${parsed.owner}/${parsed.repo}`.toLowerCase(),
   };
@@ -4955,6 +4957,7 @@ export function migrateT1Slices(input: {
     teams.add(teamKey);
     slugToTeamKeys.set(slug, teams);
   };
+  // Repo slugs below are `/`-delimited by definition: not file-system paths.
   const hostlessIdentities = new Map<string, { github: boolean; nonGithub: Set<string> }>();
   for (const { parsed } of parsedRepos) {
     const hostless = `${parsed.owner}/${parsed.repo}`.toLowerCase();
@@ -6189,6 +6192,7 @@ function teamSourceRepoSlugsInOrder(teamKey: string): string[] {
   const slugs: string[] = [];
   for (const r of repos) {
     const parsed = parseSyntheticRepoKey(r.repoPath);
+    // A repo slug, `/`-delimited by definition: not a file-system path.
     if (parsed) slugs.push(`${parsed.owner}/${parsed.repo}`);
   }
   return slugs;
