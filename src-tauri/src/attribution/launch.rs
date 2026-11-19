@@ -411,7 +411,7 @@ fn unavailable_doctor(codesense_home: &Path) -> Doctor {
         warnings: Vec::new(),
         previous_binary: None,
         supported_versions: "",
-        capture: Capture::default(),
+        capture: Default::default(),
         notes_ref: super::git_ai::NOTES_REF,
         notes_push_repos: prefs::push_repos(codesense_home),
         daemon_repo_roots: None,

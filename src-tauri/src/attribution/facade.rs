@@ -187,14 +187,14 @@ pub(crate) fn harvest(
 ) -> Result<Stats, String> {
     if !enabled(caps) {
         skipped("checkpoint import");
-        return Ok(Stats::default());
+        return Ok(Default::default());
     }
     #[cfg(cap_git_ai)]
     let stats = super::checkpoints::harvest(repo, key, store, commits);
     #[cfg(not(cap_git_ai))]
     let stats = {
         let _ = (repo, key, store, commits);
-        Ok(Stats::default())
+        Ok(Default::default())
     };
     stats
 }
