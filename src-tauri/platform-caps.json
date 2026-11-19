@@ -1,0 +1,65 @@
+[
+  {
+    "key": "git-ai",
+    "macos": { "on": ["aarch64"] },
+    "linux": { "on": ["x86_64", "aarch64"] },
+    "windows": "off",
+    "reason": "the bundled git-ai binary is shipped for macOS on Apple silicon and Linux on x86_64 and aarch64"
+  },
+  {
+    "key": "starship",
+    "macos": { "on": ["aarch64"] },
+    "linux": { "on": ["x86_64", "aarch64"] },
+    "windows": "off",
+    "reason": "the bundled starship binary is shipped for macOS on Apple silicon and Linux on x86_64 and aarch64"
+  },
+  {
+    "key": "secret-store",
+    "macos": "probe",
+    "linux": "probe",
+    "windows": "off",
+    "reason": "needs a system secret store that can be reached; values injected through the process environment are never saved"
+  },
+  {
+    "key": "mcp-bridge",
+    "macos": "on",
+    "linux": "on",
+    "windows": "off",
+    "reason": "the MCP bridge and agent activity reach the app over Unix sockets, which are not ported to named pipes yet"
+  },
+  {
+    "key": "terminal-server-sidecar",
+    "macos": "on",
+    "linux": "on",
+    "windows": "off",
+    "reason": "the terminal server that keeps sessions running while the app restarts is not built for this platform yet; terminals run inside the app"
+  },
+  {
+    "key": "remote-machines",
+    "macos": "on",
+    "linux": "on",
+    "windows": "off",
+    "reason": "connecting to other machines is not built for this platform yet"
+  },
+  {
+    "key": "agent-cli-sockets",
+    "macos": "on",
+    "linux": "on",
+    "windows": "off",
+    "reason": "agent CLIs that are driven over Unix sockets (the Codex app server, the Hermes gateway) are not ported to this platform yet"
+  },
+  {
+    "key": "shell-integration",
+    "macos": "on",
+    "linux": "on",
+    "windows": "off",
+    "reason": "shell integration (prompt marks and the working directory) is not built for this platform's shells yet"
+  },
+  {
+    "key": "pdf-export",
+    "macos": "on",
+    "linux": "off",
+    "windows": "off",
+    "reason": "PDF export prints through the macOS web view"
+  }
+]

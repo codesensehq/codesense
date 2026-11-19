@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: MIT
 //! Which optional features exist on this OS and architecture.
 //!
-//! One static table holds a row per capability. `caps()` resolves it once for the running
-//! platform; every consumer (the startup log line, the attribution installer, the
-//! `get_platform_caps` command) reads only that resolved list, and `enabled_for` answers for
-//! any other platform from the same table.
+//! `platform-caps.json` holds a row per capability. The build scripts read the same file for the
+//! `cfg(cap_…)` gates (`build_caps.rs`), so a gate and its runtime answer cannot drift. `caps()`
+//! resolves it once for the running platform; every consumer (the startup log line, the
+//! attribution installer, the `get_platform_caps` command) reads only that resolved list, and
+//! `enabled_for` answers for any other platform from the same table.
 
 use serde::Serialize;
+use serde_json::Value;
 use std::fmt::Write;
 use std::sync::OnceLock;
 
@@ -14,46 +16,112 @@ pub const GIT_AI: &str = "git-ai";
 pub const STARSHIP: &str = "starship";
 pub const SECRET_STORE: &str = "secret-store";
 
+/// The table: a JSON array of rows, in the order of the `caps:` line.
+const TABLE_JSON: &str = include_str!("../platform-caps.json");
+
 /// Whether a capability exists on one OS.
-#[derive(Clone, Copy)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Support {
     On,
     Off,
     /// On only for the listed architectures (`std::env::consts::ARCH` values).
-    OnFor(&'static [&'static str]),
-    /// On when the probe says so. The probe is run by whoever resolves the table, so tests
-    /// stub it and never touch the host.
-    Probe(fn() -> bool),
+    OnFor(Vec<String>),
+    /// On when the key's probe (`probe_for`) says so. The probe is run by whoever resolves the
+    /// table, so tests stub it and never touch the host.
+    Probe,
 }
 
 struct Row {
-    key: &'static str,
+    key: String,
     macos: Support,
     linux: Support,
+    windows: Support,
     /// Why the capability is off on a platform that lacks it.
-    reason: &'static str,
+    reason: String,
 }
 
-const TABLE: &[Row] = &[
-    Row {
-        key: GIT_AI,
-        macos: Support::OnFor(&["aarch64"]),
-        linux: Support::OnFor(&["x86_64", "aarch64"]),
-        reason: "the bundled git-ai binary is shipped for macOS on Apple silicon and Linux on x86_64 and aarch64",
-    },
-    Row {
-        key: STARSHIP,
-        macos: Support::OnFor(&["aarch64"]),
-        linux: Support::OnFor(&["x86_64", "aarch64"]),
-        reason: "the bundled starship binary is shipped for macOS on Apple silicon and Linux on x86_64 and aarch64",
-    },
-    Row {
-        key: SECRET_STORE,
-        macos: Support::Probe(crate::commands::credential_store::secret_store_available),
-        linux: Support::Probe(crate::commands::credential_store::secret_store_available),
-        reason: "needs a system secret store that can be reached; values injected through the process environment are never saved",
-    },
-];
+impl Row {
+    /// The row's value for one OS; an OS with no column has none.
+    fn support(&self, os: &str) -> Option<&Support> {
+        match os {
+            "macos" => Some(&self.macos),
+            "linux" => Some(&self.linux),
+            "windows" => Some(&self.windows),
+            _ => None,
+        }
+    }
+}
+
+/// One value: `"on"`, `"off"`, `"probe"` or `{"on": [<arch>…]}`.
+fn support(value: &Value) -> Result<Support, String> {
+    let archs = |archs: &Vec<Value>| -> Option<Vec<String>> {
+        archs
+            .iter()
+            .map(|arch| arch.as_str().map(str::to_string))
+            .collect()
+    };
+    let parsed = match value {
+        Value::String(word) => match word.as_str() {
+            "on" => Some(Support::On),
+            "off" => Some(Support::Off),
+            "probe" => Some(Support::Probe),
+            _ => None,
+        },
+        Value::Object(map) if map.len() == 1 => map
+            .get("on")
+            .and_then(Value::as_array)
+            .and_then(archs)
+            .map(Support::OnFor),
+        _ => None,
+    };
+    parsed.ok_or_else(|| {
+        format!("{value} is not \"on\", \"off\", \"probe\" or {{\"on\": [<arch>…]}}")
+    })
+}
+
+/// The rows of a table, in file order.
+fn parse_table(json: &str) -> Result<Vec<Row>, String> {
+    let rows: Vec<Value> = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    rows.iter()
+        .map(|row| {
+            let text = |field: &str| {
+                row.get(field)
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .ok_or_else(|| format!("{row} has no string `{field}`"))
+            };
+            let column = |os: &str| {
+                row.get(os)
+                    .ok_or_else(|| format!("{row} has no `{os}`"))
+                    .and_then(support)
+            };
+            Ok(Row {
+                key: text("key")?,
+                macos: column("macos")?,
+                linux: column("linux")?,
+                windows: column("windows")?,
+                reason: text("reason")?,
+            })
+        })
+        .collect()
+}
+
+/// The table, parsed once. The build scripts read the same bytes and fail the build on a bad
+/// table, and the tests parse it here, so a built app never panics on it.
+fn table() -> &'static [Row] {
+    static TABLE: OnceLock<Vec<Row>> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        parse_table(TABLE_JSON).unwrap_or_else(|error| panic!("platform-caps.json: {error}"))
+    })
+}
+
+/// The probe a `"probe"` value runs, by key. A probe value whose key has no arm here is off.
+fn probe_for(key: &str) -> Option<fn() -> bool> {
+    match key {
+        SECRET_STORE => Some(crate::commands::credential_store::secret_store_available),
+        _ => None,
+    }
+}
 
 /// One resolved capability.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -63,26 +131,26 @@ pub struct Cap {
     pub reason: Option<&'static str>,
 }
 
-/// Resolves `table` for one platform. `run` evaluates a probe row's probe.
-fn resolve(table: &[Row], os: &str, arch: &str, run: &dyn Fn(fn() -> bool) -> bool) -> Vec<Cap> {
+/// Resolves `table` for one platform. `run` evaluates a probe value's probe.
+fn resolve(
+    table: &'static [Row],
+    os: &str,
+    arch: &str,
+    run: &dyn Fn(fn() -> bool) -> bool,
+) -> Vec<Cap> {
     table
         .iter()
         .map(|row| {
-            let support = match os {
-                "macos" => row.macos,
-                "linux" => row.linux,
-                _ => Support::Off,
-            };
-            let on = match support {
+            let on = row.support(os).is_some_and(|support| match support {
                 Support::On => true,
                 Support::Off => false,
-                Support::OnFor(archs) => archs.contains(&arch),
-                Support::Probe(probe) => run(probe),
-            };
+                Support::OnFor(archs) => archs.iter().any(|on_for| on_for == arch),
+                Support::Probe => probe_for(&row.key).is_some_and(run),
+            });
             Cap {
-                key: row.key,
+                key: &row.key,
                 on,
-                reason: (!on).then_some(row.reason),
+                reason: (!on).then_some(row.reason.as_str()),
             }
         })
         .collect()
@@ -94,7 +162,7 @@ pub fn caps() -> &'static [Cap] {
     static CAPS: OnceLock<Vec<Cap>> = OnceLock::new();
     CAPS.get_or_init(|| {
         resolve(
-            TABLE,
+            table(),
             std::env::consts::OS,
             std::env::consts::ARCH,
             &|probe| probe(),
@@ -109,9 +177,9 @@ pub fn enabled_for(key: &str, os: &str, arch: &str) -> bool {
     if (os, arch) == (std::env::consts::OS, std::env::consts::ARCH) {
         return caps().iter().any(|cap| cap.key == key && cap.on);
     }
-    TABLE
+    table()
         .iter()
-        .find_map(|row| (row.key == key).then_some(row))
+        .find(|row| row.key == key)
         .is_some_and(|row| resolve(std::slice::from_ref(row), os, arch, &|_| false)[0].on)
 }
 
@@ -136,7 +204,7 @@ mod tests {
 
     /// The table resolved with every probe answering `probe`, never the host's own.
     fn resolved(os: &str, arch: &str, probe: bool) -> Vec<Cap> {
-        resolve(TABLE, os, arch, &|_| probe)
+        resolve(table(), os, arch, &|_| probe)
     }
 
     fn line(os: &str, arch: &str, probe: bool) -> String {
@@ -147,7 +215,8 @@ mod tests {
     fn macos_apple_silicon_has_everything_on() {
         assert_eq!(
             line("macos", "aarch64", true),
-            "caps: git-ai=on starship=on secret-store=on"
+            "caps: git-ai=on starship=on secret-store=on mcp-bridge=on terminal-server-sidecar=on \
+             remote-machines=on agent-cli-sockets=on shell-integration=on pdf-export=on"
         );
     }
 
@@ -155,7 +224,8 @@ mod tests {
     fn macos_intel_has_no_bundled_binaries() {
         assert_eq!(
             line("macos", "x86_64", true),
-            "caps: git-ai=off starship=off secret-store=on"
+            "caps: git-ai=off starship=off secret-store=on mcp-bridge=on terminal-server-sidecar=on \
+             remote-machines=on agent-cli-sockets=on shell-integration=on pdf-export=on"
         );
     }
 
@@ -164,7 +234,9 @@ mod tests {
         for arch in ["x86_64", "aarch64"] {
             assert_eq!(
                 line("linux", arch, true),
-                "caps: git-ai=on starship=on secret-store=on"
+                "caps: git-ai=on starship=on secret-store=on mcp-bridge=on \
+                 terminal-server-sidecar=on remote-machines=on agent-cli-sockets=on \
+                 shell-integration=on pdf-export=off"
             );
         }
     }
@@ -200,14 +272,30 @@ mod tests {
     /// A probe row asks its probe only on the platforms that name it.
     #[test]
     fn a_probe_is_not_run_for_an_unlisted_os() {
-        let table = [Row {
-            key: "probed",
+        let table: &'static [Row] = Vec::leak(vec![Row {
+            key: SECRET_STORE.into(),
             macos: Support::Off,
-            linux: Support::Probe(|| panic!("never run")),
-            reason: "r",
-        }];
-        let caps = resolve(&table, "windows", "x86_64", &|probe| probe());
-        assert!(!caps[0].on);
+            linux: Support::Probe,
+            windows: Support::Off,
+            reason: "r".into(),
+        }]);
+        for os in ["windows", "freebsd"] {
+            let caps = resolve(table, os, "x86_64", &|_| panic!("never run"));
+            assert!(!caps[0].on);
+        }
+    }
+
+    /// Every `"probe"` value names a key `probe_for` binds; one without an arm would be off for
+    /// good.
+    #[test]
+    fn every_probe_row_has_a_probe() {
+        for row in table() {
+            for os in ["macos", "linux", "windows"] {
+                if row.support(os) == Some(&Support::Probe) {
+                    assert!(probe_for(&row.key).is_some(), "{} {os}", row.key);
+                }
+            }
+        }
     }
 
     #[test]
@@ -229,18 +317,75 @@ mod tests {
 
     #[test]
     fn an_unlisted_os_is_off() {
-        assert_eq!(
-            line("windows", "x86_64", true),
-            "caps: git-ai=off starship=off secret-store=off"
-        );
+        let all_off = "caps: git-ai=off starship=off secret-store=off mcp-bridge=off \
+                       terminal-server-sidecar=off remote-machines=off agent-cli-sockets=off \
+                       shell-integration=off pdf-export=off";
+        assert_eq!(line("windows", "x86_64", true), all_off);
+        assert_eq!(line("freebsd", "x86_64", true), all_off);
     }
 
     #[test]
     fn the_table_keys_are_unique() {
-        let mut keys: Vec<_> = TABLE.iter().map(|row| row.key).collect();
+        let mut keys: Vec<_> = table().iter().map(|row| row.key.as_str()).collect();
         keys.sort_unstable();
         keys.dedup();
-        assert_eq!(keys.len(), TABLE.len());
+        assert_eq!(keys.len(), table().len());
+    }
+
+    /// The `caps:` line and `get_platform_caps` keep the file's order.
+    #[test]
+    fn the_table_keeps_its_file_order() {
+        let keys: Vec<_> = table().iter().map(|row| row.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            [
+                GIT_AI,
+                STARSHIP,
+                SECRET_STORE,
+                "mcp-bridge",
+                "terminal-server-sidecar",
+                "remote-machines",
+                "agent-cli-sockets",
+                "shell-integration",
+                "pdf-export",
+            ]
+        );
+    }
+
+    #[test]
+    fn each_value_form_parses() {
+        let value = |json: &str| support(&serde_json::from_str(json).unwrap());
+        assert_eq!(value(r#""on""#), Ok(Support::On));
+        assert_eq!(value(r#""off""#), Ok(Support::Off));
+        assert_eq!(value(r#""probe""#), Ok(Support::Probe));
+        assert_eq!(
+            value(r#"{"on": ["x86_64", "aarch64"]}"#),
+            Ok(Support::OnFor(vec!["x86_64".into(), "aarch64".into()]))
+        );
+        for bad in [
+            r#""yes""#,
+            "true",
+            r#"["aarch64"]"#,
+            r#"{"on": "aarch64"}"#,
+            r#"{"on": [1]}"#,
+            r#"{"off": ["aarch64"]}"#,
+            r#"{"on": [], "off": []}"#,
+        ] {
+            assert!(value(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_malformed_table_is_refused() {
+        for bad in [
+            r#"{"key": "x"}"#,
+            r#"[{"key": "x", "macos": "on", "linux": "on", "reason": "r"}]"#,
+            r#"[{"key": "x", "macos": "on", "linux": "on", "windows": "maybe", "reason": "r"}]"#,
+            r#"[{"macos": "on", "linux": "on", "windows": "off", "reason": "r"}]"#,
+        ] {
+            assert!(parse_table(bad).is_err(), "{bad}");
+        }
+        assert_eq!(parse_table(TABLE_JSON).map(|rows| rows.len()), Ok(9));
     }
 
     #[test]
