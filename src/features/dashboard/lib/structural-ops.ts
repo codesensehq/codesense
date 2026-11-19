@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { basename } from "@/shared/lib/path";
+import { basename, dirname, join, trimTrailingSeparators } from "@/shared/lib/path";
 import {
   createFile,
   deleteContentFile,
@@ -59,10 +59,7 @@ export function sanitizeSegment(name: string): string | null {
 export function computeRenameTarget(oldPath: string, newName: string): string | null {
   const trimmed = sanitizeSegment(newName);
   if (!trimmed) return null;
-  const stripped = oldPath.replace(/\/+$/, "");
-  const idx = stripped.lastIndexOf("/");
-  const dir = idx >= 0 ? stripped.slice(0, idx) : "";
-  return dir ? `${dir}/${trimmed}` : trimmed;
+  return join(dirname(trimTrailingSeparators(oldPath)), trimmed);
 }
 
 /**
@@ -72,8 +69,7 @@ export function computeRenameTarget(oldPath: string, newName: string): string | 
 export function computeChildTarget(dirPath: string, name: string): string | null {
   const trimmed = sanitizeSegment(name);
   if (!trimmed) return null;
-  const dir = dirPath.replace(/\/+$/, "");
-  return dir ? `${dir}/${trimmed}` : trimmed;
+  return join(dirPath, trimmed);
 }
 
 /** Delete a context-layer content file/dir, propagating across the sync boundary. */
@@ -100,7 +96,7 @@ export async function renameContent(
 ): Promise<StructuralResult & { newPath?: string }> {
   const newPath = computeRenameTarget(oldPath, newName);
   if (!newPath) return { ok: false, error: "Invalid name" };
-  if (newPath === oldPath.replace(/\/+$/, "")) return { ok: true, newPath };
+  if (newPath === trimTrailingSeparators(oldPath)) return { ok: true, newPath };
   try {
     await deps.moveContentFile(oldPath, newPath);
     return { ok: true, newPath };
@@ -178,7 +174,7 @@ export async function moveContentTo(
 ): Promise<StructuralResult & { newPath?: string; collision?: boolean }> {
   const newPath = computeChildTarget(toDirPath, basename(fromPath));
   if (!newPath) return { ok: false, error: "Invalid destination" };
-  if (newPath === fromPath.replace(/\/+$/, "")) return { ok: true, newPath };
+  if (newPath === trimTrailingSeparators(fromPath)) return { ok: true, newPath };
   try {
     await deps.moveContentFile(fromPath, newPath);
     return { ok: true, newPath };

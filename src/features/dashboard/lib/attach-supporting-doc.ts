@@ -9,6 +9,7 @@
  * listed is a no-op.
  */
 
+import { dirname, split } from "@/shared/lib/path";
 import { extractFrontmatterBlock } from "@/shared/lib/worktree";
 
 /** Strip a leading `./` and surrounding quotes from a frontmatter list value. */
@@ -21,13 +22,12 @@ function normalizeRef(ref: string): string {
 /**
  * The `supporting_docs:` ref for `canvasPath` relative to the story at
  * `storyPath` — `./design.excalidraw` for a sibling, `./sub/x` / `../x` for
- * other directories. Both inputs are absolute POSIX-style paths.
+ * other directories. Both inputs are absolute paths with either separator; the
+ * ref is always `/`-joined.
  */
 export function relativeSupportingDocPath(storyPath: string, canvasPath: string): string {
-  const slash = storyPath.lastIndexOf("/");
-  const storyDir = slash >= 0 ? storyPath.slice(0, slash) : "";
-  const from = storyDir.split("/").filter(Boolean);
-  const to = canvasPath.split("/").filter(Boolean);
+  const from = split(dirname(storyPath));
+  const to = split(canvasPath);
   let i = 0;
   while (i < from.length && i < to.length && from[i] === to[i]) i++;
   const ups = from.slice(i).map(() => "..");

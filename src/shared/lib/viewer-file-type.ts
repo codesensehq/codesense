@@ -1,4 +1,17 @@
 // SPDX-License-Identifier: MIT
+import {
+  basename,
+  dirname,
+  join,
+  normalize,
+  relative,
+  resolveRelative,
+  root,
+  split,
+  trimTrailingSeparators,
+} from "@/shared/lib/path";
+import { TEAM_CONTENT_DIR } from "@/shared/lib/team-content-path";
+
 export const HTML_FRAME_ALLOW = "clipboard-write";
 /** A frame that only shows a document for comparison: an opaque origin with
  *  scripts and nothing else, so it can't reach the app or the bridge. */
@@ -250,11 +263,10 @@ export function snapshotArchivePath(
   name: string | undefined,
   ts: string,
 ): string {
-  const root = teamContentPath.endsWith("/") ? teamContentPath.slice(0, -1) : teamContentPath;
-  const rawSlug = name ?? stripViewerExtension(filePath.split("/").pop() ?? "");
+  const rawSlug = name ?? stripViewerExtension(basename(filePath));
   const slug = sanitizeSnapshotSegment(rawSlug);
   const stamp = sanitizeSnapshotSegment(ts);
-  return `${root}/dashboards/snapshots/${slug}/${stamp}.html`;
+  return join(teamContentPath, "dashboards", "snapshots", slug, `${stamp}.html`);
 }
 
 /**
@@ -436,13 +448,6 @@ export function isLivePreviewEligible(filePath: string | null | undefined): bool
 export const VIEWER_LINK_RE = /\.(md|html?|excalidraw)(\/|$)/i;
 
 /**
- * PTS-2: anchor segment for absolute-href resolution against per-team
- * content paths. Pre-PTS-2 this was `/_bmad-output/` (source-side
- * projection); post-PTS-2 it's `/content/` (per-team content dir).
- */
-export const CONTENT_DIR_SEGMENT = "/content/";
-
-/**
  * Resolve a relative or absolute href against an owning file path.
  *
  * Used by rehype-blocks (worker), MarkdownViewer (sync fallback), and
@@ -453,15 +458,17 @@ export const CONTENT_DIR_SEGMENT = "/content/";
  * viewer-supported extension.
  *
  * - Strips `#fragment` before matching / resolving.
- * - Absolute hrefs (`/...`) are anchored to the `CONTENT_DIR_SEGMENT`
- *   ("/content/") root inside `owningFilePath`. If the segment isn't
- *   present (defensive: the caller passed a non-content path), fall
- *   back to `teamContentPath` as the root.
- * - An absolute href that already names a path under that root (a full
+ * - A drive-letter or UNC href (`C:\…`, `\\server\share\…`) is a full path
+ *   and is kept.
+ * - Rooted hrefs (`/...`) are anchored to the parent of the first `content`
+ *   directory in `owningFilePath`. If there is none (defensive: the caller
+ *   passed a non-content path), fall back to `teamContentPath` as the root.
+ * - A rooted href that already names a path under that root (a full
  *   filesystem path, e.g. a `queryContext()` row's `path`) is kept as is,
  *   never prefixed with the root a second time.
- * - Relative hrefs are joined to the owning file's directory.
- * - `..` and `.` segments are normalized away.
+ * - Relative hrefs are resolved against the owning file's directory.
+ * - `..` and `.` segments are normalized away, never above the path's root;
+ *   the result keeps the separator of the path it is built from.
  */
 export function resolveViewerLinkPath(
   href: string,
@@ -471,30 +478,20 @@ export function resolveViewerLinkPath(
   const hrefPath = href.split("#")[0];
   if (!VIEWER_LINK_RE.test(hrefPath)) return null;
 
-  let resolved: string;
-  if (hrefPath.startsWith("/")) {
-    const idx = owningFilePath.indexOf(CONTENT_DIR_SEGMENT);
-    // Slice up to (but not including) the `/content/` segment. The
-    // absolute hrefPath already begins with `/`, so an href like
-    // `/docs/x.md` lands at `{root}/docs/x.md` (mirrors the pre-PTS-2
-    // `/_bmad-output/` strip semantics).
-    const root = (idx >= 0 ? owningFilePath.substring(0, idx) : teamContentPath).replace(
-      /\/+$/,
-      "",
-    );
-    resolved = root && hrefPath.startsWith(`${root}/`) ? hrefPath : root + hrefPath;
-  } else {
-    const dir = owningFilePath.substring(0, owningFilePath.lastIndexOf("/"));
-    resolved = `${dir}/${hrefPath}`;
-  }
+  const hrefRoot = root(hrefPath);
+  if (hrefRoot.length > 1) return normalize(hrefPath);
+  if (!hrefRoot) return resolveRelative(dirname(owningFilePath), hrefPath);
 
-  const parts = resolved.split("/");
-  const normalized: string[] = [];
-  for (const part of parts) {
-    if (part === "..") normalized.pop();
-    else if (part !== "." && part !== "") normalized.push(part);
-  }
-  return "/" + normalized.join("/");
+  // Anchor at the parent of `content/` (mirrors the older `/_bmad-output/`
+  // strip semantics), so `/docs/x.md` lands at `{root}/docs/x.md`.
+  const ownerSegments = split(owningFilePath).slice(0, -1);
+  const idx = ownerSegments.indexOf(TEAM_CONTENT_DIR);
+  const anchor =
+    idx >= 0
+      ? join(root(owningFilePath), ...ownerSegments.slice(0, idx))
+      : trimTrailingSeparators(teamContentPath);
+  if (!anchor || relative(anchor, hrefPath) !== null) return normalize(hrefPath);
+  return resolveRelative(anchor, hrefPath);
 }
 
 /**
@@ -523,13 +520,12 @@ export function buildViewerUrl(
   filePath: string,
   params?: { v?: number; origin?: string; theme?: string },
 ): string {
-  // Compute relative path within root.  Strip leading "/" from the
-  // fallback so Rust's PathBuf::join doesn't discard the root.
-  const root = rootPath.endsWith("/") ? rootPath : `${rootPath}/`;
-  let relative = filePath.startsWith(root) ? filePath.slice(root.length) : filePath;
-  if (relative.startsWith("/")) relative = relative.slice(1);
+  // The `/`-joined path within the root. A file outside it falls back to its
+  // own segments, never a leading separator, so Rust's PathBuf::join doesn't
+  // discard the root.
+  const relPath = relative(rootPath, filePath) ?? split(filePath).join("/");
 
-  let url = `${params?.origin ?? `http://localhost:${port}`}/viewer/${encodeViewerRoot(rootPath)}/${encodeViewerRelPath(relative)}`;
+  let url = `${params?.origin ?? `http://localhost:${port}`}/viewer/${encodeViewerRoot(rootPath)}/${encodeViewerRelPath(relPath)}`;
   const query: string[] = [];
   if (params?.v != null) query.push(`v=${params.v}`);
   appendThemeQuery(query, params?.theme);

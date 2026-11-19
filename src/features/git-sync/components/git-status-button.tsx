@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { basename } from "@/shared/lib/path";
 import type {
   ContextConflict,
   ContextConflictResolution,
@@ -476,8 +477,7 @@ function WorktreeSection({
 }
 
 function fileName(path: string): string {
-  const name = path.split("/").pop() ?? path;
-  return name.replace(/\.(md|html?|excalidraw)$/i, "");
+  return basename(path).replace(/\.(md|html?|excalidraw)$/i, "");
 }
 
 const RESOLUTION_WORD: Record<ContextConflictResolution, string> = {

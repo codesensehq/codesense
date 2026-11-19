@@ -23,6 +23,7 @@
 
 import type { Node } from "@xyflow/react";
 
+import { join, relative, trimTrailingSeparators } from "@/shared/lib/path";
 import { derivedTreeToReactFlow } from "@/shared/lib/pipeline-graph";
 import { buildFullGroupIndex } from "@/shared/lib/pipeline-graph/build-group-index";
 import type {
@@ -85,7 +86,7 @@ export const EMPTY_GROUPED: GroupedChanges = { nodes: [], documentation: [], tot
 
 /** Join an org-root-relative path to the absolute org root (no double slash). */
 export function joinOrgPath(orgRoot: string, relPath: string): string {
-  return `${orgRoot.replace(/\/+$/, "")}/${relPath.replace(/^\/+/, "")}`;
+  return join(orgRoot, relPath);
 }
 
 /** SW-GS-8 — the publish key for the node-less Documentation bucket. */
@@ -278,16 +279,14 @@ export function groupChangesByNode(
   const epicDirs: Array<{ dirPath: string; absoluteDirPath: string }> = [];
   for (const [dirPath, info] of idx.groupByDirPath) {
     if (info.absoluteDirPath) {
-      // Normalize a trailing slash so the `${dir}/` prefix test below can't
-      // become `…//` and silently fail to match.
-      epicDirs.push({ dirPath, absoluteDirPath: info.absoluteDirPath.replace(/\/+$/, "") });
+      epicDirs.push({ dirPath, absoluteDirPath: trimTrailingSeparators(info.absoluteDirPath) });
     }
   }
   epicDirs.sort((a, b) => b.absoluteDirPath.length - a.absoluteDirPath.length); // deepest first
   const deletedByEpicDirPath = new Map<string, ChangedFile[]>();
   for (const [abs, cf] of changesByAbs) {
     if (ownedPaths.has(abs) || cf.status !== "deleted") continue;
-    const owner = epicDirs.find((e) => abs.startsWith(`${e.absoluteDirPath}/`));
+    const owner = epicDirs.find((e) => !!relative(e.absoluteDirPath, abs));
     if (owner) {
       const list = deletedByEpicDirPath.get(owner.dirPath) ?? [];
       list.push(cf);

@@ -283,7 +283,11 @@ describe("one construction site (I6)", () => {
       }
     };
     walk(root);
-    expect(sites).toEqual(["shared/terminal/terminal-manager.ts"]);
+    // The display, and the render probe's scratch terminal (never a display).
+    expect(sites.sort()).toEqual([
+      "shared/terminal/terminal-manager.ts",
+      "shared/terminal/terminal-render-probe.ts",
+    ]);
   });
 
   it("every construction takes its size and history from a snapshot", async () => {

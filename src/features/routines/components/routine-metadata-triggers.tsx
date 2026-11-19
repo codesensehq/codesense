@@ -367,6 +367,7 @@ function MetadataRow({
   const folders = new Set<string>();
   for (const row of current?.sample?.rows ?? []) {
     for (const key of Object.keys(row.fields)) keys.set(key, (keys.get(key) ?? 0) + 1);
+    // eslint-disable-next-line no-restricted-syntax -- logical path: content-relative path from Rust
     const parts = row.relPath.split("/");
     parts.pop();
     while (parts.length) {

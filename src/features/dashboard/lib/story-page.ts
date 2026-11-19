@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import { join } from "@/shared/lib/path";
 import { teamContentPage } from "@/shared/lib/team-content-page";
 import type { Org } from "@/shared/types/domain";
 
@@ -57,8 +58,7 @@ export const teamStoryPage = (orgs: readonly Org[], org: string, team: string) =
   teamContentPage(orgs, org, team, "story_page");
 
 /** The story page's path under the team's content root. */
-export const storyPagePath = (teamContentPath: string, page: string) =>
-  `${teamContentPath.replace(/\/+$/, "")}/${page}`;
+export const storyPagePath = (teamContentPath: string, page: string) => join(teamContentPath, page);
 
 /**
  * The page's route: it names the story file in the fragment, which the viewer replays to the page,

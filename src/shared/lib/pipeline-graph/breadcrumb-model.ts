@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import { join, relative, trimTrailingSeparators } from "@/shared/lib/path";
 /**
  * Shared, pure breadcrumb model for the drilled pipeline scope.
  *
@@ -35,17 +36,17 @@ export function buildPipelineBreadcrumbs(params: {
 }): PipelineCrumb[] {
   const { isDrilledIn, rootPath, scopeAbsPath, rootLabel } = params;
   if (!isDrilledIn || !rootPath) return [];
-  const root = rootPath.replace(/\/+$/, "");
-  const abs = scopeAbsPath;
-  if (abs !== root && !abs.startsWith(root + "/")) return [];
-  const segs = abs.slice(root.length).split("/").filter(Boolean);
+  const root = trimTrailingSeparators(rootPath);
+  const rel = relative(root, scopeAbsPath);
+  if (rel === null) return [];
+  const segs = rel ? rel.split("/") : [];
   const crumbs: PipelineCrumb[] = [
     { label: rootLabel, absPath: root, isCurrent: segs.length === 0 },
   ];
   segs.forEach((seg, i) => {
     crumbs.push({
       label: seg,
-      absPath: root + "/" + segs.slice(0, i + 1).join("/"),
+      absPath: join(root, ...segs.slice(0, i + 1)),
       isCurrent: i === segs.length - 1,
     });
   });

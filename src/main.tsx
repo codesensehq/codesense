@@ -117,6 +117,11 @@ if (import.meta.env.DEV) {
   void import("./app/dev-user-timing-reclaim").then((m) => m.startDevUserTimingReclaim());
 }
 
+// Decide the terminal renderer at startup, not at the first terminal, so the log
+// says which one this webview uses (on Linux, after its render probe) even when no
+// terminal is ever opened.
+void import("@/shared/terminal/terminal-manager").then((m) => m.terminalManager.chooseRenderer());
+
 // Resolve ~/.codesense BEFORE the first render: `getCodesenseHome()` is read
 // synchronously across the tree and must never be unresolved. A failed read
 // still renders (the home is then null, which callers already handle).

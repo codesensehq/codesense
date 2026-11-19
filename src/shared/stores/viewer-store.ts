@@ -141,7 +141,8 @@ import { DEFAULT_NOTE_TITLE, UNTITLED_NOTE_TITLE, isBlankNote } from "@/shared/l
 import { summarize } from "@/features/notes/lib/note-summary";
 import type { Phase } from "@/shared/lib/roles";
 import { startOpenTimer } from "@/shared/lib/open-path-timing";
-import { basename } from "@/shared/lib/path";
+import { basename, isWithin, samePath, trimTrailingSeparators } from "@/shared/lib/path";
+import { planReveal } from "@/shared/lib/reveal-plan";
 import { createDebouncedAction } from "@/shared/lib/debounced-action";
 import { fireWorkspaceOpened, fireWorkspaceClosed } from "@/shared/lib/workspace-watch-hooks";
 import { VIEWER_PERF } from "@/shared/lib/viewer-perf-config";
@@ -1263,12 +1264,12 @@ export function isShowingDiff(diff: TabDiff | undefined | null): boolean {
 /** SW-GW-1: id prefix for a generic (open-any-dir) workspace. */
 export const GENERIC_WORKSPACE_ID_PREFIX = "generic:";
 
-/** SW-GW-1: strip trailing slash(es) (keep root `/`) so the same directory always
- *  normalizes to one id/cwd — `/foo/bar/` and `/foo/bar` dedupe (AC-5). The native
- *  folder picker returns a clean absolute path, so only trailing slashes are
- *  normalized here (interior `//` isn't produced by the picker). */
+/** Strip trailing separators (keep a root: `/`, `C:\`) so the same directory always
+ *  normalizes to one id/cwd — `/foo/bar/` and `/foo/bar` dedupe. The native
+ *  folder picker returns a clean absolute path, so only trailing separators are
+ *  normalized here (interior `//` isn't produced by the picker). An empty dir stays `/`. */
 export function normalizeWorkspaceDir(dirPath: string): string {
-  return dirPath.replace(/\/+$/, "") || "/";
+  return trimTrailingSeparators(dirPath) || "/";
 }
 
 /** SW-GW-1: mint a stable, per-directory id for a generic workspace. An absolute
@@ -3708,6 +3709,7 @@ export { getActiveTeamKey };
  */
 export function deriveSourceRepoSlug(repoPath: string): string {
   const parsed = parseSyntheticRepoKey(repoPath);
+  // A repo slug, `/`-delimited by definition: not a file-system path.
   if (parsed) return `${parsed.owner}/${parsed.repo}`.toLowerCase();
   // T.4 Phase 8 review (Cluster H / D3): legacy real-path fallback retires
   // in T.6. `composeWorktreeKey` uses `::` as a separator and does not
@@ -3741,6 +3743,7 @@ export function promptIdentityFromRepoPath(
   if (!parsed) return null;
   return {
     teamKey: buildTeamKey(parsed.orgSlug, parsed.team),
+    // A repo slug, `/`-delimited by definition: not a file-system path.
     sourceRepoSlug:
       `${parsed.host ? `${parsed.host}/` : ""}${parsed.owner}/${parsed.repo}`.toLowerCase(),
   };
@@ -3834,7 +3837,7 @@ export function rekeyKeyedSlices<K extends keyof ViewerState>(
 
 /**
  * SW-HB-8 / SLW-IN-7: after {@link rekeyKeyedSlices} relocates a team's slices
- * to `newKey`, rewrite the flat `/{old}/` team segment → `/{new}/` inside the
+ * to `newKey`, rewrite the flat `/{old}/` team segment → `/{new}/` (either separator) inside the
  * ABSOLUTE content paths those slices carry (`{org_root}/{team}/content/...`),
  * so open story tabs / drill root / expanded nav re-point at the moved dir
  * instead of rendering a "file deleted" placeholder. Operates ONLY on the
@@ -3851,8 +3854,11 @@ export function rewriteTeamContentPaths(
   oldName: string,
   newName: string,
 ): Partial<ViewerState> {
-  const fromRe = new RegExp(`/${oldName}/(content|install|repos|libraries)(/|$)`);
-  const fix = (p: string): string => p.replace(fromRe, `/${newName}/$1$2`);
+  // Either separator, written back as matched, so a `C:\` path keeps its backslashes.
+  const fromRe = new RegExp(
+    `([\\\\/])${oldName}([\\\\/])(content|install|repos|libraries)([\\\\/]|$)`,
+  );
+  const fix = (p: string): string => p.replace(fromRe, `$1${newName}$2$3$4`);
   const fixTab = (t: TabState): TabState => {
     const path = fix(t.path);
     return path === t.path ? t : { ...t, path };
@@ -4280,23 +4286,11 @@ function commitNavTarget(
 }
 
 /**
- * Side-effect helper invoked after `openFile` has committed the new tab.
- *
- * 1. Expand status-nav sub-epic ancestors so the file's row is visible.
- * 2. If the file is outside the current drill path, reset drill to the
- *    viewer root first. Uses direct `drillPaths` mutation (not the
- *    sync callback in repo-viewer-view.tsx) so the pipeline scope is
- *    NOT re-synced from the drill change — we handle scope separately.
- * 3. Pipeline-scope rules (post-R-14: viewerRoot IS the scope base):
- *    - File outside viewerRoot → if drill was reset to root, also
- *      clear pipeline scope so the two slices stay in sync. Otherwise
- *      isDrilledIn becomes false while the scoped tree still shows a
- *      sub-epic, leaking viewerRootEntries into the nav.
- *    - File inside viewerRoot but NOT a story file (README, non-md,
- *      etc.) AND pipeline is currently drilled → reset pipeline scope
- *      to "" so the user sees broader context.
- *    - File inside viewerRoot and IS a story file → do nothing to
- *      scope; `AutoCenterOnActiveTab` handles highlighting/centering.
+ * Side-effect helper invoked after `openFile` has committed the new tab: applies
+ * {@link planReveal} (which folders to expand, and whether the drill and pipeline
+ * scope reset) in one update, and bumps the reveal counter. The drill is written to
+ * `drillPaths` directly, not through the sync callback in repo-viewer-view.tsx, so the
+ * pipeline scope isn't re-synced from the drill change.
  */
 function revealOpenedFile(
   repoPath: string,
@@ -4323,40 +4317,32 @@ function revealOpenedFile(
     null;
   const tree = useTeamSurfaceStore.getState().trees[teamKey];
   const sourceTeam = tree ? owner(tree) : null;
-  const navigationPath = filePath.startsWith(`${treeRoot}/`)
+  const navigationPath = isWithin(treeRoot, filePath)
     ? filePath
     : teamContentNavigationPath(teamKey, filePath, useOrgStore.getState().orgs, sourceTeam);
   if (!navigationPath) return;
 
   const currentDrill = readTeamKeyed(state.drillPaths, teamKey, treeRoot);
-  const effectiveDrill = navigationPath.startsWith(`${currentDrill}/`) ? currentDrill : treeRoot;
+  const currentScope = readTeamKeyed(state.pipelineScope, teamKey, "");
+  const { ancestors, effectiveDrill, resetScope } = planReveal({
+    treeRoot,
+    navigationPath,
+    currentDrill,
+    currentScope,
+    isPipelineFile: isPipelineFileName(basename(filePath)),
+  });
 
   // Build the partial update so it applies atomically.
   const partial: Partial<ViewerState> = {};
-  const currentScope = readTeamKeyed(state.pipelineScope, teamKey, "");
-
   if (effectiveDrill !== currentDrill) {
     partial.drillPaths = updateTeamKeyed(state.drillPaths, teamKey, effectiveDrill);
-    // When drill resets to root, also clear pipeline scope so isDrilledIn
-    // and the scoped tree stay in sync. Without this, opening a file outside
-    // the pipeline root (e.g. docs/) while drilled in leaves scope stale,
-    // causing viewerRootEntries to leak into the scoped nav.
-    if (effectiveDrill === treeRoot && currentScope !== "") {
-      partial.pipelineScope = updateTeamKeyed(state.pipelineScope, teamKey, "");
-    }
+  }
+  if (resetScope) {
+    partial.pipelineScope = updateTeamKeyed(state.pipelineScope, teamKey, "");
   }
 
-  // Walk ancestor dirs between the file and treeRoot, expanding
-  // sub-epic folders in statusNavExpandedPaths so PipelineStatusNav reveals
-  // the file. Files outside the content root produce zero ancestors.
-  const ancestors: string[] = [];
-  let parent = navigationPath.slice(0, navigationPath.lastIndexOf("/"));
-  while (parent.length > treeRoot.length && parent.startsWith(`${treeRoot}/`)) {
-    ancestors.push(parent);
-    const nextSlash = parent.lastIndexOf("/");
-    if (nextSlash < 0) break;
-    parent = parent.slice(0, nextSlash);
-  }
+  // Expand the sub-epic folders between the file and the root so PipelineStatusNav
+  // reveals it. Files outside the content root have no ancestors.
   if (ancestors.length > 0) {
     const existing = readTeamKeyed(state.statusNavExpandedPaths, teamKey, []);
     const merged = Array.from(new Set([...existing, ...ancestors]));
@@ -4366,20 +4352,6 @@ function revealOpenedFile(
         teamKey,
         merged,
       );
-    }
-  }
-  const insideViewerRoot = navigationPath.startsWith(`${treeRoot}/`);
-  const fileName = filePath.slice(filePath.lastIndexOf("/") + 1);
-
-  // Only reset pipeline scope if the opened file is outside the current
-  // scope. Opening a non-story file (e.g. README.md) INSIDE the current
-  // scope should not disrupt the drill/scope context.
-  if (insideViewerRoot && !isPipelineFileName(fileName) && currentScope !== "") {
-    const scopeAbs = `${treeRoot}/${currentScope}`;
-    const fileInsideScope =
-      navigationPath.startsWith(`${scopeAbs}/`) || navigationPath === scopeAbs;
-    if (!fileInsideScope) {
-      partial.pipelineScope = updateTeamKeyed(state.pipelineScope, teamKey, "");
     }
   }
 
@@ -4987,6 +4959,7 @@ export function migrateT1Slices(input: {
     teams.add(teamKey);
     slugToTeamKeys.set(slug, teams);
   };
+  // Repo slugs below are `/`-delimited by definition: not file-system paths.
   const hostlessIdentities = new Map<string, { github: boolean; nonGithub: Set<string> }>();
   for (const { parsed } of parsedRepos) {
     const hostless = `${parsed.owner}/${parsed.repo}`.toLowerCase();
@@ -6221,6 +6194,7 @@ function teamSourceRepoSlugsInOrder(teamKey: string): string[] {
   const slugs: string[] = [];
   for (const r of repos) {
     const parsed = parseSyntheticRepoKey(r.repoPath);
+    // A repo slug, `/`-delimited by definition: not a file-system path.
     if (parsed) slugs.push(`${parsed.owner}/${parsed.repo}`);
   }
   return slugs;
@@ -6444,7 +6418,8 @@ function setupAfterStep1(teamKey: string, workspaceId: string): WorkspaceSetupSt
 /** Whether `ws` is the workspace a Step 2 event names: its local directory,
  *  or its handle on a machine. */
 function workspaceMatchesIdentity(ws: Workspace, identity: string): boolean {
-  const norm = (p: string) => p.replace(/\/+$/, "").replace(/^\/private(?=\/)/, "");
+  // `/private` is macOS's real path for `/tmp` and `/var`, so it's a POSIX-only rule.
+  const norm = (p: string) => trimTrailingSeparators(p).replace(/^\/private(?=\/)/, "");
   const id = norm(identity);
   if (isRemoteWorkspace(ws)) return !!ws.location.handle && ws.location.handle === identity;
   return !!ws.cwd && norm(ws.cwd) === id;
@@ -11822,7 +11797,6 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
         logger.warn("viewer", `reconcile re-link failed (non-fatal): ${getErrorMessage(e)}`);
       });
 
-    const samePath = (a: string, b: string) => a.replace(/\/+$/, "") === b.replace(/\/+$/, "");
     const worktrees = await listWorktrees(sourceRepoPath);
     const entry = worktrees.find((w) => samePath(w.path, oldPath));
 

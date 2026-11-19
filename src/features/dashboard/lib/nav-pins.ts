@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { compareNavNames } from "./nav-ordering";
+import { basename } from "@/shared/lib/path";
 import { stripViewerExtension } from "@/shared/lib/viewer-file-type";
 
 /**
@@ -53,7 +54,7 @@ export function normalizePinPath(path: string): string {
  *  derive from the path's last segment; strip a viewer extension so a stale file
  *  pin reads like a live one). */
 function labelFromPath(path: string): string {
-  const base = path.split("/").filter(Boolean).pop() ?? path;
+  const base = basename(path) || path;
   return stripViewerExtension(base);
 }
 
@@ -61,7 +62,7 @@ function labelFromPath(path: string): string {
  *  isn't known from the nav): a last segment with no extension reads as a dir. Only
  *  drives the stale row's icon — a live pin always uses the resolved `meta.isDir`. */
 function looksLikeDirPath(path: string): boolean {
-  const base = path.split("/").filter(Boolean).pop() ?? "";
+  const base = basename(path);
   return !base.includes(".");
 }
 

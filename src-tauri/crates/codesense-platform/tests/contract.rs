@@ -4,23 +4,36 @@
 //! end. Process tests drive the `platform-fixture` binary, never a shell;
 //! it is the client of the IPC rows.
 
+use std::cell::Cell;
+use std::ffi::{OsStr, OsString};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
-use codesense_platform::dirs::codesense_home;
+use codesense_platform::cli::{candidates, named_in, package_dirs, search_path};
+use codesense_platform::dirs::{codesense_home, lock_dir};
 use codesense_platform::fs::{
-    atomic_replace, canonicalize, create_new_owner_only, create_owner_only, file_id, file_id_of,
-    is_owned_by_current_user, is_owner_only, link_or_copy, lock_exclusive, open_nofollow,
-    portable_name, set_owner_only, try_lock_exclusive, Linked, NonPortableName, Open,
+    atomic_replace, can_execute, canonicalize, change_stamp, create_dir_new_owner_only,
+    create_dir_owner_only, create_new_owner_only, create_owner_only, file_id, file_id_of,
+    is_executable, is_owned_by_current_user, is_owner_only, is_text_busy, is_world_writable,
+    link_count, link_or_copy, lock_exclusive, open_nofollow, open_nofollow_nonblocking,
+    portable_name, set_executable, set_owner_only, try_lock_exclusive, try_lock_shared, unlock,
+    Linked, NonPortableName, Open, Reach,
 };
 use codesense_platform::ipc::{blocking, Endpoint, LocalListener, LocalStream};
-use codesense_platform::process::{is_alive, kill_hard, terminate, Pid, ProcessTree};
-use codesense_platform::testutil::symlink_or_skip;
-use codesense_platform::user::current_user;
+use codesense_platform::limits::is_descriptor_exhaustion;
+use codesense_platform::process::{
+    exited_unreaped, group_and_foreground, is_alive, kill_hard, terminate, terminate_pid, Identity,
+    Pid, ProcessGroup, ProcessTree,
+};
+use codesense_platform::testutil::{
+    fifo_or_skip, make_group_writable, make_world_writable, pathext, relative_from_cwd,
+    symlink_or_skip, Anyone,
+};
+use codesense_platform::user::{current_user, hostname, login_shell};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 
 fn fixture(args: &[&str]) -> Command {
@@ -100,9 +113,291 @@ fn kill_hard_ends_a_process_that_ignores_terminate() {
 }
 
 #[test]
+fn a_hidden_tree_has_no_console_window() {
+    let mut tree = ProcessTree::spawn_hidden(&mut fixture(&["console"])).unwrap();
+    assert_eq!(first_line(&mut tree), "no console window");
+    assert!(tree.wait().unwrap().success());
+}
+
+#[test]
+fn a_hidden_tree_is_killed_as_a_whole() {
+    let mut tree = ProcessTree::spawn_hidden(&mut fixture(&["tree"])).unwrap();
+    let grandchild = Pid::from_raw(first_line(&mut tree).parse().unwrap());
+    assert!(is_alive(grandchild));
+    kill_hard(&tree).unwrap();
+    assert!(eventually(Duration::from_secs(5), || !is_alive(grandchild)));
+    assert!(exits_within(&mut tree, Duration::from_secs(5)));
+}
+
+/// The group of `tree`'s root: one it leads (unix) or a job it is assigned to
+/// (Windows), which holds what the root starts from then on.
+fn adopt_tree_group(tree: &ProcessTree) -> ProcessGroup {
+    ProcessGroup::adopt(tree.pid())
+        .unwrap()
+        .expect("a group other than the test's own")
+}
+
+/// A fixture tree whose group is adopted before its grandchild starts.
+fn spawn_adopted_tree() -> (ProcessTree, ProcessGroup, Pid) {
+    let mut command = fixture(&["tree-on-input"]);
+    command.stdin(Stdio::piped());
+    let mut tree = ProcessTree::spawn(&mut command).unwrap();
+    let group = adopt_tree_group(&tree);
+    let mut stdin = tree.child().stdin.take().expect("piped stdin");
+    writeln!(stdin, "go").unwrap();
+    let grandchild = Pid::from_raw(first_line(&mut tree).parse().unwrap());
+    assert!(is_alive(grandchild));
+    (tree, group, grandchild)
+}
+
+#[test]
+fn an_adopted_group_is_killed_as_a_whole() {
+    let (mut tree, group, grandchild) = spawn_adopted_tree();
+    group.kill().unwrap();
+    assert!(
+        eventually(Duration::from_secs(5), || !is_alive(grandchild)),
+        "the grandchild outlived the group kill"
+    );
+    assert!(exits_within(&mut tree, Duration::from_secs(5)));
+    group.kill().unwrap();
+    group.terminate().unwrap();
+}
+
+#[test]
+fn an_adopted_group_is_asked_to_stop() {
+    let mut tree = ProcessTree::spawn(&mut fixture(&["ignore-terminate"])).unwrap();
+    assert_eq!(first_line(&mut tree), "ready");
+    let group = adopt_tree_group(&tree);
+    group.terminate().unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(
+        tree.try_wait().unwrap().is_none(),
+        expect_terminate_can_be_ignored()
+    );
+    group.kill().unwrap();
+    assert!(exits_within(&mut tree, Duration::from_secs(2)));
+}
+
+#[test]
+fn dropping_an_adopted_group_sends_nothing() {
+    let (mut tree, group, grandchild) = spawn_adopted_tree();
+    // The leader alone, reaped directly: `tree.wait()` would end the group.
+    tree.child().kill().unwrap();
+    tree.child().wait().unwrap();
+    drop(group);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(is_alive(grandchild), "dropping the group signalled it");
+}
+
+#[test]
+fn adopting_a_child_in_this_process_group() {
+    let mut child = fixture(&["sleep"]).spawn().unwrap();
+    let pid = Pid::from_raw(child.id());
+    let group = ProcessGroup::adopt(pid).unwrap();
+    assert_eq!(group.is_some(), expect_own_group_adopted());
+    drop(group);
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(is_alive(pid), "dropping the group signalled it");
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+#[test]
+fn terminate_pid_stops_one_process_not_its_tree() {
+    let (mut tree, grandchild) = spawn_tree();
+    terminate_pid(tree.pid()).unwrap();
+    // The root directly: the tree's own wait would end the rest.
+    let root_exited = || tree.child().try_wait().unwrap().is_some();
+    assert!(eventually(Duration::from_secs(5), root_exited));
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(is_alive(grandchild), "the grandchild was stopped too");
+    assert!(terminate_pid(Pid::from_raw(0)).is_err());
+}
+
+#[test]
+fn an_exit_is_seen_without_reaping() {
+    let mut child = fixture(&["sleep"]).spawn().unwrap();
+    assert!(!exited_unreaped(&child).unwrap());
+    child.kill().unwrap();
+    let exited = || exited_unreaped(&child).unwrap();
+    assert!(eventually(Duration::from_secs(5), exited));
+    assert!(exited_unreaped(&child).unwrap(), "still unreaped");
+    child.wait().expect("still waitable");
+}
+
+#[test]
+fn group_and_foreground_reads_a_group_leader() {
+    let (tree, _) = spawn_tree();
+    expect_group_of_leader(group_and_foreground(tree.pid()), tree.pid());
+}
+
+#[test]
+fn can_execute_only_a_file_this_process_may_run() {
+    let dir = same_volume_tempdir();
+    let tool = executable(dir.path(), &expect_executable_name("tool"));
+    assert!(can_execute(&tool), "{}", tool.display());
+    let plain = dir.path().join("plain");
+    std::fs::write(&plain, "x").unwrap();
+    assert!(!can_execute(&plain), "a file this OS would not run");
+    let directory = dir.path().join(expect_executable_name("named"));
+    std::fs::create_dir(&directory).unwrap();
+    assert!(!can_execute(&directory), "a directory");
+    assert!(!can_execute(
+        &dir.path().join(expect_executable_name("missing"))
+    ));
+}
+
+#[test]
+fn descriptor_exhaustion_is_found_in_a_chain_and_a_message() {
+    let code = expect_too_many_open_files();
+    let exhausted = || std::io::Error::from_raw_os_error(code);
+    assert!(is_descriptor_exhaustion(&exhausted()));
+    let message = std::io::Error::other(format!(
+        "failed to openpty: Os {{ code: {code}, kind: Uncategorized, message: \"Too many open files\" }}"
+    ));
+    assert!(is_descriptor_exhaustion(&message));
+    assert!(is_descriptor_exhaustion(&Wrapped(exhausted())));
+    let other = std::io::Error::from(std::io::ErrorKind::NotFound);
+    assert!(!is_descriptor_exhaustion(&other));
+    assert!(!is_descriptor_exhaustion(&Wrapped(other)));
+}
+
+/// An error that names its cause only through `source()`.
+#[derive(Debug)]
+struct Wrapped(std::io::Error);
+
+impl std::fmt::Display for Wrapped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("failed to dup the pty")
+    }
+}
+
+impl std::error::Error for Wrapped {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
+#[test]
 fn is_alive_is_false_for_pid_zero_and_true_for_this_process() {
     assert!(!is_alive(Pid::from_raw(0)));
     assert!(is_alive(Pid::from_raw(std::process::id())));
+}
+
+#[test]
+fn is_alive_is_true_for_a_process_this_user_cannot_signal() {
+    assert!(is_alive(expect_unsignallable_pid()));
+}
+
+fn me() -> Identity {
+    Identity::inspect(std::process::id()).expect("this process reads")
+}
+
+/// A fixture child that sleeps, and its identity.
+fn sleeper() -> (std::process::Child, Identity) {
+    let child = fixture(&["sleep"]).spawn().unwrap();
+    let identity = Identity::inspect(child.id()).expect("the child reads");
+    (child, identity)
+}
+
+#[test]
+fn identity_of_this_process_runs_and_is_itself() {
+    let me = me();
+    assert_eq!(me.pid, std::process::id());
+    assert!(me.runs());
+    assert!(me.is(me));
+    assert!(!me.retired());
+    assert!(me.descends_from(me));
+}
+
+#[test]
+fn identity_of_the_parent_started_first_and_holds_this_process() {
+    let me = me();
+    let parent = Identity::inspect(me.parent).expect("the test runner reads");
+    assert!(parent.runs());
+    assert!(me.descends_from(parent));
+    assert!(!parent.descends_from(me));
+    assert!(parent.start <= me.start);
+}
+
+#[test]
+fn a_child_descends_from_this_process_and_an_unrelated_one_does_not() {
+    let (mut child, identity) = sleeper();
+    let (mut other, unrelated) = sleeper();
+    assert_eq!(identity.parent, std::process::id());
+    assert!(identity.descends_from(me()));
+    assert!(!identity.descends_from(unrelated));
+    assert!(!me().descends_from(identity));
+    for child in [&mut child, &mut other] {
+        child.kill().unwrap();
+        child.wait().unwrap();
+    }
+}
+
+#[test]
+fn a_grandchild_descends_from_this_process() {
+    let (tree, grandchild) = spawn_tree();
+    let grandchild = Identity::inspect(grandchild.as_raw()).expect("the grandchild reads");
+    let child = Identity::inspect(tree.pid().as_raw()).expect("the child reads");
+    assert!(grandchild.descends_from(child));
+    assert!(grandchild.descends_from(me()));
+}
+
+#[test]
+fn started_after_orders_a_start_against_wall_time() {
+    let before = SystemTime::now() - Duration::from_secs(5);
+    let (mut child, identity) = sleeper();
+    let later = SystemTime::now() + Duration::from_secs(60);
+    assert!(identity.started_after(before));
+    assert!(!identity.started_after(later));
+    assert!(me().started_after(SystemTime::UNIX_EPOCH));
+    assert!(!me().started_after(later));
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+#[test]
+fn an_exited_child_with_no_handle_left_is_retired() {
+    let (mut child, identity) = sleeper();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    drop(child);
+    assert!(!identity.runs());
+    assert!(identity.retired());
+}
+
+#[test]
+fn an_exited_child_whose_handle_is_open_no_longer_runs() {
+    let (mut child, identity) = sleeper();
+    child.kill().unwrap();
+    assert!(
+        eventually(Duration::from_secs(5), || Identity::inspect(identity.pid)
+            .is_none()),
+        "an exited child still reads"
+    );
+    assert!(!identity.runs());
+    assert_eq!(identity.retired(), expect_retired_while_unreaped());
+    child.wait().unwrap();
+}
+
+#[test]
+fn a_child_that_exits_with_the_still_active_code_no_longer_runs() {
+    let mut child = fixture(&["exit", "259"])
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let identity = Identity::inspect(child.id()).expect("the child reads");
+    assert!(identity.runs());
+    child.stdin.take().unwrap().write_all(b"exit\n").unwrap();
+    assert!(
+        eventually(Duration::from_secs(5), || Identity::inspect(identity.pid)
+            .is_none()),
+        "an exited child still reads"
+    );
+    assert!(!identity.runs());
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(expect_exit_code(259)));
+    assert!(!is_alive(Pid::from_raw(identity.pid)));
 }
 
 #[test]
@@ -119,6 +414,29 @@ fn home_is_dot_codesense() {
         codesense_home().unwrap(),
         PathBuf::from(home).join(".codesense")
     );
+}
+
+#[test]
+fn hostname_is_a_stable_name() {
+    let name = hostname().expect("a host name");
+    assert!(!name.is_empty());
+    assert!(!name.contains('\0'), "{name:?}");
+    assert_eq!(hostname(), Some(name));
+}
+
+#[test]
+fn lock_dir_ignores_the_temp_variables() {
+    let dir = lock_dir().expect("a lock directory");
+    expect_lock_dir(&dir);
+    let elsewhere = tempfile::tempdir().unwrap();
+    let mut command = fixture(&["lock-dir"]);
+    for variable in ["TMP", "TEMP", "TMPDIR"] {
+        command.env(variable, elsewhere.path());
+    }
+    let output = command.output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let theirs = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(Path::new(theirs.trim_end()), dir);
 }
 
 #[test]
@@ -188,6 +506,69 @@ fn a_file_this_user_makes_is_theirs_and_an_owner_only_create_is_owner_only() {
     assert!(is_owner_only(&file).unwrap());
     assert!(is_owner_only(&opened(&new)).unwrap());
     expect_owner_only_mode(&new);
+}
+
+#[test]
+fn create_dir_owner_only_makes_every_missing_directory_owner_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join("parent");
+    let leaf = parent.join("leaf");
+    create_dir_owner_only(&leaf).unwrap();
+    for path in [&parent, &leaf] {
+        let opened = open_nofollow(OpenOptions::new().read(true), path).unwrap();
+        assert!(is_owner_only(&opened).unwrap(), "{}", path.display());
+        expect_owner_only_mode(path);
+    }
+    let inner_file = leaf.join("file");
+    std::fs::write(&inner_file, "x").unwrap();
+    let inner_dir = leaf.join("dir");
+    std::fs::create_dir(&inner_dir).unwrap();
+    expect_inherits_owner_only(&inner_file);
+    expect_inherits_owner_only(&inner_dir);
+    create_dir_owner_only(&leaf).unwrap();
+    let file = dir.path().join("file");
+    std::fs::write(&file, "x").unwrap();
+    assert!(
+        create_dir_owner_only(&file).is_err(),
+        "a file is in the way"
+    );
+    assert!(create_dir_owner_only(&file.join("below")).is_err());
+}
+
+#[test]
+fn create_dir_new_owner_only_makes_exactly_one_new_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let new = dir.path().join("new");
+    create_dir_new_owner_only(&new).unwrap();
+    let opened = open_nofollow(OpenOptions::new().read(true), &new).unwrap();
+    assert!(is_owner_only(&opened).unwrap());
+    expect_owner_only_mode(&new);
+    assert_eq!(
+        create_dir_new_owner_only(&new).unwrap_err().kind(),
+        ErrorKind::AlreadyExists
+    );
+    let missing = dir.path().join("missing");
+    assert!(create_dir_new_owner_only(&missing.join("leaf")).is_err());
+    assert!(!missing.exists(), "never a parent");
+}
+
+#[test]
+fn set_executable_makes_a_file_this_os_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    for (stem, reach) in [("owner", Reach::Owner), ("everyone", Reach::Everyone)] {
+        let path = dir.path().join(expect_executable_name(stem));
+        std::fs::write(&path, "x").unwrap();
+        set_executable(&path, reach).unwrap();
+        assert!(is_executable(&path), "{}", path.display());
+        expect_executable_mode(&path, reach);
+    }
+}
+
+#[test]
+fn is_text_busy_is_only_a_busy_file() {
+    assert!(is_text_busy(&expect_text_busy_error()));
+    assert!(!is_text_busy(&std::io::Error::from(ErrorKind::NotFound)));
+    assert!(!is_text_busy(&std::io::Error::other("busy")));
 }
 
 #[test]
@@ -328,15 +709,7 @@ fn atomic_replace_reports_busy_for_foreign_handle() {
 fn lock_exclusive_blocks_second_holder() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("lock");
-    let open = || {
-        OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&path)
-            .unwrap()
-    };
+    let open = || open_lock_file(&path);
     let first = open();
     lock_exclusive(&first).unwrap();
     let second = open();
@@ -346,6 +719,39 @@ fn lock_exclusive_blocks_second_holder() {
     assert!(try_lock_exclusive(&second).unwrap(), "released on drop");
     drop(second);
     assert_eq!(lock_in_another_process(&path), "locked");
+}
+
+#[test]
+fn shared_locks_coexist_and_hold_off_an_exclusive_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lock");
+    let (first, second, third) = (
+        open_lock_file(&path),
+        open_lock_file(&path),
+        open_lock_file(&path),
+    );
+    assert!(try_lock_shared(&first).unwrap());
+    assert!(try_lock_shared(&second).unwrap(), "a second shared holder");
+    assert!(!try_lock_exclusive(&third).unwrap(), "both hold it");
+    assert_eq!(lock_in_another_process(&path), "busy");
+    unlock(&first).unwrap();
+    assert!(!try_lock_exclusive(&third).unwrap(), "one still holds it");
+    unlock(&second).unwrap();
+    assert!(try_lock_exclusive(&third).unwrap(), "both released");
+    assert!(!try_lock_shared(&first).unwrap(), "an exclusive holder");
+    unlock(&third).unwrap();
+    assert!(try_lock_shared(&first).unwrap(), "released");
+}
+
+/// Open the lock file at `path`, creating it.
+fn open_lock_file(path: &Path) -> File {
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .unwrap()
 }
 
 fn lock_in_another_process(path: &Path) -> String {
@@ -707,6 +1113,243 @@ fn stale_endpoint_rebinds() {
     assert!(eventually(Duration::from_secs(5), rebinds));
 }
 
+#[test]
+fn is_executable_accepts_only_an_absolute_executable_file() {
+    let dir = same_volume_tempdir();
+    let name = expect_executable_name("tool");
+    let tool = executable(dir.path(), &name);
+    assert!(is_executable(&tool), "{}", tool.display());
+    let plain = dir.path().join("plain");
+    std::fs::write(&plain, "x").unwrap();
+    assert!(!is_executable(&plain), "a file this OS would not run");
+    let directory = dir.path().join(expect_executable_name("named"));
+    std::fs::create_dir(&directory).unwrap();
+    assert!(!is_executable(&directory), "a directory");
+    let relative = relative_from_cwd(&tool);
+    assert!(!is_executable(&relative), "{}", relative.display());
+    assert!(!is_executable(
+        &dir.path().join(expect_executable_name("missing"))
+    ));
+}
+
+/// A temp dir under cargo's target directory, so it shares a volume with the
+/// working directory and [`relative_from_cwd`] can reach it. The directory is
+/// created first: an archived test run starts without it.
+fn same_volume_tempdir() -> tempfile::TempDir {
+    std::fs::create_dir_all(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap()
+}
+
+/// The fixture installs of `tool`: every spelling an OS might run.
+const TOOL_FILES: [&str; 3] = ["tool", "tool.cmd", "tool.exe"];
+
+fn path_of(dirs: &[&Path]) -> OsString {
+    std::env::join_paths(dirs).unwrap()
+}
+
+#[test]
+fn cli_candidates_follow_pathext_order() {
+    let tmp = same_volume_tempdir();
+    let dir = |name: &str| tmp.path().join(name);
+    for install in ["a", "b", "c"] {
+        for file in TOOL_FILES {
+            executable(&dir(install), file);
+        }
+    }
+    // A file this OS would not run, and directories named like the tool.
+    std::fs::create_dir(dir("decoy")).unwrap();
+    std::fs::write(dir("decoy").join("tool"), "x").unwrap();
+    for file in TOOL_FILES {
+        std::fs::create_dir_all(dir("named").join(file)).unwrap();
+    }
+    let path = path_of(&[
+        &dir("a"),
+        Path::new(""),
+        &relative_from_cwd(&dir("c")),
+        &dir("decoy"),
+        &dir("named"),
+        &dir("b"),
+    ]);
+    let expected = [expect_installs(&dir("a")), expect_installs(&dir("b"))].concat();
+    assert_eq!(candidates(&path, "tool"), expected);
+    assert!(candidates(OsStr::new(""), "tool").is_empty());
+    assert!(candidates(&path, "other").is_empty());
+    let relative = path_of(&[&relative_from_cwd(&dir("c"))]);
+    assert!(candidates(&relative, "tool").is_empty(), "{relative:?}");
+}
+
+#[test]
+fn cli_candidates_dedupe_by_canonical_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().join("real");
+    for file in TOOL_FILES {
+        executable(&real, file);
+    }
+    // The same directory listed twice is one install.
+    let twice = path_of(&[&real, &real]);
+    assert_eq!(candidates(&twice, "tool"), expect_installs(&real));
+    // A link and its target are one install; the first spelling is kept.
+    let links = tmp.path().join("links");
+    if !symlink_or_skip(&real, &links) {
+        return;
+    }
+    let path = path_of(&[&links, &real]);
+    assert_eq!(candidates(&path, "tool"), expect_installs(&links));
+}
+
+#[test]
+fn cli_named_in_templates_any_name() {
+    let dirs = [PathBuf::from("first"), PathBuf::from("second")];
+    assert_eq!(named_in(&dirs, "zzagent"), expect_named(&dirs, "zzagent"));
+    assert_eq!(
+        named_in(&dirs, "zzagent.exe"),
+        vec![dirs[0].join("zzagent.exe"), dirs[1].join("zzagent.exe")]
+    );
+    assert!(named_in(&[], "zzagent").is_empty());
+}
+
+#[test]
+fn cli_package_dirs_per_os() {
+    assert_eq!(package_dirs(), expect_package_dirs());
+}
+
+#[test]
+fn cli_search_path_per_os() {
+    let probed = Cell::new(false);
+    let found = search_path(|| {
+        probed.set(true);
+        Some("from the probe".to_owned())
+    });
+    expect_search_path(found, probed.get());
+}
+
+/// An owner-only directory `home` under `dir`.
+fn owner_only_dir(dir: &Path) -> PathBuf {
+    let home = dir.join("home");
+    std::fs::create_dir(&home).unwrap();
+    set_owner_only(&home).unwrap();
+    home
+}
+
+#[test]
+fn is_world_writable_once_any_broad_group_may_write() {
+    for anyone in [Anyone::Everyone, Anyone::Users, Anyone::AuthenticatedUsers] {
+        let dir = tempfile::tempdir().unwrap();
+        let home = owner_only_dir(dir.path());
+        let opened = || open_nofollow(OpenOptions::new().read(true), &home).unwrap();
+        assert!(
+            !is_world_writable(&opened()).unwrap(),
+            "{anyone:?}: owner-only"
+        );
+        make_world_writable(&home, anyone);
+        assert!(
+            is_world_writable(&opened()).unwrap(),
+            "{anyone:?} may write"
+        );
+    }
+}
+
+#[test]
+fn a_group_writable_directory_is_not_world_writable() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = owner_only_dir(dir.path());
+    make_group_writable(&home);
+    let opened = open_nofollow(OpenOptions::new().read(true), &home).unwrap();
+    assert!(!is_world_writable(&opened).unwrap());
+}
+
+#[test]
+fn link_count_counts_every_hard_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("first");
+    std::fs::write(&first, "bytes").unwrap();
+    let opened = |path: &Path| open_nofollow(OpenOptions::new().read(true), path).unwrap();
+    assert_eq!(link_count(&opened(&first)).unwrap(), 1);
+    let second = dir.path().join("second");
+    std::fs::hard_link(&first, &second).unwrap();
+    assert_eq!(link_count(&opened(&first)).unwrap(), 2);
+    assert_eq!(link_count(&opened(&second)).unwrap(), 2);
+}
+
+#[test]
+fn open_nofollow_nonblocking_opens_a_file_and_refuses_a_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("target");
+    std::fs::write(&target, "bytes").unwrap();
+    let mut read = String::new();
+    open_nofollow_nonblocking(OpenOptions::new().read(true), &target)
+        .unwrap()
+        .read_to_string(&mut read)
+        .unwrap();
+    assert_eq!(read, "bytes");
+    let link = dir.path().join("link");
+    if !symlink_or_skip(&target, &link) {
+        return;
+    }
+    assert!(open_nofollow_nonblocking(OpenOptions::new().read(true), &link).is_err());
+}
+
+#[test]
+fn open_nofollow_nonblocking_opens_a_fifo_without_waiting_for_a_writer() {
+    let dir = tempfile::tempdir().unwrap();
+    let fifo = dir.path().join("fifo");
+    if !fifo_or_skip(&fifo) {
+        return;
+    }
+    let (done, opened) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = done.send(open_nofollow_nonblocking(OpenOptions::new().read(true), &fifo).is_ok());
+    });
+    assert_eq!(opened.recv_timeout(Duration::from_secs(5)), Ok(true));
+}
+
+#[test]
+fn change_stamp_sees_an_in_place_rewrite_that_keeps_length_and_mtime() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("program");
+    std::fs::write(&path, "old!").unwrap();
+    let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+    let stamp = change_stamp(&path).unwrap();
+    // Past the file system's timestamp granularity.
+    std::thread::sleep(Duration::from_millis(50));
+    let mut file = OpenOptions::new().write(true).open(&path).unwrap();
+    file.write_all(b"new!").unwrap();
+    file.set_modified(modified).unwrap();
+    drop(file);
+    let metadata = std::fs::metadata(&path).unwrap();
+    assert_eq!(
+        (metadata.len(), metadata.modified().unwrap()),
+        (4, modified)
+    );
+    assert_eq!(
+        stamp != change_stamp(&path).unwrap(),
+        expect_in_place_rewrite_changes_the_stamp()
+    );
+}
+
+#[test]
+fn change_stamp_holds_for_an_untouched_file_and_changes_when_it_is_rewritten() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("program");
+    std::fs::write(&path, "old").unwrap();
+    let stamp = change_stamp(&path).unwrap();
+    assert_eq!(stamp, change_stamp(&path).unwrap(), "untouched");
+    atomic_replace(&path, b"new").unwrap();
+    let rewritten = change_stamp(&path).unwrap();
+    assert_ne!(stamp, rewritten, "rewritten");
+    assert_eq!(rewritten, change_stamp(&path).unwrap(), "untouched since");
+    assert!(change_stamp(&dir.path().join("missing")).is_err());
+}
+
+/// Write the file `name` in `dir` (made if missing) and make it executable.
+fn executable(dir: &Path, name: &str) -> PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    let path = dir.join(name);
+    std::fs::write(&path, "#!/bin/sh\n").unwrap();
+    set_executable(&path, Reach::Everyone).unwrap();
+    path
+}
+
 /// How many `.tmp.` siblings an atomic write left in `dir`.
 fn temp_siblings(dir: &Path) -> usize {
     std::fs::read_dir(dir)
@@ -718,10 +1361,98 @@ fn temp_siblings(dir: &Path) -> usize {
 
 // Per-OS expectations.
 
+/// Unix: the stamp holds the inode change time, which the write and the
+/// restored mtime both move. Windows: it holds the last-write time, which
+/// the restore puts back, so the same file id and time read as untouched.
+fn expect_in_place_rewrite_changes_the_stamp() -> bool {
+    cfg!(unix)
+}
+
 /// Unix: SIGTERM is a request a process may ignore. Windows: terminate ends
 /// the job outright.
 fn expect_terminate_can_be_ignored() -> bool {
     cfg!(unix)
+}
+
+/// A live process this user may not signal. Unix: pid 1, the init process
+/// (root's). Windows: pid 4, the System process.
+fn expect_unsignallable_pid() -> Pid {
+    Pid::from_raw(if cfg!(windows) { 4 } else { 1 })
+}
+
+/// A directory either way. Unix: `/tmp`. Windows: `locks` in the codesense
+/// home, owner-only.
+fn expect_lock_dir(dir: &Path) {
+    assert!(dir.is_dir(), "{}", dir.display());
+    if cfg!(windows) {
+        assert_eq!(dir, codesense_home().unwrap().join("locks"));
+        let opened = open_nofollow(OpenOptions::new().read(true), dir).unwrap();
+        assert!(is_owner_only(&opened).unwrap(), "{}", dir.display());
+    } else {
+        assert_eq!(dir, Path::new("/tmp"));
+    }
+}
+
+/// What a plain file or directory made inside an owner-only directory gets.
+/// Windows: the directory's inheritable ACE, so it is owner-only too. Unix:
+/// its mode comes from the umask, not the directory, so nothing to check.
+fn expect_inherits_owner_only(path: &Path) {
+    if cfg!(windows) {
+        let opened = open_nofollow(OpenOptions::new().read(true), path).unwrap();
+        assert!(is_owner_only(&opened).unwrap(), "{}", path.display());
+    }
+}
+
+/// The error a busy file gives. Unix: `ETXTBSY`. Windows:
+/// `ERROR_SHARING_VIOLATION`.
+fn expect_text_busy_error() -> std::io::Error {
+    #[cfg(unix)]
+    let code = libc::ETXTBSY;
+    #[cfg(windows)]
+    let code = windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION as i32;
+    std::io::Error::from_raw_os_error(code)
+}
+
+/// Unix: mode 0700 for the owner and 0755 for everyone. Windows: no mode;
+/// the extension made it executable.
+fn expect_executable_mode(path: &Path, reach: Reach) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        let wanted = match reach {
+            Reach::Owner => 0o700,
+            Reach::Everyone => 0o755,
+        };
+        assert_eq!(mode, wanted, "{}", path.display());
+    }
+    #[cfg(windows)]
+    let _ = (path, reach);
+}
+
+/// Unix: a plain child shares this process's group, which is never adopted.
+/// Windows: any process is adopted into a job.
+fn expect_own_group_adopted() -> bool {
+    cfg!(windows)
+}
+
+/// macOS and Linux: a group leader's group is its own pid. Elsewhere there is
+/// nothing to read.
+fn expect_group_of_leader(read: Option<(i32, i32)>, leader: Pid) {
+    if cfg!(any(target_os = "macos", target_os = "linux")) {
+        assert_eq!(read.map(|(group, _)| group), Some(leader.as_raw() as i32));
+    } else {
+        assert_eq!(read, None);
+    }
+}
+
+/// The OS error for running out of descriptors: `EMFILE` on unix,
+/// `ERROR_TOO_MANY_OPEN_FILES` on Windows.
+fn expect_too_many_open_files() -> i32 {
+    #[cfg(unix)]
+    return libc::EMFILE;
+    #[cfg(windows)]
+    return 4;
 }
 
 /// Unix: the effective uid. Windows: a SID string.
@@ -851,5 +1582,121 @@ fn expect_unc_form(path: &Path) -> Option<PathBuf> {
 fn expect_canonical(path: &Path, canonical: &Path) {
     if cfg!(unix) {
         assert_eq!(canonical, std::fs::canonicalize(path).unwrap());
+    }
+}
+
+/// The file name of an executable `stem`: unix needs no extension; Windows
+/// runs a file by its extension.
+fn expect_executable_name(stem: &str) -> String {
+    if cfg!(windows) {
+        format!("{stem}.exe")
+    } else {
+        stem.to_owned()
+    }
+}
+
+/// What `candidates` finds of [`TOOL_FILES`] in `dir`. Unix: `tool`, the one
+/// named file. Windows: `tool.exe` and `tool.cmd` in `PATHEXT` order, spelled
+/// with its extensions.
+fn expect_installs(dir: &Path) -> Vec<PathBuf> {
+    if cfg!(windows) {
+        pathext()
+            .into_iter()
+            .filter(|ext| {
+                [".exe", ".cmd"]
+                    .iter()
+                    .any(|ours| ext.eq_ignore_ascii_case(ours))
+            })
+            .map(|ext| dir.join(format!("tool{ext}")))
+            .collect()
+    } else {
+        vec![dir.join("tool")]
+    }
+}
+
+/// What `named_in` names for a bare `name`. Unix: `dir/name`. Windows:
+/// `dir/name<ext>` for each `PATHEXT` extension.
+fn expect_named(dirs: &[PathBuf], name: &str) -> Vec<PathBuf> {
+    let files = if cfg!(windows) {
+        pathext().iter().map(|ext| format!("{name}{ext}")).collect()
+    } else {
+        vec![name.to_owned()]
+    };
+    dirs.iter()
+        .flat_map(|dir| files.iter().map(move |file| dir.join(file)))
+        .collect()
+}
+
+/// The package-manager bin directories, in order. Unix: Homebrew, then the
+/// user-local, npm, bun and pnpm directories under the home. Windows: npm,
+/// Scoop, WinGet and bun.
+fn expect_package_dirs() -> Vec<PathBuf> {
+    let var = |name: &str| PathBuf::from(std::env::var_os(name).expect(name));
+    if cfg!(windows) {
+        let home = var("USERPROFILE");
+        vec![
+            var("APPDATA").join("npm"),
+            home.join("scoop").join("shims"),
+            var("LOCALAPPDATA")
+                .join("Microsoft")
+                .join("WinGet")
+                .join("Links"),
+            home.join(".bun").join("bin"),
+        ]
+    } else {
+        let home = var("HOME");
+        vec![
+            PathBuf::from("/opt/homebrew/bin"),
+            PathBuf::from("/usr/local/bin"),
+            home.join(".local/bin"),
+            home.join(".npm-global/bin"),
+            home.join(".bun/bin"),
+            home.join("Library/pnpm"),
+            home.join(".local/share/pnpm"),
+        ]
+    }
+}
+
+/// Unix: the login shell's `$PATH`, so the probe's answer. Windows: the
+/// process `PATH`, and the probe is never called.
+fn expect_search_path(found: Option<String>, probed: bool) {
+    if cfg!(windows) {
+        assert!(!probed, "Windows has no login shell to probe");
+        assert_eq!(found, std::env::var("PATH").ok());
+    } else {
+        assert!(probed);
+        assert_eq!(found.as_deref(), Some("from the probe"));
+    }
+}
+
+#[test]
+fn login_shell_is_the_accounts_shell() {
+    expect_login_shell(login_shell());
+}
+
+/// Unix: the passwd entry's shell, an absolute path (every macOS and Linux
+/// account has one). Windows: none, as it has no login shell.
+fn expect_login_shell(shell: Option<String>) {
+    if cfg!(windows) {
+        assert_eq!(shell, None);
+    } else {
+        let shell = shell.expect("a login shell in the passwd entry");
+        assert!(shell.starts_with('/'), "{shell}");
+    }
+}
+
+/// Unix: an exited child not yet reaped is a zombie that holds its pid, so it
+/// is not retired. Windows: `is_alive` sees its handle signalled, so it is.
+fn expect_retired_while_unreaped() -> bool {
+    cfg!(windows)
+}
+
+/// The code a parent reads for a child that exits with `code`. Unix keeps
+/// only its low 8 bits; Windows keeps all 32.
+fn expect_exit_code(code: i32) -> i32 {
+    if cfg!(unix) {
+        code & 0xff
+    } else {
+        code
     }
 }

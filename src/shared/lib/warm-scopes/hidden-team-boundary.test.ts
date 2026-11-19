@@ -361,6 +361,11 @@ const SITES: Record<string, { count: number; reason: string }> = {
     reason:
       "the singleton parking element and window blur/focus bookkeeping over owned displays; no team input.",
   },
+  "src/shared/terminal/terminal-render-probe.ts": {
+    count: 1,
+    reason:
+      "visibilitychange wait before the one-shot render probe starts; removed once the page is visible, no input.",
+  },
 };
 
 const PORTAL_SITE = /\bcreatePortal\s*(?:<[^>(]*>)?\(/g;

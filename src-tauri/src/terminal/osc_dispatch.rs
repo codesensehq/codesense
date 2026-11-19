@@ -168,7 +168,8 @@ mod tests {
             agent_env: Vec::new(),
             login_path: None,
         }
-        .resolve("tab-7", &host_env);
+        .resolve("tab-7", &host_env)
+        .expect("the spawn resolves");
 
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let events = Arc::new(RecordingSink::default());

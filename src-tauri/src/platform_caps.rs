@@ -3,7 +3,8 @@
 //!
 //! One static table holds a row per capability. `caps()` resolves it once for the running
 //! platform; every consumer (the startup log line, the attribution installer, the
-//! `get_platform_caps` command) reads only that resolved list.
+//! `get_platform_caps` command) reads only that resolved list, and `enabled_for` answers for
+//! any other platform from the same table.
 
 use serde::Serialize;
 use std::fmt::Write;
@@ -37,14 +38,14 @@ const TABLE: &[Row] = &[
     Row {
         key: GIT_AI,
         macos: Support::OnFor(&["aarch64"]),
-        linux: Support::Off,
-        reason: "the bundled git-ai binary is only shipped for macOS on Apple silicon",
+        linux: Support::OnFor(&["x86_64", "aarch64"]),
+        reason: "the bundled git-ai binary is shipped for macOS on Apple silicon and Linux on x86_64 and aarch64",
     },
     Row {
         key: STARSHIP,
         macos: Support::OnFor(&["aarch64"]),
-        linux: Support::Off,
-        reason: "the bundled starship binary is only shipped for macOS on Apple silicon",
+        linux: Support::OnFor(&["x86_64", "aarch64"]),
+        reason: "the bundled starship binary is shipped for macOS on Apple silicon and Linux on x86_64 and aarch64",
     },
     Row {
         key: SECRET_STORE,
@@ -101,9 +102,17 @@ pub fn caps() -> &'static [Cap] {
     })
 }
 
-/// Whether the named capability is on; an unknown key is off.
-pub fn enabled(key: &str) -> bool {
-    caps().iter().any(|cap| cap.key == key && cap.on)
+/// Whether the named capability is on for one platform; an unknown key is off. The running
+/// platform reads `caps()`, so its probes run once; any other resolves only the key's row. A
+/// probe row is off there: a probe can only answer for the host it runs on.
+pub fn enabled_for(key: &str, os: &str, arch: &str) -> bool {
+    if (os, arch) == (std::env::consts::OS, std::env::consts::ARCH) {
+        return caps().iter().any(|cap| cap.key == key && cap.on);
+    }
+    TABLE
+        .iter()
+        .find_map(|row| (row.key == key).then_some(row))
+        .is_some_and(|row| resolve(std::slice::from_ref(row), os, arch, &|_| false)[0].on)
 }
 
 fn log_line(caps: &[Cap]) -> String {
@@ -151,11 +160,11 @@ mod tests {
     }
 
     #[test]
-    fn linux_has_no_git_ai_or_starship() {
+    fn linux_has_git_ai_and_starship() {
         for arch in ["x86_64", "aarch64"] {
             assert_eq!(
                 line("linux", arch, true),
-                "caps: git-ai=off starship=off secret-store=on"
+                "caps: git-ai=on starship=on secret-store=on"
             );
         }
     }
@@ -238,8 +247,8 @@ mod tests {
     fn serializes_as_key_on_reason() {
         let json = serde_json::to_value(resolved("linux", "x86_64", false)).unwrap();
         assert_eq!(json[0]["key"], "git-ai");
-        assert_eq!(json[0]["on"], false);
-        assert!(json[0]["reason"].is_string());
+        assert_eq!(json[0]["on"], true);
+        assert!(json[0]["reason"].is_null());
         assert_eq!(json[2]["key"], "secret-store");
         assert_eq!(json[2]["on"], false);
         assert!(json[2]["reason"].is_string());
@@ -254,17 +263,78 @@ mod tests {
         };
         assert!(on("macos", "aarch64", GIT_AI));
         assert!(!on("macos", "x86_64", GIT_AI));
-        assert!(!on("linux", "x86_64", GIT_AI));
+        assert!(on("linux", "x86_64", GIT_AI));
+        assert!(on("linux", "aarch64", GIT_AI));
+        assert!(!on("linux", "riscv64", GIT_AI));
         assert!(on("macos", "aarch64", STARSHIP));
         assert!(!on("macos", "x86_64", STARSHIP));
-        assert!(!on("linux", "x86_64", STARSHIP));
+        assert!(on("linux", "x86_64", STARSHIP));
+        assert!(on("linux", "aarch64", STARSHIP));
+        assert!(!on("linux", "riscv64", STARSHIP));
+    }
+
+    /// Whether `key` is on for the running platform.
+    fn enabled(key: &str) -> bool {
+        enabled_for(key, std::env::consts::OS, std::env::consts::ARCH)
+    }
+
+    /// Another platform answers from the same table as the running one, from any host.
+    #[test]
+    fn enabled_for_answers_for_any_platform() {
+        for (os, arch) in [
+            ("macos", "aarch64"),
+            ("macos", "x86_64"),
+            ("linux", "x86_64"),
+            ("linux", "aarch64"),
+            ("linux", "riscv64"),
+            ("windows", "x86_64"),
+        ] {
+            for key in [GIT_AI, STARSHIP] {
+                let row = resolved(os, arch, false)
+                    .into_iter()
+                    .find(|cap| cap.key == key)
+                    .unwrap();
+                assert_eq!(enabled_for(key, os, arch), row.on, "{os} {arch} {key}");
+            }
+            assert!(!enabled_for("no-such-capability", os, arch));
+        }
+    }
+
+    /// Off the running platform a probe row is off, so this host's probe never answers for
+    /// another platform.
+    #[test]
+    fn enabled_for_another_platform_never_runs_a_probe() {
+        let host = (std::env::consts::OS, std::env::consts::ARCH);
+        for (os, arch) in [
+            ("macos", "aarch64"),
+            ("macos", "x86_64"),
+            ("linux", "x86_64"),
+            ("linux", "aarch64"),
+            ("windows", "x86_64"),
+        ] {
+            if (os, arch) != host {
+                assert!(!enabled_for(SECRET_STORE, os, arch), "{os} {arch}");
+            }
+        }
     }
 
     #[test]
     fn enabled_matches_the_live_host() {
-        let apple_silicon = cfg!(all(target_os = "macos", target_arch = "aarch64"));
-        assert_eq!(enabled(GIT_AI), apple_silicon);
-        assert_eq!(enabled(STARSHIP), apple_silicon);
+        let host = (std::env::consts::OS, std::env::consts::ARCH);
+        assert_eq!(
+            enabled(GIT_AI),
+            matches!(
+                host,
+                ("macos", "aarch64") | ("linux", "x86_64") | ("linux", "aarch64")
+            )
+        );
+        assert_eq!(
+            enabled(STARSHIP),
+            matches!(
+                host,
+                ("macos", "aarch64") | ("linux", "x86_64") | ("linux", "aarch64")
+            )
+        );
         // The macOS Keychain is always there (unless the environment source is selected).
         if cfg!(target_os = "macos") && std::env::var("CODESENSE_CRED_SOURCE").is_err() {
             assert!(enabled(SECRET_STORE));

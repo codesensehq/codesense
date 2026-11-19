@@ -3673,6 +3673,35 @@ mod tests {
         );
     }
 
+    /// A context worktree launches its agent in `<team>/content`, a folder inside
+    /// the working tree. The diff commands open the repo without searching upward,
+    /// so that folder fails with "could not find repository at"; the root the tab's
+    /// resolver finds (`working_tree_root_of`, what the overlay passes) reads fine.
+    #[test]
+    fn source_diff_reads_the_resolved_root_not_a_launch_subfolder() {
+        let (_dir, path) = repo_with_main(&[("team/content/readme.md", "r\n")]);
+        checkout_new_branch(&path, "feature");
+        fs::write(path.join("team/content/notes.md"), "n\n").unwrap();
+        let launch = path.join("team/content");
+
+        let err = source_worktree_changeset_impl(&launch, None).unwrap_err();
+        assert!(err.contains("could not find repository at"), "{err}");
+        let err =
+            source_file_redline_impl(&launch, "team/content/notes.md", None, None).unwrap_err();
+        assert!(err.contains("could not find repository at"), "{err}");
+
+        let root = crate::commands::git::working_tree_root_of(&launch).unwrap();
+        let records = source_worktree_changeset_impl(&root, None).unwrap();
+        assert_eq!(
+            find_record(&records, "team/content/notes.md")
+                .unwrap()
+                .status,
+            PublishFileStatus::Added
+        );
+        let r = source_file_redline_impl(&root, "team/content/notes.md", None, None).unwrap();
+        assert_eq!(r.after, "n\n");
+    }
+
     /// (Task 5 — AC-6/AC-7) Both commands are read-only: no working-tree writes,
     /// no new commits/refs.
     #[test]

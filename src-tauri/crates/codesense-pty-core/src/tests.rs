@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -475,12 +475,9 @@ fn failed_background_start_releases_pty_and_dashboard_registration() {
                 .expect("startup-failure test session"),
         );
         let pid = session.session().pty.pid().expect("child pid") as libc::pid_t;
-        let pgid = session
-            .session()
-            .pty
-            .child()
-            .process_group()
-            .expect("child process group");
+        assert!(session.session().pty.child().has_process_group());
+        // portable-pty starts the child in a session of its own: it leads its group.
+        let pgid = pid;
         let identity = stable_process_identity(pid).expect("stable child identity");
         state
             .insert_session_reaping_displaced("startup-failed".to_string(), session.take())
@@ -526,12 +523,9 @@ fn same_id_replacement_reaps_displaced_process_group() {
         make_isolated_session("replace-me", "sleep 30 & wait", false).expect("old test session"),
     );
     let old_pid = old.session().pty.pid().expect("old child pid") as libc::pid_t;
-    let old_pgid = old
-        .session()
-        .pty
-        .child()
-        .process_group()
-        .expect("old child process group");
+    assert!(old.session().pty.child().has_process_group());
+    // portable-pty starts the child in a session of its own: it leads its group.
+    let old_pgid = old_pid;
     let old_identity = stable_process_identity(old_pid).expect("old stable identity");
     state
         .insert_session_reaping_displaced("replace-me".to_string(), old.take())
@@ -549,12 +543,8 @@ fn same_id_replacement_reaps_displaced_process_group() {
         .pty
         .pid()
         .expect("replacement child pid") as libc::pid_t;
-    let replacement_pgid = replacement
-        .session()
-        .pty
-        .child()
-        .process_group()
-        .expect("replacement child process group");
+    assert!(replacement.session().pty.child().has_process_group());
+    let replacement_pgid = replacement_pid;
     let replacement_identity =
         stable_process_identity(replacement_pid).expect("replacement stable identity");
     state
@@ -1936,4 +1926,24 @@ fn subscribe_snapshot_then_live_no_gap() {
 fn snapshot_then_live_check_catches_a_snapshot_after_unlock() {
     let error = check_snapshot_then_live(true).unwrap_err();
     assert!(error.contains("also in the snapshot"), "{error}");
+}
+
+#[test]
+fn caps_off_is_unsupported_and_names_the_capability() {
+    let error = crate::caps_off("agent-cli-sockets");
+    assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+    assert!(error.to_string().contains("agent-cli-sockets"), "{error}");
+}
+
+/// Unix: `path`'s permission bits are exactly `mode`. Windows has no mode,
+/// so nothing is checked there.
+pub(crate) fn expect_mode(path: &Path, mode: u32) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let actual = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(actual, mode, "{}: {actual:o}", path.display());
+    }
+    #[cfg(not(unix))]
+    let _ = (path, mode);
 }

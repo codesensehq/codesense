@@ -847,3 +847,47 @@ describe("isKnownBinaryPath / isPreviewableFilePath (SW-VE-2 AC-5)", () => {
     }
   });
 });
+
+describe("Windows paths in the viewer", () => {
+  it("resolves a relative href against a drive-letter owner", () => {
+    expect(
+      resolveViewerLinkPath("../b.md", "C:\\r\\o\\t\\content\\a\\x.md", "C:\\r\\o\\t\\content"),
+    ).toBe("C:\\r\\o\\t\\content\\b.md");
+  });
+
+  it("anchors a /-rooted href to the parent of content without a leading /", () => {
+    expect(resolveViewerLinkPath("/overview.md", "C:\\repo\\content\\docs\\page.html", "")).toBe(
+      "C:\\repo\\overview.md",
+    );
+    expect(resolveViewerLinkPath("/../../../x.md", "C:\\repo\\content\\docs\\page.html", "")).toBe(
+      "C:\\x.md",
+    );
+  });
+
+  it("keeps a full drive-letter href, dot-resolved", () => {
+    expect(
+      resolveViewerLinkPath(
+        "C:\\u\\o\\content\\e\\doc-1.md#ac",
+        "C:\\u\\o\\content\\index.html",
+        "C:\\u\\o\\content",
+      ),
+    ).toBe("C:\\u\\o\\content\\e\\doc-1.md");
+    expect(
+      resolveViewerLinkPath(
+        "C:\\u\\o\\content\\e\\..\\doc-1.md",
+        "C:\\u\\o\\content\\index.html",
+        "C:\\u\\o\\content",
+      ),
+    ).toBe("C:\\u\\o\\content\\doc-1.md");
+  });
+
+  it("builds a drive-letter snapshot archive path", () => {
+    expect(
+      snapshotArchivePath("C:\\r\\c\\", "C:\\r\\c\\d\\x.html", undefined, "20261118T000000000Z"),
+    ).toBe("C:\\r\\c\\dashboards\\snapshots\\x\\20261118T000000000Z.html");
+  });
+
+  it("builds a /-joined viewer URL path under a drive-letter root", () => {
+    expect(buildViewerUrl(1, "C:\\r\\c", "C:\\r\\c\\a\\b.md")).toMatch(/\/a\/b\.md$/);
+  });
+});

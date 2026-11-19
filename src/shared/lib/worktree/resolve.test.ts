@@ -800,3 +800,64 @@ describe("HTML content detection (R.7)", () => {
     expect(parseStoryTitle(html)).toBeNull();
   });
 });
+
+describe("Windows and UNC paths", () => {
+  it("resolveWorktreePath keeps a drive-letter repo's separator", () => {
+    expect(resolveWorktreePath(null, "C:\\Users\\a\\repo", "feat/x")).toBe(
+      "C:\\Users\\a\\repo-wt\\feat-x",
+    );
+  });
+
+  it("resolveWorktreePath stays on a UNC share", () => {
+    expect(resolveWorktreePath(null, "\\\\server\\share\\repo", "feat/x")).toBe(
+      "\\\\server\\share\\repo-wt\\feat-x",
+    );
+  });
+
+  it("resolveWorktreePath honours an absolute drive-letter template", () => {
+    expect(
+      resolveWorktreePath(
+        { version: 1, setup: [], worktree_dir: "C:\\wt\\{repo}\\{slug}" },
+        "C:\\Users\\a\\repo",
+        "feat/x",
+      ),
+    ).toBe("C:\\wt\\repo\\feat-x");
+  });
+
+  it("storyIdFromPath reads a backslash path", () => {
+    expect(storyIdFromPath("C:\\Users\\a\\ctx\\stories\\story-foo.md")).toBe("story-foo");
+  });
+
+  it("isStoryFile accepts either separator under a drive-letter root", () => {
+    expect(isStoryFile("C:\\c\\content\\stories\\a.md", "C:\\c\\content")).toBe(true);
+    expect(isStoryFile("C:/c/content/stories/a.md", "C:\\c\\content")).toBe(true);
+    expect(isStoryFile("C:\\c\\content2\\a.md", "C:\\c\\content")).toBe(false);
+  });
+
+  it.each([
+    ["c:/Users/a//x.md", "C:\\Users\\a\\x.md"],
+    ["\\\\server\\share\\a\\\\b\\", "\\\\server\\share\\a\\b"],
+    ["C:\\", "C:\\"],
+    ["//foo//bar/", "/foo/bar"],
+  ])("normalizeStoryFilePath(%j) is %j and idempotent", (input, expected) => {
+    expect(normalizeStoryFilePath(input)).toBe(expected);
+    expect(normalizeStoryFilePath(expected)).toBe(expected);
+  });
+
+  it.each(["C:\\c\\content\\stories\\story-bar.md", "C:\\c\\content/stories/story-bar.md"])(
+    "skips a path-qualified self-reference in %j",
+    async (storyPath) => {
+      // Every path answers with the story itself, so only the self-reference check
+      // keeps the start point from becoming the story's own branch.
+      readFileMock.mockResolvedValue(
+        "---\nbranch_name: feat/story-bar\ndepends_on:\n  - ../stories/story-bar\n---\n",
+      );
+      const result = await resolveWorktreeParams(storyPath, {
+        version: 1,
+        setup: [],
+        default_start_point: "dev",
+      });
+      expect(result.startPoint).toBe("dev");
+    },
+  );
+});

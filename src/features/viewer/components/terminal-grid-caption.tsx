@@ -134,7 +134,7 @@ export function TerminalGridCaption({
   // inside their own git parent (the context repo), but a diff of the
   // enclosing repo in those tabs is misleading. The gate is NOT
   // resolver-based (`!!repo?.isRoot`) anymore: the Diff icon lights on
-  // kind alone and the overlay's "No git repo at this path." body state
+  // kind alone and the overlay's no-repo body state
   // handles cwds that happen not to be a working tree.
   const caps = getKindCapabilities(ws.kind);
   const canDiff = caps.diffCapable;

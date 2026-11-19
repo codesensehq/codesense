@@ -20,6 +20,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { QuickOpenDialog } from "@/features/viewer/components/quick-open-dialog";
 import { logger } from "@/shared/lib/logger";
+import { relative } from "@/shared/lib/path";
 import { buildTeamKey, parseTeamKey, useActiveTeamKey } from "@/shared/lib/team-key";
 import { pathToTeamContentDirSync } from "@/shared/lib/team-content-path";
 import { useActiveOrg } from "@/shared/stores/use-active-org";
@@ -53,6 +54,7 @@ import { openAgents } from "@/features/agents/agents-virtual-tab";
 import { openCodesenseSetup } from "@/features/org/lib/codesense-docs-landing";
 import { openScratchSpace } from "@/features/scratch-space/scratch-space-virtual-tab";
 import { openForeman } from "@/features/foreman/open-foreman";
+import { STORY_DASHBOARD_ACTION_ID } from "@/features/dashboard/lib/story-dashboard-action-id";
 import { useForemanMailWaiting } from "@/features/foreman/use-foreman-mail";
 import { useRoutinesStore } from "@/features/routines/stores/routines-store";
 import { useTeamMachines } from "@/features/machines/stores/machines-store";
@@ -126,6 +128,16 @@ export function CommandPaletteMount() {
         chord: formatKeystrokeDisplay(bindings.get(a.id)?.keystroke ?? ""),
       }));
   }, [dashboardActions, shortcuts]);
+  // The Story dashboard row's chord. `resolveBindings` reads the full action list, so this is
+  // keyed like `commands` above, not on `shortcuts` alone.
+  const storyDashboardChord = useMemo(
+    () =>
+      formatKeystrokeDisplay(
+        resolveBindings(shortcuts).get(STORY_DASHBOARD_ACTION_ID)?.keystroke ?? "",
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- a new action list can take the chord
+    [dashboardActions, shortcuts],
+  );
 
   // The Routines row carries the needs-you count the title-bar entry keeps live.
   const routinesNeedingYou = useRoutinesStore((s) => s.needsYouCount);
@@ -157,12 +169,12 @@ export function CommandPaletteMount() {
     for (const [teamKey, paths] of Object.entries(openedViewerPaths ?? {})) {
       const { orgSlug, teamName } = parseTeamKey(teamKey);
       if (orgSlug !== activeOrg.slug || teamName === null) continue;
-      const prefix = `${pathToTeamContentDirSync(activeOrg.org_root, teamName)}/`;
+      const contentDir = pathToTeamContentDirSync(activeOrg.org_root, teamName);
       for (const fullPath of paths) {
         out.push({
           teamName,
           fullPath,
-          relativePath: fullPath.startsWith(prefix) ? fullPath.slice(prefix.length) : fullPath,
+          relativePath: relative(contentDir, fullPath) || fullPath,
         });
       }
     }
@@ -181,6 +193,7 @@ export function CommandPaletteMount() {
         foremanMailWaiting,
         panes,
         commands,
+        storyDashboardChord,
       }),
     [
       teams,
@@ -191,6 +204,7 @@ export function CommandPaletteMount() {
       foremanMailWaiting,
       panes,
       commands,
+      storyDashboardChord,
     ],
   );
 

@@ -25,6 +25,7 @@ import { getCodesenseHome } from "@/shared/lib/codesense-home";
 import { workspaceRepoOverrides } from "@/shared/stores/config-store";
 import { useCurrentUser } from "@/shared/lib/get-current-user";
 import { logger } from "@/shared/lib/logger";
+import { join } from "@/shared/lib/path";
 import type { Attachment, SourceRepoSlug } from "@/shared/types/domain";
 
 interface PrevWorkspace {
@@ -760,7 +761,7 @@ export function useWorkspaceViewerSync(): void {
         );
         return;
       }
-      const cachePath = `${codesenseHome}/cache/frontmatter-cache.json`;
+      const cachePath = join(codesenseHome, "cache", "frontmatter-cache.json");
 
       // SW-LN-B68: commit a repo-less team before the mount (see the helper).
       commitTeamWithoutRepos(codesenseHome);

@@ -22,6 +22,7 @@ import { getCodesenseHome } from "@/shared/lib/codesense-home";
 import { type WorkspaceRepoOverrides } from "@/shared/lib/workspace-config";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { logger } from "@/shared/lib/logger";
+import { basename } from "@/shared/lib/path";
 
 /** SW-WT-9: a remembered one-time approval to run a team-synced worktree
  *  setup. Keyed by repo + config-content-hash so a config change re-prompts. */
@@ -423,7 +424,7 @@ function migrateRepos(rawRepos: unknown[]): RepoState[] {
     .map((r: unknown): RepoState | null => {
       if (typeof r === "string") {
         // Old format: plain string path
-        const name = r.split("/").pop() ?? r;
+        const name = basename(r) || r;
         return {
           repoPath: r,
           repoName: name.toLowerCase().replace(/[_ ]/g, "-"),
@@ -441,7 +442,7 @@ function migrateRepos(rawRepos: unknown[]): RepoState[] {
       const repoPath = coerceString(obj.repoPath, coerceString(obj.repo_path, ""));
       if (!repoPath) return null;
 
-      const fallbackName = repoPath.split("/").pop()?.toLowerCase().replace(/[_ ]/g, "-") ?? "";
+      const fallbackName = basename(repoPath).toLowerCase().replace(/[_ ]/g, "-");
       return {
         repoPath,
         repoName: coerceString(obj.repoName, fallbackName),

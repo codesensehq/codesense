@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import type { Extension } from "@codemirror/state";
 import type { CmModule, LanguageId } from "./cm-loader";
+import { basename } from "@/shared/lib/path";
 
 // L-7 patch: shebang regex uses an explicit interpreter whitelist instead
 // of the prior alternation `(?:ba|z|k|c|tc|d|a)?sh\b`. The old form
@@ -111,7 +112,7 @@ export function detectLanguageId(path?: string, content?: string): LanguageId {
     if (SHELL_SHEBANG_RE.test(firstLine)) return "shell";
   }
   if (!path) return "plain";
-  const name = (path.slice(path.lastIndexOf("/") + 1) || path).toLowerCase();
+  const name = (basename(path) || path).toLowerCase();
   // Own keys only: a file named `constructor` or `x.toString` must not resolve to
   // an Object.prototype member.
   const byName = Object.prototype.hasOwnProperty.call(LANGUAGE_BY_FILENAME, name)

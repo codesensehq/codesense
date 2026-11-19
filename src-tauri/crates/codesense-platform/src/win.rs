@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Windows helpers shared by the modules' Windows arms: an owned kernel
 //! handle, the current user's SID and default owner, a DACL that grants one
-//! SID and wide path strings.
+//! SID, wide path strings and the executable extensions.
 
 use std::io;
 use std::os::windows::ffi::OsStrExt;
@@ -190,4 +190,33 @@ impl SingleUserAcl {
 /// `path` as a NUL-terminated wide string.
 pub(crate) fn wide(path: &Path) -> Vec<u16> {
     path.as_os_str().encode_wide().chain(Some(0)).collect()
+}
+
+/// The extensions `PATHEXT` names as executable, in its order (`.COM;.EXE;
+/// .BAT;.CMD` when it lists none), each with a leading dot (added where an
+/// entry has none).
+pub(crate) fn pathext() -> Vec<String> {
+    let listed: Vec<String> = std::env::var("PATHEXT")
+        .unwrap_or_default()
+        .split(';')
+        .map(str::trim)
+        .filter(|ext| !ext.is_empty())
+        .map(|ext| format!(".{}", ext.trim_start_matches('.')))
+        .collect();
+    if listed.is_empty() {
+        [".COM", ".EXE", ".BAT", ".CMD"].map(str::to_owned).to_vec()
+    } else {
+        listed
+    }
+}
+
+/// Whether `path`'s extension is one of [`pathext`]'s, ignoring case.
+pub(crate) fn has_pathext(path: &Path) -> bool {
+    let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
+        return false;
+    };
+    let ext = format!(".{ext}");
+    pathext()
+        .iter()
+        .any(|listed| listed.eq_ignore_ascii_case(&ext))
 }

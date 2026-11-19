@@ -901,6 +901,7 @@ dependencies = [
  "chrono-tz",
  "codesense-fs-core",
  "codesense-host-proto",
+ "codesense-platform",
  "codesense-pty-core",
  "codesense-session-server",
  "criterion",
@@ -1027,6 +1028,7 @@ version = "0.1.0"
 dependencies = [
  "codesense-platform",
  "libc",
+ "regex",
  "serde",
  "serde_json",
 ]
@@ -1055,6 +1057,7 @@ dependencies = [
  "blake3",
  "chrono",
  "codesense-host-proto",
+ "codesense-platform",
  "libc",
  "log",
  "portable-pty",
@@ -1082,6 +1085,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "codesense-host-proto",
+ "codesense-platform",
  "codesense-pty-core",
  "cron",
  "dirs 5.0.1",

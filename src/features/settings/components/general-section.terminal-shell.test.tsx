@@ -38,6 +38,18 @@ const detectedBash = {
   overridePath: null,
   overrideRejected: false,
   unsupportedShell: null,
+  acceptedKinds: ["zsh", "bash", "fish"],
+};
+
+const detectedPwsh = {
+  path: "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+  kind: "pwsh",
+  source: "fallback",
+  detectedPath: "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+  overridePath: null,
+  overrideRejected: false,
+  unsupportedShell: null,
+  acceptedKinds: ["pwsh", "powershell", "cmd"],
 };
 
 describe("GeneralSection — terminal shell row (SW-LN-35)", () => {
@@ -99,6 +111,41 @@ describe("GeneralSection — terminal shell row (SW-LN-35)", () => {
     );
   });
 
+  it("names the shells this OS accepts, not zsh, on Windows", async () => {
+    const status = () => screen.getByTestId("settings-terminal-shell-status").textContent;
+    terminalShellInfo.mockResolvedValue(detectedPwsh);
+    const { unmount } = render(<GeneralSection query="terminal shell" />);
+    await waitFor(() =>
+      expect(status()).toBe(
+        "Detected C:\\Program Files\\PowerShell\\7\\pwsh.exe. Leave blank to keep it, or enter a path to pwsh, powershell, or cmd.",
+      ),
+    );
+    expect(status()).not.toContain("zsh");
+    unmount();
+
+    terminalShellInfo.mockResolvedValue({
+      ...detectedPwsh,
+      overridePath: "C:\\tools\\nu.exe",
+      overrideRejected: true,
+    });
+    render(<GeneralSection query="terminal shell" />);
+    await waitFor(() =>
+      expect(status()).toBe(
+        "C:\\tools\\nu.exe isn't an executable pwsh, powershell, or cmd. New terminals use C:\\Program Files\\PowerShell\\7\\pwsh.exe.",
+      ),
+    );
+    expect(status()).not.toContain("zsh");
+  });
+
+  it("keeps today's wording for zsh, bash and fish", async () => {
+    render(<GeneralSection query="terminal shell" />);
+    await waitFor(() =>
+      expect(screen.getByTestId("settings-terminal-shell-status").textContent).toBe(
+        "Detected /bin/bash. Leave blank to keep it, or enter a path to zsh, bash, or fish.",
+      ),
+    );
+  });
+
   it("clearing the field returns to the detected shell", async () => {
     useViewerStore.setState({
       settings: { ...useViewerStore.getState().settings, terminalShell: "/bin/bash" },
@@ -111,6 +158,17 @@ describe("GeneralSection — terminal shell row (SW-LN-35)", () => {
     fireEvent.blur(input);
     expect(useViewerStore.getState().settings.terminalShell).toBeUndefined();
     await waitFor(() => expect(setTerminalShellOverride).toHaveBeenCalledWith(undefined));
+  });
+
+  it("is found by searching the Windows shell names", () => {
+    const { unmount } = render(<GeneralSection query="no such setting" />);
+    expect(screen.queryByTestId("settings-terminal-shell")).toBeNull();
+    unmount();
+    for (const query of ["pwsh", "powershell", "cmd"]) {
+      const { unmount } = render(<GeneralSection query={query} />);
+      expect(screen.getByTestId("settings-terminal-shell")).toBeTruthy();
+      unmount();
+    }
   });
 
   it("renders without a backend", () => {

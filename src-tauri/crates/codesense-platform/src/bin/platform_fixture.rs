@@ -3,10 +3,15 @@
 //!
 //! - `tree`: start a `sleep` child (the test's grandchild), print its pid,
 //!   then sleep.
+//! - `tree-on-input`: as `tree`, once a line arrives on stdin (so a test can
+//!   adopt this process's group before the grandchild starts).
 //! - `ignore-terminate`: ignore the polite stop, print `ready`, then sleep.
 //! - `try-lock <path>`: print `locked` or `busy` for an exclusive lock on
 //!   `path`, then exit.
+//! - `lock-dir`: print the shared lock directory, then exit.
+//! - `console`: print `console window` or `no console window`, then exit.
 //! - `sleep`: sleep.
+//! - `exit <code>`: wait for a line on stdin, then exit with `code`.
 //!
 //! IPC client modes take an endpoint's wire form:
 //!
@@ -34,7 +39,11 @@ fn main() {
     let mut args = std::env::args_os().skip(1);
     let mode = args.next().and_then(|mode| mode.into_string().ok());
     match mode.as_deref() {
-        Some("tree") => {
+        Some(mode @ ("tree" | "tree-on-input")) => {
+            if mode == "tree-on-input" {
+                let mut line = String::new();
+                std::io::stdin().read_line(&mut line).expect("read stdin");
+            }
             let grandchild = std::process::Command::new(std::env::current_exe().expect("own path"))
                 .arg("sleep")
                 .spawn()
@@ -87,7 +96,24 @@ fn main() {
             say("ready");
             sleep_forever()
         }
+        Some("lock-dir") => {
+            let dir = codesense_platform::dirs::lock_dir().expect("a lock directory");
+            say(&dir.display().to_string());
+        }
+        Some("console") => say(if has_console_window() {
+            "console window"
+        } else {
+            "no console window"
+        }),
         Some("sleep") => sleep_forever(),
+        Some("exit") => {
+            let code = args.next().and_then(|code| code.into_string().ok());
+            let code = code
+                .and_then(|code| code.parse().ok())
+                .expect("an exit code");
+            let _ = std::io::stdin().read_line(&mut String::new());
+            std::process::exit(code);
+        }
         other => {
             eprintln!("platform-fixture: unknown mode {other:?}");
             std::process::exit(2);
@@ -139,3 +165,16 @@ fn ignore_terminate() {
 /// ignore.
 #[cfg(windows)]
 fn ignore_terminate() {}
+
+/// Unix: no process has a console window.
+#[cfg(unix)]
+fn has_console_window() -> bool {
+    false
+}
+
+/// Windows: whether this process's console, if any, has a window.
+#[cfg(windows)]
+fn has_console_window() -> bool {
+    // SAFETY: GetConsoleWindow takes no arguments and only reads.
+    !unsafe { windows_sys::Win32::System::Console::GetConsoleWindow() }.is_null()
+}

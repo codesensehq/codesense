@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import type { OpenDiffParams, OpenDiffResult } from "./open-diff-types";
 import { readOpenDiff } from "./source-redline-source";
+import { basename } from "@/shared/lib/path";
 import { registerVirtualTab } from "@/shared/lib/virtual-viewer-registry";
 import { OpenDiffTab } from "../components/open-diff-tab";
 import { DIFF_TAB_PREFIX, diffTabAddress, openDiffTab } from "./open-diff-route";
@@ -10,7 +11,7 @@ export function registerOpenDiffTab(): void {
     DIFF_TAB_PREFIX,
     (path) => {
       const address = diffTabAddress(path);
-      return address ? address.params.path.split("/").pop() + " · Diff" : "Diff";
+      return address ? basename(address.params.path) + " · Diff" : "Diff";
     },
     OpenDiffTab,
   );

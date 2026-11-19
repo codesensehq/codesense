@@ -950,7 +950,7 @@ function TileViewOptionsMenu({
     },
     // SW-VE-12: source-diff tracks `diffCapable` (root/story/generic);
     // code-editor tracks `sourceCapable` (every live kind). The overlay
-    // surfaces its own empty-state matrix downstream (no git repo /
+    // surfaces its own empty-state matrix downstream (no repository /
     // no changes / loading / failed).
     caps.diffCapable &&
       activeTabId && {

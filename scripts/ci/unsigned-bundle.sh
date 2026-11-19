@@ -10,13 +10,15 @@
 #   - macOS fetches git-ai, signs ad hoc (Apple silicon needs a signature to launch the app),
 #     builds the app and dmg, and zips the app to $RUNNER_TEMP/CodeSense.app.zip. The dmg
 #     stays in target/release/bundle/dmg.
-#   - Linux builds the formats in `bundles` (a comma list of deb, rpm and appimage; all three
-#     by default), and checks that each of them is exactly one file under
-#     target/release/bundle. The AppImage is bundled apart from the others, without the
+#   - Linux fetches git-ai and starship, builds the formats in `bundles` (a comma list of deb,
+#     rpm and appimage; all three by default), and checks that each of them is exactly one
+#     file under target/release/bundle. The AppImage is bundled apart from the others, without the
 #     terminal emulator: linuxdeploy sets an rpath on every executable in the AppDir, and the
 #     emulator is a Bun-compiled executable whose payload sits after the ELF image, which the
-#     rewrite breaks (on aarch64 the bundle aborts). The script then inserts the untouched
-#     emulator and rebuilds the image from Tauri's own AppImage runtime plus a new squashfs.
+#     rewrite breaks (on aarch64 the bundle aborts). The same rewrite corrupts the static
+#     git-ai and starship. scripts/ci/repair-appimage.sh then inserts the untouched emulator,
+#     puts the pinned git-ai and starship back and rebuilds the image from its own runtime
+#     plus a new squashfs.
 # `pnpm exec tauri` runs the CLI directly: the `tauri` script in package.json is POSIX shell
 # and does not run on a Windows runner.
 set -euo pipefail
@@ -43,7 +45,8 @@ tauri_args=(--config src-tauri/tauri.unsigned.conf.json)
 # Platform preparation.
 case "$PLATFORM" in
     macos)
-        # The bundle ships resources/git-ai; the script verifies it against src-tauri/git-ai.pin.
+        # The bundle ships resources/git-ai, which the script verifies against its pin in
+        # src-tauri/pins/.
         bash scripts/fetch-git-ai.sh
         # An inline config merged over the unsigned one: signingIdentity "-" signs ad hoc,
         # and no Apple identity or updater key is involved.
@@ -54,10 +57,18 @@ case "$PLATFORM" in
         export NODE_OPTIONS=--max-old-space-size=6144
         ;;
     linux)
+        # The bundle ships resources/git-ai and resources/starship from the pinned, checksummed
+        # downloads.
+        bash scripts/fetch-bundled.sh
         # linuxdeploy is itself an AppImage, and a runner has no FUSE to mount one.
         export APPIMAGE_EXTRACT_AND_RUN=1
         # --verbose shows linuxdeploy's own output, which a failed AppImage otherwise hides.
         tauri_args+=(--verbose)
+        # Every AppImage tool (the repair's, and linuxdeploy's `file`), checked now rather than
+        # after an hour's build.
+        if [[ ",$LINUX_BUNDLES," == *,appimage,* ]]; then
+            bash scripts/ci/repair-appimage.sh --check-tools
+        fi
         # tauri build packs every format but the AppImage, which the collection step bundles.
         build_bundles=$(tr ',' '\n' <<<"$LINUX_BUNDLES" | grep -vx appimage | paste -sd, -) || true
         if [[ -n "$build_bundles" ]]; then
@@ -110,28 +121,9 @@ case "$PLATFORM" in
             fi
         done
         if [[ ",$LINUX_BUNDLES," == *,appimage,* ]]; then
-            # Insert the emulator byte for byte. An AppImage is its runtime followed by a squashfs,
-            # so the new image is Tauri's runtime bytes plus a squashfs of the extracted tree, made
-            # with the original's compressor; no appimagetool is needed.
-            appimage=$(realpath "$BUNDLE_DIR"/appimage/*.AppImage)
-            emulator="$PROJECT_ROOT/src-tauri/binaries/codesense-emulator-$(rustc -vV | sed -n 's/^host: //p')"
-            work=$(mktemp -d "$OUT_DIR/appimage.XXXXXX")
-            offset=$(env -u APPIMAGE_EXTRACT_AND_RUN "$appimage" --appimage-offset)
-            compressor=$(unsquashfs -s -o "$offset" "$appimage" | sed -n 's/^Compression //p')
-            (cd "$work" && env -u APPIMAGE_EXTRACT_AND_RUN "$appimage" --appimage-extract >/dev/null)
-            if [[ -e "$work/squashfs-root/usr/bin/codesense-emulator" ]]; then
-                echo "Error: the AppImage was bundled with the emulator" >&2
-                exit 1
-            fi
-            install -m 755 "$emulator" "$work/squashfs-root/usr/bin/codesense-emulator"
-            mksquashfs "$work/squashfs-root" "$work/fs.sqfs" -root-owned -noappend -no-progress \
-                -comp "$compressor"
-            # A temp file, then mv: a redirect onto the original would truncate it before head reads.
-            head -c "$offset" "$appimage" >"$work/rebuilt.AppImage"
-            cat "$work/fs.sqfs" >>"$work/rebuilt.AppImage"
-            chmod +x "$work/rebuilt.AppImage"
-            mv "$work/rebuilt.AppImage" "$appimage"
-            rm -rf "$work"
+            # Bundled without the emulator, and with the git-ai and starship linuxdeploy broke; put
+            # them right.
+            bash scripts/ci/repair-appimage.sh "$BUNDLE_DIR"/appimage/*.AppImage
         fi
         ;;
 esac

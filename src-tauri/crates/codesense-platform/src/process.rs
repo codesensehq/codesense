@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Process trees: start a command as the root of a tree that is ended as a
 //! whole, ask the tree to stop, kill it, and check whether a pid still runs.
+//! Process identities ([`Identity`]): a pid with its start time and parent.
 //!
 //! Unix: the root leads a fresh process group (its pgid is its pid) and the
 //! tree is signalled through the group, SIGTERM to ask and SIGKILL to end, as
@@ -9,11 +10,15 @@
 //! suspended and runs only once it is in the job, so nothing it starts escapes
 //! (this replaces the command's creation flags). A process with no console has
 //! no polite stop there, so [`terminate`] ends the job too.
+//!
+//! A [`ProcessGroup`] is the same group for a process something else started
+//! (a pty child), adopted from its pid and never signalled on drop.
 
 use std::io;
 use std::process::{Child, Command, ExitStatus};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+mod identity;
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
@@ -22,6 +27,8 @@ use self::unix as sys;
 mod windows;
 #[cfg(windows)]
 use self::windows as sys;
+
+pub use self::identity::Identity;
 
 /// A process id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -55,24 +62,44 @@ impl std::fmt::Display for Pid {
 /// The tree lives as long as its root: once the root's exit is seen
 /// ([`ProcessTree::try_wait`], [`ProcessTree::wait`]), whatever it left
 /// running is killed then, so the group id is never signalled after it
-/// could name someone else's processes.
+/// could name someone else's processes. When the root's exit cannot be read
+/// (either returns `Err`), the tree signals nothing from then on, not even
+/// on drop: the root may already be reaped, and its pid and group reused.
+/// (On Windows the job still ends what is in it when the tree drops: a job
+/// holds processes, never ids that could be reused.)
 pub struct ProcessTree {
     child: Child,
     group: sys::Group,
-    /// Set once the tree was killed or its root's exit was seen.
+    /// Set once the tree was killed, its root's exit was seen, or that exit
+    /// could not be read.
     closed: AtomicBool,
+    /// Set once the root's exit could not be read: its state is unknown.
+    lost: bool,
 }
 
 impl ProcessTree {
     /// Spawn `command` as the root of a new tree.
     pub fn spawn(command: &mut Command) -> io::Result<Self> {
         sys::prepare(command);
+        Self::start(command)
+    }
+
+    /// [`ProcessTree::spawn`] with no console window: on Windows a console
+    /// program started from a windowed one would otherwise open one. The same
+    /// as `spawn` on unix.
+    pub fn spawn_hidden(command: &mut Command) -> io::Result<Self> {
+        sys::prepare_hidden(command);
+        Self::start(command)
+    }
+
+    fn start(command: &mut Command) -> io::Result<Self> {
         let mut child = command.spawn()?;
         match sys::Group::adopt(&child) {
             Ok(group) => Ok(Self {
                 child,
                 group,
                 closed: AtomicBool::new(false),
+                lost: false,
             }),
             Err(error) => {
                 let _ = child.kill();
@@ -94,20 +121,37 @@ impl ProcessTree {
     }
 
     /// The root's exit status if it has exited; then the rest of the tree is
-    /// killed.
+    /// killed. An `Err` (the exit cannot be read, as when something else
+    /// reaped the root) leaves the tree signalling nothing from then on.
     pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
-        let status = self.child.try_wait()?;
+        let status = match self.child.try_wait() {
+            Ok(status) => status,
+            Err(error) => return Err(self.lose(error)),
+        };
         if status.is_some() {
             self.close();
         }
         Ok(status)
     }
 
-    /// Wait for the root to exit; then the rest of the tree is killed.
+    /// Wait for the root to exit; then the rest of the tree is killed. An
+    /// `Err` leaves the tree signalling nothing from then on, as for
+    /// [`ProcessTree::try_wait`].
     pub fn wait(&mut self) -> io::Result<ExitStatus> {
-        let status = self.child.wait()?;
+        let status = match self.child.wait() {
+            Ok(status) => status,
+            Err(error) => return Err(self.lose(error)),
+        };
         self.close();
         Ok(status)
+    }
+
+    /// The root's exit could not be read (`error`), so its pid and group may
+    /// already name someone else's processes: never signal them again.
+    fn lose(&mut self, error: io::Error) -> io::Error {
+        self.closed.store(true, Ordering::Release);
+        self.lost = true;
+        error
     }
 
     fn close(&self) {
@@ -120,8 +164,10 @@ impl ProcessTree {
 impl Drop for ProcessTree {
     fn drop(&mut self) {
         self.close();
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if !self.lost {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
     }
 }
 
@@ -143,6 +189,65 @@ pub fn kill_hard(tree: &ProcessTree) -> io::Result<()> {
     tree.group.kill()?;
     tree.closed.store(true, Ordering::Release);
     Ok(())
+}
+
+/// The process group of a process something else started (a pty child), to
+/// signal as a whole. Unlike a [`ProcessTree`] it owns no child and never
+/// signals by itself: dropping it sends nothing.
+///
+/// Unix: the group the process is in, signalled with `kill(-pgid, …)`.
+/// Windows: a Job Object the process is assigned to on adoption, without
+/// kill-on-close, so what it starts from then on is in the group too.
+pub struct ProcessGroup(sys::Group);
+
+impl ProcessGroup {
+    /// The group of the running process `pid`. Unix: `None` when it is in
+    /// this process's own group, which is never ours to signal, or its group
+    /// cannot be read. Windows: always a group.
+    pub fn adopt(pid: Pid) -> io::Result<Option<Self>> {
+        Ok(sys::Group::adopt_pid(pid.0)?.map(Self))
+    }
+
+    /// Ask every process in the group to stop: SIGTERM on unix, which a
+    /// process may ignore; on Windows the job is ended, as by
+    /// [`ProcessGroup::kill`]. A group that is gone is not an error.
+    pub fn terminate(&self) -> io::Result<()> {
+        self.0.terminate()
+    }
+
+    /// Kill every process in the group: SIGKILL on unix, the job ended on
+    /// Windows. A group that is gone is not an error.
+    pub fn kill(&self) -> io::Result<()> {
+        self.0.kill()
+    }
+}
+
+/// Ask the one process `pid` to stop, never its group or what it started:
+/// SIGTERM on unix, `TerminateProcess` on Windows. Pid 0 is refused.
+pub fn terminate_pid(pid: Pid) -> io::Result<()> {
+    if pid.0 == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "pid 0 names no single process",
+        ));
+    }
+    sys::terminate_pid(pid.0)
+}
+
+/// Whether `child` has exited, without reaping it: until it is reaped its pid
+/// (and the group it leads) cannot be reused, so its group can still be
+/// signalled safely. Unix: `waitid` with `WNOWAIT`. Windows: whether its
+/// handle is signalled.
+pub fn exited_unreaped(child: &Child) -> io::Result<bool> {
+    sys::exited_unreaped(child)
+}
+
+/// The process `pid`'s `(process group, terminal foreground process group)`,
+/// raw and signed as the OS reports them (a tpgid of -1: no terminal). Read
+/// from the process table on macOS and Linux; `None` when the process is gone
+/// and on other OSes, which have no such groups.
+pub fn group_and_foreground(pid: Pid) -> Option<(i32, i32)> {
+    sys::group_and_foreground(pid.0)
 }
 
 /// Whether `pid` names a running process. One this user may not inspect

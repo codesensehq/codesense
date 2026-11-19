@@ -5,6 +5,7 @@ import type { StatusIndex } from "@/shared/stores/status-taxonomy-store";
 import { firstStatusId, firstStatusIdOfRole } from "@/shared/stores/status-taxonomy-store";
 import { collectAllStories } from "./collect-all-stories";
 import { findEnclosingEpic } from "./find-enclosing-epic";
+import { samePath } from "@/shared/lib/path";
 
 /**
  * Count the total number of stories and how many are "done".
@@ -69,9 +70,10 @@ export function rollupEpicStatus(stories: StoryRef[]): string {
  * can itself carry a `mainDoc` (a root README, or an ancestor epic in a nested
  * layout), so a mere `mainDoc !== null` check isn't enough. An epic-workspace's
  * `epicDocPath` is precisely the epic node's OWN `mainDoc.filePath` (the nav
- * opens epic terminals with `node.mainDoc.filePath`), so we require an EXACT
- * match: a fallback onto an ancestor/root whose `mainDoc` differs is rejected →
- * the caller OMITS the chip rather than rolling up the wrong scope into a
+ * opens epic terminals with `node.mainDoc.filePath`), so we require the SAME
+ * path (`samePath`, so git's `C:/…` form still matches): a fallback onto an
+ * ancestor/root whose `mainDoc` differs is rejected → the caller OMITS the chip
+ * rather than rolling up the wrong scope into a
  * plausible-but-wrong status. Pure and side-effect-free.
  */
 export function rollupEpicStatusForDoc(
@@ -79,6 +81,6 @@ export function rollupEpicStatusForDoc(
   epicDocPath: string,
 ): string | null {
   const epic = findEnclosingEpic(tree, epicDocPath);
-  if (epic.mainDoc?.filePath !== epicDocPath) return null;
+  if (!epic.mainDoc || !samePath(epic.mainDoc.filePath, epicDocPath)) return null;
   return rollupEpicStatus(collectAllStories(epic));
 }

@@ -7,6 +7,7 @@ import { useOrgStore } from "@/shared/stores/org-store";
 import { pathToTeamContentDirSync } from "@/shared/lib/team-content-path";
 import { sourceRepoRemoteKey } from "@/shared/lib/source-repo-key";
 import { parseTeamKey } from "@/shared/lib/team-key";
+import { isWithin, samePath } from "@/shared/lib/path";
 
 /** Canonical synthetic repoPath key for a workspace-tracked source repo. */
 export function syntheticRepoKey(orgSlug: string, team: string, slug: SourceRepoSlug): string {
@@ -180,8 +181,8 @@ export function findWorkspaceRepoBySlug(
  *  — callers fall back to the raw emitted `repo_path`. */
 export function syntheticKeyForContextRepoPath(contextRepoPath?: string): string | null {
   if (!contextRepoPath) return null;
-  const match = Object.values(useOrgStore.getState().workspaceRepos).find(
-    (r) => r.contextRepoPath === contextRepoPath,
+  const match = Object.values(useOrgStore.getState().workspaceRepos).find((r) =>
+    samePath(r.contextRepoPath, contextRepoPath),
   );
   return match?.repoPath ?? null;
 }
@@ -212,7 +213,7 @@ export function syntheticKeyForContentPath(contentPath?: string): string | null 
   if (!contentPath) return null;
   const match = Object.values(useOrgStore.getState().workspaceRepos).find((r) => {
     const root = r.teamContentPath;
-    return !!root && (contentPath === root || contentPath.startsWith(`${root}/`));
+    return !!root && isWithin(root, contentPath);
   });
   return match?.repoPath ?? null;
 }

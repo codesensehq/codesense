@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { itemFilePath, type FlatNavItem } from "@/features/dashboard/lib/flatten-nav-tree";
+import { isAbsolute, join, relative, root, trimTrailingSeparators } from "@/shared/lib/path";
 import type { NavContextMenuState } from "./types";
 
 export function dashboardNavTarget(
@@ -12,13 +13,13 @@ export function dashboardNavTarget(
     typeof row.path !== "string" ||
     !row.path ||
     row.path
-      .replace(/^\//, "")
-      .split("/")
+      .slice(root(row.path).length)
+      .split(/[\\/]/)
       .some((p) => p === ".." || p === "." || !p)
   )
     return null;
-  const root = contentRoot.replace(/\/+$/, "");
-  const path = row.path.startsWith("/") ? row.path : `${root}/${row.path}`;
+  const base = trimTrailingSeparators(contentRoot);
+  const path = isAbsolute(row.path) ? row.path : join(base, row.path);
   for (const item of items) {
     if (
       row.kind === "epic" &&
@@ -34,5 +35,5 @@ export function dashboardNavTarget(
     if (itemFilePath(item) === path && (row.kind === "file" || item.type === "story"))
       return { path };
   }
-  return row.kind === "file" && path.startsWith(`${root}/`) ? { path } : null;
+  return row.kind === "file" && relative(base, path) ? { path } : null;
 }

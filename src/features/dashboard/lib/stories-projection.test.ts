@@ -64,12 +64,28 @@ it("includes plain docs, main docs and native shadow/override metadata", () => {
   expect(rows.find((r) => r.path === tree.mainDoc!.filePath)).toMatchObject({
     kind: "main-doc",
     ownerPath: tree.absoluteDirPath,
+    name: "README.md",
+    relativePath: "README.md",
   });
   expect(rows.find((r) => r.path.endsWith("/guide.md"))).toMatchObject({
     kind: "doc",
     shadows: true,
     overrides: "platform",
     installedSourceRepo: "owner/repo",
+  });
+});
+
+it("names a Windows main doc by its file name", () => {
+  const epic = buildTree("epic", { dirPath: "epic", absoluteDirPath: "C:\\team\\epic" });
+  epic.mainDoc = {
+    filePath: "C:\\team\\epic\\README.md",
+    supportingDocs: null,
+    purposeText: null,
+  };
+  const tree = buildTree("", { absoluteDirPath: "C:\\team", subEpics: [epic] });
+  expect(buildStoriesRows(tree, {}).find((r) => r.kind === "main-doc")).toMatchObject({
+    name: "README.md",
+    relativePath: "epic/README.md",
   });
 });
 

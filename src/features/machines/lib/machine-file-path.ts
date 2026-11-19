@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import { relative } from "@/shared/lib/path";
 import { VIRTUAL_TAB_SCHEME } from "@/shared/lib/virtual-viewer-registry";
 
 /**
@@ -40,8 +41,8 @@ export function parseMachineFilePath(path: string): MachineFileRef | null {
 export function tildePath(absPath: string, username: string | null): string {
   if (!username) return absPath;
   for (const root of [`/home/${username}`, `/Users/${username}`]) {
-    if (absPath === root) return "~";
-    if (absPath.startsWith(`${root}/`)) return `~${absPath.slice(root.length)}`;
+    const rel = relative(root, absPath);
+    if (rel !== null) return rel ? `~/${rel}` : "~";
   }
   return absPath;
 }

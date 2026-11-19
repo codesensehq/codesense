@@ -715,18 +715,29 @@ export const reconfigureWarmPool = (
     shellIntegration,
   });
 
+/** A shell a terminal can run. */
+export type ShellKind = "zsh" | "bash" | "fish" | "pwsh" | "powershell" | "cmd";
+
 /** SW-LN-35: the shell new terminals spawn, and where it came from. */
 export interface TerminalShellInfo {
   path: string;
-  kind: "zsh" | "bash" | "fish";
+  kind: ShellKind;
   source: "override" | "env" | "passwd" | "fallback";
-  /** The shell detected without the override (`$SHELL` → passwd → `/bin/zsh`). */
+  /**
+   * The shell detected without the override (the OS's table, e.g. `$SHELL` → passwd → `/bin/zsh`
+   * on macOS).
+   */
   detectedPath: string;
   overridePath: string | null;
-  /** The override is set but isn't an executable zsh/bash/fish, so it is ignored. */
+  /** The override is set but isn't an executable shell of an accepted kind, so it is ignored. */
   overrideRejected: boolean;
-  /** A login shell CodeSense can't integrate with, which is why zsh is used. */
+  /** A login shell of a kind this OS doesn't accept, which is why the fallback is used. */
   unsupportedShell: string | null;
+  /**
+   * The shell kinds this OS accepts from the override or a login shell (zsh, bash and fish on
+   * macOS and Linux).
+   */
+  acceptedKinds: ShellKind[];
 }
 
 export const terminalShellInfo = () => invoke<TerminalShellInfo>("terminal_shell_info");
@@ -5838,8 +5849,26 @@ export interface ShadowedAgentInstall {
   onPath: boolean;
 }
 
+/** One step of git install guidance: a label, then the commands to run in order. */
+export interface HintLine {
+  label: string;
+  commands: string[];
+}
+
+/** How to install or upgrade git on the running OS (`git_install_hint` in deps.rs). */
+export interface GitInstallHint {
+  /** Offer Apple's Command Line Tools installer button. */
+  installer: boolean;
+  /** Lines shown when git is missing. */
+  install: HintLine[];
+  /** Lines shown when git is below the version floor. */
+  upgrade: HintLine[];
+}
+
 export interface DependencyStatus {
   git: GitStatus;
+  /** The running OS's row. Absent on the front end's own fallback statuses. */
+  gitInstall?: GitInstallHint;
   gh: GhStatus;
   /**
    * Per-agent binary-detection status keyed by CLI basename (`claude`, `codex`).

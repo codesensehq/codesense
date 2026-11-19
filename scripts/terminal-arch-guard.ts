@@ -43,6 +43,10 @@ const TERMINAL_WRITE = /\b(?:term|terminal|xterm|xt)\s*[?!]?\.\s*write\s*\(/;
 const OTHER_EMULATORS = ["alacritty_terminal", "vt100", "wezterm-term", "vte"];
 
 const MANAGER = "src/shared/terminal/terminal-manager.ts";
+/** The render probe's scratch terminal: built, drawn and disposed in one probe, never a display. */
+const RENDER_PROBE = "src/shared/terminal/terminal-render-probe.ts";
+/** The files that may construct a terminal and write into it. */
+const TERMINAL_OWNERS = new Set([MANAGER, RENDER_PROBE]);
 const TERMINAL_DIR = "src/shared/terminal/";
 const EXCLUDED_DIRS = new Set([
   "node_modules",
@@ -93,9 +97,9 @@ export function scan(root: string): Violation[] {
     lines.forEach((text, index) => {
       const at = (clause: Clause) => violations.push({ clause, file, line: index + 1, text });
       if (DELETED_SYMBOLS.test(text)) at("a");
-      if (file !== MANAGER && NEW_TERMINAL.test(text)) at("b");
+      if (!TERMINAL_OWNERS.has(file) && NEW_TERMINAL.test(text)) at("b");
       if (!file.startsWith(TERMINAL_DIR) && XTERM_VALUE_IMPORT.test(text)) at("c");
-      if (file !== MANAGER && TERMINAL_WRITE.test(text)) at("d");
+      if (!TERMINAL_OWNERS.has(file) && TERMINAL_WRITE.test(text)) at("d");
     });
   }
   for (const path of manifests(root)) {

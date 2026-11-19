@@ -245,7 +245,13 @@ export function SourceDiffRail(props: SourceDiffRailProps) {
             <span className="font-medium">
               {machineLabel ? "Couldn’t load diff from remote." : "Couldn’t load the source diff."}
             </span>
-            <span className="line-clamp-4 break-words text-muted-foreground">{error}</span>
+            {/* Never clamped: the cause is usually a path, and its tail is what says which. */}
+            <span
+              className="whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]"
+              data-testid={`source-diff-error-${wsId}`}
+            >
+              {error}
+            </span>
             <span className="mt-1">
               <RetryButton onRetry={onRetry} />
             </span>

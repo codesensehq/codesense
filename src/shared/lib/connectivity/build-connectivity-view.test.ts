@@ -150,3 +150,15 @@ describe("buildConnectivityView", () => {
     expect(buildConnectivityView(docs, A).rows[0].health).toBe("healthy");
   });
 });
+
+describe("buildConnectivityView scope bounds", () => {
+  it("a bare root scope bounds nothing", () => {
+    expect(buildConnectivityView([doc(`${A}/a1.md`)], "/").rows).toEqual([]);
+    expect(buildConnectivityView([doc("C:\\ctx\\a1.md")], "C:\\").rows).toEqual([]);
+  });
+
+  it("matches a Windows scope across separators", () => {
+    const v = buildConnectivityView([doc("C:/ctx/epic-a/a1.md")], "C:\\ctx\\epic-a");
+    expect(v.rows.map((r) => r.story.path)).toEqual(["C:/ctx/epic-a/a1.md"]);
+  });
+});

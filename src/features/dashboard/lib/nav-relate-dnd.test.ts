@@ -89,6 +89,11 @@ describe("underRoot", () => {
     expect(underRoot("/ctx/content-sibling/x.md", ROOT)).toBe(false); // prefix but not a child
     expect(underRoot("/ctx/content/a.md", "")).toBe(false);
   });
+  it("compares Windows paths across separators", () => {
+    expect(underRoot("C:\\ctx\\content\\a.md", "C:\\ctx\\content")).toBe(true);
+    expect(underRoot("C:/ctx/content/a.md", "C:\\ctx\\content")).toBe(true);
+    expect(underRoot("C:\\ctx\\content-sibling\\a.md", "C:\\ctx\\content")).toBe(false);
+  });
 });
 
 describe("isValidRelateDrop", () => {

@@ -57,3 +57,17 @@ describe("computePipelineScopeUpdate", () => {
     expect(computePipelineScopeUpdate(`${BASE}/a/b`, CTX, BASE)).toBe("a/b");
   });
 });
+
+describe("computePipelineScopeUpdate on Windows paths", () => {
+  const content = "C:\\o\\t\\content";
+  it("gives a /-joined scope inside the content root, either separator", () => {
+    expect(computePipelineScopeUpdate("C:/o/t/content/epic/sub", "C:\\o", content)).toBe(
+      "epic/sub",
+    );
+    expect(computePipelineScopeUpdate("C:\\o\\t\\content\\", "C:\\o", content)).toBe("");
+  });
+  it("resets inside the repo and pins outside it", () => {
+    expect(computePipelineScopeUpdate("C:\\o\\t\\install", "C:\\o", content)).toBe("");
+    expect(computePipelineScopeUpdate("C:\\other", "C:\\o", content)).toBeNull();
+  });
+});

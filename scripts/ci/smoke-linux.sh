@@ -18,22 +18,31 @@
 #       xvfb-run inside dbus-run-session with an unlocked login keyring as the Secret Service's
 #       default collection: it is alive at 30 s, has drawn a window that is not one colour, logs
 #       webview ready, a caps: line that agrees with the bundle (caps-agree) and secret store:
-#       secret-service, and exits within 10 s of SIGTERM. Each launch leaves <mode>.log and
+#       secret-service, and exits within 10 s of SIGTERM, having installed the bundled git-ai
+#       at the pinned version (installed-git-ai), and logs terminal renderer: dom with the
+#       render probe's verdict (ok, blank, no-frame or error: what WebGL drew under xvfb).
+#       Release builds carry no WebDriver, so no launch opens a terminal tab: that terminals
+#       show text is proven by the front end's Vitest rows. Each launch leaves <mode>.log and
 #       <mode>.png in <out-dir>.
-#   smoke-linux.sh variant <dmabuf|no-dbus> <out-dir>
+#   smoke-linux.sh variant <dmabuf|no-dbus|webgl> <out-dir>
 #       Launch the AppImage run extracted into <out-dir> again. dmabuf: with the user's
 #       WEBKIT_DISABLE_DMABUF_RENDERER=0, which the app keeps (the WebKit web process has it, and
 #       the log says nothing of it), the window check still passes. no-dbus: with no session bus
 #       (outside dbus-run-session, at an address that does not exist, so none autolaunches), the
-#       app stays up and logs secret store: unavailable.
+#       app stays up and logs secret store: unavailable. webgl: with
+#       CODESENSE_TERMINAL_RENDERER=webgl, the app logs terminal renderer: webgl, probe skipped.
 #   smoke-linux.sh caps-agree <listing> <log>
 #       The log has one caps: line, and its starship and git-ai are on exactly when the file
 #       list holds resources/starship and resources/git-ai.
+#   smoke-linux.sh installed-git-ai <listing> <home> <pin>
+#       When the file list holds resources/git-ai, the app installed <home>/.codesense/bin/git-ai
+#       and it prints the version= of <pin>; when it does not, the app installed none.
 #   smoke-linux.sh check-listing <listing>
 #       The /usr/bin check install runs on a file list.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 IMAGES="$SCRIPT_DIR/smoke-images.txt"
 SELF="$SCRIPT_DIR/smoke-linux.sh"
 APP_BINARY=codesense
@@ -122,6 +131,24 @@ caps_agree() {
     echo "The caps: line agrees with the bundle: ${line#*caps:}"
 }
 
+# The app installs the bundled git-ai into its home at startup, so its own pin decides the
+# version a running app gets; the caps: line alone would not show that.
+installed_git_ai() {
+    local listing="$1" installed="$2/.codesense/bin/git-ai" pin="$3" expected version
+    if ! bundled git-ai "$listing"; then
+        [[ ! -e "$installed" ]] || fail "the app installed $installed, but resources/git-ai is not bundled"
+        echo "git-ai is not bundled, and the app installed none"
+        return
+    fi
+    expected=$(sed -n 's/^version=//p' "$pin")
+    [[ -n "$expected" ]] || fail "$pin has no version"
+    [[ -x "$installed" ]] || fail "the app did not install git-ai at $installed"
+    version=$("$installed" --version) || fail "$installed failed to run"
+    version=${version%%$'\n'*}
+    [[ "$version" == "$expected" ]] || fail "the installed git-ai prints $version, not the pinned $expected"
+    echo "The app installed git-ai $version, as pinned in $pin"
+}
+
 install_package() {
     local type="$1" image="$2" package_dir="$3" out="$4" ref package
     [[ "$type" == deb || "$type" == rpm ]] || usage
@@ -201,6 +228,7 @@ start_session() {
     case "$mode" in
         default) dbus-run-session -- bash "$SELF" desktop "$mode" "$out" ;;
         dmabuf) WEBKIT_DISABLE_DMABUF_RENDERER=0 dbus-run-session -- bash "$SELF" desktop "$mode" "$out" ;;
+        webgl) CODESENSE_TERMINAL_RENDERER=webgl dbus-run-session -- bash "$SELF" desktop "$mode" "$out" ;;
         no-dbus) DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent in_xvfb "$mode" "$out" ;;
         *) usage ;;
     esac
@@ -238,7 +266,8 @@ default_collection() {
     local login=/org/freedesktop/secrets/collection/login alias collections
     echo "Secret Service owner: $(dbus-send --session --print-reply --dest=org.freedesktop.DBus \
         /org/freedesktop/DBus org.freedesktop.DBus.GetNameOwner string:org.freedesktop.secrets 2>&1)"
-    ls -la "$XDG_DATA_HOME/keyrings"
+    # Logged only: the daemon renames its temp files here, and one that vanishes mid-listing fails ls.
+    ls -la "$XDG_DATA_HOME/keyrings" || true
     collections=$(secret_service org.freedesktop.DBus.Properties.Get \
         string:org.freedesktop.Secret.Service string:Collections)
     echo "Secret Service collections: $collections"
@@ -307,7 +336,7 @@ window_drawn() {
 
 # Inside xvfb-run: launch the app, check it while it runs, stop it, then check its log.
 launch() {
-    local mode="$1" out="$2" log="$1.log" shot="$1.png" pid waited store=secret-service
+    local mode="$1" out="$2" log="$1.log" shot="$1.png" pid waited pin store=secret-service
     if [[ "$mode" == no-dbus ]]; then store=unavailable; fi
     cd "$out"
     "$out/squashfs-root/AppRun" >"$log" 2>&1 &
@@ -331,11 +360,30 @@ launch() {
     plain_log "$log" >"$mode.txt"
     grep -q "webview ready" "$mode.txt" || fail "the log has no webview ready"
     caps_agree listing "$mode.txt"
+    pin=$(cd "$ROOT" && bash scripts/fetch-bundled.sh --print-pin git-ai)
+    installed_git_ai listing "$HOME" "$ROOT/$pin"
     grep -qE "(^| )secret store: $store\$" "$mode.txt" || fail "the log has no secret store: $store"
     echo "The log has webview ready and secret store: $store"
     if [[ "$mode" == dmabuf ]] && grep -qi dmabuf "$mode.txt"; then
         fail "the log mentions DMABUF; the app should keep the user's value without a word"
     fi
+    terminal_renderer "$mode" "$mode.txt"
+}
+
+# The front end logged its terminal renderer once: DOM on Linux after the render probe (whose
+# verdict is printed), or WebGL with the probe skipped when the webgl variant forces it.
+terminal_renderer() {
+    local mode="$1" text="$2" lines want
+    lines=$(grep -oE "terminal renderer: .*" "$text" || true)
+    [[ -n "$lines" ]] || fail "the log has no terminal renderer line"
+    [[ $(wc -l <<<"$lines") -eq 1 ]] || fail "the log has more than one terminal renderer line: $lines"
+    if [[ "$mode" == webgl ]]; then
+        want="^terminal renderer: webgl \(probe: skipped\), CODESENSE_TERMINAL_RENDERER=webgl\$"
+    else
+        want="^terminal renderer: dom \(probe: (ok|blank|no-frame|error)\)\$"
+    fi
+    grep -qE "$want" <<<"$lines" || fail "unexpected terminal renderer line: $lines"
+    echo "The log has $lines"
 }
 
 [[ $# -ge 1 ]] || usage
@@ -359,7 +407,7 @@ case "$command" in
         run_appimage "$@"
         ;;
     variant)
-        [[ $# -eq 2 && "$1" =~ ^(dmabuf|no-dbus)$ ]] || usage
+        [[ $# -eq 2 && "$1" =~ ^(dmabuf|no-dbus|webgl)$ ]] || usage
         [[ -d "$2/squashfs-root" ]] || fail "$2 has no extracted AppImage; smoke-linux.sh run extracts it"
         start_session "$1" "$(realpath "$2")"
         ;;
@@ -370,6 +418,10 @@ case "$command" in
     caps-agree)
         [[ $# -eq 2 ]] || usage
         caps_agree "$@"
+        ;;
+    installed-git-ai)
+        [[ $# -eq 3 ]] || usage
+        installed_git_ai "$@"
         ;;
     check-listing)
         [[ $# -eq 1 ]] || usage

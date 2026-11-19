@@ -519,7 +519,7 @@ describe("TerminalGridCaption prompt segment", () => {
 
   it("SW-VE-12: the git segment opens the diff on every folder-rooted kind", async () => {
     // Every tab now carries the diff affordance — a non-git cwd just lands
-    // in the overlay's "No git repo" empty state. So the segment is a
+    // in the overlay's "No repository for this workspace yet." empty state. So the segment is a
     // live button, not a read-only span, on a `generic` tab too.
     sessionPromptMock.mockResolvedValue({ cwd: "/w/gen", home: null, git: GIT });
     mountFor(generic);

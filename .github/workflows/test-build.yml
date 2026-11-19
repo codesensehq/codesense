@@ -127,12 +127,13 @@ jobs:
           fetch-depth: 0
       - name: Install system libraries
         # What rust.yml's Linux check installs, plus file (linuxdeploy), rpm (the rpm bundle) and
-        # squashfs-tools (the AppImage rebuild in unsigned-bundle.sh).
+        # libarchive-tools and squashfs-tools (bsdtar and unsquashfs, to check the rpm's and the
+        # AppImage's contents, and for the AppImage rebuild in unsigned-bundle.sh).
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev libxdo-dev libssl-dev \
-            file rpm squashfs-tools
+            file rpm libarchive-tools squashfs-tools
       - name: Set up pnpm
         uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - name: Set up Node
@@ -146,7 +147,7 @@ jobs:
         run: rustup toolchain install stable --profile minimal
       - name: Check scripts
         # All of them, here: macOS runners ship no shellcheck.
-        run: shellcheck scripts/ci/unsigned-bundle.sh scripts/ci/bundle-manifest.sh scripts/ci/smoke-linux.sh
+        run: shellcheck -x scripts/ci/unsigned-bundle.sh scripts/ci/bundle-manifest.sh scripts/ci/smoke-linux.sh scripts/fetch-pinned.sh scripts/fetch-bundled.sh scripts/ci/appimage-offset.sh scripts/ci/repair-appimage.sh
       - name: Build app
         env:
           BUNDLES: ${{ matrix.bundles }}
@@ -161,6 +162,50 @@ jobs:
             grep -E "(^|/)usr/bin/$name\$" <<<"$bin_files" || { echo "Error: $name is not in /usr/bin of the deb" >&2; exit 1; }
           done
           [[ $(wc -l <<<"$bin_files") -eq 4 ]] || { echo "Error: expected the app binary and three sidecars in /usr/bin" >&2; exit 1; }
+      - name: Check the bundled git-ai and starship run
+        # Each format ships the pinned git-ai and starship as resources/git-ai and
+        # resources/starship; extract them from each and run each under its own name (under
+        # another name git-ai acts as git). git-ai prints its bare version, starship its name and
+        # version.
+        env:
+          BUNDLES: ${{ matrix.bundles }}
+        run: |
+          # Plain assignments, so a failed --print-pin stops the step here.
+          declare -A expected
+          for name in git-ai starship; do
+            pin=$(bash scripts/fetch-bundled.sh --print-pin "$name")
+            version=$(sed -n 's/^version=//p' "$pin")
+            [[ -n "$version" ]] || { echo "Error: $pin has no version" >&2; exit 1; }
+            expected[$name]=$version
+          done
+          expected[starship]="starship ${expected[starship]}"
+          for format in ${BUNDLES//,/ }; do
+            dir="$RUNNER_TEMP/extract-$format"
+            mkdir -p "$dir"
+            case "$format" in
+              deb) dpkg-deb -x target/release/bundle/deb/*.deb "$dir" ;;
+              # libarchive reads the rpm payload itself; rpm2cpio fails on this rpm without a message.
+              rpm) bsdtar -xf target/release/bundle/rpm/*.rpm -C "$dir" ;;
+              # The squashfs image after the AppImage's runtime, read the way repair-appimage.sh
+              # reads it, so the check sees the image the repair wrote.
+              appimage)
+                appimage=$(echo target/release/bundle/appimage/*.AppImage)
+                offset=$(bash scripts/ci/appimage-offset.sh "$appimage")
+                unsquashfs -q -n -d "$dir/squashfs-root" -o "$offset" "$appimage"
+                ;;
+            esac || { echo "Error: could not extract the $format" >&2; exit 1; }
+            for name in git-ai starship; do
+              found=$(find "$dir" -path "*/resources/$name" -type f)
+              [[ $(grep -c . <<<"$found") -eq 1 ]] || { echo "Error: expected one resources/$name in the $format, found: $found" >&2; exit 1; }
+              [[ -x "$found" ]] || { echo "Error: $found in the $format is not executable" >&2; exit 1; }
+              echo "$format: $(sha256sum "$found")"
+              file "$found"
+              version=$("$found" --version) || { echo "Error: $found from the $format failed to run (exit $?)" >&2; exit 1; }
+              version=${version%%$'\n'*}
+              echo "$format: $found: $version"
+              [[ "$version" == "${expected[$name]}" ]] || { echo "Error: expected ${expected[$name]} from $name in the $format" >&2; exit 1; }
+            done
+          done
       - name: Check the AppImage emulator
         # A Bun-compiled executable keeps its payload after the ELF image, so the emulator must
         # reach the AppImage's usr/bin byte for byte. The step prints every result before it
@@ -279,6 +324,9 @@ jobs:
       - name: Launch the AppImage with no session bus
         if: matrix.appimage
         run: bash scripts/ci/smoke-linux.sh variant no-dbus "$RUNNER_TEMP/smoke/appimage"
+      - name: Launch the AppImage with the WebGL terminal renderer forced
+        if: matrix.appimage
+        run: bash scripts/ci/smoke-linux.sh variant webgl "$RUNNER_TEMP/smoke/appimage"
       - name: Upload logs and screenshots
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
