@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Terminal } from "@xterm/xterm";
 import { WebglAddon } from "@xterm/addon-webgl";
 
 import {
@@ -84,6 +85,37 @@ describe("the render probe (the real WebGL addon over a stub GL context)", () =>
     const started = performance.now();
     await expect(probeWebglRender(() => addon, 5_000)).resolves.toBe("error");
     expect(performance.now() - started).toBeLessThan(2_000);
+    expect(document.body.children).toHaveLength(0);
+  });
+
+  it("no-frame when no frame comes, and it still releases the addon and its context", async () => {
+    // xterm defines `onRender` as a getter on the prototype: no frame ever reaches the probe.
+    const original = Object.getOwnPropertyDescriptor(Terminal.prototype, "onRender")!;
+    Object.defineProperty(Terminal.prototype, "onRender", {
+      configurable: true,
+      get: () => () => ({ dispose: () => {} }),
+    });
+    try {
+      const { addon, dispose } = watchedAddon();
+      await expect(probeWebglRender(() => addon, 5_000, 50)).resolves.toBe("no-frame");
+      expect(dispose).toHaveBeenCalled();
+      expect(loseContext).toHaveBeenCalledTimes(1);
+      expect(document.body.children).toHaveLength(0);
+    } finally {
+      Object.defineProperty(Terminal.prototype, "onRender", original);
+    }
+  });
+
+  it("error when the addon leaves no WebGL canvas", async () => {
+    const dispose = vi.fn();
+    const canvasless = {
+      activate: () => {},
+      dispose,
+      onContextLoss: () => ({ dispose: () => {} }),
+    } as unknown as WebglAddon;
+    await expect(probeWebglRender(() => canvasless)).resolves.toBe("error");
+    expect(dispose).toHaveBeenCalled();
+    expect(loseContext).not.toHaveBeenCalled();
     expect(document.body.children).toHaveLength(0);
   });
 
