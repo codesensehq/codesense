@@ -32,5 +32,10 @@ it("Ctrl+Enter sends the line and Ctrl+Alt+Enter pastes it; Cmd does neither", a
   // AltGr reports Ctrl and Alt too, but it types a character there and is not the paste chord.
   press({ ctrlKey: true, altKey: true, modifierAltGraph: true });
   expect(onSend).toHaveBeenCalledTimes(2);
+  // WebKitGTK reports AltGr as AltGraph alone: that Enter is a plain Enter and makes a new line.
+  expect(root.querySelectorAll("p")).toHaveLength(1);
+  expect(press({ modifierAltGraph: true })).toBe(true);
+  expect(onSend).toHaveBeenCalledTimes(2);
+  expect(root.querySelectorAll("p")).toHaveLength(2);
   editor.destroy();
 });

@@ -131,7 +131,13 @@ export function noteEditorProps({
     // Off macOS AltGr reports Ctrl and Alt, so AltGr+Enter would match Mod-Alt-Enter and paste.
     // Direct props run before the keymap plugins; the macOS chord holds Meta and is left alone.
     handleKeyDown(_view, event) {
-      return event.key === "Enter" && !hasCmd(event) && !!event.getModifierState?.("AltGraph");
+      return (
+        event.key === "Enter" &&
+        event.ctrlKey &&
+        event.altKey &&
+        !hasCmd(event) &&
+        !!event.getModifierState?.("AltGraph")
+      );
     },
     handlePaste(view, event) {
       if (!view.state.selection.$from.parent.type.spec.code) return false;
