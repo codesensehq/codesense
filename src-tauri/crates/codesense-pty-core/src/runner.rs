@@ -359,6 +359,9 @@ pub struct PtySession {
     /// fd, a remote driver owns a wire proxy. `None` once a Windows pseudo
     /// console was closed after its child exited (see [`close_after_exit`]).
     master: Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
+    /// The size last asked for, as `(cols, rows)`: what [`Self::size`]
+    /// answers once the master is closed.
+    size: Mutex<(u16, u16)>,
     child: ChildHandle,
     /// PID of the spawned shell, captured once at spawn (stable for the
     /// session's life). Source for the idle / agent-liveness process-tree checks.
@@ -382,8 +385,12 @@ impl PtySession {
         writer: Box<dyn Write + Send>,
     ) -> Self {
         let pid = child.process_id();
+        let size = master
+            .get_size()
+            .map_or((80, 24), |size| (size.cols, size.rows));
         Self {
             master: Arc::new(Mutex::new(Some(master))),
+            size: Mutex::new(size),
             child: ChildHandle(Arc::new(Mutex::new(SessionChild::new(child)))),
             pid,
             reader: Some(reader),
@@ -414,29 +421,42 @@ impl PtySession {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// The PTY's size as `(cols, rows)`; 80×24 when the driver cannot say.
+    fn last_size(&self) -> MutexGuard<'_, (u16, u16)> {
+        self.size
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// The PTY's size as `(cols, rows)`; 80×24 when the driver cannot say. Once
+    /// the master is closed, the size last asked for.
     pub fn size(&self) -> (u16, u16) {
-        self.master()
-            .as_ref()
-            .and_then(|master| master.get_size().ok())
-            .map_or((80, 24), |size| (size.cols, size.rows))
+        match self.master().as_ref() {
+            Some(master) => master
+                .get_size()
+                .map_or((80, 24), |size| (size.cols, size.rows)),
+            None => *self.last_size(),
+        }
     }
 
     /// Resize the underlying PTY. Delegates to the master handle — the local
-    /// driver's real resize, a remote driver's wire resize.
+    /// driver's real resize, a remote driver's wire resize. Once the master is
+    /// closed (a Windows session whose child exited) there is no PTY left to
+    /// size: the size is only recorded, as an ended unix session's resize
+    /// succeeds with no child to see it.
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), PtyRunnerError> {
         let master = self.master();
-        let master = master
-            .as_ref()
-            .ok_or_else(|| PtyRunnerError::Message("the terminal has closed".into()))?;
-        master
-            .resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|error| PtyRunnerError::Message(error.to_string()))
+        if let Some(master) = master.as_ref() {
+            master
+                .resize(PtySize {
+                    rows,
+                    cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+                .map_err(|error| PtyRunnerError::Message(error.to_string()))?;
+        }
+        *self.last_size() = (cols, rows);
+        Ok(())
     }
 
     /// Kill the session's child: a still-running child has its process group
@@ -746,6 +766,60 @@ mod tests {
                 signal: None
             })
         );
+    }
+
+    /// A master of a fixed size that cannot be read from or written to.
+    struct SizedMaster(Mutex<PtySize>);
+
+    impl MasterPty for SizedMaster {
+        fn resize(&self, size: PtySize) -> Result<(), anyhow::Error> {
+            *self.0.lock().unwrap() = size;
+            Ok(())
+        }
+        fn get_size(&self) -> Result<PtySize, anyhow::Error> {
+            Ok(*self.0.lock().unwrap())
+        }
+        fn try_clone_reader(&self) -> Result<Box<dyn Read + Send>, anyhow::Error> {
+            anyhow::bail!("no reader")
+        }
+        fn take_writer(&self) -> Result<Box<dyn Write + Send>, anyhow::Error> {
+            anyhow::bail!("no writer")
+        }
+        #[cfg(unix)]
+        fn process_group_leader(&self) -> Option<libc::pid_t> {
+            None
+        }
+        #[cfg(unix)]
+        fn as_raw_fd(&self) -> Option<std::os::unix::io::RawFd> {
+            None
+        }
+        #[cfg(unix)]
+        fn tty_name(&self) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+
+    #[test]
+    fn a_closed_master_resizes_ok_and_keeps_the_last_size() {
+        let master = SizedMaster(Mutex::new(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        }));
+        let session = PtySession::new(
+            Box::new(master),
+            Box::new(ExitsOnCue::default()),
+            Box::new(std::io::empty()),
+            Box::new(std::io::sink()),
+        );
+        session.resize(100, 30).unwrap();
+        assert_eq!(session.size(), (100, 30));
+        // As the console watcher closes it.
+        drop(session.master.lock().unwrap().take());
+        assert_eq!(session.size(), (100, 30));
+        assert_eq!(session.resize(120, 40), Ok(()));
+        assert_eq!(session.size(), (120, 40));
     }
 
     #[test]
