@@ -7,8 +7,9 @@ import { resolve } from "node:path";
 import { Window as DocWindow } from "happy-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+const ROOT = resolve(__dirname, "../../../..");
 const HTML = readFileSync(
-  resolve(__dirname, "../../../../src-tauri/assets/dashboards/agent-usage/index.html"),
+  resolve(ROOT, "src-tauri/assets/dashboards/agent-usage/index.html"),
   "utf8",
 );
 const APP_ORIGIN = "tauri://localhost";
@@ -29,8 +30,8 @@ function boot() {
   };
   (win as unknown as { parent: unknown }).parent = parent;
   win.document.write(HTML);
-  const post = (data: unknown, origin = APP_ORIGIN) =>
-    win.dispatchEvent(new win.MessageEvent("message", { data, origin, source: parent as never }));
+  const post = (data: unknown, origin = APP_ORIGIN, source: unknown = parent) =>
+    win.dispatchEvent(new win.MessageEvent("message", { data, origin, source: source as never }));
   return { win, doc: win.document as unknown as Document, sent, post };
 }
 
@@ -87,6 +88,48 @@ describe("agent usage dashboard", () => {
     page.post({ type: "codesense:agent-accounts-init", channel: "chan-1" }, "https://evil.example");
     await new Promise((r) => setTimeout(r, 20));
     expect(page.sent).toEqual([]);
+  });
+
+  it("ignores a reply from another app origin than the one that initialized it", async () => {
+    const page = boot();
+    open.push(page.win);
+    page.post({ type: "codesense:agent-accounts-init", channel: "chan-1" });
+    await vi.waitFor(() => expect(page.sent.length).toBeGreaterThan(0));
+    const id = page.sent[0].data.id!;
+    page.post(listReply(id, 50), "https://tauri.localhost");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(page.doc.querySelector('[data-id="acct-1"]')).toBeNull();
+    // The same reply from the host that initialized the page is rendered.
+    page.post(listReply(id, 50));
+    await vi.waitFor(() => expect(page.doc.querySelector('[data-id="acct-1"]')).not.toBeNull());
+  });
+
+  it("ignores messages from a window that is not its parent", async () => {
+    const page = boot();
+    open.push(page.win);
+    page.post({ type: "codesense:agent-accounts-init", channel: "chan-1" }, APP_ORIGIN, {});
+    await new Promise((r) => setTimeout(r, 20));
+    expect(page.sent).toEqual([]);
+  });
+
+  it("sends the revoke on unload to the host origin", async () => {
+    const page = boot();
+    open.push(page.win);
+    page.post({ type: "codesense:agent-accounts-init", channel: "chan-1" });
+    await vi.waitFor(() => expect(page.sent.length).toBeGreaterThan(0));
+    page.win.dispatchEvent(new page.win.Event("beforeunload"));
+    const revoke = page.sent.find((s) => s.data.type === "codesense:agent-accounts-revoke");
+    expect(revoke?.target).toBe(APP_ORIGIN);
+  });
+
+  it("trusts exactly the app's packaged origins", () => {
+    const rust = readFileSync(resolve(ROOT, "src-tauri/src/http/app_origins.rs"), "utf8");
+    const packaged = /const PACKAGED_ORIGINS: \[&str; \d+\] = \[([^\]]*)\]/.exec(rust)?.[1];
+    const page = /const APP_ORIGINS=\[([^\]]*)\]/.exec(HTML)?.[1];
+    const list = (src: string | undefined) =>
+      [...(src ?? "").matchAll(/["']([^"']+)["']/g)].map((m) => m[1]);
+    expect(list(packaged).length).toBeGreaterThan(0);
+    expect(list(page)).toEqual(list(packaged));
   });
 
   it("renders a usage value only as a number, never as markup", async () => {
