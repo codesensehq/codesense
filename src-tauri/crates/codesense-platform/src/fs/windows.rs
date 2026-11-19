@@ -171,8 +171,8 @@ unsafe fn grants_only(dacl: *const ACL, sid: PSID) -> bool {
 
 /// One ACE of a DACL, as the checks here read it.
 enum Ace {
-    /// An `ACCESS_ALLOWED_ACE`: `sid` may use `mask`; an inherit-only one
-    /// applies to the object's children, not to the object.
+    /// An `ACCESS_ALLOWED_ACE`: `sid` may use `mask`; one flagged
+    /// `INHERIT_ONLY_ACE` applies to the object's children, not to the object.
     Allows {
         sid: PSID,
         mask: u32,
@@ -595,8 +595,8 @@ pub(super) fn is_world_writable(file: &File) -> io::Result<bool> {
 }
 
 /// Whether `dacl` allows one of [`WRITE_RIGHTS`] to Everyone, Users or
-/// Authenticated Users on the object itself (an inherit-only ACE is for its
-/// children). A null DACL grants everyone everything, and an ACE of a kind
+/// Authenticated Users on the object itself (an ACE flagged `INHERIT_ONLY_ACE`
+/// is for its children). A null DACL grants everyone everything, and an ACE of a kind
 /// not read here counts as such a grant; deny ACEs are not weighed, so the
 /// answer errs towards writable.
 ///
