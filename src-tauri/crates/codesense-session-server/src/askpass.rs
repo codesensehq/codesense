@@ -181,6 +181,13 @@ impl Drop for Askpass {
                 let _ = thread.join();
             }
         }
+        if !woken {
+            // The parked listener keeps its socket file on unix: remove it
+            // anyway. A Windows pipe has no file, and this does nothing there.
+            if let Ok(path) = self.endpoint.address() {
+                let _ = std::fs::remove_file(path);
+            }
+        }
     }
 }
 
@@ -561,20 +568,21 @@ mod tests {
 
     #[test]
     fn a_served_secret_answers_only_its_own_keys_prompt_and_is_gone_after() {
-        let parent = tempfile::tempdir().unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        // A parent others may enter: serving makes it owner-only.
+        let parent = temp.path().join("askpass");
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).unwrap();
         let key = Path::new("/keys/id_work");
-        let askpass =
-            Askpass::serve(parent.path(), Path::new("/bin/false"), key, "s3cret").unwrap();
+        let askpass = Askpass::serve(&parent, Path::new("/bin/false"), key, "s3cret").unwrap();
         let env = askpass.env();
         assert!(env
             .iter()
             .all(|(_, value)| !value.to_string_lossy().contains("s3cret")));
         let endpoint = Endpoint::from_wire(&env[2].1).unwrap();
         let socket = endpoint.address().unwrap();
-        let mode = |p: &Path| {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::metadata(p).unwrap().permissions().mode() & 0o777
-        };
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(socket.parent().unwrap()), 0o700);
         assert_eq!(mode(&socket), 0o600);
 
@@ -605,6 +613,6 @@ mod tests {
 
         drop(askpass);
         assert!(!socket.exists(), "the socket is gone with the operation");
-        assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 0);
+        assert_eq!(std::fs::read_dir(&parent).unwrap().count(), 0);
     }
 }
