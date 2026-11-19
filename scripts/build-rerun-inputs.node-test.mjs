@@ -79,6 +79,14 @@ for (const [name, source] of [
   test(`table watch guard rejects ${name}`, () =>
     assert.throws(() => assertTableWatch(source, manifest)));
 }
+// configure_caps also reads the CODESENSE_CAPS_OFF override, so it must rerun when that changes.
+test("configure_caps reruns when the capability override changes", () => {
+  const source = readFileSync(resolve(manifest, "build_caps.rs"), "utf8");
+  assert.ok(source.includes('pub const CAPS_OFF_ENV: &str = "CODESENSE_CAPS_OFF";'));
+  const configure = source.slice(source.indexOf("pub fn configure_caps("));
+  assert.ok(configure.includes('println!("cargo:rerun-if-env-changed={CAPS_OFF_ENV}");'));
+  assert.ok(configure.includes("std::env::var(CAPS_OFF_ENV)"));
+});
 for (const crate of [".", "crates/codesense-session-server"]) {
   test(`${crate}/build.rs watches the capability table it reads`, () => {
     const dir = resolve(manifest, crate);
