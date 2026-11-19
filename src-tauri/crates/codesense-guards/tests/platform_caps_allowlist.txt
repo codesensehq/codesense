@@ -9,3 +9,4 @@
 #   reason        what the gate compiles out
 # A file with two gates has two rows. A row with no reason fails.
 crates/codesense-pty-core/src/activity/mod.rs mcp-bridge mcp-and-bridge-on-named-pipes peer::of_socket, the kernel-verified peer of a Unix socket; the named-pipe client lookup replaces it
+crates/codesense-pty-core/src/activity/ingress/unix.rs mcp-bridge mcp-and-bridge-on-named-pipes the activity ingress on a Unix socket (listener, helper client, stdin poll); named pipes replace it

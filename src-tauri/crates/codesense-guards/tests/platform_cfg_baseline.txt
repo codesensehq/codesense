@@ -15,7 +15,8 @@ crates/codesense-host-proto/src/scoped_mcp.rs 5
 crates/codesense-pty-core/src/activity/engine.rs 16
 crates/codesense-pty-core/src/activity/hook_block.rs 4
 crates/codesense-pty-core/src/activity/inbox.rs 6
-crates/codesense-pty-core/src/activity/ingress.rs 17
+crates/codesense-pty-core/src/activity/ingress.rs 2
+crates/codesense-pty-core/src/activity/ingress/unix.rs 16
 crates/codesense-pty-core/src/activity/launch.rs 18
 crates/codesense-pty-core/src/agent_cli/codex.rs 15
 crates/codesense-pty-core/src/agent_cli/hermes/channel.rs 2
