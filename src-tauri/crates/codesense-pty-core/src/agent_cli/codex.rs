@@ -822,7 +822,10 @@ fn save_hook_trust(home: &Path, grants: &[(String, String)]) -> io::Result<()> {
     // Closing the lock file releases the lock.
     while !platform_fs::try_lock_exclusive(&lock)? {
         if Instant::now() >= deadline {
-            return Err(io::ErrorKind::WouldBlock.into());
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "Codex hook trust lock busy",
+            ));
         }
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -876,8 +879,12 @@ fn save_hook_trust(home: &Path, grants: &[(String, String)]) -> io::Result<()> {
             let mut file = platform_fs::create_new_owner_only(&temporary)?;
             file.write_all(next.as_bytes())?;
             file.sync_all()?;
-            let current = match platform_fs::file_id(&config) {
-                Ok(id) => Some(stamp(id, &fs::symlink_metadata(&config)?)),
+            // A config removed between the two lookups reads as missing, as one removed
+            // before them does.
+            let current = match platform_fs::file_id(&config)
+                .and_then(|id| Ok(stamp(id, &fs::symlink_metadata(&config)?)))
+            {
+                Ok(current) => Some(current),
                 Err(error) if error.kind() == io::ErrorKind::NotFound => None,
                 Err(error) => return Err(error),
             };
