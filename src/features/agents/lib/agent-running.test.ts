@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
+import { restorePlatform, setPlatform } from "@/test/platform";
 import type { SessionListRow } from "@/tauri/commands";
 
 import {
@@ -63,12 +64,23 @@ describe("runningInstances", () => {
     expect(where({})).toBe("Team folder");
   });
 
-  it("names a remote machine, and leaves This Mac out", () => {
+  describe("the machine it runs on", () => {
+    afterEach(restorePlatform);
     const machine = (over: Partial<SessionListRow>) =>
       runningInstances({ agentKey: KEY, sessions: [session(over)], startedAt: {} })[0].machine;
-    expect(machine({ machine: "Build box", machineId: "box" })).toBe("Build box");
-    expect(machine({ machine: "This Mac" })).toBeNull();
-    expect(machine({})).toBeNull();
+
+    it("names a remote machine, and the local one by its platform's label", () => {
+      setPlatform("MacIntel");
+      expect(machine({ machine: "Build box", machineId: "box" })).toBe("Build box");
+      expect(machine({ machine: "This Mac" })).toBe("This Mac");
+      expect(machine({})).toBeNull();
+    });
+
+    it("reads This computer for a local session off macOS", () => {
+      setPlatform("Win32");
+      expect(machine({ machine: "This Mac" })).toBe("This computer");
+      expect(machine({ machine: "Build box", machineId: "box" })).toBe("Build box");
+    });
   });
 
   it("carries unread mail and the start time only when known", () => {
