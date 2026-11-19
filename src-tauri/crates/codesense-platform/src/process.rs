@@ -17,6 +17,7 @@
 use std::io;
 use std::process::{Child, Command, ExitStatus};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 mod identity;
 #[cfg(unix)]
@@ -219,6 +220,30 @@ impl ProcessGroup {
     /// Windows. A group that is gone is not an error.
     pub fn kill(&self) -> io::Result<()> {
         self.0.kill()
+    }
+}
+
+/// A process's exit, to wait for without polling.
+///
+/// Windows: a handle to the process opened with `SYNCHRONIZE` alone, as
+/// [`is_alive`] opens one; while it is open the process object stays, so the
+/// wait reads its exit even after something else reaped it. Unix has no such
+/// handle to a process this one did not start: [`ExitWaiter::open`] is
+/// [`io::ErrorKind::Unsupported`] there.
+pub struct ExitWaiter(sys::ExitWaiter);
+
+impl ExitWaiter {
+    /// A waiter on the running process `pid`; an error when it cannot be
+    /// opened (gone, not this user's, or on unix).
+    pub fn open(pid: Pid) -> io::Result<Self> {
+        sys::ExitWaiter::open(pid.0).map(Self)
+    }
+
+    /// Wait up to `timeout` for the process to exit: `Ok(true)` once it has
+    /// (at once when it already had), `Ok(false)` while it still runs after
+    /// `timeout`, and `Err` when the wait itself fails.
+    pub fn wait(&self, timeout: Duration) -> io::Result<bool> {
+        self.0.wait(timeout)
     }
 }
 
