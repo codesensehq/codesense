@@ -22,8 +22,8 @@ use windows_sys::Win32::System::JobObjects::{
 };
 use windows_sys::Win32::System::Threading::{
     GetProcessTimes, OpenProcess, OpenThread, ResumeThread, TerminateProcess, WaitForSingleObject,
-    CREATE_NO_WINDOW, CREATE_SUSPENDED, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA,
-    PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, THREAD_SUSPEND_RESUME,
+    CREATE_NO_WINDOW, CREATE_SUSPENDED, INFINITE, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_SET_QUOTA, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, THREAD_SUSPEND_RESUME,
 };
 
 use super::Identity;
@@ -169,6 +169,28 @@ pub(super) fn is_alive(pid: u32) -> bool {
         Err(error) => return error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32),
     };
     running(&process)
+}
+
+/// A process handle opened to wait on, with `SYNCHRONIZE` alone.
+pub(super) struct ExitWaiter(Handle);
+
+impl ExitWaiter {
+    pub(super) fn open(pid: u32) -> io::Result<Self> {
+        // SAFETY: opening a process to wait on it has no other effect.
+        Handle::new(unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) }).map(Self)
+    }
+
+    pub(super) fn wait(&self, timeout: Duration) -> io::Result<bool> {
+        // INFINITE is never a timeout this waits for: a longer one is cut.
+        let millis =
+            u32::try_from(timeout.as_millis()).map_or(INFINITE - 1, |m| m.min(INFINITE - 1));
+        // SAFETY: the handle is open with `PROCESS_SYNCHRONIZE`.
+        match unsafe { WaitForSingleObject(self.0.raw(), millis) } {
+            WAIT_OBJECT_0 => Ok(true),
+            WAIT_TIMEOUT => Ok(false),
+            _ => Err(io::Error::last_os_error()),
+        }
+    }
 }
 
 /// Whether the open `process` has not exited: its handle is signalled once

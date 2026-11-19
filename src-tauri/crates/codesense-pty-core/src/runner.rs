@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use codesense_platform::process::{Pid, ProcessGroup};
+use codesense_platform::process::{ExitWaiter, Pid, ProcessGroup};
 use log::{error, warn};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
@@ -33,7 +33,12 @@ mod cursor_reply;
 /// slave fds close as it exits, so the status is normally ready at once.
 const EXIT_STATUS_GRACE: Duration = Duration::from_millis(100);
 
-/// How often a pseudo console's watcher checks whether its child exited.
+/// How long a pseudo console's watcher waits on its child's process at a
+/// time, checking between waits that the session is still there.
+const CONSOLE_EXIT_SLICE: Duration = Duration::from_secs(1);
+
+/// How often a pseudo console's watcher checks whether its child exited when
+/// it cannot wait on the child's process.
 const CONSOLE_EXIT_POLL: Duration = Duration::from_millis(50);
 
 /// How long a pseudo console stays open after its child exits, so the output
@@ -592,10 +597,16 @@ fn open_local_session(spec: PtySpec) -> Result<PtySession, PtyRunnerError> {
         });
         let child = session.child();
         let master = Arc::downgrade(&session.master);
+        let wait = console_exit_wait(session.pid());
         let watcher = std::thread::Builder::new()
             .name("pty-console-close".into())
             .spawn(move || {
-                close_after_exit(&child, &master, CONSOLE_EXIT_POLL, CONSOLE_CLOSE_GRACE)
+                let timing = WatchTiming {
+                    slice: CONSOLE_EXIT_SLICE,
+                    poll: CONSOLE_EXIT_POLL,
+                    grace: CONSOLE_CLOSE_GRACE,
+                };
+                close_after_exit(&child, &master, wait, timing)
             });
         if let Err(error) = watcher {
             warn!(target: "pty", "spawn_pty: pseudo console watcher not started: {error}");
@@ -604,21 +615,68 @@ fn open_local_session(spec: PtySpec) -> Result<PtySession, PtyRunnerError> {
     Ok(session)
 }
 
-/// Wait for `child` to exit, polling every `poll`, then after `grace` drop
-/// what `slot` holds (a session's master: dropping a Windows one closes its
-/// pseudo console, which ends the reader's stream). Returns early, closing
-/// nothing, once the session itself is gone.
+/// How the console watcher learns its child exited: `wait(slice)` is
+/// `Ok(true)` once it has, `Ok(false)` while it still runs after `slice`, and
+/// `Err` when the wait itself failed.
+type ExitWait = Box<dyn FnMut(Duration) -> std::io::Result<bool> + Send>;
+
+/// A wait on the process `pid`, or `None` (with a warning) when there is no
+/// pid or its process cannot be waited on: the watcher then polls.
+fn console_exit_wait(pid: Option<u32>) -> Option<ExitWait> {
+    let Some(pid) = pid else {
+        warn!(target: "pty", "pseudo console watcher: no child pid, polling for its exit");
+        return None;
+    };
+    match ExitWaiter::open(Pid::from_raw(pid)) {
+        Ok(waiter) => Some(Box::new(move |slice| waiter.wait(slice))),
+        Err(error) => {
+            warn!(target: "pty", "pseudo console watcher: polling, child {pid} can't be waited on: {error}");
+            None
+        }
+    }
+}
+
+/// The console watcher's times: each wait on the child's process, the poll
+/// when there is none, and the grace before the close.
+#[derive(Clone, Copy)]
+struct WatchTiming {
+    slice: Duration,
+    poll: Duration,
+    grace: Duration,
+}
+
+/// Wait for `child` to exit, then after the grace drop what `slot` holds (a
+/// session's master: dropping a Windows one closes its pseudo console, which
+/// ends the reader's stream). With a `wait`, wait on the child's process a
+/// slice at a time; then read the child's status once, which closes its
+/// process group (a Job Object) as a poll would, and close whatever that read
+/// said (an exit code of 259 reads as still running). Without one, or once a
+/// wait fails, poll the child. Returns early, closing nothing, once the
+/// session itself is gone.
 fn close_after_exit<T>(
     child: &ChildHandle,
     slot: &Weak<Mutex<Option<T>>>,
-    poll: Duration,
-    grace: Duration,
+    mut wait: Option<ExitWait>,
+    timing: WatchTiming,
 ) {
-    while child.is_alive() {
+    let WatchTiming { slice, poll, grace } = timing;
+    loop {
         if slot.strong_count() == 0 {
             return;
         }
-        std::thread::sleep(poll);
+        match wait.as_mut().map(|wait| wait(slice)) {
+            Some(Ok(true)) => {
+                let _ = child.is_alive();
+                break;
+            }
+            Some(Ok(false)) => {}
+            Some(Err(error)) => {
+                warn!(target: "pty", "pseudo console watcher: polling, the wait failed: {error}");
+                wait = None;
+            }
+            None if child.is_alive() => std::thread::sleep(poll),
+            None => break,
+        }
     }
     std::thread::sleep(grace);
     if let Some(slot) = slot.upgrade() {
@@ -698,11 +756,42 @@ fn plainly(error: &(dyn std::error::Error + 'static)) -> String {
 mod tests {
     use super::*;
 
-    /// A child that runs until `exited` is set.
+    /// A child that runs until `exited` is set, counting its status probes.
     #[derive(Clone, Debug, Default)]
     struct ExitsOnCue {
         exited: Arc<std::sync::atomic::AtomicBool>,
+        probes: Arc<std::sync::atomic::AtomicUsize>,
     }
+
+    impl ExitsOnCue {
+        fn has_exited(&self) -> bool {
+            self.exited.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        fn probes(&self) -> usize {
+            self.probes.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        /// A wait on this child's process, as the watcher's waiter would
+        /// give: it sees the cue itself, never probing the child's status.
+        fn wait(&self) -> ExitWait {
+            let cue = self.clone();
+            Box::new(move |slice| {
+                let deadline = Instant::now() + slice;
+                while !cue.has_exited() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Ok(cue.has_exited())
+            })
+        }
+    }
+
+    /// Short times for the watcher's tests.
+    const TEST_TIMING: WatchTiming = WatchTiming {
+        slice: Duration::from_millis(20),
+        poll: Duration::from_millis(1),
+        grace: Duration::ZERO,
+    };
 
     impl portable_pty::ChildKiller for ExitsOnCue {
         fn kill(&mut self) -> std::io::Result<()> {
@@ -715,9 +804,10 @@ mod tests {
 
     impl Child for ExitsOnCue {
         fn try_wait(&mut self) -> std::io::Result<Option<portable_pty::ExitStatus>> {
+            self.probes
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(self
-                .exited
-                .load(std::sync::atomic::Ordering::SeqCst)
+                .has_exited()
                 .then(|| portable_pty::ExitStatus::with_exit_code(3)))
         }
         fn wait(&mut self) -> std::io::Result<portable_pty::ExitStatus> {
@@ -752,26 +842,42 @@ mod tests {
         (child, cue)
     }
 
-    #[test]
-    fn the_console_closes_once_its_child_exits_and_its_exit_still_reads() {
-        let (child, cue) = cued_child();
+    /// Watch `child` on a thread of its own with `wait`, closing a slot whose
+    /// close the returned flag records.
+    fn watch(
+        child: &ChildHandle,
+        wait: Option<ExitWait>,
+    ) -> (
+        std::thread::JoinHandle<()>,
+        Arc<Mutex<Option<Closes>>>,
+        Arc<std::sync::atomic::AtomicBool>,
+    ) {
         let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let slot = Arc::new(Mutex::new(Some(Closes(closed.clone()))));
         let watcher = {
             let (child, slot) = (child.clone(), Arc::downgrade(&slot));
-            std::thread::spawn(move || {
-                close_after_exit(&child, &slot, Duration::from_millis(1), Duration::ZERO)
-            })
+            std::thread::spawn(move || close_after_exit(&child, &slot, wait, TEST_TIMING))
         };
-        std::thread::sleep(Duration::from_millis(20));
+        (watcher, slot, closed)
+    }
+
+    #[test]
+    fn the_console_closes_once_its_child_exits_and_its_exit_still_reads() {
+        let (child, cue) = cued_child();
+        let (watcher, slot, closed) = watch(&child, Some(cue.wait()));
+        std::thread::sleep(Duration::from_millis(50));
         assert!(
             !closed.load(std::sync::atomic::Ordering::SeqCst),
             "closed while running"
         );
+        assert_eq!(cue.probes(), 0, "a waiting watcher probes nothing");
         cue.exited.store(true, std::sync::atomic::Ordering::SeqCst);
         watcher.join().unwrap();
         assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
         assert!(slot.lock().unwrap().is_none());
+        // One probe after the wait reads the exit (and closes the group);
+        // a watcher that still polled would have probed many times.
+        assert_eq!(cue.probes(), 1);
         // The reader's end-of-stream then reports the real status.
         assert_eq!(
             child.exit_info_after_eof(),
@@ -780,6 +886,19 @@ mod tests {
                 signal: None
             })
         );
+    }
+
+    #[test]
+    fn a_failed_wait_falls_back_to_polling() {
+        let (child, cue) = cued_child();
+        let failing: ExitWait = Box::new(|_| Err(std::io::Error::other("wait failed")));
+        let (watcher, slot, closed) = watch(&child, Some(failing));
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(!closed.load(std::sync::atomic::Ordering::SeqCst));
+        cue.exited.store(true, std::sync::atomic::Ordering::SeqCst);
+        watcher.join().unwrap();
+        assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(slot.lock().unwrap().is_none());
     }
 
     /// A master of a fixed size that cannot be read from or written to.
@@ -836,14 +955,46 @@ mod tests {
         assert_eq!(session.size(), (120, 40));
     }
 
+    /// A wait that always times out, counting its calls.
+    fn timing_out(waits: &Arc<std::sync::atomic::AtomicUsize>) -> ExitWait {
+        let waits = waits.clone();
+        Box::new(move |slice| {
+            waits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            std::thread::sleep(slice);
+            Ok(false)
+        })
+    }
+
     #[test]
     fn a_gone_session_stops_the_console_watcher() {
-        let (child, _running) = cued_child();
-        let slot = Arc::new(Mutex::new(Some(())));
-        let weak = Arc::downgrade(&slot);
+        let (child, running) = cued_child();
+        let waits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (watcher, slot, _closed) = watch(&child, Some(timing_out(&waits)));
+        while waits.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // The session goes while the watcher waits on its child. Read after
+        // the drop: no wait starts once the watcher sees it, so at most the
+        // one it may have begun just before can follow.
         drop(slot);
-        // Returns although the child never exits.
-        close_after_exit(&child, &weak, Duration::from_millis(1), Duration::ZERO);
+        let at_drop = waits.load(std::sync::atomic::Ordering::SeqCst);
+        // Returns although the child never exits, after the slice in hand.
+        watcher.join().unwrap();
+        assert!(waits.load(std::sync::atomic::Ordering::SeqCst) <= at_drop + 1);
+        assert_eq!(running.probes(), 0);
+    }
+
+    /// The exit closes the console whatever the status read after it says:
+    /// an exit code of 259 reads as still running.
+    #[test]
+    fn a_reported_exit_closes_the_console_even_if_the_child_reads_as_running() {
+        let (child, running) = cued_child();
+        let exited: ExitWait = Box::new(|_| Ok(true));
+        let (watcher, slot, closed) = watch(&child, Some(exited));
+        watcher.join().unwrap();
+        assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(slot.lock().unwrap().is_none());
+        assert_eq!(running.probes(), 1, "one status read after the wait");
     }
     // Unix only, as the group tests that use it are.
     #[cfg(unix)]

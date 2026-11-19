@@ -26,8 +26,8 @@ use codesense_platform::fs::{
 use codesense_platform::ipc::{blocking, Endpoint, LocalListener, LocalStream};
 use codesense_platform::limits::is_descriptor_exhaustion;
 use codesense_platform::process::{
-    exited_unreaped, group_and_foreground, is_alive, kill_hard, terminate, terminate_pid, Identity,
-    Pid, ProcessGroup, ProcessTree,
+    exited_unreaped, group_and_foreground, is_alive, kill_hard, terminate, terminate_pid,
+    ExitWaiter, Identity, Pid, ProcessGroup, ProcessTree,
 };
 use codesense_platform::testutil::{
     fifo_or_skip, make_group_writable, make_world_writable, pathext, relative_from_cwd,
@@ -96,6 +96,32 @@ fn dropping_the_tree_kills_child_and_grandchild() {
     drop(tree);
     let gone = || !is_alive(grandchild) && !is_alive(child);
     assert!(eventually(Duration::from_secs(5), gone));
+}
+
+#[test]
+fn an_exit_waiter_times_out_while_its_process_runs_and_sees_it_exit() {
+    let mut tree = ProcessTree::spawn(fixture(&["exit", "0"]).stdin(Stdio::piped())).unwrap();
+    let waiter = match ExitWaiter::open(tree.pid()) {
+        Ok(waiter) => waiter,
+        Err(error) => {
+            assert!(!expect_exit_waiter(), "{error}");
+            assert_eq!(error.kind(), ErrorKind::Unsupported, "{error}");
+            return;
+        }
+    };
+    assert!(expect_exit_waiter());
+    assert!(
+        !waiter.wait(Duration::from_millis(200)).unwrap(),
+        "the process still runs"
+    );
+    // The fixture exits once its stdin ends.
+    drop(tree.child().stdin.take());
+    assert!(waiter.wait(Duration::from_secs(10)).unwrap(), "its exit");
+    assert!(tree.wait().unwrap().success());
+    assert!(
+        waiter.wait(Duration::from_millis(1)).unwrap(),
+        "the exit still reads once the process is reaped"
+    );
 }
 
 #[test]
@@ -1366,6 +1392,12 @@ fn temp_siblings(dir: &Path) -> usize {
 /// the restore puts back, so the same file id and time read as untouched.
 fn expect_in_place_rewrite_changes_the_stamp() -> bool {
     cfg!(unix)
+}
+
+/// Windows opens a waiter on any process of this user's; unix has none to
+/// open.
+fn expect_exit_waiter() -> bool {
+    cfg!(windows)
 }
 
 /// Unix: SIGTERM is a request a process may ignore. Windows: terminate ends

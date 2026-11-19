@@ -50,6 +50,22 @@ impl Group {
     }
 }
 
+/// Unix has no handle to wait on a process this one did not start.
+pub(super) struct ExitWaiter(std::convert::Infallible);
+
+impl ExitWaiter {
+    pub(super) fn open(_pid: u32) -> io::Result<Self> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "a process this one did not start cannot be waited on here",
+        ))
+    }
+
+    pub(super) fn wait(&self, _timeout: Duration) -> io::Result<bool> {
+        match self.0 {}
+    }
+}
+
 /// Signal every process in group `pgid`; a group that is already gone is not
 /// an error.
 fn signal_group(pgid: libc::pid_t, signal: i32) -> io::Result<()> {
