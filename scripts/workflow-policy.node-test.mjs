@@ -369,7 +369,7 @@ test("rust.yml runs the Windows check on a pull request only with ci:windows, ne
       "cargo check --locked -p codesense-platform -p codesense-host-proto -p codesense-fs-core -p codesense-pty-core --all-targets",
       "cargo test --locked -p codesense-platform",
       "cargo test --locked -p codesense-host-proto --lib hook::",
-      "cargo test --locked -p codesense-pty-core --test pty_contract --test process_tree",
+      "cargo test --locked --no-fail-fast -p codesense-pty-core --test pty_contract --test process_tree",
     ],
   );
   // The pty tests run the Windows worker, built after Rust (the script asks rustc for the triple)

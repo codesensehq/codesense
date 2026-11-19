@@ -716,7 +716,7 @@ jobs:
         # ConPTY behind a host running the emulator worker, and the Job Object ending a session's tree.
         env:
           CODESENSE_EMULATOR_WORKER: ${{ github.workspace }}/src-tauri/binaries/codesense-emulator-x86_64-pc-windows-msvc.exe
-        run: cargo test --locked -p codesense-pty-core --test pty_contract --test process_tree
+        run: cargo test --locked --no-fail-fast -p codesense-pty-core --test pty_contract --test process_tree
 
   flaky-issues:
     name: Track flaky Rust tests
