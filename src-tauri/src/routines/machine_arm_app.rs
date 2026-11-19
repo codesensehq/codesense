@@ -1252,13 +1252,13 @@ mod machine_wording_tests {
 
     #[test]
     fn machine_wording_follows_the_os() {
-        let key = "acme/api/nightly";
+        let routine = "acme/api/nightly";
         assert_eq!(
-            not_managed_here_for("macos", key),
+            not_managed_here_for("macos", routine),
             "routine acme/api/nightly is not armed on a machine this Mac manages"
         );
         assert_eq!(
-            not_managed_here_for("linux", key),
+            not_managed_here_for("linux", routine),
             "routine acme/api/nightly is not armed on a machine this computer manages"
         );
         assert_eq!(
