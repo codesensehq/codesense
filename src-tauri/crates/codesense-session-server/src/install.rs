@@ -31,10 +31,10 @@
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::Read;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use codesense_platform::process::{kill_hard, ProcessTree};
 use sha2::{Digest, Sha256};
 
 use codesense_pty_core::emulator::WORKER_BIN;
@@ -442,44 +442,68 @@ pub fn run_within(
     command: &mut Command,
     timeout: std::time::Duration,
 ) -> Result<std::process::Output, String> {
-    // Put the command in its own process group. ssh may start helpers (and a
-    // remote-command transport); a timeout owns and terminates the whole tree,
-    // never just the immediate child.
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setpgid(0, 0) == 0 {
-                Ok(())
-            } else {
-                Err(std::io::Error::last_os_error())
-            }
-        });
-    }
-    let child = command
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+    // The command runs as the root of its own process tree. ssh may start
+    // helpers (and a remote-command transport); a timeout owns and ends the
+    // whole tree, never just the immediate child.
+    let mut tree = ProcessTree::spawn(command.stdout(Stdio::piped()).stderr(Stdio::piped()))
         .map_err(|e| format!("run {:?}: {e}", command.get_program()))?;
-    let pid = child.id();
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = tx.send(child.wait_with_output());
-    });
-    match rx.recv_timeout(timeout) {
-        Ok(output) => output.map_err(|e| e.to_string()),
-        Err(_) => {
-            // SAFETY: `pid` is the leader of the process group we created
-            // above. A negative pid addresses that group only.
-            unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) };
-            // Reap synchronously: returning while the waiter or descendants
-            // remain live makes retries accumulate leaked processes.
-            let _ = rx.recv();
-            Err(format!(
-                "{:?} did not finish within {} s",
-                command.get_program(),
-                timeout.as_secs()
-            ))
+    type Pipe = Option<Box<dyn Read + Send>>;
+    let drain = |pipe: Pipe| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                pipe.read_to_end(&mut bytes)?;
+            }
+            Ok::<_, std::io::Error>(bytes)
+        })
+    };
+    let stdout: Pipe = tree
+        .child()
+        .stdout
+        .take()
+        .map(|pipe| -> Box<dyn Read + Send> { Box::new(pipe) });
+    let stderr: Pipe = tree
+        .child()
+        .stderr
+        .take()
+        .map(|pipe| -> Box<dyn Read + Send> { Box::new(pipe) });
+    let (stdout, stderr) = (drain(stdout), drain(stderr));
+    let deadline = std::time::Instant::now() + timeout;
+    // Once the root exits the tree ends what it left running, so a
+    // descendant holding a pipe never keeps the readers waiting.
+    let status = loop {
+        match tree.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(10))
+            }
+            Ok(None) => {
+                let _ = kill_hard(&tree);
+                // Reap synchronously: returning while the root or its
+                // descendants remain live makes retries accumulate leaked
+                // processes.
+                let _ = tree.wait();
+                break Err(format!(
+                    "{:?} did not finish within {} s",
+                    command.get_program(),
+                    timeout.as_secs()
+                ));
+            }
+            Err(error) => break Err(error.to_string()),
         }
-    }
+    };
+    let joined = |reader: std::thread::JoinHandle<std::io::Result<Vec<u8>>>| {
+        reader
+            .join()
+            .map_err(|_| "an output reader panicked".to_string())?
+            .map_err(|e| e.to_string())
+    };
+    let (stdout, stderr) = (joined(stdout), joined(stderr));
+    Ok(std::process::Output {
+        status: status?,
+        stdout: stdout?,
+        stderr: stderr?,
+    })
 }
 
 #[cfg(test)]

@@ -37,14 +37,12 @@ crates/codesense-session-server/src/detach.rs 3
 crates/codesense-session-server/src/disconnect_log.rs 1
 crates/codesense-session-server/src/exit_with.rs 7
 crates/codesense-session-server/src/host.rs 68
-crates/codesense-session-server/src/install.rs 5
 crates/codesense-session-server/src/lib.rs 6
 crates/codesense-session-server/src/machine_stats.rs 3
 crates/codesense-session-server/src/main.rs 11
 crates/codesense-session-server/src/native_launch.rs 23
 crates/codesense-session-server/src/offline_mcp.rs 1
 crates/codesense-session-server/src/owned_supervisors.rs 36
-crates/codesense-session-server/src/private_account.rs 7
 crates/codesense-session-server/src/private_account_data.rs 1
 crates/codesense-session-server/src/private_account_native.rs 47
 crates/codesense-session-server/src/remote_workspace.rs 96

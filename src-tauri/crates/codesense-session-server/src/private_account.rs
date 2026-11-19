@@ -6,11 +6,12 @@ use crate::private_account_data::{
     encode_install, parse, InstallData, InstallFile, Marker, OTHER_PROFILE,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
+use codesense_platform::process::{kill_hard, ProcessTree};
 use std::fs::File;
 use std::io::{Read, Write};
-use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 const UNAVAILABLE: &str = "private account unavailable; check account enrollment";
@@ -228,32 +229,35 @@ fn bounded_output_within(
     limit: u64,
 ) -> Result<Ran, String> {
     let started = Instant::now();
-    let mut child = ssh
-        .command(script)
-        .process_group(0)
+    let mut command = ssh.command(script);
+    command
         .stdin(input)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .stderr(Stdio::piped());
+    // ssh runs as the root of its own process tree; every exit path ends the
+    // whole tree, never just ssh.
+    let mut tree = ProcessTree::spawn(&mut command)
         .map_err(|error| broken(step, format_args!("ssh did not start: {error}")))?;
-    let pid = child.id() as i32;
+    let stdout = tree.child().stdout.take().ok_or(UNAVAILABLE)?;
+    let stderr = tree.child().stderr.take().ok_or(UNAVAILABLE)?;
+    let stdin = bytes
+        .is_some()
+        .then(|| tree.child().stdin.take().expect("piped bootstrap input"));
+    let tree = Arc::new(Mutex::new(tree));
     let reader = |stream: Box<dyn Read + Send>| {
+        let tree = tree.clone();
         std::thread::spawn(move || {
             let mut result = Vec::new();
             let read = stream.take((LIMIT + 1) as u64).read_to_end(&mut result);
             if result.len() > LIMIT {
-                // SAFETY: this is our new SSH process group, never a remote PID.
-                unsafe {
-                    libc::kill(-pid, libc::SIGKILL);
-                }
+                let _ = kill_hard(&locked(&tree));
             }
             read.map(|_| result)
         })
     };
-    let stdout = reader(Box::new(child.stdout.take().ok_or(UNAVAILABLE)?));
-    let stderr = reader(Box::new(child.stderr.take().ok_or(UNAVAILABLE)?));
-    let writer = bytes.map(|bytes| {
-        let mut stdin = child.stdin.take().expect("piped bootstrap input");
+    let stdout = reader(Box::new(stdout));
+    let stderr = reader(Box::new(stderr));
+    let writer = bytes.zip(stdin).map(|(bytes, mut stdin)| {
         std::thread::spawn(move || match bytes {
             Upload::Bytes(bytes) => stdin.write_all(&bytes),
             Upload::Files { header, files } => {
@@ -272,24 +276,23 @@ fn bounded_output_within(
         })
     });
     let deadline = started + seconds(limit);
+    // Once ssh exits its tree ends what it left running, so a descendant
+    // holding a pipe never keeps the capture threads alive.
     let status = loop {
-        match child.try_wait() {
+        let mut tree = locked(&tree);
+        match tree.try_wait() {
             Ok(Some(status)) => break Some(status),
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            Ok(None) if Instant::now() < deadline => {
+                drop(tree);
+                std::thread::sleep(Duration::from_millis(10));
+            }
             _ => {
-                // SAFETY: owned process group, including any pipe-holding descendants.
-                unsafe {
-                    libc::kill(-pid, libc::SIGKILL);
-                }
-                let _ = child.wait();
+                let _ = kill_hard(&tree);
+                let _ = tree.wait();
                 break None;
             }
         }
     };
-    // A descendant must not keep the capture threads alive after SSH exits.
-    unsafe {
-        libc::kill(-pid, libc::SIGKILL);
-    }
     let joined = |stream: std::thread::JoinHandle<std::io::Result<Vec<u8>>>| {
         stream
             .join()
@@ -335,6 +338,11 @@ fn bounded_output_within(
     }
     Ok(ran)
 }
+/// The tree behind `tree`'s lock, whether or not a thread holding it panicked.
+fn locked(tree: &Mutex<ProcessTree>) -> MutexGuard<'_, ProcessTree> {
+    tree.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn bounded(
     ssh: &Ssh,
     step: &'static str,
