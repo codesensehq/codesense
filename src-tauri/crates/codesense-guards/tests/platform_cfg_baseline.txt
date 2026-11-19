@@ -28,7 +28,8 @@ crates/codesense-pty-core/src/agent_cli/hermes/gateway_fixture.rs 4
 crates/codesense-pty-core/src/agent_cli/hermes/lifecycle.rs 9
 crates/codesense-pty-core/src/agent_cli/version_cache.rs 18
 crates/codesense-pty-core/src/fixtures.rs 23
-crates/codesense-pty-core/src/inbox_host.rs 4
+crates/codesense-pty-core/src/inbox_host.rs 2
+crates/codesense-pty-core/src/inbox_host/unix.rs 3
 crates/codesense-pty-core/src/leak_gate.rs 14
 crates/codesense-pty-core/src/runner.rs 1
 crates/codesense-pty-core/src/tui_fixture.rs 18

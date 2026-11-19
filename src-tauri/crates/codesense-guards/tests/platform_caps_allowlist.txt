@@ -14,3 +14,4 @@ crates/codesense-pty-core/src/activity/launch/unix.rs mcp-bridge mcp-and-bridge-
 crates/codesense-pty-core/src/activity/engine/unix.rs mcp-bridge mcp-and-bridge-on-named-pipes the engine keeper and its exec verb (exec, signals, Unix-socket endpoint and relay); named pipes replace it
 crates/codesense-pty-core/src/activity/hook_block/unix.rs mcp-bridge mcp-and-bridge-on-named-pipes the selected denial's stdin poll; off unix it reads nothing and fails closed
 crates/codesense-pty-core/src/activity/inbox/unix.rs mcp-bridge mcp-and-bridge-on-named-pipes the inbox waiter over the Unix-socket ingress (host serve, helper ask and hold, parent checks); named pipes replace it
+crates/codesense-pty-core/src/inbox_host/unix.rs mcp-bridge mcp-and-bridge-on-named-pipes the host's hand-over to a waiter on its Unix socket (serve, wait, hang-up peek); named pipes replace it

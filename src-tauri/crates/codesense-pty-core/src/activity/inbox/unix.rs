@@ -63,7 +63,7 @@ pub(super) fn serve(
             InboxAdmission::Pending { delivery }
                 if commit_awaited(delivery, &ask.event)
                     && Instant::now() < until
-                    && !crate::inbox_host::hung_up(&stream) =>
+                    && !crate::inbox_host::transport::hung_up(&stream) =>
             {
                 std::thread::sleep(COMMIT_POLL);
             }
