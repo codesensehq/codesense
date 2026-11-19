@@ -13,6 +13,8 @@
 //! Unix only: the fake PTY is a Unix socket pair and the tests kill the worker with a signal.
 #![cfg(unix)]
 
+mod support;
+
 use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
@@ -27,7 +29,6 @@ use codesense_pty_core::domain::{
 };
 use codesense_pty_core::emulator::{
     EmulatorConfig, EmulatorLink, EmulatorStatus, EmulatorSupervisor, SessionEmulator, TextMode,
-    WORKER_BIN,
 };
 use codesense_pty_core::layout::ServerIdentity;
 use codesense_pty_core::runner::PtySession;
@@ -36,40 +37,6 @@ use codesense_pty_core::{SessionMeta, SessionRegistration, TerminalHost};
 use portable_pty::{Child, ChildKiller, ExitStatus, MasterPty, PtySize};
 
 const ANSWER: Duration = Duration::from_secs(20);
-
-/// The bundled worker, or `None` (with a note) when this machine has none and
-/// nothing requires one.
-fn worker() -> Option<PathBuf> {
-    let path = std::env::var_os("CODESENSE_EMULATOR_WORKER")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            let triple = match (std::env::consts::OS, std::env::consts::ARCH) {
-                ("macos", "aarch64") => "aarch64-apple-darwin",
-                ("macos", "x86_64") => "x86_64-apple-darwin",
-                ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
-                ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
-                other => panic!("no emulator worker is built for {other:?}"),
-            };
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../binaries")
-                .join(format!("{WORKER_BIN}-{triple}"))
-        });
-    if path.is_file() {
-        return Some(path);
-    }
-    let required = std::env::var_os("CI").is_some_and(|v| v == "1" || v == "true")
-        || std::env::var_os("CODESENSE_REQUIRE_EMULATOR").is_some_and(|v| v == "1");
-    assert!(
-        !required,
-        "no emulator worker at {} — build it with `pnpm run build:emulator`",
-        path.display()
-    );
-    eprintln!(
-        "skipping: no emulator worker at {} (build it with `pnpm run build:emulator`)",
-        path.display()
-    );
-    None
-}
 
 struct NoopSink;
 
@@ -270,7 +237,9 @@ const START: (u16, u16) = (100, 30);
 
 #[test]
 fn batcher_feeds_worker_in_order() {
-    let Some(worker) = worker() else { return };
+    let Some(worker) = support::worker() else {
+        return;
+    };
     let dir = tempfile::tempdir().unwrap();
     let host = host(&worker, dir.path());
     let viewer = ViewerId::new("app");
@@ -335,7 +304,9 @@ fn batcher_feeds_worker_in_order() {
 
 #[test]
 fn restart_recreates_with_positions() {
-    let Some(worker) = worker() else { return };
+    let Some(worker) = support::worker() else {
+        return;
+    };
     let dir = tempfile::tempdir().unwrap();
     let host = host(&worker, dir.path());
     let viewer = ViewerId::new("app");
@@ -384,7 +355,9 @@ fn restart_recreates_with_positions() {
 #[test]
 #[ignore = "budget measurement; 10 s"]
 fn firehose_lag_is_bounded() {
-    let Some(worker) = worker() else { return };
+    let Some(worker) = support::worker() else {
+        return;
+    };
     let dir = tempfile::tempdir().unwrap();
     let host = host(&worker, dir.path());
     let session = PtySessionId::new("firehose");
@@ -428,7 +401,9 @@ fn firehose_lag_is_bounded() {
 
 #[test]
 fn snapshot_reflects_exact_seq() {
-    let Some(worker) = worker() else { return };
+    let Some(worker) = support::worker() else {
+        return;
+    };
     let dir = tempfile::tempdir().unwrap();
     let link = EmulatorLink::new();
     let supervisor = EmulatorSupervisor::start(
@@ -528,7 +503,9 @@ fn live_after(
 /// reference.
 #[test]
 fn subscribe_snapshot_then_live_no_gap() {
-    let Some(worker) = worker() else { return };
+    let Some(worker) = support::worker() else {
+        return;
+    };
     let dir = tempfile::tempdir().unwrap();
     let sink = Arc::new(RecordingSink::default());
     let host = host_with_sink(&worker, dir.path(), sink.clone());
@@ -692,7 +669,9 @@ fn escape_stripped(raw: &str) -> String {
 
 #[test]
 fn visible_text_is_what_the_screen_shows() {
-    let Some(worker) = worker() else { return };
+    let Some(worker) = support::worker() else {
+        return;
+    };
     let dir = tempfile::tempdir().unwrap();
     let host = host(&worker, dir.path());
     let domain: &dyn TerminalDomain = &host;
