@@ -300,6 +300,9 @@ jobs:
           path: ${{ runner.temp }}/packages
           merge-multiple: true
       - name: Install the deb and rpm in clean containers
+        # A healthy run takes about 5 minutes. A crawling mirror fails here, by name, before
+        # the job's timeout cancels the whole run.
+        timeout-minutes: 20
         env:
           DEB_IMAGES: ${{ matrix.deb_images }}
         run: |
