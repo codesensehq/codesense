@@ -5,82 +5,16 @@ use codesense_platform::process::{Pid, ProcessGroup};
 #[cfg(test)]
 use std::os::unix::process::CommandExt;
 use std::{
-    fs,
     path::Path,
-    process::Command,
     time::{Duration, Instant},
 };
 
-fn owns_lock(pid: u32, home: &Path) -> bool {
-    let path = home.join("gateway.lock");
-    let Ok(bytes) = fs::read(&path) else {
-        return false;
-    };
-    let Ok(record) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-        return false;
-    };
-    if record.get("pid").unwrap_or(&record).as_u64() != Some(pid as u64) {
-        return false;
-    }
-    let Ok(lock) = fs::OpenOptions::new().read(true).write(true).open(&path) else {
-        return false;
-    };
-    // Held elsewhere, or not a lock this process can take at all.
-    if !matches!(codesense_platform::fs::try_lock_exclusive(&lock), Ok(false)) {
-        return false;
-    }
-    // Darwin lsof does not expose flock's owner. Require all three facts: the live
-    // gateway's lock record, a held kernel lock and that process's open file.
-    let Ok(output) = Command::new("/usr/sbin/lsof")
-        .args(["-a", "-p", &pid.to_string(), "-Fpn"])
-        .arg(&path)
-        .output()
-    else {
-        return false;
-    };
-    let Ok(canonical) = fs::canonicalize(path) else {
-        return false;
-    };
-    output.status.success()
-        && String::from_utf8_lossy(&output.stdout).lines().any(|line| {
-            line.strip_prefix('n')
-                .is_some_and(|name| Path::new(name) == canonical)
-        })
-}
-
-fn verified_gateway(home: &Path) -> Option<peer::PeerProcess> {
-    let bytes = Result::ok(fs::read(home.join("gateway.pid")))?;
-    let record: serde_json::Value = Result::ok(serde_json::from_slice(&bytes))?;
-    let pid = record
-        .get("pid")
-        .unwrap_or(&record)
-        .as_u64()
-        .and_then(|n| Result::ok(u32::try_from(n)))?;
-    let identity = peer::inspect(pid)?;
-    let created = Result::ok(Result::ok(fs::metadata(home))?.created())?;
-    if !identity.started_after(created) {
-        return None;
-    }
-    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
-    let id = Pid::from_u32(pid);
-    let mut system = System::new();
-    system.refresh_processes_specifics(
-        ProcessesToUpdate::Some(&[id]),
-        true,
-        ProcessRefreshKind::new().with_cmd(UpdateKind::Always),
-    );
-    let process = system.process(id)?;
-    let args: Vec<_> = process.cmd().iter().map(|s| s.to_string_lossy()).collect();
-    if !args.iter().any(|arg| arg == "hermes_cli.main")
-        || !args.windows(2).any(|args| args == ["gateway", "run"])
-        || unsafe { libc::getpgid(pid as i32) } != pid as i32
-        || !owns_lock(pid, home)
-        || !peer::runs(identity)
-    {
-        return None;
-    }
-    Some(identity)
-}
+/// Which gateway is the home's own: read from its Unix process group and lock, or
+/// none where those are not available yet.
+#[cfg_attr(unix, path = "lifecycle/unix.rs")]
+#[cfg_attr(not(unix), path = "lifecycle/off.rs")]
+mod transport;
+use transport::verified_gateway;
 
 pub(crate) fn teardown_home(home: &Path, wait_for_replacement: bool) {
     // A detached recovery may still be importing/bootstraping when the CLI tree ends.
@@ -113,6 +47,7 @@ pub(crate) fn teardown_home(home: &Path, wait_for_replacement: bool) {
 mod gateway_tests {
     use super::*;
     use std::io::BufRead;
+    use std::{fs, process::Command};
     struct Gateway(std::process::Child);
     impl Gateway {
         fn spawn(home: &Path, owns_lock: bool) -> Self {
