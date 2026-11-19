@@ -19,14 +19,18 @@
 #       default collection: it is alive at 30 s, has drawn a window that is not one colour, logs
 #       webview ready, a caps: line that agrees with the bundle (caps-agree) and secret store:
 #       secret-service, and exits within 10 s of SIGTERM, having installed the bundled git-ai
-#       at the pinned version (installed-git-ai). Each launch leaves <mode>.log and
+#       at the pinned version (installed-git-ai), and logs terminal renderer: dom with the
+#       render probe's verdict (ok, blank, no-frame or error: what WebGL drew under xvfb).
+#       Release builds carry no WebDriver, so no launch opens a terminal tab: that terminals
+#       show text is proven by the front end's Vitest rows. Each launch leaves <mode>.log and
 #       <mode>.png in <out-dir>.
-#   smoke-linux.sh variant <dmabuf|no-dbus> <out-dir>
+#   smoke-linux.sh variant <dmabuf|no-dbus|webgl> <out-dir>
 #       Launch the AppImage run extracted into <out-dir> again. dmabuf: with the user's
 #       WEBKIT_DISABLE_DMABUF_RENDERER=0, which the app keeps (the WebKit web process has it, and
 #       the log says nothing of it), the window check still passes. no-dbus: with no session bus
 #       (outside dbus-run-session, at an address that does not exist, so none autolaunches), the
-#       app stays up and logs secret store: unavailable.
+#       app stays up and logs secret store: unavailable. webgl: with
+#       CODESENSE_TERMINAL_RENDERER=webgl, the app logs terminal renderer: webgl, probe skipped.
 #   smoke-linux.sh caps-agree <listing> <log>
 #       The log has one caps: line, and its starship and git-ai are on exactly when the file
 #       list holds resources/starship and resources/git-ai.
@@ -224,6 +228,7 @@ start_session() {
     case "$mode" in
         default) dbus-run-session -- bash "$SELF" desktop "$mode" "$out" ;;
         dmabuf) WEBKIT_DISABLE_DMABUF_RENDERER=0 dbus-run-session -- bash "$SELF" desktop "$mode" "$out" ;;
+        webgl) CODESENSE_TERMINAL_RENDERER=webgl dbus-run-session -- bash "$SELF" desktop "$mode" "$out" ;;
         no-dbus) DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent in_xvfb "$mode" "$out" ;;
         *) usage ;;
     esac
@@ -361,6 +366,23 @@ launch() {
     if [[ "$mode" == dmabuf ]] && grep -qi dmabuf "$mode.txt"; then
         fail "the log mentions DMABUF; the app should keep the user's value without a word"
     fi
+    terminal_renderer "$mode" "$mode.txt"
+}
+
+# The front end logged its terminal renderer once: DOM on Linux after the render probe (whose
+# verdict is printed), or WebGL with the probe skipped when the webgl variant forces it.
+terminal_renderer() {
+    local mode="$1" text="$2" lines want
+    lines=$(grep -oE "terminal renderer: .*" "$text" || true)
+    [[ -n "$lines" ]] || fail "the log has no terminal renderer line"
+    [[ $(wc -l <<<"$lines") -eq 1 ]] || fail "the log has more than one terminal renderer line: $lines"
+    if [[ "$mode" == webgl ]]; then
+        want="^terminal renderer: webgl \(probe: skipped\), CODESENSE_TERMINAL_RENDERER=webgl\$"
+    else
+        want="^terminal renderer: dom \(probe: (ok|blank|no-frame|error)\)\$"
+    fi
+    grep -qE "$want" <<<"$lines" || fail "unexpected terminal renderer line: $lines"
+    echo "The log has $lines"
 }
 
 [[ $# -ge 1 ]] || usage
@@ -384,7 +406,7 @@ case "$command" in
         run_appimage "$@"
         ;;
     variant)
-        [[ $# -eq 2 && "$1" =~ ^(dmabuf|no-dbus)$ ]] || usage
+        [[ $# -eq 2 && "$1" =~ ^(dmabuf|no-dbus|webgl)$ ]] || usage
         [[ -d "$2/squashfs-root" ]] || fail "$2 has no extracted AppImage; smoke-linux.sh run extracts it"
         start_session "$1" "$(realpath "$2")"
         ;;
