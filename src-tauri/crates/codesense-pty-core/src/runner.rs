@@ -604,11 +604,16 @@ fn plainly(error: &(dyn std::error::Error + 'static)) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Unix only, as the group tests that use it are.
+    #[cfg(unix)]
     use codesense_platform::process::ProcessTree;
 
+    // Unix only, as the group tests that use it are.
+    #[cfg(unix)]
     #[derive(Clone, Debug)]
     struct ExitedChild(Arc<Mutex<Vec<&'static str>>>);
 
+    #[cfg(unix)]
     impl portable_pty::ChildKiller for ExitedChild {
         fn kill(&mut self) -> std::io::Result<()> {
             self.0.lock().unwrap().push("kill-child");
@@ -619,6 +624,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     impl Child for ExitedChild {
         fn try_wait(&mut self) -> std::io::Result<Option<portable_pty::ExitStatus>> {
             self.0.lock().unwrap().push("try-wait");
@@ -761,6 +767,8 @@ mod tests {
         );
     }
 
+    // Unix only, as the group tests that use it are.
+    #[cfg(unix)]
     fn test_session_child(
         child: impl Child + Send + 'static,
         process_group: Option<ProcessGroup>,
@@ -1008,11 +1016,14 @@ mod tests {
         assert!(killed.signal.is_some(), "a signal death names its signal");
     }
 
+    // Unix only, as the test that uses it is (it uses the unix-only test fixtures).
+    #[cfg(unix)]
     #[derive(Debug, Clone)]
     struct BlockingWaitChild {
         release: Arc<(Mutex<bool>, std::sync::Condvar)>,
     }
 
+    #[cfg(unix)]
     impl portable_pty::ChildKiller for BlockingWaitChild {
         fn kill(&mut self) -> std::io::Result<()> {
             Ok(())
@@ -1023,6 +1034,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     impl Child for BlockingWaitChild {
         fn try_wait(&mut self) -> std::io::Result<Option<portable_pty::ExitStatus>> {
             Ok(None)
@@ -1042,6 +1054,8 @@ mod tests {
         }
     }
 
+    // Unix only: uses the unix-only test fixtures.
+    #[cfg(unix)]
     #[test]
     fn child_reaper_enqueue_returns_before_wait_completes() {
         let release = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
@@ -1124,6 +1138,8 @@ mod tests {
 
     /// EMFILE names the process and its counts; any other
     /// error reads exactly as before.
+    // Unix only: EMFILE is the unix errno for descriptor exhaustion.
+    #[cfg(unix)]
     #[test]
     fn an_emfile_spawn_error_says_the_open_file_limit_was_reached() {
         let emfile = std::io::Error::from_raw_os_error(libc::EMFILE);

@@ -9,6 +9,9 @@
 //! Needs the bundled worker (`pnpm run build:emulator`, or
 //! `CODESENSE_EMULATOR_WORKER`). Without one the tests skip, unless `CI=1` or
 //! `CODESENSE_REQUIRE_EMULATOR=1`, where a missing worker fails them.
+//!
+//! Unix only: the fake PTY is a Unix socket pair and the tests kill the worker with a signal.
+#![cfg(unix)]
 
 use std::collections::HashSet;
 use std::io::{Read, Write};

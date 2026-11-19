@@ -1651,9 +1651,13 @@ impl AgentCliAdapter for Codex {
 
 #[cfg(test)]
 mod tests {
+    // Unix only, as the tests of the fake app-server on a Unix socket that use it are.
+    #[cfg(unix)]
     use super::app_server::AppServer;
     use super::*;
     use crate::activity::Scope;
+    // Unix only, as the tests of the fake app-server on a Unix socket that use it are.
+    #[cfg(unix)]
     use tungstenite::Message;
 
     #[test]
@@ -1909,6 +1913,8 @@ mod tests {
         );
     }
 
+    // Unix only: it makes symlinks.
+    #[cfg(unix)]
     #[test]
     fn cx4_native_record_refuses_symlinks_and_bounds_large_or_malformed_records() {
         let home = tempfile::tempdir().unwrap();
@@ -1998,6 +2004,8 @@ mod tests {
         assert!(windows.iter().any(|w| w.id == "codex:primary"));
     }
 
+    // Unix only: it talks to the fake app-server on a Unix socket.
+    #[cfg(unix)]
     #[test]
     fn cx3_fresh_engine_wakes_before_any_prompt_hook() {
         let dir = tempfile::tempdir().unwrap();
@@ -2036,6 +2044,8 @@ mod tests {
         );
     }
 
+    // Unix only: it talks to the fake app-server on a Unix socket.
+    #[cfg(unix)]
     #[test]
     fn cx3_native_readiness_refuses_review_menus_busy_or_ambiguous_threads() {
         for script in [
@@ -2080,6 +2090,8 @@ mod tests {
         }
     }
 
+    // Unix only: it talks to the fake app-server on a Unix socket.
+    #[cfg(unix)]
     #[test]
     fn cx3_native_readiness_requires_every_owned_observer_and_all_enabled_hook_trust() {
         let dir = tempfile::tempdir().unwrap();
@@ -2134,6 +2146,8 @@ mod tests {
         }
     }
 
+    // Unix only: it talks to the fake app-server on a Unix socket.
+    #[cfg(unix)]
     #[test]
     fn cx3_native_probe_cannot_replace_hook_evidence_or_revive_a_retired_launch() {
         let dir = tempfile::tempdir().unwrap();
@@ -2239,6 +2253,8 @@ mod tests {
         );
     }
 
+    // Unix only: it sets and reads unix modes.
+    #[cfg(unix)]
     #[test]
     fn cx2_live_group_writable_owned_home_can_prepare_generated_trust() {
         use std::os::unix::fs::PermissionsExt;
@@ -2333,6 +2349,8 @@ mod tests {
         );
     }
 
+    // Unix only: it makes symlinks.
+    #[cfg(unix)]
     #[test]
     fn cx2_trust_refuses_malformed_and_symlinked_configs_without_damage() {
         let home = tempfile::tempdir().unwrap();
@@ -2380,6 +2398,8 @@ mod tests {
         assert_eq!(value["hooks"]["state"].as_table().unwrap().len(), 8);
     }
 
+    // Unix only: it makes symlinks.
+    #[cfg(unix)]
     #[test]
     fn cx2_a_symlinked_home_the_user_owns_keeps_its_trust() {
         let real = tempfile::tempdir().unwrap();
@@ -2403,6 +2423,8 @@ mod tests {
         );
     }
 
+    // Unix only: it makes symlinks.
+    #[cfg(unix)]
     #[test]
     fn cx2_trust_refuses_a_linked_config_or_lock_without_damage() {
         let grants = vec![("owned:x".to_owned(), "hash-x".to_owned())];
@@ -2780,6 +2802,8 @@ mod tests {
     }
 
     /// How a fake app-server answers.
+    // Unix only: used only by the tests of the fake app-server on a Unix socket.
+    #[cfg(unix)]
     #[derive(Clone)]
     struct Script {
         /// Its thread's status: `idle` or `active`.
@@ -2797,6 +2821,8 @@ mod tests {
         more: Option<&'static str>,
     }
 
+    // Unix only: used only by the tests of the fake app-server on a Unix socket.
+    #[cfg(unix)]
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Turn {
         Start,
@@ -2804,6 +2830,7 @@ mod tests {
         HangUp,
     }
 
+    #[cfg(unix)]
     impl Default for Script {
         fn default() -> Self {
             Self {
@@ -2819,10 +2846,14 @@ mod tests {
     }
 
     /// Every request a fake app-server was sent: its method and params.
+    // Unix only: used only by the tests of the fake app-server on a Unix socket.
+    #[cfg(unix)]
     type Seen = std::sync::Arc<std::sync::Mutex<Vec<(String, Value)>>>;
 
     /// A fake Codex app-server on a Unix socket in `dir`, serving every connection by
     /// `script`: its endpoint, and every request it was sent.
+    // Unix only: the fake app-server serves a Unix socket.
+    #[cfg(unix)]
     fn app_server(dir: &Path, script: Script) -> (PathBuf, Seen) {
         let endpoint = dir.join("engine-1.sock");
         let listener = std::os::unix::net::UnixListener::bind(&endpoint).unwrap();
@@ -2899,6 +2930,8 @@ mod tests {
         (endpoint, seen)
     }
 
+    // Unix only: used only by the tests of the fake app-server on a Unix socket.
+    #[cfg(unix)]
     fn sent(seen: &std::sync::Mutex<Vec<(String, Value)>>, method: &str) -> Vec<Value> {
         seen.lock()
             .unwrap()
@@ -2908,6 +2941,8 @@ mod tests {
             .collect()
     }
 
+    // Unix only: it talks to the fake app-server on a Unix socket.
+    #[cfg(unix)]
     #[test]
     fn its_engine_is_started_a_turn_only_while_idle_and_its_answer_is_read_honestly() {
         let start = |script: Script| {
@@ -2961,6 +2996,8 @@ mod tests {
     /// The thread its TUI shows is the one its hooks named, or before any hook its only
     /// one, and in either case the latest; the engine's own threads and subagents' never
     /// are. Anything else is unclear, and no turn is started where no one sees it.
+    // Unix only: it talks to the fake app-server on a Unix socket.
+    #[cfg(unix)]
     #[test]
     fn its_turn_is_started_only_on_the_thread_its_tui_shows() {
         let thread = |id: &str, at: i64| json!({"id": id, "recencyAt": at});
@@ -3021,6 +3058,8 @@ mod tests {
 
     /// A request the engine sends while a reply is awaited is not its reply, whatever its
     /// id; the TUI answers it.
+    // Unix only: its fake engine serves a Unix socket.
+    #[cfg(unix)]
     #[test]
     fn a_request_from_its_engine_is_never_read_as_its_reply() {
         let dir = tempfile::tempdir().unwrap();
@@ -3049,9 +3088,12 @@ mod tests {
     }
 
     /// A host's inbox reports: what became of each notice.
+    // Unix only: used only by the tests of the fake app-server on a Unix socket.
+    #[cfg(unix)]
     #[derive(Default)]
     struct Outlet(std::sync::Mutex<Vec<(String, crate::inbox_host::Fate)>>);
 
+    #[cfg(unix)]
     impl crate::inbox_host::InboxOutlet for Outlet {
         fn fate(&self, _: &str, token: &str, fate: crate::inbox_host::Fate) {
             self.0.lock().unwrap().push((token.to_string(), fate));
@@ -3065,6 +3107,8 @@ mod tests {
         }
     }
 
+    // Unix only: it talks to the fake app-server on a Unix socket.
+    #[cfg(unix)]
     #[test]
     fn its_host_starts_it_a_turn_through_its_engine_and_never_while_it_works() {
         let dir = tempfile::tempdir().unwrap();

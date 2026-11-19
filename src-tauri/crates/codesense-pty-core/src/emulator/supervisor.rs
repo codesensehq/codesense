@@ -693,7 +693,7 @@ mod tests {
         assert!(name.starts_with(&prefix), "{name}");
         assert_eq!(std::fs::read(&pinned).unwrap(), b"worker bytes");
         for path in [dir.path().join("run"), runtime, pinned] {
-            crate::tests::expect_mode(&path, 0o700);
+            crate::test_support::expect_mode(&path, 0o700);
         }
     }
 

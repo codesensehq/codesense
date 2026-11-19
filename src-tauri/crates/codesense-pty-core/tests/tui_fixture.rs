@@ -2,6 +2,9 @@
 //! The seeded TUI fixture: its `.ptylog` is deterministic, matches the
 //! checked-in file, carries every frame kind the parity tests rely on, and the
 //! live binary redraws at the new size on `SIGWINCH`.
+//!
+//! Unix only, as the fixture is: it redraws on unix signals.
+#![cfg(unix)]
 
 use std::io::Read;
 use std::path::PathBuf;

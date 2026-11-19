@@ -4,7 +4,7 @@
 //! sessions.
 
 use super::*;
-use crate::tests::expect_mode;
+use crate::test_support::expect_mode;
 
 /// A model with viewer `v` attached under boot `boot` (as a client attaches by
 /// taking its first snapshot before it opens anything).
@@ -764,6 +764,8 @@ fn cleanup_reservations_are_visible_until_placement_or_release() {
     assert!(m.worktree_usage(source.path()).unwrap().opening.is_empty());
 }
 
+// Unix only: the alias is a unix symlink.
+#[cfg(unix)]
 #[test]
 fn canonical_source_usage_matches_generic_paths_and_openings_without_labels() {
     let m = model();

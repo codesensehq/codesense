@@ -495,6 +495,8 @@ mod tests {
         );
     }
 
+    // Unix only: the link half makes a symlink.
+    #[cfg(unix)]
     #[test]
     fn a_session_log_found_twice_or_through_a_link_is_refused() {
         let home = tempfile::tempdir().unwrap();

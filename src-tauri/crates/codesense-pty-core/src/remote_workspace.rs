@@ -673,7 +673,7 @@ pub mod removal {
             // SAFETY: geteuid has no preconditions.
             let uid = unsafe { libc::geteuid() };
             let fence = format!("/tmp/codesense-worktree-{uid}-{key}.lock");
-            crate::tests::expect_mode(Path::new(&fence), 0o600);
+            crate::test_support::expect_mode(Path::new(&fence), 0o600);
             drop(admission);
             let _ = std::fs::remove_file(&fence);
         }

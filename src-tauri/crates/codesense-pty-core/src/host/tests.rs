@@ -2,6 +2,8 @@
 //! The host over real PTYs: the layout follows each process exit and removal
 //! through the wrapped sink, `open_tab` never leaves a phantom-live entry, and
 //! closes free or background exactly as their mode says.
+//! Unix only: uses the unix-only test fixtures (real PTYs through `sh`).
+#![cfg(unix)]
 
 use std::sync::Arc;
 use std::time::Duration;

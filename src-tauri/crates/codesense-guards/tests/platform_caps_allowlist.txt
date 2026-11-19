@@ -18,4 +18,7 @@ crates/codesense-pty-core/src/agent_cli/codex/app_server/unix.rs agent-cli-socke
 crates/codesense-pty-core/src/agent_cli/hermes/channel/unix.rs agent-cli-sockets agent-cli-sockets-on-windows Hermes's gateway control socket and its engine relay's WebSocket over Unix sockets
 crates/codesense-pty-core/src/agent_cli/hermes/gateway_fixture.rs agent-cli-sockets agent-cli-sockets-on-windows unix-socket test gateway, gated whole; follows hermes/channel
 crates/codesense-pty-core/src/agent_cli/hermes/lifecycle/unix.rs agent-cli-sockets agent-cli-sockets-on-windows the Hermes gateway check: its own process group (getpgid) and its held gateway lock, read through lsof
+crates/codesense-pty-core/src/fixtures.rs pty-test-fixtures cross-platform-test-matrix real-PTY test and leak-gate fixtures with no every-OS caller, gated whole; their process census reads unix process groups
 crates/codesense-pty-core/src/inbox_host/unix.rs mcp-bridge mcp-and-bridge-on-named-pipes the host's hand-over to a waiter on its Unix socket (serve, wait, hang-up peek); named pipes replace it
+crates/codesense-pty-core/src/leak_gate.rs pty-leak-gate cross-platform-test-matrix the leak-gate feature's PTY lifecycle diagnostic with no every-OS caller, gated whole; only the app's dhat-heap harness enables it
+crates/codesense-pty-core/src/tui_fixture.rs tui-fixture cross-platform-test-matrix the tui-fixture feature's seeded TUI test fixture with no every-OS caller, gated whole; it redraws on unix signals

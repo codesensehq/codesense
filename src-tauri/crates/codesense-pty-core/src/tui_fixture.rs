@@ -10,6 +10,9 @@
 //!   for a seed; the checked-in `tests/fixtures/terminal/tui-fixture.ptylog`.
 //! - [`run_live`]: the same frames on a real tty, redrawn on every `SIGWINCH`,
 //!   looping until a terminating signal.
+//!
+//! Unix only: test fixture code that redraws on unix signals and reads the tty size.
+#![cfg(unix)]
 
 use crate::ptylog::{output_line, resize_line};
 

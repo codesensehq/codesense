@@ -667,6 +667,8 @@ mod tests {
     }
 
     /// An interactive shell in a real PTY, driven by typing into it.
+    // macOS and Linux only, as the tests that use it are.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     struct PtyShell {
         pid: u32,
         writer: Box<dyn std::io::Write + Send>,
@@ -675,6 +677,7 @@ mod tests {
         _reader: std::thread::JoinHandle<()>,
     }
 
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     impl PtyShell {
         fn spawn() -> Self {
             use portable_pty::{native_pty_system, CommandBuilder, PtySize};
@@ -720,6 +723,7 @@ mod tests {
         }
     }
 
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     impl Drop for PtyShell {
         fn drop(&mut self) {
             let _ = self.child.kill();
