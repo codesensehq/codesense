@@ -111,7 +111,7 @@ pub fn enabled_for(key: &str, os: &str, arch: &str) -> bool {
     }
     TABLE
         .iter()
-        .find(|row| row.key == key)
+        .find_map(|row| (row.key == key).then_some(row))
         .is_some_and(|row| resolve(std::slice::from_ref(row), os, arch, &|_| false)[0].on)
 }
 

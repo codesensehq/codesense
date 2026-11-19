@@ -64,12 +64,10 @@ const TARGET_PINS: [(&str, &str, &str, &str); 5] = [
 ];
 /// The git-ai pin for one target, or `None` where this build pins none.
 pub(crate) fn pin_for(os: &str, arch: &str) -> Option<Pin> {
-    TARGET_PINS
-        .iter()
-        .find(|&&(o, a, _, _)| (o, a) == (os, arch))
-        .map(|&(_, _, platform, text)| {
-            Pin::parse(text, platform).expect("invalid bundled git-ai pin")
-        })
+    TARGET_PINS.iter().find_map(|&(o, a, platform, text)| {
+        ((o, a) == (os, arch))
+            .then(|| Pin::parse(text, platform).expect("invalid bundled git-ai pin"))
+    })
 }
 // The running target's pin. A target with none takes the macOS arm64 pin, so `PIN` is always a
 // pin; git-ai is unsupported there (`supported`). Before changing the macOS arm64 pin's hash,
