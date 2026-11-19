@@ -8,7 +8,6 @@
 //! `enabled_for` answers for any other platform from the same table.
 
 use serde::Serialize;
-use serde_json::Value;
 use std::fmt::Write;
 use std::sync::OnceLock;
 
@@ -20,99 +19,22 @@ pub const TERMINAL_SERVER_SIDECAR: &str = "terminal-server-sidecar";
 /// The table: a JSON array of rows, in the order of the `caps:` line.
 const TABLE_JSON: &str = include_str!("../platform-caps.json");
 
-/// Whether a capability exists on one OS.
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum Support {
-    On,
-    Off,
-    /// On only for the listed architectures (`std::env::consts::ARCH` values).
-    OnFor(Vec<String>),
-    /// On when the key's probe (`probe_for`) says so. The probe is run by whoever resolves the
-    /// table, so tests stub it and never touch the host.
-    Probe,
+/// The table's one parser, the build scripts' too, so the gates and the runtime answers read the
+/// table alike.
+// `configure_caps` and `compiled_caps` are the build scripts'.
+#[allow(dead_code)]
+mod caps_table {
+    include!("../build_caps.rs");
 }
+use caps_table::{Row, Support};
 
-struct Row {
-    key: String,
-    macos: Support,
-    linux: Support,
-    windows: Support,
-    /// Why the capability is off on a platform that lacks it.
-    reason: String,
-}
-
-impl Row {
-    /// The row's value for one OS; an OS with no column has none.
-    fn support(&self, os: &str) -> Option<&Support> {
-        match os {
-            "macos" => Some(&self.macos),
-            "linux" => Some(&self.linux),
-            "windows" => Some(&self.windows),
-            _ => None,
-        }
-    }
-}
-
-/// One value: `"on"`, `"off"`, `"probe"` or `{"on": [<arch>…]}`.
-fn support(value: &Value) -> Result<Support, String> {
-    let archs = |archs: &Vec<Value>| -> Option<Vec<String>> {
-        archs
-            .iter()
-            .map(|arch| arch.as_str().map(str::to_string))
-            .collect()
-    };
-    let parsed = match value {
-        Value::String(word) => match word.as_str() {
-            "on" => Some(Support::On),
-            "off" => Some(Support::Off),
-            "probe" => Some(Support::Probe),
-            _ => None,
-        },
-        Value::Object(map) if map.len() == 1 => map
-            .get("on")
-            .and_then(Value::as_array)
-            .and_then(archs)
-            .map(Support::OnFor),
-        _ => None,
-    };
-    parsed.ok_or_else(|| {
-        format!("{value} is not \"on\", \"off\", \"probe\" or {{\"on\": [<arch>…]}}")
-    })
-}
-
-/// The rows of a table, in file order.
-fn parse_table(json: &str) -> Result<Vec<Row>, String> {
-    let rows: Vec<Value> = serde_json::from_str(json).map_err(|error| error.to_string())?;
-    rows.iter()
-        .map(|row| {
-            let text = |field: &str| {
-                row.get(field)
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-                    .ok_or_else(|| format!("{row} has no string `{field}`"))
-            };
-            let column = |os: &str| {
-                row.get(os)
-                    .ok_or_else(|| format!("{row} has no `{os}`"))
-                    .and_then(support)
-            };
-            Ok(Row {
-                key: text("key")?,
-                macos: column("macos")?,
-                linux: column("linux")?,
-                windows: column("windows")?,
-                reason: text("reason")?,
-            })
-        })
-        .collect()
-}
-
-/// The table, parsed once. The build scripts read the same bytes and fail the build on a bad
-/// table, and the tests parse it here, so a built app never panics on it.
+/// The table, parsed once. The build scripts parse the same bytes with the same parser and fail
+/// the build on a bad table, so a built app never panics on it.
 fn table() -> &'static [Row] {
     static TABLE: OnceLock<Vec<Row>> = OnceLock::new();
     TABLE.get_or_init(|| {
-        parse_table(TABLE_JSON).unwrap_or_else(|error| panic!("platform-caps.json: {error}"))
+        caps_table::parse_caps(TABLE_JSON)
+            .unwrap_or_else(|error| panic!("platform-caps.json: {error}"))
     })
 }
 
@@ -391,13 +313,13 @@ mod tests {
 
     #[test]
     fn each_value_form_parses() {
-        let value = |json: &str| support(&serde_json::from_str(json).unwrap());
-        assert_eq!(value(r#""on""#), Ok(Support::On));
-        assert_eq!(value(r#""off""#), Ok(Support::Off));
-        assert_eq!(value(r#""probe""#), Ok(Support::Probe));
+        let value = |json: &str| caps_table::parse_support(&serde_json::from_str(json).unwrap());
+        assert_eq!(value(r#""on""#), Some(Support::On));
+        assert_eq!(value(r#""off""#), Some(Support::Off));
+        assert_eq!(value(r#""probe""#), Some(Support::Probe));
         assert_eq!(
             value(r#"{"on": ["x86_64", "aarch64"]}"#),
-            Ok(Support::OnFor(vec!["x86_64".into(), "aarch64".into()]))
+            Some(Support::OnFor(vec!["x86_64".into(), "aarch64".into()]))
         );
         for bad in [
             r#""yes""#,
@@ -407,8 +329,12 @@ mod tests {
             r#"{"on": [1]}"#,
             r#"{"off": ["aarch64"]}"#,
             r#"{"on": [], "off": []}"#,
+            r#"{"on": []}"#,
+            r#"{"on": [""]}"#,
+            r#"{"on": ["X86_64"]}"#,
+            r#"{"on": ["x86-64"]}"#,
         ] {
-            assert!(value(bad).is_err(), "{bad}");
+            assert!(value(bad).is_none(), "{bad}");
         }
     }
 
@@ -419,21 +345,21 @@ mod tests {
             r#"[{"key": "x", "macos": "on", "linux": "on", "reason": "r"}]"#,
             r#"[{"key": "x", "macos": "on", "linux": "on", "windows": "maybe", "reason": "r"}]"#,
             r#"[{"macos": "on", "linux": "on", "windows": "off", "reason": "r"}]"#,
+            r#"[{"key": "x", "macos": "on", "linux": "on", "windows": "off"}]"#,
+            r#"[{"key": "x", "macos": "on", "linux": "on", "windows": "off", "reason": " "}]"#,
+            r#"[{"key": "x", "macos": "on", "linux": "on", "windows": "off", "reason": 1}]"#,
         ] {
-            assert!(parse_table(bad).is_err(), "{bad}");
+            assert!(caps_table::parse_caps(bad).is_err(), "{bad}");
         }
-        assert_eq!(parse_table(TABLE_JSON).map(|rows| rows.len()), Ok(9));
-    }
-
-    /// The build scripts' gates. A build script's own tests never run, so they are tested here.
-    #[allow(dead_code)]
-    mod build {
-        include!("../build_caps.rs");
+        assert_eq!(
+            caps_table::parse_caps(TABLE_JSON).map(|rows| rows.len()),
+            Ok(9)
+        );
     }
 
     /// The keys `table` compiles in for one target, in file order.
     fn compiled(table: &str, os: &str, arch: &str) -> Vec<String> {
-        build::compiled_caps(table, os, arch)
+        caps_table::compiled_caps(table, os, arch)
             .unwrap()
             .into_iter()
             .filter_map(|(key, on)| on.then_some(key))
@@ -458,7 +384,7 @@ mod tests {
         assert_eq!(compiled(table, "linux", "riscv64"), ["always"]);
         assert_eq!(compiled(table, "windows", "x86_64"), ["always"]);
         assert!(compiled(table, "freebsd", "x86_64").is_empty());
-        let declared: Vec<_> = build::compiled_caps(table, "windows", "x86_64")
+        let declared: Vec<_> = caps_table::compiled_caps(table, "windows", "x86_64")
             .unwrap()
             .into_iter()
             .map(|(key, _)| key)
@@ -483,20 +409,39 @@ mod tests {
             r#"[{"key": "x", "macos": "on", "linux": {"off": []}, "windows": "off", "reason": "r"}]"#,
         ] {
             assert!(
-                build::compiled_caps(bad, "macos", "aarch64").is_err(),
+                caps_table::compiled_caps(bad, "macos", "aarch64").is_err(),
                 "{bad}"
             );
         }
     }
 
+    /// A key is `[a-z0-9-]+` and appears once, so each one has its own `cfg`.
+    #[test]
+    fn a_key_is_lowercase_and_unique() {
+        let row = |key: &str| {
+            format!(
+                r#"{{"key": "{key}", "macos": "on", "linux": "on", "windows": "off", "reason": "r"}}"#
+            )
+        };
+        for key in ["", "Git-ai", "git_ai", "git ai", "git.ai", "gît"] {
+            let table = format!("[{}]", row(key));
+            assert!(caps_table::parse_caps(&table).is_err(), "{key:?}");
+        }
+        let twice = format!("[{}, {}]", row("git-ai"), row("git-ai"));
+        let error = caps_table::parse_caps(&twice).err().unwrap_or_default();
+        assert!(error.contains("second row"), "{error}");
+        let fine = format!("[{}, {}]", row("git-ai"), row("pdf-export2"));
+        assert_eq!(caps_table::parse_caps(&fine).map(|rows| rows.len()), Ok(2));
+    }
+
     #[test]
     fn a_cap_cfg_is_its_key_with_underscores() {
         assert_eq!(
-            build::cap_cfg("terminal-server-sidecar"),
+            caps_table::cap_cfg("terminal-server-sidecar"),
             "cap_terminal_server_sidecar"
         );
-        assert_eq!(build::cap_cfg(GIT_AI), "cap_git_ai");
-        assert_eq!(build::cap_cfg("pdf-export"), "cap_pdf_export");
+        assert_eq!(caps_table::cap_cfg(GIT_AI), "cap_git_ai");
+        assert_eq!(caps_table::cap_cfg("pdf-export"), "cap_pdf_export");
     }
 
     /// The build and the runtime read the same bytes: a target compiles in exactly what resolves

@@ -2,7 +2,7 @@
 include!("build_caps.rs");
 
 fn main() {
-    configure_platform_caps();
+    configure_caps("platform-caps.json");
     configure_beta_channel();
     configure_site_contract_tests();
     println!("cargo:rerun-if-env-changed=GITHUB_CLIENT_ID");
@@ -38,15 +38,6 @@ fn main() {
     );
 
     tauri_build::build()
-}
-
-/// The capability gates, `cfg(cap_<key>)`, from the table `platform_caps.rs`
-/// resolves at runtime.
-fn configure_platform_caps() {
-    println!("cargo:rerun-if-changed=platform-caps.json");
-    let table = std::fs::read_to_string("platform-caps.json")
-        .unwrap_or_else(|e| panic!("read platform-caps.json: {e}"));
-    emit_caps(&table);
 }
 
 /// The build-time update channel. `CODESENSE_CHANNEL` is `internal`

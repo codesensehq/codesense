@@ -17,10 +17,7 @@ use std::process::Command;
 include!("../../build_caps.rs");
 
 fn main() {
-    println!("cargo:rerun-if-changed=../../platform-caps.json");
-    let table = std::fs::read_to_string("../../platform-caps.json")
-        .unwrap_or_else(|e| panic!("read ../../platform-caps.json: {e}"));
-    emit_caps(&table);
+    configure_caps("../../platform-caps.json");
 
     let app_manifest = Path::new("../../Cargo.toml");
     println!("cargo:rerun-if-changed={}", app_manifest.display());

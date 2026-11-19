@@ -1,8 +1,114 @@
 // SPDX-License-Identifier: MIT
-// The capability gates, `cfg(cap_<key>)`, from `platform-caps.json`: the table
-// `src/platform_caps.rs` resolves at runtime. The app's and the session
-// server's build scripts `include!` this file, and so do `platform_caps.rs`'s
-// tests, since a build script's own tests never run.
+// The capability table, `platform-caps.json`, and its gates, `cfg(cap_<key>)`.
+// One parser for both readers: the app's and the session server's build scripts
+// `include!` this file for the gates, and `src/platform_caps.rs` `include!`s it
+// for the runtime answers, so the two cannot read the table differently.
+
+/// Whether a capability exists on one OS.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Support {
+    On,
+    Off,
+    /// On only for the listed architectures (`std::env::consts::ARCH` values).
+    OnFor(Vec<String>),
+    /// Compiled in, and on at runtime when the key's probe says so.
+    Probe,
+}
+
+/// One row of the table.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Row {
+    pub key: String,
+    pub macos: Support,
+    pub linux: Support,
+    pub windows: Support,
+    /// Why the capability is off on a platform that lacks it.
+    pub reason: String,
+}
+
+impl Row {
+    /// The row's value for one OS; an OS with no column has none.
+    pub fn support(&self, os: &str) -> Option<&Support> {
+        match os {
+            "macos" => Some(&self.macos),
+            "linux" => Some(&self.linux),
+            "windows" => Some(&self.windows),
+            _ => None,
+        }
+    }
+}
+
+/// `[a-z0-9-]+` for a key, `[a-z0-9_]+` for an architecture.
+fn is_name(name: &str, separator: u8) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == separator)
+}
+
+/// One value: `"on"`, `"off"`, `"probe"` or `{"on": [<arch>…]}` with at least
+/// one architecture; `None` for anything else.
+pub fn parse_support(value: &serde_json::Value) -> Option<Support> {
+    match value {
+        serde_json::Value::String(word) => match word.as_str() {
+            "on" => Some(Support::On),
+            "off" => Some(Support::Off),
+            "probe" => Some(Support::Probe),
+            _ => None,
+        },
+        serde_json::Value::Object(map) if map.len() == 1 => {
+            let archs = map.get("on")?.as_array()?;
+            let archs = archs
+                .iter()
+                .map(|arch| arch.as_str().filter(|arch| is_name(arch, b'_')))
+                .map(|arch| arch.map(str::to_string))
+                .collect::<Option<Vec<String>>>()?;
+            (!archs.is_empty()).then_some(Support::OnFor(archs))
+        }
+        _ => None,
+    }
+}
+
+/// The rows of `table`, in file order. Every row is an object with a key
+/// (`[a-z0-9-]+`, unique, and so a unique `cfg`), a value per OS and a reason
+/// that is not empty.
+pub fn parse_caps(table: &str) -> Result<Vec<Row>, String> {
+    let rows: Vec<serde_json::Value> =
+        serde_json::from_str(table).map_err(|error| error.to_string())?;
+    let mut cfgs = std::collections::BTreeSet::new();
+    rows.iter()
+        .map(|row| -> Result<Row, String> {
+            let key = row
+                .get("key")
+                .and_then(|key| key.as_str())
+                .filter(|key| is_name(key, b'-'))
+                .ok_or_else(|| format!("{row} has no `key` of a-z, 0-9 and `-`"))?;
+            if !cfgs.insert(cap_cfg(key)) {
+                return Err(format!("`{key}` has a second row (or the same cfg, {})", cap_cfg(key)));
+            }
+            let column = |os: &str| -> Result<Support, String> {
+                let value = row.get(os).ok_or_else(|| format!("`{key}` has no `{os}`"))?;
+                parse_support(value).ok_or_else(|| {
+                    format!(
+                        "`{key}`.{os}: {value} is not \"on\", \"off\", \"probe\" or {{\"on\": [<arch>…]}}"
+                    )
+                })
+            };
+            let reason = row
+                .get("reason")
+                .and_then(|reason| reason.as_str())
+                .filter(|reason| !reason.trim().is_empty())
+                .ok_or_else(|| format!("`{key}` has no `reason`"))?;
+            Ok(Row {
+                key: key.to_string(),
+                macos: column("macos")?,
+                linux: column("linux")?,
+                windows: column("windows")?,
+                reason: reason.to_string(),
+            })
+        })
+        .collect()
+}
 
 /// The `cfg` a capability compiles as: `cap_` and its key with `-` as `_`
 /// (`terminal-server-sidecar` is `cap_terminal_server_sidecar`).
@@ -13,68 +119,39 @@ pub fn cap_cfg(key: &str) -> String {
 /// Every key of `table`, in file order, with whether `os` on `arch` compiles
 /// it in: its value is `"on"`, `"probe"` (compiled in, decided at runtime) or
 /// `{"on": [<arch>…]}` listing `arch`. An OS with no column compiles in
-/// nothing. Every column of every row is checked, so a bad value fails the
-/// build on any target.
+/// nothing. The whole table is checked, so a bad row fails the build on any
+/// target.
 pub fn compiled_caps(table: &str, os: &str, arch: &str) -> Result<Vec<(String, bool)>, String> {
-    let rows: Vec<serde_json::Value> =
-        serde_json::from_str(table).map_err(|error| error.to_string())?;
-    rows.iter()
+    let rows = parse_caps(table)?;
+    Ok(rows
+        .into_iter()
         .map(|row| {
-            let key = row
-                .get("key")
-                .and_then(|key| key.as_str())
-                .ok_or_else(|| format!("{row} has no string `key`"))?;
-            let mut on = false;
-            for column in ["macos", "linux", "windows"] {
-                let value = row
-                    .get(column)
-                    .ok_or_else(|| format!("`{key}` has no `{column}`"))?;
-                let compiled = compiled_in(value, arch).ok_or_else(|| {
-                    format!(
-                        "`{key}`.{column}: {value} is not \"on\", \"off\", \"probe\" or {{\"on\": [<arch>…]}}"
-                    )
-                })?;
-                if column == os {
-                    on = compiled;
-                }
-            }
-            Ok((key.to_string(), on))
+            let on = match row.support(os) {
+                Some(Support::On | Support::Probe) => true,
+                Some(Support::OnFor(archs)) => archs.iter().any(|on_for| on_for == arch),
+                Some(Support::Off) | None => false,
+            };
+            (row.key, on)
         })
-        .collect()
+        .collect())
 }
 
-/// Whether one value compiles its capability in on `arch`; `None` for a value
-/// that is none of the forms.
-fn compiled_in(value: &serde_json::Value, arch: &str) -> Option<bool> {
-    match value {
-        serde_json::Value::String(word) => match word.as_str() {
-            "on" | "probe" => Some(true),
-            "off" => Some(false),
-            _ => None,
-        },
-        serde_json::Value::Object(map) if map.len() == 1 => {
-            let archs = map.get("on")?.as_array()?;
-            archs
-                .iter()
-                .try_fold(false, |listed, each| Some(listed || each.as_str()? == arch))
-        }
-        _ => None,
-    }
-}
-
-/// Declares a `cfg` per capability and sets the ones the target being built
-/// compiles in. The caller reads `table` from `platform-caps.json` and names
-/// that path in its own `rerun-if-changed`.
-pub fn emit_caps(table: &str) {
+/// For a build script: reads the table at `path` (relative to the crate),
+/// reruns when it changes, declares a `cfg` per capability and sets the ones
+/// the target being built compiles in.
+pub fn configure_caps(path: &str) {
+    println!("cargo:rerun-if-changed={path}");
+    let table =
+        std::fs::read_to_string(path).unwrap_or_else(|error| panic!("read {path}: {error}"));
     let target = |name: &str| {
         std::env::var(name).unwrap_or_else(|_| panic!("{name} is set by Cargo for build scripts"))
     };
     let caps = compiled_caps(
-        table,
+        &table,
         &target("CARGO_CFG_TARGET_OS"),
         &target("CARGO_CFG_TARGET_ARCH"),
     )
-    .unwrap_or_else(|error| panic!("platform-caps.json: {error}"));
+    .unwrap_or_else(|error| panic!("{path}: {error}"));
     for (key, on) in caps {
         let cfg = cap_cfg(&key);
         println!("cargo::rustc-check-cfg=cfg({cfg})");
