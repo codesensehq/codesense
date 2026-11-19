@@ -16,8 +16,7 @@ use std::time::{Duration, Instant};
 const UNAVAILABLE: &str = "private account unavailable; check account enrollment";
 /// The start of the refusal when a step runs out of time. The add-machine screen matches it.
 const TIMED_OUT: &str = "private account setup timed out";
-/// The connect step that re-sends the helper, after an app update.
-pub const UPLOAD_STEP: &str = "uploading the private bootstrap helper";
+pub use crate::portable::UPLOAD_STEP;
 const STAGE_STEP: &str = "staging the private bootstrap helper";
 const INSTALL_STEP: &str = "installing the terminal server";
 const CLEANUP_STEP: &str = "removing the bootstrap helper";

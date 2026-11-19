@@ -341,9 +341,7 @@ struct State {
     quit_since: HashMap<PtySessionId, u64>,
 }
 
-/// How long a session may sit at its prompt without its agent CLI in the
-/// foreground before a queued wake for it is `session_ended`.
-pub const AGENT_QUIT_GRACE_MS: u64 = 3_000;
+pub use crate::portable::AGENT_QUIT_GRACE_MS;
 
 /// Whether `facts` show a live, observed session at rest where a probe that
 /// worked found no agent CLI and the shell runs no job: its agent quit back

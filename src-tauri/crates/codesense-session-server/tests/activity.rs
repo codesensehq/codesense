@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#![cfg(cap_terminal_server_sidecar)]
 //! Packaged helper → daemon with no desktop connection, then snapshot recovery.
 //! Default fixtures use synthetic callbacks. The explicitly ignored installed-
 //! Claude fixture separately qualifies native startup hooks without a model prompt.

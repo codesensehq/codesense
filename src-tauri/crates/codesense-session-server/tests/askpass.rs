@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#![cfg(cap_terminal_server_sidecar)]
 //! The askpass as `ssh-keygen` runs it: this binary, answering from the
 //! socket, is how a kept passphrase unlocks a key — and it answers nothing
 //! but a key's passphrase prompt.

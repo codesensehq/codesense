@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#![cfg(cap_terminal_server_sidecar)]
 //! Process census against the real built sidecar binary: the PTY child's parent
 //! is the sidecar, the sidecar runs detached in its own session (not as its
 //! leader) and is parented by launchd, the child keeps running after the
