@@ -140,7 +140,7 @@ import { DEFAULT_NOTE_TITLE, UNTITLED_NOTE_TITLE, isBlankNote } from "@/shared/l
 import { summarize } from "@/features/notes/lib/note-summary";
 import type { Phase } from "@/shared/lib/roles";
 import { startOpenTimer } from "@/shared/lib/open-path-timing";
-import { basename, isWithin } from "@/shared/lib/path";
+import { basename, isWithin, trimTrailingSeparators } from "@/shared/lib/path";
 import { planReveal } from "@/shared/lib/reveal-plan";
 import { createDebouncedAction } from "@/shared/lib/debounced-action";
 import { fireWorkspaceOpened, fireWorkspaceClosed } from "@/shared/lib/workspace-watch-hooks";
@@ -1262,12 +1262,12 @@ export function isShowingDiff(diff: TabDiff | undefined | null): boolean {
 /** SW-GW-1: id prefix for a generic (open-any-dir) workspace. */
 export const GENERIC_WORKSPACE_ID_PREFIX = "generic:";
 
-/** SW-GW-1: strip trailing slash(es) (keep root `/`) so the same directory always
- *  normalizes to one id/cwd — `/foo/bar/` and `/foo/bar` dedupe (AC-5). The native
- *  folder picker returns a clean absolute path, so only trailing slashes are
- *  normalized here (interior `//` isn't produced by the picker). */
+/** Strip trailing separators (keep a root: `/`, `C:\`) so the same directory always
+ *  normalizes to one id/cwd — `/foo/bar/` and `/foo/bar` dedupe. The native
+ *  folder picker returns a clean absolute path, so only trailing separators are
+ *  normalized here (interior `//` isn't produced by the picker). An empty dir stays `/`. */
 export function normalizeWorkspaceDir(dirPath: string): string {
-  return dirPath.replace(/\/+$/, "") || "/";
+  return trimTrailingSeparators(dirPath) || "/";
 }
 
 /** SW-GW-1: mint a stable, per-directory id for a generic workspace. An absolute
@@ -6409,7 +6409,8 @@ function setupAfterStep1(teamKey: string, workspaceId: string): WorkspaceSetupSt
 /** Whether `ws` is the workspace a Step 2 event names: its local directory,
  *  or its handle on a machine. */
 function workspaceMatchesIdentity(ws: Workspace, identity: string): boolean {
-  const norm = (p: string) => p.replace(/\/+$/, "").replace(/^\/private(?=\/)/, "");
+  // `/private` is macOS's real path for `/tmp` and `/var`, so it's a POSIX-only rule.
+  const norm = (p: string) => trimTrailingSeparators(p).replace(/^\/private(?=\/)/, "");
   const id = norm(identity);
   if (isRemoteWorkspace(ws)) return !!ws.location.handle && ws.location.handle === identity;
   return !!ws.cwd && norm(ws.cwd) === id;
