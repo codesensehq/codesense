@@ -53,6 +53,7 @@ import { openAgents } from "@/features/agents/agents-virtual-tab";
 import { openCodesenseSetup } from "@/features/org/lib/codesense-docs-landing";
 import { openScratchSpace } from "@/features/scratch-space/scratch-space-virtual-tab";
 import { openForeman } from "@/features/foreman/open-foreman";
+import { STORY_DASHBOARD_ACTION_ID } from "@/features/dashboard/lib/story-dashboard-action-id";
 import { useForemanMailWaiting } from "@/features/foreman/use-foreman-mail";
 import { useRoutinesStore } from "@/features/routines/stores/routines-store";
 import { useTeamMachines } from "@/features/machines/stores/machines-store";
@@ -126,6 +127,16 @@ export function CommandPaletteMount() {
         chord: formatKeystrokeDisplay(bindings.get(a.id)?.keystroke ?? ""),
       }));
   }, [dashboardActions, shortcuts]);
+  // The Story dashboard row's chord. `resolveBindings` reads the full action list, so this is
+  // keyed like `commands` above, not on `shortcuts` alone.
+  const storyDashboardChord = useMemo(
+    () =>
+      formatKeystrokeDisplay(
+        resolveBindings(shortcuts).get(STORY_DASHBOARD_ACTION_ID)?.keystroke ?? "",
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- a new action list can take the chord
+    [dashboardActions, shortcuts],
+  );
 
   // The Routines row carries the needs-you count the title-bar entry keeps live.
   const routinesNeedingYou = useRoutinesStore((s) => s.needsYouCount);
@@ -181,6 +192,7 @@ export function CommandPaletteMount() {
         foremanMailWaiting,
         panes,
         commands,
+        storyDashboardChord,
       }),
     [
       teams,
@@ -191,6 +203,7 @@ export function CommandPaletteMount() {
       foremanMailWaiting,
       panes,
       commands,
+      storyDashboardChord,
     ],
   );
 
