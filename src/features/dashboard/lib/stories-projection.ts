@@ -7,6 +7,7 @@ import {
   resolveDeclaredStoryTitle,
   storyMetadataTitle,
 } from "@/shared/lib/pipeline-graph/story-display-title";
+import { basename } from "@/shared/lib/path";
 import { computeCountsByAbsPath } from "./nav-ordering";
 import { useStatusTaxonomyStore } from "@/shared/stores/status-taxonomy-store";
 import { topMark, type StatusMarkKind } from "@/shared/lib/status-mark";
@@ -73,19 +74,19 @@ export function buildStoriesRows(
         shadows: doc.shadowsTeamFile ?? false,
         installedSourceRepo: doc.installedSourceRepo ?? null,
       });
-    if (node.mainDoc)
+    if (node.mainDoc) {
+      const mainDocName = basename(node.mainDoc.filePath);
       rows.push({
         ...base,
         id: node.mainDoc.filePath,
         path: node.mainDoc.filePath,
-        relativePath: node.dirPath
-          ? `${node.dirPath}/${node.mainDoc.filePath.split("/").pop()}`
-          : node.mainDoc.filePath.split("/").pop(),
+        relativePath: node.dirPath ? `${node.dirPath}/${mainDocName}` : mainDocName,
         kind: "main-doc",
-        name: node.mainDoc.filePath.split("/").pop(),
+        name: mainDocName,
         metadataValid: node.mainDoc.metadataValid !== false,
         metadataInvalidReason: node.mainDoc.metadataInvalidReason ?? null,
       });
+    }
     const mark = topMark([...childMarks, ...node.stories.map((story) => marks[story.filePath])]);
     const epic = node.mainDoc;
     const epicStatus = epic?.status?.trim() || null;

@@ -77,6 +77,10 @@ describe("exportDefaultFilename (AC-4)", () => {
     expect(exportDefaultFilename("/x/y/design.excalidraw", "svg")).toBe("design.svg");
     expect(exportDefaultFilename("flat.excalidraw", "png")).toBe("flat.png");
   });
+
+  it("takes the file name of a Windows canvas path", () => {
+    expect(exportDefaultFilename("C:\\x\\y\\design.excalidraw", "png")).toBe("design.png");
+  });
 });
 
 describe("exportCanvas", () => {

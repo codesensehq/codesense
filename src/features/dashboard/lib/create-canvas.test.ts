@@ -27,6 +27,11 @@ describe("canCreateCanvas (AC-1, AC-2 scope gate)", () => {
     expect(canCreateCanvas("/x/diagram.excalidraw.png")).toBe(false);
   });
 
+  it("reads the extension of a Windows path's file name", () => {
+    expect(canCreateCanvas("C:\\ctx\\epic\\story.md")).toBe(true);
+    expect(canCreateCanvas("C:\\ctx\\design.excalidraw")).toBe(false);
+  });
+
   it("is false for folder / extensionless / generic non-viewable nodes", () => {
     expect(canCreateCanvas("/x/some-folder")).toBe(false);
     expect(canCreateCanvas("/x/data.json")).toBe(false);
@@ -68,6 +73,18 @@ describe("canvasCandidatePath (AC-3 naming + collision suffix)", () => {
   it("handles a bare filename with no directory", () => {
     expect(canvasCandidatePath("readme.md", 0)).toBe("readme.excalidraw");
     expect(canvasCandidatePath("readme.md", 1)).toBe("readme-2.excalidraw");
+  });
+
+  it("keeps a Windows doc's directory and separator", () => {
+    expect(canvasCandidatePath("C:\\x\\y\\architecture.md", 0)).toBe(
+      "C:\\x\\y\\architecture.excalidraw",
+    );
+    expect(canvasCandidatePath("C:\\x\\y\\architecture.md", 1)).toBe(
+      "C:\\x\\y\\architecture-2.excalidraw",
+    );
+    expect(canvasCandidatePath("C:\\x\\y/architecture.md", 0)).toBe(
+      "C:\\x\\y\\architecture.excalidraw",
+    );
   });
 });
 

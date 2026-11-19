@@ -75,6 +75,11 @@ describe("partitionPinnedNav", () => {
     expect(item.isDir).toBe(false); // last segment has an extension → file
   });
 
+  it("derives a stale pin's label from a Windows-separated path", () => {
+    const [item] = partitionPinnedNav(["notes\\guides\\readme.md"], [], new Map());
+    expect(item).toMatchObject({ path: "notes/guides/readme.md", label: "readme", isDir: false });
+  });
+
   it("infers a stale DIR pin's type from the path (no extension → dir icon)", () => {
     const [item] = partitionPinnedNav(["some/epic-dir"], [], new Map());
     expect(item.stale).toBe(true);
