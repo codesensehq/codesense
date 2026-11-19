@@ -484,26 +484,45 @@ fn of_waiters_retrying_an_unreachable_host_only_the_newest_keeps_on() {
     assert_eq!(std::fs::read_to_string(&retrier).unwrap(), "a newer waiter");
 }
 
+/// How many processes [`attached_for_a_while`] has read.
+static READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Reads a process as the OS does for its first six reads (three looks at an attachment
+/// of two), then reads nothing: the waiter's agent goes away while it waits.
+fn attached_for_a_while(pid: u32) -> Option<Process> {
+    let read = READS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    if read < 6 {
+        Process::inspect(pid)
+    } else {
+        None
+    }
+}
+
 #[test]
 fn a_waiter_retrying_an_unreachable_host_ends_once_it_is_no_longer_attached() {
     let dir = tempfile::tempdir().unwrap();
     let socket = dir.path().join("activity.sock");
-    let gone = Attachment {
-        inspect: |_| None,
+    let going = Attachment {
+        inspect: attached_for_a_while,
         ..attached()
     };
     let (done, ended) = std::sync::mpsc::channel();
     {
         let socket = socket.clone();
         std::thread::spawn(move || {
-            let _ = done.send(wait(&socket, "token", gone, QUICK, |_| ask("Stop", me())).is_none());
+            let _ =
+                done.send(wait(&socket, "token", going, QUICK, |_| ask("Stop", me())).is_none());
         });
     }
-    // It ends before it asks, never retrying the host it cannot reach.
-    assert_eq!(ended.recv_timeout(QUICK.retry_max), Ok(true));
+    // It retries the host it cannot reach while attached, then ends at its next look.
+    assert_eq!(ended.recv_timeout(Duration::from_secs(30)), Ok(true));
+    assert!(
+        READS.load(std::sync::atomic::Ordering::SeqCst) > 6,
+        "it looked again after its agent went away"
+    );
     assert!(
         !retrier_path(&socket, "token").exists(),
-        "no record is left"
+        "it gave up its record as the newest retrier"
     );
 }
 
