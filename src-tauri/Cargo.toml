@@ -76,7 +76,7 @@ codesense-pty-core = { path = "crates/codesense-pty-core" }
 codesense-fs-core = { path = "crates/codesense-fs-core" }
 # OS mechanisms: the command-line tool lookup and the passphrase dialog.
 codesense-platform = { path = "crates/codesense-platform" }
-sysinfo = "0.32"
+sysinfo = "0.40"
 dirs = "5"
 uuid = { version = "1", features = ["v4"] }
 # ~2.12: `requireSignedVersion` binds the signed bytes to the announced version.
