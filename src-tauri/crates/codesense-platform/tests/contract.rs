@@ -16,14 +16,18 @@ use std::time::{Duration, Instant};
 use codesense_platform::cli::{candidates, named_in, package_dirs, search_path};
 use codesense_platform::dirs::{codesense_home, lock_dir};
 use codesense_platform::fs::{
-    atomic_replace, canonicalize, create_dir_new_owner_only, create_dir_owner_only,
+    atomic_replace, can_execute, canonicalize, create_dir_new_owner_only, create_dir_owner_only,
     create_new_owner_only, create_owner_only, file_id, file_id_of, is_executable,
     is_owned_by_current_user, is_owner_only, is_text_busy, link_or_copy, lock_exclusive,
     open_nofollow, portable_name, set_executable, set_owner_only, try_lock_exclusive,
     try_lock_shared, unlock, Linked, NonPortableName, Open, Reach,
 };
 use codesense_platform::ipc::{blocking, Endpoint, LocalListener, LocalStream};
-use codesense_platform::process::{is_alive, kill_hard, terminate, Pid, ProcessTree};
+use codesense_platform::limits::is_descriptor_exhaustion;
+use codesense_platform::process::{
+    exited_unreaped, group_and_foreground, is_alive, kill_hard, terminate, terminate_pid, Pid,
+    ProcessGroup, ProcessTree,
+};
 use codesense_platform::testutil::{pathext, relative_from_cwd, symlink_or_skip};
 use codesense_platform::user::{current_user, hostname, login_shell};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
@@ -102,6 +106,172 @@ fn kill_hard_ends_a_process_that_ignores_terminate() {
     );
     kill_hard(&tree).unwrap();
     assert!(exits_within(&mut tree, Duration::from_secs(2)));
+}
+
+#[test]
+fn a_hidden_tree_has_no_console_window() {
+    let mut tree = ProcessTree::spawn_hidden(&mut fixture(&["console"])).unwrap();
+    assert_eq!(first_line(&mut tree), "no console window");
+    assert!(tree.wait().unwrap().success());
+}
+
+#[test]
+fn a_hidden_tree_is_killed_as_a_whole() {
+    let mut tree = ProcessTree::spawn_hidden(&mut fixture(&["tree"])).unwrap();
+    let grandchild = Pid::from_raw(first_line(&mut tree).parse().unwrap());
+    assert!(is_alive(grandchild));
+    kill_hard(&tree).unwrap();
+    assert!(eventually(Duration::from_secs(5), || !is_alive(grandchild)));
+    assert!(exits_within(&mut tree, Duration::from_secs(5)));
+}
+
+/// The group of `tree`'s root: one it leads (unix) or a job it is assigned to
+/// (Windows), which holds what the root starts from then on.
+fn adopt_tree_group(tree: &ProcessTree) -> ProcessGroup {
+    ProcessGroup::adopt(tree.pid())
+        .unwrap()
+        .expect("a group other than the test's own")
+}
+
+/// A fixture tree whose group is adopted before its grandchild starts.
+fn spawn_adopted_tree() -> (ProcessTree, ProcessGroup, Pid) {
+    let mut command = fixture(&["tree-on-input"]);
+    command.stdin(Stdio::piped());
+    let mut tree = ProcessTree::spawn(&mut command).unwrap();
+    let group = adopt_tree_group(&tree);
+    let mut stdin = tree.child().stdin.take().expect("piped stdin");
+    writeln!(stdin, "go").unwrap();
+    let grandchild = Pid::from_raw(first_line(&mut tree).parse().unwrap());
+    assert!(is_alive(grandchild));
+    (tree, group, grandchild)
+}
+
+#[test]
+fn an_adopted_group_is_killed_as_a_whole() {
+    let (mut tree, group, grandchild) = spawn_adopted_tree();
+    group.kill().unwrap();
+    assert!(
+        eventually(Duration::from_secs(5), || !is_alive(grandchild)),
+        "the grandchild outlived the group kill"
+    );
+    assert!(exits_within(&mut tree, Duration::from_secs(5)));
+    group.kill().unwrap();
+    group.terminate().unwrap();
+}
+
+#[test]
+fn an_adopted_group_is_asked_to_stop() {
+    let mut tree = ProcessTree::spawn(&mut fixture(&["ignore-terminate"])).unwrap();
+    assert_eq!(first_line(&mut tree), "ready");
+    let group = adopt_tree_group(&tree);
+    group.terminate().unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(
+        tree.try_wait().unwrap().is_none(),
+        expect_terminate_can_be_ignored()
+    );
+    group.kill().unwrap();
+    assert!(exits_within(&mut tree, Duration::from_secs(2)));
+}
+
+#[test]
+fn dropping_an_adopted_group_sends_nothing() {
+    let (mut tree, group, grandchild) = spawn_adopted_tree();
+    // The leader alone, reaped directly: `tree.wait()` would end the group.
+    tree.child().kill().unwrap();
+    tree.child().wait().unwrap();
+    drop(group);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(is_alive(grandchild), "dropping the group signalled it");
+}
+
+#[test]
+fn adopting_a_child_in_this_process_group() {
+    let mut child = fixture(&["sleep"]).spawn().unwrap();
+    let pid = Pid::from_raw(child.id());
+    let group = ProcessGroup::adopt(pid).unwrap();
+    assert_eq!(group.is_some(), expect_own_group_adopted());
+    drop(group);
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(is_alive(pid), "dropping the group signalled it");
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+#[test]
+fn terminate_pid_stops_one_process_not_its_tree() {
+    let (mut tree, grandchild) = spawn_tree();
+    terminate_pid(tree.pid()).unwrap();
+    // The root directly: the tree's own wait would end the rest.
+    let root_exited = || tree.child().try_wait().unwrap().is_some();
+    assert!(eventually(Duration::from_secs(5), root_exited));
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(is_alive(grandchild), "the grandchild was stopped too");
+    assert!(terminate_pid(Pid::from_raw(0)).is_err());
+}
+
+#[test]
+fn an_exit_is_seen_without_reaping() {
+    let mut child = fixture(&["sleep"]).spawn().unwrap();
+    assert!(!exited_unreaped(&child).unwrap());
+    child.kill().unwrap();
+    let exited = || exited_unreaped(&child).unwrap();
+    assert!(eventually(Duration::from_secs(5), exited));
+    assert!(exited_unreaped(&child).unwrap(), "still unreaped");
+    child.wait().expect("still waitable");
+}
+
+#[test]
+fn group_and_foreground_reads_a_group_leader() {
+    let (tree, _) = spawn_tree();
+    expect_group_of_leader(group_and_foreground(tree.pid()), tree.pid());
+}
+
+#[test]
+fn can_execute_only_a_file_this_process_may_run() {
+    let dir = same_volume_tempdir();
+    let tool = executable(dir.path(), &expect_executable_name("tool"));
+    assert!(can_execute(&tool), "{}", tool.display());
+    let plain = dir.path().join("plain");
+    std::fs::write(&plain, "x").unwrap();
+    assert!(!can_execute(&plain), "a file this OS would not run");
+    let directory = dir.path().join(expect_executable_name("named"));
+    std::fs::create_dir(&directory).unwrap();
+    assert!(!can_execute(&directory), "a directory");
+    assert!(!can_execute(
+        &dir.path().join(expect_executable_name("missing"))
+    ));
+}
+
+#[test]
+fn descriptor_exhaustion_is_found_in_a_chain_and_a_message() {
+    let code = expect_too_many_open_files();
+    let exhausted = || std::io::Error::from_raw_os_error(code);
+    assert!(is_descriptor_exhaustion(&exhausted()));
+    let message = std::io::Error::other(format!(
+        "failed to openpty: Os {{ code: {code}, kind: Uncategorized, message: \"Too many open files\" }}"
+    ));
+    assert!(is_descriptor_exhaustion(&message));
+    assert!(is_descriptor_exhaustion(&Wrapped(exhausted())));
+    let other = std::io::Error::from(std::io::ErrorKind::NotFound);
+    assert!(!is_descriptor_exhaustion(&other));
+    assert!(!is_descriptor_exhaustion(&Wrapped(other)));
+}
+
+/// An error that names its cause only through `source()`.
+#[derive(Debug)]
+struct Wrapped(std::io::Error);
+
+impl std::fmt::Display for Wrapped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("failed to dup the pty")
+    }
+}
+
+impl std::error::Error for Wrapped {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
 }
 
 #[test]
@@ -998,6 +1168,31 @@ fn expect_executable_mode(path: &Path, reach: Reach) {
     }
     #[cfg(windows)]
     let _ = (path, reach);
+}
+
+/// Unix: a plain child shares this process's group, which is never adopted.
+/// Windows: any process is adopted into a job.
+fn expect_own_group_adopted() -> bool {
+    cfg!(windows)
+}
+
+/// macOS and Linux: a group leader's group is its own pid. Elsewhere there is
+/// nothing to read.
+fn expect_group_of_leader(read: Option<(i32, i32)>, leader: Pid) {
+    if cfg!(any(target_os = "macos", target_os = "linux")) {
+        assert_eq!(read.map(|(group, _)| group), Some(leader.as_raw() as i32));
+    } else {
+        assert_eq!(read, None);
+    }
+}
+
+/// The OS error for running out of descriptors: `EMFILE` on unix,
+/// `ERROR_TOO_MANY_OPEN_FILES` on Windows.
+fn expect_too_many_open_files() -> i32 {
+    #[cfg(unix)]
+    return libc::EMFILE;
+    #[cfg(windows)]
+    return 4;
 }
 
 /// Unix: the effective uid. Windows: a SID string.

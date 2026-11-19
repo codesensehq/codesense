@@ -149,6 +149,16 @@ pub(super) fn is_executable(path: &Path) -> bool {
             .unwrap_or(false)
 }
 
+pub(super) fn can_execute(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: a NUL-terminated path; `access` only reads it.
+    let runnable = unsafe { libc::access(c_path.as_ptr(), libc::X_OK) } == 0;
+    runnable && Path::is_file(path)
+}
+
 pub(super) fn link_or_copy(target: &Path, link: &Path) -> io::Result<Linked> {
     std::os::unix::fs::symlink(target, link)?;
     Ok(Linked::Symlink)

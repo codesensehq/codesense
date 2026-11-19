@@ -84,3 +84,12 @@ describe("visitNavTree", () => {
     expect(visitNavTree(null, () => "x")).toBeNull();
   });
 });
+
+describe("findNavNodeByPath on Windows paths", () => {
+  it("matches a row across separators and drive-letter case", () => {
+    const t = baseTree({ stories: [story("C:\\root\\s.md")], docs: [doc("C:\\root\\d.md")] });
+    expect(findNavNodeByPath(t, "c:/root/s.md")?.story?.filePath).toBe("C:\\root\\s.md");
+    expect(findNavNodeByPath(t, "C:/root/d.md")?.doc?.filePath).toBe("C:\\root\\d.md");
+    expect(findNavNodeByPath(t, "C:/root/S.md")).toBeNull();
+  });
+});

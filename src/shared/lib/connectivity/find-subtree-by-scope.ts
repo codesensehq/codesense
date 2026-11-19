@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import type { DerivedPipelineTree } from "../pipeline-graph/types";
+import { isAbsolute, samePath, split } from "@/shared/lib/path";
 
 /**
  * SW-DX-8 — resolve a `$scope` sub-epic NAME (or dirPath / absolute path) to its
@@ -16,12 +17,14 @@ export function findSubtreeByScope(
   const want = scope.trim();
   if (want === "") return null;
 
+  // A relative scope also matches as a segment-wise suffix (so `.../seamless-workspaces`
+  // doesn't match `spaces`); a rooted one only as the whole path.
+  const tail = isAbsolute(want) ? [] : split(want);
   const matches = (n: DerivedPipelineTree): boolean =>
     n.dirName === want ||
     n.dirPath === want ||
-    n.absoluteDirPath === want ||
-    // separator-guarded suffix so `.../seamless-workspaces` doesn't match `spaces`
-    n.absoluteDirPath.endsWith(`/${want}`);
+    samePath(n.absoluteDirPath, want) ||
+    endsWithSegments(n.absoluteDirPath, tail);
 
   const walk = (n: DerivedPipelineTree): DerivedPipelineTree | null => {
     if (matches(n)) return n;
@@ -33,4 +36,14 @@ export function findSubtreeByScope(
   };
 
   return walk(tree);
+}
+
+/** True when `path`'s last segments are `tail` (non-empty), across separators. */
+function endsWithSegments(path: string, tail: readonly string[]): boolean {
+  if (tail.length === 0) return false;
+  const have = split(path);
+  return (
+    tail.length <= have.length &&
+    tail.every((seg, i) => seg === have[have.length - tail.length + i])
+  );
 }

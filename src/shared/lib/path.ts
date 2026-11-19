@@ -112,6 +112,24 @@ export function relative(dir: string, path: string): string | null {
   return target.slice(base.length).join("/");
 }
 
+/** `parts` with `.` and empty segments dropped and `..` popping, never above the start. */
+function resolveSegments(parts: string[]): string[] {
+  const out: string[] = [];
+  for (const seg of parts) {
+    if (seg === "..") out.pop();
+    else if (seg !== "." && seg !== "") out.push(seg);
+  }
+  return out;
+}
+
+/** `rt` followed by `parts` joined with `sep`. */
+function withRoot(rt: string, parts: string[], sep: string): string {
+  const body = parts.join(sep);
+  if (!rt) return body;
+  if (/[\\/]$/.test(rt)) return rt + body;
+  return body ? rt + sep + body : rt;
+}
+
 /**
  * Resolve `rel` against the absolute directory `base`, collapsing `.`, `..` and
  * empty segments. Pure and safe against traversal: `..` never pops above the
@@ -119,17 +137,48 @@ export function relative(dir: string, path: string): string | null {
  */
 export function resolveRelative(base: string, rel: string): string {
   const rt = root(base);
-  const parts = segmentsAfter(base, rt);
-  for (const seg of rel.split(SEPARATORS)) {
-    if (seg === "..") {
-      if (parts.length > 0) parts.pop();
-    } else if (seg !== "." && seg !== "") {
-      parts.push(seg);
-    }
+  const parts = resolveSegments([...segmentsAfter(base, rt), ...rel.split(SEPARATORS)]);
+  return withRoot(rt, parts, separator(base));
+}
+
+/**
+ * `path` with `.`, `..` and repeated separators resolved, keeping its own
+ * separator. `..` never climbs above the root (or, for a relative path, above
+ * its start).
+ */
+export function normalize(path: string): string {
+  const rt = root(path);
+  return withRoot(rt, resolveSegments(segmentsAfter(path, rt)), separator(path));
+}
+
+/**
+ * One spelling per path, for keys and equality: the root, then the segments
+ * joined by one separator, with trailing separators dropped (a bare root is
+ * kept). A drive-letter or UNC path is written with `\` and an upper-case drive
+ * letter; a POSIX path keeps `/`; a relative path keeps its first separator.
+ * Segments are not case-folded and `.`/`..` are kept (see {@link normalize}).
+ */
+export function canonicalPath(path: string): string {
+  const rt = root(path);
+  const segments = segmentsAfter(path, rt);
+  if (DRIVE_ROOT.test(rt)) return withRoot(`${rt[0].toUpperCase()}:\\`, segments, "\\");
+  if (rt.length > 1) {
+    const share = "\\\\" + rt.slice(2).split(SEPARATORS).filter(Boolean).join("\\");
+    return withRoot(share, segments, "\\");
   }
-  const sep = separator(base);
-  const body = parts.join(sep);
-  if (!rt) return body;
-  if (/[\\/]$/.test(rt)) return rt + body;
-  return body ? rt + sep + body : rt;
+  return withRoot(rt, segments, separator(rt || path));
+}
+
+/**
+ * True when `a` and `b` name the same path whatever their separators (git for
+ * Windows prints `C:/…` where the front end builds `C:\…`). Only the drive
+ * letter folds case.
+ */
+export function samePath(a: string, b: string): boolean {
+  return canonicalPath(a) === canonicalPath(b);
+}
+
+/** True when `path` is `dir` itself or inside it, across separators. */
+export function isWithin(dir: string, path: string): boolean {
+  return relative(dir, path) !== null;
 }

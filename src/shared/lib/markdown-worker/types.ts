@@ -29,7 +29,7 @@ export type ParseRequest =
       /**
        * PTS-2: per-team content dir, used as the fallback root for
        * `resolveViewerLinkPath` when an absolute href can't be anchored
-       * against `CONTENT_DIR_SEGMENT` in `filePath`.
+       * against a `content` directory in `filePath`.
        */
       teamContentPath: string;
     }

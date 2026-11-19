@@ -182,3 +182,25 @@ describe("rollupEpicStatusForDoc", () => {
     expect(rollupEpicStatusForDoc(rootEpicTree, "/ctx/pipe/deleted/README.md")).toBeNull();
   });
 });
+
+describe("rollupEpicStatusForDoc on Windows paths", () => {
+  it("locates the epic when the doc path uses git's forward slashes", () => {
+    const tree = buildTree("", {
+      absoluteDirPath: "C:\\ctx\\pipe",
+      subEpics: [
+        buildTree("epic-a", {
+          dirPath: "epic-a",
+          absoluteDirPath: "C:\\ctx\\pipe\\epic-a",
+          mainDoc: mainDoc("C:\\ctx\\pipe\\epic-a\\README.md"),
+          stories: [
+            buildStoryRef("a1.md", {
+              status: "in-progress",
+              absolutePath: "C:\\ctx\\pipe\\epic-a\\a1.md",
+            }),
+          ],
+        }),
+      ],
+    });
+    expect(rollupEpicStatusForDoc(tree, "C:/ctx/pipe/epic-a/README.md")).toBe("in-progress");
+  });
+});

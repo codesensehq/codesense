@@ -58,3 +58,11 @@ describe("isWorktreeYamlChangeEvent", () => {
     expect(isWorktreeYamlChangeEvent("/org-root/_codesense/worktree/alderco/.lock")).toBe(false);
   });
 });
+
+describe("isWorktreeYamlChangeEvent on Windows paths", () => {
+  it("matches both locations with backslashes", () => {
+    expect(isWorktreeYamlChangeEvent("C:\\repos\\x\\.codesense\\worktree.yaml")).toBe(true);
+    expect(isWorktreeYamlChangeEvent("C:\\o\\_codesense\\worktree\\owner\\repo.yaml")).toBe(true);
+    expect(isWorktreeYamlChangeEvent("C:\\o\\_codesense\\worktree.yaml")).toBe(false);
+  });
+});

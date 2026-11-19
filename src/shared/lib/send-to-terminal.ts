@@ -20,6 +20,7 @@ import {
 import { toast } from "sonner";
 import { getErrorMessage } from "@/shared/lib/error-message";
 import { SESSION_NOT_FOUND } from "@/features/viewer/lib/terminal-attach";
+import { samePath } from "@/shared/lib/path";
 
 const NO_WORKSPACE_TOAST = "No workspace open";
 const NO_TERMINAL_TOAST = "No terminal active";
@@ -82,7 +83,7 @@ export function sendTextToTerminal(text: string, isRetry = false): void {
           promptIdentity.sourceRepoSlug,
           () => {
             const currentRepoPath = getActiveWorkspaceContext().repoPath;
-            if (currentRepoPath !== capturedRepoPath) {
+            if (!currentRepoPath || !samePath(currentRepoPath, capturedRepoPath)) {
               return;
             }
             sendTextToTerminal(text, true);

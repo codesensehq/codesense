@@ -85,3 +85,14 @@ describe("FileKindIcon", () => {
     expect(at(10)).toBeCloseTo(1.5);
   });
 });
+
+describe("fileKindOf on Windows paths", () => {
+  it.each<[string, FileKind]>([
+    ["C:\\c\\.claude\\agents\\dev.md", "agentDef"],
+    ["C:\\c\\skills\\x\\SKILL.md", "agentDef"],
+    ["C:\\c\\content\\dashboards\\board.html", "dashboard"],
+    ["C:\\c\\content\\page.html", "html"],
+  ])("%s is %s", (path, kind) => {
+    expect(fileKindOf(path)).toBe(kind);
+  });
+});

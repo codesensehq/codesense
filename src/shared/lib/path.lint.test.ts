@@ -65,6 +65,19 @@ describe("path splitting lint rule", () => {
     expect(await lint(code, "src/features/viewer/__fixtures__/x.ts")).toEqual([]);
   });
 
+  it("rejects split in the shared modules", async () => {
+    const code = 'export const f = (relPath: string) => relPath.split("/");\n';
+    const messages = await lint(code, "src/shared/lib/x.ts");
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatch(PATH_RULE);
+  });
+
+  it("passes the path helper itself and shared test fixtures", async () => {
+    const code = 'export const f = (relPath: string) => relPath.split("/");\n';
+    expect(await lint(code, "src/shared/lib/path.ts")).toEqual([]);
+    expect(await lint(code, "src/shared/lib/pipeline-graph/test-fixtures/x.ts")).toEqual([]);
+  });
+
   it("keeps the first-use rules and the path rule together on a first-use surface", async () => {
     const code = [
       'import { Loader2 } from "lucide-react";',

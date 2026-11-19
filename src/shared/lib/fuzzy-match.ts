@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import { basename } from "@/shared/lib/path";
 /**
  * Simple fuzzy match scoring used by the quick-open, quick-repo, and
  * workspace switcher dialogs. Returns 0 for no match; higher is better.
@@ -21,7 +22,7 @@ export function fuzzyScore(
 
   if (!q) return 1;
 
-  const prefixTarget = opts?.filenameFromPath ? (c.split("/").pop() ?? c) : c;
+  const prefixTarget = opts?.filenameFromPath ? basename(c) || c : c;
   if (prefixTarget.startsWith(q)) return 100 + 1 / candidate.length;
   if (c.includes(q)) return 50 + 1 / candidate.length;
 

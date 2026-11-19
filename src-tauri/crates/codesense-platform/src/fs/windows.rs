@@ -405,6 +405,10 @@ pub(super) fn is_executable(path: &Path) -> bool {
     path.is_absolute() && path.is_file() && crate::win::has_pathext(path)
 }
 
+pub(super) fn can_execute(path: &Path) -> bool {
+    is_executable(path)
+}
+
 pub(super) fn canonicalize(path: &Path) -> io::Result<PathBuf> {
     dunce::canonicalize(path).map(plain_unc)
 }

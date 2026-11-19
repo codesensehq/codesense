@@ -12,6 +12,7 @@
 //! several tabs in one checkout, or a caption polling while a command finishes,
 //! share one `git` run per [`CACHE_TTL`].
 
+use codesense_platform::process::{exited_unreaped, kill_hard, ProcessTree};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Read;
@@ -157,29 +158,6 @@ enum Miss {
     TimedOut,
 }
 
-/// Whether `child` has exited, without reaping it: until it is reaped its pid
-/// (its process group's id) can't be reused, so the group can still be
-/// signalled safely.
-#[cfg(unix)]
-fn exited_unreaped(child: &std::process::Child) -> std::io::Result<bool> {
-    // SAFETY: zeroed siginfo storage is valid for waitid to fill.
-    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-    // SAFETY: valid siginfo pointer; WNOWAIT leaves the child waitable.
-    let rc = unsafe {
-        libc::waitid(
-            libc::P_PID,
-            child.id() as libc::id_t,
-            &mut info,
-            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-        )
-    };
-    if rc != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: waitid filled the record; with WNOHANG and no exit, si_pid is 0.
-    Ok(unsafe { info.si_pid() } != 0)
-}
-
 /// Inherited git variables that would point the prompt's `git status` at another
 /// repository, index, object store, history (shallow, grafts, replace refs) or config
 /// than the directory it reads, or let discovery cross into another filesystem.
@@ -222,26 +200,22 @@ fn read(path: &Path) -> Result<GitPromptStatus, Miss> {
     if !path.is_dir() {
         return Err(Miss::NoStatus);
     }
-    let mut command = git_status_command(path);
-    // Its own process group, so a timeout reaps a helper `git` started (a
-    // filter, a credential helper) along with it.
-    #[cfg(unix)]
-    std::os::unix::process::CommandExt::process_group(&mut command, 0);
-    let mut child = command.spawn().map_err(|_| Miss::NoStatus)?;
-    // Only ever called while `git` is unreaped (running, or a zombie), so the
-    // group id is still `git`'s own and can't name a reused group.
-    let kill_group = |child: &std::process::Child| {
-        #[cfg(unix)]
-        // SAFETY: the child leads a fresh process group; a negative PID targets it.
-        unsafe {
-            libc::kill(-(child.id() as i32), libc::SIGKILL);
-        }
-        #[cfg(not(unix))]
-        let _ = child;
-    };
-    let Some(mut stdout) = child.stdout.take() else {
-        kill_group(&child);
-        let _ = child.wait();
+    run(git_status_command(path))
+}
+
+/// Run a prompt read's `command` (see [`git_status_command`]) and parse what it
+/// prints.
+fn run(mut command: Command) -> Result<GitPromptStatus, Miss> {
+    // A tree of its own, so a timeout kills a helper `git` started (a filter,
+    // a credential helper) along with it, and whatever is left once `git`
+    // exits goes too. Hidden: `git` is a console program, and a windowed host
+    // would otherwise open a console for every read. `kill_hard` is only ever
+    // called while `git` is unreaped (running, or a zombie), so the group id is
+    // still `git`'s own and can't name a reused group.
+    let mut tree = ProcessTree::spawn_hidden(&mut command).map_err(|_| Miss::NoStatus)?;
+    let Some(mut stdout) = tree.child().stdout.take() else {
+        let _ = kill_hard(&tree);
+        let _ = tree.wait();
         return Err(Miss::NoStatus);
     };
     let (sender, receiver) = std::sync::mpsc::channel();
@@ -261,27 +235,26 @@ fn read(path: &Path) -> Result<GitPromptStatus, Miss> {
     let deadline = Instant::now() + GIT_TIMEOUT;
     // Wait for `git` to exit but leave it unreaped until the pipe is drained.
     loop {
-        #[cfg(unix)]
-        let exited = exited_unreaped(&child);
-        #[cfg(not(unix))]
-        let exited = child.try_wait().map(|exit| exit.is_some());
-        match exited {
+        match exited_unreaped(tree.child()) {
             Ok(true) => break,
             Ok(false) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
             Ok(false) => {
-                kill_group(&child);
-                let _ = child.kill();
-                let _ = child.wait();
+                let _ = kill_hard(&tree);
+                let _ = tree.wait();
                 return Err(Miss::TimedOut);
             }
             Err(_) => {
                 // The exit can't be observed without reaping (or something
                 // else reaped `git`): signal the group only while `git` is
                 // provably still running, since a reaped pid may be reused.
-                if matches!(child.try_wait(), Ok(None)) {
-                    kill_group(&child);
-                    let _ = child.kill();
-                    let _ = child.wait();
+                // A `try_wait` that reaps `git` closes the tree, which kills
+                // what it left in its group, as after any exit: the group id
+                // stays reserved while a member lives, and an empty one is
+                // not an error. One that can't read the exit either leaves
+                // the tree signalling nothing, now or when it drops.
+                if matches!(tree.try_wait(), Ok(None)) {
+                    let _ = kill_hard(&tree);
+                    let _ = tree.wait();
                 }
                 return Err(Miss::NoStatus);
             }
@@ -300,9 +273,11 @@ fn read(path: &Path) -> Result<GitPromptStatus, Miss> {
     if out.is_none() {
         // A helper still holds the pipe: `git` is a zombie, so its group id
         // is still reserved, and the kill reaches only that group.
-        kill_group(&child);
+        let _ = kill_hard(&tree);
     }
-    let exit = child.wait().map_err(|_| Miss::NoStatus)?;
+    // Reaping `git` kills whatever it left running; a wait that can't read
+    // its exit signals nothing, now or when the tree drops.
+    let exit = tree.wait().map_err(|_| Miss::NoStatus)?;
     let out = out.ok_or(Miss::TimedOut)?;
     if !exit.success() {
         return Err(Miss::NoStatus);
@@ -606,5 +581,97 @@ u AA N... 100644 100644 100644 100644 a b c added.txt
         }
         let fresh = cached_with(&plain, |_| Ok(GitPromptStatus::default()));
         assert_eq!(fresh, Some(GitPromptStatus::default()));
+    }
+
+    /// Poll `done` every 20 ms for up to 5 s.
+    fn eventually(mut done: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !done() {
+            if Instant::now() > deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        true
+    }
+
+    /// A `git` stand-in: `script` run by `sh` with `$0` naming the file it
+    /// writes its helper's pid to, piped as the prompt's `git` is.
+    fn stand_in(script: &str, pid_file: &Path) -> Command {
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg(script)
+            .arg(pid_file)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        command
+    }
+
+    /// The helper pid the stand-in wrote.
+    fn helper_pid(pid_file: &Path) -> u32 {
+        let mut pid = None;
+        assert!(eventually(|| {
+            pid = std::fs::read_to_string(pid_file)
+                .ok()
+                .and_then(|text| text.trim().parse().ok());
+            pid.is_some()
+        }));
+        pid.unwrap()
+    }
+
+    fn running(pid: u32) -> bool {
+        codesense_platform::process::is_alive(codesense_platform::process::Pid::from_raw(pid))
+    }
+
+    /// The exit check sees `git` exit and leaves it to be reaped, with its
+    /// status.
+    #[test]
+    fn an_exit_is_seen_without_reaping() {
+        let mut running_child = Command::new("sleep").arg("30").spawn().unwrap();
+        assert!(!exited_unreaped(&running_child).unwrap());
+        running_child.kill().unwrap();
+        running_child.wait().unwrap();
+
+        let mut child = Command::new("sh").args(["-c", "exit 3"]).spawn().unwrap();
+        assert!(eventually(|| exited_unreaped(&child).unwrap()));
+        assert!(exited_unreaped(&child).unwrap(), "still unreaped");
+        assert_eq!(child.wait().unwrap().code(), Some(3));
+    }
+
+    /// A `git` that outlives the timeout is killed with its whole group.
+    #[test]
+    fn a_timed_out_read_kills_the_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("helper.pid");
+        let command = stand_in("sleep 30 & echo $! > \"$0\"; wait", &pid_file);
+        assert_eq!(run(command), Err(Miss::TimedOut));
+        let helper = helper_pid(&pid_file);
+        assert!(eventually(|| !running(helper)), "the helper outlived it");
+    }
+
+    /// A helper `git` leaves running (not holding its output) is killed once
+    /// `git`'s exit is seen: a status read's helpers do not outlive it.
+    #[test]
+    fn a_helper_left_behind_by_git_is_killed() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("helper.pid");
+        let command = stand_in("sleep 30 >/dev/null 2>&1 & echo $! > \"$0\"", &pid_file);
+        assert_eq!(run(command), Ok(GitPromptStatus::default()));
+        let helper = helper_pid(&pid_file);
+        assert!(eventually(|| !running(helper)), "the helper outlived git");
+    }
+
+    /// A helper that still holds the output after `git` exits is killed with
+    /// the group once the timeout passes.
+    #[test]
+    fn a_helper_holding_the_output_is_killed() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("helper.pid");
+        let command = stand_in("sleep 30 & echo $! > \"$0\"", &pid_file);
+        assert_eq!(run(command), Err(Miss::TimedOut));
+        let helper = helper_pid(&pid_file);
+        assert!(eventually(|| !running(helper)), "the helper outlived it");
     }
 }

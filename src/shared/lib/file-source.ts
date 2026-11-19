@@ -3,6 +3,7 @@ import { useWorktreeRosterStore } from "@/features/viewer/stores/worktree-roster
 import type { NavSource } from "./nav-lens";
 import type { ContentSource } from "./team-content-context";
 import { privateFile } from "./private-file";
+import { relative } from "@/shared/lib/path";
 
 /** An opened file keeps its source when the nav switches to another one. */
 export function resolveFileSource(
@@ -12,7 +13,7 @@ export function resolveFileSource(
 ): { source: NavSource; contentRoot: string; orgRoot: string | null } {
   const worktree = useWorktreeRosterStore
     .getState()
-    .rows?.find((row) => row.kind === "context" && filePath.startsWith(`${row.path}/`));
+    .rows?.find((row) => row.kind === "context" && !!relative(row.path, filePath));
   if (worktree?.kind === "context")
     return {
       source: { kind: "worktree", id: worktree.id },

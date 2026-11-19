@@ -68,6 +68,7 @@ import {
   stepExpand,
   jumpToWhatNeedsYou,
 } from "@/features/viewer/lib/terminal-tab-keys";
+import { samePath } from "@/shared/lib/path";
 
 /**
  * Canonical action registry for every configurable keyboard shortcut +
@@ -985,7 +986,9 @@ const shortcutActions: readonly ShortcutAction[] = [
         toast.error("Couldn't export — workspace has no source repo");
         return;
       }
-      const fromConfig = useConfigStore.getState().repos.find((r) => r.repoPath === lookupKey);
+      const fromConfig = useConfigStore
+        .getState()
+        .repos.find((r) => samePath(r.repoPath, lookupKey));
       const fromWorkspace = useOrgStore.getState().workspaceRepos[lookupKey];
       const resolved = fromConfig ?? fromWorkspace;
       // Surface feedback on empty teamContentPath — the earlier silent
