@@ -2627,8 +2627,9 @@ enum Changed {
 }
 
 /// One census list as failure lines, after a note saying which: the sites the
-/// changed files touch (see [`Site::touched`]), those in the changed files first;
-/// else every site. By file and line, at most `cap` of them, then how many more.
+/// changed files touch (see [`Site::touched`]), those in the changed files first,
+/// then by how few files define the name; else every site. By file and line within
+/// each, at most `cap` of them, then how many more.
 fn listing(sites: &[Site], changed: &Changed, cap: usize) -> Vec<String> {
     let (note, mut picked): (&str, Vec<&Site>) = match changed {
         Changed::NoBase => (
