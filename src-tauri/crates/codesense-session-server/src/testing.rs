@@ -114,10 +114,15 @@ pub fn host_environment() -> HostEnvironment {
 /// with no `cwd` the child starts in `HOME` (`/var/empty` exists only on macOS).
 pub fn empty_home() -> String {
     static HOME: OnceLock<tempfile::TempDir> = OnceLock::new();
-    HOME.get_or_init(|| tempfile::tempdir().expect("the empty home"))
-        .path()
-        .to_string_lossy()
-        .into_owned()
+    HOME.get_or_init(|| {
+        tempfile::Builder::new()
+            .prefix("codesense-test-home-")
+            .tempdir()
+            .expect("the empty home")
+    })
+    .path()
+    .to_string_lossy()
+    .into_owned()
 }
 
 /// `script`, run by the user's shell of whichever host resolves it — `/bin/bash`
