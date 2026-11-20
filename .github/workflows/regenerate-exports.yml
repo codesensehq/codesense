@@ -99,11 +99,13 @@ jobs:
             exit 1
           fi
       - name: Run the exports
+        # The model schemas first: the app's build script refuses a stale schema fixture, so the
+        # other exports' cargo builds need it written.
         env:
           EXPORTS: ${{ inputs.exports }}
         run: |
           if [ "$EXPORTS" = all ]; then
-            set -- live-data-contract mcp-reference model-schemas
+            set -- model-schemas live-data-contract mcp-reference
           else
             set -- "$EXPORTS"
           fi
