@@ -790,12 +790,13 @@ jobs:
         id: compile
         # Each suite with the arguments its run below takes (one --lib would apply to every package).
         env:
-          SUITES: &suites |
+          SUITES: &suites |-
             pty-core -p codesense-pty-core
             session-server -p codesense-session-server
             app -p codesense --lib
         run: |
           while read -r _ packages; do
+            [[ -n $packages ]] || continue
             read -r -a args <<< "$packages"
             cargo nextest run --profile ci --locked "${args[@]}" --no-run
           done <<< "$SUITES"
@@ -815,6 +816,7 @@ jobs:
           rm -f target/nextest/ci/junit.xml
           status=0
           while read -r part packages; do
+            [[ -n $packages ]] || continue
             read -r -a args <<< "$packages"
             cargo nextest run --profile ci --locked "${args[@]}" || status=1
             if [[ -f target/nextest/ci/junit.xml ]]; then mv target/nextest/ci/junit.xml "$RUNNER_TEMP/junit/$part.xml"; fi
@@ -822,21 +824,27 @@ jobs:
           exit "$status"
       - name: Test the updater on the beta channel
         # The license module (the beta channels' updater) compiles only off the internal channel,
-        # the default, so its tests need a beta build of the app of their own. The beta channel
-        # reads only public config (tauri.beta-prod.conf.json) and a release time.
+        # the default, so its tests need a beta build of the app of their own, with the dashboard
+        # publishing a beta release turns on. The beta channel reads only public config
+        # (tauri.beta-prod.conf.json) and a release time.
         if: (success() || failure()) && steps.compile.outcome == 'success'
         env:
           CODESENSE_CHANNEL: beta
+          # The production share host a beta build names, which its share-host test checks.
+          CODESENSE_DASH_HOST: https://share.codesense.ai
           BETA_TESTS: >-
             test(/^license::/)
             | test(=commands::dashboard_launch::tests::license_headless_runs_count_a_starting_run_until_it_is_released)
             | test(=mcp::feedback_tool::tests::in_the_beta_the_tool_refuses_and_says_why)
+            | test(=dashboard_publish::client::tests::a_beta_channel_uses_only_its_share_host)
         run: |
           mkdir -p "$RUNNER_TEMP/junit"
           status=0
-          # Every test that compiles only off the internal channel: the module's and two outside it.
+          # Every test that compiles only off the internal channel: the license module's and the
+          # three outside it gated not(cs_channel = "internal") or on a beta channel.
           CODESENSE_RELEASED_AT="$(git log -1 --format=%ct)" \
-            cargo nextest run --profile ci --locked -p codesense --lib -E "$BETA_TESTS" || status=1
+            cargo nextest run --profile ci --locked -p codesense --lib --features dashboard-publish \
+            -E "$BETA_TESTS" || status=1
           if [[ -f target/nextest/ci/junit.xml ]]; then mv target/nextest/ci/junit.xml "$RUNNER_TEMP/junit/license.xml"; fi
           exit "$status"
       - name: List flaky tests

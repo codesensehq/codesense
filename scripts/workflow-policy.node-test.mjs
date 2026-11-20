@@ -518,10 +518,16 @@ test("rust.yml's Linux app job runs the shared suites and the Secret Service tes
     compileStep.env.SUITES,
     "pty-core -p codesense-pty-core\n" +
       "session-server -p codesense-session-server\n" +
-      "app -p codesense --lib\n",
+      "app -p codesense --lib",
   );
+  // Three suites and no blank line: `<<<` adds a newline, and a blank line would be a fourth
+  // pass over the whole workspace.
+  const suiteLines = compileStep.env.SUITES.split("\n");
+  assert.equal(suiteLines.length, 3);
+  assert.ok(suiteLines.every((line) => line.trim()));
   assert.equal(suitesStep.env.SUITES, compileStep.env.SUITES);
-  const eachSuite = /while read -r \w+ packages; do\n\s+read -r -a args <<< "\$packages"\n/;
+  const eachSuite =
+    /while read -r \w+ packages; do\n\s+\[\[ -n \$packages \]\] \|\| continue\n\s+read -r -a args <<< "\$packages"\n/;
   assert.match(compileStep.run, eachSuite);
   assert.match(suitesStep.run, eachSuite);
   assert.ok(
@@ -541,7 +547,7 @@ test("rust.yml's Linux app job runs the shared suites and the Secret Service tes
     suitesStep.run.includes('mv target/nextest/ci/junit.xml "$RUNNER_TEMP/junit/$part.xml"'),
   );
   // The tests that compile only on a beta channel run on a build of their own: the updater's
-  // module and the two outside it, by exact name.
+  // module and the three outside it, by exact name.
   const beta = job.steps.find((step) => step.name === "Test the updater on the beta channel");
   assert.ok(names.indexOf(beta.name) > suites);
   assert.equal(beta.env.CODESENSE_CHANNEL, "beta");
@@ -549,12 +555,15 @@ test("rust.yml's Linux app job runs the shared suites and the Secret Service tes
     beta.env.BETA_TESTS,
     "test(/^license::/)" +
       " | test(=commands::dashboard_launch::tests::license_headless_runs_count_a_starting_run_until_it_is_released)" +
-      " | test(=mcp::feedback_tool::tests::in_the_beta_the_tool_refuses_and_says_why)",
+      " | test(=mcp::feedback_tool::tests::in_the_beta_the_tool_refuses_and_says_why)" +
+      " | test(=dashboard_publish::client::tests::a_beta_channel_uses_only_its_share_host)",
   );
+  assert.equal(beta.env.CODESENSE_DASH_HOST, "https://share.codesense.ai");
   assert.match(beta.run, /CODESENSE_RELEASED_AT=/);
   assert.ok(
     beta.run.includes(
-      'cargo nextest run --profile ci --locked -p codesense --lib -E "$BETA_TESTS"',
+      "cargo nextest run --profile ci --locked -p codesense --lib --features dashboard-publish \\\n" +
+        '  -E "$BETA_TESTS"',
     ),
   );
   assert.ok(beta.run.includes('mv target/nextest/ci/junit.xml "$RUNNER_TEMP/junit/license.xml"'));
