@@ -151,6 +151,40 @@ fn a_claude_agent_spawns_with_preparations_args_and_its_own_settings_file() {
     mcp_scope::remove_scope_config(&id);
 }
 
+/// The Agents panel's interactive launch execs its prepared argv on Windows; macOS still
+/// types it, and a headless launch is captured, never an exec.
+#[test]
+fn an_agents_panel_launch_execs_its_prepared_argv_on_windows_only() {
+    let _home_env = crate::routines::test_support::TempHome::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    team_content(&home, &alice());
+    save(&home, &alice(), draft("panel", AgentCli::Claude));
+    let cwd = worktree(tmp.path());
+    let launch = prepare_named(&home, &alice(), "panel", interactive(None)).unwrap();
+    let id = session("panel");
+    let (mut prepared, _creation, settings) =
+        apply_for_session(launch, Path::new(CLI), &id, &cwd, None, true).unwrap();
+
+    set_prepared_execution(&mut prepared, "windows");
+    let mut expected = vec![CLI.to_string()];
+    expected.extend(prepared.launch.args.iter().cloned());
+    expected.extend(prepared.scope.extra_args.iter().cloned());
+    let execution = prepared.scope.execution.clone().expect("a Windows exec");
+    assert_eq!(execution.argv, expected);
+    assert_eq!(execution.native_launch, AgentCli::Claude);
+
+    set_prepared_execution(&mut prepared, "macos");
+    assert_eq!(prepared.scope.execution, None);
+
+    prepared.launch.mode = LaunchMode::Headless;
+    set_prepared_execution(&mut prepared, "windows");
+    assert_eq!(prepared.scope.execution, None);
+
+    drop(settings);
+    mcp_scope::remove_scope_config(&id);
+}
+
 #[test]
 fn a_codex_agent_keeps_its_home_and_retains_permission_flags() {
     let _home_env = crate::routines::test_support::TempHome::new();
