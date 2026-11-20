@@ -1944,7 +1944,7 @@ test("test build: the AppImage launches beside the installs, on the x86_64 build
     runs
       .filter((run) => /smoke-linux\.sh (run|variant)/.test(run))
       .map((run) => run.match(/smoke-linux\.sh (run|variant \S+)/)[1]),
-    ["run", "variant dmabuf", "variant no-dbus", "variant webgl"],
+    ["run", "variant dmabuf", "variant no-dbus", "variant webgl", "variant tray"],
   );
   const check = jobs["linux-app"].steps.find((step) => step.name === "Check scripts");
   assert.match(check.run, /^shellcheck .*scripts\/ci\/smoke-linux\.sh/);
