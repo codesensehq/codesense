@@ -378,6 +378,7 @@ const FAILURE_REASONS: Record<string, string> = {
   type: "It isn't a GIF, WebP, PNG or JPEG.",
   redirect: "It redirected to a site that isn't on the list.",
   https: "The source must use HTTPS.",
+  changed: "The source now serves a different image.",
 };
 
 /** Why an image isn't shown, in the pane's words. */
