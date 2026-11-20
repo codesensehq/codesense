@@ -60,6 +60,7 @@ use super::route_to_context::{
 };
 use crate::agents::adapter;
 use crate::agents::launch_check::{LaunchWarning, LaunchWarningCode};
+use crate::commands::worktree::seat::SeatLaunch;
 use crate::domain::Principal;
 use crate::domain::SourceRepoSlug;
 use crate::install::worktree_index::{

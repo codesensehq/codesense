@@ -2435,7 +2435,18 @@ const MAX_UNRESOLVED_PATHS: usize = 279;
 /// The Secret Service probe adds 1 more, as CI measured: `source.name()` on a D-Bus error in
 /// `absence_of` (commands/credential_store.rs), which reads an error's name string and calls no
 /// write primitive.
-const MAX_UNRESOLVED_METHODS: usize = 6_558;
+/// Seat worktrees add 19 more: 21 new calls minus 2 that moved out of
+/// `relaunch_local_now` and `resolve_hydrated_story_worktree_unlocked`. The count is the
+/// `X1_PRINT_UNRESOLVED_METHODS` list for main diffed against the branch's list. The calls are
+/// `.as_str()` on strings and session ids in `seat_worktree_inner` (3),
+/// `SeatWorktreeParam::deserialize`, `start_beside_gone_folder` and `terminal_respawn_tab`;
+/// `.display()` on paths in `seat_worktree_inner` (2), `repin` and `seat_record_fits`; `.ok()`
+/// on results in `resolve_commit`, `catch_up_seat_branch`, `recorded_workspace_folder` and
+/// `stamps_story_branch`; `.is_empty()` in `resolve_commit` (2) and `resumed_launch_home`;
+/// `.find(..)` on iterators in `seat_worktree_inner`, `story_base_record` and
+/// `recorded_workspace_folder`; and `.exists()` on a path in `seat_worktree_inner`. They are
+/// std string, path, result and iterator calls; none calls a write primitive.
+const MAX_UNRESOLVED_METHODS: usize = 6_577;
 
 /// X1: no unattended root reaches a write primitive; every reviewed entry is
 /// still needed; the walk still sees the app.

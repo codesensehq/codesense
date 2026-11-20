@@ -5456,7 +5456,8 @@ fn stamps_story_branch(home: &Path, principal: &Principal, code_path: &Path) -> 
     !worktree_index::read_record(home, principal, code_path)
         .ok()
         .flatten()
-        .is_some_and(|record| record.is_seat())
+        .as_ref()
+        .is_some_and(WorktreeStoryRecord::is_seat)
 }
 
 /// Disk-touching registration and wiring run only on the blocking pool.
