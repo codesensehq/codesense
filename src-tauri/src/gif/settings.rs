@@ -19,8 +19,7 @@ use std::{
 pub(crate) const FILE: &str = "gif.json";
 /// The longest a search waits for the keychain: past it, an access prompt is waiting on the user.
 pub(crate) const KEY_READ_TIMEOUT: Duration = Duration::from_secs(3);
-const NO_STORE: &str =
-    "This computer has no secret store, so the key can't be kept here. Nothing changed.";
+const NO_STORE: &str = "This computer has no secret store, so the key can't be kept here.";
 /// Held while `gif.json` is read, changed and written.
 static WRITE: Mutex<()> = std::sync::Mutex::new(());
 
@@ -131,7 +130,9 @@ pub(crate) const MIN_KEY_CHARS: usize = 16;
 #[derive(Default)]
 struct KeyCache {
     reading: std::sync::atomic::AtomicBool,
-    key: Mutex<Option<(Provider, Secret)>>,
+    /// The key last read, and a generation each save and remove moves on, so a read that
+    /// started before one of them never caches the key it replaced.
+    key: Mutex<(u64, Option<(Provider, Secret)>)>,
 }
 
 /// The provider key in the OS keychain. The secret store is checked before every keyring call:
@@ -190,21 +191,44 @@ impl Keys {
         Ok(((self.stores)(provider), account))
     }
 
-    fn remember(&self, entry: Option<(Provider, Secret)>) {
-        *self.cache.key.lock().unwrap_or_else(|e| e.into_inner()) = entry;
+    /// The cache's generation, taken when a read starts.
+    fn generation(&self) -> u64 {
+        self.cache.key.lock().unwrap_or_else(|e| e.into_inner()).0
+    }
+
+    /// Cache `entry`: from a read that started at generation `read_at`, only when no save or
+    /// remove has happened since; from a save or remove (`None`), always, moving the generation.
+    fn remember(&self, entry: Option<(Provider, Secret)>, read_at: Option<u64>) {
+        let mut cached = self.cache.key.lock().unwrap_or_else(|e| e.into_inner());
+        match read_at {
+            Some(generation) if generation != cached.0 => {}
+            Some(_) => cached.1 = entry,
+            None => *cached = (cached.0 + 1, entry),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_cached_key(&self) -> bool {
+        self.cache.key.lock().unwrap().1.is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_reading(&self) -> bool {
+        self.cache.reading.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// The saved key, trimmed (an item saved outside the app may end in a newline); `None` when
     /// there is none. Blocking: it may raise a keychain prompt.
     pub(crate) fn read_key(&self, provider: Provider) -> Result<Option<Secret>, GifError> {
         let (store, account) = self.reach(provider)?;
+        let read_at = self.generation();
         let key = match store.get(account) {
             Ok(Some(key)) => Some(key.expose().trim().to_string()),
             Ok(None) => None,
             Err(_) => return Err(GifError::KeychainUnavailable),
         };
         let key = key.filter(|k| k != "").map(Secret::new);
-        self.remember(key.clone().map(|k| (provider, k)));
+        self.remember(key.clone().map(|k| (provider, k)), Some(read_at));
         Ok(key)
     }
 
@@ -215,7 +239,7 @@ impl Keys {
         if !(self.available)() {
             return Err(GifError::NoSecretStore);
         }
-        let cached = match &*self.cache.key.lock().unwrap_or_else(|e| e.into_inner()) {
+        let cached = match &self.cache.key.lock().unwrap_or_else(|e| e.into_inner()).1 {
             Some((p, key)) if *p == provider => Some(key.clone()),
             _ => None,
         };
@@ -246,30 +270,15 @@ impl Keys {
         }
     }
 
-    /// Save `key`, trimmed; an empty or short key is refused. Blocking.
+    /// Save `key`, which [`check_key`] has passed. Blocking.
     pub(crate) fn save_key(&self, provider: Provider, key: &str) -> Result<(), String> {
-        let key = key.trim();
-        let name = Provider::display_name(provider);
-        if key == "" {
-            return Err(format!("Enter a {name} key."));
-        }
-        if key.contains(|c: char| !c.is_ascii_graphic()) || key.len() > 256 {
-            return Err(format!(
-                "A {name} key has only letters, digits and symbols, with no spaces."
-            ));
-        }
-        if key.chars().count() < MIN_KEY_CHARS {
-            return Err(format!(
-                "A {name} key has at least {MIN_KEY_CHARS} characters. Check that you pasted all \
-                 of it."
-            ));
-        }
+        let key = check_key(provider, key)?;
         let (store, account) = self.reach(provider).map_err(|_| NO_STORE.to_string())?;
         let secret = Secret::new(key);
         store
             .set(account, &secret)
             .map_err(|_| "Couldn't save the key to your OS keychain.".to_string())?;
-        self.remember(Some((provider, secret)));
+        self.remember(Some((provider, secret)), None);
         Ok(())
     }
 
@@ -278,9 +287,31 @@ impl Keys {
         let (store, account) = self.reach(provider).map_err(|_| NO_STORE.to_string())?;
         CredentialStore::delete(store.as_ref(), account)
             .map_err(|_| "Couldn't remove the key from your OS keychain.".to_string())?;
-        self.remember(None);
+        self.remember(None, None);
         Ok(())
     }
+}
+
+/// `key` trimmed, or why it can't be a key: empty, spaces or other non-printing characters,
+/// longer than 256 bytes or shorter than [`MIN_KEY_CHARS`].
+pub(crate) fn check_key(provider: Provider, key: &str) -> Result<String, String> {
+    let key = key.trim();
+    let name = Provider::display_name(provider);
+    if key == "" {
+        return Err(format!("Enter a {name} key."));
+    }
+    if key.contains(|c: char| !c.is_ascii_graphic()) || key.len() > 256 {
+        return Err(format!(
+            "A {name} key has only letters, digits and symbols, with no spaces."
+        ));
+    }
+    if key.chars().count() < MIN_KEY_CHARS {
+        return Err(format!(
+            "A {name} key has at least {MIN_KEY_CHARS} characters. Check that you pasted all of \
+             it."
+        ));
+    }
+    Ok(key.to_string())
 }
 
 /// What the Settings card shows for On/Off, the provider and the ceiling.
@@ -365,6 +396,8 @@ pub(crate) fn status_with(keys: &Keys, dir: &Path) -> KeyStatus {
 pub(crate) fn save_with(keys: &Keys, dir: &Path, key: &str) -> Result<KeyStatus, String> {
     let current = load(dir);
     let provider = current.provider;
+    // A key that can't be one changes nothing, the current key's production flag included.
+    check_key(provider, key).map_err(|error| format!("{error} Nothing changed."))?;
     let had_production = current.production_keys.len() > 0;
     update(dir, |s| s.clear_production(provider))?;
     keys.save_key(provider, key).map_err(|error| {

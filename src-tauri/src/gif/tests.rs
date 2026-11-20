@@ -114,6 +114,9 @@ impl CredentialStore for Prompting {
     fn set(&self, _: &str, _: &Secret) -> Result<(), CredentialError> {
         Ok(())
     }
+    fn delete(&self, _: &str) -> Result<(), CredentialError> {
+        Ok(())
+    }
 }
 
 struct Harness {
@@ -726,7 +729,13 @@ async fn with_no_secret_store_nothing_touches_the_keyring_or_network_and_saves_a
         Some(ACCOUNT),
         Duration::from_secs(3),
     );
-    assert!(settings::save_with(&keys, h.dir.path(), "another-key-value-0001").is_err());
+    assert_eq!(
+        settings::save_with(&keys, h.dir.path(), "another-key-value-0001"),
+        Err(
+            "This computer has no secret store, so the key can't be kept here. Nothing changed."
+                .to_string()
+        )
+    );
     assert!(settings::remove_with(&keys, h.dir.path()).is_err());
     assert_eq!(
         settings::status_with(&keys, h.dir.path()).status,
@@ -780,6 +789,37 @@ async fn a_keychain_read_that_waits_on_a_prompt_gives_up_and_never_piles_up() {
     assert!(found.is_ok(), "{found:?}");
     assert_eq!(prompting.gets.load(Ordering::SeqCst), 1);
     assert_eq!(settings::KEY_READ_TIMEOUT, Duration::from_secs(3));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_read_that_ends_after_a_remove_never_caches_the_removed_key() {
+    let (release, wait) = std::sync::mpsc::channel();
+    let store = Arc::new(Prompting {
+        release: Mutex::new(wait),
+        gets: AtomicUsize::new(0),
+    });
+    let keys = Keys::new(
+        store.clone(),
+        true,
+        Some(ACCOUNT),
+        Duration::from_millis(100),
+    );
+    assert_eq!(
+        keys.read_timed(Provider::Giphy).await,
+        Err(GifError::KeychainUnavailable),
+        "the read still waits on its prompt"
+    );
+    keys.remove_key(Provider::Giphy).unwrap();
+    release.send(()).unwrap();
+    for _ in 0..100 {
+        if !keys.is_reading() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(!keys.is_reading());
+    assert!(!keys.has_cached_key(), "the late read kept the removed key");
+    assert_eq!(store.gets.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -1018,11 +1058,19 @@ fn a_missing_state_starts_with_every_search_and_a_corrupt_or_future_one_with_non
     assert!(corrupt
         .take("giphy:aaaaaaaaaaaaaaaa", false, START_MS)
         .is_err());
+    // One search frees every 40 s from then, never all 90 at once.
+    assert_eq!(
+        corrupt.take("giphy:aaaaaaaaaaaaaaaa", false, START_MS + 1),
+        Err(GifError::RateLimited { retry_after: 40 })
+    );
     assert!(corrupt
-        .take("giphy:aaaaaaaaaaaaaaaa", false, START_MS + 3_599_999)
+        .take("giphy:aaaaaaaaaaaaaaaa", false, START_MS + 40_000)
+        .is_ok());
+    assert!(corrupt
+        .take("giphy:aaaaaaaaaaaaaaaa", false, START_MS + 40_000)
         .is_err());
     assert!(corrupt
-        .take("giphy:aaaaaaaaaaaaaaaa", false, START_MS + 3_600_000)
+        .take("giphy:aaaaaaaaaaaaaaaa", false, START_MS + 80_000)
         .is_ok());
 
     let future = format!(
@@ -1034,7 +1082,7 @@ fn a_missing_state_starts_with_every_search_and_a_corrupt_or_future_one_with_non
         .take("giphy:bbbbbbbbbbbbbbbb", false, START_MS)
         .is_err());
     assert!(ahead
-        .take("giphy:bbbbbbbbbbbbbbbb", false, START_MS + 3_600_000)
+        .take("giphy:bbbbbbbbbbbbbbbb", false, START_MS + 40_000)
         .is_ok());
 }
 
@@ -1217,6 +1265,32 @@ fn a_failed_key_save_says_what_changed() {
     assert!(!error.contains("Nothing changed"));
     assert!(settings::load(dir.path()).production_keys.is_empty());
     assert!(!settings::status_with(&keys, dir.path()).production);
+}
+
+#[test]
+fn a_bad_paste_is_refused_before_the_production_flag_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(FakeStore::default());
+    store.set(ACCOUNT, &Secret::new(KEY)).unwrap();
+    let keys = Keys::new(store.clone(), true, Some(ACCOUNT), Duration::from_secs(3));
+    let production = SettingsUpdate {
+        production: Some(true),
+        ..Default::default()
+    };
+    settings::set_with(&keys, dir.path(), production).unwrap();
+    for bad in ["too-short", "two words in a key", ""] {
+        let error = settings::save_with(&keys, dir.path(), bad).unwrap_err();
+        assert!(error.ends_with("Nothing changed."), "{error}");
+        assert!(
+            settings::status_with(&keys, dir.path()).production,
+            "{bad:?}"
+        );
+    }
+    assert_eq!(store.get(ACCOUNT).unwrap().unwrap().expose(), KEY);
+    assert_eq!(
+        settings::check_key(Provider::Giphy, "  a-key-of-16-char \n"),
+        Ok("a-key-of-16-char".to_string())
+    );
 }
 
 #[test]

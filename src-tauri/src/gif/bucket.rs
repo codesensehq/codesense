@@ -80,11 +80,16 @@ impl Bucket {
         }
     }
 
-    /// `key`'s searches within the hour before `now_ms`: none when it is new, a full hour's
-    /// worth at `now_ms` after a corrupt file or a search time in the future, and a backoff cut to
-    /// at most 24 h from now.
+    /// `key`'s searches within the hour before `now_ms`: none when it is new, a full window that
+    /// frees one search every 40 s after a corrupt file or a search time in the future, and a
+    /// backoff cut to at most 24 h from now.
     fn window(state: &mut RateState, key: &str, corrupt: bool, now_ms: i64) -> RateEntry {
-        let full = || vec![now_ms; CAPACITY];
+        // A full window whose searches leave it one every 40 s from now.
+        let full = || {
+            (1..=CAPACITY as i64)
+                .map(|i| now_ms - HOUR_MS + i * (HOUR_MS / CAPACITY as i64))
+                .collect::<Vec<_>>()
+        };
         let mut entry = match state.buckets.remove(key) {
             Some(entry) => entry,
             None if corrupt => RateEntry {
