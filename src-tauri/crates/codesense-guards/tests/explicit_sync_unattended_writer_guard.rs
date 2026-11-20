@@ -1015,12 +1015,7 @@ impl<'ast> Visit<'ast> for Body {
         visit::visit_pat_ident(self, pat);
     }
     fn visit_macro(&mut self, mac: &'ast syn::Macro) {
-        scan_tokens(
-            mac.tokens.clone(),
-            &mut self.calls,
-            &mut self.lines,
-            &mut self.types,
-        );
+        scan_tokens(mac.tokens.clone(), self);
     }
 }
 
@@ -1052,14 +1047,9 @@ fn path_line(path: &syn::Path) -> usize {
         .map_or_else(|| line_of(path.span()), |s| line_of(s.ident.span()))
 }
 
-/// Calls inside a macro invocation, read from its tokens: `a::b(` is a path
-/// call, `.m(` a method call. `lines` gets each call's line.
-fn scan_tokens(
-    tokens: TokenStream,
-    out: &mut Vec<Call>,
-    lines: &mut Vec<usize>,
-    types: &mut HashSet<String>,
-) {
+/// Calls inside a macro invocation, read from its tokens into `body`: `a::b(`
+/// is a path call, `.m(` a method call.
+fn scan_tokens(tokens: TokenStream, body: &mut Body) {
     let toks: Vec<TokenTree> = tokens.into_iter().collect();
     let punct =
         |i: usize, c: char| matches!(toks.get(i), Some(TokenTree::Punct(p)) if p.as_char() == c);
@@ -1068,19 +1058,21 @@ fn scan_tokens(
     while i < toks.len() {
         match &toks[i] {
             TokenTree::Group(group) => {
-                scan_tokens(group.stream(), out, lines, types);
+                scan_tokens(group.stream(), body);
                 i += 1;
             }
             TokenTree::Punct(p) if p.as_char() == '.' => {
                 if let Some(TokenTree::Ident(method)) = toks.get(i + 1) {
                     if paren(i + 2) {
-                        out.push(Call::Method {
-                            name: method.to_string(),
-                            on_self: matches!(i.checked_sub(1).map(|k| &toks[k]), Some(TokenTree::Ident(r)) if r == "self"),
-                            args: usize::MAX,
-                            sql: false,
-                        });
-                        lines.push(line_of(method.span()));
+                        body.push(
+                            Call::Method {
+                                name: method.to_string(),
+                                on_self: matches!(i.checked_sub(1).map(|k| &toks[k]), Some(TokenTree::Ident(r)) if r == "self"),
+                                args: usize::MAX,
+                                sql: false,
+                            },
+                            line_of(method.span()),
+                        );
                     }
                     i += 2;
                 } else {
@@ -1092,7 +1084,7 @@ fn scan_tokens(
                     .to_string()
                     .starts_with(|c: char| c.is_ascii_uppercase())
                 {
-                    types.insert(first.to_string());
+                    body.types.insert(first.to_string());
                 }
                 let mut segments = vec![first.to_string()];
                 let mut j = i + 1;
@@ -1103,7 +1095,7 @@ fn scan_tokens(
                                 .to_string()
                                 .starts_with(|c: char| c.is_ascii_uppercase())
                             {
-                                types.insert(next.to_string());
+                                body.types.insert(next.to_string());
                             }
                             segments.push(next.to_string());
                             j += 3;
@@ -1113,11 +1105,13 @@ fn scan_tokens(
                 }
                 let after_fn = i > 0 && matches!(&toks[i - 1], TokenTree::Ident(k) if k == "fn");
                 if paren(j) && !after_fn {
-                    out.push(Call::Path {
-                        segments,
-                        value: false,
-                    });
-                    lines.push(line_of(first.span()));
+                    body.push(
+                        Call::Path {
+                            segments,
+                            value: false,
+                        },
+                        line_of(first.span()),
+                    );
                 }
                 i = j;
             }
@@ -1223,6 +1217,11 @@ impl Items<'_> {
             }
             child_ids.push(id);
         }
+        debug_assert_eq!(
+            body.calls.len(),
+            body.lines.len(),
+            "a call without its line"
+        );
         let (calls, lines): (Vec<Call>, Vec<usize>) = body
             .calls
             .into_iter()
@@ -1521,14 +1520,15 @@ struct Site {
     caller: String,
     callee: String,
     method: bool,
-    /// For a method: the files of the candidate definitions that make it
-    /// ambiguous (a new one makes calls in untouched files ambiguous).
+    /// The files that define a function of the callee's name (for a method,
+    /// the candidates that make it ambiguous): a new definition can leave a
+    /// call in an untouched file unresolved.
     defined_in: Vec<String>,
 }
 
 impl Site {
-    /// Whether a change to `files` touches it: its own file, or for a method
-    /// one of its candidates' files.
+    /// Whether a change to `files` touches it: its own file, or one of its
+    /// [`Site::defined_in`] files.
     fn touched(&self, files: &BTreeSet<String>) -> bool {
         files.contains(&self.file) || self.defined_in.iter().any(|file| files.contains(file))
     }
@@ -1541,11 +1541,12 @@ impl Site {
         };
         format!("{}:{}  {} -> {callee}", self.file, self.line, self.caller)
     }
-    /// `X1-method|caller|method|file:line`: `cut -d'|' -f1-3` drops the line,
-    /// so main's list diffs against a branch's.
-    fn method_record(&self) -> String {
+    /// `X1-path|caller|path|file:line` or `X1-method|caller|method|file:line`:
+    /// `cut -d'|' -f1-3` drops the line, so main's list diffs against a branch's.
+    fn record(&self) -> String {
+        let kind = if self.method { "method" } else { "path" };
         format!(
-            "X1-method|{}|{}|{}:{}",
+            "X1-{kind}|{}|{}|{}:{}",
             self.caller, self.callee, self.file, self.line
         )
     }
@@ -1838,7 +1839,8 @@ impl Graph {
                                         caller,
                                         callee,
                                         method: false,
-                                        defined_in: Vec::new(),
+                                        defined_in: self
+                                            .defined_in(segments.last().unwrap(), false),
                                     });
                             }
                         }
@@ -1851,20 +1853,13 @@ impl Graph {
                                 .filter_map(|&id| self.funcs[id].self_ty.as_ref())
                                 .collect();
                             if owners.len() > 1 {
-                                let mut defined_in: Vec<String> = self.by_name[name]
-                                    .iter()
-                                    .filter(|&&id| self.funcs[id].self_ty.is_some())
-                                    .map(|&id| self.funcs[id].file.clone())
-                                    .collect();
-                                defined_in.sort();
-                                defined_in.dedup();
                                 out.unresolved_methods.push(Site {
                                     file: func.file.clone(),
                                     line,
                                     caller: func.label(),
                                     callee: name.clone(),
                                     method: true,
-                                    defined_in,
+                                    defined_in: self.defined_in(name, true),
                                 });
                             }
                         }
@@ -1879,6 +1874,20 @@ impl Graph {
         }
         out.unresolved_paths = paths.into_values().collect();
         out
+    }
+
+    /// The files that define a function named `name` (only methods when
+    /// `methods`), sorted.
+    fn defined_in(&self, name: &str, methods: bool) -> Vec<String> {
+        let files: BTreeSet<&String> = self
+            .by_name
+            .get(name)
+            .into_iter()
+            .flatten()
+            .filter(|&&id| !methods || self.funcs[id].self_ty.is_some())
+            .map(|&id| &self.funcs[id].file)
+            .collect();
+        files.into_iter().cloned().collect()
     }
 
     /// `first` is a `use` alias for another crate's item in `func`'s file.
@@ -2042,8 +2051,8 @@ impl Graph {
         let roots = self.roots(policy);
         let mut report = Report {
             roots_by_kind: BTreeMap::new(),
-            unresolved_paths: res.unresolved_paths.clone(),
-            unresolved_methods: res.unresolved_methods.clone(),
+            unresolved_paths: res.unresolved_paths,
+            unresolved_methods: res.unresolved_methods,
             nodes: self.funcs.len(),
             ..Report::default()
         };
@@ -2491,8 +2500,11 @@ fn the_retired_preview_has_no_writer_exception() {
 /// `String::new`, `Type::deserialize`, `Key::parse` via `FromStr`) or
 /// external-crate constructors and parsers: none has a body in this app-source
 /// graph, so none reaches a write primitive. A rise means the resolver lost track
-/// of something: over the ceiling the failure lists the sites in the files the
-/// change touches (see [`census_listing`]); `X1_PRINT_UNRESOLVED=1` lists all. The ceiling
+/// of something: over the ceiling the failure lists the sites the change touches,
+/// by the files changed since `X1_DIFF_BASE` (CI sets it to the pull request's or
+/// merge group's base; see [`census_listing`]), and `X1_PRINT_UNRESOLVED=1` lists all
+/// as `X1-path|caller|path|file:line` (run `cut -d'|' -f1-3` on main's and the
+/// branch's lists before diffing them). The ceiling
 /// is a growth tripwire; raise it only after reviewing every added site. 278: the
 /// shared-read handoff map in `commands/worktree_probe.rs` adds one `HashMap::new()`.
 /// 279: the live hub's bounded memory, measured by CI. The new constructor calls are
@@ -2511,9 +2523,10 @@ const MAX_UNRESOLVED_PATHS: usize = 279;
 /// with a sink-reaching candidate must pass its review (rusqlite `.prepare`
 /// collisions are covered by the SQL review). This cap is a growth tripwire:
 /// raise it only after reviewing the added sites, never by adding sink
-/// exceptions or slack. Over the ceiling the failure lists the calls in the files
-/// the change touches with their lines (see [`census_listing`]);
-/// `X1_PRINT_UNRESOLVED_METHODS=1` prints every one as `X1-method|caller|method|file:line`.
+/// exceptions or slack. Over the ceiling the failure lists the calls the change
+/// touches, by the files changed since `X1_DIFF_BASE` (see [`census_listing`]);
+/// `X1_PRINT_UNRESOLVED_METHODS=1` prints every one as `X1-method|caller|method|file:line`
+/// (run `cut -d'|' -f1-3` on main's and the branch's lists before diffing them).
 /// The census after the runtime counters is 6_496, one more than main without them. Their code
 /// is in `live_hub/mod.rs`, `shared/invoke_stats.rs` and `session_text.rs` and calls no write
 /// primitive. The skill allowlist adds up to 5 more in `agents/` (launch and provides), none
@@ -2572,10 +2585,10 @@ fn diff_base(raw: Option<&str>) -> Option<&str> {
 }
 
 /// The graph's file keys (`commands/watch.rs`) for the app sources a
-/// `git diff --name-only` listing names (`src-tauri/src/commands/watch.rs`).
+/// `git diff --name-only -z` listing names (`src-tauri/src/commands/watch.rs`).
 fn changed_files(listing: &str) -> BTreeSet<String> {
     listing
-        .lines()
+        .split('\0')
         .filter_map(|path| path.strip_prefix("src-tauri/src/"))
         .map(str::to_string)
         .collect()
@@ -2584,10 +2597,12 @@ fn changed_files(listing: &str) -> BTreeSet<String> {
 /// The app sources changed between `base` and `HEAD` in the checkout at
 /// `repo`, or `None` when git fails (no git, not a checkout, an unknown base).
 fn changed_since(repo: &Path, base: &str) -> Option<BTreeSet<String>> {
+    // Trees only: a blob-less clone must not fetch.
     let out = std::process::Command::new("git")
+        .env("GIT_NO_LAZY_FETCH", "1")
         .arg("-C")
         .arg(repo)
-        .args(["diff", "--name-only"])
+        .args(["diff", "--no-renames", "--name-only", "-z"])
         .arg(format!("{base}...HEAD"))
         .arg("--")
         .output()
@@ -2600,33 +2615,52 @@ fn changed_since(repo: &Path, base: &str) -> Option<BTreeSet<String>> {
         .map(|listing| changed_files(&listing))
 }
 
+/// What the diff base gives the failure listing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Changed {
+    /// `X1_DIFF_BASE` is unset or not a commit sha.
+    NoBase,
+    /// git could not diff the base against `HEAD`.
+    GitFailed,
+    /// The app sources changed since the base.
+    Files(BTreeSet<String>),
+}
+
 /// One census list as failure lines, after a note saying which: the sites the
-/// `changed` files touch (see [`Site::touched`]), or every site when there is
-/// no diff base or it touches none; by file and line, at most `cap` of them,
-/// then how many more there are.
-fn listing(sites: &[Site], changed: Option<&BTreeSet<String>>, cap: usize) -> Vec<String> {
-    let touched: Vec<&Site> = match changed {
-        Some(files) => sites.iter().filter(|site| site.touched(files)).collect(),
-        None => Vec::new(),
-    };
-    let (note, mut picked): (&str, Vec<&Site>) = if changed.is_none() {
-        (
-            "unfiltered (no usable X1_DIFF_BASE): every site is listed",
+/// changed files touch (see [`Site::touched`]), those in the changed files first;
+/// else every site. By file and line, at most `cap` of them, then how many more.
+fn listing(sites: &[Site], changed: &Changed, cap: usize) -> Vec<String> {
+    let (note, mut picked): (&str, Vec<&Site>) = match changed {
+        Changed::NoBase => (
+            "unfiltered (no usable X1_DIFF_BASE): every site",
             sites.iter().collect(),
-        )
-    } else if touched.is_empty() {
-        (
-            "no site matched the files this change touches: every site is listed",
+        ),
+        Changed::GitFailed => (
+            "unfiltered (git could not diff X1_DIFF_BASE...HEAD): every site",
             sites.iter().collect(),
-        )
-    } else {
-        (
-            "the sites the files this change touches hold or define",
-            touched,
-        )
+        ),
+        Changed::Files(files) => {
+            let touched: Vec<&Site> = sites.iter().filter(|site| site.touched(files)).collect();
+            if touched.is_empty() {
+                (
+                    "unfiltered (no site is in or defined in a changed file): every site",
+                    sites.iter().collect(),
+                )
+            } else {
+                (
+                    "filtered: the sites in the changed files, then those naming a function \
+                     defined in one",
+                    touched,
+                )
+            }
+        }
     };
+    // Sites in the change's own files stay under the cap.
+    match changed {
+        Changed::Files(files) => picked.sort_by_key(|site| (!files.contains(&site.file), *site)),
+        _ => picked.sort(),
+    }
     let mut out = vec![note.to_string()];
-    picked.sort();
     out.extend(picked.iter().take(cap).map(|site| site.row()));
     if picked.len() > cap {
         out.push(format!(
@@ -2639,11 +2673,7 @@ fn listing(sites: &[Site], changed: Option<&BTreeSet<String>>, cap: usize) -> Ve
 
 /// What the main test prints before its census assertions fail: each list
 /// over its ceiling (`(paths, methods)`), as a [`listing`].
-fn census_listing(
-    report: &Report,
-    ceilings: (usize, usize),
-    changed: Option<&BTreeSet<String>>,
-) -> Vec<String> {
+fn census_listing(report: &Report, ceilings: (usize, usize), changed: &Changed) -> Vec<String> {
     let mut out = Vec::new();
     for (what, sites, ceiling) in [
         (
@@ -2744,12 +2774,12 @@ fn no_unattended_root_reaches_a_write_primitive() {
 
     if std::env::var_os("X1_PRINT_UNRESOLVED").is_some() {
         for site in &report.unresolved_paths {
-            println!("  unresolved: {}", site.row());
+            println!("{}", site.record());
         }
     }
     if std::env::var_os("X1_PRINT_UNRESOLVED_METHODS").is_some() {
         for site in &report.unresolved_methods {
-            println!("{}", site.method_record());
+            println!("{}", site.record());
         }
     }
 
@@ -2786,9 +2816,12 @@ fn no_unattended_root_reaches_a_write_primitive() {
         || report.unresolved_methods.len() > MAX_UNRESOLVED_METHODS
     {
         let base = std::env::var("X1_DIFF_BASE").ok();
-        let changed = diff_base(base.as_deref()).and_then(|base| changed_since(&root(), base));
+        let changed = match diff_base(base.as_deref()) {
+            None => Changed::NoBase,
+            Some(base) => changed_since(&root(), base).map_or(Changed::GitFailed, Changed::Files),
+        };
         let ceilings = (MAX_UNRESOLVED_PATHS, MAX_UNRESOLVED_METHODS);
-        for line in census_listing(&report, ceilings, changed.as_ref()) {
+        for line in census_listing(&report, ceilings, &changed) {
             eprintln!("{line}");
         }
     }
@@ -3491,9 +3524,16 @@ fn site(file: &str, line: usize, callee: &str) -> Site {
     }
 }
 
+fn files(names: &[&str]) -> Changed {
+    Changed::Files(names.iter().map(|name| name.to_string()).collect())
+}
+
+const FILTERED: &str =
+    "filtered: the sites in the changed files, then those naming a function defined in one";
+
 /// Self-test: the census records each ambiguous method call (macro tokens
 /// included) and each unresolved path call (once per caller and path, at its
-/// first line) with its file and line, and the counts are those sites.
+/// first line) with its file, line and the files defining its callee's name.
 #[test]
 fn planted_census_sites_carry_their_lines() {
     let res = planted_census().resolution();
@@ -3502,6 +3542,13 @@ fn planted_census_sites_carry_their_lines() {
         paths,
         ["routines/census.rs:10  routines::census::build -> Quiet::prepare"]
     );
+    let records: Vec<String> = res.unresolved_paths.iter().map(Site::record).collect();
+    assert_eq!(
+        records,
+        ["X1-path|routines::census::build|Quiet::prepare|routines/census.rs:10"]
+    );
+    let defined: Vec<&Vec<String>> = res.unresolved_paths.iter().map(|s| &s.defined_in).collect();
+    assert_eq!(defined, [&["agents/prepare/mod.rs"]]);
     let methods: Vec<String> = res.unresolved_methods.iter().map(Site::row).collect();
     assert_eq!(
         methods,
@@ -3510,38 +3557,46 @@ fn planted_census_sites_carry_their_lines() {
             "routines/census.rs:7  routines::census::tick -> .write_it()",
         ]
     );
+    let records: Vec<String> = res.unresolved_methods.iter().map(Site::record).collect();
     assert_eq!(
-        res.unresolved_methods[0].method_record(),
-        "X1-method|routines::census::tick|write_it|routines/census.rs:6"
+        records,
+        [
+            "X1-method|routines::census::tick|write_it|routines/census.rs:6",
+            "X1-method|routines::census::tick|write_it|routines/census.rs:7",
+        ]
     );
 }
 
-/// Self-test: over a ceiling the failure lists that list's sites (unfiltered,
-/// with a note, without a diff base); at its ceiling a list prints nothing.
+/// Self-test: over a ceiling the failure lists that list's sites, filtered by
+/// the changed files or unfiltered with a note; at its ceiling a list prints
+/// nothing.
 #[test]
 fn planted_census_over_a_ceiling_lists_its_sites() {
     let report = planted_census().check(&planted_policy(&[], &[], &[]));
-    let listed = census_listing(&report, (0, 2), None);
     assert_eq!(
-        listed,
+        census_listing(&report, (0, 2), &Changed::NoBase),
         [
             "1 unresolved in-crate path calls (ceiling 0):",
-            "  unfiltered (no usable X1_DIFF_BASE): every site is listed",
+            "  unfiltered (no usable X1_DIFF_BASE): every site",
             "  routines/census.rs:10  routines::census::build -> Quiet::prepare",
         ]
     );
-    let listed = census_listing(&report, (1, 1), None);
-    assert_eq!(listed[0], "2 ambiguous method calls (ceiling 1):");
+    let filtered = format!("  {FILTERED}");
     assert_eq!(
-        listed[2],
-        "  routines/census.rs:6  routines::census::tick -> .write_it()"
+        census_listing(&report, (1, 1), &files(&["routines/census.rs"])),
+        [
+            "2 ambiguous method calls (ceiling 1):",
+            filtered.as_str(),
+            "  routines/census.rs:6  routines::census::tick -> .write_it()",
+            "  routines/census.rs:7  routines::census::tick -> .write_it()",
+        ]
     );
-    assert_eq!(listed.len(), 4);
-    assert!(census_listing(&report, (1, 2), None).is_empty());
+    assert!(census_listing(&report, (1, 2), &Changed::NoBase).is_empty());
 }
 
-/// Self-test: with a changed-file set the listing keeps only the sites in
-/// those files, by file and line; without one it keeps every site after a note.
+/// Self-test: with a changed-file set the listing keeps only the sites those
+/// files touch, by file and line; without one, when git failed, or when it
+/// touches none, it keeps every site after a note saying why.
 #[test]
 fn the_listing_filters_by_changed_file() {
     let sites = [
@@ -3549,34 +3604,33 @@ fn the_listing_filters_by_changed_file() {
         site("a.rs", 3, "a::f"),
         site("b.rs", 2, "b::h"),
     ];
-    let changed: BTreeSet<String> = ["b.rs".to_string()].into();
     assert_eq!(
-        listing(&sites, Some(&changed), 100),
-        [
-            "the sites the files this change touches hold or define",
-            "b.rs:2  m::f -> b::h",
-            "b.rs:9  m::f -> b::g",
-        ]
+        listing(&sites, &files(&["b.rs"]), 100),
+        [FILTERED, "b.rs:2  m::f -> b::h", "b.rs:9  m::f -> b::g"]
     );
-    assert_eq!(
-        listing(&sites, None, 100),
-        [
-            "unfiltered (no usable X1_DIFF_BASE): every site is listed",
-            "a.rs:3  m::f -> a::f",
-            "b.rs:2  m::f -> b::h",
-            "b.rs:9  m::f -> b::g",
-        ]
-    );
-    let untouched: BTreeSet<String> = ["c.rs".to_string()].into();
-    assert_eq!(
-        listing(&sites, Some(&untouched), 100),
-        [
-            "no site matched the files this change touches: every site is listed",
-            "a.rs:3  m::f -> a::f",
-            "b.rs:2  m::f -> b::h",
-            "b.rs:9  m::f -> b::g",
-        ]
-    );
+    let every = [
+        "a.rs:3  m::f -> a::f",
+        "b.rs:2  m::f -> b::h",
+        "b.rs:9  m::f -> b::g",
+    ];
+    for (changed, note) in [
+        (
+            Changed::NoBase,
+            "unfiltered (no usable X1_DIFF_BASE): every site",
+        ),
+        (
+            Changed::GitFailed,
+            "unfiltered (git could not diff X1_DIFF_BASE...HEAD): every site",
+        ),
+        (
+            files(&["c.rs"]),
+            "unfiltered (no site is in or defined in a changed file): every site",
+        ),
+    ] {
+        let mut expected = vec![note];
+        expected.extend(every);
+        assert_eq!(listing(&sites, &changed, 100), expected, "{changed:?}");
+    }
 }
 
 /// Self-test: a method call is touched when a changed file defines one of the
@@ -3600,41 +3654,66 @@ fn a_new_candidate_touches_the_calls_it_makes_ambiguous() {
         ),
     ])
     .resolution();
+    let rows: Vec<String> = res.unresolved_methods.iter().map(Site::row).collect();
     assert_eq!(
-        res.unresolved_methods[0].defined_in,
-        ["routines/loud.rs", "routines/quiet.rs"]
+        rows,
+        ["routines/quiet.rs:3  routines::quiet::tick -> .write_it()"]
     );
-    let changed: BTreeSet<String> = ["routines/loud.rs".to_string()].into();
+    let defined: Vec<&Vec<String>> = res
+        .unresolved_methods
+        .iter()
+        .map(|s| &s.defined_in)
+        .collect();
+    assert_eq!(defined, [&["routines/loud.rs", "routines/quiet.rs"]]);
     assert_eq!(
-        listing(&res.unresolved_methods, Some(&changed), 100),
+        listing(&res.unresolved_methods, &files(&["routines/loud.rs"]), 100),
         [
-            "the sites the files this change touches hold or define",
+            FILTERED,
             "routines/quiet.rs:3  routines::quiet::tick -> .write_it()",
         ]
     );
 }
 
 /// Self-test: a listing prints at most `cap` sites, then how many more and the
-/// env vars that print them all.
+/// env vars that print them all; the sites in the changed files come first,
+/// so more than `cap` sites touched only by a definition cannot hide them.
 #[test]
 fn the_listing_is_capped() {
     let sites: Vec<Site> = (1..=5).map(|line| site("a.rs", line, "a::f")).collect();
-    let changed: BTreeSet<String> = ["a.rs".to_string()].into();
+    let more = "... and 3 more (X1_PRINT_UNRESOLVED=1 or X1_PRINT_UNRESOLVED_METHODS=1 prints all)";
     assert_eq!(
-        listing(&sites, Some(&changed), 2),
+        listing(&sites, &files(&["a.rs"]), 2),
         [
-            "the sites the files this change touches hold or define",
+            FILTERED,
             "a.rs:1  m::f -> a::f",
             "a.rs:2  m::f -> a::f",
-            "... and 3 more (X1_PRINT_UNRESOLVED=1 or X1_PRINT_UNRESOLVED_METHODS=1 prints all)",
+            more
         ]
     );
-    assert_eq!(listing(&sites, Some(&changed), 5).len(), 6);
+    assert_eq!(listing(&sites, &files(&["a.rs"]), 5).len(), 6);
+
+    let mut sites: Vec<Site> = (1..=4)
+        .map(|line| Site {
+            defined_in: vec!["c.rs".to_string()],
+            ..site("a.rs", line, "a::f")
+        })
+        .collect();
+    sites.push(site("z.rs", 1, "z::f"));
+    let more = "... and 3 more (X1_PRINT_UNRESOLVED=1 or X1_PRINT_UNRESOLVED_METHODS=1 prints all)";
+    assert_eq!(
+        listing(&sites, &files(&["c.rs", "z.rs"]), 2),
+        [
+            FILTERED,
+            "z.rs:1  m::f -> z::f",
+            "a.rs:1  m::f -> a::f",
+            more
+        ]
+    );
 }
 
-/// Self-test: only a 7-64 character hex sha is a diff base; a git listing maps
-/// to the graph's file keys; a failing git (unknown base, no checkout) is no
-/// filter, not a panic.
+/// Self-test: only a 7-64 character hex sha is a diff base; a NUL-separated git
+/// listing maps to the graph's file keys; git diffs a known commit and a failing
+/// git (unknown base, no checkout) gives `None`, not a panic.
 #[test]
 fn the_diff_base_falls_back_to_no_filter() {
     let (longest, too_long) = ("a".repeat(64), "a".repeat(65));
@@ -3652,9 +3731,21 @@ fn the_diff_base_falls_back_to_no_filter() {
     }
     assert_eq!(diff_base(None), None);
     assert_eq!(
-        changed_files("src-tauri/src/commands/watch.rs\nsrc/App.tsx\nsrc-tauri/src/lib.rs\n"),
+        changed_files("src-tauri/src/commands/watch.rs\0src/App.tsx\0src-tauri/src/lib.rs\0"),
         BTreeSet::from(["commands/watch.rs".to_string(), "lib.rs".to_string()])
     );
+    // HEAD...HEAD changes nothing; skipped where the guard root is no checkout.
+    let head = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root())
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()
+        .filter(|out| out.status.success());
+    if let Some(head) = head {
+        let head = String::from_utf8_lossy(&head.stdout).trim().to_string();
+        assert_eq!(changed_since(&root(), &head), Some(BTreeSet::new()));
+    }
     assert_eq!(
         changed_since(&root(), "0000000000000000000000000000000000000000"),
         None
