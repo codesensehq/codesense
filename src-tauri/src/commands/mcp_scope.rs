@@ -670,9 +670,9 @@ pub(crate) const AGENT_CLI_NOT_FOUND: &str = "agent CLI not found";
 /// `--config` entry with its value), the rule a typed relaunch applies: a shared flag
 /// token alone never removes an unrelated override.
 pub(crate) fn without_removed_args(args: &[String], remove: &[String]) -> Vec<String> {
-    let mut kept = Vec::with_capacity(args.len());
+    let mut kept = Vec::new();
     let (mut at, mut removed) = (0, 0);
-    while at < args.len() {
+    while let Some(token) = args.get(at) {
         let width = match remove.get(removed).map(String::as_str) {
             Some("-c" | "--config") => 2,
             _ => 1,
@@ -682,7 +682,7 @@ pub(crate) fn without_removed_args(args: &[String], remove: &[String]) -> Vec<St
             removed += width;
             at += width;
         } else {
-            kept.push(args[at].clone());
+            kept.push(token.clone());
             at += 1;
         }
     }

@@ -112,8 +112,8 @@ impl LocationMark {
     fn of(path: &Path) -> Self {
         Self {
             path: path.to_path_buf(),
-            stamp: change_stamp(path).ok(),
-            link: std::fs::read_link(path).ok(),
+            stamp: Result::ok(change_stamp(path)),
+            link: Result::ok(std::fs::read_link(path)),
         }
     }
 }
@@ -650,10 +650,11 @@ impl DependencyManager {
 
     /// What each known install location of `basename` holds now.
     fn known_marks(&self, basename: &str) -> Vec<LocationMark> {
-        (self.known_locations)(basename)
-            .iter()
-            .map(|path| LocationMark::of(path))
-            .collect()
+        Vec::from_iter(
+            (self.known_locations)(basename)
+                .iter()
+                .map(|path| LocationMark::of(path)),
+        )
     }
 
     /// Whether a binary a launch found gone is executable at one of its known install
@@ -663,10 +664,11 @@ impl DependencyManager {
     /// file unchanged since the miss is still unusable, so it does not re-probe every
     /// launch.
     fn lost_binary_is_back(&self, basename: &str, at_miss: &[LocationMark]) -> bool {
-        (self.known_locations)(basename).iter().any(|path| {
-            is_executable(path)
-                && at_miss.iter().find(|mark| mark.path == *path) != Some(&LocationMark::of(path))
-        })
+        // A mark holds its path, so one missing from the miss's marks is a location that
+        // was absent then or holds something else now.
+        (self.known_locations)(basename)
+            .iter()
+            .any(|path| is_executable(path) && !at_miss.contains(&LocationMark::of(path)))
     }
 
     /// The binary a launch of `basename` should spawn, checked against what was
@@ -1066,7 +1068,7 @@ fn binary_fingerprint(path: &Path) -> Option<BinaryFingerprint> {
     let meta = std::fs::metadata(&canonical).ok()?;
     let mtime = meta.modified().ok()?;
     Some(BinaryFingerprint {
-        stamp: change_stamp(&canonical).ok(),
+        stamp: Result::ok(change_stamp(&canonical)),
         canonical,
         mtime,
         len: meta.len(),
