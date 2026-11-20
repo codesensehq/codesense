@@ -91,7 +91,13 @@ impl RepliesOwed {
         let owed = sessions.get_mut(tab_session)?;
         let (id, reminded) = owed.messages.iter_mut().find(|(_, reminded)| !*reminded)?;
         *reminded = true;
-        Some(*id)
+        let id = *id;
+        // A session with nothing left to name keeps no entry: a turn that ends without an answer
+        // is named once, then forgotten.
+        if owed.messages.iter().all(|(_, reminded)| *reminded) {
+            sessions.remove(tab_session);
+        }
+        Some(id)
     }
 }
 
@@ -113,6 +119,10 @@ mod tests {
         assert_eq!(owed.remind("tab-1"), Some(7));
         assert!(!owed.owes("tab-1"));
         assert_eq!(owed.remind("tab-1"), None, "never twice");
+        assert!(
+            owed.sessions().is_empty(),
+            "a session with nothing to name is dropped"
+        );
     }
 
     #[test]

@@ -3820,16 +3820,17 @@ fn merge_notify_hooks(
         &guard.marker,
     );
     // The reply reminder rides every settings body the guard does. A folder's copy beside a
-    // launch's runs twice at one Stop, and the app answers only one of them with a block.
+    // launch's runs twice at one Stop; the app names each owed message once, so the two never
+    // name the same one.
     let reply = match hooks.reply_verb {
         Some(verb) => {
             let reply = hook::command(verb, target);
-            merge_hook_entry(settings, &["Stop"], reply.entry(), &reply.marker)?
+            merge_hook_entry(settings, &["Stop"], reply.entry(), &reply.marker)
         }
-        None => false,
+        None => Some(false),
     };
     let deny = merge_deny_rules(settings, codesense_pty_core::notify_hook::deny_rules());
-    Some(replaced | status? | guard? | reply | deny?)
+    Some(replaced | status? | guard? | reply? | deny?)
 }
 
 /// Rewrite in place, as `target` writes it now, each hook entry whose command is exactly one an

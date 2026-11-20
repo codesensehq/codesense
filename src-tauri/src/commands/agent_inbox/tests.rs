@@ -56,6 +56,8 @@ pub(crate) struct FakeHost {
     threads: Mutex<HashMap<String, (String, Option<String>)>>,
     /// Every `pins_changed` call: `(team, thread)`.
     pin_events: Mutex<Vec<(String, crate::weft::pins::ThreadKey)>>,
+    /// The reply reminder's record, this fake's own.
+    owed: crate::commands::reply_owed::RepliesOwed,
 }
 
 impl FakeHost {
@@ -99,6 +101,7 @@ impl FakeHost {
             queued: Mutex::default(),
             threads: Mutex::default(),
             pin_events: Mutex::default(),
+            owed: Default::default(),
         })
     }
 
@@ -379,6 +382,9 @@ impl InboxHost for FakeHost {
             .unwrap()
             .push((team.team.clone(), thread.clone()));
     }
+    fn replies_owed(&self) -> &crate::commands::reply_owed::RepliesOwed {
+        &self.owed
+    }
     async fn owning_story_for_path(&self, team: &LaunchTeam, logical_path: &str) -> Option<String> {
         self.story_owners
             .lock()
@@ -630,6 +636,93 @@ async fn read_messages_returns_oldest_first_then_empty() {
     assert!(read_messages(&*host, Some("S2")).await.unwrap().is_empty());
     // H1's message is still waiting for H1.
     assert_eq!(read_messages(&*host, Some("S1")).await.unwrap().len(), 1);
+}
+
+/// The person's message a session reads is owed an answer until the session replies to it or
+/// sends the person anything; mail from an agent never is.
+#[tokio::test]
+async fn reading_the_persons_mail_owes_it_until_an_answer() {
+    let fake = FakeHost::new();
+    let host = port(&fake);
+    send_message(
+        &host,
+        Some("S1"),
+        "H2",
+        "agent mail",
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    read_messages(&*host, Some("S2")).await.unwrap();
+    assert!(!fake.owed.owes("S2"), "mail from an agent is not owed");
+
+    let asked = sent_id(
+        send_message(
+            &host,
+            None,
+            "H2",
+            "a question",
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap(),
+    );
+    assert!(!fake.owed.owes("S2"), "unread mail is not owed yet");
+    read_messages(&*host, Some("S2")).await.unwrap();
+    assert!(fake.owed.owes("S2"));
+    assert!(!fake.owed.owes("S1"), "only the reader owes it");
+    reply(&host, Some("S2"), asked, "the answer", None)
+        .await
+        .unwrap();
+    assert!(!fake.owed.owes("S2"), "a reply answers it");
+
+    send_message(&host, None, "H2", "another", None, None, None, None, None)
+        .await
+        .unwrap();
+    read_messages(&*host, Some("S2")).await.unwrap();
+    assert!(fake.owed.owes("S2"));
+    send_message(
+        &host,
+        Some("S1"),
+        "H2",
+        "to an agent",
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        fake.owed.owes("S2"),
+        "the reader's own mail to an agent answers nothing"
+    );
+    send_message(
+        &host,
+        Some("S2"),
+        HUMAN,
+        "done",
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        !fake.owed.owes("S2"),
+        "a send_message to the person answers it"
+    );
 }
 
 #[tokio::test]

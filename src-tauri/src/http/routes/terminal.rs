@@ -237,23 +237,42 @@ async fn reply_check(
     let tab_session_id = headers
         .get(HEADER_TAB_SESSION_ID)
         .and_then(|v| v.to_str().ok())
-        .map(str::trim)
         .unwrap_or("");
-    if tab_session_id.is_empty() {
+    let app = state.app_handle.clone();
+    reply_check_answer(
+        crate::commands::reply_owed::replies_owed(),
+        tab_session_id,
+        move |tab| async move {
+            crate::commands::dashboard_launch::session_liveness(&app, &tab)
+                .await
+                .may_be_true()
+        },
+    )
+    .await
+    .map(Json)
+}
+
+/// The route's answer for the tab `tab_session_id` names, from `owed`. `live` probes the tab
+/// only when it owes something; a session known gone is never answered.
+async fn reply_check_answer<F, Fut>(
+    owed: &crate::commands::reply_owed::RepliesOwed,
+    tab_session_id: &str,
+    live: F,
+) -> Result<ReplyCheckResponse, StatusCode>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let tab = tab_session_id.trim();
+    if tab.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
-    let owed = crate::commands::reply_owed::replies_owed();
-    // Nothing owed needs no liveness probe; a session known gone is never answered.
-    let block = if owed.owes(tab_session_id)
-        && crate::commands::dashboard_launch::session_liveness(&state.app_handle, tab_session_id)
-            .await
-            .may_be_true()
-    {
-        owed.remind(tab_session_id).map(|id| id.to_string())
+    let block = if owed.owes(tab) && live(tab.to_string()).await {
+        owed.remind(tab).map(|id| id.to_string())
     } else {
         None
     };
-    Ok(Json(ReplyCheckResponse { block }))
+    Ok(ReplyCheckResponse { block })
 }
 
 /// A CLI started by hand in a CodeSense tab has no launch to record. Its first hook writes a
@@ -323,6 +342,59 @@ pub fn router() -> Router<AppState> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::commands::reply_owed::RepliesOwed;
+    use crate::weft::inbox::HUMAN;
+
+    async fn answer(
+        owed: &RepliesOwed,
+        tab: &str,
+        live: bool,
+    ) -> Result<Option<String>, StatusCode> {
+        reply_check_answer(owed, tab, |_| async move { live })
+            .await
+            .map(|answer| answer.block)
+    }
+
+    #[tokio::test]
+    async fn reply_check_needs_the_tab_header() {
+        let owed = RepliesOwed::default();
+        assert_eq!(answer(&owed, "", true).await, Err(StatusCode::BAD_REQUEST));
+        assert_eq!(
+            answer(&owed, "  ", true).await,
+            Err(StatusCode::BAD_REQUEST)
+        );
+    }
+
+    #[tokio::test]
+    async fn reply_check_names_a_live_tabs_message_once() {
+        let owed = RepliesOwed::default();
+        owed.took("tab-1", "lead", [(7, HUMAN)]);
+        assert_eq!(
+            answer(&owed, "tab-1", true).await,
+            Ok(Some("7".to_string()))
+        );
+        assert_eq!(answer(&owed, "tab-1", true).await, Ok(None), "never twice");
+        assert_eq!(
+            answer(&owed, "tab-2", true).await,
+            Ok(None),
+            "another tab owes nothing"
+        );
+        let body = serde_json::to_value(ReplyCheckResponse { block: None }).unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({ "block": null }),
+            "the wire field the hook reads"
+        );
+    }
+
+    #[tokio::test]
+    async fn reply_check_never_answers_a_tab_that_is_gone() {
+        let owed = RepliesOwed::default();
+        owed.took("tab-1", "lead", [(7, HUMAN)]);
+        assert_eq!(answer(&owed, "tab-1", false).await, Ok(None));
+        assert!(owed.owes("tab-1"), "a gone tab's probe names nothing");
+    }
 
     fn update(event: &'static str, status: &'static str) -> TerminalStatusAction {
         TerminalStatusAction::Update(ResolvedHook { event, status })

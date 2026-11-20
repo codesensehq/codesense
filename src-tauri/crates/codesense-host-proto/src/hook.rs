@@ -469,6 +469,10 @@ fn secret(path: &str) -> bool {
 pub(crate) mod tests {
     use super::*;
     use serde_json::{json, Value};
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+    use std::thread;
 
     /// A fresh temporary directory, removed when dropped.
     pub(crate) struct TempDir(pub(crate) std::path::PathBuf);
@@ -491,6 +495,59 @@ pub(crate) mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    /// One request the test listener took: its head and body.
+    pub(crate) struct Request {
+        pub(crate) head: String,
+        pub(crate) body: Vec<u8>,
+    }
+
+    /// A listener that answers one request with `status` and `body`, and hands it back.
+    pub(crate) fn listener(status: &str, body: &str) -> (u16, mpsc::Receiver<Request>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let answer = format!(
+            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut raw = Vec::new();
+            let mut chunk = [0u8; 4096];
+            let request = loop {
+                let n = stream.read(&mut chunk).unwrap();
+                raw.extend_from_slice(&chunk[..n]);
+                let Some(end) = raw.windows(4).position(|w| w == b"\r\n\r\n") else {
+                    assert!(n > 0, "request ended early");
+                    continue;
+                };
+                let head = String::from_utf8(raw[..end].to_vec()).unwrap();
+                let length: usize = head
+                    .lines()
+                    .find_map(|l| l.strip_prefix("Content-Length: "))
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                if raw.len() >= end + 4 + length {
+                    break Request {
+                        head,
+                        body: raw[end + 4..end + 4 + length].to_vec(),
+                    };
+                }
+                assert!(n > 0, "request ended early");
+            };
+            stream.write_all(answer.as_bytes()).unwrap();
+            let _ = tx.send(request);
+        });
+        (port, rx)
+    }
+
+    /// A port nothing listens on.
+    pub(crate) fn closed_port() -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
     }
 
     fn call(tool: &str, input: Value) -> Value {

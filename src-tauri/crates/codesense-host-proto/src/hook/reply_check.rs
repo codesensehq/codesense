@@ -9,7 +9,7 @@
 //! post, a non-200 or an answer it can't read, the turn just stops. Nor while Claude is already
 //! continuing a turn for a `Stop` hook (`stop_hook_active`), so it can't loop.
 
-use super::notify::{post, PostError, STATUS_PATH};
+use super::notify::{local_url, post, PostError, STATUS_PATH};
 use super::HookEnv;
 
 /// The app's route that answers whether a session owes the person a reply, beside the status
@@ -57,14 +57,14 @@ pub fn reply_check(input: &[u8], env: &HookEnv) -> Option<Block> {
     let url = match &env.status_url {
         // An injected status URL names the app; this route sits beside it.
         Some(status) => format!("{}{REPLY_CHECK_PATH}", status.strip_suffix(STATUS_PATH)?),
-        None => local_url(port.as_deref()?),
+        None => local_url(port.as_deref()?, REPLY_CHECK_PATH),
     };
     let mut result = post(&url, session, b"{}");
     // As the status post does: a session that outlived its app retries once at the port the
     // running app wrote.
     if matches!(result, Err(PostError::Connect)) && env.status_url.is_none() {
         if let Some(current) = env.port_file().filter(|c| Some(c) != port.as_ref()) {
-            result = post(&local_url(&current), session, b"{}");
+            result = post(&local_url(&current, REPLY_CHECK_PATH), session, b"{}");
         }
     }
     let response = result.ok().filter(|r| r.code == 200)?;
@@ -83,57 +83,14 @@ pub fn reply_check(input: &[u8], env: &HookEnv) -> Option<Block> {
     valid.then_some(Block { message_id: id })
 }
 
-fn local_url(port: &str) -> String {
-    format!("http://127.0.0.1:{port}{REPLY_CHECK_PATH}")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hook::tests::TempDir;
-    use std::io::{Read, Write};
+    use crate::hook::tests::{closed_port, listener, Request, TempDir};
     use std::net::TcpListener;
-    use std::sync::mpsc;
-    use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     const STOP: &[u8] = br#"{"hook_event_name":"Stop","session_id":"abc","stop_hook_active":false,"last_assistant_message":"SECRET"}"#;
-
-    /// A listener that answers one request with `status` and `body`, and hands its bytes back.
-    fn listener(status: &str, body: &str) -> (u16, mpsc::Receiver<Vec<u8>>) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let answer = format!(
-            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut raw = Vec::new();
-            let mut chunk = [0u8; 4096];
-            loop {
-                let n = stream.read(&mut chunk).unwrap();
-                raw.extend_from_slice(&chunk[..n]);
-                if let Some(end) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
-                    let head = String::from_utf8_lossy(&raw[..end]).into_owned();
-                    let length: usize = head
-                        .lines()
-                        .find_map(|l| l.strip_prefix("Content-Length: "))
-                        .unwrap()
-                        .parse()
-                        .unwrap();
-                    if raw.len() >= end + 4 + length {
-                        break;
-                    }
-                }
-                assert!(n > 0, "request ended early");
-            }
-            stream.write_all(answer.as_bytes()).unwrap();
-            let _ = tx.send(raw);
-        });
-        (port, rx)
-    }
 
     fn env(home: &TempDir, port: Option<u16>) -> HookEnv {
         HookEnv {
@@ -154,11 +111,10 @@ mod tests {
             block.to_json(),
             r#"{"decision":"block","reason":"You haven't answered in the chat: reply to message 42 with your answer."}"#
         );
-        let request = String::from_utf8(rx.recv_timeout(Duration::from_secs(5)).unwrap()).unwrap();
-        assert!(request.starts_with("POST /api/v1/terminal/reply-check HTTP/1."));
-        assert!(request.contains("\r\nX-Codesense-Tab-Session-Id: tab-1\r\n"));
-        assert!(request.ends_with("\r\n\r\n{}"), "the turn is never sent");
-        assert!(!request.contains("SECRET"));
+        let Request { head, body } = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(head.starts_with("POST /api/v1/terminal/reply-check HTTP/1."));
+        assert!(head.contains("\r\nX-Codesense-Tab-Session-Id: tab-1\r\n"));
+        assert_eq!(body, b"{}", "the turn is never sent");
     }
 
     #[test]
@@ -240,15 +196,33 @@ mod tests {
     #[test]
     fn a_refused_post_retries_once_at_the_current_port() {
         let home = TempDir::new();
-        let closed = TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
         let (port, _rx) = listener("200 OK", r#"{"block":"42"}"#);
         std::fs::write(home.0.join("http.port"), format!("{port}\n")).unwrap();
-        let block = reply_check(STOP, &env(&home, Some(closed)));
+        let block = reply_check(STOP, &env(&home, Some(closed_port())));
         assert_eq!(block.map(|b| b.message_id).as_deref(), Some("42"));
+    }
+
+    #[test]
+    fn a_refused_post_with_nothing_to_retry_lets_the_turn_stop() {
+        let home = TempDir::new();
+        assert_eq!(reply_check(STOP, &env(&home, Some(closed_port()))), None);
+    }
+
+    /// An app that takes the post and never answers costs the turn at most the client's
+    /// timeout, under Claude's 5 s hook limit.
+    #[test]
+    fn a_silent_app_lets_the_turn_stop_within_the_hook_limit() {
+        let home = TempDir::new();
+        let silent = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = silent.local_addr().unwrap().port();
+        let started = Instant::now();
+        assert_eq!(reply_check(STOP, &env(&home, Some(port))), None);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        drop(silent);
     }
 
     #[test]
@@ -258,8 +232,10 @@ mod tests {
         let mut injected = env(&home, None);
         injected.status_url = Some(format!("http://127.0.0.1:{port}/api/v1/terminal/status"));
         assert!(reply_check(STOP, &injected).is_some());
-        let request = String::from_utf8(rx.recv_timeout(Duration::from_secs(5)).unwrap()).unwrap();
-        assert!(request.starts_with("POST /api/v1/terminal/reply-check HTTP/1."));
+        let request = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(request
+            .head
+            .starts_with("POST /api/v1/terminal/reply-check HTTP/1."));
         // A status URL of another shape names no route this hook knows.
         injected.status_url = Some(format!("http://127.0.0.1:{port}/hooks/status"));
         assert_eq!(reply_check(STOP, &injected), None);

@@ -85,6 +85,11 @@ pub(crate) fn emit_inbox_changed<R: tauri::Runtime>(
 /// The registry and store side of the inbox.
 #[async_trait::async_trait]
 pub(crate) trait InboxHost: Send + Sync {
+    /// The person's messages each session took and hasn't answered (the reply reminder's
+    /// record): the app's one record.
+    fn replies_owed(&self) -> &super::reply_owed::RepliesOwed {
+        super::reply_owed::replies_owed()
+    }
     fn media_config(&self, _team: &LaunchTeam) -> crate::media::Config {
         crate::media::Config::default()
     }
@@ -963,7 +968,7 @@ async fn store_message(
         Err(reason) => return Ok(SendResult::invalid(reason)),
     };
     if recipient == HUMAN {
-        super::reply_owed::replies_owed().answered(&sender);
+        host.replies_owed().answered(&sender);
     }
     if inserted {
         if let Some((attachment, true)) = prepared {
@@ -2018,7 +2023,7 @@ pub(crate) async fn read_messages<'a>(
     .await??;
     // The person's messages this session took are owed an answer until it gives one.
     if let Some(tab) = sessions.running_tab(&reader) {
-        super::reply_owed::replies_owed().took(
+        host.replies_owed().took(
             tab,
             &reader,
             taken.iter().map(|m| (m.id, m.from.as_str())),
