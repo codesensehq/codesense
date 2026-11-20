@@ -226,19 +226,27 @@ impl FakeHost {
 
 #[async_trait::async_trait]
 impl InboxHost for FakeHost {
-    async fn cached_media(&self, team: &LaunchTeam, sha: &str) -> Result<Vec<u8>, String> {
+    async fn cached_media(
+        &self,
+        team: &LaunchTeam,
+        attachment: &crate::media::Attachment,
+    ) -> Result<Vec<u8>, String> {
         let Some(media) = self.media_state() else {
+            let sha = attachment.sha256.as_deref().unwrap_or_default();
             return crate::media::read_cached(&self.dir.path().join("media-cache"), sha);
         };
-        let source = media.admission(&self.media_config(team), sha);
-        media.fetch_or_cached(sha, source).await.map(|b| b.to_vec())
+        crate::media::index_new_teams(&media, self, std::slice::from_ref(team)).await;
+        media
+            .read(&self.media_config(team), attachment)
+            .await
+            .map(|b| b.to_vec())
     }
 
     fn present_media(&self, team: &LaunchTeam, attachments: &mut [crate::media::Attachment]) {
         let config = self.media_config(team);
-        config.apply(attachments);
-        if let Some(media) = self.media_state() {
-            media.present(&config, attachments);
+        match self.media_state() {
+            Some(media) => media.present(&config, attachments),
+            None => config.apply(attachments),
         }
     }
 
@@ -299,12 +307,18 @@ impl InboxHost for FakeHost {
         if let Some(path) = &input.path {
             let cache = self.dir.path().join("media-cache");
             std::fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
+            let media = self.media_state().unwrap_or_else(|| {
+                crate::media::MediaState::for_test(
+                    cache,
+                    Arc::new(crate::media::FakeFetch::default()),
+                )
+            });
             let attachment = crate::media::prepare_local_for_scope_or_workspace(
                 scope,
                 std::path::Path::new(path),
                 workspace_root,
                 &input.alt,
-                &cache,
+                &media,
             )?;
             return Ok((attachment, false));
         }
@@ -6281,7 +6295,7 @@ async fn a_provider_gif_sent_from_this_machine_is_served_from_memory_and_never_o
         Some(crate::media::MediaProvider::Giphy)
     );
     assert_eq!(cache_files(&fake), 0, "nothing under the cache dir");
-    assert!(media.memory_only(&gif_sha()), "indexed on fetch");
+    assert!(media.is_memory_only(&gif_sha(), None), "indexed on fetch");
     let read = read_media(&host, launch_team("default"), id, gif_sha())
         .await
         .unwrap();
@@ -6293,7 +6307,7 @@ async fn a_provider_gif_sent_from_this_machine_is_served_from_memory_and_never_o
     let media = fake.use_media(fetch.clone());
     fake.own_media.lock().unwrap().clear();
     host.synced_teams().await.unwrap();
-    assert!(media.memory_only(&gif_sha()));
+    assert!(media.is_memory_only(&gif_sha(), None));
     let mut listed = fake
         .rows()
         .into_iter()
@@ -6342,7 +6356,7 @@ async fn tap_to_load_of_a_remote_senders_gif_holds_it_in_memory_and_indexes_it()
     assert_eq!(settled(&fake, id).await.state, "cached");
     assert_eq!(cache_files(&fake), 0);
     assert!(
-        media.memory_only(&gif_sha()),
+        media.is_memory_only(&gif_sha(), None),
         "in the index, so served no-store"
     );
 }
@@ -6360,10 +6374,10 @@ async fn a_team_attached_after_startup_is_indexed_on_its_first_sighting() {
     a.source_host = Some("i.giphy.com".into());
     a.media_provider = Some(crate::media::MediaProvider::Giphy);
     media_message(&fake, "late", a);
-    assert!(!media.memory_only(&gif_sha()));
+    assert!(!media.is_memory_only(&gif_sha(), None));
     host.synced_teams().await.unwrap();
     assert!(media.index.is_team_indexed(ORG, "late"));
-    assert!(media.memory_only(&gif_sha()));
+    assert!(media.is_memory_only(&gif_sha(), None));
     assert!(
         !fake.dir.path().join("media-cache").join(gif_sha()).exists(),
         "its provider copy leaves the disk when it is indexed"

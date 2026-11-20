@@ -93,10 +93,14 @@ pub(crate) trait InboxHost: Send + Sync {
             self.media_config(team).apply(attachments);
         }
     }
-    /// The bytes of a cached image by sha256, for a reader that has confirmed it is an
-    /// image of a message in `team`: memory, then the disk cache, then a re-fetch when
-    /// `team`'s config admits one.
-    async fn cached_media(&self, _team: &LaunchTeam, _sha: &str) -> Result<Vec<u8>, String> {
+    /// The bytes of `attachment`, a cached image the reader has confirmed is on a message
+    /// in `team`: memory, then the disk cache, then a re-fetch when `team`'s config
+    /// admits one.
+    async fn cached_media(
+        &self,
+        _team: &LaunchTeam,
+        _attachment: &crate::media::Attachment,
+    ) -> Result<Vec<u8>, String> {
         Err("no media cache".into())
     }
     /// A message's attachments changed (sent, fetched): the media sha index records them.
@@ -2832,11 +2836,21 @@ impl InboxHost for AppInboxHost {
             return;
         }
         let config = self.media_config(team);
-        config.apply(attachments);
-        crate::media::present_cached(&self.app, &config, attachments);
+        match crate::media::app_state(&self.app) {
+            Some(media) => media.present(&config, attachments),
+            None => config.apply(attachments),
+        }
     }
-    async fn cached_media(&self, team: &LaunchTeam, sha: &str) -> Result<Vec<u8>, String> {
-        crate::media::fetch_or_cached(&self.app, &self.media_config(team), sha)
+    async fn cached_media(
+        &self,
+        team: &LaunchTeam,
+        attachment: &crate::media::Attachment,
+    ) -> Result<Vec<u8>, String> {
+        let media = crate::media::app_state(&self.app).ok_or("media unavailable")?;
+        // The team is indexed before its media is served.
+        crate::media::index_new_teams(&media, self, std::slice::from_ref(team)).await;
+        media
+            .read(&self.media_config(team), attachment)
             .await
             .map(|bytes| bytes.to_vec())
     }
@@ -3616,9 +3630,11 @@ pub(crate) async fn read_media(
         return Err("invalid media hash".into());
     }
     let (location, attachments) = message_attachments(&**host, team, message_id).await?;
-    crate::media::cached_attachment(&attachments, &sha256).ok_or("media unavailable")?;
+    let attachment = crate::media::cached_attachment(&attachments, &sha256)
+        .ok_or("media unavailable")?
+        .clone();
     // Only a confirmed attachment of this message is read, or fetched again.
-    let bytes = host.cached_media(&location.team, &sha256).await?;
+    let bytes = host.cached_media(&location.team, &attachment).await?;
     let (mime, _, _) =
         crate::media::inspect(&bytes).map_err(|_| "media unavailable".to_string())?;
     Ok(InboxMediaBytes { mime, bytes })

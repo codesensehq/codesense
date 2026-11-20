@@ -11,7 +11,6 @@ pub(crate) use state::MediaState;
 pub(crate) use state::{FakeFetch, Fetch};
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::{
     path::{Path, PathBuf},
     time::Duration,
@@ -40,6 +39,18 @@ fn host_matches(pattern: &str, host: &str) -> bool {
             .is_some_and(|prefix| prefix.ends_with('.') && prefix.len() > 1)
     } else {
         host == pattern
+    }
+}
+
+/// Provider media: `media_provider` says so or, only when it is missing (an old
+/// message), `source_host` is a provider host.
+pub(crate) fn is_provider(
+    media_provider: Option<MediaProvider>,
+    source_host: Option<&str>,
+) -> bool {
+    match media_provider {
+        Some(provider) => provider.is_provider(),
+        None => source_host.is_some_and(|h| MediaProvider::of_host(h).is_provider()),
     }
 }
 
@@ -222,16 +233,20 @@ impl Attachment {
             own_sender: false,
         }
     }
-    /// Provider media: `mediaProvider` says so or, on an old message without it, the
-    /// source host is a provider host.
+    /// Provider media (see [`is_provider`]).
     pub fn is_provider_media(&self) -> bool {
-        match self.media_provider {
-            Some(provider) => provider.is_provider(),
-            None => self
-                .source_host
-                .as_deref()
-                .is_some_and(|h| MediaProvider::of_host(h).is_provider()),
-        }
+        is_provider(self.media_provider, self.source_host.as_deref())
+    }
+    /// The verified image `sha` is this attachment's, cached.
+    fn set_cached(&mut self, sha: String, mime: &str, width: u32, height: u32, bytes: u64) {
+        self.sha256 = Some(sha);
+        self.mime = Some(mime.into());
+        self.width = Some(width);
+        self.height = Some(height);
+        self.bytes = Some(bytes);
+        self.state = "cached".into();
+        self.reason = None;
+        self.retryable = false;
     }
     fn failed(mut self, error: Failure) -> Self {
         self.state = "failed".into();
@@ -471,21 +486,6 @@ pub fn read_cached(dir: &Path, sha: &str) -> Result<Vec<u8>, String> {
     let _ = file.set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now()));
     Ok(bytes)
 }
-fn store_bytes(dir: &Path, bytes: &[u8], a: &mut Attachment) -> Result<(), Failure> {
-    let _guard = DISK.lock().unwrap_or_else(|e| e.into_inner());
-    let (mime, w, h) = inspect(bytes)?;
-    let sha = format!("{:x}", Sha256::digest(bytes));
-    write_file(dir, &sha, bytes)?;
-    a.sha256 = Some(sha);
-    a.mime = Some(mime.into());
-    a.width = Some(w);
-    a.height = Some(h);
-    a.bytes = Some(bytes.len() as u64);
-    a.state = "cached".into();
-    a.reason = None;
-    a.retryable = false;
-    Ok(())
-}
 /// Write verified `bytes` as `dir/<sha>`, evicting the oldest files over the cap.
 /// The caller holds [`DISK`].
 fn write_file(dir: &Path, sha: &str, bytes: &[u8]) -> Result<(), Failure> {
@@ -577,7 +577,7 @@ pub(crate) async fn prepare(
         .ok_or_else(|| "media team unavailable".to_string())?;
         (root.join(&raw), Some(raw))
     };
-    let dir = cache_dir(app)?;
+    let media = app_state(app).ok_or("media unavailable")?;
     let alt = input.alt.clone();
     let scope = scope.clone();
     let workspace_root = workspace_root.map(Path::to_path_buf);
@@ -587,7 +587,7 @@ pub(crate) async fn prepare(
             &content_path,
             workspace_root.as_deref(),
             &alt,
-            &dir,
+            &media,
         );
         match scoped {
             Ok(a) => Ok(a),
@@ -600,7 +600,7 @@ pub(crate) async fn prepare(
                         &workspace_root.join(relative),
                         Some(workspace_root),
                         &alt,
-                        &dir,
+                        &media,
                     )
                     .map_err(|_| content_error)
                 } else {
@@ -617,10 +617,10 @@ pub(crate) fn prepare_local_for_scope(
     scope: &crate::context_repo::caller_scope::CallerScope,
     path: &std::path::Path,
     alt: &str,
-    cache_dir: &std::path::Path,
+    media: &MediaState,
 ) -> Result<Attachment, String> {
     let bytes = read_scoped_media(scope, path)?;
-    cache_local_media(&bytes, alt, cache_dir)
+    cache_local_media(bytes, alt, media)
 }
 
 pub(crate) fn prepare_local_for_scope_or_workspace(
@@ -628,7 +628,7 @@ pub(crate) fn prepare_local_for_scope_or_workspace(
     path: &std::path::Path,
     workspace_root: Option<&std::path::Path>,
     alt: &str,
-    cache_dir: &std::path::Path,
+    media: &MediaState,
 ) -> Result<Attachment, String> {
     if matches!(
         scope,
@@ -636,7 +636,7 @@ pub(crate) fn prepare_local_for_scope_or_workspace(
     ) {
         return Err("local media sender is unknown".into());
     }
-    if let Ok(a) = prepare_local_for_scope(scope, path, alt, cache_dir) {
+    if let Ok(a) = prepare_local_for_scope(scope, path, alt, media) {
         return Ok(a);
     }
     let root = workspace_root.ok_or_else(|| "local media is outside sender scope".to_string())?;
@@ -646,7 +646,7 @@ pub(crate) fn prepare_local_for_scope_or_workspace(
         return Err("local media is outside sender workspace".into());
     }
     let bytes = read_local_media(&canonical_file)?;
-    cache_local_media(&bytes, alt, cache_dir)
+    cache_local_media(bytes, alt, media)
 }
 
 fn read_scoped_media(
@@ -691,14 +691,12 @@ fn read_limited(mut reader: impl std::io::Read) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-fn cache_local_media(
-    bytes: &[u8],
-    alt: &str,
-    cache_dir: &std::path::Path,
-) -> Result<Attachment, String> {
+/// Keep a local image by the memory-only rule: its bytes go to memory, never to disk,
+/// when the index holds the same sha memory-only (a provider GIF saved locally).
+fn cache_local_media(bytes: Vec<u8>, alt: &str, media: &MediaState) -> Result<Attachment, String> {
     let mut attachment = Attachment::empty(alt);
     attachment.media_provider = Some(MediaProvider::None);
-    Ok(match store_bytes(cache_dir, bytes, &mut attachment) {
+    Ok(match media.keep(bytes, None, &mut attachment) {
         Ok(()) => attachment,
         Err(error) => attachment.failed(Failure {
             retryable: false,
@@ -736,11 +734,24 @@ pub(crate) fn install(app: &tauri::AppHandle) {
 async fn startup(app: &tauri::AppHandle, state: &std::sync::Arc<MediaState>) -> Result<(), String> {
     use crate::commands::agent_inbox::InboxHost;
     let host = crate::commands::agent_inbox::AppInboxHost { app: app.clone() };
-    // `synced_teams` indexes each team it has not seen yet before returning it.
-    let teams = host.synced_teams().await;
+    // `synced_teams` indexes each team it has not seen yet before returning it. Until it
+    // answers, the index is not ready: listings leave cached images as they are.
+    let mut wait = std::time::Duration::from_secs(5);
+    let teams = loop {
+        match host.synced_teams().await {
+            Ok(teams) => break teams,
+            Err(e) => {
+                log::warn!("inbox media: synced teams unavailable, retrying: {e}");
+                tokio::time::sleep(wait).await;
+                wait = (wait * 2).min(std::time::Duration::from_secs(300));
+            }
+        }
+    };
     state.set_ready();
+    // Listings drawn before the index was ready are drawn again.
+    host.inbox_changed(&[]);
     let mut stores = Vec::new();
-    for team in teams? {
+    for team in teams {
         let path = host.team_store(&team).await?;
         stores.push((team, path));
     }
@@ -773,19 +784,19 @@ pub(crate) async fn index_new_teams(
         if state.index.is_team_indexed(&team.org, &team.team) {
             continue;
         }
-        let path = match host.team_store(team).await {
-            Ok(path) => path,
-            Err(e) => {
-                log::warn!("inbox media: no store to index: {e}");
-                continue;
-            }
-        };
-        let (state, team) = (state.clone(), team.clone());
-        if let Err(e) = crate::commands::await_blocking("media.index", move || {
-            purge::index_store(&state, &team, &path)
-        })
-        .await
-        {
+        // Concurrent first sightings share one scan; a failed scan is tried again later.
+        let indexing = state.team_indexing(&team.org, &team.team);
+        let indexed = indexing
+            .get_or_try_init(|| async {
+                let path = host.team_store(team).await?;
+                let (state, team) = (state.clone(), team.clone());
+                crate::commands::await_blocking("media.index", move || {
+                    purge::index_store(&state, &team, &path)
+                })
+                .await
+            })
+            .await;
+        if let Err(e) = indexed {
             log::warn!("inbox media: could not index a team: {e}");
         }
     }
@@ -801,30 +812,6 @@ pub(crate) async fn fetch(
     let config = config(app, team).await?;
     let state = app_state(app).ok_or("media unavailable")?;
     state.fetch(&config, a, automatic).await
-}
-
-/// Memory-aware presence of `attachments` under `config` (see [`MediaState::present`]).
-pub(crate) fn present_cached(
-    app: &tauri::AppHandle,
-    config: &Config,
-    attachments: &mut [Attachment],
-) {
-    if let Some(state) = app_state(app) {
-        state.present(config, attachments);
-    }
-}
-
-/// The bytes of `sha` for a reader of `team`'s inbox that has already confirmed the
-/// sha is a cached image of one of its messages: memory, then disk, then a re-fetch
-/// when `config` admits one.
-pub(crate) async fn fetch_or_cached(
-    app: &tauri::AppHandle,
-    config: &Config,
-    sha: &str,
-) -> Result<axum::body::Bytes, String> {
-    let state = app_state(app).ok_or("media unavailable")?;
-    let source = state.admission(config, sha);
-    state.fetch_or_cached(sha, source).await
 }
 
 /// Record a message's attachments in the sha index.

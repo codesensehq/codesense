@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use sha2::{Digest, Sha256};
 
 #[test]
 fn fetch_rule_requires_auto_own_machine_and_allowed_host() {
@@ -84,8 +85,9 @@ fn local_media_uses_sender_scope_when_ui_scope_is_parent_team() {
     assert!(ui.open(&parent_only).is_ok());
 
     let cache = tempfile::tempdir().unwrap();
-    assert!(prepare_local_for_scope(&caller, &parent_only, "parent", cache.path()).is_err());
-    let own = prepare_local_for_scope(&caller, &child_image, "child", cache.path()).unwrap();
+    let media = MediaState::for_test(cache.path().to_path_buf(), Arc::new(Unreachable));
+    assert!(prepare_local_for_scope(&caller, &parent_only, "parent", &media).is_err());
+    let own = prepare_local_for_scope(&caller, &child_image, "child", &media).unwrap();
     assert_eq!(own.state, "cached");
     assert_eq!(own.mime.as_deref(), Some("image/gif"));
     assert_eq!(
@@ -121,62 +123,53 @@ fn local_media_workspace_access_is_sender_bound_and_canonical() {
     std::fs::write(&traversal_target, gif).unwrap();
     symlink(&outside, &escape).unwrap();
     let cache = tempfile::tempdir().unwrap();
+    let cache = MediaState::for_test(cache.path().to_path_buf(), Arc::new(Unreachable));
 
-    let own = prepare_local_for_scope_or_workspace(
-        &caller,
-        &image,
-        Some(&workspace),
-        "own meme",
-        cache.path(),
-    );
+    let own =
+        prepare_local_for_scope_or_workspace(&caller, &image, Some(&workspace), "own meme", &cache);
     let other = prepare_local_for_scope_or_workspace(
         &caller,
         &other_image,
         Some(&workspace),
         "other meme",
-        cache.path(),
+        &cache,
     );
     let parent = prepare_local_for_scope_or_workspace(
         &caller,
         &outside,
         Some(&workspace),
         "parent only",
-        cache.path(),
+        &cache,
     );
     let symlink_escape = prepare_local_for_scope_or_workspace(
         &caller,
         &escape,
         Some(&workspace),
         "symlink escape",
-        cache.path(),
+        &cache,
     );
     let traversal_escape = prepare_local_for_scope_or_workspace(
         &caller,
         &workspace.join("../escape.gif"),
         Some(&workspace),
         "traversal escape",
-        cache.path(),
+        &cache,
     );
     let unowned = prepare_local_for_scope_or_workspace(
         &caller,
         &arbitrary_image,
         Some(&workspace),
         "unowned path",
-        cache.path(),
+        &cache,
     );
-    let remote_workspace = prepare_local_for_scope_or_workspace(
-        &caller,
-        &image,
-        None,
-        "remote worktree",
-        cache.path(),
-    );
+    let remote_workspace =
+        prepare_local_for_scope_or_workspace(&caller, &image, None, "remote worktree", &cache);
     let unknown = prepare_local_for_scope_or_workspace(
         &CallerScope::Unknown,
         &image,
         Some(&workspace),
         "unknown sender",
-        cache.path(),
+        &cache,
     );
     assert!(own.is_ok(), "sender can attach from its own workspace");
     assert!(other.is_err(), "another session's workspace is refused");
@@ -333,9 +326,10 @@ async fn fetch_transport_omits_private_headers_rejects_redirect_and_caps_stream(
 #[test]
 fn cache_round_trips_verified_bytes_and_all_supported_headers() {
     let dir = tempfile::tempdir().unwrap();
+    let media = MediaState::for_test(dir.path().to_path_buf(), Arc::new(Unreachable));
     let mut a = Attachment::empty("cat");
     let bytes = b"GIF89a\x02\x00\x03\x00";
-    store_bytes(dir.path(), bytes, &mut a).unwrap();
+    media.keep(bytes.to_vec(), None, &mut a).unwrap();
     assert_eq!(
         read_cached(dir.path(), a.sha256.as_deref().unwrap()).unwrap(),
         bytes
@@ -412,13 +406,15 @@ fn canonical_config_edits_emit_the_existing_inbox_domain_event() {
 #[test]
 fn evicted_remote_images_offer_retry_and_local_images_report_unavailable() {
     let dir = tempfile::tempdir().unwrap();
+    let state = MediaState::for_test(dir.path().to_path_buf(), Arc::new(Unreachable));
     let mut local = Attachment::empty("cat");
-    store_bytes(dir.path(), b"GIF89a\x02\x00\x03\x00", &mut local).unwrap();
+    state
+        .keep(b"GIF89a\x02\x00\x03\x00".to_vec(), None, &mut local)
+        .unwrap();
     let mut remote = local.clone();
     remote.source_url = Some("https://i.giphy.com/cat.gif".into());
     std::fs::remove_file(dir.path().join(local.sha256.as_ref().unwrap())).unwrap();
     let mut images = vec![local, remote];
-    let state = MediaState::for_test(dir.path().to_path_buf(), Arc::new(Unreachable));
     state.present(&Config::default(), &mut images);
     assert_eq!(images[0].state, "failed");
     assert_eq!(images[0].reason.as_deref(), Some("cache"));
@@ -801,7 +797,7 @@ async fn a_non_provider_copy_is_deleted_when_a_provider_reference_arrives() {
     let sha = a.sha256.clone().unwrap();
     state.note(&owner("a", 1), 1, &[a]);
     assert_eq!(files(state.dir()), vec![sha.clone()]);
-    assert!(!state.memory_only(&sha));
+    assert!(!state.is_memory_only(&sha, None));
     let giphy = cached_ref(
         "https://i.giphy.com/same.gif",
         false,
@@ -809,7 +805,7 @@ async fn a_non_provider_copy_is_deleted_when_a_provider_reference_arrives() {
         MediaProvider::Giphy,
     );
     state.note(&owner("b", 2), 2, &[giphy]);
-    assert!(state.memory_only(&sha));
+    assert!(state.is_memory_only(&sha, None));
     assert!(
         files(state.dir()).is_empty(),
         "the shared copy goes at once"
@@ -850,9 +846,77 @@ fn listing_shows_tap_to_load_without_an_own_sender_and_the_link_card_when_off() 
         ..Config::default()
     };
     let mut listed = vec![own];
-    off.apply(&mut listed);
     state.present(&off, &mut listed);
     assert_eq!(listed[0].state, "blocked");
+}
+
+#[tokio::test]
+async fn ask_or_an_unlisted_host_shows_tap_to_load_and_never_refetches_by_itself() {
+    let fetch = Arc::new(FakeFetch::default());
+    let url = "https://i.giphy.com/ask.gif";
+    let bytes = gif(12);
+    fetch.serve(url, &bytes, url, None);
+    let (_dir, state) = state_over(&fetch);
+    let sha = sha_of(&bytes);
+    let own = cached_ref(url, true, &sha, MediaProvider::Giphy);
+    state.note(&owner("a", 1), 1, std::slice::from_ref(&own));
+    let ask = Config {
+        remote: Remote::Ask,
+        ..Config::default()
+    };
+    let unlisted = Config {
+        hosts: vec!["example.com".into()],
+        ..Config::default()
+    };
+    for (config, reason) in [(&ask, "ask"), (&unlisted, "host")] {
+        let mut listed = vec![own.clone()];
+        state.present(config, &mut listed);
+        assert_eq!(listed[0].state, "pending");
+        assert_eq!(listed[0].reason.as_deref(), Some(reason));
+        assert!(state.read(config, &own).await.is_err());
+    }
+    assert!(fetch.calls().is_empty(), "no automatic re-fetch");
+}
+
+#[test]
+fn before_the_startup_index_is_ready_listings_leave_cached_images_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = MediaState::new(dir.path().join("inbox-media"), Arc::new(Unreachable));
+    let theirs = cached_ref(
+        "https://i.giphy.com/x.gif",
+        false,
+        &sha_of(&gif(13)),
+        MediaProvider::Giphy,
+    );
+    let mut plain = Attachment::empty("cat");
+    plain.sha256 = Some(sha_of(&gif(14)));
+    plain.state = "cached".into();
+    let mut listed = vec![theirs, plain];
+    state.present(&Config::default(), &mut listed);
+    assert!(listed.iter().all(|a| a.state == "cached"), "{listed:?}");
+    state.set_ready();
+    state.present(&Config::default(), &mut listed);
+    assert_eq!(listed[0].state, "pending");
+    assert_eq!(listed[1].state, "failed");
+}
+
+#[test]
+fn local_bytes_of_a_memory_only_sha_are_held_in_memory_never_on_disk() {
+    let (_dir, state) = state_over(&Arc::new(FakeFetch::default()));
+    let bytes = gif(15);
+    let sha = sha_of(&bytes);
+    let giphy = cached_ref(
+        "https://i.giphy.com/saved.gif",
+        false,
+        &sha,
+        MediaProvider::Giphy,
+    );
+    state.note(&owner("a", 1), 1, &[giphy]);
+    let a = cache_local_media(bytes, "saved", &state).unwrap();
+    assert_eq!(a.state, "cached");
+    assert_eq!(a.media_provider, Some(MediaProvider::None));
+    assert!(files(state.dir()).is_empty());
+    assert!(state.memory.contains(&sha, std::time::Instant::now()));
 }
 
 #[tokio::test]
@@ -884,7 +948,7 @@ async fn read(
     sha: &str,
 ) -> Result<axum::body::Bytes, String> {
     state
-        .fetch_or_cached(sha, state.admission(config, sha))
+        .fetch_or_cached(sha, None, state.admission(config, sha).ok())
         .await
 }
 
@@ -957,12 +1021,16 @@ async fn a_refetch_that_hashes_differently_is_a_permanent_failure() {
 async fn disk_shas_are_read_from_disk_and_never_fetched() {
     let (_dir, state) = state_over(&Arc::new(FakeFetch::default()));
     let mut local = Attachment::empty("cat");
-    store_bytes(state.dir(), &gif(11), &mut local).unwrap();
+    state.keep(gif(11), None, &mut local).unwrap();
     let sha = local.sha256.unwrap();
     assert_eq!(
-        state.fetch_or_cached(&sha, None).await.unwrap().as_ref(),
+        state
+            .fetch_or_cached(&sha, None, None)
+            .await
+            .unwrap()
+            .as_ref(),
         gif(11).as_slice()
     );
     std::fs::remove_file(state.dir().join(&sha)).unwrap();
-    assert!(state.fetch_or_cached(&sha, None).await.is_err());
+    assert!(state.fetch_or_cached(&sha, None, None).await.is_err());
 }

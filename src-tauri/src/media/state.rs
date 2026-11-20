@@ -66,6 +66,9 @@ pub(crate) struct MediaState {
     inflight: Mutex<HashMap<String, Refetch>>,
     fetcher: Arc<dyn Fetch>,
     ready: tokio::sync::watch::Sender<bool>,
+    /// Teams being indexed on their first sighting, so concurrent readers share one scan.
+    #[allow(clippy::type_complexity)]
+    indexing: Mutex<HashMap<(String, String), Arc<tokio::sync::OnceCell<()>>>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -83,6 +86,7 @@ impl MediaState {
             inflight: Mutex::default(),
             fetcher,
             ready: tokio::sync::watch::channel(false).0,
+            indexing: Mutex::default(),
         }
     }
 
@@ -102,6 +106,10 @@ impl MediaState {
         self.ready.send_replace(true);
     }
 
+    fn is_ready(&self) -> bool {
+        *self.ready.borrow()
+    }
+
     async fn ready(&self) {
         let mut ready = self.ready.subscribe();
         if tokio::time::timeout(READY_WAIT, ready.wait_for(|r| *r))
@@ -112,9 +120,19 @@ impl MediaState {
         }
     }
 
-    /// Whether `sha` is served from memory only (any provider reference to it).
-    pub(crate) fn memory_only(&self, sha: &str) -> bool {
-        self.index.is_memory_only(sha)
+    /// The one memory-only rule: `sha` is served from memory only, and never written to
+    /// disk, when the index holds any provider reference to it, or when `attachment`
+    /// itself is provider media (before the index has it).
+    pub(crate) fn is_memory_only(&self, sha: &str, attachment: Option<&Attachment>) -> bool {
+        self.index.is_memory_only(sha) || attachment.is_some_and(Attachment::is_provider_media)
+    }
+
+    /// The one-shot indexing of `team`, shared by concurrent first sightings.
+    pub(crate) fn team_indexing(&self, org: &str, team: &str) -> Arc<tokio::sync::OnceCell<()>> {
+        lock(&self.indexing)
+            .entry((org.to_string(), team.to_string()))
+            .or_default()
+            .clone()
     }
 
     /// Record the attachments of one message in the index. A sha this makes
@@ -140,16 +158,22 @@ impl MediaState {
         }
     }
 
-    /// The automatic re-fetch `config` admits for `sha`: remote media is not off, the
-    /// index has a URL whose own attachment was sent from this machine, and the team
-    /// allows that URL's host.
-    pub(crate) fn admission(&self, config: &Config, sha: &str) -> Option<Source> {
-        if config.remote == Remote::Off {
-            return None;
+    /// The automatic re-fetch `config` admits for `sha`, or the tap-to-load reason
+    /// there is none: `sender` without a URL sent from this machine, `ask` unless remote
+    /// media is `auto`, `host` when the team doesn't list the URL's host.
+    pub(crate) fn admission(&self, config: &Config, sha: &str) -> Result<Source, &'static str> {
+        let url = self.index.refetch_url(sha).ok_or("sender")?;
+        if config.remote != Remote::Auto {
+            return Err("ask");
         }
-        let url = self.index.refetch_url(sha)?;
-        let host = url::Url::parse(&url).ok()?.host_str()?.to_string();
-        config.allows(&host).then(|| Source {
+        let host = url::Url::parse(&url)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_string))
+            .unwrap_or_default();
+        if !config.should_auto_fetch(&host, true) {
+            return Err("host");
+        }
+        Ok(Source {
             url,
             config: config.clone(),
         })
@@ -173,11 +197,17 @@ impl MediaState {
         entry.attempts += 1;
     }
 
-    /// Memory-aware presence for a listing: a `cached` attachment whose sha is
-    /// memory-only stays `cached` while it is in memory or can be fetched again; one
-    /// whose re-fetch failed shows `failed`; one with no admitted re-fetch shows
-    /// tap-to-load. Other shas keep the disk check.
+    /// `attachments` as `config` and this machine present them. `config` applies first
+    /// (remote media off: the link card). Then a `cached` memory-only attachment stays
+    /// `cached` while it is in memory or can be fetched again, shows `failed` once its
+    /// re-fetch failed, and shows tap-to-load (with the reason) when no automatic
+    /// re-fetch is admitted. Other shas keep the disk check. Until the startup index is
+    /// built, `cached` attachments are left as they are.
     pub(crate) fn present(&self, config: &Config, attachments: &mut [Attachment]) {
+        config.apply(attachments);
+        if !self.is_ready() {
+            return;
+        }
         let now = Instant::now();
         for a in attachments {
             let Some(sha) = a.sha256.clone() else {
@@ -186,7 +216,7 @@ impl MediaState {
             if a.state != "cached" {
                 continue;
             }
-            if !self.memory_only(&sha) && !a.is_provider_media() {
+            if !self.is_memory_only(&sha, Some(&*a)) {
                 if !self.dir.join(&sha).is_file() {
                     a.state = "failed".into();
                     a.reason = Some("cache".into());
@@ -205,12 +235,25 @@ impl MediaState {
                     continue;
                 }
             }
-            if self.admission(config, &sha).is_none() {
+            if let Err(reason) = self.admission(config, &sha) {
                 a.state = "pending".into();
-                a.reason = Some("sender".into());
+                a.reason = Some(reason.into());
                 a.retryable = false;
             }
         }
+    }
+
+    /// The bytes of a confirmed `attachment` for a reader under `config`: memory, then
+    /// the disk cache (not for a memory-only sha), then an admitted re-fetch.
+    pub(crate) async fn read(
+        self: &Arc<Self>,
+        config: &Config,
+        attachment: &Attachment,
+    ) -> Result<Bytes, String> {
+        let sha = attachment.sha256.as_deref().ok_or("media unavailable")?;
+        self.ready().await;
+        let source = self.admission(config, sha).ok();
+        self.fetch_or_cached(sha, Some(attachment), source).await
     }
 
     /// The bytes of `sha`: from memory, then (only for a sha that is not memory-only)
@@ -219,13 +262,14 @@ impl MediaState {
     pub(crate) async fn fetch_or_cached(
         self: &Arc<Self>,
         sha: &str,
+        attachment: Option<&Attachment>,
         source: Option<Source>,
     ) -> Result<Bytes, String> {
         if !super::valid_sha(sha) {
             return Err("invalid media hash".into());
         }
         self.ready().await;
-        if !self.memory_only(sha) {
+        if !self.is_memory_only(sha, attachment) {
             let dir = self.dir.clone();
             let sha = sha.to_string();
             return crate::commands::await_blocking("media.read", move || {
@@ -289,9 +333,9 @@ impl MediaState {
         }
     }
 
-    /// Fetch `a`'s source URL and store the bytes by the final host: a provider host,
-    /// or a sha the index already holds memory-only, goes to memory; anything else to
-    /// the disk cache. Every fetch path (send, tap-to-load) comes through here.
+    /// Fetch `a`'s source URL and keep the bytes by the final host: a provider host, or
+    /// a sha the index already holds memory-only, goes to memory; anything else to the
+    /// disk cache. Every fetch path (send, tap-to-load) comes through here.
     pub(crate) async fn fetch(
         self: &Arc<Self>,
         config: &Config,
@@ -320,11 +364,17 @@ impl MediaState {
             Ok(got) => got,
             Err(e) => return Ok(a.failed(e)),
         };
-        let provider = MediaProvider::of_host(got.final_url.host_str().unwrap_or(""));
-        a.media_provider = Some(provider);
+        a.media_provider = Some(MediaProvider::of_host(
+            got.final_url.host_str().unwrap_or(""),
+        ));
         let state = self.clone();
         crate::commands::await_blocking("media.cache", move || {
-            Ok(match state.store(got, provider, &mut a) {
+            let Downloaded {
+                bytes,
+                cache_control,
+                ..
+            } = got;
+            Ok(match state.keep(bytes, cache_control.as_deref(), &mut a) {
                 Ok(()) => a,
                 Err(e) => a.failed(e),
             })
@@ -332,36 +382,33 @@ impl MediaState {
         .await
     }
 
-    fn store(
+    /// Keep verified `bytes` as `a`'s image by the memory-only rule: in memory, never on
+    /// disk, when `a` is provider media or the index holds the sha memory-only (for as
+    /// long as `cache_control` allows); else in the disk cache. The rule is checked and
+    /// the bytes written under the disk lock. Blocking: call it off the async runtime.
+    pub(crate) fn keep(
         &self,
-        got: Downloaded,
-        provider: MediaProvider,
+        bytes: Vec<u8>,
+        cache_control: Option<&str>,
         a: &mut Attachment,
     ) -> Result<(), Failure> {
-        let (mime, w, h) = super::inspect(&got.bytes)?;
-        let sha = format!("{:x}", Sha256::digest(&got.bytes));
-        let len = got.bytes.len() as u64;
+        let (mime, w, h) = super::inspect(&bytes)?;
+        let sha = format!("{:x}", Sha256::digest(&bytes));
+        let len = bytes.len() as u64;
         {
             let _guard = lock(&super::DISK);
-            if provider.is_provider() || self.memory_only(&sha) {
+            if self.is_memory_only(&sha, Some(&*a)) {
                 // A non-provider copy of the same bytes cached earlier goes too.
                 let _ = std::fs::remove_file(self.dir.join(&sha));
-                let lifetime = Lifetime::from_cache_control(got.cache_control.as_deref());
+                let lifetime = Lifetime::from_cache_control(cache_control);
                 self.memory
-                    .insert(&sha, Bytes::from(got.bytes), lifetime, Instant::now());
+                    .insert(&sha, Bytes::from(bytes), lifetime, Instant::now());
             } else {
-                super::write_file(&self.dir, &sha, &got.bytes)?;
+                super::write_file(&self.dir, &sha, &bytes)?;
             }
         }
         lock(&self.failures).remove(&sha);
-        a.sha256 = Some(sha);
-        a.mime = Some(mime.into());
-        a.width = Some(w);
-        a.height = Some(h);
-        a.bytes = Some(len);
-        a.state = "cached".into();
-        a.reason = None;
-        a.retryable = false;
+        a.set_cached(sha, mime, w, h, len);
         Ok(())
     }
 }

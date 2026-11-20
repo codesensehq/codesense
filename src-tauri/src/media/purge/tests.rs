@@ -80,7 +80,11 @@ impl Fixture {
     fn data(&self) -> PathBuf {
         self.dir.path().join("data")
     }
+    /// A start: every team is indexed (as `synced_teams` does), then the purge runs.
     fn run(&self) -> Result<Purged, String> {
+        for (team, path) in self.stores() {
+            index_store(&self.state, &team, &path).unwrap();
+        }
         run(&self.state, &self.stores(), &self.data())
     }
     /// Every column of every message in team `name`, as stored.
@@ -139,13 +143,10 @@ async fn the_purge_deletes_provider_files_once_and_backfills_only_media_provider
     }
     let before = (f.records("a"), f.records("b"));
 
-    assert_eq!(
+    assert!(matches!(
         f.run().unwrap(),
-        Purged::Done {
-            deleted: 3,
-            backfilled: 2
-        }
-    );
+        Purged::Done { backfilled: 2, .. }
+    ));
     assert!(
         !f.cached(1) && !f.cached(3) && !f.cached(4),
         "provider files go, shared ones too"
@@ -189,8 +190,11 @@ async fn the_purge_deletes_provider_files_once_and_backfills_only_media_provider
 
     // A completed purge does nothing on the next start.
     f.cache(1);
-    assert_eq!(f.run().unwrap(), Purged::AlreadyDone);
-    assert!(f.cached(1));
+    assert_eq!(
+        run(&f.state, &f.stores(), &f.data()).unwrap(),
+        Purged::AlreadyDone
+    );
+    assert!(f.cached(1), "the purge itself deletes nothing more");
 }
 
 #[tokio::test]
@@ -256,6 +260,19 @@ async fn an_interrupted_purge_writes_no_marker_and_reruns() {
     assert!(matches!(rerun.run().unwrap(), Purged::Done { .. }));
     assert!(!rerun.cached(6) && !rerun.cached(7));
     assert!(rerun.data().join(MARKER).exists());
+}
+
+#[test]
+fn no_marker_until_every_team_is_indexed() {
+    let f = Fixture::new();
+    f.send(
+        "a",
+        &[image(8, "https://i.giphy.com/eight.gif", None, false)],
+    );
+    index_store(&f.state, &team("a"), &f.store("a")).unwrap();
+    // Team b's store is not in the index yet.
+    assert!(run(&f.state, &f.stores(), &f.data()).is_err());
+    assert!(!f.data().join(MARKER).exists());
 }
 
 #[test]
