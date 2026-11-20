@@ -461,7 +461,7 @@ test("rust.yml's Linux app job runs the shared suites and the Secret Service tes
   const libs = job.steps.find((step) => step.name === "Install system libraries");
   assert.match(
     libs.run,
-    /^bash scripts\/install-linux-app-libs\.sh dbus gnome-keyring libsecret-tools$/,
+    /^bash scripts\/install-linux-app-libs\.sh dbus gnome-keyring libsecret-tools zsh$/,
   );
   // One apt list for every Linux job that builds the app.
   assert.equal(

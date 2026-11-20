@@ -736,8 +736,12 @@ jobs:
         with:
           persist-credentials: false
       - name: Install system libraries
-        # The shared app list, plus a session bus, the keyring daemon and its CLI.
-        run: bash scripts/install-linux-app-libs.sh dbus gnome-keyring libsecret-tools
+        # The shared app list, plus a session bus, the keyring daemon and its CLI, and zsh for the
+        # spawn tests of a zsh user.
+        run: bash scripts/install-linux-app-libs.sh dbus gnome-keyring libsecret-tools zsh
+      - name: Allow unprivileged user namespaces
+        # Ubuntu 24.04 restricts them, and Codex's launch preflight then refuses (the remedy it names).
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Set up pnpm
         uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - name: Set up Node
