@@ -413,7 +413,11 @@ mod tests {
             notify(EVENT, &env(&home, Some(closed_port()))),
             Outcome::Posted
         );
-        assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap().body, EVENT);
+        let retried = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(retried
+            .head
+            .starts_with("POST /api/v1/terminal/status HTTP/1."));
+        assert_eq!(retried.body, EVENT);
         assert_eq!(log(&home), "");
     }
 

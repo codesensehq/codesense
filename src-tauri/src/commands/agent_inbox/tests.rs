@@ -702,6 +702,20 @@ async fn reading_the_persons_mail_owes_it_until_an_answer() {
     )
     .await
     .unwrap();
+    assert!(fake.owed.owes("S2"), "another session's mail answers nothing");
+    send_message(
+        &host,
+        Some("S2"),
+        "H1",
+        "to an agent",
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     assert!(
         fake.owed.owes("S2"),
         "the reader's own mail to an agent answers nothing"

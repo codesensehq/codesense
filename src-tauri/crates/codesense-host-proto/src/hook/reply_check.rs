@@ -196,10 +196,14 @@ mod tests {
     #[test]
     fn a_refused_post_retries_once_at_the_current_port() {
         let home = TempDir::new();
-        let (port, _rx) = listener("200 OK", r#"{"block":"42"}"#);
+        let (port, rx) = listener("200 OK", r#"{"block":"42"}"#);
         std::fs::write(home.0.join("http.port"), format!("{port}\n")).unwrap();
         let block = reply_check(STOP, &env(&home, Some(closed_port())));
         assert_eq!(block.map(|b| b.message_id).as_deref(), Some("42"));
+        let retried = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(retried
+            .head
+            .starts_with("POST /api/v1/terminal/reply-check HTTP/1."));
     }
 
     #[test]
