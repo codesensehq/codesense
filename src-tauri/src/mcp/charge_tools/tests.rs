@@ -110,20 +110,109 @@ fn a_chain_through_a_reused_handle_follows_only_its_earlier_holder() {
     assert!(run(&store, &caller("grand", "grand-h"), params("DEMO-2", Some("dev"), None)).is_ok());
 }
 
+/// A seat whose record keeps the tab that launched it, as a launch now records.
+fn seat_launched_by_tab(store: &UsageStore, tab: &str, handle: &str, launcher: &str, at: i64) {
+    let mut r = SessionRecord::new(tab);
+    r.org = Some("acme".into());
+    r.team = Some("dev".into());
+    r.handle = Some(handle.into());
+    r.launched_by = Some(format!("{launcher}-handle"));
+    r.launched_by_session = Some(launcher.into());
+    r.recorded_at_ms = at;
+    store.write_session_record(&r).unwrap();
+}
+
+fn remote(session: &str, handle: &str) -> Caller {
+    Caller { session: session.into(), handle: Some(handle.into()), team: Some(("acme".into(), "dev".into())) }
+}
+
 #[test]
-fn a_remote_caller_charges_its_own_launch_but_not_a_strangers_tab() {
+fn a_recorded_launcher_tab_is_followed_and_its_handle_is_never_consulted() {
     let (_d, store) = store();
-    // The remote tab has no record here; its authority verified its handle and team.
-    seat(&store, "launched", "dev", "launched-h", Some("remote-h"), 300);
-    seat(&store, "strangers", "dev", "strangers-h", Some("someone-h"), 300);
-    let remote = Caller {
-        session: "remote-tab".into(),
-        handle: Some("remote-h".into()),
-        team: Some(("acme".into(), "dev".into())),
-    };
-    run(&store, &remote, params("DEMO-2", Some("launched"), None)).unwrap();
-    let err = run(&store, &remote, params("DEMO-2", Some("strangers"), None)).unwrap_err();
+    seat(&store, "grand", "dev", "grand-h", None, 100);
+    seat_launched_by_tab(&store, "lead", "lead-h", "grand", 200);
+    seat_launched_by_tab(&store, "dev", "dev-h", "lead", 300);
+    assert!(run(&store, &caller("lead", "lead-h"), params("DEMO-2", Some("dev"), None)).is_ok());
+    assert!(run(&store, &caller("grand", "grand-h"), params("DEMO-2", Some("dev"), Some(1_000))).is_ok());
+    // A seat holding the launcher's recorded handle is not the launcher tab.
+    seat(&store, "imposter", "dev", "lead-handle", None, 50);
+    let err = run(&store, &caller("imposter", "lead-handle"), params("DEMO-2", Some("dev"), None)).unwrap_err();
     assert!(err.contains("launch chain"), "{err}");
+}
+
+#[test]
+fn a_remote_caller_charges_a_seat_whose_record_names_its_tab_and_a_reused_remote_handle_is_refused() {
+    let (_d, store) = store();
+    // The remote tab has no record here; its authority verified its tab, handle and team.
+    seat_launched_by_tab(&store, "launched", "launched-h", "remote-tab", 300);
+    run(&store, &remote("remote-tab", "remote-h"), params("DEMO-2", Some("launched"), None)).unwrap();
+    // An earlier remote tab held the same handle and launched this seat: a later holder of the
+    // handle may not charge it, whether the seat recorded the earlier tab or only the handle.
+    seat_launched_by_tab(&store, "earlier-launch", "e-h", "old-remote-tab", 300);
+    seat(&store, "handle-only", "dev", "h-h", Some("remote-h"), 300);
+    for target in ["earlier-launch", "handle-only"] {
+        let err = run(&store, &remote("remote-tab", "remote-h"), params("DEMO-2", Some(target), None)).unwrap_err();
+        assert!(err.contains("launch chain"), "{target}: {err}");
+    }
+}
+
+#[test]
+fn a_launcher_recorded_by_its_tab_counts_only_when_recorded_before_the_seat() {
+    let (_d, store) = store();
+    // Older records name their launcher's tab in launched_by.
+    seat(&store, "grand", "dev", "grand-h", None, 100);
+    seat(&store, "lead", "dev", "lead-h", Some("grand"), 200);
+    seat(&store, "dev", "dev", "dev-h", Some("lead"), 300);
+    assert!(run(&store, &caller("lead", "lead-h"), params("DEMO-2", Some("dev"), None)).is_ok());
+    assert!(run(&store, &caller("grand", "grand-h"), params("DEMO-2", Some("dev"), Some(1_000))).is_ok());
+    // A tab recorded after the seat did not launch it, and its handle is not tried instead.
+    seat(&store, "late", "dev", "late-h", None, 400);
+    seat(&store, "early-late-h", "dev", "late-h", None, 50);
+    seat(&store, "orphan", "dev", "orphan-h", Some("late"), 300);
+    for by in [caller("late", "late-h"), caller("early-late-h", "late-h")] {
+        assert!(run(&store, &by, params("DEMO-2", Some("orphan"), None)).is_err(), "{}", by.session);
+    }
+}
+
+#[test]
+fn a_live_launcher_tab_is_read_as_its_handle() {
+    let (_d, store) = store();
+    seat(&store, "lead", "dev", "lead-h", None, 200);
+    // The recorded launcher is a live tab id with no record of its own; the registry knows its handle.
+    seat(&store, "dev", "dev", "dev-h", Some("live-tab"), 300);
+    let live = |raw: &str| if raw == "live-tab" { "lead-h".to_owned() } else { raw.to_owned() };
+    let p = params("DEMO-2", Some("dev"), None);
+    assert!(charge(&store, &caller("lead", "lead-h"), &p, NOW, &known, &live).is_ok());
+    assert!(charge(&store, &caller("lead", "lead-h"), &p, NOW, &known, &as_recorded).is_err());
+}
+
+#[test]
+fn a_record_that_took_a_handle_after_the_seat_launched_is_not_its_holder() {
+    let (_d, store) = store();
+    seat(&store, "lead", "dev", "lead-h", None, 200);
+    seat(&store, "dev", "dev", "dev-h", Some("lead-h"), 300);
+    // A seat recorded before dev under another handle took `lead-h` only later (now).
+    seat(&store, "taker", "dev", "other-h", None, 100);
+    seat(&store, "taker", "dev", "lead-h", None, 100);
+    let err = run(&store, &caller("taker", "lead-h"), params("DEMO-2", Some("dev"), None)).unwrap_err();
+    assert!(err.contains("launch chain"), "{err}");
+    assert!(run(&store, &caller("lead", "lead-h"), params("DEMO-2", Some("dev"), None)).is_ok());
+}
+
+#[test]
+fn a_caller_is_only_its_own_record_never_one_whose_native_id_matches_its_tab() {
+    let (_d, store) = store();
+    chain(&store);
+    // Another team's record whose native id is the caller's tab id.
+    let mut other = SessionRecord::new("someone");
+    other.native_session_id = Some("caller-tab".into());
+    other.org = Some("acme".into());
+    other.team = Some("dev".into());
+    other.handle = Some("lead-h".into());
+    other.recorded_at_ms = 10;
+    store.write_session_record(&other).unwrap();
+    let err = run(&store, &caller("caller-tab", "x"), params("DEMO-2", Some("dev"), None)).unwrap_err();
+    assert!(err.contains("another team's"), "{err}");
 }
 
 #[test]
@@ -171,4 +260,45 @@ fn a_story_is_found_only_in_its_own_org_and_team() {
     assert!(story_in_team(home.path(), "acme", "ops", "DEMO-7").is_none());
     assert!(story_in_team(home.path(), "globex", "dev", "DEMO-7").is_none());
     assert!(story_in_team(home.path(), "acme", "dev", "DEMO-8").is_none());
+}
+
+#[test]
+fn a_charge_may_start_at_the_sessions_first_usage_when_it_precedes_its_record() {
+    let (_d, mut store) = store();
+    chain(&store);
+    // dev's record is from 300 and its first usage from 200.
+    store.ingest(&[event("e0", "dev", "gpt-6-sol", 200, Tokens { input: 1, ..Default::default() })]).unwrap();
+    let me = caller("dev", "dev-h");
+    assert!(run(&store, &me, params("DEMO-2", None, Some(250))).is_ok());
+    let err = run(&store, &me, params("DEMO-2", None, Some(199))).unwrap_err();
+    assert!(err.contains("before session dev started (200"), "{err}");
+}
+
+#[test]
+fn another_seats_charge_at_the_same_moment_is_not_replaced() {
+    let (_d, store) = store();
+    chain(&store);
+    run(&store, &caller("lead", "lead-h"), params("DEMO-1", Some("dev"), Some(1_000))).unwrap();
+    let err = run(&store, &caller("dev", "dev-h"), params("DEMO-2", None, Some(1_000))).unwrap_err();
+    assert!(err.contains("was made by lead-h"), "{err}");
+    let kept = store.charges_for("dev").unwrap();
+    assert_eq!((kept[0].story_id.as_str(), kept[0].charged_by_session.as_str()), ("DEMO-1", "lead"));
+    // The seat that made it may replace it; another moment is open to anyone allowed.
+    run(&store, &caller("lead", "lead-h"), params("DEMO-2", Some("dev"), Some(1_000))).unwrap();
+    run(&store, &caller("dev", "dev-h"), params("DEMO-1", None, Some(1_001))).unwrap();
+    assert_eq!(store.charges_for("dev").unwrap().len(), 2);
+}
+
+#[test]
+fn a_session_has_at_most_the_charge_cap_but_may_still_replace_one() {
+    let (_d, store) = store();
+    chain(&store);
+    let me = caller("dev", "dev-h");
+    for n in 0..MAX_CHARGES as i64 {
+        run(&store, &me, params("DEMO-1", None, Some(1_000 + n))).unwrap();
+    }
+    let err = run(&store, &me, params("DEMO-2", None, Some(5_000))).unwrap_err();
+    assert!(err.contains("already has 100 charges"), "{err}");
+    run(&store, &me, params("DEMO-2", None, Some(1_000))).unwrap();
+    assert_eq!(store.charges_for("dev").unwrap().len(), MAX_CHARGES);
 }

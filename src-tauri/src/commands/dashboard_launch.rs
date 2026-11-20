@@ -945,6 +945,8 @@ struct LaunchEntry {
     story_was_explicit: bool,
     /// The launcher's task identity, captured under the reservation lock before async startup.
     launcher_task: Option<String>,
+    /// The launcher's tab, captured under the same lock: its handle may be reused later.
+    launcher_session: Option<String>,
     local_effect_owner: Option<super::pty_host::LocalEffectClaim>,
     chat_workspace_id: Option<String>,
     remote_shell: Option<super::pty_layout::RemoteShellRecord>,
@@ -1150,6 +1152,7 @@ impl LaunchEntry {
             local_effect_owner: owner,
             session_id: Some(session_id.to_string()),
             launcher_task: None,
+            launcher_session: None,
             story_was_explicit: false,
             _permit: None, // cap-free — the user opened this, not a dashboard.
             kind: KIND_REGISTERED,
@@ -2108,6 +2111,7 @@ impl DashboardLaunchState {
             hook(self);
         }
 
+        let launcher_session = launcher.as_ref().map(|(session, _)| session.clone());
         // Restoration does not retain transient run provenance. Prefer the captured root's
         // durable identity, without holding the registry lock across SQLite I/O.
         let launcher_task = launcher.map(|(session, fallback)| {
@@ -2134,6 +2138,7 @@ impl DashboardLaunchState {
                 local_effect_owner: None,
                 session_id: None,
                 launcher_task,
+                launcher_session,
                 story_was_explicit,
                 _permit: Some(permit),
                 bound_at_ms: None,
@@ -3196,6 +3201,11 @@ impl DashboardLaunchState {
             .collect()
     }
 
+    /// The tab that launched `handle`'s session, captured when its launch was reserved.
+    pub(crate) fn launcher_session(&self, handle: &str) -> Option<String> {
+        self.lock().by_handle.get(handle).and_then(|entry| entry.launcher_session.clone())
+    }
+
     /// A launcher id normalized the way [`begin_with_provenance`] records `launched_by`,
     /// so a filter by session id and by its handle select the same sessions.
     ///
@@ -3845,7 +3855,8 @@ pub(crate) fn compose_launch_write(
 ) -> Option<LaunchWrite> {
     let snapshot = state.snapshot().into_iter().find(|s| s.handle == handle)?;
     let owner = state.owner_for_session(session_id);
-    let record = record_from_launch(session_id, &snapshot, owner.as_ref(), &facts);
+    let mut record = record_from_launch(session_id, &snapshot, owner.as_ref(), &facts);
+    record.launched_by_session = state.launcher_session(handle);
     // What the task is typed and linked from, beyond the brief: the launch's role, its saved
     // agent's queue role, the task it reviews and the session it continues.
     let mut task = facts.task;
@@ -6512,6 +6523,7 @@ impl DashboardLaunchState {
                 startup_noted: false,
                 session_id: None,
                 launcher_task: None,
+                launcher_session: None,
                 story_was_explicit: false,
                 local_effect_owner: None,
                 _permit: None,
@@ -9851,6 +9863,22 @@ mod tests {
         assert_eq!(dev.goal, "Build the store.");
         let tree: Vec<String> = store.task_subtree("lead-tab").unwrap().into_iter().map(|t| t.task_id).collect();
         assert_eq!(tree, ["lead-tab", "dev-tab"]);
+    }
+
+    /// A launch records its launcher's tab, captured at reservation, so a charge's launch chain
+    /// never depends on a handle that may be reused; a launch with no launcher records none.
+    #[test]
+    fn a_launch_records_the_tab_that_launched_it() {
+        let (_dir, store) = crate::session_usage::tests::store();
+        let state = DashboardLaunchState::new(4);
+        bind_launch(&state, "lead-handle", "lead-tab", None, "DEMO-1", None);
+        capture_bound(&state, &store, "lead-handle", "lead-tab", task_facts(Some("Lead it.")));
+        bind_launch(&state, "DEMO-1#dev", "dev-tab", Some("lead-handle"), "DEMO-1", None);
+        capture_bound(&state, &store, "DEMO-1#dev", "dev-tab", task_facts(Some("Build it.")));
+        let dev = store.read_session_record("dev-tab").unwrap().unwrap();
+        assert_eq!(dev.launched_by_session.as_deref(), Some("lead-tab"));
+        let lead = store.read_session_record("lead-tab").unwrap().unwrap();
+        assert_eq!(lead.launched_by_session, None);
     }
 
     #[test]

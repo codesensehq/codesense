@@ -825,6 +825,13 @@ impl UsageStore {
         .map_err(db_err)?;
         // The durable session record: another additive table, for the same reason.
         tx.execute_batch(record::SCHEMA).map_err(db_err)?;
+        // The launcher's tab and when the record took its handle, which a charge's launch chain
+        // is checked by. Additive columns; an older record has neither.
+        for (column, kind) in [("launched_by_session", "TEXT"), ("handle_at_ms", "INTEGER")] {
+            if !has_column(&tx, "session_record", column)? {
+                tx.execute_batch(&format!("ALTER TABLE session_record ADD COLUMN {column} {kind};")).map_err(db_err)?;
+            }
+        }
         // A session's charges to stories, before the story totals triggers that watch them.
         tx.execute_batch(charge::SCHEMA).map_err(db_err)?;
         tx.execute_batch(timing::SCHEMA).map_err(db_err)?;
@@ -3489,7 +3496,7 @@ pub(crate) mod tests {
             .unwrap();
         let first = store.report(&Filter { limit: Some(1), ..Filter::default() }).unwrap();
         let cursor = first.next_cursor.unwrap();
-        for bad in ["x", "u:zz:1:s1", "u:0:abc:s1", "u:0:1:", "o:1:2:3"] {
+        for bad in ["x", "u:zz:1:s1", "u:0:abc:s1", "u:0:1:", "o:1:2:3", "v:0:1:x:s1", "v:0:1:-:"] {
             let got = store.report(&Filter { cursor: Some(bad.into()), ..Filter::default() });
             assert!(got.unwrap_err().starts_with("invalid:"), "{bad}");
         }
