@@ -21,8 +21,8 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { deflateSync, gzipSync } from "node:zlib";
-import { writeBuildOutput } from "./lib/build-output.mjs";
+import { deflateSync } from "node:zlib";
+import { tarGz, writeBuildOutput } from "./lib/build-output.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TEMPLATE = join(ROOT, "codesense-docs", "sample-source-repo");
@@ -159,45 +159,18 @@ export function buildRepository(commits, trees) {
   return { commit: tip, entries };
 }
 
-// ---------------------------------------------------------------------------
-// Deterministic tar.gz (same shape as build-codesense-docs.mjs)
-// ---------------------------------------------------------------------------
-
-function tarHeader(name, size, mtime) {
-  const header = Buffer.alloc(512);
-  const put = (value, offset, length) => header.write(value, offset, length, "utf8");
-  const octal = (value, length) => value.toString(8).padStart(length - 1, "0");
-  if (Buffer.byteLength(name) > 100) throw new Error(`tar path too long: ${name}`);
-  put(name, 0, 100);
-  put(octal(0o644, 8), 100, 8);
-  put(octal(0, 8), 108, 8);
-  put(octal(0, 8), 116, 8);
-  put(octal(size, 12), 124, 12);
-  put(octal(mtime, 12), 136, 12);
-  put("        ", 148, 8);
-  put("0", 156, 1);
-  put("ustar\0", 257, 6);
-  put("00", 263, 2);
-  let sum = 0;
-  for (const byte of header) sum += byte;
-  put(`${octal(sum, 7)}\0`, 148, 8);
-  return header;
-}
-
-export function tarGz(entries, mtime) {
-  const parts = [];
-  for (const [name, data] of entries) {
-    parts.push(tarHeader(name, data.length, mtime), data);
-    const pad = (512 - (data.length % 512)) % 512;
-    if (pad) parts.push(Buffer.alloc(pad));
-  }
-  parts.push(Buffer.alloc(1024));
-  return gzipSync(Buffer.concat(parts), { level: 9 });
-}
-
 /** Every input the archive is built from, for `cargo:rerun-if-changed`. */
 export function buildInputs() {
   return [fileURLToPath(import.meta.url), join(ROOT, "scripts/lib/build-output.mjs"), TEMPLATE];
+}
+
+/** The archive the template builds, and the commit it checks out. */
+export function buildArchive() {
+  const commits = listCommits();
+  const trees = buildCommitTrees(commits);
+  const { commit, entries } = buildRepository(commits, trees);
+  const finalCommittedAt = bundle.committedAtBase + (commits.length - 1) * bundle.committedAtStep;
+  return { commit, archive: tarGz(entries, finalCommittedAt) };
 }
 
 function main() {
@@ -208,11 +181,7 @@ function main() {
   const output = resolve(
     process.argv[2] ?? join(ROOT, "src-tauri", "resources", "sample-source-repo.tar.gz"),
   );
-  const commits = listCommits();
-  const trees = buildCommitTrees(commits);
-  const { commit, entries } = buildRepository(commits, trees);
-  const finalCommittedAt = bundle.committedAtBase + (commits.length - 1) * bundle.committedAtStep;
-  const archive = tarGz(entries, finalCommittedAt);
+  const { commit, archive } = buildArchive();
   if (existsSync(output) && readFileSync(output).equals(archive)) {
     console.log(`sample-source-repo: ${commit} unchanged (${output})`);
     return;
