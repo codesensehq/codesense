@@ -2446,7 +2446,7 @@ const MAX_UNRESOLVED_PATHS: usize = 279;
 /// `.find(..)` on iterators in `seat_worktree_inner`, `story_base_record` and
 /// `recorded_workspace_folder`; and `.exists()` on a path in `seat_worktree_inner`. They are
 /// std string, path, result and iterator calls; none calls a write primitive.
-const MAX_UNRESOLVED_METHODS: usize = 6_577;
+const MAX_UNRESOLVED_METHODS: usize = 0;
 
 /// X1: no unattended root reaches a write primitive; every reviewed entry is
 /// still needed; the walk still sees the app.
