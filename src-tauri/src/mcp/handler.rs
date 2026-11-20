@@ -17845,10 +17845,10 @@ pub(crate) mod tests {
         // Workspace chat engine's agent-facing MCP pair. Both infer
         // the caller's bound workspace from `sessionId` (admission check
         // rejects an unbound session or an archived workspace).
-        // GIF search for agents: searches GIPHY with the user's own key (set in Settings only).
-        "gif_search",
         "workspace_chat_send",
         "workspace_chat_read",
+        // GIF search for agents: searches GIPHY with the user's own key (set in Settings only).
+        "gif_search",
         // Read the human's online/away status so an agent can adjust its
         // behavior (don't ping at 3am, batch for morning, escalate differently).
         "get_human_status",
