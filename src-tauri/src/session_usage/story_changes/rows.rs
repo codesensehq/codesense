@@ -184,6 +184,11 @@ pub(super) fn session_row(store: &UsageStore, session: &str, usages: &[&SessionU
             for segment in &segments {
                 let from = segment.from_ms.map_or(start, |from| from.max(start));
                 let to = segment.to_ms.map_or(end, |to| to.min(end));
+                // A segment wholly outside the observed span adds no time, and never a span that
+                // ends before it starts.
+                if from >= to {
+                    continue;
+                }
                 if let Some((w, a, i)) = store.interval_time(session, from, to)? {
                     (wall, active, idle) = (wall + w, active + a, idle + i);
                     span = Some(span.map_or((from, to), |(first, last)| (first.min(from), last.max(to))));

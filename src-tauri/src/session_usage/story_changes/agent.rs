@@ -363,7 +363,7 @@ fn summarize(
 }
 
 /// A session row as `session_read`'s summary facts: identity, launch, timing totals and cost.
-fn session_summary(row: &Value) -> Value {
+pub(super) fn session_summary(row: &Value) -> Value {
     let record = &row["session"];
     let timing = &record["timing"];
     let mut summary = json!({
