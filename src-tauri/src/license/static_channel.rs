@@ -407,7 +407,8 @@ pub fn remove_license_records(
     true
 }
 
-#[cfg(all(test, not(cs_channel = "internal")))]
+// Off on Linux with `updates::tests`, whose macOS fixtures it uses (linux-test-defects).
+#[cfg(all(test, not(cs_channel = "internal"), not(target_os = "linux")))]
 mod tests {
     //! SV-PBF-278 case table: one test per row, against a loopback manifest server.
 
