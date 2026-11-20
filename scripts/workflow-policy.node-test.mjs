@@ -511,31 +511,55 @@ test("rust.yml's Linux app job runs the shared suites and the Secret Service tes
     "utf8",
   );
   assert.match(sidecarScript, /^bash "\$SCRIPT_DIR\/build-emulator\.sh"/m);
-  const suitesRun = job.steps[suites].run;
-  for (const packages of [
-    "pty-core) packages=(-p codesense-pty-core) ;;",
-    "session-server) packages=(-p codesense-session-server) ;;",
-    "app) packages=(-p codesense --lib) ;;",
-  ])
-    assert.ok(suitesRun.includes(packages), packages);
-  assert.ok(
-    suitesRun.includes('cargo nextest run --profile ci --locked "${packages[@]}" || status=1'),
+  // The compile builds each suite with the arguments its run takes, from the one list.
+  const compileStep = job.steps.find((step) => step.name === "Compile the tests");
+  const suitesStep = job.steps[suites];
+  assert.equal(
+    compileStep.env.SUITES,
+    "pty-core -p codesense-pty-core\n" +
+      "session-server -p codesense-session-server\n" +
+      "app -p codesense --lib\n",
   );
-  assert.ok(suitesRun.includes('mv target/nextest/ci/junit.xml "$RUNNER_TEMP/junit/$part.xml"'));
-  // The updater's tests compile only on a beta channel, so they run on a build of their own.
+  assert.equal(suitesStep.env.SUITES, compileStep.env.SUITES);
+  const eachSuite = /while read -r \w+ packages; do\n\s+read -r -a args <<< "\$packages"\n/;
+  assert.match(compileStep.run, eachSuite);
+  assert.match(suitesStep.run, eachSuite);
+  assert.ok(
+    compileStep.run.includes('cargo nextest run --profile ci --locked "${args[@]}" --no-run'),
+  );
+  assert.ok(compileStep.run.trimEnd().endsWith('done <<< "$SUITES"'));
+  assert.ok(
+    suitesStep.run.includes('cargo nextest run --profile ci --locked "${args[@]}" || status=1'),
+  );
+  assert.ok(suitesStep.run.includes('done <<< "$SUITES"'));
+  // A report left before the loop is never kept as a suite's.
+  assert.ok(
+    suitesStep.run.indexOf("rm -f target/nextest/ci/junit.xml") <
+      suitesStep.run.indexOf("while read"),
+  );
+  assert.ok(
+    suitesStep.run.includes('mv target/nextest/ci/junit.xml "$RUNNER_TEMP/junit/$part.xml"'),
+  );
+  // The tests that compile only on a beta channel run on a build of their own: the updater's
+  // module and the two outside it, by exact name.
   const beta = job.steps.find((step) => step.name === "Test the updater on the beta channel");
   assert.ok(names.indexOf(beta.name) > suites);
-  assert.deepEqual(beta.env, { CODESENSE_CHANNEL: "beta" });
+  assert.equal(beta.env.CODESENSE_CHANNEL, "beta");
+  assert.equal(
+    beta.env.BETA_TESTS,
+    "test(/^license::/)" +
+      " | test(=commands::dashboard_launch::tests::license_headless_runs_count_a_starting_run_until_it_is_released)" +
+      " | test(=mcp::feedback_tool::tests::in_the_beta_the_tool_refuses_and_says_why)",
+  );
   assert.match(beta.run, /CODESENSE_RELEASED_AT=/);
   assert.ok(
     beta.run.includes(
-      "cargo nextest run --profile ci --locked -p codesense --lib -E 'test(/^license::/)'",
+      'cargo nextest run --profile ci --locked -p codesense --lib -E "$BETA_TESTS"',
     ),
   );
   assert.ok(beta.run.includes('mv target/nextest/ci/junit.xml "$RUNNER_TEMP/junit/license.xml"'));
-  assert.ok(
-    job.steps.filter((step) => step !== beta).every((step) => !/ -E /.test(step.run ?? "")),
-  );
+  assert.ok(job.steps.every((step) => !/ -E /.test(step.run ?? "") || step === beta));
+  assert.equal(job["timeout-minutes"], 60);
   assert.ok(workflow.jobs["flaky-issues"].needs.includes("rust-linux-app"));
 });
 

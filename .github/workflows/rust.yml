@@ -720,7 +720,9 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' && github.event_name != 'merge_group' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # Measured: about 38 minutes (compile 5, Secret Service 5, the suites 26), before the updater's
+    # beta build, which compiles the app once more.
+    timeout-minutes: 60
     permissions:
       contents: read
     defaults:
@@ -786,7 +788,17 @@ jobs:
         run: bash scripts/build-session-server.sh
       - name: Compile the tests
         id: compile
-        run: cargo nextest run --profile ci --locked -p codesense-pty-core -p codesense-session-server -p codesense --lib --no-run
+        # Each suite with the arguments its run below takes (one --lib would apply to every package).
+        env:
+          SUITES: &suites |
+            pty-core -p codesense-pty-core
+            session-server -p codesense-session-server
+            app -p codesense --lib
+        run: |
+          while read -r _ packages; do
+            read -r -a args <<< "$packages"
+            cargo nextest run --profile ci --locked "${args[@]}" --no-run
+          done <<< "$SUITES"
       - name: Test the credential store against Secret Service
         # A private session bus; the script unlocks the keyring, checks it, and runs the tests.
         run: dbus-run-session -- bash scripts/run-secret-service-tests.sh
@@ -795,18 +807,18 @@ jobs:
         # Runs after a failed Secret Service step, not when the test build never ran. Each run's
         # JUnit report is kept before the next overwrites it.
         if: (success() || failure()) && steps.compile.outcome == 'success'
+        env:
+          SUITES: *suites
         run: |
           mkdir -p "$RUNNER_TEMP/junit"
+          # A report left by the Secret Service runs is not one of these.
+          rm -f target/nextest/ci/junit.xml
           status=0
-          for part in pty-core session-server app; do
-            case "$part" in
-              pty-core) packages=(-p codesense-pty-core) ;;
-              session-server) packages=(-p codesense-session-server) ;;
-              app) packages=(-p codesense --lib) ;;
-            esac
-            cargo nextest run --profile ci --locked "${packages[@]}" || status=1
+          while read -r part packages; do
+            read -r -a args <<< "$packages"
+            cargo nextest run --profile ci --locked "${args[@]}" || status=1
             if [[ -f target/nextest/ci/junit.xml ]]; then mv target/nextest/ci/junit.xml "$RUNNER_TEMP/junit/$part.xml"; fi
-          done
+          done <<< "$SUITES"
           exit "$status"
       - name: Test the updater on the beta channel
         # The license module (the beta channels' updater) compiles only off the internal channel,
@@ -815,11 +827,16 @@ jobs:
         if: (success() || failure()) && steps.compile.outcome == 'success'
         env:
           CODESENSE_CHANNEL: beta
+          BETA_TESTS: >-
+            test(/^license::/)
+            | test(=commands::dashboard_launch::tests::license_headless_runs_count_a_starting_run_until_it_is_released)
+            | test(=mcp::feedback_tool::tests::in_the_beta_the_tool_refuses_and_says_why)
         run: |
           mkdir -p "$RUNNER_TEMP/junit"
           status=0
+          # Every test that compiles only off the internal channel: the module's and two outside it.
           CODESENSE_RELEASED_AT="$(git log -1 --format=%ct)" \
-            cargo nextest run --profile ci --locked -p codesense --lib -E 'test(/^license::/)' || status=1
+            cargo nextest run --profile ci --locked -p codesense --lib -E "$BETA_TESTS" || status=1
           if [[ -f target/nextest/ci/junit.xml ]]; then mv target/nextest/ci/junit.xml "$RUNNER_TEMP/junit/license.xml"; fi
           exit "$status"
       - name: List flaky tests
