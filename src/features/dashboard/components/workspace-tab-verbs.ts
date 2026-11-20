@@ -284,7 +284,7 @@ export function makeRealOpenWorkspaceTabDeps(
     closeTab: (_workspaceId, sessionId) =>
       // Roll back by the tab's unique sessionId — NOT by re-resolving the active
       // team, which can change during the awaited agent launch and strand the
-      // orphan. Its host ends it wherever it landed (SW-GW-5); a session it never
+      // orphan. Its host ends it wherever it landed; a session it never
       // placed has nothing to end.
       void useViewerStore
         .getState()
