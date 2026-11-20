@@ -3611,15 +3611,15 @@ fn ensure_epic_workspace_inner(
     ))
 }
 
-/// SW-EW-35: the lifecycle events `cli`'s `codesense-notify` hook listens on to drive
-/// the per-tab agent-status dot: exactly the events the status receiver maps for it
-/// (its adapter's status hooks).
+/// SW-EW-35: the lifecycle events `cli`'s status hook (`codesense-bridge hook notify`)
+/// listens on to drive the per-tab agent-status dot: exactly the events the status receiver
+/// maps for it (its adapter's status hooks).
 fn status_hook_events(cli: AgentCli) -> impl Iterator<Item = &'static str> {
     adapter(cli).status_hooks().iter().map(|hook| hook.event)
 }
 
-/// Where `cli` reads hooks in a folder, and the command its status hook runs (its
-/// descriptor's): the script its tab's host installed (`codesense_pty_core::notify_hook`),
+/// Where `cli` reads hooks in a folder, and the verb its status hook runs (its
+/// descriptor's): from the bridge its tab's host placed (`codesense_pty_core::notify_hook`),
 /// so it works in a non-git epic dir as well as a worktree and no folder carries it.
 fn project_hooks(cli: AgentCli) -> Option<&'static ProjectHooks> {
     descriptor(cli).project_hooks.as_ref()
@@ -10127,7 +10127,7 @@ mod tests {
 
     /// SW-AN-51: the committed `.claude/settings.json` must stay in lockstep with
     /// the writer's command string: the dedup check (`event_runs_notify_hook`) counts any
-    /// command naming the installed script, so a drifted one would silently survive every
+    /// command naming the status hook's marker, so a drifted one would silently survive every
     /// regen — this test fails loudly instead. Compiled only where the file exists.
     #[cfg(cs_claude_settings)]
     #[test]

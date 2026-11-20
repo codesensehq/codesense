@@ -150,7 +150,7 @@ pub trait AgentCliAdapter: Send + Sync {
     fn session_policy(&self) -> SessionPolicy;
 
     /// The hook events at which the CLI's own settings run CodeSense's status hook
-    /// (`codesense-notify`): none for a CLI that raises its status otherwise.
+    /// (`codesense-bridge hook notify`): none for a CLI that raises its status otherwise.
     fn status_hooks(&self) -> &'static [StatusHook];
 
     /// How a host drives a running CLI.
