@@ -1521,9 +1521,17 @@ struct Site {
     caller: String,
     callee: String,
     method: bool,
+    /// For a method: the files of the candidate definitions that make it
+    /// ambiguous (a new one makes calls in untouched files ambiguous).
+    defined_in: Vec<String>,
 }
 
 impl Site {
+    /// Whether a change to `files` touches it: its own file, or for a method
+    /// one of its candidates' files.
+    fn touched(&self, files: &BTreeSet<String>) -> bool {
+        files.contains(&self.file) || self.defined_in.iter().any(|file| files.contains(file))
+    }
     /// `file:line  caller -> callee`: a line of the failure listing.
     fn row(&self) -> String {
         let callee = if self.method {
@@ -1830,6 +1838,7 @@ impl Graph {
                                         caller,
                                         callee,
                                         method: false,
+                                        defined_in: Vec::new(),
                                     });
                             }
                         }
@@ -1842,12 +1851,20 @@ impl Graph {
                                 .filter_map(|&id| self.funcs[id].self_ty.as_ref())
                                 .collect();
                             if owners.len() > 1 {
+                                let mut defined_in: Vec<String> = self.by_name[name]
+                                    .iter()
+                                    .filter(|&&id| self.funcs[id].self_ty.is_some())
+                                    .map(|&id| self.funcs[id].file.clone())
+                                    .collect();
+                                defined_in.sort();
+                                defined_in.dedup();
                                 out.unresolved_methods.push(Site {
                                     file: func.file.clone(),
                                     line,
                                     caller: func.label(),
                                     callee: name.clone(),
                                     method: true,
+                                    defined_in,
                                 });
                             }
                         }
@@ -2583,25 +2600,32 @@ fn changed_since(repo: &Path, base: &str) -> Option<BTreeSet<String>> {
         .map(|listing| changed_files(&listing))
 }
 
-/// One census list as failure lines: the sites in the `changed` files (every
-/// site, after a note, when there is no diff base), by file and line, at most
-/// `cap` of them, then how many more there are.
+/// One census list as failure lines, after a note saying which: the sites the
+/// `changed` files touch (see [`Site::touched`]), or every site when there is
+/// no diff base or it touches none; by file and line, at most `cap` of them,
+/// then how many more there are.
 fn listing(sites: &[Site], changed: Option<&BTreeSet<String>>, cap: usize) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut picked: Vec<&Site> = match changed {
-        Some(files) => sites
-            .iter()
-            .filter(|site| files.contains(&site.file))
-            .collect(),
-        None => {
-            out.push("unfiltered (no usable X1_DIFF_BASE): every site is listed".to_string());
-            sites.iter().collect()
-        }
+    let touched: Vec<&Site> = match changed {
+        Some(files) => sites.iter().filter(|site| site.touched(files)).collect(),
+        None => Vec::new(),
     };
-    if changed.is_some() && picked.is_empty() {
-        // A new method name can make calls in unchanged files ambiguous.
-        out.push("none in the files this change touches".to_string());
-    }
+    let (note, mut picked): (&str, Vec<&Site>) = if changed.is_none() {
+        (
+            "unfiltered (no usable X1_DIFF_BASE): every site is listed",
+            sites.iter().collect(),
+        )
+    } else if touched.is_empty() {
+        (
+            "no site matched the files this change touches: every site is listed",
+            sites.iter().collect(),
+        )
+    } else {
+        (
+            "the sites the files this change touches hold or define",
+            touched,
+        )
+    };
+    let mut out = vec![note.to_string()];
     picked.sort();
     out.extend(picked.iter().take(cap).map(|site| site.row()));
     if picked.len() > cap {
@@ -2634,15 +2658,7 @@ fn census_listing(
         ),
     ] {
         if sites.len() > ceiling {
-            let scope = if changed.is_some() {
-                ", in the files this change touches"
-            } else {
-                ""
-            };
-            out.push(format!(
-                "{} {what} (ceiling {ceiling}){scope}:",
-                sites.len()
-            ));
+            out.push(format!("{} {what} (ceiling {ceiling}):", sites.len()));
             out.extend(
                 listing(sites, changed, LISTING_CAP)
                     .into_iter()
@@ -3471,6 +3487,7 @@ fn site(file: &str, line: usize, callee: &str) -> Site {
         caller: "m::f".to_string(),
         callee: callee.to_string(),
         method: false,
+        defined_in: Vec::new(),
     }
 }
 
@@ -3535,7 +3552,11 @@ fn the_listing_filters_by_changed_file() {
     let changed: BTreeSet<String> = ["b.rs".to_string()].into();
     assert_eq!(
         listing(&sites, Some(&changed), 100),
-        ["b.rs:2  m::f -> b::h", "b.rs:9  m::f -> b::g"]
+        [
+            "the sites the files this change touches hold or define",
+            "b.rs:2  m::f -> b::h",
+            "b.rs:9  m::f -> b::g",
+        ]
     );
     assert_eq!(
         listing(&sites, None, 100),
@@ -3549,7 +3570,47 @@ fn the_listing_filters_by_changed_file() {
     let untouched: BTreeSet<String> = ["c.rs".to_string()].into();
     assert_eq!(
         listing(&sites, Some(&untouched), 100),
-        ["none in the files this change touches"]
+        [
+            "no site matched the files this change touches: every site is listed",
+            "a.rs:3  m::f -> a::f",
+            "b.rs:2  m::f -> b::h",
+            "b.rs:9  m::f -> b::g",
+        ]
+    );
+}
+
+/// Self-test: a method call is touched when a changed file defines one of the
+/// candidates that make it ambiguous: a second `write_it` makes the untouched
+/// file's call ambiguous, and the listing names that call.
+#[test]
+fn a_new_candidate_touches_the_calls_it_makes_ambiguous() {
+    let res = planted(&[
+        (
+            "routines/quiet.rs",
+            &["routines", "quiet"],
+            "pub struct Quiet;\n\
+             impl Quiet { pub fn write_it(&self) {} }\n\
+             pub fn tick(w: u8) { w.write_it(); }\n",
+        ),
+        (
+            "routines/loud.rs",
+            &["routines", "loud"],
+            "pub struct Loud;\n\
+             impl Loud { pub fn write_it(&self) {} }\n",
+        ),
+    ])
+    .resolution();
+    assert_eq!(
+        res.unresolved_methods[0].defined_in,
+        ["routines/loud.rs", "routines/quiet.rs"]
+    );
+    let changed: BTreeSet<String> = ["routines/loud.rs".to_string()].into();
+    assert_eq!(
+        listing(&res.unresolved_methods, Some(&changed), 100),
+        [
+            "the sites the files this change touches hold or define",
+            "routines/quiet.rs:3  routines::quiet::tick -> .write_it()",
+        ]
     );
 }
 
@@ -3562,12 +3623,13 @@ fn the_listing_is_capped() {
     assert_eq!(
         listing(&sites, Some(&changed), 2),
         [
+            "the sites the files this change touches hold or define",
             "a.rs:1  m::f -> a::f",
             "a.rs:2  m::f -> a::f",
             "... and 3 more (X1_PRINT_UNRESOLVED=1 or X1_PRINT_UNRESOLVED_METHODS=1 prints all)",
         ]
     );
-    assert_eq!(listing(&sites, Some(&changed), 5).len(), 5);
+    assert_eq!(listing(&sites, Some(&changed), 5).len(), 6);
 }
 
 /// Self-test: only a 7-64 character hex sha is a diff base; a git listing maps
