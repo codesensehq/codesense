@@ -452,6 +452,10 @@ jobs:
         run: bash scripts/ci/smoke-linux.sh variant no-dbus "$RUNNER_TEMP/smoke/appimage"
       - name: Launch the AppImage with the WebGL terminal renderer forced
         run: bash scripts/ci/smoke-linux.sh variant webgl "$RUNNER_TEMP/smoke/appimage"
+      - name: Launch the AppImage with the tray icon turned on
+        # The tray icon loads only the AppIndicator library the AppImage bundles: the launch fails
+        # first if the runner has one of its own, so a bundle without it fails.
+        run: bash scripts/ci/smoke-linux.sh variant tray "$RUNNER_TEMP/smoke/appimage"
       - name: Upload logs and screenshots
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

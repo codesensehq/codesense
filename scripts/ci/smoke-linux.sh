@@ -8,8 +8,9 @@
 #   smoke-linux.sh install <deb|rpm> <image> <package-dir> <out-dir>
 #       Install the one .deb or .rpm under <package-dir> in <image>, a <name>:<tag> listed in
 #       smoke-images.txt and run by its pinned digest. The distribution's resolver must find
-#       every dependency, and the package's file list (kept as <out-dir>/<deb|rpm>.list) must
-#       hold the app binary and its three sidecars. A deb image's apt fetches from
+#       every dependency, ldconfig must then find the AppIndicator library the tray icon loads
+#       (the package depends on it), and the package's file list (kept as
+#       <out-dir>/<deb|rpm>.list) must hold the app binary and its three sidecars. A deb image's apt fetches from
 #       SMOKE_APT_MIRROR (apt-mirror), with retries and short timeouts. When SMOKE_APT_CACHE names
 #       a directory, a deb image uses it as its apt archives and keeps what it fetches there
 #       (apt-keep), so a cache of that directory saves the next run the download.
@@ -27,7 +28,8 @@
 #   smoke-linux.sh same-resources <listing> <listing>
 #       Both file lists ship the same optional resources (resources/starship, resources/git-ai).
 #   smoke-linux.sh run <package-dir> <out-dir>
-#       Extract the one .AppImage under <package-dir> into <out-dir>, check that every shared
+#       Extract the one .AppImage under <package-dir> into <out-dir>, check that it bundles the
+#       AppIndicator library (appindicator-bundled) and that every shared
 #       library its executables link resolves on this machine, and launch it under
 #       xvfb-run inside dbus-run-session with an unlocked login keyring as the Secret Service's
 #       default collection: it is alive at 30 s, has drawn a window that is not one colour, logs
@@ -38,21 +40,38 @@
 #       Release builds carry no WebDriver, so no launch opens a terminal tab: that terminals
 #       show text is proven by the front end's Vitest rows. Each launch leaves <mode>.log and
 #       <mode>.png in <out-dir>.
-#   smoke-linux.sh variant <dmabuf|no-dbus|webgl> <out-dir>
+#   smoke-linux.sh variant <dmabuf|no-dbus|webgl|tray> <out-dir>
 #       Launch the AppImage run extracted into <out-dir> again. dmabuf: with the user's
 #       WEBKIT_DISABLE_DMABUF_RENDERER=0, which the app keeps (the WebKit web process has it, and
 #       the log says nothing of it), the window check still passes. no-dbus: with no session bus
 #       (outside dbus-run-session, at an address that does not exist, so none autolaunches), the
 #       app stays up and logs secret store: unavailable. webgl: with
 #       CODESENSE_TERMINAL_RENDERER=webgl, the app logs terminal renderer: webgl, probe skipped.
+#       tray: with the tray icon setting turned on before the launch (seed-tray writes it into
+#       the fresh home's app state), the app logs terminal-server-tray=on and turns the item on
+#       (tray-launch). The launch first checks that ldconfig finds no AppIndicator library on
+#       the runner (no-installed-appindicator), so only the AppImage's own copy can turn it on.
 #   smoke-linux.sh caps-agree <listing> <log>
 #       The log has one caps: line, and its starship and git-ai are on exactly when the file
-#       list holds resources/starship and resources/git-ai.
+#       list holds resources/starship and resources/git-ai, and its terminal-server-tray exactly
+#       when the file list holds the AppIndicator library.
 #   smoke-linux.sh installed-git-ai <listing> <home> <pin>
 #       When the file list holds resources/git-ai, the app installed <home>/.codesense/bin/git-ai
 #       and it prints the version= of <pin>; when it does not, the app installed none.
 #   smoke-linux.sh check-listing <listing>
 #       The /usr/bin check install runs on a file list.
+#   smoke-linux.sh appindicator-bundled <listing>
+#       The file list holds an AppIndicator library (libayatana-appindicator3 or
+#       libappindicator3, .so or .so.1), which the tray icon loads.
+#   smoke-linux.sh seed-tray <data-home>
+#       Turn the tray icon setting on in the app state under <data-home> (XDG_DATA_HOME), as
+#       the app saves it, before the app first starts there.
+#   smoke-linux.sh tray-launch <log>
+#       The log's caps: line has terminal-server-tray=on, and the app turned the item on.
+#   smoke-linux.sh installed-appindicator
+#       ldconfig finds an AppIndicator library, as install checks after the package installs.
+#   smoke-linux.sh no-installed-appindicator
+#       ldconfig finds no AppIndicator library, as the tray launch checks before it starts.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -66,6 +85,10 @@ SIDECARS=(codesense-bridge codesense-session-server codesense-emulator)
 export SMOKE_APT_MIRROR="${SMOKE_APT_MIRROR:-http://azure.archive.ubuntu.com/ubuntu/}"
 # Resources the bundle carries only where the platform turns them on.
 OPTIONAL_RESOURCES=(starship git-ai)
+# The AppIndicator libraries the tray icon loads, by the names its loader tries.
+APPINDICATOR='lib(ayatana-)?appindicator3\.so(\.1)?'
+# The app's identifier (tauri.conf.json), which names its data directory.
+APP_ID=ai.codesense
 
 usage() {
     sed -n 's/^#   //p' "$0" | grep "^smoke-linux.sh" | sed 's/^/usage: /' >&2
@@ -130,6 +153,33 @@ same_resources() {
     echo "Both list: ${first:-no optional resources}"
 }
 
+# Whether file list <listing> holds an AppIndicator library.
+has_appindicator() {
+    grep -Eq "(^|/)$APPINDICATOR\$" "$1"
+}
+
+appindicator_bundled() {
+    has_appindicator "$1" || fail "$1 holds no AppIndicator library (libayatana-appindicator3.so.1 or the like)"
+    echo "The bundle holds $(grep -E "(^|/)$APPINDICATOR\$" "$1" | xargs -n1 basename | sort -u | paste -sd ' ' -)"
+}
+
+# The tray icon setting, on, where the app reads its saved state at startup.
+seed_tray() {
+    local dir="$1/$APP_ID"
+    mkdir -p "$dir"
+    printf '{"viewer":{"settings":{"terminalServerMenuBar":true}}}\n' >"$dir/app-state.json"
+    echo "Seeded the tray icon setting on in $dir/app-state.json"
+}
+
+tray_launch() {
+    local text
+    text=$(plain_log "$1")
+    grep -qE '(^| )caps:( [[:alnum:]-]+=(on|off))* terminal-server-tray=on( |$)' <<<"$text" ||
+        fail "the caps: line does not have terminal-server-tray=on"
+    grep -qE '\[terminal_server_tray\] menu-bar item on( |$)' <<<"$text" || fail "the log does not show the tray item turned on"
+    echo "The log has terminal-server-tray=on and the tray item turned on"
+}
+
 # The log as plain text: the console log colours each line.
 plain_log() {
     sed "s/$(printf '\033')\[[0-9;]*m//g" "$1"
@@ -150,6 +200,12 @@ caps_agree() {
             [[ "$state" == off ]] || fail "caps: $name=${state:-<none>}, but resources/$name is not bundled"
         fi
     done
+    state=$(grep -oE " terminal-server-tray=(on|off)" <<<"$line" | cut -d= -f2 || true)
+    if has_appindicator "$listing"; then
+        [[ "$state" == on ]] || fail "caps: terminal-server-tray=${state:-<none>}, but the AppIndicator library is bundled"
+    else
+        [[ "$state" == off ]] || fail "caps: terminal-server-tray=${state:-<none>}, but no AppIndicator library is bundled"
+    fi
     echo "The caps: line agrees with the bundle: ${line#*caps:}"
 }
 
@@ -249,6 +305,31 @@ in_container() {
             ;;
         *) usage ;;
     esac
+    installed_appindicator
+}
+
+# The AppIndicator libraries ldconfig finds by name, one a line.
+# A missing or failing ldconfig fails, so finding none means none.
+ldconfig_appindicator() {
+    local cache
+    cache=$(ldconfig -p) || fail "ldconfig -p failed"
+    grep -E "^[[:space:]]*$APPINDICATOR " <<<"$cache" | awk '{print $1}' || true
+}
+
+# The package's dependencies brought in an AppIndicator library the loader finds by name.
+installed_appindicator() {
+    local found
+    found=$(ldconfig_appindicator)
+    [[ -n "$found" ]] || fail "ldconfig finds no AppIndicator library after the install"
+    echo "ldconfig finds: $(paste -sd ' ' - <<<"$found")"
+}
+
+# The runner has no AppIndicator library of its own, so a tray that turns on loaded the bundle's.
+no_installed_appindicator() {
+    local found
+    found=$(ldconfig_appindicator)
+    [[ -z "$found" ]] || fail "ldconfig already finds an AppIndicator library on this machine: $(paste -sd ' ' - <<<"$found")"
+    echo "ldconfig finds no AppIndicator library on this machine"
 }
 
 # Whether <pid> is running: a child that has exited stays a zombie until it is reaped.
@@ -266,6 +347,7 @@ run_appimage() {
     # The runners have no FUSE to mount the image, so the smoke runs the extracted tree.
     (cd "$out" && "$appimage" --appimage-extract >/dev/null)
     find "$out/squashfs-root" >"$out/listing"
+    appindicator_bundled "$out/listing"
     resolve_libs "$out/squashfs-root"
     start_session default "$out"
 }
@@ -298,6 +380,11 @@ start_session() {
         default) dbus-run-session -- bash "$SELF" desktop "$mode" "$out" ;;
         dmabuf) WEBKIT_DISABLE_DMABUF_RENDERER=0 dbus-run-session -- bash "$SELF" desktop "$mode" "$out" ;;
         webgl) CODESENSE_TERMINAL_RENDERER=webgl dbus-run-session -- bash "$SELF" desktop "$mode" "$out" ;;
+        tray)
+            no_installed_appindicator
+            seed_tray "$XDG_DATA_HOME"
+            dbus-run-session -- bash "$SELF" desktop "$mode" "$out"
+            ;;
         no-dbus) DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent in_xvfb "$mode" "$out" ;;
         *) usage ;;
     esac
@@ -437,6 +524,7 @@ launch() {
         fail "the log mentions DMABUF; the app should keep the user's value without a word"
     fi
     terminal_renderer "$mode" "$mode.txt"
+    if [[ "$mode" == tray ]]; then tray_launch "$mode.txt"; fi
 }
 
 # The front end logged its terminal renderer once: DOM on Linux after the render probe (whose
@@ -488,7 +576,7 @@ case "$command" in
         run_appimage "$@"
         ;;
     variant)
-        [[ $# -eq 2 && "$1" =~ ^(dmabuf|no-dbus|webgl)$ ]] || usage
+        [[ $# -eq 2 && "$1" =~ ^(dmabuf|no-dbus|webgl|tray)$ ]] || usage
         [[ -d "$2/squashfs-root" ]] || fail "$2 has no extracted AppImage; smoke-linux.sh run extracts it"
         start_session "$1" "$(realpath "$2")"
         ;;
@@ -507,6 +595,26 @@ case "$command" in
     check-listing)
         [[ $# -eq 1 ]] || usage
         check_listing "$@"
+        ;;
+    appindicator-bundled)
+        [[ $# -eq 1 ]] || usage
+        appindicator_bundled "$@"
+        ;;
+    seed-tray)
+        [[ $# -eq 1 ]] || usage
+        seed_tray "$@"
+        ;;
+    tray-launch)
+        [[ $# -eq 1 ]] || usage
+        tray_launch "$@"
+        ;;
+    installed-appindicator)
+        [[ $# -eq 0 ]] || usage
+        installed_appindicator
+        ;;
+    no-installed-appindicator)
+        [[ $# -eq 0 ]] || usage
+        no_installed_appindicator
         ;;
     *) usage ;;
 esac

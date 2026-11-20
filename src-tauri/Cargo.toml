@@ -74,8 +74,8 @@ codesense-host-proto = { path = "crates/codesense-host-proto" }
 codesense-session-server = { path = "crates/codesense-session-server" }
 codesense-pty-core = { path = "crates/codesense-pty-core" }
 codesense-fs-core = { path = "crates/codesense-fs-core" }
-# OS mechanisms: the command-line tool lookup and the passphrase dialog.
-codesense-platform = { path = "crates/codesense-platform" }
+# OS mechanisms: the command-line tool lookup, the passphrase dialog and the tray host check.
+codesense-platform = { path = "crates/codesense-platform", features = ["tray-host"] }
 sysinfo = "0.32"
 dirs = "5"
 uuid = { version = "1", features = ["v4"] }
@@ -153,6 +153,10 @@ tokio-util = { version = "0.7", features = ["io"] }
 axum = "0.8"
 utoipa = { version = "5", features = ["axum_extras"] }
 dashmap = "6"
+# The terminal-server tray capability's probe loads the AppIndicator library the tray needs,
+# by the names its own loader tries (libappindicator-sys, the same version). For every target,
+# so the probe needs no OS gate.
+libloading = "0.7"
 dhat = { version = "0.3.3", optional = true }
 
 [target.'cfg(unix)'.dependencies]

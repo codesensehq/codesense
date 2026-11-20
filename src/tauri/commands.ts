@@ -2780,8 +2780,9 @@ export const replaceTerminalServer = (expected: LocalActivityUpgrade) =>
 export const endUnownedTerminalSession = (session: string) =>
   invoke<void>("end_unowned_terminal_session", { session });
 
-/** SV-8: show (or remove at once) this instance's terminal server in the macOS
- *  menu bar. Pushed from `useTerminalServerMenuBarSetting`; a no-op off macOS. */
+/** Show (or remove at once) this instance's terminal server in the macOS menu bar or
+ *  Linux tray. Pushed from `useTerminalServerMenuBarSetting`; a no-op where the
+ *  terminal-server-tray capability is off. */
 export const setTerminalServerMenuBar = (enabled: boolean) =>
   invoke<void>("set_terminal_server_menu_bar", { enabled });
 

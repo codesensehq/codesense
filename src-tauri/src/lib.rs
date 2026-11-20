@@ -403,8 +403,9 @@ pub fn run() {
         // SW-AU-34: close-to-background. Closing the window keeps the process — and
         // thus the MCP host, the sync engine, and `ActiveTeamState` — alive, so a
         // running agent can keep driving codesense with no window on screen.
-        // macOS-only: the model is dock-resident (Windows/Linux keep today's
-        // quit-on-last-close until a real tray ships). Cmd-Q / menu-Quit fire
+        // Where the background-on-close capability is on: macOS backgrounds to the
+        // Dock, Linux only while the terminal-server tray item shows (its atomic is
+        // read here, never the tray itself). Cmd-Q / menu-Quit fire
         // `RunEvent::ExitRequested`, NOT this event, so hiding on close can never
         // swallow a real quit — no "quitting" guard is needed. This arm is
         // deliberately thin: one lock-free atomic read plus native calls, with no
@@ -414,16 +415,18 @@ pub fn run() {
         // Only the primary "main" window backgrounds the app; any secondary window
         // (none today) should close normally — this keeps the close arm consistent
         // with the "main"-targeted restore in the `Reopen` handler.
-        #[cfg(target_os = "macos")]
+        #[cfg(cap_background_on_close)]
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
             if window.label() == "main" {
-                use commands::background_mode::{close_action, quit_on_close, CloseAction};
+                use commands::background_mode::{close_action, quit_on_close, CloseAction, Restore};
                 let app = window.app_handle();
-                match close_action(quit_on_close()) {
+                let tray_visible = commands::terminal_server_tray::tray_visible();
+                match close_action(quit_on_close(), tray_visible, Restore::current()) {
                     CloseAction::Background => {
                         let _ = window.hide();
                         // NSApp `hide:` — drop off-screen and become App-Nap-eligible
                         // (the MCP socket stays responsive via I/O wakeups regardless).
+                        #[cfg(target_os = "macos")]
                         let _ = app.hide();
                         api.prevent_close();
                         // One-time explainer: emit; the FE renders it once as a toast.

@@ -573,6 +573,12 @@ jobs:
       - name: Set up Rust
         # Matches ci.yml; rustup's proxies read the channel in rust-toolchain.toml.
         run: rustup toolchain install stable --profile minimal 2>&1 | tee "$RUNNER_TEMP/rust-ci-logs/rustup.log"
+      - name: Install D-Bus headers
+        # The platform crate's tests build its tray host check (the tray-host feature), which
+        # links libdbus through pkg-config.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libdbus-1-dev pkg-config
       - name: Restore scanner archives
         # Archives named by their sha256; install-scanners verifies each against the lock before use.
         id: scanner-cache

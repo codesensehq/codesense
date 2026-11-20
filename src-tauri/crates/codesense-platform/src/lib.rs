@@ -24,6 +24,8 @@
 //! - [`ipc`]: local endpoints, listeners and streams (Unix sockets, named
 //!   pipes) and the pid at the other end.
 //! - [`dialog`]: a system dialog that asks for a secret with hidden entry.
+//! - [`tray`]: whether a tray item shows anywhere (a StatusNotifier host on
+//!   Linux).
 
 pub mod cli;
 pub mod dialog;
@@ -32,7 +34,10 @@ pub mod fs;
 pub mod ipc;
 pub mod limits;
 pub mod process;
+pub mod tray;
 pub mod user;
+
+pub use tray::status_notifier_host_registered;
 
 #[cfg(feature = "testutil")]
 pub mod testutil;

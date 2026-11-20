@@ -65,16 +65,16 @@
   {
     "key": "background-on-close",
     "macos": "on",
-    "linux": "off",
+    "linux": "on",
     "windows": "off",
     "reason": "closing the window quits CodeSense"
   },
   {
     "key": "terminal-server-tray",
     "macos": "on",
-    "linux": "off",
+    "linux": "probe",
     "windows": "off",
-    "reason": "there is no tray icon for the terminal server"
+    "reason": "the terminal server's tray icon isn't built for this platform, or needs a tray library this system doesn't provide"
   },
   {
     "key": "pty-test-fixtures",

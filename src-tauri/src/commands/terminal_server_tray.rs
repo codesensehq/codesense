@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! SV-8: this instance's terminal server in the macOS menu bar.
+//! This instance's terminal server in the macOS menu bar, or the Linux tray.
 //!
 //! An opt-in item (`settings.terminalServerMenuBar`, pushed by the frontend
 //! through [`set_terminal_server_menu_bar`]) that shows whether the terminal
@@ -18,6 +18,15 @@
 //! It refreshes when the menu-bar item is clicked, when the
 //! server starts, stops or loses its connection ([`terminal_server_changed`]),
 //! and otherwise every [`REFRESH`] — no faster than the Settings section.
+//!
+//! It exists where the `terminal-server-tray` capability is on ([`tray_allowed`]):
+//! on Linux only when the AppIndicator library loads ([`tray_library_available`]),
+//! since building an item without it panics. An AppIndicator item reports no
+//! clicks and shows no tooltip, so there the status lives in the menu (kept
+//! current by the refresh) and the count shows only where the host draws labels.
+//! An item shows only while a tray host is registered (stock GNOME has none), so
+//! [`tray_visible`] says whether it does, for the window-close handler: a tray OS
+//! backgrounds the window only while the item is there to bring it back.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -25,7 +34,9 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Manager, Runtime};
 
+use crate::commands::background_mode::{show_hidden_window, Restore};
 use crate::commands::pty_backend::{TerminalServerOverview, TerminalServerRun};
+use crate::platform_caps::{Caps, TERMINAL_SERVER_TRAY};
 
 /// The item's id among the app's tray icons.
 pub const TRAY_ID: &str = "terminal-server";
@@ -203,6 +214,58 @@ pub(crate) fn toggle(host: &dyn TrayHost, enabled: bool) -> Result<bool, String>
     Ok(host.shown())
 }
 
+/// Whether the item may exist on this platform: the `terminal-server-tray`
+/// capability, never the OS.
+pub(crate) fn tray_allowed(caps: &Caps) -> bool {
+    caps.enabled(TERMINAL_SERVER_TRAY)
+}
+
+/// The names libappindicator-sys's loader tries, in its order, with its default
+/// `backcompat` names: building a tray item panics unless one of them loads.
+const APPINDICATOR_LIBRARIES: [&str; 4] = [
+    "libayatana-appindicator3.so.1",
+    "libappindicator3.so.1",
+    "libayatana-appindicator3.so",
+    "libappindicator3.so",
+];
+
+/// Whether `load` loads one of the AppIndicator libraries.
+pub(crate) fn tray_library_loads(load: &dyn Fn(&str) -> bool) -> bool {
+    APPINDICATOR_LIBRARIES.iter().any(|name| load(name))
+}
+
+/// The `terminal-server-tray` probe: an AppIndicator library loads. False off
+/// Linux, where nothing is loaded.
+pub fn tray_library_available() -> bool {
+    std::env::consts::OS == "linux"
+        && tray_library_loads(&|name| {
+            // SAFETY: loading the library runs only its initialisers, as the
+            // tray's own loader does when it builds the item.
+            match unsafe { libloading::Library::new(name) } {
+                // Kept loaded: the tray's loader opens the same library, and a
+                // GTK library is not safe to unload.
+                Ok(library) => {
+                    std::mem::forget(library);
+                    true
+                }
+                Err(_) => false,
+            }
+        })
+}
+
+/// Whether the item shows in a tray now: built, and a tray host registered.
+/// Read by the window-close handler, so it is only ever an atomic.
+static TRAY_VISIBLE: AtomicBool = AtomicBool::new(false);
+/// Held while `TRAY_VISIBLE` is written, so a host check that read `ENABLED`
+/// and `TURN` before the item was removed can't set it after it was cleared.
+static VISIBILITY: Mutex<()> = Mutex::new(());
+
+/// Whether the item shows in a tray now. A lock-free read, for the
+/// window-close handler.
+pub fn tray_visible() -> bool {
+    TRAY_VISIBLE.load(Ordering::SeqCst)
+}
+
 /// The setting's mirror: whether the item should show.
 static ENABLED: AtomicBool = AtomicBool::new(false);
 /// Bumped as the item turns on, so a refresher of an earlier turn stops.
@@ -216,10 +279,10 @@ const STOP_OR_START_ID: &str = "terminal-server-tray:stop-or-start";
 struct NativeMenuState(Mutex<Option<(tauri::menu::Menu<tauri::Wry>, TrayMenuModel)>>);
 
 /// FE→Rust push of `settings.terminalServerMenuBar`: the item shows at once,
-/// or goes at once. macOS only (elsewhere a no-op).
+/// or goes at once. A no-op where the tray capability is off.
 #[tauri::command]
 pub fn set_terminal_server_menu_bar(app: AppHandle, enabled: bool) -> Result<(), String> {
-    if !cfg!(target_os = "macos") {
+    if !tray_allowed(&Caps::live()) {
         return Ok(());
     }
     if APP.set(app.clone()).is_ok() {
@@ -236,16 +299,23 @@ pub fn set_terminal_server_menu_bar(app: AppHandle, enabled: bool) -> Result<(),
         std::thread::Builder::new()
             .name("terminal-server-tray".into())
             .spawn(move || {
+                // One session-bus connection for the turn, reused by every tick.
+                let mut hosts = codesense_platform::tray::HostCheck::new();
                 while ENABLED.load(Ordering::SeqCst) && TURN.load(Ordering::SeqCst) == turn {
                     refresh_now(&refreshing);
+                    check_tray_host(&refreshing, turn, &mut hosts);
                     std::thread::sleep(REFRESH);
                 }
             })
             .map_err(|error| {
                 ENABLED.store(false, Ordering::SeqCst);
                 AppTray { app: app.clone() }.remove();
+                clear_tray_visible(&app);
                 format!("start the menu-bar refresh: {error}")
             })?;
+    }
+    if !enabled {
+        clear_tray_visible(&app);
     }
     if was != enabled {
         log::info!(target: "terminal_server_tray", "menu-bar item {}", if enabled { "on" } else { "off" });
@@ -271,6 +341,53 @@ fn refresh_soon(app: &AppHandle) {
         .spawn(move || refresh_now(&app));
 }
 
+/// Whether a tray host shows the item of `turn`, asked off the main thread (the
+/// session-bus connect and read block) when the item turns on and on each
+/// refresh tick, on the refresher's kept connection. Until it connects, the
+/// item counts as not shown, so close quits. An answer for an item since
+/// removed, or of an earlier turn, is dropped.
+fn check_tray_host(app: &AppHandle, turn: u64, hosts: &mut codesense_platform::tray::HostCheck) {
+    let registered = hosts.registered();
+    let _visibility = VISIBILITY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if ENABLED.load(Ordering::SeqCst) && TURN.load(Ordering::SeqCst) == turn {
+        set_tray_visible(app, registered);
+    }
+}
+
+/// The item was removed: it shows nowhere.
+fn clear_tray_visible(app: &AppHandle) {
+    let _visibility = VISIBILITY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    set_tray_visible(app, false);
+}
+
+/// Record whether the item shows. When it stops showing, a window hidden by a
+/// close has no way back on a tray OS, so it is shown again.
+fn set_tray_visible(app: &AppHandle, visible: bool) {
+    let was = TRAY_VISIBLE.swap(visible, Ordering::SeqCst);
+    if was != visible {
+        log::info!(target: "terminal_server_tray", "tray item {}", if visible { "visible" } else { "not visible" });
+    }
+    if !was || visible {
+        return;
+    }
+    let showing = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let Some(window) = showing.get_webview_window("main") else {
+            return;
+        };
+        let hidden = !window.is_visible().unwrap_or(true);
+        if show_hidden_window(tray_visible(), hidden, Restore::current()) {
+            log::info!(target: "terminal_server_tray", "tray item gone: showing the hidden window");
+            let _ = tauri::WebviewWindow::show(&window);
+            let _ = window.set_focus();
+        }
+    });
+}
+
 /// Read the server (never starting one) and show what it says.
 fn refresh_now(app: &AppHandle) {
     if !ENABLED.load(Ordering::SeqCst) || REFRESHING.swap(true, Ordering::SeqCst) {
@@ -293,7 +410,7 @@ fn refresh_now(app: &AppHandle) {
     }
 }
 
-/// The item in the macOS menu bar.
+/// The item in the macOS menu bar or a Linux tray.
 struct AppTray {
     app: AppHandle,
 }
@@ -301,14 +418,41 @@ struct AppTray {
 const ICON_RUNNING: &[u8] = include_bytes!("../../icons/tray/terminal-server-running.png");
 const ICON_STOPPED: &[u8] = include_bytes!("../../icons/tray/terminal-server-stopped.png");
 const ICON_ATTENTION: &[u8] = include_bytes!("../../icons/tray/terminal-server-attention.png");
+const LIGHT_RUNNING: &[u8] = include_bytes!("../../icons/tray/linux/terminal-server-running.png");
+const LIGHT_STOPPED: &[u8] = include_bytes!("../../icons/tray/linux/terminal-server-stopped.png");
+const LIGHT_ATTENTION: &[u8] =
+    include_bytes!("../../icons/tray/linux/terminal-server-attention.png");
+
+/// Whether `os` (a `std::env::consts::OS` value) tints template icons itself:
+/// the macOS menu bar does. A tray host draws the pixels as they are, so there
+/// the icons are a light glyph with a dark edge, legible on a dark bar and a
+/// light one.
+fn template_icons(os: &str) -> bool {
+    os == "macos"
+}
+
+/// Whether this OS's item uses template icons.
+fn as_template() -> bool {
+    template_icons(std::env::consts::OS)
+}
+
+fn icon_bytes(icon: TrayIcon, template: bool) -> &'static [u8] {
+    match (icon, template) {
+        (TrayIcon::Running, true) => ICON_RUNNING,
+        (TrayIcon::Stopped, true) => ICON_STOPPED,
+        (TrayIcon::Attention, true) => ICON_ATTENTION,
+        (TrayIcon::Running, false) => LIGHT_RUNNING,
+        (TrayIcon::Stopped, false) => LIGHT_STOPPED,
+        (TrayIcon::Attention, false) => LIGHT_ATTENTION,
+    }
+}
+
+fn decode(bytes: &[u8]) -> Result<tauri::image::Image<'static>, String> {
+    tauri::image::Image::from_bytes(bytes).map_err(|error| error.to_string())
+}
 
 fn icon_image(icon: TrayIcon) -> Result<tauri::image::Image<'static>, String> {
-    let bytes = match icon {
-        TrayIcon::Running => ICON_RUNNING,
-        TrayIcon::Stopped => ICON_STOPPED,
-        TrayIcon::Attention => ICON_ATTENTION,
-    };
-    tauri::image::Image::from_bytes(bytes).map_err(|error| error.to_string())
+    decode(icon_bytes(icon, as_template()))
 }
 
 impl AppTray {
@@ -364,7 +508,7 @@ impl TrayHost for AppTray {
         let menu = self.menu(model)?;
         tauri::tray::TrayIconBuilder::with_id(TRAY_ID)
             .icon(icon_image(model.icon)?)
-            .icon_as_template(true)
+            .icon_as_template(as_template())
             .tooltip("CodeSense terminal server")
             .menu(&menu)
             .show_menu_on_left_click(true)
@@ -408,7 +552,7 @@ impl TrayHost for AppTray {
                 if let Some(tray) = app.tray_by_id(TRAY_ID) {
                     if previous.icon != model.icon {
                         tray.set_icon(Some(icon_image(model.icon)?)).map_err(|e| e.to_string())?;
-                        tray.set_icon_as_template(true).map_err(|e| e.to_string())?;
+                        tray.set_icon_as_template(as_template()).map_err(|e| e.to_string())?;
                     }
                     tray.set_title(model.count.map(|count| count.to_string())).map_err(|e| e.to_string())?;
                     tray.set_tooltip(Some(&model.status)).map_err(|e| e.to_string())?;
@@ -646,16 +790,92 @@ mod tests {
 
     #[test]
     fn sv8_template_icons_are_distinct_and_have_transparency() {
-        let icons = [TrayIcon::Running, TrayIcon::Stopped, TrayIcon::Attention]
-            .map(|icon| icon_image(icon).unwrap());
-        for icon in &icons {
-            assert!(icon.width() > 0 && icon.height() > 0);
-            assert!(icon.rgba().chunks_exact(4).any(|pixel| pixel[3] == 0));
-            assert!(icon.rgba().chunks_exact(4).any(|pixel| pixel[3] > 0));
+        for template in [true, false] {
+            let icons = [TrayIcon::Running, TrayIcon::Stopped, TrayIcon::Attention]
+                .map(|icon| decode(icon_bytes(icon, template)).unwrap());
+            for icon in &icons {
+                assert!(icon.width() > 0 && icon.height() > 0);
+                assert!(icon.rgba().chunks_exact(4).any(|pixel| pixel[3] == 0));
+                assert!(icon.rgba().chunks_exact(4).any(|pixel| pixel[3] > 0));
+            }
+            assert_ne!(icons[0].rgba(), icons[1].rgba());
+            assert_ne!(icons[0].rgba(), icons[2].rgba());
+            assert_ne!(icons[1].rgba(), icons[2].rgba());
         }
-        assert_ne!(icons[0].rgba(), icons[1].rgba());
-        assert_ne!(icons[0].rgba(), icons[2].rgba());
-        assert_ne!(icons[1].rgba(), icons[2].rgba());
+    }
+
+    /// The macOS menu bar tints black template icons; a tray host gets the light
+    /// glyph with its dark edge, the same shape.
+    #[test]
+    fn a_tray_host_gets_light_icons_and_the_menu_bar_template_ones() {
+        assert!(template_icons("macos"));
+        assert!(!template_icons("linux") && !template_icons("windows"));
+        assert_eq!(as_template(), template_icons(std::env::consts::OS));
+        let pixels_of = |bytes| {
+            let icon = decode(bytes).unwrap();
+            let pixels: Vec<[u8; 4]> = icon
+                .rgba()
+                .chunks_exact(4)
+                .map(|pixel| [pixel[0], pixel[1], pixel[2], pixel[3]])
+                .collect();
+            (icon.width(), icon.height(), pixels)
+        };
+        for icon in [TrayIcon::Running, TrayIcon::Stopped, TrayIcon::Attention] {
+            let (width, height, template) = pixels_of(icon_bytes(icon, true));
+            let (light_width, light_height, light) = pixels_of(icon_bytes(icon, false));
+            assert_eq!((width, height), (light_width, light_height), "{icon:?}");
+            assert!(
+                template.iter().all(|p| p[3] == 0 || p[..3] == [0, 0, 0]),
+                "{icon:?}: the template is black"
+            );
+            assert!(
+                light.iter().any(|p| p[3] > 0 && p[0] > 160),
+                "{icon:?}: the tray icon has a light glyph"
+            );
+            assert!(
+                light.iter().any(|p| p[3] > 0 && p[0] < 64),
+                "{icon:?}: and a dark edge"
+            );
+            for (template, light) in template.iter().zip(&light) {
+                if template[3] > 0 {
+                    assert!(light[3] > 0, "{icon:?}: the glyph keeps its shape");
+                }
+            }
+        }
+    }
+
+    /// The tray follows its capability, not the OS.
+    #[test]
+    fn the_tray_is_allowed_only_with_its_capability() {
+        use crate::platform_caps::caps_with_off;
+        assert!(tray_allowed(&Caps(&caps_with_off(&[]))));
+        assert!(!tray_allowed(&Caps(&caps_with_off(&[
+            TERMINAL_SERVER_TRAY
+        ]))));
+    }
+
+    /// The probe loads the AppIndicator library by the loader's names, in its
+    /// order: any one present is enough, none is off.
+    #[test]
+    fn the_tray_probe_needs_one_appindicator_library() {
+        let tried = RefCell::new(Vec::new());
+        let absent = |name: &str| {
+            tried.borrow_mut().push(name.to_string());
+            false
+        };
+        assert!(!tray_library_loads(&absent));
+        assert_eq!(*tried.borrow(), APPINDICATOR_LIBRARIES);
+        for present in APPINDICATOR_LIBRARIES {
+            assert!(tray_library_loads(&|name| name == present), "{present}");
+        }
+        for name in APPINDICATOR_LIBRARIES {
+            let pattern = name.strip_suffix(".1").unwrap_or(name);
+            assert!(pattern.ends_with(".so"), "{name}");
+            assert!(pattern.contains("appindicator3"), "{name}");
+        }
+        if std::env::consts::OS != "linux" {
+            assert!(!tray_library_available(), "nothing is loaded off Linux");
+        }
     }
 
     /// A stopped server offers Start; one that needs attention offers what
