@@ -197,6 +197,31 @@ describe("useWorktreeWatch — attach and detach run in order per key", () => {
     expect(applied.at(-1)).toBe(`applied /b as ${fake.slot()}`);
   });
 
+  it("an attach released before its turn is skipped", async () => {
+    const fake = fakeBackend();
+    const a = renderHook(() => useWorktreeWatch("ws1", "/a", true));
+    await flush();
+    a.unmount();
+    const b = renderHook(() => useWorktreeWatch("ws1", "/b", true));
+    await flush();
+    b.unmount();
+    renderHook(() => useWorktreeWatch("ws1", "/c", true));
+    await flush();
+    fake.resolve(0);
+    await flush();
+    expect(fake.calls.map((c) => c.cwd)).toEqual(["/a", "/c"]);
+    fake.resolve(1);
+    await flush();
+    expect(fake.slot()).toBe(2);
+    expect(fake.log).toEqual([
+      "attach /a",
+      "applied /a as 1",
+      "detach 1",
+      "attach /c",
+      "applied /c as 2",
+    ]);
+  });
+
   it("two consumers share one attach and the last release detaches it", async () => {
     const fake = fakeBackend();
     const a = renderHook(() => useWorktreeWatch("ws1", "/wt", true));
@@ -299,6 +324,28 @@ describe("useWorktreeWatch — attach and detach run in order per key", () => {
     expect(fake.slot()).toBe(3);
     expect(mockAttach).toHaveBeenCalledTimes(3);
     expect(nonce()).toBe(1);
+  });
+
+  it("a re-attach for an entry released before its turn is skipped", async () => {
+    const { fake, b } = await lateOverlap();
+    fake.apply(1); // B: 1
+    fake.apply(0); // A: 2
+    fake.reply(1);
+    await flush();
+    let releaseDetach!: () => void;
+    mockDetach.mockImplementationOnce((_wsId: string, token: number) => {
+      fake.log.push(`detach ${token}`);
+      return new Promise<void>((r) => (releaseDetach = r));
+    });
+    fake.reply(0);
+    await flush();
+    // The late token's detach holds the key; the re-attach is queued behind it.
+    expect(fake.log.at(-1)).toBe("detach 2");
+    b.unmount();
+    releaseDetach();
+    await flush();
+    expect(mockAttach).toHaveBeenCalledTimes(2);
+    expect(nonce()).toBe(0);
   });
 
   it("a late lower token is detached and the live watch kept", async () => {

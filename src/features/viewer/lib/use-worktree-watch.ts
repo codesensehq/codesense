@@ -30,9 +30,12 @@ interface WatchEntry {
   cwd: string;
   /** The token of the last attach that resolved for this entry; `null` until one does. */
   token: number | null;
-  /** The attach this entry is waiting on, or `null` once it has settled. */
-  pending: object | null;
-  /** Late tokens of superseded attaches, compared with `pending` once it settles. */
+  /**
+   * An attach for this entry is queued or in flight. An entry has at most one at a time: a
+   * re-attach is queued only once the previous attach has settled.
+   */
+  pending: boolean;
+  /** Late tokens of superseded attaches, compared with the pending attach's token once it settles. */
   held: number[];
 }
 
@@ -100,14 +103,19 @@ function detach(wsId: string, token: number): void {
  * entry's watch: once it lands, the change nonce is bumped so the gap is caught up.
  */
 function attach(wsId: string, entry: WatchEntry, resume: boolean): void {
-  const attempt = {};
-  entry.pending = attempt;
+  entry.pending = true;
   enqueue(wsId, (link) => {
+    // Released before its turn: skip the attach. Release already detached the held tokens, and
+    // no token was minted.
+    if (entry.count === 0) {
+      entry.pending = false;
+      link.finish();
+      return;
+    }
     lazyAttachWorktreeWatch(wsId, entry.cwd).then(
       (token) => {
-        const current = entry.pending === attempt;
-        if (current) entry.pending = null;
-        if (current && entry.count > 0) {
+        entry.pending = false;
+        if (entry.count > 0) {
           entry.token = token;
           settleHeld(wsId, entry, token);
           if (resume) useViewerStore.getState().bumpWorktreeChangedPath(wsId, "", true);
@@ -124,10 +132,8 @@ function attach(wsId: string, entry: WatchEntry, resume: boolean): void {
       },
       (err) => {
         logger.warn("useWorktreeWatch", `worktree watch attach failed for ${wsId} — ${err}`);
-        if (entry.pending === attempt) {
-          entry.pending = null;
-          settleHeld(wsId, entry, null);
-        }
+        entry.pending = false;
+        settleHeld(wsId, entry, null);
         link.finish();
       },
     );
@@ -161,7 +167,7 @@ function acquire(wsId: string, cwd: string): void {
     existing.count++;
     return;
   }
-  const entry: WatchEntry = { count: 1, cwd, token: null, pending: null, held: [] };
+  const entry: WatchEntry = { count: 1, cwd, token: null, pending: false, held: [] };
   watches.set(wsId, entry);
   // Fire-and-forget so a watch failure never blocks the mount.
   attach(wsId, entry, false);
@@ -175,7 +181,7 @@ function release(wsId: string): void {
   watches.delete(wsId);
   for (const late of entry.held.splice(0)) detach(wsId, late);
   // An attach still in flight sees count 0 when it resolves and detaches its own token.
-  if (entry.pending === null && entry.token !== null) detach(wsId, entry.token);
+  if (!entry.pending && entry.token !== null) detach(wsId, entry.token);
 }
 
 /**
