@@ -4,35 +4,49 @@ import {
   openWorkspaceTab,
   sendToWorkspaceTab,
   GENERIC_AGENT_ROLE,
+  type AgentTabLaunch,
   type OpenWorkspaceTabDeps,
   type SendToWorkspaceTabDeps,
 } from "./workspace-tab-verbs";
+import type { ScopedExecution } from "@/tauri/commands";
 
 describe("@P1 openWorkspaceTab (SW-GW-2)", () => {
+  const EXEC = { argv: ["/opt/bin/claude", "--x"], nativeLaunch: "claude" } as ScopedExecution;
+  type Opened = { workspaceId: string; role?: string; sessionId?: string; execution?: unknown };
+
   function makeDeps(overrides?: Partial<OpenWorkspaceTabDeps>): {
     deps: OpenWorkspaceTabDeps;
-    opened: Array<{ workspaceId: string; role?: string }>;
-    launched: string[];
+    order: string[];
+    opened: Opened[];
+    launched: Array<{ sessionId: string; launch: AgentTabLaunch }>;
     closed: Array<{ workspaceId: string; sessionId: string }>;
   } {
-    const opened: Array<{ workspaceId: string; role?: string }> = [];
-    const launched: string[] = [];
+    const order: string[] = [];
+    const opened: Opened[] = [];
+    const launched: Array<{ sessionId: string; launch: AgentTabLaunch }> = [];
     const closed: Array<{ workspaceId: string; sessionId: string }> = [];
     const deps: OpenWorkspaceTabDeps = {
       workspaceKindOf: () => "generic",
-      openTab: (workspaceId, role) => {
-        opened.push({ workspaceId, role });
-        return "shell-new";
+      newSessionId: () => "shell-minted",
+      openTab: (workspaceId, role, launch) => {
+        order.push("open");
+        opened.push({ workspaceId, role, ...launch });
+        return launch?.sessionId ?? "shell-new";
       },
       closeTab: (workspaceId, sessionId) => {
         closed.push({ workspaceId, sessionId });
       },
-      launchAgent: async (_workspaceId, sessionId) => {
-        launched.push(sessionId);
+      prepareAgent: async () => {
+        order.push("prepare");
+        return { spec: { agentPath: "/opt/bin/claude" }, extraArgs: [] };
+      },
+      launchAgent: async (sessionId, launch) => {
+        order.push("launch");
+        launched.push({ sessionId, launch });
       },
       ...overrides,
     };
-    return { deps, opened, launched, closed };
+    return { deps, order, opened, launched, closed };
   }
 
   it("opens a plain tab in a generic workspace and returns its sessionId", async () => {
@@ -43,12 +57,33 @@ describe("@P1 openWorkspaceTab (SW-GW-2)", () => {
     expect(launched).toEqual([]); // no agent launched for a plain tab
   });
 
-  it("tags an agent tab and launches the agent when agent:true", async () => {
-    const { deps, opened, launched } = makeDeps();
+  it("projects for the minted id, then tags the tab and launches the agent when agent:true", async () => {
+    const { deps, order, opened, launched } = makeDeps();
     const res = await openWorkspaceTab({ workspaceId: "generic:/x", agent: true }, deps);
-    expect(res).toEqual({ sessionId: "shell-new" });
-    expect(opened).toEqual([{ workspaceId: "generic:/x", role: GENERIC_AGENT_ROLE }]);
-    expect(launched).toEqual(["shell-new"]); // agent launched into the new tab
+    expect(res).toEqual({ sessionId: "shell-minted" });
+    expect(order).toEqual(["prepare", "open", "launch"]);
+    expect(opened).toEqual([
+      {
+        workspaceId: "generic:/x",
+        role: GENERIC_AGENT_ROLE,
+        sessionId: "shell-minted",
+        execution: undefined,
+      },
+    ]);
+    expect(launched.map((l) => l.sessionId)).toEqual(["shell-minted"]);
+  });
+
+  it("opens the tab with the projection's exec, so the agent is its process", async () => {
+    const { deps, opened, launched } = makeDeps({
+      prepareAgent: async () => ({
+        spec: { agentPath: "/opt/bin/claude" },
+        extraArgs: [],
+        execution: EXEC,
+      }),
+    });
+    await openWorkspaceTab({ workspaceId: "generic:/x", agent: true }, deps);
+    expect(opened[0]?.execution).toEqual(EXEC);
+    expect(launched[0]?.launch.execution).toEqual(EXEC);
   });
 
   it("rejects a non-generic workspace (never opens a tab)", async () => {
@@ -71,18 +106,31 @@ describe("@P1 openWorkspaceTab (SW-GW-2)", () => {
     await expect(openWorkspaceTab({}, deps)).rejects.toThrow(/must be a non-empty string/);
   });
 
-  it("rolls back the orphan tab when the agent launch fails (no mislabeled tab left)", async () => {
+  it("a failed preparation opens no tab, so there is nothing to roll back", async () => {
     const { deps, opened, closed } = makeDeps({
-      launchAgent: async () => {
+      prepareAgent: async () => {
         throw new Error("unavailable: agent CLI not found on PATH");
       },
     });
     await expect(
       openWorkspaceTab({ workspaceId: "generic:/x", agent: true }, deps),
     ).rejects.toThrow(/agent CLI not found/);
+    expect(opened).toEqual([]);
+    expect(closed).toEqual([]);
+  });
+
+  it("rolls back the orphan tab when the agent launch fails (no mislabeled tab left)", async () => {
+    const { deps, opened, closed } = makeDeps({
+      launchAgent: async () => {
+        throw new Error("the shell never reached its prompt");
+      },
+    });
+    await expect(
+      openWorkspaceTab({ workspaceId: "generic:/x", agent: true }, deps),
+    ).rejects.toThrow(/never reached its prompt/);
     // The tab was opened, then rolled back — same workspace + the minted sessionId.
-    expect(opened).toEqual([{ workspaceId: "generic:/x", role: GENERIC_AGENT_ROLE }]);
-    expect(closed).toEqual([{ workspaceId: "generic:/x", sessionId: "shell-new" }]);
+    expect(opened.map((o) => o.role)).toEqual([GENERIC_AGENT_ROLE]);
+    expect(closed).toEqual([{ workspaceId: "generic:/x", sessionId: "shell-minted" }]);
   });
 
   it("does NOT roll back a plain (non-agent) tab (no launch to fail)", async () => {

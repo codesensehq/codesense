@@ -3078,11 +3078,13 @@ export interface ViewerState {
   /** SW-GW-2: open a new terminal tab in an EXISTING workspace and RETURN its
    *  `sessionId` right away (the addressable handle); `role` optionally tags the
    *  tab (e.g. a generic-agent tab). Returns `""` when no such workspace is open
-   *  (so no orphan tab is opened). */
+   *  (so no orphan tab is opened). `sessionId` opens the tab under an id minted
+   *  earlier (a launch projected for it); `execution` starts its agent as the
+   *  tab's process instead of a shell. */
   openTabInWorkspace: (
     teamKey: string,
     workspaceId: string,
-    opts?: { role?: string; name?: string },
+    opts?: { role?: string; name?: string; sessionId?: string; execution?: ScopedExecution },
   ) => string;
   /** Close a terminal tab through its host: an idle shell (or an exited tab)
    *  goes, a busy one keeps running out of sight (`kill` ends it regardless).
@@ -8640,9 +8642,19 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     }
     // SW-WA-F6 (AC-1): an optional `name` reads as what the tab is FOR; omitted →
     // the host's `Terminal N`.
-    const tab = { ...createTerminalTab(opts?.name), ...(opts?.role ? { role: opts.role } : {}) };
+    const tab = {
+      ...createTerminalTab(opts?.name),
+      ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}),
+      ...(opts?.role ? { role: opts.role } : {}),
+    };
+    const execution = opts?.execution;
     void get()
-      .addTerminalTab(teamKey, tab, workspaceId)
+      .addTerminalTab(
+        teamKey,
+        tab,
+        workspaceId,
+        execution ? { commandArgv: execution.argv, nativeLaunch: execution.nativeLaunch } : {},
+      )
       .catch(() => {});
     return tab.sessionId;
   },

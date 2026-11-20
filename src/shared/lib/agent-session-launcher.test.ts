@@ -418,6 +418,34 @@ describe("connectAgentSession orchestration (AC-1/2/3/5/7)", () => {
     const relaunched = useAgentStateStore.getState().launchBySession[opened.sessionId].spec;
     expect(relaunched.agentPath).toBe("/fresh/hermes");
     expect(relaunched.args).toEqual(execution.argv.slice(1));
+    expect(useAgentStateStore.getState().launchBySession[opened.sessionId].exec).toBe(true);
+  });
+
+  it("the default tab opens with its projection's exec and types no line", async () => {
+    const execution = {
+      argv: ["C:\\npm\\claude.exe", "--dangerously-skip-permissions", "--settings", "s.json"],
+      nativeLaunch: "claude" as const,
+    };
+    const { deps, spawnOpts } = makeDeps({
+      projectScopeConfig: vi.fn(async () => ({
+        extraArgs: ["--settings", "s.json"],
+        environmentBinding: null,
+        execution,
+      })),
+    });
+    const opened = await connectAgentSession(params, deps);
+    expect(spawnOpts[0]).toEqual(expect.objectContaining({ execution }));
+    expect(deps.launchAgentLine).not.toHaveBeenCalled();
+    const recorded = useAgentStateStore.getState().launchBySession[opened.sessionId];
+    expect(recorded.exec).toBe(true);
+    expect([recorded.spec.agentPath, ...(recorded.spec.args ?? [])]).toEqual(execution.argv);
+  });
+
+  it("a typed launch is recorded without the exec flag", async () => {
+    const { deps } = makeDeps();
+    const opened = await connectAgentSession(params, deps);
+    expect(deps.launchAgentLine).toHaveBeenCalledTimes(1);
+    expect(useAgentStateStore.getState().launchBySession[opened.sessionId].exec).toBeUndefined();
   });
 
   it("a prepared launch spawns with exactly the backend's env strip, account and binding", async () => {
