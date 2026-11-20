@@ -137,6 +137,8 @@ export function queuedExport({ spawn = spawnSync, gate = diskGate } = {}) {
     ],
     { cwd: ROOT, stdio: "inherit", env: { ...process.env, UPDATE_DOCS_SCHEMAS: "1" } },
   );
+  if (result.error)
+    throw new Error(`Model schema export could not start cargo: ${result.error.message}`);
   if (result.status !== 0) throw new Error(`Model schema export failed (${result.status})`);
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

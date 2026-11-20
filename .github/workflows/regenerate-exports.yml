@@ -46,8 +46,11 @@ jobs:
     defaults:
       run:
         shell: bash
+    # The same env as rust.yml's Linux app job: rust-cache keys on these variables, so a different
+    # set would never restore that job's cache.
     env:
       CARGO_INCREMENTAL: "0"
+      RUST_BACKTRACE: "1"
       CARGO_TERM_COLOR: always
     steps:
       - name: Check out source
@@ -120,8 +123,11 @@ jobs:
             exit 1
           fi
           out="$RUNNER_TEMP/generated-exports"
+          list="$RUNNER_TEMP/changed-files"
           mkdir -p "$out"
-          mapfile -d '' changed < <(git ls-files -z --modified --others --exclude-standard)
+          # Listed to a file first, so a git failure fails the step instead of reading as fresh.
+          git ls-files -z --modified --others --exclude-standard > "$list"
+          mapfile -d '' changed < "$list"
           for file in "${changed[@]}"; do
             mkdir -p "$out/$(dirname "$file")"
             cp "$file" "$out/$file"
@@ -142,5 +148,7 @@ jobs:
         with:
           name: generated-exports
           path: ${{ runner.temp }}/generated-exports/
+          # gen:docs also writes the skill copies under .claude/, .agents/ and the like.
+          include-hidden-files: true
           retention-days: 7
           if-no-files-found: error

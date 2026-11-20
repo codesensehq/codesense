@@ -2061,6 +2061,15 @@ test("export regeneration: each option runs its script's own queued export, read
   assert.equal(upload.if, "steps.collect.outputs.changed != '0'");
   assert.equal(upload.with.name, "generated-exports");
   assert.equal(upload.with["retention-days"], 7);
+  assert.equal(upload.with["include-hidden-files"], true);
+  // rust-cache keys on the env, so it restores the Linux app job's cache only with the same env.
+  const linuxApp = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8")).jobs[
+    "rust-linux-app"
+  ];
+  assert.deepEqual(workflow.jobs.regenerate.env, linuxApp.env);
+  const cacheKey = (job) =>
+    job.steps.find((step) => step.uses?.startsWith("Swatinem/rust-cache@")).with["shared-key"];
+  assert.equal(cacheKey(workflow.jobs.regenerate), cacheKey(linuxApp));
 });
 
 test("export regeneration: the policy rejects another trigger, a write, a changed input or an expression in run", () => {
