@@ -459,6 +459,10 @@ pub struct OpenTabRequest {
     pub index: Option<usize>,
     pub activate: bool,
     pub spawn: TabSpawn,
+    /// The tab's own folder when it runs outside the workspace's (a story seat
+    /// worktree); see [`OpenTab::cwd`]. Omitted for a tab in the workspace's folder.
+    #[serde(default)]
+    pub cwd: Option<std::path::PathBuf>,
 }
 
 /// The app launch the webview last asked the hosts' layout under, so a read
@@ -574,10 +578,11 @@ pub async fn terminal_open_tab(
         index,
         activate,
         spawn,
+        cwd,
     } = request;
     refuse_launch_tags(tags.keys())?;
     let open = OpenTab {
-        cwd: None,
+        cwd,
         viewer: app_viewer(),
         workspace,
         session,

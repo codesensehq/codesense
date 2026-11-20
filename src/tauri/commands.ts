@@ -2447,6 +2447,9 @@ export interface TerminalOpenTabRequest {
   index?: number;
   activate: boolean;
   spawn: TerminalTabSpawn;
+  /** The tab's own folder when it runs outside the workspace's (a story seat
+   *  worktree): the host records it for the tab, never for the workspace. */
+  cwd?: string;
 }
 
 export type TerminalCloseMode = "keepIfBusy" | "kill";

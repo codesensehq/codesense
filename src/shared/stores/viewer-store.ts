@@ -773,6 +773,9 @@ export interface OpenTerminalTabOptions {
   account?: ResolveAgentAccountInput;
   /** Opaque one-use backend binding for an MCP-scoped environment. */
   environmentBinding?: string;
+  /** The tab's own folder when it isn't the workspace's (a story seat worktree):
+   *  the shell starts there, and the workspace keeps its folder. */
+  tabCwd?: string;
 }
 
 /** How a respawn's new process is started: the shell rules of the launch that
@@ -1126,7 +1129,8 @@ function openLayoutTab(
       role: tab.role,
       placement: opts.placement ?? "tab",
       activate: opts.activate ?? true,
-      spawn: tabSpawn(s, ws, size, opts),
+      spawn: tabSpawn(s, opts.tabCwd ? { ...ws, cwd: opts.tabCwd } : ws, size, opts),
+      ...(opts.tabCwd ? { cwd: opts.tabCwd } : {}),
     });
   return open()
     .catch((e: unknown) => {
