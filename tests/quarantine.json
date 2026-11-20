@@ -106,5 +106,11 @@
     "reason": "timing-sensitive under full-suite load; flaked in merge-queue and pull request runs",
     "issue": "https://github.com/codesensehq/codesense/issues/4",
     "added": "2026-11-14"
+  },
+  {
+    "id": "cargo:codesense_pty_core::runner::tests::group_signals_reach_the_whole_group_and_a_gone_group_is_ok",
+    "reason": "on macOS a gone process group holding only a zombie answers EPERM, which the group signal reports as an error",
+    "issue": "https://github.com/codesensehq/codesense/issues/375",
+    "added": "2026-11-20"
   }
 ]
