@@ -383,7 +383,9 @@ const FAILURE_REASONS: Record<string, string> = {
 
 /** Why an image isn't shown, in the pane's words. */
 function mediaReason(a: InboxMediaAttachment, team: string): string {
-  if (a.state === "blocked") return `GIF · media is off in ${team}'s team config`;
+  if (a.state === "blocked" || a.reason === "off") {
+    return `GIF · media is off in ${team}'s team config`;
+  }
   if (a.state === "failed") {
     return (
       (a.reason && FAILURE_REASONS[a.reason]) || `${a.sourceHost || "The source"} didn't answer.`

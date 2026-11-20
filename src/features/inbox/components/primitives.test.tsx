@@ -164,6 +164,13 @@ describe("MessageBody image attachments", () => {
     expect((load as HTMLButtonElement).disabled).toBe(false);
   });
 
+  it("pending with reason off: says media is off", () => {
+    render(<MessageBody m={withMedia(image({ state: "pending", reason: "off" }))} />);
+    expect(screen.getByTestId("ibx-media-card").textContent).toContain(
+      `GIF · media is off in ${team.team}'s team config`,
+    );
+  });
+
   it("blocked: says media is off and links its source, with no Load", () => {
     render(<MessageBody m={withMedia(image({ state: "blocked" }))} />);
     expect(screen.getByTestId("ibx-media-card").textContent).toContain(
