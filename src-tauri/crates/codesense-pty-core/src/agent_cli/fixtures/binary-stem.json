@@ -7,6 +7,10 @@
     ["CLAUDE.EXE", "claude"],
     ["codex.bat", "codex"],
     ["claude.js", "claude.js"],
-    ["C:\\Program Files\\nodejs\\node.exe", "node"]
+    ["C:\\Program Files\\nodejs\\node.exe", "node"],
+    ["/usr/local/bin/claude/", "claude"],
+    ["C:\\npm\\claude.exe\\", "claude"],
+    ["/", ""],
+    ["", ""]
   ]
 }

@@ -268,12 +268,17 @@ pub fn validate_startup(startup: &AgentStartup, launch: NativeLaunch) -> Result<
     startup.validate(&descriptor(cli).startup)
 }
 
-/// The runtime name of the program at `path`: its last component (split on `/` or `\`),
-/// lowercased, with a trailing `.exe`, `.cmd` or `.bat` dropped, so `C:\npm\claude.cmd`,
-/// `CLAUDE.EXE` and `/usr/local/bin/claude` all name `claude`. The one place an agent
-/// path becomes the name [`by_binary`] and the process matcher compare.
+/// The runtime name of the program at `path`: its last non-empty component (split on
+/// `/` or `\`), lowercased, with a trailing `.exe`, `.cmd` or `.bat` dropped, so
+/// `C:\npm\claude.cmd`, `CLAUDE.EXE` and `/usr/local/bin/claude/` all name `claude`.
+/// The one place an agent path becomes the name [`by_binary`] and the process matcher
+/// compare.
 pub fn binary_stem(path: &str) -> String {
-    let base = path.rsplit(['/', '\\']).next().unwrap_or(path).to_lowercase();
+    let base = path
+        .rsplit(['/', '\\'])
+        .find(|segment| !segment.is_empty())
+        .unwrap_or_default()
+        .to_lowercase();
     match [".exe", ".cmd", ".bat"]
         .iter()
         .find_map(|ext| base.strip_suffix(ext))
