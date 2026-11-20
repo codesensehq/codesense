@@ -2263,6 +2263,62 @@ mod b1 {
         assert_eq!((new_cost["totals"]["sessions"].clone(), new_cost["totals"]["costUsd"].clone()), (json!(2), json!(4.0)));
     }
 
+    /// A charge moves a session's later usage to another story: the story it resolved to falls by
+    /// exactly what the charged story gains, the two add up to the session's cost, both stories are
+    /// marked and recomputed, and a story the charge does not touch keeps its totals.
+    #[tokio::test]
+    async fn a_charge_moves_the_charged_usage_between_stories() {
+        let (dir, mut s) = store();
+        let home = dir.path();
+        let (from, to, calm) = ("DEMO-10", "DEMO-11", "DEMO-12");
+        seed_session(&mut s, home, from, "mover", true);
+        let mut later = event("mover-e2", "mover", "gpt-6-sol", 1_790_000_001_000, Tokens { input: 5, ..Default::default() });
+        later.reported_cost_usd = Some(3.0);
+        s.ingest(&[later]).unwrap();
+        seed_session(&mut s, home, to, "stay", true);
+        seed_session(&mut s, home, calm, "calm", true);
+        let all = [from.to_owned(), to.to_owned(), calm.to_owned()];
+        human_read(home, &all);
+        index_all(home).await;
+        s.conn.execute("DELETE FROM source_event", []).unwrap();
+        let cost = |answer: &Value| answer["totals"]["costUsd"].as_f64();
+        let (from_before, to_before, calm_before) = (compute(home, from).await, compute(home, to).await, compute(home, calm).await);
+        assert_eq!((cost(&from_before), cost(&to_before)), (Some(5.0), Some(2.0)));
+        let charge = crate::session_usage::charge::Charge {
+            story_id: to.into(),
+            from_ms: 1_790_000_000_500,
+            org: Some("acme".into()),
+            team: Some("dev".into()),
+            charged_by: Some("lead".into()),
+            charged_by_session: "lead".into(),
+            charged_at_ms: 1_790_000_002_000,
+        };
+        s.charge_story("mover", &charge).unwrap();
+        assert!(dirty(&s, to), "the charged story is marked by the charge");
+        assert!(!dirty(&s, calm));
+        sweep_sources(&s, home, now_ms()).unwrap();
+        assert!(dirty(&s, from), "the story the session resolved to is marked through its changed row");
+        assert_eq!(rows(&s, from).len(), 1);
+        assert_eq!(rows(&s, to).len(), 2);
+        let (from_after, to_after) = (compute(home, from).await, compute(home, to).await);
+        assert_eq!(cost(&from_after), Some(2.0));
+        assert_eq!(cost(&to_after), Some(5.0));
+        assert_eq!(cost(&from_before).unwrap() - cost(&from_after).unwrap(), cost(&to_after).unwrap() - cost(&to_before).unwrap());
+        let session = crate::session_usage::cost_rollup::CostRollup::total(&s.session_cost("mover").unwrap());
+        assert_eq!(Some(cost(&from_after).unwrap() + 3.0), session, "the two parts are the whole session");
+        assert_eq!(compute(home, calm).await["totals"], calm_before["totals"]);
+        // The charged story lists the session once, with its segment of the story and that cost.
+        let read = full(home, to).await;
+        let mover = read["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|session| session["session"]["sessionId"] == "mover")
+            .unwrap();
+        assert_eq!(mover["segments"], json!([{"fromMs": 1_790_000_000_500_i64, "toMs": null}]));
+        assert_eq!(mover["cost"]["totalUsd"], 3.0);
+    }
+
     /// The upgrade copies the old session queue into `source_event` and drops the old table, in the
     /// transaction `open` runs it in.
     #[test]

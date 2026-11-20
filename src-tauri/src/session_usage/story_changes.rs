@@ -1123,7 +1123,8 @@ async fn indexed_session_facts(
     Ok(SessionFacts::new(half, rows::fold(&rows, chrono::Utc::now().timestamp_millis(), redirected), sessions))
 }
 
-/// The story's indexed sessions as `session_read` reads them, each once.
+/// The story's indexed sessions as `session_read` reads them, each once, with the segments and
+/// cost of a charged session's part in this story.
 async fn read_indexed_sessions(
     home: &Path,
     scope: &CallerScope,
@@ -1156,6 +1157,12 @@ async fn read_indexed_sessions(
             .and_then(Value::as_str)
             .unwrap_or("exact");
         session["basis"] = json!(basis);
+        // A session charged to more than one story counts here only for its segments of this
+        // story: they and their cost replace the whole session's.
+        if let Some(segments) = row.contribution.extra.get("segments") {
+            session["segments"] = segments.clone();
+            session["cost"]["totalUsd"] = json!(row.contribution.nums.get("cost").copied().flatten());
+        }
         sessions.push(session);
     }
     Ok(sessions)
