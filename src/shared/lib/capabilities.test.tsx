@@ -121,4 +121,20 @@ describe("the not-yet-available sentence", () => {
       );
     }
   });
+
+  it('names no OS and doesn\'t say "yet" in any product reason: the sentence says both', () => {
+    const SAYS_OS_OR_YET = /\byet\b|\b(windows|linux|mac ?os|unix)\b/i;
+    // Reasons written before this rule. The list only shrinks: reword one, then drop it here.
+    const LEGACY = [
+      "git-ai",
+      "starship",
+      "terminal-server-sidecar",
+      "agent-cli-sockets",
+      "shell-integration",
+    ];
+    for (const row of TABLE.filter((r) => r.scope !== "test")) {
+      if (LEGACY.includes(row.key)) expect(row.reason, row.key).toMatch(SAYS_OS_OR_YET);
+      else expect(row.reason, row.key).not.toMatch(SAYS_OS_OR_YET);
+    }
+  });
 });
