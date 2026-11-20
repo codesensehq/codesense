@@ -1,16 +1,20 @@
 // SPDX-License-Identifier: MIT
 //! The GIPHY adapter: `/v1/gifs/search` and `/v1/gifs?ids=`, straight from this machine with the
 //! user's own key, every request carrying the rating.
-use super::{Found, GifError, GifProvider, Provider, Rating, Rendition};
+use super::{Found, GifError, GifProvider, Pingbacks, Provider, Rating, Rendition};
 use crate::commands::credential_store::Secret;
 use futures_util::future::BoxFuture;
 use serde_json::Value;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 const API: &str = "https://api.giphy.com/v1/gifs";
-/// The largest API response read: a page of ten GIFs is well under this.
+/// The largest API response read: a page of results is well under this.
 pub(crate) const MAX_BODY: usize = 2 * 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const USER_AGENT: &str = "CodeSense-GifSearch/1.0";
+/// The most results one search asks for: twice the limit, so results dropped by the rating or
+/// the rendition rule still leave enough.
+const MAX_FETCH: usize = 25;
 
 /// An API response: the status, its `Retry-After` and the body.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,15 +38,21 @@ pub(crate) trait Transport: Send + Sync {
 }
 
 /// The network transport: the shared hardened client, https only, no redirects, at most
-/// [`MAX_BODY`] read.
+/// [`MAX_BODY`] read. A failure keeps only its kind: the reqwest error, whose text holds the
+/// URL and so the key, is dropped.
 pub(crate) struct Http {
     client: reqwest::Client,
 }
 impl Http {
     pub(crate) fn new() -> Result<Self, String> {
-        let client = crate::media::hardened_client_builder(TIMEOUT)
-            .user_agent("CodeSense-GifSearch/1.0")
-            .https_only(true)
+        Self::on(crate::media::hardened_client_builder(TIMEOUT).https_only(true))
+    }
+
+    /// The transport over `base`, with the user agent and no redirects. Tests pass a plain
+    /// builder so a local server can answer.
+    pub(crate) fn on(base: reqwest::ClientBuilder) -> Result<Self, String> {
+        let client = base
+            .user_agent(USER_AGENT)
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|_| "the GIF search client could not start".to_string())?;
@@ -50,7 +60,7 @@ impl Http {
     }
 }
 fn failure(error: &reqwest::Error) -> Failure {
-    if error.is_timeout() {
+    if reqwest::Error::is_timeout(error) {
         Failure::Timeout
     } else {
         Failure::Network
@@ -59,27 +69,32 @@ fn failure(error: &reqwest::Error) -> Failure {
 impl Transport for Http {
     fn get<'a>(&'a self, url: &'a url::Url) -> BoxFuture<'a, Result<Reply, Failure>> {
         Box::pin(async move {
-            let mut response = self
+            let request = self
                 .client
                 .get(url.clone())
-                .header(reqwest::header::ACCEPT, "application/json")
-                .send()
-                .await
-                .map_err(|e| failure(&e))?;
+                .header(reqwest::header::ACCEPT, "application/json");
+            let mut response = match request.send().await {
+                Ok(response) => response,
+                Err(error) => return Err(failure(&error)),
+            };
             let status = reqwest::Response::status(&response).as_u16();
-            let retry_after = response
-                .headers()
-                .get(reqwest::header::RETRY_AFTER)
-                .and_then(|v| v.to_str().ok())
-                .map(str::to_owned);
-            if response
-                .content_length()
-                .is_some_and(|n| n > MAX_BODY as u64)
-            {
+            let retry_after = match response.headers().get(reqwest::header::RETRY_AFTER) {
+                Some(value) => match value.to_str() {
+                    Ok(text) => Some(text.to_owned()),
+                    Err(_) => None,
+                },
+                None => None,
+            };
+            if reqwest::Response::content_length(&response).is_some_and(|n| n > MAX_BODY as u64) {
                 return Err(Failure::TooLarge);
             }
             let mut body = Vec::new();
-            while let Some(chunk) = response.chunk().await.map_err(|e| failure(&e))? {
+            loop {
+                let chunk = match response.chunk().await {
+                    Ok(Some(chunk)) => chunk,
+                    Ok(None) => break,
+                    Err(error) => return Err(failure(&error)),
+                };
                 if body.len() + chunk.len() > MAX_BODY {
                     return Err(Failure::TooLarge);
                 }
@@ -110,7 +125,7 @@ impl Giphy {
         }
     }
 
-    fn url(&self, path: &str, pairs: &[(&str, &str)], rating: Rating) -> url::Url {
+    fn api_url(&self, path: &str, pairs: &[(&str, &str)], rating: Rating) -> url::Url {
         let mut url: url::Url = format!("{API}{path}").parse().expect("the GIPHY API URL");
         {
             let mut query = url.query_pairs_mut();
@@ -125,11 +140,14 @@ impl Giphy {
 
     /// The `data` array of a GET, or the typed error. Log lines name the status or the failure,
     /// never the URL, which holds the key.
-    async fn data(&self, url: url::Url) -> Result<Vec<Value>, GifError> {
-        let reply = self.transport.get(&url).await.map_err(|failure| {
-            log::warn!(target: "gif", "gif search: the GIPHY request failed ({failure:?})");
-            GifError::ProviderUnavailable
-        })?;
+    async fn api_data(&self, url: url::Url) -> Result<Vec<Value>, GifError> {
+        let reply = match self.transport.get(&url).await {
+            Ok(reply) => reply,
+            Err(failure) => {
+                log::warn!(target: "gif", "gif search: the GIPHY request failed ({failure:?})");
+                return Err(GifError::ProviderUnavailable);
+            }
+        };
         match reply.status {
             200..=299 => {}
             401 | 403 => {
@@ -141,6 +159,10 @@ impl Giphy {
                     super::bucket::retry_after_secs(reply.retry_after.as_deref(), self.now_ms);
                 log::warn!(target: "gif", "gif search: GIPHY rate limited searches for {retry_after} s");
                 return Err(GifError::RateLimited { retry_after });
+            }
+            status @ 400..=499 => {
+                log::warn!(target: "gif", "gif search: GIPHY refused the request (HTTP {status})");
+                return Err(GifError::BadQuery("GIPHY refused the request"));
             }
             status => {
                 log::warn!(target: "gif", "gif search: GIPHY answered HTTP {status}");
@@ -163,20 +185,20 @@ fn malformed() -> GifError {
 }
 
 impl GifProvider for Giphy {
-    fn search<'a>(
+    fn search_gifs<'a>(
         &'a self,
         query: &'a str,
         rating: Rating,
         limit: usize,
     ) -> BoxFuture<'a, Result<Vec<Found>, GifError>> {
         Box::pin(async move {
-            let limit_text = limit.to_string();
-            let url = self.url(
+            let fetch = (limit * 2).min(MAX_FETCH).to_string();
+            let url = self.api_url(
                 "/search",
-                &[("q", query), ("limit", limit_text.as_str())],
+                &[("q", query), ("limit", fetch.as_str())],
                 rating,
             );
-            let data = self.data(url).await?;
+            let data = self.api_data(url).await?;
             Ok(data
                 .iter()
                 .filter_map(|gif| found(gif, rating))
@@ -185,15 +207,15 @@ impl GifProvider for Giphy {
         })
     }
 
-    fn lookup<'a>(
+    fn lookup_gifs<'a>(
         &'a self,
         ids: &'a [String],
         rating: Rating,
     ) -> BoxFuture<'a, Result<Vec<Found>, GifError>> {
         Box::pin(async move {
             let joined = ids.join(",");
-            let url = self.url("", &[("ids", joined.as_str())], rating);
-            let data = self.data(url).await?;
+            let url = self.api_url("", &[("ids", joined.as_str())], rating);
+            let data = self.api_data(url).await?;
             let mut by_id: HashMap<String, Found> = data
                 .iter()
                 .filter_map(|gif| found(gif, rating))
@@ -216,8 +238,8 @@ fn within(gif: &Value, ceiling: Rating) -> bool {
     rating.is_some_and(|r| r <= ceiling)
 }
 
-/// One GIPHY result as a candidate with its analytics data, or `None` when it is above the
-/// rating or has no qualifying rendition.
+/// One GIPHY result as a candidate with its pingbacks, or `None` when it is above the rating or
+/// has no qualifying rendition.
 fn found(gif: &Value, rating: Rating) -> Option<Found> {
     if !within(gif, rating) {
         return None;
@@ -226,11 +248,24 @@ fn found(gif: &Value, rating: Rating) -> Option<Found> {
     let title = gif.get("title").and_then(Value::as_str).unwrap_or("");
     let images = gif.get("images")?.as_object()?;
     let candidate = super::candidate(Provider::Giphy, id, title, &renditions(images))?;
-    let analytics = gif.get("analytics").filter(|v| v.is_object()).cloned();
     Some(Found {
         candidate,
-        analytics,
+        pingbacks: pingbacks(gif.get("analytics")),
     })
+}
+
+/// GIPHY's `analytics.{onload,onclick,onsent}.url`, each kept only on GIPHY's hosts over https.
+fn pingbacks(analytics: Option<&Value>) -> Option<Pingbacks> {
+    let url = |event: &str| {
+        let url = analytics?.get(event)?.get("url")?.as_str();
+        Pingbacks::keep_url(Provider::Giphy, url)
+    };
+    Pingbacks {
+        onload: url("onload"),
+        onclick: url("onclick"),
+        onsent: url("onsent"),
+    }
+    .if_any()
 }
 
 /// Every GIF and WebP rendition GIPHY lists: each image's `url` (GIF, or a still for the
@@ -240,8 +275,8 @@ fn renditions(images: &serde_json::Map<String, Value>) -> Vec<Rendition> {
     for (name, image) in images {
         let still = name.ends_with("_still");
         let size = |field: &str| number(image.get(field));
-        let width = size("width").and_then(|n| u32::try_from(n).ok());
-        let height = size("height").and_then(|n| u32::try_from(n).ok());
+        let side = |field: &str| size(field).and_then(|n| u32::try_from(n).map_or(None, Some));
+        let (width, height) = (side("width"), side("height"));
         for (url_field, size_field) in [("url", "size"), ("webp", "webp_size")] {
             if let Some(url) = image.get(url_field).and_then(Value::as_str) {
                 renditions.push(Rendition {
@@ -262,7 +297,7 @@ fn renditions(images: &serde_json::Map<String, Value>) -> Vec<Rendition> {
 /// GIPHY sends sizes as strings of digits; a number is read too.
 fn number(value: Option<&Value>) -> Option<u64> {
     match value? {
-        Value::String(text) => text.trim().parse().ok(),
+        Value::String(text) => text.trim().parse().map_or(None, Some),
         Value::Number(number) => number.as_u64(),
         _ => None,
     }

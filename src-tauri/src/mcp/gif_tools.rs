@@ -6,7 +6,8 @@ use rmcp::schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::commands::dashboard_launch::LaunchTeam;
-use crate::gif::{self, GifError, Provider};
+use crate::gif::{self, GifError, GifService, Provider};
+use crate::media::Config;
 
 /// `gif_search` inputs: exactly one of `query` and `ids`.
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -31,46 +32,62 @@ pub struct GifSearchParams {
     pub provider: Option<String>,
 }
 
-/// Run `gif_search` for a caller whose team is `team` (none: nothing auto-loads). Returns the
-/// tool result: `{status:"ok", provider, candidates}` or `{status:"error", error, message}`.
+/// Run `gif_search` for a caller whose team is `team` (none: nothing auto-loads).
 pub(crate) async fn gif_search(
     app: &tauri::AppHandle,
     team: Option<&LaunchTeam>,
     params: GifSearchParams,
 ) -> serde_json::Value {
-    match run(app, team, params).await {
+    let service = match gif::service(app) {
+        Ok(service) => service,
+        Err(e) => {
+            log::warn!(target: "gif", "gif search: unavailable: {e}");
+            return GifError::tool_result(GifError::ProviderUnavailable);
+        }
+    };
+    let config = match team {
+        Some(team) => match crate::media::config(app, team).await {
+            Ok(config) => Some(config),
+            Err(_) => None,
+        },
+        None => None,
+    };
+    search_with(&service, config.as_ref(), params).await
+}
+
+/// The tool result for `params` on `service`: `{status:"ok", provider, candidates}` or
+/// `{status:"error", error, message}`. With no team `config`, nothing auto-loads.
+pub(crate) async fn search_with(
+    service: &GifService,
+    config: Option<&Config>,
+    params: GifSearchParams,
+) -> serde_json::Value {
+    match run(service, config, params).await {
         Ok((provider, candidates)) => serde_json::json!({
             "status": "ok",
             "provider": provider,
             "candidates": candidates,
         }),
-        Err(error) => error.tool_result(),
+        Err(error) => GifError::tool_result(error),
     }
 }
 
 async fn run(
-    app: &tauri::AppHandle,
-    team: Option<&LaunchTeam>,
+    service: &GifService,
+    config: Option<&Config>,
     params: GifSearchParams,
 ) -> Result<(Provider, Vec<gif::Candidate>), GifError> {
     let request = gif::normalize(params.query.as_deref(), params.ids.as_deref(), params.limit)?;
-    let provider = match params.provider.as_deref() {
-        None => Provider::Giphy,
-        Some(name) => Provider::parse(name).ok_or(GifError::BadQuery("provider is giphy"))?,
-    };
-    let service = gif::service(app).map_err(|e| {
-        log::warn!(target: "gif", "gif search: unavailable: {e}");
-        GifError::ProviderUnavailable
-    })?;
-    let mut candidates = gif::GifService::run(&service, &request, params.rating.as_deref()).await?;
-    let config = match team {
-        Some(team) => crate::media::config(app, team).await.ok(),
+    let requested = match params.provider.as_deref() {
         None => None,
-    }
-    .unwrap_or(crate::media::Config {
+        Some(name) => Some(Provider::parse(name).ok_or(GifError::BadQuery("unknown provider"))?),
+    };
+    let (provider, mut candidates) =
+        GifService::run(service, &request, requested, params.rating.as_deref()).await?;
+    let off = Config {
         remote: crate::media::Remote::Off,
         ..Default::default()
-    });
-    gif::set_auto_loads(&mut candidates, &config);
+    };
+    gif::set_auto_loads(&mut candidates, config.unwrap_or(&off));
     Ok((provider, candidates))
 }

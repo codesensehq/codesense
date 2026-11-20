@@ -96,12 +96,14 @@ impl CredentialStore for Locked {
     }
 }
 
-/// A Keychain read that waits on an access prompt until the test lets it go.
+/// A keychain read that waits on an access prompt until the test lets it go.
 struct Prompting {
     release: Mutex<std::sync::mpsc::Receiver<()>>,
+    gets: AtomicUsize,
 }
 impl CredentialStore for Prompting {
     fn get(&self, _: &str) -> Result<Option<Secret>, CredentialError> {
+        self.gets.fetch_add(1, Ordering::SeqCst);
         let _ = self
             .release
             .lock()
@@ -122,13 +124,9 @@ struct Harness {
     service: GifService,
 }
 impl Harness {
+    /// The service's own keys, so a save here reaches the key a search uses.
     fn keys(&self) -> Keys {
-        Keys::new(
-            self.store.clone(),
-            true,
-            Some(ACCOUNT),
-            Duration::from_secs(3),
-        )
+        self.service.keys.clone()
     }
     fn advance(&self, ms: i64) {
         self.now.fetch_add(ms, Ordering::SeqCst);
@@ -136,9 +134,19 @@ impl Harness {
     fn now(&self) -> i64 {
         self.now.load(Ordering::SeqCst)
     }
+    async fn run(
+        &self,
+        request: &Request,
+        rating: Option<&str>,
+    ) -> Result<Vec<Candidate>, GifError> {
+        self.service
+            .run(request, None, rating)
+            .await
+            .map(|(_, candidates)| candidates)
+    }
     async fn search(&self, query: &str) -> Result<Vec<Candidate>, GifError> {
         let request = normalize(Some(query), None, Some(6))?;
-        self.service.run(&request, None).await
+        self.run(&request, None).await
     }
     fn file(&self, name: &str) -> String {
         std::fs::read_to_string(self.dir.path().join(name)).unwrap_or_default()
@@ -197,7 +205,7 @@ async fn search_returns_candidates_in_provider_order_by_the_rendition_rule() {
     assert_eq!(ids(&found), ["ShipIt01", "Small-02", "Title08"]);
 
     // The fewest bytes among animated renditions at least 480 wide (the original's WebP), not
-    // the smaller 480w still; the preview is fixed_width_still.
+    // the smaller 480w still or the smaller 480w preview cut; the preview is fixed_width_still.
     let ship = &found[0];
     assert_eq!(ship.provider, Provider::Giphy);
     assert_eq!(
@@ -293,12 +301,25 @@ async fn every_request_carries_the_rating_mapped_and_capped_at_the_ceiling() {
             .map(|(_, v)| v)
     };
     let search = normalize(Some("ship it"), None, None).unwrap();
-    h.service.run(&search, None).await.unwrap();
+    h.run(&search, None).await.unwrap();
     assert_eq!(rating_of(&h).as_deref(), Some("pg"), "the default ceiling");
-    h.service.run(&search, Some("G")).await.unwrap();
+    assert!(
+        h.transport
+            .last_pairs()
+            .contains(&("limit".into(), "12".into())),
+        "a search asks for twice its limit"
+    );
+    h.run(&normalize(Some("ship it"), None, Some(10)).unwrap(), None)
+        .await
+        .unwrap();
+    assert!(h
+        .transport
+        .last_pairs()
+        .contains(&("limit".into(), "20".into())));
+    h.run(&search, Some("G")).await.unwrap();
     assert_eq!(rating_of(&h).as_deref(), Some("g"));
     for above in ["pg-13", "r", "nonsense"] {
-        h.service.run(&search, Some(above)).await.unwrap();
+        h.run(&search, Some(above)).await.unwrap();
         assert_eq!(rating_of(&h).as_deref(), Some("pg"), "{above}");
     }
     settings::set_with(
@@ -310,11 +331,11 @@ async fn every_request_carries_the_rating_mapped_and_capped_at_the_ceiling() {
         },
     )
     .unwrap();
-    h.service.run(&search, Some("PG-13")).await.unwrap();
+    h.run(&search, Some("PG-13")).await.unwrap();
     assert_eq!(rating_of(&h).as_deref(), Some("pg-13"));
     let first = ["First_1".to_string()];
     let lookup = normalize(None, Some(first.as_slice()), None).unwrap();
-    h.service.run(&lookup, Some("g")).await.unwrap();
+    h.run(&lookup, Some("g")).await.unwrap();
     assert_eq!(
         rating_of(&h).as_deref(),
         Some("g"),
@@ -467,44 +488,93 @@ async fn titles_lose_control_and_bidi_characters_and_stop_at_120() {
     assert_eq!(cleaned.chars().count(), MAX_TITLE_CHARS - 1);
     assert!(!cleaned.contains('\u{202E}') && !cleaned.contains('\u{200B}'));
     assert_eq!(clean_title("a\u{0}b\u{1b}[31mc\u{2066}d"), "ab[31mcd");
+    // Tag characters spell hidden text; variation selectors, the soft hyphen, the combining
+    // grapheme joiner and interlinear annotations are invisible too.
+    let hidden = "ok\u{E0001}\u{E0069}\u{E0067}\u{E006E}\u{E007F}\u{FE0F}\u{E0100}\u{00AD}\u{034F}\u{180E}\u{FFF9}!";
+    assert_eq!(clean_title(hidden), "ok!");
 }
 
 #[tokio::test]
-async fn analytics_are_held_an_hour_then_dropped() {
+async fn pingbacks_are_held_an_hour_then_dropped() {
     let h = harness();
     h.transport.reply(200, None, SEARCH);
     h.search("ship it").await.unwrap();
     let onsent = |now| {
         h.service
             .analytics
-            .get(Provider::Giphy, "ShipIt01", now)
-            .and_then(|a| a["onsent"]["url"].as_str().map(str::to_string))
+            .pingbacks_for(Provider::Giphy, "ShipIt01", now)
+            .and_then(|p| p.onsent)
     };
     assert!(onsent(h.now()).unwrap().contains("action_type=SENT"));
-    assert!(h
+    let small = h
         .service
         .analytics
-        .get(Provider::Giphy, "Small-02", h.now())
-        .is_some());
+        .pingbacks_for(Provider::Giphy, "Small-02", h.now())
+        .unwrap();
+    assert_eq!(small.onload, None, "an off-host pingback is dropped");
+    assert_eq!(small.onclick, None, "a pingback over 2 KB is dropped");
+    assert!(small.onsent.is_some());
     assert!(
         h.service
             .analytics
-            .get(Provider::Giphy, "Title08", h.now())
+            .pingbacks_for(Provider::Giphy, "Title08", h.now())
             .is_none(),
-        "a result with no analytics data holds none"
+        "a result with no pingbacks holds none"
     );
     assert!(onsent(h.now() + analytics::TTL_MS - 1).is_some());
     assert!(onsent(h.now() + analytics::TTL_MS).is_none());
     // A later search drops the expired entries.
     h.advance(analytics::TTL_MS + 1);
     h.search("ship it").await.unwrap();
-    assert_eq!(h.service.analytics.len(), 0);
+    assert_eq!(h.service.analytics.held_count(), 0);
+}
+
+#[test]
+fn the_pingback_map_holds_at_most_2000_entries_and_drops_the_oldest() {
+    let held = analytics::Analytics::new();
+    let found = |i: usize| Found {
+        candidate: Candidate {
+            provider: Provider::Giphy,
+            id: format!("id{i}"),
+            title: String::new(),
+            url: String::new(),
+            preview_url: String::new(),
+            width: 1,
+            height: 1,
+            auto_loads: false,
+        },
+        pingbacks: Some(Pingbacks {
+            onsent: Some(format!("https://giphy-analytics.giphy.com/{i}")),
+            ..Default::default()
+        }),
+    };
+    let batch: Vec<Found> = (0..2100).map(found).collect();
+    held.record(Provider::Giphy, &batch, START_MS);
+    assert_eq!(held.held_count(), analytics::MAX_ENTRIES);
+    assert!(held
+        .pingbacks_for(Provider::Giphy, "id0", START_MS)
+        .is_none());
+    assert!(held
+        .pingbacks_for(Provider::Giphy, "id99", START_MS)
+        .is_none());
+    assert!(held
+        .pingbacks_for(Provider::Giphy, "id100", START_MS)
+        .is_some());
+    // Recording one again makes it the newest.
+    held.record(Provider::Giphy, &[found(100), found(5000)], START_MS + 1);
+    assert_eq!(held.held_count(), analytics::MAX_ENTRIES);
+    assert!(held
+        .pingbacks_for(Provider::Giphy, "id100", START_MS)
+        .is_some());
+    assert!(held
+        .pingbacks_for(Provider::Giphy, "id101", START_MS)
+        .is_none());
 }
 
 /// A provider that answers from memory, to show the service runs any adapter through the trait.
 struct Canned(Vec<Found>);
 impl GifProvider for Canned {
-    fn search<'a>(
+    fn search_gifs<'a>(
         &'a self,
         _: &'a str,
         _: Rating,
@@ -512,7 +582,7 @@ impl GifProvider for Canned {
     ) -> BoxFuture<'a, Result<Vec<Found>, GifError>> {
         Box::pin(async move { Ok(self.0.iter().take(limit).cloned().collect()) })
     }
-    fn lookup<'a>(
+    fn lookup_gifs<'a>(
         &'a self,
         _: &'a [String],
         _: Rating,
@@ -539,7 +609,10 @@ async fn the_service_runs_any_provider_through_the_trait_in_its_order() {
                 height: 270,
                 auto_loads: false,
             },
-            analytics: Some(serde_json::json!({"id": id})),
+            pingbacks: Some(Pingbacks {
+                onsent: Some(format!("https://giphy-analytics.giphy.com/{id}")),
+                ..Default::default()
+            }),
         })
         .collect();
     let adapters: Adapters = Arc::new(
@@ -553,15 +626,24 @@ async fn the_service_runs_any_provider_through_the_trait_in_its_order() {
         adapters,
         Arc::new(|| START_MS),
     );
-    let found = service
-        .run(&normalize(Some("x"), None, Some(2)).unwrap(), None)
+    let (provider, found) = service
+        .run(&normalize(Some("x"), None, Some(2)).unwrap(), None, None)
         .await
         .unwrap();
+    assert_eq!(provider, Provider::Giphy);
     assert_eq!(ids(&found), ["c", "a"]);
     assert!(service
         .analytics
-        .get(Provider::Giphy, "a", START_MS)
+        .pingbacks_for(Provider::Giphy, "a", START_MS)
         .is_some());
+    let named = service
+        .run(
+            &normalize(Some("x"), None, None).unwrap(),
+            Some(Provider::Giphy),
+            None,
+        )
+        .await;
+    assert!(named.is_ok(), "the active provider may be named");
 }
 
 // ---- AC 2: typed, safe errors ----
@@ -633,17 +715,18 @@ async fn with_no_secret_store_nothing_touches_the_keyring_or_network_and_saves_a
         true,
     );
     let before = h.store.calls.load(Ordering::SeqCst);
-    assert_eq!(
-        h.search("ship it").await,
-        Err(GifError::KeychainUnavailable)
-    );
+    let error = h.search("ship it").await.unwrap_err();
+    assert_eq!(error, GifError::NoSecretStore);
+    assert_eq!(error.code(), "keychainUnavailable");
+    assert!(error.to_string().contains("no secret store"));
+    assert!(!error.to_string().contains("Settings"));
     let keys = Keys::new(
         h.store.clone(),
         false,
         Some(ACCOUNT),
         Duration::from_secs(3),
     );
-    assert!(settings::save_with(&keys, h.dir.path(), "another-key").is_err());
+    assert!(settings::save_with(&keys, h.dir.path(), "another-key-value-0001").is_err());
     assert!(settings::remove_with(&keys, h.dir.path()).is_err());
     assert_eq!(
         settings::status_with(&keys, h.dir.path()).status,
@@ -663,20 +746,39 @@ async fn with_no_secret_store_nothing_touches_the_keyring_or_network_and_saves_a
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_keychain_read_that_waits_on_a_prompt_gives_up_with_the_settings_hint() {
+async fn a_keychain_read_that_waits_on_a_prompt_gives_up_and_never_piles_up() {
     let (release, wait) = std::sync::mpsc::channel();
     let store = Arc::new(Prompting {
         release: Mutex::new(wait),
+        gets: AtomicUsize::new(0),
     });
+    let prompting = store.clone();
     let h = harness_with(
         move |_| Keys::new(store, true, Some(ACCOUNT), Duration::from_millis(100)),
         false,
     );
     let error = h.search("ship it").await.unwrap_err();
-    release.send(()).unwrap();
     assert_eq!(error, GifError::KeychainUnavailable);
     assert!(error.to_string().contains("Settings → Messaging"));
+    // A second search while the prompt still waits starts no second read.
+    assert_eq!(
+        h.search("ship it").await,
+        Err(GifError::KeychainUnavailable)
+    );
+    assert_eq!(prompting.gets.load(Ordering::SeqCst), 1);
     assert_eq!(h.transport.requests(), 0);
+    // Once the user allows it, the key read is kept and the next search uses it.
+    release.send(()).unwrap();
+    let mut found = Err(GifError::KeychainUnavailable);
+    for _ in 0..50 {
+        found = h.search("ship it").await;
+        if found.is_ok() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(found.is_ok(), "{found:?}");
+    assert_eq!(prompting.gets.load(Ordering::SeqCst), 1);
     assert_eq!(settings::KEY_READ_TIMEOUT, Duration::from_secs(3));
 }
 
@@ -689,6 +791,8 @@ async fn provider_failures_map_to_typed_errors() {
         (Some(500), GifError::ProviderUnavailable),
         (Some(503), GifError::ProviderUnavailable),
         (Some(302), GifError::ProviderUnavailable),
+        (Some(404), GifError::BadQuery("GIPHY refused the request")),
+        (Some(414), GifError::BadQuery("GIPHY refused the request")),
         (None, GifError::ProviderUnavailable),
     ];
     for (status, expected) in replies {
@@ -735,15 +839,44 @@ async fn the_91st_search_in_an_hour_is_rate_limited_and_the_count_survives_a_res
         h.search("ship it").await.unwrap();
     }
     let limited = h.search("ship it").await;
-    assert!(matches!(limited, Err(GifError::RateLimited { retry_after }) if retry_after <= 40));
+    assert_eq!(limited, Err(GifError::RateLimited { retry_after: 3600 }));
     assert_eq!(h.transport.requests(), 90);
 
     let restarted = bucket::Bucket::new(h.dir.path().join(bucket::FILE));
     let key = format!("giphy:{}", fingerprint(&Secret::new(KEY)));
-    assert!(restarted.take(&key, false, h.now()).is_err());
-    // One search refills every 40 seconds.
-    assert!(restarted.take(&key, false, h.now() + 40_000).is_ok());
+    assert!(restarted.take(&key, false, h.now() + 3_599_999).is_err());
+    // The window rolls: an hour after the first search, one is free again.
+    assert!(restarted.take(&key, false, h.now() + 3_600_000).is_ok());
     assert!(!h.file(bucket::FILE).contains(KEY));
+}
+
+#[tokio::test]
+async fn the_limit_is_a_rolling_hour_of_90_searches() {
+    let h = harness();
+    // 90 searches 30 s apart fill 44.5 minutes; the 91st, under an hour after the first, waits
+    // until the first is an hour old.
+    for _ in 0..90 {
+        h.search("ship it").await.unwrap();
+        h.advance(30_000);
+    }
+    assert_eq!(
+        h.search("ship it").await,
+        Err(GifError::RateLimited { retry_after: 900 })
+    );
+    h.advance(899_000);
+    assert!(h.search("ship it").await.is_err());
+    h.advance(1_000);
+    assert!(
+        h.search("ship it").await.is_ok(),
+        "the first search left the window"
+    );
+    assert!(
+        h.search("ship it").await.is_err(),
+        "the second is 30 s younger"
+    );
+    h.advance(30_000);
+    assert!(h.search("ship it").await.is_ok());
+    assert_eq!(h.transport.requests(), 92);
 }
 
 #[tokio::test]
@@ -844,6 +977,29 @@ async fn a_429_blocks_searches_until_its_retry_after_or_15_minutes() {
     );
 }
 
+#[tokio::test]
+async fn a_429_that_asks_for_no_wait_still_blocks_for_a_second() {
+    let past = chrono::DateTime::from_timestamp_millis(START_MS - 60_000)
+        .unwrap()
+        .to_rfc2822();
+    for retry_after in ["0", past.as_str()] {
+        let h = harness();
+        h.transport.reply(429, Some(retry_after), "{}");
+        assert_eq!(
+            h.search("ship it").await,
+            Err(GifError::RateLimited { retry_after: 1 }),
+            "{retry_after}"
+        );
+        assert_eq!(
+            h.search("ship it").await,
+            Err(GifError::RateLimited { retry_after: 1 })
+        );
+        assert_eq!(h.transport.requests(), 1);
+        h.advance(1_000);
+        assert!(h.search("ship it").await.is_ok());
+    }
+}
+
 fn bucket_in(dir: &std::path::Path, contents: &str) -> bucket::Bucket {
     let path = dir.join(bucket::FILE);
     std::fs::write(&path, contents).unwrap();
@@ -851,7 +1007,7 @@ fn bucket_in(dir: &std::path::Path, contents: &str) -> bucket::Bucket {
 }
 
 #[test]
-fn a_missing_state_starts_full_and_a_corrupt_or_future_one_starts_empty() {
+fn a_missing_state_starts_with_every_search_and_a_corrupt_or_future_one_with_none() {
     let dir = tempfile::tempdir().unwrap();
     let missing = bucket::Bucket::new(dir.path().join(bucket::FILE));
     assert!(missing
@@ -863,19 +1019,22 @@ fn a_missing_state_starts_full_and_a_corrupt_or_future_one_starts_empty() {
         .take("giphy:aaaaaaaaaaaaaaaa", false, START_MS)
         .is_err());
     assert!(corrupt
-        .take("giphy:aaaaaaaaaaaaaaaa", false, START_MS + 40_000)
+        .take("giphy:aaaaaaaaaaaaaaaa", false, START_MS + 3_599_999)
+        .is_err());
+    assert!(corrupt
+        .take("giphy:aaaaaaaaaaaaaaaa", false, START_MS + 3_600_000)
         .is_ok());
 
     let future = format!(
-        r#"{{"buckets":{{"giphy:bbbbbbbbbbbbbbbb":{{"tokens":90,"refilledAtMs":{}}}}}}}"#,
-        START_MS + 3_600_000
+        r#"{{"buckets":{{"giphy:bbbbbbbbbbbbbbbb":{{"searches":[{}]}}}}}}"#,
+        START_MS + 60_000
     );
     let ahead = bucket_in(dir.path(), &future);
     assert!(ahead
         .take("giphy:bbbbbbbbbbbbbbbb", false, START_MS)
         .is_err());
     assert!(ahead
-        .take("giphy:bbbbbbbbbbbbbbbb", false, START_MS + 40_000)
+        .take("giphy:bbbbbbbbbbbbbbbb", false, START_MS + 3_600_000)
         .is_ok());
 }
 
@@ -884,10 +1043,9 @@ fn a_saved_backoff_within_a_day_is_kept_and_one_beyond_is_clamped() {
     let dir = tempfile::tempdir().unwrap();
     let state = format!(
         r#"{{"buckets":{{
-            "giphy:aaaaaaaaaaaaaaaa":{{"tokens":90,"refilledAtMs":{now},"backoffUntilMs":{soon}}},
-            "giphy:bbbbbbbbbbbbbbbb":{{"tokens":90,"refilledAtMs":{now},"backoffUntilMs":{late}}}
+            "giphy:aaaaaaaaaaaaaaaa":{{"searches":[],"backoffUntilMs":{soon}}},
+            "giphy:bbbbbbbbbbbbbbbb":{{"searches":[],"backoffUntilMs":{late}}}
         }}}}"#,
-        now = START_MS,
         soon = START_MS + 2 * 3_600_000,
         late = START_MS + 48 * 3_600_000,
     );
@@ -951,15 +1109,23 @@ fn the_key_is_the_giphy_keychain_item_under_the_login_name() {
     let status = settings::status_with(&keys, dir.path());
     assert_eq!(status.status, KeyState::Saved);
     assert_eq!(status.hint.as_deref(), Some("…7f3a"));
-    let wire = serde_json::to_string(&status).unwrap();
-    assert!(!wire.contains(KEY));
+    assert_eq!(
+        serde_json::to_value(&status).unwrap(),
+        serde_json::json!({"status": "saved", "hint": "…7f3a", "production": false})
+    );
 
-    settings::save_with(&keys, dir.path(), "  a-new-key-value \n").unwrap();
+    settings::save_with(&keys, dir.path(), "  a-new-key-value-0001 \n").unwrap();
     assert_eq!(
         store.get(ACCOUNT).unwrap().unwrap().expose(),
-        "a-new-key-value"
+        "a-new-key-value-0001"
     );
-    for bad in ["", "   \n", "two words", "tab\tinside"] {
+    for bad in [
+        "",
+        "   \n",
+        "two words here, long",
+        "tab\tinside-a-long-key",
+        "short-key-15chr",
+    ] {
         assert!(
             settings::save_with(&keys, dir.path(), bad).is_err(),
             "{bad:?}"
@@ -967,7 +1133,7 @@ fn the_key_is_the_giphy_keychain_item_under_the_login_name() {
     }
     assert_eq!(
         store.get(ACCOUNT).unwrap().unwrap().expose(),
-        "a-new-key-value"
+        "a-new-key-value-0001"
     );
     let other = Keys::new(
         store.clone(),
@@ -983,12 +1149,83 @@ fn the_key_is_the_giphy_keychain_item_under_the_login_name() {
     assert_eq!(store.get(ACCOUNT).unwrap(), None);
 }
 
+#[tokio::test]
+async fn a_key_saved_outside_the_app_with_a_trailing_newline_is_trimmed_on_read() {
+    let h = harness_with(
+        |store| {
+            store
+                .inner
+                .set(ACCOUNT, &Secret::new(format!("{KEY}\n")))
+                .unwrap();
+            Keys::new(store, true, Some(ACCOUNT), Duration::from_secs(3))
+        },
+        false,
+    );
+    let status = settings::status_with(&h.keys(), h.dir.path());
+    assert_eq!(status.hint.as_deref(), Some("…7f3a"));
+    h.search("ship it").await.unwrap();
+    let pairs = h.transport.last_pairs();
+    assert!(pairs.contains(&("api_key".into(), KEY.into())));
+}
+
+#[test]
+fn a_short_key_saved_outside_the_app_shows_no_hint() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(FakeStore::default());
+    store.set(ACCOUNT, &Secret::new("short-key")).unwrap();
+    let keys = Keys::new(store, true, Some(ACCOUNT), Duration::from_secs(3));
+    let status = settings::status_with(&keys, dir.path());
+    assert_eq!(status.status, KeyState::Saved);
+    assert_eq!(status.hint, None);
+}
+
+/// A keychain that reads but refuses writes.
+struct ReadOnly(FakeStore);
+impl CredentialStore for ReadOnly {
+    fn get(&self, account: &str) -> Result<Option<Secret>, CredentialError> {
+        self.0.get(account)
+    }
+    fn set(&self, _: &str, _: &Secret) -> Result<(), CredentialError> {
+        Err("keychain write failed".into())
+    }
+}
+
+#[test]
+fn a_failed_key_save_says_what_changed() {
+    let dir = tempfile::tempdir().unwrap();
+    let inner = FakeStore::default();
+    inner.set(ACCOUNT, &Secret::new(KEY)).unwrap();
+    let keys = Keys::new(
+        Arc::new(ReadOnly(inner)),
+        true,
+        Some(ACCOUNT),
+        Duration::from_secs(3),
+    );
+    let error = settings::save_with(&keys, dir.path(), "a-replacement-key-0001").unwrap_err();
+    assert!(error.ends_with("Nothing changed."), "{error}");
+
+    let production = SettingsUpdate {
+        production: Some(true),
+        ..Default::default()
+    };
+    settings::set_with(&keys, dir.path(), production).unwrap();
+    let error = settings::save_with(&keys, dir.path(), "a-replacement-key-0001").unwrap_err();
+    assert!(
+        error.contains("no longer marked as a production key"),
+        "{error}"
+    );
+    assert!(!error.contains("Nothing changed"));
+    assert!(settings::load(dir.path()).production_keys.is_empty());
+    assert!(!settings::status_with(&keys, dir.path()).production);
+}
+
 #[test]
 fn an_environment_credential_source_refuses_key_writes() {
     let dir = tempfile::tempdir().unwrap();
     let env = Arc::new(EnvStore::new(Provider::Giphy.key_service()));
     let keys = Keys::new(env, true, Some(ACCOUNT), Duration::from_secs(3));
-    assert!(settings::save_with(&keys, dir.path(), "a-key-value").is_err());
+    let error = settings::save_with(&keys, dir.path(), "a-key-value-long-enough").unwrap_err();
+    assert!(error.contains("OS keychain"), "{error}");
 }
 
 #[tokio::test]
@@ -1039,6 +1276,187 @@ async fn the_key_never_reaches_an_error_a_log_line_or_a_file() {
     assert!(!h.file(settings::FILE).contains(KEY));
     assert!(h.file(bucket::FILE).contains("giphy:"));
     assert!(!h.file(bucket::FILE).contains(KEY));
+}
+
+#[tokio::test]
+async fn the_real_transport_keeps_the_key_out_of_a_failure_and_its_logs() {
+    crate::test_logger::clear("gif");
+    crate::test_logger::clear("reqwest");
+    let http = giphy::Http::new().unwrap();
+    let url: url::Url = format!("https://gif-test.invalid/v1/gifs/search?api_key={KEY}&q=x")
+        .parse()
+        .unwrap();
+    let failure = http.get(&url).await.unwrap_err();
+    assert_eq!(failure, Failure::Network);
+    assert!(!format!("{failure:?}").contains(KEY));
+    for target in ["gif", "reqwest"] {
+        for line in crate::test_logger::lines(target) {
+            assert!(!line.contains(KEY) && !line.contains("api_key"), "{line}");
+        }
+    }
+}
+
+fn local_http() -> giphy::Http {
+    giphy::Http::on(reqwest::Client::builder()).unwrap()
+}
+
+fn at(server: &wiremock::MockServer, path: &str) -> url::Url {
+    format!("{}{path}", server.uri()).parse().unwrap()
+}
+
+#[tokio::test]
+async fn the_transport_sends_its_agent_follows_no_redirect_and_reads_retry_after() {
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/moved"))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .insert_header("location", format!("{}/elsewhere", server.uri())),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/elsewhere"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/limited"))
+        .and(header("user-agent", giphy::USER_AGENT))
+        .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "120"))
+        .mount(&server)
+        .await;
+    let http = local_http();
+    let moved = http.get(&at(&server, "/moved")).await.unwrap();
+    assert_eq!(moved.status, 302, "a redirect is never followed");
+    let limited = http.get(&at(&server, "/limited")).await.unwrap();
+    assert_eq!(limited.status, 429, "the request carries the agent");
+    assert_eq!(limited.retry_after.as_deref(), Some("120"));
+}
+
+#[tokio::test]
+async fn the_transport_reads_at_most_2_mib_with_a_content_length() {
+    use wiremock::matchers::path;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let server = MockServer::start().await;
+    for (route, size) in [("/fits", giphy::MAX_BODY), ("/over", giphy::MAX_BODY + 1)] {
+        Mock::given(path(route))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![b'a'; size]))
+            .mount(&server)
+            .await;
+    }
+    let http = local_http();
+    let fits = http.get(&at(&server, "/fits")).await.unwrap();
+    assert_eq!(fits.body.len(), giphy::MAX_BODY);
+    assert_eq!(
+        http.get(&at(&server, "/over")).await,
+        Err(Failure::TooLarge)
+    );
+}
+
+/// A server that answers one request with a chunked body of `total` bytes and no length.
+async fn chunked_server(total: usize) -> url::Url {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0u8; 4096];
+        let _ = socket.read(&mut request).await;
+        let head = b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n";
+        if socket.write_all(head).await.is_err() {
+            return;
+        }
+        let chunk = vec![b'a'; 64 * 1024];
+        let mut sent = 0;
+        while sent < total {
+            let n = chunk.len().min(total - sent);
+            let framed = [format!("{n:x}\r\n").as_bytes(), &chunk[..n], b"\r\n"].concat();
+            if socket.write_all(&framed).await.is_err() {
+                return;
+            }
+            sent += n;
+        }
+        let _ = socket.write_all(b"0\r\n\r\n").await;
+    });
+    format!("http://{addr}/").parse().unwrap()
+}
+
+#[tokio::test]
+async fn the_transport_reads_at_most_2_mib_without_a_content_length() {
+    let http = local_http();
+    let small = http.get(&chunked_server(1000).await).await.unwrap();
+    assert_eq!(small.body.len(), 1000);
+    assert_eq!(
+        http.get(&chunked_server(giphy::MAX_BODY + 1).await).await,
+        Err(Failure::TooLarge)
+    );
+}
+
+#[tokio::test]
+async fn the_tool_result_names_the_provider_and_marks_auto_loads_from_the_team() {
+    use crate::mcp::gif_tools::{search_with, GifSearchParams};
+    let h = harness();
+    let search = || GifSearchParams {
+        query: Some("ship it".into()),
+        ..Default::default()
+    };
+    h.transport.reply(200, None, SEARCH);
+    let no_team = search_with(&h.service, None, search()).await;
+    assert_eq!(no_team["status"], "ok");
+    assert_eq!(no_team["provider"], "giphy");
+    let candidates = no_team["candidates"].as_array().unwrap();
+    assert_eq!(candidates.len(), 3);
+    assert!(
+        candidates.iter().all(|c| c["autoLoads"] == false),
+        "with no team config nothing auto-loads"
+    );
+
+    h.transport.reply(200, None, SEARCH);
+    let team = crate::media::Config::default();
+    let with_team = search_with(&h.service, Some(&team), search()).await;
+    let candidates = with_team["candidates"].as_array().unwrap();
+    assert!(candidates.iter().all(|c| c["autoLoads"] == true));
+
+    let unknown = search_with(
+        &h.service,
+        None,
+        GifSearchParams {
+            ids: Some(vec!["First_1".into()]),
+            provider: Some("klipy".into()),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(unknown["status"], "error");
+    assert_eq!(unknown["error"], "badQuery");
+    let both = search_with(
+        &h.service,
+        None,
+        GifSearchParams {
+            query: Some("ship it".into()),
+            ids: Some(vec!["First_1".into()]),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(both["error"], "badQuery");
+    assert_eq!(h.transport.requests(), 2, "bad input makes no request");
+
+    h.transport.reply(429, Some("30"), "{}");
+    let limited = search_with(&h.service, None, search()).await;
+    assert_eq!(
+        limited,
+        serde_json::json!({
+            "status": "error",
+            "error": "rateLimited",
+            "message": "GIF search is paused. Try again in 30 seconds.",
+            "retryAfter": 30,
+        })
+    );
 }
 
 // ---- AC 5 and 7: settings ----
@@ -1107,7 +1525,7 @@ async fn lookup_returns_the_ids_asked_in_order_and_counts_against_the_bucket() {
     h.transport.reply(200, None, LOOKUP);
     let asked = ["First_1", "Second2", "Above-3"].map(String::from);
     let request = normalize(None, Some(asked.as_slice()), None).unwrap();
-    let found = h.service.run(&request, None).await.unwrap();
+    let found = h.run(&request, None).await.unwrap();
     assert_eq!(
         ids(&found),
         ["First_1", "Second2"],
@@ -1125,7 +1543,10 @@ async fn lookup_returns_the_ids_asked_in_order_and_counts_against_the_bucket() {
 
     let state: serde_json::Value = serde_json::from_str(&h.file(bucket::FILE)).unwrap();
     let key = format!("giphy:{}", fingerprint(&Secret::new(KEY)));
-    assert_eq!(state["buckets"][&key]["tokens"], 89.0);
+    assert_eq!(
+        state["buckets"][&key]["searches"],
+        serde_json::json!([START_MS])
+    );
 }
 
 #[test]

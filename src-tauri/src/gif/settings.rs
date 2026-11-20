@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! The user's GIF search settings and the provider key, with the Tauri commands the Settings
 //! card calls. Settings live in `gif.json` in the app data dir (On or Off, the provider, the
-//! rating ceiling and which key fingerprints are production keys); the key lives only in the
-//! Keychain item the provider names, under the OS login name. No MCP tool reaches either.
+//! rating ceiling and which key fingerprints are production keys); the key lives only in the OS
+//! keychain item the provider names, under the OS login name. No MCP tool reaches either.
 use super::{fingerprint, GifError, Provider, Rating};
 use crate::commands::credential_store::{
     default_store, secret_store_available, CredentialStore, Secret,
@@ -17,12 +17,12 @@ use std::{
 
 /// The settings file's name in the app data dir.
 pub(crate) const FILE: &str = "gif.json";
-/// The longest a search waits for the Keychain: past it, an access prompt is waiting on the user.
+/// The longest a search waits for the keychain: past it, an access prompt is waiting on the user.
 pub(crate) const KEY_READ_TIMEOUT: Duration = Duration::from_secs(3);
 const NO_STORE: &str =
-    "This computer has no secret store, so the key can't be saved here. Nothing changed.";
+    "This computer has no secret store, so the key can't be kept here. Nothing changed.";
 /// Held while `gif.json` is read, changed and written.
-static WRITE: Mutex<()> = Mutex::new(());
+static WRITE: Mutex<()> = std::sync::Mutex::new(());
 
 /// What `gif.json` holds. A missing or unreadable file, or field, reads as its default: On,
 /// GIPHY, a pg ceiling and no production key.
@@ -123,19 +123,33 @@ fn update(dir: &Path, change: impl FnOnce(&mut GifSettings)) -> Result<GifSettin
     Ok(settings)
 }
 
-/// The provider key in the Keychain. The secret store is checked before every keyring call: on a
-/// computer without one (Windows today) the keyring is an in-memory stand-in, which must never
-/// read as a saved key.
+/// Keys shorter than this are refused, and the Settings card shows the last 4 characters only of
+/// a key at least this long.
+pub(crate) const MIN_KEY_CHARS: usize = 16;
+
+/// The key read in flight and the key last read, shared by every clone of one [`Keys`].
+#[derive(Default)]
+struct KeyCache {
+    reading: std::sync::atomic::AtomicBool,
+    key: Mutex<Option<(Provider, Secret)>>,
+}
+
+/// The provider key in the OS keychain. The secret store is checked before every keyring call:
+/// on a computer without one (Windows today) the keyring is an in-memory stand-in, which must
+/// never read as a saved key. A key read is single-flight: while one is running (an access
+/// prompt waiting on the user), a search does not start another. The last key read is kept in
+/// memory until a save or a remove.
 #[derive(Clone)]
 pub(crate) struct Keys {
     stores: Arc<dyn Fn(Provider) -> Arc<dyn CredentialStore> + Send + Sync>,
     available: Arc<dyn Fn() -> bool + Send + Sync>,
     account: Option<String>,
     read_timeout: Duration,
+    cache: Arc<KeyCache>,
 }
 
 impl Keys {
-    /// The OS Keychain, the secret store probe and the OS login name.
+    /// The OS keychain, the secret store probe and the OS login name.
     pub(crate) fn system() -> Self {
         Self {
             stores: Arc::new(|provider: Provider| -> Arc<dyn CredentialStore> {
@@ -144,6 +158,7 @@ impl Keys {
             available: Arc::new(secret_store_available),
             account: codesense_platform::user::login_name(),
             read_timeout: KEY_READ_TIMEOUT,
+            cache: Arc::new(KeyCache::default()),
         }
     }
 
@@ -159,64 +174,112 @@ impl Keys {
             available: Arc::new(move || available),
             account: account.map(str::to_string),
             read_timeout,
+            cache: Arc::new(KeyCache::default()),
         }
     }
 
-    /// The store and account to use, or `None` with no secret store or no login name.
-    fn reach(&self, provider: Provider) -> Option<(Arc<dyn CredentialStore>, &str)> {
+    /// The store and account to use, or why there are none.
+    fn reach(&self, provider: Provider) -> Result<(Arc<dyn CredentialStore>, &str), GifError> {
         if !(self.available)() {
-            return None;
+            return Err(GifError::NoSecretStore);
         }
-        let account = self.account.as_deref()?;
-        Some(((self.stores)(provider), account))
+        let account = self
+            .account
+            .as_deref()
+            .ok_or(GifError::KeychainUnavailable)?;
+        Ok(((self.stores)(provider), account))
     }
 
-    /// The saved key, `None` when there is none. Blocking: it may raise a Keychain prompt.
-    pub(crate) fn read(&self, provider: Provider) -> Result<Option<Secret>, GifError> {
-        let (store, account) = self.reach(provider).ok_or(GifError::KeychainUnavailable)?;
-        match store.get(account) {
-            Ok(Some(key)) if key.expose().trim() != "" => Ok(Some(key)),
-            Ok(_) => Ok(None),
-            Err(_) => Err(GifError::KeychainUnavailable),
-        }
+    fn remember(&self, entry: Option<(Provider, Secret)>) {
+        *self.cache.key.lock().unwrap_or_else(|e| e.into_inner()) = entry;
     }
 
-    /// The key for a search: [`Self::read`] off the async threads, given up after the read
-    /// timeout so a Keychain prompt never holds a search. No key is [`GifError::NoProvider`].
+    /// The saved key, trimmed (an item saved outside the app may end in a newline); `None` when
+    /// there is none. Blocking: it may raise a keychain prompt.
+    pub(crate) fn read_key(&self, provider: Provider) -> Result<Option<Secret>, GifError> {
+        let (store, account) = self.reach(provider)?;
+        let key = match store.get(account) {
+            Ok(Some(key)) => Some(key.expose().trim().to_string()),
+            Ok(None) => None,
+            Err(_) => return Err(GifError::KeychainUnavailable),
+        };
+        let key = key.filter(|k| k != "").map(Secret::new);
+        self.remember(key.clone().map(|k| (provider, k)));
+        Ok(key)
+    }
+
+    /// The key for a search: the one last read, else one [`Self::read_key`] off the async
+    /// threads, given up after the read timeout so a keychain prompt never holds a search. While
+    /// a read is still running no other starts. No key is [`GifError::NoProvider`].
     pub(crate) async fn read_timed(&self, provider: Provider) -> Result<Secret, GifError> {
+        if !(self.available)() {
+            return Err(GifError::NoSecretStore);
+        }
+        let cached = match &*self.cache.key.lock().unwrap_or_else(|e| e.into_inner()) {
+            Some((p, key)) if *p == provider => Some(key.clone()),
+            _ => None,
+        };
+        if let Some(key) = cached {
+            return Ok(key);
+        }
+        let reading = &self.cache.reading;
+        if reading.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return Err(GifError::KeychainUnavailable);
+        }
         let keys = self.clone();
-        let read = tokio::task::spawn_blocking(move || keys.read(provider));
+        let read = tokio::task::spawn_blocking(move || {
+            let key = keys.read_key(provider);
+            keys.cache
+                .reading
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            key
+        });
         match tokio::time::timeout(self.read_timeout, read).await {
             Ok(Ok(Ok(Some(key)))) => Ok(key),
             Ok(Ok(Ok(None))) => Err(GifError::NoProvider),
             Ok(Ok(Err(error))) => Err(error),
-            Ok(Err(_)) | Err(_) => Err(GifError::KeychainUnavailable),
+            Ok(Err(_)) => {
+                reading.store(false, std::sync::atomic::Ordering::SeqCst);
+                Err(GifError::KeychainUnavailable)
+            }
+            Err(_) => Err(GifError::KeychainUnavailable),
         }
     }
 
-    /// Save `key`, trimmed; an empty key is refused. Blocking.
-    pub(crate) fn save(&self, provider: Provider, key: &str) -> Result<(), String> {
+    /// Save `key`, trimmed; an empty or short key is refused. Blocking.
+    pub(crate) fn save_key(&self, provider: Provider, key: &str) -> Result<(), String> {
         let key = key.trim();
-        let label = Provider::label(provider);
+        let name = Provider::display_name(provider);
         if key == "" {
-            return Err(format!("Enter a {label} key."));
+            return Err(format!("Enter a {name} key."));
         }
-        if key.len() > 256 || key.contains(|c: char| !c.is_ascii_graphic()) {
+        if key.contains(|c: char| !c.is_ascii_graphic()) || key.len() > 256 {
             return Err(format!(
-                "A {label} key has only letters, digits and symbols, with no spaces."
+                "A {name} key has only letters, digits and symbols, with no spaces."
             ));
         }
-        let (store, account) = self.reach(provider).ok_or(NO_STORE)?;
+        if key.chars().count() < MIN_KEY_CHARS {
+            return Err(format!(
+                "A {name} key has at least {MIN_KEY_CHARS} characters. Check that you pasted all \
+                 of it."
+            ));
+        }
+        let (store, account) = self.reach(provider).map_err(|_| NO_STORE.to_string())?;
+        let secret = Secret::new(key);
         store
-            .set(account, &Secret::new(key))
-            .map_err(|_| "Couldn't save the key to your Keychain. Nothing changed.".to_string())
+            .set(account, &secret)
+            .map_err(|_| "Couldn't save the key to your OS keychain.".to_string())?;
+        self.remember(Some((provider, secret)));
+        Ok(())
     }
 
     /// Remove the saved key. Blocking.
-    pub(crate) fn remove(&self, provider: Provider) -> Result<(), String> {
-        let (store, account) = self.reach(provider).ok_or(NO_STORE)?;
+    pub(crate) fn remove_key(&self, provider: Provider) -> Result<(), String> {
+        let (store, account) = self.reach(provider).map_err(|_| NO_STORE.to_string())?;
         CredentialStore::delete(store.as_ref(), account)
-            .map_err(|_| "Couldn't remove the key from your Keychain.".to_string())
+            .map_err(|_| "Couldn't remove the key from your OS keychain.".to_string())?;
+        self.remember(None);
+        Ok(())
     }
 }
 
@@ -257,7 +320,8 @@ pub enum KeyState {
     Unavailable,
 }
 
-/// What the Settings card shows for the key: never the key, only its last four characters.
+/// What the Settings card shows for the key: never the key, only the last 4 characters of one
+/// at least [`MIN_KEY_CHARS`] long.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KeyStatus {
@@ -266,15 +330,20 @@ pub struct KeyStatus {
     pub production: bool,
 }
 
+/// The key's status, read fresh from the keychain (the read that may raise an access prompt,
+/// while the user is in Settings to allow it).
 pub(crate) fn status_with(keys: &Keys, dir: &Path) -> KeyStatus {
     let settings = load(dir);
-    match keys.read(settings.provider) {
+    match keys.read_key(settings.provider) {
         Ok(Some(key)) => {
             let chars: Vec<char> = key.expose().chars().collect();
-            let tail: String = chars[chars.len().saturating_sub(4)..].iter().collect();
+            let hint = (chars.len() >= MIN_KEY_CHARS).then(|| {
+                let tail: String = chars[chars.len() - 4..].iter().collect();
+                format!("…{tail}")
+            });
             KeyStatus {
                 status: KeyState::Saved,
-                hint: Some(format!("…{tail}")),
+                hint,
                 production: settings.is_production(settings.provider, &fingerprint(&key)),
             }
         }
@@ -291,19 +360,29 @@ pub(crate) fn status_with(keys: &Keys, dir: &Path) -> KeyStatus {
     }
 }
 
-/// Save a new key. Its production flag starts cleared, as a replaced key's does.
+/// Save a new key. Its production flag is cleared first, as a replaced key's is, so a failed
+/// save never leaves a new key marked production.
 pub(crate) fn save_with(keys: &Keys, dir: &Path, key: &str) -> Result<KeyStatus, String> {
-    let provider = load(dir).provider;
-    keys.save(provider, key)?;
+    let current = load(dir);
+    let provider = current.provider;
+    let had_production = current.production_keys.len() > 0;
     update(dir, |s| s.clear_production(provider))?;
+    keys.save_key(provider, key).map_err(|error| {
+        if had_production {
+            format!("{error} The saved key stays, no longer marked as a production key.")
+        } else {
+            format!("{error} Nothing changed.")
+        }
+    })?;
     Ok(status_with(keys, dir))
 }
 
-/// Remove the key and its production flag.
+/// Remove the key and its production flag (the flag first, so a failed remove never leaves a
+/// half-applied state behind it).
 pub(crate) fn remove_with(keys: &Keys, dir: &Path) -> Result<KeyStatus, String> {
     let provider = load(dir).provider;
-    keys.remove(provider)?;
     update(dir, |s| s.clear_production(provider))?;
+    keys.remove_key(provider)?;
     Ok(status_with(keys, dir))
 }
 
@@ -321,9 +400,9 @@ pub(crate) fn set_with(
         Some(flag) => {
             let provider = load(dir).provider;
             let key = keys
-                .read(provider)
-                .map_err(|_| "Couldn't read the key from your Keychain.".to_string())?
-                .ok_or_else(|| format!("Save a {} key first.", Provider::label(provider)))?;
+                .read_key(provider)
+                .map_err(|_| "Couldn't read the key from your OS keychain.".to_string())?
+                .ok_or_else(|| format!("Save a {} key first.", Provider::display_name(provider)))?;
             Some((provider, fingerprint(&key), flag))
         }
         None => None,
@@ -351,40 +430,37 @@ pub(crate) fn data_dir<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<P
         .map_err(|_| "GIF search has no app data folder".to_string())
 }
 
-/// Run a settings or keyring call off the async threads: the keyring blocks and may prompt.
-async fn blocking<T: Send + 'static>(
-    call: impl FnOnce() -> Result<T, String> + Send + 'static,
-) -> Result<T, String> {
-    tokio::task::spawn_blocking(call)
-        .await
-        .map_err(|_| "GIF search settings are unavailable".to_string())?
+/// The service's keys and folder, so a save or remove here reaches the key a search uses.
+fn service_keys(app: &tauri::AppHandle) -> Result<(Keys, PathBuf), String> {
+    let service = super::service(app)?;
+    Ok((service.keys.clone(), service.data_dir().to_path_buf()))
 }
 
 #[tauri::command]
 pub async fn gif_settings_get(app: tauri::AppHandle) -> Result<SettingsView, String> {
     let dir = data_dir(&app)?;
-    blocking(move || Ok(view(&load(&dir)))).await
+    crate::commands::await_blocking("gif.settings_get", move || Ok(view(&load(&dir)))).await
 }
 #[tauri::command]
 pub async fn gif_settings_set(
     app: tauri::AppHandle,
     update: SettingsUpdate,
 ) -> Result<SettingsView, String> {
-    let dir = data_dir(&app)?;
-    blocking(move || set_with(&Keys::system(), &dir, update)).await
+    let (keys, dir) = service_keys(&app)?;
+    crate::commands::await_blocking("gif.settings_set", move || set_with(&keys, &dir, update)).await
 }
 #[tauri::command]
 pub async fn gif_key_status(app: tauri::AppHandle) -> Result<KeyStatus, String> {
-    let dir = data_dir(&app)?;
-    blocking(move || Ok(status_with(&Keys::system(), &dir))).await
+    let (keys, dir) = service_keys(&app)?;
+    crate::commands::await_blocking("gif.key_status", move || Ok(status_with(&keys, &dir))).await
 }
 #[tauri::command]
 pub async fn gif_key_save(app: tauri::AppHandle, key: String) -> Result<KeyStatus, String> {
-    let dir = data_dir(&app)?;
-    blocking(move || save_with(&Keys::system(), &dir, &key)).await
+    let (keys, dir) = service_keys(&app)?;
+    crate::commands::await_blocking("gif.key_save", move || save_with(&keys, &dir, &key)).await
 }
 #[tauri::command]
 pub async fn gif_key_remove(app: tauri::AppHandle) -> Result<KeyStatus, String> {
-    let dir = data_dir(&app)?;
-    blocking(move || remove_with(&Keys::system(), &dir)).await
+    let (keys, dir) = service_keys(&app)?;
+    crate::commands::await_blocking("gif.key_remove", move || remove_with(&keys, &dir)).await
 }

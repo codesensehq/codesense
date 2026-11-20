@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! GIF search for agents: one provider trait and its GIPHY adapter, the machine-local key, the
-//! search rate limit and the user's settings. The key never leaves the Keychain except in the
+//! search rate limit and the user's settings. The key never leaves the OS keychain except in the
 //! provider request itself; no error, log line, file or tool result carries it.
 pub(crate) mod analytics;
 pub(crate) mod bucket;
@@ -97,7 +97,7 @@ impl Provider {
             Self::Giphy => "giphy",
         }
     }
-    pub fn label(self) -> &'static str {
+    pub fn display_name(self) -> &'static str {
         match self {
             Self::Giphy => "GIPHY",
         }
@@ -134,11 +134,34 @@ pub struct Candidate {
     pub auto_loads: bool,
 }
 
-/// A candidate with the provider's analytics data for it, which [`analytics::Analytics`] keeps.
+/// The longest pingback URL kept.
+const MAX_PINGBACK_BYTES: usize = 2048;
+
+/// A result's pingback URLs (GIPHY's `analytics`), each on the provider's hosts over https.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Pingbacks {
+    pub onload: Option<String>,
+    pub onclick: Option<String>,
+    pub onsent: Option<String>,
+}
+impl Pingbacks {
+    /// Keep `url` only when it is on `provider`'s hosts over https and at most 2 KB.
+    pub fn keep_url(provider: Provider, url: Option<&str>) -> Option<String> {
+        url.filter(|u| u.len() <= MAX_PINGBACK_BYTES && on_provider_host(provider, u))
+            .map(str::to_string)
+    }
+    /// `None` when no URL passed.
+    pub fn if_any(self) -> Option<Self> {
+        (self.onload.is_some() || self.onclick.is_some() || self.onsent.is_some()).then_some(self)
+    }
+}
+
+/// A candidate with its pingbacks, which [`analytics::Analytics`] keeps.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Found {
     pub candidate: Candidate,
-    pub analytics: Option<serde_json::Value>,
+    pub pingbacks: Option<Pingbacks>,
 }
 
 /// Why `gif_search` returned no candidates. The text names no key and no request URL: it is
@@ -147,16 +170,18 @@ pub struct Found {
 pub enum GifError {
     /// GIF search is off, or the provider has no key.
     NoProvider,
-    /// The key could not be read: no secret store, a locked or refused Keychain, or a read that
-    /// took too long (an access prompt waiting on the user).
+    /// The key could not be read: a locked or refused keychain, or a read that took too long (an
+    /// access prompt waiting on the user).
     KeychainUnavailable,
+    /// This computer has no secret store to keep a key in.
+    NoSecretStore,
     /// The provider refused the key (401 or 403).
     InvalidKey,
     /// Searches are paused for `retry_after` seconds: the local cap or the provider's 429.
     RateLimited { retry_after: u64 },
     /// A 5xx, a timeout, a network failure or a body that is not the provider's JSON.
     ProviderUnavailable,
-    /// The input was refused before any network call.
+    /// The input was refused before any network call, or the provider refused the request.
     BadQuery(&'static str),
 }
 impl GifError {
@@ -164,7 +189,7 @@ impl GifError {
     pub fn code(self) -> &'static str {
         match self {
             Self::NoProvider => "noProvider",
-            Self::KeychainUnavailable => "keychainUnavailable",
+            Self::KeychainUnavailable | Self::NoSecretStore => "keychainUnavailable",
             Self::InvalidKey => "invalidKey",
             Self::RateLimited { .. } => "rateLimited",
             Self::ProviderUnavailable => "providerUnavailable",
@@ -192,8 +217,12 @@ impl std::fmt::Display for GifError {
                  Settings → Messaging.",
             ),
             Self::KeychainUnavailable => f.write_str(
-                "The GIPHY key could not be read from the Keychain. The user can open Settings → \
+                "The GIPHY key could not be read from the OS keychain. The user can open Settings → \
                  Messaging, where the key is read while they are there to allow it.",
+            ),
+            Self::NoSecretStore => f.write_str(
+                "GIF search can't run on this computer: it has no secret store to keep a GIPHY key \
+                 in.",
             ),
             Self::InvalidKey => f.write_str(
                 "GIPHY refused the key. The user can replace it in Settings → Messaging.",
@@ -261,8 +290,9 @@ pub fn normalize(
     }
 }
 
-/// Provider text made safe to show and to use as alt text: control, zero-width and bidi
-/// formatting characters dropped, whitespace runs collapsed, at most 120 characters.
+/// Provider text made safe to show and to use as alt text: control and format characters (bidi,
+/// zero-width, tags, variation selectors) dropped, whitespace runs collapsed, at most 120
+/// characters.
 pub fn clean_title(raw: &str) -> String {
     let visible: String = raw
         .chars()
@@ -278,15 +308,34 @@ pub fn clean_title(raw: &str) -> String {
         .to_string()
 }
 
-/// Zero-width marks, bidi marks, embeddings, overrides and isolates, and the BOM.
+/// Every format character (general category Cf: soft hyphen, bidi marks, embeddings, overrides
+/// and isolates, zero-width marks, the BOM, interlinear annotations, tags), plus the invisible
+/// combining grapheme joiner and the variation selectors.
 fn is_format_char(c: char) -> bool {
     matches!(
         c,
-        '\u{061C}'
+        '\u{00AD}'
+            | '\u{034F}'
+            | '\u{0600}'..='\u{0605}'
+            | '\u{061C}'
+            | '\u{06DD}'
+            | '\u{070F}'
+            | '\u{0890}'..='\u{0891}'
+            | '\u{08E2}'
+            | '\u{180E}'
             | '\u{200B}'..='\u{200F}'
             | '\u{202A}'..='\u{202E}'
-            | '\u{2060}'..='\u{2069}'
+            | '\u{2060}'..='\u{206F}'
+            | '\u{FE00}'..='\u{FE0F}'
             | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{110BD}'
+            | '\u{110CD}'
+            | '\u{13430}'..='\u{1343F}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0000}'..='\u{E007F}'
+            | '\u{E0100}'..='\u{E01EF}'
     )
 }
 
@@ -310,12 +359,18 @@ pub enum Format {
 impl Format {
     /// From the URL's path extension.
     pub fn of_url(url: &str) -> Self {
-        let file = url
-            .parse::<url::Url>()
-            .ok()
-            .and_then(|u| u.path_segments()?.next_back().map(str::to_ascii_lowercase))
-            .unwrap_or_default();
-        match file.rsplit_once('.').map(|(_, ext)| ext) {
+        let file = match url.parse::<url::Url>() {
+            Ok(u) => u
+                .path_segments()
+                .and_then(|mut segments| segments.next_back())
+                .map(str::to_ascii_lowercase),
+            Err(_) => None,
+        };
+        match file
+            .as_deref()
+            .and_then(|f| f.rsplit_once('.'))
+            .map(|(_, ext)| ext)
+        {
             Some("gif") => Self::Gif,
             Some("webp") => Self::Webp,
             Some("png") => Self::Png,
@@ -351,12 +406,14 @@ impl Rendition {
     }
 }
 
-/// The rendition a candidate's `url` names: animated GIF or WebP within the limits, the fewest
-/// bytes among those at least 480 px wide, else the widest.
+/// The rendition a candidate's `url` names: animated GIF or WebP within the limits and not a
+/// GIPHY `preview*` cut (a few frames), the fewest bytes among those at least 480 px wide, else
+/// the widest.
 pub fn pick_animated(renditions: &[Rendition]) -> Option<&Rendition> {
     let animated: Vec<_> = renditions
         .iter()
-        .filter(|r| !r.still && matches!(r.format, Format::Gif | Format::Webp))
+        .filter(|r| !r.still && !r.name.starts_with("preview"))
+        .filter(|r| matches!(r.format, Format::Gif | Format::Webp))
         .filter_map(|r| r.within_limits().map(|size| (r, size)))
         .collect();
     animated
@@ -430,26 +487,26 @@ pub fn candidate(
 /// `url` host allowed.
 pub fn set_auto_loads(candidates: &mut [Candidate], config: &crate::media::Config) {
     for candidate in candidates {
-        candidate.auto_loads = candidate
-            .url
-            .parse::<url::Url>()
-            .ok()
-            .and_then(|u| u.host_str().map(|h| config.should_auto_fetch(h, true)))
-            .unwrap_or(false);
+        candidate.auto_loads = match candidate.url.parse::<url::Url>() {
+            Ok(url) => url
+                .host_str()
+                .is_some_and(|host| config.should_auto_fetch(host, true)),
+            Err(_) => false,
+        };
     }
 }
 
 /// A GIF provider adapter, holding its key.
 pub(crate) trait GifProvider: Send + Sync {
     /// Up to `limit` GIFs for `query` at `rating`, in the provider's order.
-    fn search<'a>(
+    fn search_gifs<'a>(
         &'a self,
         query: &'a str,
         rating: Rating,
         limit: usize,
     ) -> BoxFuture<'a, Result<Vec<Found>, GifError>>;
     /// The GIFs with these ids that are within `rating`, in the order asked.
-    fn lookup<'a>(
+    fn lookup_gifs<'a>(
         &'a self,
         ids: &'a [String],
         rating: Rating,
@@ -463,10 +520,10 @@ pub(crate) type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 pub(crate) type Adapters = Arc<dyn Fn(Provider, Secret, i64) -> Box<dyn GifProvider> + Send + Sync>;
 
 /// Everything `gif_search` needs: the settings and bucket files, the key, the adapter and the
-/// analytics map. One per app, so every search shares the bucket's lock.
+/// analytics map. One per app, so every search shares the bucket's lock and the key's single read.
 pub(crate) struct GifService {
     data_dir: PathBuf,
-    keys: settings::Keys,
+    pub(crate) keys: settings::Keys,
     bucket: Arc<bucket::Bucket>,
     pub(crate) analytics: analytics::Analytics,
     adapters: Adapters,
@@ -490,22 +547,35 @@ impl GifService {
         }
     }
 
+    /// The settings and key folder.
+    pub(crate) fn data_dir(&self) -> &std::path::Path {
+        &self.data_dir
+    }
+
     /// Run a checked request: settings, key, bucket, then the provider. Every error but the
-    /// provider's returns before any network call. Candidates come back with `auto_loads` unset.
+    /// provider's returns before any network call. `requested` is the provider the caller named,
+    /// which must be the active one. Returns the provider that ran and its candidates, with
+    /// `auto_loads` unset.
     pub(crate) async fn run(
         &self,
         request: &Request,
+        requested: Option<Provider>,
         rating: Option<&str>,
-    ) -> Result<Vec<Candidate>, GifError> {
+    ) -> Result<(Provider, Vec<Candidate>), GifError> {
         let dir = self.data_dir.clone();
         let current = tokio::task::spawn_blocking(move || settings::load(&dir))
             .await
-            .unwrap_or_default();
+            .map_err(|_| GifError::ProviderUnavailable)?;
         if !current.enabled {
             return Err(GifError::NoProvider);
         }
         let provider = current.provider;
-        let key = self.keys.read_timed(provider).await?;
+        if requested.is_some_and(|p| p != provider) {
+            return Err(GifError::BadQuery(
+                "provider is not the active GIF provider",
+            ));
+        }
+        let key = settings::Keys::read_timed(&self.keys, provider).await?;
         let fingerprint = fingerprint(&key);
         let production = current.is_production(provider, &fingerprint);
         let bucket_key = format!("{}:{fingerprint}", provider.as_str());
@@ -517,23 +587,26 @@ impl GifService {
         let adapter = (self.adapters)(provider, key, (self.clock)());
         let result = match request {
             Request::Search { query, limit } => {
-                GifProvider::search(adapter.as_ref(), query, rating, *limit).await
+                GifProvider::search_gifs(adapter.as_ref(), query, rating, *limit).await
             }
-            Request::Lookup { ids } => GifProvider::lookup(adapter.as_ref(), ids, rating).await,
+            Request::Lookup { ids } => {
+                GifProvider::lookup_gifs(adapter.as_ref(), ids, rating).await
+            }
         };
         match result {
             Ok(found) => {
                 self.analytics.record(provider, &found, (self.clock)());
-                Ok(found.into_iter().map(|f| f.candidate).collect())
+                Ok((provider, found.into_iter().map(|f| f.candidate).collect()))
             }
             Err(GifError::RateLimited { retry_after }) => {
                 let (bucket, now) = (self.bucket.clone(), (self.clock)());
-                let retry_after = tokio::task::spawn_blocking(move || {
+                let blocked = tokio::task::spawn_blocking(move || {
                     bucket.back_off(&bucket_key, retry_after, now)
                 })
-                .await
-                .unwrap_or(retry_after);
-                Err(GifError::RateLimited { retry_after })
+                .await;
+                Err(GifError::RateLimited {
+                    retry_after: blocked.unwrap_or(retry_after.max(1)),
+                })
             }
             Err(error) => Err(error),
         }
