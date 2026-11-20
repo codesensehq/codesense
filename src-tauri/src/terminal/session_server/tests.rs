@@ -1622,7 +1622,8 @@ fn session_verbs_reach_the_hosted_runtime() {
     spawn(
         &sidecar,
         &client,
-        "read line; stty size; printf 'GOT=%s\\n' \"$line\"; sleep 60",
+        // `; :` keeps the shell, so sleep runs under it: bash 5 execs a script's last command.
+        "read line; stty size; printf 'GOT=%s\\n' \"$line\"; sleep 60; :",
         registration("io-1", None, false),
     );
     client

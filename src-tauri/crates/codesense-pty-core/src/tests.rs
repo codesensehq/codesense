@@ -807,10 +807,11 @@ fn osc7_cwd_changes_emit_cwd_changed_once_per_real_change() {
     let mut reg = registration("osc7-cwd");
     reg.osc_enabled = true;
     // Three OSC 7 reports: path /tmp/a repeated, then switching to /tmp/b.
-    // The parser is byte-exact so the printf escapes drive it directly.
+    // The parser is byte-exact so the printf escapes drive it directly (octal: dash's printf,
+    // Linux's sh, has no \x escapes).
     spawn(
         &state,
-        sh("printf '\\x1b]7;file:///tmp/a\\x07\\x1b]7;file:///tmp/a\\x07\\x1b]7;file:///tmp/b\\x07'; exit 0"),
+        sh("printf '\\033]7;file:///tmp/a\\007\\033]7;file:///tmp/a\\007\\033]7;file:///tmp/b\\007'; exit 0"),
         reg,
     )
     .expect("spawn");
