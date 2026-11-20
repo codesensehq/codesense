@@ -3825,8 +3825,17 @@ mod tests {
         }
         if fifo(&receipt) {
             let path = root.path().to_path_buf();
-            let read = record.clone();
-            assert!(without_blocking(move || consumed(&path, &read)).is_err());
+            let (owner, team, machine, request) = (
+                record.owner_id,
+                record.team_key.clone(),
+                record.machine_id.clone(),
+                record.request_id,
+            );
+            assert!(without_blocking(move || {
+                DashboardLaunchState::new(1)
+                    .consumed_remote_shell(&path, owner, &team, &machine, request)
+                    .is_err()
+            }));
         }
     }
 
