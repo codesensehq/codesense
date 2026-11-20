@@ -136,10 +136,13 @@ branch first; it must be based on a `main` that has this workflow:
 
 ```bash
 gh workflow run regenerate-exports.yml --repo codesensehq/codesense --ref <branch>
-gh run list --repo codesensehq/codesense --workflow regenerate-exports.yml --branch <branch> --limit 1
+gh run list --repo codesensehq/codesense --workflow regenerate-exports.yml --branch <branch> --event workflow_dispatch --limit 1
+gh run watch <run id> --repo codesensehq/codesense --exit-status
 ```
 
-The second command prints the run's id. The default, `all`, runs every export,
+The second command prints the newest run's id. A new run takes a few seconds
+to appear, so check that its start time is the one you just dispatched before
+you use it; the third waits for it to finish. The default, `all`, runs every export,
 then `pnpm gen:docs`. `-f exports=live-data-contract` (or `mcp-reference`,
 `model-schemas`) runs one, but its `pnpm gen:docs` still fails if another export
 is stale, so use `all` unless you know the others are fresh. The run's summary
