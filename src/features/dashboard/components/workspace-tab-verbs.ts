@@ -47,7 +47,17 @@ export interface AgentTabLaunch {
   spec: AgentLaunchSpec;
   /** The per-session config's launch flags. */
   extraArgs: string[];
+  /** The one-use binding of the scope's environment, which the tab's spawn consumes. */
+  environmentBinding?: string;
   /** The agent runs as the tab's process: no line is typed. */
+  execution?: ScopedExecution;
+}
+
+/** How an agent tab opens: under the id its launch was prepared for, with that launch's
+ *  environment binding and, for an exec, its argv as the tab's process. */
+export interface AgentTabOpen {
+  sessionId: string;
+  environmentBinding?: string;
   execution?: ScopedExecution;
 }
 
@@ -58,18 +68,15 @@ export interface OpenWorkspaceTabDeps {
   /** A new tab's session id, before its tab opens (an agent tab projects for it). */
   newSessionId: () => string;
   /** Add a tab to the workspace and return its `sessionId` (`""` if the workspace
-   *  vanished). `role` tags an agent tab; `sessionId` is the id minted for it and
-   *  `execution` starts its agent as the tab's process. */
-  openTab: (
-    workspaceId: string,
-    role?: string,
-    launch?: { sessionId: string; execution?: ScopedExecution },
-  ) => string;
+   *  vanished). `role` tags an agent tab, which opens as `launch` says and resolves
+   *  once its host placed it (rejecting when the host refused the spawn); a plain tab
+   *  resolves at once. */
+  openTab: (workspaceId: string, role?: string, launch?: AgentTabOpen) => Promise<string>;
   /** Remove a just-opened tab — the rollback for a failed agent launch (so a
    *  thrown launch never leaves an orphan, mislabeled agent tab behind). */
   closeTab: (workspaceId: string, sessionId: string) => void;
-  /** Prepare the agent launch for `sessionId` (SW-GW-2 agent tab): its per-session
-   *  config for the workspace's dir. Rejects `unavailable:` when the agent CLI can't
+  /** Prepare the agent launch for `sessionId`: its per-session config for the
+   *  workspace's dir. Rejects `unavailable:` when the agent CLI can't
    *  be resolved, or when the launch could only be typed where none may be. */
   prepareAgent: (workspaceId: string, sessionId: string) => Promise<AgentTabLaunch>;
   /** Start the prepared agent in its open tab: record an exec, or type the launch
@@ -101,26 +108,26 @@ export async function openWorkspaceTab(
     throw new Error(`not-allowed: openTab targets generic (dir) workspaces only, not "${kind}"`);
   }
   if (args.agent !== true) {
-    const sessionId = deps.openTab(workspaceId);
+    const sessionId = await deps.openTab(workspaceId);
     if (!sessionId) throw new Error(`unavailable: could not open a tab in "${workspaceId}"`);
     return { sessionId };
   }
   // A failed preparation opened nothing, so it has nothing to roll back.
-  const minted = deps.newSessionId();
-  const launch = await deps.prepareAgent(workspaceId, minted);
-  const sessionId = deps.openTab(workspaceId, GENERIC_AGENT_ROLE, {
-    sessionId: minted,
-    execution: launch.execution,
-  });
-  if (!sessionId) {
-    throw new Error(`unavailable: could not open a tab in "${workspaceId}"`);
-  }
+  const sessionId = deps.newSessionId();
+  const launch = await deps.prepareAgent(workspaceId, sessionId);
   try {
+    const opened = await deps.openTab(workspaceId, GENERIC_AGENT_ROLE, {
+      sessionId,
+      environmentBinding: launch.environmentBinding,
+      execution: launch.execution,
+    });
+    if (!opened) throw new Error(`unavailable: could not open a tab in "${workspaceId}"`);
     await deps.launchAgent(sessionId, launch);
   } catch (err) {
-    // The tab was opened + role-tagged BEFORE the launch. A failed launch would
-    // otherwise strand a `generic-agent`-tagged tab with no agent behind it — roll
-    // it back so state matches the rejected result.
+    // The session was projected for and may hold a tab: a refused spawn, a workspace
+    // that vanished, or a launch that failed would otherwise strand a
+    // `generic-agent`-tagged session with no agent behind it — end it so state matches
+    // the rejected result.
     deps.closeTab(workspaceId, sessionId);
     throw err;
   }
@@ -264,19 +271,25 @@ export function makeRealOpenWorkspaceTabDeps(
       resolveWorkspaceTeam(useViewerStore.getState().workspaces, workspaceId)?.workspace.kind ??
       null,
     newSessionId: () => createTerminalTab().sessionId,
-    openTab: (workspaceId, role, launch) => {
+    openTab: async (workspaceId, role, launch) => {
       const hit = resolveWorkspaceTeam(useViewerStore.getState().workspaces, workspaceId);
       if (!hit) return "";
-      return useViewerStore.getState().openTabInWorkspace(hit.teamKey, workspaceId, {
-        role,
-        ...launch,
-      });
+      const store = useViewerStore.getState();
+      if (!launch) return store.openTabInWorkspace(hit.teamKey, workspaceId, { role });
+      // An agent tab waits for its spawn, so a refused one is rolled back, never recorded.
+      const opened = store.startTabInWorkspace(hit.teamKey, workspaceId, { role, ...launch });
+      await opened.spawned;
+      return opened.sessionId;
     },
     closeTab: (_workspaceId, sessionId) =>
       // Roll back by the tab's unique sessionId — NOT by re-resolving the active
       // team, which can change during the awaited agent launch and strand the
-      // orphan. Its host ends it wherever it landed (SW-GW-5).
-      useViewerStore.getState().removeTerminalTabBySession(sessionId, { kill: true }),
+      // orphan. Its host ends it wherever it landed (SW-GW-5); a session it never
+      // placed has nothing to end.
+      void useViewerStore
+        .getState()
+        .removeTerminalTabBySession(sessionId, { kill: true })
+        .catch(() => {}),
     prepareAgent: async (workspaceId, sessionId) => {
       const agentPath = await resolveAgentCliPath();
       if (!agentPath) {
@@ -304,6 +317,7 @@ export function makeRealOpenWorkspaceTabDeps(
       return {
         spec: { agentPath, configCwd: cwd },
         extraArgs: scope.extraArgs,
+        ...(scope.environmentBinding ? { environmentBinding: scope.environmentBinding } : {}),
         ...(scope.execution ? { execution: scope.execution } : {}),
       };
     },
