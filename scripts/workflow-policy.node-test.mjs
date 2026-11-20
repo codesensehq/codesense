@@ -508,7 +508,20 @@ test("rust.yml's Linux app job runs the shared suites and the Secret Service tes
     suitesRun.includes('cargo nextest run --profile ci --locked "${packages[@]}" || status=1'),
   );
   assert.ok(suitesRun.includes('mv target/nextest/ci/junit.xml "$RUNNER_TEMP/junit/$part.xml"'));
-  assert.ok(job.steps.every((step) => !/ -E /.test(step.run ?? "")));
+  // The updater's tests compile only on a beta channel, so they run on a build of their own.
+  const beta = job.steps.find((step) => step.name === "Test the updater on the beta channel");
+  assert.ok(names.indexOf(beta.name) > suites);
+  assert.deepEqual(beta.env, { CODESENSE_CHANNEL: "beta" });
+  assert.match(beta.run, /CODESENSE_RELEASED_AT=/);
+  assert.ok(
+    beta.run.includes(
+      "cargo nextest run --profile ci --locked -p codesense --lib -E 'test(/^license::/)'",
+    ),
+  );
+  assert.ok(beta.run.includes('mv target/nextest/ci/junit.xml "$RUNNER_TEMP/junit/license.xml"'));
+  assert.ok(
+    job.steps.filter((step) => step !== beta).every((step) => !/ -E /.test(step.run ?? "")),
+  );
   assert.ok(workflow.jobs["flaky-issues"].needs.includes("rust-linux-app"));
 });
 
@@ -1657,7 +1670,7 @@ test("Rust test jobs list flaky tests after nextest and only flaky-issues writes
     const job = workflow.jobs[name];
     assert.deepEqual(job.permissions, { contents: "read" });
     const steps = job.steps;
-    const test = steps.findIndex(
+    const test = steps.findLastIndex(
       (step) => step.run?.includes("cargo nextest run") && !step.run.includes("--no-run"),
     );
     const flaky = steps[test + 1];

@@ -802,6 +802,20 @@ jobs:
             if [[ -f target/nextest/ci/junit.xml ]]; then mv target/nextest/ci/junit.xml "$RUNNER_TEMP/junit/$part.xml"; fi
           done
           exit "$status"
+      - name: Test the updater on the beta channel
+        # The license module (the beta channels' updater) compiles only off the internal channel,
+        # the default, so its tests need a beta build of the app of their own. The beta channel
+        # reads only public config (tauri.beta-prod.conf.json) and a release time.
+        if: (success() || failure()) && steps.compile.outcome == 'success'
+        env:
+          CODESENSE_CHANNEL: beta
+        run: |
+          mkdir -p "$RUNNER_TEMP/junit"
+          status=0
+          CODESENSE_RELEASED_AT="$(git log -1 --format=%ct)" \
+            cargo nextest run --profile ci --locked -p codesense --lib -E 'test(/^license::/)' || status=1
+          if [[ -f target/nextest/ci/junit.xml ]]; then mv target/nextest/ci/junit.xml "$RUNNER_TEMP/junit/license.xml"; fi
+          exit "$status"
       - name: List flaky tests
         # A pass on nextest's one retry is flaky: listed in the job summary and the JUnit report,
         # and tracked as a public issue by flaky-issues on main.
