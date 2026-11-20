@@ -897,10 +897,11 @@ fn by_workspace(
 }
 
 /// The layout tab and warm spawn that reopen `tab` on This Mac: a shell in
-/// its workspace and folder (when that folder is gone, its own folder if it has
-/// one, else the home folder), under its name and role, without taking focus.
-/// `folder_exists` is asked of the recorded folder. A tab's own folder that is
-/// gone is settled by `open_layout_tab`, as for every tab it opens.
+/// its workspace and folder (when that folder is gone, its own folder, else its
+/// workspace's folder, else the home folder: the first that exists), under its
+/// name and role, without taking focus. `folder_exists` is asked of each folder
+/// the spawn may start in. The tab keeps its own folder in the layout either way;
+/// one that is gone is settled by `open_layout_tab`, as for every tab it opens.
 pub(crate) fn reopen_local_request(
     tab: &RestoreTab,
     home: &str,
@@ -937,11 +938,15 @@ pub(crate) fn reopen_local_request(
         index: None,
         activate: false,
     };
-    let cwd = tab
-        .cwd
-        .clone()
-        .filter(|cwd| folder_exists(cwd))
-        .or_else(|| tab.tab_dir.clone())
+    let workspace_dir = tab
+        .descriptor
+        .as_ref()
+        .and_then(|d| d.worktree_path.as_ref())
+        .map(|dir| dir.to_string_lossy().into_owned());
+    let existing = |dir: Option<String>| dir.filter(|dir| folder_exists(dir));
+    let cwd = existing(tab.cwd.clone())
+        .or_else(|| existing(tab.tab_dir.clone()))
+        .or_else(|| existing(workspace_dir))
         .unwrap_or_else(|| home.to_string());
     let spawn = TabSpawn::Warm(AttachWarmArgs {
         target_cwd: cwd,
@@ -1600,14 +1605,19 @@ mod tests {
             reopen_local_request(&shell, "/home/me", |_| true).0.cwd,
             None
         );
-        // Its folder gone, it still starts there: `open_layout_tab` settles a gone
-        // folder of a tab's own for every start path.
-        let (open, spawn) = reopen_local_request(&seat, "/home/me", |_| false);
-        assert_eq!(open.cwd.as_deref(), Some(Path::new("/srv/SW-1-seat-dev")));
-        let crate::commands::pty_layout::TabSpawn::Warm(warm) = spawn else {
-            panic!("a warm shell")
+        // Its folder gone, it starts in its workspace's folder; the layout still gets
+        // its own folder, which `open_layout_tab` settles for every start path.
+        let start = |exists: &dyn Fn(&str) -> bool| {
+            let (open, spawn) = reopen_local_request(&seat, "/home/me", exists);
+            assert_eq!(open.cwd.as_deref(), Some(Path::new("/srv/SW-1-seat-dev")));
+            let crate::commands::pty_layout::TabSpawn::Warm(warm) = spawn else {
+                panic!("a warm shell")
+            };
+            warm.target_cwd
         };
-        assert_eq!(warm.target_cwd, "/srv/SW-1-seat-dev");
+        assert_eq!(start(&|dir| dir == "/srv/SW-1"), "/srv/SW-1");
+        // Its workspace's folder gone too: the home folder, never a folder that is gone.
+        assert_eq!(start(&|_| false), "/home/me");
         // A record from before tab folders were kept reads without one.
         let mut older = serde_json::to_value(&seat).unwrap();
         older.as_object_mut().unwrap().remove("tabDir");
