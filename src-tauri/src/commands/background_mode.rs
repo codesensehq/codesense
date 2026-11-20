@@ -6,7 +6,10 @@
 //! dock-resident behavior. "Open" comes to mean *process-alive*, not
 //! *window-visible*, which is the contract a leave-it-running agent
 //! needs. The window-close handler in `lib.rs` reads a single process-global flag
-//! (the user's quit-on-close preference) to decide hide-vs-quit.
+//! (the user's quit-on-close preference) to decide hide-vs-quit. On Linux, which
+//! has no Dock, the window backgrounds only while the terminal-server tray item
+//! shows (its own atomic, [`crate::commands::terminal_server_tray::tray_visible`]),
+//! since that item is the only way back; otherwise close quits.
 //!
 //! The flag is mirrored from the frontend `settings.quitOnClose` via
 //! [`set_quit_on_close`] — one value, one atomic, no `AppHandle`/`State`. That is what keeps the read on
@@ -65,18 +68,56 @@ pub fn set_quit_on_close(quit_on_close: bool) {
 pub enum CloseAction {
     /// Hide the app; keep the process (MCP host + engine + state) alive.
     Background,
-    /// Quit the process — the user opted into quit-on-close.
+    /// Quit the process — the user opted into quit-on-close, or nothing could
+    /// bring a hidden window back.
     Quit,
 }
 
-/// Resolve the close action from the current preference. `quit_on_close = true`
-/// ⇒ [`CloseAction::Quit`]; otherwise [`CloseAction::Background`] (the default).
-pub fn close_action(quit_on_close: bool) -> CloseAction {
-    if quit_on_close {
-        CloseAction::Quit
-    } else {
-        CloseAction::Background
+/// How a person brings a backgrounded window back on this OS.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Restore {
+    /// The Dock icon (macOS), which is always there.
+    Dock,
+    /// The terminal-server tray item's Open CodeSense, there only while the item
+    /// shows in a tray host.
+    Tray,
+}
+
+impl Restore {
+    /// The restore path of `os` (a `std::env::consts::OS` value).
+    pub fn for_os(os: &str) -> Self {
+        if os == "macos" {
+            Self::Dock
+        } else {
+            Self::Tray
+        }
     }
+
+    /// The restore path of the running OS.
+    pub fn current() -> Self {
+        Self::for_os(std::env::consts::OS)
+    }
+}
+
+/// Resolve the close action. `quit_on_close = true` ⇒ [`CloseAction::Quit`].
+/// Otherwise the window backgrounds when it can be brought back: always with the
+/// Dock, and with the tray only while its item shows (`tray_visible`). A tray OS
+/// with no visible item quits, so a closed window is never stranded.
+pub fn close_action(quit_on_close: bool, tray_visible: bool, restore: Restore) -> CloseAction {
+    match (quit_on_close, restore) {
+        (true, _) => CloseAction::Quit,
+        (false, Restore::Dock) => CloseAction::Background,
+        (false, Restore::Tray) if tray_visible => CloseAction::Background,
+        (false, Restore::Tray) => CloseAction::Quit,
+    }
+}
+
+/// Whether a hidden main window must be shown again now that the tray item is
+/// (`tray_visible`) or isn't: on a tray OS a hidden window with no item has no
+/// way back. The Dock always brings one back, so macOS never shows a window it
+/// hid.
+pub fn show_hidden_window(tray_visible: bool, window_hidden: bool, restore: Restore) -> bool {
+    restore == Restore::Tray && window_hidden && !tray_visible
 }
 
 #[cfg(test)]
@@ -87,12 +128,68 @@ mod tests {
     fn default_is_background_on_close() {
         // A fresh flag reads false → Background, so a fresh profile is dock-resident
         // (never a surprise quit) until the FE pushes an explicit quit-on-close.
-        assert_eq!(close_action(false), CloseAction::Background);
+        assert_eq!(
+            close_action(false, false, Restore::Dock),
+            CloseAction::Background
+        );
     }
 
     #[test]
     fn quit_on_close_pref_maps_to_quit() {
-        assert_eq!(close_action(true), CloseAction::Quit);
+        assert_eq!(close_action(true, true, Restore::Dock), CloseAction::Quit);
+    }
+
+    /// Every combination: the Dock always backgrounds unless quit-on-close; the
+    /// tray backgrounds only while its item shows, and otherwise quits.
+    #[test]
+    fn close_action_covers_every_combination() {
+        use CloseAction::{Background, Quit};
+        for (quit, visible, restore, want) in [
+            (false, false, Restore::Dock, Background),
+            (false, true, Restore::Dock, Background),
+            (true, false, Restore::Dock, Quit),
+            (true, true, Restore::Dock, Quit),
+            (false, false, Restore::Tray, Quit),
+            (false, true, Restore::Tray, Background),
+            (true, false, Restore::Tray, Quit),
+            (true, true, Restore::Tray, Quit),
+        ] {
+            assert_eq!(
+                close_action(quit, visible, restore),
+                want,
+                "quit_on_close={quit} tray_visible={visible} {restore:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn restore_follows_the_os() {
+        assert_eq!(Restore::for_os("macos"), Restore::Dock);
+        for os in ["linux", "windows", "freebsd"] {
+            assert_eq!(Restore::for_os(os), Restore::Tray, "{os}");
+        }
+        assert_eq!(Restore::current(), Restore::for_os(std::env::consts::OS));
+    }
+
+    /// Only a tray OS shows a hidden window, and only once the item is gone.
+    #[test]
+    fn a_hidden_window_is_shown_when_the_tray_goes() {
+        for (visible, hidden, restore, want) in [
+            (false, true, Restore::Tray, true),
+            (true, true, Restore::Tray, false),
+            (false, false, Restore::Tray, false),
+            (true, false, Restore::Tray, false),
+            (false, true, Restore::Dock, false),
+            (true, true, Restore::Dock, false),
+            (false, false, Restore::Dock, false),
+            (true, false, Restore::Dock, false),
+        ] {
+            assert_eq!(
+                show_hidden_window(visible, hidden, restore),
+                want,
+                "tray_visible={visible} window_hidden={hidden} {restore:?}"
+            );
+        }
     }
 
     /// AC-7 guard: the window-close handler must never block the macOS UI thread —
@@ -118,6 +215,11 @@ mod tests {
             "tauri_plugin_dialog",
             "MessageDialog",
             "block_on",
+            // The tray item's visibility is an atomic; the arm never locks the tray
+            // or asks the session bus.
+            "tray_by_id",
+            "status_notifier_host_registered",
+            "dbus",
         ] {
             assert!(
                 !arm.contains(forbidden),
@@ -131,10 +233,16 @@ mod tests {
         // Process-global, so set explicitly both ways to stay order-independent.
         set_quit_on_close(true);
         assert!(quit_on_close());
-        assert_eq!(close_action(quit_on_close()), CloseAction::Quit);
+        assert_eq!(
+            close_action(quit_on_close(), false, Restore::Dock),
+            CloseAction::Quit
+        );
 
         set_quit_on_close(false);
         assert!(!quit_on_close());
-        assert_eq!(close_action(quit_on_close()), CloseAction::Background);
+        assert_eq!(
+            close_action(quit_on_close(), false, Restore::Dock),
+            CloseAction::Background
+        );
     }
 }

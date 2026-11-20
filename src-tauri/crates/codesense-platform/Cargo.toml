@@ -1,7 +1,7 @@
 [package]
 name = "codesense-platform"
 version = "0.1.0"
-description = "The one place OS-specific mechanisms live: process trees, private and atomic files, locks, links, the codesense home, the current user and host name, the open-file limit, local IPC, the command-line tool lookup and the secret-entry dialog"
+description = "The one place OS-specific mechanisms live: process trees, private and atomic files, locks, links, the codesense home, the current user and host name, the open-file limit, local IPC, the command-line tool lookup, the secret-entry dialog and whether a tray item shows"
 edition = "2021"
 license = "MIT"
 publish = false
@@ -17,6 +17,9 @@ path = "src/bin/platform_fixture.rs"
 [features]
 # Helpers for other crates' tests; enable it on a dev-dependency only.
 testutil = []
+# The tray host check's session-bus read on Linux (`tray`). Only the app enables it, so the
+# sidecars, which are also built static for musl, never link libdbus.
+tray-host = ["dep:dbus"]
 
 [dependencies]
 dirs = "5"
@@ -26,6 +29,11 @@ tokio = { version = "1", features = ["net", "time"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Asks the session bus whether a tray host is registered (`tray`, with `tray-host`). The crate
+# and version the app's Secret Service store already builds.
+dbus = { version = "0.9", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
@@ -44,6 +52,6 @@ windows-sys = { version = "0.59", features = [
 
 [dev-dependencies]
 # Itself with the test helpers, for the contract suite's link rows.
-codesense-platform = { path = ".", features = ["testutil"] }
+codesense-platform = { path = ".", features = ["testutil", "tray-host"] }
 tempfile = "3"
 tokio = { version = "1", features = ["io-util", "rt", "time"] }

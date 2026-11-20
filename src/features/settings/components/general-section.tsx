@@ -83,7 +83,7 @@ import { UpdatesSection } from "@/features/license/UpdatesSection";
 import { SectionHeader } from "./section-header";
 import { SettingRow } from "./setting-row";
 import { TerminalServerSection } from "./terminal-server-section";
-import { localMachineNoun } from "@/shared/lib/local-machine";
+import { localMachineNoun, quitOnCloseFooter, trayPlaceName } from "@/shared/lib/local-machine";
 
 // ---------- Row specs ----------
 
@@ -289,7 +289,10 @@ const GENERAL_ROW_SPECS = {
   },
   terminalServerMenuBar: {
     key: "terminalServerMenuBar",
-    label: "Show terminal server in the menu bar",
+    // Read when shown or matched, so it names this OS's place for the item.
+    get label() {
+      return `Show terminal server in the ${trayPlaceName()}`;
+    },
     keywords: ["menu bar", "tray", "status", "terminal server", "agents", "stop", "restart"],
   },
   quitOnClose: {
@@ -1368,8 +1371,8 @@ function ShellIntegrationRow() {
 // ---------- Publish mode (SW-GS-17) ----------
 
 function QuitOnCloseRow() {
-  // Default OFF → closing the window hides the app (macOS
-  // dock-resident) and keeps the MCP host + engine alive so an agent can
+  // Default OFF → closing the window hides the app (macOS dock-resident; on
+  // Linux only while the tray icon shows) and keeps the MCP host + engine alive so an agent can
   // keep driving codesense with no window on screen. On → a window close quits.
   // undefined means "use default (off / background-on-close)".
   const raw = useViewerStore((s) => s.settings.quitOnClose);
@@ -1388,17 +1391,12 @@ function QuitOnCloseRow() {
       onChange={(v) => updateSettings({ quitOnClose: v === "on" })}
       gridClassName="grid-cols-2"
       buttonPaddingClassName="px-2 py-1.5"
-      footer={
-        <p className="mt-1 text-[10px] text-muted-foreground">
-          Off keeps codesense running in the background on close (dock icon reopens it) so routines
-          keep firing. On makes closing the window quit.
-        </p>
-      }
+      footer={<p className="mt-1 text-[10px] text-muted-foreground">{quitOnCloseFooter()}</p>}
     />
   );
 }
 
-// ---------- Terminal server in the menu bar ----------
+// ---------- Terminal server in the menu bar (the tray off macOS) ----------
 
 function TerminalServerMenuBarRow() {
   // Off by default; undefined reads as off. The push to Rust lives in
@@ -1409,7 +1407,7 @@ function TerminalServerMenuBarRow() {
   return (
     <RadioGroupRow
       label={GENERAL_ROW_SPECS.terminalServerMenuBar.label}
-      ariaLabel="Show terminal server in the menu bar"
+      ariaLabel={GENERAL_ROW_SPECS.terminalServerMenuBar.label}
       testId="settings-terminal-server-menu-bar"
       value={active ? "on" : "off"}
       options={[

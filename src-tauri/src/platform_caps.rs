@@ -15,6 +15,7 @@ pub const GIT_AI: &str = "git-ai";
 pub const STARSHIP: &str = "starship";
 pub const SECRET_STORE: &str = "secret-store";
 pub const TERMINAL_SERVER_SIDECAR: &str = "terminal-server-sidecar";
+pub const TERMINAL_SERVER_TRAY: &str = "terminal-server-tray";
 
 /// The table: a JSON array of rows, in the order of the `caps:` line.
 const TABLE_JSON: &str = include_str!("../platform-caps.json");
@@ -48,6 +49,7 @@ fn table() -> &'static [Row] {
 fn probe_for(key: &str) -> Option<fn() -> bool> {
     match key {
         SECRET_STORE => Some(crate::commands::credential_store::secret_store_available),
+        TERMINAL_SERVER_TRAY => Some(crate::commands::terminal_server_tray::tray_library_available),
         _ => None,
     }
 }
@@ -223,8 +225,8 @@ mod tests {
                 line("linux", arch, true),
                 "caps: git-ai=on starship=on secret-store=on mcp-bridge=on \
                  terminal-server-sidecar=on remote-machines=on agent-cli-sockets=on \
-                 shell-integration=on pdf-export=off background-on-close=off \
-                 terminal-server-tray=off"
+                 shell-integration=on pdf-export=off background-on-close=on \
+                 terminal-server-tray=on"
             );
         }
     }
@@ -244,6 +246,30 @@ mod tests {
                 assert_eq!(cap.on, probe, "{os} {arch}");
             }
         }
+    }
+
+    /// The tray item follows its probe (the AppIndicator library loads) on Linux, is on on macOS
+    /// whatever a probe would say, and off on Windows; background-on-close is on for both.
+    #[test]
+    fn the_tray_follows_its_probe_on_linux() {
+        let state = |os, arch, probe, key| {
+            resolved(os, arch, probe)
+                .into_iter()
+                .find(|cap| cap.key == key)
+                .unwrap()
+        };
+        for arch in ["x86_64", "aarch64"] {
+            for probe in [true, false] {
+                let tray = state("linux", arch, probe, TERMINAL_SERVER_TRAY);
+                assert_eq!(tray.on, probe, "linux {arch}");
+                assert_eq!(tray.reason.is_some(), !probe);
+                assert!(state("linux", arch, probe, "background-on-close").on);
+                assert!(state("macos", "aarch64", probe, TERMINAL_SERVER_TRAY).on);
+                assert!(!state("windows", "x86_64", probe, TERMINAL_SERVER_TRAY).on);
+                assert!(!state("windows", "x86_64", probe, "background-on-close").on);
+            }
+        }
+        assert!(probe_for(TERMINAL_SERVER_TRAY).is_some());
     }
 
     /// Windows has no support for it, whatever a probe would say.
@@ -339,7 +365,7 @@ mod tests {
                 "shell-integration",
                 "pdf-export",
                 "background-on-close",
-                "terminal-server-tray",
+                TERMINAL_SERVER_TRAY,
             ]
         );
     }
@@ -749,6 +775,9 @@ mod tests {
         ] {
             if (os, arch) != host {
                 assert!(!enabled_for(SECRET_STORE, os, arch), "{os} {arch}");
+                if os == "linux" {
+                    assert!(!enabled_for(TERMINAL_SERVER_TRAY, os, arch), "{os} {arch}");
+                }
             }
         }
     }

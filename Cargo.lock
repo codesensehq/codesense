@@ -926,6 +926,7 @@ dependencies = [
  "jsonschema",
  "keyring",
  "libc",
+ "libloading",
  "log",
  "mime_guess",
  "minisign-verify 0.2.5",
@@ -1038,6 +1039,7 @@ name = "codesense-platform"
 version = "0.1.0"
 dependencies = [
  "codesense-platform",
+ "dbus",
  "dirs 5.0.1",
  "dunce",
  "libc",

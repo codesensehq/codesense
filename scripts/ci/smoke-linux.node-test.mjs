@@ -87,31 +87,66 @@ const appLog = (caps) => [
   logLine("secret store: secret-service", "auth"),
 ];
 // What `find squashfs-root` lists for the extracted AppImage.
+const appindicator = "squashfs-root/usr/lib/libayatana-appindicator3.so.1";
 const extracted = (...resources) => [
   "squashfs-root/AppRun",
   "squashfs-root/usr/bin/codesense",
   "squashfs-root/usr/lib/CodeSense/resources/starship-compact.toml",
+  appindicator,
   ...resources.map((name) => `squashfs-root/usr/lib/CodeSense/resources/${name}`),
 ];
+const withoutAppindicator = (listing) => listing.filter((line) => line !== appindicator);
 const capsAgree = (listing, caps) => smoke("caps-agree", fixture(listing), fixture(appLog(caps)));
 
+const TRAY = "terminal-server-tray=on";
+
 test("caps-agree: a capability is on exactly when its binary is bundled", () => {
-  passes(capsAgree(extracted(), "caps: git-ai=off starship=off"));
-  passes(capsAgree(extracted("starship", "git-ai"), "caps: git-ai=on starship=on"));
-  passes(capsAgree(extracted("starship"), "caps: git-ai=off starship=on"));
+  passes(capsAgree(extracted(), `caps: git-ai=off starship=off ${TRAY}`));
+  passes(capsAgree(extracted("starship", "git-ai"), `caps: git-ai=on starship=on ${TRAY}`));
+  passes(capsAgree(extracted("starship"), `caps: git-ai=off starship=on ${TRAY}`));
   // Other capabilities on the line, such as secret-store after them, are not this check's.
-  passes(capsAgree(extracted(), "caps: git-ai=off starship=off secret-store=on"));
-  passes(capsAgree(extracted("starship"), "caps: git-ai=off starship=on secret-store=off"));
-  passes(capsAgree(extracted(), "caps: bridge=on git-ai=off secret-store=on starship=off"));
+  passes(capsAgree(extracted(), `caps: git-ai=off starship=off secret-store=on ${TRAY}`));
+  passes(capsAgree(extracted("starship"), `caps: git-ai=off starship=on ${TRAY} secret-store=off`));
+  passes(capsAgree(extracted(), `caps: bridge=on git-ai=off secret-store=on starship=off ${TRAY}`));
+});
+
+test("caps-agree: the tray icon is on exactly when an AppIndicator library is bundled", () => {
+  passes(
+    capsAgree(
+      withoutAppindicator(extracted()),
+      "caps: git-ai=off starship=off terminal-server-tray=off",
+    ),
+  );
+  for (const library of [
+    "squashfs-root/usr/lib/libayatana-appindicator3.so",
+    "squashfs-root/usr/lib/libappindicator3.so.1",
+    "squashfs-root/usr/lib/libappindicator3.so",
+  ]) {
+    passes(
+      capsAgree(
+        [...withoutAppindicator(extracted()), library],
+        `caps: git-ai=off starship=off ${TRAY}`,
+      ),
+    );
+  }
+  fails(
+    capsAgree(extracted(), "caps: git-ai=off starship=off terminal-server-tray=off"),
+    /terminal-server-tray=off.*the AppIndicator library is bundled/,
+  );
+  fails(
+    capsAgree(withoutAppindicator(extracted()), `caps: git-ai=off starship=off ${TRAY}`),
+    /terminal-server-tray=on.*no AppIndicator library is bundled/,
+  );
+  fails(capsAgree(extracted(), "caps: git-ai=off starship=off"), /terminal-server-tray=<none>/);
 });
 
 test("caps-agree: a bundled binary that is off, or an absent one that is on, fails", () => {
   fails(
-    capsAgree(extracted("starship"), "caps: git-ai=off starship=off"),
+    capsAgree(extracted("starship"), `caps: git-ai=off starship=off ${TRAY}`),
     /starship=off.*resources\/starship is bundled/,
   );
   fails(
-    capsAgree(extracted(), "caps: git-ai=on starship=off"),
+    capsAgree(extracted(), `caps: git-ai=on starship=off ${TRAY}`),
     /git-ai=on.*resources\/git-ai is not bundled/,
   );
 });
@@ -123,13 +158,107 @@ test("caps-agree: a missing caps: line, a second one or a missing key fails", ()
       "caps-agree",
       fixture(extracted()),
       fixture([
-        ...appLog("caps: git-ai=off starship=off"),
-        logLine("caps: git-ai=off starship=off"),
+        ...appLog(`caps: git-ai=off starship=off ${TRAY}`),
+        logLine(`caps: git-ai=off starship=off ${TRAY}`),
       ]),
     ),
     /expected one caps: line, found 2/,
   );
-  fails(capsAgree(extracted(), "caps: git-ai=off"), /starship=<none>/);
+  fails(capsAgree(extracted(), `caps: git-ai=off ${TRAY}`), /starship=<none>/);
+});
+
+test("appindicator-bundled: the AppImage must hold an AppIndicator library", () => {
+  passes(smoke("appindicator-bundled", fixture(extracted())));
+  passes(
+    smoke(
+      "appindicator-bundled",
+      fixture([...withoutAppindicator(extracted()), "squashfs-root/usr/lib/libappindicator3.so"]),
+    ),
+  );
+  fails(
+    smoke("appindicator-bundled", fixture(withoutAppindicator(extracted()))),
+    /holds no AppIndicator library/,
+  );
+  // A name that only starts like one, or another library, is not it.
+  fails(
+    smoke(
+      "appindicator-bundled",
+      fixture([
+        ...withoutAppindicator(extracted()),
+        "squashfs-root/usr/lib/libayatana-appindicator3.so.1.0.0.bak",
+        "squashfs-root/usr/lib/libayatana-indicator3.so.7",
+      ]),
+    ),
+    /holds no AppIndicator library/,
+  );
+});
+
+test("seed-tray: the app state under the data home turns the tray icon setting on", () => {
+  const home = fs.mkdtempSync(path.join(dir, "data-"));
+  passes(smoke("seed-tray", home));
+  const config = JSON.parse(
+    fs.readFileSync(path.join(home, "ai.codesense", "app-state.json"), "utf8"),
+  );
+  assert.deepEqual(config, { viewer: { settings: { terminalServerMenuBar: true } } });
+  // The directory is the app's: its identifier names it.
+  const tauri = JSON.parse(
+    fs.readFileSync(
+      fileURLToPath(new URL("../../src-tauri/tauri.conf.json", import.meta.url)),
+      "utf8",
+    ),
+  );
+  assert.equal(tauri.identifier, "ai.codesense");
+});
+
+test("installed-appindicator: ldconfig must find an AppIndicator library", () => {
+  const bin = fs.mkdtempSync(path.join(dir, "bin-"));
+  const ldconfig = (lines) => {
+    fs.writeFileSync(
+      path.join(bin, "ldconfig"),
+      `#!/bin/sh\ncat <<'EOF'\n${lines.join("\n")}\nEOF\n`,
+      { mode: 0o755 },
+    );
+    return spawnSync("bash", [script, "installed-appindicator"], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+    });
+  };
+  const header = "1234 libs found in cache `/etc/ld.so.cache'";
+  const libc = "\tlibc.so.6 (libc6,x86-64) => /lib/x86_64-linux-gnu/libc.so.6";
+  passes(
+    ldconfig([
+      header,
+      "\tlibayatana-appindicator3.so.1 (libc6,x86-64) => /lib/x86_64-linux-gnu/libayatana-appindicator3.so.1",
+      libc,
+    ]),
+  );
+  passes(
+    ldconfig([header, "\tlibappindicator3.so.1 (libc6,AArch64) => /lib64/libappindicator3.so.1"]),
+  );
+  fails(ldconfig([header, libc]), /ldconfig finds no AppIndicator library/);
+  fails(
+    ldconfig([
+      header,
+      "\tlibayatana-indicator3.so.7 (libc6,x86-64) => /lib/libayatana-indicator3.so.7",
+    ]),
+    /ldconfig finds no AppIndicator library/,
+  );
+});
+
+test("tray-launch: the caps: line has the tray icon on and the item turned on", () => {
+  const caps = `caps: git-ai=on starship=on secret-store=on ${TRAY}`;
+  const on = logLine("menu-bar item on", "terminal_server_tray");
+  const trayLaunch = (lines) => smoke("tray-launch", fixture(lines));
+  passes(trayLaunch([...appLog(caps), on]));
+  fails(
+    trayLaunch([...appLog("caps: git-ai=on starship=on terminal-server-tray=off"), on]),
+    /does not have terminal-server-tray=on/,
+  );
+  fails(trayLaunch(appLog(caps)), /tray item turned on/);
+  fails(
+    trayLaunch([...appLog(caps), logLine("menu-bar item on", "system")]),
+    /tray item turned on/,
+  );
 });
 
 // A home where the app installed a git-ai that prints `version`, and a pin naming `pinned`.
