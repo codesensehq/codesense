@@ -81,9 +81,12 @@ describe("htmlToPlain without a DOM parser", () => {
 
   it("decodes each entity once, so an escaped entity stays as written", () => {
     vi.stubGlobal("DOMParser", undefined);
-    expect(htmlToPlain("<p>Use &amp;lt;b&amp;gt; for bold, &amp;amp; for &amp;</p>")).toBe(
-      "Use &lt;b&gt; for bold, &amp; for &",
-    );
+    expect(
+      htmlToPlain(
+        "<p>Use &amp;lt;b&amp;gt; for bold, &amp;amp; for &amp;, &amp;quot;q&amp;quot; " +
+          "&amp;#39;s&amp;#39; and &amp;nbsp;</p>",
+      ),
+    ).toBe("Use &lt;b&gt; for bold, &amp; for &, &quot;q&quot; &#39;s&#39; and &nbsp;");
   });
 
   it("decodes entities in the title the same way as in the body, as the DOM path does", () => {
