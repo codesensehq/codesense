@@ -20,8 +20,9 @@ use codesense_platform::fs::{
     create_dir_new_owner_only, create_dir_owner_only, create_new_owner_only, create_owner_only,
     file_id, file_id_of, is_executable, is_owned_by_current_user, is_owner_only, is_text_busy,
     is_world_writable, link_count, link_or_copy, lock_exclusive, open_nofollow,
-    open_nofollow_nonblocking, portable_name, read_exact_at, set_executable, set_owner_only,
-    try_lock_exclusive, try_lock_shared, unlock, Linked, NonPortableName, Open, Reach,
+    open_nofollow_nonblocking, place_link, portable_name, read_exact_at, set_executable,
+    set_owner_only, try_lock_exclusive, try_lock_shared, unlock, Linked, NonPortableName, Open,
+    PlaceLink, Reach,
 };
 use codesense_platform::ipc::{blocking, Endpoint, LocalListener, LocalStream};
 use codesense_platform::limits::is_descriptor_exhaustion;
@@ -31,7 +32,7 @@ use codesense_platform::process::{
 };
 use codesense_platform::testutil::{
     fifo_or_skip, make_group_writable, make_world_writable, pathext, relative_from_cwd,
-    symlink_or_skip, Anyone,
+    symlink_or_skip, without_hard_links, Anyone,
 };
 use codesense_platform::user::{current_user, hostname, login_shell};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
@@ -1511,6 +1512,75 @@ fn read_exact_at_reads_from_the_offset_whatever_the_cursor() {
     );
 }
 
+/// A source to place, rewritten as a new file (a new id) with `bytes`, as an
+/// update replaces a binary.
+fn new_source(path: &Path, bytes: &str) {
+    let fresh = path.with_extension("new");
+    std::fs::write(&fresh, bytes).unwrap();
+    std::fs::rename(&fresh, path).unwrap();
+}
+
+/// Whether `link` is the very file `source` is.
+fn same_file(source: &Path, link: &Path) -> bool {
+    file_id(source).unwrap() == file_id(link).unwrap()
+}
+
+#[test]
+fn place_link_places_a_hard_link_once_and_again_after_the_source_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source");
+    let link = dir.path().join("link");
+    new_source(&source, "first");
+    place_link(&source, &link, PlaceLink::Hard).unwrap();
+    assert!(same_file(&source, &link));
+    // Already placed: a second placement links nothing, so one whose hard link
+    // would fail leaves the hard link as it was.
+    without_hard_links(|| place_link(&source, &link, PlaceLink::Hard)).unwrap();
+    assert!(same_file(&source, &link), "a second placement is a no-op");
+    new_source(&source, "second");
+    place_link(&source, &link, PlaceLink::Hard).unwrap();
+    assert!(same_file(&source, &link));
+    assert_eq!(std::fs::read_to_string(&link).unwrap(), "second");
+    assert_eq!(temp_siblings(dir.path()), 0, "never a partial left");
+}
+
+#[test]
+fn place_link_falls_back_where_a_hard_link_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source");
+    let link = dir.path().join("link");
+    new_source(&source, "first");
+    without_hard_links(|| place_link(&source, &link, PlaceLink::Hard)).unwrap();
+    expect_hard_link_fallback(&source, &link);
+    assert_eq!(std::fs::read_to_string(&link).unwrap(), "first");
+    // Placing again where a hard link would work: a copy that still matches
+    // the source is already placed; a symbolic link is not the same file.
+    place_link(&source, &link, PlaceLink::Hard).unwrap();
+    assert_eq!(
+        same_file(&source, &link),
+        !expect_fallback_kept(),
+        "the second placement"
+    );
+    new_source(&source, "second");
+    without_hard_links(|| place_link(&source, &link, PlaceLink::Hard)).unwrap();
+    assert_eq!(std::fs::read_to_string(&link).unwrap(), "second");
+    assert_eq!(temp_siblings(dir.path()), 0, "never a partial left");
+}
+
+#[test]
+fn place_link_symbolic_never_adds_a_hard_link_on_unix() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source");
+    let link = dir.path().join("link");
+    new_source(&source, "first");
+    for _ in 0..2 {
+        place_link(&source, &link, PlaceLink::Symbolic).unwrap();
+        expect_symbolic_placement(&source, &link);
+    }
+    assert_eq!(std::fs::read_to_string(&link).unwrap(), "first");
+    assert_eq!(temp_siblings(dir.path()), 0, "never a partial left");
+}
+
 /// Write the file `name` in `dir` (made if missing) and make it executable.
 fn executable(dir: &Path, name: &str) -> PathBuf {
     std::fs::create_dir_all(dir).unwrap();
@@ -1732,6 +1802,42 @@ fn expect_replace_past_foreign_handle(
 fn expect_linked(linked: Linked) {
     if cfg!(unix) {
         assert_eq!(linked, Linked::Symlink);
+    }
+}
+
+/// Where a hard link fails, unix places a symbolic link to the source and
+/// Windows a copy of it (a file of its own).
+fn expect_hard_link_fallback(source: &Path, link: &Path) {
+    let meta = std::fs::symlink_metadata(link).unwrap();
+    if cfg!(unix) {
+        assert!(meta.file_type().is_symlink());
+        assert_eq!(std::fs::read_link(link).unwrap(), source);
+    } else {
+        assert!(meta.is_file());
+        assert!(!same_file(source, link));
+    }
+}
+
+/// Whether a fallback that still matches the source counts as placed: a
+/// Windows copy with the source's length and last-write time does; a unix
+/// symbolic link is never the same file as the source, so a hard placement
+/// replaces it.
+fn expect_fallback_kept() -> bool {
+    cfg!(windows)
+}
+
+/// Unix: a symbolic link to the source, which keeps its one link. Windows
+/// places it as a hard link.
+fn expect_symbolic_placement(source: &Path, link: &Path) {
+    if cfg!(unix) {
+        assert!(std::fs::symlink_metadata(link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read_link(link).unwrap(), source);
+        assert_eq!(link_count(&File::open(source).unwrap()).unwrap(), 1);
+    } else {
+        assert!(same_file(source, link));
     }
 }
 

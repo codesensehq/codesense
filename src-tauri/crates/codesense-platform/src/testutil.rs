@@ -72,6 +72,29 @@ pub fn pathext() -> Vec<String> {
     sys::pathext()
 }
 
+std::thread_local! {
+    static HARD_LINKS_REFUSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `f` with every hard link [`crate::fs::place_link`] tries on this
+/// thread failing, as one across volumes would, so a test reaches its
+/// fallback: a symbolic link on unix, a copy on Windows.
+pub fn without_hard_links<T>(f: impl FnOnce() -> T) -> T {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            HARD_LINKS_REFUSED.with(|refused| refused.set(self.0));
+        }
+    }
+    let _restore = Restore(HARD_LINKS_REFUSED.with(|refused| refused.replace(true)));
+    f()
+}
+
+/// Whether [`without_hard_links`] is running on this thread.
+pub(crate) fn hard_links_refused() -> bool {
+    HARD_LINKS_REFUSED.with(std::cell::Cell::get)
+}
+
 #[cfg(unix)]
 mod sys {
     use std::path::Path;
