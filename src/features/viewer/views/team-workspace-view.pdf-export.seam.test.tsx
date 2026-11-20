@@ -110,6 +110,11 @@ describe("the nav context menu's Export to PDF", () => {
     expect(note).toHaveTextContent("printing isn't built here");
     // Inside the item: a menu's children are its items.
     expect(item).toContainElement(note);
+    // Readable: only the label is dimmed. Named by the label, so the sentence is read once.
+    for (let el: Element | null = note; el && el !== item.parentElement; el = el.parentElement)
+      expect(el.className).not.toMatch(/opacity/);
+    expect(item).toHaveAccessibleName("Export to PDF");
+    expect(item).toHaveAccessibleDescription(note!.textContent!);
     expect(screen.getByRole("menu").querySelector(":scope > [role=note]")).toBeNull();
     fireEvent.click(item);
     expect(screen.getByRole("menu")).toBeInTheDocument();

@@ -26,7 +26,9 @@ feature code.
   control and render one `<CapabilityOffNote cap id>`. The control stays visible and focusable but
   does nothing: it gets `aria-disabled`, the sentence as its tooltip, and `aria-describedby`
   pointing at the note. The control acts through `onClick` or `onSelect` (a button, a link or a
-  menu item); both are replaced and their default action prevented.
+  menu item); both are replaced and their default action prevented. A control that shows the
+  sentence inside itself (a menu item) passes `dim={false}` and dims only its label, so the
+  sentence stays readable.
 - **The feature runs with less.** `<CapabilityOffNotice cap>` is an amber notice: what changes,
   then the sentence.
 

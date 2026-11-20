@@ -471,6 +471,11 @@ describe("ViewerTabs — PDF export", () => {
     expect(note).toHaveTextContent(sentence);
     // Inside the item: a menu's children are its items.
     expect(item).toContainElement(note);
+    // Readable: only the label is dimmed. Named by the label, so the sentence is read once.
+    for (let el: Element | null = note; el && el !== item.parentElement; el = el.parentElement)
+      expect(el.className).not.toMatch(/opacity/);
+    expect(item).toHaveAccessibleName("Export to PDF");
+    expect(item).toHaveAccessibleDescription(note!.textContent!);
     expect(
       screen.getByRole("menu", { name: "Tab actions" }).querySelector(":scope > [role=note]"),
     ).toBeNull();
