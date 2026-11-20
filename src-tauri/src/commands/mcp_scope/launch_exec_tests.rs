@@ -404,3 +404,35 @@ mod producers {
         assert_eq!(outcome.execution, set);
     }
 }
+
+/// A launch of a CLI that needs a configured model endpoint projects no profile launch on
+/// any OS, so it never execs: macOS keeps main's refusal.
+#[test]
+fn a_profile_launch_of_an_endpoint_cli_is_refused_on_every_os() {
+    use crate::commands::mcp_authoring::ScopeLaunch;
+    let _home = crate::routines::test_support::TempHome::new();
+    let root = tempfile::tempdir().unwrap();
+    for runtime in AgentCli::ALL
+        .into_iter()
+        .filter(|cli| crate::agents::adapter::desktop(*cli).model_endpoint.is_some())
+    {
+        for os in ["macos", "linux", "windows"] {
+            let id = format!("launch-exec-endpoint-{}", uuid::Uuid::new_v4());
+            let args: Vec<String> = Vec::new();
+            let cli = super::LaunchCli::new(Path::new("/opt/bin/agent"), &args);
+            let projected = ScopeLaunch::default().project_launch(
+                runtime,
+                &id,
+                root.path(),
+                None,
+                None,
+                Some(&cli),
+                None,
+                &args,
+                os,
+            );
+            super::remove_scope_config(&id);
+            assert!(projected.is_err(), "{runtime:?} on {os}");
+        }
+    }
+}
