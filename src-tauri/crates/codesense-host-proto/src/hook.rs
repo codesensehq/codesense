@@ -491,7 +491,7 @@ pub(crate) mod tests {
         }
     }
 
-    pub(crate) fn call(tool: &str, input: Value) -> Value {
+    fn call(tool: &str, input: Value) -> Value {
         json!({"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": input})
     }
 
@@ -507,7 +507,7 @@ pub(crate) mod tests {
     /// Strings JSON::PP reads as a split surrogate pair: a high escape, then a character, a
     /// simple escape or another high (which replaces it), then the low that pairs with it. The
     /// hex digits may be either case.
-    pub(crate) fn split_pairs() -> [String; 5] {
+    fn split_pairs() -> [String; 5] {
         [
             format!("{HIGH}x{LOW}"),
             format!("{HIGH}\\n{LOW}"),
@@ -519,7 +519,7 @@ pub(crate) mod tests {
 
     /// Strings JSON::PP and serde_json both refuse: a high followed by a non-surrogate `\u`
     /// escape or the closing quote before any low, and a low with no high before it.
-    pub(crate) fn unpaired() -> [String; 5] {
+    fn unpaired() -> [String; 5] {
         [
             format!("{HIGH}A"),
             HIGH.to_string(),
@@ -531,7 +531,7 @@ pub(crate) mod tests {
 
     /// Payloads carrying the JSON string body `s`: beside a protected path, as a key, in a Bash
     /// description and in the command itself.
-    pub(crate) fn carrying(s: &str) -> [String; 4] {
+    fn carrying(s: &str) -> [String; 4] {
         [
             format!(
                 r#"{{"tool_name":"Read","tool_input":{{"file_path":"/repo/.env","x":"{s}"}}}}"#
@@ -550,7 +550,7 @@ pub(crate) mod tests {
     }
 
     /// Calls the guard denies, the script too.
-    pub(crate) fn denied_cases() -> Vec<Value> {
+    fn denied_cases() -> Vec<Value> {
         vec![
             call("Read", json!({"file_path": "/repo/.env"})),
             call("Read", json!({"file_path": "/repo/.env.local"})),
@@ -602,7 +602,7 @@ pub(crate) mod tests {
 
     /// Calls the guard denies that the script lets through: Windows paths and other
     /// letter cases.
-    pub(crate) fn deny_more_cases() -> Vec<Value> {
+    fn deny_more_cases() -> Vec<Value> {
         vec![
             call("Read", json!({"file_path": "C:\\Users\\a\\proj\\.env"})),
             call(
@@ -630,7 +630,7 @@ pub(crate) mod tests {
     }
 
     /// Calls the guard allows, the script too.
-    pub(crate) fn allowed_cases() -> Vec<Value> {
+    fn allowed_cases() -> Vec<Value> {
         vec![
             call("Read", json!({"file_path": "/repo/.env.example"})),
             call("Read", json!({"file_path": "/repo/.env.sample"})),
