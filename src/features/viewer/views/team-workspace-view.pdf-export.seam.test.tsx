@@ -114,6 +114,9 @@ describe("the nav context menu's Export to PDF", () => {
     for (let el: Element | null = note; el && el !== item.parentElement; el = el.parentElement)
       expect(el.className).not.toMatch(/opacity/);
     expect(item).toHaveAccessibleName("Export to PDF");
+    // On keyboard focus the item takes the accent background; the sentence takes its ink.
+    expect(item).toHaveClass("group");
+    expect(note).toHaveClass("group-focus-visible:text-accent-foreground");
     expect(item).toHaveAccessibleDescription(note!.textContent!);
     expect(screen.getByRole("menu").querySelector(":scope > [role=note]")).toBeNull();
     fireEvent.click(item);

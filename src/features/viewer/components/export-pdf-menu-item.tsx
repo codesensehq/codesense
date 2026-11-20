@@ -33,7 +33,7 @@ export function ExportPdfMenuItem({
   return (
     <CapabilityOffControl cap="pdf-export" noteId={noteId} dim={false}>
       <PositionedMenuItem
-        className={cn(className, "flex flex-col items-start")}
+        className={cn(className, "group flex flex-col items-start")}
         // An unavailable item the menu's arrow keys still reach, so its reason can be read.
         data-focusable-disabled
         aria-labelledby={labelId}
@@ -42,7 +42,11 @@ export function ExportPdfMenuItem({
         <span id={labelId} className="flex w-full items-center justify-between gap-4 opacity-50">
           {children}
         </span>
-        <span id={noteId} className="block max-w-64 text-xs text-muted-foreground">
+        {/* On keyboard focus the item takes the accent background; the sentence follows its ink. */}
+        <span
+          id={noteId}
+          className="block max-w-64 text-xs text-muted-foreground group-focus-visible:text-accent-foreground"
+        >
           {notYetAvailableSentence(capability)}
         </span>
       </PositionedMenuItem>
