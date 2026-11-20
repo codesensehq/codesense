@@ -89,7 +89,7 @@ src/commands/dashboard_launch.rs 5
 src/commands/deps.rs 10
 src/commands/local_organization.rs 2
 src/commands/mcp_scope.rs 26
-src/commands/mcp_scope/inventory.rs 5
+src/commands/mcp_scope/inventory.rs 1
 src/commands/sprint_run/run_artifact.rs 9
 src/commands/terminal_server_tray.rs 1
 src/commands/update.rs 3
@@ -100,7 +100,6 @@ src/content_engine/file_mode.rs 1
 src/content_engine/git_exclude.rs 4
 src/context_repo/worktree.rs 3
 src/dashboard_publish/manifest.rs 3
-src/domain/loaded_org.rs 2
 src/http/registry.rs 6
 src/install/agent_account_store.rs 3
 src/lib.rs 6
@@ -115,14 +114,11 @@ src/mcp/remote_agent_task/harness.rs 4
 src/mcp/remote_agent_task/registry.rs 10
 src/mcp/socket_server.rs 10
 src/packs/risk.rs 3
-src/packs/validate.rs 6
+src/packs/validate.rs 3
 src/renderer_recovery.rs 10
 src/renderer_watchdog.rs 4
 src/routines/command.rs 2
 src/runtime_diagnostics.rs 6
-src/session_conversation.rs 3
-src/session_text.rs 3
-src/session_usage/session_log_usage.rs 3
 src/shared/proc_capture.rs 7
 src/terminal/session_server.rs 7
 src/terminal/session_server/strays.rs 14

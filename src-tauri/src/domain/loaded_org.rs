@@ -144,8 +144,10 @@ impl FileLoadError {
     }
 }
 
+/// Whether `error` is this process running out of descriptors (`EMFILE`;
+/// `ERROR_TOO_MANY_OPEN_FILES` on Windows).
 pub(crate) fn descriptor_exhausted(error: &std::io::Error) -> bool {
-    matches!(error.raw_os_error(), Some(libc::EMFILE | libc::ENFILE))
+    codesense_platform::limits::is_descriptor_exhaustion(error)
 }
 
 /// A startup/fork burst can temporarily consume the descriptor budget.
@@ -309,21 +311,19 @@ teams:
 
     #[test]
     fn descriptor_exhaustion_retries_and_recovers_the_org() {
-        for errno in [libc::EMFILE, libc::ENFILE] {
-            let td = TempDir::new().unwrap();
-            write_all_valid(td.path());
-            let mut attempts = 0;
-            let loaded = load_org_with_reader("alpha-corp".into(), td.path(), None, &mut |path| {
-                attempts += 1;
-                if attempts <= 2 {
-                    Err(std::io::Error::from_raw_os_error(errno))
-                } else {
-                    fs::read(path)
-                }
-            });
-            assert!(loaded.org.is_some(), "{:?}", loaded.file_errors);
-            assert_eq!(attempts, 5);
-        }
+        let td = TempDir::new().unwrap();
+        write_all_valid(td.path());
+        let mut attempts = 0;
+        let loaded = load_org_with_reader("alpha-corp".into(), td.path(), None, &mut |path| {
+            attempts += 1;
+            if attempts <= 2 {
+                Err(std::io::Error::from_raw_os_error(libc::EMFILE))
+            } else {
+                fs::read(path)
+            }
+        });
+        assert!(loaded.org.is_some(), "{:?}", loaded.file_errors);
+        assert_eq!(attempts, 5);
     }
 
     #[test]
