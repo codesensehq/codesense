@@ -357,8 +357,8 @@ gif_search({ ids: ["&lt;id&gt;"] })  // the same GIFs again, from ids kept from 
         <p>Errors say what to fix. <code>noProvider</code> means GIF search is off or has no key; the
           user turns it on and adds a key in Settings → Messaging, the only place a key is entered.
           <code>keychainUnavailable</code> means the key couldn't be read (opening Settings → Messaging
-          lets macOS ask to allow it). <code>rateLimited</code> carries <code>retryAfter</code> seconds:
-          searches stop at 90 an hour per key unless it is marked a production key, and pause for as
+          lets the computer ask to allow it). <code>rateLimited</code> carries <code>retryAfter</code> seconds:
+          searches stop at 90 in any hour per key unless it is marked a production key, and pause for as
           long as GIPHY asks after it refuses one. <code>invalidKey</code>,
           <code>providerUnavailable</code> and <code>badQuery</code> complete the list.</p>
         <p>Without <code>gif_search</code>, a GIF link found another way still works: for a GIPHY page

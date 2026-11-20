@@ -266,15 +266,15 @@ a key, none of them is made.
   `User-Agent: CodeSense-GifSearch/1.0` and no referrer. GIPHY sees your IP
   address, your key and the search words.
 - **Limits:** public addresses only, `https://` only, no redirects, 2 MiB of
-  response at most. At most 90 searches an hour per key unless you mark it a
+  response at most. At most 90 searches in any hour per key unless you mark it a
   production key, and none for as long as GIPHY asks after it refuses one (a
   `429`).
-- **What is kept:** the key stays in your Keychain, in the
+- **What is kept:** the key stays in your OS keychain, in the
   `ai.codesense.giphy-api-key` item under your login name. In the app's data
   folder, `gif.json` keeps On or Off, the rating ceiling and which key is a
-  production key, and `gif-rate.json` keeps the search count; both name a key
-  only by a fingerprint. The analytics links GIPHY returns with each result are
-  held in memory for an hour. A GIF is downloaded only when an agent sends it,
+  production key, and `gif-rate.json` keeps the last hour's search times; both
+  name a key only by a fingerprint. The pingback links GIPHY returns with each
+  result are held in memory for an hour. A GIF is downloaded only when an agent sends it,
   as in [Pictures in the inbox](#4-pictures-in-the-inbox).
 - **Turning it off:** set GIF search to Off in Settings → Messaging, or remove
   the key there.
