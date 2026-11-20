@@ -662,7 +662,7 @@ test("a frozen shipped kit code block uses Tab for navigation without editing", 
   await page.route("**/kit/v1/editor.js", (route) =>
     route.fulfill({
       contentType: "text/javascript",
-      body: readFileSync("src-tauri/src/http/routes/dashboard_kit/editor.js", "utf8"),
+      body: readFileSync("src-tauri/src/http/routes/dashboard_kit/editor.min.js", "utf8"),
     }),
   );
   const editorPane = (
