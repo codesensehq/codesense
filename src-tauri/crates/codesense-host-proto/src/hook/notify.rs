@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Claude's status hook: posts a lifecycle event to the running CodeSense app, so terminal
-//! status dots and the agent list stay live. A port of `scripts/codesense-notify.reference.sh`,
-//! step for step, over a plain `TcpStream`.
+//! status dots and the agent list stay live. A port of the bash status script earlier releases
+//! installed, step for step, over a plain `TcpStream`.
 //!
 //! When the app isn't running (no port to reach) it says so in one line on stderr. When a
 //! CodeSense tab's post fails (no port, a connect error, non-200, or a post the app dropped as

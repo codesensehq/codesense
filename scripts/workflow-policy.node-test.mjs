@@ -1374,11 +1374,6 @@ test("Rust jobs preserve package coverage for nextest and doctests and always up
   assert.deepEqual(packages(linux.env.RUST_PACKAGES), [...portable, "codesense-bridge"].sort());
   const runs = linux.steps.filter((step) => step.run?.includes("cargo nextest run"));
   assert.equal(runs.length, 2, "compile and run both use nextest");
-  // The secret guard's oracle against its Perl script, until the script is deleted.
-  assert.deepEqual(
-    linux.steps.filter((step) => /\bcargo test\b(?! --doc)/.test(step.run ?? "")).map((s) => s.run),
-    ["cargo test --locked -p codesense-host-proto --lib hook:: -- --ignored"],
-  );
   for (const step of runs) {
     assert.match(step.run, /--profile ci/);
     assert.match(step.run, /\$RUST_PACKAGES/);

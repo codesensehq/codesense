@@ -605,10 +605,6 @@ jobs:
         # and tracked as a public issue by flaky-issues on main.
         if: (success() || failure()) && steps.compile.outcome == 'success'
         run: node scripts/flaky-tests.mjs summary target/nextest/ci/junit.xml
-      - name: Compare the secret guard with its Perl script
-        # The Rust guard must deny everything the installed Perl guard denies (/usr/bin/perl is on
-        # the runner). It goes when the Perl script is deleted.
-        run: "cargo test --locked -p codesense-host-proto --lib hook:: -- --ignored"
       - name: Test Linux doctests
         timeout-minutes: 15
         # Runs after failed tests, but not when the test build never ran, so an earlier failure

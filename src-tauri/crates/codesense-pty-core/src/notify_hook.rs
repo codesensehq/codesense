@@ -20,17 +20,8 @@ use codesense_host_proto::hook::{self, HookTarget, Verb};
 
 use crate::activity::HelperLink;
 
-/// The reference hook, embedded in the app binary. The repo copy at
-/// `scripts/codesense-notify.reference.sh` is the single source of truth;
-/// edits there flow in on the next build.
-pub const SOURCE: &str = include_str!("../../../../scripts/codesense-notify.reference.sh");
-
 /// The status script an earlier CodeSense installed in a host's activity root.
 pub const NAME: &str = "codesense-notify.sh";
-
-/// Mode the installed hook lands with on unix (executable for owner, read + exec
-/// for group and other): [`Reach::Everyone`].
-pub const MODE: u32 = 0o755;
 
 /// The guard script an earlier CodeSense installed in a host's activity root.
 pub const GUARD_NAME: &str = "codesense-secret-guard.sh";
@@ -38,10 +29,9 @@ pub const GUARD_NAME: &str = "codesense-secret-guard.sh";
 /// The tools the guard is scoped to, as a hook matcher.
 pub const GUARD_MATCHER: &str = "Read|Grep|Glob|Bash";
 
-/// The protected list and the guard built from it live beside the guard's verdict in
-/// `codesense-host-proto`, so the guard, the installed script and Claude's `permissions.deny`
-/// rules keep one list.
-pub use codesense_host_proto::hook::{deny_rules, guard_source, Family, FAMILIES, PROTECTED_DIRS};
+/// The protected list lives beside the guard's verdict in `codesense-host-proto`, so the guard
+/// and Claude's `permissions.deny` rules keep one list.
+pub use codesense_host_proto::hook::{deny_rules, Family, FAMILIES, PROTECTED_DIRS};
 
 /// The command the guard hook runs on this host ([`hook::command`]).
 pub fn guard_command() -> String {
@@ -94,12 +84,6 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn source_has_bash_shebang_and_tab_session_check() {
-        assert!(SOURCE.starts_with("#!/bin/bash\n"));
-        assert!(SOURCE.contains("CODESENSE_TAB_SESSION_ID"));
-    }
-
-    #[test]
     fn the_hook_commands_are_the_local_targets() {
         let local = HookTarget::local();
         assert_eq!(status_command(), hook::command(Verb::Notify, local).command);
@@ -143,6 +127,5 @@ mod tests {
             deny_rules(),
             codesense_host_proto::hook::deny_rules()
         ));
-        assert_eq!(guard_source(), codesense_host_proto::hook::guard_source());
     }
 }

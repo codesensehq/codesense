@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 //! Claude's hooks as `codesense-bridge hook …` runs them: the status post ([`notify`]) and the
 //! secret-file guard's verdict ([`secret_guard`]), with the one list of protected credential
-//! files ([`FAMILIES`], [`PROTECTED_DIRS`]).
+//! files ([`FAMILIES`], [`PROTECTED_DIRS`]), and the hook commands CodeSense writes to run them
+//! ([`command`]).
 //!
-//! They port the installed scripts (`scripts/codesense-notify.reference.sh` and the guard
-//! [`guard_source`] writes), so a hook needs no bash, curl or perl. The list lives here, beside
-//! the verdict, and `codesense-pty-core` re-exports it: the guard, the installed script and
-//! Claude's `permissions.deny` rules keep one list.
+//! They port the bash status script and the Perl guard script earlier releases installed, so a
+//! hook needs no bash, curl or perl; "the script" below is that guard, whose reading of a call
+//! the verdict keeps. The list lives here, beside the verdict, and `codesense-pty-core`
+//! re-exports it: the guard and Claude's `permissions.deny` rules keep one list.
 //!
 //! The guard is a credential-exfiltration control, so its port may only deny more than the
 //! script: it judges every path in the script's own form and in widened forms (`\` as a
@@ -18,19 +19,11 @@ use regex::Regex;
 
 mod command;
 mod notify;
-#[cfg(test)]
-mod oracle;
 
 pub use command::{
     command, legacy_verb, HookCommand, HookTarget, Verb, BRIDGE, HOST_ENV, LEGACY_COMMANDS,
 };
 pub use notify::{notify, HookEnv, Outcome};
-
-/// The secret-file guard's template, installed beside the status hook with the protected
-/// families filled in ([`guard_source`]). The repo copy at
-/// `scripts/codesense-secret-guard.reference.sh` is the single source of truth for its logic.
-const GUARD_TEMPLATE: &str =
-    include_str!("../../../../scripts/codesense-secret-guard.reference.sh");
 
 /// One protected family of credential files, named by a basename glob. `except` are the globs
 /// the hook lets through (templates, public keys); a native deny rule cannot express an
@@ -86,17 +79,6 @@ fn glob_body(glob: &str, escape: impl Fn(char, &mut String)) -> String {
     re
 }
 
-/// A basename glob as an anchored regular expression, in the installed guard's Perl syntax.
-fn glob_regex(glob: &str) -> String {
-    let body = glob_body(glob, |c, re| {
-        if !(c.is_ascii_alphanumeric() || c == '_') {
-            re.push('\\');
-        }
-        re.push(c);
-    });
-    format!("^{body}$")
-}
-
 /// Claude's `permissions.deny` rules for the protected families. The hook sees one path or
 /// command; these also keep Grep and Glob from reaching a credential file inside a directory
 /// they search.
@@ -111,48 +93,12 @@ pub fn deny_rules() -> &'static [String] {
     &RULES
 }
 
-/// The guard script as installed: its template with the families and directories written in.
-pub fn guard_source() -> String {
-    let mut defs = String::from("my @FAMILIES = (\n");
-    for f in FAMILIES {
-        let except: Vec<String> = f
-            .except
-            .iter()
-            .map(|e| format!("qr/{}/", glob_regex(e)))
-            .collect();
-        defs.push_str(&format!(
-            "  [qr/{}/, [{}]],\n",
-            glob_regex(f.glob),
-            except.join(", ")
-        ));
-    }
-    defs.push_str(");\nmy @DIRS = (");
-    let dirs: Vec<String> = PROTECTED_DIRS
-        .iter()
-        .map(|d| format!("qr{{{}}}", protected_dir(d).replace('.', "\\.")))
-        .collect();
-    defs.push_str(&dirs.join(", "));
-    defs.push_str(");");
-    GUARD_TEMPLATE
-        .lines()
-        .map(|line| {
-            if line.starts_with("# @@PROTECTED@@") {
-                defs.clone()
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-        + "\n"
-}
-
 /// A protected directory as the guard matches it: anywhere in a path, without the `~/`.
 fn protected_dir(dir: &str) -> &str {
     dir.trim_start_matches("~/")
 }
 
-/// The reason the guard gives the agent, word for word the installed script's.
+/// The reason the guard gives the agent, word for word the script's.
 pub const GUARD_REASON: &str = "CodeSense blocks reading credential files (.env, key files, ~/.config/codesense-mcp/) so secrets do not land in transcripts. Ask the user to give you the value another way, or read .env.example for the names.";
 
 /// The guard's verdict on a call that would read a credential file.
@@ -603,7 +549,7 @@ pub(crate) mod tests {
         secret_guard(payload.to_string().as_bytes()).map(|deny| deny.reason)
     }
 
-    /// Calls the guard denies, the installed script too.
+    /// Calls the guard denies, the script too.
     pub(crate) fn denied_cases() -> Vec<Value> {
         vec![
             call("Read", json!({"file_path": "/repo/.env"})),
@@ -654,7 +600,7 @@ pub(crate) mod tests {
         ]
     }
 
-    /// Calls the guard denies that the installed script lets through: Windows paths and other
+    /// Calls the guard denies that the script lets through: Windows paths and other
     /// letter cases.
     pub(crate) fn deny_more_cases() -> Vec<Value> {
         vec![
@@ -683,7 +629,7 @@ pub(crate) mod tests {
         ]
     }
 
-    /// Calls the guard allows, the installed script too.
+    /// Calls the guard allows, the script too.
     pub(crate) fn allowed_cases() -> Vec<Value> {
         vec![
             call("Read", json!({"file_path": "/repo/.env.example"})),
@@ -909,7 +855,6 @@ pub(crate) mod tests {
 
     #[test]
     fn the_deny_is_the_scripts_canonical_json() {
-        assert!(GUARD_TEMPLATE.contains(GUARD_REASON));
         let deny = Deny {
             reason: GUARD_REASON,
         };
@@ -921,17 +866,11 @@ pub(crate) mod tests {
         );
     }
 
-    /// Every protected family has both a hook pattern and a native deny rule, and the hook
-    /// denies a name in the family while letting its exceptions through.
+    /// Every protected family has a native deny rule, and the hook denies a name in the family
+    /// while letting its exceptions through.
     #[test]
-    fn every_family_has_a_hook_pattern_and_a_deny_rule() {
-        let script = guard_source();
+    fn every_family_has_a_deny_rule_and_the_hooks_verdict() {
         for family in FAMILIES {
-            assert!(
-                script.contains(&format!("qr/{}/", glob_regex(family.glob))),
-                "{} has no hook pattern",
-                family.glob
-            );
             let rule = format!("Read(**/{})", family.glob);
             assert!(deny_rules().contains(&rule), "{rule} is not a deny rule");
             let name = family.glob.replace('*', "backup");
