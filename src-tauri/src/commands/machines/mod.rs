@@ -805,8 +805,9 @@ fn spawn_pinned_script(
         // hidden pipe filling and deadlocking a long-lived transport.
         .stderr(Stdio::null());
     // The root of its own tree (on unix the leader of a fresh process group),
-    // so the guard ends everything ssh starts.
-    let tree = ProcessTree::spawn(&mut command).map_err(|e| format!("start SSH attach: {e}"))?;
+    // so the guard ends everything ssh starts; no console window on Windows.
+    let tree =
+        ProcessTree::spawn_hidden(&mut command).map_err(|e| format!("start SSH attach: {e}"))?;
     // Establish ownership immediately: every later early return runs Drop and
     // kills/reaps the whole group.
     let mut guard = SshProcessGuard {

@@ -233,10 +233,11 @@ fn run_inner(
     if !alive() || Instant::now() >= deadline {
         return Err("local Git preparation cancelled".into());
     }
-    // Git leads a tree of its own (on unix a fresh process group): dropping
-    // it kills everything Git started, and an exit ends what Git left behind.
+    // Git leads a tree of its own (on unix a fresh process group), with no
+    // console window on Windows: dropping it kills everything Git started,
+    // and an exit ends what Git left behind.
     let mut tree =
-        ProcessTree::spawn(&mut command).map_err(|_| "local Git executable unavailable")?;
+        ProcessTree::spawn_hidden(&mut command).map_err(|_| "local Git executable unavailable")?;
     // Git rewrites one progress line with `\r`; each rewrite is a reading.
     let lines = tree.child().stderr.take().map(|stderr| {
         let (tx, rx) = std::sync::mpsc::channel::<String>();
