@@ -45,7 +45,7 @@ use super::ContentSource;
 pub(super) async fn render(source: ContentSource) -> Result<Vec<u8>, String> {
     let dir = tempfile::tempdir()
         .map_err(|e| format!("Failed to create a temporary directory: {}", e))?;
-    let out = dir.path().join("out.pdf");
+    let out = tempfile::TempDir::path(&dir).join("out.pdf");
     let (tx, rx) = oneshot::channel();
     let export = Export::start(source, out.clone(), tx);
     let printed = rx
@@ -157,7 +157,7 @@ fn offscreen_view() -> (gtk::OffscreenWindow, WebView) {
     });
     let window = gtk::OffscreenWindow::new();
     window.set_default_size(816, 1056);
-    window.add(&web_view);
+    ContainerExt::add(&window, &web_view);
     window.show_all();
     (window, web_view)
 }
@@ -259,7 +259,7 @@ fn print_to_pdf(
     let Ok(uri) = url::Url::from_file_path(out) else {
         return finish(
             &done,
-            Err(format!("Not an absolute path: {}", out.display())),
+            Err(format!("Not an absolute path: {}", Path::display(out))),
         );
     };
     let uri = uri.to_string();
@@ -275,7 +275,10 @@ fn print_to_pdf(
     let printing = Rc::new(std::cell::Cell::new(false));
     web_view.connect_load_changed(move |web_view, event| {
         // A failed load finishes too, after `load-failed` took the callback.
-        if event != LoadEvent::Finished || done.borrow().is_none() || printing.replace(true) {
+        if event != LoadEvent::Finished
+            || done.borrow().is_none()
+            || std::cell::Cell::replace(&printing, true)
+        {
             return;
         }
         debug!(target: "export_pdf", "Load finished; printing to file");
@@ -291,12 +294,18 @@ fn print_to_pdf(
 fn start_print(web_view: &WebView, printer: &str, uri: &str, done: Done) {
     let settings = gtk::PrintSettings::new();
     settings.set_printer(printer);
-    settings.set(gtk::PRINT_SETTINGS_OUTPUT_FILE_FORMAT.as_str(), Some("pdf"));
-    settings.set(gtk::PRINT_SETTINGS_OUTPUT_URI.as_str(), Some(uri));
+    settings.set(
+        glib::GStr::as_str(gtk::PRINT_SETTINGS_OUTPUT_FILE_FORMAT),
+        Some("pdf"),
+    );
+    settings.set(
+        glib::GStr::as_str(gtk::PRINT_SETTINGS_OUTPUT_URI),
+        Some(uri),
+    );
     let page = gtk::PageSetup::new();
-    page.set_paper_size_and_default_margins(&gtk::PaperSize::new(Some(
-        gtk::PAPER_NAME_LETTER.as_str(),
-    )));
+    page.set_paper_size_and_default_margins(&gtk::PaperSize::new(Some(glib::GStr::as_str(
+        gtk::PAPER_NAME_LETTER,
+    ))));
 
     let operation = PrintOperation::new(web_view);
     operation.set_print_settings(&settings);
@@ -430,9 +439,8 @@ fn choose_file_printer(printers: &[Printer], preferred: &str) -> Result<String, 
         "No print-to-file printer: GTK's file print backend (libprintbackend-file.so) is missing"
             .to_string()
     })?;
-    let chosen = candidates
-        .find(|printer| printer.name == preferred)
-        .unwrap_or(first);
+    let chosen =
+        Iterator::find(&mut candidates, |printer| printer.name == preferred).unwrap_or(first);
     Ok(chosen.name.clone())
 }
 
