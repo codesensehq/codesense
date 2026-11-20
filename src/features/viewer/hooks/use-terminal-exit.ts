@@ -167,10 +167,13 @@ export function useTerminalExit({
       openLaunchSheet(teamLaunch);
       return;
     }
-    if (!launch) return;
+    if (!launch || launch.exec) return;
     run("Relaunch", () => relaunchAgentInLiveShell(sessionId, launch.line, relaunchDeps));
     focusTerminal();
   }, [teamLaunch, launch, run, sessionId, relaunchDeps, focusTerminal]);
+
+  // An agent that was its tab's process left no shell to launch it in again.
+  const inShell = (launch && !launch.exec) || teamLaunch ? relaunchInShell : undefined;
 
   const crashStands =
     crashSeq !== null &&
@@ -219,7 +222,7 @@ export function useTerminalExit({
       agent: launch?.agent ?? teamLaunch?.name ?? null,
       focusToken: 0,
       busy: relaunch.busy,
-      onRelaunchAgent: launch || teamLaunch ? relaunchInShell : undefined,
+      onRelaunchAgent: inShell,
       onClose: () => endTabRef.current({ dead: false }),
       onDismiss: () => useAgentStateStore.getState().setRelaunch(sessionId, null),
       onEscape: focusTerminal,
@@ -233,7 +236,7 @@ export function useTerminalExit({
       agent: launch?.agent ?? teamLaunch?.name ?? null,
       focusToken: 0,
       busy: relaunch.busy,
-      onRelaunchAgent: launch || teamLaunch ? relaunchInShell : undefined,
+      onRelaunchAgent: inShell,
       onClose: () => endTabRef.current({ dead: false }),
       onDismiss: () => {
         if (row?.crashId) void dismissAgentMark(sessionId, row.crashId);

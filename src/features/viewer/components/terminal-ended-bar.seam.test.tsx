@@ -1035,6 +1035,16 @@ describe("an agent tab", () => {
     expect(hx.onEnd).toHaveBeenCalledWith({ dead: false });
   });
 
+  it("an agent that was its tab's process offers no relaunch into a shell", async () => {
+    const hx = await mount();
+    recordAgentLaunch(SID, VERB_SPEC, VERB_LINE, true);
+    hook("UserPromptSubmit", "running");
+    commandEnd(137);
+    expect(bar()).toHaveAttribute("data-kind", "agent");
+    expect(screen.queryByTestId("terminal-ended-relaunch")).toBeNull();
+    expect(hx.sent).toEqual([]);
+  });
+
   it("an agent the user typed crashes inside a live shell: no Relaunch", async () => {
     await mount();
     hook("UserPromptSubmit", "running");
