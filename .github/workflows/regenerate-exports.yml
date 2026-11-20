@@ -23,9 +23,9 @@ on:
         type: choice
         options:
           - all
+          - model-schemas
           - live-data-contract
           - mcp-reference
-          - model-schemas
         default: all
 
 permissions: {}
