@@ -554,5 +554,5 @@ pub(crate) fn sweep_managed_runtimes(scopes: &Path) {
     hermes::runtime::sweep(scopes);
 }
 
-#[cfg(test)]
+#[cfg(all(test, cap_agent_cli_sockets))]
 pub(crate) use hermes::runtime::tests::Fixture as ManagedHomeFixture;

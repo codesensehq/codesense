@@ -735,11 +735,11 @@ jobs:
         run: bash scripts/build-session-server.sh
       - name: Check the desktop app
         run: cargo check --locked -p codesense --lib --tests --features dashboard-publish
-      - name: Check the desktop app with git-ai off
+      - name: Check the desktop app with git-ai and agent-cli-sockets off
         # CODESENSE_CAPS_OFF turns capabilities off for one build, so Linux compiles the code a
         # platform without them builds: their facades' off arms, with the gated parts left out.
         env:
-          CODESENSE_CAPS_OFF: git-ai
+          CODESENSE_CAPS_OFF: git-ai,agent-cli-sockets
         run: cargo check --locked -p codesense --lib --tests --features dashboard-publish
 
   rust-linux-app:

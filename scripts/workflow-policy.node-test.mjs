@@ -2309,15 +2309,16 @@ test("smoke images: the policy rejects a bare tag, a short digest, a duplicate o
   assert.deepEqual(smokeImagesPolicy(`# a comment\n\nubuntu:24.04${pin}\n`), []);
 });
 
-// Linux compiles the code a platform without git-ai builds (the facade's off arms, with the
-// gated parts left out); the Linux app job runs the facade's tests, with the rest of the app's.
-test("rust.yml checks the app with git-ai off", () => {
+// Linux compiles the code a platform without git-ai and the agent-CLI sockets builds (the
+// facades' off arms, with the gated parts left out); the Linux app job runs the git-ai facade's
+// tests, with the rest of the app's.
+test("rust.yml checks the app with git-ai and agent-cli-sockets off", () => {
   const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
   const steps = workflow.jobs["rust-check-linux"].steps;
   const off = steps.filter((step) => step.env?.CODESENSE_CAPS_OFF !== undefined);
   assert.equal(off.length, 1, "one cap-off check step");
-  assert.equal(off[0].name, "Check the desktop app with git-ai off");
-  assert.equal(off[0].env.CODESENSE_CAPS_OFF, "git-ai");
+  assert.equal(off[0].name, "Check the desktop app with git-ai and agent-cli-sockets off");
+  assert.equal(off[0].env.CODESENSE_CAPS_OFF, "git-ai,agent-cli-sockets");
   assert.equal(
     off[0].run,
     "cargo check --locked -p codesense --lib --tests --features dashboard-publish",

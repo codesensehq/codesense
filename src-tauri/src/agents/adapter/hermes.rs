@@ -169,6 +169,10 @@ fn permission_display(settings: &serde_json::Value, args: &[String]) -> String {
     format!("{approval} approvals · {toolsets} · {denies} tool deny rules")
 }
 
+#[cfg(cap_agent_cli_sockets)]
+pub(super) mod runtime;
+#[cfg(not(cap_agent_cli_sockets))]
+#[path = "hermes/runtime_off.rs"]
 pub(super) mod runtime;
 
 /// Only non-secret startup model selectors are admitted until endpoint credentials land.
@@ -392,6 +396,7 @@ fn model_settings(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(cap_agent_cli_sockets)]
     #[test]
     fn hermes_admin_policy_presence_refuses_system_or_nonempty_ambient() {
         let fixture = super::super::ManagedHomeFixture::new();
