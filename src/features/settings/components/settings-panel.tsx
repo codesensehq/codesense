@@ -13,18 +13,13 @@ import type { SectionKey } from "@/features/settings/lib/types";
 
 import { AccountSection } from "./account-section";
 import { DashboardsSection } from "./dashboards-section";
-import { GeneralSection } from "./general-section";
+import { GeneralSection, useGeneralRowSpecs } from "./general-section";
 import { IdentitySection } from "./identity-section";
 import { PhasesSection } from "./phases-section/phases-section";
 import { ProjectionExcludesSection } from "./projection-excludes-section";
 import { RepoSection } from "./repo-section";
 import { ShortcutsSection } from "./shortcuts-section";
-import {
-  SettingsSidebar,
-  SECTION_NAV_ITEMS,
-  sectionHasContent,
-  useLiveSectionSpecs,
-} from "./settings-sidebar";
+import { SettingsSidebar, SECTION_NAV_ITEMS, sectionHasContent } from "./settings-sidebar";
 
 /**
  * App-wide Settings panel — the body of the `virtual://settings` tab. Two-column
@@ -98,14 +93,14 @@ export function SettingsPanel() {
   // the query, jump to the first matching section. Uses ref to read
   // activeSection without including it in deps (prevents sidebar clicks
   // from re-triggering auto-switch).
-  const liveSpecs = useLiveSectionSpecs();
+  const generalSpecs = useGeneralRowSpecs();
   useEffect(() => {
     if (!query.trim()) return;
     const current = activeSectionRef.current;
-    if (sectionHasContent(current, query, liveSpecs)) {
+    if (sectionHasContent(current, query, generalSpecs)) {
       return; // current section still has matching rows
     }
-    const first = SECTION_NAV_ITEMS.find((n) => sectionHasContent(n.key, query, liveSpecs));
+    const first = SECTION_NAV_ITEMS.find((n) => sectionHasContent(n.key, query, generalSpecs));
     // Set-state-in-effect is intentional — auto-switch needs to observe
     // query changes (a side-effectful trigger) and reconcile with the
     // ref-tracked activeSection (intentionally NOT in deps to avoid
@@ -114,7 +109,7 @@ export function SettingsPanel() {
     // setActiveSection writer, so the value isn't a pure function of query.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (first) setActiveSection(first.key);
-  }, [query, liveSpecs]);
+  }, [query, generalSpecs]);
 
   // Manual section change from sidebar click.
   // A row an opener asked for is dropped once the user moves on by hand, so it never replays.

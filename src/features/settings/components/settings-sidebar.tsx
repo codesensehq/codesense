@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-import { useMemo } from "react";
 import { APPEARANCE_ROW_SPECS } from "./appearance-section";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -22,7 +21,7 @@ import { DASHBOARDS_SECTION_SPEC } from "./dashboards-section";
 import { useGeneralRowSpecs } from "./general-section";
 import { IDENTITY_SECTION_SPECS } from "./identity-section";
 import { REPO_SECTION_SPEC } from "./repo-section";
-import { useShortcutRowSpecs } from "./shortcuts-section";
+import { shortcutRowSpecs } from "./shortcuts-section";
 import { ACCOUNT_SECTION_SPEC } from "./account-section";
 import { PHASES_SECTION_SPEC } from "./phases-section/phases-section";
 import { PROJECTION_EXCLUDES_SECTION_SPEC } from "./projection-excludes-section";
@@ -50,27 +49,19 @@ export const SECTION_NAV_ITEMS: SectionNavItem[] = [
 
 // ---------- Section content matching ----------
 
-/** The sections whose rows follow live state: General's and Shortcuts' depend on this OS's
- *  capabilities, and dashboard commands come and go with the slot dashboards. */
-type LiveSection = "general" | "shortcuts";
-export type LiveSectionSpecs = Record<LiveSection, readonly SettingRowSpec[]>;
-
-/** The row specs of the live sections, for `sectionHasContent`. */
-export function useLiveSectionSpecs(): LiveSectionSpecs {
-  const general = useGeneralRowSpecs();
-  const shortcuts = useShortcutRowSpecs();
-  return useMemo(() => ({ general, shortcuts }), [general, shortcuts]);
-}
-
 /** Maps each section to the row specs that determine whether it has
  *  visible content for a given query. The sidebar dims sections where
  *  no row spec matches — ensuring the enabled state reflects actual
- *  content, not a static keyword approximation. The live sections aren't here: callers pass
- *  `useLiveSectionSpecs()` to `sectionHasContent`, so their hidden rows never match. */
-const SECTION_ROW_SPECS: Record<Exclude<SectionKey, LiveSection>, readonly SettingRowSpec[]> = {
+ *  content, not a static keyword approximation. General isn't here: its rows depend on this OS's
+ *  capabilities, so callers pass `useGeneralRowSpecs()` to `sectionHasContent`. */
+const SECTION_ROW_SPECS: Record<Exclude<SectionKey, "general">, readonly SettingRowSpec[]> = {
   appearance: APPEARANCE_ROW_SPECS,
   dashboards: [DASHBOARDS_SECTION_SPEC],
   identity: IDENTITY_SECTION_SPECS,
+  // Dashboard commands come and go with the slot dashboards, so read them each time.
+  get shortcuts() {
+    return shortcutRowSpecs();
+  },
   repo: [REPO_SECTION_SPEC],
   workspace: WORKSPACE_ROW_SPECS,
   phases: [PHASES_SECTION_SPEC],
@@ -78,15 +69,15 @@ const SECTION_ROW_SPECS: Record<Exclude<SectionKey, LiveSection>, readonly Setti
   account: [ACCOUNT_SECTION_SPEC],
 };
 
-/** Returns true if the section has at least one row that matches the query. `liveSpecs`
- *  comes from `useLiveSectionSpecs`, so General's and Shortcuts' hidden rows never match. */
+/** Returns true if the section has at least one row that matches the query. `generalSpecs`
+ *  comes from `useGeneralRowSpecs`, so General's hidden rows never match. */
 export function sectionHasContent(
   key: SectionKey,
   query: string,
-  liveSpecs: LiveSectionSpecs,
+  generalSpecs: readonly SettingRowSpec[],
 ): boolean {
   if (!query.trim()) return true;
-  const specs = key === "general" || key === "shortcuts" ? liveSpecs[key] : SECTION_ROW_SPECS[key];
+  const specs = key === "general" ? generalSpecs : SECTION_ROW_SPECS[key];
   return specs.some((spec) => rowMatches(spec, query));
 }
 
@@ -105,10 +96,10 @@ export function SettingsSidebar({
   query,
   collapsed,
 }: SettingsSidebarProps) {
-  const liveSpecs = useLiveSectionSpecs();
+  const generalSpecs = useGeneralRowSpecs();
   const enabledItems = SECTION_NAV_ITEMS.map((item) => ({
     ...item,
-    enabled: sectionHasContent(item.key, query, liveSpecs),
+    enabled: sectionHasContent(item.key, query, generalSpecs),
   }));
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {

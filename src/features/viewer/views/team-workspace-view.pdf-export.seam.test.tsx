@@ -98,9 +98,17 @@ describe("the nav context menu's Export to PDF", () => {
     expect(screen.getByRole("menuitem", { name: /Export to PDF/ })).toBeInTheDocument();
   });
 
-  it("is absent with the capability off", async () => {
+  it("stays with the capability off, disabled and explained", async () => {
     setPlatformCaps({ "pdf-export": "printing isn't built here" });
     await openNavMenu();
-    expect(screen.queryByRole("menuitem", { name: /Export to PDF/ })).toBeNull();
+    const item = screen.getByRole("menuitem", { name: /Export to PDF/ });
+    expect(item).toHaveAttribute("aria-disabled", "true");
+    expect(item.getAttribute("title")).toMatch(
+      /^Not yet available on .+: printing isn't built here\.$/,
+    );
+    const note = document.getElementById(item.getAttribute("aria-describedby")!);
+    expect(note).toHaveTextContent("printing isn't built here");
+    fireEvent.click(item);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
   });
 });

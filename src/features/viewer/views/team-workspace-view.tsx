@@ -77,7 +77,6 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { exportViewerToPdf } from "../lib/export-pdf";
-import { useCapability } from "@/shared/lib/capabilities";
 import { FindBar } from "../components/find-bar";
 import { useWorkspaceBarCallbacks } from "../hooks/use-workspace-bar-callbacks";
 import { useFocusActiveWorkspaceDoc } from "../hooks/use-focus-active-workspace-doc";
@@ -951,8 +950,6 @@ export function TeamWorkspaceView({ teamKey }: TeamWorkspaceViewProps) {
     },
     [navRepoPath],
   );
-  // Without the handler the nav context menu has no export item.
-  const pdfExport = useCapability("pdf-export").on;
 
   // PTS-2: Shared content-root absolute path. Used for `isDrilledIn`,
   // `rootPath`, and downstream nav props — one memoized value avoids
@@ -1560,7 +1557,7 @@ export function TeamWorkspaceView({ teamKey }: TeamWorkspaceViewProps) {
                 renderOpenCli={renderOpenCli}
                 onOpenEpicTerminal={handleOpenEpicTerminal}
                 isStoryFilePath={handleIsStoryFilePath}
-                onExportPdf={pdfExport ? handleExportPdf : undefined}
+                onExportPdf={handleExportPdf}
                 viewerRootPath={viewerRootAbsolute}
                 refreshKey={navRefreshKey}
                 // SLW-NC-1 Phase 2: provenance badge inputs for installed

@@ -8,7 +8,6 @@ import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
 import { resolveVirtualTabTooltip } from "@/shared/lib/virtual-viewer-registry";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 import { useEffectiveShortcut } from "@/shared/stores/shortcuts-store";
-import { useCapability } from "@/shared/lib/capabilities";
 import { useContentSource } from "@/shared/hooks/use-content-source";
 import { useActiveTeamKey } from "@/shared/lib/team-key";
 import {
@@ -16,6 +15,7 @@ import {
   PositionedMenuItem,
 } from "@/shared/components/positioned-context-menu";
 import { canExportToPdf, exportViewerToPdf } from "../lib/export-pdf";
+import { ExportPdfMenuItem } from "./export-pdf-menu-item";
 import { StarterPageMenuItems } from "./starter-page-menu-items";
 import { useSummaryHeadings } from "@/shared/hooks/use-summary-headings";
 import { isPipelineFileName } from "@/shared/lib/pipeline-graph/pipeline-file-filter";
@@ -79,7 +79,6 @@ export function ViewerTabs({ repoPath }: ViewerTabsProps) {
   const pinTab = useViewerStore((s) => s.pinTab);
   const openFile = useViewerStore((s) => s.openFile);
   const resolvedRepo = useContentSource(repoPath);
-  const pdfExport = useCapability("pdf-export").on;
   const exportKeystroke = useEffectiveShortcut("viewer.export-pdf");
   const exportHint = formatKeystrokeDisplay(exportKeystroke);
 
@@ -278,10 +277,10 @@ export function ViewerTabs({ repoPath }: ViewerTabsProps) {
             isFile
             onClose={() => setTabContextMenu(null)}
           />
-          {pdfExport && canExportToPdf(tabContextMenu.path) && (
+          {canExportToPdf(tabContextMenu.path) && (
             <>
               <div role="separator" className="my-1 h-px bg-border" />
-              <PositionedMenuItem
+              <ExportPdfMenuItem
                 className="flex items-center justify-between"
                 onClick={() => {
                   // Match `repo-viewer-view.tsx` handleExportPdf guard:
@@ -299,7 +298,7 @@ export function ViewerTabs({ repoPath }: ViewerTabsProps) {
               >
                 <span>Export to PDF</span>
                 <span className="ml-4 text-xs text-muted-foreground">{exportHint}</span>
-              </PositionedMenuItem>
+              </ExportPdfMenuItem>
             </>
           )}
         </PositionedContextMenu>

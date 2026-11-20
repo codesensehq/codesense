@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 
 import { resetPlatformCaps, setPlatformCaps } from "@/shared/lib/__test-utils__/platform-caps";
 import { setDynamicShortcutActions, type ShortcutAction } from "@/shared/lib/shortcuts/registry";
@@ -56,28 +56,43 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const OFF = { "pdf-export": "printing isn't built here" } as const;
+const SENTENCE = "Not yet available on Windows: printing isn't built here.";
+
 describe("Settings → Shortcuts with PDF export off", () => {
-  it("has no Export to PDF row, and the row comes back when the capability is on", () => {
-    setPlatformCaps({ "pdf-export": "printing isn't built here" });
+  it("shows the row with the off sentence in place of the chord, and Edit does nothing", () => {
+    setPlatformCaps(OFF);
     render(<ShortcutsSection query="" />);
-    expect(screen.queryByTestId(EXPORT_ROW)).toBeNull();
-    act(() => setPlatformCaps());
-    expect(screen.getByTestId(EXPORT_ROW)).toBeInTheDocument();
+    const row = screen.getByTestId(EXPORT_ROW);
+    const note = within(row).getByRole("note");
+    expect(note).toHaveTextContent(SENTENCE);
+    expect(within(row).queryByTestId(`${EXPORT_ROW}-current`)).toBeNull();
+    const edit = within(row).getByTestId(`${EXPORT_ROW}-edit`);
+    expect(edit).toHaveAttribute("aria-disabled", "true");
+    expect(edit).toHaveAttribute("title", SENTENCE);
+    expect(edit).toHaveAttribute("aria-describedby", note.id);
+    fireEvent.click(edit);
+    expect(within(row).queryByTestId(`${EXPORT_ROW}-capture`)).toBeNull();
   });
 
-  it("shows the row before the capabilities load (fail open)", () => {
+  it("shows the chord again when the capability is on, and before the capabilities load", () => {
     render(<ShortcutsSection query="" />);
-    expect(screen.getByTestId(EXPORT_ROW)).toBeInTheDocument();
+    expect(screen.getByTestId(`${EXPORT_ROW}-current`)).toHaveTextContent("Ctrl+Shift+E");
+    act(() => setPlatformCaps(OFF));
+    expect(screen.queryByTestId(`${EXPORT_ROW}-current`)).toBeNull();
+    act(() => setPlatformCaps());
+    expect(screen.getByTestId(`${EXPORT_ROW}-current`)).toBeInTheDocument();
+    expect(within(screen.getByTestId(EXPORT_ROW)).queryByRole("note")).toBeNull();
   });
 
   it("keeps a dashboard command's row though its available() is false", () => {
-    setPlatformCaps({ "pdf-export": "printing isn't built here" });
+    setPlatformCaps(OFF);
     render(<ShortcutsSection query="" />);
     expect(screen.getByTestId(`shortcut-row-${ARCHIVE}`)).toBeInTheDocument();
   });
 
   it("frees the export chord: the dashboard command takes it with no conflict", () => {
-    setPlatformCaps({ "pdf-export": "printing isn't built here" });
+    setPlatformCaps(OFF);
     render(<ShortcutsSection query="" />);
     expect(screen.queryByTestId("shortcuts-conflicts")).toBeNull();
     expect(screen.getByTestId(`shortcut-row-${ARCHIVE}-current`)).toHaveTextContent("Ctrl+Shift+E");
@@ -101,16 +116,14 @@ describe("the Settings sidebar index with PDF export off", () => {
     />
   );
 
-  it("doesn't match Shortcuts on the hidden row, and does once the capability is on", () => {
-    setPlatformCaps({ "pdf-export": "printing isn't built here" });
+  it("still finds the Export to PDF row", () => {
+    setPlatformCaps(OFF);
     render(sidebar("export to pdf"));
-    expect(screen.getByTestId("settings-nav-shortcuts")).toHaveAttribute("aria-disabled", "true");
-    act(() => setPlatformCaps());
     expect(screen.getByTestId("settings-nav-shortcuts")).not.toHaveAttribute("aria-disabled");
   });
 
   it("still matches a dashboard command whose available() is false", () => {
-    setPlatformCaps({ "pdf-export": "printing isn't built here" });
+    setPlatformCaps(OFF);
     render(sidebar("archive thread"));
     expect(screen.getByTestId("settings-nav-shortcuts")).not.toHaveAttribute("aria-disabled");
   });

@@ -443,7 +443,10 @@ describe("ViewerTabs — Windows paths", () => {
 
 describe("ViewerTabs — PDF export", () => {
   beforeEach(() => setupState());
-  afterEach(() => resetPlatformCaps());
+  afterEach(() => {
+    resetPlatformCaps();
+    vi.restoreAllMocks();
+  });
 
   const exportItem = () => screen.queryByRole("menuitem", { name: /Export to PDF/ });
 
@@ -454,11 +457,20 @@ describe("ViewerTabs — PDF export", () => {
     expect(exportItem()).toBeInTheDocument();
   });
 
-  it("has no Export to PDF item with the capability off", () => {
+  it("keeps Export to PDF with the capability off, disabled and explained", () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux x86_64");
     setPlatformCaps({ "pdf-export": "printing isn't built here" });
     render(<ViewerTabs repoPath={REPO} />);
     fireEvent.contextMenu(screen.getByText("a.md"));
-    expect(screen.getByText("Close")).toBeInTheDocument();
-    expect(exportItem()).toBeNull();
+    const item = exportItem()!;
+    const sentence = "Not yet available on Linux: printing isn't built here.";
+    expect(item).toHaveAttribute("aria-disabled", "true");
+    expect(item).toHaveAttribute("data-focusable-disabled");
+    expect(item).toHaveAttribute("title", sentence);
+    const note = document.getElementById(item.getAttribute("aria-describedby")!);
+    expect(note).toHaveTextContent(sentence);
+    fireEvent.click(item);
+    // Inert: the menu stays open and nothing is exported.
+    expect(screen.getByRole("menu", { name: "Tab actions" })).toBeInTheDocument();
   });
 });
