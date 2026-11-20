@@ -585,7 +585,7 @@ fn a_thread_lists_every_recorded_session_of_its_agent_and_story_ended_ones_inclu
         ]
     );
     // A thread with no story reads no record: nothing bounds an agent's no-story sessions.
-    let mut store_w = UsageStore::open(&dir.path().join("usage.sqlite")).unwrap();
+    let store_w = UsageStore::open(&dir.path().join("usage.sqlite")).unwrap();
     let mut none = SessionRecord::new("tab-loose");
     none.handle = Some("loose".into());
     none.agent = Some("dev@3".into());
