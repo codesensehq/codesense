@@ -9985,6 +9985,30 @@ mod tests {
         }
     }
 
+    /// The status hook on `PreToolUse` never passes for the guard, nor the guard for it: merging
+    /// the guard into settings that already run the status hook there adds it once, beside one
+    /// status entry, on either target.
+    #[test]
+    fn the_guard_merges_beside_a_status_hook_on_the_same_event() {
+        for target in HookTarget::ALL {
+            let status = hook::command(Verb::Notify, target);
+            let mut settings = serde_json::json!({
+                "hooks": { "PreToolUse": [{ "matcher": "", "hooks": [status.entry()] }] }
+            });
+            for _ in 0..2 {
+                merge_notify_hooks(&mut settings, AgentCli::Claude, &["PreToolUse"], target)
+                    .unwrap();
+            }
+            for verb in Verb::ALL {
+                assert_eq!(
+                    entries(&settings, "PreToolUse", verb, target).len(),
+                    1,
+                    "{target:?} {verb:?}: {settings}"
+                );
+            }
+        }
+    }
+
     /// SW-AN-51: the committed `.claude/settings.json` must stay in lockstep with
     /// the writer's command string: the dedup check (`event_runs_notify_hook`) counts any
     /// command naming the installed script, so a drifted one would silently survive every
