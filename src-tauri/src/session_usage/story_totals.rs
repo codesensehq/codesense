@@ -191,6 +191,24 @@ const TRIGGERS: &[(&str, &str, Effect)] = &[
         "AFTER UPDATE ON session_record",
         Effect::MarkAndQueue("lower(NEW.story_id), lower(OLD.story_id)", "NEW.session_id"),
     ),
+    // A charge moves a session's usage from one story to another from a moment on: both stories
+    // are marked and the session is queued, so its rows are rebuilt and the story it resolved to
+    // before loses what it no longer holds.
+    (
+        "session_story_charge_insert",
+        "AFTER INSERT ON session_story_charge",
+        Effect::MarkAndQueue("lower(NEW.story_id)", "NEW.tab_session_id"),
+    ),
+    (
+        "session_story_charge_update",
+        "AFTER UPDATE ON session_story_charge",
+        Effect::MarkAndQueue("lower(NEW.story_id), lower(OLD.story_id)", "NEW.tab_session_id"),
+    ),
+    (
+        "session_story_charge_delete",
+        "AFTER DELETE ON session_story_charge",
+        Effect::MarkAndQueue("lower(OLD.story_id)", "OLD.tab_session_id"),
+    ),
     ("usage_event_insert", "AFTER INSERT ON usage_event", Effect::Queue("NEW.session_id")),
     // A usage row that changes (a repricing, a late cost, an upsert that moves it to another
     // session): both the session it was and the one it is queue, so each rewrites its row.

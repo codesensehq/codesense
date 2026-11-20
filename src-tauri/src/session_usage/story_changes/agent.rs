@@ -26,9 +26,9 @@ pub struct AgentParams {
     /// merge commits have empty ranges with a reason; without it these fields are omitted.
     /// `sessions.full`: each session as session_read returns it, not its summary
     /// {sessionId,nativeSessionIds,basis,agent,cli,model,branch,worktree,timing,costUsd,
-    /// costReason}. `tasks.full`: each task row with its task_read outcome, not its summary
-    /// {taskId,parentId,taskType,status,goal (200 chars, goalTruncated),mainSkill,createdAtMs,
-    /// closedAtMs,reviews}.
+    /// costReason, and a charged session's segments}. `tasks.full`: each task row with its
+    /// task_read outcome, not its summary {taskId,parentId,taskType,status,goal (200 chars,
+    /// goalTruncated),mainSkill,createdAtMs,closedAtMs,reviews}.
     #[serde(default)]
     pub include: Vec<AgentInclude>,
     /// Story id, for example DEMO-29.
@@ -366,7 +366,7 @@ fn summarize(
 fn session_summary(row: &Value) -> Value {
     let record = &row["session"];
     let timing = &record["timing"];
-    json!({
+    let mut summary = json!({
         "sessionId": session_id(row),
         "nativeSessionIds": row["nativeSessionIds"],
         "basis": row["basis"],
@@ -388,7 +388,12 @@ fn session_summary(row: &Value) -> Value {
         },
         "costUsd": row["cost"]["totalUsd"],
         "costReason": row["cost"]["reason"],
-    })
+    });
+    // A session charged to more than one story: its segments of this one.
+    if let Some(segments) = row.get("segments") {
+        summary["segments"] = segments.clone();
+    }
+    summary
 }
 
 /// A task row as its identity, kind, state, review ids and the start of its goal, with
