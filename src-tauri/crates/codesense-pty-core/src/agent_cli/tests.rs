@@ -629,14 +629,11 @@ fn claudes_status_hooks_report_what_its_own_hooks_do_and_codex_has_none() {
             "{name}"
         );
     }
-    // Claude's status hook runs the script its tab's host installed, never a workspace's.
+    // Claude's status hook runs the bridge its tab's host placed, never a workspace's.
     let hooks = descriptor(AgentCli::Claude).project_hooks.as_ref().unwrap();
     assert_eq!(hooks.committed, ".claude/settings.json");
     assert_eq!(hooks.local, ".claude/settings.local.json");
-    assert_eq!(
-        hooks.status_command,
-        "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true"
-    );
+    assert_eq!(hooks.status_verb, codesense_host_proto::hook::Verb::Notify);
 }
 
 #[test]

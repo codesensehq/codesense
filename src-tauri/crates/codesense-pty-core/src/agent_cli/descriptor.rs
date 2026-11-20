@@ -178,10 +178,9 @@ pub struct ProjectHooks {
     /// The personal one beside it: the only one CodeSense writes, for a CLI typed by hand
     /// in a worktree it made.
     pub local: String,
-    /// The status hook's command: the `codesense-notify.sh` CodeSense installs beside its
-    /// host's activity helper, found through the tab's host root, and nothing outside a
-    /// host's tab.
-    pub status_command: String,
+    /// The bridge subcommand its status hook runs. Each writer builds the command for the
+    /// host that runs it ([`codesense_host_proto::hook::command`]).
+    pub status_verb: codesense_host_proto::hook::Verb,
 }
 
 /// How a launch hands a CLI a settings object (CodeSense's permissions and hooks, with a

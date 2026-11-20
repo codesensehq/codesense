@@ -16,10 +16,14 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
+mod command;
 mod notify;
 #[cfg(test)]
 mod oracle;
 
+pub use command::{
+    command, legacy_verb, HookCommand, HookTarget, Verb, BRIDGE, HOST_ENV, LEGACY_COMMANDS,
+};
 pub use notify::{notify, HookEnv, Outcome};
 
 /// The secret-file guard's template, installed beside the status hook with the protected

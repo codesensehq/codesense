@@ -106,7 +106,7 @@ static DESCRIPTOR: LazyLock<Descriptor> = LazyLock::new(|| Descriptor {
     project_hooks: Some(ProjectHooks {
         committed: ".claude/settings.json".into(),
         local: ".claude/settings.local.json".into(),
-        status_command: crate::notify_hook::status_command(),
+        status_verb: codesense_host_proto::hook::Verb::Notify,
     }),
     // The oldest release remote tasks were qualified on, with every flag the task
     // harness passes.

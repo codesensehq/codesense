@@ -15,6 +15,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use codesense_host_proto::hook::{self, HookTarget, Verb};
 use codesense_platform::fs::{is_executable, set_executable, Reach};
 
 /// The reference hook, embedded in the app binary. The repo copy at
@@ -40,29 +41,14 @@ pub const GUARD_MATCHER: &str = "Read|Grep|Glob|Bash";
 /// rules keep one list.
 pub use codesense_host_proto::hook::{deny_rules, guard_source, Family, FAMILIES, PROTECTED_DIRS};
 
-/// The installed hook as a hook command names it: under the host root its tab exports.
-pub fn installed_script() -> String {
-    format!("${}/{NAME}", crate::activity::HOST_ENV)
-}
-
-/// The installed guard as a hook command names it.
-pub fn installed_guard() -> String {
-    format!("${}/{GUARD_NAME}", crate::activity::HOST_ENV)
-}
-
-/// The command the guard hook runs. A missing script allows the call: the guard never blocks
-/// work because it is not installed.
+/// The command the guard hook runs on this host ([`hook::command`]).
 pub fn guard_command() -> String {
-    let script = format!("\"{}\"", installed_guard());
-    format!("[ -x {script} ] && {script} || true")
+    hook::command(Verb::SecretGuard, HookTarget::local()).command
 }
 
-/// The command a Claude status hook runs. A missing script (a tab outside any host, or a
-/// host that could not write it) would fail every hook event, so it is guarded like the
-/// inbox hooks; `[` reads no stdin, so the hook's JSON still reaches the script.
+/// The command a Claude status hook runs on this host ([`hook::command`]).
 pub fn status_command() -> String {
-    let script = format!("\"{}\"", installed_script());
-    format!("[ -x {script} ] && {script} || true")
+    hook::command(Verb::Notify, HookTarget::local()).command
 }
 
 /// Write the hook into the host activity `root` with mode [`MODE`], unless it is already
@@ -141,10 +127,12 @@ mod tests {
     }
 
     #[test]
-    fn the_status_command_runs_the_hosts_installed_script_guarded() {
+    fn the_hook_commands_are_the_local_targets() {
+        let local = HookTarget::local();
+        assert_eq!(status_command(), hook::command(Verb::Notify, local).command);
         assert_eq!(
-            status_command(),
-            "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true"
+            guard_command(),
+            hook::command(Verb::SecretGuard, local).command
         );
     }
 
@@ -226,14 +214,6 @@ mod tests {
         let dest = tmp.path().join(NAME);
         fs::write(&dest, SOURCE).unwrap();
         assert!(!is_installed(&dest, SOURCE));
-    }
-
-    #[test]
-    fn the_guard_command_is_guarded_like_the_status_command() {
-        assert_eq!(
-            guard_command(),
-            "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-secret-guard.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-secret-guard.sh\" || true"
-        );
     }
 
     #[test]

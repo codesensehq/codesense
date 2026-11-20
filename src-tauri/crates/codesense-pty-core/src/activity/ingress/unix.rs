@@ -698,11 +698,6 @@ mod tests {
             crate::notify_hook::SOURCE
         );
         assert_eq!(std::fs::metadata(&hook).unwrap().mode() & 0o777, 0o755);
-        assert!(crate::notify_hook::status_command().contains(&format!(
-            "${}/{}",
-            name,
-            crate::notify_hook::NAME
-        )));
         // This test process is the hand-typed CLI; its parent stands in for the
         // shell the host spawned.
         let shell = unsafe { libc::getppid() } as u32;
