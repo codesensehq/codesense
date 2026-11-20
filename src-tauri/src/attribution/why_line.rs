@@ -13,7 +13,7 @@ use rmcp::schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 pub(crate) const NOTES_CHANGED: &str = "notes changed during read";
@@ -184,7 +184,7 @@ async fn resolve_at_holding(
     );
     let blocking_hold = hold.clone();
     let _hold = hold;
-    let (mut result, stats, commit_times) = read_held(blocking_hold, move || {
+    let (mut result, stats, checkout) = read_held(blocking_hold, move || {
         let mut result = local_result(resolve_with_read(
             &read_home,
             &read_principal,
@@ -205,9 +205,8 @@ async fn resolve_at_holding(
             .filter(|range| super::turns::exact_agent_range(range))
             .filter_map(|range| Value::as_str(&range["commit"]).map(str::to_owned))
             .collect::<BTreeSet<_>>();
-        // The committer time of each exact agent range's commit, for the story a charged session
-        // worked then.
-        let mut commit_times = HashMap::new();
+        // The attached checkout, where a charged session's commits are dated.
+        let mut checkout = None;
         let stats = if BTreeSet::is_empty(&commits) {
             std::default::Default::default()
         } else if let Some(repo) = configured_repo(&read_home, &read_principal, &read_params.repo)?
@@ -243,17 +242,12 @@ async fn resolve_at_holding(
                     }
                 }
             }
-            let checkout = Path::new(repo.local_path.as_deref().unwrap());
-            for commit in &commits {
-                if let Some(at) = super::turns::committer_ms(checkout, commit) {
-                    commit_times.insert(commit.clone(), at);
-                }
-            }
+            checkout = repo.local_path.clone().map(PathBuf::from);
             stats
         } else {
             std::default::Default::default()
         };
-        Ok((result, stats, commit_times))
+        Ok((result, stats, checkout))
     })
     .await?;
     let natives: BTreeSet<String> = result["ranges"]
@@ -289,36 +283,49 @@ async fn resolve_at_holding(
             sessions.entry(id).or_insert(facts);
         }
     }
-    // A session charged to more than one story worked the story in force at the commit's time.
-    let charged_at: BTreeSet<(String, i64)> = result["ranges"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|range| range["basis"] == "exact" && range["tool"] != HUMAN_TOOL)
-        .filter_map(|range| {
-            let id = native_to_session.get(Value::as_str(&range["nativeSessionId"])?)?;
-            let at = commit_times.get(Value::as_str(&range["commit"])?)?;
-            let charged = sessions[id.as_str()]["charges"].as_array().is_some_and(|c| !c.is_empty());
-            charged.then(|| (id.clone(), *at))
-        })
-        .collect();
-    let stories_at: HashMap<(String, i64), Option<String>> = if BTreeSet::is_empty(&charged_at) {
-        HashMap::new()
-    } else {
-        let (at_store, at_home, at_scope) = (store.to_owned(), home.to_owned(), scope.clone());
-        crate::commands::await_blocking("why_line.story_at", move || {
-            let usage = crate::session_usage::UsageStore::open(&at_store)?;
-            let mut stories = crate::session_usage::StoryResolver::for_home(&at_home, HashMap::new())
-                .with_scope(at_scope);
-            charged_at
-                .into_iter()
-                .map(|(id, at)| {
-                    let story = usage.story_id_at(&id, at, &mut stories)?;
-                    Ok(((id, at), story))
-                })
-                .collect::<Result<HashMap<_, _>, String>>()
-        })
-        .await?
+    // A session charged to more than one story worked the story in force at its commit's time.
+    // Only charged sessions' commits are dated, in one read of the checkout, and each session's
+    // stories are read once.
+    let mut charged: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for range in result["ranges"].as_array().into_iter().flatten() {
+        if range["basis"] != "exact" || range["tool"] == HUMAN_TOOL {
+            continue;
+        }
+        let id = Value::as_str(&range["nativeSessionId"]).and_then(|native| native_to_session.get(native));
+        if let (Some(id), Some(commit)) = (id, Value::as_str(&range["commit"])) {
+            if sessions[id.as_str()]["charges"].as_array().is_some_and(|c| !c.is_empty()) {
+                charged.entry(id.clone()).or_default().insert(commit.to_owned());
+            }
+        }
+    }
+    let stories_at: HashMap<(String, String), Option<String>> = match checkout {
+        Some(checkout) if !charged.is_empty() => {
+            let (at_store, at_home, at_scope) = (store.to_owned(), home.to_owned(), scope.clone());
+            crate::commands::await_blocking("why_line.story_at", move || {
+                let times = super::turns::committer_times(
+                    &checkout,
+                    charged.values().flatten().map(String::as_str),
+                );
+                let usage = crate::session_usage::UsageStore::open(&at_store)?;
+                let mut stories = crate::session_usage::StoryResolver::for_home(&at_home, HashMap::new())
+                    .with_scope(at_scope);
+                let mut found = HashMap::new();
+                for (id, commits) in charged {
+                    let dated: Vec<(String, i64)> = commits
+                        .into_iter()
+                        .filter_map(|commit| times.get(&commit).map(|at| (commit.clone(), *at)))
+                        .collect();
+                    let at: Vec<i64> = dated.iter().map(|(_, at)| *at).collect();
+                    let story = usage.story_ids_at(&id, &at, &mut stories)?;
+                    for ((commit, _), story) in dated.into_iter().zip(story) {
+                        found.insert((id.clone(), commit), story);
+                    }
+                }
+                Ok(found)
+            })
+            .await?
+        }
+        _ => HashMap::new(),
     };
     if let Some(ranges) = result.get_mut("ranges").and_then(Value::as_array_mut) {
         for range in ranges {
@@ -331,8 +338,8 @@ async fn resolve_at_holding(
             {
                 range["sessionId"] = json!(id);
                 range["link"] = json!("linked");
-                let at = Value::as_str(&range["commit"]).and_then(|commit| commit_times.get(commit));
-                range["story"] = match at.and_then(|at| stories_at.get(&(id.clone(), *at))) {
+                let commit = Value::as_str(&range["commit"]).unwrap_or_default().to_owned();
+                range["story"] = match stories_at.get(&(id.clone(), commit)) {
                     Some(story) => json!(story),
                     None => sessions[id.as_str()]["story"]["id"].clone(),
                 };
@@ -923,16 +930,17 @@ fn associated_story(subject: &str) -> Option<String> {
     story_id_from_branch(id).filter(|parsed| parsed == id)
 }
 
+/// The most candidate sessions an associated range names.
+const MAX_CANDIDATES: usize = 20;
+
 /// The distinct session ids of a story's usage rows, newest first: a session charged to the story
 /// more than once has a row per segment, and is a candidate once.
 fn candidate_ids(rows: Vec<crate::session_usage::SessionUsage>) -> Vec<String> {
-    let mut ids: Vec<String> = Vec::with_capacity(rows.len());
-    for row in rows {
-        if !ids.contains(&row.session_id) {
-            ids.push(row.session_id);
-        }
-    }
-    ids
+    let mut seen = std::collections::HashSet::new();
+    rows.into_iter()
+        .map(|row| row.session_id)
+        .filter(|id| seen.insert(id.clone()))
+        .collect()
 }
 
 fn associate(
@@ -959,13 +967,16 @@ fn associate(
     let candidates = match candidate_cache.entry(story.clone()) {
         std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
         std::collections::hash_map::Entry::Vacant(entry) => {
+            // Every row, newest first: a session charged to the story more than once has several,
+            // and the limit counts distinct sessions.
             let filter = Filter {
                 story: Some(story.clone()),
-                limit: Some(20),
                 ..Filter::default()
             };
             let report = UsageStore::open(store)?.report_with(&filter, stories)?;
-            entry.insert(candidate_ids(report.sessions))
+            let mut ids = candidate_ids(report.sessions);
+            ids.truncate(MAX_CANDIDATES);
+            entry.insert(ids)
         }
     };
     value["basis"] = json!("associated");
