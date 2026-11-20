@@ -5,14 +5,15 @@
 //! route byte for byte, and the guard's deny reaches Claude.
 
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Output, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use codesense_host_proto::hook::{self, HookTarget, Verb};
 
 mod support;
+
+use support::TempDir;
 
 /// A shell Claude may run a hook command in, and the target whose commands it runs.
 struct Shell {
@@ -34,29 +35,6 @@ fn shells() -> impl Iterator<Item = &'static Shell> {
     SHELLS
         .iter()
         .filter(|shell| shell.target == HookTarget::local())
-}
-
-/// A fresh temporary directory, removed when dropped.
-struct TempDir(PathBuf);
-
-impl TempDir {
-    fn new() -> Self {
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "codesense-hook-commands-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        Self(dir)
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
 }
 
 /// A host root holding the built bridge under the name `target`'s commands run.

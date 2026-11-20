@@ -3,27 +3,20 @@
 
 use std::io::Write;
 use std::process::{Command, Output, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 mod support;
 
-use support::listener;
+use support::{listener, TempDir};
 
 /// Run `codesense-bridge hook <args>` with `stdin` and a home of its own.
 fn hook(args: &[&str], stdin: &[u8], env: &[(&str, &str)]) -> Output {
-    static NEXT: AtomicUsize = AtomicUsize::new(0);
-    let home = std::env::temp_dir().join(format!(
-        "codesense-bridge-hook-{}-{}",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
-    std::fs::create_dir_all(&home).unwrap();
+    let home = TempDir::new();
     let mut command = Command::new(env!("CARGO_BIN_EXE_codesense-bridge"));
     command
         .arg("hook")
         .args(args)
-        .env("HOME", &home)
+        .env("HOME", &home.0)
         .env_remove("CODESENSE_API_PORT")
         .env_remove("CODESENSE_STATUS_URL")
         .env_remove("CODESENSE_TAB_SESSION_ID")
@@ -34,9 +27,7 @@ fn hook(args: &[&str], stdin: &[u8], env: &[(&str, &str)]) -> Output {
     let mut child = command.spawn().unwrap();
     // A verb that reads no stdin may have exited already.
     let _ = child.stdin.take().unwrap().write_all(stdin);
-    let output = child.wait_with_output().unwrap();
-    let _ = std::fs::remove_dir_all(&home);
-    output
+    child.wait_with_output().unwrap()
 }
 
 #[test]

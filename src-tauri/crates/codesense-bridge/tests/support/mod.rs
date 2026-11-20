@@ -1,11 +1,37 @@
 // SPDX-License-Identifier: MIT
-//! What the bridge's hook tests share: a local listener standing in for the app's API.
+//! What the bridge's hook tests share: temporary directories and a local listener standing in
+//! for the app's API.
 // Each test file uses part of it.
 #![allow(dead_code)]
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
+
+/// A fresh temporary directory, removed when dropped.
+pub struct TempDir(pub PathBuf);
+
+impl TempDir {
+    pub fn new() -> Self {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "codesense-bridge-test-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
 
 /// Answer each request 200 and hand its bytes back, head and body.
 pub fn listener() -> (String, mpsc::Receiver<Vec<u8>>) {
