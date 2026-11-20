@@ -30,6 +30,8 @@ use log::warn;
 use serde_json::{json, Value};
 
 pub(crate) mod inventory;
+#[cfg(test)]
+mod launch_exec_tests;
 
 const CREDENTIAL_JOURNAL: &str = ".credential-copyback.json";
 
@@ -622,21 +624,36 @@ pub struct ScopedExecution {
     pub native_launch: codesense_pty_core::agent_cli::AgentCli,
 }
 
+/// Whether a launch of `runtime` on `os` (`std::env::consts::OS`) runs the agent as the
+/// root of its PTY from an argv rather than as a line typed into a shell. A CLI that must
+/// own its PTY always does; on Windows every agent does, since no POSIX shell types it.
+pub(crate) fn launches_direct(runtime: AgentCli, os: &str) -> bool {
+    codesense_pty_core::agent_cli::adapter(runtime).end_on_engine_loss() || os == "windows"
+}
+
 /// The exec of `program` with `args` for a CLI that must own its PTY directly, entered as
 /// an interactive launch is (the same normalization the other managed entries plan).
 pub(crate) fn scoped_execution(
-    runtime: codesense_pty_core::agent_cli::AgentCli,
+    runtime: AgentCli,
     program: &Path,
     args: Vec<String>,
 ) -> Option<ScopedExecution> {
-    codesense_pty_core::agent_cli::adapter(runtime)
-        .end_on_engine_loss()
-        .then(|| ScopedExecution {
-            argv: std::iter::once(program.to_string_lossy().into_owned())
-                .chain(super::mcp_workspace::interactive_arguments(runtime, args))
-                .collect(),
-            native_launch: runtime,
-        })
+    scoped_execution_on(runtime, program, args, std::env::consts::OS)
+}
+
+/// [`scoped_execution`] on `os`.
+pub(crate) fn scoped_execution_on(
+    runtime: AgentCli,
+    program: &Path,
+    args: Vec<String>,
+    os: &str,
+) -> Option<ScopedExecution> {
+    launches_direct(runtime, os).then(|| ScopedExecution {
+        argv: std::iter::once(program.to_string_lossy().into_owned())
+            .chain(super::mcp_workspace::interactive_arguments(runtime, args))
+            .collect(),
+        native_launch: runtime,
+    })
 }
 
 /// SW-AN-45: what a scoped launch contributes to the child — extra argv (a `config_flag`
