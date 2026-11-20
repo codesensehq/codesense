@@ -320,6 +320,8 @@ vi.mock("@/shared/stores/config-store", () => {
   const store = (selector: (s: Record<string, unknown>) => unknown) => selector(configStoreValues);
   store.getState = () => configStoreValues;
   store.setState = vi.fn();
+  // The dashboard-commands sync re-pushes chords when the capabilities load.
+  store.subscribe = () => () => {};
   return {
     useConfigStore: store,
     resetWorkspaceConfigView: vi.fn(),
