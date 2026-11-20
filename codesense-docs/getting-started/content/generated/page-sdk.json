@@ -4566,7 +4566,7 @@
     {
       "name": "openWorkspace",
       "owner": "VerbMethods",
-      "signature": "openWorkspace(args?: {\n      agent?: string;\n      headed?: boolean;\n      initialPrompt?: string;\n      mode?: string;\n      model?: string;\n      role?: string;\n      sessionMode?: \"new\" | \"focus\";\n      storyId?: string;\n      target?: {\n        createWorktree?: boolean;\n        kind?: \"story\" | \"epic\" | \"branch\" | \"dir\" | \"team-workspace\";\n        name?: string;\n        org?: string;\n        path?: string;\n        storyId?: string;\n        team?: string;\n        worktree?: string;\n        [key: string]: unknown;\n      };\n      [key: string]: unknown;\n    }): Promise<unknown>;",
+      "signature": "openWorkspace(args?: {\n      agent?: string;\n      headed?: boolean;\n      initialPrompt?: string;\n      mode?: string;\n      model?: string;\n      role?: string;\n      sessionMode?: \"new\" | \"focus\";\n      storyId?: string;\n      target?: {\n        createWorktree?: boolean;\n        kind?: \"story\" | \"epic\" | \"branch\" | \"dir\" | \"team-workspace\";\n        name?: string;\n        org?: string;\n        path?: string;\n        seatWorktree?: {\n          commit?: string;\n          kind?: \"branch\" | \"commit\";\n          [key: string]: unknown;\n        };\n        storyId?: string;\n        team?: string;\n        worktree?: string;\n        [key: string]: unknown;\n      };\n      [key: string]: unknown;\n    }): Promise<unknown>;",
       "description": "spawn · launch · confirmable · MCP twin open_workspace",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "class": "spawn",
@@ -4625,6 +4625,20 @@
               },
               "path": {
                 "type": "string"
+              },
+              "seatWorktree": {
+                "properties": {
+                  "commit": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "enum": [
+                      "branch",
+                      "commit"
+                    ]
+                  }
+                },
+                "type": "object"
               },
               "storyId": {
                 "type": "string"
@@ -13416,6 +13430,20 @@
               },
               "path": {
                 "type": "string"
+              },
+              "seatWorktree": {
+                "properties": {
+                  "commit": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "enum": [
+                      "branch",
+                      "commit"
+                    ]
+                  }
+                },
+                "type": "object"
               },
               "storyId": {
                 "type": "string"
@@ -23083,7 +23111,7 @@
     {
       "verb": "openWorkspace",
       "tier": "spawn",
-      "args": "{\"additionalProperties\":true,\"properties\":{\"agent\":{\"type\":\"string\"},\"headed\":{\"type\":\"boolean\"},\"initialPrompt\":{\"type\":\"string\"},\"mode\":{\"type\":\"string\"},\"model\":{\"type\":\"string\"},\"role\":{\"type\":\"string\"},\"sessionMode\":{\"enum\":[\"new\",\"focus\"]},\"storyId\":{\"type\":\"string\"},\"target\":{\"properties\":{\"createWorktree\":{\"type\":\"boolean\"},\"kind\":{\"enum\":[\"story\",\"epic\",\"branch\",\"dir\",\"team-workspace\"]},\"name\":{\"type\":\"string\"},\"org\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"storyId\":{\"type\":\"string\"},\"team\":{\"type\":\"string\"},\"worktree\":{\"type\":\"string\"}},\"type\":\"object\"}},\"required\":[],\"type\":\"object\"}",
+      "args": "{\"additionalProperties\":true,\"properties\":{\"agent\":{\"type\":\"string\"},\"headed\":{\"type\":\"boolean\"},\"initialPrompt\":{\"type\":\"string\"},\"mode\":{\"type\":\"string\"},\"model\":{\"type\":\"string\"},\"role\":{\"type\":\"string\"},\"sessionMode\":{\"enum\":[\"new\",\"focus\"]},\"storyId\":{\"type\":\"string\"},\"target\":{\"properties\":{\"createWorktree\":{\"type\":\"boolean\"},\"kind\":{\"enum\":[\"story\",\"epic\",\"branch\",\"dir\",\"team-workspace\"]},\"name\":{\"type\":\"string\"},\"org\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"seatWorktree\":{\"properties\":{\"commit\":{\"type\":\"string\"},\"kind\":{\"enum\":[\"branch\",\"commit\"]}},\"type\":\"object\"},\"storyId\":{\"type\":\"string\"},\"team\":{\"type\":\"string\"},\"worktree\":{\"type\":\"string\"}},\"type\":\"object\"}},\"required\":[],\"type\":\"object\"}",
       "description": "spawn · launch · confirmable · MCP twin open_workspace",
       "denyExample": "denied: grant",
       "result": {
@@ -24807,8 +24835,8 @@
     }
   ],
   "sources": {
-    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "7828d6489f7b7e9d7a457324b1a53d7f60fb632ba8c3980c77026819af6aa840",
-    "src-tauri/src/verbs/registry.generated.json": "1b2af1c82e9aace66c6df378907f70b5a2938c5c477306a99c8403e96cffc865",
+    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "4116d1ec4b7ed1df2f2a6e68b86094b908943c303c3958b693af1551237b789f",
+    "src-tauri/src/verbs/registry.generated.json": "37b956e3c1451649b0d0e5c06121cd31abd5a49e13e61d26149b9d8078710e39",
     "src-tauri/src/verbs/registry.rs": "f599ccbb17d3f3b23bb5e557cb4d12199480e3a536b109a13ad4496309fb3770",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29",

@@ -1393,6 +1393,20 @@ describe("spawn-class verbs (SW-DX-7)", () => {
     );
   });
 
+  it("refuses seatWorktree from a page instead of dropping it", async () => {
+    const openWorkspace = vi.fn(async () => ({}));
+    stubController(openWorkspace);
+    for (const target of [
+      { kind: "story", storyId: "SW-9", session: "dev", seatWorktree: { kind: "branch" } },
+      { kind: "team-workspace", name: "Sprint 1", seatWorktree: { kind: "branch" } },
+    ]) {
+      await expect(runBridgeCommand("openWorkspace", { target })).rejects.toThrow(
+        /seatWorktree is not supported from a page yet/,
+      );
+    }
+    expect(openWorkspace).not.toHaveBeenCalled();
+  });
+
   it("rejects machineId on a non-story target and a blank machineId", async () => {
     const openWorkspace = vi.fn(async () => ({}));
     stubController(openWorkspace);

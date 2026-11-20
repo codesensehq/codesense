@@ -3380,6 +3380,20 @@
             "path": {
               "type": "string"
             },
+            "seatWorktree": {
+              "properties": {
+                "commit": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "branch",
+                    "commit"
+                  ]
+                }
+              },
+              "type": "object"
+            },
             "storyId": {
               "type": "string"
             },
