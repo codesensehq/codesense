@@ -861,7 +861,8 @@ fn open_in(m: &LayoutModel, workspace: &str, folder: &Path, session: &str, cwd: 
 #[test]
 fn a_tab_dir_is_kept_beside_the_workspace_folder_and_leaves_with_its_tab() {
     let m = model();
-    let (base, seat) = (Path::new("/work/app"), Path::new("/work/app-seat-dev"));
+    let seat_dir = tempfile::tempdir().unwrap();
+    let (base, seat) = (Path::new("/work/app"), seat_dir.path());
     open_in(&m, "w", base, "lead", None);
     open_in(&m, "w", base, "seat", Some(seat));
     // A tab whose own folder is the workspace's stores nothing.
@@ -886,7 +887,8 @@ fn a_tab_dir_is_kept_beside_the_workspace_folder_and_leaves_with_its_tab() {
 #[test]
 fn a_moved_tab_carries_its_folder_unless_its_new_workspace_runs_there() {
     let m = model();
-    let (base, seat) = (Path::new("/work/app"), Path::new("/work/app-seat-dev"));
+    let seat_dir = tempfile::tempdir().unwrap();
+    let (base, seat) = (Path::new("/work/app"), seat_dir.path());
     open_in(&m, "w", base, "lead", None);
     open_in(&m, "w", base, "seat", Some(seat));
     let elsewhere = WorkspaceDescriptor {
@@ -961,18 +963,13 @@ fn a_tab_counts_and_respawns_in_its_own_folder() {
 #[test]
 fn tab_dirs_round_trip_and_an_older_snapshot_without_them_loads() {
     let m = model();
-    open_in(
-        &m,
-        "w",
-        Path::new("/work/app"),
-        "seat",
-        Some(Path::new("/work/app-seat-dev")),
-    );
+    let seat = tempfile::tempdir().unwrap();
+    open_in(&m, "w", Path::new("/work/app"), "seat", Some(seat.path()));
     let layout = layout_of(&m, "w").unwrap();
     let json = serde_json::to_value(&layout).unwrap();
     assert_eq!(
         json["tabDirs"],
-        serde_json::json!({"seat": "/work/app-seat-dev"})
+        serde_json::json!({"seat": seat.path().to_str().unwrap()})
     );
     assert_eq!(
         serde_json::from_value::<WorkspaceLayout>(json.clone()).unwrap(),
@@ -987,4 +984,105 @@ fn tab_dirs_round_trip_and_an_older_snapshot_without_them_loads() {
         .unwrap()
         .get("tabDirs")
         .is_none());
+}
+
+/// The sessions `worktree_usage(dir)` counts as running there, sorted.
+fn counted(m: &LayoutModel, dir: &Path) -> Vec<String> {
+    let mut found: Vec<String> = m
+        .worktree_usage(dir)
+        .unwrap()
+        .entries
+        .into_iter()
+        .map(|(_, tab)| tab.session.as_str().to_string())
+        .collect();
+    found.sort();
+    found
+}
+
+#[test]
+fn a_tab_folder_that_is_gone_is_never_recorded() {
+    let m = model();
+    let base = tempfile::tempdir().unwrap();
+    let gone = base.path().join("gone-seat");
+    let mut open = request("v", "w", "seat");
+    open.descriptor.as_mut().unwrap().worktree_path = Some(base.path().to_path_buf());
+    open.cwd = Some(gone.clone());
+    m.reserve(
+        &open.session,
+        &open.workspace,
+        open.descriptor.as_ref(),
+        Some(gone.as_path()),
+    )
+    .unwrap();
+    // While it spawns, it counts in the workspace's folder, and other checks answer.
+    assert_eq!(
+        m.worktree_usage(base.path()).unwrap().opening,
+        vec![sid("seat")]
+    );
+    let other = tempfile::tempdir().unwrap();
+    assert!(m.worktree_usage(other.path()).unwrap().opening.is_empty());
+    // The folder appearing between the reservation and the placement isn't recorded:
+    // the placement keeps what the reservation kept.
+    std::fs::create_dir(&gone).unwrap();
+    m.place_opened(open).unwrap();
+    let layout = layout_of(&m, "w").unwrap();
+    assert!(layout.tab_dirs.is_empty());
+    assert_eq!(layout.tab_dir(&sid("seat")), Some(base.path()));
+    assert_eq!(counted(&m, base.path()), ["seat"]);
+}
+
+#[test]
+fn a_tab_whose_folder_is_removed_loses_it_when_moved_or_restarted() {
+    let m = model();
+    let base = tempfile::tempdir().unwrap();
+    let (seat, moved) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    open_in(&m, "w", base.path(), "seat", Some(seat.path()));
+    open_in(&m, "w", base.path(), "moved", Some(moved.path()));
+    let (seat_path, moved_path) = (seat.path().to_path_buf(), moved.path().to_path_buf());
+    seat.close().unwrap();
+    moved.close().unwrap();
+    // A move re-records the tab's folder: a gone one is dropped.
+    let elsewhere = WorkspaceDescriptor {
+        worktree_path: Some(base.path().join("x")),
+        ..descriptor("x")
+    };
+    m.place(
+        &sid("moved"),
+        &ws("x"),
+        Placement::Tab,
+        None,
+        Some(elsewhere),
+    )
+    .unwrap();
+    assert!(layout_of(&m, "x").unwrap().tab_dirs.is_empty());
+    assert!(!moved_path.exists());
+    // A restart after its folder went away runs in the workspace's folder.
+    m.on_exit(&sid("seat"), None);
+    m.reserve_respawn(&sid("seat")).unwrap();
+    m.finish_respawn(&sid("seat")).unwrap();
+    let layout = layout_of(&m, "w").unwrap();
+    assert!(layout.tab_dirs.is_empty());
+    assert_eq!(layout.tab_dir(&sid("seat")), Some(base.path()));
+    assert!(!seat_path.exists());
+}
+
+#[test]
+fn a_live_tab_whose_folder_is_removed_never_fails_a_usage_check() {
+    let m = model();
+    let base = tempfile::tempdir().unwrap();
+    let seat = tempfile::tempdir().unwrap();
+    open_in(&m, "w", base.path(), "lead", None);
+    open_in(&m, "w", base.path(), "seat", Some(seat.path()));
+    let seat_path = seat.path().to_path_buf();
+    seat.close().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    assert!(counted(&m, other.path()).is_empty());
+    assert_eq!(counted(&m, base.path()), ["lead"]);
+    // Its folder's parent still holds it, compared by path.
+    assert!(counted(&m, seat_path.parent().unwrap()).contains(&"seat".to_string()));
+    // A workspace's own folder that is gone still fails the check.
+    let gone_base = tempfile::tempdir().unwrap();
+    open_in(&m, "y", gone_base.path(), "stale", None);
+    gone_base.close().unwrap();
+    assert!(m.worktree_usage(other.path()).is_err());
 }

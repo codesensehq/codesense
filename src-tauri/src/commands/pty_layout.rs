@@ -16,6 +16,7 @@ use codesense_pty_core::layout::{
     TagPatch, Tags, ViewHint, WorkspaceDescriptor,
 };
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::commands::async_helpers::await_blocking;
@@ -443,6 +444,39 @@ pub enum TabSpawn {
     Warm(AttachWarmArgs),
 }
 
+impl TabSpawn {
+    /// The folder the session starts in.
+    fn cwd_mut(&mut self) -> &mut String {
+        match self {
+            TabSpawn::Cold(args) => &mut args.cwd,
+            TabSpawn::Warm(args) => &mut args.target_cwd,
+        }
+    }
+}
+
+/// A tab's own folder on This Mac that is gone (`gone`) is not where it runs: a spawn
+/// that would start there starts in its workspace's folder `ws_dir` instead, when it has
+/// one. The app's two start paths, [`open_layout_tab`] and [`terminal_respawn_tab`],
+/// settle a gone folder here; the host's layout never records one.
+fn start_beside_gone_folder(spawn: &mut TabSpawn, gone: &Path, ws_dir: Option<&Path>) {
+    let cwd = spawn.cwd_mut();
+    if let Some(ws_dir) = ws_dir.filter(|_| Path::new(cwd.as_str()) == gone) {
+        *cwd = ws_dir.to_string_lossy().into_owned();
+    }
+}
+
+/// The folder of the workspace holding `session`, as This Mac's hosts record it.
+fn recorded_workspace_folder(app: &tauri::AppHandle, session: &PtySessionId) -> Option<PathBuf> {
+    let boot = webview_boot()?;
+    pty_backend::layout_snapshots(app, &boot)
+        .ok()?
+        .into_iter()
+        .flat_map(|snapshot| snapshot.workspaces.into_values())
+        .find(|ws| ws.tabs.iter().any(|tab| &tab.session == session))?
+        .descriptor
+        .worktree_path
+}
+
 /// A `terminal_open_tab` request; the session id is the tab id.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -663,13 +697,22 @@ async fn webview_layout_replies(
 pub(crate) async fn open_layout_tab(
     app: tauri::AppHandle,
     machine_id: String,
-    open: OpenTab,
-    spawn: TabSpawn,
+    mut open: OpenTab,
+    mut spawn: TabSpawn,
 ) -> Result<TabEntry, String> {
     let session_id = open.session.as_str().to_string();
     let reap = session_id.clone();
     let reaper = app.clone();
     await_blocking("terminal_open_tab", move || {
+        if machine_id == super::machines::LOCAL_MACHINE_ID {
+            if let Some(gone) = open.cwd.take_if(|dir| !dir.is_dir()) {
+                let ws_dir = open
+                    .descriptor
+                    .as_ref()
+                    .and_then(|d| d.worktree_path.as_deref());
+                start_beside_gone_folder(&mut spawn, &gone, ws_dir);
+            }
+        }
         let spawner = app.clone();
         pty_backend::open_tab(&app, &machine_id, open, |host| {
             let host = SpawnPlacement::Exact(Box::new(host));
@@ -786,6 +829,17 @@ pub async fn terminal_respawn_tab(
             )?;
         }
         let session = PtySessionId::new(session.session());
+        // A tab whose own folder went away restarts in its workspace's folder, and
+        // its agent's scope with it.
+        let (mut spawn, mut scope) = (spawn, scope);
+        let start = PathBuf::from(spawn.cwd_mut().as_str());
+        if !backend.is_remote() && !start.is_dir() {
+            let ws_dir = recorded_workspace_folder(&app, &session);
+            start_beside_gone_folder(&mut spawn, &start, ws_dir.as_deref());
+            if let Some(scope) = scope.as_mut().filter(|s| Path::new(&s.cwd) == start) {
+                scope.cwd = spawn.cwd_mut().clone();
+            }
+        }
         let spawner = app.clone();
         let session_id = session.as_str().to_string();
         let remove_args = std::sync::Mutex::new(None);
@@ -1481,6 +1535,37 @@ mod tests {
             TabSpawn::Cold(args) => assert_eq!(args.interactive, Some(true)),
             TabSpawn::Warm(_) => panic!("expected a cold spawn"),
         }
+    }
+
+    /// A spawn that would start in a tab's own folder that is gone starts in its
+    /// workspace's folder; any other start folder, or a workspace without a folder,
+    /// is left as it is.
+    #[test]
+    fn a_spawn_in_a_gone_tab_folder_starts_in_the_workspace_folder() {
+        let size = serde_json::json!({ "cols": 80, "rows": 24 });
+        let warm = |cwd: &str| -> TabSpawn {
+            serde_json::from_value(
+                serde_json::json!({ "kind": "warm", "targetCwd": cwd, "size": size }),
+            )
+            .unwrap()
+        };
+        let cold = |cwd: &str| -> TabSpawn {
+            serde_json::from_value(
+                serde_json::json!({ "kind": "cold", "command": "zsh", "cwd": cwd, "size": size }),
+            )
+            .unwrap()
+        };
+        let (gone, base) = (Path::new("/w/app-seat-dev"), Path::new("/w/app"));
+        for mut spawn in [warm("/w/app-seat-dev"), cold("/w/app-seat-dev")] {
+            start_beside_gone_folder(&mut spawn, gone, Some(base));
+            assert_eq!(spawn.cwd_mut().as_str(), "/w/app");
+        }
+        let mut elsewhere = warm("/home/me");
+        start_beside_gone_folder(&mut elsewhere, gone, Some(base));
+        assert_eq!(elsewhere.cwd_mut().as_str(), "/home/me");
+        let mut no_folder = cold("/w/app-seat-dev");
+        start_beside_gone_folder(&mut no_folder, gone, None);
+        assert_eq!(no_folder.cwd_mut().as_str(), "/w/app-seat-dev");
     }
 
     /// A Relaunch the host answers by reviving an earlier respawn's process (its

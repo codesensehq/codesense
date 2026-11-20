@@ -765,6 +765,26 @@ describe("⌘⇧T — reopen the last closed tab", () => {
     expect(tabsIn(WS)).toEqual([replacement]);
   });
 
+  it("an Ended last tab with a folder of its own opens there, not in the replacement shell", async () => {
+    seed({ tabs: ["t1"] });
+    render(<TerminalArea />);
+    recordClosedTab({
+      kind: "ended",
+      teamKey: TEAM,
+      workspaceId: WS,
+      tab: { id: "seat", sessionId: "seat", name: "dev", cwd: "/w/story-seat-dev" },
+      wasLastTab: true,
+    });
+    terminal("t1").focus();
+    press({ key: "T", metaKey: true, shiftKey: true });
+    await waitFor(() => expect(terminalHost().opened).toHaveLength(1));
+    const fresh = terminalHost().opened[0];
+    expect(fresh.cwd).toBe("/w/story-seat-dev");
+    expect(fresh.name).toBe("dev");
+    expect(nameOf(WS, "t1")).toBe("t1");
+    expect(tabsIn(WS)).toEqual(["t1", fresh.session]);
+  });
+
   it("with nothing closed, does nothing", async () => {
     render(<TerminalArea />);
     terminal("t1").focus();
