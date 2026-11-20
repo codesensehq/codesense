@@ -790,6 +790,19 @@ jobs:
         run: |
           cargo nextest run --profile ci --locked -p codesense-pty-core --test pty_contract --test headless_session
           cargo nextest run --profile ci --locked -p codesense-pty-core --lib -E 'test(/^runner::cursor_reply::/)'
+      - name: Export the MCP registry (temporary)
+        if: always()
+        run: node scripts/generate-mcp-reference.mjs --queued-export
+      - name: Upload the MCP registry export (temporary)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mcp-registry-export
+          path: |
+            codesense-docs/getting-started/content/generated/mcp-tools.json
+            codesense-docs/getting-started/content/generated/mcp-tools.default.json
+            codesense-docs/getting-started/content/generated/mcp-tools.dashboard-publish.json
+            codesense-docs/getting-started/content/generated/mcp-tools.inputs.json
 
   rust-check-windows:
     name: Rust check (Windows)
