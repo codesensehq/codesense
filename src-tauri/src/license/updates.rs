@@ -423,7 +423,7 @@ impl Install {
     }
 
     /// What an install replaces, and what `can_replace_with` checks.
-    pub fn target(&self) -> Option<&Path> {
+    pub fn replace_target(&self) -> Option<&Path> {
         match self {
             Install::Bundle { target, .. } => Some(target),
             Install::AppImage(file) => Some(file),
@@ -432,7 +432,7 @@ impl Install {
     }
 
     /// What the updater builder's `executable_path` is set to, if anything.
-    pub fn executable(&self) -> Option<&Path> {
+    pub fn executable_path(&self) -> Option<&Path> {
         match self {
             Install::Bundle { executable, .. } => executable.as_deref(),
             Install::AppImage(file) => Some(file),
@@ -1034,7 +1034,7 @@ impl Updates {
             return Outcome::PackageManager;
         }
         // An install the user can't write would raise an administrator prompt at every quit.
-        if !self.install.target().is_some_and(can_replace) {
+        if !self.install.replace_target().is_some_and(can_replace) {
             self.not_writable.store(true, Ordering::SeqCst);
             log::warn!(target: "license", "update not downloaded: the app can't be replaced without an administrator");
             return Outcome::NotWritable;
@@ -1094,7 +1094,7 @@ impl Updates {
                     .redirect(reqwest_mcp::redirect::Policy::none())
                     .https_only(!cfg!(debug_assertions))
             });
-        if let Some(executable) = self.install.executable() {
+        if let Some(executable) = self.install.executable_path() {
             builder = builder.executable_path(executable);
         }
         let updater = builder.build().map_err(|e| label(&e))?;
@@ -1214,7 +1214,7 @@ impl Updates {
         let failed = staged.is_some() && self.failed_version() == staged;
         // Without the location check, a location already found unwritable still counts.
         let writable = if check_location {
-            self.install.target().is_some_and(can_replace)
+            self.install.replace_target().is_some_and(can_replace)
         } else {
             !self.not_writable.load(Ordering::SeqCst)
         };
@@ -2094,8 +2094,8 @@ pub(super) mod tests {
             Install::Unknown,
             "a dev or unpackaged build"
         );
-        assert_eq!(Install::PackageManager.target(), None);
-        assert_eq!(Install::Unknown.executable(), None);
+        assert_eq!(Install::PackageManager.replace_target(), None);
+        assert_eq!(Install::Unknown.executable_path(), None);
     }
 
     /// One path, Tauri's `Env::appimage`, names what the plugin replaces (`executable_path`),
@@ -2162,18 +2162,18 @@ pub(super) mod tests {
             .unwrap()
             .with_install(install);
         assert_eq!(
-            updates.install.executable(),
+            updates.install.executable_path(),
             Some(file.as_path()),
             "executable_path"
         );
         assert_eq!(
-            updates.install.target(),
+            updates.install.replace_target(),
             Some(file.as_path()),
             "the install target"
         );
         assert!(updates
             .install
-            .target()
+            .replace_target()
             .is_some_and(|t| can_replace_with(t, &temp)));
     }
 
