@@ -134,11 +134,14 @@ describe("GeneralSection — rows gated on platform capabilities", () => {
       expect(selected).toHaveAttribute("tabIndex", "0");
       selected.focus();
       expect(selected).toHaveFocus();
-      fireEvent.click(screen.getByTestId(`${testId}-on`));
-      fireEvent.click(screen.getByTestId(`${testId}-off`));
-      for (const k of ["ArrowRight", "ArrowLeft", "Home", "End"])
+      for (const option of ["on", "off"]) {
+        fireEvent.click(screen.getByTestId(`${testId}-${option}`));
+        expect(settings()[key]).toBe(stored);
+      }
+      for (const k of ["ArrowRight", "ArrowLeft", "Home", "End"]) {
         fireEvent.keyDown(group, { key: k });
-      expect(settings()[key]).toBe(stored);
+        expect(settings()[key]).toBe(stored);
+      }
       expect(checked(testId)).toBe(`${testId}-${shown}`);
       expect(selected).toHaveFocus();
     },

@@ -572,9 +572,9 @@ function RadioGroupRow<T extends string>({
 }: RadioGroupRowProps<T>) {
   const noteId = useId();
   const platformCaps = useConfigStore((s) => s.platformCaps);
-  const offCap =
-    capability && !selectCapability(platformCaps, capability.cap).on ? capability : undefined;
-  const offCapability = offCap ? selectCapability(platformCaps, offCap.cap) : undefined;
+  const capState = capability ? selectCapability(platformCaps, capability.cap) : undefined;
+  const offCap = capState && !capState.on ? capability : undefined;
+  const offCapability = offCap ? capState : undefined;
   const shown = offCap ? offCap.offValue : value;
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
