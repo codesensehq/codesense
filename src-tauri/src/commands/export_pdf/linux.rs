@@ -86,6 +86,10 @@ impl Export {
         let over = Arc::new(AtomicBool::new(false));
         let dropped = over.clone();
         glib::idle_add_once(move || {
+            eprintln!(
+                "diag: idle start {id} dropped={}",
+                dropped.load(Ordering::Acquire)
+            );
             if dropped.load(Ordering::Acquire) {
                 return;
             }
@@ -103,18 +107,36 @@ impl Drop for Export {
     fn drop(&mut self) {
         self.over.store(true, Ordering::Release);
         let id = self.id;
+        eprintln!("diag: guard drop {id}");
         glib::idle_add_once(move || release(id));
     }
+}
+
+/// Scratch: destroy `window`, first stopping and terminating its web view when
+/// PDF_DIAG_TERMINATE is set.
+fn teardown(window: &gtk::OffscreenWindow) {
+    if std::env::var_os("PDF_DIAG_TERMINATE").is_some() {
+        if let Some(view) = window.child().and_then(|c| c.downcast::<WebView>().ok()) {
+            eprintln!("diag: stop_loading");
+            view.stop_loading();
+            eprintln!("diag: terminate_web_process");
+            view.terminate_web_process();
+            eprintln!("diag: terminated");
+        }
+    }
+    eprintln!("diag: destroy begin");
+    // SAFETY: the caller's handle is the last one read.
+    unsafe { window.destroy() };
+    eprintln!("diag: destroy end");
 }
 
 /// Destroy export `id`'s window and the web view in it. Main thread only.
 fn release(id: usize) {
     let window = PARKED.with(|parked| parked.borrow_mut().remove(&id));
+    eprintln!("diag: release {id} parked={}", window.is_some());
     if let Some(window) = window {
         debug!(target: "export_pdf", "Releasing export {}", id);
-        // SAFETY: the registry held the export's only handle on the window, and
-        // nothing reads it after this.
-        unsafe { window.destroy() };
+        teardown(&window);
     }
 }
 
@@ -423,7 +445,12 @@ fn file_printer() -> Result<String, String> {
     }));
     let data = Rc::into_raw(search.clone()).cast_mut().cast();
     // SAFETY: GTK owns the reference in `data` until it calls `free_search`.
+    eprintln!("diag: enumerate begin");
     unsafe { gtk_enumerate_printers(each_printer, data, Some(free_search), GFALSE) };
+    eprintln!(
+        "diag: enumerate end, {} printers",
+        search.borrow().printers.len()
+    );
     let search = search.borrow();
     choose_file_printer(&search.printers, &search.preferred)
 }
@@ -577,11 +604,12 @@ mod tests {
         let outcome = Rc::new(RefCell::new(None));
         let sink = outcome.clone();
         print_to_pdf(&web_view, source, &out, move |result| {
+            eprintln!("diag: done callback");
             *sink.borrow_mut() = Some(result);
         });
         let result = run_until(|| outcome.borrow_mut().take());
-        // SAFETY: the test's only handle on the window; nothing reads it after.
-        unsafe { window.destroy() };
+        eprintln!("diag: print done ok={}", result.is_ok());
+        teardown(&window);
         result.map(|()| fs::read(&out).expect("the printed PDF"))
     }
 
