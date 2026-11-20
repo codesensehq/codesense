@@ -471,15 +471,21 @@ export function recordAgentLaunch(
   });
 }
 
-/** Remember an agent its tab's exec started: the exec's argv is the launch. */
+/** Remember an agent its tab's exec started. The spec keeps the launch's own args (a
+ *  relaunch projects its scope afresh from them) and takes only the program the exec ran;
+ *  the exec's argv is the recorded line. */
 export function recordExecLaunch(
   sessionId: string,
   spec: AgentLaunchSpec,
   execution: ScopedExecution,
 ): void {
   const [agentPath, ...args] = execution.argv;
-  const launched = { ...spec, agentPath, args };
-  recordAgentLaunch(sessionId, launched, buildAgentLaunchCommand(agentPath, args), true);
+  recordAgentLaunch(
+    sessionId,
+    { ...spec, agentPath },
+    buildAgentLaunchCommand(agentPath, args),
+    true,
+  );
 }
 
 /** Whether every agent launch on `platform` must exec its agent as the tab's process, so

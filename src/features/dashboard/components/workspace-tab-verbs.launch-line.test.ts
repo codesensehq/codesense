@@ -110,11 +110,7 @@ describe("an agent tab opened by a dashboard verb", () => {
       line: "'/opt/bin/claude' '--dangerously-skip-permissions' '--mcp-config' '/s.json'",
       agent: "claude",
       exec: true,
-      spec: {
-        agentPath: "/opt/bin/claude",
-        configCwd: "/work/dir",
-        args: ["--dangerously-skip-permissions", "--mcp-config", "/s.json"],
-      },
+      spec: { agentPath: "/opt/bin/claude", configCwd: "/work/dir" },
     });
   });
 

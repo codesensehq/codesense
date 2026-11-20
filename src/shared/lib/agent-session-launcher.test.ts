@@ -438,7 +438,25 @@ describe("connectAgentSession orchestration (AC-1/2/3/5/7)", () => {
     expect(deps.launchAgentLine).not.toHaveBeenCalled();
     const recorded = useAgentStateStore.getState().launchBySession[opened.sessionId];
     expect(recorded.exec).toBe(true);
-    expect([recorded.spec.agentPath, ...(recorded.spec.args ?? [])]).toEqual(execution.argv);
+    expect(recorded.line).toBe(buildAgentLaunchCommand(execution.argv[0], execution.argv.slice(1)));
+    // The launch's own spec is kept: only the program comes from the exec.
+    expect(recorded.spec.agentPath).toBe(execution.argv[0]);
+    expect(recorded.spec.args).toBeUndefined();
+
+    // A relaunch projects the default launch afresh: no old scope flags replayed.
+    const respawn = vi.fn(async (_request: RespawnRequest) => ({ extraArgs: [], execution }));
+    const inject = { launchAgentLine: vi.fn(async () => ({ ok: true as const })) };
+    await relaunchAgentSession(opened.sessionId, recorded.spec, respawn, inject);
+    await relaunchAgentSession(
+      opened.sessionId,
+      useAgentStateStore.getState().launchBySession[opened.sessionId].spec,
+      respawn,
+      inject,
+    );
+    for (const [request] of respawn.mock.calls) {
+      expect(request.scope).toMatchObject({ defaultArgs: true, launchArgs: [] });
+    }
+    expect(inject.launchAgentLine).not.toHaveBeenCalled();
   });
 
   it("a typed launch is recorded without the exec flag", async () => {
