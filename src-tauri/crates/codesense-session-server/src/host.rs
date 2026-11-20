@@ -1070,9 +1070,15 @@ impl Host {
         } else {
             codesense_pty_core::activity::HelperLink::Symbolic
         };
+        // Claude's hooks run the bridge this host's install placed beside it.
+        let bridge = std::env::current_exe()
+            .map(|exe| exe.with_file_name(crate::install::BRIDGE))
+            .ok()
+            .filter(|bridge| bridge.is_file());
         let started = codesense_pty_core::activity::ActivityService::start_with(
             &real,
             self.terminal.activity(),
+            bridge.as_deref(),
             link,
         )
         .map_err(|error| error.to_string())?;
@@ -7162,6 +7168,7 @@ mod activity_root_tests {
         let service = codesense_pty_core::activity::ActivityService::start_with(
             dir.path(),
             &std::sync::Arc::new(codesense_pty_core::activity::ActivityOwner::new()),
+            None,
             codesense_pty_core::activity::HelperLink::Symbolic,
         )
         .unwrap();
@@ -7190,6 +7197,7 @@ mod activity_root_tests {
         let service = codesense_pty_core::activity::ActivityService::start(
             &activity_root(Path::new(&root)).unwrap(),
             &std::sync::Arc::new(codesense_pty_core::activity::ActivityOwner::new()),
+            None,
         );
         assert!(service.is_ok(), "the service starts in the real directory");
     }

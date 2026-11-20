@@ -64,7 +64,7 @@ fn host_with(owner: ActivityOwner) -> Host {
     let owner = Arc::new(owner);
     let outlet = Arc::new(Outlet::default());
     owner.set_inbox_outlet(outlet.clone());
-    let service = ActivityService::start(root.path(), &owner).unwrap();
+    let service = ActivityService::start(root.path(), &owner, None).unwrap();
     Host {
         _root: root,
         owner,

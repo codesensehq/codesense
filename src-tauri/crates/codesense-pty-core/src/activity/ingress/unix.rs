@@ -27,17 +27,23 @@ pub struct ActivityService {
 }
 
 impl ActivityService {
-    /// `root` must already be a private directory belonging to this user.
-    pub fn start(root: &Path, owner: &Arc<ActivityOwner>) -> io::Result<Self> {
-        Self::start_with(root, owner, HelperLink::Hard)
+    /// `root` must already be a private directory belonging to this user. `bridge` is the
+    /// host's `codesense-bridge`, placed in `root` for Claude's hooks.
+    pub fn start(
+        root: &Path,
+        owner: &Arc<ActivityOwner>,
+        bridge: Option<&Path>,
+    ) -> io::Result<Self> {
+        Self::start_with(root, owner, bridge, HelperLink::Hard)
     }
 
-    /// [`Self::start`], choosing how the shells' helper is placed. A
+    /// [`Self::start`], choosing how the shells' helper and the bridge are placed. A
     /// private-account host must never hard-link its installed binary: that
     /// install refuses any file with a second link.
     pub fn start_with(
         root: &Path,
         owner: &Arc<ActivityOwner>,
+        bridge: Option<&Path>,
         link: HelperLink,
     ) -> io::Result<Self> {
         let metadata = std::fs::symlink_metadata(root)?;
@@ -86,9 +92,9 @@ impl ActivityService {
         if let Err(error) = refresh_helper(root, &helper, link) {
             log::warn!("activity helper for typed agents unavailable: {error}");
         }
-        // Claude's status hooks run this host's copy; without it they do nothing.
-        if let Err(error) = crate::notify_hook::install(root) {
-            log::warn!("Claude status hook unavailable: {error}");
+        // Claude's status and guard hooks run this host's bridge; without it they do nothing.
+        if let Err(error) = crate::notify_hook::install(root, bridge, link) {
+            log::warn!("Claude hooks unavailable: {error}");
         }
         sweep_stale_launches(root, std::time::SystemTime::now());
         owner.configure_ingress(path.clone(), helper);
@@ -605,7 +611,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let owner = Arc::new(ActivityOwner::new());
-        let service = ActivityService::start(root.path(), &owner).unwrap();
+        let service = ActivityService::start(root.path(), &owner, None).unwrap();
         let writer = owner
             .prepare_native(
                 "session",
@@ -682,7 +688,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let owner = Arc::new(ActivityOwner::new());
-        let service = ActivityService::start(root.path(), &owner).unwrap();
+        let service = ActivityService::start(root.path(), &owner, None).unwrap();
         let (name, value) = service.shell_env().unwrap();
         assert_eq!(name, crate::activity::HOST_ENV);
         assert_eq!(Path::new(&value), root.path());
@@ -691,13 +697,13 @@ mod tests {
         let placed = std::fs::metadata(root.path().join(crate::activity::HELPER_NAME)).unwrap();
         let built = std::fs::metadata(std::env::current_exe().unwrap()).unwrap();
         assert_eq!((placed.ino(), placed.dev()), (built.ino(), built.dev()));
-        // Claude's status hook is installed beside it, where its command looks.
-        let hook = root.path().join(crate::notify_hook::NAME);
-        assert_eq!(
-            std::fs::read_to_string(&hook).unwrap(),
-            crate::notify_hook::SOURCE
-        );
-        assert_eq!(std::fs::metadata(&hook).unwrap().mode() & 0o777, 0o755);
+        // No old status script is left where Claude's hooks look; with no bridge given,
+        // none is placed.
+        assert!(!root.path().join(crate::notify_hook::NAME).exists());
+        assert!(!root
+            .path()
+            .join(codesense_host_proto::hook::BRIDGE)
+            .exists());
         // This test process is the hand-typed CLI; its parent stands in for the
         // shell the host spawned.
         let shell = unsafe { libc::getppid() } as u32;
@@ -805,7 +811,7 @@ mod tests {
         std::fs::create_dir(&fresh).unwrap();
         std::fs::write(fresh.join("settings.json"), "{}").unwrap();
         let owner = Arc::new(ActivityOwner::new());
-        let service = ActivityService::start(root.path(), &owner).unwrap();
+        let service = ActivityService::start(root.path(), &owner, None).unwrap();
         // A launch from a few moments ago may still be read by its CLI.
         assert!(fresh.join("settings.json").exists());
         assert!(service.path().exists());
@@ -844,7 +850,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let owner = Arc::new(ActivityOwner::new());
-        let service = ActivityService::start(root.path(), &owner).unwrap();
+        let service = ActivityService::start(root.path(), &owner, None).unwrap();
         let mut client = UnixStream::connect(service.path()).unwrap();
         let start = Instant::now();
         // Sending one header byte each 100 ms used to reset SO_RCVTIMEO.

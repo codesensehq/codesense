@@ -1,36 +1,38 @@
 // SPDX-License-Identifier: MIT
-//! The Claude status hook CodeSense itself ships.
+//! Claude's hooks as CodeSense's own install serves them.
 //!
-//! The script is part of CodeSense's own install, never of a workspace or team content:
-//! every host writes it once into its activity root, beside the activity helper, when it
-//! starts ([`install`]). A Claude session reaches it through its tab's
-//! `$CODESENSE_ACTIVITY_HOST`, as its inbox hooks reach the helper ([`status_command`]).
-//! The hook posts Claude Code lifecycle events to the running CodeSense app so terminal
-//! status dots and the agent list stay live.
+//! The hooks run `codesense-bridge hook <verb>` (`codesense_host_proto::hook`). The bridge is
+//! part of CodeSense's own install, never of a workspace or team content: every host places it
+//! in its activity root, beside the activity helper, when it starts ([`install`]). A Claude
+//! session reaches it through its tab's `$CODESENSE_ACTIVITY_HOST`, as its inbox hooks reach
+//! the helper ([`status_command`]). The status hook posts Claude Code lifecycle events to the
+//! running CodeSense app so terminal status dots and the agent list stay live; the guard keeps
+//! credential files out of transcripts.
 //!
 //! Lives in `codesense-pty-core` because both the main `codesense` binary and the
 //! `codesense-session-server` sidecar run a host.
 
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use codesense_host_proto::hook::{self, HookTarget, Verb};
-use codesense_platform::fs::{is_executable, set_executable, Reach};
+
+use crate::activity::HelperLink;
 
 /// The reference hook, embedded in the app binary. The repo copy at
 /// `scripts/codesense-notify.reference.sh` is the single source of truth;
 /// edits there flow in on the next build.
 pub const SOURCE: &str = include_str!("../../../../scripts/codesense-notify.reference.sh");
 
-/// The installed hook's file name in a host's activity root.
+/// The status script an earlier CodeSense installed in a host's activity root.
 pub const NAME: &str = "codesense-notify.sh";
 
 /// Mode the installed hook lands with on unix (executable for owner, read + exec
 /// for group and other): [`Reach::Everyone`].
 pub const MODE: u32 = 0o755;
 
-/// The installed guard's file name in a host's activity root.
+/// The guard script an earlier CodeSense installed in a host's activity root.
 pub const GUARD_NAME: &str = "codesense-secret-guard.sh";
 
 /// The tools the guard is scoped to, as a hook matcher.
@@ -51,68 +53,39 @@ pub fn status_command() -> String {
     hook::command(Verb::Notify, HookTarget::local()).command
 }
 
-/// Write the hook into the host activity `root` with mode [`MODE`], unless it is already
-/// there. The write is atomic: a tmp file renamed over whatever is at the path (a symlink
-/// included, never followed), so a hook firing meanwhile runs one whole script.
-pub fn install(root: &Path) -> io::Result<()> {
-    let status = install_one(root, NAME, SOURCE);
-    let guard = install_one(root, GUARD_NAME, &guard_source());
-    status.and(guard)
-}
-
-fn install_one(root: &Path, name: &str, source: &str) -> io::Result<()> {
-    let dest = root.join(name);
-    if is_installed(&dest, source) {
-        return Ok(());
+/// Ready the host activity `root` for Claude's hooks: place the host's `bridge` there, where
+/// [`hook::command`] runs it, as `how` places the activity helper; and remove the scripts an
+/// earlier CodeSense installed there. With no bridge nothing is placed and it says so once: the
+/// guarded hook commands then do nothing.
+pub fn install(root: &Path, bridge: Option<&Path>, how: HelperLink) -> io::Result<()> {
+    let mut removed = Ok(());
+    for name in [NAME, GUARD_NAME] {
+        match fs::remove_file(root.join(name)) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => {
+                removed = removed.and(Err(error))
+            }
+            _ => {}
+        }
     }
-    atomic_write_mode(&dest, source.as_bytes())
-}
-
-/// Whether `dest` is a regular file this OS would run, holding `source`. On
-/// Windows a `.sh` file never is, so the hook is rewritten on every install.
-fn is_installed(dest: &Path, source: &str) -> bool {
-    let Ok(meta) = fs::symlink_metadata(dest) else {
-        return false;
+    let placed = match bridge {
+        Some(bridge) => place_bridge(bridge, &root.join(HookTarget::local().bridge_file()), how),
+        None => {
+            log::warn!(
+                "no codesense-bridge on this host: Claude's status and guard hooks do nothing"
+            );
+            Ok(())
+        }
     };
-    meta.is_file()
-        && is_executable(dest)
-        && fs::read(dest).is_ok_and(|bytes| bytes == source.as_bytes())
+    removed.and(placed)
 }
 
-/// Write `bytes` to `dest` through a tmp file given [`MODE`] before the rename.
-fn atomic_write_mode(dest: &Path, bytes: &[u8]) -> io::Result<()> {
-    let parent = dest.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = dest.file_name().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "notify-hook dest has no file name",
-        )
-    })?;
-    let tmp = tmp_path(parent, file_name);
-    // Clean a stale tmp from a previous crashed write.
-    let _ = fs::remove_file(&tmp);
-    {
-        use std::io::Write;
-        let mut f = fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&tmp)?;
-        f.write_all(bytes)?;
-        f.sync_all()?;
-    }
-    set_executable(&tmp, Reach::Everyone)?;
-    if let Err(e) = fs::rename(&tmp, dest) {
-        let _ = fs::remove_file(&tmp);
-        return Err(e);
-    }
-    Ok(())
-}
-
-fn tmp_path(parent: &Path, name: &std::ffi::OsStr) -> PathBuf {
-    let mut buf = std::ffi::OsString::from(".");
-    buf.push(name);
-    buf.push(".tmp.notify-hook");
-    parent.join(buf)
+/// Place `bridge` at `dest` with the function that places the activity helper.
+fn place_bridge(bridge: &Path, dest: &Path, how: HelperLink) -> io::Result<()> {
+    let _ = (bridge, dest, how);
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "bridge placement is not wired yet",
+    ))
 }
 
 #[cfg(test)]
@@ -136,95 +109,32 @@ mod tests {
         );
     }
 
+    /// The scripts an earlier CodeSense installed in the root are removed, whether or not the
+    /// host has a bridge to place; anything else there stays.
     #[test]
-    fn install_writes_an_executable_copy_once() {
-        let tmp = tempdir().unwrap();
-        install(tmp.path()).unwrap();
-        let dest = tmp.path().join(NAME);
-        assert_eq!(fs::read_to_string(&dest).unwrap(), SOURCE);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            crate::test_support::expect_mode(&dest, MODE);
-            let first = fs::metadata(&dest).unwrap().ino();
-            install(tmp.path()).unwrap();
-            assert_eq!(fs::metadata(&dest).unwrap().ino(), first, "left as it was");
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn install_repairs_drifted_bytes_or_a_missing_exec_bit() {
-        use std::os::unix::fs::PermissionsExt;
-        let tmp = tempdir().unwrap();
-        let dest = tmp.path().join(NAME);
-        for (bytes, mode) in [
-            (&b"#!/bin/sh\necho stale\n"[..], 0o755),
-            (SOURCE.as_bytes(), 0o644),
-        ] {
-            fs::write(&dest, bytes).unwrap();
-            fs::set_permissions(&dest, fs::Permissions::from_mode(mode)).unwrap();
-            install(tmp.path()).unwrap();
-            assert_eq!(fs::read_to_string(&dest).unwrap(), SOURCE);
-            crate::test_support::expect_mode(&dest, MODE);
-        }
-    }
-
-    /// The check takes any execute bit, as `is_executable` does, not only the
-    /// owner's: a byte-identical hook only its group may run is left alone.
-    #[cfg(unix)]
-    #[test]
-    fn a_hook_only_its_group_may_run_counts_as_installed() {
-        use std::os::unix::fs::PermissionsExt;
-        let tmp = tempdir().unwrap();
-        let dest = tmp.path().join(NAME);
-        fs::write(&dest, SOURCE).unwrap();
-        fs::set_permissions(&dest, fs::Permissions::from_mode(0o650)).unwrap();
-        assert!(is_installed(&dest, SOURCE));
-        install(tmp.path()).unwrap();
-        crate::test_support::expect_mode(&dest, 0o650);
-    }
-
-    /// A symlink at the path is replaced, never followed, even one whose target holds the
-    /// script.
-    #[cfg(unix)]
-    #[test]
-    fn install_replaces_a_symlink_without_following_it() {
-        let tmp = tempdir().unwrap();
-        let dest = tmp.path().join(NAME);
-        for target in ["nowhere.sh", "other.sh"] {
-            let target = tmp.path().join(target);
-            if target.ends_with("other.sh") {
-                fs::write(&target, SOURCE).unwrap();
+    fn install_removes_the_old_scripts_with_or_without_a_bridge() {
+        let bridge = tempdir().unwrap();
+        let bridge = bridge.path().join(hook::BRIDGE);
+        fs::write(&bridge, b"bridge").unwrap();
+        for given in [None, Some(bridge.as_path())] {
+            let tmp = tempdir().unwrap();
+            for name in [NAME, GUARD_NAME, "keep.sh"] {
+                fs::write(tmp.path().join(name), b"#!/bin/sh\n").unwrap();
             }
-            let _ = fs::remove_file(&dest);
-            std::os::unix::fs::symlink(&target, &dest).unwrap();
-            install(tmp.path()).unwrap();
-            assert!(fs::symlink_metadata(&dest).unwrap().file_type().is_file());
-            assert_eq!(fs::read_to_string(&dest).unwrap(), SOURCE);
+            let _ = install(tmp.path(), given, HelperLink::Hard);
+            assert!(!tmp.path().join(NAME).exists(), "{given:?}");
+            assert!(!tmp.path().join(GUARD_NAME).exists(), "{given:?}");
+            assert!(tmp.path().join("keep.sh").exists(), "{given:?}");
         }
-        assert!(!tmp.path().join("nowhere.sh").exists(), "never followed");
     }
 
-    /// The right bytes without an execute bit are not an install: on Windows,
-    /// where a `.sh` file is never executable, `install` rewrites the hook.
+    /// With no bridge nothing is placed, and that is not a failure.
     #[test]
-    fn a_byte_identical_hook_without_an_execute_bit_is_not_installed() {
+    fn install_without_a_bridge_places_nothing() {
         let tmp = tempdir().unwrap();
-        let dest = tmp.path().join(NAME);
-        fs::write(&dest, SOURCE).unwrap();
-        assert!(!is_installed(&dest, SOURCE));
-    }
-
-    #[test]
-    fn install_writes_the_guard_beside_the_status_hook() {
-        let tmp = tempdir().unwrap();
-        install(tmp.path()).unwrap();
-        assert_eq!(
-            fs::read_to_string(tmp.path().join(GUARD_NAME)).unwrap(),
-            guard_source()
-        );
-        assert_eq!(fs::read_to_string(tmp.path().join(NAME)).unwrap(), SOURCE);
+        install(tmp.path(), None, HelperLink::Hard).unwrap();
+        install(tmp.path(), None, HelperLink::Hard).unwrap();
+        assert_eq!(fs::read_dir(tmp.path()).unwrap().count(), 0);
     }
 
     #[test]

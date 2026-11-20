@@ -1118,7 +1118,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let owner = std::sync::Arc::new(ActivityOwner::new());
-        let service = crate::activity::ActivityService::start(root.path(), &owner).unwrap();
+        let service = crate::activity::ActivityService::start(root.path(), &owner, None).unwrap();
         // This test process is the CLI; its parent stands in for the shell the host spawned.
         owner.register("shell", Some(std::os::unix::process::parent_id()));
         let launch = || {

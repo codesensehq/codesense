@@ -639,7 +639,9 @@ pub fn run() {
                 let root = home.join("in-process-activity");
                 let created = std::fs::DirBuilder::new().mode(0o700).create(&root);
                 if created.is_ok() || created.as_ref().is_err_and(|error| error.kind() == std::io::ErrorKind::AlreadyExists) {
-                    match codesense_pty_core::activity::ActivityService::start(&root, in_process_host.activity()) {
+                    // Claude's hooks run the app's bundled bridge, placed in the root.
+                    let bridge = commands::deps::resolve_sidecar_source("codesense-bridge").ok();
+                    match codesense_pty_core::activity::ActivityService::start(&root, in_process_host.activity(), bridge.as_deref()) {
                         Ok(service) => { app.manage(service); }
                         Err(error) => log::warn!("in-process activity reporting unavailable: {error}"),
                     }

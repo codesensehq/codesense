@@ -94,7 +94,7 @@ async fn gateway_bridge_who_am_i_checks_live_ancestry_again_after_initialize() {
             // trust check is shared; Hermes remains rejected as a fresh public
             // launch until its own independent listing gate passes.
             let owner = Arc::new(ActivityOwner::new());
-            let service = ActivityService::start(home.path(), &owner).unwrap();
+            let service = ActivityService::start(home.path(), &owner, None).unwrap();
             let writer = owner.prepare_native("gateway-hook", AgentCli::Codex, service.path().to_str().unwrap()).unwrap();
             let activity = home.path().join("activity.json");
             std::fs::write(&activity, serde_json::to_vec(&json!({"socket":service.path(),"token":writer.token})).unwrap()).unwrap();
