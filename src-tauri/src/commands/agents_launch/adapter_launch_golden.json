@@ -164,6 +164,16 @@
           {
             "hooks": [
               {
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook reply-check || true",
+                "timeout": 5,
+                "type": "command"
+              }
+            ],
+            "matcher": ""
+          },
+          {
+            "hooks": [
+              {
                 "asyncRewake": true,
                 "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/activity-helper\" ] || exit 0; exec \"$CODESENSE_ACTIVITY_HOST/activity-helper\" --inbox-wait claude Stop \"$PPID\"",
                 "timeout": 2147483,
@@ -500,6 +510,16 @@
           {
             "hooks": [
               {
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook reply-check || true",
+                "timeout": 5,
+                "type": "command"
+              }
+            ],
+            "matcher": ""
+          },
+          {
+            "hooks": [
+              {
                 "asyncRewake": true,
                 "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/activity-helper\" ] || exit 0; exec \"$CODESENSE_ACTIVITY_HOST/activity-helper\" --inbox-wait claude Stop \"$PPID\"",
                 "timeout": 2147483,
@@ -768,6 +788,16 @@
             "hooks": [
               {
                 "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
+                "timeout": 5,
+                "type": "command"
+              }
+            ],
+            "matcher": ""
+          },
+          {
+            "hooks": [
+              {
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook reply-check || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -1108,6 +1138,16 @@
             "hooks": [
               {
                 "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
+                "timeout": 5,
+                "type": "command"
+              }
+            ],
+            "matcher": ""
+          },
+          {
+            "hooks": [
+              {
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook reply-check || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3118,6 +3158,16 @@
           {
             "hooks": [
               {
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook reply-check || true",
+                "timeout": 5,
+                "type": "command"
+              }
+            ],
+            "matcher": ""
+          },
+          {
+            "hooks": [
+              {
                 "asyncRewake": true,
                 "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/activity-helper\" ] || exit 0; exec \"$CODESENSE_ACTIVITY_HOST/activity-helper\" --inbox-wait claude Stop \"$PPID\"",
                 "timeout": 2147483,
@@ -3461,6 +3511,16 @@
           {
             "hooks": [
               {
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook reply-check || true",
+                "timeout": 5,
+                "type": "command"
+              }
+            ],
+            "matcher": ""
+          },
+          {
+            "hooks": [
+              {
                 "asyncRewake": true,
                 "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/activity-helper\" ] || exit 0; exec \"$CODESENSE_ACTIVITY_HOST/activity-helper\" --inbox-wait claude Stop \"$PPID\"",
                 "timeout": 2147483,
@@ -3732,6 +3792,16 @@
             "hooks": [
               {
                 "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
+                "timeout": 5,
+                "type": "command"
+              }
+            ],
+            "matcher": ""
+          },
+          {
+            "hooks": [
+              {
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook reply-check || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -4073,6 +4143,16 @@
             "hooks": [
               {
                 "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
+                "timeout": 5,
+                "type": "command"
+              }
+            ],
+            "matcher": ""
+          },
+          {
+            "hooks": [
+              {
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook reply-check || true",
                 "timeout": 5,
                 "type": "command"
               }
