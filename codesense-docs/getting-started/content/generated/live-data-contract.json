@@ -1090,7 +1090,12 @@
       "theme",
       "kitTokens",
       "virtualList",
-      "inboxThread"
+      "inboxThread",
+      "formatKeys",
+      "fillKeys",
+      "formatModifierClick",
+      "localMachineLabel",
+      "localMachinePhrase"
     ],
     "frame_presentation": {
       "builtins": "builtin:stop, builtin:close-tab and builtin:set-role use host labels, icons, availability and handlers. Stop and Close tab always use the host confirmation. Results include builtin:true after the action settles. Unknown builtin ids reject, including builtin:relaunch.",
