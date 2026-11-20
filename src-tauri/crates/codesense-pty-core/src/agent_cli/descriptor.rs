@@ -181,6 +181,9 @@ pub struct ProjectHooks {
     /// The bridge subcommand its status hook runs. Each writer builds the command for the
     /// host that runs it ([`codesense_host_proto::hook::command`]).
     pub status_verb: codesense_host_proto::hook::Verb,
+    /// The bridge subcommand its synchronous `Stop` hook runs to remind the agent, once, to
+    /// answer the person in the chat; `None` for a CLI whose `Stop` can't continue a turn.
+    pub reply_verb: Option<codesense_host_proto::hook::Verb>,
 }
 
 /// How a launch hands a CLI a settings object (CodeSense's permissions and hooks, with a

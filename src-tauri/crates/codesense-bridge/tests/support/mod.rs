@@ -35,6 +35,11 @@ impl Drop for TempDir {
 
 /// Answer each request 200 and hand its bytes back, head and body.
 pub fn listener() -> (String, mpsc::Receiver<Vec<u8>>) {
+    listener_answering("{}")
+}
+
+/// [`listener`] answering each request with `body`.
+pub fn listener_answering(body: &'static str) -> (String, mpsc::Receiver<Vec<u8>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port().to_string();
     let (tx, rx) = mpsc::channel();
@@ -60,9 +65,11 @@ pub fn listener() -> (String, mpsc::Receiver<Vec<u8>>) {
                 }
                 assert!(n > 0, "request ended early");
             }
-            stream
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
-                .unwrap();
+            let answer = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(answer.as_bytes()).unwrap();
             let _ = tx.send(raw);
         }
     });

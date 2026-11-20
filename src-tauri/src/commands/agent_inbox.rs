@@ -318,6 +318,14 @@ impl KnownSessions {
         self.0.iter()
     }
 
+    /// The tab session of the running session with `handle`.
+    fn running_tab(&self, handle: &str) -> Option<&str> {
+        self.0
+            .iter()
+            .find(|s| s.running && s.handle == handle)
+            .and_then(|s| s.session.as_deref())
+    }
+
     /// The session `id` names: by its handle, else by its tab session (a running one
     /// first, should an ended tab still hold the same id).
     pub(crate) fn find(&self, id: &str) -> Option<&KnownSession> {
@@ -928,6 +936,7 @@ async fn store_message(
     let fetch_location = location.clone();
     let text = text.to_string();
     let recipient = to.clone();
+    let sender = from.clone();
     let request_id = request_id.map(str::to_string);
     let stored = with_store("send_message", location.path, move |store| {
         inbox::inbox_insert_request_outcome(
@@ -953,6 +962,9 @@ async fn store_message(
         Ok(outcome) => outcome,
         Err(reason) => return Ok(SendResult::invalid(reason)),
     };
+    if recipient == HUMAN {
+        super::reply_owed::replies_owed().answered(&sender);
+    }
     if inserted {
         if let Some((attachment, true)) = prepared {
             start_media_fetch(host.clone(), fetch_location, message_id, attachment);
@@ -1999,10 +2011,19 @@ pub(crate) async fn read_messages<'a>(
         Ok(None) | Err(_) => return Ok(Vec::new()),
     };
     let InboxLocation { team, path } = session_store(host, &me).await?;
+    let reader = me.clone();
     let taken = with_store("read_messages", path, move |store| {
         inbox::inbox_take_unread(store, &me)
     })
     .await??;
+    // The person's messages this session took are owed an answer until it gives one.
+    if let Some(tab) = sessions.running_tab(&reader) {
+        super::reply_owed::replies_owed().took(
+            tab,
+            &reader,
+            taken.iter().map(|m| (m.id, m.from.as_str())),
+        );
+    }
     if !taken.is_empty() {
         host.inbox_event(InboxEvent::new(
             InboxChange::Read,

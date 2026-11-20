@@ -203,6 +203,59 @@ async fn terminal_status(
     }
 }
 
+/// What the reply reminder reads at a Claude `Stop`.
+#[derive(Serialize, ToSchema)]
+pub struct ReplyCheckResponse {
+    /// The id of the oldest message from the person this session took, hasn't answered and
+    /// hasn't been reminded of, now marked reminded; `null` when there is none. Only an id,
+    /// never the message's text.
+    pub block: Option<String>,
+}
+
+/// Whether a Claude agent owes the person an answer, at its turn's end.
+///
+/// The `codesense-bridge hook reply-check` `Stop` hook asks this. The tab is identified as for
+/// `/api/v1/terminal/status`, by the `X-Codesense-Tab-Session-Id` header, and only a live
+/// session is answered. The body is ignored: the hook sends nothing of the turn. Each message
+/// is named once, so a turn the reminder kept going ends at its next `Stop`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/terminal/reply-check",
+    tag = "terminal",
+    params(
+        ("X-Codesense-Tab-Session-Id" = String, Header, description = "Terminal tab session ID (from CODESENSE_TAB_SESSION_ID env var)")
+    ),
+    responses(
+        (status = 200, description = "The message to remind the agent of, or none", body = ReplyCheckResponse),
+        (status = 400, description = "Missing X-Codesense-Tab-Session-Id header")
+    )
+)]
+async fn reply_check(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<ReplyCheckResponse>, StatusCode> {
+    let tab_session_id = headers
+        .get(HEADER_TAB_SESSION_ID)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .unwrap_or("");
+    if tab_session_id.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let owed = crate::commands::reply_owed::replies_owed();
+    // Nothing owed needs no liveness probe; a session known gone is never answered.
+    let block = if owed.owes(tab_session_id)
+        && crate::commands::dashboard_launch::session_liveness(&state.app_handle, tab_session_id)
+            .await
+            .may_be_true()
+    {
+        owed.remind(tab_session_id).map(|id| id.to_string())
+    } else {
+        None
+    };
+    Ok(Json(ReplyCheckResponse { block }))
+}
+
 /// A CLI started by hand in a CodeSense tab has no launch to record. Its first hook writes a
 /// minimal record: the tab, the CLI's own id from the payload, and org and team only when the
 /// tab's session has an owner. Every other fact says why it is unknown.
@@ -259,7 +312,12 @@ fn terminal_status_event(tab_session_id: &str, hook: ResolvedHook) -> TerminalSt
 }
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/api/v1/terminal/status", post(terminal_status))
+    Router::new()
+        .route("/api/v1/terminal/status", post(terminal_status))
+        .route(
+            codesense_host_proto::hook::REPLY_CHECK_PATH,
+            post(reply_check),
+        )
 }
 
 #[cfg(test)]

@@ -512,7 +512,14 @@ fn hook(verb: Option<&str>) {
                 let _ = stdout.flush();
             }
         }
-        _ => eprintln!("usage: codesense-bridge hook notify|secret-guard"),
+        Some("reply-check") => {
+            if let Some(block) = hook::reply_check(&input(), &hook::HookEnv::from_process()) {
+                let mut stdout = std::io::stdout().lock();
+                let _ = stdout.write_all(block.to_json().as_bytes());
+                let _ = stdout.flush();
+            }
+        }
+        _ => eprintln!("usage: codesense-bridge hook notify|secret-guard|reply-check"),
     }
 }
 

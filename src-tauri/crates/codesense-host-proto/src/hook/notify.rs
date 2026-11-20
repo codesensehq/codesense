@@ -48,7 +48,7 @@ impl HookEnv {
     }
 
     /// The running app's port as it wrote it at its last start.
-    fn port_file(&self) -> Option<String> {
+    pub(super) fn port_file(&self) -> Option<String> {
         let home = self.codesense_home.as_ref()?;
         let port = fs::read_to_string(home.join("http.port")).ok()?;
         Some(port.trim().to_string()).filter(|p| !p.is_empty())
@@ -70,7 +70,7 @@ pub enum Outcome {
 
 /// Why a post got no answer: the field curl's exit code held in the script's log line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PostError {
+pub(super) enum PostError {
     Connect,
     Timeout,
     Io,
@@ -88,9 +88,9 @@ impl PostError {
     }
 }
 
-struct Response {
-    code: u16,
-    body: Vec<u8>,
+pub(super) struct Response {
+    pub(super) code: u16,
+    pub(super) body: Vec<u8>,
 }
 
 /// Post one hook event (`input`, Claude's hook JSON, sent unchanged) as the script does.
@@ -165,8 +165,11 @@ fn one_line(text: &str) -> String {
         .collect()
 }
 
+/// The status route's path; the app's other hook routes sit beside it.
+pub(super) const STATUS_PATH: &str = "/api/v1/terminal/status";
+
 fn local_url(port: &str) -> String {
-    format!("http://127.0.0.1:{port}/api/v1/terminal/status")
+    format!("http://127.0.0.1:{port}{STATUS_PATH}")
 }
 
 /// `http://host:port/path` as `(host:port, addresses, port, path)`; any other form is
@@ -197,7 +200,7 @@ fn parse_url(url: &str) -> Option<(&str, Vec<IpAddr>, u16, &str)> {
 }
 
 /// POST `body` to `url` within [`TIMEOUT`] and read the whole answer.
-fn post(url: &str, session: &str, body: &[u8]) -> Result<Response, PostError> {
+pub(super) fn post(url: &str, session: &str, body: &[u8]) -> Result<Response, PostError> {
     let (authority, addrs, port, path) = parse_url(url).ok_or(PostError::UnsupportedUrl)?;
     let deadline = Instant::now() + TIMEOUT;
     let left = || {

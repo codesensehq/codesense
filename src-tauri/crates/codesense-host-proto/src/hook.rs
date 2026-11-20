@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-//! Claude's hooks as `codesense-bridge hook …` runs them: the status post ([`notify`]) and the
-//! secret-file guard's verdict ([`secret_guard`]), with the one list of protected credential
-//! files ([`FAMILIES`], [`PROTECTED_DIRS`]), and the hook commands CodeSense writes to run them
-//! ([`command`]).
+//! Claude's hooks as `codesense-bridge hook …` runs them: the status post ([`notify`]), the
+//! secret-file guard's verdict ([`secret_guard`]) and the reply reminder ([`reply_check`]),
+//! with the one list of protected credential files ([`FAMILIES`], [`PROTECTED_DIRS`]), and the
+//! hook commands CodeSense writes to run them ([`command`]).
 //!
 //! They port the bash status script and the Perl guard script earlier releases installed, so a
 //! hook needs no bash, curl or perl; "the script" below is that guard, whose reading of a call
@@ -19,11 +19,13 @@ use regex::Regex;
 
 mod command;
 mod notify;
+mod reply_check;
 
 pub use command::{
     command, legacy_verb, HookCommand, HookTarget, Verb, BRIDGE, HOST_ENV, LEGACY_COMMANDS,
 };
 pub use notify::{notify, HookEnv, Outcome};
+pub use reply_check::{reply_check, Block, REPLY_CHECK_PATH};
 
 /// One protected family of credential files, named by a basename glob. `except` are the globs
 /// the hook lets through (templates, public keys); a native deny rule cannot express an
