@@ -1060,6 +1060,25 @@ mod tests {
         assert!(!target.exists(), "the link was followed");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn the_operation_lock_refuses_a_fifo_without_waiting_for_a_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("operation.lock");
+        let c_path = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
+        // SAFETY: a NUL-terminated path the call only reads.
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+        let (done, refused) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_millis(100);
+            let _ = done.send(lock_operation(&path, &|| true, deadline).map(drop));
+        });
+        assert_eq!(
+            refused.recv_timeout(Duration::from_secs(5)),
+            Ok(Err("bundle lock is not regular".to_string()))
+        );
+    }
+
     #[test]
     fn headroom_refuses_what_the_disk_cannot_hold_and_a_missing_path() {
         let dir = tempfile::tempdir().unwrap();
