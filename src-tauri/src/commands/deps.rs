@@ -13,7 +13,7 @@ use tauri::{Emitter, Manager};
 
 use crate::agents::launch_check::{cli_version_warning, LaunchWarning};
 use codesense_platform::cli;
-use codesense_platform::fs::is_executable;
+use codesense_platform::fs::{change_stamp, is_executable, ChangeStamp};
 use codesense_pty_core::agent_cli::{binary_stem, by_binary, descriptor, AgentCli};
 
 /// Minimum required git version for Code Sense sync operations.
@@ -82,17 +82,37 @@ pub struct PendingShadowed {
 }
 
 /// The identity a resolved binary is checked against at launch: its canonical
-/// target plus that target's mtime, length and (on unix) inode. The length and
-/// inode catch an in-place upgrade that keeps the path and resets the mtime, as
-/// npm does (it writes package files with a fixed mtime).
+/// target plus that target's mtime, length and change stamp. The length and stamp
+/// catch an in-place upgrade that keeps the path and resets the mtime, as npm does
+/// (it writes package files with a fixed mtime).
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BinaryFingerprint {
     canonical: PathBuf,
     mtime: SystemTime,
     len: u64,
-    inode: u64,
-    /// Unlike mtime, Unix change time cannot be restored by an installer.
-    change_time: (i64, i64),
+    /// Unlike mtime, an installer cannot restore it: the inode and change time on
+    /// unix, the file id (new on a rename-over) and last-write time on Windows.
+    stamp: Option<ChangeStamp>,
+}
+
+/// What one known install location held when a launch found its binary gone: the
+/// change stamp of the file it resolves to and its link target, each `None` when
+/// there was none. A location that differs later was reinstalled or repointed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LocationMark {
+    path: PathBuf,
+    stamp: Option<ChangeStamp>,
+    link: Option<PathBuf>,
+}
+
+impl LocationMark {
+    fn of(path: &Path) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            stamp: change_stamp(path).ok(),
+            link: std::fs::read_link(path).ok(),
+        }
+    }
 }
 
 /// How long after a launch found an agent CLI gone (no usable install anywhere)
@@ -124,6 +144,9 @@ struct AgentEntry {
     /// vanished). Lets a later launch retry after [`LOST_RETRY_AFTER`]; `None` for
     /// every other resolution.
     lost_at: Option<Instant>,
+    /// What each known install location held at that miss
+    /// ([`DependencyManager::lost_binary_is_back`]).
+    lost_locations: Vec<LocationMark>,
 }
 
 /// Inner state for DependencyManager, protected by RwLock for re-resolution after install.
@@ -524,11 +547,12 @@ impl DependencyManager {
         &self,
         basename: &str,
         resolution: AgentResolution,
-        lost_at: Option<Instant>,
+        lost: Option<(Instant, Vec<LocationMark>)>,
     ) -> PendingShadowed {
-        let lost_at = match (&resolution.path, lost_at) {
-            (None, None) => Some(Instant::now()),
-            (_, lost_at) => lost_at,
+        let (lost_at, lost_locations) = match (&resolution.path, lost) {
+            (None, None) => (Some(Instant::now()), self.known_marks(basename)),
+            (_, Some((at, locations))) => (Some(at), locations),
+            (Some(_), None) => (None, Vec::new()),
         };
         info!(
             target: "deps",
@@ -548,6 +572,7 @@ impl DependencyManager {
                 fingerprint: resolution.fingerprint,
                 shadowed: Vec::new(),
                 lost_at,
+                lost_locations,
             },
         );
         PendingShadowed {
@@ -620,17 +645,25 @@ impl DependencyManager {
         entry.shadowed = shadowed;
     }
 
-    /// Whether a binary a launch found gone at `lost` (the miss's `Instant`) is executable
-    /// at one of its known install locations, changed since that miss. Ctime, not mtime: a
-    /// reinstall can keep an older mtime, but its inode change always moves ctime. A file
-    /// unchanged since the miss is still unusable, so it does not re-probe every launch.
-    fn lost_binary_is_back(&self, basename: &str, lost: Instant) -> bool {
-        let Some(missed_at) = SystemTime::now().checked_sub(lost.elapsed()) else {
-            return false;
-        };
+    /// What each known install location of `basename` holds now.
+    fn known_marks(&self, basename: &str) -> Vec<LocationMark> {
         (self.known_locations)(basename)
             .iter()
-            .any(|path| is_executable(path) && changed_since(path, missed_at))
+            .map(|path| LocationMark::of(path))
+            .collect()
+    }
+
+    /// Whether a binary a launch found gone is executable at one of its known install
+    /// locations, changed since that miss (`at_miss`): the file it resolves to has another
+    /// change stamp (an in-place reinstall, which an older mtime cannot hide), its link
+    /// points elsewhere (a repoint to an older install), or it was not there at all. A
+    /// file unchanged since the miss is still unusable, so it does not re-probe every
+    /// launch.
+    fn lost_binary_is_back(&self, basename: &str, at_miss: &[LocationMark]) -> bool {
+        (self.known_locations)(basename).iter().any(|path| {
+            is_executable(path)
+                && at_miss.iter().find(|mark| mark.path == *path) != Some(&LocationMark::of(path))
+        })
     }
 
     /// The binary a launch of `basename` should spawn, checked against what was
@@ -650,7 +683,7 @@ impl DependencyManager {
             return match entry.lost_at {
                 Some(lost)
                     if lost.elapsed() >= LOST_RETRY_AFTER
-                        || self.lost_binary_is_back(basename, lost) =>
+                        || self.lost_binary_is_back(basename, &entry.lost_locations) =>
                 {
                     LaunchBinaryLookup::Stale
                 }
@@ -708,14 +741,14 @@ impl DependencyManager {
         info!(target: "deps", "{basename}: cached binary changed or is gone — re-resolving for launch");
         // Stamped before the probe, so a reinstall that lands while the probe runs still
         // counts as changed after this miss on the next launch.
-        let missed_at = Instant::now();
+        let at_miss = (Instant::now(), self.known_marks(basename));
         let resolution = resolve();
         if resolution.path.is_none() {
             info!(
                 target: "deps",
                 "{basename}: no usable install found for launch — retrying after {LOST_RETRY_AFTER:?}"
             );
-            let pending = self.store_resolution(basename, resolution, Some(missed_at));
+            let pending = self.store_resolution(basename, resolution, Some(at_miss));
             return (LaunchBinaryLookup::Unresolved, Some(pending));
         }
         let pending = self.store_winner(basename, resolution);
@@ -1007,29 +1040,6 @@ fn no_known_locations(_basename: &str) -> Vec<PathBuf> {
     Vec::new()
 }
 
-/// Whether `path`'s link or the file it resolves to changed at or after `since` (ctime,
-/// which a reinstall or a repoint always moves). Both are checked: a symlink repointed
-/// to an older install moves only the link's ctime, while an in-place reinstall behind
-/// an unchanged link moves only the target's. Off unix there is no ctime, so the retry
-/// cooldown stands.
-#[cfg(unix)]
-fn changed_since(path: &Path, since: SystemTime) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    let changed_at = |meta: std::fs::Metadata| {
-        let secs = meta.ctime().max(0) as u64;
-        std::time::UNIX_EPOCH + Duration::new(secs, meta.ctime_nsec() as u32)
-    };
-    [std::fs::symlink_metadata(path), std::fs::metadata(path)]
-        .into_iter()
-        .filter_map(Result::ok)
-        .any(|meta| changed_at(meta) > since)
-}
-
-#[cfg(not(unix))]
-fn changed_since(_path: &Path, _since: SystemTime) -> bool {
-    false
-}
-
 /// Probe the login shell's `$PATH` once (bounded by [`AGENT_PROBE_TIMEOUT`]). A
 /// successful probe also seeds the process-wide [`LOGIN_SHELL_PATH`] cache so
 /// worktree setup reuses it. `None` when the probe fails or times out.
@@ -1046,25 +1056,17 @@ fn canonical_key(path: &Path) -> PathBuf {
     codesense_platform::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-/// The canonical target with its mtime, length and inode — what a launch compares
-/// the cached binary against. `None` when the file is gone.
+/// The canonical target with its mtime, length and change stamp — what a launch
+/// compares the cached binary against. `None` when the file is gone.
 fn binary_fingerprint(path: &Path) -> Option<BinaryFingerprint> {
     let canonical = std::fs::canonicalize(path).ok()?;
     let meta = std::fs::metadata(&canonical).ok()?;
     let mtime = meta.modified().ok()?;
-    #[cfg(unix)]
-    let (inode, change_time) = {
-        use std::os::unix::fs::MetadataExt;
-        (meta.ino(), (meta.ctime(), meta.ctime_nsec()))
-    };
-    #[cfg(not(unix))]
-    let (inode, change_time) = (0, (0, 0));
     Some(BinaryFingerprint {
+        stamp: change_stamp(&canonical).ok(),
         canonical,
         mtime,
         len: meta.len(),
-        inode,
-        change_time,
     })
 }
 
@@ -4284,8 +4286,59 @@ mod tests {
         std::thread::sleep(Duration::from_millis(20));
         dm.known_locations = Box::new(move |_: &str| vec![unusable.clone()]);
         // The re-resolve found nothing usable: the miss is stamped now, after the file.
-        let _ = dm.store_resolution("claude", AgentResolution::default(), Some(Instant::now()));
+        let at_miss = (Instant::now(), dm.known_marks("claude"));
+        let _ = dm.store_resolution("claude", AgentResolution::default(), Some(at_miss));
         assert_eq!(dm.launch_binary("claude"), LaunchBinaryLookup::Unresolved);
+    }
+
+    /// A known-location binary reinstalled in place after the miss (same path, same
+    /// mtime, same size) re-resolves: its change stamp moved.
+    #[test]
+    fn a_known_location_binary_rewritten_in_place_after_the_miss_re_resolves() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let a = tmp.path().join("a");
+        let mut dm = manager_with(BTreeMap::new());
+        let installed = exec_stub(&a, "claude");
+        let mtime = std::fs::metadata(&installed).unwrap().modified().unwrap();
+        let known = installed.clone();
+        dm.known_locations = Box::new(move |_: &str| vec![known.clone()]);
+        let at_miss = (Instant::now(), dm.known_marks("claude"));
+        let _ = dm.store_resolution("claude", AgentResolution::default(), Some(at_miss));
+        assert_eq!(dm.launch_binary("claude"), LaunchBinaryLookup::Unresolved);
+
+        // An npm-style reinstall: replaced by rename, the old mtime put back.
+        let staged = a.join("claude.new");
+        std::fs::copy(&installed, &staged).unwrap();
+        std::fs::rename(&staged, &installed).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&installed)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+        assert_eq!(dm.launch_binary("claude"), LaunchBinaryLookup::Stale);
+    }
+
+    /// A known-location link repointed to another install after the miss re-resolves, even
+    /// when the install it now names is older than the miss.
+    #[cfg(unix)]
+    #[test]
+    fn a_known_location_link_repointed_after_the_miss_re_resolves() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let old = exec_stub(&tmp.path().join("old"), "claude");
+        let new = exec_stub(&tmp.path().join("new"), "claude");
+        let link = tmp.path().join("claude");
+        std::os::unix::fs::symlink(&new, &link).unwrap();
+        let mut dm = manager_with(BTreeMap::new());
+        let known = link.clone();
+        dm.known_locations = Box::new(move |_: &str| vec![known.clone()]);
+        let at_miss = (Instant::now(), dm.known_marks("claude"));
+        let _ = dm.store_resolution("claude", AgentResolution::default(), Some(at_miss));
+        assert_eq!(dm.launch_binary("claude"), LaunchBinaryLookup::Unresolved);
+
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(&old, &link).unwrap();
+        assert_eq!(dm.launch_binary("claude"), LaunchBinaryLookup::Stale);
     }
 
     /// Back-date `basename`'s `lost_at` past the retry cooldown. `false` when the
