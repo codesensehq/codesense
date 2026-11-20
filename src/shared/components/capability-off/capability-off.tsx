@@ -80,14 +80,19 @@ function inert(event?: { preventDefault(): void }): void {
  * by the `CapabilityOffNote` whose id is `noteId`. The child is a button, a link or a menu item
  * whose action is its `onClick` or `onSelect`: both are replaced, and their default action is
  * prevented. A control that acts through any other handler doesn't belong here.
+ *
+ * `dim={false}` leaves the control at full opacity, for one that carries its own sentence and
+ * dims only its label, so the sentence stays readable.
  */
 export function CapabilityOffControl({
   cap,
   noteId,
+  dim = true,
   children,
 }: {
   cap: CapabilityKey;
   noteId: string;
+  dim?: boolean;
   children: ReactElement<ControlProps>;
 }) {
   const capability = useCapability(cap);
@@ -100,7 +105,8 @@ export function CapabilityOffControl({
     "aria-describedby": noteId,
     className: cn(
       children.props.className,
-      "cursor-default opacity-50 hover:bg-transparent hover:text-current",
+      "cursor-default hover:bg-transparent hover:text-current",
+      dim && "opacity-50",
     ),
   });
 }

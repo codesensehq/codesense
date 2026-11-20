@@ -20,7 +20,7 @@
 | --cs-text-lg | 15px | 15px | tokens.css |
 | --cs-text-xl | 18px | 18px | tokens.css |
 | --cs-leading | 1.5 | 1.5 | tokens.css |
-| --cs-font-mono | ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace | ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace | tokens.css |
+| --cs-font-mono | ui-monospace, SFMono-Regular, "SF Mono", Menlo, "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace | ui-monospace, SFMono-Regular, "SF Mono", Menlo, "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace | tokens.css |
 | --cs-hover | color-mix(in srgb, var(--cs-fg, CanvasText) 6%, transparent) | color-mix(in srgb, var(--cs-fg, CanvasText) 6%, transparent) | tokens.css |
 | --cs-inset | color-mix(in srgb, var(--cs-fg, CanvasText) 4%, var(--cs-bg, Canvas)) | color-mix(in srgb, var(--cs-fg, CanvasText) 4%, var(--cs-bg, Canvas)) | tokens.css |
 | --cs-shadow-lg | 0 0 0 1px rgb(0 0 0 / 0.04), 0 12px 32px rgb(0 0 0 / 0.28), 0 2px 8px rgb(0 0 0 / 0.16) | 0 0 0 1px rgb(0 0 0 / 0.04), 0 12px 32px rgb(0 0 0 / 0.28), 0 2px 8px rgb(0 0 0 / 0.16) | tokens.css |

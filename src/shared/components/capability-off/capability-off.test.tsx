@@ -99,6 +99,24 @@ describe("CapabilityOffControl with CapabilityOffNote (the disabled control with
     expect(onAdd).not.toHaveBeenCalled();
     expect(screen.getByRole("note")).toHaveAttribute("id", "why");
   });
+
+  it("dims the control by default, and not with dim={false}", () => {
+    off();
+    render(
+      <>
+        <CapabilityOffControl cap="remote-machines" noteId="why">
+          <button type="button">Dimmed</button>
+        </CapabilityOffControl>
+        <CapabilityOffControl cap="remote-machines" noteId="why" dim={false}>
+          <button type="button">Full</button>
+        </CapabilityOffControl>
+      </>,
+    );
+    expect(screen.getByRole("button", { name: "Dimmed" })).toHaveClass("opacity-50");
+    const full = screen.getByRole("button", { name: "Full" });
+    expect(full).not.toHaveClass("opacity-50");
+    expect(full).toHaveAttribute("aria-disabled", "true");
+  });
 });
 
 describe("CapabilityOffControl stops what the element would do on its own", () => {

@@ -22,6 +22,10 @@ export const TRAFFIC_LIGHT_WIDTH = 78;
  *   - On macOS, a 78px drag-only spacer reserved for the Overlay traffic lights; elsewhere the
  *     window keeps its native title bar, so the row starts at a 12px gutter (`pl-3`) that
  *     mirrors the right one.
+ *
+ *     Guard: on Windows and Linux the OS draws the title bar and its minimise, maximise and close
+ *     controls, and this row sits below it. Don't draw window controls here. Custom controls
+ *     come only with `decorations: false` for those platforms and a design for them, together.
  *   - SW-OC-28: the identity menu (`context repo / team ▾`) — the one place to
  *     switch context repo or team and to reach Private, agent
  *     definitions, routines, Machines and Settings (agent accounts have no menu row yet,

@@ -52,7 +52,7 @@ import {
 } from "@/tauri/commands";
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
 import { logger } from "@/shared/lib/logger";
-import type { CapabilityKey } from "@/shared/lib/capabilities";
+import { selectCapability, type CapabilityKey } from "@/shared/lib/capabilities";
 import { useConfigStore } from "@/shared/stores/config-store";
 import { rowMatches, type SettingRowSpec } from "@/features/settings/lib/row-matches";
 import {
@@ -441,9 +441,9 @@ const GATED_ROWS = Object.entries(GENERAL_ROW_CAPABILITY) as [string, Capability
  */
 export function useGeneralRowSpecs(): SettingRowSpec[] {
   // The hidden row keys, joined so the selector returns a stable string. A capability reads as
-  // on until the startup read lands (or if it failed), like `useCapability`.
+  // on until the startup read lands (or if it failed), through `useCapability`'s selector.
   const hidden = useConfigStore((s) =>
-    GATED_ROWS.filter(([, cap]) => s.platformCaps?.[cap]?.on === false)
+    GATED_ROWS.filter(([, cap]) => !selectCapability(s.platformCaps, cap).on)
       .map(([row]) => row)
       .join(" "),
   );

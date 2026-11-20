@@ -60,7 +60,7 @@
     "macos": "on",
     "linux": "off",
     "windows": "off",
-    "reason": "PDF export prints through the macOS web view"
+    "reason": "PDF printing isn't built for this platform's web view"
   },
   {
     "key": "background-on-close",

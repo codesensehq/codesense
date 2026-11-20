@@ -15,6 +15,7 @@ import {
   PositionedMenuItem,
 } from "@/shared/components/positioned-context-menu";
 import { canExportToPdf, exportViewerToPdf } from "../lib/export-pdf";
+import { ExportPdfMenuItem } from "./export-pdf-menu-item";
 import { StarterPageMenuItems } from "./starter-page-menu-items";
 import { useSummaryHeadings } from "@/shared/hooks/use-summary-headings";
 import { isPipelineFileName } from "@/shared/lib/pipeline-graph/pipeline-file-filter";
@@ -279,7 +280,7 @@ export function ViewerTabs({ repoPath }: ViewerTabsProps) {
           {canExportToPdf(tabContextMenu.path) && (
             <>
               <div role="separator" className="my-1 h-px bg-border" />
-              <PositionedMenuItem
+              <ExportPdfMenuItem
                 className="flex items-center justify-between"
                 onClick={() => {
                   // Match `repo-viewer-view.tsx` handleExportPdf guard:
@@ -297,7 +298,7 @@ export function ViewerTabs({ repoPath }: ViewerTabsProps) {
               >
                 <span>Export to PDF</span>
                 <span className="ml-4 text-xs text-muted-foreground">{exportHint}</span>
-              </PositionedMenuItem>
+              </ExportPdfMenuItem>
             </>
           )}
         </PositionedContextMenu>

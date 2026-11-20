@@ -34,6 +34,7 @@ import {
   PositionedMenuItem,
 } from "@/shared/components/positioned-context-menu";
 import { canExportToPdf } from "@/features/viewer/lib/export-pdf";
+import { ExportPdfMenuItem } from "@/features/viewer/components/export-pdf-menu-item";
 import { canCreateCanvas, canExportCanvas } from "@/features/dashboard/lib/create-canvas";
 import { exportCanvas } from "@/features/dashboard/lib/export-canvas";
 import type { PinnedNavItem } from "@/features/dashboard/lib/nav-pins";
@@ -352,14 +353,14 @@ export function NavContextMenu({
             </PositionedMenuItem>
           )}
           {onExportPdf && menu && canExportToPdf(menu.path) && (
-            <PositionedMenuItem
+            <ExportPdfMenuItem
               onClick={() => {
                 if (menu) onExportPdf(menu.path);
                 onClose();
               }}
             >
               Export to PDF
-            </PositionedMenuItem>
+            </ExportPdfMenuItem>
           )}
           {menu && canCreateCanvas(menu.path) && (
             <PositionedMenuItem

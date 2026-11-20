@@ -15,6 +15,7 @@ import { useConfigStore } from "@/shared/stores/config-store";
 import { resetPlatformCaps } from "./__test-utils__/platform-caps";
 import {
   CAPABILITY_KEYS,
+  capabilityOn,
   notYetAvailableSentence,
   platformName,
   useCapability,
@@ -77,6 +78,16 @@ describe("useCapability", () => {
     expect(screen.getByTestId("cap-remote-machines")).toHaveTextContent("on");
   });
 
+  it("capabilityOn answers the same outside React, on before the answer lands", async () => {
+    expect(capabilityOn("pdf-export")).toBe(true);
+    getPlatformCaps.mockResolvedValue([
+      { key: "pdf-export", on: false, reason: "printing isn't built here" },
+    ]);
+    await useConfigStore.getState().loadPlatformCaps();
+    expect(capabilityOn("pdf-export")).toBe(false);
+    expect(capabilityOn("mcp-bridge")).toBe(true);
+  });
+
   it("knows every product capability in platform-caps.json, in its order", () => {
     expect(CAPABILITY_KEYS).toEqual(
       TABLE.filter((row) => row.scope !== "test").map((row) => row.key),
@@ -108,6 +119,25 @@ describe("the not-yet-available sentence", () => {
       expect(row.reason).not.toMatch(
         /socket|pipe|MCP|bridge|IPC|sidecar|daemon|unix|windows|linux|macos|platform/i,
       );
+    }
+  });
+
+  it('names no OS and doesn\'t say "yet" in any product reason: the sentence says both', () => {
+    const SAYS_OS_OR_YET = /\byet\b|\b(windows|win32|linux|mac|mac ?os|darwin|apple|unix)\b/i;
+    // Reasons written before this rule. The list only shrinks: reword one, then drop it here.
+    const LEGACY = [
+      "git-ai",
+      "starship",
+      "terminal-server-sidecar",
+      "agent-cli-sockets",
+      "shell-integration",
+    ];
+    const rows = TABLE.filter((r) => r.scope !== "test");
+    // A deleted row takes its entry off the list too.
+    expect(LEGACY.filter((key) => !rows.some((r) => r.key === key))).toEqual([]);
+    for (const row of rows) {
+      if (LEGACY.includes(row.key)) expect(row.reason, row.key).toMatch(SAYS_OS_OR_YET);
+      else expect(row.reason, row.key).not.toMatch(SAYS_OS_OR_YET);
     }
   });
 });

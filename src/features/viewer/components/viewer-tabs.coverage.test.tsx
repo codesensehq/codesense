@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { resetPlatformCaps, setPlatformCaps } from "@/shared/lib/__test-utils__/platform-caps";
 import { ViewerTabs } from "./viewer-tabs";
 
 // ---------- Mocks ----------
@@ -437,5 +438,52 @@ describe("ViewerTabs — Windows paths", () => {
     });
     render(<ViewerTabs repoPath={REPO} />);
     expect(screen.getByText("TR-1 — API health endpoint")).toBeInTheDocument();
+  });
+});
+
+describe("ViewerTabs — PDF export", () => {
+  beforeEach(() => setupState());
+  afterEach(() => {
+    resetPlatformCaps();
+    vi.restoreAllMocks();
+  });
+
+  const exportItem = () => screen.queryByRole("menuitem", { name: /Export to PDF/ });
+
+  it("a Markdown tab offers Export to PDF with the capability on", () => {
+    setPlatformCaps();
+    render(<ViewerTabs repoPath={REPO} />);
+    fireEvent.contextMenu(screen.getByText("a.md"));
+    expect(exportItem()).toBeInTheDocument();
+  });
+
+  it("keeps Export to PDF with the capability off, disabled and explained", () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux x86_64");
+    setPlatformCaps({ "pdf-export": "printing isn't built here" });
+    render(<ViewerTabs repoPath={REPO} />);
+    fireEvent.contextMenu(screen.getByText("a.md"));
+    const item = exportItem()!;
+    const sentence = "Not yet available on Linux: printing isn't built here.";
+    expect(item).toHaveAttribute("aria-disabled", "true");
+    expect(item).toHaveAttribute("data-focusable-disabled");
+    expect(item).toHaveAttribute("title", sentence);
+    const note = document.getElementById(item.getAttribute("aria-describedby")!);
+    expect(note).toHaveTextContent(sentence);
+    // Inside the item: a menu's children are its items.
+    expect(item).toContainElement(note);
+    // Readable: only the label is dimmed. Named by the label, so the sentence is read once.
+    for (let el: Element | null = note; el && el !== item.parentElement; el = el.parentElement)
+      expect(el.className).not.toMatch(/opacity/);
+    expect(item).toHaveAccessibleName("Export to PDF");
+    // On keyboard focus the item takes the accent background; the sentence takes its ink.
+    expect(item).toHaveClass("group");
+    expect(note).toHaveClass("group-focus-visible:text-accent-foreground");
+    expect(item).toHaveAccessibleDescription(note!.textContent!);
+    expect(
+      screen.getByRole("menu", { name: "Tab actions" }).querySelector(":scope > [role=note]"),
+    ).toBeNull();
+    fireEvent.click(item);
+    // Inert: the menu stays open and nothing is exported.
+    expect(screen.getByRole("menu", { name: "Tab actions" })).toBeInTheDocument();
   });
 });
