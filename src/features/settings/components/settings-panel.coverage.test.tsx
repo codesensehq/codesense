@@ -22,6 +22,9 @@ vi.mock("@/tauri/commands", () => ({
   listDirectory: vi.fn().mockResolvedValue([]),
   // AboutRow update-check probe.
   checkForUpdate: vi.fn().mockResolvedValue(null),
+  // Messaging's GIF search card.
+  gifSettingsGet: vi.fn().mockResolvedValue({ enabled: true, provider: "giphy", ceiling: "pg" }),
+  gifKeyStatus: vi.fn().mockResolvedValue({ status: "missing", hint: null, production: false }),
 }));
 
 vi.mock("@/shared/lib/codesense-home", () => ({
@@ -227,6 +230,26 @@ describe("SettingsPanel — sections and Repo reactivity", () => {
     expect(screen.getByTestId("settings-nav-repo")).toBeInTheDocument();
     expect(screen.getByTestId("settings-nav-workspace")).toBeInTheDocument();
     expect(screen.getByTestId("settings-nav-account")).toBeInTheDocument();
+  });
+
+  it("shows the GIF search card in Messaging, also found by a search for it", async () => {
+    await act(async () => {
+      render(<SettingsPanel />);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("settings-nav-messaging"));
+    });
+    expect(screen.getByRole("heading", { name: "Messaging" })).toBeInTheDocument();
+    expect(await screen.findByLabelText("GIPHY API key")).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("settings-nav-general"));
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("settings-search-input"), {
+        target: { value: "giphy" },
+      });
+    });
+    expect(screen.getByTestId("gif-search-card")).toBeInTheDocument();
   });
 
   it("shows the Repo section with empty state when no repos exist", async () => {

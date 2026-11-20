@@ -6,3 +6,7 @@
 
 /** The canonical keychain statement, reused wherever this exact sentence appears. */
 export const CREDENTIALS_IN_KEYCHAIN = "Credentials are stored in your OS keychain";
+
+/** Where the GIF search key lives, under its field in Settings → Messaging. */
+export const GIF_KEY_IN_KEYCHAIN =
+  "Saved in your Keychain on this computer. CodeSense sends it only to GIPHY, never shows it again and never puts it in files, logs or agent tools.";

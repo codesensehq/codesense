@@ -10218,6 +10218,29 @@ export const dashboardPublisherKeySave = (key: string) =>
 export const dashboardPublisherKeyRemove = () =>
   invoke<DashboardPublisherKeyStatus>("dashboard_publisher_key_remove");
 
+export type GifRating = "g" | "pg" | "pg-13";
+export interface GifSettings {
+  enabled: boolean;
+  provider: "giphy";
+  ceiling: GifRating;
+}
+export interface GifSettingsUpdate {
+  enabled?: boolean;
+  ceiling?: GifRating;
+  production?: boolean;
+}
+export interface GifKeyStatus {
+  status: "missing" | "saved" | "unavailable";
+  hint: string | null;
+  production: boolean;
+}
+export const gifSettingsGet = () => invoke<GifSettings>("gif_settings_get");
+export const gifSettingsSet = (update: GifSettingsUpdate) =>
+  invoke<GifSettings>("gif_settings_set", { update });
+export const gifKeyStatus = () => invoke<GifKeyStatus>("gif_key_status");
+export const gifKeySave = (key: string) => invoke<GifKeyStatus>("gif_key_save", { key });
+export const gifKeyRemove = () => invoke<GifKeyStatus>("gif_key_remove");
+
 export const dashboardInventory = (folder?: string, localOnly = false) =>
   invoke<import("@/features/dashboard-publishing/types").DashboardInventory>(
     "dashboard_inventory",
