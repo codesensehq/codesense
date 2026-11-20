@@ -140,14 +140,14 @@ fn a_recorded_launcher_tab_is_followed_and_its_handle_is_never_consulted() {
     assert!(err.contains("launch chain"), "{err}");
 }
 
+/// A remote tab charging the seat it launched goes through the real launch record (see
+/// `a_remote_tab_charges_the_seat_it_launched_through_the_recorded_launch`); here, a later holder
+/// of a remote handle is refused.
 #[test]
-fn a_remote_caller_charges_a_seat_whose_record_names_its_tab_and_a_reused_remote_handle_is_refused() {
+fn a_reused_remote_handle_is_refused() {
     let (_d, store) = store();
-    // The remote tab has no record here; its authority verified its tab, handle and team.
-    seat_launched_by_tab(&store, "launched", "launched-h", "remote-tab", 300);
-    run(&store, &remote("remote-tab", "remote-h"), params("DEMO-2", Some("launched"), None)).unwrap();
-    // An earlier remote tab held the same handle and launched this seat: a later holder of the
-    // handle may not charge it, whether the seat recorded the earlier tab or only the handle.
+    // An earlier remote tab held the same handle and launched these seats: a later holder of the
+    // handle may not charge them, whether a seat recorded the earlier tab or only the handle.
     seat_launched_by_tab(&store, "earlier-launch", "e-h", "old-remote-tab", 300);
     seat(&store, "handle-only", "dev", "h-h", Some("remote-h"), 300);
     for target in ["earlier-launch", "handle-only"] {
@@ -169,8 +169,12 @@ fn a_launcher_recorded_by_its_tab_counts_only_when_recorded_before_the_seat() {
     seat(&store, "late", "dev", "late-h", None, 400);
     seat(&store, "early-late-h", "dev", "late-h", None, 50);
     seat(&store, "orphan", "dev", "orphan-h", Some("late"), 300);
+    // Were the late tab read as its handle, `early-late-h` would hold it at the seat's launch.
+    let as_handle = |raw: &str| if raw == "late" { "late-h".to_owned() } else { raw.to_owned() };
+    let p = params("DEMO-2", Some("orphan"), None);
     for by in [caller("late", "late-h"), caller("early-late-h", "late-h")] {
-        assert!(run(&store, &by, params("DEMO-2", Some("orphan"), None)).is_err(), "{}", by.session);
+        let err = charge(&store, &by, &p, NOW, &known, &as_handle).unwrap_err();
+        assert!(err.contains("launch chain"), "{}: {err}", by.session);
     }
 }
 

@@ -2097,6 +2097,13 @@ impl DashboardLaunchState {
                 _ => None,
             };
         }
+        // The launcher's tab: a local launch's session, or a remote tab's session on its machine
+        // (the one its authority verifies a remote caller as).
+        let launcher_session = launcher_entry.and_then(|launcher| {
+            launcher.session_id.clone().or_else(|| {
+                launcher.remote_shell.as_ref().map(|remote| remote.target.session.as_str().to_owned())
+            })
+        });
         let launcher = launcher_entry.and_then(|launcher| {
             let session = launcher.session_id.as_ref()?;
             let fallback = launcher.provenance.as_ref()
@@ -2111,7 +2118,6 @@ impl DashboardLaunchState {
             hook(self);
         }
 
-        let launcher_session = launcher.as_ref().map(|(session, _)| session.clone());
         // Restoration does not retain transient run provenance. Prefer the captured root's
         // durable identity, without holding the registry lock across SQLite I/O.
         let launcher_task = launcher.map(|(session, fallback)| {
@@ -9879,6 +9885,35 @@ mod tests {
         assert_eq!(dev.launched_by_session.as_deref(), Some("lead-tab"));
         let lead = store.read_session_record("lead-tab").unwrap().unwrap();
         assert_eq!(lead.launched_by_session, None);
+    }
+
+    /// A seat a remote tab launched records that tab, and the remote caller its authority verifies
+    /// as that tab may charge it; another remote tab may not.
+    #[test]
+    fn a_remote_tab_charges_the_seat_it_launched_through_the_recorded_launch() {
+        use crate::mcp::charge_tools::{charge, Caller, ChargeSessionStoryParams};
+        let (_dir, store) = crate::session_usage::tests::store();
+        let state = DashboardLaunchState::new(4);
+        state
+            .reserve_remote_shell(roster_remote_record("remote-lead", "remote-tab", "1", true))
+            .unwrap();
+        bind_launch(&state, "DEMO-1#dev", "dev-tab", Some("remote-lead"), "DEMO-1", None);
+        capture_bound(&state, &store, "DEMO-1#dev", "dev-tab", task_facts(Some("Build it.")));
+        let dev = store.read_session_record("dev-tab").unwrap().unwrap();
+        assert_eq!(dev.launched_by_session.as_deref(), Some("remote-tab"));
+        let remote = |session: &str| Caller {
+            session: session.into(),
+            handle: Some("remote-lead".into()),
+            team: Some(("acme".into(), "dev".into())),
+        };
+        let params = ChargeSessionStoryParams { story: "DEMO-2".into(), session_id: Some("dev-tab".into()), from_ms: None };
+        let known = |_: &str, _: &str, _: &str| Some(std::path::PathBuf::from("DEMO-2.md"));
+        let as_recorded = |raw: &str| raw.to_owned();
+        let now = chrono::Utc::now().timestamp_millis() + 1_000;
+        charge(&store, &remote("remote-tab"), &params, now, &known, &as_recorded).unwrap();
+        let other = charge(&store, &remote("other-remote-tab"), &params, now + 1, &known, &as_recorded);
+        assert!(other.unwrap_err().contains("launch chain"));
+        assert_eq!(store.charges_for("dev-tab").unwrap().len(), 1);
     }
 
     #[test]
