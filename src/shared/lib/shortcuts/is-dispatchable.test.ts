@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+
+import { resetPlatformCaps, setPlatformCaps } from "@/shared/lib/__test-utils__/platform-caps";
 
 import {
   ROW_POPUP_ALLOWED,
@@ -8,7 +10,7 @@ import {
   isDispatchable,
   type DispatchGateState,
 } from "./is-dispatchable";
-import { SHORTCUT_ACTIONS, type ShortcutAction } from "./registry";
+import { SHORTCUT_ACTIONS, resolveBindings, type ShortcutAction } from "./registry";
 
 const action = (scope: ShortcutAction["scope"]): ShortcutAction => ({
   id: `test.${scope}`,
@@ -243,5 +245,42 @@ describe("isDispatchable", () => {
     it("dispatches from the empty roster (open team, no focused workspace)", () => {
       expect(isDispatchable(action("team"), state({ ...NO_WORKSPACE }))).toBe(true);
     });
+  });
+
+  describe("an action's capability", () => {
+    afterEach(() => resetPlatformCaps());
+    const exportPdf = () => registered("viewer.export-pdf");
+
+    it("export to PDF needs pdf-export", () => {
+      expect(exportPdf().capability).toBe("pdf-export");
+    });
+
+    it("refuses the action with the capability off, whatever the state", () => {
+      setPlatformCaps({ "pdf-export": "printing isn't built here" });
+      expect(isDispatchable(exportPdf(), state())).toBe(false);
+    });
+
+    it("dispatches with it on, and before the capabilities load", () => {
+      expect(isDispatchable(exportPdf(), state())).toBe(true);
+      setPlatformCaps();
+      expect(isDispatchable(exportPdf(), state())).toBe(true);
+    });
+  });
+});
+
+describe("resolveBindings with a capability off", () => {
+  afterEach(() => resetPlatformCaps());
+
+  it("binds nothing to the action, so its chord is free for another", () => {
+    const chord = "CmdOrCtrl+Shift+E";
+    const shortcuts = { "settings.open": chord };
+    expect(resolveBindings(shortcuts).get("viewer.export-pdf")?.keystroke).toBe(chord);
+    setPlatformCaps({ "pdf-export": "printing isn't built here" });
+    const bindings = resolveBindings(shortcuts);
+    expect(bindings.get("viewer.export-pdf")).toEqual({ keystroke: "", terminalKeystroke: "" });
+    expect(bindings.get("settings.open")?.keystroke).toBe(chord);
+    expect([...bindings].filter(([, b]) => b.keystroke === chord).map(([id]) => id)).toEqual([
+      "settings.open",
+    ]);
   });
 });

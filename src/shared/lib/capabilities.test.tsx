@@ -15,6 +15,7 @@ import { useConfigStore } from "@/shared/stores/config-store";
 import { resetPlatformCaps } from "./__test-utils__/platform-caps";
 import {
   CAPABILITY_KEYS,
+  capabilityOn,
   notYetAvailableSentence,
   platformName,
   useCapability,
@@ -75,6 +76,16 @@ describe("useCapability", () => {
     await useConfigStore.getState().loadPlatformCaps();
     await waitFor(() => expect(getPlatformCaps).toHaveBeenCalledTimes(1));
     expect(screen.getByTestId("cap-remote-machines")).toHaveTextContent("on");
+  });
+
+  it("capabilityOn answers the same outside React, on before the answer lands", async () => {
+    expect(capabilityOn("pdf-export")).toBe(true);
+    getPlatformCaps.mockResolvedValue([
+      { key: "pdf-export", on: false, reason: "printing isn't built here" },
+    ]);
+    await useConfigStore.getState().loadPlatformCaps();
+    expect(capabilityOn("pdf-export")).toBe(false);
+    expect(capabilityOn("mcp-bridge")).toBe(true);
   });
 
   it("knows every product capability in platform-caps.json, in its order", () => {

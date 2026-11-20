@@ -32,13 +32,30 @@ export interface Capability {
 
 const ON: Capability = { on: true, reason: null };
 
+type PlatformCaps = ReturnType<typeof useConfigStore.getState>["platformCaps"];
+
+/** The one selector over the startup answer (`platformCaps`), shared by the hook, the non-hook
+ *  form and filters that subscribe to the map, so their fail-open rule can't drift. */
+export function selectCapability(caps: PlatformCaps, cap: CapabilityKey): Capability {
+  const found = caps?.[cap];
+  return found ? { on: found.on, reason: found.reason } : ON;
+}
+
 /**
  * Whether `cap` is on here and, when off, why. Before the startup read lands, or if it failed,
  * every capability reads as on: today's UI, with the backend still refusing what this OS can't do.
  */
 export function useCapability(cap: CapabilityKey): Capability {
-  const found = useConfigStore((s) => s.platformCaps?.[cap]);
-  return found ? { on: found.on, reason: found.reason } : ON;
+  return selectCapability(
+    useConfigStore((s) => s.platformCaps),
+    cap,
+  );
+}
+
+/** {@link useCapability}'s answer outside React (the shortcut gate and the bindings), with the
+ *  same fail-open rule. */
+export function capabilityOn(cap: CapabilityKey): boolean {
+  return selectCapability(useConfigStore.getState().platformCaps, cap).on;
 }
 
 /** The running OS as people name it: "macOS", "Windows", "Linux", or "this platform". */

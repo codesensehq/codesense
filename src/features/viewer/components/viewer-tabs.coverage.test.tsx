@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { resetPlatformCaps, setPlatformCaps } from "@/shared/lib/__test-utils__/platform-caps";
 import { ViewerTabs } from "./viewer-tabs";
 
 // ---------- Mocks ----------
@@ -437,5 +438,27 @@ describe("ViewerTabs — Windows paths", () => {
     });
     render(<ViewerTabs repoPath={REPO} />);
     expect(screen.getByText("TR-1 — API health endpoint")).toBeInTheDocument();
+  });
+});
+
+describe("ViewerTabs — PDF export", () => {
+  beforeEach(() => setupState());
+  afterEach(() => resetPlatformCaps());
+
+  const exportItem = () => screen.queryByRole("menuitem", { name: /Export to PDF/ });
+
+  it("a Markdown tab offers Export to PDF with the capability on", () => {
+    setPlatformCaps();
+    render(<ViewerTabs repoPath={REPO} />);
+    fireEvent.contextMenu(screen.getByText("a.md"));
+    expect(exportItem()).toBeInTheDocument();
+  });
+
+  it("has no Export to PDF item with the capability off", () => {
+    setPlatformCaps({ "pdf-export": "printing isn't built here" });
+    render(<ViewerTabs repoPath={REPO} />);
+    fireEvent.contextMenu(screen.getByText("a.md"));
+    expect(screen.getByText("Close")).toBeInTheDocument();
+    expect(exportItem()).toBeNull();
   });
 });

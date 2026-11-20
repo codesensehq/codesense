@@ -70,6 +70,7 @@ import {
   jumpToWhatNeedsYou,
 } from "@/features/viewer/lib/terminal-tab-keys";
 import { samePath } from "@/shared/lib/path";
+import { capabilityOn, type CapabilityKey } from "@/shared/lib/capabilities";
 
 /**
  * Canonical action registry for every configurable keyboard shortcut +
@@ -207,6 +208,9 @@ export interface ShortcutAction {
   command?: DashboardCommandInfo;
   /** Checked by the dispatch gate: whether the action may fire now. */
   available?: () => boolean;
+  /** The OS capability the action needs. With it off the action never fires, holds no chord and
+   *  has no Settings row. */
+  capability?: CapabilityKey;
   run: () => void;
 }
 
@@ -972,6 +976,7 @@ const shortcutActions: readonly ShortcutAction[] = [
     menuPath: ["File", "Export to PDF"],
     defaultKeystroke: "CmdOrCtrl+Shift+E",
     scope: "workspace",
+    capability: "pdf-export",
     run: () => {
       const { teamKey, workspace, sourceRepoSlug, repoPath } = getActiveWorkspaceContext();
       if (!workspace) return;
@@ -1377,6 +1382,8 @@ let resolvedCache: {
   actions: readonly ShortcutAction[];
   /** The terminal chords depend on the platform, which tests flip. */
   mac: boolean;
+  /** An action whose capability is off holds no chord. */
+  caps: ReturnType<typeof useConfigStore.getState>["platformCaps"];
   bindings: Map<string, ResolvedBinding>;
 } | null = null;
 
@@ -1384,15 +1391,18 @@ let resolvedCache: {
  * Every action's effective chord under `shortcuts`. An override wins (`""` clears it).
  * A dashboard command without one gets its declared default unless that is reserved,
  * or already held by a built-in, an explicit override or an earlier dashboard command;
- * then it is unbound and Settings lists it under Conflicts.
+ * then it is unbound and Settings lists it under Conflicts. An action whose capability is off is
+ * skipped: it binds nothing, so its chord is free and never reported as a conflict.
  */
 export function resolveBindings(shortcuts: Record<string, string>): Map<string, ResolvedBinding> {
   const actions = allShortcutActions();
   const mac = isMac();
+  const caps = useConfigStore.getState().platformCaps;
   if (
     resolvedCache?.shortcuts === shortcuts &&
     resolvedCache.actions === actions &&
-    resolvedCache.mac === mac
+    resolvedCache.mac === mac &&
+    resolvedCache.caps === caps
   )
     return resolvedCache.bindings;
   const drafts = new Map<string, Omit<ResolvedBinding, "terminalKeystroke">>();
@@ -1404,7 +1414,9 @@ export function resolveBindings(shortcuts: Record<string, string>): Map<string, 
   const defaults: ShortcutAction[] = [];
   for (const action of actions) {
     const override = shortcuts[action.id];
-    if (override === "")
+    if (action.capability && !capabilityOn(action.capability))
+      drafts.set(action.id, { keystroke: "" });
+    else if (override === "")
       drafts.set(action.id, {
         keystroke: "",
         unbound: { kind: "cleared" },
@@ -1450,7 +1462,7 @@ export function resolveBindings(shortcuts: Record<string, string>): Map<string, 
     );
     bindings.set(action.id, { ...draft, terminalKeystroke });
   }
-  resolvedCache = { shortcuts, actions, mac, bindings };
+  resolvedCache = { shortcuts, actions, mac, caps, bindings };
   return bindings;
 }
 

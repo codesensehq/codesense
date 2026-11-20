@@ -320,11 +320,14 @@ describe("TitleBar", () => {
     });
 
     it.each(["Win32", "Linux x86_64"])(
-      "on %s has no spacer, starts at the 12px gutter, and a mousedown at x=10 drags",
+      "on %s has no spacer or window controls, starts at the 12px gutter, and a mousedown at x=10 drags",
       (platform) => {
         setPlatform(platform);
         const { container } = render(<TitleBar />);
         expect(screen.queryByTestId("title-bar-traffic-lights")).toBeNull();
+        // The OS title bar above the row owns these.
+        for (const name of [/minimi[sz]e/i, /maximi[sz]e/i, /restore/i, /^close( window)?$/i])
+          expect(screen.queryByRole("button", { name })).toBeNull();
         expect(row(container)).toHaveClass("pl-3");
         row(container).dispatchEvent(
           new MouseEvent("mousedown", { bubbles: true, clientX: 10, button: 0 }),

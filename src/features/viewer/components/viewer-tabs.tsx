@@ -8,6 +8,7 @@ import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
 import { resolveVirtualTabTooltip } from "@/shared/lib/virtual-viewer-registry";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 import { useEffectiveShortcut } from "@/shared/stores/shortcuts-store";
+import { useCapability } from "@/shared/lib/capabilities";
 import { useContentSource } from "@/shared/hooks/use-content-source";
 import { useActiveTeamKey } from "@/shared/lib/team-key";
 import {
@@ -78,6 +79,7 @@ export function ViewerTabs({ repoPath }: ViewerTabsProps) {
   const pinTab = useViewerStore((s) => s.pinTab);
   const openFile = useViewerStore((s) => s.openFile);
   const resolvedRepo = useContentSource(repoPath);
+  const pdfExport = useCapability("pdf-export").on;
   const exportKeystroke = useEffectiveShortcut("viewer.export-pdf");
   const exportHint = formatKeystrokeDisplay(exportKeystroke);
 
@@ -276,7 +278,7 @@ export function ViewerTabs({ repoPath }: ViewerTabsProps) {
             isFile
             onClose={() => setTabContextMenu(null)}
           />
-          {canExportToPdf(tabContextMenu.path) && (
+          {pdfExport && canExportToPdf(tabContextMenu.path) && (
             <>
               <div role="separator" className="my-1 h-px bg-border" />
               <PositionedMenuItem

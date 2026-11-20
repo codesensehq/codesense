@@ -5,7 +5,6 @@ import { Switch } from "@/components/ui/switch";
 import { AppButton } from "@/shared/components/app-button";
 import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
 import {
-  allShortcutActions,
   NAV_AXES,
   resolveBindings,
   shortcutLabelById,
@@ -13,6 +12,8 @@ import {
   type ShortcutAction,
 } from "@/shared/lib/shortcuts/registry";
 import { rowMatches, type SettingRowSpec } from "@/features/settings/lib/row-matches";
+import { selectCapability } from "@/shared/lib/capabilities";
+import { useConfigStore } from "@/shared/stores/config-store";
 import { useEffectiveShortcut, useShortcutsStore } from "@/shared/stores/shortcuts-store";
 
 import { ShortcutRow, showResetAllConfirm, takeChord } from "./shortcut-row";
@@ -28,10 +29,26 @@ function shortcutRowSpec(action: ShortcutAction): SettingRowSpec {
   };
 }
 
-/** Row specs for every action in the registry, dashboard commands included. Shared
- *  with the sidebar's `SECTION_ROW_SPECS` map so both filter by the same data. */
-export function shortcutRowSpecs(): SettingRowSpec[] {
-  return allShortcutActions().map(shortcutRowSpec);
+/**
+ * Every registered action, dashboard commands included, less those whose `capability` is off on
+ * this OS. Filters on `capability`, never `available()`: a dashboard command's `available()` means
+ * "its dashboard is focused and in scope", which is false while Settings is open, and its row must
+ * stay. Subscribes to the capabilities, so the list follows the startup read.
+ */
+export function useShortcutActions(): readonly ShortcutAction[] {
+  const actions = useDynamicShortcutActions((s) => s.all);
+  const caps = useConfigStore((s) => s.platformCaps);
+  return useMemo(
+    () => actions.filter((a) => !a.capability || selectCapability(caps, a.capability).on),
+    [actions, caps],
+  );
+}
+
+/** Row specs for {@link useShortcutActions}. Shared with the sidebar's section match so both
+ *  filter by the same data. */
+export function useShortcutRowSpecs(): SettingRowSpec[] {
+  const actions = useShortcutActions();
+  return useMemo(() => actions.map(shortcutRowSpec), [actions]);
 }
 
 const NAV_ID_SET = new Set(NAV_AXES.flatMap((axis) => axis.actionIds));
@@ -179,7 +196,7 @@ function DashboardGroup({
  * default).
  */
 export function ShortcutsSection({ query }: ShortcutsSectionProps) {
-  const actions = useDynamicShortcutActions((s) => s.all);
+  const actions = useShortcutActions();
   const shortcuts = useShortcutsStore((s) => s.shortcuts);
 
   const visible = useMemo(
