@@ -31,7 +31,7 @@ pub const KLIPY_HOSTS: &[&str] = &["klipy.com", "*.klipy.com"];
 pub const PROVIDER_HOSTS: &[&str] = &["giphy.com", "*.giphy.com", "klipy.com", "*.klipy.com"];
 
 /// Whether `host` matches `pattern`: exactly, or `*.suffix` for any subdomain of it.
-fn host_matches(pattern: &str, host: &str) -> bool {
+pub(crate) fn host_matches(pattern: &str, host: &str) -> bool {
     let host = host.trim_end_matches('.').to_ascii_lowercase();
     let pattern = pattern.to_ascii_lowercase();
     if let Some(suffix) = pattern.strip_prefix("*.") {
@@ -363,14 +363,20 @@ fn redirect_policy(config: &Config) -> reqwest::redirect::Policy {
         }
     })
 }
-fn client_builder(config: &Config) -> reqwest::ClientBuilder {
+/// The hardened base of every client that reaches a provider or a remote image: rustls, no
+/// referrer, no proxy, public addresses only and a `timeout`. Callers add their own user agent,
+/// redirect policy and `https_only`.
+pub(crate) fn hardened_client_builder(timeout: Duration) -> reqwest::ClientBuilder {
     reqwest::Client::builder()
         .use_rustls_tls()
-        .user_agent("ImageFetcher/1.0")
         .referer(false)
         .no_proxy()
         .dns_resolver(std::sync::Arc::new(PublicDns))
-        .timeout(Duration::from_secs(10))
+        .timeout(timeout)
+}
+fn client_builder(config: &Config) -> reqwest::ClientBuilder {
+    hardened_client_builder(Duration::from_secs(10))
+        .user_agent("ImageFetcher/1.0")
         .redirect(redirect_policy(config))
 }
 /// A fetched body, the URL it finally came from after redirects, and its
