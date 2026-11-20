@@ -42,7 +42,7 @@ impl Lifetime {
                 return Self::Pinned;
             }
             if name.eq_ignore_ascii_case("max-age") {
-                match value.and_then(|v| v.parse::<u64>().ok()) {
+                match value.and_then(|v| Result::ok(v.parse::<u64>())) {
                     Some(0) => return Self::Pinned,
                     Some(seconds) => max_age = Some(seconds),
                     None => {}
@@ -110,7 +110,7 @@ impl MemoryStore {
     pub fn with_cap(cap: usize) -> Self {
         Self {
             cap,
-            inner: Mutex::new(Inner::default()),
+            inner: Mutex::default(),
         }
     }
 
@@ -121,7 +121,7 @@ impl MemoryStore {
     /// The bytes of `sha`, if held and not expired. A read counts as a use.
     pub fn get(&self, sha: &str, now: Instant) -> Option<Bytes> {
         let mut inner = self.lock();
-        if inner.entries.get(sha)?.expired(now) {
+        if Entry::expired(inner.entries.get(sha)?, now) {
             inner.remove(sha);
             return None;
         }
@@ -135,7 +135,7 @@ impl MemoryStore {
         self.lock()
             .entries
             .get(sha)
-            .is_some_and(|entry| !entry.expired(now))
+            .is_some_and(|entry| !Entry::expired(entry, now))
     }
 
     /// Hold `bytes` under `sha`, evicting expired then least recently used entries first.

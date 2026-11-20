@@ -2543,7 +2543,8 @@ pub(crate) fn inbox_set_attachments(
 /// attachments JSON, untouched.
 pub(crate) fn inbox_attachments_raw(store: &WeftStore) -> WvWriteResult<Vec<(i64, i64, String)>> {
     let conn = store.conn()?;
-    let mut stmt = conn.prepare(
+    let mut stmt = rusqlite::Connection::prepare(
+        &conn,
         "SELECT id, created_at, attachments FROM wv_inbox \
          WHERE attachments IS NOT NULL AND attachments NOT IN ('', '[]') ORDER BY id",
     )?;
@@ -2570,6 +2571,6 @@ pub(crate) fn inbox_replace_attachments_raw(
     if changed > 0 {
         write_audit_public(&tx, INBOX, "mutate", id)?;
     }
-    tx.commit()?;
+    rusqlite::Transaction::commit(tx)?;
     Ok(changed > 0)
 }

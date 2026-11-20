@@ -8,6 +8,7 @@ use std::{
     collections::{HashMap, HashSet},
     sync::Mutex,
 };
+use url::Url;
 
 /// The message an attachment belongs to: org, team and message id.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -48,7 +49,7 @@ impl Reference {
     fn url_is_provider(&self) -> bool {
         self.url
             .as_deref()
-            .and_then(|u| url::Url::parse(u).ok())
+            .and_then(|u| Result::ok(Url::parse(u)))
             .and_then(|u| u.host_str().map(MediaProvider::of_host))
             .is_some_and(MediaProvider::is_provider)
     }
@@ -65,8 +66,8 @@ impl Inner {
     fn forget(&mut self, owner: &Owner) {
         for sha in self.by_owner.remove(owner).unwrap_or_default() {
             if let Some(refs) = self.by_sha.get_mut(&sha) {
-                refs.retain(|r| &r.owner != owner);
-                if refs.is_empty() {
+                Vec::retain(refs, |r| &r.owner != owner);
+                if Vec::is_empty(refs) {
                     self.by_sha.remove(&sha);
                 }
             }
@@ -85,6 +86,12 @@ pub struct ShaIndex {
 }
 
 impl ShaIndex {
+    pub fn new() -> Self {
+        Self {
+            inner: Mutex::default(),
+        }
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -106,10 +113,10 @@ impl ShaIndex {
                 shas.push(sha);
             }
         }
-        if !shas.is_empty() {
+        if !Vec::is_empty(&shas) {
             inner.by_owner.insert(owner.clone(), shas.clone());
         }
-        shas.retain(|sha| inner.memory_only(sha));
+        Vec::retain(&mut shas, |sha| inner.memory_only(sha));
         shas
     }
 
@@ -137,7 +144,7 @@ impl ShaIndex {
         let own = || refs.iter().filter(|r| r.own_sender && r.url.is_some());
         let provider = refs.iter().any(Reference::is_provider);
         provider
-            .then(|| own().find(|r| r.url_is_provider()))
+            .then(|| Iterator::find(&mut own(), |r| r.url_is_provider()))
             .flatten()
             .or_else(|| own().next())
             .and_then(|r| r.url.clone())

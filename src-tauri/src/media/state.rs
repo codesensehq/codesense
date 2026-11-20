@@ -16,6 +16,7 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
+use url::Url;
 
 /// Gets a URL's bytes. Production is `media::download`; tests stand in a local server.
 pub(crate) trait Fetch: Send + Sync {
@@ -84,7 +85,7 @@ impl MediaState {
         Self {
             dir,
             memory: MemoryStore::default(),
-            index: ShaIndex::default(),
+            index: ShaIndex::new(),
             failures: Mutex::default(),
             inflight: Mutex::default(),
             fetcher,
@@ -165,7 +166,7 @@ impl MediaState {
         }
         let _guard = lock(&super::DISK);
         match std::fs::remove_file(self.dir.join(sha)) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+            Err(e) if std::io::Error::kind(&e) != std::io::ErrorKind::NotFound => Err(e),
             _ => Ok(()),
         }
     }
@@ -181,8 +182,7 @@ impl MediaState {
         if config.remote == Remote::Ask {
             return Err("ask");
         }
-        let host = url::Url::parse(&url)
-            .ok()
+        let host = Result::ok(Url::parse(&url))
             .and_then(|u| u.host_str().map(str::to_string))
             .unwrap_or_default();
         if !config.should_auto_fetch(&host, true) {
@@ -267,7 +267,7 @@ impl MediaState {
     ) -> Result<Bytes, String> {
         let sha = attachment.sha256.as_deref().ok_or("media unavailable")?;
         self.ready().await;
-        let source = self.admission(config, sha).ok();
+        let source = Result::ok(self.admission(config, sha));
         self.fetch_or_cached(sha, Some(attachment), source).await
     }
 

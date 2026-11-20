@@ -494,9 +494,9 @@ fn write_file(dir: &Path, sha: &str, bytes: &[u8]) -> Result<(), Failure> {
         .map_err(network)?
         .flatten()
         .filter_map(|e| {
-            let meta = e.metadata().ok()?;
+            let meta = Result::ok(std::fs::DirEntry::metadata(&e))?;
             meta.is_file()
-                .then(|| (e.path(), meta.len(), meta.modified().ok()))
+                .then(|| (std::fs::DirEntry::path(&e), meta.len(), Result::ok(meta.modified())))
         })
         .collect();
     let mut total: u64 = entries.iter().map(|(_, len, _)| len).sum();
@@ -510,7 +510,7 @@ fn write_file(dir: &Path, sha: &str, bytes: &[u8]) -> Result<(), Failure> {
     }
     let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(network)?;
     std::io::Write::write_all(&mut temp, bytes).map_err(network)?;
-    temp.persist(dir.join(sha)).map_err(network)?;
+    tempfile::NamedTempFile::persist(temp, dir.join(sha)).map_err(network)?;
     Ok(())
 }
 
@@ -756,7 +756,9 @@ async fn startup(app: &tauri::AppHandle, state: &std::sync::Arc<MediaState>) -> 
         let path = host.team_store(&team).await?;
         stores.push((team, path));
     }
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let data_dir = tauri::Manager::path(app)
+        .app_data_dir()
+        .map_err(|e| e.to_string())?;
     let state = state.clone();
     let purged = crate::commands::await_blocking("media.purge", move || {
         purge::run(&state, &stores, &data_dir)
@@ -832,7 +834,7 @@ pub(crate) async fn note(
     };
     let at = crate::weft::inbox::now_ms();
     let _ = crate::commands::await_blocking("media.note", move || {
-        state.note(&owner, at, &attachments);
+        MediaState::note(&state, &owner, at, &attachments);
         Ok(())
     })
     .await;

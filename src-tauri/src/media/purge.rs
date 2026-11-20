@@ -55,13 +55,13 @@ pub(crate) fn index_store(
 /// when nothing changes or the JSON doesn't parse.
 pub(crate) fn backfill(json: &str) -> Option<String> {
     let mut attachments: Vec<indexmap::IndexMap<String, serde_json::Value>> =
-        serde_json::from_str(json).ok()?;
+        Result::ok(serde_json::from_str(json))?;
     let mut changed = false;
     for a in &mut attachments {
         if a.contains_key("mediaProvider") || !a.get("sha256").is_some_and(|v| v.is_string()) {
             continue;
         }
-        let host = a.get("sourceHost").and_then(|v| v.as_str());
+        let host = a.get("sourceHost").and_then(serde_json::Value::as_str);
         if let Some(host) = host.filter(|h| super::is_provider(None, Some(*h))) {
             let provider = MediaProvider::of_host(host);
             a.insert("mediaProvider".into(), serde_json::json!(provider));
@@ -69,7 +69,7 @@ pub(crate) fn backfill(json: &str) -> Option<String> {
         }
     }
     changed
-        .then(|| serde_json::to_string(&attachments).ok())
+        .then(|| Result::ok(serde_json::to_string(&attachments)))
         .flatten()
 }
 
@@ -97,7 +97,7 @@ pub(crate) fn run(
     data_dir: &Path,
 ) -> Result<Purged, String> {
     let marker = data_dir.join(MARKER);
-    if marker.exists() {
+    if Path::exists(&marker) {
         return Ok(Purged::AlreadyDone);
     }
     let mut scanned = Vec::new();
@@ -111,7 +111,7 @@ pub(crate) fn run(
     }
     let mut deleted = 0;
     for sha in state.index.provider_shas() {
-        let existed = state.dir().join(&sha).exists();
+        let existed = Path::exists(&state.dir().join(&sha));
         state
             .remove_file(&sha)
             .map_err(|e| format!("purge could not delete a provider file: {e}"))?;
