@@ -99,6 +99,14 @@ describe("UpdatesSection", () => {
     expect(mockOpenUrl).toHaveBeenCalledWith("https://codesense.ai/download");
   });
 
+  it("says to update a package-manager install through the package manager, with no download link", async () => {
+    await renderSection("beta", view({ update_attention: "package_manager" }));
+    const line = await screen.findByTestId("settings-updates-update-by-hand");
+    expect(line.textContent).toBe(COPY.updatePackageManager);
+    expect(screen.queryByTestId("settings-updates-update-download")).toBeNull();
+    expect(screen.queryByText(COPY.downloadLatest)).toBeNull();
+  });
+
   it("opens this build's download page when a staging update needs installing by hand", async () => {
     window.__CODESENSE_PUBLIC_HOST__ = "preview.example.invalid";
     await renderSection("beta-staging", view({ update_attention: "not_writable" }));

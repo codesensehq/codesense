@@ -23,6 +23,8 @@ export const COPY = {
   hideReleaseNotes: "Hide release notes",
   updateNotWritable:
     "A new build is out, but CodeSense can't replace itself where it's installed without an administrator.",
+  /** A `.deb` or `.rpm` install: the package manager installs the new build, not the app. */
+  updatePackageManager: "A new build is out. Update CodeSense through your package manager.",
   updateFailing: "CodeSense couldn't download the new build.",
   /** SW-PB-23: installing the offered build at a restart failed. */
   updateInstallFailed: "CodeSense couldn't install the new build.",

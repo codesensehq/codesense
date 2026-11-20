@@ -12,8 +12,15 @@ export interface LicenseView {
   /** The build the background updater staged for the next quit, with its release notes. */
   update: { staged_version: string; notes: string } | null;
   /** Set when the next build has to be installed by hand: the app's folder can't be written
-   *  without an administrator, or several update attempts in a row failed. */
-  update_attention?: "not_writable" | "failing" | "install_failed" | "records_unwritable" | null;
+   *  without an administrator, or several update attempts in a row failed. `package_manager`:
+   *  a `.deb` or `.rpm` install, which its package manager updates. */
+  update_attention?:
+    | "not_writable"
+    | "package_manager"
+    | "failing"
+    | "install_failed"
+    | "records_unwritable"
+    | null;
   /** This build gets no updates: it was built without its channel's updater config. */
   updates_off?: boolean;
   /** SW-PB-23: the staged build can be installed now and the app relaunched. */
