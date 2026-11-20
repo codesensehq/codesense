@@ -90,7 +90,6 @@ src/commands/deps.rs 10
 src/commands/local_organization.rs 2
 src/commands/mcp_scope.rs 26
 src/commands/mcp_scope/inventory.rs 5
-src/commands/paths.rs 3
 src/commands/sprint_run/run_artifact.rs 9
 src/commands/terminal_server_tray.rs 1
 src/commands/update.rs 3
@@ -126,7 +125,6 @@ src/runtime_diagnostics.rs 6
 src/session_conversation.rs 3
 src/session_text.rs 3
 src/session_usage/session_log_usage.rs 3
-src/shared/json_io.rs 5
 src/shared/proc_capture.rs 7
 src/terminal/session_server.rs 7
 src/terminal/session_server/strays.rs 14
