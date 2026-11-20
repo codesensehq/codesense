@@ -8,24 +8,17 @@
 //! `codesense-session-server` binary is a thin `main` over this; tests drive
 //! it in-process.
 //!
-//! The sidecar's modules compile where the app's `terminal-server-sidecar`
-//! capability is on, and the remote-machine client's where `remote-machines`
-//! is. `machine_owner` and `portable` compile on every target; `portable`
-//! holds what the app reads from gated modules, and a stand-in module keeps
-//! each of those items at its old path when its module is gated off.
+//! The SSH client (`ssh`, `check`, `install`, `askpass`, `stop`,
+//! `survival`, `private_account`), `machine_owner` and `portable` compile on
+//! every target: they reach the OS only through `codesense-platform`. The rest
+//! of the sidecar compiles where the app's `terminal-server-sidecar`
+//! capability is on. `portable` holds what the app reads from gated modules,
+//! and a stand-in module keeps each of those items at its old path when its
+//! module is gated off.
 
-// The remote-machine client reaches a machine with the sidecar's `install` and
-// `askpass`, so it needs the sidecar compiled.
-#[cfg(all(cap_remote_machines, not(cap_terminal_server_sidecar)))]
-compile_error!(
-    "the remote-machines capability needs terminal-server-sidecar: the remote modules use install and askpass"
-);
-
-#[cfg(cap_terminal_server_sidecar)]
 pub mod askpass;
 #[cfg(cap_terminal_server_sidecar)]
 pub mod attach;
-#[cfg(cap_remote_machines)]
 pub mod check;
 #[cfg(cap_terminal_server_sidecar)]
 pub mod detach;
@@ -35,11 +28,8 @@ pub mod disconnect_log;
 pub mod exit_with;
 #[cfg(cap_terminal_server_sidecar)]
 pub mod host;
-#[cfg(cap_terminal_server_sidecar)]
 pub mod install;
-#[cfg(cap_remote_machines)]
 pub mod private_account;
-#[cfg(cap_remote_machines)]
 mod private_account_data;
 #[cfg(cap_terminal_server_sidecar)]
 #[cfg(target_os = "linux")]
@@ -58,11 +48,8 @@ pub mod routine_arm;
 pub mod server;
 #[cfg(cap_terminal_server_sidecar)]
 pub mod session_wake;
-#[cfg(cap_remote_machines)]
 pub mod ssh;
-#[cfg(cap_terminal_server_sidecar)]
 pub mod stop;
-#[cfg(cap_terminal_server_sidecar)]
 pub mod survival;
 #[cfg(cap_terminal_server_sidecar)]
 #[cfg(any(test, feature = "test-support"))]
@@ -102,8 +89,4 @@ mod portable;
 #[cfg(not(cap_terminal_server_sidecar))]
 pub mod session_wake {
     pub use crate::portable::AGENT_QUIT_GRACE_MS;
-}
-#[cfg(not(cap_remote_machines))]
-pub mod private_account {
-    pub use crate::portable::UPLOAD_STEP;
 }

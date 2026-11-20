@@ -566,6 +566,8 @@ mod tests {
         assert!(asks_for_key(&cut, accented.as_bytes()));
     }
 
+    // Unix only: it reads the socket file's and its directory's mode bits.
+    #[cfg(unix)]
     #[test]
     fn a_served_secret_answers_only_its_own_keys_prompt_and_is_gone_after() {
         use std::os::unix::fs::PermissionsExt;

@@ -301,8 +301,14 @@ fn write_pin(dir: &Path, alias: &str, key: &HostKey) -> Result<(), String> {
     static PIN_FILES: std::sync::Mutex<()> = std::sync::Mutex::new(());
     static STAGE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let _held = PIN_FILES.lock().unwrap_or_else(|e| e.into_inner());
-    std::fs::create_dir_all(dir).map_err(|e| format!("create {dir:?}: {e}"))?;
-    let _ = codesense_platform::fs::set_owner_only(dir);
+    // Missing directories are created owner-only; one already there is made
+    // so, and a failure there is logged rather than fatal, as the pin file
+    // itself is always created owner-only.
+    codesense_platform::fs::create_dir_owner_only(dir)
+        .map_err(|e| format!("create {dir:?}: {e}"))?;
+    if let Err(error) = codesense_platform::fs::set_owner_only(dir) {
+        log::warn!(target: "machines", "host-key pins in {dir:?} are not owner-only: {error}");
+    }
     let target = dir.join(alias);
     let staged = dir.join(format!(
         ".{alias}.incoming-{}-{}",
@@ -813,7 +819,8 @@ impl Drop for TempDir {
 }
 
 fn tempfile_dir(parent: &Path) -> Result<TempDir, String> {
-    std::fs::create_dir_all(parent).map_err(|e| format!("create {parent:?}: {e}"))?;
+    codesense_platform::fs::create_dir_owner_only(parent)
+        .map_err(|e| format!("create {parent:?}: {e}"))?;
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -1021,6 +1028,7 @@ pub fn env_words(ssh: &Ssh) -> Vec<OsString> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codesense_platform::fs::{is_owner_only, open_nofollow, set_executable, Reach};
 
     fn paths(dir: &Path) -> Paths {
         Paths::under(dir)
@@ -1059,15 +1067,13 @@ mod tests {
 
     #[test]
     fn jump_host_keyscan_quotes_remote_shell_metacharacters() {
-        use std::os::unix::fs::PermissionsExt;
-
         let dir = tempfile::tempdir().unwrap();
         let marker = dir.path().join("injected");
         let bin = dir.path().join("bin");
         std::fs::create_dir(&bin).unwrap();
         let scanner = bin.join("ssh-keyscan");
         std::fs::write(&scanner, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n").unwrap();
-        std::fs::set_permissions(&scanner, std::fs::Permissions::from_mode(0o700)).unwrap();
+        set_executable(&scanner, Reach::Owner).unwrap();
         let hostile = format!("box;touch${{IFS}}{}", marker.display());
         let command = keyscan_remote_command(&[
             "-T".into(),
@@ -1154,7 +1160,6 @@ mod tests {
 
     #[test]
     fn a_pin_is_the_machine_alias_and_its_key_owner_only() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let c = connector(dir.path(), SignIn::Agent);
         let key = HostKey::parse(
@@ -1164,11 +1169,24 @@ mod tests {
         c.pin(&key).unwrap();
         let text = std::fs::read_to_string(c.known_hosts()).unwrap();
         assert_eq!(text, format!("codesense-devbox-1a2b {}\n", key.to_line()));
-        let mode = std::fs::metadata(c.known_hosts())
-            .unwrap()
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o777, 0o600);
+        let pin = open_nofollow(std::fs::OpenOptions::new().read(true), &c.known_hosts()).unwrap();
+        assert!(is_owner_only(&pin).unwrap());
+    }
+
+    /// The directories a pin creates are owner-only, not the umask's mode.
+    #[test]
+    fn a_pin_creates_its_directories_owner_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("new").join("known_hosts");
+        let key = HostKey::parse(
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl",
+        )
+        .unwrap();
+        write_pin(&dir, "codesense-devbox-1a2b", &key).unwrap();
+        for created in [dir.parent().unwrap(), dir.as_path()] {
+            let opened = open_nofollow(std::fs::OpenOptions::new().read(true), created).unwrap();
+            assert!(is_owner_only(&opened).unwrap(), "{created:?}");
+        }
     }
 
     /// The fingerprint is `ssh-keygen -l`'s.
@@ -1276,7 +1294,6 @@ mod tests {
 
     #[test]
     fn a_pinned_scan_through_scan_reports_silence_as_unreachable() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let pinned = HostKey::parse(
             "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl",
@@ -1285,7 +1302,7 @@ mod tests {
         let fake = |name: &str, body: &str| {
             let path = dir.path().join(name);
             std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            set_executable(&path, Reach::Everyone).unwrap();
             path
         };
         // No jump host here: the scan must reach the fake key scanner directly.
@@ -1328,12 +1345,11 @@ mod tests {
     /// `NoHostAuthenticationForProxyCommand`).
     #[test]
     fn options_that_could_skip_the_pin_are_off_where_ssh_has_them() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let fake = |name: &str, body: &str| {
             let path = dir.path().join(name);
             std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            set_executable(&path, Reach::Everyone).unwrap();
             path
         };
         let args = |program: &Path| {
@@ -1369,11 +1385,10 @@ mod tests {
     /// `resolved`; any other `ssh` logs its arguments one per line and runs
     /// `then`; the key scanner logs its arguments and prints `ED25519`.
     fn fakes(dir: &Path, resolved: &str, then: &str) -> (PathBuf, PathBuf) {
-        use std::os::unix::fs::PermissionsExt;
         let write = |name: &str, body: String| {
             let path = dir.join(name);
             std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            set_executable(&path, Reach::Everyone).unwrap();
             path
         };
         let log = |name: &str| shell_quote(&dir.join(name).to_string_lossy());

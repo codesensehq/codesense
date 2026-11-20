@@ -7,9 +7,6 @@
 /// foreground before a queued wake for it is `session_ended`.
 pub const AGENT_QUIT_GRACE_MS: u64 = 3_000;
 
-/// The connect step that re-sends the helper, after an app update.
-pub const UPLOAD_STEP: &str = "uploading the private bootstrap helper";
-
 #[cfg(test)]
 mod tests {
     // The app reads these at their old paths on every target, whether or not
@@ -20,7 +17,6 @@ mod tests {
             crate::session_wake::AGENT_QUIT_GRACE_MS,
             super::AGENT_QUIT_GRACE_MS
         );
-        assert_eq!(crate::private_account::UPLOAD_STEP, super::UPLOAD_STEP);
         let owner = crate::machine_owner::MachineOwner::Local {
             id: "12e45678-e89b-42d3-a456-426614174000".into(),
         };
