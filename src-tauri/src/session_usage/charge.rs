@@ -157,14 +157,16 @@ impl UsageStore {
         Ok(charges)
     }
 
-    /// The session that held `handle` at `at_ms`: the latest record with that handle written at or
-    /// before then. A handle is reused, so a later holder never stands for an earlier one.
+    /// The session that held `handle` at `at_ms`: of the records that had taken that handle by
+    /// then (when the record was first written, or when its handle last changed), the latest. A
+    /// handle is reused, so a later holder never stands for an earlier one.
     pub(crate) fn handle_holder(&self, handle: &str, at_ms: i64) -> Result<Option<SessionRecord>, String> {
         let id: Option<String> = self
             .conn
             .query_row(
-                "SELECT session_id FROM session_record WHERE handle = ?1 AND recorded_at_ms <= ?2
-                 ORDER BY recorded_at_ms DESC, session_id DESC LIMIT 1",
+                "SELECT session_id FROM session_record
+                 WHERE handle = ?1 AND COALESCE(handle_at_ms, recorded_at_ms) <= ?2
+                 ORDER BY COALESCE(handle_at_ms, recorded_at_ms) DESC, session_id DESC LIMIT 1",
                 params![handle, at_ms],
                 |r| r.get(0),
             )
@@ -188,31 +190,42 @@ impl UsageStore {
             .map_err(db_err)
     }
 
-    /// The story id `session` worked at `at_ms`: the charge in force then, else the story its usage
-    /// before its first charge resolves to, else its launch record's story.
-    pub(crate) fn story_id_at(
+    /// The story id `session` worked at each of `times`: the charge in force then, else the story
+    /// its usage before its first charge resolves to, else its launch record's story. Its charges
+    /// and that earlier story are each read once.
+    pub(crate) fn story_ids_at(
         &self,
         session: &str,
-        at_ms: i64,
+        times: &[i64],
         stories: &mut StoryResolver,
-    ) -> Result<Option<String>, String> {
+    ) -> Result<Vec<Option<String>>, String> {
         let identity = session_read::resolve_session(self, None, session)?;
         let charges = self.charges_for(&identity.session_id)?;
-        if let Some(charge) = charges.iter().rev().find(|c| c.from_ms <= at_ms) {
-            return Ok(Some(charge.story_id.clone()));
+        let mut before_charges: Option<Option<String>> = None;
+        let mut found = Vec::with_capacity(times.len());
+        for &at_ms in times {
+            if let Some(charge) = charges.iter().rev().find(|c| c.from_ms <= at_ms) {
+                found.push(Some(charge.story_id.clone()));
+                continue;
+            }
+            if before_charges.is_none() {
+                let report = self.report_with(
+                    &Filter {
+                        session_id: Some(identity.session_id.clone()),
+                        ..Default::default()
+                    },
+                    stories,
+                )?;
+                let story = report
+                    .sessions
+                    .iter()
+                    .filter(|s| s.segment.is_none_or(|segment| segment.from_ms.is_none()))
+                    .find_map(|s| s.story.as_ref().map(|story| story.id.clone()))
+                    .or_else(|| identity.record.as_ref().and_then(|r| r.story_id.clone()));
+                before_charges = Some(story);
+            }
+            found.push(before_charges.clone().flatten());
         }
-        let report = self.report_with(
-            &Filter {
-                session_id: Some(identity.session_id.clone()),
-                ..Default::default()
-            },
-            stories,
-        )?;
-        let before_charges = report
-            .sessions
-            .iter()
-            .filter(|s| s.segment.is_none_or(|segment| segment.from_ms.is_none()))
-            .find_map(|s| s.story.as_ref().map(|story| story.id.clone()));
-        Ok(before_charges.or_else(|| identity.record.and_then(|r| r.story_id)))
+        Ok(found)
     }
 }

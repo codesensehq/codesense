@@ -83,6 +83,11 @@ pub struct SessionRecord {
     pub team: Option<String>,
     pub handle: Option<String>,
     pub launched_by: Option<String>,
+    /// The tab of the session that launched this one, captured when the launch was reserved
+    /// (a handle can be reused; a tab cannot). `None` for a session no tab launched, and for
+    /// records written before it was kept.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub launched_by_session: Option<String>,
     /// `key@revision`.
     pub agent: Option<String>,
     pub manifest_hash: Option<String>,
@@ -209,10 +214,17 @@ impl UsageStore {
             .execute(
                 "INSERT INTO session_record (session_id, native_session_id, org, team, handle, launched_by, agent,
                     manifest_hash, cli, cli_version, model, mcp_allow, bridge_tools, account, story_id, workspace,
-                    worktree, branch, run_id, config_home, provided_skills, unavailable, recorded_at_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
+                    worktree, branch, run_id, config_home, provided_skills, unavailable, recorded_at_ms,
+                    launched_by_session, handle_at_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?23)
                  ON CONFLICT (session_id) DO UPDATE SET
                     native_session_id = COALESCE(session_record.native_session_id, excluded.native_session_id),
+                    -- The first launcher tab stands. A changed handle is stamped with when it
+                    -- changed, so the record never looks as if it held the new handle earlier.
+                    launched_by_session = COALESCE(session_record.launched_by_session, excluded.launched_by_session),
+                    handle_at_ms = CASE WHEN session_record.handle IS excluded.handle
+                        THEN COALESCE(session_record.handle_at_ms, session_record.recorded_at_ms)
+                        ELSE CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) END,
                     org = excluded.org, team = excluded.team, handle = excluded.handle,
                     launched_by = excluded.launched_by, agent = excluded.agent, manifest_hash = excluded.manifest_hash,
                     cli = excluded.cli, cli_version = excluded.cli_version, model = excluded.model,
@@ -244,6 +256,7 @@ impl UsageStore {
                     clean_list(&r.provided_skills),
                     unavailable,
                     r.recorded_at_ms,
+                    clean(&r.launched_by_session),
                 ],
             )
             .map_err(db_err)?;
@@ -300,7 +313,7 @@ impl UsageStore {
             .query_row(
                 "SELECT session_id, native_session_id, org, team, handle, launched_by, agent, manifest_hash, cli,
                     cli_version, model, mcp_allow, bridge_tools, account, story_id, workspace, worktree, branch,
-                    run_id, config_home, provided_skills, unavailable, recorded_at_ms
+                    run_id, config_home, provided_skills, unavailable, recorded_at_ms, launched_by_session
                  FROM session_record WHERE session_id = ?1 OR native_session_id = ?1
                  ORDER BY session_id = ?1 DESC LIMIT 1",
                 params![session_id],
@@ -331,6 +344,7 @@ impl UsageStore {
                         provided_skills: list_of(r.get(20)?),
                         unavailable: serde_json::from_str(&unavailable).unwrap_or_default(),
                         recorded_at_ms: r.get(22)?,
+                        launched_by_session: r.get(23)?,
                         timing: None,
                     })
                 },
