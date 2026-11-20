@@ -127,10 +127,7 @@ pub(crate) fn seat_worktree_inner(
     let worktrees = super::parse_worktree_porcelain(&listed);
     // Checked out in a worktree at another folder (moved by hand, or made under an
     // earlier `worktree_dir`): never moved under it.
-    let branch_elsewhere = worktrees.iter().any(|entry| {
-        entry.branch.as_deref() == Some(branch.as_str())
-            && !super::paths_equal(&entry.path, &path_text)
-    });
+    let branch_elsewhere = checked_out_elsewhere(&worktrees, &branch, Some(&path_text));
     let existing = worktrees
         .into_iter()
         .find(|entry| super::paths_equal(&entry.path, &path_text));
@@ -213,6 +210,19 @@ pub(crate) fn seat_worktree_inner(
             })
         }
     }
+}
+
+/// Whether `branch` is checked out in one of `worktrees` (a `git worktree list`), other
+/// than the one at `except`.
+fn checked_out_elsewhere(
+    worktrees: &[super::WorktreeInfo],
+    branch: &str,
+    except: Option<&str>,
+) -> bool {
+    worktrees.iter().any(|entry| {
+        entry.branch.as_deref() == Some(branch)
+            && !except.is_some_and(|except| super::paths_equal(&entry.path, except))
+    })
 }
 
 /// The full sha `commit` names in `repo`, or `Invalid` when it names no commit there.
@@ -313,16 +323,12 @@ pub(crate) struct SeatBranch {
     pub tip: String,
 }
 
-/// Whether the seat worktree at `path` holds work nothing else keeps, as git sees it:
-/// [`SeatKeep::Dirty`] for uncommitted changes or a status that can't be read;
+/// Whether the commits of the seat worktree at `path` are kept elsewhere:
 /// [`SeatKeep::Unmerged`] for a branch seat whose tip is in neither the story branch nor
 /// `origin/<story branch>`, a branch seat moved to another branch, or a commit seat moved
-/// off its pinned commit. Liveness and unpublished context are the caller's checks.
-/// Blocking: it runs git.
+/// off its pinned commit; [`SeatKeep::Dirty`] when its HEAD can't be read. The caller has
+/// checked its status, liveness and unpublished context. Blocking: it runs git.
 pub(crate) fn seat_removal_plan(path: &Path, seat: &SeatRecord) -> Result<SeatRemoval, SeatKeep> {
-    if super::worktree_git_dirty_opt(path) != Some(false) {
-        return Err(SeatKeep::Dirty);
-    }
     let repo = super::main_repo_of_worktree(path).ok_or(SeatKeep::RemoveFailed)?;
     let head: String = super::run_git(&["rev-parse", "--verify", "HEAD"], path)
         .map(|out| out.trim().to_string())
@@ -354,9 +360,21 @@ pub(crate) fn seat_removal_plan(path: &Path, seat: &SeatRecord) -> Result<SeatRe
 }
 
 /// Delete a removed seat's branch from `repo`, only while it is still at the tip its
-/// cleanup checked. `update-ref`, not `git branch -d`, which compares with the clone's
-/// HEAD and refuses a branch merged only into the story branch.
+/// cleanup checked and no other worktree has it checked out (`update-ref` doesn't check
+/// that; `git branch -d` compares with the clone's HEAD and refuses a branch merged only
+/// into the story branch).
 pub(crate) fn delete_seat_branch(repo: &Path, branch: &SeatBranch) -> Result<(), String> {
+    let listed = super::run_git(&["worktree", "list", "--porcelain"], repo)?;
+    if checked_out_elsewhere(
+        &super::parse_worktree_porcelain(&listed),
+        &branch.name,
+        None,
+    ) {
+        return Err(format!(
+            "{} is checked out in another worktree, so it was kept",
+            branch.name
+        ));
+    }
     let reference = format!("refs/heads/{}", branch.name);
     super::run_git(&["update-ref", "-d", &reference, &branch.tip], repo).map(|_| ())
 }
@@ -852,26 +870,65 @@ mod tests {
         let f = fixture();
         let seat = branch_seat(&f, "dev");
         let plan = seat_removal_plan(&seat.path, &seat.seat).unwrap();
-        commit_file(&seat.path, "late.txt", "late work\n");
+        git(
+            &f.repo,
+            &["worktree", "remove", seat.path.to_str().unwrap()],
+        );
+        git(
+            &f.repo,
+            &["update-ref", "refs/heads/feat/story-seat-dev", &f.main],
+        );
         assert!(delete_seat_branch(&plan.repo, plan.branch.as_ref().unwrap()).is_err());
         assert!(!git(&f.repo, &["branch", "--list", "feat/story-seat-dev"]).is_empty());
     }
 
+    /// The status the cleanup keeps a seat `dirty` on: changes, or one it can't read.
     #[test]
-    fn a_dirty_or_unreadable_seat_is_kept_dirty() {
+    fn a_dirty_or_unreadable_seat_reads_as_not_clean() {
         let f = fixture();
         let seat = branch_seat(&f, "dev");
-        std::fs::write(seat.path.join("notes.txt"), "uncommitted\n").unwrap();
         assert_eq!(
-            seat_removal_plan(&seat.path, &seat.seat),
-            Err(SeatKeep::Dirty)
+            super::super::worktree_git_dirty_opt(&seat.path),
+            Some(false)
         );
-        // A folder git can't read a status in.
+        std::fs::write(seat.path.join("notes.txt"), "uncommitted\n").unwrap();
+        assert_eq!(super::super::worktree_git_dirty_opt(&seat.path), Some(true));
         let not_a_repo = tempfile::tempdir().unwrap();
         assert_eq!(
-            seat_removal_plan(not_a_repo.path(), &seat.seat),
-            Err(SeatKeep::Dirty)
+            super::super::worktree_git_dirty_opt(not_a_repo.path()),
+            None
         );
+        assert_eq!(
+            seat_removal_plan(not_a_repo.path(), &seat.seat),
+            Err(SeatKeep::RemoveFailed),
+            "no clone to remove it from"
+        );
+    }
+
+    #[test]
+    fn a_seat_branch_checked_out_in_another_worktree_is_kept() {
+        let f = fixture();
+        let seat = branch_seat(&f, "dev");
+        let plan = seat_removal_plan(&seat.path, &seat.seat).unwrap();
+        git(
+            &f.repo,
+            &["worktree", "remove", seat.path.to_str().unwrap()],
+        );
+        // Someone looks at the seat's work in a worktree of their own.
+        let look = f.repo.parent().unwrap().join("look");
+        git(
+            &f.repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                look.to_str().unwrap(),
+                "feat/story-seat-dev",
+            ],
+        );
+        assert!(delete_seat_branch(&plan.repo, plan.branch.as_ref().unwrap()).is_err());
+        assert!(!git(&f.repo, &["branch", "--list", "feat/story-seat-dev"]).is_empty());
+        assert_eq!(git(&look, &["rev-parse", "HEAD"]), f.story_tip);
     }
 
     #[test]

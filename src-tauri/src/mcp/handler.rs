@@ -8429,7 +8429,7 @@ impl CodesenseHandler {
     // session id against `self.connection_session()`.
     // -----------------------------------------------------------------
     #[tool(
-        description = "Close a terminal tab opened with open_terminal_tab or open_remote_tab, the symmetric counterpart of the open verbs. Args: {handle} only, no {tab}/{machine}/{workspace} name address (the opaque handle from the open or from list_sessions; a raw sessionId is refused). Terminates the CLI if one is running (SIGTERM then SIGKILL via the host's kill path), closes the tab, drops it from list_sessions. Works for local AND remote tabs — the handle resolves to its host transparently (same way read_terminal_tab does). Idempotent: a handle whose session is already gone returns { closed: true, alreadyClosed: true } instead of refusing; a handle nothing ever had returns { closed: false, reason: \"unknownHandle\" }. A session trying to close its own tab mid-call is refused with { closed: false, reason: \"selfClose\" } (the reply would never reach it). Keeps the worktree and its files, even for the last tab. The one exception is a story seat's own seat worktree (handle <storyId>#<name>, opened with open_workspace seatWorktree): once its session has ended it is removed with its seat branch when it is clean, has no unpublished context and its commits are in the story branch, else kept with the reason on its list_worktrees row (seatKept). close_workspace ends every session in a workspace and keeps its files too. Removing any other worktree is a separate, explicit act. Gated by the trusted-side Interactive tier. Returns { closed, hadCliRunning, remote, alreadyClosed?, seatWorktreesRemoved? (paths) }."
+        description = "Close a terminal tab opened with open_terminal_tab or open_remote_tab, the symmetric counterpart of the open verbs. Args: {handle} only, no {tab}/{machine}/{workspace} name address (the opaque handle from the open or from list_sessions; a raw sessionId is refused). Terminates the CLI if one is running (SIGTERM then SIGKILL via the host's kill path), closes the tab, drops it from list_sessions. Works for local AND remote tabs — the handle resolves to its host transparently (same way read_terminal_tab does). Idempotent: a handle whose session is already gone returns { closed: true, alreadyClosed: true } instead of refusing; a handle nothing ever had returns { closed: false, reason: \"unknownHandle\" }. A session trying to close its own tab mid-call is refused with { closed: false, reason: \"selfClose\" } (the reply would never reach it). Keeps the worktree and its files, even for the last tab. The one exception is a story seat's own seat worktree (handle <storyId>#<name>, opened with open_workspace seatWorktree): once its session has ended it is removed with its seat branch and its git-ignored files when it is clean, has no unpublished context and its commits are in the story branch, else kept with the reason on its list_worktrees row (seatKept). close_workspace ends every session in a workspace and keeps its files too. Removing any other worktree is a separate, explicit act. Gated by the trusted-side Interactive tier. Returns { closed, hadCliRunning, remote, alreadyClosed?, seatWorktreesRemoved? (paths) }."
     )]
     async fn close_terminal_tab(
         &self,
@@ -8547,12 +8547,12 @@ impl CodesenseHandler {
         remote: bool,
         mut reply: serde_json::Value,
     ) -> serde_json::Value {
-        use crate::commands::mcp_workspace::{reap_story_seats, SEAT_EXIT_WAIT};
+        use crate::commands::mcp_workspace::{reap_story_seats, SEAT_CLOSE_WAITS};
         let Some((story_id, seat)) = seat_of_handle(handle).filter(|_| !remote) else {
             return reply;
         };
         let removed =
-            reap_story_seats(&self.app_handle, story_id, Some(seat), SEAT_EXIT_WAIT).await;
+            reap_story_seats(&self.app_handle, story_id, Some(seat), SEAT_CLOSE_WAITS).await;
         reply["seatWorktreesRemoved"] = serde_json::json!(removed);
         reply
     }
@@ -8572,7 +8572,7 @@ impl CodesenseHandler {
     // reload does not bring the pill back.
     // -----------------------------------------------------------------
     #[tool(
-        description = "Close a workspace: ends every live terminal session in it (every tab, on every machine that holds it) and removes its pill from the workspace tray. Close keeps files: the story's worktree, its files and its git registration are never removed by this verb. The exception is its seat worktrees (open_workspace seatWorktree): each is removed with its seat branch once its session has ended, when it is clean, has no unpublished context and its commits are in the story branch, else kept with the reason on its list_worktrees row (seatKept). Address it by {story_id} (the story) OR {workspace_id} (the raw viewer id — root:/story:/generic: etc.). A story with no tray row still closes the sessions filed under its story. REFUSALS: { closed: false, reason: \"discardUnsavedRefused\" } when discardUnsaved is true (close never discards unsaved work; removing a worktree with it is a separate explicit act in the Worktrees panel); { closed: false, reason: \"selfClose\" } when the caller's own session is one of the workspace's tabs; { closed: false, reason: \"ambiguousWorkspace\" } when a bare story_id has live sessions in more than one team; { closed: false, reason: \"unknownWorkspace\" } for a workspace_id nothing holds; { closed: false, reason: \"tabsNotClosed\", failed: [...] } when a session would not end (its pill stays). IDEMPOTENT: a workspace already closed returns { closed: true, alreadyClosed: true, tabsClosed: [], worktreeRemoved: false }. Returns { closed, tabsClosed: [handle...] (the sessions this call ended), workspaceRetired (its pill was removed from viewer state and the saved state), worktreeRemoved: false (the story's worktree), seatWorktreesRemoved: [path...] }. Does NOT archive the agent definition (agent_delete does that), and does NOT touch chat history or documents. Gated by the trusted-side Interactive tier."
+        description = "Close a workspace: ends every live terminal session in it (every tab, on every machine that holds it) and removes its pill from the workspace tray. Close keeps files: the story's worktree, its files and its git registration are never removed by this verb. The exception is its seat worktrees (open_workspace seatWorktree): each is removed with its seat branch and its git-ignored files once its session has ended, when it is clean, has no unpublished context and its commits are in the story branch, else kept with the reason on its list_worktrees row (seatKept). Address it by {story_id} (the story) OR {workspace_id} (the raw viewer id — root:/story:/generic: etc.). A story with no tray row still closes the sessions filed under its story. REFUSALS: { closed: false, reason: \"discardUnsavedRefused\" } when discardUnsaved is true (close never discards unsaved work; removing a worktree with it is a separate explicit act in the Worktrees panel); { closed: false, reason: \"selfClose\" } when the caller's own session is one of the workspace's tabs; { closed: false, reason: \"ambiguousWorkspace\" } when a bare story_id has live sessions in more than one team; { closed: false, reason: \"unknownWorkspace\" } for a workspace_id nothing holds; { closed: false, reason: \"tabsNotClosed\", failed: [...] } when a session would not end (its pill stays). IDEMPOTENT: a workspace already closed returns { closed: true, alreadyClosed: true, tabsClosed: [], worktreeRemoved: false }. Returns { closed, tabsClosed: [handle...] (the sessions this call ended), workspaceRetired (its pill was removed from viewer state and the saved state), worktreeRemoved: false (the story's worktree), seatWorktreesRemoved: [path...] }. Does NOT archive the agent definition (agent_delete does that), and does NOT touch chat history or documents. Gated by the trusted-side Interactive tier."
     )]
     async fn close_workspace(
         &self,
@@ -8760,7 +8760,7 @@ impl CodesenseHandler {
             &self.app_handle,
             &target.form,
             None,
-            crate::commands::mcp_workspace::SEAT_EXIT_WAIT,
+            crate::commands::mcp_workspace::SEAT_CLOSE_WAITS,
         )
         .await;
         ok_json(serde_json::json!({
@@ -19330,8 +19330,9 @@ pub(crate) mod tests {
             .rfind("self.with_seat_cleanup(handle, is_remote, reply)")
             .unwrap();
         assert!(teardown < cleanup);
-        assert!(body_of("with_seat_cleanup")
-            .contains("reap_story_seats(&self.app_handle, story_id, Some(seat), SEAT_EXIT_WAIT)"));
+        assert!(body_of("with_seat_cleanup").contains(
+            "reap_story_seats(&self.app_handle, story_id, Some(seat), SEAT_CLOSE_WAITS)"
+        ));
         let workspace = body_of("close_workspace");
         let teardown = workspace.find("terminal_close_tab(").unwrap();
         let cleanup = workspace.find("reap_story_seats(").unwrap();
@@ -19341,7 +19342,7 @@ pub(crate) mod tests {
 
     #[test]
     fn close_terminal_tab_params_require_handle_and_reject_extras() {
-        // A tab close never touches the worktree, so there is no
+        // A tab close never discards unsaved work, so there is no
         // `discardUnsaved` here. `deny_unknown_fields` keeps the signature
         // tight — a stray `discardUnsaved` from a caller who confused the two
         // verbs reads as a programmer error, not a silent no-op.

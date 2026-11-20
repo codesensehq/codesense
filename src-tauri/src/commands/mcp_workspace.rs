@@ -1171,13 +1171,18 @@ pub(crate) async fn with_story_prepare_lock<T>(
     story_id: &str,
     work: impl std::future::Future<Output = T>,
 ) -> T {
+    let _claim = story_prepare_claim(story_id).await;
+    work.await
+}
+
+/// Hold `story_id`'s prepare lock (see [`with_story_prepare_lock`]) while the claim lives.
+async fn story_prepare_claim(story_id: &str) -> super::workspace_open::OpenClaim {
     static PREPARING: std::sync::OnceLock<super::workspace_open::OpenClaims> =
         std::sync::OnceLock::new();
-    let _claim = PREPARING
+    PREPARING
         .get_or_init(Default::default)
         .claim(story_id)
-        .await;
-    work.await
+        .await
 }
 
 type SeatLaunchCounts = std::sync::Mutex<std::collections::BTreeMap<(String, String), usize>>;
@@ -1247,44 +1252,89 @@ pub(crate) fn seats_to_reap(
         .collect()
 }
 
-/// How long a close waits for the sessions it ended to exit before it keeps their seat
-/// worktree as `live`.
-pub(crate) const SEAT_EXIT_WAIT: Duration = Duration::from_secs(5);
+/// How long a seat cleanup waits: for the sessions a close ended to exit before it keeps
+/// their seat worktree as `live`, and for the story's prepare lock (`None`: as long as it
+/// takes). A seat whose lock isn't free in time is left to the next sweep.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SeatWaits {
+    pub exit: Duration,
+    pub lock: Option<Duration>,
+}
+
+/// A close's waits: a launch can hold the story's lock through its setup, and a close
+/// doesn't wait for that.
+pub(crate) const SEAT_CLOSE_WAITS: SeatWaits = SeatWaits {
+    exit: Duration::from_secs(5),
+    lock: Some(Duration::from_secs(2)),
+};
 
 /// Clean up the seat worktrees of `story_id` (only the seat `only`, when given) with
-/// [`reap_seat_worktree`](crate::commands::worktree::reap_seat_worktree), under the
-/// story's prepare lock so no launch prepares the story meanwhile, skipping a seat whose
-/// launch is under way. Every cleanup trigger comes here: a seat tab's close, a
-/// workspace close and the sweep after a story launch. Returns the seat worktrees removed.
+/// [`reap_seat_worktree`](crate::commands::worktree::reap_seat_worktree). Every cleanup
+/// trigger comes here: a seat tab's close, a workspace close and the sweep after a story
+/// launch. Returns the seat worktrees removed.
 pub(crate) async fn reap_story_seats(
     app: &AppHandle,
     story_id: &str,
     only: Option<&str>,
-    wait_for_exit: Duration,
+    waits: SeatWaits,
+) -> Vec<PathBuf> {
+    let ctx: Option<crate::content_engine::ResolverContext> = app
+        .try_state::<std::sync::Arc<crate::content_engine::sync::WaveCoordinator>>()
+        .and_then(|coord| coord.active_ctx());
+    let Some(ctx) = ctx else {
+        return Vec::new();
+    };
+    let probe = crate::commands::worktree::AppSeatProbe(app);
+    reap_seats_of(
+        &probe,
+        &ctx.codesense_home,
+        &ctx.principal(),
+        story_id,
+        only,
+        waits,
+    )
+    .await
+}
+
+/// [`reap_story_seats`] over the records at `home`. A story with no seat to clean up (no
+/// seat record by that name) returns at once, without the prepare lock. Otherwise the
+/// seats run under the story's prepare lock, so no launch prepares the story meanwhile,
+/// read again once it is held; a seat whose launch is under way is skipped.
+pub(crate) async fn reap_seats_of(
+    probe: &impl crate::commands::worktree::SeatProbe,
+    home: &Path,
+    principal: &Principal,
+    story_id: &str,
+    only: Option<&str>,
+    waits: SeatWaits,
 ) -> Vec<PathBuf> {
     use crate::commands::worktree::{reap_seat_worktree, SeatReap};
-    with_story_prepare_lock(story_id, async {
-        let ctx: Option<crate::content_engine::ResolverContext> = app
-            .try_state::<std::sync::Arc<crate::content_engine::sync::WaveCoordinator>>()
-            .and_then(|coord| coord.active_ctx());
-        let Some(ctx) = ctx else {
-            return Vec::new();
-        };
-        let (home, principal) = (ctx.codesense_home.clone(), ctx.principal());
-        let records = crate::install::worktree_index::find_by_story_id(&home, &principal, story_id)
+    let seats = || {
+        let records = crate::install::worktree_index::find_by_story_id(home, principal, story_id)
             .unwrap_or_default();
-        let mut removed = Vec::new();
-        for record in seats_to_reap(records, story_id, only, |name| {
+        seats_to_reap(records, story_id, only, |name| {
             seat_launch_in_flight(story_id, name)
-        }) {
-            let reap = reap_seat_worktree(app, &home, &principal, &record, wait_for_exit).await;
-            if reap == Some(SeatReap::Reaped) {
-                removed.push(record.code_repo_path);
-            }
+        })
+    };
+    if matches!(seats()[..], []) {
+        return Vec::new();
+    }
+    let claim = story_prepare_claim(story_id);
+    let _claim = match waits.lock {
+        None => claim.await,
+        Some(wait) => match tokio::time::timeout(wait, claim).await {
+            Ok(claim) => claim,
+            Err(_) => return Vec::new(),
+        },
+    };
+    let mut removed = Vec::new();
+    for record in seats() {
+        let reap = reap_seat_worktree(probe, home, principal, &record, waits.exit).await;
+        if reap == Some(SeatReap::Reaped) {
+            removed.push(record.code_repo_path);
         }
-        removed
-    })
-    .await
+    }
+    removed
 }
 
 /// Start the sweep of `story_id`'s seat worktrees ([`reap_story_seats`]) in the
@@ -1293,7 +1343,11 @@ pub(crate) async fn reap_story_seats(
 pub(crate) fn spawn_seat_sweep(app: &AppHandle, story_id: &str) {
     let (app, story_id) = (app.clone(), story_id.to_string());
     tauri::async_runtime::spawn(async move {
-        let removed = reap_story_seats(&app, &story_id, None, Duration::ZERO).await;
+        let waits = SeatWaits {
+            exit: Duration::ZERO,
+            lock: None,
+        };
+        let removed = reap_story_seats(&app, &story_id, None, waits).await;
         log::debug!("seat sweep for {story_id} removed {removed:?}");
     });
 }
@@ -2738,6 +2792,78 @@ mod tests {
         // A launch without a seat counts nothing.
         let _shared = SeatLaunchClaim::new(story, None);
         assert!(!seat_launch_in_flight(story, ""));
+    }
+
+    /// A close of a tab with no seat worktree never waits for the story's prepare lock
+    /// (a launch can hold it through a long setup); a real seat waits for it only so
+    /// long, then is left to the next sweep; with the lock free, the seat is cleaned up.
+    #[tokio::test]
+    async fn a_seat_cleanup_waits_for_the_prepare_lock_only_for_a_seat_and_only_so_long() {
+        use crate::commands::worktree::fake_probe::FakeProbe;
+        use crate::install::worktree_index::SeatKind;
+        let home = tempfile::tempdir().unwrap();
+        let principal = Principal::from(42);
+        let story = "SEAT-LOCK-1";
+        let path = home.path().join("app-seat-dev");
+        let mut record = WorktreeStoryRecord::new(
+            &path,
+            "acme",
+            SourceRepoSlug::new("acme", "app").unwrap(),
+            story,
+            home.path().join("team/content/stories/story.md"),
+        );
+        record.seat = Some(SeatRecord {
+            name: "dev".into(),
+            kind: SeatKind::Branch,
+            pinned_commit: None,
+            kept: None,
+        });
+        write_record(home.path(), &principal, &record).unwrap();
+        let waits = |lock: Option<Duration>| SeatWaits {
+            exit: Duration::ZERO,
+            lock,
+        };
+        let launch = story_prepare_claim(story).await;
+        // No seat by that name: back at once, though the lock is held and never given up.
+        let probe = FakeProbe::passing();
+        let shared = tokio::time::timeout(
+            Duration::from_secs(5),
+            reap_seats_of(
+                &probe,
+                home.path(),
+                &principal,
+                story,
+                Some("reviewer"),
+                waits(None),
+            ),
+        )
+        .await
+        .expect("a close of a tab without a seat worktree never waits for the lock");
+        assert!(shared.is_empty());
+        // The seat: its lock isn't free in time, so it's left alone.
+        let later = reap_seats_of(
+            &probe,
+            home.path(),
+            &principal,
+            story,
+            Some("dev"),
+            waits(Some(Duration::from_millis(50))),
+        )
+        .await;
+        assert!(later.is_empty());
+        assert!(probe.asked().is_empty(), "{:?}", probe.asked());
+        // Once the launch is done, it is cleaned up.
+        drop(launch);
+        let removed = reap_seats_of(
+            &probe,
+            home.path(),
+            &principal,
+            story,
+            Some("dev"),
+            waits(Some(Duration::from_millis(50))),
+        )
+        .await;
+        assert_eq!(removed, [path]);
     }
 
     /// A seat launch is counted before it waits for the story's prepare lock, which a

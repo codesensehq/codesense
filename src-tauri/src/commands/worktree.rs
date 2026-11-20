@@ -1940,15 +1940,44 @@ pub(crate) enum SeatReap {
     Kept(crate::install::worktree_index::SeatKeep),
 }
 
+/// What a seat worktree's cleanup asks of the app, one question per check, so the order
+/// of the checks and each keep reason are tested without a running app ([`AppSeatProbe`]
+/// in the app).
+#[async_trait::async_trait]
+pub(crate) trait SeatProbe: Send + Sync {
+    /// Whether a session runs in `path`, or a tab is opening or restarting into it,
+    /// asking again until `wait` has passed. Anything that can't be asked counts as in
+    /// use.
+    async fn in_use(&self, path: &Path, wait: Duration) -> bool;
+    /// `git status` of `path`: `Some(true)` with changes, `None` when it can't be read.
+    async fn dirty(&self, path: &Path) -> Option<bool>;
+    /// The team-file edits at `path` that aren't published.
+    async fn unpublished(
+        &self,
+        path: &Path,
+    ) -> Result<crate::commands::team_file_edits::WorktreeUnpublished, String>;
+    /// [`seat::seat_removal_plan`] for the seat at `path`.
+    async fn plan(
+        &self,
+        path: &Path,
+        seat: &crate::install::worktree_index::SeatRecord,
+    ) -> Result<seat::SeatRemoval, crate::install::worktree_index::SeatKeep>;
+    /// Remove the seat worktree at `path` from the clone `repo`.
+    async fn remove_seat(&self, path: &Path, repo: &Path) -> Result<(), String>;
+    /// Delete the removed seat's branch ([`seat::delete_seat_branch`]).
+    async fn delete_branch(&self, repo: &Path, branch: &seat::SeatBranch) -> Result<(), String>;
+}
+
 /// The single seat-removal check. The seat worktree `record` names is removed when, in
-/// order: no session runs in its folder (waiting up to `wait_for_exit` for one that was
-/// just ended to exit), its git status is clean, it has no unpublished context, and
-/// [`seat::seat_removal_plan`] finds its commits merged. It goes through the removal
-/// funnel [`prune_worktree_locked`] (which prunes its record), and then its seat branch is
-/// deleted. Otherwise it is kept and the reason is noted on its record for
+/// order: nothing runs in its folder or is starting there (waiting up to
+/// `wait_for_exit` for a session that was just ended to exit), its git status is clean,
+/// it has no unpublished context, and [`seat::seat_removal_plan`] finds its commits
+/// merged; nothing must have started there meanwhile either. It goes through the removal
+/// funnel [`prune_worktree_locked`] (which prunes its record), and then its seat branch
+/// is deleted. Otherwise it is kept and the reason is noted on its record for
 /// `list_worktrees`. A record without a seat is never touched (`None`).
 pub(crate) async fn reap_seat_worktree(
-    app: &tauri::AppHandle,
+    probe: &impl SeatProbe,
     home: &Path,
     principal: &Principal,
     record: &crate::install::worktree_index::WorktreeStoryRecord,
@@ -1956,7 +1985,7 @@ pub(crate) async fn reap_seat_worktree(
 ) -> Option<SeatReap> {
     let seat = record.seat.clone()?;
     let path = record.code_repo_path.as_path();
-    let reap = seat_reap(app, path, &seat, wait_for_exit).await;
+    let reap = seat_reap(probe, path, &seat, wait_for_exit).await;
     if let SeatReap::Kept(reason) = reap {
         note_seat_kept(home, principal, path, reason);
     }
@@ -1964,59 +1993,38 @@ pub(crate) async fn reap_seat_worktree(
 }
 
 async fn seat_reap(
-    app: &tauri::AppHandle,
+    probe: &impl SeatProbe,
     path: &Path,
     seat: &crate::install::worktree_index::SeatRecord,
     wait_for_exit: Duration,
 ) -> SeatReap {
     use crate::install::worktree_index::SeatKeep;
-    if !seat_folder_idle(app, path, wait_for_exit).await {
+    if probe.in_use(path, wait_for_exit).await {
         return SeatReap::Kept(SeatKeep::Live);
     }
-    let status_path = path.to_path_buf();
-    let dirty = crate::commands::await_blocking("reap_seat_worktree.status", move || {
-        Ok(worktree_git_dirty_opt(&status_path))
-    })
-    .await;
-    if !matches!(dirty, Ok(Some(false))) {
+    if probe.dirty(path).await != Some(false) {
         return SeatReap::Kept(SeatKeep::Dirty);
     }
-    let path_text = path.to_string_lossy().into_owned();
-    let unpublished = crate::commands::team_file_edits::worktree_unpublished_context(
-        app.clone(),
-        path_text.clone(),
-    )
-    .await;
-    if let Some(keep) = seat_keep_for_unpublished(&unpublished) {
+    if let Some(keep) = seat_keep_for_unpublished(&probe.unpublished(path).await) {
         return SeatReap::Kept(keep);
     }
-    let (plan_path, plan_seat) = (path.to_path_buf(), seat.clone());
-    let plan = crate::commands::await_blocking("reap_seat_worktree.plan", move || {
-        Ok(seat::seat_removal_plan(&plan_path, &plan_seat))
-    })
-    .await;
-    let plan: seat::SeatRemoval = match plan {
-        Ok(Ok(plan)) => plan,
-        Ok(Err(keep)) => return SeatReap::Kept(keep),
-        Err(_) => return SeatReap::Kept(SeatKeep::Dirty),
+    let plan = match probe.plan(path, seat).await {
+        Ok(plan) => plan,
+        Err(keep) => return SeatReap::Kept(keep),
     };
-    let repo_text = plan.repo.to_string_lossy().into_owned();
-    if let Err(error) =
-        prune_worktree_locked(app, path, repo_text, path_text, SEAT_REMOVAL_CONSENT).await
-    {
+    // The checks took a while: anything that started in the folder meanwhile keeps it.
+    if probe.in_use(path, Duration::ZERO).await {
+        return SeatReap::Kept(SeatKeep::Live);
+    }
+    if let Err(error) = probe.remove_seat(path, &plan.repo).await {
         log::warn!(
             target: "commands::worktree",
             "seat worktree {path:?} was kept: removing it failed: {error}"
         );
         return SeatReap::Kept(SeatKeep::RemoveFailed);
     }
-    if let Some(branch) = plan.branch {
-        let repo = plan.repo;
-        let deleted = crate::commands::await_blocking("reap_seat_worktree.branch", move || {
-            seat::delete_seat_branch(&repo, &branch)
-        })
-        .await;
-        if let Err(error) = deleted {
+    if let Some(branch) = &plan.branch {
+        if let Err(error) = probe.delete_branch(&plan.repo, branch).await {
             log::warn!(
                 target: "commands::worktree",
                 "the branch of removed seat worktree {path:?} was kept: {error}"
@@ -2024,6 +2032,174 @@ async fn seat_reap(
         }
     }
     SeatReap::Reaped
+}
+
+/// [`SeatProbe`] for the running app.
+pub(crate) struct AppSeatProbe<'a>(pub &'a tauri::AppHandle);
+
+#[async_trait::async_trait]
+impl SeatProbe for AppSeatProbe<'_> {
+    async fn in_use(&self, path: &Path, wait: Duration) -> bool {
+        let deadline = std::time::Instant::now() + wait;
+        loop {
+            let live: Liveness<Vec<PathBuf>> =
+                crate::commands::pty_backend::live_session_home_dirs_off_thread(self.0).await;
+            let idle = crate::commands::worktree_liveness::live_sessions_inside(&live, path)
+                == Some(0)
+                && !crate::mcp::move_workspace::local_folder_in_use(self.0, path).await;
+            if idle {
+                return false;
+            }
+            if std::time::Instant::now() >= deadline {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
+
+    async fn dirty(&self, path: &Path) -> Option<bool> {
+        let path = path.to_path_buf();
+        crate::commands::await_blocking("reap_seat_worktree.status", move || {
+            Ok(worktree_git_dirty_opt(&path))
+        })
+        .await
+        .unwrap_or(None)
+    }
+
+    async fn unpublished(
+        &self,
+        path: &Path,
+    ) -> Result<crate::commands::team_file_edits::WorktreeUnpublished, String> {
+        crate::commands::team_file_edits::worktree_unpublished_context(
+            self.0.clone(),
+            path.to_string_lossy().into_owned(),
+        )
+        .await
+    }
+
+    async fn plan(
+        &self,
+        path: &Path,
+        seat: &crate::install::worktree_index::SeatRecord,
+    ) -> Result<seat::SeatRemoval, crate::install::worktree_index::SeatKeep> {
+        let (path, seat) = (path.to_path_buf(), seat.clone());
+        crate::commands::await_blocking("reap_seat_worktree.plan", move || {
+            Ok(seat::seat_removal_plan(&path, &seat))
+        })
+        .await
+        .unwrap_or(Err(crate::install::worktree_index::SeatKeep::Dirty))
+    }
+
+    async fn remove_seat(&self, path: &Path, repo: &Path) -> Result<(), String> {
+        prune_worktree_locked(
+            self.0,
+            path,
+            repo.to_string_lossy().into_owned(),
+            path.to_string_lossy().into_owned(),
+            SEAT_REMOVAL_CONSENT,
+        )
+        .await
+    }
+
+    async fn delete_branch(&self, repo: &Path, branch: &seat::SeatBranch) -> Result<(), String> {
+        let (repo, branch) = (repo.to_path_buf(), branch.clone());
+        crate::commands::await_blocking("reap_seat_worktree.branch", move || {
+            seat::delete_seat_branch(&repo, &branch)
+        })
+        .await
+    }
+}
+
+/// A scripted [`SeatProbe`] for tests of the seat cleanup.
+#[cfg(test)]
+pub(crate) mod fake_probe {
+    use super::{seat, SeatProbe};
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    /// A scripted [`SeatProbe`]: every check passes unless a test says otherwise, and
+    /// each one it is asked is recorded in order. `in_use` answers in turn (then `false`).
+    pub(crate) struct FakeProbe {
+        pub in_use: Mutex<Vec<bool>>,
+        pub dirty: Option<bool>,
+        pub unpublished: Result<usize, String>,
+        pub plan: Result<seat::SeatRemoval, crate::install::worktree_index::SeatKeep>,
+        pub remove: Result<(), String>,
+        pub asked: Mutex<Vec<String>>,
+    }
+
+    impl FakeProbe {
+        pub(crate) fn passing() -> Self {
+            Self {
+                in_use: Mutex::new(Vec::new()),
+                dirty: Some(false),
+                unpublished: Ok(0),
+                plan: Ok(seat::SeatRemoval {
+                    repo: PathBuf::from("/src/app"),
+                    branch: Some(seat::SeatBranch {
+                        name: "feat/s-1-seat-dev".into(),
+                        tip: "abc".into(),
+                    }),
+                }),
+                remove: Ok(()),
+                asked: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn ask(&self, what: String) {
+            self.asked.lock().unwrap().push(what);
+        }
+
+        pub(crate) fn asked(&self) -> Vec<String> {
+            self.asked.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl SeatProbe for FakeProbe {
+        async fn in_use(&self, _path: &Path, wait: Duration) -> bool {
+            self.ask(format!("in_use {}s", wait.as_secs()));
+            let mut answers = self.in_use.lock().unwrap();
+            (!answers.is_empty()) && answers.remove(0)
+        }
+        async fn dirty(&self, _path: &Path) -> Option<bool> {
+            self.ask("dirty".into());
+            self.dirty
+        }
+        async fn unpublished(
+            &self,
+            _path: &Path,
+        ) -> Result<crate::commands::team_file_edits::WorktreeUnpublished, String> {
+            self.ask("unpublished".into());
+            self.unpublished.clone().map(|count| {
+                crate::commands::team_file_edits::WorktreeUnpublished {
+                    count,
+                    files: vec!["CLAUDE.md".into(); count],
+                }
+            })
+        }
+        async fn plan(
+            &self,
+            _path: &Path,
+            _seat: &crate::install::worktree_index::SeatRecord,
+        ) -> Result<seat::SeatRemoval, crate::install::worktree_index::SeatKeep> {
+            self.ask("plan".into());
+            self.plan.clone()
+        }
+        async fn remove_seat(&self, _path: &Path, _repo: &Path) -> Result<(), String> {
+            self.ask("remove".into());
+            self.remove.clone()
+        }
+        async fn delete_branch(
+            &self,
+            _repo: &Path,
+            branch: &seat::SeatBranch,
+        ) -> Result<(), String> {
+            self.ask(format!("delete {}", branch.name));
+            Ok(())
+        }
+    }
 }
 
 /// Whether a seat's unpublished-context count keeps it: any team-file edit not published
@@ -2038,28 +2214,9 @@ pub(crate) fn seat_keep_for_unpublished(
     }
 }
 
-/// Whether no session runs in `path` ([`worktree_live_session_count`]'s count is 0),
-/// asking again until `wait` has passed. Sessions that can't be counted are not idle.
-///
-/// [`worktree_live_session_count`]: crate::commands::worktree_liveness::worktree_live_session_count
-async fn seat_folder_idle(app: &tauri::AppHandle, path: &Path, wait: Duration) -> bool {
-    let deadline = std::time::Instant::now() + wait;
-    loop {
-        let live: Liveness<Vec<PathBuf>> =
-            crate::commands::pty_backend::live_session_home_dirs_off_thread(app).await;
-        if crate::commands::worktree_liveness::live_sessions_inside(&live, path) == Some(0) {
-            return true;
-        }
-        if std::time::Instant::now() >= deadline {
-            return false;
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-}
-
 /// Note on the seat record at `path` why its cleanup kept it. Best-effort: the row only
 /// shows a stale reason, or none, when this fails.
-fn note_seat_kept(
+pub(crate) fn note_seat_kept(
     home: &Path,
     principal: &Principal,
     path: &Path,
@@ -6129,18 +6286,165 @@ detached
         assert_eq!(distinct_clone_dirs(&paths).len(), 2);
     }
 
-    /// SW-XS-17 (AC-2): the only paths that delete a worktree from disk are the
-    /// explicit `remove_worktree` command and the cleanup of a seat worktree
-    /// (`seat_reap`, behind `reap_seat_worktree`, which never touches a record without
-    /// a seat). Every production caller of the prune chain (`remove_worktree` /
-    /// `seat_reap` → `prune_worktree_locked` → `remove_registered_worktree` →
+    fn seat_record(path: &Path) -> WorktreeStoryRecord {
+        let mut record = wl2_record(path, "S-1");
+        record.seat = Some(crate::install::worktree_index::SeatRecord {
+            name: "dev".into(),
+            kind: crate::install::worktree_index::SeatKind::Branch,
+            pinned_commit: None,
+            kept: None,
+        });
+        record
+    }
+
+    use super::fake_probe::FakeProbe;
+
+    /// The cleanup's checks run in order (in use, status, unpublished context, merged,
+    /// in use again, remove, branch) and stop at the first that keeps the seat, with
+    /// that reason: one case per keep reason.
+    #[tokio::test]
+    async fn a_seat_reap_checks_in_order_and_keeps_for_each_reason() {
+        use crate::install::worktree_index::SeatKeep;
+        let home = TempDir::new().unwrap();
+        let principal = Principal::from(42);
+        let record = seat_record(&home.path().join("app-seat-dev"));
+        let (at, owner, seat) = (home.path(), &principal, &record);
+        let reap = move |probe: FakeProbe| async move {
+            let reap = reap_seat_worktree(&probe, at, owner, seat, Duration::from_secs(5)).await;
+            (reap, probe.asked())
+        };
+        let all = [
+            "in_use 5s",
+            "dirty",
+            "unpublished",
+            "plan",
+            "in_use 0s",
+            "remove",
+            "delete feat/s-1-seat-dev",
+        ];
+        let upto = |n: usize| all[..n].iter().map(|s| s.to_string()).collect::<Vec<_>>();
+
+        assert_eq!(
+            reap(FakeProbe::passing()).await,
+            (Some(SeatReap::Reaped), upto(7))
+        );
+        let probe = FakeProbe {
+            in_use: Mutex::new(vec![true]),
+            ..FakeProbe::passing()
+        };
+        assert_eq!(
+            reap(probe).await,
+            (Some(SeatReap::Kept(SeatKeep::Live)), upto(1))
+        );
+        for dirty in [Some(true), None] {
+            let probe = FakeProbe {
+                dirty,
+                ..FakeProbe::passing()
+            };
+            assert_eq!(
+                reap(probe).await,
+                (Some(SeatReap::Kept(SeatKeep::Dirty)), upto(2)),
+                "{dirty:?}"
+            );
+        }
+        for unpublished in [Ok(1), Err("can't count".to_string())] {
+            let probe = FakeProbe {
+                unpublished,
+                ..FakeProbe::passing()
+            };
+            assert_eq!(
+                reap(probe).await,
+                (Some(SeatReap::Kept(SeatKeep::UnpublishedContext)), upto(3))
+            );
+        }
+        let probe = FakeProbe {
+            plan: Err(SeatKeep::Unmerged),
+            ..FakeProbe::passing()
+        };
+        assert_eq!(
+            reap(probe).await,
+            (Some(SeatReap::Kept(SeatKeep::Unmerged)), upto(4))
+        );
+        // A tab that started opening or restarting in the folder during the checks.
+        let probe = FakeProbe {
+            in_use: Mutex::new(vec![false, true]),
+            ..FakeProbe::passing()
+        };
+        assert_eq!(
+            reap(probe).await,
+            (Some(SeatReap::Kept(SeatKeep::Live)), upto(5))
+        );
+        let probe = FakeProbe {
+            remove: Err("git worktree remove failed".into()),
+            ..FakeProbe::passing()
+        };
+        assert_eq!(
+            reap(probe).await,
+            (Some(SeatReap::Kept(SeatKeep::RemoveFailed)), upto(6))
+        );
+        // A commit seat has no branch to delete.
+        let probe = FakeProbe {
+            plan: Ok(seat::SeatRemoval {
+                repo: PathBuf::from("/src/app"),
+                branch: None,
+            }),
+            ..FakeProbe::passing()
+        };
+        assert_eq!(reap(probe).await, (Some(SeatReap::Reaped), upto(6)));
+        // A base worktree is never asked about.
+        let probe = FakeProbe::passing();
+        let base = wl2_record(&home.path().join("app"), "S-1");
+        assert_eq!(
+            reap_seat_worktree(&probe, home.path(), &principal, &base, Duration::ZERO).await,
+            None
+        );
+        assert!(probe.asked().is_empty());
+    }
+
+    /// The reason a cleanup kept a seat is noted on its stored record, and the
+    /// `list_worktrees` row built from that record shows it.
+    #[tokio::test]
+    async fn a_kept_seat_shows_why_on_its_row() {
+        let home = TempDir::new().unwrap();
+        let principal = Principal::from(42);
+        let path = home.path().join("app-seat-dev");
+        let record = seat_record(&path);
+        crate::install::worktree_index::write_record(home.path(), &principal, &record).unwrap();
+        let probe = FakeProbe {
+            dirty: Some(true),
+            ..FakeProbe::passing()
+        };
+        reap_seat_worktree(&probe, home.path(), &principal, &record, Duration::ZERO).await;
+        let stored = crate::install::worktree_index::read_record(home.path(), &principal, &path)
+            .unwrap()
+            .unwrap();
+        let row = WorktreeRow::story(managed_row_from_record(stored, false));
+        let json = serde_json::to_value(&row).unwrap();
+        assert_eq!(json["seat"], "dev");
+        assert_eq!(json["seatKept"], "dirty");
+    }
+
+    /// The only paths that delete a worktree from disk are the explicit
+    /// `remove_worktree` command and the cleanup of a seat worktree, whose chain is
+    /// pinned up to its three triggers (a seat tab's close, a workspace close and the
+    /// sweep after a story launch) and never touches a record without a seat. Every
+    /// production caller of the prune chain (`remove_worktree` / `remove_seat` →
+    /// `prune_worktree_locked` → `remove_registered_worktree` →
     /// `remove_worktree_prune_core`) is the link above it; nothing else in the crate
     /// reaches it.
     #[test]
     fn worktree_prune_is_reachable_only_from_remove_worktree() {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let allowed: [(&str, &[&str]); 3] = [
-            ("prune_worktree_locked", &["remove_worktree", "seat_reap"]),
+        let allowed: [(&str, &[&str]); 8] = [
+            ("prune_worktree_locked", &["remove_worktree", "remove_seat"]),
+            ("remove_seat", &["seat_reap"]),
+            ("seat_reap", &["reap_seat_worktree"]),
+            ("reap_seat_worktree", &["reap_seats_of"]),
+            ("reap_seats_of", &["reap_story_seats"]),
+            (
+                "reap_story_seats",
+                &["with_seat_cleanup", "close_workspace", "spawn_seat_sweep"],
+            ),
             ("remove_registered_worktree", &["prune_worktree_locked"]),
             (
                 "remove_worktree_prune_core",

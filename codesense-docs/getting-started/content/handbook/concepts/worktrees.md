@@ -147,7 +147,8 @@ worktree, not the seat's.
   it is removed when no session runs in it, it has no uncommitted changes, its
   context edits are published and, for a `branch` seat, its commits are in the
   story branch or `origin/<story branch>`. Its seat branch is deleted with it, and
-  its installed dependencies go too. Otherwise it is kept, and its
+  so are its git-ignored files: installed dependencies, build output and any local
+  ignored files, such as notes in an ignored folder. Otherwise it is kept, and its
   `list_worktrees` row says why in `seatKept`: `live`, `dirty`,
   `unpublished-context`, `unmerged` or `remove-failed`. A seat being launched is
   never removed, and the story's own worktree never is.
