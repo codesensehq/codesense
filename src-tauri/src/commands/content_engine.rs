@@ -3803,6 +3803,7 @@ fn merge_notify_hooks(
     let Some(hooks) = project_hooks(cli) else {
         return Some(false);
     };
+    let replaced = replace_legacy_hooks(settings, target);
     let status = hook::command(hooks.status_verb, target);
     let status = merge_hook_entry(settings, events, status.entry(), &status.marker);
     // The secret-file guard goes wherever the status hooks do, for the CLIs that have project
@@ -3816,7 +3817,44 @@ fn merge_notify_hooks(
         &guard.marker,
     );
     let deny = merge_deny_rules(settings, codesense_pty_core::notify_hook::deny_rules());
-    Some(status? | guard? | deny?)
+    Some(replaced | status? | guard? | deny?)
+}
+
+/// Rewrite in place, as `target` writes it now, each hook entry whose command is exactly one an
+/// earlier CodeSense wrote ([`hook::LEGACY_COMMANDS`]), keeping the entry's other keys, so a
+/// file never holds the old hook beside the new one. A command that only names an old script
+/// (a team's own `.claude/hooks/codesense-notify.sh`) is left alone. Whether anything changed.
+fn replace_legacy_hooks(settings: &mut serde_json::Value, target: HookTarget) -> bool {
+    let Some(events) = settings.get_mut("hooks").and_then(|h| h.as_object_mut()) else {
+        return false;
+    };
+    let mut changed = false;
+    let entries = events
+        .values_mut()
+        .filter_map(|groups| groups.as_array_mut())
+        .flatten()
+        .filter_map(|group| group.get_mut("hooks")?.as_array_mut())
+        .flatten()
+        .filter_map(|entry| entry.as_object_mut());
+    for entry in entries {
+        let Some(verb) = entry
+            .get("command")
+            .and_then(|c| c.as_str())
+            .and_then(hook::legacy_verb)
+        else {
+            continue;
+        };
+        let written = hook::command(verb, target);
+        entry.insert("command".into(), written.command.into());
+        if let Some(shell) = written.shell {
+            entry.insert("shell".into(), shell.into());
+        }
+        if let Some(on_failure) = written.on_failure {
+            entry.insert("onFailure".into(), on_failure.into());
+        }
+        changed = true;
+    }
+    changed
 }
 
 /// Add git-ai's checkpoint hook (`command`) to a per-launch Claude settings body, on both
@@ -10006,6 +10044,84 @@ mod tests {
                     "{target:?} {verb:?}: {settings}"
                 );
             }
+        }
+    }
+
+    /// Settings as an earlier CodeSense wrote them: the old status command on every status
+    /// event and the old guard on `PreToolUse`.
+    fn legacy_settings() -> serde_json::Value {
+        let legacy = |verb| {
+            let (_, command) = hook::LEGACY_COMMANDS
+                .iter()
+                .find(|(v, _)| *v == verb)
+                .unwrap();
+            serde_json::json!({ "type": "command", "command": command, "timeout": 5 })
+        };
+        let mut settings = serde_json::json!({ "hooks": {} });
+        for ev in status_hook_events(AgentCli::Claude) {
+            settings["hooks"][ev] =
+                serde_json::json!([{ "matcher": "", "hooks": [legacy(Verb::Notify)] }]);
+        }
+        settings["hooks"]["PreToolUse"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "matcher": codesense_pty_core::notify_hook::GUARD_MATCHER,
+                "hooks": [legacy(Verb::SecretGuard)],
+            }));
+        settings
+    }
+
+    /// The local and remote merges replace what an earlier CodeSense wrote in place: one status
+    /// entry per event, where the old one was, and one guard. A team's own hook that only names
+    /// an old script's file stays.
+    #[test]
+    fn hooks_an_earlier_codesense_wrote_are_replaced_in_place() {
+        let tmp = TempDir::new().unwrap();
+        let team_hook = ".claude/hooks/codesense-notify.sh";
+        for remote in [false, true] {
+            let mut settings = legacy_settings();
+            settings["hooks"]["Stop"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({
+                    "matcher": "",
+                    "hooks": [{ "type": "command", "command": team_hook }],
+                }));
+            let target = if remote {
+                merge_remote_notify_hooks(&mut settings, AgentCli::Claude).unwrap();
+                HookTarget::Posix
+            } else {
+                merge_local_notify_hooks(&mut settings, tmp.path(), AgentCli::Claude).unwrap();
+                HookTarget::local()
+            };
+            let status = hook::command(Verb::Notify, target);
+            for ev in status_hook_events(AgentCli::Claude) {
+                assert_eq!(
+                    entries(&settings, ev, Verb::Notify, target),
+                    [status.entry()],
+                    "remote {remote}: {ev}"
+                );
+                assert_eq!(hook_commands(&settings, ev)[0], status.command, "in place");
+            }
+            assert_eq!(
+                entries(&settings, "PreToolUse", Verb::SecretGuard, target),
+                [hook::command(Verb::SecretGuard, target).entry()],
+                "remote {remote}"
+            );
+            let text = settings.to_string();
+            for (_, legacy) in hook::LEGACY_COMMANDS {
+                let legacy = serde_json::Value::from(*legacy).to_string();
+                assert!(!text.contains(&legacy), "remote {remote}: {text}");
+            }
+            assert_eq!(
+                hook_commands(&settings, "Stop")
+                    .iter()
+                    .filter(|c| *c == team_hook)
+                    .count(),
+                1,
+                "the team's own hook stays"
+            );
         }
     }
 
