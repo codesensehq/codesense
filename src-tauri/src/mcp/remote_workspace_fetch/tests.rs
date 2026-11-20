@@ -642,7 +642,9 @@ fn a_story_or_workspace_id_resolves_to_its_machine_and_handle() {
         ..Default::default()
     })
     .unwrap_err()
-    .contains("this Mac"));
+    .contains(machine_wording::machine_noun_lower(
+        machine_wording::RUNNING_OS
+    )));
     assert!(by(RemoteWorkspaceFetchParams {
         story_id: Some("SW-3".into()),
         ..Default::default()
