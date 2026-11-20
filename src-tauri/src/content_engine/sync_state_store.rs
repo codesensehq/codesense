@@ -1433,21 +1433,20 @@ fn remote_guard_path(path: &Path) -> PathBuf {
     append_suffix(path, ".remote-effects")
 }
 fn read_remote_guard(path: &Path) -> Result<Option<String>> {
+    use codesense_platform::fs::{is_owned_by_current_user, link_count, open_nofollow_nonblocking};
     use std::io::Read;
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-    let file = match std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(remote_guard_path(path))
-    {
+    let file = match open_nofollow_nonblocking(
+        std::fs::OpenOptions::new().read(true),
+        &remote_guard_path(path),
+    ) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
     let meta = file.metadata()?;
     if !meta.is_file()
-        || meta.nlink() != 1
-        || meta.uid() != unsafe { libc::geteuid() }
+        || link_count(&file)? != 1
+        || !is_owned_by_current_user(&file)?
         || meta.len() != 36
     {
         return Err(SyncStateStoreError::Data(
@@ -1490,7 +1489,6 @@ fn validate_remote_guard(path: &Path, conn: &Connection) -> Result<()> {
 }
 fn establish_remote_guard(path: &Path, conn: &Connection) -> Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
     validate_remote_guard(path, conn)?;
     if remote_database_generation(conn)?.is_some() {
         return Ok(());
@@ -1504,19 +1502,13 @@ fn establish_remote_guard(path: &Path, conn: &Connection) -> Result<()> {
     // Before the enclosing FULL transaction can commit and authorize dispatch,
     // persist this marker and its directory entry. An interrupted first setup
     // conservatively refuses recovery; it never invents a new remote UUID.
-    let mut marker = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(remote_guard_path(path))?;
+    let mut marker = codesense_platform::fs::create_new_owner_only(&remote_guard_path(path))?;
     marker.write_all(generation.as_bytes())?;
     marker.sync_all()?;
-    std::fs::File::open(
+    codesense_platform::fs::sync_dir(
         path.parent()
             .ok_or_else(|| SyncStateStoreError::Data("journal path has no parent".into()))?,
-    )?
-    .sync_all()?;
+    )?;
     Ok(())
 }
 
@@ -2513,6 +2505,88 @@ mod tests {
         SyncStateStore::open(&store.path).unwrap();
         assert!(dir.path().join("install.sqlite3.corrupt-0").is_file());
         assert!(!remote_guard_path(&store.path).exists());
+    }
+
+    #[test]
+    fn remote_journal_guard_is_owner_only_in_a_fresh_or_shared_directory() {
+        use crate::test_support::owner_only::{is_owner_only, shared_dir};
+        let (dir, store) = store();
+        remote_guard_fixture(&store, dir.path());
+        assert!(is_owner_only(&remote_guard_path(&store.path)));
+        let shared = dir.path().join("shared");
+        shared_dir(&shared);
+        let store = SyncStateStore::open(shared.join("install.sqlite3")).unwrap();
+        remote_guard_fixture(&store, dir.path());
+        assert!(is_owner_only(&remote_guard_path(&store.path)));
+    }
+
+    /// The store and its guard, unchanged, and nothing quarantined.
+    fn assert_remote_state_kept(store: &SyncStateStore, database: &[u8], guard: &[u8]) {
+        assert_eq!(std::fs::read(&store.path).unwrap(), database);
+        assert_eq!(
+            std::fs::read(remote_guard_path(&store.path)).unwrap(),
+            guard
+        );
+        assert!(!append_suffix(&store.path, ".corrupt-0").exists());
+    }
+
+    #[test]
+    fn remote_journal_guard_with_a_second_link_is_refused_and_state_kept() {
+        let (dir, store) = store();
+        let (context, repo, identity, _) = remote_guard_fixture(&store, dir.path());
+        let database = std::fs::read(&store.path).unwrap();
+        let guard = std::fs::read(remote_guard_path(&store.path)).unwrap();
+        let second = dir.path().join("second-link");
+        std::fs::hard_link(remote_guard_path(&store.path), &second).unwrap();
+        assert!(SyncStateStore::open(&store.path).is_err());
+        assert!(store
+            .prepare_destination_effect(&context, &repo, &identity, "selected.md", &json!({}))
+            .is_err());
+        assert_remote_state_kept(&store, &database, &guard);
+        std::fs::remove_file(second).unwrap();
+        SyncStateStore::open(&store.path).unwrap();
+    }
+
+    #[test]
+    fn remote_journal_guard_of_the_wrong_length_is_refused_and_state_kept() {
+        let (dir, store) = store();
+        remote_guard_fixture(&store, dir.path());
+        let database = std::fs::read(&store.path).unwrap();
+        let guard = std::fs::read(remote_guard_path(&store.path)).unwrap();
+        let longer = [guard.as_slice(), b"0".as_slice()].concat();
+        for wrong in [&guard[..35], longer.as_slice()] {
+            std::fs::write(remote_guard_path(&store.path), wrong).unwrap();
+            assert!(SyncStateStore::open(&store.path).is_err());
+            assert_remote_state_kept(&store, &database, wrong);
+        }
+    }
+
+    #[test]
+    fn remote_journal_guard_that_is_a_link_or_a_fifo_is_refused_without_blocking() {
+        use crate::test_support::owner_only::{fifo, file_symlink, without_blocking};
+        let (dir, store) = store();
+        remote_guard_fixture(&store, dir.path());
+        let database = std::fs::read(&store.path).unwrap();
+        let guard_path = remote_guard_path(&store.path);
+        let elsewhere = tempfile::tempdir().unwrap();
+        let target = elsewhere.path().join("guard");
+        std::fs::rename(&guard_path, &target).unwrap();
+        if file_symlink(&target, &guard_path) {
+            assert!(SyncStateStore::open(&store.path).is_err());
+            assert!(std::fs::symlink_metadata(&guard_path)
+                .unwrap()
+                .file_type()
+                .is_symlink());
+            assert_eq!(std::fs::read(&store.path).unwrap(), database);
+            std::fs::remove_file(&guard_path).unwrap();
+        }
+        if fifo(&guard_path) {
+            let path = store.path.clone();
+            assert!(without_blocking(
+                move || SyncStateStore::open(&path).is_err()
+            ));
+            assert_eq!(std::fs::read(&store.path).unwrap(), database);
+        }
     }
 
     /// SW-XS-9 re-review B: records of paths the repo now tracks are dropped;

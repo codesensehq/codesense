@@ -300,6 +300,39 @@ pub(crate) fn on_osc133_command_end<R: tauri::Runtime>(
 /// drive under a paused clock (and SW-XS-12's guard roots on).
 pub(crate) fn spawn_sync_timers<R: tauri::Runtime>(_app: &tauri::AppHandle<R>) {}
 
+/// The in-process activity root under `home`, which holds the bridge
+/// Claude's hooks run: created owner-only (unix 0700; on Windows a protected
+/// owner-only DACL) when missing, and used as it is when it exists.
+fn in_process_activity_root(home: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    let root = home.join("in-process-activity");
+    match codesense_platform::fs::create_dir_new_owner_only(&root) {
+        Ok(()) => Ok(root),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(root),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod in_process_activity_root_tests {
+    use super::in_process_activity_root;
+    use crate::test_support::owner_only::{is_owner_only, shared_dir};
+
+    #[test]
+    fn the_activity_root_is_owner_only_in_a_shared_home_and_kept_when_it_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        shared_dir(&home);
+        let root = in_process_activity_root(&home).unwrap();
+        assert_eq!(root, home.join("in-process-activity"));
+        assert!(is_owner_only(&root));
+        std::fs::write(root.join("bridge"), b"kept").unwrap();
+        assert_eq!(in_process_activity_root(&home).unwrap(), root);
+        assert_eq!(std::fs::read(root.join("bridge")).unwrap(), b"kept");
+        assert!(is_owner_only(&root));
+        assert!(in_process_activity_root(&dir.path().join("missing")).is_err());
+    }
+}
+
 /// SW-GT-25: periodic audit-log compaction poll. On a slow fixed cadence, run one
 /// [`should_compact`](commands::sprint_run::compaction::should_compact)-gated pass on
 /// a `spawn_blocking` worker so the fold + rewrite of the run store never touch the
@@ -640,10 +673,7 @@ pub fn run() {
                 // boots empty; a tail scan reconciles against the log on open.
                 app.state::<commands::workspace_chat::WorkspaceChatStore>()
                     .install(&home);
-                use std::os::unix::fs::DirBuilderExt;
-                let root = home.join("in-process-activity");
-                let created = std::fs::DirBuilder::new().mode(0o700).create(&root);
-                if created.is_ok() || created.as_ref().is_err_and(|error| error.kind() == std::io::ErrorKind::AlreadyExists) {
+                if let Ok(root) = in_process_activity_root(&home) {
                     // Claude's hooks run the app's bundled bridge, placed in the root.
                     let bridge = commands::deps::resolve_sidecar_source("codesense-bridge").ok();
                     match codesense_pty_core::activity::ActivityService::start(&root, in_process_host.activity(), bridge.as_deref()) {
