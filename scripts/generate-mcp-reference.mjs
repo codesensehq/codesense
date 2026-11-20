@@ -328,6 +328,7 @@ export const META = {
   task_update: { arc: "E", write: true },
   task_list: { arc: "E", write: false },
   task_read: { arc: "E", write: false },
+  charge_session_story: { arc: "E", write: true },
   roles_list: { arc: "F", write: false },
   role_save: { arc: "F", write: true },
   close_terminal_tab: { arc: "C", write: true },
