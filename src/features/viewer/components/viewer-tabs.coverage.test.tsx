@@ -469,6 +469,11 @@ describe("ViewerTabs — PDF export", () => {
     expect(item).toHaveAttribute("title", sentence);
     const note = document.getElementById(item.getAttribute("aria-describedby")!);
     expect(note).toHaveTextContent(sentence);
+    // Inside the item: a menu's children are its items.
+    expect(item).toContainElement(note);
+    expect(
+      screen.getByRole("menu", { name: "Tab actions" }).querySelector(":scope > [role=note]"),
+    ).toBeNull();
     fireEvent.click(item);
     // Inert: the menu stays open and nothing is exported.
     expect(screen.getByRole("menu", { name: "Tab actions" })).toBeInTheDocument();
