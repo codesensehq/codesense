@@ -101,9 +101,11 @@ Install & Restart.
   (`inbox-media`, 256 MiB at most, oldest removed first). On the first start
   after this update, the app deletes GIPHY and KLIPY pictures that earlier
   versions saved in that folder.
-- **Known limit:** copies of GIPHY and KLIPY pictures that the app's built-in
-  browser cached before this update stay in that browser's cache until they age
-  out. Pictures served since then tell it not to store them.
+- **Known limits:** the app's built-in browser keeps its own cache, and two
+  kinds of copy can stay there until they age out. GIPHY and KLIPY pictures it
+  cached before this update stay; GIPHY and KLIPY pictures served since then
+  tell it not to store them. And a picture first shown as ordinary media keeps
+  its browser copy if a GIPHY or KLIPY message later shares the same image.
 - **Turning it off:** each team has its own inbox settings file,
   `config/inbox.yml` inside that team's folder in your context repository
   (`<team>/config/inbox.yml`). Set `remote: off` under `media:` to never
