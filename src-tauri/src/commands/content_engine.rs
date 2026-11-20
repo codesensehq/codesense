@@ -3675,30 +3675,32 @@ fn arm_inbox(settings: &mut serde_json::Value, cli: AgentCli) -> Option<()> {
 /// writes to still drives its status dot, and its inbox hooks. The CLI merges hooks
 /// across settings files, and the command is the same string the folder writer uses,
 /// so a folder that has it never runs it twice. A body of an unexpected shape is left
-/// as is.
+/// as is. `writer` is the target of this host, which runs the launch.
 pub(crate) fn merge_launch_notify_hooks(
     settings: &mut serde_json::Value,
     cwd: &Path,
     cli: AgentCli,
+    writer: HookTarget,
 ) {
     let own: Vec<serde_json::Value> = folder_settings(cwd, cli)
         .into_iter()
         .filter_map(|path| serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok())
         .collect();
-    let target = HookTarget::local();
     let needed: Vec<&str> = status_hook_events(cli)
-        .filter(|ev| !own.iter().any(|c| event_runs_notify_hook(c, ev, target)))
+        .filter(|ev| !own.iter().any(|c| event_runs_notify_hook(c, ev, writer)))
         .collect();
-    let _ = merge_notify_hooks(settings, cli, &needed, target);
+    let _ = merge_notify_hooks(settings, cli, &needed, writer);
     let _ = arm_inbox(settings, cli);
 }
 
 /// Required Agent startup checks existing folder settings, then projects hooks into
-/// the private per-session body. It never repairs or writes the launch folder.
+/// the private per-session body. It never repairs or writes the launch folder. `writer` is
+/// the target of this host, which runs the launch.
 pub(crate) fn merge_required_launch_notify_hooks(
     settings: &mut serde_json::Value,
     cwd: &Path,
     cli: AgentCli,
+    writer: HookTarget,
 ) -> Result<(), String> {
     use crate::agents::content_reader::{ContentReader, FsContentReader};
     use std::io::Read;
@@ -3739,14 +3741,13 @@ pub(crate) fn merge_required_launch_notify_hooks(
         }
         own.push(value);
     }
-    let target = HookTarget::local();
     let needed: Vec<&str> = status_hook_events(cli)
         .filter(|event| {
             !own.iter()
-                .any(|config| event_runs_notify_hook(config, event, target))
+                .any(|config| event_runs_notify_hook(config, event, writer))
         })
         .collect();
-    merge_notify_hooks(settings, cli, &needed, target)
+    merge_notify_hooks(settings, cli, &needed, writer)
         .and_then(|_| arm_inbox(settings, cli))
         .ok_or_else(|| "required notification settings have invalid hooks".to_string())?;
     Ok(())
@@ -3755,24 +3756,25 @@ pub(crate) fn merge_required_launch_notify_hooks(
 /// Add `cli`'s status hook to a managed worktree's own `settings.local.json` body for
 /// every lifecycle event its committed `settings.json` does not already run it on, so an
 /// agent typed by hand there drives its status dot. `None` when the body's `hooks` is not
-/// the shape the CLI expects; otherwise whether anything changed.
+/// the shape the CLI expects; otherwise whether anything changed. `writer` is the target of
+/// this host, whose worktree it is.
 pub(crate) fn merge_local_notify_hooks(
     local: &mut serde_json::Value,
     dir: &Path,
     cli: AgentCli,
+    writer: HookTarget,
 ) -> Option<bool> {
     let committed = project_hooks(cli)
         .and_then(|hooks| std::fs::read_to_string(dir.join(&hooks.committed)).ok())
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
-    let target = HookTarget::local();
     let needed: Vec<&str> = status_hook_events(cli)
         .filter(|ev| {
             !committed
                 .as_ref()
-                .is_some_and(|c| event_runs_notify_hook(c, ev, target))
+                .is_some_and(|c| event_runs_notify_hook(c, ev, writer))
         })
         .collect();
-    merge_notify_hooks(local, cli, &needed, target)
+    merge_notify_hooks(local, cli, &needed, writer)
 }
 
 /// Append the CodeSense hook group to each `events` entry of `settings.hooks`
@@ -3780,10 +3782,11 @@ pub(crate) fn merge_local_notify_hooks(
 /// whether anything changed, or `None` when `hooks` (or an event's value) is
 /// not the shape Claude expects — the caller then leaves the file alone.
 /// Same required notification hooks for a private remote launch file of `cli`. A remote
-/// host is POSIX, whatever OS this one is.
+/// host is POSIX, so the writer's own target (`_writer`) never shapes the file.
 pub(crate) fn merge_remote_notify_hooks(
     settings: &mut serde_json::Value,
     cli: AgentCli,
+    _writer: HookTarget,
 ) -> Result<(), String> {
     let events: Vec<&str> = status_hook_events(cli).collect();
     merge_notify_hooks(settings, cli, &events, HookTarget::Posix)
@@ -9735,7 +9738,7 @@ mod tests {
     fn launch_hooks_wire_every_event_once_for_a_folder_with_no_settings() {
         let tmp = TempDir::new().unwrap();
         let mut v = serde_json::json!({ "permissions": { "allow": ["Read"] } });
-        merge_launch_notify_hooks(&mut v, tmp.path(), AgentCli::Claude);
+        merge_launch_notify_hooks(&mut v, tmp.path(), AgentCli::Claude, HookTarget::local());
         for ev in status_hook_events(AgentCli::Claude) {
             assert_eq!(notify_count(&v, ev), 1, "event {ev} wired once");
         }
@@ -9751,7 +9754,7 @@ mod tests {
             vec![inbox_hook(&v, "SessionStart")]
         );
         // Re-merging is idempotent.
-        merge_launch_notify_hooks(&mut v, tmp.path(), AgentCli::Claude);
+        merge_launch_notify_hooks(&mut v, tmp.path(), AgentCli::Claude, HookTarget::local());
         for ev in status_hook_events(AgentCli::Claude) {
             assert_eq!(notify_count(&v, ev), 1, "event {ev} still once");
         }
@@ -9792,10 +9795,26 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         // A launch's settings carry its CLI's inbox hooks, armed once whatever re-merges.
         let mut launch = serde_json::json!({});
-        merge_launch_notify_hooks(&mut launch, tmp.path(), AgentCli::Claude);
-        merge_launch_notify_hooks(&mut launch, tmp.path(), AgentCli::Claude);
+        merge_launch_notify_hooks(
+            &mut launch,
+            tmp.path(),
+            AgentCli::Claude,
+            HookTarget::local(),
+        );
+        merge_launch_notify_hooks(
+            &mut launch,
+            tmp.path(),
+            AgentCli::Claude,
+            HookTarget::local(),
+        );
         let mut required = serde_json::json!({});
-        merge_required_launch_notify_hooks(&mut required, tmp.path(), AgentCli::Claude).unwrap();
+        merge_required_launch_notify_hooks(
+            &mut required,
+            tmp.path(),
+            AgentCli::Claude,
+            HookTarget::local(),
+        )
+        .unwrap();
         for v in [&launch, &required] {
             for ev in claude_inbox_events() {
                 assert_eq!(
@@ -9807,18 +9826,29 @@ mod tests {
         // The managed worktree's own settings never get it: the waiter runs the helper of
         // the host a launch runs on, which a folder cannot name.
         let mut local = serde_json::json!({});
-        merge_local_notify_hooks(&mut local, tmp.path(), AgentCli::Claude);
+        merge_local_notify_hooks(
+            &mut local,
+            tmp.path(),
+            AgentCli::Claude,
+            HookTarget::local(),
+        );
         assert!(!local.to_string().contains(INBOX_ARG));
         // An agent on a machine gets its inbox hooks from its machine's host.
         let mut remote = serde_json::json!({});
-        merge_remote_notify_hooks(&mut remote, AgentCli::Claude).unwrap();
+        merge_remote_notify_hooks(&mut remote, AgentCli::Claude, HookTarget::local()).unwrap();
         assert!(!remote.to_string().contains(INBOX_ARG));
         // A CLI with no status hooks whose inbox hooks ride its argv (Codex) gets nothing
         // in its settings: its launch's own preparing adds its checks.
         let mut codex = serde_json::json!({});
-        merge_launch_notify_hooks(&mut codex, tmp.path(), AgentCli::Codex);
-        merge_required_launch_notify_hooks(&mut codex, tmp.path(), AgentCli::Codex).unwrap();
-        merge_remote_notify_hooks(&mut codex, AgentCli::Codex).unwrap();
+        merge_launch_notify_hooks(&mut codex, tmp.path(), AgentCli::Codex, HookTarget::local());
+        merge_required_launch_notify_hooks(
+            &mut codex,
+            tmp.path(),
+            AgentCli::Codex,
+            HookTarget::local(),
+        )
+        .unwrap();
+        merge_remote_notify_hooks(&mut codex, AgentCli::Codex, HookTarget::local()).unwrap();
         assert!(
             codex["hooks"].as_object().is_none_or(|hooks| hooks
                 .values()
@@ -9848,7 +9878,7 @@ mod tests {
         )
         .unwrap();
         let mut v = serde_json::json!({});
-        merge_launch_notify_hooks(&mut v, tmp.path(), AgentCli::Claude);
+        merge_launch_notify_hooks(&mut v, tmp.path(), AgentCli::Claude, HookTarget::local());
         assert_eq!(notify_count(&v, "Stop"), 0, "settings.json already runs it");
         assert_eq!(
             notify_count(&v, "PermissionRequest"),
@@ -9927,7 +9957,8 @@ mod tests {
             "permissions": { "deny": ["WebFetch"] }
         });
         for _ in 0..2 {
-            merge_remote_notify_hooks(&mut settings, AgentCli::Claude).unwrap();
+            merge_remote_notify_hooks(&mut settings, AgentCli::Claude, HookTarget::local())
+                .unwrap();
         }
         let groups = settings["hooks"]["PreToolUse"].as_array().unwrap();
         let guard = posix(Verb::SecretGuard).marker;
@@ -9957,7 +9988,7 @@ mod tests {
         assert!(groups.iter().any(|g| g["hooks"][0]["command"].as_str().is_some_and(|c| c.contains(&posix(Verb::Notify).marker))));
         // A CLI with no project hooks gets none.
         let mut codex = serde_json::json!({});
-        merge_remote_notify_hooks(&mut codex, AgentCli::Codex).unwrap();
+        merge_remote_notify_hooks(&mut codex, AgentCli::Codex, HookTarget::local()).unwrap();
         assert_eq!(codex, serde_json::json!({}));
     }
 
@@ -9985,11 +10016,12 @@ mod tests {
     }
 
     /// Each writer writes the form of the host that runs the hooks: a local file gets the
-    /// writer's own target, and a remote file the POSIX form whatever OS writes it (the remote
-    /// merge takes no target from its writer), with no `shell` or `onFailure` key.
+    /// writer's own target, and a remote file the POSIX form whatever OS writes it, with no
+    /// `shell` or `onFailure` key.
     #[test]
     fn notify_hooks_are_written_for_the_host_that_runs_them() {
-        for (local, remote, written) in [
+        let tmp = TempDir::new().unwrap();
+        for (writer, remote, written) in [
             (HookTarget::Posix, false, HookTarget::Posix),
             (HookTarget::Windows, false, HookTarget::Windows),
             (HookTarget::Posix, true, HookTarget::Posix),
@@ -9997,12 +10029,12 @@ mod tests {
         ] {
             let mut settings = serde_json::json!({});
             if remote {
-                merge_remote_notify_hooks(&mut settings, AgentCli::Claude).unwrap();
+                merge_remote_notify_hooks(&mut settings, AgentCli::Claude, writer).unwrap();
             } else {
-                let events: Vec<&str> = status_hook_events(AgentCli::Claude).collect();
-                merge_notify_hooks(&mut settings, AgentCli::Claude, &events, local).unwrap();
+                merge_local_notify_hooks(&mut settings, tmp.path(), AgentCli::Claude, writer)
+                    .unwrap();
             }
-            let row = format!("{local:?} writer, remote {remote}");
+            let row = format!("{writer:?} writer, remote {remote}");
             for ev in status_hook_events(AgentCli::Claude) {
                 assert_eq!(
                     entries(&settings, ev, Verb::Notify, written),
@@ -10088,12 +10120,14 @@ mod tests {
                     "matcher": "",
                     "hooks": [{ "type": "command", "command": team_hook }],
                 }));
+            let writer = HookTarget::local();
             let target = if remote {
-                merge_remote_notify_hooks(&mut settings, AgentCli::Claude).unwrap();
+                merge_remote_notify_hooks(&mut settings, AgentCli::Claude, writer).unwrap();
                 HookTarget::Posix
             } else {
-                merge_local_notify_hooks(&mut settings, tmp.path(), AgentCli::Claude).unwrap();
-                HookTarget::local()
+                merge_local_notify_hooks(&mut settings, tmp.path(), AgentCli::Claude, writer)
+                    .unwrap();
+                writer
             };
             let status = hook::command(Verb::Notify, target);
             for ev in status_hook_events(AgentCli::Claude) {

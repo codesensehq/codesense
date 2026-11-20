@@ -72,7 +72,11 @@ pub(crate) fn prepare(
         match essential.id.as_str() {
             "codesense-bridge" => {}
             "codesense-notify-settings" => {
-                crate::commands::content_engine::merge_remote_notify_hooks(&mut settings, runtime)?
+                crate::commands::content_engine::merge_remote_notify_hooks(
+                    &mut settings,
+                    runtime,
+                    codesense_host_proto::hook::HookTarget::local(),
+                )?
             }
             _ => {
                 return Err(format!(

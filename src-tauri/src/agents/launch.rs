@@ -682,12 +682,14 @@ pub fn apply_generated(
                             &mut content,
                             cwd,
                             launch.runtime,
+                            codesense_host_proto::hook::HookTarget::local(),
                         )?;
                     } else {
                         crate::commands::content_engine::merge_launch_notify_hooks(
                             &mut content,
                             cwd,
                             launch.runtime,
+                            codesense_host_proto::hook::HookTarget::local(),
                         );
                     }
                     if let Some(listed) = &launch.launch.skill_allowlist {

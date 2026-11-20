@@ -711,6 +711,7 @@ pub(crate) mod tests {
             &mut settings,
             root.path(),
             codesense_pty_core::agent_cli::AgentCli::Claude,
+            codesense_host_proto::hook::HookTarget::local(),
         )
         .unwrap();
         assert!(settings.get("hooks").is_some());
@@ -723,6 +724,7 @@ pub(crate) mod tests {
                     &mut serde_json::json!({}),
                     root.path(),
                     codesense_pty_core::agent_cli::AgentCli::Claude,
+                    codesense_host_proto::hook::HookTarget::local(),
                 )
                 .unwrap_err()
                 .contains("notification settings")
@@ -742,6 +744,7 @@ pub(crate) mod tests {
                 &mut serde_json::json!({}),
                 root.path(),
                 codesense_pty_core::agent_cli::AgentCli::Claude,
+                codesense_host_proto::hook::HookTarget::local(),
             )
             .unwrap_err()
             .contains("exceed 1 MiB")
@@ -755,6 +758,7 @@ pub(crate) mod tests {
                     &mut serde_json::json!({}),
                     root.path(),
                     codesense_pty_core::agent_cli::AgentCli::Claude,
+                    codesense_host_proto::hook::HookTarget::local(),
                 )
                 .is_err()
             );

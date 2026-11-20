@@ -245,6 +245,7 @@ fn rewriting_keeps_the_teams_servers_and_replaces_a_stale_bridge_once() {
         &mut launch,
         &dir,
         codesense_pty_core::agent_cli::AgentCli::Claude,
+        codesense_host_proto::hook::HookTarget::local(),
     );
     assert!(!launch.to_string().contains("hook notify"), "{launch}");
     assert!(launch.to_string().contains("--inbox-wait"), "{launch}");

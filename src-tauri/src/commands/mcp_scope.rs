@@ -1166,7 +1166,12 @@ pub(crate) fn profile_launch_settings(cwd: &Path, headless: bool, runtime: Agent
             settings = rules(&settings);
         }
     }
-    crate::commands::content_engine::merge_launch_notify_hooks(&mut settings, cwd, runtime);
+    crate::commands::content_engine::merge_launch_notify_hooks(
+        &mut settings,
+        cwd,
+        runtime,
+        codesense_host_proto::hook::HookTarget::local(),
+    );
     settings
 }
 
