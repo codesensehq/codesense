@@ -5,6 +5,7 @@ import {
   sendToWorkspaceTab,
   GENERIC_AGENT_ROLE,
   type AgentTabLaunch,
+  type AgentTabOpen,
   type OpenWorkspaceTabDeps,
   type SendToWorkspaceTabDeps,
 } from "./workspace-tab-verbs";
@@ -12,7 +13,7 @@ import type { ScopedExecution } from "@/tauri/commands";
 
 describe("@P1 openWorkspaceTab (SW-GW-2)", () => {
   const EXEC = { argv: ["/opt/bin/claude", "--x"], nativeLaunch: "claude" } as ScopedExecution;
-  type Opened = { workspaceId: string; role?: string; sessionId?: string; execution?: unknown };
+  type Opened = { workspaceId: string; role?: string } & Partial<AgentTabOpen>;
 
   function makeDeps(overrides?: Partial<OpenWorkspaceTabDeps>): {
     deps: OpenWorkspaceTabDeps;
@@ -28,7 +29,7 @@ describe("@P1 openWorkspaceTab (SW-GW-2)", () => {
     const deps: OpenWorkspaceTabDeps = {
       workspaceKindOf: () => "generic",
       newSessionId: () => "shell-minted",
-      openTab: (workspaceId, role, launch) => {
+      openTab: async (workspaceId, role, launch) => {
         order.push("open");
         opened.push({ workspaceId, role, ...launch });
         return launch?.sessionId ?? "shell-new";
@@ -67,23 +68,47 @@ describe("@P1 openWorkspaceTab (SW-GW-2)", () => {
         workspaceId: "generic:/x",
         role: GENERIC_AGENT_ROLE,
         sessionId: "shell-minted",
+        environmentBinding: undefined,
         execution: undefined,
       },
     ]);
     expect(launched.map((l) => l.sessionId)).toEqual(["shell-minted"]);
   });
 
-  it("opens the tab with the projection's exec, so the agent is its process", async () => {
+  it("opens the tab with the projection's exec and binding, so the agent is its process", async () => {
     const { deps, opened, launched } = makeDeps({
       prepareAgent: async () => ({
         spec: { agentPath: "/opt/bin/claude" },
         extraArgs: [],
+        environmentBinding: "binding-1",
         execution: EXEC,
       }),
     });
     await openWorkspaceTab({ workspaceId: "generic:/x", agent: true }, deps);
-    expect(opened[0]?.execution).toEqual(EXEC);
+    expect(opened[0]).toMatchObject({ environmentBinding: "binding-1", execution: EXEC });
     expect(launched[0]?.launch.execution).toEqual(EXEC);
+  });
+
+  it("a spawn the host refuses is rolled back and its agent never recorded", async () => {
+    const { deps, launched, closed } = makeDeps({
+      openTab: async () => {
+        throw new Error("not an absolute path to an existing .exe");
+      },
+    });
+    await expect(
+      openWorkspaceTab({ workspaceId: "generic:/x", agent: true }, deps),
+    ).rejects.toThrow(/existing \.exe/);
+    expect(launched).toEqual([]);
+    expect(closed).toEqual([{ workspaceId: "generic:/x", sessionId: "shell-minted" }]);
+  });
+
+  it("a workspace gone after the preparation ends the session it was prepared for", async () => {
+    const { deps, launched, closed } = makeDeps({ openTab: async () => "" });
+    await expect(
+      openWorkspaceTab({ workspaceId: "generic:/x", agent: true }, deps),
+    ).rejects.toThrow(/unavailable: could not open a tab/);
+    expect(launched).toEqual([]);
+    expect(closed).toEqual([{ workspaceId: "generic:/x", sessionId: "shell-minted" }]);
   });
 
   it("rejects a non-generic workspace (never opens a tab)", async () => {

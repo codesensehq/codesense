@@ -463,6 +463,39 @@ describe("openTabInWorkspace (SW-GW-2)", () => {
     expect(wsTabs(TEAM, WID).find((t) => t.sessionId === unnamed)?.name).toMatch(/^Terminal \d+$/);
   });
 
+  it("opens an agent tab under its prepared id, binding and exec, and hands back its spawn", async () => {
+    useViewerStore.setState({
+      workspaces: { [TEAM]: [{ id: WID, kind: "generic", cwd: "/proj", status: "ready" }] },
+    });
+    const argv = ["C:\\npm\\claude.exe", "--dangerously-skip-permissions"];
+    const { sessionId, spawned } = useViewerStore.getState().startTabInWorkspace(TEAM, WID, {
+      role: "generic-agent",
+      sessionId: "shell-prepared",
+      environmentBinding: "binding-1",
+      execution: { argv, nativeLaunch: "claude" },
+    });
+    await spawned;
+    expect(sessionId).toBe("shell-prepared");
+    const request = terminalHost().opened.find((r) => r.session === "shell-prepared");
+    expect(request?.role).toBe("generic-agent");
+    expect(request?.spawn).toMatchObject({
+      kind: "cold",
+      commandArgv: argv,
+      nativeLaunch: "claude",
+      environmentBinding: "binding-1",
+    });
+  });
+
+  it("a start in a workspace that is not open opens nothing and has nothing to wait on", async () => {
+    useViewerStore.setState({ workspaces: { [TEAM]: [] } });
+    const { sessionId, spawned } = useViewerStore
+      .getState()
+      .startTabInWorkspace(TEAM, "generic:/gone", { sessionId: "shell-prepared" });
+    await spawned;
+    expect(sessionId).toBe("");
+    expect(terminalHost().opened).toHaveLength(0);
+  });
+
   it("returns '' and mints NO tab when the workspace is not open (no orphan)", () => {
     useViewerStore.setState({ workspaces: { [TEAM]: [] } });
     const sessionId = useViewerStore.getState().openTabInWorkspace(TEAM, "generic:/gone");
@@ -487,7 +520,7 @@ describe("openTabInWorkspace (SW-GW-2)", () => {
 describe("workspace-tab-verbs real deps over the store (SW-GW-2 review)", () => {
   const OTHER = "other-org:default";
 
-  it("F4: openTab resolves a generic workspace opened in a NON-active team", () => {
+  it("F4: openTab resolves a generic workspace opened in a NON-active team", async () => {
     // The workspace lives under OTHER, not TEAM — global resolution must still find it.
     useViewerStore.setState({
       workspaces: {
@@ -496,7 +529,7 @@ describe("workspace-tab-verbs real deps over the store (SW-GW-2 review)", () => 
     });
     const deps = makeRealOpenWorkspaceTabDeps();
     expect(deps.workspaceKindOf("generic:/proj")).toBe("generic");
-    const sessionId = deps.openTab("generic:/proj");
+    const sessionId = await deps.openTab("generic:/proj");
     expect(sessionId).toMatch(/^shell-/);
     expect(wsTabs(OTHER, "generic:/proj").some((t) => t.sessionId === sessionId)).toBe(true);
   });
@@ -541,7 +574,7 @@ describe("workspace-tab-verbs real deps over the store (SW-GW-2 review)", () => 
     expect(makeRealOpenWorkspaceTabDeps().workspaceKindOf("generic:/gone")).toBeNull();
   });
 
-  it("M1: when two teams hold the SAME generic workspaceId, openTab prefers the ACTIVE team", () => {
+  it("M1: when two teams hold the SAME generic workspaceId, openTab prefers the ACTIVE team", async () => {
     // A generic id (`generic:<path>`) isn't team-namespaced — resolve to the
     // operator's active team, not whichever was inserted first.
     useOrgStore.setState({ activeOrgSlug: "test-org", activeTeamName: "default" }); // → TEAM
@@ -551,7 +584,7 @@ describe("workspace-tab-verbs real deps over the store (SW-GW-2 review)", () => 
         [TEAM]: [{ id: "generic:/dup", kind: "generic", cwd: "/dup", status: "ready" }],
       },
     });
-    const sessionId = makeRealOpenWorkspaceTabDeps().openTab("generic:/dup");
+    const sessionId = await makeRealOpenWorkspaceTabDeps().openTab("generic:/dup");
     expect(sessionId).toMatch(/^shell-/);
     // The tab landed under the ACTIVE team (TEAM), not OTHER.
     expect(wsTabs(TEAM, "generic:/dup")).toHaveLength(1);
