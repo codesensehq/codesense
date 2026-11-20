@@ -1,0 +1,61 @@
+{
+  "data": [
+    {
+      "type": "gif",
+      "id": "Second2",
+      "title": "second",
+      "rating": "pg",
+      "images": {
+        "fixed_height": {
+          "url": "https://media0.giphy.com/media/Second2/200.gif",
+          "width": "356",
+          "height": "200",
+          "size": "300000"
+        }
+      }
+    },
+    {
+      "type": "gif",
+      "id": "Unasked9",
+      "title": "not asked for",
+      "rating": "g",
+      "images": {
+        "fixed_height": {
+          "url": "https://media0.giphy.com/media/Unasked9/200.gif",
+          "width": "356",
+          "height": "200",
+          "size": "300000"
+        }
+      }
+    },
+    {
+      "type": "gif",
+      "id": "First_1",
+      "title": "first",
+      "rating": "g",
+      "images": {
+        "fixed_height": {
+          "url": "https://media0.giphy.com/media/First_1/200.gif",
+          "width": "356",
+          "height": "200",
+          "size": "300000"
+        }
+      }
+    },
+    {
+      "type": "gif",
+      "id": "Above-3",
+      "title": "above the ceiling",
+      "rating": "pg-13",
+      "images": {
+        "fixed_height": {
+          "url": "https://media0.giphy.com/media/Above-3/200.gif",
+          "width": "356",
+          "height": "200",
+          "size": "300000"
+        }
+      }
+    }
+  ],
+  "meta": { "status": 200, "msg": "OK", "response_id": "r2" }
+}

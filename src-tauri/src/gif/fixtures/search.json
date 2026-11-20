@@ -1,0 +1,211 @@
+{
+  "data": [
+    {
+      "type": "gif",
+      "id": "ShipIt01",
+      "title": "Ship It GIF by Example Studio",
+      "rating": "g",
+      "images": {
+        "original": {
+          "url": "https://media1.giphy.com/media/ShipIt01/giphy.gif",
+          "width": "600",
+          "height": "400",
+          "size": "3000000",
+          "webp": "https://media1.giphy.com/media/ShipIt01/giphy.webp",
+          "webp_size": "900000",
+          "mp4": "https://media1.giphy.com/media/ShipIt01/giphy.mp4",
+          "mp4_size": "200000"
+        },
+        "downsized_medium": {
+          "url": "https://media1.giphy.com/media/ShipIt01/giphy-downsized-medium.gif",
+          "width": "500",
+          "height": "333",
+          "size": "1500000"
+        },
+        "fixed_width": {
+          "url": "https://media1.giphy.com/media/ShipIt01/200w.gif",
+          "width": "200",
+          "height": "133",
+          "size": "400000",
+          "webp": "https://media1.giphy.com/media/ShipIt01/200w.webp",
+          "webp_size": "150000"
+        },
+        "480w_still": {
+          "url": "https://media1.giphy.com/media/ShipIt01/480w_s.jpg",
+          "width": "480",
+          "height": "320",
+          "size": "30000"
+        },
+        "original_still": {
+          "url": "https://media1.giphy.com/media/ShipIt01/giphy_s.gif",
+          "width": "600",
+          "height": "400",
+          "size": "80000"
+        },
+        "fixed_width_still": {
+          "url": "https://media1.giphy.com/media/ShipIt01/200w_s.gif",
+          "width": "200",
+          "height": "133",
+          "size": "12000"
+        },
+        "looping": {
+          "mp4": "https://media1.giphy.com/media/ShipIt01/giphy-loop.mp4",
+          "mp4_size": "100000"
+        }
+      },
+      "analytics": {
+        "onload": { "url": "https://giphy-analytics.giphy.com/v2/pingback_simple?analytics_response_payload=a1&action_type=SEEN" },
+        "onclick": { "url": "https://giphy-analytics.giphy.com/v2/pingback_simple?analytics_response_payload=a1&action_type=CLICK" },
+        "onsent": { "url": "https://giphy-analytics.giphy.com/v2/pingback_simple?analytics_response_payload=a1&action_type=SENT" }
+      }
+    },
+    {
+      "type": "gif",
+      "id": "Small-02",
+      "title": "small",
+      "rating": "pg",
+      "images": {
+        "fixed_width": {
+          "url": "https://media2.giphy.com/media/Small-02/200w.gif",
+          "width": "200",
+          "height": "150",
+          "size": "100000"
+        },
+        "fixed_height": {
+          "url": "https://media2.giphy.com/media/Small-02/200.gif",
+          "width": "300",
+          "height": "200",
+          "size": "250000"
+        },
+        "preview_gif": {
+          "url": "https://media2.giphy.com/media/Small-02/giphy-preview.gif",
+          "width": "100",
+          "height": "75",
+          "size": "40000"
+        },
+        "preview": {
+          "mp4": "https://media2.giphy.com/media/Small-02/giphy-preview.mp4",
+          "mp4_size": "20000",
+          "width": "150",
+          "height": "112"
+        },
+        "downsized_still": {
+          "url": "https://media2.giphy.com/media/Small-02/giphy-downsized_s.mp4",
+          "width": "300",
+          "height": "200",
+          "size": "10000"
+        }
+      },
+      "analytics": {
+        "onsent": { "url": "https://giphy-analytics.giphy.com/v2/pingback_simple?analytics_response_payload=b2&action_type=SENT" }
+      }
+    },
+    {
+      "type": "gif",
+      "id": "TooBig03",
+      "title": "too big",
+      "rating": "g",
+      "images": {
+        "original": {
+          "url": "https://media3.giphy.com/media/TooBig03/giphy.gif",
+          "width": "5000",
+          "height": "3000",
+          "size": "7000000"
+        },
+        "downsized_large": {
+          "url": "https://media3.giphy.com/media/TooBig03/giphy-downsized-large.gif",
+          "width": "1000",
+          "height": "600",
+          "size": "9500000"
+        },
+        "fixed_width": {
+          "url": "https://media3.giphy.com/media/TooBig03/200w.gif",
+          "width": "200",
+          "height": "120"
+        },
+        "fixed_height": {
+          "url": "https://media3.giphy.com/media/TooBig03/200.gif",
+          "size": "300000"
+        }
+      }
+    },
+    {
+      "type": "gif",
+      "id": "OffHost04",
+      "title": "off host",
+      "rating": "g",
+      "images": {
+        "original": {
+          "url": "https://media.example.net/media/OffHost04/giphy.gif",
+          "width": "480",
+          "height": "270",
+          "size": "500000"
+        }
+      }
+    },
+    {
+      "type": "gif",
+      "id": "Plain05",
+      "title": "plain http",
+      "rating": "g",
+      "images": {
+        "original": {
+          "url": "http://media4.giphy.com/media/Plain05/giphy.gif",
+          "width": "480",
+          "height": "270",
+          "size": "500000"
+        }
+      }
+    },
+    {
+      "type": "gif",
+      "id": "StillHost06",
+      "title": "still off host",
+      "rating": "g",
+      "images": {
+        "original": {
+          "url": "https://media4.giphy.com/media/StillHost06/giphy.gif",
+          "width": "480",
+          "height": "270",
+          "size": "500000"
+        },
+        "fixed_width_still": {
+          "url": "https://giphy.com.example.net/media/StillHost06/200w_s.gif",
+          "width": "200",
+          "height": "113",
+          "size": "9000"
+        }
+      }
+    },
+    {
+      "type": "gif",
+      "id": "Rated07",
+      "title": "above the ceiling",
+      "rating": "r",
+      "images": {
+        "original": {
+          "url": "https://media4.giphy.com/media/Rated07/giphy.gif",
+          "width": "480",
+          "height": "270",
+          "size": "500000"
+        }
+      }
+    },
+    {
+      "type": "gif",
+      "id": "Title08",
+      "title": "  Nailed\u0007 it\u202e!\u2066 \n\t  ",
+      "rating": "y",
+      "images": {
+        "original": {
+          "url": "https://i.giphy.com/media/Title08/giphy.gif",
+          "width": "480",
+          "height": "360",
+          "size": "700000"
+        }
+      }
+    }
+  ],
+  "pagination": { "total_count": 8, "count": 8, "offset": 0 },
+  "meta": { "status": 200, "msg": "OK", "response_id": "r1" }
+}
