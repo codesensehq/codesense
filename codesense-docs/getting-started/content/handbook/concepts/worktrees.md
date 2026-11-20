@@ -4,7 +4,9 @@ _From a story to its worktree and branch: setup scripts, hydration, discovery an
 
 A **worktree** is a second (or third, or tenth) checkout of a repo, each on
 its own branch, sharing one `.git`. CodeSense gives every story its own, so
-agents working on different stories never step on each other's files.
+agents working on different stories never step on each other's files. By
+default every session of a story shares the story's worktree; a named session
+can have one of its own (see [Seat worktrees](#seat-worktrees)).
 
 ## From a story to a worktree
 
@@ -104,6 +106,41 @@ Context doesn't sync into an open worktree on its own: an agent there brings
 in newer context with `hydrate_worktree`, and sends edits back with reverse
 sync (see [Reverse sync](agent-context.md#reverse-sync), in
 Beta).
+
+## Seat worktrees
+
+By default a story's own session and its named sessions (`<story>#<name>`) all
+work in the story's worktree. An agent that launches a named session with
+`open_workspace` can give it a worktree of its own with `seatWorktree`:
+
+```json
+{"target": "story", "story_id": "LL-214", "name": "dev", "seatWorktree": {"kind": "branch"}}
+{"target": "story", "story_id": "LL-214", "name": "review", "seatWorktree": {"kind": "commit", "commit": "3f2c1a9"}}
+```
+
+| Kind | What the session gets |
+|---|---|
+| `branch` | A writable worktree on its own branch, `<story branch>-seat-<name>` (`feat/LL-214-seat-dev`), cut from the tip of the story's branch. The repo's setup commands run there. |
+| `commit` | A detached checkout pinned to that commit (a sha or a ref). No setup runs, so nothing is installed: it suits a reviewer that only reads the code. |
+
+The folder is the one `worktree_dir` gives a branch named
+`<story branch>-seat-<name>`, beside the story's own: `../api-wt/feat-LL-214-seat-dev`
+for the example. The tab opens in the story's workspace with the other sessions,
+under the same `<story>#<name>` handle. The seat worktree is linked to the story
+like the story's own worktree: context arrives when its agent launches,
+`hydrate_story` and reverse sync work there, and its sessions count toward the
+story.
+
+- Launching the same name again reuses its seat worktree. A `commit` seat
+  launched with another commit moves to it when it has no uncommitted changes;
+  with changes the launch is refused and the worktree is left as it was.
+- A seat launch never changes the story's `branch` field.
+- When the name is already running, nothing is created: the running session
+  keeps its folder, and the result says so in a warning.
+- A seat worktree needs a `name`, runs on This Mac only, and can't be asked for
+  from a dashboard page yet. Without `seatWorktree` a named session shares the
+  story's worktree, as always.
+- Seat worktrees stay until you remove them, like any worktree (see below).
 
 ## Clean-up
 
