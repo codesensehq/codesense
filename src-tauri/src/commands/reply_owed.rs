@@ -30,12 +30,12 @@ struct Owed {
 /// Each session's unanswered messages from the person, by tab session id.
 #[derive(Debug, Default)]
 pub(crate) struct RepliesOwed {
-    sessions: Mutex<HashMap<String, Owed>>,
+    tabs: Mutex<HashMap<String, Owed>>,
 }
 
 impl RepliesOwed {
-    fn sessions(&self) -> MutexGuard<'_, HashMap<String, Owed>> {
-        self.sessions.lock().unwrap_or_else(|e| e.into_inner())
+    fn tabs(&self) -> MutexGuard<'_, HashMap<String, Owed>> {
+        self.tabs.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// `tab_session`, running as `handle`, took `messages` (`(id, from)`): the person's are
@@ -54,8 +54,8 @@ impl RepliesOwed {
         if person.peek().is_none() {
             return;
         }
-        let mut sessions = self.sessions();
-        let owed = sessions.entry(tab_session.to_string()).or_default();
+        let mut tabs = self.tabs();
+        let owed = tabs.entry(tab_session.to_string()).or_default();
         if owed.handle != handle {
             owed.handle = handle.to_string();
             owed.messages.clear();
@@ -74,12 +74,12 @@ impl RepliesOwed {
         if handle == HUMAN {
             return;
         }
-        self.sessions().retain(|_, owed| owed.handle != handle);
+        self.tabs().retain(|_, owed| owed.handle != handle);
     }
 
     /// Whether `tab_session` owes the person a message the reminder hasn't named.
     pub(crate) fn owes(&self, tab_session: &str) -> bool {
-        self.sessions()
+        self.tabs()
             .get(tab_session)
             .is_some_and(|owed| owed.messages.iter().any(|(_, reminded)| !reminded))
     }
@@ -87,15 +87,15 @@ impl RepliesOwed {
     /// The oldest message `tab_session` owes the person that the reminder hasn't named yet,
     /// now marked named, so the next `Stop` lets the turn end.
     pub(crate) fn remind(&self, tab_session: &str) -> Option<i64> {
-        let mut sessions = self.sessions();
-        let owed = sessions.get_mut(tab_session)?;
+        let mut tabs = self.tabs();
+        let owed = tabs.get_mut(tab_session)?;
         let (id, reminded) = owed.messages.iter_mut().find(|(_, reminded)| !*reminded)?;
         *reminded = true;
         let id = *id;
         // A session with nothing left to name keeps no entry: a turn that ends without an answer
         // is named once, then forgotten.
         if owed.messages.iter().all(|(_, reminded)| *reminded) {
-            sessions.remove(tab_session);
+            tabs.remove(tab_session);
         }
         Some(id)
     }
@@ -120,7 +120,7 @@ mod tests {
         assert!(!owed.owes("tab-1"));
         assert_eq!(owed.remind("tab-1"), None, "never twice");
         assert!(
-            owed.sessions().is_empty(),
+            owed.tabs().is_empty(),
             "a session with nothing to name is dropped"
         );
     }
