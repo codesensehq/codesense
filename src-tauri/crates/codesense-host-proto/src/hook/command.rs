@@ -108,10 +108,11 @@ impl HookCommand {
 ///
 /// - **POSIX:** `[ -x … ] && … || true`; `[` reads no stdin, so the hook's JSON reaches the
 ///   bridge.
-/// - **Windows:** a PowerShell command (Claude's `shell: "powershell"`). The path is
-///   double-quoted, since PowerShell never expands `$env:` inside single quotes, and the bridge
-///   is run with the hook's own stdin, never a PowerShell string, so the payload's bytes reach
-///   it unchanged. `onFailure: "continue"`: a hook that fails on Windows would otherwise block
+/// - **Windows:** a PowerShell command (Claude's `shell: "powershell"`). It checks the variable
+///   is set first: unset, the path would be `\codesense-bridge.exe` at the drive's root. The
+///   path is double-quoted, since PowerShell never expands `$env:` inside single quotes, and
+///   the bridge is run with the hook's own stdin, never a PowerShell string, so the payload's
+///   bytes reach it unchanged. `onFailure: "continue"`: a hook that fails on Windows would otherwise block
 ///   the tool call. The guard's deny is its printed decision, not a failure.
 pub fn command(verb: Verb, target: HookTarget) -> HookCommand {
     let verb = verb.as_str();
@@ -130,7 +131,7 @@ pub fn command(verb: Verb, target: HookTarget) -> HookCommand {
             let path = format!("\"$env:{HOST_ENV}\\{bridge}\"");
             HookCommand {
                 command: format!(
-                    "if (Test-Path -LiteralPath {path}) {{ & {path} hook {verb} }}; exit 0"
+                    "if ($env:{HOST_ENV} -and (Test-Path -LiteralPath {path})) {{ & {path} hook {verb} }}; exit 0"
                 ),
                 shell: Some("powershell"),
                 on_failure: Some("continue"),
@@ -186,14 +187,14 @@ mod tests {
             (
                 Verb::Notify,
                 HookTarget::Windows,
-                r#"if (Test-Path -LiteralPath "$env:CODESENSE_ACTIVITY_HOST\codesense-bridge.exe") { & "$env:CODESENSE_ACTIVITY_HOST\codesense-bridge.exe" hook notify }; exit 0"#,
+                r#"if ($env:CODESENSE_ACTIVITY_HOST -and (Test-Path -LiteralPath "$env:CODESENSE_ACTIVITY_HOST\codesense-bridge.exe")) { & "$env:CODESENSE_ACTIVITY_HOST\codesense-bridge.exe" hook notify }; exit 0"#,
                 Some("powershell"),
                 Some("continue"),
             ),
             (
                 Verb::SecretGuard,
                 HookTarget::Windows,
-                r#"if (Test-Path -LiteralPath "$env:CODESENSE_ACTIVITY_HOST\codesense-bridge.exe") { & "$env:CODESENSE_ACTIVITY_HOST\codesense-bridge.exe" hook secret-guard }; exit 0"#,
+                r#"if ($env:CODESENSE_ACTIVITY_HOST -and (Test-Path -LiteralPath "$env:CODESENSE_ACTIVITY_HOST\codesense-bridge.exe")) { & "$env:CODESENSE_ACTIVITY_HOST\codesense-bridge.exe" hook secret-guard }; exit 0"#,
                 Some("powershell"),
                 Some("continue"),
             ),

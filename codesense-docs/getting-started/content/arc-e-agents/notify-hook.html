@@ -96,7 +96,8 @@
           <code>[ -x "$CODESENSE_ACTIVITY_HOST/codesense-bridge" ] &amp;&amp; "$CODESENSE_ACTIVITY_HOST/codesense-bridge" hook notify || true</code>.
           On Windows it is a PowerShell command
           (<code>"shell": "powershell"</code>) that runs
-          <code>codesense-bridge.exe</code>, with
+          <code>codesense-bridge.exe</code> when
+          <code>$env:CODESENSE_ACTIVITY_HOST</code> is set and holds it, with
           <code>"onFailure": "continue"</code> so a failed hook never blocks a
           tool call; it needs Claude Code 2.1.295 or newer. Either way, a tab
           whose root has no bridge runs a hook that does nothing. Settings an
