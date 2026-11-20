@@ -255,7 +255,8 @@ async fn fetch_transport_omits_private_headers_rejects_redirect_and_caps_stream(
                 .unwrap(),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .bytes;
         assert_eq!(inspect(&bytes).unwrap(), ("image/gif", 2, 3));
     }
     Mock::given(path("/same-host"))
@@ -417,7 +418,8 @@ fn evicted_remote_images_offer_retry_and_local_images_report_unavailable() {
     remote.source_url = Some("https://i.giphy.com/cat.gif".into());
     std::fs::remove_file(dir.path().join(local.sha256.as_ref().unwrap())).unwrap();
     let mut images = vec![local, remote];
-    cached_presence(dir.path(), &mut images);
+    let state = MediaState::for_test(dir.path().to_path_buf(), Arc::new(Unreachable));
+    state.present(&Config::default(), &mut images);
     assert_eq!(images[0].state, "failed");
     assert_eq!(images[0].reason.as_deref(), Some("cache"));
     assert!(!images[0].retryable);
@@ -522,4 +524,445 @@ fn read_cached_refuses_a_directory_a_symlink_or_an_oversized_file() {
         );
     }
     assert!(read_cached(dir.path(), &sha('c')).is_ok());
+}
+
+// Provider media is held in memory only.
+
+const GIF: &[u8] = b"GIF89a\x02\x00\x03\x00";
+
+/// A distinct GIF the inspector accepts.
+fn gif(n: u8) -> Vec<u8> {
+    let mut bytes = GIF.to_vec();
+    bytes.push(n);
+    bytes
+}
+
+fn sha_of(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn remote(url: &str, own: bool) -> Attachment {
+    Attachment::remote(url, "cat", &Config::default(), own).unwrap()
+}
+
+fn owner(team: &str, message_id: i64) -> index::Owner {
+    index::Owner {
+        org: "acme".into(),
+        team: team.into(),
+        message_id,
+    }
+}
+
+/// The files in the disk cache.
+fn files(dir: &Path) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn state_over(fetch: &Arc<FakeFetch>) -> (tempfile::TempDir, Arc<MediaState>) {
+    let dir = tempfile::tempdir().unwrap();
+    let state = MediaState::for_test(dir.path().join("inbox-media"), fetch.clone());
+    (dir, state)
+}
+
+use std::sync::Arc;
+
+/// A fetcher for tests that must not reach the network.
+struct Unreachable;
+impl Fetch for Unreachable {
+    fn get<'a>(
+        &'a self,
+        _url: &'a str,
+        _config: &'a Config,
+    ) -> futures_util::future::BoxFuture<'a, Result<Downloaded, Failure>> {
+        Box::pin(async { Err(failure("http")) })
+    }
+}
+
+#[test]
+fn provider_host_lists_are_fixed_and_their_union_is_provider_hosts() {
+    let union: Vec<_> = GIPHY_HOSTS.iter().chain(KLIPY_HOSTS).copied().collect();
+    assert_eq!(PROVIDER_HOSTS, union.as_slice());
+    for (host, provider) in [
+        ("giphy.com", MediaProvider::Giphy),
+        ("media2.giphy.com", MediaProvider::Giphy),
+        ("I.GIPHY.COM.", MediaProvider::Giphy),
+        ("klipy.com", MediaProvider::Klipy),
+        ("static.klipy.com", MediaProvider::Klipy),
+        ("giphy.com.evil.test", MediaProvider::None),
+        ("notgiphy.com", MediaProvider::None),
+        ("example.com", MediaProvider::None),
+    ] {
+        assert_eq!(MediaProvider::of_host(host), provider, "{host}");
+    }
+}
+
+#[test]
+fn the_default_allowlist_is_every_giphy_and_klipy_subdomain() {
+    let config = Config::default();
+    assert_eq!(config.hosts, vec!["*.giphy.com", "*.klipy.com"]);
+    for host in ["i.giphy.com", "static.klipy.com", "media.klipy.com"] {
+        assert!(config.allows(host), "{host}");
+    }
+}
+
+#[test]
+fn new_attachment_fields_are_optional_and_old_messages_read_unchanged() {
+    let old = r#"{"kind":"image","sha256":"ab","alt":"cat","sourceHost":"i.giphy.com","state":"cached","retryable":false}"#;
+    let a: Attachment = serde_json::from_str(old).unwrap();
+    assert_eq!(a.media_provider, None);
+    assert!(!a.own_sender);
+    assert!(
+        a.is_provider_media(),
+        "an old provider-host attachment counts as provider media"
+    );
+    assert_eq!(serde_json::to_string(&a).unwrap(), old);
+    let mut new = a.clone();
+    new.media_provider = Some(MediaProvider::None);
+    new.own_sender = true;
+    let json = serde_json::to_string(&new).unwrap();
+    assert!(json.contains(r#""mediaProvider":"none""#) && json.contains(r#""ownSender":true"#));
+    assert!(
+        !new.is_provider_media(),
+        "`none` wins over a provider source host"
+    );
+    assert_eq!(serde_json::from_str::<Attachment>(&json).unwrap(), new);
+}
+
+#[tokio::test]
+async fn provider_bytes_from_a_send_or_a_tap_never_reach_disk() {
+    let fetch = Arc::new(FakeFetch::default());
+    let url = "https://i.giphy.com/cat.gif";
+    fetch.serve(url, &gif(1), url, None);
+    let (_dir, state) = state_over(&fetch);
+    // The send-time fetch (automatic) and a tap-to-load (consent) take the same decision.
+    for automatic in [true, false] {
+        let a = state
+            .fetch(&Config::default(), remote(url, true), automatic)
+            .await
+            .unwrap();
+        assert_eq!(a.state, "cached");
+        assert_eq!(a.media_provider, Some(MediaProvider::Giphy));
+        assert!(files(state.dir()).is_empty(), "nothing under the cache dir");
+        assert!(state
+            .memory
+            .contains(a.sha256.as_deref().unwrap(), std::time::Instant::now()));
+    }
+}
+
+/// Fetches through the real HTTP stack, with the named hosts pointed at a local server.
+struct Local(reqwest::Client);
+impl Fetch for Local {
+    fn get<'a>(
+        &'a self,
+        url: &'a str,
+        _config: &'a Config,
+    ) -> futures_util::future::BoxFuture<'a, Result<Downloaded, Failure>> {
+        Box::pin(send(&self.0, url::Url::parse(url).unwrap()))
+    }
+}
+
+#[tokio::test]
+async fn the_final_host_after_redirects_decides_storage() {
+    use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
+    let server = MockServer::start().await;
+    let port = server.address().port();
+    let redirect = |to: String| ResponseTemplate::new(302).insert_header("location", to);
+    Mock::given(path("/to-giphy"))
+        .respond_with(redirect(format!("http://i.giphy.com:{port}/gif-a")))
+        .mount(&server)
+        .await;
+    Mock::given(path("/gif-a"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(gif(1)))
+        .mount(&server)
+        .await;
+    Mock::given(path("/to-plain"))
+        .respond_with(redirect(format!("http://example.test:{port}/gif-b")))
+        .mount(&server)
+        .await;
+    Mock::given(path("/gif-b"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(gif(2)))
+        .mount(&server)
+        .await;
+    // The HTTP fixture substitutes only the redirect admission and DNS; production still
+    // enforces HTTPS, the allowlist and public addresses.
+    let client = client_builder(&Config::default())
+        .redirect(reqwest::redirect::Policy::limited(3))
+        .resolve("i.giphy.com", *server.address())
+        .resolve("example.test", *server.address())
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let state = MediaState::for_test(dir.path().join("inbox-media"), Arc::new(Local(client)));
+    let at = |url: String| {
+        let mut a = Attachment::empty("cat");
+        a.source_host = url::Url::parse(&url).unwrap().host_str().map(String::from);
+        a.source_url = Some(url);
+        a.own_sender = true;
+        a
+    };
+    let config = Config::default();
+
+    let to_giphy = state
+        .fetch(
+            &config,
+            at(format!("http://example.test:{port}/to-giphy")),
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(to_giphy.state, "cached");
+    assert_eq!(to_giphy.media_provider, Some(MediaProvider::Giphy));
+    assert!(
+        files(state.dir()).is_empty(),
+        "a redirect to GIPHY is held in memory"
+    );
+
+    let to_plain = state
+        .fetch(
+            &config,
+            at(format!("http://i.giphy.com:{port}/to-plain")),
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(to_plain.state, "cached");
+    assert_eq!(to_plain.media_provider, Some(MediaProvider::None));
+    assert_eq!(files(state.dir()), vec![to_plain.sha256.clone().unwrap()]);
+}
+
+fn cached_ref(url: &str, own: bool, sha: &str, provider: MediaProvider) -> Attachment {
+    let mut a = remote(url, own);
+    a.sha256 = Some(sha.into());
+    a.state = "cached".into();
+    a.reason = None;
+    a.media_provider = Some(provider);
+    a
+}
+
+#[tokio::test]
+async fn after_a_restart_only_an_own_sender_url_is_fetched_automatically() {
+    let fetch = Arc::new(FakeFetch::default());
+    let (own_url, remote_url) = (
+        "https://media.giphy.com/own.gif",
+        "https://i.giphy.com/theirs.gif",
+    );
+    let bytes = gif(3);
+    fetch.serve(own_url, &bytes, own_url, None);
+    fetch.serve(remote_url, &bytes, remote_url, None);
+    let sha = sha_of(&bytes);
+    // A new state: memory cleared and the sender's tab gone; only the saved `ownSender`.
+    let (_dir, state) = state_over(&fetch);
+    let own = cached_ref(own_url, true, &sha, MediaProvider::Giphy);
+    let theirs = cached_ref(remote_url, false, &sha, MediaProvider::Giphy);
+    state.note(&owner("a", 1), 1, std::slice::from_ref(&own));
+    state.note(&owner("b", 2), 2, std::slice::from_ref(&theirs));
+    let config = Config::default();
+    let mut listed = vec![own.clone(), theirs.clone()];
+    state.present(&config, &mut listed);
+    assert!(
+        listed.iter().all(|a| a.state == "cached"),
+        "re-fetchable: {listed:?}"
+    );
+    let got = read(&state, &config, &sha).await.unwrap();
+    assert_eq!(got.as_ref(), bytes.as_slice());
+    assert_eq!(fetch.calls(), vec![own_url.to_string()]);
+    // The remote sender's URL is fetched only on a tap.
+    let mut tapped = theirs.clone();
+    tapped.state = "pending".into();
+    state.fetch(&config, tapped, false).await.unwrap();
+    assert_eq!(
+        fetch.calls(),
+        vec![own_url.to_string(), remote_url.to_string()]
+    );
+}
+
+#[tokio::test]
+async fn a_non_provider_copy_is_deleted_when_a_provider_reference_arrives() {
+    let fetch = Arc::new(FakeFetch::default());
+    let plain = "https://example.com/p.gif";
+    let bytes = gif(4);
+    fetch.serve(plain, &bytes, plain, None);
+    let (_dir, state) = state_over(&fetch);
+    let config = Config {
+        hosts: vec!["example.com".into()],
+        ..Config::default()
+    };
+    let a = state
+        .fetch(&config, remote(plain, true), false)
+        .await
+        .unwrap();
+    let sha = a.sha256.clone().unwrap();
+    state.note(&owner("a", 1), 1, &[a]);
+    assert_eq!(files(state.dir()), vec![sha.clone()]);
+    assert!(!state.memory_only(&sha));
+    let giphy = cached_ref(
+        "https://i.giphy.com/same.gif",
+        false,
+        &sha,
+        MediaProvider::Giphy,
+    );
+    state.note(&owner("b", 2), 2, &[giphy]);
+    assert!(state.memory_only(&sha));
+    assert!(
+        files(state.dir()).is_empty(),
+        "the shared copy goes at once"
+    );
+    // And a later fetch of the plain URL keeps it in memory: the memory-only rule wins.
+    state
+        .fetch(&config, remote(plain, true), false)
+        .await
+        .unwrap();
+    assert!(files(state.dir()).is_empty());
+}
+
+#[test]
+fn listing_shows_tap_to_load_without_an_own_sender_and_the_link_card_when_off() {
+    let (_dir, state) = state_over(&Arc::new(FakeFetch::default()));
+    let sha = sha_of(&gif(5));
+    let theirs = cached_ref(
+        "https://i.giphy.com/x.gif",
+        false,
+        &sha,
+        MediaProvider::Giphy,
+    );
+    state.note(&owner("a", 1), 1, std::slice::from_ref(&theirs));
+    let mut listed = vec![theirs.clone()];
+    state.present(&Config::default(), &mut listed);
+    assert_eq!(listed[0].state, "pending");
+    assert_eq!(listed[0].reason.as_deref(), Some("sender"));
+    // An own sender, but remote media off: the link card.
+    let own = cached_ref(
+        "https://i.giphy.com/x.gif",
+        true,
+        &sha,
+        MediaProvider::Giphy,
+    );
+    state.note(&owner("a", 2), 2, std::slice::from_ref(&own));
+    let off = Config {
+        remote: Remote::Off,
+        ..Config::default()
+    };
+    let mut listed = vec![own];
+    off.apply(&mut listed);
+    state.present(&off, &mut listed);
+    assert_eq!(listed[0].state, "blocked");
+}
+
+#[tokio::test]
+async fn concurrent_misses_on_one_sha_make_one_fetch() {
+    let fetch = Arc::new(FakeFetch::default());
+    let url = "https://i.giphy.com/one.gif";
+    let bytes = gif(6);
+    fetch.serve(url, &bytes, url, Some("no-store"));
+    fetch.slow(std::time::Duration::from_millis(50));
+    let (_dir, state) = state_over(&fetch);
+    let sha = sha_of(&bytes);
+    state.note(
+        &owner("a", 1),
+        1,
+        &[cached_ref(url, true, &sha, MediaProvider::Giphy)],
+    );
+    let config = Config::default();
+    let reads = (0..8).map(|_| read(&state, &config, &sha));
+    for got in futures_util::future::join_all(reads).await {
+        assert_eq!(got.unwrap().as_ref(), bytes.as_slice());
+    }
+    assert_eq!(fetch.calls().len(), 1);
+}
+
+/// A reader's path: admission from the index, then memory, disk or a re-fetch.
+async fn read(
+    state: &Arc<MediaState>,
+    config: &Config,
+    sha: &str,
+) -> Result<axum::body::Bytes, String> {
+    state
+        .fetch_or_cached(sha, state.admission(config, sha))
+        .await
+}
+
+#[tokio::test]
+async fn a_permanent_refetch_failure_is_not_retried_and_a_transient_one_once() {
+    let fetch = Arc::new(FakeFetch::default());
+    let (gone, flaky) = (
+        "https://i.giphy.com/gone.gif",
+        "https://i.giphy.com/flaky.gif",
+    );
+    fetch.fail(gone, failure("http"));
+    fetch.fail(flaky, network("timeout"));
+    let (_dir, state) = state_over(&fetch);
+    let config = Config::default();
+    let (gone_sha, flaky_sha) = (sha_of(&gif(7)), sha_of(&gif(8)));
+    let gone_a = cached_ref(gone, true, &gone_sha, MediaProvider::Giphy);
+    let flaky_a = cached_ref(flaky, true, &flaky_sha, MediaProvider::Giphy);
+    state.note(&owner("a", 1), 1, std::slice::from_ref(&gone_a));
+    state.note(&owner("a", 2), 2, std::slice::from_ref(&flaky_a));
+    let calls = |url: &str| fetch.calls().iter().filter(|c| *c == url).count();
+
+    for _ in 0..3 {
+        assert!(read(&state, &config, &gone_sha).await.is_err());
+    }
+    assert_eq!(
+        calls(gone),
+        1,
+        "a permanent failure is not retried this session"
+    );
+    for _ in 0..3 {
+        assert!(read(&state, &config, &flaky_sha).await.is_err());
+    }
+    assert_eq!(
+        calls(flaky),
+        2,
+        "a transient failure is retried once per session"
+    );
+
+    let mut listed = vec![gone_a.clone(), flaky_a];
+    state.present(&config, &mut listed);
+    assert_eq!(listed[0].state, "failed");
+    assert_eq!(listed[0].reason.as_deref(), Some("http"));
+    assert!(listed[0].retryable, "the person can retry");
+    assert_eq!(listed[1].state, "failed");
+    assert_eq!(listed[1].reason.as_deref(), Some("network"));
+    // A tap on retry always fetches.
+    state.fetch(&config, gone_a, false).await.unwrap();
+    assert_eq!(calls(gone), 2);
+}
+
+#[tokio::test]
+async fn a_refetch_that_hashes_differently_is_a_permanent_failure() {
+    let fetch = Arc::new(FakeFetch::default());
+    let url = "https://i.giphy.com/changed.gif";
+    fetch.serve(url, &gif(9), url, None);
+    let (_dir, state) = state_over(&fetch);
+    let sha = sha_of(&gif(10));
+    state.note(
+        &owner("a", 1),
+        1,
+        &[cached_ref(url, true, &sha, MediaProvider::Giphy)],
+    );
+    let config = Config::default();
+    assert!(read(&state, &config, &sha).await.is_err());
+    assert!(read(&state, &config, &sha).await.is_err());
+    assert_eq!(fetch.calls().len(), 1);
+}
+
+#[tokio::test]
+async fn disk_shas_are_read_from_disk_and_never_fetched() {
+    let (_dir, state) = state_over(&Arc::new(FakeFetch::default()));
+    let mut local = Attachment::empty("cat");
+    store_bytes(state.dir(), &gif(11), &mut local).unwrap();
+    let sha = local.sha256.unwrap();
+    assert_eq!(
+        state.fetch_or_cached(&sha, None).await.unwrap().as_ref(),
+        gif(11).as_slice()
+    );
+    std::fs::remove_file(state.dir().join(&sha)).unwrap();
+    assert!(state.fetch_or_cached(&sha, None).await.is_err());
 }

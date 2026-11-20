@@ -58,6 +58,10 @@ pub(crate) struct FakeHost {
     pin_events: Mutex<Vec<(String, crate::weft::pins::ThreadKey)>>,
     /// The reply reminder's record, this fake's own.
     owed: crate::commands::reply_owed::RepliesOwed,
+    /// The app's media state, for tests of the memory-only media path; none by default.
+    media: Mutex<Option<Arc<crate::media::MediaState>>>,
+    /// Senders whose sessions run on this machine.
+    own_media: Mutex<HashSet<String>>,
 }
 
 impl FakeHost {
@@ -102,7 +106,23 @@ impl FakeHost {
             threads: Mutex::default(),
             pin_events: Mutex::default(),
             owed: Default::default(),
+            media: Mutex::default(),
+            own_media: Mutex::default(),
         })
+    }
+
+    /// Serve media through a real media state over `fetch`, as the app does; returns it.
+    pub(crate) fn use_media(
+        &self,
+        fetch: Arc<crate::media::FakeFetch>,
+    ) -> Arc<crate::media::MediaState> {
+        let state = crate::media::MediaState::for_test(self.dir.path().join("media-cache"), fetch);
+        *self.media.lock().unwrap() = Some(state.clone());
+        state
+    }
+
+    fn media_state(&self) -> Option<Arc<crate::media::MediaState>> {
+        self.media.lock().unwrap().clone()
     }
 
     /// `handle` was launched from saved agent `agent` on `story`.
@@ -209,8 +229,52 @@ impl FakeHost {
 
 #[async_trait::async_trait]
 impl InboxHost for FakeHost {
-    fn cached_media(&self, sha: &str) -> Result<Vec<u8>, String> {
-        crate::media::read_cached(&self.dir.path().join("media-cache"), sha)
+    async fn cached_media(&self, team: &LaunchTeam, sha: &str) -> Result<Vec<u8>, String> {
+        let Some(media) = self.media_state() else {
+            return crate::media::read_cached(&self.dir.path().join("media-cache"), sha);
+        };
+        let source = media.admission(&self.media_config(team), sha);
+        media.fetch_or_cached(sha, source).await.map(|b| b.to_vec())
+    }
+
+    fn present_media(&self, team: &LaunchTeam, attachments: &mut [crate::media::Attachment]) {
+        let config = self.media_config(team);
+        config.apply(attachments);
+        if let Some(media) = self.media_state() {
+            media.present(&config, attachments);
+        }
+    }
+
+    async fn own_media_sender(&self, sender: &str) -> bool {
+        self.own_media.lock().unwrap().contains(sender)
+    }
+
+    async fn fetch_media(
+        &self,
+        team: &LaunchTeam,
+        attachment: crate::media::Attachment,
+        automatic: bool,
+    ) -> Result<crate::media::Attachment, String> {
+        let media = self.media_state().ok_or("media fetch unavailable")?;
+        media
+            .fetch(&self.media_config(team), attachment, automatic)
+            .await
+    }
+
+    async fn note_media(
+        &self,
+        team: &LaunchTeam,
+        message_id: i64,
+        attachments: &[crate::media::Attachment],
+    ) {
+        if let Some(media) = self.media_state() {
+            let owner = crate::media::index::Owner {
+                org: team.org.clone(),
+                team: team.team.clone(),
+                message_id,
+            };
+            media.note(&owner, inbox::now_ms(), attachments);
+        }
     }
 
     async fn caller_scope(&self, sender: &str) -> crate::context_repo::caller_scope::CallerScope {
@@ -247,26 +311,32 @@ impl InboxHost for FakeHost {
             )?;
             return Ok((attachment, false));
         }
-        Ok((
-            crate::media::Attachment::remote(
-                input.url.as_deref().unwrap(),
-                &input.alt,
-                &crate::media::Config::default(),
-                own,
-            )
-            .map_err(|e| e.reason.to_string())?,
-            false,
-        ))
+        let attachment = crate::media::Attachment::remote(
+            input.url.as_deref().unwrap(),
+            &input.alt,
+            &crate::media::Config::default(),
+            own,
+        )
+        .map_err(|e| e.reason.to_string())?;
+        // With a media state, an own-machine sender's allowed host is fetched at once.
+        let auto = self.media_state().is_some()
+            && crate::media::Config::default()
+                .should_auto_fetch(attachment.source_host.as_deref().unwrap_or(""), own);
+        Ok((attachment, auto))
     }
 
     async fn synced_teams(&self) -> Result<Vec<LaunchTeam>, String> {
-        Ok(self
+        let teams: Vec<_> = self
             .known_teams
             .lock()
             .unwrap()
             .iter()
             .map(|team| launch_team(team))
-            .collect())
+            .collect();
+        if let Some(media) = self.media_state() {
+            crate::media::index_new_teams(&media, self, &teams).await;
+        }
+        Ok(teams)
     }
 
     async fn admit_automatic_input(&self, _: &str) -> Result<(), String> {
@@ -6005,6 +6075,8 @@ fn gif_attachment(state: &str) -> crate::media::Attachment {
         state: state.into(),
         reason: None,
         retryable: false,
+        media_provider: None,
+        own_sender: false,
     }
 }
 
@@ -6238,6 +6310,169 @@ fn event_and_source_shapes_name_their_teams() {
     };
     // `set_human_status` takes a real app handle, so its shape is pinned in the source.
     assert!(source("src/commands/agent_inbox.rs").contains("host.inbox_changed(&[]);"));
-    assert!(source("src/routines/wake_app.rs")
-        .contains("emit_inbox_changed(&app,&[(team,vec![id])])"));
+    assert!(
+        source("src/routines/wake_app.rs").contains("emit_inbox_changed(&app,&[(team,vec![id])])")
+    );
+}
+
+// Provider media is held in memory only.
+
+fn provider_media(url: &str) -> crate::media::MediaInput {
+    crate::media::MediaInput {
+        url: Some(url.into()),
+        path: None,
+        alt: "Typing cat".into(),
+    }
+}
+
+async fn send_media(host: &Arc<dyn InboxHost>, media: &crate::media::MediaInput) -> i64 {
+    sent_id(
+        send_message_request(
+            host,
+            Some("S1"),
+            "H2",
+            "",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(media),
+        )
+        .await
+        .unwrap(),
+    )
+}
+
+/// The stored attachment of message `id`, once the background fetch has stored it.
+async fn settled(fake: &FakeHost, id: i64) -> crate::media::Attachment {
+    for _ in 0..200 {
+        let row = fake.rows().into_iter().find(|m| m.id == id).unwrap();
+        if row.attachments[0].state != "pending" {
+            return row.attachments[0].clone();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("the media fetch never finished");
+}
+
+fn cache_files(fake: &FakeHost) -> usize {
+    std::fs::read_dir(fake.dir.path().join("media-cache"))
+        .map(|d| d.count())
+        .unwrap_or(0)
+}
+
+#[tokio::test]
+async fn a_provider_gif_sent_from_this_machine_is_served_from_memory_and_never_on_disk() {
+    let fake = FakeHost::new();
+    let fetch = Arc::new(crate::media::FakeFetch::default());
+    let url = "https://i.giphy.com/cat.gif";
+    fetch.serve(url, GIF, url, Some("max-age=600"));
+    let media = fake.use_media(fetch.clone());
+    fake.own_media
+        .lock()
+        .unwrap()
+        .extend(["H1".to_string(), "S1".to_string()]);
+    let host = port(&fake);
+    let id = send_media(&host, &provider_media(url)).await;
+    let stored = settled(&fake, id).await;
+    assert_eq!(stored.state, "cached");
+    assert!(
+        stored.own_sender,
+        "the own-machine admission is saved at send"
+    );
+    assert_eq!(
+        stored.media_provider,
+        Some(crate::media::MediaProvider::Giphy)
+    );
+    assert_eq!(cache_files(&fake), 0, "nothing under the cache dir");
+    assert!(media.memory_only(&gif_sha()), "indexed on fetch");
+    let read = read_media(&host, launch_team("default"), id, gif_sha())
+        .await
+        .unwrap();
+    assert_eq!(read.bytes, GIF);
+    assert_eq!(fetch.calls().len(), 1, "served from memory");
+
+    // A restart: memory and index cleared, the sender's tab gone. A synced team is indexed
+    // on its first sighting, and `read_media` fetches the sha again from the saved URL.
+    let media = fake.use_media(fetch.clone());
+    fake.own_media.lock().unwrap().clear();
+    host.synced_teams().await.unwrap();
+    assert!(media.memory_only(&gif_sha()));
+    let mut listed = fake
+        .rows()
+        .into_iter()
+        .find(|m| m.id == id)
+        .unwrap()
+        .attachments;
+    host.present_media(&launch_team("default"), &mut listed);
+    assert_eq!(
+        listed[0].state, "cached",
+        "an own-machine provider GIF stays cached"
+    );
+    let read = read_media(&host, launch_team("default"), id, gif_sha())
+        .await
+        .unwrap();
+    assert_eq!(read.bytes, GIF);
+    assert_eq!(fetch.calls().len(), 2);
+    assert_eq!(cache_files(&fake), 0);
+}
+
+#[tokio::test]
+async fn tap_to_load_of_a_remote_senders_gif_holds_it_in_memory_and_indexes_it() {
+    let fake = FakeHost::new();
+    let fetch = Arc::new(crate::media::FakeFetch::default());
+    let url = "https://media.giphy.com/theirs.gif";
+    fetch.serve(url, GIF, url, Some("no-store"));
+    let media = fake.use_media(fetch.clone());
+    let host = port(&fake);
+    let id = send_media(&host, &provider_media(url)).await;
+    let pending = fake
+        .rows()
+        .into_iter()
+        .find(|m| m.id == id)
+        .unwrap()
+        .attachments;
+    assert_eq!(
+        pending[0].state, "pending",
+        "a remote sender's GIF waits for a tap"
+    );
+    assert!(!pending[0].own_sender);
+    assert!(fetch.calls().is_empty());
+    // `loadMedia` and the app's tap go through `finish_media_fetch`.
+    let location = team_inbox(&*host, launch_team("default")).await.unwrap();
+    finish_media_fetch(&host, location, id, pending[0].clone(), false)
+        .await
+        .unwrap();
+    assert_eq!(settled(&fake, id).await.state, "cached");
+    assert_eq!(cache_files(&fake), 0);
+    assert!(
+        media.memory_only(&gif_sha()),
+        "in the index, so served no-store"
+    );
+}
+
+#[tokio::test]
+async fn a_team_attached_after_startup_is_indexed_on_its_first_sighting() {
+    let fake = FakeHost::new();
+    let media = fake.use_media(Arc::new(crate::media::FakeFetch::default()));
+    let host = port(&fake);
+    host.synced_teams().await.unwrap();
+    assert!(!media.index.is_team_indexed(ORG, "late"));
+    fake.known_teams.lock().unwrap().insert("late".into());
+    let mut a = gif_attachment("cached");
+    a.source_url = Some("https://i.giphy.com/late.gif".into());
+    a.source_host = Some("i.giphy.com".into());
+    a.media_provider = Some(crate::media::MediaProvider::Giphy);
+    media_message(&fake, "late", a);
+    assert!(!media.memory_only(&gif_sha()));
+    host.synced_teams().await.unwrap();
+    assert!(media.index.is_team_indexed(ORG, "late"));
+    assert!(media.memory_only(&gif_sha()));
+    assert!(
+        !fake.dir.path().join("media-cache").join(gif_sha()).exists(),
+        "its provider copy leaves the disk when it is indexed"
+    );
 }

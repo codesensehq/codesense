@@ -802,6 +802,9 @@ pub fn run() {
             app.manage(commands::local_profile::LocalProfileState::load(&profile_home)?);
             commands::local_profile::LocalProfileState::start_import(handle.clone());
             app.manage(commands::guest_session::GuestSessionState::load(commands::paths::codesense_home_dir().as_deref()));
+            // Inbox media: provider media held in memory only, the sha index over every
+            // synced team and the one-time purge of provider files from the disk cache.
+            media::install(app.handle());
             // Local HTML query/routine capabilities remain independent of service access.
             // Registry observation may immediately schedule auto-connect, so
             // every terminal/session and ambient-profile dependency must already be
