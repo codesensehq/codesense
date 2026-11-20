@@ -47,6 +47,10 @@ pub(crate) struct UsageHalf {
     pub ids: Vec<String>,
     pub record: Option<SessionRecord>,
     pub report: UsageReport,
+    /// The story the session works now: its latest segment's when it was charged to more than one.
+    pub story: Option<crate::session_usage::UsageStory>,
+    /// Its charges to stories, oldest first.
+    pub charges: Vec<crate::session_usage::charge::Charge>,
     /// What the session's rows that have a price add up to.
     pub priced_usd: f64,
     /// The rest of its thread, oldest first, by the thread read's seat rule: on a story, the
@@ -241,11 +245,15 @@ fn half_of(
         ..Default::default()
     };
     let report = UsageStore::report_with(store, &filter, &mut stories)?;
+    let charges = UsageStore::charges_for(store, &session_id)?;
+    let story = crate::session_usage::charge::current_story(&report, &charges, &mut stories);
     Ok(UsageHalf {
         session_id,
         ids,
         record,
         report,
+        story,
+        charges,
         priced_usd,
         earlier: vec![],
     })
@@ -371,7 +379,7 @@ pub(crate) fn assemble(
     let chain: Vec<&UsageHalf> = half.earlier.iter().chain(std::iter::once(half)).collect();
     let sessions: Vec<&crate::session_usage::SessionUsage> =
         chain.iter().flat_map(|h| h.report.sessions.iter()).collect();
-    let story = report.sessions.iter().find_map(|s| s.story.clone());
+    let story = half.story.clone();
     let mut models = BTreeSet::new();
     let mut unpriced_models = BTreeSet::new();
     for session in &sessions {
@@ -457,6 +465,7 @@ pub(crate) fn assemble(
         "firstAtMs": first,
         "lastAtMs": last,
         "story": story,
+        "charges": half.charges.iter().map(|c| json!({"story": c.story_id, "fromMs": c.from_ms, "chargedBy": c.charged_by})).collect::<Vec<_>>(),
         "runId": record.and_then(|r| r.run_id.clone()).or_else(|| report.sessions.iter().find_map(|s| s.run_id.clone())),
         "branch": record.and_then(|r| r.branch.clone()),
         "worktree": record.and_then(|r| r.worktree.clone()),
@@ -486,7 +495,7 @@ pub async fn read(
         )
     })
     .await?;
-    let story = half.report.sessions.iter().find_map(|s| s.story.as_ref().map(|s| s.id.clone()));
+    let story = half.story.as_ref().map(|s| s.id.clone());
     let (commits, reason) = match story {
         Some(story) => {
             let (commits, reason) = story_commits(home, &story, scope).await?;
