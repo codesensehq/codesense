@@ -912,6 +912,7 @@ pub(crate) fn reopen_local_request(
         .map(|(_, form)| form.to_string())
         .unwrap_or_else(|| tab.workspace_id.clone());
     let open = OpenTab {
+        cwd: None,
         viewer: app_viewer(),
         workspace: crate::commands::pty_layout::workspace_key(&tab.team_key, &form),
         session: PtySessionId::new(crate::commands::mcp_workspace::mint_session_id()),

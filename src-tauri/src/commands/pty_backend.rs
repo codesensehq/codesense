@@ -5308,6 +5308,7 @@ mod tests {
 
     fn tab_request(session: &str) -> OpenTab {
         OpenTab {
+            cwd: None,
             viewer: app_viewer(),
             workspace: codesense_pty_core::domain::WorkspaceKey::new("root:acme/app"),
             session: sid(session),

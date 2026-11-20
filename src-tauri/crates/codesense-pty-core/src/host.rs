@@ -171,8 +171,12 @@ impl TerminalHost {
             // A spawn would displace a session this layout does not own.
             return Err(LayoutError::AlreadyPlaced(session.clone()));
         }
-        self.layout
-            .reserve(session, &request.workspace, request.descriptor.as_ref())
+        self.layout.reserve(
+            session,
+            &request.workspace,
+            request.descriptor.as_ref(),
+            request.cwd.as_deref(),
+        )
     }
 
     /// The second half: place the reserved session once its spawn ended as

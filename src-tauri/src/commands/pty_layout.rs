@@ -577,6 +577,7 @@ pub async fn terminal_open_tab(
     } = request;
     refuse_launch_tags(tags.keys())?;
     let open = OpenTab {
+        cwd: None,
         viewer: app_viewer(),
         workspace,
         session,

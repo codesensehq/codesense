@@ -87,6 +87,22 @@ describe("the viewer store is a projection of the host's terminal layout", () =>
     expect(respawned.execution).toEqual(execution);
   });
 
+  it("a tab with a folder of its own restarts there, not in the workspace's folder", async () => {
+    seedTerminalTabs(TEAM, "w1", ["lead", { session: "seat", cwd: "/w/w1-seat-dev" }]);
+    terminalHost().exit("lead", 0);
+    terminalHost().exit("seat", 0);
+    const respawn = vi.spyOn(terminalHost(), "respawnTab");
+    await s().respawnTerminalTab(TEAM, "seat", "w1", {});
+    await s().respawnTerminalTab(TEAM, "lead", "w1", {});
+    expect(respawn.mock.calls.map(([, session, spawn]) => [session, spawn])).toEqual([
+      ["seat", expect.objectContaining({ kind: "cold", cwd: "/w/w1-seat-dev" })],
+      ["lead", expect.objectContaining({ kind: "cold", cwd: "/w/w1" })],
+    ]);
+    expect(selectWorkspaceTabs(s(), TEAM, "w1").find((t) => t.sessionId === "seat")?.cwd).toBe(
+      "/w/w1-seat-dev",
+    );
+  });
+
   it("every tab action is a host verb: rename, reorder, focus, close", async () => {
     seedTerminalTabs(TEAM, "w1", ["a", "b", "c"]);
     s().renameTerminalTab(TEAM, "b", "build");

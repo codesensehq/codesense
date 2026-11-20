@@ -1902,6 +1902,7 @@ mod tests {
             },
             Request::ReserveTab {
                 request: OpenTab {
+                    cwd: None,
                     viewer: viewer.clone(),
                     workspace: workspace.clone(),
                     session: session("s1"),

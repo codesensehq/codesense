@@ -154,9 +154,35 @@ pub struct WorkspaceLayout {
     pub last_active: Option<PtySessionId>,
     pub grid: GridState,
     pub next_ordinal: u32,
+    /// The working folder of each tab that runs somewhere other than the descriptor's
+    /// `worktree_path` (a story seat worktree), by session. A tab not listed runs in the
+    /// workspace's folder. An entry leaves with its tab, and moves with it to another
+    /// workspace. An older host or snapshot has none.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub tab_dirs: BTreeMap<PtySessionId, PathBuf>,
 }
 
 impl WorkspaceLayout {
+    /// The folder `session`'s tab runs in: its own, else the workspace's.
+    pub fn tab_dir(&self, session: &PtySessionId) -> Option<&Path> {
+        self.tab_dirs
+            .get(session)
+            .map(PathBuf::as_path)
+            .or(self.descriptor.worktree_path.as_deref())
+    }
+
+    /// Record that `session`'s tab runs in `dir`, unless that is the workspace's folder.
+    fn set_tab_dir(&mut self, session: &PtySessionId, dir: Option<PathBuf>) {
+        match dir {
+            Some(dir) if self.descriptor.worktree_path.as_ref() != Some(&dir) => {
+                self.tab_dirs.insert(session.clone(), dir);
+            }
+            _ => {
+                self.tab_dirs.remove(session);
+            }
+        }
+    }
+
     fn new(descriptor: WorkspaceDescriptor) -> Self {
         Self {
             descriptor,
@@ -230,6 +256,12 @@ pub struct OpenTab {
     pub workspace: WorkspaceKey,
     pub session: PtySessionId,
     pub descriptor: Option<WorkspaceDescriptor>,
+    /// The tab's own working folder when it differs from the workspace's (a story seat
+    /// worktree). The tab runs there, and is counted there by [`WorktreeUsage`], but it
+    /// never replaces the workspace's `worktree_path`, so it opens beside tabs that run
+    /// in the workspace's folder. An older client omits it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<PathBuf>,
     pub name: Option<String>,
     pub role: Option<String>,
     pub tags: Tags,
@@ -439,6 +471,24 @@ struct ViewerState {
     last_activity: u64,
 }
 
+/// What [`LayoutState::detach_entry`] unlinked: the workspace, the strip position, the
+/// entry and the tab's own working folder.
+type Detached = (WorkspaceKey, usize, TabEntry, Option<PathBuf>);
+
+/// Where a reserved session will run: its workspace, that workspace's folder (for the
+/// one-folder-per-workspace check) and the tab's own folder, if it has one.
+struct OpeningDirectory {
+    workspace: WorkspaceKey,
+    dir: Option<PathBuf>,
+    tab: Option<PathBuf>,
+}
+
+impl OpeningDirectory {
+    fn working_dir(&self) -> Option<&Path> {
+        self.tab.as_deref().or(self.dir.as_deref())
+    }
+}
+
 #[derive(Default)]
 struct LayoutState {
     /// This host lifetime's id, minted per model; every announcement names it.
@@ -448,7 +498,7 @@ struct LayoutState {
     /// Which workspace holds each placed session (a session is in at most one).
     placed: HashMap<PtySessionId, WorkspaceKey>,
     opening: HashMap<PtySessionId, Opening>,
-    opening_directories: HashMap<PtySessionId, (WorkspaceKey, Option<PathBuf>)>,
+    opening_directories: HashMap<PtySessionId, OpeningDirectory>,
     /// Exited entries a respawn in place holds between its reap and its new
     /// process registering: whether that new process already exited.
     respawning: HashMap<PtySessionId, bool>,
@@ -485,19 +535,20 @@ impl LayoutState {
     }
 
     /// Unlink `session`'s entry from its workspace, returning the workspace, the
-    /// strip position it held, and the entry.
-    fn detach_entry(&mut self, session: &PtySessionId) -> Option<(WorkspaceKey, usize, TabEntry)> {
+    /// strip position it held, the entry and its own working folder, if it had one.
+    fn detach_entry(&mut self, session: &PtySessionId) -> Option<Detached> {
         let key = self.placed.remove(session)?;
         let ws = self.workspaces.get_mut(&key)?;
         let index = ws.index_of(session)?;
         let entry = ws.tabs.remove(index);
-        Some((key, index, entry))
+        let dir = ws.tab_dirs.remove(session);
+        Some((key, index, entry, dir))
     }
 
     /// Take `session`'s entry out of the layout for good, moving any focus on
     /// it to the nearest remaining tab. Returns the workspace it left.
     fn take_entry(&mut self, session: &PtySessionId) -> Option<(WorkspaceKey, TabEntry)> {
-        let (key, index, entry) = self.detach_entry(session)?;
+        let (key, index, entry, _) = self.detach_entry(session)?;
         self.refocus_away_from(&key, session, index);
         for viewer in self.viewers.values_mut() {
             viewer.views.remove(session);
@@ -690,22 +741,19 @@ impl LayoutModel {
             let cwd = cwd.canonicalize().map_err(|e| format!("terminal working directory unavailable: {e}; stop the agents or restart the terminal server"))?;
             Ok(cwd.starts_with(&source))
         };
+        // Each tab counts where it runs: its own folder (a seat worktree), else its
+        // workspace's.
         let mut usage = WorktreeUsage::default();
         for (key, ws) in &state.workspaces {
-            if ws.tabs.iter().any(|tab| !tab.state.is_exited())
-                && in_source(ws.descriptor.worktree_path.as_deref())?
-            {
-                usage.entries.extend(
-                    ws.tabs
-                        .iter()
-                        .filter(|tab| !tab.state.is_exited())
-                        .map(|tab| (key.clone(), tab.clone())),
-                );
+            for tab in ws.tabs.iter().filter(|tab| !tab.state.is_exited()) {
+                if in_source(ws.tab_dir(&tab.session))? {
+                    usage.entries.push((key.clone(), tab.clone()));
+                }
             }
         }
-        for (session, (_, cwd)) in &state.opening_directories {
+        for (session, opening) in &state.opening_directories {
             if matches!(state.opening.get(session), Some(Opening::Spawning))
-                && in_source(cwd.as_deref())?
+                && in_source(opening.working_dir())?
             {
                 usage.opening.push(session.clone());
             }
@@ -715,7 +763,7 @@ impl LayoutModel {
                 .placed
                 .get(session)
                 .and_then(|key| state.workspaces.get(key))
-                .and_then(|ws| ws.descriptor.worktree_path.as_deref());
+                .and_then(|ws| ws.tab_dir(session));
             if in_source(cwd)? {
                 usage.opening.push(session.clone());
             }
@@ -780,12 +828,15 @@ impl LayoutModel {
 
     /// Reserve `session` for an `open_tab` whose spawn is about to run, so its
     /// exit or removal during the spawn is recorded rather than missed. An
-    /// absent workspace needs a descriptor, checked before anything spawns.
+    /// absent workspace needs a descriptor, checked before anything spawns. A
+    /// workspace runs in one folder, its descriptor's; `tab_cwd` is the tab's own
+    /// folder (a seat worktree), which is never compared with it.
     pub(crate) fn reserve(
         &self,
         session: &PtySessionId,
         workspace: &WorkspaceKey,
         descriptor: Option<&WorkspaceDescriptor>,
+        tab_cwd: Option<&Path>,
     ) -> Result<(), LayoutError> {
         let mut state = self.lock()?;
         if state.placed.contains_key(session) || state.opening.contains_key(session) {
@@ -799,10 +850,9 @@ impl LayoutModel {
             let existing_conflict = state.workspaces.get(workspace).is_some_and(|ws| {
                 !ws.tabs.is_empty() && ws.descriptor.worktree_path.as_ref() != Some(cwd)
             });
-            let pending_conflict = state
-                .opening_directories
-                .values()
-                .any(|(key, dir)| key == workspace && dir.as_ref() != Some(cwd));
+            let pending_conflict = state.opening_directories.values().any(|opening| {
+                &opening.workspace == workspace && opening.dir.as_ref() != Some(cwd)
+            });
             if existing_conflict || pending_conflict {
                 return Err(LayoutError::CwdConflict(workspace.clone()));
             }
@@ -813,9 +863,14 @@ impl LayoutModel {
                 .get(workspace)
                 .and_then(|ws| ws.descriptor.worktree_path.clone())
         });
-        state
-            .opening_directories
-            .insert(session.clone(), (workspace.clone(), cwd));
+        state.opening_directories.insert(
+            session.clone(),
+            OpeningDirectory {
+                workspace: workspace.clone(),
+                dir: cwd,
+                tab: tab_cwd.map(Path::to_path_buf),
+            },
+        );
         state.opening.insert(session.clone(), Opening::Spawning);
         Ok(())
     }
@@ -841,6 +896,7 @@ impl LayoutModel {
             workspace,
             session,
             descriptor,
+            cwd,
             name,
             role,
             tags,
@@ -880,6 +936,7 @@ impl LayoutModel {
             state: entry_state,
             tags,
         };
+        ws.set_tab_dir(&session, cwd);
         ws.insert_at(index, entry.clone());
         if activate && placement == Placement::Tab {
             ws.last_active = Some(session.clone());
@@ -1079,14 +1136,17 @@ impl LayoutModel {
             }
             (None, None) => return Err(LayoutError::UnknownWorkspace(workspace.clone())),
         }
-        let (from, was_at, mut entry) = state
+        let (from, was_at, mut entry, dir) = state
             .detach_entry(session)
             .ok_or_else(|| LayoutError::UnknownSession(session.clone()))?;
         if &from != workspace || placement != Placement::Tab {
             state.refocus_away_from(&from, session, was_at);
         }
         entry.placement = placement;
-        state.workspace_mut(workspace)?.insert_at(index, entry);
+        // A tab with a folder of its own keeps it in its new workspace.
+        let target = state.workspace_mut(workspace)?;
+        target.set_tab_dir(session, dir);
+        target.insert_at(index, entry);
         state.placed.insert(session.clone(), workspace.clone());
         Ok(state.publish([from, workspace.clone()]))
     }

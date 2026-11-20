@@ -1061,6 +1061,7 @@ fn open_entry_in(
 ) {
     use codesense_pty_core::layout::{OpenTab, WorkspaceDescriptor};
     let request = OpenTab {
+        cwd: None,
         viewer: ViewerId::new("app"),
         workspace: codesense_pty_core::domain::WorkspaceKey::new("root:acme/app"),
         session: PtySessionId::new(session),

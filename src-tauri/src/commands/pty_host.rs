@@ -4251,6 +4251,7 @@ mod tests {
             prior
                 .open_tab(
                     OpenTab {
+                        cwd: None,
                         viewer,
                         workspace: WorkspaceKey::new("root:acme/app"),
                         session: PtySessionId::new(&fixture.session),
@@ -4822,6 +4823,7 @@ mod tests {
         client
             .open_tab(
                 OpenTab {
+                    cwd: None,
                     viewer: super::super::pty_layout::app_viewer(),
                     workspace: workspace.clone(),
                     session: PtySessionId::new(&fixture.session),
@@ -5404,6 +5406,7 @@ mod tests {
             let session = PtySessionId::new(&fixture.session);
             let viewer = ViewerId::new("respawn-viewer");
             let request = OpenTab {
+                cwd: None,
                 viewer: viewer.clone(),
                 workspace: WorkspaceKey::new("root:rm5aa"),
                 session: session.clone(),

@@ -2117,6 +2117,7 @@ async fn finish_launch_inner(
             let meta_story = home.descriptor.story_id.clone();
             let meta_workspace = home.workspace.as_str().to_string();
             let open = OpenTab {
+                cwd: None,
                 viewer: app_viewer(),
                 workspace: home.workspace,
                 session: record.target.session.clone(),

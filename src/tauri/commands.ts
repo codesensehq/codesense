@@ -2389,6 +2389,9 @@ export interface TerminalWorkspaceLayout {
   lastActive: string | null;
   grid: TerminalGridState;
   nextOrdinal: number;
+  /** The working folder of each tab (by session) that runs outside the workspace's
+   *  `worktreePath`, such as a story seat worktree. Absent from an older host. */
+  tabDirs?: Record<string, string>;
 }
 
 export interface TerminalViewHint {
