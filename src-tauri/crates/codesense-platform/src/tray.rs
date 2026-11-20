@@ -11,11 +11,11 @@
 //! - macOS and Windows: true. The menu bar and the notification area are always
 //!   there.
 //!
-//! A [`HostCheck`] keeps its session-bus connection between answers, so a
-//! caller that asks repeatedly pays the connect (libdbus's own, longer timeout)
-//! once, and again only after the connection drops; each answer after that is
-//! the read alone, bounded by [`TIMEOUT`]. Either can block: ask off the main
-//! thread.
+//! A [`HostCheck`] keeps its session-bus connection between answers. Until a
+//! connect succeeds, every answer tries it again, and a connect waits up to
+//! libdbus's default reply timeout (about 25 s), answering false meanwhile; once
+//! connected, each answer is the read alone, bounded by [`TIMEOUT`], until the
+//! connection drops. Either can block for that long: ask off the main thread.
 
 use std::time::Duration;
 

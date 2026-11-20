@@ -342,8 +342,9 @@ fn refresh_soon(app: &AppHandle) {
 }
 
 /// Whether a tray host shows the item of `turn`, asked off the main thread (the
-/// session-bus read blocks briefly) when the item turns on and on each refresh
-/// tick, on the refresher's kept connection. An answer for an item since
+/// session-bus connect and read block) when the item turns on and on each
+/// refresh tick, on the refresher's kept connection. Until it connects, the
+/// item counts as not shown, so close quits. An answer for an item since
 /// removed, or of an earlier turn, is dropped.
 fn check_tray_host(app: &AppHandle, turn: u64, hosts: &mut codesense_platform::tray::HostCheck) {
     let registered = hosts.registered();

@@ -309,8 +309,11 @@ in_container() {
 }
 
 # The AppIndicator libraries ldconfig finds by name, one a line.
+# A missing or failing ldconfig fails, so finding none means none.
 ldconfig_appindicator() {
-    ldconfig -p | grep -E "^[[:space:]]*$APPINDICATOR " | awk '{print $1}' || true
+    local cache
+    cache=$(ldconfig -p) || fail "ldconfig -p failed"
+    grep -E "^[[:space:]]*$APPINDICATOR " <<<"$cache" | awk '{print $1}' || true
 }
 
 # The package's dependencies brought in an AppIndicator library the loader finds by name.

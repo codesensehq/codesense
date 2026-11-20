@@ -211,11 +211,11 @@ test("seed-tray: the app state under the data home turns the tray icon setting o
 });
 
 // The subcommand run with a fake ldconfig on PATH that prints `lines`.
-const withLdconfig = (command, lines) => {
+const withLdconfig = (command, lines, status = 0) => {
   const bin = fs.mkdtempSync(path.join(dir, "bin-"));
   fs.writeFileSync(
     path.join(bin, "ldconfig"),
-    `#!/bin/sh\ncat <<'EOF'\n${lines.join("\n")}\nEOF\n`,
+    `#!/bin/sh\ncat <<'EOF'\n${lines.join("\n")}\nEOF\nexit ${status}\n`,
     { mode: 0o755 },
   );
   return spawnSync("bash", [script, command], {
@@ -246,6 +246,10 @@ test("no-installed-appindicator: the tray launch needs a runner without the libr
     check([header, "\tlibappindicator3.so (libc6,x86-64) => /lib/libappindicator3.so"]),
     /already finds/,
   );
+  // A failing ldconfig proves nothing either way.
+  for (const command of ["no-installed-appindicator", "installed-appindicator"]) {
+    fails(withLdconfig(command, [header, libc], 1), /ldconfig -p failed/);
+  }
 });
 
 test("installed-appindicator: ldconfig must find an AppIndicator library", () => {
