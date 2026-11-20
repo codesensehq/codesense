@@ -650,9 +650,9 @@ jobs:
   rust-check-linux:
     name: Rust check (Linux)
     # A compile check of the desktop app and its tests on pull requests, merge groups, main and the
-    # nightly run: the only compile of the app before a merge. Check only: the tests themselves run
-    # on macOS, after the merge. It also builds the release-only `dashboard-publish` feature, which
-    # no other public job compiles.
+    # nightly run: the only compile of the app before a merge. Check only: the app's unit tests run
+    # in Rust (Linux app) and on macOS. It also checks the release-only `dashboard-publish` feature
+    # on the internal channel; Rust (Linux app) builds that feature only for its beta-channel tests.
     # Gap: code behind `cfg(target_os = "macos")` and the macOS-only dependencies is not compiled
     # on Linux. A change to that code first compiles on main, after the merge; add the `ci:macos`
     # label to the pull request to run the macOS job before the queue.
