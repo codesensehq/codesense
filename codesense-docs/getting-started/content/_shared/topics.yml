@@ -336,7 +336,8 @@
         "role_save",
         "release_role",
         "workspace_chat_read",
-        "workspace_chat_send"
+        "workspace_chat_send",
+        "gif_search"
       ]
     },
     {

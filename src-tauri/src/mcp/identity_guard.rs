@@ -94,6 +94,7 @@ const NO_IDENTITY_TOOLS: &[&str] = &[
     "get_publish_set",
     "get_story_format",
     "get_viewer_state",
+    "gif_search",
     "health_ping",
     "install_terminal_server",
     "list_agent_accounts",

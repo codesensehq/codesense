@@ -362,6 +362,14 @@
       "calls": [{"tool": "register_role", "arguments": {"team": {"org": "example/team-context", "team": "engineering"}, "role": "reviewer"}}]
     },
     {
+      "id": "arc-f-gifs",
+      "title": "GIF search",
+      "tools": ["gif_search"],
+      "docs": "arc-f-inboxes-and-triage/messages.html#send-media",
+      "searchTerms": ["gif", "meme", "giphy", "media", "reaction"],
+      "calls": [{"tool": "gif_search", "arguments": {"query": "ship it", "limit": 6}}]
+    },
+    {
       "id": "arc-f-messages",
       "title": "Roles and workspace chat",
       "tools": ["roles_list", "role_save", "inbox_post", "release_role", "get_human_status", "mark_unread", "role_state", "workspace_chat_send", "workspace_chat_read"],

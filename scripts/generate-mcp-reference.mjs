@@ -156,6 +156,7 @@ export const META = {
   role_state: { arc: "F", write: false },
   send_message: { arc: "F", write: true, core: true },
   send_role_message: { arc: "F", write: true },
+  gif_search: { arc: "F", write: false },
   // SW-WC-2: workspace chat engine's agent-facing pair.
   workspace_chat_send: { arc: "F", write: true, core: true },
   workspace_chat_read: { arc: "F", write: false, core: true },
