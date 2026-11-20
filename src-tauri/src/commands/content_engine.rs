@@ -6927,6 +6927,54 @@ mod tests {
         );
     }
 
+    /// A story's seat worktrees follow it: a move relinks a seat record like the base
+    /// one, and an id rename rekeys both, each keeping its seat.
+    #[test]
+    fn a_seat_record_follows_its_story_through_a_move_and_a_rename() {
+        let home = TempDir::new().unwrap();
+        let h = home.path();
+        let story = format!(
+            "{}/users/42/orgs/acme/ctx/alpha/content/impl/OLD-ID.md",
+            h.display()
+        );
+        let seat = worktree_index::SeatRecord {
+            name: "dev".into(),
+            kind: worktree_index::SeatKind::Branch,
+            pinned_commit: None,
+        };
+        let mut seated = wt_record("/abs/wt-seat", &story);
+        seated.seat = Some(seat.clone());
+        let moved = relinked_record(&seated, Path::new(&story_at("beta")));
+        assert_eq!(moved.seat, Some(seat.clone()));
+
+        for (code_repo, seat) in [("/abs/wt-base", None), ("/abs/wt-seat", Some(seat.clone()))] {
+            let mut rec = WorktreeStoryRecord::new(
+                PathBuf::from(code_repo),
+                "acme/ctx",
+                SourceRepoSlug::new("acme", "app").unwrap(),
+                "OLD-ID",
+                PathBuf::from(&story),
+            );
+            rec.seat = seat;
+            worktree_index::write_record(h, &Principal::from(42u64), &rec).unwrap();
+        }
+        rekey_worktrees_story_id("OLD-ID", "NEW-ID", Path::new(&story));
+        let mut after =
+            worktree_index::find_by_story_id(h, &Principal::from(42u64), "NEW-ID").unwrap();
+        after.sort_by(|a, b| a.code_repo_path.cmp(&b.code_repo_path));
+        let seats: Vec<_> = after
+            .iter()
+            .map(|r| (r.code_repo_path.clone(), r.seat.clone()))
+            .collect();
+        assert_eq!(
+            seats,
+            vec![
+                (PathBuf::from("/abs/wt-base"), None),
+                (PathBuf::from("/abs/wt-seat"), Some(seat)),
+            ]
+        );
+    }
+
     /// SLW-IN-9 AC-5: a story_id rename repoints ONLY the record for the exact
     /// renamed file, in the event's org. A same-id record at a different path
     /// (a distinct story) and a same-id record in another org are untouched.
