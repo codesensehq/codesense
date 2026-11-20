@@ -4,7 +4,7 @@
 //! plus the polling helpers those tests need on loaded machines.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use codesense_pty_core::domain::{
@@ -110,12 +110,14 @@ pub fn host_environment() -> HostEnvironment {
 }
 
 /// An empty directory for a spawn's `HOME`, so no profile of the machine's
-/// user runs there. It must exist: with no `cwd` the child starts in `HOME`
-/// (`/var/empty` exists only on macOS).
+/// user runs there: this process's own, private and made once. It must exist:
+/// with no `cwd` the child starts in `HOME` (`/var/empty` exists only on macOS).
 pub fn empty_home() -> String {
-    let home = std::env::temp_dir().join("codesense-test-empty-home");
-    std::fs::create_dir_all(&home).expect("the empty home");
-    home.to_string_lossy().into_owned()
+    static HOME: OnceLock<tempfile::TempDir> = OnceLock::new();
+    HOME.get_or_init(|| tempfile::tempdir().expect("the empty home"))
+        .path()
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// `script`, run by the user's shell of whichever host resolves it — `/bin/bash`
