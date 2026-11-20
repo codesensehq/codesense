@@ -471,8 +471,8 @@ mod tests {
     }
 
     // ---- Payloads captured from a real `claude` run (Claude Code 2.1.x). The
-    // same files feed `scripts/codesense-notify-hook.test.sh`, which proves the
-    // hook script forwards them to this route unmodified. ----
+    // same files feed `codesense-bridge/tests/hook_commands.rs`, which proves the
+    // written hook commands forward them to this route unmodified. ----
 
     const REAL_HOOK_PAYLOADS: &[(&str, &str)] = &[
         (
