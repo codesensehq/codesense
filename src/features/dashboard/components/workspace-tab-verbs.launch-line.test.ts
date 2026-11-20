@@ -5,6 +5,7 @@ const h = vi.hoisted(() => ({
   submitted: true,
   lines: [] as string[],
   projections: [] as unknown[][],
+  execution: undefined as undefined | { argv: string[]; nativeLaunch: string },
 }));
 vi.mock("@/shared/lib/default-agent", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/shared/lib/default-agent")>()),
@@ -24,6 +25,7 @@ vi.mock("@/tauri/commands", async (orig) => ({
     return {
       extraArgs: ["--mcp-config", `/scope/${String(args[0])}.json`],
       environmentBinding: null,
+      ...(h.execution ? { execution: h.execution } : {}),
     };
   }),
   sessionHasLiveAgent: vi.fn(async () => true),
@@ -41,7 +43,14 @@ import {
 
 const WS = "generic:/work/dir";
 
+/** The verb's real preparation and launch, for one session of `WS`. */
+async function start(sessionId: string, workspaceId = WS): Promise<void> {
+  const deps = makeRealOpenWorkspaceTabDeps();
+  await deps.launchAgent(sessionId, await deps.prepareAgent(workspaceId, sessionId));
+}
+
 beforeEach(() => {
+  h.execution = undefined;
   h.submitted = true;
   h.lines = [];
   h.projections = [];
@@ -57,7 +66,7 @@ beforeEach(() => {
 
 describe("an agent tab opened by a dashboard verb", () => {
   it("launches with its per-session config and records the exact line", async () => {
-    await makeRealOpenWorkspaceTabDeps().launchAgent(WS, "shell-a");
+    await start("shell-a");
     // No allowlist, the launcher's default args: the bridge and hooks for this session.
     expect(h.projections).toEqual([
       ["shell-a", "/work/dir", null, undefined, [], { binary: "claude", defaultArgs: true }],
@@ -77,9 +86,8 @@ describe("an agent tab opened by a dashboard verb", () => {
     const resolve = vi.mocked(resolveAgentCliPath);
     resolve.mockClear();
     resolve.mockResolvedValueOnce("/tmp/a/claude").mockResolvedValueOnce("/tmp/b/claude");
-    const deps = makeRealOpenWorkspaceTabDeps();
-    await deps.launchAgent(WS, "shell-c");
-    await deps.launchAgent(WS, "shell-d");
+    await start("shell-c");
+    await start("shell-d");
     expect(resolve).toHaveBeenCalledTimes(2);
     expect(h.lines[0]).toContain("'/tmp/a/claude'");
     expect(h.lines[1]).toContain("'/tmp/b/claude'");
@@ -87,14 +95,61 @@ describe("an agent tab opened by a dashboard verb", () => {
 
   it("records nothing when the line never submitted", async () => {
     h.submitted = false;
-    await makeRealOpenWorkspaceTabDeps().launchAgent(WS, "shell-b");
+    await start("shell-b");
     expect(useAgentStateStore.getState().launchBySession).toEqual({});
   });
+
+  it("an exec projection types no line and records the exec", async () => {
+    h.execution = {
+      argv: ["/opt/bin/claude", "--dangerously-skip-permissions", "--mcp-config", "/s.json"],
+      nativeLaunch: "claude",
+    };
+    await start("shell-exec");
+    expect(h.lines).toEqual([]);
+    expect(useAgentStateStore.getState().launchBySession["shell-exec"]).toEqual({
+      line: "'/opt/bin/claude' '--dangerously-skip-permissions' '--mcp-config' '/s.json'",
+      agent: "claude",
+      exec: true,
+      spec: { agentPath: "/opt/bin/claude", configCwd: "/work/dir" },
+    });
+  });
+
+  it.each([
+    ["Win32", true],
+    ["MacIntel", false],
+    ["Linux x86_64", false],
+  ])(
+    "a workspace with no folder on %s: refused only where launches exec",
+    async (platform, refused) => {
+      vi.stubGlobal("navigator", { platform });
+      const NO_DIR = "generic:/no-dir";
+      useViewerStore.setState({
+        workspaces: {
+          [getActiveTeamKey()]: [
+            { id: NO_DIR, kind: "generic", status: "ready" },
+          ] as unknown as Workspace[],
+        },
+      });
+      try {
+        const started = start("shell-nodir", NO_DIR);
+        if (refused) {
+          await expect(started).rejects.toThrow(/^unavailable: /);
+          expect(h.lines).toEqual([]);
+        } else {
+          await started;
+          expect(h.lines).toEqual(["'/opt/bin/claude' '--dangerously-skip-permissions'"]);
+        }
+        expect(h.projections).toEqual([]);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
 
   it("probes the running agent even when its install is no longer available", async () => {
     const resolve = vi.mocked(resolveAgentCliPath);
     resolve.mockResolvedValueOnce("/tmp/codex");
-    await makeRealOpenWorkspaceTabDeps().launchAgent(WS, "shell-live");
+    await start("shell-live");
     resolve.mockClear();
     resolve.mockResolvedValue(null);
     expect(await makeRealSendToWorkspaceTabDeps().agentLive("shell-live")).toBe(true);

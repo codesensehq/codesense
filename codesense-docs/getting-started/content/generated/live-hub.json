@@ -1147,7 +1147,7 @@
     "src-tauri/src/live_hub/view_key.rs": "8e76214d7c961f122717219e2893d06ccd504dc042fe96790243089ea0a2ae37",
     "src-tauri/src/live_hub/mod.rs": "cc68a7bbe3f1fb64bfd1b66f26d034efd50bc52b24a152ba473025d2581672bd",
     "src-tauri/src/live_hub/agent_list/sessions.rs": "a9726ec640a283d333235a25f81e21791f49f9231fc786e52e0f11dc60cd851d",
-    "src-tauri/src/mcp/session_list.rs": "6e9b55c5d09a90efa260b3be00fad790a314d8da8fabe071746a6a8582d3b6b3",
+    "src-tauri/src/mcp/session_list.rs": "98f063bd33a9bb9758e1982331b5d0ca034862547d62482f35a0b018d779e971",
     "src-tauri/src/agents/session_fields.rs": "9ec6c8ab4833c6b6d6242524dac58c6203df507271a4bfa13233838553c50416",
     "src-tauri/src/live_hub/agent_list/fields.rs": "0e6d5d02a04c2e620fc4e754c5ab140cfe687eae3f3494fabdd1f44ad07416a8",
     "src-tauri/src/live_hub/effective_status.rs": "4c975cc197d37d6f0890ec4905b3db0a3b56b2deae669797bf28c284787aa2ca",

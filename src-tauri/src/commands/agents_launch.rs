@@ -164,6 +164,23 @@ fn apply_for_session_with_cli(
     Ok((prepared, creation, applied.settings))
 }
 
+/// The exec `prepared` runs on `os`: only an interactive launch owns its PTY; a headless
+/// one is captured as it is.
+fn set_prepared_execution(prepared: &mut PreparedAgentLaunch, os: &str) {
+    prepared.scope.execution = None;
+    if prepared.launch.mode == LaunchMode::Interactive {
+        // The program is the resolved CLI, so this never refuses.
+        let _ = super::mcp_scope::finish_launch_execution(
+            &mut prepared.scope,
+            prepared.account.runtime,
+            Some(Path::new(&prepared.agent_path)),
+            &prepared.launch.args,
+            false,
+            os,
+        );
+    }
+}
+
 /// The renderer/dashboard producer's one-use environment handoff, consumed by PTY spawn.
 pub(crate) fn bind_prepared_launch_environment<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
@@ -171,19 +188,7 @@ pub(crate) fn bind_prepared_launch_environment<R: tauri::Runtime>(
     creation: Option<ScopeCreation>,
     requires_spend_holds: bool,
 ) -> Vec<(String, String)> {
-    // Only an interactive launch owns its PTY; a headless one is captured as it is.
-    prepared.scope.execution = if prepared.launch.mode == LaunchMode::Interactive {
-        super::mcp_scope::scoped_execution(
-            prepared.account.runtime,
-            Path::new(&prepared.agent_path),
-            super::mcp_scope::compose_args(
-                prepared.launch.args.clone(),
-                prepared.scope.extra_args.clone(),
-            ),
-        )
-    } else {
-        None
-    };
+    set_prepared_execution(prepared, std::env::consts::OS);
     let recorded_scope_env = prepared.scope.extra_env.clone();
     prepared.scope.environment_binding = super::agent_accounts::mint_launch_environment(
         app,

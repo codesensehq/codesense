@@ -754,6 +754,18 @@ export function workspaceTabGridPreset(
   return projectedWorkspace(s, teamKey, workspaceId)?.grid.preset ?? "columns";
 }
 
+/** A tab {@link ViewerState.openTabInWorkspace} opens: `role` tags it (a generic-agent
+ *  tab), `name` titles it; `sessionId` is an id minted earlier (a launch projected for
+ *  it), whose one-use `environmentBinding` the spawn consumes and whose `execution`
+ *  starts its agent as the tab's process instead of a shell. */
+export interface WorkspaceTabOptions {
+  role?: string;
+  name?: string;
+  sessionId?: string;
+  environmentBinding?: string;
+  execution?: ScopedExecution;
+}
+
 /** How to open a terminal tab beyond its session, name and role. */
 export interface OpenTerminalTabOptions {
   commandArgv?: ScopedExecution["argv"];
@@ -3087,11 +3099,15 @@ export interface ViewerState {
    *  `sessionId` right away (the addressable handle); `role` optionally tags the
    *  tab (e.g. a generic-agent tab). Returns `""` when no such workspace is open
    *  (so no orphan tab is opened). */
-  openTabInWorkspace: (
+  openTabInWorkspace: (teamKey: string, workspaceId: string, opts?: WorkspaceTabOptions) => string;
+  /** {@link openTabInWorkspace}, also handing back its spawn, which settles once the
+   *  host placed the tab or refused it (`sessionId` `""`: nothing was opened, and the
+   *  spawn has settled). */
+  startTabInWorkspace: (
     teamKey: string,
     workspaceId: string,
-    opts?: { role?: string; name?: string },
-  ) => string;
+    opts?: WorkspaceTabOptions,
+  ) => { sessionId: string; spawned: Promise<void> };
   /** Close a terminal tab through its host: an idle shell (or an exited tab)
    *  goes, a busy one keeps running out of sight (`kill` ends it regardless).
    *  Closing the last ordinary tab opens a fresh one unless `replace: false`.
@@ -8645,20 +8661,33 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   // announces it. Guards on the workspace existing so no tab is opened under a
   // dead id.
   openTabInWorkspace: (teamKey, workspaceId, opts) => {
+    const { sessionId, spawned } = get().startTabInWorkspace(teamKey, workspaceId, opts);
+    void spawned.catch(() => {});
+    return sessionId;
+  },
+
+  startTabInWorkspace: (teamKey, workspaceId, opts) => {
+    const none = { sessionId: "", spawned: Promise.resolve() };
     const record = readTeamKeyed(get().workspaces, teamKey, []).find((w) => w.id === workspaceId);
-    if (!record) return "";
+    if (!record) return none;
     if (isRemoteWorkspace(record)) {
       if (record.status === "ready")
         remoteWorkspaceDriver()?.openTerminal({ teamKey, workspaceId, location: record.location });
-      return "";
+      return none;
     }
     // SW-WA-F6 (AC-1): an optional `name` reads as what the tab is FOR; omitted →
     // the host's `Terminal N`.
-    const tab = { ...createTerminalTab(opts?.name), ...(opts?.role ? { role: opts.role } : {}) };
-    void get()
-      .addTerminalTab(teamKey, tab, workspaceId)
-      .catch(() => {});
-    return tab.sessionId;
+    const tab = {
+      ...createTerminalTab(opts?.name),
+      ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}),
+      ...(opts?.role ? { role: opts.role } : {}),
+    };
+    const execution = opts?.execution;
+    const spawned = get().addTerminalTab(teamKey, tab, workspaceId, {
+      ...(opts?.environmentBinding ? { environmentBinding: opts.environmentBinding } : {}),
+      ...(execution ? { commandArgv: execution.argv, nativeLaunch: execution.nativeLaunch } : {}),
+    });
+    return { sessionId: tab.sessionId, spawned };
   },
 
   removeTerminalTab: (teamKey, tabId, workspaceId, opts = {}) => {

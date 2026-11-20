@@ -3,6 +3,7 @@
 //! copy, consumed by the session registry (`is_idle`), the host's batched
 //! agent-liveness commands, and the host's memory sampler.
 
+use crate::agent_cli::{adapter, binary_stem, by_binary};
 use codesense_platform::process::{group_and_foreground, Pid};
 
 /// Returns `true` if `pid` has at least one live descendant process — i.e. the
@@ -173,52 +174,55 @@ fn classify_jobs(shell: u32, groups: Option<(i32, i32)>, subtree: &[Proc]) -> Ru
 
 /// Interpreters an agent CLI may run under as a script (`#!/usr/bin/env node`,
 /// a Python entry point): for these the script — argv's first non-flag entry
-/// after the interpreter — names the program. Matched on the lowercased basename,
-/// `python` as a prefix (`python3`, `python3.12`, macOS's `Python`).
-fn is_interpreter(basename: &str) -> bool {
-    matches!(basename, "node" | "nodejs" | "bun") || basename.starts_with("python")
+/// after the interpreter — names the program. Matched on the [`binary_stem`]
+/// (`node.exe` is `node`), `python` as a prefix (`python3`, `python3.12`,
+/// macOS's `Python`).
+fn is_interpreter(stem: &str) -> bool {
+    matches!(stem, "node" | "nodejs" | "bun") || stem.starts_with("python")
 }
 
-/// A path's last component, lowercased.
-fn basename_lower(path: &str) -> String {
-    path.rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(path)
-        .to_lowercase()
+/// Whether `script` is the npm package entry of the agent CLI `stem`
+/// ([`crate::agent_cli::AgentCliAdapter::npm_entry`]), on either separator: Windows runs an npm install as
+/// `node.exe …\node_modules\<package>\cli.js`, with no shim naming the CLI.
+fn is_npm_entry(script: &str, stem: &str) -> bool {
+    let script = script.replace('\\', "/").to_lowercase();
+    by_binary(stem)
+        .and_then(|cli| adapter(cli).npm_entry())
+        .is_some_and(|entry| script.ends_with(&format!("/{entry}")))
 }
 
-/// Does a process run the agent CLI `needle_lower` (already lowercased) as its
-/// EXECUTABLE? Pure so it unit-tests the shim shapes without a live process tree.
+/// Does a process run the agent CLI `needle` (its name or path, compared by
+/// [`binary_stem`]) as its EXECUTABLE? Pure so it unit-tests the shim shapes
+/// without a live process tree.
 ///
 /// Matches only what names the program, never an arbitrary path segment or
 /// argument (`node /x/claude/server.js`, `cat CLAUDE.md`, a cwd under
 /// `~/claude/` are not the agent):
-/// - the process name, the resolved exe's basename, or argv[0]'s basename;
-/// - under a script interpreter (argv[0] `node`, `bun`, `python3`, …), the
-///   basename of the script it runs — an npm shim `node /usr/local/bin/claude` —
-///   with a `.js`/`.mjs`/`.cjs`/`.py` extension ignored.
-pub fn agent_signature_matches(
-    name: &str,
-    exe: Option<&str>,
-    cmd: &[&str],
-    needle_lower: &str,
-) -> bool {
-    if needle_lower.is_empty() {
+/// - the [`binary_stem`] of the process name, the resolved exe, or argv[0]
+///   (`claude.exe` is `claude`);
+/// - under a script interpreter (argv[0] `node`, `node.exe`, `bun`, `python3`, …),
+///   the basename of the script it runs — an npm shim `node /usr/local/bin/claude` —
+///   with a `.js`/`.mjs`/`.cjs`/`.py` extension ignored, or the CLI's npm package
+///   entry (`…\node_modules\@anthropic-ai\claude-code\cli.js` is Claude).
+pub fn agent_signature_matches(name: &str, exe: Option<&str>, cmd: &[&str], needle: &str) -> bool {
+    let needle = binary_stem(needle);
+    if needle.is_empty() {
         return false;
     }
-    if name.to_lowercase() == needle_lower || exe.is_some_and(|e| basename_lower(e) == needle_lower)
-    {
+    let name = binary_stem(name);
+    let exe = exe.map(binary_stem);
+    if name == needle || exe.as_deref() == Some(needle.as_str()) {
         return true;
     }
-    let Some(argv0) = cmd.first().map(|a| basename_lower(a)) else {
+    let Some(argv0) = cmd.first().map(|a| binary_stem(a)) else {
         return false;
     };
-    if argv0 == needle_lower {
+    if argv0 == needle {
         return true;
     }
     let interpreted = is_interpreter(&argv0)
-        || is_interpreter(&name.to_lowercase())
-        || exe.is_some_and(|e| is_interpreter(&basename_lower(e)));
+        || is_interpreter(&name)
+        || exe.as_deref().is_some_and(is_interpreter);
     if !interpreted {
         return false;
     }
@@ -226,12 +230,12 @@ pub fn agent_signature_matches(
         .skip(1)
         .find(|a| !a.starts_with('-'))
         .is_some_and(|script| {
-            let base = basename_lower(script);
+            let base = binary_stem(script);
             let stem = [".js", ".mjs", ".cjs", ".py"]
                 .iter()
                 .find_map(|ext| base.strip_suffix(ext))
                 .unwrap_or(&base);
-            stem == needle_lower
+            stem == needle || is_npm_entry(script, &needle)
         })
 }
 
@@ -501,6 +505,67 @@ mod tests {
         ));
         // empty needle never matches
         assert!(!agent_signature_matches("claude", None, &["claude"], ""));
+
+        // Windows: the npm install runs `node.exe …\node_modules\@anthropic-ai\claude-code\cli.js`
+        assert!(agent_signature_matches(
+            "node.exe",
+            Some(r"C:\Program Files\nodejs\node.exe"),
+            &[
+                r"C:\Program Files\nodejs\node.exe",
+                r"C:\Users\u\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\cli.js",
+            ],
+            "claude"
+        ));
+        // the same entry with `/` separators
+        assert!(agent_signature_matches(
+            "node",
+            Some("/usr/local/bin/node"),
+            &[
+                "node",
+                "/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js"
+            ],
+            "claude"
+        ));
+        // the native Windows binary, in any case
+        assert!(agent_signature_matches(
+            "claude.exe",
+            Some(r"C:\Users\u\.local\bin\claude.exe"),
+            &[r"C:\Users\u\.local\bin\claude.exe"],
+            "claude"
+        ));
+        assert!(agent_signature_matches(
+            "CLAUDE.EXE",
+            None,
+            &[r"C:\TOOLS\CLAUDE.EXE"],
+            "claude"
+        ));
+        // a node server under a `claude\` directory is still not the agent
+        assert!(!agent_signature_matches(
+            "node.exe",
+            Some(r"C:\Program Files\nodejs\node.exe"),
+            &[
+                r"C:\Program Files\nodejs\node.exe",
+                r"C:\x\claude\server.js"
+            ],
+            "claude"
+        ));
+        // an editor opening a file named for the CLI is not the agent
+        assert!(!agent_signature_matches(
+            "notepad.exe",
+            Some(r"C:\Windows\System32\notepad.exe"),
+            &["notepad.exe", "CLAUDE.md"],
+            "claude"
+        ));
+        // another package's entry under the same layout is not Claude
+        assert!(!agent_signature_matches(
+            "node.exe",
+            None,
+            &[
+                "node.exe",
+                r"C:\npm\node_modules\@anthropic-ai\other-tool\cli.js"
+            ],
+            "claude"
+        ));
     }
 
     fn proc_info(name: &str, exe: Option<&str>, cmd: &[&str]) -> ProcInfo {

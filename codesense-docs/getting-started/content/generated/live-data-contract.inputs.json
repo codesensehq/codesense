@@ -28,9 +28,9 @@
     "src-tauri/src/verbs/grant_tests.rs": "ceb02015e280007d69007dec6fa938c9d2f5fbd7036e21ca578b2fc67ac5ca27",
     "src-tauri/src/verbs/mod.rs": "8b4ae477c13685de85690ac87f252e4be0d1538da9bacd50752477b4d30cea68",
     "src-tauri/src/verbs/policy.rs": "c1fe81f79a639040ae9d7f27bea572b2c14d08a950bbd7b738f66357eebdd24c",
-    "src-tauri/src/verbs/registry.generated.json": "1b2af1c82e9aace66c6df378907f70b5a2938c5c477306a99c8403e96cffc865",
+    "src-tauri/src/verbs/registry.generated.json": "37b956e3c1451649b0d0e5c06121cd31abd5a49e13e61d26149b9d8078710e39",
     "src-tauri/src/verbs/registry.rs": "f599ccbb17d3f3b23bb5e557cb4d12199480e3a536b109a13ad4496309fb3770",
-    "src-tauri/src/verbs/schema.rs": "41b32205130643f2f6d5155dbb64a306cb80ca892e83a8c997bf1211e780d6d7",
+    "src-tauri/src/verbs/schema.rs": "8fb09e816a79b228c006f733855fdd9c54cf1b694adf5bc6e1a6b91c13ef9b03",
     "src-tauri/src/verbs/tests.rs": "1c1c38d20d928fd9b4af10651588fe651bf8f727741d5bba8df945d3e385944b"
   },
   "outputSha256": "ec3537051fc82fbb4c96528d534e37efc2d1a7592b026784067f7ed9f03863ca"

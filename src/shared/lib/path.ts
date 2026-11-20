@@ -85,6 +85,18 @@ export function basename(path: string): string {
 }
 
 /**
+ * The runtime name of the program at `path`: its {@link basename}, lowercased, with a
+ * trailing `.exe`, `.cmd` or `.bat` dropped (`C:\npm\claude.cmd`, `CLAUDE.EXE` and
+ * `/usr/local/bin/claude` all name `claude`). The backend's `agent_cli::binary_stem`
+ * keeps the same rule; one table asserts both.
+ */
+export function binaryStem(path: string): string {
+  return basename(path)
+    .toLowerCase()
+    .replace(/\.(exe|cmd|bat)$/, "");
+}
+
+/**
  * Everything before the last separator. No separator → `""`; a root stays its
  * own parent (`/` → `/`, `C:\` → `C:\`, `\\server\share` → itself).
  */

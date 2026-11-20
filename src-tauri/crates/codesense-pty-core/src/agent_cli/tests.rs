@@ -1583,3 +1583,22 @@ fn a_home_with_no_verified_gateway_is_left_alone_at_teardown() {
     kill_hard(&tree).unwrap();
     assert!(running, "a live process the home names is not its gateway");
 }
+
+/// The rows the front end's stem helper asserts too, from one shared table.
+#[test]
+fn an_agent_path_names_its_runtime_by_one_stem() {
+    let table: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/binary-stem.json")).unwrap();
+    for row in table["rows"].as_array().unwrap() {
+        let (path, stem) = (row[0].as_str().unwrap(), row[1].as_str().unwrap());
+        assert_eq!(super::binary_stem(path), stem, "{path}");
+    }
+    assert_eq!(
+        super::by_binary(&super::binary_stem(r"C:\npm\claude.cmd")),
+        Some(AgentCli::Claude)
+    );
+    assert_eq!(
+        super::by_binary(&super::binary_stem("CODEX.EXE")),
+        Some(AgentCli::Codex)
+    );
+}

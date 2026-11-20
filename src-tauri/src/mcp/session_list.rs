@@ -265,8 +265,8 @@ pub(crate) fn with_launch_telemetry(
 /// that CLI is qualified on. The CLI is told by its binary, so nothing here names one.
 fn with_release(row: &mut SessionListRow) {
     let note = row.launch_telemetry.as_ref().and_then(|launch| {
-        let binary = std::path::Path::new(launch.binary_path.as_deref()?).file_name()?;
-        let cli = codesense_pty_core::agent_cli::by_binary(binary.to_str()?)?;
+        let binary = codesense_pty_core::agent_cli::binary_stem(launch.binary_path.as_deref()?);
+        let cli = codesense_pty_core::agent_cli::by_binary(&binary)?;
         crate::agents::launch_check::cli_version_warning(cli, launch.binary_version.as_deref())
     });
     row.release_qualified = note.as_ref().map(|_| false);
@@ -1027,6 +1027,12 @@ mod tests {
             ("fine", "/bin/opencode", Some("2.1.4")),
             ("odd", "/bin/mystery", Some("9.9.9")),
             ("blank", "/bin/opencode", None),
+            // A Windows install is told by its stem.
+            (
+                "win-old",
+                r"C:\Users\u\AppData\Roaming\npm\opencode.exe",
+                Some("2.0.1"),
+            ),
             // Every listed CLI is told by its binary, Hermes as any other.
             ("hermes-old", "/bin/hermes", Some("0.22.4")),
             ("hermes-fine", "/bin/hermes", Some("0.22.5")),
@@ -1065,7 +1071,11 @@ mod tests {
                 .unwrap()
                 .clone()
         };
-        for (name, release) in [("old", "2.0.1"), ("hermes-old", "0.22.4")] {
+        for (name, release) in [
+            ("old", "2.0.1"),
+            ("win-old", "2.0.1"),
+            ("hermes-old", "0.22.4"),
+        ] {
             let row = find(name);
             assert_eq!(row["releaseQualified"], false, "{name}: {row}");
             let note = row["releaseNote"].as_str().unwrap();

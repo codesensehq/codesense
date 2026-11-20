@@ -334,6 +334,11 @@ impl AgentCliAdapter for Claude {
         self.inbox_hooks(launch)
     }
 
+    /// Its npm install runs this script under `node`.
+    fn npm_entry(&self) -> Option<&'static str> {
+        Some("node_modules/@anthropic-ai/claude-code/cli.js")
+    }
+
     /// It is reached through its terminal and its waiter.
     fn channel(&self, _: &[String]) -> Option<NativeChannel> {
         None

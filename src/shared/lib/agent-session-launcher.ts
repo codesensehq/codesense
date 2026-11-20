@@ -23,7 +23,8 @@ import {
 import { whenTerminalLayoutHydrated } from "@/shared/lib/terminal-layout";
 import { logger } from "@/shared/lib/logger";
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
-import { basename } from "@/shared/lib/path";
+import { binaryStem } from "@/shared/lib/path";
+import { platformName } from "@/shared/lib/capabilities";
 
 /**
  * SW-GS-2b — the generalized codesense-managed-agent session launcher: connect
@@ -316,22 +317,19 @@ async function connectAgentSessionInner(
 
     // A structured exec already started the agent. Shell launches still use the
     // existing bounded injector and surface its failure.
-    const line = execution
-      ? buildAgentLaunchCommand(execution.argv[0], execution.argv.slice(1))
-      : agentLaunchLine(spec, extraArgs);
-    const launched: InjectOutcome = execution
-      ? { ok: true }
-      : await deps.launchAgentLine(tab.sessionId, line);
-    if (!launched.ok) {
-      throw new Error(
-        `Agent launch: the shell never reached its prompt to start the agent (session ${tab.sessionId}).`,
-      );
+    if (execution) {
+      recordExecLaunch(tab.sessionId, spec, execution);
+    } else {
+      const line = agentLaunchLine(spec, extraArgs);
+      const launched = await deps.launchAgentLine(tab.sessionId, line);
+      if (!launched.ok) {
+        throw new Error(
+          `Agent launch: the shell never reached its prompt to start the agent (session ${tab.sessionId}).`,
+        );
+      }
+      recordAgentLaunch(tab.sessionId, spec, line);
+      activityWrapped = launched.activityWrapped;
     }
-    const recorded = execution
-      ? { ...spec, agentPath: execution.argv[0], args: execution.argv.slice(1) }
-      : spec;
-    recordAgentLaunch(tab.sessionId, recorded, line);
-    activityWrapped = launched.activityWrapped;
   } catch (err) {
     try {
       await deps.closeTab(tab.sessionId);
@@ -457,11 +455,44 @@ export function agentLaunchLine(spec: AgentLaunchSpec, extraArgs: readonly strin
     : buildAgentLaunchCommand(spec.agentPath, spec.args);
 }
 
-/** Remember how CodeSense launched a session's agent (and the exact line it typed). */
-export function recordAgentLaunch(sessionId: string, spec: AgentLaunchSpec, line: string): void {
-  useAgentStateStore
-    .getState()
-    .recordLaunch(sessionId, { line, agent: agentBasename(spec.agentPath), spec });
+/** Remember how CodeSense launched a session's agent (and the exact line it typed);
+ *  `exec`: the agent was the tab's process, with no shell under it. */
+export function recordAgentLaunch(
+  sessionId: string,
+  spec: AgentLaunchSpec,
+  line: string,
+  exec = false,
+): void {
+  useAgentStateStore.getState().recordLaunch(sessionId, {
+    line,
+    agent: agentBasename(spec.agentPath),
+    spec,
+    ...(exec ? { exec: true } : {}),
+  });
+}
+
+/** Remember an agent its tab's exec started. The spec keeps the launch's own args (a
+ *  relaunch projects its scope afresh from them) and takes only the program the exec ran;
+ *  the exec's argv is the recorded line. */
+export function recordExecLaunch(
+  sessionId: string,
+  spec: AgentLaunchSpec,
+  execution: ScopedExecution,
+): void {
+  const [agentPath, ...args] = execution.argv;
+  recordAgentLaunch(
+    sessionId,
+    { ...spec, agentPath },
+    buildAgentLaunchCommand(agentPath, args),
+    true,
+  );
+}
+
+/** Whether every agent launch on `platform` must exec its agent as the tab's process, so
+ *  no launch line may be typed: Windows has no POSIX shell to type one into. The backend
+ *  decides each launch (`launches_direct`); this is for a path that cannot ask it. */
+export function agentLaunchesDirect(platform: string = platformName()): boolean {
+  return platform === "Windows";
 }
 
 /** What a respawn of the tab runs with: the launch's own shell rules (env strip,
@@ -542,32 +573,12 @@ export async function relaunchAgentSession(
   }
   const { extraArgs, removeArgs, execution } = await respawn(request);
   if (execution) {
-    const freshSpec = { ...spec, agentPath: execution.argv[0], args: execution.argv.slice(1) };
-    const line = buildAgentLaunchCommand(freshSpec.agentPath, freshSpec.args);
-    recordAgentLaunch(sessionId, freshSpec, line);
+    recordExecLaunch(sessionId, spec, execution);
     return { ok: true };
   }
   let freshSpec = spec;
   if (removeArgs !== undefined) {
-    const original = spec.args ?? [];
-    const kept: string[] = [];
-    let removed = 0;
-    for (let at = 0; at < original.length; ) {
-      // Match complete overrides, including each -c value, in their original order.
-      // A shared flag token alone must never remove the user's unrelated override.
-      const width = removeArgs[removed] === "-c" || removeArgs[removed] === "--config" ? 2 : 1;
-      if (
-        removed < removeArgs.length &&
-        removeArgs
-          .slice(removed, removed + width)
-          .every((token, offset) => original[at + offset] === token)
-      ) {
-        removed += width;
-        at += width;
-      } else {
-        kept.push(original[at++]);
-      }
-    }
+    const kept = withoutRemovedArgs(spec.args ?? [], removeArgs);
     freshSpec = { ...spec, args: scopedLaunchArgs(kept, extraArgs) };
   }
   const line = agentLaunchLine(freshSpec, removeArgs === undefined ? extraArgs : []);
@@ -575,6 +586,28 @@ export async function relaunchAgentSession(
   if (!launched.ok) return { ok: false, reason: injectFailure(launched) };
   recordAgentLaunch(sessionId, freshSpec, line);
   return { ok: true };
+}
+
+/**
+ * `args` without the overrides in `remove`, matched whole and in their original order: a
+ * `-c`/`--config` entry with its value, so a shared flag token alone never removes the
+ * user's unrelated override, and a truncated entry matches nothing. The backend's
+ * `mcp_scope::without_removed_args` keeps the same rule; one table asserts both.
+ */
+export function withoutRemovedArgs(args: readonly string[], remove: readonly string[]): string[] {
+  const kept: string[] = [];
+  let removed = 0;
+  for (let at = 0; at < args.length; ) {
+    const width = remove[removed] === "-c" || remove[removed] === "--config" ? 2 : 1;
+    const entry = remove.slice(removed, removed + width);
+    if (entry.length === width && entry.every((token, offset) => args[at + offset] === token)) {
+      removed += width;
+      at += width;
+    } else {
+      kept.push(args[at++]);
+    }
+  }
+  return kept;
 }
 
 /** Launch the agent again in its shell, which still runs (the agent crashed in it). */
@@ -587,9 +620,9 @@ export async function relaunchAgentInLiveShell(
   return launched.ok ? { ok: true } : { ok: false, reason: injectFailure(launched) };
 }
 
-/** The process name the AC-12 liveness probe matches: the agent exe basename. */
+/** The process name the liveness probe matches: the agent's {@link binaryStem}. */
 export function agentBasename(agentPath: string): string {
-  return basename(agentPath) || agentPath;
+  return binaryStem(agentPath) || agentPath;
 }
 
 /** AC-12: true `<agent>`-process liveness in the owned tab (connected vs dropped

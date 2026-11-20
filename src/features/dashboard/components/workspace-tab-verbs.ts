@@ -13,16 +13,24 @@
 // story/branch/epic agent session (those go through the story verbs).
 
 import type { WorkspaceKind } from "@/shared/lib/workspace-kind-capabilities";
-import { selectSessionHome, useViewerStore, type Workspace } from "@/shared/stores/viewer-store";
+import {
+  createTerminalTab,
+  selectSessionHome,
+  useViewerStore,
+  type Workspace,
+} from "@/shared/stores/viewer-store";
 import { getActiveTeamKey } from "@/shared/lib/team-key";
 import { injectAgentLine, type GateMode } from "@/shared/lib/agent-session-injection";
 import {
   agentBasename,
+  agentLaunchesDirect,
   agentLaunchLine,
   isAgentConnected,
   recordAgentLaunch,
+  recordExecLaunch,
+  type AgentLaunchSpec,
 } from "@/shared/lib/agent-session-launcher";
-import { projectMcpScopeConfig } from "@/tauri/commands";
+import { projectMcpScopeConfig, type ScopedExecution } from "@/tauri/commands";
 import { DEFAULT_AGENT_CLI, resolveAgentCliPath } from "@/shared/lib/default-agent";
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
 
@@ -33,26 +41,55 @@ export const GENERIC_AGENT_ROLE = "generic-agent";
 
 // ── openTab ──────────────────────────────────────────────────────────────────
 
+/** An agent tab's launch, prepared for its session before the tab opens. */
+export interface AgentTabLaunch {
+  /** The launch to record (and, with no exec, to type into the tab's shell). */
+  spec: AgentLaunchSpec;
+  /** The per-session config's launch flags. */
+  extraArgs: string[];
+  /** The one-use binding of the scope's environment, which the tab's spawn consumes. */
+  environmentBinding?: string;
+  /** The agent runs as the tab's process: no line is typed. */
+  execution?: ScopedExecution;
+}
+
+/** How an agent tab opens: under the id its launch was prepared for, with that launch's
+ *  environment binding and, for an exec, its argv as the tab's process. */
+export interface AgentTabOpen {
+  sessionId: string;
+  environmentBinding?: string;
+  execution?: ScopedExecution;
+}
+
 export interface OpenWorkspaceTabDeps {
   /** The kind of an OPEN workspace by id (wherever it is open), or `null` when no
    *  such workspace is open — the existence + kind gate. */
   workspaceKindOf: (workspaceId: string) => WorkspaceKind | null;
-  /** Mint + add a tab to the workspace and return its `sessionId` (`""` if the
-   *  workspace vanished). `role` tags an agent tab. */
-  openTab: (workspaceId: string, role?: string) => string;
+  /** A new tab's session id, before its tab opens (an agent tab projects for it). */
+  newSessionId: () => string;
+  /** Add a tab to the workspace and return its `sessionId` (`""` if the workspace
+   *  vanished). `role` tags an agent tab, which opens as `launch` says and resolves
+   *  once its host placed it (rejecting when the host refused the spawn); a plain tab
+   *  resolves at once. */
+  openTab: (workspaceId: string, role?: string, launch?: AgentTabOpen) => Promise<string>;
   /** Remove a just-opened tab — the rollback for a failed agent launch (so a
    *  thrown launch never leaves an orphan, mislabeled agent tab behind). */
   closeTab: (workspaceId: string, sessionId: string) => void;
-  /** Launch the agent CLI into the tab's shell (SW-GW-2 agent tab), with its
-   *  per-session config for the workspace's dir. Rejects `unavailable:` when the
-   *  agent CLI can't be resolved. */
-  launchAgent: (workspaceId: string, sessionId: string) => Promise<void>;
+  /** Prepare the agent launch for `sessionId`: its per-session config for the
+   *  workspace's dir. Rejects `unavailable:` when the agent CLI can't
+   *  be resolved, or when the launch could only be typed where none may be. */
+  prepareAgent: (workspaceId: string, sessionId: string) => Promise<AgentTabLaunch>;
+  /** Start the prepared agent in its open tab: record an exec, or type the launch
+   *  line into the tab's shell. */
+  launchAgent: (sessionId: string, launch: AgentTabLaunch) => Promise<void>;
 }
 
 /**
  * `openTab({workspaceId, agent?}) → {sessionId}` — add a tab to an already-open
  * GENERIC (dir) workspace and return its addressable `sessionId`. `agent:true`
- * additionally launches the agent CLI into the new tab so it can host `prompt`s.
+ * additionally launches the agent CLI into the new tab so it can host `prompt`s:
+ * its launch is projected first, so the tab opens with the agent as its process
+ * when the launch is an exec, and a line is typed only when it is not.
  * Refuses any non-generic / un-opened `workspaceId` (AC-3/AC-7).
  */
 export async function openWorkspaceTab(
@@ -70,21 +107,29 @@ export async function openWorkspaceTab(
   if (kind !== "generic") {
     throw new Error(`not-allowed: openTab targets generic (dir) workspaces only, not "${kind}"`);
   }
-  const wantsAgent = args.agent === true;
-  const sessionId = deps.openTab(workspaceId, wantsAgent ? GENERIC_AGENT_ROLE : undefined);
-  if (!sessionId) {
-    throw new Error(`unavailable: could not open a tab in "${workspaceId}"`);
+  if (args.agent !== true) {
+    const sessionId = await deps.openTab(workspaceId);
+    if (!sessionId) throw new Error(`unavailable: could not open a tab in "${workspaceId}"`);
+    return { sessionId };
   }
-  if (wantsAgent) {
-    try {
-      await deps.launchAgent(workspaceId, sessionId);
-    } catch (err) {
-      // The tab was minted + role-tagged BEFORE the launch. A failed launch (e.g.
-      // no agent CLI) would otherwise strand a `generic-agent`-tagged tab with no
-      // agent behind it — roll it back so state matches the rejected result.
-      deps.closeTab(workspaceId, sessionId);
-      throw err;
-    }
+  // A failed preparation opened nothing, so it has nothing to roll back.
+  const sessionId = deps.newSessionId();
+  const launch = await deps.prepareAgent(workspaceId, sessionId);
+  try {
+    const opened = await deps.openTab(workspaceId, GENERIC_AGENT_ROLE, {
+      sessionId,
+      environmentBinding: launch.environmentBinding,
+      execution: launch.execution,
+    });
+    if (!opened) throw new Error(`unavailable: could not open a tab in "${workspaceId}"`);
+    await deps.launchAgent(sessionId, launch);
+  } catch (err) {
+    // The session was projected for and may hold a tab: a refused spawn, a workspace
+    // that vanished, or a launch that failed would otherwise strand a
+    // `generic-agent`-tagged session with no agent behind it — end it so state matches
+    // the rejected result.
+    deps.closeTab(workspaceId, sessionId);
+    throw err;
   }
   return { sessionId };
 }
@@ -225,17 +270,27 @@ export function makeRealOpenWorkspaceTabDeps(
     workspaceKindOf: (workspaceId) =>
       resolveWorkspaceTeam(useViewerStore.getState().workspaces, workspaceId)?.workspace.kind ??
       null,
-    openTab: (workspaceId, role) => {
+    newSessionId: () => createTerminalTab().sessionId,
+    openTab: async (workspaceId, role, launch) => {
       const hit = resolveWorkspaceTeam(useViewerStore.getState().workspaces, workspaceId);
       if (!hit) return "";
-      return useViewerStore.getState().openTabInWorkspace(hit.teamKey, workspaceId, { role });
+      const store = useViewerStore.getState();
+      if (!launch) return store.openTabInWorkspace(hit.teamKey, workspaceId, { role });
+      // An agent tab waits for its spawn, so a refused one is rolled back, never recorded.
+      const opened = store.startTabInWorkspace(hit.teamKey, workspaceId, { role, ...launch });
+      await opened.spawned;
+      return opened.sessionId;
     },
     closeTab: (_workspaceId, sessionId) =>
       // Roll back by the tab's unique sessionId — NOT by re-resolving the active
       // team, which can change during the awaited agent launch and strand the
-      // orphan. Its host ends it wherever it landed (SW-GW-5).
-      useViewerStore.getState().removeTerminalTabBySession(sessionId, { kill: true }),
-    launchAgent: async (workspaceId, sessionId) => {
+      // orphan. Its host ends it wherever it landed; a session it never
+      // placed has nothing to end.
+      void useViewerStore
+        .getState()
+        .removeTerminalTabBySession(sessionId, { kill: true })
+        .catch(() => {}),
+    prepareAgent: async (workspaceId, sessionId) => {
       const agentPath = await resolveAgentCliPath();
       if (!agentPath) {
         throw new Error("unavailable: agent CLI not found on PATH");
@@ -245,19 +300,35 @@ export function makeRealOpenWorkspaceTabDeps(
       const target = resolveWorkspaceTeam(useViewerStore.getState().workspaces, workspaceId);
       const cwd = target?.workspace.cwd;
       if ((frameId || pagePath) && !cwd) throw new Error("File not found");
-      const scope = cwd
-        ? await projectMcpScopeConfig(sessionId, cwd, null, undefined, [], {
-            binary: agentBasename(agentPath),
-            defaultArgs: true,
-            ...(frameId || pagePath ? { frameId, pagePath, teamKey: target?.teamKey } : {}),
-          })
-        : { extraArgs: [] };
+      if (!cwd) {
+        // With no dir there is no projection to exec the agent from.
+        if (agentLaunchesDirect()) {
+          throw new Error("unavailable: an agent tab needs a workspace folder on this platform");
+        }
+        return { spec: { agentPath }, extraArgs: [] };
+      }
+      const scope = await projectMcpScopeConfig(sessionId, cwd, null, undefined, [], {
+        binary: agentBasename(agentPath),
+        defaultArgs: true,
+        ...(frameId || pagePath ? { frameId, pagePath, teamKey: target?.teamKey } : {}),
+      });
       // The panel's own shell: a relaunch restarts it the panel's way, with a fresh
       // config for the same dir.
-      const spec = cwd ? { agentPath, configCwd: cwd } : { agentPath };
-      const line = agentLaunchLine(spec, scope.extraArgs);
+      return {
+        spec: { agentPath, configCwd: cwd },
+        extraArgs: scope.extraArgs,
+        ...(scope.environmentBinding ? { environmentBinding: scope.environmentBinding } : {}),
+        ...(scope.execution ? { execution: scope.execution } : {}),
+      };
+    },
+    launchAgent: async (sessionId, launch) => {
+      if (launch.execution) {
+        recordExecLaunch(sessionId, launch.spec, launch.execution);
+        return;
+      }
+      const line = agentLaunchLine(launch.spec, launch.extraArgs);
       const { submitted } = await submitLine(sessionId, line, "shell");
-      if (submitted) recordAgentLaunch(sessionId, spec, line);
+      if (submitted) recordAgentLaunch(sessionId, launch.spec, line);
     },
   };
 }
