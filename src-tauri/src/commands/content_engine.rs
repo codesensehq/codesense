@@ -3824,8 +3824,9 @@ fn merge_notify_hooks(
 }
 
 /// Rewrite in place, as `target` writes it now, each hook entry whose command is exactly one an
-/// earlier CodeSense wrote ([`hook::LEGACY_COMMANDS`]), keeping the entry's other keys, so a
-/// file never holds the old hook beside the new one. A command that only names an old script
+/// earlier CodeSense wrote ([`hook::LEGACY_COMMANDS`]): the keys of the new entry
+/// ([`hook::HookCommand::entry`]) go over the old one's, and its other keys stay, so a file
+/// never holds the old hook beside the new one. A command that only names an old script
 /// (a team's own `.claude/hooks/codesense-notify.sh`) is left alone. Whether anything changed.
 fn replace_legacy_hooks(settings: &mut serde_json::Value, target: HookTarget) -> bool {
     let Some(events) = settings.get_mut("hooks").and_then(|h| h.as_object_mut()) else {
@@ -3847,13 +3848,8 @@ fn replace_legacy_hooks(settings: &mut serde_json::Value, target: HookTarget) ->
         else {
             continue;
         };
-        let written = hook::command(verb, target);
-        entry.insert("command".into(), written.command.into());
-        if let Some(shell) = written.shell {
-            entry.insert("shell".into(), shell.into());
-        }
-        if let Some(on_failure) = written.on_failure {
-            entry.insert("onFailure".into(), on_failure.into());
+        if let serde_json::Value::Object(written) = hook::command(verb, target).entry() {
+            entry.extend(written);
         }
         changed = true;
     }
@@ -10104,14 +10100,19 @@ mod tests {
         settings
     }
 
-    /// The local and remote merges replace what an earlier CodeSense wrote in place: one status
-    /// entry per event, where the old one was, and one guard. A team's own hook that only names
-    /// an old script's file stays.
+    /// The local and remote merges replace what an earlier CodeSense wrote in place, in the form
+    /// of the host that runs it (a Windows writer's own file gets the PowerShell form, a remote
+    /// file the POSIX one): one status entry per event, where the old one was, and one guard. A
+    /// team's own hook that only names an old script's file stays.
     #[test]
     fn hooks_an_earlier_codesense_wrote_are_replaced_in_place() {
         let tmp = TempDir::new().unwrap();
         let team_hook = ".claude/hooks/codesense-notify.sh";
-        for remote in [false, true] {
+        for (writer, remote) in [
+            (HookTarget::Posix, false),
+            (HookTarget::Windows, false),
+            (HookTarget::Windows, true),
+        ] {
             let mut settings = legacy_settings();
             settings["hooks"]["Stop"]
                 .as_array_mut()
@@ -10120,7 +10121,6 @@ mod tests {
                     "matcher": "",
                     "hooks": [{ "type": "command", "command": team_hook }],
                 }));
-            let writer = HookTarget::local();
             let target = if remote {
                 merge_remote_notify_hooks(&mut settings, AgentCli::Claude, writer).unwrap();
                 HookTarget::Posix
@@ -10134,19 +10134,22 @@ mod tests {
                 assert_eq!(
                     entries(&settings, ev, Verb::Notify, target),
                     [status.entry()],
-                    "remote {remote}: {ev}"
+                    "{writer:?} writer, remote {remote}: {ev}"
                 );
                 assert_eq!(hook_commands(&settings, ev)[0], status.command, "in place");
             }
             assert_eq!(
                 entries(&settings, "PreToolUse", Verb::SecretGuard, target),
                 [hook::command(Verb::SecretGuard, target).entry()],
-                "remote {remote}"
+                "{writer:?} writer, remote {remote}"
             );
             let text = settings.to_string();
             for (_, legacy) in hook::LEGACY_COMMANDS {
                 let legacy = serde_json::Value::from(*legacy).to_string();
-                assert!(!text.contains(&legacy), "remote {remote}: {text}");
+                assert!(
+                    !text.contains(&legacy),
+                    "{writer:?} writer, remote {remote}: {text}"
+                );
             }
             assert_eq!(
                 hook_commands(&settings, "Stop")
