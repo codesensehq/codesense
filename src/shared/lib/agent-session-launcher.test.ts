@@ -670,6 +670,12 @@ describe("agentBasename (AC-12 liveness needle)", () => {
     expect(agentBasename("/opt/homebrew/bin/claude")).toBe("claude");
     expect(agentBasename("claude")).toBe("claude");
   });
+
+  it("names a Windows CLI by its stem, so the liveness probe finds it", () => {
+    expect(agentBasename("C:\\Users\\u\\AppData\\Roaming\\npm\\claude.exe")).toBe("claude");
+    expect(agentBasename("C:\\npm\\claude.cmd")).toBe("claude");
+    expect(agentBasename("CODEX.BAT")).toBe("codex");
+  });
 });
 
 describe("waitForAgentLive (AC-11/AC-12 — hook-independent readiness)", () => {
