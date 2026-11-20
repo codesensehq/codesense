@@ -171,6 +171,9 @@ function avatar(path: string): string | undefined {
   return file ? inside(AVATARS, `${pack}/${file}`) : undefined;
 }
 
+/** The committed file behind a kit route: the app serves `editor.min.js` as `/kit/v1/editor.js`. */
+const kitFile = (name: string) => (name === "editor.js" ? "editor.min.js" : name);
+
 function servePane(url: string): { type: string; body: string | Buffer } | undefined {
   const path = decodeURIComponent(url.split("?")[0]);
   const kit = path.startsWith("/kit/v1/");
@@ -179,7 +182,7 @@ function servePane(url: string): { type: string; body: string | Buffer } | undef
   const dir =
     route === "pane" ? mounts.get(Buffer.from(panes ?? "", "base64url").toString()) : undefined;
   const file = kit
-    ? (avatar(path) ?? inside(KIT, path.slice("/kit/v1/".length)))
+    ? (avatar(path) ?? inside(KIT, kitFile(path.slice("/kit/v1/".length))))
     : dir
       ? inside(dir, rest.join("/"))
       : undefined;

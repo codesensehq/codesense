@@ -9,8 +9,9 @@ import { editorDigest } from "./kit-editor-digest.mjs";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const entry = resolve(root, "src/features/notes/editor/kit-entry.ts");
 const out = resolve(root, "src-tauri/src/http/routes/dashboard_kit");
-// The .min.js name keeps code scanning from analyzing the bundled library code; the app still
-// serves it as /kit/v1/editor.js.
+// The bundle is mostly third-party library code. The .min.js name keeps code scanning from
+// analyzing it (its first-party modules stay scanned in src/); the app still serves it as
+// /kit/v1/editor.js.
 const JS = "editor.min.js";
 const sourceCss = readFileSync(resolve(root, "src/styles/scratch-note.css"), "utf8");
 const { digest, tiptap } = editorDigest(root, entry);

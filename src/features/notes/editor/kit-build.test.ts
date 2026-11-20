@@ -9,8 +9,9 @@ it("keeps the committed editor current, standalone, CSP-compatible and within bu
     execFileSync("pnpm", ["build:kit-editor", "--check"], { cwd: process.cwd(), stdio: "pipe" }),
   ).not.toThrow();
   const path = "src-tauri/src/http/routes/dashboard_kit/";
-  // The bundle is third-party library code; the .min.js name keeps code scanning's
-  // JavaScript extractor from analyzing it. It is still served as /kit/v1/editor.js.
+  // The bundle is mostly third-party library code; the .min.js name keeps code scanning's
+  // JavaScript extractor from analyzing it (its first-party modules stay scanned in src/).
+  // It is still served as /kit/v1/editor.js.
   expect(existsSync(path + "editor.js")).toBe(false);
   const js = readFileSync(path + "editor.min.js", "utf8"),
     css = readFileSync(path + "editor.css", "utf8");

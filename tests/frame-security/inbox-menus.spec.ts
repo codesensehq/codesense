@@ -15,7 +15,9 @@ test.beforeAll(async ({ browser }) => {
     const kit = req.url?.match(/^\/kit\/v1\/([^?]+)/);
     if (kit) {
       res.setHeader("content-type", kit[1].endsWith(".css") ? "text/css" : "text/javascript");
-      res.end(readFileSync(`src-tauri/src/http/routes/dashboard_kit/${kit[1]}`));
+      // The app serves the committed editor.min.js as /kit/v1/editor.js.
+      const file = kit[1] === "editor.js" ? "editor.min.js" : kit[1];
+      res.end(readFileSync(`src-tauri/src/http/routes/dashboard_kit/${file}`));
       return;
     }
     const nested = req.url?.startsWith("/message/");
