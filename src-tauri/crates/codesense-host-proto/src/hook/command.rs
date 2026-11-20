@@ -112,8 +112,8 @@ impl HookCommand {
 ///   is set first: unset, the path would be `\codesense-bridge.exe` at the drive's root. The
 ///   path is double-quoted, since PowerShell never expands `$env:` inside single quotes, and
 ///   the bridge is run with the hook's own stdin, never a PowerShell string, so the payload's
-///   bytes reach it unchanged. `onFailure: "continue"`: a hook that fails on Windows would otherwise block
-///   the tool call. The guard's deny is its printed decision, not a failure.
+///   bytes reach it unchanged. `onFailure: "continue"`: a hook that fails on Windows would
+///   otherwise block the tool call. The guard's deny is its printed decision, not a failure.
 pub fn command(verb: Verb, target: HookTarget) -> HookCommand {
     let verb = verb.as_str();
     let bridge = target.bridge_file();
