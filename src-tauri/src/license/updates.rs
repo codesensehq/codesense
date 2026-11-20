@@ -339,8 +339,11 @@ pub fn can_replace_with(target: &Path, temp: &Path) -> bool {
     // both, its own folder (the first on its volume), writes the new file at its path, and renames
     // it back if that fails. Its own folder is always tried and is on its volume, so the file must
     // be this user's, writable and on its folder's volume, and the folder must take new entries.
+    // A shared folder (world-writable or sticky, like /tmp) is refused: another user could put
+    // their own file at the path between the rename and the write.
     if bundle.is_file() {
-        return std::fs::metadata(parent).is_ok_and(|dir| dir.dev() == bundle.dev())
+        return std::fs::metadata(parent)
+            .is_ok_and(|dir| dir.dev() == bundle.dev() && dir.mode() & 0o1002 == 0)
             && bundle.uid() == uid
             && rustix::fs::access(target, rustix::fs::Access::WRITE_OK).is_ok()
             && tempfile::tempfile_in(parent).is_ok();
@@ -392,6 +395,9 @@ impl Install {
             Some(BundleType::Deb | BundleType::Rpm) => Install::PackageManager,
             Some(BundleType::AppImage) => appimage_file(executable, appimage, temp)
                 .map_or(Install::Unknown, Install::AppImage),
+            // tauri-utils' `bundle_type()` knows a marker only for deb, rpm, AppImage, MSI and
+            // NSIS, which the bundler writes into Linux and Windows packages; on macOS it answers
+            // `App` for any build without one, so every macOS run, `.app` or not, lands here.
             Some(_) => {
                 install_target(executable).map_or(Install::Unknown, |target| Install::Bundle {
                     target,
@@ -402,15 +408,16 @@ impl Install {
         }
     }
 
-    /// How this run is installed. `env` is the app's (`Manager::env`).
-    pub fn running(env: &tauri::Env) -> Self {
+    /// How this run is installed. `env` is the app's (`Manager::env`); without it an AppImage
+    /// run is `Unknown`.
+    pub fn running(env: Option<&tauri::Env>) -> Self {
         let Ok(executable) = std::env::current_exe() else {
             return Install::Unknown;
         };
         Install::of(
             tauri::utils::platform::bundle_type(),
             &executable,
-            running_appimage(env).as_deref(),
+            env.and_then(running_appimage).as_deref(),
             &std::env::temp_dir(),
         )
     }
@@ -784,14 +791,7 @@ impl Updates {
             endpoint: endpoint(base)?,
             running,
             // Without the app's `Env` an AppImage is not known yet; `with_install` sets it.
-            install: std::env::current_exe().map_or(Install::Unknown, |exe| {
-                Install::of(
-                    tauri::utils::platform::bundle_type(),
-                    &exe,
-                    None,
-                    &std::env::temp_dir(),
-                )
-            }),
+            install: Install::running(None),
             max_backoff,
             max_bytes: MAX_UPDATE_BYTES,
             clock: Box::new(Instant::now),
@@ -2201,6 +2201,11 @@ pub(super) mod tests {
         let read_only_file = can_replace_with(&file, &temp);
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert!(!read_only_file, "a file this user can't write");
+
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o1777)).unwrap();
+        let shared_folder = can_replace_with(&file, &temp);
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(!shared_folder, "a world-writable, sticky folder");
 
         let guard = ReadOnly::new(dir.path());
         let read_only_folder = can_replace_with(&file, &temp);

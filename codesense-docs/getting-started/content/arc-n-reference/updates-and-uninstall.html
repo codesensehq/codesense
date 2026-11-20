@@ -56,7 +56,9 @@
         <p>
           On Linux, the AppImage updates itself the same way: the new AppImage is checked against the
           release signing key and replaces the old file where it is when you quit, as long as the file and
-          its folder are yours to write. CodeSense installed from a <code>.deb</code> or <code>.rpm</code>
+          its folder are yours to write and the folder isn't shared, like <code>/tmp</code>. As CodeSense quits, the old AppImage is moved into a temporary
+          folder and the new one is written at its path; if the write fails the old file is put back,
+          and once it succeeds the old copy is deleted. CodeSense installed from a <code>.deb</code> or <code>.rpm</code>
           package doesn't download updates itself. When a newer build is out, the Updates section says
           <q>A new build is out. Update CodeSense through your package manager.</q>, with no download link:
           install the new package the way you installed this one.
