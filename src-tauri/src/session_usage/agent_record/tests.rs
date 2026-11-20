@@ -620,3 +620,26 @@ fn a_charged_seat_reads_as_its_latest_segments_story_with_its_charges() {
     assert_eq!(record["story"]["basis"], "charged");
     assert_eq!(record["charges"], json!([{"story": "DEMO-2", "fromMs": AT + 1, "chargedBy": "lead"}]));
 }
+
+/// The record read itself reads a charged seat's story as its latest segment's.
+#[tokio::test]
+async fn a_charged_seats_record_read_names_its_latest_segments_story() {
+    let (dir, _store) = store();
+    launched(dir.path(), AgentCli::Claude, "seat", "claude-sonnet-5-5", None);
+    let charge = crate::session_usage::charge::Charge {
+        story_id: "DEMO-2".into(),
+        from_ms: AT + 1,
+        org: None,
+        team: None,
+        charged_by: Some("lead".into()),
+        charged_by_session: "tab-lead".into(),
+        charged_at_ms: AT + 1,
+    };
+    UsageStore::open(&dir.path().join("usage.sqlite")).unwrap().charge_story("tab-seat", &charge).unwrap();
+    let params = Params { handle: "seat".into() };
+    let record = read(dir.path(), &params, HashMap::new(), &ThreadPeers::default(), &CallerScope::Human)
+        .await
+        .unwrap();
+    assert_eq!(record["story"]["id"], "DEMO-2");
+    assert_eq!(record["charges"][0]["story"], "DEMO-2");
+}

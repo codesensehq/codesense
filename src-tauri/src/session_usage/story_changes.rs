@@ -1158,10 +1158,19 @@ async fn read_indexed_sessions(
             .unwrap_or("exact");
         session["basis"] = json!(basis);
         // A session charged to more than one story counts here only for its segments of this
-        // story: they and their cost replace the whole session's.
+        // story: they and their cost replace the whole session's. Its models (and their tokens
+        // and costs) stay the whole session's, and say so.
         if let Some(segments) = row.contribution.extra.get("segments") {
+            let cost = row.contribution.nums.get("cost").copied().flatten();
             session["segments"] = segments.clone();
-            session["cost"]["totalUsd"] = json!(row.contribution.nums.get("cost").copied().flatten());
+            session["cost"] = json!({
+                "state": if cost.is_some() { "present" } else { "absent" },
+                "totalUsd": cost,
+                "source": session["cost"]["source"],
+                "reason": if cost.is_some() { None } else { row.contribution.reasons.get("cost").cloned() },
+                "scope": "segments",
+            });
+            session["modelsScope"] = json!("session");
         }
         sessions.push(session);
     }

@@ -245,3 +245,45 @@ fn the_session_statement_finds_charges_by_their_key() {
         .join("\n");
     assert!(!plan.lines().any(|l| l.contains("SCAN c")), "the charge lookup scans:\n{plan}");
 }
+
+/// A charge names the tab; usage arrives under the CLI's native id. The split holds whether the
+/// native id is linked by the tab's record or by the launch its export was attributed to.
+#[test]
+fn a_tab_charge_splits_the_usage_its_native_session_reported() {
+    for by_record in [true, false] {
+        let (_d, mut store) = store();
+        let mut record = record::SessionRecord::new("tab-1");
+        record.story_id = Some("DEMO-1".into());
+        record.org = Some("acme".into());
+        if by_record {
+            record.native_session_id = Some("native-1".into());
+        }
+        // The record is written first, so it does not take the native id from the attribution.
+        store.write_session_record(&record).unwrap();
+        if !by_record {
+            store
+                .conn
+                .execute(
+                    "INSERT INTO session_attribution (session_id, org, team, agent, handle, cwd, attributed_at_ms, launch_id)
+                     VALUES ('native-1', 'acme', 'dev', 'builtin/claude', 'h', NULL, 1, 'tab-1')",
+                    [],
+                )
+                .unwrap();
+        }
+        let at = local_noon(2026, 11, 2);
+        store
+            .ingest(&[call("a", "native-1", at, 1.0), call("b", "native-1", at + 10, 2.0), call("c", "native-1", at + 20, 4.0)])
+            .unwrap();
+        charge_to(&store, "tab-1", "DEMO-2", at + 15);
+        let r = report(&store, Filter::default());
+        let rows = rows_of(&r, "native-1");
+        assert_eq!(rows.len(), 2, "by record: {by_record}");
+        let (after, before) = (rows[0], rows[1]);
+        assert_eq!((after.segment, after.cost_usd, story_of(after)), (segment(Some(at + 15), None), Some(4.0), (Some("DEMO-2"), Some("charged"))));
+        assert_eq!((before.segment, before.cost_usd, story_of(before).0), (segment(None, Some(at + 15)), Some(3.0), Some("DEMO-1")));
+        assert!(rows.iter().all(|row| row.tab_session_id.as_deref() == Some("tab-1")));
+        // A report of the tab finds the same rows.
+        let by_tab = report(&store, Filter { session_id: Some("tab-1".into()), ..Filter::default() });
+        assert_eq!(by_tab.sessions.len(), 2);
+    }
+}
