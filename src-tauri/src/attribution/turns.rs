@@ -183,7 +183,7 @@ where
 }
 /// The committer time of `commit` in `repo`, read in-process, as the last millisecond of its second
 /// (Git records whole seconds, and a call that ran in the same second preceded the commit).
-fn committer_ms(repo: &Path, commit: &str) -> Option<i64> {
+pub(super) fn committer_ms(repo: &Path, commit: &str) -> Option<i64> {
     let oid = Result::ok(git2::Oid::from_str(commit))?;
     let repository = Result::ok(git2::Repository::open(repo))?;
     let found = Result::ok(repository.find_commit(oid))?;
