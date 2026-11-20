@@ -831,8 +831,12 @@ impl DependencyManager {
                             source: entry.source,
                             shadowed: entry.shadowed.clone(),
                             qualified: Self::version_qualified(basename, entry.version.as_deref()),
-                            supported: by_binary(basename)
-                                .map(|cli| descriptor(cli).release.supported.to_string()),
+                            supported: by_binary(basename).map(|cli| {
+                                descriptor(cli)
+                                    .release
+                                    .supported_for(std::env::consts::OS)
+                                    .to_string()
+                            }),
                         },
                     )
                 })

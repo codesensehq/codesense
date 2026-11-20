@@ -72,6 +72,8 @@ static DESCRIPTOR: LazyLock<Descriptor> = LazyLock::new(|| Descriptor {
         before: None,
         first_line: false,
         supported: "Orion 1.x",
+        windows_min: None,
+        windows_supported: None,
     },
     telemetry: None,
     usage_snapshot_timing: false,

@@ -242,7 +242,7 @@ pub fn with_releases(text: &str) -> Option<String> {
         let slot = format!("{{{binary}_release}}");
         let current = filled.as_deref().unwrap_or(text);
         if current.contains(&slot) {
-            filled = Some(current.replace(&slot, release.supported));
+            filled = Some(current.replace(&slot, release.supported_for(std::env::consts::OS)));
         }
     }
     filled

@@ -889,6 +889,26 @@ fn claude_task_version_output_needs_the_floor_or_newer() {
     );
 }
 
+/// Windows Claude needs `onFailure` on its hooks, so its floor is higher; the unix floor is
+/// unchanged. The names are passed in, so every row runs on whatever OS runs the test.
+#[test]
+fn claudes_minimum_is_per_os() {
+    let claude = claude_release();
+    for (os, min, supported) in [
+        ("windows", (2, 1, 295), "Claude Code 2.1.295 or newer"),
+        ("macos", (2, 1, 141), "Claude Code 2.1.141 or newer"),
+        ("linux", (2, 1, 141), "Claude Code 2.1.141 or newer"),
+    ] {
+        assert_eq!(claude.min_for(os), min, "{os}");
+        assert_eq!(claude.supported_for(os), supported, "{os}");
+    }
+    let codex = codex_release();
+    for os in ["windows", "macos", "linux"] {
+        assert_eq!(codex.min_for(os), codex.min, "{os}");
+        assert_eq!(codex.supported_for(os), codex.supported, "{os}");
+    }
+}
+
 fn startup(args: &[&str], settings: serde_json::Value) -> AgentStartup {
     AgentStartup {
         args: args.iter().map(|arg| arg.to_string()).collect(),
