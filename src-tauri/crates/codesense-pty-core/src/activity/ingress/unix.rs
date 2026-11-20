@@ -172,25 +172,7 @@ impl ActivityService {
 /// shells a helper that does not know `--activity-run`; across filesystems it
 /// falls back to a symbolic link.
 fn refresh_helper(root: &Path, helper: &Path, how: HelperLink) -> io::Result<()> {
-    let link = root.join(HELPER_NAME);
-    let current = std::fs::metadata(helper)?;
-    let placed = match how {
-        HelperLink::Hard => std::fs::symlink_metadata(&link)
-            .is_ok_and(|placed| placed.ino() == current.ino() && placed.dev() == current.dev()),
-        HelperLink::Symbolic => std::fs::read_link(&link).is_ok_and(|to| to == helper),
-    };
-    if placed {
-        return Ok(());
-    }
-    let partial = root.join(format!(".{HELPER_NAME}.{}", uuid::Uuid::new_v4().simple()));
-    match how {
-        HelperLink::Hard => std::fs::hard_link(helper, &partial)
-            .or_else(|_| std::os::unix::fs::symlink(helper, &partial))?,
-        HelperLink::Symbolic => std::os::unix::fs::symlink(helper, &partial)?,
-    }
-    std::fs::rename(&partial, &link).inspect_err(|_| {
-        let _ = std::fs::remove_file(&partial);
-    })
+    codesense_platform::fs::place_link(helper, &root.join(HELPER_NAME), how)
 }
 
 /// Launch directories outlive a host that crashed. Each holds a private copy

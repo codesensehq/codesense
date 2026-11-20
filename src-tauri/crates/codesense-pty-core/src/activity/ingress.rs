@@ -123,14 +123,10 @@ enum Bind {
     EngineLost,
 }
 
-/// How the shells' helper names this binary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HelperLink {
-    /// A hard link: pins this very build (a symbolic link across filesystems).
-    Hard,
-    /// A symbolic link only: for an install that must keep one link per file.
-    Symbolic,
-}
+/// How the shells' helper, and the bridge beside it, name their binaries: a hard link that
+/// pins this very build (a symbolic link across filesystems), or a symbolic link only, for an
+/// install that must keep one link per file.
+pub use codesense_platform::fs::PlaceLink as HelperLink;
 
 /// One bounded attempt; callers exit neutrally even if delivery fails. This
 /// entry accepts only the normalized whitelist, never raw provider content.
