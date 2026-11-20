@@ -83,10 +83,10 @@ fn a_staged_binary_is_invoked_as_git_ai_and_installs() {
 #[test]
 fn pin_and_unsupported_platform_never_fetches() {
     let macos = pin_for("macos", "aarch64").unwrap();
-    assert_eq!(macos.expected_version, "1.7.5-cs.4");
+    assert_eq!(macos.expected_version, "1.7.5-cs.7");
     assert_eq!(
         macos.sha256,
-        "ebcd7fd565c09ac8df86d3aff828325e6d4428606bd184c438b467e94902a87c"
+        "7cb440e634d17f47a41ba762de8c39d0f263b9c903153678af865b22a367be5e"
     );
     assert_eq!(macos.asset, "git-ai-macos-arm64");
     assert_eq!(macos.platform, "macos-arm64");
@@ -166,7 +166,7 @@ fn the_running_pin_is_the_hosts_or_else_the_macos_one() {
         ("windows", "x86_64") => ("windows-x86_64", "1.7.5-cs.5", "git-ai-windows-x86_64.exe"),
         ("windows", "aarch64") => ("windows-arm64", "1.7.5-cs.5", "git-ai-windows-arm64.exe"),
         // macOS arm64, and any target without a pin of its own.
-        _ => ("macos-arm64", "1.7.5-cs.4", "git-ai-macos-arm64"),
+        _ => ("macos-arm64", "1.7.5-cs.7", "git-ai-macos-arm64"),
     };
     assert_eq!(PIN.platform, platform);
     assert_eq!(PIN.expected_version, version);
