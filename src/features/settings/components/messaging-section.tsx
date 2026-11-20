@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /**
- * Settings → Messaging: the GIF search card. On or Off, the GIPHY key (kept in the Keychain,
+ * Settings → Messaging: the GIF search card. On or Off, the GIPHY key (kept in the OS keychain,
  * entered only here), whether it is a production key, and the rating ceiling. The key row
  * explains itself through `CapabilityOff` where there is no secret store, and still counts in
  * search and the sidebar.
@@ -64,32 +64,43 @@ export function MessagingSection({ query = "" }: { query?: string }) {
 function GifSearchCard({ shown }: { shown: ReadonlySet<string> }) {
   const secretStore = useCapability("secret-store");
   const [settings, setSettings] = useState<GifSettings | null>(null);
+  const [settingsFailed, setSettingsFailed] = useState(false);
   const [key, setKey] = useState<GifKeyStatus | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  // Each key read, save and remove takes a number; only the latest may set the key status, so a
+  // slow first read never overwrites a newer save or remove.
+  const keySeq = useRef(0);
+  const keyCall = (call: () => Promise<GifKeyStatus>) => {
+    const seq = ++keySeq.current;
+    return call().then((status) => {
+      if (seq === keySeq.current) setKey(status);
+      return status;
+    });
+  };
 
-  useEffect(() => {
-    let live = true;
-    void (async () => {
-      try {
-        const read = await api.gifSettingsGet();
-        if (live) setSettings(read);
-      } catch (e) {
-        if (live) setError(String(e));
-      }
-    })();
-    return () => {
-      live = false;
-    };
-  }, []);
-
-  // The one key read that may raise a Keychain access prompt, while the user is here to allow it.
-  const readKey = useCallback(async () => {
+  const readSettings = useCallback(async () => {
     try {
-      setKey(await api.gifKeyStatus());
+      setSettings(await api.gifSettingsGet());
+      setSettingsFailed(false);
     } catch {
-      setKey({ status: "unavailable", hint: null, production: false });
+      setSettingsFailed(true);
     }
+  }, []);
+  useEffect(() => {
+    void readSettings();
+  }, [readSettings]);
+
+  // The one key read that may raise a keychain access prompt, while the user is here to allow it.
+  const readKey = useCallback(async () => {
+    const seq = ++keySeq.current;
+    let status: GifKeyStatus;
+    try {
+      status = await api.gifKeyStatus();
+    } catch {
+      status = { status: "unavailable", hint: null, production: false };
+    }
+    if (seq === keySeq.current) setKey(status);
   }, []);
   useEffect(() => {
     if (secretStore.on) void readKey();
@@ -136,6 +147,18 @@ function GifSearchCard({ shown }: { shown: ReadonlySet<string> }) {
             {error}
           </p>
         )}
+        {settingsFailed && (
+          <p role="alert" className="mt-2 text-sm text-destructive">
+            Couldn't read the GIF search settings.{" "}
+            <button
+              type="button"
+              className="underline underline-offset-4"
+              onClick={() => void readSettings()}
+            >
+              Try again
+            </button>
+          </p>
+        )}
       </div>
       {shown.has("gifSearch") && (
         <SettingRow label="Provider" target="gifSearch">
@@ -160,8 +183,18 @@ function GifSearchCard({ shown }: { shown: ReadonlySet<string> }) {
               status={key}
               busy={busy}
               onRetry={() => void readKey()}
-              onSave={(value) => run(() => api.gifKeySave(value), setKey)}
-              onRemove={() => run(api.gifKeyRemove, setKey)}
+              onSave={(value) =>
+                run(
+                  () => keyCall(() => api.gifKeySave(value)),
+                  () => {},
+                )
+              }
+              onRemove={() =>
+                run(
+                  () => keyCall(api.gifKeyRemove),
+                  () => {},
+                )
+              }
               onProduction={(production) => void change({ production })}
             />
           </CapabilityOff>
@@ -216,13 +249,16 @@ function KeyRow({
   const [empty, setEmpty] = useState(false);
   if (!status) return <p className="pt-1 text-sm text-muted-foreground">Checking the key…</p>;
   const saved = status.status === "saved";
+  const unavailable = status.status === "unavailable";
   const editing = replacing || status.status === "missing";
   return (
     <div className="space-y-2 text-sm">
-      {saved && (
+      {(saved || unavailable) && (
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-foreground">Key saved</span>
-          <span className="font-mono text-xs text-muted-foreground">{status.hint}</span>
+          {saved && <span className="text-foreground">Key saved</span>}
+          {saved && status.hint && (
+            <span className="font-mono text-xs text-muted-foreground">{status.hint}</span>
+          )}
           <div className="ml-auto flex gap-1">
             <Button
               variant="ghost"
@@ -248,8 +284,8 @@ function KeyRow({
       )}
       {status.status === "unavailable" && (
         <p className="text-muted-foreground">
-          Couldn't read the key from your Keychain. If your Mac asked to allow access, allow it,
-          then{" "}
+          Couldn't read the key from your OS keychain. If your computer asked to allow access, allow
+          it, then{" "}
           <button
             type="button"
             className="underline underline-offset-4"
@@ -292,9 +328,12 @@ function KeyRow({
             const value = (field.current?.value ?? "").trim();
             setEmpty(value === "");
             if (value === "") return;
-            if (field.current) field.current.value = "";
-            setVisible(false);
-            void onSave(value).then((ok) => ok && setReplacing(false));
+            void onSave(value).then((ok) => {
+              if (!ok) return;
+              if (field.current) field.current.value = "";
+              setVisible(false);
+              setReplacing(false);
+            });
           }}
         >
           <div className="flex flex-wrap gap-2">

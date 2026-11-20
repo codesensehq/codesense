@@ -9,4 +9,4 @@ export const CREDENTIALS_IN_KEYCHAIN = "Credentials are stored in your OS keycha
 
 /** Where the GIF search key lives, under its field in Settings → Messaging. */
 export const GIF_KEY_IN_KEYCHAIN =
-  "Saved in your Keychain on this computer. CodeSense sends it only to GIPHY, never shows it again and never puts it in files, logs or agent tools.";
+  "Stored in your OS keychain on this computer. CodeSense sends it only to GIPHY and shows only its last 4 characters; it never puts it in files, logs or agent tools.";

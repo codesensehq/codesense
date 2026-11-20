@@ -11,7 +11,7 @@ const backend = vi.hoisted(() => {
     key: null as string | null,
     production: false,
   };
-  const status = () =>
+  const status = (): import("@/tauri/commands").GifKeyStatus =>
     state.key === null
       ? { status: "missing" as const, hint: null, production: false }
       : { status: "saved" as const, hint: `…${state.key.slice(-4)}`, production: state.production };
@@ -150,7 +150,7 @@ describe("Messaging → GIF search card", () => {
     expect(screen.queryByLabelText("GIPHY API key")).toBeNull();
   });
 
-  it("offers a retry when the Keychain could not be read", async () => {
+  it("offers a retry, a replace and a remove when the keychain could not be read", async () => {
     backend.gifKeyStatus.mockResolvedValueOnce({
       status: "unavailable",
       hint: null,
@@ -158,8 +158,57 @@ describe("Messaging → GIF search card", () => {
     });
     backend.state.key = "stored-elsewhere-9z9z";
     render(<MessagingSection />);
-    fireEvent.click(await screen.findByRole("button", { name: "try again" }));
+    await screen.findByRole("button", { name: "try again" });
+    expect(screen.getByRole("button", { name: "Replace" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "try again" }));
     await screen.findByText("Key saved");
+  });
+
+  it("offers a retry when the settings could not be read", async () => {
+    backend.gifSettingsGet.mockRejectedValueOnce(new Error("no app data folder"));
+    render(<MessagingSection />);
+    fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
+    await settled();
+    expect(screen.queryByText(/Couldn't read the GIF search settings/)).toBeNull();
+  });
+
+  it("keeps the typed key when the save fails", async () => {
+    backend.gifKeySave.mockRejectedValueOnce("Couldn't save the key to your OS keychain.");
+    render(<MessagingSection />);
+    const field = await screen.findByLabelText("GIPHY API key");
+    fireEvent.change(field, { target: { value: "test-key-0123456789" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save key" }));
+    expect(
+      await screen.findByText("Couldn't save the key to your OS keychain."),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("GIPHY API key")).toHaveValue("test-key-0123456789");
+  });
+
+  it("never lets a slower key read overwrite a newer save", async () => {
+    type Status = Awaited<ReturnType<typeof backend.gifKeyStatus>>;
+    let answer!: (status: Status) => void;
+    backend.gifKeyStatus
+      .mockResolvedValueOnce({ status: "unavailable", hint: null, production: false })
+      .mockImplementationOnce(
+        () =>
+          new Promise<Status>((resolve) => {
+            answer = resolve;
+          }),
+      );
+    render(<MessagingSection />);
+    // A retry is still waiting (on a keychain prompt) when the user saves a new key.
+    fireEvent.click(await screen.findByRole("button", { name: "try again" }));
+    await waitFor(() => expect(backend.gifKeyStatus).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole("button", { name: "Replace" }));
+    fireEvent.change(screen.getByLabelText("GIPHY API key"), {
+      target: { value: "test-key-c3d4c3d4" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save key" }));
+    await screen.findByText("…c3d4");
+    answer({ status: "missing", hint: null, production: false });
+    await waitFor(() => expect(screen.getByText("Key saved")).toBeInTheDocument());
+    expect(screen.queryByText(/No key yet/)).toBeNull();
   });
 
   it("explains the key row where there is no secret store, and the other rows still work", async () => {
