@@ -126,6 +126,8 @@ fn release(id: usize) {
 thread_local! {
     /// How many web views `offscreen_view` has made on this thread.
     static VIEWS_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// The decisions the policy handler ignored on this thread.
+    static IGNORED: RefCell<Vec<Decided>> = const { RefCell::new(Vec::new()) };
 }
 
 /// A bare web view on its own ephemeral context, in an offscreen window sized
@@ -143,10 +145,13 @@ fn offscreen_view() -> (gtk::OffscreenWindow, WebView) {
     });
     let web_view = WebView::with_context(&context);
     web_view.connect_decide_policy(|_, decision, kind| {
-        if allowed(&decided(decision, kind)) {
+        let decided = decided(decision, kind);
+        if allowed(&decided) {
             return false;
         }
-        debug!(target: "export_pdf", "Ignoring a {:?} the page asked for", kind);
+        #[cfg(test)]
+        IGNORED.with(|ignored| ignored.borrow_mut().push(decided));
+        debug!(target: "export_pdf", "Ignoring a {:?} the page asked for", decided);
         decision.ignore();
         true
     });
@@ -808,6 +813,26 @@ mod tests {
         // Time for a download that got through to land.
         let settle = Instant::now() + Duration::from_secs(2);
         run_until(|| (Instant::now() >= settle).then_some(()));
+        // The page did try all three, so the empty folders mean the policy held.
+        let ignored = IGNORED.with(|ignored| ignored.borrow().clone());
+        assert!(
+            ignored.contains(&Decided::Navigation(NavigationType::LinkClicked)),
+            "no download link click was ignored: {ignored:?}"
+        );
+        assert!(
+            ignored.contains(&Decided::NewWindow),
+            "no new window was ignored: {ignored:?}"
+        );
+        assert!(
+            ignored.iter().any(|d| matches!(
+                d,
+                Decided::Response {
+                    attachment: true,
+                    ..
+                }
+            )),
+            "no attachment response was ignored: {ignored:?}"
+        );
         assert_eq!(files_under(&downloads), Vec::<PathBuf>::new());
         let leaked: Vec<_> = files_under(home.path())
             .into_iter()
