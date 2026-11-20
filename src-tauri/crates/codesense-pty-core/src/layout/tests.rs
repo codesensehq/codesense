@@ -1041,7 +1041,9 @@ fn a_tab_whose_folder_is_removed_loses_it_when_moved_or_restarted() {
     let (seat_path, moved_path) = (seat.path().to_path_buf(), moved.path().to_path_buf());
     seat.close().unwrap();
     moved.close().unwrap();
-    // A move re-records the tab's folder: a gone one is dropped.
+    // A move re-records the tab's folder: a gone one is dropped. The other workspace's
+    // own folder exists, since a usage check fails closed on a gone workspace folder.
+    std::fs::create_dir(base.path().join("x")).unwrap();
     let elsewhere = WorkspaceDescriptor {
         worktree_path: Some(base.path().join("x")),
         ..descriptor("x")
