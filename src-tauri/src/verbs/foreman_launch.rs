@@ -24,7 +24,7 @@ pub struct Page {
 pub const PAGES: &[Page] = &[
     Page {
         path: "getting-started/content/foreman/index.html",
-        sha256: "1bf643bfede0d2155c3ab6f9e27492341f3287d9d2df61589d364010e52b2865",
+        sha256: "7916254a4bf94e365715b47c27fe83d394f89b4414ebb93daf5d08202ee417f5",
     },
     Page {
         path: "getting-started/content/guide/index.html",

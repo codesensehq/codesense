@@ -1,4 +1,4 @@
-// vendored story-view build kit-rev:2 sha256:1eb6f4555f2662864941398e9971e5e822d632d039bf94dbf51a77c0d2fe89fd
+// vendored story-view build kit-rev:2 sha256:cffdd334b0e891590a68ab7189286eb3f613e9f72af22f9ef047239ae1ed6589
 (function(){
 'use strict';
 const SCRIPT_SRC=document.currentScript&&document.currentScript.src||'';
@@ -3843,8 +3843,9 @@ const costReader=({usage,unknown,dead,settled,wait=Promise.resolve()})=>{
   if(known&&known.state==='loading')return;
   costs.set(pill.sessionId,known||{state:'loading'});
   wait.then(()=>usage({sessionId:pill.sessionId})).then(answer=>{
-   const first=answer&&Array.isArray(answer.sessions)?answer.sessions[0]:null;
-   costs.set(pill.sessionId,Number.isFinite(first&&first.costUsd)?{state:'known',usd:first.costUsd}:{state:'unknown'});
+   const rows=answer&&Array.isArray(answer.sessions)?answer.sessions:[];
+   const usd=rows.length&&rows.every(row=>Number.isFinite(row&&row.costUsd))?rows.reduce((sum,row)=>sum+row.costUsd,0):null;
+   costs.set(pill.sessionId,usd===null?{state:'unknown'}:{state:'known',usd});
   },()=>costs.set(pill.sessionId,{state:'unknown'})).then(()=>{if(!dead())settled(pill);});
  };
  return {text,read,has:pill=>costs.has(pill.sessionId)};
