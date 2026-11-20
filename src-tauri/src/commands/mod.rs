@@ -41,6 +41,7 @@ pub mod credential_store;
 pub mod context_repo_git;
 pub mod deps;
 #[cfg(target_os = "macos")]
+#[path = "export_pdf/macos.rs"]
 pub mod export_pdf;
 pub mod file_index;
 pub mod file_surface;
