@@ -32,7 +32,9 @@ interface WatchEntry {
   token: number | null;
   /**
    * An attach for this entry is queued or in flight. An entry has at most one at a time: a
-   * re-attach is queued only once the previous attach has settled.
+   * re-attach is queued only once the previous attach has settled. While a re-attach is pending,
+   * `token` is stale: a late attach replaced that watch, and the late token's detach is queued
+   * ahead of the re-attach or sits in `held`.
    */
   pending: boolean;
   /** Late tokens of superseded attaches, compared with the pending attach's token once it settles. */
@@ -180,7 +182,9 @@ function release(wsId: string): void {
   if (entry.count > 0) return;
   watches.delete(wsId);
   for (const late of entry.held.splice(0)) detach(wsId, late);
-  // An attach still in flight sees count 0 when it resolves and detaches its own token.
+  // A pending attach that is still queued is skipped; one in flight sees count 0 when it
+  // resolves and detaches its own token. `token` needs no detach then: with a re-attach pending it
+  // is stale, since the later token that replaced it is already queued for detach or in `held`.
   if (!entry.pending && entry.token !== null) detach(wsId, entry.token);
 }
 
