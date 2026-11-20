@@ -739,6 +739,12 @@ jobs:
         # The shared app list, plus a session bus, the keyring daemon and its CLI, and zsh for the
         # spawn tests of a zsh user.
         run: bash scripts/install-linux-app-libs.sh dbus gnome-keyring libsecret-tools zsh
+      - name: Make zsh's completion directories private
+        # zsh's compinit stops at a prompt over the runner's group-writable function directories,
+        # so a zsh test session never reaches its first prompt.
+        run: |
+          insecure=$(zsh -fc 'autoload -Uz compaudit; compaudit' 2>/dev/null || true)
+          if [[ -n "$insecure" ]]; then printf '%s\n' "$insecure" | xargs sudo chmod g-w,o-w; fi
       - name: Allow unprivileged user namespaces
         # Ubuntu 24.04 restricts them, and Codex's launch preflight then refuses (the remedy it names).
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0

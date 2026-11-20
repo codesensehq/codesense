@@ -463,6 +463,20 @@ test("rust.yml's Linux app job runs the shared suites and the Secret Service tes
     libs.run,
     /^bash scripts\/install-linux-app-libs\.sh dbus gnome-keyring libsecret-tools zsh$/,
   );
+  // The zsh and Codex launch tests need a zsh that reaches its prompt and user namespaces, set up
+  // before any test runs.
+  const compile = job.steps.findIndex((step) => step.name === "Compile the tests");
+  for (const [name, run] of [
+    ["Make zsh's completion directories private", /compaudit.*\n.*xargs sudo chmod g-w,o-w/],
+    [
+      "Allow unprivileged user namespaces",
+      /^sudo sysctl -w kernel\.apparmor_restrict_unprivileged_userns=0$/,
+    ],
+  ]) {
+    const at = job.steps.findIndex((step) => step.name === name);
+    assert.ok(at >= 0 && at < compile, name);
+    assert.match(job.steps[at].run, run, name);
+  }
   // One apt list for every Linux job that builds the app.
   assert.equal(
     workflow.jobs["rust-check-linux"].steps.find((step) => step.name === "Install system libraries")
