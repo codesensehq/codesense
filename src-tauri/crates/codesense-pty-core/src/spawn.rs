@@ -567,8 +567,10 @@ fn shell_command(
 /// The argv-direct child running `program` with `args` on `os` (a
 /// [`std::env::consts::OS`] value), `exists` telling whether a file is there.
 ///
-/// On Windows only an absolute path to an existing `.exe` runs ([`direct_program`]).
-/// Elsewhere the program runs as given.
+/// On Windows only an absolute path to an existing `.exe` runs ([`direct_program`]),
+/// and `SHELL` is the host's POSIX runner when it has one, else unset, whatever the
+/// app inherited or `agent_env` set: no shell started the agent. Elsewhere the
+/// program runs as given, with the `SHELL` it inherits.
 fn direct_command(
     host: &HostEnvironment,
     program: &str,
@@ -580,6 +582,12 @@ fn direct_command(
     direct_program(program, os, exists)?;
     let mut cmd = agent_command(host, program, agent_env);
     cmd.args(args);
+    if os == "windows" {
+        match host.posix_runner() {
+            Some(runner) => cmd.env("SHELL", runner.to_string_lossy().as_ref()),
+            None => cmd.env_remove("SHELL"),
+        }
+    }
     Ok(cmd)
 }
 
@@ -1285,6 +1293,74 @@ mod tests {
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
         assert_eq!(argv, ["/opt/bin/claude", "--x"]);
+    }
+
+    /// A Windows host whose table has a POSIX runner.
+    static WINDOWS_WITH_BASH: ShellTable = ShellTable {
+        kinds: &[ShellKind::Pwsh, ShellKind::PowerShell, ShellKind::Cmd],
+        rows: &[],
+        last: ("cmd.exe", ShellKind::Cmd),
+        posix_runner: Some(crate::shell::PosixRunner {
+            paths: &["/usr/bin/bash"],
+            last: "/usr/bin/bash",
+        }),
+    };
+
+    /// An argv-direct Windows launch carries the host's POSIX runner as `SHELL`, or none,
+    /// never an inherited or `agent_env` one; macOS keeps what it inherits.
+    #[test]
+    fn a_windows_direct_launch_sets_shell_only_to_a_posix_runner() {
+        let shell_of = |vars: &[(&str, &str)],
+                        agent_env: &[(&str, &str)],
+                        table: &'static ShellTable,
+                        os: &str| {
+            let host = HostEnvironment::with_vars(
+                None,
+                None,
+                vars.iter().map(|(k, v)| (k.to_string(), v.to_string())),
+            )
+            .with_shell_table(table);
+            let agent_env: Vec<(String, String)> = agent_env
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            let cmd =
+                direct_command(&host, r"C:\npm\claude.exe", &[], &agent_env, os, |_| true).unwrap();
+            cmd.get_env("SHELL")
+                .map(|v| v.to_string_lossy().into_owned())
+        };
+        let windows = ShellTable::for_os("windows");
+        let msys = [("SHELL", "/usr/bin/zsh")];
+        // pwsh only: no SHELL, inherited or not
+        assert_eq!(shell_of(&msys, &[], windows, "windows"), None);
+        assert_eq!(shell_of(&[], &[], windows, "windows"), None);
+        // an Agent's own SHELL is overridden too
+        assert_eq!(
+            shell_of(&[], &[("SHELL", "/bin/fish")], windows, "windows"),
+            None
+        );
+        // a POSIX runner: SHELL is it
+        assert_eq!(
+            shell_of(
+                &msys,
+                &[("SHELL", "/bin/fish")],
+                &WINDOWS_WITH_BASH,
+                "windows"
+            )
+            .as_deref(),
+            Some("/usr/bin/bash")
+        );
+        // macOS is unchanged: the spawn keeps what it inherits
+        assert_eq!(
+            shell_of(
+                &[("SHELL", "/bin/zsh")],
+                &[],
+                ShellTable::for_os("macos"),
+                "macos"
+            )
+            .as_deref(),
+            Some("/bin/zsh")
+        );
     }
 
     /// PowerShell and cmd start with no arguments: no `-l`, no init.
