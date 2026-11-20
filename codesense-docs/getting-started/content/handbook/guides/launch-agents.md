@@ -26,6 +26,8 @@ CodeSense then:
 3. Copies your team's context into the worktree as files: by default `CLAUDE.md` and `.claude/` skills, commands, hooks and agents for Claude Code, or `AGENTS.md` and `.agents/skills` for Codex, plus the MCP config for CodeSense's tools. None of it is committed: the paths go in the repo's `.git/info/exclude`.
 4. Opens the workspace with a terminal tab in the worktree.
 
+Every session you or an agent opens on the story shares this worktree by default. An agent can give a named session a worktree of its own instead; see [Seat worktrees](../concepts/worktrees.md#seat-worktrees).
+
 ## 3. Start your agent
 
 The terminal runs your login shell (zsh, bash or fish), already in the worktree. Start your agent there:

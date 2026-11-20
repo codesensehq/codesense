@@ -567,6 +567,7 @@ time.sleep(600)
     let refused = client
         .open_remote_tab(
             codesense_pty_core::layout::OpenTab {
+                cwd: None,
                 viewer: crate::commands::pty_layout::app_viewer(),
                 workspace: crate::commands::pty_layout::workspace_key(&team_key, "objects"),
                 session: codesense_pty_core::domain::PtySessionId::new("desk-if-absent"),

@@ -801,12 +801,15 @@ pub(crate) fn snapshot_from_worktree_index(
     };
     let records = crate::install::worktree_index::iter_story_records(home, principal)
         .map_err(|e| format!("reading the worktree index failed: {e}"))?;
-    let found = records.into_iter().find(|r| {
-        r.story_id == story_id
-            && r.org_slug == org_slug
-            && crate::install::worktree_index::resolve_team(r).as_deref() == Some(team)
-            && r.code_repo_path.is_dir()
-    });
+    // A story's workspace moves with its base worktree; its seat worktrees never stand in.
+    let found = crate::install::worktree_index::base_story_records(&records)
+        .find(|r| {
+            r.story_id == story_id
+                && r.org_slug == org_slug
+                && crate::install::worktree_index::resolve_team(r).as_deref() == Some(team)
+                && r.code_repo_path.is_dir()
+        })
+        .cloned();
     Ok(found.map(|r| {
         let path = r.code_repo_path.to_string_lossy().into_owned();
         WorkspaceSnapshot {
@@ -4015,6 +4018,51 @@ mod tests {
         );
         // A record whose worktree directory is gone is not movable.
         std::fs::remove_dir(&wt).unwrap();
+        assert!(
+            snapshot_from_worktree_index(home.path(), &principal, "acme:alpha", "SW-4")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_seat_worktree_is_never_the_story_workspace_that_moves() {
+        use crate::install::worktree_index::{self, SeatKind, SeatRecord, WorktreeStoryRecord};
+        let home = tempdir().unwrap();
+        let principal = crate::domain::Principal::from(42u64);
+        let story = home
+            .path()
+            .join("users/42/orgs/acme/ctx/alpha/content/impl/SW-4.md");
+        let record = |dir: &std::path::Path| {
+            std::fs::create_dir(dir).unwrap();
+            WorktreeStoryRecord::new(
+                dir.to_path_buf(),
+                "acme",
+                SourceRepoSlug::new("acme", "codesense").unwrap(),
+                "SW-4",
+                story.clone(),
+            )
+        };
+        let (base_wt, seat_wt) = (
+            home.path().join("wt-sw-4"),
+            home.path().join("wt-sw-4-seat"),
+        );
+        let base = record(base_wt.as_path());
+        let mut seat = record(seat_wt.as_path());
+        seat.seat = Some(SeatRecord {
+            name: "dev".into(),
+            kind: SeatKind::Branch,
+            pinned_commit: None,
+        });
+        for rec in [&base, &seat] {
+            worktree_index::write_record(home.path(), &principal, rec).unwrap();
+        }
+        let found = snapshot_from_worktree_index(home.path(), &principal, "acme:alpha", "SW-4")
+            .unwrap()
+            .expect("the base worktree moves");
+        assert_eq!(found.worktree_path, base_wt.to_string_lossy());
+        // With the base worktree gone, the seat does not take its place.
+        std::fs::remove_dir(&base_wt).unwrap();
         assert!(
             snapshot_from_worktree_index(home.path(), &principal, "acme:alpha", "SW-4")
                 .unwrap()

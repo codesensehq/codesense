@@ -193,6 +193,7 @@ fn remote_unknown_spawn_keeps_live_process_and_commits_reserved_correlation() {
     let workspace = WorkspaceKey::new("org:team|work");
     let session = sid("uncertain");
     let request = OpenTab {
+        cwd: None,
         viewer: ViewerId::new("app"),
         workspace: workspace.clone(),
         session: session.clone(),
@@ -1712,6 +1713,7 @@ pub(crate) fn remote_tab_runs(
     client
         .open_remote_tab(
             OpenTab {
+                cwd: None,
                 viewer,
                 workspace: WorkspaceKey::new(format!("runs-{id}")),
                 session: session.clone(),
@@ -1773,6 +1775,7 @@ fn connector_contract(
     let cwd = intent.cwd.clone();
     let before = client.live_session_ids().unwrap();
     let request = OpenTab {
+        cwd: None,
         viewer: viewer.clone(),
         workspace: workspace.clone(),
         session: session.clone(),
@@ -4567,6 +4570,7 @@ fn layout_transcript(
     let open = |session: &str,
                 workspace: &WorkspaceKey,
                 descriptor: Option<WorkspaceDescriptor>| OpenTab {
+        cwd: None,
         viewer: viewer.clone(),
         workspace: workspace.clone(),
         session: sid(session),
@@ -4764,6 +4768,7 @@ fn respawn_tab_refuses_a_running_tab_and_respawns_an_exited_one_in_place() {
         ] {
             host.open_tab(
                 OpenTab {
+                    cwd: None,
                     viewer: viewer.clone(),
                     workspace: workspace.clone(),
                     session: sid(id),

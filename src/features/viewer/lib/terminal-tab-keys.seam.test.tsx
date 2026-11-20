@@ -718,6 +718,25 @@ describe("⌘⇧T — reopen the last closed tab", () => {
     expect(activeIn(WS)).toBe(fresh.session);
   });
 
+  it("an Ended tab with a folder of its own reopens there, in the same workspace", async () => {
+    render(<TerminalArea />);
+    recordClosedTab({
+      kind: "ended",
+      teamKey: TEAM,
+      workspaceId: WS,
+      tab: { id: "seat", sessionId: "seat", name: "dev", cwd: "/w/story-seat-dev" },
+    });
+    terminal("t1").focus();
+    press({ key: "T", metaKey: true, shiftKey: true });
+    await waitFor(() => expect(terminalHost().opened).toHaveLength(1));
+    const fresh = terminalHost().opened[0];
+    // The host records the tab's own folder; the workspace keeps its folder.
+    expect(fresh.cwd).toBe("/w/story-seat-dev");
+    expect(fresh.descriptor?.worktreePath).not.toBe("/w/story-seat-dev");
+    const spawnCwd = fresh.spawn.kind === "warm" ? fresh.spawn.targetCwd : fresh.spawn.cwd;
+    expect(spawnCwd).toBe("/w/story-seat-dev");
+  });
+
   it("an Ended AGENT tab reopens as a plainly named shell, not under the agent's name", async () => {
     seed({ tabs: ["t1", "claude"] });
     useViewerStore.setState({ aiStatusBySession: { claude: "done" } });
@@ -744,6 +763,26 @@ describe("⌘⇧T — reopen the last closed tab", () => {
     await waitFor(() => expect(nameOf(WS, replacement)).toBe("t1"));
     expect(terminalHost().opened).toHaveLength(1);
     expect(tabsIn(WS)).toEqual([replacement]);
+  });
+
+  it("an Ended last tab with a folder of its own opens there, not in the replacement shell", async () => {
+    seed({ tabs: ["t1"] });
+    render(<TerminalArea />);
+    recordClosedTab({
+      kind: "ended",
+      teamKey: TEAM,
+      workspaceId: WS,
+      tab: { id: "seat", sessionId: "seat", name: "dev", cwd: "/w/story-seat-dev" },
+      wasLastTab: true,
+    });
+    terminal("t1").focus();
+    press({ key: "T", metaKey: true, shiftKey: true });
+    await waitFor(() => expect(terminalHost().opened).toHaveLength(1));
+    const fresh = terminalHost().opened[0];
+    expect(fresh.cwd).toBe("/w/story-seat-dev");
+    expect(fresh.name).toBe("dev");
+    expect(nameOf(WS, "t1")).toBe("t1");
+    expect(tabsIn(WS)).toEqual(["t1", fresh.session]);
   });
 
   it("with nothing closed, does nothing", async () => {

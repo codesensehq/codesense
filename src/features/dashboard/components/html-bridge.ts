@@ -2022,6 +2022,13 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
       if (!target || typeof target.kind !== "string") {
         throw new Error("openWorkspace: { target: { kind } } required");
       }
+      // A page's open runs in the story's shared worktree; a seat worktree is launched over
+      // MCP for now. Refused here, never silently dropped.
+      if ("seatWorktree" in target) {
+        throw new Error(
+          "unavailable: seatWorktree is not supported from a page yet; an agent launches a seat with the open_workspace tool",
+        );
+      }
       if (a.reviewPrompt !== undefined && target.kind !== "branch") {
         throw new Error("openWorkspace: reviewPrompt is only supported for branch targets");
       }

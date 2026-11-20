@@ -39,6 +39,7 @@ export interface SeededEntry {
   placement?: TerminalPlacement;
   exit?: { code: number | null; signal?: string | null };
   tags?: Record<string, string>;
+  cwd?: string;
 }
 
 function emptyGrid(): TerminalGridState {
@@ -122,6 +123,7 @@ export class MockTerminalHost {
         role: request.role,
         placement: request.placement,
         tags: request.tags,
+        cwd: request.cwd,
       },
       { index: request.index, activate: request.activate },
     );
@@ -289,6 +291,9 @@ export class MockTerminalHost {
         : { kind: "live" },
       tags: entry.tags ?? {},
     };
+    if (entry.cwd && entry.cwd !== layout.descriptor.worktreePath) {
+      layout.tabDirs = { ...layout.tabDirs, [entry.session]: entry.cwd };
+    }
     layout.tabs.splice(opts.index ?? layout.tabs.length, 0, placed);
     if (placed.placement === "tab" && (opts.activate || !layout.lastActive)) {
       layout.lastActive = placed.session;

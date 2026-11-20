@@ -1906,6 +1906,11 @@ declare namespace CodesenseSdk {
         name?: string;
         org?: string;
         path?: string;
+        seatWorktree?: {
+          commit?: string;
+          kind?: "branch" | "commit";
+          [key: string]: unknown;
+        };
         storyId?: string;
         team?: string;
         worktree?: string;

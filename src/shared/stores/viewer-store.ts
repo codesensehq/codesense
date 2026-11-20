@@ -394,6 +394,9 @@ export interface TerminalTab {
   /** Set on a tab whose session runs on a remote Machine: which one, and the
    *  handle its pane attaches with. */
   origin?: TerminalTabOrigin;
+  /** The tab's own working folder when it isn't its workspace's (a story seat
+   *  worktree): a restart runs it there again. */
+  cwd?: string;
 }
 
 /** Where a remote tab's session runs. `offlineSince` is set while the Machine
@@ -770,6 +773,9 @@ export interface OpenTerminalTabOptions {
   account?: ResolveAgentAccountInput;
   /** Opaque one-use backend binding for an MCP-scoped environment. */
   environmentBinding?: string;
+  /** The tab's own folder when it isn't the workspace's (a story seat worktree):
+   *  the shell starts there, and the workspace keeps its folder. */
+  tabCwd?: string;
 }
 
 /** How a respawn's new process is started: the shell rules of the launch that
@@ -1123,7 +1129,8 @@ function openLayoutTab(
       role: tab.role,
       placement: opts.placement ?? "tab",
       activate: opts.activate ?? true,
-      spawn: tabSpawn(s, ws, size, opts),
+      spawn: tabSpawn(s, opts.tabCwd ? { ...ws, cwd: opts.tabCwd } : ws, size, opts),
+      ...(opts.tabCwd ? { cwd: opts.tabCwd } : {}),
     });
   return open()
     .catch((e: unknown) => {
@@ -8587,7 +8594,13 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     }
     const s = get();
     const record = workspaceRecord(s, teamKey, workspaceId);
-    const cwd = opts.cwd || record?.cwd;
+    // A tab with a folder of its own (a story seat worktree) restarts there, never in
+    // the workspace's folder.
+    const tabCwd = [
+      ...selectWorkspaceTabs(s, teamKey, workspaceId),
+      ...selectHiddenTerminalTabs(s, teamKey, workspaceId),
+    ].find((tab) => tab.sessionId === sessionId)?.cwd;
+    const cwd = opts.cwd || tabCwd || record?.cwd;
     if (!cwd) throw new Error(`no workspace ${workspaceId} with a directory to restart in`);
     const ws: Workspace = {
       ...(record ?? { id: workspaceId, kind: "generic", status: "ready" }),

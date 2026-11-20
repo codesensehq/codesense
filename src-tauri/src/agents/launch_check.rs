@@ -135,6 +135,9 @@ pub enum LaunchWarningCode {
     /// that is already live. The existing deadline (or lack of one) is left
     /// alone; a running session's budget never changes mid-flight.
     MaxRuntimeIgnored,
+    /// `open_workspace` was called with `seatWorktree` on a session that is already
+    /// live: nothing is created or moved, and the session keeps its working folder.
+    SeatWorktreeIgnored,
     RoleNotJoined,
     StartupDeliveryUnconfirmed,
     /// The agent's CLI is installed at a version outside the range CodeSense is

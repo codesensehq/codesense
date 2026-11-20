@@ -2389,6 +2389,9 @@ export interface TerminalWorkspaceLayout {
   lastActive: string | null;
   grid: TerminalGridState;
   nextOrdinal: number;
+  /** The working folder of each tab (by session) that runs outside the workspace's
+   *  `worktreePath`, such as a story seat worktree. Absent from an older host. */
+  tabDirs?: Record<string, string>;
 }
 
 export interface TerminalViewHint {
@@ -2444,6 +2447,9 @@ export interface TerminalOpenTabRequest {
   index?: number;
   activate: boolean;
   spawn: TerminalTabSpawn;
+  /** The tab's own folder when it runs outside the workspace's (a story seat
+   *  worktree): the host records it for the tab, never for the workspace. */
+  cwd?: string;
 }
 
 export type TerminalCloseMode = "keepIfBusy" | "kill";

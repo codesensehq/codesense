@@ -661,6 +661,7 @@ fn a_real_hosts_layout_carries_the_bound_launch_to_a_restarted_app() {
     let session = PtySessionId::new("sid-ctl");
     host.open_tab(
         OpenTab {
+            cwd: None,
             viewer: viewer.clone(),
             workspace: WorkspaceKey::new("acme:backend|ws-content"),
             session: session.clone(),

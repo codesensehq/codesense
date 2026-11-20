@@ -1334,6 +1334,7 @@ impl Host {
             session.as_str().to_string(),
         );
         let open = OpenTab {
+            cwd: None,
             viewer: codesense_pty_core::domain::ViewerId::new("routine"),
             workspace: recipe.workspace.clone(),
             session: session.clone(),
@@ -5447,6 +5448,7 @@ mod tests {
                 1,
                 Request::ReserveTab {
                     request: OpenTab {
+                        cwd: None,
                         viewer: ViewerId::new("app"),
                         workspace: WorkspaceKey::new("team|work"),
                         session: session.clone(),
@@ -5535,6 +5537,7 @@ mod tests {
         host.reserve_tab(
             conn.id,
             OpenTab {
+                cwd: None,
                 viewer: ViewerId::new("app"),
                 workspace: workspace.clone(),
                 session: session.clone(),
@@ -6378,6 +6381,7 @@ mod tests {
         let (conn, frames, _peer) = test_conn(64);
         host.connect(&conn);
         let request = OpenTab {
+            cwd: None,
             viewer: ViewerId::new("app"),
             workspace: WorkspaceKey::new("ws"),
             session: PtySessionId::new("opening"),
@@ -6466,6 +6470,7 @@ mod tests {
             .expect("the viewer attaches before the terminal opens");
         let session = PtySessionId::new("lost-finish");
         let request = OpenTab {
+            cwd: None,
             viewer: viewer.clone(),
             workspace: WorkspaceKey::new("ws"),
             session: session.clone(),
@@ -6674,6 +6679,7 @@ mod tests {
 
         fn open(session: &str, tags: Tags) -> OpenTab {
             OpenTab {
+                cwd: None,
                 viewer: ViewerId::new("app"),
                 workspace: WorkspaceKey::new("ws"),
                 session: PtySessionId::new(session),

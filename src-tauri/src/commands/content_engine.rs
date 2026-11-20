@@ -5462,6 +5462,18 @@ pub(crate) fn register_story_workspace(
     Ok(record.setup_complete)
 }
 
+/// Whether registering the worktree at `code_path` may stamp its story's `branch`
+/// frontmatter from the worktree's HEAD. A seat worktree is on its own branch (or
+/// detached), so it never re-points the story's branch; a record that can't be read is
+/// treated as the story's base worktree, as before seats existed.
+fn stamps_story_branch(home: &Path, principal: &Principal, code_path: &Path) -> bool {
+    !worktree_index::read_record(home, principal, code_path)
+        .ok()
+        .flatten()
+        .as_ref()
+        .is_some_and(WorktreeStoryRecord::is_seat)
+}
+
 /// Disk-touching registration and wiring run only on the blocking pool.
 fn establish_worktree_story_link_blocking(
     _ctx: &crate::commands::async_helpers::BlockingCtx,
@@ -5481,10 +5493,12 @@ fn establish_worktree_story_link_blocking(
             "story workspace registration requires a durable team and source repository".into(),
         );
     };
-    let setup_complete =
-        register_story_workspace(&codesense_home, &Principal::from(user_id), record)?;
+    let principal = Principal::from(user_id);
+    let setup_complete = register_story_workspace(&codesense_home, &principal, record)?;
     crate::commands::managed_worktree_config::write(&code_path, &codesense_home);
-    let _ = write_story_branch(app, &story_path, &code_path);
+    if stamps_story_branch(&codesense_home, &principal, &code_path) {
+        let _ = write_story_branch(app, &story_path, &code_path);
+    }
 
     // Publish registration readiness to the existing workspace roster.
     crate::commands::worktree::emit_worktree_changed(app);
@@ -6537,6 +6551,44 @@ mod tests {
     }
 
     #[test]
+    fn a_seat_registration_keeps_its_seat_and_never_stamps_the_story_branch() {
+        let home = tempfile::tempdir().unwrap();
+        let (base, seat) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let principal = Principal::from(42);
+        let story = home
+            .path()
+            .join("users/42/orgs/acme/context/team/content/S-1.md");
+        let record = |root: &Path| {
+            WorktreeStoryRecord::new(
+                root,
+                "acme/context",
+                SourceRepoSlug::new("acme", "repo").unwrap(),
+                "S-1",
+                story.clone(),
+            )
+        };
+        // No record yet, and the story's base worktree: the branch is stamped as before.
+        assert!(stamps_story_branch(home.path(), &principal, base.path()));
+        register_story_workspace(home.path(), &principal, record(base.path())).unwrap();
+        assert!(stamps_story_branch(home.path(), &principal, base.path()));
+
+        let mut seated = record(seat.path());
+        seated.seat = Some(worktree_index::SeatRecord {
+            name: "dev".into(),
+            kind: worktree_index::SeatKind::Branch,
+            pinned_commit: None,
+        });
+        worktree_index::write_record(home.path(), &principal, &seated).unwrap();
+        // The launch re-registers with a plain record; the seat survives it.
+        register_story_workspace(home.path(), &principal, record(seat.path())).unwrap();
+        let after = worktree_index::read_record(home.path(), &principal, seat.path())
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.seat, seated.seat);
+        assert!(!stamps_story_branch(home.path(), &principal, seat.path()));
+    }
+
+    #[test]
     fn delayed_old_profile_team_activation_is_rejected_before_mutation() {
         let home = tempfile::tempdir().unwrap();
         for id in ["41", "42"] {
@@ -6892,6 +6944,54 @@ mod tests {
                 ..LIGHT
             }),
             "override still carried across the move (AC-6)"
+        );
+    }
+
+    /// A story's seat worktrees follow it: a move relinks a seat record like the base
+    /// one, and an id rename rekeys both, each keeping its seat.
+    #[test]
+    fn a_seat_record_follows_its_story_through_a_move_and_a_rename() {
+        let home = TempDir::new().unwrap();
+        let h = home.path();
+        let story = format!(
+            "{}/users/42/orgs/acme/ctx/alpha/content/impl/OLD-ID.md",
+            h.display()
+        );
+        let seat = worktree_index::SeatRecord {
+            name: "dev".into(),
+            kind: worktree_index::SeatKind::Branch,
+            pinned_commit: None,
+        };
+        let mut seated = wt_record("/abs/wt-seat", &story);
+        seated.seat = Some(seat.clone());
+        let moved = relinked_record(&seated, Path::new(&story_at("beta")));
+        assert_eq!(moved.seat, Some(seat.clone()));
+
+        for (code_repo, seat) in [("/abs/wt-base", None), ("/abs/wt-seat", Some(seat.clone()))] {
+            let mut rec = WorktreeStoryRecord::new(
+                PathBuf::from(code_repo),
+                "acme/ctx",
+                SourceRepoSlug::new("acme", "app").unwrap(),
+                "OLD-ID",
+                PathBuf::from(&story),
+            );
+            rec.seat = seat;
+            worktree_index::write_record(h, &Principal::from(42u64), &rec).unwrap();
+        }
+        rekey_worktrees_story_id("OLD-ID", "NEW-ID", Path::new(&story));
+        let mut after =
+            worktree_index::find_by_story_id(h, &Principal::from(42u64), "NEW-ID").unwrap();
+        after.sort_by(|a, b| a.code_repo_path.cmp(&b.code_repo_path));
+        let seats: Vec<_> = after
+            .iter()
+            .map(|r| (r.code_repo_path.clone(), r.seat.clone()))
+            .collect();
+        assert_eq!(
+            seats,
+            vec![
+                (PathBuf::from("/abs/wt-base"), None),
+                (PathBuf::from("/abs/wt-seat"), Some(seat)),
+            ]
         );
     }
 

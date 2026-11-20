@@ -32,6 +32,8 @@ use crate::domain::Principal;
 use crate::domain::SourceRepoSlug;
 use crate::operations::git_remote::derive_repository_identity;
 
+pub mod seat;
+
 /// Identity context required to choose the authoritative physical home for a
 /// tracked worktree config. Keeping these fields together prevents readers and
 /// writers from accidentally applying only part of the migration epoch key.

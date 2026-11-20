@@ -12,7 +12,7 @@ _Context repos, teams, stories, worktrees, agents, routines and the rest, in one
 | Source repo | A code repository on a team's list. You attach it to a clone you made with git. |
 | Epic | A folder of stories. |
 | Story | A markdown or HTML file with a few metadata fields: `type`, `status`, `source_repo`, `depends_on` and any of your own. |
-| Worktree | A git worktree of a source repo for one story, on its own branch, beside your clone. The first open creates it; it stays until you remove it. |
+| Worktree | A git worktree of a source repo for one story, on its own branch, beside your clone. The first open creates it; it stays until you remove it. The story's sessions share it by default; a named session can have its own [seat worktree](../concepts/worktrees.md#seat-worktrees). |
 | Workspace | Where you work on one story or task: its terminal tabs and tiles, its worktree when it has one, and the diff, editor, Story HUD and Inbox overlays. |
 | Context hydration | Copying team context into a workspace: when an agent launches there, or when an agent calls `hydrate_worktree` or `hydrate_story`. Never in the background. |
 | Agent | A saved definition, `config/agents/<id>/agent.yaml`: which CLI (Claude Code, Codex or OpenCode) runs, what it starts with, its MCP servers and permissions. Each CLI uses its own login. Open **Agent definitions** from the context repo menu. |

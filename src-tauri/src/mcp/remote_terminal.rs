@@ -420,6 +420,7 @@ mod tests {
                 "namespace":{"serverId":"s","epoch":"e","generation":"1"},"session":session.as_str()}
         })).unwrap();
         client.open_remote_tab(OpenTab {
+            cwd: None,
             viewer: ViewerId::new("app"), workspace: record.workspace.clone(), session: session.clone(),
             descriptor: Some(WorkspaceDescriptor { display_name: "work".into(), kind: "root".into(), ..Default::default() }),
             name: None, role: None,
