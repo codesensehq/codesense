@@ -105,6 +105,13 @@ pub trait AgentCliAdapter: Send + Sync {
         false
     }
 
+    /// The entry script of its npm package, from `node_modules/` on (`/` separated), which
+    /// a process runs under `node` with no shim naming the CLI (the Windows npm install).
+    /// `None` for a CLI not installed through npm that way.
+    fn npm_entry(&self) -> Option<&'static str> {
+        None
+    }
+
     /// How new mail reaches a session of this CLI.
     fn inbox(&self) -> InboxDelivery;
 

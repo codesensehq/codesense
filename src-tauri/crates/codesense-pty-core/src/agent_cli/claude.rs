@@ -335,6 +335,10 @@ impl AgentCliAdapter for Claude {
     }
 
     /// It is reached through its terminal and its waiter.
+    fn npm_entry(&self) -> Option<&'static str> {
+        Some("node_modules/@anthropic-ai/claude-code/cli.js")
+    }
+
     fn channel(&self, _: &[String]) -> Option<NativeChannel> {
         None
     }

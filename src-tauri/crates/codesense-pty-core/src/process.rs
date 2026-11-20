@@ -3,7 +3,7 @@
 //! copy, consumed by the session registry (`is_idle`), the host's batched
 //! agent-liveness commands, and the host's memory sampler.
 
-use crate::agent_cli::binary_stem;
+use crate::agent_cli::{adapter, binary_stem, by_binary};
 use codesense_platform::process::{group_and_foreground, Pid};
 
 /// Returns `true` if `pid` has at least one live descendant process — i.e. the
@@ -181,21 +181,19 @@ fn is_interpreter(stem: &str) -> bool {
     matches!(stem, "node" | "nodejs" | "bun") || stem.starts_with("python")
 }
 
-/// The entry script of each agent CLI's npm package, which Windows runs as
-/// `node.exe …\node_modules\<package>\cli.js` (no shebang shim names it).
-const NPM_ENTRY_SCRIPTS: &[(&str, &str)] =
-    &[("claude", "node_modules/@anthropic-ai/claude-code/cli.js")];
-
-/// Whether `script` is the npm package entry of the agent CLI `stem`, on either separator.
+/// Whether `script` is the npm package entry of the agent CLI `stem`
+/// ([`crate::agent_cli::AgentCliAdapter::npm_entry`]), on either separator: Windows runs an npm install as
+/// `node.exe …\node_modules\<package>\cli.js`, with no shim naming the CLI.
 fn is_npm_entry(script: &str, stem: &str) -> bool {
     let script = script.replace('\\', "/").to_lowercase();
-    NPM_ENTRY_SCRIPTS
-        .iter()
-        .any(|(cli, entry)| *cli == stem && script.ends_with(&format!("/{entry}")))
+    by_binary(stem)
+        .and_then(|cli| adapter(cli).npm_entry())
+        .is_some_and(|entry| script.ends_with(&format!("/{entry}")))
 }
 
 /// Does a process run the agent CLI `needle` (its name or path, compared by
-/// [`binary_stem`]) as its EXECUTABLE? Pure so it unit-tests the shim shapes without a live process tree.
+/// [`binary_stem`]) as its EXECUTABLE? Pure so it unit-tests the shim shapes
+/// without a live process tree.
 ///
 /// Matches only what names the program, never an arbitrary path segment or
 /// argument (`node /x/claude/server.js`, `cat CLAUDE.md`, a cwd under
