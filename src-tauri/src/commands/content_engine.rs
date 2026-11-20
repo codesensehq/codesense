@@ -10050,7 +10050,7 @@ mod tests {
     /// Settings as an earlier CodeSense wrote them: the old status command on every status
     /// event and the old guard on `PreToolUse`.
     fn legacy_settings() -> serde_json::Value {
-        let legacy = |verb| {
+        let legacy = |verb: Verb| {
             let (_, command) = hook::LEGACY_COMMANDS
                 .iter()
                 .find(|(v, _)| *v == verb)
