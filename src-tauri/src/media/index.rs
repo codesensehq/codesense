@@ -43,13 +43,7 @@ impl Reference {
     /// A provider reference: `mediaProvider` says so, or (an old message only, with no
     /// `mediaProvider`) its source host is a provider host.
     pub fn is_provider(&self) -> bool {
-        match self.media_provider {
-            Some(provider) => provider.is_provider(),
-            None => self
-                .source_host
-                .as_deref()
-                .is_some_and(|h| MediaProvider::of_host(h).is_provider()),
-        }
+        super::is_provider(self.media_provider, self.source_host.as_deref())
     }
     fn url_is_provider(&self) -> bool {
         self.url

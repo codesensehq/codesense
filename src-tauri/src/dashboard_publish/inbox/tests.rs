@@ -128,20 +128,20 @@ impl InboxHost for FakeInbox {
     fn inbox_changed(&self, _changes: &[(LaunchTeam, Vec<i64>)]) {
         self.changed.fetch_add(1, Ordering::SeqCst);
     }
-    async fn cached_media(&self, team: &LaunchTeam, sha: &str) -> Result<Vec<u8>, String> {
+    async fn cached_media(&self, team: &LaunchTeam, attachment: &crate::media::Attachment) -> Result<Vec<u8>, String> {
         let media = self.media.lock().unwrap().clone();
         let Some(media) = media else {
+            let sha = attachment.sha256.as_deref().unwrap_or_default();
             return self.cache.lock().unwrap().get(sha).cloned().ok_or("evicted".into());
         };
-        let source = media.admission(&self.media_config(team), sha);
-        media.fetch_or_cached(sha, source).await.map(|b| b.to_vec())
+        media.read(&self.media_config(team), attachment).await.map(|b| b.to_vec())
     }
     fn present_media(&self, team: &LaunchTeam, attachments: &mut [crate::media::Attachment]) {
         let config = self.media_config(team);
-        config.apply(attachments);
         let media = self.media.lock().unwrap().clone();
-        if let Some(media) = media {
-            media.present(&config, attachments);
+        match media {
+            Some(media) => media.present(&config, attachments),
+            None => config.apply(attachments),
         }
     }
 }

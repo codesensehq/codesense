@@ -55,17 +55,17 @@ async fn serve(
         )
         .await
         {
-            if view
+            if let Some(attachment) = view
                 .messages
                 .iter()
-                .any(|m| crate::media::cached_attachment(&m.attachments, &sha).is_some())
+                .find_map(|m| crate::media::cached_attachment(&m.attachments, &sha))
             {
-                allowed = Some(team);
+                allowed = Some((team, attachment.clone()));
                 break;
             }
         }
     }
-    let Some(team) = allowed else {
+    let Some((team, attachment)) = allowed else {
         return StatusCode::FORBIDDEN.into_response();
     };
     // Authorized: the bytes come from memory or the disk cache, or are fetched again
@@ -73,19 +73,21 @@ async fn serve(
     let Some(media) = crate::media::app_state(&state.app_handle) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    respond(&media, &host.media_config(&team), &sha).await
+    // The team is indexed before its media is served.
+    crate::media::index_new_teams(&media, &*host, std::slice::from_ref(&team)).await;
+    respond(&media, &host.media_config(&team), &attachment).await
 }
 
-/// The authorized image `sha`: from memory or the disk cache, or fetched again when
-/// the config of the team that carries it admits a re-fetch.
+/// The authorized image `attachment`: from memory or the disk cache, or fetched again
+/// when the config of the team that carries it admits a re-fetch.
 pub(crate) async fn respond(
     media: &std::sync::Arc<crate::media::MediaState>,
     config: &crate::media::Config,
-    sha: &str,
+    attachment: &crate::media::Attachment,
 ) -> Response {
-    let source = media.admission(config, sha);
-    match media.fetch_or_cached(sha, source).await {
-        Ok(bytes) => image_response(bytes, media.memory_only(sha)),
+    let sha = attachment.sha256.as_deref().unwrap_or_default();
+    match media.read(config, attachment).await {
+        Ok(bytes) => image_response(bytes, media.is_memory_only(sha, Some(attachment))),
         Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
 }
@@ -206,12 +208,8 @@ mod tests {
         // and serves it from memory, `no-store`.
         let giphy = "https://i.giphy.com/a.gif";
         fetch.serve(giphy, &gif(1), giphy, None);
-        let direct = sha(&gif(1));
-        media.note(
-            &owner(1),
-            1,
-            &[image(giphy, true, &direct, MediaProvider::Giphy)],
-        );
+        let direct = image(giphy, true, &sha(&gif(1)), MediaProvider::Giphy);
+        media.note(&owner(1), 1, std::slice::from_ref(&direct));
         let response = respond(&media, &config, &direct).await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(cache_control(&response), "no-store");
@@ -229,11 +227,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(fetched.media_provider, Some(MediaProvider::Giphy));
-        let redirected = fetched.sha256.clone().unwrap();
-        media.note(&owner(2), 2, &[fetched]);
-        let response = respond(&media, &config, &redirected).await;
+        media.note(&owner(2), 2, std::slice::from_ref(&fetched));
+        let response = respond(&media, &config, &fetched).await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(cache_control(&response), "no-store");
+        // The attachment's own fields count before the index has it.
+        let mut unindexed = fetched.clone();
+        unindexed.source_url = Some("https://example.com/unindexed.gif".into());
+        let fresh = MediaState::for_test(dir.path().join("other-cache"), fetch.clone());
+        assert!(fresh.is_memory_only(fetched.sha256.as_deref().unwrap(), Some(&unindexed)));
 
         // Anything else is on disk and immutable by hash.
         let other = "https://example.com/c.gif";
@@ -246,10 +248,12 @@ mod tests {
             )
             .await
             .unwrap();
-        let on_disk = fetched.sha256.clone().unwrap();
-        media.note(&owner(3), 3, &[fetched]);
-        assert!(media.dir().join(&on_disk).is_file());
-        let response = respond(&media, &config, &on_disk).await;
+        media.note(&owner(3), 3, std::slice::from_ref(&fetched));
+        assert!(media
+            .dir()
+            .join(fetched.sha256.as_deref().unwrap())
+            .is_file());
+        let response = respond(&media, &config, &fetched).await;
         assert_eq!(response.status(), StatusCode::OK);
         assert!(!cache_control(&response).contains("no-store"));
         assert!(cache_control(&response).contains("immutable"));

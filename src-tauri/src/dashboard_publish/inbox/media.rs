@@ -111,7 +111,9 @@ pub(crate) fn query(ctx: LiveCtx, call: Call) -> BoxFuture<'static, Result<Value
         // 1. Authorize: the sha must be an image attachment of this message in this team
         //    (or its sender's face). Nothing is fetched before this answers.
         let (step_host, step_team, step_args) = (host.clone(), team.clone(), args.clone());
-        let step = catalog::blocking(call.hold.clone(), "live.media", move || {
+        // The call's slot is held for this step only: it is released before any wait for
+        // the media index or a network re-fetch.
+        let step = catalog::blocking(call.hold, "live.media", move || {
             Ok(chunk(
                 &*step_host,
                 &step_team,
@@ -127,13 +129,10 @@ pub(crate) fn query(ctx: LiveCtx, call: Call) -> BoxFuture<'static, Result<Value
             Step::Answer(answer) => Ok(answer),
             // 2. Only for a confirmed attachment: its bytes, from memory or disk, or
             //    fetched again. 3. Served with the size and hash re-checks.
-            Step::Attachment => {
-                let _slot = call.hold;
-                match host.cached_media(&team, &args.sha256).await {
-                    Ok(bytes) => serve(&bytes, &args),
-                    Err(_) => Ok(refused("not_cached")),
-                }
-            }
+            Step::Attachment(attachment) => match host.cached_media(&team, &attachment).await {
+                Ok(bytes) => serve(&bytes, &args),
+                Err(_) => Ok(refused("not_cached")),
+            },
         }
     })
 }
@@ -143,7 +142,7 @@ enum Step {
     /// Answered without reading attachment bytes: a refusal, or a face.
     Answer(Value),
     /// A cached image attachment of the requested message: read its bytes.
-    Attachment,
+    Attachment(Box<crate::media::Attachment>),
 }
 
 /// What proves a face hash: the sender's face is drawn again from the same sources the
@@ -207,7 +206,7 @@ fn attachment_chunk(attachment: &crate::media::Attachment) -> Step {
     if attachment.bytes.is_some_and(|n| n > MAX_MEDIA_BYTES as u64) {
         return Step::Answer(json!({"refused": "too_large", "bytes": attachment.bytes}));
     }
-    Step::Attachment
+    Step::Attachment(Box::new(attachment.clone()))
 }
 
 /// One chunk of `bytes`, which must be an image of at most [`MAX_MEDIA_BYTES`] that still

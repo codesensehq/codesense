@@ -61,12 +61,9 @@ pub(crate) fn backfill(json: &str) -> Option<String> {
         if a.contains_key("mediaProvider") || !a.get("sha256").is_some_and(|v| v.is_string()) {
             continue;
         }
-        let provider = a
-            .get("sourceHost")
-            .and_then(|v| v.as_str())
-            .map(MediaProvider::of_host)
-            .filter(|p| p.is_provider());
-        if let Some(provider) = provider {
+        let host = a.get("sourceHost").and_then(|v| v.as_str());
+        if let Some(host) = host.filter(|h| super::is_provider(None, Some(*h))) {
+            let provider = MediaProvider::of_host(host);
             a.insert("mediaProvider".into(), serde_json::json!(provider));
             changed = true;
         }
@@ -85,9 +82,9 @@ pub(crate) enum Purged {
     Done { deleted: usize, backfilled: usize },
 }
 
-/// The one-time purge, over every synced team's store:
-/// 1. scan each store's messages into the sha index;
-/// 2. collect every sha with a provider reference;
+/// The one-time purge, over every synced team's store, once the sha index holds them all:
+/// 1. read each store's messages;
+/// 2. collect every sha with a provider reference in the index;
 /// 3. delete those files from the disk cache, shared ones too;
 /// 4. only once every deletion succeeded, backfill `mediaProvider` on old provider
 ///    attachments, then write the marker.
@@ -105,15 +102,12 @@ pub(crate) fn run(
     }
     let mut scanned = Vec::new();
     for (team, path) in stores {
-        let (store, rows) = rows(path)?;
-        // Indexed without deleting: step 3 deletes, and fails the run if it cannot.
-        for (id, at, json) in &rows {
-            state
-                .index
-                .set_message(&owner(team, *id), *at, &attachments(json));
+        // A team the index lacks could hide a provider sha: no marker until it has it.
+        if !state.index.is_team_indexed(&team.org, &team.team) {
+            return Err(format!("{}/{} is not indexed yet", team.org, team.team));
         }
-        state.index.mark_team(&team.org, &team.team);
-        scanned.push((team, store, rows));
+        let (store, rows) = rows(path)?;
+        scanned.push((store, rows));
     }
     let mut deleted = 0;
     for sha in state.index.provider_shas() {
@@ -124,8 +118,8 @@ pub(crate) fn run(
         deleted += usize::from(existed);
     }
     let mut backfilled = 0;
-    for (team, store, rows) in scanned {
-        for (id, at, json) in rows {
+    for (store, rows) in scanned {
+        for (id, _, json) in rows {
             let Some(filled) = backfill(&json) else {
                 continue;
             };
@@ -133,9 +127,6 @@ pub(crate) fn run(
                 .map_err(|e| e.to_string())?
             {
                 backfilled += 1;
-                state
-                    .index
-                    .set_message(&owner(team, id), at, &attachments(&filled));
             }
         }
     }
