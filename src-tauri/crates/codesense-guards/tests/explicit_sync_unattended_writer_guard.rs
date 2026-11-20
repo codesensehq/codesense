@@ -2655,9 +2655,13 @@ fn listing(sites: &[Site], changed: &Changed, cap: usize) -> Vec<String> {
             }
         }
     };
-    // Sites in the change's own files stay under the cap.
+    // Sites in the change's own files stay under the cap; then a name few
+    // files define (a new candidate) before a common one.
     match changed {
-        Changed::Files(files) => picked.sort_by_key(|site| (!files.contains(&site.file), *site)),
+        Changed::Files(files) => picked.sort_by_key(|site| {
+            let own = files.contains(&site.file);
+            (!own, if own { 0 } else { site.defined_in.len() }, *site)
+        }),
         _ => picked.sort(),
     }
     let mut out = vec![note.to_string()];
@@ -3676,7 +3680,8 @@ fn a_new_candidate_touches_the_calls_it_makes_ambiguous() {
 
 /// Self-test: a listing prints at most `cap` sites, then how many more and the
 /// env vars that print them all; the sites in the changed files come first,
-/// so more than `cap` sites touched only by a definition cannot hide them.
+/// so more than `cap` sites touched only by a definition cannot hide them, and
+/// of those a name fewer files define comes first.
 #[test]
 fn the_listing_is_capped() {
     let sites: Vec<Site> = (1..=5).map(|line| site("a.rs", line, "a::f")).collect();
@@ -3699,7 +3704,6 @@ fn the_listing_is_capped() {
         })
         .collect();
     sites.push(site("z.rs", 1, "z::f"));
-    let more = "... and 3 more (X1_PRINT_UNRESOLVED=1 or X1_PRINT_UNRESOLVED_METHODS=1 prints all)";
     assert_eq!(
         listing(&sites, &files(&["c.rs", "z.rs"]), 2),
         [
@@ -3708,6 +3712,22 @@ fn the_listing_is_capped() {
             "a.rs:1  m::f -> a::f",
             more
         ]
+    );
+
+    // A name only `c.rs` defines ranks before one three files define.
+    let mut sites: Vec<Site> = (1..=3)
+        .map(|line| Site {
+            defined_in: vec!["c.rs".to_string(), "d.rs".to_string(), "e.rs".to_string()],
+            ..site("a.rs", line, "a::new")
+        })
+        .collect();
+    sites.push(Site {
+        defined_in: vec!["c.rs".to_string()],
+        ..site("y.rs", 1, "y::rare")
+    });
+    assert_eq!(
+        listing(&sites, &files(&["c.rs"]), 1),
+        [FILTERED, "y.rs:1  m::f -> y::rare", more]
     );
 }
 
