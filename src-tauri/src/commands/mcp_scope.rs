@@ -1166,7 +1166,12 @@ pub(crate) fn profile_launch_settings(cwd: &Path, headless: bool, runtime: Agent
             settings = rules(&settings);
         }
     }
-    crate::commands::content_engine::merge_launch_notify_hooks(&mut settings, cwd, runtime);
+    crate::commands::content_engine::merge_launch_notify_hooks(
+        &mut settings,
+        cwd,
+        runtime,
+        codesense_host_proto::hook::HookTarget::local(),
+    );
     settings
 }
 
@@ -2980,7 +2985,7 @@ mod tests {
             .filter(|hook| {
                 hook["command"]
                     .as_str()
-                    .is_some_and(|c| c.contains("codesense-notify"))
+                    .is_some_and(|c| c.contains("hook notify"))
             })
             .count()
     }

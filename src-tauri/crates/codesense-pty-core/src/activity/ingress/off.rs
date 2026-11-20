@@ -16,13 +16,18 @@ fn off() -> io::Error {
 pub struct ActivityService {}
 
 impl ActivityService {
-    pub fn start(_root: &Path, _owner: &Arc<ActivityOwner>) -> io::Result<Self> {
+    pub fn start(
+        _root: &Path,
+        _owner: &Arc<ActivityOwner>,
+        _bridge: Option<&Path>,
+    ) -> io::Result<Self> {
         Err(off())
     }
 
     pub fn start_with(
         _root: &Path,
         _owner: &Arc<ActivityOwner>,
+        _bridge: Option<&Path>,
         _link: HelperLink,
     ) -> io::Result<Self> {
         Err(off())

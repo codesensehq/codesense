@@ -159,6 +159,8 @@ static DESCRIPTOR: LazyLock<Descriptor> = LazyLock::new(|| {
         before: None,
         first_line: false,
             supported: "Codex 0.159.3 or a newer 0.x release",
+            windows_min: None,
+            windows_supported: None,
         },
     }
 });

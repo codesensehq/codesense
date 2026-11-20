@@ -752,10 +752,7 @@ fn a_launch_into_a_context_content_folder_leaves_the_repo_clean() {
                 .get(crate::commands::mcp_scope::BRIDGE_SERVER_KEY)
                 .is_some());
             let hooks = read_json(&file)["hooks"].clone();
-            assert!(
-                hooks["Stop"].to_string().contains("codesense-notify"),
-                "{hooks}"
-            );
+            assert!(hooks["Stop"].to_string().contains("hook notify"), "{hooks}");
         }
         drop(settings);
         mcp_scope::remove_scope_config(&id);
@@ -944,9 +941,7 @@ fn every_agent_launch_reaches_its_selected_servers_the_bridge_and_notify() {
                     let settings = read_json(applied.settings.as_ref().unwrap().path());
                     for ev in crate::agent_state::status_hooks().map(|hook| hook.event) {
                         assert!(
-                            settings["hooks"][ev]
-                                .to_string()
-                                .contains("codesense-notify"),
+                            settings["hooks"][ev].to_string().contains("hook notify"),
                             "{label}: {ev} hook"
                         );
                     }
@@ -2748,9 +2743,7 @@ fn page_launch_settings_carry_status_hooks() {
         let settings = read_json(settings.as_ref().unwrap().path());
         for event in crate::agent_state::status_hooks().map(|hook| hook.event) {
             assert!(
-                settings["hooks"][event]
-                    .to_string()
-                    .contains("codesense-notify"),
+                settings["hooks"][event].to_string().contains("hook notify"),
                 "{event} hook (attribution hook trust {hook_trust})"
             );
         }

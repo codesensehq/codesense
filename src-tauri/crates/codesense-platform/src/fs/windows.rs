@@ -40,7 +40,9 @@ use windows_sys::Win32::Storage::FileSystem::{
     OPEN_ALWAYS, WRITE_DAC, WRITE_OWNER,
 };
 
-use super::{portable_name, ChangeStamp, Creation, FileId, Linked, Open, Reach, ReplaceError};
+use super::{
+    portable_name, ChangeStamp, Creation, FileId, Linked, Open, PlaceLink, Reach, ReplaceError,
+};
 use crate::win::{wide, CurrentUser, SingleUserAcl, SECURITY_DESCRIPTOR_REVISION};
 
 /// `ACCESS_ALLOWED_ACE_TYPE`: an ACE that grants access to one SID.
@@ -571,6 +573,41 @@ pub(super) fn link_or_copy(target: &Path, link: &Path) -> io::Result<Linked> {
         }
         Err(error) => Err(error),
     }
+}
+
+/// Private-account roots are unix-only, so [`PlaceLink::Symbolic`] places as
+/// [`PlaceLink::Hard`]: a hard link, else a copy. Never a symlink, which
+/// needs Developer Mode and which [`file_id`] would not see through.
+pub(super) fn place_link(source: &Path, link: &Path, _how: PlaceLink) -> io::Result<()> {
+    if placed(source, link)? {
+        return Ok(());
+    }
+    let partial = super::partial_link(link);
+    super::hard_link(source, &partial)
+        .or_else(|_| std::fs::copy(source, &partial).map(drop))
+        .inspect_err(|_| {
+            let _ = std::fs::remove_file(&partial);
+        })?;
+    replace(&partial, link).map_err(|error| {
+        let _ = std::fs::remove_file(&partial);
+        io::Error::from(error)
+    })
+}
+
+/// Whether `link` is already `source`: the same file, or a copy with its
+/// length and last-write time.
+fn placed(source: &Path, link: &Path) -> io::Result<bool> {
+    let current = std::fs::metadata(source)?;
+    let Ok(placed) = std::fs::symlink_metadata(link) else {
+        return Ok(false);
+    };
+    if !placed.is_file() {
+        return Ok(false);
+    }
+    if matches!((file_id(link), file_id(source)), (Ok(placed), Ok(current)) if placed == current) {
+        return Ok(true);
+    }
+    Ok(placed.len() == current.len() && placed.modified()? == current.modified()?)
 }
 
 /// The rights that change a file or a directory's entries: write and append

@@ -350,9 +350,7 @@ fn claude_settings_are_a_private_per_launch_file_outside_the_workspace() {
             .map(|rule| json!(rule)),
     );
     assert_eq!(written["permissions"], expected);
-    assert!(written["hooks"]["Stop"]
-        .to_string()
-        .contains("codesense-notify"));
+    assert!(written["hooks"]["Stop"].to_string().contains("hook notify"));
     let deny: Vec<&str> = ["Bash(git push --force:*)"]
         .into_iter()
         .chain(
@@ -1024,7 +1022,7 @@ fn an_agents_own_settings_merge_into_the_one_launch_file() {
         assert!(allow.contains(&json!(rule)), "{rule}");
     }
     let stop = written["hooks"]["Stop"].to_string();
-    assert!(stop.contains("agent-hook") && stop.contains("codesense-notify"));
+    assert!(stop.contains("agent-hook") && stop.contains("hook notify"));
     // Claude keeps only the last `--settings`, so the agent's pair is replaced by CodeSense's.
     let mut args = launch.launch.args.clone();
     applied.drop_agent_settings(&mut args);
@@ -1057,9 +1055,7 @@ fn an_agents_settings_file_resolves_against_the_workspace_in_either_flag_form() 
         assert!(applied.merged_agent_settings, "{id}");
         let written = read_json(applied.settings.as_ref().unwrap().path());
         assert_eq!(written["autoMemoryEnabled"], json!(false), "{id}");
-        assert!(written["hooks"]["Stop"]
-            .to_string()
-            .contains("codesense-notify"));
+        assert!(written["hooks"]["Stop"].to_string().contains("hook notify"));
     }
 }
 

@@ -18,7 +18,7 @@ crates/codesense-pty-core/src/activity/hook_block.rs 2
 crates/codesense-pty-core/src/activity/hook_block/unix.rs 3
 crates/codesense-pty-core/src/activity/inbox.rs 2
 crates/codesense-pty-core/src/activity/ingress.rs 2
-crates/codesense-pty-core/src/activity/ingress/unix.rs 16
+crates/codesense-pty-core/src/activity/ingress/unix.rs 14
 crates/codesense-pty-core/src/activity/launch.rs 2
 crates/codesense-pty-core/src/activity/launch/unix.rs 13
 crates/codesense-pty-core/src/agent_cli/codex.rs 2

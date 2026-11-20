@@ -95,7 +95,12 @@ fn write_in(dir: &Path, home: &Path, bridge: Option<&Path>) -> Vec<String> {
             continue;
         };
         if merge_file(dir, &hooks.local, ConfigFormat::Json, |settings| {
-            crate::commands::content_engine::merge_local_notify_hooks(settings, dir, cli)
+            crate::commands::content_engine::merge_local_notify_hooks(
+                settings,
+                dir,
+                cli,
+                codesense_host_proto::hook::HookTarget::local(),
+            )
         }) {
             written.push(&hooks.local);
         }

@@ -146,7 +146,7 @@ while True: time.sleep(.05)
         let mut owner = ActivityOwner::with_adapters(orion::adapters);
         owner.sink = Some(sink);
         let owner = Arc::new(owner);
-        let _service = crate::activity::ActivityService::start(home.path(), &owner).unwrap();
+        let _service = crate::activity::ActivityService::start(home.path(), &owner, None).unwrap();
         let socket = home.path().join("activity.sock");
         let writer = owner
             .prepare_native("loss", orion::ORION, socket.to_str().unwrap())

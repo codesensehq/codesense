@@ -150,7 +150,7 @@ pub trait AgentCliAdapter: Send + Sync {
     fn session_policy(&self) -> SessionPolicy;
 
     /// The hook events at which the CLI's own settings run CodeSense's status hook
-    /// (`codesense-notify`): none for a CLI that raises its status otherwise.
+    /// (`codesense-bridge hook notify`): none for a CLI that raises its status otherwise.
     fn status_hooks(&self) -> &'static [StatusHook];
 
     /// How a host drives a running CLI.
@@ -242,7 +242,7 @@ pub fn with_releases(text: &str) -> Option<String> {
         let slot = format!("{{{binary}_release}}");
         let current = filled.as_deref().unwrap_or(text);
         if current.contains(&slot) {
-            filled = Some(current.replace(&slot, release.supported));
+            filled = Some(current.replace(&slot, release.supported_for(std::env::consts::OS)));
         }
     }
     filled

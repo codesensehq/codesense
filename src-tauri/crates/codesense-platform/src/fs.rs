@@ -2,9 +2,10 @@
 //! Files: owner-only permissions, ownership checks, file identity,
 //! owner-only creates of files and directories, opens that refuse links,
 //! atomic replace, exclusive and shared locks, links with a copy fallback,
-//! canonical paths, names that are valid on every OS, execute bits, busy
-//! files, whether a file is executable, world-writable files, link counts,
-//! change stamps, the space left on a volume and positioned reads.
+//! placed links, canonical paths, names that are valid on every OS, execute
+//! bits, busy files, whether a file is executable, world-writable files,
+//! link counts, change stamps, the space left on a volume and positioned
+//! reads.
 
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -303,6 +304,50 @@ pub enum Linked {
 /// taken from `link`'s directory, as a symlink resolves it.
 pub fn link_or_copy(target: &Path, link: &Path) -> io::Result<Linked> {
     sys::link_or_copy(target, link)
+}
+
+/// How [`place_link`] makes its link.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaceLink {
+    /// A hard link, which pins this very file: a later rewrite of the path
+    /// it came from does not change what the link runs. On unix a symbolic
+    /// link where a hard one can't be made (across file systems); on
+    /// Windows a copy.
+    Hard,
+    /// On unix a symbolic link only, for an install that refuses any file
+    /// with a second hard link. Windows places it as [`PlaceLink::Hard`].
+    Symbolic,
+}
+
+/// Make `link` name the file `source` as `how` says, unless it already
+/// does, through a partial sibling renamed over whatever is at `link` (a
+/// link included, never followed), so a process starting `link` meanwhile
+/// runs one whole file.
+///
+/// Already placed: unix [`PlaceLink::Hard`], `link` is the same file
+/// (`dev`, `ino`); [`PlaceLink::Symbolic`], `link` is a symbolic link to
+/// exactly `source`. Windows, `link` has `source`'s [`file_id`], or for a
+/// copy, the same length and last-write time (a copy keeps the source's).
+pub fn place_link(source: &Path, link: &Path, how: PlaceLink) -> io::Result<()> {
+    sys::place_link(source, link, how)
+}
+
+/// The partial sibling [`place_link`] makes before its rename.
+fn partial_link(link: &Path) -> PathBuf {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    tmp_sibling(link, SEQ.fetch_add(1, Ordering::Relaxed))
+}
+
+/// `std::fs::hard_link`, which a test can make fail on its thread
+/// (`testutil::without_hard_links`) to reach [`place_link`]'s fallback.
+fn hard_link(source: &Path, link: &Path) -> io::Result<()> {
+    #[cfg(feature = "testutil")]
+    {
+        if crate::testutil::hard_links_refused() {
+            return Err(io::Error::other("hard links refused on this thread"));
+        }
+    }
+    std::fs::hard_link(source, link)
 }
 
 /// Whether `path` is an absolute path to a file this OS would run, after

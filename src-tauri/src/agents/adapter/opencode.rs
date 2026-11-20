@@ -186,8 +186,9 @@ pub(super) fn plugin_source() -> String {
 /// so the plugin and the launch warning cannot disagree about it.
 fn supported_range() -> String {
     let release = &codesense_pty_core::agent_cli::descriptor(AgentCli::OpenCode).release;
+    let (major, minor, patch) = release.min_for(std::env::consts::OS);
     let range = serde_json::json!({
-        "min": [release.min.0, release.min.1, release.min.2],
+        "min": [major, minor, patch],
         "beforeMajor": release.before_major,
     });
     format!("/* @supported */ {range}")

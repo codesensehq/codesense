@@ -178,10 +178,9 @@ pub struct ProjectHooks {
     /// The personal one beside it: the only one CodeSense writes, for a CLI typed by hand
     /// in a worktree it made.
     pub local: String,
-    /// The status hook's command: the `codesense-notify.sh` CodeSense installs beside its
-    /// host's activity helper, found through the tab's host root, and nothing outside a
-    /// host's tab.
-    pub status_command: String,
+    /// The bridge subcommand its status hook runs. Each writer builds the command for the
+    /// host that runs it ([`codesense_host_proto::hook::command`]).
+    pub status_verb: codesense_host_proto::hook::Verb,
 }
 
 /// How a launch hands a CLI a settings object (CodeSense's permissions and hooks, with a
@@ -329,16 +328,36 @@ pub struct Release {
     pub first_line: bool,
     /// The qualified range, as user-facing refusals name it.
     pub supported: &'static str,
+    /// A higher oldest release on Windows, where it differs ([`Release::min_for`]).
+    pub windows_min: Option<(u64, u64, u64)>,
+    /// The Windows range, as refusals there name it ([`Release::supported_for`]).
+    pub windows_supported: Option<&'static str>,
 }
 
 /// The most `--version` output a check reads before refusing it.
 pub const VERSION_OUTPUT_MAX: usize = 128;
 
 impl Release {
+    /// The oldest qualified release on `os` (a `std::env::consts::OS` name).
+    pub fn min_for(&self, os: &str) -> (u64, u64, u64) {
+        match self.windows_min {
+            Some(min) if os == "windows" => min,
+            _ => self.min,
+        }
+    }
+
+    /// The qualified range on `os`, as user-facing refusals there name it.
+    pub fn supported_for(&self, os: &str) -> &'static str {
+        match self.windows_supported {
+            Some(supported) if os == "windows" => supported,
+            _ => self.supported,
+        }
+    }
+
     /// The `--version` output of the oldest qualified release.
     #[cfg(any(test, feature = "test-support"))]
     pub fn minimum_output(&self) -> String {
-        let (major, minor, patch) = self.min;
+        let (major, minor, patch) = self.min_for(std::env::consts::OS);
         format!("{}{major}.{minor}.{patch}{}", self.prefix, self.suffix)
     }
 
@@ -372,7 +391,7 @@ impl Release {
     /// Whether `token` (the release number alone, as the dependency check parses it)
     /// is a qualified release. The one place the range is decided.
     pub fn version_qualified(&self, token: &str) -> bool {
-        release_at_least(token, self.min).is_some_and(|release| {
+        release_at_least(token, self.min_for(std::env::consts::OS)).is_some_and(|release| {
             self.before_major.is_none_or(|before| release.0 < before)
                 && self.before.is_none_or(|before| release < before)
         })
@@ -382,7 +401,7 @@ impl Release {
     pub fn remote_task_refusal(&self) -> String {
         format!(
             "capabilityUnavailable: remote tasks require {}",
-            self.supported
+            self.supported_for(std::env::consts::OS)
         )
     }
 

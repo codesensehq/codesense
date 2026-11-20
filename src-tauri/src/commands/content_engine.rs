@@ -22,6 +22,7 @@ use tauri::Manager;
 use tokio::sync::Mutex;
 
 use codesense_fs_core::filters::is_ignored;
+use codesense_host_proto::hook::{self, HookTarget, Verb};
 use codesense_pty_core::agent_cli::{adapter, descriptor, AgentCli, Prepare, ProjectHooks};
 
 use crate::content_engine::{
@@ -3610,15 +3611,15 @@ fn ensure_epic_workspace_inner(
     ))
 }
 
-/// SW-EW-35: the lifecycle events `cli`'s `codesense-notify` hook listens on to drive
-/// the per-tab agent-status dot: exactly the events the status receiver maps for it
-/// (its adapter's status hooks).
+/// The lifecycle events `cli`'s status hook (`codesense-bridge hook notify`)
+/// listens on to drive the per-tab agent-status dot: exactly the events the status receiver
+/// maps for it (its adapter's status hooks).
 fn status_hook_events(cli: AgentCli) -> impl Iterator<Item = &'static str> {
     adapter(cli).status_hooks().iter().map(|hook| hook.event)
 }
 
-/// Where `cli` reads hooks in a folder, and the command its status hook runs (its
-/// descriptor's): the script its tab's host installed (`codesense_pty_core::notify_hook`),
+/// Where `cli` reads hooks in a folder, and the verb its status hook runs (its
+/// descriptor's): from the bridge its tab's host placed (`codesense_pty_core::notify_hook`),
 /// so it works in a non-git epic dir as well as a worktree and no folder carries it.
 fn project_hooks(cli: AgentCli) -> Option<&'static ProjectHooks> {
     descriptor(cli).project_hooks.as_ref()
@@ -3653,14 +3654,10 @@ fn event_runs_hook(settings: &serde_json::Value, event: &str, marker: &str) -> b
         })
 }
 
-/// `true` when `settings.hooks[event]` already runs the CodeSense status hook: a command
-/// naming the host's installed script.
-fn event_runs_notify_hook(settings: &serde_json::Value, event: &str) -> bool {
-    event_runs_hook(
-        settings,
-        event,
-        &codesense_pty_core::notify_hook::installed_script(),
-    )
+/// `true` when `settings.hooks[event]` already runs the CodeSense status hook as `target`
+/// writes it.
+fn event_runs_notify_hook(settings: &serde_json::Value, event: &str, target: HookTarget) -> bool {
+    event_runs_hook(settings, event, &hook::command(Verb::Notify, target).marker)
 }
 
 /// The inbox hooks of `cli`, whose settings body this is, from its inbox port: they run
@@ -3678,29 +3675,32 @@ fn arm_inbox(settings: &mut serde_json::Value, cli: AgentCli) -> Option<()> {
 /// writes to still drives its status dot, and its inbox hooks. The CLI merges hooks
 /// across settings files, and the command is the same string the folder writer uses,
 /// so a folder that has it never runs it twice. A body of an unexpected shape is left
-/// as is.
+/// as is. `writer` is the target of this host, which runs the launch.
 pub(crate) fn merge_launch_notify_hooks(
     settings: &mut serde_json::Value,
     cwd: &Path,
     cli: AgentCli,
+    writer: HookTarget,
 ) {
     let own: Vec<serde_json::Value> = folder_settings(cwd, cli)
         .into_iter()
         .filter_map(|path| serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok())
         .collect();
     let needed: Vec<&str> = status_hook_events(cli)
-        .filter(|ev| !own.iter().any(|c| event_runs_notify_hook(c, ev)))
+        .filter(|ev| !own.iter().any(|c| event_runs_notify_hook(c, ev, writer)))
         .collect();
-    let _ = merge_notify_hooks(settings, cli, &needed);
+    let _ = merge_notify_hooks(settings, cli, &needed, writer);
     let _ = arm_inbox(settings, cli);
 }
 
 /// Required Agent startup checks existing folder settings, then projects hooks into
-/// the private per-session body. It never repairs or writes the launch folder.
+/// the private per-session body. It never repairs or writes the launch folder. `writer` is
+/// the target of this host, which runs the launch.
 pub(crate) fn merge_required_launch_notify_hooks(
     settings: &mut serde_json::Value,
     cwd: &Path,
     cli: AgentCli,
+    writer: HookTarget,
 ) -> Result<(), String> {
     use crate::agents::content_reader::{ContentReader, FsContentReader};
     use std::io::Read;
@@ -3744,10 +3744,10 @@ pub(crate) fn merge_required_launch_notify_hooks(
     let needed: Vec<&str> = status_hook_events(cli)
         .filter(|event| {
             !own.iter()
-                .any(|config| event_runs_notify_hook(config, event))
+                .any(|config| event_runs_notify_hook(config, event, writer))
         })
         .collect();
-    merge_notify_hooks(settings, cli, &needed)
+    merge_notify_hooks(settings, cli, &needed, writer)
         .and_then(|_| arm_inbox(settings, cli))
         .ok_or_else(|| "required notification settings have invalid hooks".to_string())?;
     Ok(())
@@ -3756,11 +3756,13 @@ pub(crate) fn merge_required_launch_notify_hooks(
 /// Add `cli`'s status hook to a managed worktree's own `settings.local.json` body for
 /// every lifecycle event its committed `settings.json` does not already run it on, so an
 /// agent typed by hand there drives its status dot. `None` when the body's `hooks` is not
-/// the shape the CLI expects; otherwise whether anything changed.
+/// the shape the CLI expects; otherwise whether anything changed. `writer` is the target of
+/// this host, whose worktree it is.
 pub(crate) fn merge_local_notify_hooks(
     local: &mut serde_json::Value,
     dir: &Path,
     cli: AgentCli,
+    writer: HookTarget,
 ) -> Option<bool> {
     let committed = project_hooks(cli)
         .and_then(|hooks| std::fs::read_to_string(dir.join(&hooks.committed)).ok())
@@ -3769,58 +3771,89 @@ pub(crate) fn merge_local_notify_hooks(
         .filter(|ev| {
             !committed
                 .as_ref()
-                .is_some_and(|c| event_runs_notify_hook(c, ev))
+                .is_some_and(|c| event_runs_notify_hook(c, ev, writer))
         })
         .collect();
-    merge_notify_hooks(local, cli, &needed)
+    merge_notify_hooks(local, cli, &needed, writer)
 }
 
 /// Append the CodeSense hook group to each `events` entry of `settings.hooks`
 /// that does not already run it, keeping every other key and hook. Returns
 /// whether anything changed, or `None` when `hooks` (or an event's value) is
 /// not the shape Claude expects — the caller then leaves the file alone.
-/// Same required notification hooks for a private remote launch file of `cli`.
+/// Same required notification hooks for a private remote launch file of `cli`. A remote
+/// host is POSIX, so the writer's own target (`_writer`) never shapes the file.
 pub(crate) fn merge_remote_notify_hooks(
     settings: &mut serde_json::Value,
     cli: AgentCli,
+    _writer: HookTarget,
 ) -> Result<(), String> {
     let events: Vec<&str> = status_hook_events(cli).collect();
-    merge_notify_hooks(settings, cli, &events)
+    merge_notify_hooks(settings, cli, &events, HookTarget::Posix)
         .ok_or_else(|| "required notification settings cannot be merged".to_string())?;
     Ok(())
 }
 
-/// [`merge_hook_group`] of `cli`'s status hook at `events`; nothing for a CLI with no
-/// project hooks, which has no status hooks either.
+/// [`merge_hook_entry`] of `cli`'s status hook at `events` and its secret-file guard, as
+/// `target` (the OS of the host that runs them) writes them; nothing for a CLI with no project
+/// hooks, which has no status hooks either.
 fn merge_notify_hooks(
     settings: &mut serde_json::Value,
     cli: AgentCli,
     events: &[&str],
+    target: HookTarget,
 ) -> Option<bool> {
     let Some(hooks) = project_hooks(cli) else {
         return Some(false);
     };
-    let status = merge_hook_group(
-        settings,
-        events,
-        &hooks.status_command,
-        &codesense_pty_core::notify_hook::installed_script(),
-    );
+    let replaced = replace_legacy_hooks(settings, target);
+    let status = hook::command(hooks.status_verb, target);
+    let status = merge_hook_entry(settings, events, status.entry(), &status.marker);
     // The secret-file guard goes wherever the status hooks do, for the CLIs that have project
     // hooks.
+    let guard = hook::command(Verb::SecretGuard, target);
     let guard = merge_hook_entry_matching(
         settings,
         &["PreToolUse"],
         codesense_pty_core::notify_hook::GUARD_MATCHER,
-        serde_json::json!({
-            "type": "command",
-            "command": codesense_pty_core::notify_hook::guard_command(),
-            "timeout": 5,
-        }),
-        &codesense_pty_core::notify_hook::installed_guard(),
+        guard.entry(),
+        &guard.marker,
     );
     let deny = merge_deny_rules(settings, codesense_pty_core::notify_hook::deny_rules());
-    Some(status? | guard? | deny?)
+    Some(replaced | status? | guard? | deny?)
+}
+
+/// Rewrite in place, as `target` writes it now, each hook entry whose command is exactly one an
+/// earlier CodeSense wrote ([`hook::LEGACY_COMMANDS`]): the keys of the new entry
+/// ([`hook::HookCommand::entry`]) go over the old one's, and its other keys stay, so a file
+/// never holds the old hook beside the new one. A command that only names an old script
+/// (a team's own `.claude/hooks/codesense-notify.sh`) is left alone. Whether anything changed.
+fn replace_legacy_hooks(settings: &mut serde_json::Value, target: HookTarget) -> bool {
+    let Some(events) = settings.get_mut("hooks").and_then(|h| h.as_object_mut()) else {
+        return false;
+    };
+    let mut changed = false;
+    let entries = events
+        .values_mut()
+        .filter_map(|groups| groups.as_array_mut())
+        .flatten()
+        .filter_map(|group| group.get_mut("hooks")?.as_array_mut())
+        .flatten()
+        .filter_map(|entry| entry.as_object_mut());
+    for entry in entries {
+        let Some(verb) = entry
+            .get("command")
+            .and_then(|c| c.as_str())
+            .and_then(hook::legacy_verb)
+        else {
+            continue;
+        };
+        if let serde_json::Value::Object(written) = hook::command(verb, target).entry() {
+            entry.extend(written);
+        }
+        changed = true;
+    }
+    changed
 }
 
 /// Add git-ai's checkpoint hook (`command`) to a per-launch Claude settings body, on both
@@ -3898,27 +3931,8 @@ fn merge_deny_rules(settings: &mut serde_json::Value, rules: &[String]) -> Optio
     Some(changed)
 }
 
-/// Append a hook group running `command` to each `events` entry of `settings.hooks` that
-/// does not already run a command naming `marker`, keeping every other key and hook.
-fn merge_hook_group(
-    settings: &mut serde_json::Value,
-    events: &[&str],
-    command: &str,
-    marker: &str,
-) -> Option<bool> {
-    merge_hook_entry(
-        settings,
-        events,
-        serde_json::json!({
-            "type": "command",
-            "command": command,
-            "timeout": 5,
-        }),
-        marker,
-    )
-}
-
-/// [`merge_hook_group`] for a hook entry of any shape (its command names `marker`).
+/// Append a hook group running `hook` to each `events` entry of `settings.hooks` that does
+/// not already run a command naming `marker`, keeping every other key and hook.
 fn merge_hook_entry(
     settings: &mut serde_json::Value,
     events: &[&str],
@@ -6409,9 +6423,14 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    /// Claude's status hook command.
-    fn notify_command() -> &'static str {
-        &project_hooks(AgentCli::Claude).unwrap().status_command
+    /// Claude's status hook command on this host.
+    fn notify_command() -> String {
+        hook::command(Verb::Notify, HookTarget::local()).command
+    }
+
+    /// What tells Claude's status hook on this host from every other hook.
+    fn notify_marker() -> String {
+        hook::command(Verb::Notify, HookTarget::local()).marker
     }
 
     #[test]
@@ -9686,7 +9705,7 @@ mod tests {
     fn notify_count(v: &serde_json::Value, event: &str) -> usize {
         hook_commands(v, event)
             .iter()
-            .filter(|c| c.contains("codesense-notify"))
+            .filter(|c| c.contains(&notify_marker()))
             .count()
     }
 
@@ -9715,7 +9734,7 @@ mod tests {
     fn launch_hooks_wire_every_event_once_for_a_folder_with_no_settings() {
         let tmp = TempDir::new().unwrap();
         let mut v = serde_json::json!({ "permissions": { "allow": ["Read"] } });
-        merge_launch_notify_hooks(&mut v, tmp.path(), AgentCli::Claude);
+        merge_launch_notify_hooks(&mut v, tmp.path(), AgentCli::Claude, HookTarget::local());
         for ev in status_hook_events(AgentCli::Claude) {
             assert_eq!(notify_count(&v, ev), 1, "event {ev} wired once");
         }
@@ -9731,7 +9750,7 @@ mod tests {
             vec![inbox_hook(&v, "SessionStart")]
         );
         // Re-merging is idempotent.
-        merge_launch_notify_hooks(&mut v, tmp.path(), AgentCli::Claude);
+        merge_launch_notify_hooks(&mut v, tmp.path(), AgentCli::Claude, HookTarget::local());
         for ev in status_hook_events(AgentCli::Claude) {
             assert_eq!(notify_count(&v, ev), 1, "event {ev} still once");
         }
@@ -9772,10 +9791,26 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         // A launch's settings carry its CLI's inbox hooks, armed once whatever re-merges.
         let mut launch = serde_json::json!({});
-        merge_launch_notify_hooks(&mut launch, tmp.path(), AgentCli::Claude);
-        merge_launch_notify_hooks(&mut launch, tmp.path(), AgentCli::Claude);
+        merge_launch_notify_hooks(
+            &mut launch,
+            tmp.path(),
+            AgentCli::Claude,
+            HookTarget::local(),
+        );
+        merge_launch_notify_hooks(
+            &mut launch,
+            tmp.path(),
+            AgentCli::Claude,
+            HookTarget::local(),
+        );
         let mut required = serde_json::json!({});
-        merge_required_launch_notify_hooks(&mut required, tmp.path(), AgentCli::Claude).unwrap();
+        merge_required_launch_notify_hooks(
+            &mut required,
+            tmp.path(),
+            AgentCli::Claude,
+            HookTarget::local(),
+        )
+        .unwrap();
         for v in [&launch, &required] {
             for ev in claude_inbox_events() {
                 assert_eq!(
@@ -9787,18 +9822,29 @@ mod tests {
         // The managed worktree's own settings never get it: the waiter runs the helper of
         // the host a launch runs on, which a folder cannot name.
         let mut local = serde_json::json!({});
-        merge_local_notify_hooks(&mut local, tmp.path(), AgentCli::Claude);
+        merge_local_notify_hooks(
+            &mut local,
+            tmp.path(),
+            AgentCli::Claude,
+            HookTarget::local(),
+        );
         assert!(!local.to_string().contains(INBOX_ARG));
         // An agent on a machine gets its inbox hooks from its machine's host.
         let mut remote = serde_json::json!({});
-        merge_remote_notify_hooks(&mut remote, AgentCli::Claude).unwrap();
+        merge_remote_notify_hooks(&mut remote, AgentCli::Claude, HookTarget::local()).unwrap();
         assert!(!remote.to_string().contains(INBOX_ARG));
         // A CLI with no status hooks whose inbox hooks ride its argv (Codex) gets nothing
         // in its settings: its launch's own preparing adds its checks.
         let mut codex = serde_json::json!({});
-        merge_launch_notify_hooks(&mut codex, tmp.path(), AgentCli::Codex);
-        merge_required_launch_notify_hooks(&mut codex, tmp.path(), AgentCli::Codex).unwrap();
-        merge_remote_notify_hooks(&mut codex, AgentCli::Codex).unwrap();
+        merge_launch_notify_hooks(&mut codex, tmp.path(), AgentCli::Codex, HookTarget::local());
+        merge_required_launch_notify_hooks(
+            &mut codex,
+            tmp.path(),
+            AgentCli::Codex,
+            HookTarget::local(),
+        )
+        .unwrap();
+        merge_remote_notify_hooks(&mut codex, AgentCli::Codex, HookTarget::local()).unwrap();
         assert!(
             codex["hooks"].as_object().is_none_or(|hooks| hooks
                 .values()
@@ -9816,19 +9862,19 @@ mod tests {
             |cmd: &str| serde_json::json!([{ "hooks": [{ "type": "command", "command": cmd }] }]);
         fs::write(
             claude.join("settings.json"),
-            serde_json::json!({ "hooks": { "Stop": group(notify_command()) } }).to_string(),
+            serde_json::json!({ "hooks": { "Stop": group(&notify_command()) } }).to_string(),
         )
         .unwrap();
         fs::write(
             claude.join("settings.local.json"),
             serde_json::json!({ "hooks": {
-                "PermissionRequest": group("x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" y"),
+                "PermissionRequest": group(&format!("x {} y", notify_marker())),
             } })
             .to_string(),
         )
         .unwrap();
         let mut v = serde_json::json!({});
-        merge_launch_notify_hooks(&mut v, tmp.path(), AgentCli::Claude);
+        merge_launch_notify_hooks(&mut v, tmp.path(), AgentCli::Claude, HookTarget::local());
         assert_eq!(notify_count(&v, "Stop"), 0, "settings.json already runs it");
         assert_eq!(
             notify_count(&v, "PermissionRequest"),
@@ -9874,25 +9920,28 @@ mod tests {
     }
 
     #[test]
-    fn guarded_hook_command_runs_script_with_stdin_when_present() {
+    fn guarded_hook_command_runs_the_bridge_with_stdin_when_present() {
         use std::os::unix::fs::PermissionsExt;
         let tmp = TempDir::new().unwrap();
-        let script = tmp.path().join(codesense_pty_core::notify_hook::NAME);
+        let bridge = tmp.path().join(hook::BRIDGE);
         fs::write(
-            &script,
-            "#!/bin/sh\ncat > \"$CODESENSE_ACTIVITY_HOST/got.json\"\n",
+            &bridge,
+            "#!/bin/sh\necho \"$*\" > \"$CODESENSE_ACTIVITY_HOST/args\"\ncat > \"$CODESENSE_ACTIVITY_HOST/got.json\"\n",
         )
         .unwrap();
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&bridge, fs::Permissions::from_mode(0o755)).unwrap();
         let payload = r#"{"hook_event_name":"PermissionRequest"}"#;
         let out = run_hook_command(tmp.path(), payload);
         assert!(out.status.success());
         assert_eq!(
+            fs::read_to_string(tmp.path().join("args")).unwrap(),
+            "hook notify\n"
+        );
+        assert_eq!(
             fs::read_to_string(tmp.path().join("got.json")).unwrap(),
             payload,
-            "the hook JSON reaches the script on stdin"
+            "the hook JSON reaches the bridge on stdin"
         );
-        assert!(notify_command().contains(&codesense_pty_core::notify_hook::installed_script()));
     }
 
     /// The secret-file guard rides next to the status hooks: one `PreToolUse` group scoped to the
@@ -9904,12 +9953,18 @@ mod tests {
             "permissions": { "deny": ["WebFetch"] }
         });
         for _ in 0..2 {
-            merge_remote_notify_hooks(&mut settings, AgentCli::Claude).unwrap();
+            merge_remote_notify_hooks(&mut settings, AgentCli::Claude, HookTarget::local())
+                .unwrap();
         }
         let groups = settings["hooks"]["PreToolUse"].as_array().unwrap();
+        let guard = posix(Verb::SecretGuard).marker;
         let guards: Vec<_> = groups
             .iter()
-            .filter(|g| g["hooks"][0]["command"].as_str().is_some_and(|c| c.contains("codesense-secret-guard")))
+            .filter(|g| {
+                g["hooks"][0]["command"]
+                    .as_str()
+                    .is_some_and(|c| c.contains(&guard))
+            })
             .collect();
         assert_eq!(guards.len(), 1, "added once: {groups:?}");
         // Claude's own deny rules ride along, once, beside whatever the file already denies.
@@ -9926,16 +9981,190 @@ mod tests {
         assert!(denies.contains(&serde_json::json!("WebFetch")), "the file's own rules stay");
         assert_eq!(guards[0]["matcher"], "Read|Grep|Glob|Bash");
         assert!(groups.iter().any(|g| g["hooks"][0]["command"] == "mine.sh"), "the user's own hook stays");
-        assert!(groups.iter().any(|g| g["hooks"][0]["command"].as_str().is_some_and(|c| c.contains("codesense-notify"))));
+        assert!(groups.iter().any(|g| g["hooks"][0]["command"].as_str().is_some_and(|c| c.contains(&posix(Verb::Notify).marker))));
         // A CLI with no project hooks gets none.
         let mut codex = serde_json::json!({});
-        merge_remote_notify_hooks(&mut codex, AgentCli::Codex).unwrap();
+        merge_remote_notify_hooks(&mut codex, AgentCli::Codex, HookTarget::local()).unwrap();
         assert_eq!(codex, serde_json::json!({}));
+    }
+
+    /// `verb`'s hook as a POSIX host runs it.
+    fn posix(verb: Verb) -> hook::HookCommand {
+        hook::command(verb, HookTarget::Posix)
+    }
+
+    /// The hook entries of `settings` at `event` whose command names `verb`'s marker on
+    /// `target`.
+    fn entries(
+        settings: &serde_json::Value,
+        event: &str,
+        verb: Verb,
+        target: HookTarget,
+    ) -> Vec<serde_json::Value> {
+        let marker = hook::command(verb, target).marker;
+        settings["hooks"][event]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|g| g["hooks"].as_array().cloned().unwrap_or_default())
+            .filter(|h| h["command"].as_str().is_some_and(|c| c.contains(&marker)))
+            .collect()
+    }
+
+    /// Each writer writes the form of the host that runs the hooks: a local file gets the
+    /// writer's own target, and a remote file the POSIX form whatever OS writes it, with no
+    /// `shell` or `onFailure` key.
+    #[test]
+    fn notify_hooks_are_written_for_the_host_that_runs_them() {
+        let tmp = TempDir::new().unwrap();
+        for (writer, remote, written) in [
+            (HookTarget::Posix, false, HookTarget::Posix),
+            (HookTarget::Windows, false, HookTarget::Windows),
+            (HookTarget::Posix, true, HookTarget::Posix),
+            (HookTarget::Windows, true, HookTarget::Posix),
+        ] {
+            let mut settings = serde_json::json!({});
+            if remote {
+                merge_remote_notify_hooks(&mut settings, AgentCli::Claude, writer).unwrap();
+            } else {
+                merge_local_notify_hooks(&mut settings, tmp.path(), AgentCli::Claude, writer)
+                    .unwrap();
+            }
+            let row = format!("{writer:?} writer, remote {remote}");
+            for ev in status_hook_events(AgentCli::Claude) {
+                assert_eq!(
+                    entries(&settings, ev, Verb::Notify, written),
+                    [hook::command(Verb::Notify, written).entry()],
+                    "{row}: {ev}"
+                );
+            }
+            assert_eq!(
+                entries(&settings, "PreToolUse", Verb::SecretGuard, written),
+                [hook::command(Verb::SecretGuard, written).entry()],
+                "{row}"
+            );
+            if written == HookTarget::Posix {
+                let text = settings.to_string();
+                assert!(!text.contains("\"shell\""), "{row}: {text}");
+                assert!(!text.contains("onFailure"), "{row}: {text}");
+            }
+        }
+    }
+
+    /// The status hook on `PreToolUse` never passes for the guard, nor the guard for it: merging
+    /// the guard into settings that already run the status hook there adds it once, beside one
+    /// status entry, on either target.
+    #[test]
+    fn the_guard_merges_beside_a_status_hook_on_the_same_event() {
+        for target in HookTarget::ALL {
+            let status = hook::command(Verb::Notify, target);
+            let mut settings = serde_json::json!({
+                "hooks": { "PreToolUse": [{ "matcher": "", "hooks": [status.entry()] }] }
+            });
+            for _ in 0..2 {
+                merge_notify_hooks(&mut settings, AgentCli::Claude, &["PreToolUse"], target)
+                    .unwrap();
+            }
+            for verb in Verb::ALL {
+                assert_eq!(
+                    entries(&settings, "PreToolUse", verb, target).len(),
+                    1,
+                    "{target:?} {verb:?}: {settings}"
+                );
+            }
+        }
+    }
+
+    /// Settings as an earlier CodeSense wrote them: the old status command on every status
+    /// event and the old guard on `PreToolUse`.
+    fn legacy_settings() -> serde_json::Value {
+        let legacy = |verb: Verb| {
+            let (_, command) = hook::LEGACY_COMMANDS
+                .iter()
+                .find(|(v, _)| *v == verb)
+                .unwrap();
+            serde_json::json!({ "type": "command", "command": command, "timeout": 5 })
+        };
+        let mut settings = serde_json::json!({ "hooks": {} });
+        for ev in status_hook_events(AgentCli::Claude) {
+            settings["hooks"][ev] =
+                serde_json::json!([{ "matcher": "", "hooks": [legacy(Verb::Notify)] }]);
+        }
+        settings["hooks"]["PreToolUse"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "matcher": codesense_pty_core::notify_hook::GUARD_MATCHER,
+                "hooks": [legacy(Verb::SecretGuard)],
+            }));
+        settings
+    }
+
+    /// The local and remote merges replace what an earlier CodeSense wrote in place, in the form
+    /// of the host that runs it (a Windows writer's own file gets the PowerShell form, a remote
+    /// file the POSIX one): one status entry per event, where the old one was, and one guard. A
+    /// team's own hook that only names an old script's file stays.
+    #[test]
+    fn hooks_an_earlier_codesense_wrote_are_replaced_in_place() {
+        let tmp = TempDir::new().unwrap();
+        let team_hook = ".claude/hooks/codesense-notify.sh";
+        for (writer, remote) in [
+            (HookTarget::Posix, false),
+            (HookTarget::Windows, false),
+            (HookTarget::Windows, true),
+        ] {
+            let mut settings = legacy_settings();
+            settings["hooks"]["Stop"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({
+                    "matcher": "",
+                    "hooks": [{ "type": "command", "command": team_hook }],
+                }));
+            let target = if remote {
+                merge_remote_notify_hooks(&mut settings, AgentCli::Claude, writer).unwrap();
+                HookTarget::Posix
+            } else {
+                merge_local_notify_hooks(&mut settings, tmp.path(), AgentCli::Claude, writer)
+                    .unwrap();
+                writer
+            };
+            let status = hook::command(Verb::Notify, target);
+            for ev in status_hook_events(AgentCli::Claude) {
+                assert_eq!(
+                    entries(&settings, ev, Verb::Notify, target),
+                    [status.entry()],
+                    "{writer:?} writer, remote {remote}: {ev}"
+                );
+                assert_eq!(hook_commands(&settings, ev)[0], status.command, "in place");
+            }
+            assert_eq!(
+                entries(&settings, "PreToolUse", Verb::SecretGuard, target),
+                [hook::command(Verb::SecretGuard, target).entry()],
+                "{writer:?} writer, remote {remote}"
+            );
+            let text = settings.to_string();
+            for (_, legacy) in hook::LEGACY_COMMANDS {
+                let legacy = serde_json::Value::from(*legacy).to_string();
+                assert!(
+                    !text.contains(&legacy),
+                    "{writer:?} writer, remote {remote}: {text}"
+                );
+            }
+            assert_eq!(
+                hook_commands(&settings, "Stop")
+                    .iter()
+                    .filter(|c| *c == team_hook)
+                    .count(),
+                1,
+                "the team's own hook stays"
+            );
+        }
     }
 
     /// SW-AN-51: the committed `.claude/settings.json` must stay in lockstep with
     /// the writer's command string: the dedup check (`event_runs_notify_hook`) counts any
-    /// command naming the installed script, so a drifted one would silently survive every
+    /// command naming the status hook's marker, so a drifted one would silently survive every
     /// regen — this test fails loudly instead. Compiled only where the file exists.
     #[cfg(cs_claude_settings)]
     #[test]
@@ -9966,7 +10195,7 @@ mod tests {
                         .get("command")
                         .and_then(|c| c.as_str())
                         .expect("hook has command string");
-                    if command.contains("codesense-notify") {
+                    if command.contains(&notify_marker()) {
                         saw_notify = true;
                         assert_eq!(
                             command,
@@ -9980,7 +10209,7 @@ mod tests {
         }
         assert!(
             saw_notify,
-            "{} has no codesense-notify hook (nothing to guard)",
+            "{} has no status hook (nothing to guard)",
             path.display()
         );
     }

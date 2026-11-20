@@ -60,7 +60,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -72,7 +72,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -95,7 +95,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -107,7 +107,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -117,7 +117,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-secret-guard.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-secret-guard.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook secret-guard || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -129,7 +129,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -154,7 +154,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -177,7 +177,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -200,7 +200,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -396,7 +396,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -408,7 +408,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -431,7 +431,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -443,7 +443,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -453,7 +453,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-secret-guard.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-secret-guard.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook secret-guard || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -465,7 +465,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -490,7 +490,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -513,7 +513,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -536,7 +536,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -673,7 +673,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -685,7 +685,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -708,7 +708,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -720,7 +720,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -730,7 +730,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-secret-guard.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-secret-guard.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook secret-guard || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -742,7 +742,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -767,7 +767,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -790,7 +790,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -813,7 +813,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -1013,7 +1013,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -1025,7 +1025,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -1048,7 +1048,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -1060,7 +1060,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -1070,7 +1070,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-secret-guard.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-secret-guard.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook secret-guard || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -1082,7 +1082,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -1107,7 +1107,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -1130,7 +1130,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -1153,7 +1153,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3014,7 +3014,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3026,7 +3026,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3049,7 +3049,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3061,7 +3061,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3071,7 +3071,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-secret-guard.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-secret-guard.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook secret-guard || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3083,7 +3083,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3108,7 +3108,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3131,7 +3131,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3154,7 +3154,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3357,7 +3357,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3369,7 +3369,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3392,7 +3392,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3404,7 +3404,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3414,7 +3414,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-secret-guard.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-secret-guard.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook secret-guard || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3426,7 +3426,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3451,7 +3451,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3474,7 +3474,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3497,7 +3497,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3637,7 +3637,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3649,7 +3649,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3672,7 +3672,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3684,7 +3684,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3694,7 +3694,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-secret-guard.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-secret-guard.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook secret-guard || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3706,7 +3706,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3731,7 +3731,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3754,7 +3754,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3777,7 +3777,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3978,7 +3978,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -3990,7 +3990,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -4013,7 +4013,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -4025,7 +4025,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -4035,7 +4035,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-secret-guard.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-secret-guard.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook secret-guard || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -4047,7 +4047,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -4072,7 +4072,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -4095,7 +4095,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -4118,7 +4118,7 @@
           {
             "hooks": [
               {
-                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true",
+                "command": "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-bridge\" hook notify || true",
                 "timeout": 5,
                 "type": "command"
               }
@@ -4197,7 +4197,7 @@
   "claude-profile-open Interactive": {
     "scope_files": {
       ".mcp.json": "{\n  \"mcpServers\": {\n    \"codesense\": {\n      \"command\": \"<BRIDGE>\"\n    }\n  }\n}",
-      "launch-settings.json": "{\n  \"hooks\": {\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"[ -x \\\"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\\\" ] && \\\"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\\\" || true\",\n            \"timeout\": 5,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"\"\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"[ -x \\\"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\\\" ] && \\\"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\\\" || true\",\n            \"timeout\": 5,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"\"\n      },\n      {\n        \"hooks\": [\n          {\n            \"asyncRewake\": true,\n            \"command\": \"[ -x \\\"$CODESENSE_ACTIVITY_HOST/activity-helper\\\" ] || exit 0; exec \\\"$CODESENSE_ACTIVITY_HOST/activity-helper\\\" --inbox-wait claude PostToolUse \\\"$PPID\\\"\",\n            \"timeout\": 2147483,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"\"\n      }\n    ],\n    \"PostToolUseFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"[ -x \\\"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\\\" ] && \\\"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\\\" || true\",\n            \"timeout\": 5,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"\"\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"[ -x \\\"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\\\" ] && \\\"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\\\" || true\",\n            \"timeout\": 5,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"\"\n      },\n      {\n        \"hooks\": [\n          {\n            \"command\": \"[ -x \\\"$CODESENSE_ACTIVITY_HOST/codesense-secret-guard.sh\\\" ] && \\\"$CODESENSE_ACTIVITY_HOST/codesense-secret-guard.sh\\\" || true\",\n            \"timeout\": 5,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"Read|Grep|Glob|Bash\"\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"[ -x \\\"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\\\" ] && \\\"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\\\" || true\",\n            \"timeout\": 5,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"\"\n      }\n    ],\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"asyncRewake\": true,\n            \"command\": \"[ -x \\\"$CODESENSE_ACTIVITY_HOST/activity-helper\\\" ] || exit 0; exec \\\"$CODESENSE_ACTIVITY_HOST/activity-helper\\\" --inbox-wait claude SessionStart \\\"$PPID\\\"\",\n            \"timeout\": 2147483,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"\"\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"[ -x \\\"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\\\" ] && \\\"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\\\" || true\",\n            \"timeout\": 5,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"\"\n      },\n      {\n        \"hooks\": [\n          {\n            \"asyncRewake\": true,\n            \"command\": \"[ -x \\\"$CODESENSE_ACTIVITY_HOST/activity-helper\\\" ] || exit 0; exec \\\"$CODESENSE_ACTIVITY_HOST/activity-helper\\\" --inbox-wait claude Stop \\\"$PPID\\\"\",\n            \"timeout\": 2147483,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"\"\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"[ -x \\\"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\\\" ] && \\\"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\\\" || true\",\n            \"timeout\": 5,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"\"\n      },\n      {\n        \"hooks\": [\n          {\n            \"asyncRewake\": true,\n            \"command\": \"[ -x \\\"$CODESENSE_ACTIVITY_HOST/activity-helper\\\" ] || exit 0; exec \\\"$CODESENSE_ACTIVITY_HOST/activity-helper\\\" --inbox-wait claude StopFailure \\\"$PPID\\\"\",\n            \"timeout\": 2147483,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"\"\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"[ -x \\\"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\\\" ] && \\\"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\\\" || true\",\n            \"timeout\": 5,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"\"\n      },\n      {\n        \"hooks\": [\n          {\n            \"command\": \"[ -x \\\"$CODESENSE_ACTIVITY_HOST/activity-helper\\\" ] || exit 0; exec \\\"$CODESENSE_ACTIVITY_HOST/activity-helper\\\" --inbox-wait claude UserPromptSubmit \\\"$PPID\\\"\",\n            \"timeout\": 5,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"\"\n      }\n    ]\n  },\n  \"permissions\": {\n    \"deny\": [\n      \"Read(**/.env)\",\n      \"Read(**/.env.*)\",\n      \"Read(**/*.pem)\",\n      \"Read(**/*.key)\",\n      \"Read(**/id_rsa*)\",\n      \"Read(**/id_ed25519*)\",\n      \"Read(~/.config/codesense-mcp/**)\"\n    ]\n  }\n}",
+      "launch-settings.json": "{\n  \"hooks\": {\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"[ -x \\\"$CODESENSE_ACTIVITY_HOST/codesense-bridge\\\" ] && \\\"$CODESENSE_ACTIVITY_HOST/codesense-bridge\\\" hook notify || true\",\n            \"timeout\": 5,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"\"\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"[ -x \\\"$CODESENSE_ACTIVITY_HOST/codesense-bridge\\\" ] && \\\"$CODESENSE_ACTIVITY_HOST/codesense-bridge\\\" hook notify || true\",\n            \"timeout\": 5,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"\"\n      },\n      {\n        \"hooks\": [\n          {\n            \"asyncRewake\": true,\n            \"command\": \"[ -x \\\"$CODESENSE_ACTIVITY_HOST/activity-helper\\\" ] || exit 0; exec \\\"$CODESENSE_ACTIVITY_HOST/activity-helper\\\" --inbox-wait claude PostToolUse \\\"$PPID\\\"\",\n            \"timeout\": 2147483,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"\"\n      }\n    ],\n    \"PostToolUseFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"[ -x \\\"$CODESENSE_ACTIVITY_HOST/codesense-bridge\\\" ] && \\\"$CODESENSE_ACTIVITY_HOST/codesense-bridge\\\" hook notify || true\",\n            \"timeout\": 5,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"\"\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"[ -x \\\"$CODESENSE_ACTIVITY_HOST/codesense-bridge\\\" ] && \\\"$CODESENSE_ACTIVITY_HOST/codesense-bridge\\\" hook notify || true\",\n            \"timeout\": 5,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"\"\n      },\n      {\n        \"hooks\": [\n          {\n            \"command\": \"[ -x \\\"$CODESENSE_ACTIVITY_HOST/codesense-bridge\\\" ] && \\\"$CODESENSE_ACTIVITY_HOST/codesense-bridge\\\" hook secret-guard || true\",\n            \"timeout\": 5,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"Read|Grep|Glob|Bash\"\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"[ -x \\\"$CODESENSE_ACTIVITY_HOST/codesense-bridge\\\" ] && \\\"$CODESENSE_ACTIVITY_HOST/codesense-bridge\\\" hook notify || true\",\n            \"timeout\": 5,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"\"\n      }\n    ],\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"asyncRewake\": true,\n            \"command\": \"[ -x \\\"$CODESENSE_ACTIVITY_HOST/activity-helper\\\" ] || exit 0; exec \\\"$CODESENSE_ACTIVITY_HOST/activity-helper\\\" --inbox-wait claude SessionStart \\\"$PPID\\\"\",\n            \"timeout\": 2147483,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"\"\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"[ -x \\\"$CODESENSE_ACTIVITY_HOST/codesense-bridge\\\" ] && \\\"$CODESENSE_ACTIVITY_HOST/codesense-bridge\\\" hook notify || true\",\n            \"timeout\": 5,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"\"\n      },\n      {\n        \"hooks\": [\n          {\n            \"asyncRewake\": true,\n            \"command\": \"[ -x \\\"$CODESENSE_ACTIVITY_HOST/activity-helper\\\" ] || exit 0; exec \\\"$CODESENSE_ACTIVITY_HOST/activity-helper\\\" --inbox-wait claude Stop \\\"$PPID\\\"\",\n            \"timeout\": 2147483,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"\"\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"[ -x \\\"$CODESENSE_ACTIVITY_HOST/codesense-bridge\\\" ] && \\\"$CODESENSE_ACTIVITY_HOST/codesense-bridge\\\" hook notify || true\",\n            \"timeout\": 5,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"\"\n      },\n      {\n        \"hooks\": [\n          {\n            \"asyncRewake\": true,\n            \"command\": \"[ -x \\\"$CODESENSE_ACTIVITY_HOST/activity-helper\\\" ] || exit 0; exec \\\"$CODESENSE_ACTIVITY_HOST/activity-helper\\\" --inbox-wait claude StopFailure \\\"$PPID\\\"\",\n            \"timeout\": 2147483,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"\"\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"[ -x \\\"$CODESENSE_ACTIVITY_HOST/codesense-bridge\\\" ] && \\\"$CODESENSE_ACTIVITY_HOST/codesense-bridge\\\" hook notify || true\",\n            \"timeout\": 5,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"\"\n      },\n      {\n        \"hooks\": [\n          {\n            \"command\": \"[ -x \\\"$CODESENSE_ACTIVITY_HOST/activity-helper\\\" ] || exit 0; exec \\\"$CODESENSE_ACTIVITY_HOST/activity-helper\\\" --inbox-wait claude UserPromptSubmit \\\"$PPID\\\"\",\n            \"timeout\": 5,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"\"\n      }\n    ]\n  },\n  \"permissions\": {\n    \"deny\": [\n      \"Read(**/.env)\",\n      \"Read(**/.env.*)\",\n      \"Read(**/*.pem)\",\n      \"Read(**/*.key)\",\n      \"Read(**/id_rsa*)\",\n      \"Read(**/id_ed25519*)\",\n      \"Read(~/.config/codesense-mcp/**)\"\n    ]\n  }\n}",
       "owner.json": "{\"instance_root\":\"<INSTANCE_ROOT>\",\"server_id\":\"\"}"
     },
     "spawn": {

@@ -93,6 +93,8 @@ static DESCRIPTOR: LazyLock<Descriptor> = LazyLock::new(|| {
         before: Some((0, 22, 6)),
         first_line: true,
         supported: "Hermes Agent 0.22.5",
+        windows_min: None,
+        windows_supported: None,
     },
     telemetry: None,
     usage_snapshot_timing: false,

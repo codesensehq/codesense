@@ -21,8 +21,8 @@ pub const TOKEN_ENV: &str = "CODESENSE_ACTIVITY_TOKEN";
 /// A terminal's host activity root, exported to every shell it runs. It is
 /// stable for the host's install, so a shell opened before the app restarted
 /// still reaches its host: the root holds the socket, [`HELPER_NAME`] and the
-/// Claude status hook (`crate::notify_hook`).
-pub const HOST_ENV: &str = "CODESENSE_ACTIVITY_HOST";
+/// bridge Claude's hooks run (`crate::notify_hook`).
+pub const HOST_ENV: &str = codesense_host_proto::hook::HOST_ENV;
 /// The host's own helper, refreshed under its root at every start.
 pub const HELPER_NAME: &str = "activity-helper";
 const SOCKET_NAME: &str = "activity.sock";
@@ -123,14 +123,10 @@ enum Bind {
     EngineLost,
 }
 
-/// How the shells' helper names this binary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HelperLink {
-    /// A hard link: pins this very build (a symbolic link across filesystems).
-    Hard,
-    /// A symbolic link only: for an install that must keep one link per file.
-    Symbolic,
-}
+/// How the shells' helper, and the bridge beside it, name their binaries: a hard link that
+/// pins this very build (a symbolic link across filesystems), or a symbolic link only, for an
+/// install that must keep one link per file.
+pub use codesense_platform::fs::PlaceLink as HelperLink;
 
 /// One bounded attempt; callers exit neutrally even if delivery fails. This
 /// entry accepts only the normalized whitelist, never raw provider content.

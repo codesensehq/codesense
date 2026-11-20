@@ -106,7 +106,7 @@ static DESCRIPTOR: LazyLock<Descriptor> = LazyLock::new(|| Descriptor {
     project_hooks: Some(ProjectHooks {
         committed: ".claude/settings.json".into(),
         local: ".claude/settings.local.json".into(),
-        status_command: crate::notify_hook::status_command(),
+        status_verb: codesense_host_proto::hook::Verb::Notify,
     }),
     // The oldest release remote tasks were qualified on, with every flag the task
     // harness passes.
@@ -118,6 +118,9 @@ static DESCRIPTOR: LazyLock<Descriptor> = LazyLock::new(|| Descriptor {
         before: None,
         first_line: false,
         supported: "Claude Code 2.1.141 or newer",
+        // Windows hooks set `onFailure`, which Claude reads from this release on.
+        windows_min: Some((2, 1, 295)),
+        windows_supported: Some("Claude Code 2.1.295 or newer"),
     },
 });
 

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Unix: permission modes, uid, (dev, ino), link counts and ctime,
-//! `O_NOFOLLOW`, `rename`, `flock`, `ETXTBSY`, `fstatvfs` and `pread`.
+//! `O_NOFOLLOW`, `rename`, `flock`, `ETXTBSY`, `fstatvfs`, `pread`, and hard
+//! and symbolic links for [`super::place_link`].
 
 use std::fs::{File, Metadata, OpenOptions};
 use std::io;
@@ -8,7 +9,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-use super::{ChangeStamp, Creation, FileId, Linked, Open, Reach, ReplaceError};
+use super::{ChangeStamp, Creation, FileId, Linked, Open, PlaceLink, Reach, ReplaceError};
 
 pub(super) fn set_owner_only(path: &Path, is_dir: bool) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -178,6 +179,27 @@ pub(super) fn can_execute(path: &Path) -> bool {
 pub(super) fn link_or_copy(target: &Path, link: &Path) -> io::Result<Linked> {
     std::os::unix::fs::symlink(target, link)?;
     Ok(Linked::Symlink)
+}
+
+pub(super) fn place_link(source: &Path, link: &Path, how: PlaceLink) -> io::Result<()> {
+    let current = std::fs::metadata(source)?;
+    let placed = match how {
+        PlaceLink::Hard => std::fs::symlink_metadata(link)
+            .is_ok_and(|placed| placed.ino() == current.ino() && placed.dev() == current.dev()),
+        PlaceLink::Symbolic => std::fs::read_link(link).is_ok_and(|to| to == source),
+    };
+    if placed {
+        return Ok(());
+    }
+    let partial = super::partial_link(link);
+    match how {
+        PlaceLink::Hard => super::hard_link(source, &partial)
+            .or_else(|_| std::os::unix::fs::symlink(source, &partial))?,
+        PlaceLink::Symbolic => std::os::unix::fs::symlink(source, &partial)?,
+    }
+    std::fs::rename(&partial, link).inspect_err(|_| {
+        let _ = std::fs::remove_file(&partial);
+    })
 }
 
 pub(super) fn is_world_writable(file: &File) -> io::Result<bool> {
