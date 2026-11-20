@@ -69,7 +69,8 @@ impl Executors {
                 .ok_or_else(|| {
                     format!(
                         "capabilityUnavailable: install {} on the remote machine",
-                        executor.release.supported
+                        // This runs on the remote machine, so its own OS is the target's.
+                        executor.release.supported_for(std::env::consts::OS)
                     )
                 })?
         };
