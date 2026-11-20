@@ -22,17 +22,25 @@ use crate::shell::{resolve_shell_from, ShellKind, ShellTable, UserShell};
 use codesense_platform::{cli, fs, user};
 
 /// Why a [`SpawnIntent`] cannot be resolved on this host.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpawnError {
     /// The intent runs a command line, the user's shell does not run POSIX
     /// commands, and this OS has no POSIX shell to run it under.
     NoPosixRunner,
+    /// The intent's argv runs this program, which Windows would start through
+    /// `cmd.exe` (a `.cmd` or `.bat` script) or could not run as named (not an
+    /// absolute path to an existing `.exe`).
+    BatchProgram(String),
 }
 
 impl std::fmt::Display for SpawnError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NoPosixRunner => f.write_str("no POSIX shell to run the command on this OS"),
+            Self::BatchProgram(program) => write!(
+                f,
+                "{program} is not an absolute path to an existing .exe, so it cannot run directly on this OS"
+            ),
         }
     }
 }
@@ -556,6 +564,52 @@ fn shell_command(
     Ok(cmd)
 }
 
+/// The argv-direct child running `program` with `args` on `os` (a
+/// [`std::env::consts::OS`] value), `exists` telling whether a file is there.
+///
+/// On Windows only an absolute path to an existing `.exe` runs ([`direct_program`]).
+/// Elsewhere the program runs as given.
+fn direct_command(
+    host: &HostEnvironment,
+    program: &str,
+    args: &[String],
+    agent_env: &[(String, String)],
+    os: &str,
+    exists: impl Fn(&Path) -> bool,
+) -> Result<CommandBuilder, SpawnError> {
+    direct_program(program, os, exists)?;
+    let mut cmd = agent_command(host, program, agent_env);
+    cmd.args(args);
+    Ok(cmd)
+}
+
+/// Whether `program` may be spawned argv-direct on `os`: on Windows only an absolute
+/// path to an existing file whose extension, with trailing dots and spaces trimmed as
+/// Windows trims them, is `.exe`. An allowlist, not a `.cmd`/`.bat` denylist: the PTY
+/// layer swaps a `PATHEXT` extension in for a program that does not exist, and Windows
+/// runs a batch script through `cmd.exe`. Every other OS runs the program as given.
+fn direct_program(
+    program: &str,
+    os: &str,
+    exists: impl Fn(&Path) -> bool,
+) -> Result<(), SpawnError> {
+    if os != "windows" {
+        return Ok(());
+    }
+    let named = program.trim_end_matches(['.', ' ']).to_ascii_lowercase();
+    let bytes = program.as_bytes();
+    let absolute = program.starts_with(r"\\")
+        || (bytes.len() > 2
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'\\' | b'/'));
+    if absolute && named.ends_with(".exe") && exists(Path::new(program)) {
+        Ok(())
+    } else {
+        Err(SpawnError::BatchProgram(program.to_string()))
+    }
+}
+
 /// Assemble the child command — argv, cwd, and the full managed environment
 /// (`TERM`/`LANG`/PATH, the `ZDOTDIR` RC wrappers, shell-init, starship, and
 /// finally the intent's own variables) — from the intent and its resolved
@@ -578,11 +632,14 @@ fn build_spawn_command(
         // no shell wrapper, no RC wrappers, no shell-integration. Used by
         // managed agent launches so the agent CLI owns the PTY from the
         // start and Ctrl+C routes to the agent in-process.
-        Some([program, args @ ..]) => {
-            let mut cmd = agent_command(host, program, &intent.agent_env);
-            cmd.args(args);
-            cmd
-        }
+        Some([program, args @ ..]) => direct_command(
+            host,
+            program,
+            args,
+            &intent.agent_env,
+            std::env::consts::OS,
+            |path| path.is_file(),
+        )?,
         // Empty argv falls through to the interactive shell: a mis-set empty
         // vec cannot leave the spawn with no command.
         _ => shell_command(
@@ -1147,6 +1204,87 @@ mod tests {
             fish_c.get_env("SHELL").and_then(|v| v.to_str()),
             Some("/opt/homebrew/bin/fish")
         );
+    }
+
+    /// A Windows argv-direct launch runs only an absolute path to an existing `.exe`, so no
+    /// implicit `cmd.exe` ever runs a batch script; other OSes run the program as given.
+    #[test]
+    fn a_windows_direct_launch_runs_only_an_existing_absolute_exe() {
+        let present = |path: &Path| !path.to_string_lossy().contains("missing");
+        for (program, accepted) in [
+            (r"C:\npm\claude.exe", true),
+            (r"C:\NPM\CLAUDE.EXE", true),
+            ("C:/npm/claude.exe", true),
+            (r"\\server\share\claude.exe", true),
+            // Windows trims a trailing space or dot, so the name still runs `claude.exe`.
+            (r"C:\npm\claude.exe ", true),
+            (r"C:\npm\claude.cmd", false),
+            (r"C:\npm\claude.bat", false),
+            (r"C:\npm\claude.bat.", false),
+            (r"C:\npm\claude.CMD ", false),
+            ("claude", false),
+            ("claude.exe", false),
+            (r"npm\claude.exe", false),
+            (r"C:\missing\claude.exe", false),
+            (r"C:\npm\claude", false),
+        ] {
+            let checked = direct_program(program, "windows", present);
+            if accepted {
+                assert_eq!(checked, Ok(()), "{program:?}");
+            } else {
+                assert_eq!(
+                    checked,
+                    Err(SpawnError::BatchProgram(program.to_string())),
+                    "{program:?}"
+                );
+            }
+        }
+        for os in ["macos", "linux"] {
+            for program in ["claude", r"C:\npm\claude.cmd", "/missing/claude"] {
+                assert_eq!(
+                    direct_program(program, os, |_| false),
+                    Ok(()),
+                    "{os} {program}"
+                );
+            }
+        }
+        let error = SpawnError::BatchProgram(r"C:\npm\claude.cmd".into()).to_string();
+        assert!(error.contains(r"C:\npm\claude.cmd"), "{error}");
+    }
+
+    /// The refusal reaches the spawn: a Windows intent that runs a batch script resolves to
+    /// no command at all.
+    #[test]
+    fn a_refused_program_spawns_nothing() {
+        let fx = Fixture::new();
+        let host = fx.host(&[]);
+        let refused = direct_command(
+            &host,
+            r"C:\npm\claude.cmd",
+            &["--x".to_string()],
+            &[],
+            "windows",
+            |_| true,
+        );
+        assert_eq!(
+            refused.err(),
+            Some(SpawnError::BatchProgram(r"C:\npm\claude.cmd".into()))
+        );
+        let ran = direct_command(
+            &host,
+            "/opt/bin/claude",
+            &["--x".to_string()],
+            &[],
+            "macos",
+            |_| false,
+        )
+        .unwrap();
+        let argv: Vec<String> = ran
+            .get_argv()
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(argv, ["/opt/bin/claude", "--x"]);
     }
 
     /// PowerShell and cmd start with no arguments: no `-l`, no init.
