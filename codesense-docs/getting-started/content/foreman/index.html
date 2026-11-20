@@ -9,7 +9,7 @@
 </head>
 <body>
 <script>
-// vendored story-view build kit-rev:2 sha256:5a2b599b8f002e06358a3208f6e979e4fb20d5f6eb7527171f0fcaf1e6ac847e
+// vendored story-view build kit-rev:2 sha256:c36c0775dc0f554a599366855b86c05199e80ee1dd577926be83ddc75fdcf289
 (function(){
 'use strict';
 const SCRIPT_SRC=document.currentScript&&document.currentScript.src||'';
@@ -3855,8 +3855,9 @@ const costReader=({usage,unknown,dead,settled,wait=Promise.resolve()})=>{
   if(known&&known.state==='loading')return;
   costs.set(pill.sessionId,known||{state:'loading'});
   wait.then(()=>usage({sessionId:pill.sessionId})).then(answer=>{
-   const first=answer&&Array.isArray(answer.sessions)?answer.sessions[0]:null;
-   costs.set(pill.sessionId,Number.isFinite(first&&first.costUsd)?{state:'known',usd:first.costUsd}:{state:'unknown'});
+   const rows=answer&&Array.isArray(answer.sessions)?answer.sessions:[];
+   const usd=rows.length&&rows.every(row=>Number.isFinite(row&&row.costUsd))?rows.reduce((sum,row)=>sum+row.costUsd,0):null;
+   costs.set(pill.sessionId,usd===null?{state:'unknown'}:{state:'known',usd});
   },()=>costs.set(pill.sessionId,{state:'unknown'})).then(()=>{if(!dead())settled(pill);});
  };
  return {text,read,has:pill=>costs.has(pill.sessionId)};
