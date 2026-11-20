@@ -58,7 +58,11 @@ pub fn install(root: &Path, bridge: Option<&Path>, how: HelperLink) -> io::Resul
         }
     }
     let placed = match bridge {
-        Some(bridge) => place_bridge(bridge, &root.join(HookTarget::local().bridge_file()), how),
+        Some(bridge) => codesense_platform::fs::place_link(
+            bridge,
+            &root.join(HookTarget::local().bridge_file()),
+            how,
+        ),
         None => {
             log::warn!(
                 "no codesense-bridge on this host: Claude's status and guard hooks do nothing"
@@ -67,15 +71,6 @@ pub fn install(root: &Path, bridge: Option<&Path>, how: HelperLink) -> io::Resul
         }
     };
     removed.and(placed)
-}
-
-/// Place `bridge` at `dest` with the function that places the activity helper.
-fn place_bridge(bridge: &Path, dest: &Path, how: HelperLink) -> io::Result<()> {
-    let _ = (bridge, dest, how);
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "bridge placement is not wired yet",
-    ))
 }
 
 #[cfg(test)]
@@ -105,7 +100,7 @@ mod tests {
             for name in [NAME, GUARD_NAME, "keep.sh"] {
                 fs::write(tmp.path().join(name), b"#!/bin/sh\n").unwrap();
             }
-            let _ = install(tmp.path(), given, HelperLink::Hard);
+            install(tmp.path(), given, HelperLink::Hard).unwrap();
             assert!(!tmp.path().join(NAME).exists(), "{given:?}");
             assert!(!tmp.path().join(GUARD_NAME).exists(), "{given:?}");
             assert!(tmp.path().join("keep.sh").exists(), "{given:?}");
@@ -119,6 +114,47 @@ mod tests {
         install(tmp.path(), None, HelperLink::Hard).unwrap();
         install(tmp.path(), None, HelperLink::Hard).unwrap();
         assert_eq!(fs::read_dir(tmp.path()).unwrap().count(), 0);
+    }
+
+    /// The bridge given lands where the hook commands run it, as the very file (a hard link),
+    /// once: a second start finds it placed.
+    #[test]
+    fn install_places_the_bridge_where_the_hooks_run_it() {
+        use codesense_platform::fs::file_id;
+        let bridge = tempdir().unwrap();
+        let bridge = bridge.path().join(hook::BRIDGE);
+        fs::write(&bridge, b"bridge").unwrap();
+        let root = tempdir().unwrap();
+        let placed = root.path().join(HookTarget::local().bridge_file());
+        install(root.path(), Some(&bridge), HelperLink::Hard).unwrap();
+        assert_eq!(file_id(&placed).unwrap(), file_id(&bridge).unwrap());
+        install(root.path(), Some(&bridge), HelperLink::Hard).unwrap();
+        assert_eq!(file_id(&placed).unwrap(), file_id(&bridge).unwrap());
+        assert_eq!(
+            fs::read_dir(root.path()).unwrap().count(),
+            1,
+            "nothing else"
+        );
+    }
+
+    /// A private-account root's install refuses any file with a second hard link, so the
+    /// bridge there is a symbolic link, and the bridge keeps its one link.
+    #[cfg(unix)]
+    #[test]
+    fn a_private_root_gets_a_symbolic_bridge_never_a_hard_link() {
+        use std::os::unix::fs::MetadataExt;
+        let bridge = tempdir().unwrap();
+        let bridge = bridge.path().join(hook::BRIDGE);
+        fs::write(&bridge, b"bridge").unwrap();
+        let root = tempdir().unwrap();
+        install(root.path(), Some(&bridge), HelperLink::Symbolic).unwrap();
+        let placed = root.path().join(hook::BRIDGE);
+        assert!(fs::symlink_metadata(&placed)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(fs::read_link(&placed).unwrap(), bridge);
+        assert_eq!(fs::metadata(&bridge).unwrap().nlink(), 1);
     }
 
     #[test]
