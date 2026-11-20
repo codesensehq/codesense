@@ -183,12 +183,25 @@ where
 }
 /// The committer time of `commit` in `repo`, read in-process, as the last millisecond of its second
 /// (Git records whole seconds, and a call that ran in the same second preceded the commit).
-pub(super) fn committer_ms(repo: &Path, commit: &str) -> Option<i64> {
+fn committer_ms(repo: &Path, commit: &str) -> Option<i64> {
     let oid = Result::ok(git2::Oid::from_str(commit))?;
     let repository = Result::ok(git2::Repository::open(repo))?;
     let found = Result::ok(repository.find_commit(oid))?;
     let seconds = found.committer().when().seconds();
     Some(seconds * 1000 + 999)
+}
+/// [`committer_ms`] of each of `commits` that `repo` has, opening it once.
+pub(super) fn committer_times<'a>(repo: &Path, commits: impl IntoIterator<Item = &'a str>) -> HashMap<String, i64> {
+    let Ok(repository) = git2::Repository::open(repo) else {
+        return HashMap::new();
+    };
+    commits
+        .into_iter()
+        .filter_map(|commit| {
+            let found = repository.find_commit(git2::Oid::from_str(commit).ok()?).ok()?;
+            Some((commit.to_owned(), found.committer().when().seconds() * 1000 + 999))
+        })
+        .collect()
 }
 /// The turn `commit` was made in, for a line whose edit turn is unknown: the last indexed
 /// shell-type call of the linked session at or before the committer time, and only when that time
