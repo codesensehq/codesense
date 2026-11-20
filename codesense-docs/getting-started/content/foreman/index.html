@@ -9,7 +9,7 @@
 </head>
 <body>
 <script>
-// vendored story-view build kit-rev:2 sha256:cffdd334b0e891590a68ab7189286eb3f613e9f72af22f9ef047239ae1ed6589
+// vendored story-view build kit-rev:2 sha256:47503447983041333be3dad543a5821f9a5e88e7590d7ed15f45e33675fc45fa
 (function(){
 'use strict';
 const SCRIPT_SRC=document.currentScript&&document.currentScript.src||'';
@@ -431,12 +431,13 @@ function spendFromTotals(answer,id){
  }
  return {text:`${Number.isFinite(entry.openSessions)&&entry.openSessions>0?'≥ ':''}${money(totals.costUsd)}`,known:true};
 }
+function distinctSessions(rows){return new Set(rows.map(row=>`${row&&row.cli}|${row&&row.sessionId}`)).size;}
 function spendFromUsage(usage,{open=false}={}){
  const sessions=usage&&Array.isArray(usage.sessions)?usage.sessions:null;
  if(!sessions||!sessions.length)return null;
  const priced=sessions.filter(row=>row&&Number.isFinite(row.costUsd));
  if(!priced.length)return null;
- const unpriced=sessions.length-priced.length,notes=[usage.nextCursor?COPY.spend.partial:'',unpriced?COPY.spend.unpricedSome(unpriced):''].filter(Boolean);
+ const unpriced=distinctSessions(sessions.filter(row=>!(row&&Number.isFinite(row.costUsd)))),notes=[usage.nextCursor?COPY.spend.partial:'',unpriced?COPY.spend.unpricedSome(unpriced):''].filter(Boolean);
  return {text:`${open?'≥ ':''}${money(priced.reduce((sum,row)=>sum+row.costUsd,0))}${notes.length?` · ${notes.join(' · ')}`:''}`,known:true};
 }
 function stageModel(status,config){
@@ -3874,7 +3875,7 @@ const sumKnown=values=>{const known=values.filter(Number.isFinite);return known.
 function groups(rows,keyOf){
  const by=new Map();
  for(const row of rows){const key=keyOf(row);if(!by.has(key))by.set(key,[]);by.get(key).push(row);}
- const list=[...by].map(([label,members])=>({label,usd:sumKnown(members.map(row=>row.costUsd)),sessions:members.length,unpriced:members.filter(row=>!Number.isFinite(row.costUsd)).length}));
+ const list=[...by].map(([label,members])=>({label,usd:sumKnown(members.map(row=>row.costUsd)),sessions:distinctSessions(members),unpriced:distinctSessions(members.filter(row=>!Number.isFinite(row.costUsd)))}));
  const top=Math.max(...list.map(group=>group.usd===null?-Infinity:group.usd));
  return list.sort((a,b)=>(b.usd===null?-1:b.usd)-(a.usd===null?-1:a.usd)||a.label.localeCompare(b.label)).map(group=>({...group,share:group.usd!==null&&top>0?group.usd/top:null}));
 }
@@ -3882,10 +3883,10 @@ function usageModel(usage,points,sessions){
  const rows=Array.isArray(usage&&usage.sessions)?usage.sessions:null;
  if(!rows)return {kind:'error'};
  if(!rows.length)return {kind:'empty'};
- const handles=handlesOf(sessions),usd=sumKnown(rows.map(row=>row.costUsd)),unpriced=rows.filter(row=>!Number.isFinite(row.costUsd)).length;
+ const handles=handlesOf(sessions),usd=sumKnown(rows.map(row=>row.costUsd)),unpriced=distinctSessions(rows.filter(row=>!Number.isFinite(row.costUsd)));
  const tokens=sumKnown(rows.map(row=>row.tokens&&typeof row.tokens==='object'?sumKnown(TOKEN_KEYS.map(key=>row.tokens[key])):null));
  const perPoint=usd!==null&&Number.isFinite(points)&&points>0?usd/points:null;
- return {kind:'ok',sessions:rows.length,usd,unpriced,partial:Boolean(usage.nextCursor),tokens,perPoint,
+ return {kind:'ok',sessions:distinctSessions(rows),usd,unpriced,partial:Boolean(usage.nextCursor),tokens,perPoint,
   roles:groups(rows,row=>launchRole({role:row.role,handle:handles.get(String(row.sessionId)),agent:row.agent},'unattributed')),models:groups(rows,row=>(Array.isArray(row.models)&&row.models.length?row.models.map(modelName).join(' + '):'unknown model'))};
 }
 const tokensText=count=>count>=1e6?`${(count/1e6).toFixed(1)} M`:count>=1e3?`${(count/1e3).toFixed(1)} k`:String(count);
