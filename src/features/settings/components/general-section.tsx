@@ -52,7 +52,8 @@ import {
 } from "@/tauri/commands";
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
 import { logger } from "@/shared/lib/logger";
-import { isMac } from "@/shared/lib/shortcuts/keystroke";
+import type { CapabilityKey } from "@/shared/lib/capabilities";
+import { useConfigStore } from "@/shared/stores/config-store";
 import { rowMatches, type SettingRowSpec } from "@/features/settings/lib/row-matches";
 import {
   useDashboardProfileStore,
@@ -86,7 +87,7 @@ import { localMachineNoun } from "@/shared/lib/local-machine";
 
 // ---------- Row specs ----------
 
-const GENERAL_ROW_SPECS: Record<string, SettingRowSpec> = {
+const GENERAL_ROW_SPECS = {
   editor: {
     key: "editor",
     label: "Editor",
@@ -420,9 +421,37 @@ const GENERAL_ROW_SPECS: Record<string, SettingRowSpec> = {
     label: "About",
     keywords: ["about", "version", "update", "updates", "check", "release", "codesense"],
   },
-};
+} satisfies Record<string, SettingRowSpec>;
 
 export const GENERAL_ROW_SPEC_LIST: SettingRowSpec[] = Object.values(GENERAL_ROW_SPECS);
+
+/** The rows whose feature exists only where a capability is on; elsewhere they are hidden. */
+export const GENERAL_ROW_CAPABILITY: Partial<
+  Record<keyof typeof GENERAL_ROW_SPECS, CapabilityKey>
+> = {
+  quitOnClose: "background-on-close",
+  terminalServerMenuBar: "terminal-server-tray",
+};
+const GATED_ROWS = Object.entries(GENERAL_ROW_CAPABILITY) as [string, CapabilityKey][];
+
+/**
+ * The General rows this OS has: `GENERAL_ROW_SPEC_LIST` without the rows whose capability is
+ * off. The section, the settings sidebar and the search auto-switch all match against it, so a
+ * hidden row never counts as a match.
+ */
+export function useGeneralRowSpecs(): SettingRowSpec[] {
+  // The hidden row keys, joined so the selector returns a stable string. A capability reads as
+  // on until the startup read lands (or if it failed), like `useCapability`.
+  const hidden = useConfigStore((s) =>
+    GATED_ROWS.filter(([, cap]) => s.platformCaps?.[cap]?.on === false)
+      .map(([row]) => row)
+      .join(" "),
+  );
+  return useMemo(() => {
+    const off = new Set(hidden.split(" "));
+    return GENERAL_ROW_SPEC_LIST.filter((spec) => !off.has(spec.key));
+  }, [hidden]);
+}
 
 // ---------- General section ----------
 
@@ -431,9 +460,12 @@ export function GeneralSection({ query }: { query: string }) {
   // queries like "theme" false-match unrelated rows (e.g. "Content width"
   // via t-h-e-m-e through "con[t]ent wid[t][h]... [e]... nor[m]al... wid[e]").
   // Each row's label + keywords is curated for predictable substring hits.
+  // A row whose feature doesn't exist on this OS is dropped before counting, so
+  // a search for it shows the empty state and announces the right count.
+  const specs = useGeneralRowSpecs();
   const visibleKeys = useMemo(
-    () => GENERAL_ROW_SPEC_LIST.filter((spec) => rowMatches(spec, query)).map((spec) => spec.key),
-    [query],
+    () => specs.filter((spec) => rowMatches(spec, query)).map((spec) => spec.key),
+    [specs, query],
   );
   const visibleCount = visibleKeys.length;
   const visibleSet = new Set(visibleKeys);
@@ -476,11 +508,10 @@ export function GeneralSection({ query }: { query: string }) {
           {visibleSet.has("warmPoolSize") && <WarmPoolSizeRow />}
           {visibleSet.has("worktreeSetupParallelism") && <WorktreeParallelismRow />}
           {visibleSet.has("backgroundAgentLimit") && <BackgroundAgentLimitRow />}
-          {/* SW-AU-34: background-on-close is macOS-only (dock-resident model); hide
-              the toggle off-macOS so it never promises behavior the platform lacks. */}
-          {visibleSet.has("quitOnClose") && isMac() && <QuitOnCloseRow />}
-          {/* SV-8: the menu-bar item is macOS-only. */}
-          {visibleSet.has("terminalServerMenuBar") && isMac() && <TerminalServerMenuBarRow />}
+          {/* Hidden where the capability is off (filtered above), so neither row
+              promises behavior the platform lacks. */}
+          {visibleSet.has("quitOnClose") && <QuitOnCloseRow />}
+          {visibleSet.has("terminalServerMenuBar") && <TerminalServerMenuBarRow />}
           {visibleSet.has("openForemanOnStart") && <OpenForemanOnStartRow />}
           {visibleSet.has("osNotifications") && <OsNotificationsRow />}
           {visibleSet.has("notifyOnFinish") && <NotifyOnFinishRow />}
@@ -1337,7 +1368,7 @@ function ShellIntegrationRow() {
 // ---------- Publish mode (SW-GS-17) ----------
 
 function QuitOnCloseRow() {
-  // SW-AU-34 (AC-5): default OFF → closing the window hides the app (macOS
+  // Default OFF → closing the window hides the app (macOS
   // dock-resident) and keeps the MCP host + engine alive so an agent can
   // keep driving codesense with no window on screen. On → a window close quits.
   // undefined means "use default (off / background-on-close)".
@@ -1367,7 +1398,7 @@ function QuitOnCloseRow() {
   );
 }
 
-// ---------- Terminal server in the menu bar (SV-8) ----------
+// ---------- Terminal server in the menu bar ----------
 
 function TerminalServerMenuBarRow() {
   // Off by default; undefined reads as off. The push to Rust lives in

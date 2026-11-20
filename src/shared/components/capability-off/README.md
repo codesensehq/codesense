@@ -39,5 +39,6 @@ can't do.
 Feature code under `src/features/` doesn't check the OS (`isMac()`, `navigator.platform` and the
 like) to decide whether a feature exists. [`os-checks.guard.test.ts`](./os-checks.guard.test.ts)
 fails a new OS check, including an aliased import of an OS helper. Today's uses are in its
-allowlist with a reason each: presentation such as key names, shortcut glyphs and the title-bar
-inset, and one macOS-only settings gate still to move to a capability. The list only shrinks.
+allowlist with a reason each, all presentation such as key names, shortcut glyphs and the title-bar
+inset. The list only shrinks. A setting whose feature doesn't exist on this OS is hidden with
+`useCapability(...).on`, not shown disabled.
