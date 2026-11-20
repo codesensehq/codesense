@@ -601,6 +601,13 @@ fn set_direct_shell(cmd: &mut CommandBuilder, host: &HostEnvironment, os: &str) 
 /// Windows trims them, is `.exe`. An allowlist, not a `.cmd`/`.bat` denylist: the PTY
 /// layer swaps a `PATHEXT` extension in for a program that does not exist, and Windows
 /// runs a batch script through `cmd.exe`. Every other OS runs the program as given.
+///
+/// A race remains: this probe runs when the spawn is resolved, and the PTY layer's
+/// Windows `search_path` runs at the spawn itself, so an absolute `.exe` that vanishes
+/// in between, beside a `.cmd` or `.bat` of the same name, can have `PATHEXT` swap the
+/// script in. It takes a write to the CLI's own folder, which could already replace
+/// the `.exe`; closing it (an absolute program that skips `search_path`) is left to the
+/// npm shim work.
 fn direct_program(
     program: &str,
     os: &str,
