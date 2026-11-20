@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! SV-8: this instance's terminal server in the macOS menu bar, or the Linux
-//! tray.
+//! This instance's terminal server in the macOS menu bar, or the Linux tray.
 //!
 //! An opt-in item (`settings.terminalServerMenuBar`, pushed by the frontend
 //! through [`set_terminal_server_menu_bar`]) that shows whether the terminal
@@ -300,9 +299,11 @@ pub fn set_terminal_server_menu_bar(app: AppHandle, enabled: bool) -> Result<(),
         std::thread::Builder::new()
             .name("terminal-server-tray".into())
             .spawn(move || {
+                // One session-bus connection for the turn, reused by every tick.
+                let mut hosts = codesense_platform::tray::HostCheck::new();
                 while ENABLED.load(Ordering::SeqCst) && TURN.load(Ordering::SeqCst) == turn {
                     refresh_now(&refreshing);
-                    check_tray_host(&refreshing, turn);
+                    check_tray_host(&refreshing, turn, &mut hosts);
                     std::thread::sleep(REFRESH);
                 }
             })
@@ -342,9 +343,10 @@ fn refresh_soon(app: &AppHandle) {
 
 /// Whether a tray host shows the item of `turn`, asked off the main thread (the
 /// session-bus read blocks briefly) when the item turns on and on each refresh
-/// tick. An answer for an item since removed, or of an earlier turn, is dropped.
-fn check_tray_host(app: &AppHandle, turn: u64) {
-    let registered = codesense_platform::status_notifier_host_registered();
+/// tick, on the refresher's kept connection. An answer for an item since
+/// removed, or of an earlier turn, is dropped.
+fn check_tray_host(app: &AppHandle, turn: u64, hosts: &mut codesense_platform::tray::HostCheck) {
+    let registered = hosts.registered();
     let _visibility = VISIBILITY
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);

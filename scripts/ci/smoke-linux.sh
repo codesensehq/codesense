@@ -49,8 +49,8 @@
 #       CODESENSE_TERMINAL_RENDERER=webgl, the app logs terminal renderer: webgl, probe skipped.
 #       tray: with the tray icon setting turned on before the launch (seed-tray writes it into
 #       the fresh home's app state), the app logs terminal-server-tray=on and turns the item on
-#       (tray-launch). Nothing installs the AppIndicator library here, so only the AppImage's
-#       own copy can turn it on.
+#       (tray-launch). The launch first checks that ldconfig finds no AppIndicator library on
+#       the runner (no-installed-appindicator), so only the AppImage's own copy can turn it on.
 #   smoke-linux.sh caps-agree <listing> <log>
 #       The log has one caps: line, and its starship and git-ai are on exactly when the file
 #       list holds resources/starship and resources/git-ai, and its terminal-server-tray exactly
@@ -70,6 +70,8 @@
 #       The log's caps: line has terminal-server-tray=on, and the app turned the item on.
 #   smoke-linux.sh installed-appindicator
 #       ldconfig finds an AppIndicator library, as install checks after the package installs.
+#   smoke-linux.sh no-installed-appindicator
+#       ldconfig finds no AppIndicator library, as the tray launch checks before it starts.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -306,12 +308,25 @@ in_container() {
     installed_appindicator
 }
 
+# The AppIndicator libraries ldconfig finds by name, one a line.
+ldconfig_appindicator() {
+    ldconfig -p | grep -E "^[[:space:]]*$APPINDICATOR " | awk '{print $1}' || true
+}
+
 # The package's dependencies brought in an AppIndicator library the loader finds by name.
 installed_appindicator() {
     local found
-    found=$(ldconfig -p | grep -E "^[[:space:]]*$APPINDICATOR " || true)
+    found=$(ldconfig_appindicator)
     [[ -n "$found" ]] || fail "ldconfig finds no AppIndicator library after the install"
-    echo "ldconfig finds: $(awk '{print $1}' <<<"$found" | paste -sd ' ' -)"
+    echo "ldconfig finds: $(paste -sd ' ' - <<<"$found")"
+}
+
+# The runner has no AppIndicator library of its own, so a tray that turns on loaded the bundle's.
+no_installed_appindicator() {
+    local found
+    found=$(ldconfig_appindicator)
+    [[ -z "$found" ]] || fail "ldconfig already finds an AppIndicator library on this machine: $(paste -sd ' ' - <<<"$found")"
+    echo "ldconfig finds no AppIndicator library on this machine"
 }
 
 # Whether <pid> is running: a child that has exited stays a zombie until it is reaped.
@@ -363,6 +378,7 @@ start_session() {
         dmabuf) WEBKIT_DISABLE_DMABUF_RENDERER=0 dbus-run-session -- bash "$SELF" desktop "$mode" "$out" ;;
         webgl) CODESENSE_TERMINAL_RENDERER=webgl dbus-run-session -- bash "$SELF" desktop "$mode" "$out" ;;
         tray)
+            no_installed_appindicator
             seed_tray "$XDG_DATA_HOME"
             dbus-run-session -- bash "$SELF" desktop "$mode" "$out"
             ;;
@@ -592,6 +608,10 @@ case "$command" in
     installed-appindicator)
         [[ $# -eq 0 ]] || usage
         installed_appindicator
+        ;;
+    no-installed-appindicator)
+        [[ $# -eq 0 ]] || usage
+        no_installed_appindicator
         ;;
     *) usage ;;
 esac

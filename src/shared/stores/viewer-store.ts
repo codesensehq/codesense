@@ -1599,8 +1599,9 @@ export interface ViewerSettings {
   // → `setQuitOnClose`, read on the window-close path. Optional — undefined reads as
   // `false` (background-on-close, the shipped default).
   quitOnClose?: boolean;
-  // SV-8: show this instance's terminal server in the macOS menu bar (status,
-  // Open, Restart, Stop/Start, Quit). Pushed to Rust via
+  // Show this instance's terminal server in the macOS menu bar or Linux tray (status,
+  // Open, Restart, Stop/Start, Quit; a no-op where the terminal-server-tray
+  // capability is off). Pushed to Rust via
   // `useTerminalServerMenuBarSetting` → `setTerminalServerMenuBar`. Optional —
   // undefined reads as `false` (off, the shipped default).
   terminalServerMenuBar?: boolean;

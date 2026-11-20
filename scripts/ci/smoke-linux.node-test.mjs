@@ -210,19 +210,46 @@ test("seed-tray: the app state under the data home turns the tray icon setting o
   assert.equal(tauri.identifier, "ai.codesense");
 });
 
-test("installed-appindicator: ldconfig must find an AppIndicator library", () => {
+// The subcommand run with a fake ldconfig on PATH that prints `lines`.
+const withLdconfig = (command, lines) => {
   const bin = fs.mkdtempSync(path.join(dir, "bin-"));
-  const ldconfig = (lines) => {
-    fs.writeFileSync(
-      path.join(bin, "ldconfig"),
-      `#!/bin/sh\ncat <<'EOF'\n${lines.join("\n")}\nEOF\n`,
-      { mode: 0o755 },
-    );
-    return spawnSync("bash", [script, "installed-appindicator"], {
-      encoding: "utf8",
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
-    });
-  };
+  fs.writeFileSync(
+    path.join(bin, "ldconfig"),
+    `#!/bin/sh\ncat <<'EOF'\n${lines.join("\n")}\nEOF\n`,
+    { mode: 0o755 },
+  );
+  return spawnSync("bash", [script, command], {
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+  });
+};
+
+test("no-installed-appindicator: the tray launch needs a runner without the library", () => {
+  const header = "1234 libs found in cache `/etc/ld.so.cache'";
+  const libc = "\tlibc.so.6 (libc6,x86-64) => /lib/x86_64-linux-gnu/libc.so.6";
+  const check = (lines) => withLdconfig("no-installed-appindicator", lines);
+  passes(check([header, libc]));
+  passes(
+    check([
+      header,
+      "\tlibayatana-indicator3.so.7 (libc6,x86-64) => /lib/libayatana-indicator3.so.7",
+    ]),
+  );
+  fails(
+    check([
+      header,
+      "\tlibayatana-appindicator3.so.1 (libc6,x86-64) => /lib/x86_64-linux-gnu/libayatana-appindicator3.so.1",
+    ]),
+    /already finds an AppIndicator library on this machine: libayatana-appindicator3.so.1/,
+  );
+  fails(
+    check([header, "\tlibappindicator3.so (libc6,x86-64) => /lib/libappindicator3.so"]),
+    /already finds/,
+  );
+});
+
+test("installed-appindicator: ldconfig must find an AppIndicator library", () => {
+  const ldconfig = (lines) => withLdconfig("installed-appindicator", lines);
   const header = "1234 libs found in cache `/etc/ld.so.cache'";
   const libc = "\tlibc.so.6 (libc6,x86-64) => /lib/x86_64-linux-gnu/libc.so.6";
   passes(

@@ -6,8 +6,9 @@ import { useViewerStore } from "@/shared/stores/viewer-store";
 import { setTerminalServerMenuBar } from "@/tauri/commands";
 
 /**
- * App-wide macOS settings integration, outside the CLI workspace capability.
- * SV-8: keep the macOS menu-bar item for the terminal server in step with the
+ * App-wide settings integration, outside the CLI workspace capability.
+ * Keep the terminal server's item (macOS menu bar or Linux tray; a no-op where the
+ * terminal-server-tray capability is off) in step with the
  * `terminalServerMenuBar` setting. Pushes once at launch (after settings
  * hydrate) and again whenever the setting changes, so turning it off removes
  * the item at once. An undefined setting resolves to `false` (off by default).
