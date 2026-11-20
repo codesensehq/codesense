@@ -185,7 +185,7 @@ describe("MessageBody image attachments", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(loadInboxMedia).toHaveBeenCalledWith(team, 7);
     unmount();
-    render(
+    const { unmount: unmount2 } = render(
       <MessageBody
         m={withMedia(image({ state: "failed", mime: "image/png", sourceHost: "cdn.example" }))}
       />,
@@ -194,6 +194,11 @@ describe("MessageBody image attachments", () => {
       "Couldn't load this image. cdn.example didn't answer.",
     );
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    unmount2();
+    render(<MessageBody m={withMedia(image({ state: "failed", reason: "changed" }))} />);
+    expect(screen.getByTestId("ibx-media-card").textContent).toContain(
+      "Couldn't load this GIF. The source now serves a different image.",
+    );
   });
 });
 
