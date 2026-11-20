@@ -106,7 +106,16 @@ jobs:
           save-if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}
           cache-on-failure: true
       - name: Test source guards
-        run: cargo test --locked -p codesense-guards
+        env:
+          X1_PRINT_UNRESOLVED_METHODS: "1"
+        run: |
+          cargo test --locked -p codesense-guards --test explicit_sync_unattended_writer_guard -- --nocapture 2>&1 | grep '^X1-method|' | sort > "$RUNNER_TEMP/branch.txt" || true
+          git fetch --depth=1 https://github.com/codesensehq/codesense.git main
+          git worktree add "$RUNNER_TEMP/main" FETCH_HEAD
+          (cd "$RUNNER_TEMP/main" && cargo test --locked -p codesense-guards --test explicit_sync_unattended_writer_guard -- --nocapture 2>&1 | grep '^X1-method|' | sort > "$RUNNER_TEMP/main.txt" || true)
+          wc -l "$RUNNER_TEMP/branch.txt" "$RUNNER_TEMP/main.txt"
+          echo "=== only on branch (or more often) ==="
+          diff "$RUNNER_TEMP/main.txt" "$RUNNER_TEMP/branch.txt" | grep '^[<>]' || true
 
   rust-macos-build:
     name: Rust (macOS arm64) build ${{ matrix.part }}
