@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! Files: owner-only permissions, ownership checks, file identity,
 //! owner-only creates of files and directories, opens that refuse links,
-//! atomic replace, exclusive and shared locks, links with a copy fallback,
-//! placed links, canonical paths, names that are valid on every OS, execute
-//! bits, busy files, whether a file is executable, world-writable files,
-//! link counts, change stamps, the space left on a volume and positioned
-//! reads.
+//! atomic replace, directory syncs, exclusive and shared locks, links with a
+//! copy fallback, placed links, canonical paths, names that are valid on
+//! every OS, execute bits, busy files, whether a file is executable,
+//! world-writable files, link counts, change stamps, the space left on a
+//! volume and positioned reads.
 
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -258,6 +258,18 @@ pub fn atomic_replace(path: &Path, bytes: &[u8]) -> Result<(), ReplaceError> {
         return Err(e);
     }
     Ok(())
+}
+
+/// Make the entries created, renamed or removed in the directory `dir`
+/// durable, so a crash after this returns cannot lose them. Unix: open `dir`
+/// and `fsync` it. Windows: NTFS logs a new entry in its metadata journal,
+/// and `FlushFileBuffers` on `dir` opened for writing commits that journal;
+/// where `dir` cannot be opened for writing or its file system cannot flush
+/// a directory (FAT, some network shares), the entry is as durable as that
+/// file system makes it on its own. Never an error for a directory that
+/// exists on Windows; `NotFound` for a missing `dir` on every OS.
+pub fn sync_dir(dir: &Path) -> io::Result<()> {
+    sys::sync_dir(dir)
 }
 
 /// Take an exclusive lock on `file`, waiting for it: `flock(LOCK_EX)` on

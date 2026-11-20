@@ -2,9 +2,10 @@
 //! Windows: a protected owner-only DACL, set on a path or at creation; DACL
 //! and owner checks, and writes the DACL allows anyone; volume serial and
 //! 128-bit file id, link counts and change stamps; reparse-point refusal;
-//! std's rename with a bounded retry, std's file locks, sharing violations,
-//! a copy where symlinks need Developer Mode, the caller's free space and
-//! positioned reads. Execute bits do not exist: the extension decides.
+//! std's rename with a bounded retry, directory flushes, std's file locks,
+//! sharing violations, a copy where symlinks need Developer Mode, the
+//! caller's free space and positioned reads. Execute bits do not exist: the
+//! extension decides.
 
 use std::ffi::{c_void, OsString};
 use std::fs::{File, OpenOptions};
@@ -532,6 +533,25 @@ fn is_busy(error: &io::Error, to: &Path) -> bool {
         Some(ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION) => true,
         Some(ERROR_ACCESS_DENIED) => !to.is_dir(),
         _ => false,
+    }
+}
+
+pub(super) fn sync_dir(dir: &Path) -> io::Result<()> {
+    let flushed = OpenOptions::new()
+        .access_mode(GENERIC_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .open(dir)
+        .and_then(|handle| handle.sync_all());
+    match flushed {
+        Ok(()) => Ok(()),
+        // Not flushable here (no write access, FAT, a network share): the
+        // file system makes the entry durable on its own.
+        Err(error) => match std::fs::metadata(dir) {
+            Ok(meta) if meta.is_dir() => Ok(()),
+            Ok(_) => Err(error),
+            Err(missing) => Err(missing),
+        },
     }
 }
 

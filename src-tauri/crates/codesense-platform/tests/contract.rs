@@ -21,8 +21,8 @@ use codesense_platform::fs::{
     file_id, file_id_of, is_executable, is_owned_by_current_user, is_owner_only, is_text_busy,
     is_world_writable, link_count, link_or_copy, lock_exclusive, open_nofollow,
     open_nofollow_nonblocking, place_link, portable_name, read_exact_at, set_executable,
-    set_owner_only, try_lock_exclusive, try_lock_shared, unlock, Linked, NonPortableName, Open,
-    PlaceLink, Reach,
+    set_owner_only, sync_dir, try_lock_exclusive, try_lock_shared, unlock, Linked, NonPortableName,
+    Open, PlaceLink, Reach,
 };
 use codesense_platform::ipc::{blocking, Endpoint, LocalListener, LocalStream};
 use codesense_platform::limits::is_descriptor_exhaustion;
@@ -809,6 +809,25 @@ fn shared_locks_coexist_and_hold_off_an_exclusive_one() {
 }
 
 /// Open the lock file at `path`, creating it.
+#[test]
+fn sync_dir_syncs_an_existing_directory_and_refuses_a_missing_one() {
+    let dir = tempfile::tempdir().unwrap();
+    sync_dir(dir.path()).unwrap();
+    let entry = dir.path().join("entry");
+    std::fs::write(&entry, b"x").unwrap();
+    sync_dir(dir.path()).unwrap();
+    std::fs::rename(&entry, dir.path().join("renamed")).unwrap();
+    sync_dir(dir.path()).unwrap();
+    let private = dir.path().join("private");
+    create_dir_owner_only(&private).unwrap();
+    create_new_owner_only(&private.join("entry")).unwrap();
+    sync_dir(&private).unwrap();
+    assert_eq!(
+        sync_dir(&dir.path().join("missing")).unwrap_err().kind(),
+        ErrorKind::NotFound
+    );
+}
+
 fn open_lock_file(path: &Path) -> File {
     OpenOptions::new()
         .read(true)
