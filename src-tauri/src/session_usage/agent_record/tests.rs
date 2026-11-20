@@ -595,3 +595,28 @@ fn a_thread_lists_every_recorded_session_of_its_agent_and_story_ended_ones_inclu
     let empty = tempfile::tempdir().unwrap();
     assert_eq!(thread_sessions_in(empty.path(), "dev", "STORY-A").unwrap(), vec![]);
 }
+
+/// A seat charged to another story reads as that story's (its latest segment's), with its
+/// charges listed; both story reads of the record agree.
+#[test]
+fn a_charged_seat_reads_as_its_latest_segments_story_with_its_charges() {
+    let (dir, _store) = store();
+    launched(dir.path(), AgentCli::Claude, "seat", "claude-sonnet-5-5", None);
+    let store = UsageStore::open(&dir.path().join("usage.sqlite")).unwrap();
+    let charge = crate::session_usage::charge::Charge {
+        story_id: "DEMO-2".into(),
+        from_ms: AT + 1,
+        org: None,
+        team: None,
+        charged_by: Some("lead".into()),
+        charged_by_session: "tab-lead".into(),
+        charged_at_ms: AT + 1,
+    };
+    store.charge_story("tab-seat", &charge).unwrap();
+    let half = half(dir.path(), "seat");
+    assert_eq!(half.story.as_ref().map(|s| s.id.as_str()), Some("DEMO-2"));
+    let record = assemble("seat", &half, None, None);
+    assert_eq!(record["story"]["id"], "DEMO-2");
+    assert_eq!(record["story"]["basis"], "charged");
+    assert_eq!(record["charges"], json!([{"story": "DEMO-2", "fromMs": AT + 1, "chargedBy": "lead"}]));
+}

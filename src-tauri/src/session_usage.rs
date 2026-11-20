@@ -12,6 +12,7 @@
 //! leaves earlier usage at the price it was billed at.
 
 pub mod agent_record;
+pub mod charge;
 pub(crate) mod contribution;
 pub mod conversation;
 pub(crate) mod cost_rollup;
@@ -35,6 +36,8 @@ pub(crate) mod session_log_usage;
 mod spend_scan_tests;
 #[cfg(test)]
 mod session_report_tests;
+#[cfg(test)]
+mod charge_tests;
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
@@ -343,13 +346,14 @@ pub struct Filter {
     pub session_id: Option<String>,
     /// Only usage recorded in this working directory (a workspace path, exact match).
     pub cwd: Option<String>,
-    /// Only the sessions spent on this story (a story id, e.g. `DEMO-5`; see each session's
-    /// `story`).
+    /// Only the rows spent on this story (a story id, e.g. `DEMO-5`; see each row's `story`). A
+    /// session charged to more than one story keeps only its segments of this one.
     pub story: Option<String>,
-    /// The most sessions to return, newest first. The totals still cover every session. Omitted: all.
+    /// The most rows to return, newest first. The totals still cover every row. Omitted: all.
     pub limit: Option<usize>,
-    /// The `nextCursor` of the previous page: continue after the last session it returned. Pass the
-    /// same other fields. A cursor from a different window or filter is refused.
+    /// The `nextCursor` of the previous page: continue after the last row it returned. Pass the
+    /// same other fields. A cursor from a different window or filter, or from before rows had
+    /// segments, is refused.
     pub cursor: Option<String>,
 }
 
@@ -369,32 +373,51 @@ fn cursor_key(filter: &Filter) -> u64 {
     h.finish()
 }
 
-/// The cursor that continues after `session`: a keyset over the report's sort
-/// `(lastAtMs desc, sessionId asc)`, so sessions arriving or leaving between pages move no row.
-fn cursor_after(key: u64, session: &SessionUsage) -> String {
-    format!("u:{key:x}:{}:{}", session.last_at_ms, session.session_id)
+/// Where a row's segment starts: `None` for an uncharged session's row and for a charged
+/// session's usage before its first charge.
+fn segment_from(session: &SessionUsage) -> Option<i64> {
+    session.segment.and_then(|segment| segment.from_ms)
 }
 
-/// The `(lastAtMs, sessionId)` a cursor continues after, or why it is refused.
-fn parse_cursor(filter: &Filter) -> Result<Option<(i64, String)>, String> {
+/// The cursor that continues after `session`: a keyset over the report's sort
+/// `(lastAtMs desc, sessionId asc, segment fromMs asc)`, so rows arriving or leaving between pages
+/// move no row. `-` stands for no segment start. A cursor of the earlier `u:` form, which had no
+/// segment, is refused.
+fn cursor_after(key: u64, session: &SessionUsage) -> String {
+    let from = segment_from(session).map_or_else(|| "-".to_string(), |at| at.to_string());
+    format!("v:{key:x}:{}:{from}:{}", session.last_at_ms, session.session_id)
+}
+
+/// The cursor's place in the sort: a row's `lastAtMs`, segment `fromMs` and `sessionId`.
+type CursorAt = (i64, Option<i64>, String);
+
+/// The `(lastAtMs, segment fromMs, sessionId)` a cursor continues after, or why it is refused.
+fn parse_cursor(filter: &Filter) -> Result<Option<CursorAt>, String> {
     let Some(cursor) = filter.cursor.as_deref().filter(|c| !c.is_empty()) else {
         return Ok(None);
     };
-    let parts: Vec<&str> = cursor.splitn(4, ':').collect();
+    let parts: Vec<&str> = cursor.splitn(5, ':').collect();
     let parsed = match parts.as_slice() {
-        ["u", key, at, id] if !id.is_empty() => u64::from_str_radix(key, 16)
-            .ok()
-            .zip(at.parse::<i64>().ok())
-            .map(|(key, at)| (key, at, id.to_string())),
+        ["v", key, at, from, id] if !id.is_empty() => {
+            let from = match *from {
+                "-" => Some(None),
+                from => from.parse::<i64>().ok().map(Some),
+            };
+            u64::from_str_radix(key, 16)
+                .ok()
+                .zip(at.parse::<i64>().ok())
+                .zip(from)
+                .map(|((key, at), from)| (key, at, from, id.to_string()))
+        }
         _ => None,
     };
-    let Some((key, at, id)) = parsed else {
+    let Some((key, at, from, id)) = parsed else {
         return Err(format!("invalid: cursor {cursor} is not one this tool returned"));
     };
     if key != cursor_key(filter) {
         return Err("invalid: this cursor belongs to a different window or filter; page with the arguments that returned it".to_string());
     }
-    Ok(Some((at, id)))
+    Ok(Some((at, from, id)))
 }
 
 /// The saved agent or fresh-session routine whose spend is counted, across all machines.
@@ -467,12 +490,27 @@ pub struct Spend {
     pub unpriced_models: Vec<String>,
 }
 
+/// The span of a charged session's row: from a charge (`null`: the usage before the session's
+/// first charge) to the next one (`null`: the open last segment), epoch milliseconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Segment {
+    pub from_ms: Option<i64>,
+    pub to_ms: Option<i64>,
+}
+
+/// One row of a usage report: a session's usage, or for a session charged to more than one story
+/// (see [`charge`]), one segment of it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionUsage {
     /// The agent CLI the session ran in: `claude`, `codex` or `opencode`.
     pub cli: AgentCli,
     pub session_id: String,
+    /// The CodeSense session id (tab) of the launch the session ran under: its session record's,
+    /// else its attributed launch's. `null` when there is no launch record. Two native sessions of
+    /// one launch (for example after `/clear`) are two rows with the same `tabSessionId`.
+    pub tab_session_id: Option<String>,
     /// Who ran the session, recorded at launch. `null` for sessions CodeSense did not launch, or
     /// that launched before attribution was recorded.
     pub org: Option<String>,
@@ -484,8 +522,9 @@ pub struct SessionUsage {
     /// other machine over this Mac, else the greater id). A removed machine keeps its id here.
     pub machine_id: String,
     pub cwd: Option<String>,
-    /// The story the session was spent on, or `null` when it is not tied to one: the story
-    /// worktree its working folder is in, else the story its launch was opened for.
+    /// The story the session was spent on, or `null` when it is not tied to one: the story it was
+    /// charged to for this segment, else the story worktree its working folder is in, else the
+    /// story its launch was opened for.
     pub story: Option<UsageStory>,
     pub models: Vec<String>,
     pub first_at_ms: i64,
@@ -498,13 +537,17 @@ pub struct SessionUsage {
     /// The run the session worked, from its durable session record; `null` for a session with no
     /// record (older sessions, or CLIs CodeSense did not launch) or one launched outside a run.
     pub run_id: Option<String>,
+    /// The span of this row on a session that has a charge; absent on an uncharged session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub segment: Option<Segment>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageTotals {
     pub tokens: Tokens,
-    /// The sum over sessions whose cost is known. `unpricedSessions` counts the rest.
+    /// The sum over rows whose cost is known. `pricedSessions` and `unpricedSessions` count rows,
+    /// so a session charged to more than one story counts once per segment.
     pub cost_usd: f64,
     pub priced_sessions: u32,
     pub unpriced_sessions: u32,
@@ -525,13 +568,13 @@ pub struct DayUsage {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageReport {
-    /// Newest activity first.
+    /// Newest activity first: one row per session, or per segment of a charged session.
     pub sessions: Vec<SessionUsage>,
     /// One entry per local day with usage, newest day first.
     pub days: Vec<DayUsage>,
     pub totals: UsageTotals,
-    /// How many sessions matched before `limit` cut `sessions`. Served as `total` on MCP, Tauri
-    /// and hosted responses so callers can tell when a walk is complete.
+    /// How many rows matched before `limit` cut `sessions`. Served as `total` on MCP, Tauri and
+    /// hosted responses so callers can tell when a walk is complete.
     #[serde(rename = "total")]
     pub session_count: usize,
     /// Pass as `cursor` for the next page. Present only when sessions follow this page's last one.
@@ -557,6 +600,16 @@ impl UsageReport {
             k if k < sessions.len() => Some(cursor_after(self.cursor_key, &sessions[k - 1])),
             _ => self.next_cursor.clone(),
         }
+    }
+
+    /// The story of the newest row that has one: for a session charged to more than one story, the
+    /// story of its latest segment with usage.
+    pub fn latest_story(&self) -> Option<&UsageStory> {
+        self.sessions
+            .iter()
+            .filter(|s| s.story.is_some())
+            .max_by_key(|s| (s.last_at_ms, segment_from(s)))
+            .and_then(|s| s.story.as_ref())
     }
 }
 
@@ -772,6 +825,8 @@ impl UsageStore {
         .map_err(db_err)?;
         // The durable session record: another additive table, for the same reason.
         tx.execute_batch(record::SCHEMA).map_err(db_err)?;
+        // A session's charges to stories, before the story totals triggers that watch them.
+        tx.execute_batch(charge::SCHEMA).map_err(db_err)?;
         tx.execute_batch(timing::SCHEMA).map_err(db_err)?;
         task::init(&tx)?;
         conversation::init(&tx)?;
@@ -1273,11 +1328,15 @@ impl UsageStore {
                     run_id: r.get(17)?,
                     story_id: r.get(18)?,
                     launch_session_id: r.get(19)?,
+                    tab_session_id: r.get(20)?,
+                    charge_from: r.get(21)?,
                 }))
             })
             .map_err(db_err)?;
 
-        let mut by_session: HashMap<(AgentCli, String), Acc> = HashMap::new();
+        // One accumulator per session, and per segment of a charged session: the charge its usage
+        // falls under (`None` before the first charge, and for an uncharged session).
+        let mut by_session: HashMap<(AgentCli, String, Option<i64>), Acc> = HashMap::new();
         let mut unknown = 0usize;
         for row in rows {
             let Some(row) = row.map_err(db_err)? else {
@@ -1285,7 +1344,7 @@ impl UsageStore {
                 continue;
             };
             let acc = by_session
-                .entry((row.cli, row.session_id.clone()))
+                .entry((row.cli, row.session_id.clone(), row.charge_from))
                 .or_insert_with(|| Acc::new(row.at_ms));
             // Days are kept per session, so a story filter leaves out the days of the
             // sessions it drops.
@@ -1304,6 +1363,7 @@ impl UsageStore {
             acc.handle = acc.handle.take().or(row.handle);
             acc.run_id = acc.run_id.take().or(row.run_id);
             acc.launch_session_id = acc.launch_session_id.take().or(Some(row.launch_session_id));
+            acc.tab_session_id = acc.tab_session_id.take().or(row.tab_session_id);
             if acc.story_id.is_none() {
                 acc.story_id = row.story_id;
             }
@@ -1328,13 +1388,31 @@ impl UsageStore {
         let want_story = filter.story.as_deref().map(str::trim).filter(|s| !s.is_empty());
         let fresh = if Option::is_none(stored) { Some(self.stored_stories()?) } else { None };
         let stored = Option::get_or_insert_with(stored, || Option::unwrap_or_default(fresh));
+        let charges = self.all_charges()?;
         let mut by_day: HashMap<String, DayAcc> = HashMap::new();
         let mut sessions: Vec<SessionUsage> = Vec::with_capacity(by_session.len());
-        for ((cli, session_id), acc) in by_session {
-            // The stored link first (the worktree the session's usage was recorded in), then a
-            // story worktree holding its folder now (kept, so it outlives the worktree), then
-            // the story its durable launch record names, or the live launch's story.
-            let story = if let Some((id, path)) = stored
+        for ((cli, session_id, charge_from), acc) in by_session {
+            // A session with a charge has a segment on every row; the charge a segment starts at
+            // names its story.
+            let tab_charges = acc
+                .launch_session_id
+                .as_deref()
+                .and_then(|tab| charges.get(tab))
+                .filter(|tab_charges| !tab_charges.is_empty());
+            let segment = tab_charges.map(|tab_charges| Segment {
+                from_ms: charge_from,
+                to_ms: charge::segment_end(tab_charges, charge_from),
+            });
+            let charged = charge_from.and_then(|from| {
+                tab_charges.and_then(|tab_charges| tab_charges.iter().find(|c| c.from_ms == from))
+            });
+            // A charge first, then the stored link (the worktree the session's usage was recorded
+            // in), then a story worktree holding its folder now (kept, so it outlives the
+            // worktree), then the story its durable launch record names, or the live launch's
+            // story.
+            let story = if let Some(charge) = charged {
+                Some(charge::charged_story(stories, charge))
+            } else if let Some((id, path)) = stored
                 .get(acc.launch_session_id.as_deref().unwrap_or(&session_id))
                 .or_else(|| stored.get(&session_id))
             {
@@ -1378,6 +1456,7 @@ impl UsageStore {
             sessions.push(SessionUsage {
                 cli,
                 session_id,
+                tab_session_id: acc.tab_session_id,
                 org: acc.org,
                 team: acc.team,
                 agent: acc.agent,
@@ -1395,12 +1474,14 @@ impl UsageStore {
                 cost_usd: cost_rollup::CostRollup::total(&acc.rollup),
                 unpriced_models: acc.rollup.unpriced(),
                 run_id: acc.run_id,
+                segment,
             });
         }
         sessions.sort_by(|a, b| {
             b.last_at_ms
                 .cmp(&a.last_at_ms)
                 .then(a.session_id.cmp(&b.session_id))
+                .then(segment_from(a).cmp(&segment_from(b)))
         });
         let mut days: Vec<DayUsage> = by_day
             .into_iter()
@@ -1430,13 +1511,16 @@ impl UsageStore {
             }
         }
         let session_count = sessions.len();
-        if let Some((at, id)) = &after {
-            // The sort is (lastAtMs desc, sessionId asc): keep what sorts after the cursor's row.
-            // A session whose lastAtMs rose may have moved above the cursor and be skipped by this
-            // walk, but none is repeated; the reader recovers by walking from page 1 through
-            // continuation and merging by sessionId.
+        if let Some((at, from, id)) = &after {
+            // The sort is (lastAtMs desc, sessionId asc, segment fromMs asc, none first): keep what
+            // sorts after the cursor's row. A row whose lastAtMs rose may have moved above the
+            // cursor and be skipped by this walk, but none is repeated; the reader recovers by
+            // walking from page 1 through continuation and merging by (sessionId, segment fromMs).
             sessions.retain(|s| {
-                s.last_at_ms < *at || (s.last_at_ms == *at && s.session_id.as_str() > id.as_str())
+                s.last_at_ms < *at
+                    || (s.last_at_ms == *at
+                        && (s.session_id.as_str() > id.as_str()
+                            || (s.session_id == *id && segment_from(s) > *from)))
             });
         }
         let mut next_cursor = None;
@@ -1531,6 +1615,9 @@ fn count_full_report(_store: &UsageStore, _filter: &Filter) {}
 /// The statement behind [`UsageStore::report_with`]. `by_session` binds `?3` to the session ids to
 /// read and filters them inside the CTE, a plain `IN` so `usage_event_by_session` serves it and
 /// no other session's events are touched; otherwise `?3` is unused and every event is read.
+/// Each event also carries its launch's tab id (its session record's, else its attributed launch's,
+/// never its own native id) and the start of the charge it falls under: the tab's latest charge
+/// at or before the event, looked up by the charge table's key.
 fn usage_report_sql(by_session: bool) -> String {
     let (inner, outer) = if by_session {
         ("WHERE e.session_id IN (SELECT value FROM json_each(?3))", "1")
@@ -1542,7 +1629,8 @@ fn usage_report_sql(by_session: bool) -> String {
             SELECT e.*, a.org, a.team, a.agent, a.handle, COALESCE(e.cwd, a.cwd) AS launch_cwd,
                    COALESCE(a.launch_id,
                             (SELECT r.session_id FROM session_record r WHERE r.native_session_id = e.session_id),
-                            e.session_id) AS launch_session_id
+                            e.session_id) AS launch_session_id,
+                   a.launch_id AS attributed_launch_id
             FROM usage_event e
             LEFT JOIN session_attribution a ON a.session_id = e.session_id
             {inner}
@@ -1550,7 +1638,11 @@ fn usage_report_sql(by_session: bool) -> String {
          SELECT e.cli, e.session_id, e.day, e.launch_cwd, e.at_ms, e.model, e.input, e.output, e.cache_read, e.cache_write, e.cost_usd,
                 e.org, e.team, e.agent, e.cache_write_1h, e.handle, e.machine_id, r.run_id,
                 CASE WHEN r.story_id = r.handle AND (r.handle GLOB 'routine:*@*' OR r.handle GLOB '_worker/*') THEN NULL ELSE r.story_id END,
-                e.launch_session_id
+                e.launch_session_id,
+                COALESCE(r.session_id, e.attributed_launch_id),
+                (SELECT c.from_ms FROM session_story_charge c
+                 WHERE c.tab_session_id = e.launch_session_id AND c.from_ms <= e.at_ms
+                 ORDER BY c.from_ms DESC LIMIT 1)
          FROM attributed_usage e
          LEFT JOIN session_record r ON r.session_id = e.launch_session_id
          WHERE (?1 IS NULL OR e.day >= ?1)
@@ -1872,6 +1964,10 @@ struct StoredRow {
     run_id: Option<String>,
     story_id: Option<String>,
     launch_session_id: String,
+    /// The launch's CodeSense session id; `None` when there is no launch record.
+    tab_session_id: Option<String>,
+    /// The start of the charge the event falls under; `None` before the first, or uncharged.
+    charge_from: Option<i64>,
 }
 
 /// Per-session running totals while the stored rows are folded in.
@@ -1883,6 +1979,7 @@ struct Acc {
     run_id: Option<String>,
     story_id: Option<String>,
     launch_session_id: Option<String>,
+    tab_session_id: Option<String>,
     /// Any of its usage came from another machine.
     remote: bool,
     /// The time and machine (`""` for this Mac) of its latest call.
@@ -1908,6 +2005,7 @@ impl Acc {
             run_id: None,
             story_id: None,
             launch_session_id: None,
+            tab_session_id: None,
             remote: false,
             machine: None,
             cwd: None,
