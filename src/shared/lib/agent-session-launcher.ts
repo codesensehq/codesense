@@ -578,25 +578,7 @@ export async function relaunchAgentSession(
   }
   let freshSpec = spec;
   if (removeArgs !== undefined) {
-    const original = spec.args ?? [];
-    const kept: string[] = [];
-    let removed = 0;
-    for (let at = 0; at < original.length; ) {
-      // Match complete overrides, including each -c value, in their original order.
-      // A shared flag token alone must never remove the user's unrelated override.
-      const width = removeArgs[removed] === "-c" || removeArgs[removed] === "--config" ? 2 : 1;
-      if (
-        removed < removeArgs.length &&
-        removeArgs
-          .slice(removed, removed + width)
-          .every((token, offset) => original[at + offset] === token)
-      ) {
-        removed += width;
-        at += width;
-      } else {
-        kept.push(original[at++]);
-      }
-    }
+    const kept = withoutRemovedArgs(spec.args ?? [], removeArgs);
     freshSpec = { ...spec, args: scopedLaunchArgs(kept, extraArgs) };
   }
   const line = agentLaunchLine(freshSpec, removeArgs === undefined ? extraArgs : []);
@@ -604,6 +586,28 @@ export async function relaunchAgentSession(
   if (!launched.ok) return { ok: false, reason: injectFailure(launched) };
   recordAgentLaunch(sessionId, freshSpec, line);
   return { ok: true };
+}
+
+/**
+ * `args` without the overrides in `remove`, matched whole and in their original order: a
+ * `-c`/`--config` entry with its value, so a shared flag token alone never removes the
+ * user's unrelated override, and a truncated entry matches nothing. The backend's
+ * `mcp_scope::without_removed_args` keeps the same rule; one table asserts both.
+ */
+export function withoutRemovedArgs(args: readonly string[], remove: readonly string[]): string[] {
+  const kept: string[] = [];
+  let removed = 0;
+  for (let at = 0; at < args.length; ) {
+    const width = remove[removed] === "-c" || remove[removed] === "--config" ? 2 : 1;
+    const entry = remove.slice(removed, removed + width);
+    if (entry.length === width && entry.every((token, offset) => args[at + offset] === token)) {
+      removed += width;
+      at += width;
+    } else {
+      kept.push(args[at++]);
+    }
+  }
+  return kept;
 }
 
 /** Launch the agent again in its shell, which still runs (the agent crashed in it). */
