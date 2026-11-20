@@ -126,6 +126,31 @@ CodeSense says so when none is.
 Every test build is a source build like the one above: the `internal` channel,
 no update checks and no dashboard publishing.
 
+## Regenerating exports
+
+A few generated docs files are written only by Rust tests: the live-data
+contract, the MCP registry export and the model schemas fixture. When
+`pnpm gen:docs` says one is stale, regenerate it in CI instead of building
+Rust locally:
+
+```bash
+gh workflow run regenerate-exports.yml --repo codesensehq/codesense --ref <branch>
+```
+
+Add `-f exports=live-data-contract` (or `mcp-reference`, `model-schemas`) to run
+one; the default, `all`, runs every one, then `pnpm gen:docs`. The run's summary
+lists the files it changed, and its `generated-exports` artifact holds them at
+their repository paths, kept for 7 days. Apply them to your branch and commit
+them yourself:
+
+```bash
+tmp=$(mktemp -d)
+gh run download <run id> --repo codesensehq/codesense -n generated-exports -D "$tmp"
+cp -R "$tmp"/. .
+```
+
+When nothing changed, the summary says so and there is no artifact.
+
 ## Building your own release
 
 If you give a build to other people, [TRADEMARKS.md](TRADEMARKS.md) asks you to

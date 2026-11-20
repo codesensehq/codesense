@@ -1,0 +1,146 @@
+# SPDX-License-Identifier: MIT
+name: Regenerate exports
+
+# Run by hand to refresh the generated exports that only cargo can write, without a local Rust
+# build: `gh workflow run regenerate-exports.yml --ref <branch>` (add `-f exports=<name>` for one).
+# The `exports` input names the script, scripts/generate-<name>.mjs, and the job runs that script's
+# own --queued-export, so the scripts stay the only definition of each export:
+#   live-data-contract  cargo test mcp::live_data_authoring::tests (dashboard-publish), then the
+#                       seal: generated/live-data-contract.json and its .inputs.json
+#   mcp-reference       cargo test of the MCP registry (dashboard-publish), then the seal and
+#                       mcp-tools.json: generated/mcp-tools.*.json
+#   model-schemas       UPDATE_DOCS_SCHEMAS=1 cargo test docs_schemas::export_model_schemas:
+#                       src-tauri/src/docs_schemas.generated.json
+# Every other gen:docs step is Node only. After the exports, `pnpm gen:docs` renders the pages built
+# from them. The files the run changed are uploaded as the `generated-exports` artifact, at their
+# repository paths, and listed in the job summary; with nothing changed there is no artifact. The
+# job only reads the repository: apply the artifact and commit it yourself (README.md#regenerating-exports).
+on:
+  workflow_dispatch:
+    inputs:
+      exports:
+        description: Which export to regenerate
+        type: choice
+        options:
+          - all
+          - live-data-contract
+          - mcp-reference
+          - model-schemas
+        default: all
+
+permissions: {}
+
+concurrency:
+  # One group per export choice, so dispatching two choices on one ref does not cancel the first.
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.exports }}
+  cancel-in-progress: true
+
+jobs:
+  regenerate:
+    name: Regenerate exports
+    # The exports are platform-neutral data; Linux builds them as rust.yml's Linux app job does.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Free disk space
+        # Each export's disk gate wants 25 GiB free, and the default and dashboard-publish test
+        # builds both land in target/. The runner's preinstalled Android, .NET and Haskell
+        # toolchains are not used here.
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          df -h .
+      - name: Install system libraries
+        run: bash scripts/install-linux-app-libs.sh
+      - name: Set up pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: Install dependencies
+        # build.rs runs the docs generators, which import packages.
+        run: pnpm install --frozen-lockfile
+      - name: Set up Rust
+        # Matches ci.yml; rustup's proxies read the channel in rust-toolchain.toml.
+        run: rustup toolchain install stable --profile minimal
+      - name: Restore Rust dependencies
+        # The Linux app job's cache, restored only: this run never saves one.
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: rust-linux-app
+          save-if: false
+      - name: Fetch bundled binaries
+        # The Linux bundle's pinned git-ai and starship, which tauri-build needs in place.
+        run: bash scripts/fetch-bundled.sh
+      - name: Build sidecars
+        # The app's build script needs the bundled sidecars to exist.
+        run: bash scripts/build-session-server.sh
+      - name: Check the setup left the tree clean
+        # So every file the artifact holds was written by an export.
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            git status --short
+            echo "::error::setup changed tracked files"
+            exit 1
+          fi
+      - name: Run the exports
+        env:
+          EXPORTS: ${{ inputs.exports }}
+        run: |
+          if [ "$EXPORTS" = all ]; then
+            set -- live-data-contract mcp-reference model-schemas
+          else
+            set -- "$EXPORTS"
+          fi
+          for name in "$@"; do
+            echo "::group::$name"
+            node "scripts/generate-$name.mjs" --queued-export
+            echo "::endgroup::"
+          done
+          pnpm gen:docs
+      - name: Collect the changed files
+        id: collect
+        run: |
+          deleted=$(git ls-files --deleted)
+          if [ -n "$deleted" ]; then
+            printf '%s\n' "$deleted"
+            echo "::error::the exports deleted tracked files, which an artifact cannot carry"
+            exit 1
+          fi
+          out="$RUNNER_TEMP/generated-exports"
+          mkdir -p "$out"
+          mapfile -d '' changed < <(git ls-files -z --modified --others --exclude-standard)
+          for file in "${changed[@]}"; do
+            mkdir -p "$out/$(dirname "$file")"
+            cp "$file" "$out/$file"
+          done
+          echo "changed=${#changed[@]}" >> "$GITHUB_OUTPUT"
+          {
+            if [ "${#changed[@]}" -eq 0 ]; then
+              echo "The exports were fresh: nothing changed, so there is no artifact."
+            else
+              echo "${#changed[@]} file(s) changed, in the \`generated-exports\` artifact:"
+              echo
+              printf -- "- \`%s\`\n" "${changed[@]}"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the changed files
+        if: steps.collect.outputs.changed != '0'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: generated-exports
+          path: ${{ runner.temp }}/generated-exports/
+          retention-days: 7
+          if-no-files-found: error

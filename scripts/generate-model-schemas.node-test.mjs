@@ -4,7 +4,13 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
-import { ROOT, verifySources, modelSchemas, schemaFields } from "./generate-model-schemas.mjs";
+import {
+  ROOT,
+  verifySources,
+  modelSchemas,
+  queuedExport,
+  schemaFields,
+} from "./generate-model-schemas.mjs";
 
 test("the PR docs check rejects a stale standalone schema without repairing it", () => {
   const path = join(
@@ -114,4 +120,36 @@ test("the agent schema states OpenCode's launch-mode permission default", () => 
   ])
     assert.match(text, part);
   assert.doesNotMatch(text, /composer supplies the `ask` fallback/);
+});
+
+test("the queued export gates disk, then runs the one Rust exporter with UPDATE_DOCS_SCHEMAS", () => {
+  const calls = [];
+  queuedExport({
+    gate: (root) => calls.push(["gate", root]),
+    spawn: (command, args, options) => {
+      calls.push([command, args, options.cwd, options.env.UPDATE_DOCS_SCHEMAS]);
+      return { status: 0 };
+    },
+  });
+  assert.deepEqual(calls, [
+    ["gate", ROOT],
+    [
+      "cargo",
+      [
+        "test",
+        "--manifest-path",
+        "src-tauri/Cargo.toml",
+        "--lib",
+        "docs_schemas::export_model_schemas",
+        "-j",
+        "4",
+      ],
+      ROOT,
+      "1",
+    ],
+  ]);
+  assert.throws(
+    () => queuedExport({ gate: () => {}, spawn: () => ({ status: 101 }) }),
+    /Model schema export failed \(101\)/,
+  );
 });
