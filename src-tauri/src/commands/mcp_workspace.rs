@@ -957,7 +957,8 @@ async fn ensure_seat_worktree(
     let outcome = {
         let repo = checkout.clone_path.clone();
         let branch = checkout.branch.clone();
-        let template = checkout.config.worktree_dir.clone();
+        // The folder whose record was just checked: rendered once, created there.
+        let path = path.clone();
         let seat = seat.clone();
         crate::commands::await_blocking("ensure_seat_worktree", move || {
             Ok(seat_worktree_inner(
@@ -965,7 +966,7 @@ async fn ensure_seat_worktree(
                 &branch,
                 &seat.name,
                 &seat.worktree,
-                &template,
+                &path,
             ))
         })
         .await?

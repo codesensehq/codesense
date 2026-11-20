@@ -109,21 +109,29 @@ pub(crate) fn seat_worktree_path(
 }
 
 /// Create or reuse the seat worktree named `slug` of the story on `story_branch` in
-/// `repo` (the story's source clone), at [`seat_worktree_path`]. Blocking: it runs git.
+/// `repo` (the story's source clone), at `path`: the caller renders it once with
+/// [`seat_worktree_path`] and checks that folder's record before anything is created
+/// there. Blocking: it runs git.
 pub(crate) fn seat_worktree_inner(
     repo: &Path,
     story_branch: &str,
     slug: &str,
     kind: &SeatWorktreeParam,
-    worktree_dir_template: &str,
+    path: &Path,
 ) -> Result<SeatOutcome, SeatError> {
     let branch = seat_branch_name(story_branch, slug);
-    let path = seat_worktree_path(repo, story_branch, slug, worktree_dir_template)
-        .map_err(SeatError::Failed)?;
+    let path = path.to_path_buf();
     let path_text = path.to_string_lossy().into_owned();
     let listed =
         super::run_git(&["worktree", "list", "--porcelain"], repo).map_err(SeatError::Failed)?;
-    let existing = super::parse_worktree_porcelain(&listed)
+    let worktrees = super::parse_worktree_porcelain(&listed);
+    // Checked out in a worktree at another folder (moved by hand, or made under an
+    // earlier `worktree_dir`): never moved under it.
+    let branch_elsewhere = worktrees.iter().any(|entry| {
+        entry.branch.as_deref() == Some(branch.as_str())
+            && !super::paths_equal(&entry.path, &path_text)
+    });
+    let existing = worktrees
         .into_iter()
         .find(|entry| super::paths_equal(&entry.path, &path_text));
     if existing.is_some() && !path.is_dir() {
@@ -149,7 +157,7 @@ pub(crate) fn seat_worktree_inner(
             }
             // Cut from the story branch itself, never from the clone's HEAD.
             let start = format!("refs/heads/{story_branch}");
-            if existing.is_none() {
+            if existing.is_none() && !branch_elsewhere {
                 catch_up_seat_branch(repo, &branch, &start)?;
             }
             let opened = super::story_branch_worktree_inner(
@@ -344,6 +352,18 @@ mod tests {
 
     const TEMPLATE: &str = "../{repo}-wt/{slug}";
 
+    /// [`seat_worktree_inner`] at the folder `template` renders, as the launch calls it.
+    fn inner(
+        repo: &Path,
+        story_branch: &str,
+        slug: &str,
+        kind: &SeatWorktreeParam,
+        template: &str,
+    ) -> Result<SeatOutcome, SeatError> {
+        let path = seat_worktree_path(repo, story_branch, slug, template).unwrap();
+        seat_worktree_inner(repo, story_branch, slug, kind, &path)
+    }
+
     fn seat_path(f: &Fixture, slug: &str) -> PathBuf {
         super::super::render_worktree_dir(TEMPLATE, &f.repo, &seat_branch_name("feat/story", slug))
             .unwrap()
@@ -359,7 +379,7 @@ mod tests {
     fn a_branch_seat_is_cut_from_the_story_branch_tip_on_its_own_branch() {
         let f = fixture();
         let slug = crate::commands::workspace_open::worker_slug("Worker 2").unwrap();
-        let out = seat_worktree_inner(
+        let out = inner(
             &f.repo,
             "feat/story",
             &slug,
@@ -393,7 +413,7 @@ mod tests {
     #[test]
     fn a_branch_seat_relaunch_reuses_its_worktree_and_keeps_its_work() {
         let f = fixture();
-        let first = seat_worktree_inner(
+        let first = inner(
             &f.repo,
             "feat/story",
             "dev",
@@ -402,7 +422,7 @@ mod tests {
         )
         .unwrap();
         let seat_commit = commit_file(&first.path, "seat.txt", "seat work\n");
-        let again = seat_worktree_inner(
+        let again = inner(
             &f.repo,
             "feat/story",
             "dev",
@@ -419,7 +439,7 @@ mod tests {
     fn an_earlier_seat_branch_catches_up_with_the_story_or_keeps_its_own_work() {
         let f = fixture();
         let launch = |slug: &str| {
-            seat_worktree_inner(
+            inner(
                 &f.repo,
                 "feat/story",
                 slug,
@@ -462,10 +482,40 @@ mod tests {
     }
 
     #[test]
+    fn a_seat_branch_checked_out_in_another_folder_is_never_moved() {
+        let f = fixture();
+        let moved = f.repo.parent().unwrap().join("moved-seat");
+        git(
+            &f.repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "feat/story-seat-dev",
+                moved.to_str().unwrap(),
+                &f.main,
+            ],
+        );
+        let err = inner(
+            &f.repo,
+            "feat/story",
+            "dev",
+            &SeatWorktreeParam::Branch,
+            TEMPLATE,
+        )
+        .unwrap_err();
+        assert!(matches!(err, SeatError::Invalid(_)), "{err:?}");
+        // The branch and the worktree that holds it are as they were.
+        assert_eq!(git(&f.repo, &["rev-parse", "feat/story-seat-dev"]), f.main);
+        assert_eq!(git(&moved, &["rev-parse", "HEAD"]), f.main);
+        assert!(git(&moved, &["status", "--porcelain"]).is_empty());
+    }
+
+    #[test]
     fn a_commit_seat_is_a_detached_checkout_at_the_commit_with_nothing_installed() {
         let f = fixture();
-        let out = seat_worktree_inner(&f.repo, "feat/story", "review", &commit(&f.main), TEMPLATE)
-            .unwrap();
+        let out = inner(&f.repo, "feat/story", "review", &commit(&f.main), TEMPLATE).unwrap();
         assert!(out.created);
         assert_eq!(out.path, seat_path(&f, "review"));
         assert_eq!(
@@ -480,7 +530,7 @@ mod tests {
         // No branch is created for a commit seat.
         assert!(git(&f.repo, &["branch", "--list", "feat/story-seat-review"]).is_empty());
         // A short sha or a ref resolves to the full sha.
-        let by_ref = seat_worktree_inner(
+        let by_ref = inner(
             &f.repo,
             "feat/story",
             "review-2",
@@ -503,8 +553,7 @@ mod tests {
             "--orphan",
             " ",
         ] {
-            let err = seat_worktree_inner(&f.repo, "feat/story", "review", &commit(bad), TEMPLATE)
-                .unwrap_err();
+            let err = inner(&f.repo, "feat/story", "review", &commit(bad), TEMPLATE).unwrap_err();
             assert!(matches!(err, SeatError::Invalid(_)), "{bad:?}: {err:?}");
             assert!(!seat_path(&f, "review").exists(), "{bad:?}");
         }
@@ -522,16 +571,12 @@ mod tests {
     #[test]
     fn a_clean_commit_seat_re_pins_and_a_dirty_one_is_refused_unchanged() {
         let f = fixture();
-        let first =
-            seat_worktree_inner(&f.repo, "feat/story", "qa", &commit(&f.main), TEMPLATE).unwrap();
+        let first = inner(&f.repo, "feat/story", "qa", &commit(&f.main), TEMPLATE).unwrap();
         // The same commit again reuses it as it is.
-        let same =
-            seat_worktree_inner(&f.repo, "feat/story", "qa", &commit(&f.main), TEMPLATE).unwrap();
+        let same = inner(&f.repo, "feat/story", "qa", &commit(&f.main), TEMPLATE).unwrap();
         assert!(!same.created);
         // Clean: re-pinned to the new commit, still detached.
-        let moved =
-            seat_worktree_inner(&f.repo, "feat/story", "qa", &commit(&f.story_tip), TEMPLATE)
-                .unwrap();
+        let moved = inner(&f.repo, "feat/story", "qa", &commit(&f.story_tip), TEMPLATE).unwrap();
         assert!(!moved.created);
         assert_eq!(moved.path, first.path);
         assert_eq!(git(&moved.path, &["rev-parse", "HEAD"]), f.story_tip);
@@ -545,8 +590,7 @@ mod tests {
         );
         // Dirty: refused, and the worktree keeps its commit and its change.
         std::fs::write(moved.path.join("notes.txt"), "uncommitted\n").unwrap();
-        let err = seat_worktree_inner(&f.repo, "feat/story", "qa", &commit(&f.main), TEMPLATE)
-            .unwrap_err();
+        let err = inner(&f.repo, "feat/story", "qa", &commit(&f.main), TEMPLATE).unwrap_err();
         assert!(matches!(err, SeatError::Invalid(_)), "{err:?}");
         assert_eq!(git(&moved.path, &["rev-parse", "HEAD"]), f.story_tip);
         assert!(moved.path.join("notes.txt").exists());
@@ -555,7 +599,7 @@ mod tests {
     #[test]
     fn a_seat_name_keeps_its_kind() {
         let f = fixture();
-        seat_worktree_inner(
+        inner(
             &f.repo,
             "feat/story",
             "dev",
@@ -563,11 +607,10 @@ mod tests {
             TEMPLATE,
         )
         .unwrap();
-        let err = seat_worktree_inner(&f.repo, "feat/story", "dev", &commit(&f.main), TEMPLATE)
-            .unwrap_err();
+        let err = inner(&f.repo, "feat/story", "dev", &commit(&f.main), TEMPLATE).unwrap_err();
         assert!(matches!(err, SeatError::Invalid(_)), "{err:?}");
-        seat_worktree_inner(&f.repo, "feat/story", "qa", &commit(&f.main), TEMPLATE).unwrap();
-        let err = seat_worktree_inner(
+        inner(&f.repo, "feat/story", "qa", &commit(&f.main), TEMPLATE).unwrap();
+        let err = inner(
             &f.repo,
             "feat/story",
             "qa",
@@ -585,7 +628,7 @@ mod tests {
         let path = seat_path(&f, "dev");
         std::fs::create_dir_all(&path).unwrap();
         std::fs::write(path.join("keep.txt"), "not a worktree\n").unwrap();
-        let err = seat_worktree_inner(
+        let err = inner(
             &f.repo,
             "feat/story",
             "dev",
