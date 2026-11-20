@@ -4511,18 +4511,18 @@ mod tests {
                     persist_cleanup_record(&record);
                 }
                 let code = r#"import fcntl,json,os,pathlib,signal,sys,time
-    h=pathlib.Path(sys.argv[1]); checkpoint=pathlib.Path(sys.argv[2])
-    f=open(h/'gateway.lock','w+'); json.dump({'pid':os.getpid()},f); f.flush(); fcntl.flock(f,fcntl.LOCK_EX)
-    (h/'gateway.pid').write_text(json.dumps({'pid':os.getpid()}))
-    def stop(*args):
-     final={'timestamp':'2026-10-27T10:00:12.000Z','type':'response_item','payload':{'type':'message','role':'assistant','content':[{'type':'output_text','text':'gateway final checkpoint written by TERM'}]}}
-     with next(h.glob('sessions/**/rollout-*.jsonl')).open('a') as stream:
-      stream.write(json.dumps(final)+'\n'); stream.flush(); os.fsync(stream.fileno())
-     checkpoint.write_text('stopped-before-capture'); sys.exit(0)
-    signal.signal(signal.SIGTERM,stop)
-    print('ready',flush=True)
-    while True: time.sleep(.05)
-    "#;
+h=pathlib.Path(sys.argv[1]); checkpoint=pathlib.Path(sys.argv[2])
+f=open(h/'gateway.lock','w+'); json.dump({'pid':os.getpid()},f); f.flush(); fcntl.flock(f,fcntl.LOCK_EX)
+(h/'gateway.pid').write_text(json.dumps({'pid':os.getpid()}))
+def stop(*args):
+ final={'timestamp':'2026-10-27T10:00:12.000Z','type':'response_item','payload':{'type':'message','role':'assistant','content':[{'type':'output_text','text':'gateway final checkpoint written by TERM'}]}}
+ with next(h.glob('sessions/**/rollout-*.jsonl')).open('a') as stream:
+  stream.write(json.dumps(final)+'\n'); stream.flush(); os.fsync(stream.fileno())
+ checkpoint.write_text('stopped-before-capture'); sys.exit(0)
+signal.signal(signal.SIGTERM,stop)
+print('ready',flush=True)
+while True: time.sleep(.05)
+"#;
                 let child = Command::new("python3")
                     .args(["-c", code])
                     .arg(home)

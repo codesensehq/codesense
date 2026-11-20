@@ -668,7 +668,7 @@ mod timeout_tests {
     use codesense_platform::process::{is_alive, terminate_pid};
 
     // Fails on Linux (linux-test-defects): a timed-out command's background child survives.
-    #[cfg(target_os = "macos")]
+    #[cfg(not(target_os = "linux"))]
     mod group_reap {
         use super::*;
 

@@ -968,7 +968,7 @@ fn exits_of(events: &[TerminalDomainEvent], id: &str) -> Vec<Option<ExitInfo>> {
 }
 
 // Fails on Linux (linux-test-defects): a write into an exited session succeeds.
-#[cfg(target_os = "macos")]
+#[cfg(not(target_os = "linux"))]
 mod write_after_exit {
     use super::*;
 

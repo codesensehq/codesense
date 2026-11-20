@@ -2864,8 +2864,8 @@ mod tests {
         reverse.release(conn.id, session.as_str());
         assert!(!config.exists());
     }
-    // Fails on Linux (linux-test-defects): the native argv names this test binary, not the CLI.
-    #[cfg(target_os = "macos")]
+    // Linux-only, and fails on Linux (linux-test-defects), so off everywhere: argv[0] is wrong.
+    #[cfg(any())]
     mod native_provision {
         use super::*;
 
