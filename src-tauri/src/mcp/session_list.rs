@@ -1027,6 +1027,12 @@ mod tests {
             ("fine", "/bin/opencode", Some("2.1.4")),
             ("odd", "/bin/mystery", Some("9.9.9")),
             ("blank", "/bin/opencode", None),
+            // A Windows install is told by its stem.
+            (
+                "win-old",
+                r"C:\Users\u\AppData\Roaming\npm\opencode.exe",
+                Some("2.0.1"),
+            ),
             // Every listed CLI is told by its binary, Hermes as any other.
             ("hermes-old", "/bin/hermes", Some("0.22.4")),
             ("hermes-fine", "/bin/hermes", Some("0.22.5")),
@@ -1065,7 +1071,11 @@ mod tests {
                 .unwrap()
                 .clone()
         };
-        for (name, release) in [("old", "2.0.1"), ("hermes-old", "0.22.4")] {
+        for (name, release) in [
+            ("old", "2.0.1"),
+            ("win-old", "2.0.1"),
+            ("hermes-old", "0.22.4"),
+        ] {
             let row = find(name);
             assert_eq!(row["releaseQualified"], false, "{name}: {row}");
             let note = row["releaseNote"].as_str().unwrap();
