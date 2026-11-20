@@ -326,10 +326,10 @@ describe("the shipped sources", () => {
       expect(spliced(readFileSync(file, "utf8"), core)).toBe(readFileSync(file, "utf8"));
   });
   it("the hosted toolkit header and Rust constant name the same toolkit version", () => {
-    expect(LIVE_JS.startsWith("// cs-live 4\n")).toBe(true);
+    expect(LIVE_JS.startsWith("// cs-live 5\n")).toBe(true);
     expect(
       readFileSync(join(process.cwd(), "src-tauri/src/dashboard_publish/create.rs"), "utf8"),
-    ).toContain("TOOLKIT_VERSION: u32 = 4;");
+    ).toContain("TOOLKIT_VERSION: u32 = 5;");
   });
 });
 

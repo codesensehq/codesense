@@ -1,4 +1,4 @@
-// cs-live 4
+// cs-live 5
 // The CodeSense dashboard toolkit. Plain functions over the hosted
 // page API (queries and streams): the page posts each request to its own
 // window and the viewer answers from its parent window. No network calls of its
@@ -319,7 +319,7 @@ var CS = (function () {
   var QUERYALL_LIMIT = 100;
 
   var PAGED_LISTS = {
-    sessionUsage: { rows: "sessions", id: function (r) { return JSON.stringify([r.cli, r.sessionId]); }, cursor: { arg: "cursor", next: "nextCursor" }, total: "total" },
+    sessionUsage: { rows: "sessions", id: function (r) { return JSON.stringify([r.cli, r.sessionId, r.segment && r.segment.fromMs != null ? r.segment.fromMs : null]); }, cursor: { arg: "cursor", next: "nextCursor" }, total: "total" },
     queryContext: { rows: "rows", id: function (r) { return r.id != null ? r.id : r.path; }, cursor: { arg: "cursor", next: "nextCursor" }, total: "total" },
     storyChanges: { rows: "commits", id: "sha", cursor: { arg: "cursor", next: "nextCursor" }, total: "total" }
   };
