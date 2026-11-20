@@ -1027,6 +1027,52 @@ mod tests {
         .is_err());
         assert!(started.elapsed() < Duration::from_secs(2));
     }
+    #[test]
+    fn a_held_operation_lock_refuses_a_second_holder_until_released() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("operation.lock");
+        let soon = || Instant::now() + Duration::from_millis(100);
+        let held = lock_operation(&path, &|| true, soon()).unwrap();
+        assert_eq!(
+            lock_operation(&path, &|| true, soon()).unwrap_err(),
+            "bundle operation is busy"
+        );
+        assert_eq!(
+            lock_operation(&path, &|| false, soon() + Duration::from_secs(60)).unwrap_err(),
+            "bundle operation is busy"
+        );
+        drop(held);
+        assert!(lock_operation(&path, &|| true, soon()).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_operation_lock_refuses_a_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        let path = dir.path().join("operation.lock");
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        let deadline = Instant::now() + Duration::from_millis(100);
+        assert_eq!(
+            lock_operation(&path, &|| true, deadline).unwrap_err(),
+            "bundle operation lock unavailable"
+        );
+        assert!(!target.exists(), "the link was followed");
+    }
+
+    #[test]
+    fn headroom_refuses_what_the_disk_cannot_hold_and_a_missing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(headroom(dir.path(), 0), Ok(()));
+        assert_eq!(
+            headroom(dir.path(), u64::MAX).unwrap_err(),
+            "local disk lacks bundle preparation headroom"
+        );
+        assert_eq!(
+            headroom(&dir.path().join("missing"), 0).unwrap_err(),
+            "local disk headroom unavailable"
+        );
+    }
 }
 
 #[cfg(test)]
