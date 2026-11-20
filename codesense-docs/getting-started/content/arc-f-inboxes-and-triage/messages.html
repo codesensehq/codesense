@@ -369,7 +369,9 @@
           There is no setting control in the pane. The host fetches the image and serves its own copy;
           the pane never loads an image directly from a remote site. GIPHY and KLIPY images are held
           in memory only, never on disk, and fetched again when you view them after a restart or once
-          they expire. Other images stay in the host's local cache.</p>
+          they expire; with <code>ask</code>, or from another person's machine, that takes a tap.
+          Other images stay in the host's local cache. Copies the app's built-in browser cached before
+          this behavior age out of that cache.</p>
         <p>For a document attachment instead, <code>attachFile: "design/ux-brief.md"</code> adds
           the existing file card with Open. It is a logical team-content reference, separate from
           <code>media</code>, and leaves the message's primary file unchanged.</p>
