@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: MIT
 // The Rust exporter is the only writer of the fixture. Never rehash a stale fixture here.
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { diskGate } from "./lib/sealed-export.mjs";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CONTENT = "codesense-docs/getting-started/content";
@@ -13,7 +15,7 @@ export function verifySources(fixture, readSource = (path) => readFileSync(join(
     const actual = createHash("sha256").update(readSource(path)).digest("hex");
     if (actual !== expected)
       throw new Error(
-        `Model schema fixture is stale: ${path}. Export with UPDATE_DOCS_SCHEMAS=1 cargo test -p codesense --lib docs_schemas::export_model_schemas, then pnpm gen:docs. Do not rehash the fixture.`,
+        `Model schema fixture is stale: ${path}. Export with node scripts/generate-model-schemas.mjs --queued-export (no local cargo: dispatch regenerate-exports.yml), then pnpm gen:docs. Do not rehash the fixture.`,
       );
   }
 }
@@ -118,5 +120,28 @@ export function generate(check = false) {
   output(page, updated, check);
   console.log(`generate-model-schemas: ${check ? "ok" : "generated serde schemas and field rows"}`);
 }
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))
-  generate(process.argv.includes("--check"));
+// The exporter the stale message names, unqueued, for CI's export workflow. Cargo builds into the
+// worktree's shared `target/`.
+export function queuedExport({ spawn = spawnSync, gate = diskGate } = {}) {
+  gate(ROOT);
+  const result = spawn(
+    "cargo",
+    [
+      "test",
+      "--manifest-path",
+      "src-tauri/Cargo.toml",
+      "--lib",
+      "docs_schemas::export_model_schemas",
+      "-j",
+      "4",
+    ],
+    { cwd: ROOT, stdio: "inherit", env: { ...process.env, UPDATE_DOCS_SCHEMAS: "1" } },
+  );
+  if (result.error)
+    throw new Error(`Model schema export could not start cargo: ${result.error.message}`);
+  if (result.status !== 0) throw new Error(`Model schema export failed (${result.status})`);
+}
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  if (process.argv.includes("--queued-export")) queuedExport();
+  else generate(process.argv.includes("--check"));
+}

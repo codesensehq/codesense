@@ -66,6 +66,14 @@ const TEST_BUILD = {
     "linux-smoke": "linux-app",
   },
 };
+// The export regeneration is dispatched by hand and only reads the repository: whoever ran it
+// commits its artifact. Its `exports` input names scripts/generate-<name>.mjs (or all), and reaches
+// the run script through env, so no run script expands an expression.
+const REGENERATE_EXPORTS = {
+  file: "regenerate-exports.yml",
+  triggers: ["workflow_dispatch"],
+  exports: ["all", "live-data-contract", "mcp-reference", "model-schemas"],
+};
 const JOB_PERMISSIONS = new Map([
   [`${COMMIT_EMAILS.file}:${COMMIT_EMAILS.job}`, { contents: "read" }],
   ["dco.yml:dco", { contents: "read", "pull-requests": "read" }],
@@ -205,10 +213,15 @@ export function workflowPolicy(text, file = "") {
   if (scorecardWorkflow && (Object.hasOwn(workflow, "env") || Object.hasOwn(workflow, "defaults")))
     errors.push("scorecard: workflow env and defaults are forbidden");
   // Kept apart from allowedTriggers, so each file's exception reads (and merges) on its own.
-  const permittedTriggers = file === COMMIT_EMAILS.file ? COMMIT_EMAILS.triggers : allowedTriggers;
+  const permittedTriggers =
+    file === COMMIT_EMAILS.file
+      ? COMMIT_EMAILS.triggers
+      : file === REGENERATE_EXPORTS.file
+        ? REGENERATE_EXPORTS.triggers
+        : allowedTriggers;
   if (!triggers.length || triggers.some((t) => !permittedTriggers.includes(t)))
     errors.push(
-      "triggers must match the workflow allowlist; Scorecard and commit emails forbid pull requests",
+      "triggers must match the workflow allowlist; Scorecard and commit emails forbid pull requests, export regeneration allows only workflow_dispatch",
     );
   if (triggers.includes("merge_group")) {
     const mergeGroup = mapping(workflow.on) ? workflow.on.merge_group : null;
@@ -266,6 +279,26 @@ export function workflowPolicy(text, file = "") {
       );
     for (const [name, needs] of Object.entries(TEST_BUILD.needs))
       if (workflow.jobs?.[name]?.needs !== needs) errors.push(`${name}: needs must be ${needs}`);
+  }
+  if (file === REGENERATE_EXPORTS.file) {
+    const inputs = mapping(workflow.on) ? workflow.on.workflow_dispatch?.inputs : null;
+    const exports = mapping(inputs) ? inputs.exports : null;
+    if (
+      JSON.stringify(Object.keys(inputs ?? {})) !== '["exports"]' ||
+      !mapping(exports) ||
+      exports.type !== "choice" ||
+      exports.default !== "all" ||
+      JSON.stringify(exports.options) !== JSON.stringify(REGENERATE_EXPORTS.exports)
+    )
+      errors.push(
+        `export regeneration: the only input must be exports, a choice of ${REGENERATE_EXPORTS.exports.join(", ")} defaulting to all`,
+      );
+    for (const [name, job] of Object.entries(workflow.jobs ?? {}))
+      for (const step of Array.isArray(job?.steps) ? job.steps : [])
+        if (mapping(step) && String(step.run ?? "").includes("${{"))
+          errors.push(
+            `${name}: step "${step.name ?? step.run}" expands an expression in run; pass it through env`,
+          );
   }
   if (
     file === COMMIT_EMAILS.file &&

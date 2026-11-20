@@ -1,10 +1,17 @@
 // SPDX-License-Identifier: MIT
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
-import { ROOT, verifySources, modelSchemas, schemaFields } from "./generate-model-schemas.mjs";
+import {
+  ROOT,
+  verifySources,
+  modelSchemas,
+  queuedExport,
+  schemaFields,
+} from "./generate-model-schemas.mjs";
 
 test("the PR docs check rejects a stale standalone schema without repairing it", () => {
   const path = join(
@@ -114,4 +121,82 @@ test("the agent schema states OpenCode's launch-mode permission default", () => 
   ])
     assert.match(text, part);
   assert.doesNotMatch(text, /composer supplies the `ask` fallback/);
+});
+
+test("the queued export gates disk, then runs the one Rust exporter with UPDATE_DOCS_SCHEMAS", () => {
+  const calls = [];
+  queuedExport({
+    gate: (root) => calls.push(["gate", root]),
+    spawn: (command, args, options) => {
+      calls.push([command, args, options.cwd, options.env.UPDATE_DOCS_SCHEMAS]);
+      return { status: 0 };
+    },
+  });
+  assert.deepEqual(calls, [
+    ["gate", ROOT],
+    [
+      "cargo",
+      [
+        "test",
+        "--manifest-path",
+        "src-tauri/Cargo.toml",
+        "--lib",
+        "docs_schemas::export_model_schemas",
+        "-j",
+        "4",
+      ],
+      ROOT,
+      "1",
+    ],
+  ]);
+  assert.throws(
+    () => queuedExport({ gate: () => {}, spawn: () => ({ status: 101 }) }),
+    /Model schema export failed \(101\)/,
+  );
+});
+
+// The command line, end to end, with stand-in df and cargo on PATH: no Rust build runs.
+test(
+  "--queued-export runs the exporter from the command line",
+  { skip: process.platform === "win32" },
+  () => {
+    const bin = mkdtempSync(join(tmpdir(), "model-schemas-"));
+    const log = join(bin, "cargo.log");
+    try {
+      writeFileSync(
+        join(bin, "df"),
+        "#!/bin/sh\necho 'Filesystem 1K-blocks Used Available'\necho 'disk 1 1 999999999'\n",
+      );
+      writeFileSync(join(bin, "cargo"), `#!/bin/sh\necho "$UPDATE_DOCS_SCHEMAS $*" > '${log}'\n`);
+      chmodSync(join(bin, "df"), 0o755);
+      chmodSync(join(bin, "cargo"), 0o755);
+      const result = spawnSync(
+        process.execPath,
+        ["scripts/generate-model-schemas.mjs", "--queued-export"],
+        {
+          cwd: ROOT,
+          encoding: "utf8",
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+        },
+      );
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(
+        readFileSync(log, "utf8"),
+        "1 test --manifest-path src-tauri/Cargo.toml --lib docs_schemas::export_model_schemas -j 4\n",
+      );
+    } finally {
+      rmSync(bin, { recursive: true, force: true });
+    }
+  },
+);
+
+test("the queued export names a cargo that cannot start", () => {
+  assert.throws(
+    () =>
+      queuedExport({
+        gate: () => {},
+        spawn: () => ({ status: null, error: new Error("spawn cargo ENOENT") }),
+      }),
+    /could not start cargo: spawn cargo ENOENT/,
+  );
 });

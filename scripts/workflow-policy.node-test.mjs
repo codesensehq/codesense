@@ -2032,6 +2032,102 @@ test("test build: the policy rejects a missing platform gate, input, runner or n
     assert.match(workflowPolicy(fixture, testBuildFile).join("\n"), error);
 });
 
+// The export regeneration: dispatched by hand, read-only, and each `exports` option names the script
+// whose own --queued-export it runs.
+const regenerateExportsFile = "regenerate-exports.yml";
+const regenerateExports = () =>
+  fs.readFileSync(path.join(directory, regenerateExportsFile), "utf8");
+
+test("export regeneration: each option runs its script's own queued export, read-only", () => {
+  const workflow = parse(regenerateExports());
+  assert.deepEqual(Object.keys(workflow.on), ["workflow_dispatch"]);
+  const { exports } = workflow.on.workflow_dispatch.inputs;
+  assert.equal(exports.type, "choice");
+  assert.equal(exports.default, "all");
+  const scripts = fileURLToPath(new URL(".", import.meta.url));
+  for (const name of exports.options.filter((option) => option !== "all")) {
+    const script = path.join(scripts, `generate-${name}.mjs`);
+    assert.ok(fs.existsSync(script), `${name}: scripts/generate-${name}.mjs`);
+    assert.ok(fs.readFileSync(script, "utf8").includes('"--queued-export"'), `${name} queued path`);
+  }
+  const { steps, permissions } = workflow.jobs.regenerate;
+  assert.deepEqual(permissions, { contents: "read" });
+  const run = steps.find((step) => step.name === "Run the exports");
+  assert.deepEqual(run.env, { EXPORTS: "${{ inputs.exports }}" });
+  assert.ok(run.run.includes(`set -- ${exports.options.slice(1).join(" ")}\n`), "all runs each");
+  assert.ok(run.run.includes('node "scripts/generate-$name.mjs" --queued-export'));
+  assert.ok(run.run.trimEnd().endsWith("pnpm gen:docs"));
+  const upload = steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
+  assert.equal(upload.if, "steps.collect.outputs.changed != '0'");
+  assert.equal(upload.with.name, "generated-exports");
+  assert.equal(upload.with["retention-days"], 7);
+  assert.equal(upload.with["include-hidden-files"], true);
+  // rust-cache keys on the env, so it restores the Linux app job's cache only with the same env.
+  const linuxApp = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8")).jobs[
+    "rust-linux-app"
+  ];
+  assert.deepEqual(workflow.jobs.regenerate.env, linuxApp.env);
+  const cacheKey = (job) =>
+    job.steps.find((step) => step.uses?.startsWith("Swatinem/rust-cache@")).with["shared-key"];
+  assert.equal(cacheKey(workflow.jobs.regenerate), cacheKey(linuxApp));
+});
+
+test("export regeneration: the policy rejects another trigger, a write, a changed input or an expression in run", () => {
+  const cases = [
+    [
+      regenerateExports().replace("on:\n", "on:\n  pull_request:\n"),
+      /export regeneration allows only workflow_dispatch/,
+    ],
+    [
+      regenerateExports().replace("on:\n", "on:\n  push:\n    branches: [main]\n"),
+      /export regeneration allows only workflow_dispatch/,
+    ],
+    [
+      regenerateExports().replace("      contents: read", "      contents: write"),
+      /regenerate: permissions must grant exactly contents: read/,
+    ],
+    [
+      regenerateExports().replace(
+        "      contents: read",
+        "      contents: read\n      pull-requests: write",
+      ),
+      /regenerate: permissions must grant exactly contents: read/,
+    ],
+    [
+      regenerateExports().replace("          - model-schemas\n", ""),
+      /the only input must be exports, a choice of/,
+    ],
+    [
+      regenerateExports().replace("        default: all", "        default: model-schemas"),
+      /the only input must be exports/,
+    ],
+    [
+      regenerateExports().replace("        type: choice", "        type: string"),
+      /the only input must be exports/,
+    ],
+    [
+      regenerateExports().replace(
+        "    inputs:\n",
+        "    inputs:\n      ref:\n        type: string\n",
+      ),
+      /the only input must be exports/,
+    ],
+    [
+      regenerateExports().replace(
+        'if [ "$EXPORTS" = all ]',
+        "if [ '${{ inputs.exports }}' = all ]",
+      ),
+      /regenerate: step "Run the exports" expands an expression in run; pass it through env/,
+    ],
+  ];
+  for (const [fixture, error] of cases)
+    assert.match(workflowPolicy(fixture, regenerateExportsFile).join("\n"), error);
+  // The rules are this file's: another dispatch-only workflow keeps the general allowlist.
+  const expanded = regenerateExports().replace('"$EXPORTS"', "'${{ inputs.exports }}'");
+  assert.deepEqual(workflowPolicy(expanded, "other.yml"), []);
+  assert.deepEqual(workflowPolicy(regenerateExports(), regenerateExportsFile), []);
+});
+
 // The packaging smoke's containers come from one list, each pinned by its image index digest.
 const smokeImages = fileURLToPath(new URL("ci/smoke-images.txt", import.meta.url));
 

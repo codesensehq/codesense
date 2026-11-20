@@ -8,9 +8,10 @@ import { execFileSync, spawnSync } from "node:child_process";
 export const allowStaleExport = (argv = process.argv, env = process.env) =>
   argv.includes("--allow-stale-export") || env.DOCS_ALLOW_STALE_EXPORT === "1";
 
-// The refresh command shown to the user. A template literal stays on the `=` line at any
-// length, so a longer or shorter command keeps the same formatting.
-export const REFRESH_COMMAND = `pnpm docs:refresh-mcp`;
+// The refresh command shown to the user, with the CI route for a checkout without a Rust build. A
+// template literal stays on the `=` line at any length, so a longer or shorter command keeps the
+// same formatting.
+export const REFRESH_COMMAND = `pnpm docs:refresh-mcp (without a local Rust build: gh workflow run regenerate-exports.yml --ref <branch>)`;
 
 const DEFAULT_MIN_FREE_GIB = 25;
 const HARD_FLOOR_GIB = 20;

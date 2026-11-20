@@ -126,6 +126,42 @@ CodeSense says so when none is.
 Every test build is a source build like the one above: the `internal` channel,
 no update checks and no dashboard publishing.
 
+## Regenerating exports
+
+A few generated docs files are written only by Rust tests: the live-data
+contract, the MCP registry export and the model schemas fixture. When
+`pnpm gen:docs` says one is stale, a maintainer (running a workflow needs write
+access) can regenerate it in CI instead of building Rust locally. Push your
+branch first; it must be based on a `main` that has this workflow:
+
+```bash
+gh workflow run regenerate-exports.yml --repo codesensehq/codesense --ref <branch>
+gh run list --repo codesensehq/codesense --workflow regenerate-exports.yml --branch <branch> --event workflow_dispatch --limit 1
+gh run watch <run id> --repo codesensehq/codesense --exit-status
+```
+
+The second command prints the newest run's id. A new run takes a few seconds
+to appear, so check that its start time is the one you just dispatched before
+you use it; the third waits for it to finish. The default, `all`, runs every export,
+then `pnpm gen:docs`. `-f exports=live-data-contract` (or `mcp-reference`,
+`model-schemas`) runs one, but its `pnpm gen:docs` still fails if another export
+is stale, so use `all` unless you know the others are fresh. The run's summary
+lists the files it changed, and its `generated-exports` artifact holds them at
+their repository paths, kept for 7 days. From the repository root, apply them
+to your branch and commit them yourself:
+
+```bash
+tmp=$(mktemp -d)
+gh run download <run id> --repo codesensehq/codesense -n generated-exports -D "$tmp"
+cp -R "$tmp"/. .
+(cd "$tmp" && find . -type f -print0) | xargs -0 git add --
+git commit -s -m "Regenerate the generated exports"
+```
+
+When `live-data-contract.json` changed, add the `ci:macos` label to the pull
+request: the test that pins the contract runs only on macOS. When nothing
+changed, the summary says so and there is no artifact.
+
 ## Building your own release
 
 If you give a build to other people, [TRADEMARKS.md](TRADEMARKS.md) asks you to
