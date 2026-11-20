@@ -2980,7 +2980,7 @@ mod tests {
             .filter(|hook| {
                 hook["command"]
                     .as_str()
-                    .is_some_and(|c| c.contains("codesense-notify"))
+                    .is_some_and(|c| c.contains("hook notify"))
             })
             .count()
     }

@@ -82,7 +82,7 @@ fn notify_hooks(settings: &Value, event: &str) -> usize {
         .filter(|h| {
             h["command"]
                 .as_str()
-                .is_some_and(|c| c.contains("codesense-notify"))
+                .is_some_and(|c| c.contains("hook notify"))
         })
         .count()
 }
@@ -246,7 +246,7 @@ fn rewriting_keeps_the_teams_servers_and_replaces_a_stale_bridge_once() {
         &dir,
         codesense_pty_core::agent_cli::AgentCli::Claude,
     );
-    assert!(!launch.to_string().contains("codesense-notify"), "{launch}");
+    assert!(!launch.to_string().contains("hook notify"), "{launch}");
     assert!(launch.to_string().contains("--inbox-wait"), "{launch}");
 }
 
@@ -300,7 +300,7 @@ fn without_a_bridge_only_the_hooks_are_written() {
     std::fs::create_dir_all(&dir).unwrap();
     write_in(&dir, tmp.path(), None);
     assert_eq!(written(&dir), vec![".claude/settings.local.json"]);
-    // A hand-typed `claude` there runs the script its tab's host installed, on every
+    // A hand-typed `claude` there runs the bridge its tab's host placed, on every
     // status event.
     let local = read_json(&dir.join(".claude/settings.local.json"));
     for ev in crate::agent_state::status_hooks().map(|hook| hook.event) {

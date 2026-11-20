@@ -11991,7 +11991,7 @@ mod tests {
             assert_eq!(settings["permissions"], expected);
             assert!(settings["hooks"]["Stop"]
                 .to_string()
-                .contains("codesense-notify"));
+                .contains("hook notify"));
             let denies: Vec<&str> = ["Bash(git push --force:*)"]
                 .into_iter()
                 .chain(codesense_pty_core::notify_hook::deny_rules().iter().map(String::as_str))
@@ -12184,7 +12184,7 @@ mod tests {
                     assert_eq!(
                         groups
                             .iter()
-                            .filter(|g| g.to_string().contains("codesense-notify"))
+                            .filter(|g| g.to_string().contains("hook notify"))
                             .count(),
                         1,
                         "{label}: {ev} wired once"
