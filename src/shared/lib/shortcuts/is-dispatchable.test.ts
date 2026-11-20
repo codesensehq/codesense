@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { resetPlatformCaps, setPlatformCaps } from "@/shared/lib/__test-utils__/platform-caps";
 
@@ -248,7 +248,10 @@ describe("isDispatchable", () => {
   });
 
   describe("an action's capability", () => {
-    afterEach(() => resetPlatformCaps());
+    afterEach(() => {
+      resetPlatformCaps();
+      vi.restoreAllMocks();
+    });
     const exportPdf = () => registered("viewer.export-pdf");
 
     it("export to PDF needs pdf-export", () => {
@@ -258,6 +261,13 @@ describe("isDispatchable", () => {
     it("refuses the action with the capability off, whatever the state", () => {
       setPlatformCaps({ "pdf-export": "printing isn't built here" });
       expect(isDispatchable(exportPdf(), state())).toBe(false);
+    });
+
+    it("dispatches on Linux with it on, and binds its chord", () => {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux x86_64");
+      setPlatformCaps();
+      expect(isDispatchable(exportPdf(), state())).toBe(true);
+      expect(resolveBindings({}).get("viewer.export-pdf")?.keystroke).toBe("CmdOrCtrl+Shift+E");
     });
 
     it("dispatches with it on, and before the capabilities load", () => {

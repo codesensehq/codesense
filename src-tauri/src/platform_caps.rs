@@ -223,7 +223,7 @@ mod tests {
                 line("linux", arch, true),
                 "caps: git-ai=on starship=on secret-store=on mcp-bridge=on \
                  terminal-server-sidecar=on remote-machines=on agent-cli-sockets=on \
-                 shell-integration=on pdf-export=off background-on-close=off \
+                 shell-integration=on pdf-export=on background-on-close=off \
                  terminal-server-tray=off"
             );
         }

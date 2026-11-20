@@ -58,7 +58,7 @@
   {
     "key": "pdf-export",
     "macos": "on",
-    "linux": "off",
+    "linux": "on",
     "windows": "off",
     "reason": "PDF printing isn't built for this platform's web view"
   },

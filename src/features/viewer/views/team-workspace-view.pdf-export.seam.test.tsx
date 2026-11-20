@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { installMockBackend } from "@/app/mock/install";
 import { resetPlatformCaps, setPlatformCaps } from "@/shared/lib/__test-utils__/platform-caps";
@@ -75,6 +75,7 @@ beforeEach(() => {
 afterEach(async () => {
   cleanup();
   resetPlatformCaps();
+  vi.restoreAllMocks();
   await act(async () => {
     await Promise.resolve();
     await Promise.resolve();
@@ -96,6 +97,16 @@ describe("the nav context menu's Export to PDF", () => {
     setPlatformCaps();
     await openNavMenu();
     expect(screen.getByRole("menuitem", { name: /Export to PDF/ })).toBeInTheDocument();
+  });
+
+  it("is enabled on Linux with the capability on", async () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux x86_64");
+    setPlatformCaps();
+    await openNavMenu();
+    const item = screen.getByRole("menuitem", { name: /Export to PDF/ });
+    expect(item).not.toHaveAttribute("aria-disabled");
+    expect(item).not.toHaveAttribute("title");
+    expect(item).not.toHaveAttribute("aria-describedby");
   });
 
   it("stays with the capability off, disabled and explained", async () => {

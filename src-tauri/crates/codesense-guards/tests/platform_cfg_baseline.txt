@@ -90,7 +90,6 @@ src/commands/deps.rs 16
 src/commands/local_organization.rs 2
 src/commands/mcp_scope.rs 26
 src/commands/mcp_scope/inventory.rs 5
-src/commands/mod.rs 1
 src/commands/paths.rs 3
 src/commands/sprint_run/run_artifact.rs 9
 src/commands/terminal_server_tray.rs 2
@@ -106,7 +105,7 @@ src/dashboard_publish/manifest.rs 3
 src/domain/loaded_org.rs 2
 src/http/registry.rs 6
 src/install/agent_account_store.rs 20
-src/lib.rs 10
+src/lib.rs 7
 src/license/updates.rs 4
 src/mcp/local_mcp_relay/config.rs 1
 src/mcp/local_mcp_relay/local_grant.rs 2

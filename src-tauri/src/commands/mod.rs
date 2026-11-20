@@ -40,8 +40,6 @@ pub mod credential_store;
 // provider registry + the declared connector store (reconciles the two mechanisms).
 pub mod context_repo_git;
 pub mod deps;
-#[cfg(target_os = "macos")]
-#[path = "export_pdf/macos.rs"]
 pub mod export_pdf;
 pub mod file_index;
 pub mod file_surface;
@@ -216,10 +214,10 @@ pub use async_helpers::await_blocking;
 ///
 /// **Platform note** — the count is over the **declared** handler set
 /// (lexical source-text count), not the runtime-registered set. The
-/// three `commands::export_pdf::*` handlers are
-/// `#[cfg(target_os = "macos")]`-gated; on Linux/Windows they don't get
-/// registered, but they're still declared in `lib.rs`, so the lexical
-/// counter — and this constant — match across platforms.
+/// two PDF handlers in `commands::export_pdf` are `#[cfg(cap_pdf_export)]`-
+/// gated; where the capability is off they don't get registered, but
+/// they're still declared in `lib.rs`, so the lexical counter — and this
+/// constant — match across platforms.
 ///
 /// `allow(dead_code)`: only the `#[cfg(test)]` block below references
 /// this; clippy in `--lib` mode (what CI runs) does not see the test

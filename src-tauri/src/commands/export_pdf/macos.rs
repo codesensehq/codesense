@@ -1,19 +1,13 @@
 // SPDX-License-Identifier: MIT
-//! PDF export via hidden offscreen WKWebView (macOS only).
+//! PDF rendering via hidden offscreen WKWebView (macOS).
 //!
-//! Two Tauri commands:
-//! - `export_pdf_from_url`: loads a URL and exports to PDF
-//! - `export_pdf_from_html`: loads an HTML string and exports to PDF
-//!
-//! Plus a utility command:
-//! - `write_binary_file`: decodes base64 data and writes raw bytes to disk
+//! `render` loads a URL or an HTML string and returns the PDF bytes that
+//! `createPDF` makes: one page 612pt wide and as tall as the content. The
+//! commands in `export_pdf.rs` own the timeout and the write.
 
-use base64::Engine as _;
 use log::{debug, error};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::fs;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -240,10 +234,7 @@ impl CsPdfNavDelegate {
 // Core PDF generation
 // ---------------------------------------------------------------------------
 
-enum ContentSource {
-    Url(String),
-    Html(String),
-}
+use super::ContentSource;
 
 /// Dispatches WKWebView creation + content loading to the main thread,
 /// then waits for the navigation delegate to generate the PDF and send
@@ -253,7 +244,7 @@ enum ContentSource {
 /// for the duration of the export and released when the PDF completion handler
 /// (or a navigation failure) fires — so no native webview is leaked per export
 /// (SW-FX-64).
-async fn generate_pdf(source: ContentSource) -> Result<Vec<u8>, String> {
+pub(super) async fn render(source: ContentSource) -> Result<Vec<u8>, String> {
     let (tx, rx) = oneshot::channel::<Result<Vec<u8>, String>>();
 
     dispatch2::DispatchQueue::main().exec_async(move || {
@@ -314,84 +305,4 @@ async fn generate_pdf(source: ContentSource) -> Result<Vec<u8>, String> {
 
     rx.await
         .map_err(|_| "PDF export channel closed unexpectedly".to_string())?
-}
-
-// ---------------------------------------------------------------------------
-// Tauri commands
-// ---------------------------------------------------------------------------
-
-#[tauri::command]
-pub async fn export_pdf_from_url(url: String, output_path: String) -> Result<(), String> {
-    debug!(target: "export_pdf", "export_pdf_from_url: url={}, output={}", url, output_path);
-
-    let pdf_bytes = tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        generate_pdf(ContentSource::Url(url)),
-    )
-    .await
-    .map_err(|_| "PDF export timed out after 30 seconds".to_string())?
-    .map_err(|e| format!("PDF generation failed: {}", e))?;
-
-    let path = PathBuf::from(&output_path);
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| format!("Failed to create directory: {}", e))?;
-    }
-    tokio::fs::write(&path, &pdf_bytes)
-        .await
-        .map_err(|e| format!("Failed to write PDF to {}: {}", output_path, e))?;
-
-    debug!(target: "export_pdf", "PDF written: {} bytes to {}", pdf_bytes.len(), output_path);
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn export_pdf_from_html(html: String, output_path: String) -> Result<(), String> {
-    debug!(target: "export_pdf", "export_pdf_from_html: html_len={}, output={}", html.len(), output_path);
-
-    let pdf_bytes = tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        generate_pdf(ContentSource::Html(html)),
-    )
-    .await
-    .map_err(|_| "PDF export timed out after 30 seconds".to_string())?
-    .map_err(|e| format!("PDF generation failed: {}", e))?;
-
-    let path = PathBuf::from(&output_path);
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| format!("Failed to create directory: {}", e))?;
-    }
-    tokio::fs::write(&path, &pdf_bytes)
-        .await
-        .map_err(|e| format!("Failed to write PDF to {}: {}", output_path, e))?;
-
-    debug!(target: "export_pdf", "PDF written: {} bytes to {}", pdf_bytes.len(), output_path);
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn write_binary_file(base64_data: String, output_path: String) -> Result<(), String> {
-    crate::commands::await_blocking("write_binary_file", move || {
-        debug!(target: "export_pdf", "write_binary_file: output={}", output_path);
-
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(&base64_data)
-            .map_err(|e| format!("Base64 decode failed: {}", e))?;
-
-        let path = PathBuf::from(&output_path);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create directory {}: {}", parent.display(), e))?;
-        }
-
-        fs::write(&path, &bytes)
-            .map_err(|e| format!("Failed to write file {}: {}", output_path, e))?;
-
-        debug!(target: "export_pdf", "Binary file written: {} bytes to {}", bytes.len(), output_path);
-        Ok(())
-    })
-    .await
 }
