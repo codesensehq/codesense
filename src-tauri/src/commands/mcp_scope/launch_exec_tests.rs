@@ -356,23 +356,19 @@ mod producers {
         );
     }
 
+    /// The rows the typed relaunch's removal (`withoutRemovedArgs`) asserts too.
     #[test]
     fn removal_matches_whole_overrides_in_order_as_the_typed_relaunch_does() {
-        let strings = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
-        for (args, remove, kept) in [
-            (
-                &["-c", "a=1", "-c", "b=2"][..],
-                &["-c", "b=2"][..],
-                &["-c", "a=1"][..],
-            ),
-            (&["--settings", "f", "-x"], &["--settings"], &["f", "-x"]),
-            (&["-c", "a=1"], &["-c"], &["-c", "a=1"]),
-            (&["-c", "a=1"], &["-c", "z=9"], &["-c", "a=1"]),
-            (&["--y"], &[], &["--y"]),
-        ] {
+        let table: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/remove-args.json")).unwrap();
+        let strings = |words: &serde_json::Value| -> Vec<String> {
+            serde_json::from_value(words.clone()).unwrap()
+        };
+        for row in table["rows"].as_array().unwrap() {
+            let (args, remove, kept) = (strings(&row[0]), strings(&row[1]), strings(&row[2]));
             assert_eq!(
-                without_removed_args(&strings(args), &strings(remove)),
-                strings(kept),
+                without_removed_args(&args, &remove),
+                kept,
                 "{args:?} - {remove:?}"
             );
         }
@@ -412,10 +408,11 @@ fn a_profile_launch_of_an_endpoint_cli_is_refused_on_every_os() {
     use crate::commands::mcp_authoring::ScopeLaunch;
     let _home = crate::routines::test_support::TempHome::new();
     let root = tempfile::tempdir().unwrap();
-    for runtime in AgentCli::ALL
-        .into_iter()
-        .filter(|cli| crate::agents::adapter::desktop(*cli).model_endpoint.is_some())
-    {
+    for runtime in AgentCli::ALL.into_iter().filter(|cli| {
+        crate::agents::adapter::desktop(*cli)
+            .model_endpoint
+            .is_some()
+    }) {
         for os in ["macos", "linux", "windows"] {
             let id = format!("launch-exec-endpoint-{}", uuid::Uuid::new_v4());
             let args: Vec<String> = Vec::new();

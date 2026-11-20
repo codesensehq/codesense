@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, it, expect, vi } from "vitest";
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
 import {
+  withoutRemovedArgs,
   buildAgentLaunchCommand,
   agentLaunchLine,
   connectAgentSession,
@@ -680,6 +683,20 @@ describe("reconnectAgentSession (AC-1/AC-2)", () => {
       ),
     ).rejects.toThrow(/did not come up/i);
     expect(deps.sendReorient).not.toHaveBeenCalled();
+  });
+});
+
+describe("withoutRemovedArgs", () => {
+  // The backend's `mcp_scope::without_removed_args` asserts the same table.
+  const { rows } = JSON.parse(
+    readFileSync(
+      resolve(__dirname, "../../../src-tauri/src/commands/mcp_scope/fixtures/remove-args.json"),
+      "utf-8",
+    ),
+  ) as { rows: [string[], string[], string[]][] };
+
+  it.each(rows)("%j without %j keeps %j", (args, remove, kept) => {
+    expect(withoutRemovedArgs(args, remove)).toEqual(kept);
   });
 });
 
