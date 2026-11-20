@@ -448,9 +448,10 @@ fn choose_file_printer(printers: &[Printer], preferred: &str) -> Result<String, 
 mod tests {
     //! The tests that print need a display and GTK's print backends, so they
     //! are ignored: `rust-linux-app` runs them under `xvfb-run` with
-    //! `--run-ignored all`. Each initializes GTK on its own thread, so run them
-    //! with nextest, which gives every test its own process. They read the PDF
-    //! back with poppler's `pdfinfo` and `pdftotext`.
+    //! `--run-ignored all`. Each runs on a GTK thread of its own process (see
+    //! `on_gtk`), so run them with nextest, which gives every test its own
+    //! process. They read the PDF back with poppler's `pdfinfo` and
+    //! `pdftotext`.
     use super::*;
     use std::cell::Cell;
     use std::fs;
@@ -544,6 +545,33 @@ mod tests {
         assert!(!allowed(&response(true, true)));
         assert!(!allowed(&response(false, false)));
         assert!(!allowed(&response(false, true)));
+    }
+
+    /// Run `test` on this process's GTK thread, which never exits, and pass its
+    /// panic on. WebKit's per-thread teardown deadlocks when the thread that
+    /// started GTK exits (`WTF::RunLoop::threadWillExit` waits on a dispatch
+    /// nothing will run), and libtest runs each test on a thread that exits when
+    /// it returns. The app's GTK thread is its main thread, which runs until the
+    /// process ends.
+    fn on_gtk(test: impl FnOnce() + Send + 'static) {
+        type Job = Box<dyn FnOnce() + Send>;
+        static GTK: std::sync::OnceLock<std::sync::mpsc::Sender<Job>> = std::sync::OnceLock::new();
+        let jobs = GTK.get_or_init(|| {
+            let (tx, rx) = std::sync::mpsc::channel::<Job>();
+            std::thread::Builder::new()
+                .name("gtk".to_string())
+                .spawn(move || rx.into_iter().for_each(|job| job()))
+                .expect("the GTK thread");
+            tx
+        });
+        let (tx, rx) = std::sync::mpsc::channel();
+        jobs.send(Box::new(move || {
+            let _ = tx.send(std::panic::catch_unwind(std::panic::AssertUnwindSafe(test)));
+        }))
+        .expect("the GTK thread is running");
+        if let Err(panic) = rx.recv().expect("the GTK thread answers") {
+            std::panic::resume_unwind(panic);
+        }
     }
 
     fn init_gtk() {
@@ -666,114 +694,128 @@ mod tests {
     #[test]
     #[ignore = "needs a display and GTK's print backends: rust-linux-app runs it under xvfb-run"]
     fn html_prints_to_a_pdf() {
-        init_gtk();
-        let bytes = print(ContentSource::Html(PAGE.to_string())).expect("an HTML export");
-        assert_pdf_with_text(&bytes, "Exported heading");
+        on_gtk(|| {
+            init_gtk();
+            let bytes = print(ContentSource::Html(PAGE.to_string())).expect("an HTML export");
+            assert_pdf_with_text(&bytes, "Exported heading");
+        });
     }
 
     #[test]
     #[ignore = "needs a display and GTK's print backends: rust-linux-app runs it under xvfb-run"]
     fn a_file_url_prints_to_a_pdf() {
-        init_gtk();
-        let dir = tempfile::tempdir().unwrap();
-        let page = dir.path().join("a page.html");
-        fs::write(&page, PAGE).unwrap();
-        let url = url::Url::from_file_path(&page).unwrap().to_string();
-        let bytes = print(ContentSource::Url(url)).expect("a URL export");
-        assert_pdf_with_text(&bytes, "Body text for the export.");
+        on_gtk(|| {
+            init_gtk();
+            let dir = tempfile::tempdir().unwrap();
+            let page = dir.path().join("a page.html");
+            fs::write(&page, PAGE).unwrap();
+            let url = url::Url::from_file_path(&page).unwrap().to_string();
+            let bytes = print(ContentSource::Url(url)).expect("a URL export");
+            assert_pdf_with_text(&bytes, "Body text for the export.");
+        });
     }
 
     #[test]
     #[ignore = "needs a display and GTK's print backends: rust-linux-app runs it under xvfb-run"]
     fn a_load_failure_is_an_error() {
-        init_gtk();
-        let closed = TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}/", closed.local_addr().unwrap());
-        drop(closed);
-        let err = print(ContentSource::Url(url)).expect_err("a refused connection");
-        assert!(err.contains("failed"), "{err}");
+        on_gtk(|| {
+            init_gtk();
+            let closed = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/", closed.local_addr().unwrap());
+            drop(closed);
+            let err = print(ContentSource::Url(url)).expect_err("a refused connection");
+            assert!(err.contains("failed"), "{err}");
+        });
     }
 
     #[test]
     #[ignore = "needs a display and GTK's print backends: rust-linux-app runs it under xvfb-run"]
     fn a_german_locale_still_finds_the_file_printer() {
-        // Before GTK sets the locale from the environment.
-        for name in ["LANGUAGE", "LANG", "LC_ALL"] {
-            std::env::set_var(name, "de_DE.UTF-8");
-        }
-        init_gtk();
-        assert_ne!(
+        on_gtk(|| {
+            // Before GTK sets the locale from the environment.
+            for name in ["LANGUAGE", "LANG", "LC_ALL"] {
+                std::env::set_var(name, "de_DE.UTF-8");
+            }
+            init_gtk();
+            assert_ne!(
             file_printer_name(),
             "Print to File",
             "GTK's German translations are missing (language-pack-gnome-de-base, a de_DE.UTF-8 \
              locale), so this test would pass without them"
         );
-        assert_eq!(file_printer(), Ok(file_printer_name()));
-        let bytes = print(ContentSource::Html(PAGE.to_string())).expect("an export in German");
-        assert_pdf_with_text(&bytes, "Exported heading");
+            assert_eq!(file_printer(), Ok(file_printer_name()));
+            let bytes = print(ContentSource::Html(PAGE.to_string())).expect("an export in German");
+            assert_pdf_with_text(&bytes, "Exported heading");
+        });
     }
 
     #[test]
     #[ignore = "needs a display and GTK's print backends: rust-linux-app runs it under xvfb-run"]
     fn two_exports_share_no_stored_data() {
-        init_gtk();
-        let url = serve(
-            "<!DOCTYPE html><html><body><p id=\"out\">pending</p><script>\
+        on_gtk(|| {
+            init_gtk();
+            let url = serve(
+                "<!DOCTYPE html><html><body><p id=\"out\">pending</p><script>\
              const before = localStorage.getItem('kept') || 'none';\
              localStorage.setItem('kept', 'stored');\
              document.getElementById('out').textContent =\
                'before=' + before + ' after=' + localStorage.getItem('kept');\
              </script></body></html>",
-        );
-        for export in ["first", "second"] {
-            let bytes = print(ContentSource::Url(url.clone()))
-                .unwrap_or_else(|e| panic!("the {export} export: {e}"));
-            // The page stores a value and reads it back, so storage works; the
-            // next export starts without it.
-            assert_pdf_with_text(&bytes, "before=none after=stored");
-        }
+            );
+            for export in ["first", "second"] {
+                let bytes = print(ContentSource::Url(url.clone()))
+                    .unwrap_or_else(|e| panic!("the {export} export: {e}"));
+                // The page stores a value and reads it back, so storage works; the
+                // next export starts without it.
+                assert_pdf_with_text(&bytes, "before=none after=stored");
+            }
+        });
     }
 
     #[test]
     #[ignore = "needs a display and GTK's print backends: rust-linux-app runs it under xvfb-run"]
     fn dropping_an_export_destroys_its_window() {
-        init_gtk();
-        // A server that never answers, so the export is in flight when the
-        // timeout would drop it.
-        let stalled = TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}/", stalled.local_addr().unwrap());
-        let dir = tempfile::tempdir().unwrap();
-        let (tx, _rx) = oneshot::channel();
-        let export = Export::start(ContentSource::Url(url), dir.path().join("out.pdf"), tx);
-        let id = export.id;
-        let window = run_until(|| PARKED.with(|parked| parked.borrow().get(&id).cloned()));
-        let destroyed = Rc::new(Cell::new(false));
-        let seen = destroyed.clone();
-        window.connect_destroy(move |_| seen.set(true));
-        drop(window);
-        drop(export);
-        run_until(|| destroyed.get().then_some(()));
-        assert!(PARKED.with(|parked| parked.borrow().is_empty()));
-        drop(stalled);
+        on_gtk(|| {
+            init_gtk();
+            // A server that never answers, so the export is in flight when the
+            // timeout would drop it.
+            let stalled = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/", stalled.local_addr().unwrap());
+            let dir = tempfile::tempdir().unwrap();
+            let (tx, _rx) = oneshot::channel();
+            let export = Export::start(ContentSource::Url(url), dir.path().join("out.pdf"), tx);
+            let id = export.id;
+            let window = run_until(|| PARKED.with(|parked| parked.borrow().get(&id).cloned()));
+            let destroyed = Rc::new(Cell::new(false));
+            let seen = destroyed.clone();
+            window.connect_destroy(move |_| seen.set(true));
+            drop(window);
+            drop(export);
+            run_until(|| destroyed.get().then_some(()));
+            assert!(PARKED.with(|parked| parked.borrow().is_empty()));
+            drop(stalled);
+        });
     }
 
     #[test]
     #[ignore = "needs a display and GTK's print backends: rust-linux-app runs it under xvfb-run"]
     fn an_export_dropped_before_it_starts_makes_no_window() {
-        init_gtk();
-        let dir = tempfile::tempdir().unwrap();
-        let (tx, mut rx) = oneshot::channel();
-        let export = Export::start(
-            ContentSource::Html(PAGE.to_string()),
-            dir.path().join("out.pdf"),
-            tx,
-        );
-        drop(export);
-        let context = glib::MainContext::default();
-        while context.iteration(false) {}
-        assert_eq!(VIEWS_MADE.with(|made| made.get()), 0, "a web view was made");
-        assert!(PARKED.with(|parked| parked.borrow().is_empty()));
-        assert!(rx.try_recv().is_err(), "no export ran");
+        on_gtk(|| {
+            init_gtk();
+            let dir = tempfile::tempdir().unwrap();
+            let (tx, mut rx) = oneshot::channel();
+            let export = Export::start(
+                ContentSource::Html(PAGE.to_string()),
+                dir.path().join("out.pdf"),
+                tx,
+            );
+            drop(export);
+            let context = glib::MainContext::default();
+            while context.iteration(false) {}
+            assert_eq!(VIEWS_MADE.with(|made| made.get()), 0, "a web view was made");
+            assert!(PARKED.with(|parked| parked.borrow().is_empty()));
+            assert!(rx.try_recv().is_err(), "no export ran");
+        });
     }
 
     /// Every file under `dir`, at any depth.
@@ -793,59 +835,61 @@ mod tests {
     #[test]
     #[ignore = "needs a display and GTK's print backends: rust-linux-app runs it under xvfb-run"]
     fn a_page_that_downloads_still_exports_and_writes_no_file() {
-        // A home and Downloads folder of the test's own, before GLib reads them.
-        let home = tempfile::tempdir().unwrap();
-        let downloads = home.path().join("Downloads");
-        let config = home.path().join(".config");
-        fs::create_dir_all(&downloads).unwrap();
-        fs::create_dir_all(&config).unwrap();
-        fs::write(
-            config.join("user-dirs.dirs"),
-            format!("XDG_DOWNLOAD_DIR=\"{}\"\n", downloads.display()),
-        )
-        .unwrap();
-        std::env::set_var("HOME", home.path());
-        std::env::set_var("XDG_CONFIG_HOME", &config);
-        std::env::set_var("XDG_DOWNLOAD_DIR", &downloads);
-        init_gtk();
-        // A script-clicked download link and an attachment in a frame. (A scripted
-        // window.open never reaches the policy: WebKit blocks it as a popup first,
-        // so new windows are covered by the policy's own test.)
-        let url = serve(
-            "<!DOCTYPE html><html><body><p>Exported despite the downloads.</p>\
+        on_gtk(|| {
+            // A home and Downloads folder of the test's own, before GLib reads them.
+            let home = tempfile::tempdir().unwrap();
+            let downloads = home.path().join("Downloads");
+            let config = home.path().join(".config");
+            fs::create_dir_all(&downloads).unwrap();
+            fs::create_dir_all(&config).unwrap();
+            fs::write(
+                config.join("user-dirs.dirs"),
+                format!("XDG_DOWNLOAD_DIR=\"{}\"\n", downloads.display()),
+            )
+            .unwrap();
+            std::env::set_var("HOME", home.path());
+            std::env::set_var("XDG_CONFIG_HOME", &config);
+            std::env::set_var("XDG_DOWNLOAD_DIR", &downloads);
+            init_gtk();
+            // A script-clicked download link and an attachment in a frame. (A scripted
+            // window.open never reaches the policy: WebKit blocks it as a popup first,
+            // so new windows are covered by the policy's own test.)
+            let url = serve(
+                "<!DOCTYPE html><html><body><p>Exported despite the downloads.</p>\
              <a id=\"save\" download=\"leaked.txt\" href=\"data:text/plain,leaked\">save</a>\
              <iframe src=\"/attachment\"></iframe>\
              <script>document.getElementById('save').click();</script></body></html>",
-        );
-        let bytes = print(ContentSource::Url(url)).expect("the export");
-        assert_pdf_with_text(&bytes, "Exported despite the downloads.");
-        // Time for a download that got through to land.
-        let settle = Instant::now() + Duration::from_secs(2);
-        run_until(|| (Instant::now() >= settle).then_some(()));
-        // The page did try both, so the empty folders mean the policy held.
-        let ignored = IGNORED.with(|ignored| ignored.borrow().clone());
-        assert!(
-            ignored.contains(&Decided::Navigation(NavigationType::LinkClicked)),
-            "no download link click was ignored: {ignored:?}"
-        );
-        assert!(
-            ignored.iter().any(|d| matches!(
-                d,
-                Decided::Response {
-                    attachment: true,
-                    ..
-                }
-            )),
-            "no attachment response was ignored: {ignored:?}"
-        );
-        assert_eq!(files_under(&downloads), Vec::<PathBuf>::new());
-        let leaked: Vec<_> = files_under(home.path())
-            .into_iter()
-            .filter(|path| {
-                let name = path.file_name().unwrap_or_default().to_string_lossy();
-                name.contains("leaked") || name.contains("attached")
-            })
-            .collect();
-        assert_eq!(leaked, Vec::<PathBuf>::new());
+            );
+            let bytes = print(ContentSource::Url(url)).expect("the export");
+            assert_pdf_with_text(&bytes, "Exported despite the downloads.");
+            // Time for a download that got through to land.
+            let settle = Instant::now() + Duration::from_secs(2);
+            run_until(|| (Instant::now() >= settle).then_some(()));
+            // The page did try both, so the empty folders mean the policy held.
+            let ignored = IGNORED.with(|ignored| ignored.borrow().clone());
+            assert!(
+                ignored.contains(&Decided::Navigation(NavigationType::LinkClicked)),
+                "no download link click was ignored: {ignored:?}"
+            );
+            assert!(
+                ignored.iter().any(|d| matches!(
+                    d,
+                    Decided::Response {
+                        attachment: true,
+                        ..
+                    }
+                )),
+                "no attachment response was ignored: {ignored:?}"
+            );
+            assert_eq!(files_under(&downloads), Vec::<PathBuf>::new());
+            let leaked: Vec<_> = files_under(home.path())
+                .into_iter()
+                .filter(|path| {
+                    let name = path.file_name().unwrap_or_default().to_string_lossy();
+                    name.contains("leaked") || name.contains("attached")
+                })
+                .collect();
+            assert_eq!(leaked, Vec::<PathBuf>::new());
+        });
     }
 }
