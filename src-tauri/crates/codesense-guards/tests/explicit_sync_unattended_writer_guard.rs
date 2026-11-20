@@ -2446,7 +2446,14 @@ const MAX_UNRESOLVED_PATHS: usize = 279;
 /// `.find(..)` on iterators in `seat_worktree_inner`, `story_base_record` and
 /// `recorded_workspace_folder`; and `.exists()` on a path in `seat_worktree_inner`. They are
 /// std string, path, result and iterator calls; none calls a write primitive.
-const MAX_UNRESOLVED_METHODS: usize = 6_577;
+/// The reply reminder adds 7 more, as CI measured: `.as_str()` on the sender in `read_messages`
+/// (commands/agent_inbox.rs); `.retain(..)` in `RepliesOwed::answered`, `.drain(..)` in
+/// `RepliesOwed::took`, and `.find(..)` and `.all(..)` in `RepliesOwed::remind`
+/// (commands/reply_owed.rs); and `.ok()` on the tab header in `reply_check` and `.is_empty()` on
+/// the tab id in `reply_check_answer` (http/routes/terminal.rs). They are std string, iterator,
+/// collection and result calls on the in-memory reply record and the tab header; none calls a
+/// write primitive.
+const MAX_UNRESOLVED_METHODS: usize = 6_584;
 
 /// X1: no unattended root reaches a write primitive; every reviewed entry is
 /// still needed; the walk still sees the app.
