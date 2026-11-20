@@ -353,7 +353,6 @@ async fn results_above_the_ceiling_are_dropped() {
     let h = harness();
     h.transport.reply(200, None, SEARCH);
     let found = h
-        .service
         .run(&normalize(Some("ship it"), None, None).unwrap(), Some("g"))
         .await
         .unwrap();
