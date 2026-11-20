@@ -495,8 +495,13 @@ fn write_file(dir: &Path, sha: &str, bytes: &[u8]) -> Result<(), Failure> {
         .flatten()
         .filter_map(|e| {
             let meta = Result::ok(std::fs::DirEntry::metadata(&e))?;
-            meta.is_file()
-                .then(|| (std::fs::DirEntry::path(&e), meta.len(), Result::ok(meta.modified())))
+            meta.is_file().then(|| {
+                (
+                    std::fs::DirEntry::path(&e),
+                    meta.len(),
+                    Result::ok(meta.modified()),
+                )
+            })
         })
         .collect();
     let mut total: u64 = entries.iter().map(|(_, len, _)| len).sum();
