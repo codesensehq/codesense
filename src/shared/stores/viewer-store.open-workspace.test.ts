@@ -486,6 +486,26 @@ describe("openTabInWorkspace (SW-GW-2)", () => {
     });
   });
 
+  it("the tab verb's agent open rejects when the host refuses the spawn", async () => {
+    useViewerStore.setState({
+      workspaces: { [TEAM]: [{ id: WID, kind: "generic", cwd: "/proj", status: "ready" }] },
+    });
+    const refused = vi.spyOn(terminalHost(), "openTab").mockImplementation(() => {
+      throw new Error("C:\\npm\\claude.cmd is not an absolute path to an existing .exe");
+    });
+    try {
+      await expect(
+        makeRealOpenWorkspaceTabDeps().openTab(WID, GENERIC_AGENT_ROLE, {
+          sessionId: "shell-refused",
+          execution: { argv: ["C:\\npm\\claude.cmd"], nativeLaunch: "claude" },
+        }),
+      ).rejects.toMatch(/existing \.exe/);
+      expect(refused).toHaveBeenCalledTimes(1);
+    } finally {
+      refused.mockRestore();
+    }
+  });
+
   it("a start in a workspace that is not open opens nothing and has nothing to wait on", async () => {
     useViewerStore.setState({ workspaces: { [TEAM]: [] } });
     const { sessionId, spawned } = useViewerStore
