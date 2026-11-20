@@ -95,9 +95,15 @@ Install & Restart.
   held in memory only and never written to disk, as those providers' terms
   require. It is downloaded again when you view it after the app restarts or
   after it expires (as the provider's `Cache-Control` says, at most 24 hours).
-  Only a picture that an agent in one of this app's tabs sent is downloaded
-  again by itself; others wait for your click. Other pictures are kept in the
-  app's cache folder (`inbox-media`, 256 MiB at most, oldest removed first).
+  It is downloaded again by itself only when an agent in one of this app's tabs
+  sent it, `remote` is `auto` and its host is on the list; otherwise it waits
+  for your click. Other pictures are kept in the app's cache folder
+  (`inbox-media`, 256 MiB at most, oldest removed first). On the first start
+  after this update, the app deletes GIPHY and KLIPY pictures that earlier
+  versions saved in that folder.
+- **Known limit:** copies of GIPHY and KLIPY pictures that the app's built-in
+  browser cached before this update stay in that browser's cache until they age
+  out. Pictures served since then tell it not to store them.
 - **Turning it off:** each team has its own inbox settings file,
   `config/inbox.yml` inside that team's folder in your context repository
   (`<team>/config/inbox.yml`). Set `remote: off` under `media:` to never
