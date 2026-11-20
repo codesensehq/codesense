@@ -457,6 +457,18 @@ describe("ViewerTabs — PDF export", () => {
     expect(exportItem()).toBeInTheDocument();
   });
 
+  it("on Linux with the capability on, Export to PDF is enabled", () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux x86_64");
+    setPlatformCaps();
+    render(<ViewerTabs repoPath={REPO} />);
+    fireEvent.contextMenu(screen.getByText("a.md"));
+    const item = exportItem()!;
+    expect(item).not.toHaveAttribute("aria-disabled");
+    expect(item).not.toHaveAttribute("data-focusable-disabled");
+    expect(item).not.toHaveAttribute("title");
+    expect(item).not.toHaveAttribute("aria-describedby");
+  });
+
   it("keeps Export to PDF with the capability off, disabled and explained", () => {
     vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux x86_64");
     setPlatformCaps({ "pdf-export": "printing isn't built here" });

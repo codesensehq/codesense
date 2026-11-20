@@ -1768,12 +1768,11 @@ pub fn run() {
             commands::paths::resolve_team_content_dir,
             // macOS menu rebuild (C.16)
             menu::rebuild_menu,
-            // PDF export (R.4) — macOS only
-            #[cfg(target_os = "macos")]
+            // PDF export (R.4), where the OS's web view can print
+            #[cfg(cap_pdf_export)]
             commands::export_pdf::export_pdf_from_url,
-            #[cfg(target_os = "macos")]
+            #[cfg(cap_pdf_export)]
             commands::export_pdf::export_pdf_from_html,
-            #[cfg(target_os = "macos")]
             commands::export_pdf::write_binary_file,
             // Content engine boundary surface (SS-13), read by the
             // frontend (merge preview) and the context MCP tools.

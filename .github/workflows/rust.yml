@@ -736,8 +736,11 @@ jobs:
         with:
           persist-credentials: false
       - name: Install system libraries
-        # The shared app list, plus a session bus, the keyring daemon and its CLI.
-        run: bash scripts/install-linux-app-libs.sh dbus gnome-keyring libsecret-tools
+        # The shared app list, plus a session bus, the keyring daemon and its CLI, and for PDF
+        # export's renderer a virtual display, GTK's German translations and poppler's readers.
+        run: >-
+          bash scripts/install-linux-app-libs.sh dbus gnome-keyring libsecret-tools
+          xvfb xauth language-pack-gnome-de-base language-pack-de poppler-utils
       - name: Set up pnpm
         uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - name: Set up Node
@@ -792,6 +795,17 @@ jobs:
       - name: Test the credential store against Secret Service
         # A private session bus; the script unlocks the keyring, checks it, and runs the tests.
         run: dbus-run-session -- bash scripts/run-secret-service-tests.sh
+      - name: Test PDF export's renderer on a virtual display
+        # A bare WebKitGTK web view prints HTML, a file URL and an http page to GTK's file printer,
+        # in English and in German, and poppler reads the text back; a failed load is an error and
+        # a dropped export destroys its window. The tests are ignored without a display. The
+        # WebKit setting is the app's own default (linux_startup.rs).
+        env:
+          WEBKIT_DISABLE_DMABUF_RENDERER: "1"
+        run: |
+          sudo locale-gen de_DE.UTF-8
+          xvfb-run -a cargo nextest run --profile ci --locked -p codesense --lib --retries 0 \
+            --run-ignored all -E 'test(/^commands::export_pdf::render::tests::/)'
       - name: Test the pty contract, the cursor-query answer and a session with no viewer
         # A real pty behind a host running the emulator worker (built with the sidecars above), as
         # on Windows (ConPTY), a session that reports its exit with no viewer, and the runner's
