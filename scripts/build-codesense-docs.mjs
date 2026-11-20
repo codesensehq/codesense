@@ -40,9 +40,9 @@ import {
 } from "node:fs";
 import { dirname, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { deflateSync, gzipSync } from "node:zlib";
+import { deflateSync } from "node:zlib";
 import { BUILTIN_PANE_EXAMPLES } from "./lib/builtin-panes.mjs";
-import { writeBuildOutput } from "./lib/build-output.mjs";
+import { tarGz, writeBuildOutput } from "./lib/build-output.mjs";
 import { isMain } from "./lib/is-main.mjs";
 import { HANDBOOK_DIR, siteInside, siteRoot } from "./lib/site-root.mjs";
 import { exampleBytes } from "./generate-builtin-pane-examples.mjs";
@@ -1130,42 +1130,6 @@ export function buildRepository(files) {
       .map(([id, data]) => [`.git/objects/${id.slice(0, 2)}/${id.slice(2)}`, data]),
   ];
   return { commit, entries };
-}
-
-// ---------------------------------------------------------------------------
-// Deterministic tar.gz
-// ---------------------------------------------------------------------------
-
-function tarHeader(name, size, mtime) {
-  const header = Buffer.alloc(512);
-  const put = (value, offset, length) => header.write(value, offset, length, "utf8");
-  const octal = (value, length) => value.toString(8).padStart(length - 1, "0");
-  if (Buffer.byteLength(name) > 100) throw new Error(`tar path too long: ${name}`);
-  put(name, 0, 100);
-  put(octal(0o644, 8), 100, 8);
-  put(octal(0, 8), 108, 8);
-  put(octal(0, 8), 116, 8);
-  put(octal(size, 12), 124, 12);
-  put(octal(mtime, 12), 136, 12);
-  put("        ", 148, 8);
-  put("0", 156, 1);
-  put("ustar\0", 257, 6);
-  put("00", 263, 2);
-  let sum = 0;
-  for (const byte of header) sum += byte;
-  put(`${octal(sum, 7)}\0`, 148, 8);
-  return header;
-}
-
-export function tarGz(entries, mtime) {
-  const parts = [];
-  for (const [name, data] of entries) {
-    parts.push(tarHeader(name, data.length, mtime), data);
-    const pad = (512 - (data.length % 512)) % 512;
-    if (pad) parts.push(Buffer.alloc(pad));
-  }
-  parts.push(Buffer.alloc(1024));
-  return gzipSync(Buffer.concat(parts), { level: 9 });
 }
 
 /**

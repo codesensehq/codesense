@@ -147,13 +147,24 @@ then `pnpm gen:docs`. `-f exports=live-data-contract` (or `mcp-reference`,
 `model-schemas`) runs one, but its `pnpm gen:docs` still fails if another export
 is stale, so use `all` unless you know the others are fresh. The run's summary
 lists the files it changed, and its `generated-exports` artifact holds them at
-their repository paths, kept for 7 days. From the repository root, apply them
-to your branch and commit them yourself:
+their repository paths, kept for 7 days. From the repository root, download it
+and list its files:
 
 ```bash
 tmp=$(mktemp -d)
 gh run download <run id> --repo codesensehq/codesense -n generated-exports -D "$tmp"
+(cd "$tmp" && find . -type f | sort)
+```
+
+Every file should be generated output. A generated file whose inputs your
+branch changed is simply stale there: keep it. One whose inputs did not change
+points at a build step that differs between hosts: delete it from `$tmp` and
+open an issue. Then apply the files to your branch, check them, and commit them
+yourself:
+
+```bash
 cp -R "$tmp"/. .
+git status --short
 (cd "$tmp" && find . -type f -print0) | xargs -0 git add --
 git commit -s -m "Regenerate the generated exports"
 ```
