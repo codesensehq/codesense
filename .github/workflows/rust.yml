@@ -96,6 +96,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # Full history without file contents: the X1 guard diffs against the base to list
+          # only the unresolved calls in the files a change touches.
+          fetch-depth: 0
+          filter: blob:none
       - name: Set up Rust
         # Matches ci.yml; rustup's proxies read the channel in rust-toolchain.toml.
         run: rustup toolchain install stable --profile minimal
@@ -106,6 +110,9 @@ jobs:
           save-if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}
           cache-on-failure: true
       - name: Test source guards
+        env:
+          # Empty on push, schedule and dispatch: the guard then lists unfiltered.
+          X1_DIFF_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         run: cargo test --locked -p codesense-guards
 
   rust-macos-build:

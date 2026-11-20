@@ -76,6 +76,7 @@ use proc_macro2::{Delimiter, TokenStream, TokenTree};
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 
 // ---- The policy ----------------------------------------------------------------
@@ -552,6 +553,9 @@ struct Func {
     trait_name: Option<String>,
     name: String,
     calls: Vec<Call>,
+    /// The source line of each of `calls`, kept beside them (not in [`Call`],
+    /// whose equality dedups the hidden-writer list).
+    lines: Vec<usize>,
     /// The types (and traits) the function names.
     types: HashSet<String>,
 }
@@ -727,6 +731,8 @@ struct Child {
 #[derive(Debug, Clone, Default)]
 struct Body {
     calls: Vec<Call>,
+    /// The source line of each of `calls`.
+    lines: Vec<usize>,
     locals: HashSet<String>,
     types: HashSet<String>,
     children: Vec<Child>,
@@ -745,6 +751,10 @@ impl Body {
             ..Body::default()
         }
     }
+    fn push(&mut self, call: Call, line: usize) {
+        self.calls.push(call);
+        self.lines.push(line);
+    }
     fn note_types(&mut self, path: &syn::Path) {
         for segment in &path.segments {
             let ident = segment.ident.to_string();
@@ -761,6 +771,7 @@ impl Body {
                 Call::Child(i) => Call::Child(i + offset),
                 other => other,
             }));
+        self.lines.extend(other.lines);
         self.children.extend(other.children);
         self.locals.extend(other.locals);
         self.types.extend(other.types);
@@ -798,7 +809,7 @@ impl Body {
     fn child(&mut self, kind: ChildKind, tag: &str, expr: &syn::Expr) {
         let body = self.sub(expr);
         if kind == ChildKind::Task {
-            self.calls.push(Call::Child(self.children.len()));
+            self.push(Call::Child(self.children.len()), line_of(expr.span()));
         }
         self.children.push(Child {
             kind,
@@ -877,10 +888,13 @@ impl<'ast> Visit<'ast> for Body {
                     && segments.len() >= 2
                     && (segments[segments.len() - 2].ends_with("Watcher")
                         || segments[segments.len() - 2].ends_with("Debouncer"));
-                self.calls.push(Call::Path {
-                    segments,
-                    value: false,
-                });
+                self.push(
+                    Call::Path {
+                        segments,
+                        value: false,
+                    },
+                    path_line(&path.path),
+                );
                 if watcher_new {
                     for arg in &call.args {
                         if is_closure_like(arg) {
@@ -901,18 +915,24 @@ impl<'ast> Visit<'ast> for Body {
             {
                 if let syn::Expr::Field(field) = &**expr {
                     if let syn::Member::Named(ident) = &field.member {
-                        self.calls.push(Call::Field {
-                            name: ident.to_string(),
-                        });
+                        self.push(
+                            Call::Field {
+                                name: ident.to_string(),
+                            },
+                            line_of(ident.span()),
+                        );
                     }
                     self.visit_expr(&field.base);
                 }
             }
             syn::Expr::Field(field) => {
                 if let syn::Member::Named(ident) = &field.member {
-                    self.calls.push(Call::Field {
-                        name: ident.to_string(),
-                    });
+                    self.push(
+                        Call::Field {
+                            name: ident.to_string(),
+                        },
+                        line_of(ident.span()),
+                    );
                 }
                 self.visit_expr(&field.base);
             }
@@ -925,12 +945,15 @@ impl<'ast> Visit<'ast> for Body {
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
         let on_self = matches!(&*call.receiver, syn::Expr::Path(p) if p.path.is_ident("self"));
         let name = call.method.to_string();
-        self.calls.push(Call::Method {
-            name: name.clone(),
-            on_self,
-            args: call.args.len(),
-            sql: call.args.len() == 1 && is_sql_text(&call.args[0]),
-        });
+        self.push(
+            Call::Method {
+                name: name.clone(),
+                on_self,
+                args: call.args.len(),
+                sql: call.args.len() == 1 && is_sql_text(&call.args[0]),
+            },
+            line_of(call.method.span()),
+        );
         self.visit_expr(&call.receiver);
         if name == "route" && call.args.len() == 2 {
             let route = route_name(&call.args[0]);
@@ -978,10 +1001,13 @@ impl<'ast> Visit<'ast> for Body {
             .last()
             .is_some_and(|s| s.starts_with(|c: char| c.is_ascii_lowercase()))
         {
-            self.calls.push(Call::Path {
-                segments,
-                value: true,
-            });
+            self.push(
+                Call::Path {
+                    segments,
+                    value: true,
+                },
+                path_line(&path.path),
+            );
         }
     }
     fn visit_pat_ident(&mut self, pat: &'ast syn::PatIdent) {
@@ -989,7 +1015,12 @@ impl<'ast> Visit<'ast> for Body {
         visit::visit_pat_ident(self, pat);
     }
     fn visit_macro(&mut self, mac: &'ast syn::Macro) {
-        scan_tokens(mac.tokens.clone(), &mut self.calls, &mut self.types);
+        scan_tokens(
+            mac.tokens.clone(),
+            &mut self.calls,
+            &mut self.lines,
+            &mut self.types,
+        );
     }
 }
 
@@ -1009,9 +1040,26 @@ impl<'ast> Visit<'ast> for TypeNames {
     }
 }
 
+/// The 1-based source line `span` starts on.
+fn line_of(span: proc_macro2::Span) -> usize {
+    span.start().line
+}
+
+/// The line of a path's last segment (the called name).
+fn path_line(path: &syn::Path) -> usize {
+    path.segments
+        .last()
+        .map_or_else(|| line_of(path.span()), |s| line_of(s.ident.span()))
+}
+
 /// Calls inside a macro invocation, read from its tokens: `a::b(` is a path
-/// call, `.m(` a method call.
-fn scan_tokens(tokens: TokenStream, out: &mut Vec<Call>, types: &mut HashSet<String>) {
+/// call, `.m(` a method call. `lines` gets each call's line.
+fn scan_tokens(
+    tokens: TokenStream,
+    out: &mut Vec<Call>,
+    lines: &mut Vec<usize>,
+    types: &mut HashSet<String>,
+) {
     let toks: Vec<TokenTree> = tokens.into_iter().collect();
     let punct =
         |i: usize, c: char| matches!(toks.get(i), Some(TokenTree::Punct(p)) if p.as_char() == c);
@@ -1020,7 +1068,7 @@ fn scan_tokens(tokens: TokenStream, out: &mut Vec<Call>, types: &mut HashSet<Str
     while i < toks.len() {
         match &toks[i] {
             TokenTree::Group(group) => {
-                scan_tokens(group.stream(), out, types);
+                scan_tokens(group.stream(), out, lines, types);
                 i += 1;
             }
             TokenTree::Punct(p) if p.as_char() == '.' => {
@@ -1032,6 +1080,7 @@ fn scan_tokens(tokens: TokenStream, out: &mut Vec<Call>, types: &mut HashSet<Str
                             args: usize::MAX,
                             sql: false,
                         });
+                        lines.push(line_of(method.span()));
                     }
                     i += 2;
                 } else {
@@ -1068,6 +1117,7 @@ fn scan_tokens(tokens: TokenStream, out: &mut Vec<Call>, types: &mut HashSet<Str
                         segments,
                         value: false,
                     });
+                    lines.push(line_of(first.span()));
                 }
                 i = j;
             }
@@ -1173,19 +1223,20 @@ impl Items<'_> {
             }
             child_ids.push(id);
         }
-        let calls = body
+        let (calls, lines): (Vec<Call>, Vec<usize>) = body
             .calls
             .into_iter()
-            .filter_map(|call| match call {
-                Call::Child(i) => Some(Call::Child(child_ids[i])),
+            .zip(body.lines)
+            .filter_map(|(call, line)| match call {
+                Call::Child(i) => Some((Call::Child(child_ids[i]), line)),
                 Call::Path { ref segments, .. }
                     if segments.len() == 1 && locals.contains(&segments[0]) =>
                 {
                     None
                 }
-                other => Some(other),
+                other => Some((other, line)),
             })
-            .collect();
+            .unzip();
         let id = self.graph.funcs.len();
         self.graph.funcs.push(Func {
             file: self.file.clone(),
@@ -1194,6 +1245,7 @@ impl Items<'_> {
             trait_name,
             name,
             calls,
+            lines,
             types,
         });
         id
@@ -1460,17 +1512,49 @@ fn absolute_in(path: &[String], module: &[String]) -> Vec<String> {
     base
 }
 
+/// One unresolved call the census counts: where it is, the function that
+/// makes it and what it names (a path, or a method name when `method`).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct Site {
+    file: String,
+    line: usize,
+    caller: String,
+    callee: String,
+    method: bool,
+}
+
+impl Site {
+    /// `file:line  caller -> callee`: a line of the failure listing.
+    fn row(&self) -> String {
+        let callee = if self.method {
+            format!(".{}()", self.callee)
+        } else {
+            self.callee.clone()
+        };
+        format!("{}:{}  {} -> {callee}", self.file, self.line, self.caller)
+    }
+    /// `X1-method|caller|method|file:line`: `cut -d'|' -f1-3` drops the line,
+    /// so main's list diffs against a branch's.
+    fn method_record(&self) -> String {
+        format!(
+            "X1-method|{}|{}|{}:{}",
+            self.caller, self.callee, self.file, self.line
+        )
+    }
+}
+
 /// What the main test reports about resolution.
 #[derive(Debug, Default)]
 struct Resolution {
     /// Successors per node.
     adj: Vec<Vec<usize>>,
     /// In-crate path calls (`crate::…`, a crate module or type) that name a
-    /// crate function but resolve to nothing.
-    unresolved_paths: Vec<String>,
+    /// crate function but resolve to nothing: one per caller and path (the
+    /// first line seen), in that order.
+    unresolved_paths: Vec<Site>,
     /// Method calls several crate types define that resolve to none of them
-    /// (the caller names none of those types).
-    unresolved_methods: usize,
+    /// (the caller names none of those types): every one.
+    unresolved_methods: Vec<Site>,
 }
 
 impl Graph {
@@ -1719,9 +1803,11 @@ impl Graph {
             .iter()
             .filter_map(|f| f.self_ty.as_ref())
             .collect();
+        // Keyed by `caller calls path`: the count is one per caller and path.
+        let mut paths: BTreeMap<String, Site> = BTreeMap::new();
         for func in &self.funcs {
             let mut next = Vec::new();
-            for call in &func.calls {
+            for (call, &line) in func.calls.iter().zip(&func.lines) {
                 let targets = self.resolve(func, call);
                 if targets.is_empty() {
                     match call {
@@ -1735,11 +1821,16 @@ impl Graph {
                                 || crate_types.contains(first);
                             let defined = self.by_name.contains_key(segments.last().unwrap());
                             if in_crate && defined && !self.is_external_alias(func, first) {
-                                out.unresolved_paths.push(format!(
-                                    "{} calls {}",
-                                    func.label(),
-                                    segments.join("::")
-                                ));
+                                let (caller, callee) = (func.label(), segments.join("::"));
+                                paths
+                                    .entry(format!("{caller} calls {callee}"))
+                                    .or_insert_with(|| Site {
+                                        file: func.file.clone(),
+                                        line,
+                                        caller,
+                                        callee,
+                                        method: false,
+                                    });
                             }
                         }
                         Call::Method { name, .. } if !COMMON_METHODS.contains(&name.as_str()) => {
@@ -1751,10 +1842,13 @@ impl Graph {
                                 .filter_map(|&id| self.funcs[id].self_ty.as_ref())
                                 .collect();
                             if owners.len() > 1 {
-                                out.unresolved_methods += 1;
-                                if std::env::var_os("X1_PRINT_UNRESOLVED_METHODS").is_some() {
-                                    println!("X1-method|{}|{}", func.label(), name);
-                                }
+                                out.unresolved_methods.push(Site {
+                                    file: func.file.clone(),
+                                    line,
+                                    caller: func.label(),
+                                    callee: name.clone(),
+                                    method: true,
+                                });
                             }
                         }
                         _ => {}
@@ -1766,8 +1860,7 @@ impl Graph {
             next.dedup();
             out.adj.push(next);
         }
-        out.unresolved_paths.sort();
-        out.unresolved_paths.dedup();
+        out.unresolved_paths = paths.into_values().collect();
         out
     }
 
@@ -1933,7 +2026,7 @@ impl Graph {
         let mut report = Report {
             roots_by_kind: BTreeMap::new(),
             unresolved_paths: res.unresolved_paths.clone(),
-            unresolved_methods: res.unresolved_methods,
+            unresolved_methods: res.unresolved_methods.clone(),
             nodes: self.funcs.len(),
             ..Report::default()
         };
@@ -2061,8 +2154,8 @@ struct Report {
     /// Per app root: (name, functions reached, floor).
     reach: Vec<(String, usize, usize)>,
     roots_by_kind: BTreeMap<&'static str, usize>,
-    unresolved_paths: Vec<String>,
-    unresolved_methods: usize,
+    unresolved_paths: Vec<Site>,
+    unresolved_methods: Vec<Site>,
     nodes: usize,
 }
 
@@ -2381,7 +2474,8 @@ fn the_retired_preview_has_no_writer_exception() {
 /// `String::new`, `Type::deserialize`, `Key::parse` via `FromStr`) or
 /// external-crate constructors and parsers: none has a body in this app-source
 /// graph, so none reaches a write primitive. A rise means the resolver lost track
-/// of something: run with `X1_PRINT_UNRESOLVED=1` and read the list. The ceiling
+/// of something: over the ceiling the failure lists the sites in the files the
+/// change touches (see [`census_listing`]); `X1_PRINT_UNRESOLVED=1` lists all. The ceiling
 /// is a growth tripwire; raise it only after reviewing every added site. 278: the
 /// shared-read handoff map in `commands/worktree_probe.rs` adds one `HashMap::new()`.
 /// 279: the live hub's bounded memory, measured by CI. The new constructor calls are
@@ -2400,7 +2494,9 @@ const MAX_UNRESOLVED_PATHS: usize = 279;
 /// with a sink-reaching candidate must pass its review (rusqlite `.prepare`
 /// collisions are covered by the SQL review). This cap is a growth tripwire:
 /// raise it only after reviewing the added sites, never by adding sink
-/// exceptions or slack.
+/// exceptions or slack. Over the ceiling the failure lists the calls in the files
+/// the change touches with their lines (see [`census_listing`]);
+/// `X1_PRINT_UNRESOLVED_METHODS=1` prints every one as `X1-method|caller|method|file:line`.
 /// The census after the runtime counters is 6_496, one more than main without them. Their code
 /// is in `live_hub/mod.rs`, `shared/invoke_stats.rs` and `session_text.rs` and calls no write
 /// primitive. The skill allowlist adds up to 5 more in `agents/` (launch and provides), none
@@ -2447,6 +2543,115 @@ const MAX_UNRESOLVED_PATHS: usize = 279;
 /// `recorded_workspace_folder`; and `.exists()` on a path in `seat_worktree_inner`. They are
 /// std string, path, result and iterator calls; none calls a write primitive.
 const MAX_UNRESOLVED_METHODS: usize = 6_577;
+
+/// The most lines each census list prints on failure; the env vars print them all.
+const LISTING_CAP: usize = 100;
+
+/// `X1_DIFF_BASE` when it is a commit sha (7 to 64 hex characters); anything
+/// else, empty included, is no base.
+fn diff_base(raw: Option<&str>) -> Option<&str> {
+    let base = raw?.trim();
+    ((7..=64).contains(&base.len()) && base.bytes().all(|b| b.is_ascii_hexdigit())).then_some(base)
+}
+
+/// The graph's file keys (`commands/watch.rs`) for the app sources a
+/// `git diff --name-only` listing names (`src-tauri/src/commands/watch.rs`).
+fn changed_files(listing: &str) -> BTreeSet<String> {
+    listing
+        .lines()
+        .filter_map(|path| path.strip_prefix("src-tauri/src/"))
+        .map(str::to_string)
+        .collect()
+}
+
+/// The app sources changed between `base` and `HEAD` in the checkout at
+/// `repo`, or `None` when git fails (no git, not a checkout, an unknown base).
+fn changed_since(repo: &Path, base: &str) -> Option<BTreeSet<String>> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["diff", "--name-only"])
+        .arg(format!("{base}...HEAD"))
+        .arg("--")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8(out.stdout)
+        .ok()
+        .map(|listing| changed_files(&listing))
+}
+
+/// One census list as failure lines: the sites in the `changed` files (every
+/// site, after a note, when there is no diff base), by file and line, at most
+/// `cap` of them, then how many more there are.
+fn listing(sites: &[Site], changed: Option<&BTreeSet<String>>, cap: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut picked: Vec<&Site> = match changed {
+        Some(files) => sites
+            .iter()
+            .filter(|site| files.contains(&site.file))
+            .collect(),
+        None => {
+            out.push("unfiltered (no usable X1_DIFF_BASE): every site is listed".to_string());
+            sites.iter().collect()
+        }
+    };
+    if changed.is_some() && picked.is_empty() {
+        // A new method name can make calls in unchanged files ambiguous.
+        out.push("none in the files this change touches".to_string());
+    }
+    picked.sort();
+    out.extend(picked.iter().take(cap).map(|site| site.row()));
+    if picked.len() > cap {
+        out.push(format!(
+            "... and {} more (X1_PRINT_UNRESOLVED=1 or X1_PRINT_UNRESOLVED_METHODS=1 prints all)",
+            picked.len() - cap
+        ));
+    }
+    out
+}
+
+/// What the main test prints before its census assertions fail: each list
+/// over its ceiling (`(paths, methods)`), as a [`listing`].
+fn census_listing(
+    report: &Report,
+    ceilings: (usize, usize),
+    changed: Option<&BTreeSet<String>>,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for (what, sites, ceiling) in [
+        (
+            "unresolved in-crate path calls",
+            &report.unresolved_paths,
+            ceilings.0,
+        ),
+        (
+            "ambiguous method calls",
+            &report.unresolved_methods,
+            ceilings.1,
+        ),
+    ] {
+        if sites.len() > ceiling {
+            let scope = if changed.is_some() {
+                ", in the files this change touches"
+            } else {
+                ""
+            };
+            out.push(format!(
+                "{} {what} (ceiling {ceiling}){scope}:",
+                sites.len()
+            ));
+            out.extend(
+                listing(sites, changed, LISTING_CAP)
+                    .into_iter()
+                    .map(|line| format!("  {line}")),
+            );
+        }
+    }
+    out
+}
 
 /// X1: no unattended root reaches a write primitive; every reviewed entry is
 /// still needed; the walk still sees the app.
@@ -2513,7 +2718,7 @@ fn no_unattended_root_reaches_a_write_primitive() {
         report.nodes,
         report.roots_by_kind,
         report.unresolved_paths.len(),
-        report.unresolved_methods,
+        report.unresolved_methods.len(),
         ALLOWED.len(),
         EXPLICIT.len()
     );
@@ -2522,8 +2727,13 @@ fn no_unattended_root_reaches_a_write_primitive() {
     }
 
     if std::env::var_os("X1_PRINT_UNRESOLVED").is_some() {
-        for line in &report.unresolved_paths {
-            println!("  unresolved: {line}");
+        for site in &report.unresolved_paths {
+            println!("  unresolved: {}", site.row());
+        }
+    }
+    if std::env::var_os("X1_PRINT_UNRESOLVED_METHODS").is_some() {
+        for site in &report.unresolved_methods {
+            println!("{}", site.method_record());
         }
     }
 
@@ -2554,18 +2764,29 @@ fn no_unattended_root_reaches_a_write_primitive() {
     eprintln!(
         "X1 census: {}/{} (ceilings {MAX_UNRESOLVED_PATHS}/{MAX_UNRESOLVED_METHODS})",
         report.unresolved_paths.len(),
-        report.unresolved_methods
+        report.unresolved_methods.len()
     );
+    if report.unresolved_paths.len() > MAX_UNRESOLVED_PATHS
+        || report.unresolved_methods.len() > MAX_UNRESOLVED_METHODS
+    {
+        let base = std::env::var("X1_DIFF_BASE").ok();
+        let changed = diff_base(base.as_deref()).and_then(|base| changed_since(&root(), base));
+        let ceilings = (MAX_UNRESOLVED_PATHS, MAX_UNRESOLVED_METHODS);
+        for line in census_listing(&report, ceilings, changed.as_ref()) {
+            eprintln!("{line}");
+        }
+    }
     assert!(
         report.unresolved_paths.len() <= MAX_UNRESOLVED_PATHS,
         "{} in-crate path calls resolve to nothing (ceiling {MAX_UNRESOLVED_PATHS}); \
-         X1_PRINT_UNRESOLVED=1 lists them",
+         the lines above list them, X1_PRINT_UNRESOLVED=1 lists all",
         report.unresolved_paths.len()
     );
     assert!(
-        report.unresolved_methods <= MAX_UNRESOLVED_METHODS,
-        "{} ambiguous method calls resolve to nothing (ceiling {MAX_UNRESOLVED_METHODS})",
-        report.unresolved_methods
+        report.unresolved_methods.len() <= MAX_UNRESOLVED_METHODS,
+        "{} ambiguous method calls resolve to nothing (ceiling {MAX_UNRESOLVED_METHODS}); \
+         the lines above list them, X1_PRINT_UNRESOLVED_METHODS=1 lists all",
+        report.unresolved_methods.len()
     );
 
     assert!(
@@ -3216,6 +3437,168 @@ fn planted_relative_paths_name_their_own_module() {
         !violations("hub::stats::the_real_one").is_empty(),
         "the walk still follows a qualified call to the sink-reaching publish"
     );
+}
+
+/// A planted graph with census sites on known lines: two ambiguous `.write_it()`
+/// calls (one in a macro) in `tick`, and one unresolved path call made twice in
+/// `build` (`Quiet` defines no `prepare`).
+fn planted_census() -> Graph {
+    planted(&[
+        PLANTED_SINK,
+        (
+            "routines/census.rs",
+            &["routines", "census"],
+            "pub struct Quiet;\n\
+             impl Quiet { pub fn write_it(&self) {} }\n\
+             pub struct Loud;\n\
+             impl Loud { pub fn write_it(&self) {} }\n\
+             pub fn tick(w: u8) {\n\
+                 w.write_it();\n\
+                 tracing::info!(\"{:?}\", w.write_it());\n\
+             }\n\
+             pub fn build() {\n\
+                 Quiet::prepare(1);\n\
+                 Quiet::prepare(2);\n\
+             }\n",
+        ),
+    ])
+}
+
+fn site(file: &str, line: usize, callee: &str) -> Site {
+    Site {
+        file: file.to_string(),
+        line,
+        caller: "m::f".to_string(),
+        callee: callee.to_string(),
+        method: false,
+    }
+}
+
+/// Self-test: the census records each ambiguous method call (macro tokens
+/// included) and each unresolved path call (once per caller and path, at its
+/// first line) with its file and line, and the counts are those sites.
+#[test]
+fn planted_census_sites_carry_their_lines() {
+    let res = planted_census().resolution();
+    let paths: Vec<String> = res.unresolved_paths.iter().map(Site::row).collect();
+    assert_eq!(
+        paths,
+        ["routines/census.rs:10  routines::census::build -> Quiet::prepare"]
+    );
+    let methods: Vec<String> = res.unresolved_methods.iter().map(Site::row).collect();
+    assert_eq!(
+        methods,
+        [
+            "routines/census.rs:6  routines::census::tick -> .write_it()",
+            "routines/census.rs:7  routines::census::tick -> .write_it()",
+        ]
+    );
+    assert_eq!(
+        res.unresolved_methods[0].method_record(),
+        "X1-method|routines::census::tick|write_it|routines/census.rs:6"
+    );
+}
+
+/// Self-test: over a ceiling the failure lists that list's sites (unfiltered,
+/// with a note, without a diff base); at its ceiling a list prints nothing.
+#[test]
+fn planted_census_over_a_ceiling_lists_its_sites() {
+    let report = planted_census().check(&planted_policy(&[], &[], &[]));
+    let listed = census_listing(&report, (0, 2), None);
+    assert_eq!(
+        listed,
+        [
+            "1 unresolved in-crate path calls (ceiling 0):",
+            "  unfiltered (no usable X1_DIFF_BASE): every site is listed",
+            "  routines/census.rs:10  routines::census::build -> Quiet::prepare",
+        ]
+    );
+    let listed = census_listing(&report, (1, 1), None);
+    assert_eq!(listed[0], "2 ambiguous method calls (ceiling 1):");
+    assert_eq!(
+        listed[2],
+        "  routines/census.rs:6  routines::census::tick -> .write_it()"
+    );
+    assert_eq!(listed.len(), 4);
+    assert!(census_listing(&report, (1, 2), None).is_empty());
+}
+
+/// Self-test: with a changed-file set the listing keeps only the sites in
+/// those files, by file and line; without one it keeps every site after a note.
+#[test]
+fn the_listing_filters_by_changed_file() {
+    let sites = [
+        site("b.rs", 9, "b::g"),
+        site("a.rs", 3, "a::f"),
+        site("b.rs", 2, "b::h"),
+    ];
+    let changed: BTreeSet<String> = ["b.rs".to_string()].into();
+    assert_eq!(
+        listing(&sites, Some(&changed), 100),
+        ["b.rs:2  m::f -> b::h", "b.rs:9  m::f -> b::g"]
+    );
+    assert_eq!(
+        listing(&sites, None, 100),
+        [
+            "unfiltered (no usable X1_DIFF_BASE): every site is listed",
+            "a.rs:3  m::f -> a::f",
+            "b.rs:2  m::f -> b::h",
+            "b.rs:9  m::f -> b::g",
+        ]
+    );
+    let untouched: BTreeSet<String> = ["c.rs".to_string()].into();
+    assert_eq!(
+        listing(&sites, Some(&untouched), 100),
+        ["none in the files this change touches"]
+    );
+}
+
+/// Self-test: a listing prints at most `cap` sites, then how many more and the
+/// env vars that print them all.
+#[test]
+fn the_listing_is_capped() {
+    let sites: Vec<Site> = (1..=5).map(|line| site("a.rs", line, "a::f")).collect();
+    let changed: BTreeSet<String> = ["a.rs".to_string()].into();
+    assert_eq!(
+        listing(&sites, Some(&changed), 2),
+        [
+            "a.rs:1  m::f -> a::f",
+            "a.rs:2  m::f -> a::f",
+            "... and 3 more (X1_PRINT_UNRESOLVED=1 or X1_PRINT_UNRESOLVED_METHODS=1 prints all)",
+        ]
+    );
+    assert_eq!(listing(&sites, Some(&changed), 5).len(), 5);
+}
+
+/// Self-test: only a 7-64 character hex sha is a diff base; a git listing maps
+/// to the graph's file keys; a failing git (unknown base, no checkout) is no
+/// filter, not a panic.
+#[test]
+fn the_diff_base_falls_back_to_no_filter() {
+    let (longest, too_long) = ("a".repeat(64), "a".repeat(65));
+    assert_eq!(diff_base(Some("1c861bd8")), Some("1c861bd8"));
+    assert_eq!(diff_base(Some(longest.as_str())), Some(longest.as_str()));
+    for bad in [
+        "",
+        "abc123",
+        "main",
+        "1c861bd8 --output=x",
+        "-1c861bd8",
+        too_long.as_str(),
+    ] {
+        assert_eq!(diff_base(Some(bad)), None, "{bad:?}");
+    }
+    assert_eq!(diff_base(None), None);
+    assert_eq!(
+        changed_files("src-tauri/src/commands/watch.rs\nsrc/App.tsx\nsrc-tauri/src/lib.rs\n"),
+        BTreeSet::from(["commands/watch.rs".to_string(), "lib.rs".to_string()])
+    );
+    assert_eq!(
+        changed_since(&root(), "0000000000000000000000000000000000000000"),
+        None
+    );
+    let nowhere = std::env::temp_dir().join("x1-guard-no-such-checkout");
+    assert_eq!(changed_since(&nowhere, "1c861bd8"), None);
 }
 
 /// A maintainer's probe, not a gate: print every path the walk finds from
