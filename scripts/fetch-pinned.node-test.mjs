@@ -236,7 +236,7 @@ test("fetch-bundled maps each host to its pins", (t) => {
     return `https://github.com/${field("repo")}/releases/download/${field("tag")}/${asset}`;
   };
   const macGitAi = gitAi("macos-arm64", "git-ai-macos-arm64");
-  assert.match(macGitAi, /\/v1\.7\.5-cs\.4\//);
+  assert.match(macGitAi, /\/v1\.7\.5-cs\.7\//);
   // Each host prints exactly one URL per pinned binary, in order, so an extra pin fails here:
   // macOS bundles git-ai; Linux bundles git-ai and starship.
   for (const [os, arch, urls] of [
