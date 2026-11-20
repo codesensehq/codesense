@@ -201,7 +201,7 @@ test("the composer focuses without an outline and inserts host-dropped paths at 
   await expect(draft).toHaveCSS("outline-style", "none");
 });
 
-test("a dropped path with a backslash or a quote stays one quoted argument", async ({
+test("a dropped path with a backslash or a quote is quoted and stays one argument", async ({
   mountPane,
 }) => {
   const pane = await mountPane(INBOX_PANE, messageViewFixtures(false));
@@ -210,10 +210,17 @@ test("a dropped path with a backslash or a quote stays one quoted argument", asy
   await expect(draft).toHaveValue("");
   await post(pane, {
     type: "codesense:file-drop",
-    paths: ["/tmp/a dir\\", '/tmp/say "hi".md', "/tmp/back\\slash.md"],
+    paths: [
+      "/tmp/a dir\\",
+      '/tmp/say "hi".md',
+      "/tmp/back\\slash.md",
+      '/tmp/a"b.md',
+      "/tmp/plain.md",
+    ],
   });
-  // The trailing backslash is escaped, so it can't swallow the closing quote.
+  // Backslashes and quotes are escaped inside the quotes, so a trailing backslash can't swallow
+  // the closing quote; a path with either is quoted even without a space.
   await expect(draft).toHaveValue(
-    String.raw`"/tmp/a dir\\" "/tmp/say \"hi\".md" /tmp/back\slash.md `,
+    String.raw`"/tmp/a dir\\" "/tmp/say \"hi\".md" "/tmp/back\\slash.md" "/tmp/a\"b.md" /tmp/plain.md `,
   );
 });
