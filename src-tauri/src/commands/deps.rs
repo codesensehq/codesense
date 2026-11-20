@@ -84,14 +84,17 @@ pub struct PendingShadowed {
 /// The identity a resolved binary is checked against at launch: its canonical
 /// target plus that target's mtime, length and change stamp. The length and stamp
 /// catch an in-place upgrade that keeps the path and resets the mtime, as npm does
-/// (it writes package files with a fixed mtime).
+/// (it writes package files with a fixed mtime). On Windows a rename-over is caught
+/// by the file id and a size change by the length; a same-size rewrite in place with
+/// its last-write time restored is missed until the next Re-check or lost-binary
+/// re-probe, which resolve from scratch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BinaryFingerprint {
     canonical: PathBuf,
     mtime: SystemTime,
     len: u64,
-    /// Unlike mtime, an installer cannot restore it: the inode and change time on
-    /// unix, the file id (new on a rename-over) and last-write time on Windows.
+    /// The inode and change time on unix, which an installer cannot restore; the file
+    /// id (new on a rename-over) and last-write time on Windows, whose time it can.
     stamp: Option<ChangeStamp>,
 }
 
