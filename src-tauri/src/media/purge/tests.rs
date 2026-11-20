@@ -155,18 +155,21 @@ async fn the_purge_deletes_provider_files_once_and_backfills_only_media_provider
     assert!(f.data().join(MARKER).exists());
 
     // The backfill changed only `mediaProvider`: every other byte of every record is the same.
+    // A record that already had the field (four.gif) keeps it, so both sides drop it to compare.
     let after = (f.records("a"), f.records("b"));
+    let strip = |record: &Vec<String>| -> Vec<String> {
+        record
+            .iter()
+            .map(|c| {
+                c.replace(r#","mediaProvider":"giphy""#, "")
+                    .replace(r#","mediaProvider":"klipy""#, "")
+            })
+            .collect()
+    };
     for (before, after) in [(&before.0, &after.0), (&before.1, &after.1)] {
         assert_eq!(before.len(), after.len());
         for (b, a) in before.iter().zip(after) {
-            let stripped: Vec<String> = a
-                .iter()
-                .map(|c| {
-                    c.replace(r#","mediaProvider":"giphy""#, "")
-                        .replace(r#","mediaProvider":"klipy""#, "")
-                })
-                .collect();
-            assert_eq!(b, &stripped);
+            assert_eq!(strip(b), strip(a));
         }
     }
     let joined: String = after
