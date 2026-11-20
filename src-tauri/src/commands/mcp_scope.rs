@@ -656,6 +656,78 @@ pub(crate) fn scoped_execution_on(
     })
 }
 
+/// The flag the launcher's typed default line runs the agent permissively with
+/// (`PERMISSIVE_LAUNCH_FLAG` in `agent-session-launcher.ts`). Only the runtime whose own
+/// bypass flag it is gets it on a default-args exec, so an exec is never more permissive
+/// than the line it replaces.
+const PERMISSIVE_LAUNCH_FLAG: &str = "--dangerously-skip-permissions";
+
+/// The refusal of a Windows agent launch whose CLI did not resolve: with no program to
+/// exec there is no launch, since no shell may type one.
+pub(crate) const AGENT_CLI_NOT_FOUND: &str = "agent CLI not found";
+
+/// `args` without the overrides in `remove`, matched whole and in order (a `-c` or
+/// `--config` entry with its value), the rule a typed relaunch applies: a shared flag
+/// token alone never removes an unrelated override.
+pub(crate) fn without_removed_args(args: &[String], remove: &[String]) -> Vec<String> {
+    let mut kept = Vec::with_capacity(args.len());
+    let (mut at, mut removed) = (0, 0);
+    while at < args.len() {
+        let width = match remove.get(removed).map(String::as_str) {
+            Some("-c" | "--config") => 2,
+            _ => 1,
+        };
+        let entry = remove.get(removed..removed + width);
+        if entry.is_some_and(|entry| args.get(at..at + width) == Some(entry)) {
+            removed += width;
+            at += width;
+        } else {
+            kept.push(args[at].clone());
+            at += 1;
+        }
+    }
+    kept
+}
+
+/// Give `outcome` the exec of `program` when a launch of `runtime` on `os` runs direct and
+/// no projection set one. The argv is `program`, the launch args (led by the permissive
+/// flag for a default-args launch of the runtime it belongs to, and without the
+/// projection's `remove_args`), then the scope's `extra_args`. On Windows a launch with no
+/// resolved `program` is refused; elsewhere it projects with no exec, as a shell launch.
+pub(crate) fn finish_launch_execution(
+    outcome: &mut ScopeOutcome,
+    runtime: AgentCli,
+    program: Option<&Path>,
+    launch_args: &[String],
+    default_args: bool,
+    os: &str,
+) -> Result<(), String> {
+    if outcome.execution.is_some() || !launches_direct(runtime, os) {
+        return Ok(());
+    }
+    let Some(program) = program else {
+        return match os {
+            "windows" => Err(AGENT_CLI_NOT_FOUND.into()),
+            _ => Ok(()),
+        };
+    };
+    let mut args = Vec::new();
+    if default_args && descriptor(runtime).bypass_flag == PERMISSIVE_LAUNCH_FLAG {
+        args.push(PERMISSIVE_LAUNCH_FLAG.to_string());
+    }
+    args.extend(without_removed_args(
+        launch_args,
+        outcome.remove_args.as_deref().unwrap_or_default(),
+    ));
+    outcome.execution = scoped_execution_on(
+        runtime,
+        program,
+        compose_args(args, outcome.extra_args.clone()),
+        os,
+    );
+    Ok(())
+}
+
 /// SW-AN-45: what a scoped launch contributes to the child — extra argv (a `config_flag`
 /// agent) and/or extra env vars (an `env_dir` agent). Exactly one is populated per the
 /// adapter's `injection`; an unscoped (or descriptor-less) launch yields both empty. Serialized
