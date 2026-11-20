@@ -12,9 +12,12 @@
 //! - the plugin's minisign check against the channel's key, with `requireSignedVersion` on, so
 //!   the signature's trusted comment must name that same version (an older signed build served
 //!   as a newer one is refused);
-//! - the tarball holds exactly one top-level `.app`, whose Info.plist says that version and
-//!   declares the `codesense://` scheme only beta builds have;
-//! - the app's bundle and its folder can be replaced without an administrator prompt;
+//! - on macOS, the tarball holds exactly one top-level `.app`, whose Info.plist says that version
+//!   and declares the `codesense://` scheme only beta builds have; on Linux, the bytes are an
+//!   AppImage for this processor (`Install::check_payload`);
+//! - the app's bundle and its folder (on Linux, the AppImage file and its folder) can be
+//!   replaced without an administrator prompt. A `.deb` or `.rpm` install downloads nothing:
+//!   its package manager updates it;
 //! - a size cap: the HEAD must announce a length under it, and the download stops once the
 //!   bytes counted pass it;
 //! - the latest manifest read still names that version (`set_gate`). The same holds again at
@@ -89,6 +92,8 @@ pub enum Outcome {
     BackingOff,
     /// The app can't be replaced without an administrator, so nothing was downloaded.
     NotWritable,
+    /// A `.deb` or `.rpm` install, which its package manager updates, so nothing was downloaded.
+    PackageManager,
     /// The download verified, but by then the latest manifest named another version. Nothing
     /// was staged.
     Withdrawn,
@@ -104,6 +109,8 @@ pub enum Outcome {
 pub enum Attention {
     /// The app can't be replaced without an administrator.
     NotWritable,
+    /// A `.deb` or `.rpm` install: its package manager installs the new build.
+    PackageManager,
     /// Several attempts in a row failed.
     Failing,
     /// Installing the offered build at a restart failed (SW-PB-23).
@@ -326,8 +333,18 @@ pub fn can_replace_with(target: &Path, temp: &Path) -> bool {
     let Some(parent) = target.parent() else {
         return false;
     };
-    // SAFETY: getuid has no preconditions and cannot fail.
-    let uid = unsafe { libc::getuid() };
+    let uid = rustix::process::getuid().as_raw();
+    // An AppImage is one file (Linux). The plugin's `install_appimage` renames it into a new
+    // `tauri_current_app*` folder under the system temp folder, the user cache folder or, failing
+    // both, its own folder (the first on its volume), writes the new file at its path, and renames
+    // it back if that fails. Its own folder is always tried and is on its volume, so the file must
+    // be this user's, writable and on its folder's volume, and the folder must take new entries.
+    if bundle.is_file() {
+        return std::fs::metadata(parent).is_ok_and(|dir| dir.dev() == bundle.dev())
+            && bundle.uid() == uid
+            && rustix::fs::access(target, rustix::fs::Access::WRITE_OK).is_ok()
+            && tempfile::tempfile_in(parent).is_ok();
+    }
     bundle.is_dir()
         && bundle.uid() == uid
         && bundle.dev() == temp.dev()
@@ -338,6 +355,171 @@ pub fn can_replace_with(target: &Path, temp: &Path) -> bool {
 #[cfg(not(unix))]
 pub fn can_replace_with(_target: &Path, _temp: &Path) -> bool {
     false
+}
+
+/// How this run of the app is installed, and so what an update replaces.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Install {
+    /// A bundle the plugin replaces as a folder: the `.app` on macOS. `executable` goes to the
+    /// plugin's `executable_path` when set; otherwise the plugin uses the running executable.
+    Bundle {
+        target: PathBuf,
+        executable: Option<PathBuf>,
+    },
+    /// The running AppImage file (Linux), replaced in place. The same path is what the plugin
+    /// replaces (its `executable_path`), since its default, the running executable, is the
+    /// read-only binary inside the AppImage's mount.
+    AppImage(PathBuf),
+    /// A `.deb` or `.rpm` install: its package manager updates it, never the app.
+    PackageManager,
+    /// Nothing the app can replace: a dev or unpackaged build, or an AppImage whose path didn't
+    /// check out.
+    Unknown,
+}
+
+impl Install {
+    /// How a run is installed, from the bundle type Tauri wrote into the build
+    /// (`tauri::utils::platform::bundle_type`), the running executable, the AppImage path Tauri
+    /// read at launch (`Env::appimage`), and the system temp folder.
+    pub fn of(
+        bundle: Option<tauri::utils::config::BundleType>,
+        executable: &Path,
+        appimage: Option<&Path>,
+        temp: &Path,
+    ) -> Self {
+        use tauri::utils::config::BundleType;
+        match bundle {
+            Some(BundleType::Deb | BundleType::Rpm) => Install::PackageManager,
+            Some(BundleType::AppImage) => appimage_file(executable, appimage, temp)
+                .map_or(Install::Unknown, Install::AppImage),
+            Some(_) => {
+                install_target(executable).map_or(Install::Unknown, |target| Install::Bundle {
+                    target,
+                    executable: None,
+                })
+            }
+            None => Install::Unknown,
+        }
+    }
+
+    /// How this run is installed. `env` is the app's (`Manager::env`).
+    pub fn running(env: &tauri::Env) -> Self {
+        let Ok(executable) = std::env::current_exe() else {
+            return Install::Unknown;
+        };
+        Install::of(
+            tauri::utils::platform::bundle_type(),
+            &executable,
+            running_appimage(env).as_deref(),
+            &std::env::temp_dir(),
+        )
+    }
+
+    /// What an install replaces, and what `can_replace_with` checks.
+    pub fn target(&self) -> Option<&Path> {
+        match self {
+            Install::Bundle { target, .. } => Some(target),
+            Install::AppImage(file) => Some(file),
+            Install::PackageManager | Install::Unknown => None,
+        }
+    }
+
+    /// What the updater builder's `executable_path` is set to, if anything.
+    pub fn executable(&self) -> Option<&Path> {
+        match self {
+            Install::Bundle { executable, .. } => executable.as_deref(),
+            Install::AppImage(file) => Some(file),
+            Install::PackageManager | Install::Unknown => None,
+        }
+    }
+
+    /// The checks on the verified bytes before they are staged. They come after the plugin's
+    /// minisign check, which with `requireSignedVersion` already binds the bytes to the offered
+    /// version on every OS. An AppImage has no Info.plist, so the bundle's version and
+    /// `codesense://` checks don't apply to it: the signature's trusted comment carries the
+    /// version, and the desktop entry inside the AppImage registers the scheme.
+    pub fn check_payload(&self, bytes: &[u8], offered: &str) -> Result<(), &'static str> {
+        match self {
+            Install::Bundle { .. } => check_bundle(bytes, offered),
+            Install::AppImage(_) => check_appimage(bytes, std::env::consts::ARCH),
+            Install::PackageManager | Install::Unknown => Err("the app can't be replaced"),
+        }
+    }
+}
+
+/// The AppImage path Tauri read when the app started. Only Linux has one.
+fn running_appimage(env: &tauri::Env) -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    if let Some(path) = &env.appimage {
+        return Some(PathBuf::from(path));
+    }
+    let _ = env;
+    None
+}
+
+/// The running AppImage file, when `appimage` names one this run really runs from. Tauri only
+/// logs a warning when `APPIMAGE` is set but the app is not inside an AppImage's mount (an
+/// extracted AppImage run from inside another one inherits its `APPIMAGE`), so the same test
+/// refuses it here: the executable must sit in a `.mount_*` folder of the temp folder, where the
+/// AppImage runtime mounts it. The path must be absolute and name a plain file that starts with
+/// an AppImage header for this processor.
+fn appimage_file(executable: &Path, appimage: Option<&Path>, temp: &Path) -> Option<PathBuf> {
+    let appimage = appimage.filter(|p| p.is_absolute())?;
+    let mounted = executable
+        .strip_prefix(temp)
+        .ok()
+        .and_then(|rest| rest.components().next())
+        .is_some_and(|dir| dir.as_os_str().to_string_lossy().starts_with(".mount_"));
+    if !mounted || !std::fs::symlink_metadata(appimage).is_ok_and(|m| m.is_file()) {
+        return None;
+    }
+    let mut head = Vec::with_capacity(ELF64_HEADER_LEN);
+    std::fs::File::open(appimage)
+        .ok()?
+        .take(ELF64_HEADER_LEN as u64)
+        .read_to_end(&mut head)
+        .ok()?;
+    check_appimage(&head, std::env::consts::ARCH)
+        .is_ok()
+        .then(|| appimage.to_path_buf())
+}
+
+/// The length of a 64-bit ELF file header.
+const ELF64_HEADER_LEN: usize = 64;
+const NOT_AN_APPIMAGE: &str = "the update is not an AppImage";
+
+/// The ELF `e_machine` for a Rust `std::env::consts::ARCH`.
+fn elf_machine(arch: &str) -> Option<u16> {
+    match arch {
+        "x86_64" => Some(62),
+        "aarch64" => Some(183),
+        _ => None,
+    }
+}
+
+/// The checks on a verified AppImage before it is staged: a 64-bit little-endian ELF executable
+/// for `arch` (a `std::env::consts::ARCH`) that carries the AppImage type-2 magic, `AI\x02` at
+/// offset 8. Anything else (a tarball, a package, another processor's build, a cut-off file) is
+/// refused. The size cap holds before this runs.
+pub fn check_appimage(bytes: &[u8], arch: &str) -> Result<(), &'static str> {
+    const ET_EXEC: u16 = 2;
+    const ET_DYN: u16 = 3;
+    let header = bytes.get(..ELF64_HEADER_LEN).ok_or(NOT_AN_APPIMAGE)?;
+    let half = |at: usize| u16::from_le_bytes([header[at], header[at + 1]]);
+    // ELF magic, 64-bit class, little-endian data, ELF version 1, then the AppImage magic.
+    if !header.starts_with(b"\x7fELF")
+        || header[4] != 2
+        || header[5] != 1
+        || header[6] != 1
+        || header[8..11] != b"AI\x02"[..]
+        || !matches!(half(16), ET_EXEC | ET_DYN)
+    {
+        return Err(NOT_AN_APPIMAGE);
+    }
+    if elf_machine(arch) != Some(half(18)) {
+        return Err("the AppImage in the update is for another processor");
+    }
+    Ok(())
 }
 
 /// What the app inside a verified tarball says about itself, read from
@@ -563,10 +745,9 @@ impl Drop for BusyGuard<'_> {
 pub struct Updates {
     endpoint: Url,
     running: String,
-    /// The bundle an install replaces.
-    target: Option<PathBuf>,
-    /// Set only by tests, which install into a temporary folder.
-    executable: Option<PathBuf>,
+    /// What an install replaces, and the path handed to the plugin: one value, so the check and
+    /// the install name the same file or folder.
+    install: Install,
     /// The longest backoff: the check interval.
     max_backoff: Duration,
     max_bytes: u64,
@@ -602,10 +783,15 @@ impl Updates {
         Ok(Self {
             endpoint: endpoint(base)?,
             running,
-            target: std::env::current_exe()
-                .ok()
-                .and_then(|exe| install_target(&exe)),
-            executable: None,
+            // Without the app's `Env` an AppImage is not known yet; `with_install` sets it.
+            install: std::env::current_exe().map_or(Install::Unknown, |exe| {
+                Install::of(
+                    tauri::utils::platform::bundle_type(),
+                    &exe,
+                    None,
+                    &std::env::temp_dir(),
+                )
+            }),
             max_backoff,
             max_bytes: MAX_UPDATE_BYTES,
             clock: Box::new(Instant::now),
@@ -659,12 +845,19 @@ impl Updates {
         self
     }
 
+    /// Sets how this run is installed (`Install::running`).
+    pub fn with_install(mut self, install: Install) -> Self {
+        self.install = install;
+        self
+    }
+
     /// Installs into `bundle` (a `.app` path) instead of the running app. Tests only.
     #[cfg(test)]
-    pub fn installing_into(mut self, bundle: &Path) -> Self {
-        self.executable = Some(bundle.join("Contents/MacOS/codesense"));
-        self.target = Some(bundle.to_path_buf());
-        self
+    pub fn installing_into(self, bundle: &Path) -> Self {
+        self.with_install(Install::Bundle {
+            target: bundle.to_path_buf(),
+            executable: Some(bundle.join("Contents/MacOS/codesense")),
+        })
     }
 
     /// Replaces the monotonic clock. Tests only.
@@ -720,7 +913,10 @@ impl Updates {
     /// Whether Settings → Beta should say to install the next build by hand.
     pub fn attention(&self) -> Option<Attention> {
         if self.not_writable.load(Ordering::SeqCst) {
-            return Some(Attention::NotWritable);
+            return Some(match self.install {
+                Install::PackageManager => Attention::PackageManager,
+                _ => Attention::NotWritable,
+            });
         }
         // SW-PB-23: the build on offer (staged, or not yet staged) is one whose install failed at
         // a restart: install it by hand. A failure for any other build says nothing.
@@ -831,8 +1027,14 @@ impl Updates {
         if backing_off && !offer.explicit {
             return Outcome::BackingOff;
         }
+        // The plugin would run the package manager as an administrator: never download.
+        if self.install == Install::PackageManager {
+            self.not_writable.store(true, Ordering::SeqCst);
+            log::info!(target: "license", "update not downloaded: the package manager updates this install");
+            return Outcome::PackageManager;
+        }
         // An install the user can't write would raise an administrator prompt at every quit.
-        if !self.target.as_deref().is_some_and(can_replace) {
+        if !self.install.target().is_some_and(can_replace) {
             self.not_writable.store(true, Ordering::SeqCst);
             log::warn!(target: "license", "update not downloaded: the app can't be replaced without an administrator");
             return Outcome::NotWritable;
@@ -892,7 +1094,7 @@ impl Updates {
                     .redirect(reqwest_mcp::redirect::Policy::none())
                     .https_only(!cfg!(debug_assertions))
             });
-        if let Some(executable) = &self.executable {
+        if let Some(executable) = self.install.executable() {
             builder = builder.executable_path(executable);
         }
         let updater = builder.build().map_err(|e| label(&e))?;
@@ -936,11 +1138,12 @@ impl Updates {
         if received.load(Ordering::SeqCst) > self.max_bytes {
             return Err(TOO_LARGE);
         }
-        let version = offer.version.clone();
-        let bytes =
-            tokio::task::spawn_blocking(move || check_bundle(&bytes, &version).map(|()| bytes))
-                .await
-                .map_err(|_| "the updater failed")??;
+        let (version, install) = (offer.version.clone(), self.install.clone());
+        let bytes = tokio::task::spawn_blocking(move || {
+            install.check_payload(&bytes, &version).map(|()| bytes)
+        })
+        .await
+        .map_err(|_| "the updater failed")??;
         Ok(Some((update, bytes)))
     }
 
@@ -1011,7 +1214,7 @@ impl Updates {
         let failed = staged.is_some() && self.failed_version() == staged;
         // Without the location check, a location already found unwritable still counts.
         let writable = if check_location {
-            self.target.as_deref().is_some_and(can_replace)
+            self.install.target().is_some_and(can_replace)
         } else {
             !self.not_writable.load(Ordering::SeqCst)
         };
@@ -1700,6 +1903,326 @@ pub(super) mod tests {
         assert!(
             !can_replace_with(Path::new("/usr/bin"), &temp),
             "not this user's"
+        );
+    }
+
+    /// A 64-bit ELF header for `machine` carrying the AppImage type-2 magic, padded to `len`.
+    fn appimage_bytes(machine: u16, len: usize) -> Vec<u8> {
+        let mut bytes = vec![0u8; len.max(ELF64_HEADER_LEN)];
+        bytes[..4].copy_from_slice(b"\x7fELF");
+        bytes[4..7].copy_from_slice(&[2, 1, 1]);
+        bytes[8..11].copy_from_slice(b"AI\x02");
+        bytes[16..18].copy_from_slice(&3u16.to_le_bytes());
+        bytes[18..20].copy_from_slice(&machine.to_le_bytes());
+        bytes.truncate(len);
+        bytes
+    }
+
+    const X86_64: u16 = 62;
+    const AARCH64: u16 = 183;
+
+    #[test]
+    fn only_an_appimage_for_this_processor_passes_the_appimage_check() {
+        assert_eq!(
+            check_appimage(&appimage_bytes(X86_64, 4096), "x86_64"),
+            Ok(())
+        );
+        assert_eq!(
+            check_appimage(&appimage_bytes(AARCH64, 64), "aarch64"),
+            Ok(())
+        );
+        let mut executable = appimage_bytes(X86_64, 64);
+        executable[16..18].copy_from_slice(&2u16.to_le_bytes());
+        assert_eq!(check_appimage(&executable, "x86_64"), Ok(()), "ET_EXEC");
+
+        let plain_elf = {
+            let mut b = appimage_bytes(X86_64, 64);
+            b[8..11].copy_from_slice(&[0, 0, 0]);
+            b
+        };
+        let thirty_two_bit = {
+            let mut b = appimage_bytes(X86_64, 64);
+            b[4] = 1;
+            b
+        };
+        let big_endian = {
+            let mut b = appimage_bytes(X86_64, 64);
+            b[5] = 2;
+            b
+        };
+        let relocatable = {
+            let mut b = appimage_bytes(X86_64, 64);
+            b[16..18].copy_from_slice(&1u16.to_le_bytes());
+            b
+        };
+        let mut deb = b"!<arch>\ndebian-binary   ".to_vec();
+        deb.resize(128, 0);
+        let mut rpm = vec![0xed, 0xab, 0xee, 0xdb, 3, 0];
+        rpm.resize(128, 0);
+        let other = "the AppImage in the update is for another processor";
+        let refused: [(&str, Vec<u8>, &str, &str); 11] = [
+            (
+                "the macOS app tarball",
+                good().bytes.to_vec(),
+                "x86_64",
+                NOT_AN_APPIMAGE,
+            ),
+            ("a deb", deb, "x86_64", NOT_AN_APPIMAGE),
+            ("an rpm", rpm, "x86_64", NOT_AN_APPIMAGE),
+            (
+                "an ELF without the AppImage magic",
+                plain_elf,
+                "x86_64",
+                NOT_AN_APPIMAGE,
+            ),
+            ("a 32-bit ELF", thirty_two_bit, "x86_64", NOT_AN_APPIMAGE),
+            ("a big-endian ELF", big_endian, "x86_64", NOT_AN_APPIMAGE),
+            ("an object file", relocatable, "x86_64", NOT_AN_APPIMAGE),
+            (
+                "cut off inside the header",
+                appimage_bytes(X86_64, 40),
+                "x86_64",
+                NOT_AN_APPIMAGE,
+            ),
+            ("empty", Vec::new(), "x86_64", NOT_AN_APPIMAGE),
+            (
+                "another processor's build",
+                appimage_bytes(AARCH64, 64),
+                "x86_64",
+                other,
+            ),
+            (
+                "a processor with no updates",
+                appimage_bytes(X86_64, 64),
+                "riscv64",
+                other,
+            ),
+        ];
+        for (case, bytes, arch, label) in refused {
+            assert_eq!(check_appimage(&bytes, arch), Err(label), "{case}");
+            assert!(
+                !label.contains("://") && !label.contains('/'),
+                "{case}: no URL or path"
+            );
+        }
+    }
+
+    /// The payload check follows how the app is installed: the `.app` tarball checks for a
+    /// bundle, the AppImage check for an AppImage, and nothing passes where nothing is replaced.
+    #[test]
+    fn the_payload_check_follows_the_install() {
+        let bundle = Install::Bundle {
+            target: PathBuf::from("/Applications/CodeSense.app"),
+            executable: None,
+        };
+        assert_eq!(bundle.check_payload(good().bytes, NEXT), Ok(()));
+        assert!(bundle
+            .check_payload(&appimage_bytes(X86_64, 64), NEXT)
+            .is_err());
+        let appimage = Install::AppImage(PathBuf::from("/home/u/CodeSense.AppImage"));
+        assert_eq!(
+            appimage.check_payload(good().bytes, NEXT),
+            Err(NOT_AN_APPIMAGE),
+            "a macOS tarball on Linux"
+        );
+        let this_processor = match std::env::consts::ARCH {
+            "aarch64" => Some(AARCH64),
+            "x86_64" => Some(X86_64),
+            _ => None,
+        };
+        if let Some(machine) = this_processor {
+            assert_eq!(
+                appimage.check_payload(&appimage_bytes(machine, 64), NEXT),
+                Ok(())
+            );
+        }
+        for nothing in [Install::PackageManager, Install::Unknown] {
+            assert!(
+                nothing.check_payload(good().bytes, NEXT).is_err(),
+                "{nothing:?}"
+            );
+        }
+    }
+
+    /// A temp folder holding an AppImage mount, and the executable inside it.
+    fn mounted(temp: &Path) -> PathBuf {
+        temp.join(".mount_CodeSeAbc123/usr/bin/codesense")
+    }
+
+    /// An AppImage for this processor in `dir`.
+    fn appimage_in(dir: &Path) -> PathBuf {
+        let machine = match std::env::consts::ARCH {
+            "aarch64" => AARCH64,
+            _ => X86_64,
+        };
+        let file = dir.join("CodeSense.AppImage");
+        std::fs::write(&file, appimage_bytes(machine, 256)).unwrap();
+        file
+    }
+
+    #[test]
+    fn the_bundle_type_decides_how_the_app_is_installed() {
+        use tauri::utils::config::BundleType;
+        let temp = tempfile::tempdir().unwrap();
+        let exe = Path::new("/Applications/CodeSense.app/Contents/MacOS/codesense");
+        assert_eq!(
+            Install::of(Some(BundleType::App), exe, None, temp.path()),
+            Install::Bundle {
+                target: PathBuf::from("/Applications/CodeSense.app"),
+                executable: None,
+            }
+        );
+        for package in [BundleType::Deb, BundleType::Rpm] {
+            assert_eq!(
+                Install::of(
+                    Some(package.clone()),
+                    Path::new("/usr/bin/codesense"),
+                    None,
+                    temp.path()
+                ),
+                Install::PackageManager,
+                "{package:?}"
+            );
+        }
+        assert_eq!(
+            Install::of(
+                None,
+                Path::new("/home/u/src/target/debug/codesense"),
+                None,
+                temp.path()
+            ),
+            Install::Unknown,
+            "a dev or unpackaged build"
+        );
+        assert_eq!(Install::PackageManager.target(), None);
+        assert_eq!(Install::Unknown.executable(), None);
+    }
+
+    /// One path, Tauri's `Env::appimage`, names what the plugin replaces (`executable_path`),
+    /// what the install replaces and what the replace check looks at, and only when this run is
+    /// inside that AppImage's mount.
+    #[test]
+    fn an_appimage_is_replaced_at_the_path_tauri_read_and_nowhere_else() {
+        use tauri::utils::config::BundleType;
+        let temp = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let file = appimage_in(home.path());
+        let exe = mounted(temp.path());
+        let of = |exe: &Path, appimage: Option<&Path>| {
+            Install::of(Some(BundleType::AppImage), exe, appimage, temp.path())
+        };
+        assert_eq!(
+            of(&exe, Some(file.as_path())),
+            Install::AppImage(file.clone())
+        );
+
+        let not_an_appimage = home.path().join("notes.txt");
+        std::fs::write(&not_an_appimage, "hello").unwrap();
+        let missing = home.path().join("Gone.AppImage");
+        let unmounted = home.path().join("squashfs-root/usr/bin/codesense");
+        let refused: [(&str, &Path, Option<&Path>); 6] = [
+            ("no APPIMAGE", exe.as_path(), None),
+            (
+                "a relative path",
+                exe.as_path(),
+                Some(Path::new("CodeSense.AppImage")),
+            ),
+            ("a missing file", exe.as_path(), Some(missing.as_path())),
+            (
+                "a file that is not an AppImage",
+                exe.as_path(),
+                Some(not_an_appimage.as_path()),
+            ),
+            ("a folder", exe.as_path(), Some(home.path())),
+            (
+                "an executable outside an AppImage mount",
+                unmounted.as_path(),
+                Some(file.as_path()),
+            ),
+        ];
+        for (case, exe, appimage) in refused {
+            assert_eq!(of(exe, appimage), Install::Unknown, "{case}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_appimage_path_feeds_the_builder_the_install_and_the_replace_check() {
+        use tauri::utils::config::BundleType;
+        let home = tempfile::tempdir().unwrap();
+        let file = appimage_in(home.path());
+        let temp = std::env::temp_dir();
+        let install = Install::of(
+            Some(BundleType::AppImage),
+            &mounted(&temp),
+            Some(file.as_path()),
+            &temp,
+        );
+        let updates = Updates::new("https://updates.codesense.ai", RUNNING.into(), DAY)
+            .unwrap()
+            .with_install(install);
+        assert_eq!(
+            updates.install.executable(),
+            Some(file.as_path()),
+            "executable_path"
+        );
+        assert_eq!(
+            updates.install.target(),
+            Some(file.as_path()),
+            "the install target"
+        );
+        assert!(updates
+            .install
+            .target()
+            .is_some_and(|t| can_replace_with(t, &temp)));
+    }
+
+    /// The plugin renames the AppImage out of its folder and writes the new one at its path, so
+    /// the file must be this user's plain, writable file and its folder must take new entries.
+    #[cfg(unix)]
+    #[test]
+    fn only_an_appimage_this_user_can_rewrite_in_its_folder_can_be_replaced() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let file = appimage_in(dir.path());
+        let temp = std::env::temp_dir();
+        assert!(can_replace_with(&file, &temp));
+        // The plugin falls back to the AppImage's own folder, so another temp volume is fine.
+        assert!(
+            can_replace_with(&file, Path::new("/dev")),
+            "temp on another volume"
+        );
+        assert!(
+            !can_replace_with(&dir.path().join("Gone.AppImage"), &temp),
+            "no file"
+        );
+
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let read_only_file = can_replace_with(&file, &temp);
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(!read_only_file, "a file this user can't write");
+
+        let guard = ReadOnly::new(dir.path());
+        let read_only_folder = can_replace_with(&file, &temp);
+        drop(guard);
+        assert!(!read_only_folder, "a folder that takes no new entry");
+
+        let link = dir.path().join("Link.AppImage");
+        std::os::unix::fs::symlink(&file, &link).unwrap();
+        assert!(!can_replace_with(&link, &temp), "a link, not the file");
+
+        // A file owned by someone else: /etc/passwd is root's on every unix this runs on.
+        assert!(
+            !can_replace_with(Path::new("/etc/passwd"), &temp),
+            "not this user's"
+        );
+    }
+
+    #[test]
+    fn the_package_manager_attention_reaches_the_ui_as_package_manager() {
+        assert_eq!(
+            serde_json::to_string(&Attention::PackageManager).unwrap(),
+            "\"package_manager\""
         );
     }
 
@@ -2476,6 +2999,40 @@ pub(super) mod tests {
             .installing_into(&locked.join("Codesense.app"));
         let outcome = updates.run(app.handle(), offer(NEXT)).await;
         drop(guard);
+        assert_eq!(outcome, Outcome::NotWritable);
+        assert_eq!(updates.attention(), Some(Attention::NotWritable));
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    /// A `.deb` or `.rpm` install downloads nothing, whatever its folder allows: the plugin would
+    /// run the package manager as an administrator.
+    #[tokio::test]
+    async fn a_package_manager_install_downloads_nothing_and_says_so() {
+        let server = MockServer::start().await;
+        serve(&server, NEXT, &good()).await;
+        let app = app();
+        let updates = Updates::new(&server.uri(), RUNNING.into(), DAY)
+            .unwrap()
+            .with_install(Install::PackageManager);
+        let outcome = updates.run(app.handle(), offer(NEXT)).await;
+        assert_eq!(outcome, Outcome::PackageManager);
+        assert_eq!(updates.attention(), Some(Attention::PackageManager));
+        assert!(server.received_requests().await.unwrap().is_empty());
+        assert!(!updates.has_staged());
+        assert_eq!(updates.restart_ready(true), Err(NotReady::NothingStaged));
+    }
+
+    /// Any other run that is not an AppImage (a dev or unpackaged build) asks for an install by
+    /// hand, as an unwritable folder does.
+    #[tokio::test]
+    async fn an_install_with_nothing_to_replace_downloads_nothing() {
+        let server = MockServer::start().await;
+        serve(&server, NEXT, &good()).await;
+        let app = app();
+        let updates = Updates::new(&server.uri(), RUNNING.into(), DAY)
+            .unwrap()
+            .with_install(Install::Unknown);
+        let outcome = updates.run(app.handle(), offer(NEXT)).await;
         assert_eq!(outcome, Outcome::NotWritable);
         assert_eq!(updates.attention(), Some(Attention::NotWritable));
         assert!(server.received_requests().await.unwrap().is_empty());

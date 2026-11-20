@@ -160,7 +160,7 @@ libloading = "0.7"
 dhat = { version = "0.3.3", optional = true }
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1", features = ["fs"] }
+rustix = { version = "1", features = ["fs", "process"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
