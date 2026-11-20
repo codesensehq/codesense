@@ -567,10 +567,8 @@ fn shell_command(
 /// The argv-direct child running `program` with `args` on `os` (a
 /// [`std::env::consts::OS`] value), `exists` telling whether a file is there.
 ///
-/// On Windows only an absolute path to an existing `.exe` runs ([`direct_program`]),
-/// and `SHELL` is the host's POSIX runner when it has one, else unset, whatever the
-/// app inherited or `agent_env` set: no shell started the agent. Elsewhere the
-/// program runs as given, with the `SHELL` it inherits.
+/// On Windows only an absolute path to an existing `.exe` runs ([`direct_program`]).
+/// Elsewhere the program runs as given. Its `SHELL` is [`set_direct_shell`]'s.
 fn direct_command(
     host: &HostEnvironment,
     program: &str,
@@ -582,13 +580,20 @@ fn direct_command(
     direct_program(program, os, exists)?;
     let mut cmd = agent_command(host, program, agent_env);
     cmd.args(args);
-    if os == "windows" {
-        match host.posix_runner() {
-            Some(runner) => cmd.env("SHELL", runner.to_string_lossy().as_ref()),
-            None => cmd.env_remove("SHELL"),
-        }
-    }
     Ok(cmd)
+}
+
+/// The `SHELL` an argv-direct child on `os` carries, set last over everything the
+/// spawn inherited or set: on Windows the host's POSIX runner when it has one, else
+/// none, since no shell started the agent. Every other OS keeps what it has.
+fn set_direct_shell(cmd: &mut CommandBuilder, host: &HostEnvironment, os: &str) {
+    if os != "windows" {
+        return;
+    }
+    match host.posix_runner() {
+        Some(runner) => cmd.env("SHELL", runner.to_string_lossy().as_ref()),
+        None => cmd.env_remove("SHELL"),
+    }
 }
 
 /// Whether `program` may be spawned argv-direct on `os`: on Windows only an absolute
@@ -627,6 +632,7 @@ fn build_spawn_command(
     intent: &SpawnIntent,
     resolved: &ResolvedSpawnResources,
     host: &HostEnvironment,
+    (os, exists): (&str, &dyn Fn(&Path) -> bool),
 ) -> Result<CommandBuilder, SpawnError> {
     let osc_enabled = intent.osc_enabled();
     let preset = intent.starship_preset.as_deref();
@@ -640,14 +646,9 @@ fn build_spawn_command(
         // no shell wrapper, no RC wrappers, no shell-integration. Used by
         // managed agent launches so the agent CLI owns the PTY from the
         // start and Ctrl+C routes to the agent in-process.
-        Some([program, args @ ..]) => direct_command(
-            host,
-            program,
-            args,
-            &intent.agent_env,
-            std::env::consts::OS,
-            |path| path.is_file(),
-        )?,
+        Some([program, args @ ..]) => {
+            direct_command(host, program, args, &intent.agent_env, os, exists)?
+        }
         // Empty argv falls through to the interactive shell: a mis-set empty
         // vec cannot leave the spawn with no command.
         _ => shell_command(
@@ -731,6 +732,9 @@ fn build_spawn_command(
     for (key, value) in &intent.env {
         cmd.env(key, value);
     }
+    if matches!(intent.argv.as_deref(), Some([_, ..])) {
+        set_direct_shell(&mut cmd, host, os);
+    }
 
     Ok(cmd)
 }
@@ -775,9 +779,23 @@ impl SpawnIntent {
     /// so it may block on the host's disk. Fails only for a command line that
     /// this host has no POSIX shell to run.
     pub fn resolve(&self, session_id: &str, host: &HostEnvironment) -> Result<PtySpec, SpawnError> {
+        self.resolve_on(session_id, host, std::env::consts::OS, &|path| {
+            path.is_file()
+        })
+    }
+
+    /// [`Self::resolve`] as on `os` (a [`std::env::consts::OS`] value), with `exists`
+    /// telling whether a file is there.
+    fn resolve_on(
+        &self,
+        session_id: &str,
+        host: &HostEnvironment,
+        os: &str,
+        exists: &dyn Fn(&Path) -> bool,
+    ) -> Result<PtySpec, SpawnError> {
         let resolved = resolve_spawn_resources(host, self);
         Ok(PtySpec {
-            command: build_spawn_command(session_id, self, &resolved, host)?,
+            command: build_spawn_command(session_id, self, &resolved, host, (os, exists))?,
             size: PtySize {
                 rows: self.rows,
                 cols: self.cols,
@@ -1260,39 +1278,50 @@ mod tests {
         assert!(error.contains(r"C:\npm\claude.cmd"), "{error}");
     }
 
-    /// The refusal reaches the spawn: a Windows intent that runs a batch script resolves to
-    /// no command at all.
+    /// An agent launch on `os`: the program as the PTY's root, with `env` and `agent_env`.
+    fn direct(program: &str, env: &[(&str, &str)], agent_env: &[(&str, &str)]) -> SpawnIntent {
+        let pairs = |vars: &[(&str, &str)]| -> Vec<(String, String)> {
+            vars.iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        SpawnIntent {
+            argv: Some(vec![program.to_string(), "--x".to_string()]),
+            env: pairs(env),
+            agent_env: pairs(agent_env),
+            ..interactive("")
+        }
+    }
+
+    /// The refusal reaches the spawn: a Windows intent whose argv runs a batch script
+    /// resolves to no command at all, and an accepted `.exe` resolves to its argv.
     #[test]
-    fn a_refused_program_spawns_nothing() {
+    fn a_windows_agent_spawn_runs_only_an_existing_exe() {
         let fx = Fixture::new();
         let host = fx.host(&[]);
-        let refused = direct_command(
-            &host,
-            r"C:\npm\claude.cmd",
-            &["--x".to_string()],
-            &[],
-            "windows",
-            |_| true,
-        );
+        let refused =
+            direct(r"C:\npm\claude.cmd", &[], &[]).resolve_on("s", &host, "windows", &|_| true);
         assert_eq!(
             refused.err(),
             Some(SpawnError::BatchProgram(r"C:\npm\claude.cmd".into()))
         );
-        let ran = direct_command(
-            &host,
-            "/opt/bin/claude",
-            &["--x".to_string()],
-            &[],
-            "macos",
-            |_| false,
-        )
-        .unwrap();
-        let argv: Vec<String> = ran
+        let missing =
+            direct(r"C:\npm\claude.exe", &[], &[]).resolve_on("s", &host, "windows", &|_| false);
+        assert!(matches!(missing, Err(SpawnError::BatchProgram(_))));
+        let spec = direct(r"C:\npm\claude.exe", &[], &[])
+            .resolve_on("s", &host, "windows", &|_| true)
+            .expect("an existing .exe resolves");
+        let argv: Vec<String> = spec
+            .command
             .get_argv()
             .iter()
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
-        assert_eq!(argv, ["/opt/bin/claude", "--x"]);
+        assert_eq!(argv, [r"C:\npm\claude.exe", "--x"]);
+        // Elsewhere the program runs as given, whatever is on disk.
+        assert!(direct("claude", &[], &[])
+            .resolve_on("s", &host, "macos", &|_| false)
+            .is_ok());
     }
 
     /// A Windows host whose table has a POSIX runner.
@@ -1306,44 +1335,54 @@ mod tests {
         }),
     };
 
-    /// An argv-direct Windows launch carries the host's POSIX runner as `SHELL`, or none,
-    /// never an inherited or `agent_env` one; macOS keeps what it inherits.
+    /// A Windows agent spawn carries the host's POSIX runner as `SHELL`, or none: never an
+    /// inherited one, an Agent's own, or one the intent sets. macOS keeps what it inherits.
     #[test]
-    fn a_windows_direct_launch_sets_shell_only_to_a_posix_runner() {
-        let shell_of = |vars: &[(&str, &str)],
-                        agent_env: &[(&str, &str)],
-                        table: &'static ShellTable,
-                        os: &str| {
-            let host = HostEnvironment::with_vars(
-                None,
-                None,
-                vars.iter().map(|(k, v)| (k.to_string(), v.to_string())),
-            )
-            .with_shell_table(table);
-            let agent_env: Vec<(String, String)> = agent_env
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect();
-            let cmd =
-                direct_command(&host, r"C:\npm\claude.exe", &[], &agent_env, os, |_| true).unwrap();
-            cmd.get_env("SHELL")
-                .map(|v| v.to_string_lossy().into_owned())
-        };
+    fn a_windows_agent_spawn_sets_shell_only_to_a_posix_runner() {
+        let fx = Fixture::new();
+        let shell_of =
+            |vars: &[(&str, &str)], intent: SpawnIntent, table: &'static ShellTable, os: &str| {
+                let host = fx.host(vars).with_shell_table(table);
+                let spec = intent
+                    .resolve_on("s", &host, os, &|_| true)
+                    .expect("the spawn resolves");
+                env(&spec, "SHELL")
+            };
         let windows = ShellTable::for_os("windows");
+        let exe = r"C:\npm\claude.exe";
         let msys = [("SHELL", "/usr/bin/zsh")];
-        // pwsh only: no SHELL, inherited or not
-        assert_eq!(shell_of(&msys, &[], windows, "windows"), None);
-        assert_eq!(shell_of(&[], &[], windows, "windows"), None);
-        // an Agent's own SHELL is overridden too
+        // pwsh only: no SHELL, inherited, the Agent's own or the intent's
         assert_eq!(
-            shell_of(&[], &[("SHELL", "/bin/fish")], windows, "windows"),
+            shell_of(&msys, direct(exe, &[], &[]), windows, "windows"),
             None
         );
-        // a POSIX runner: SHELL is it
+        assert_eq!(
+            shell_of(&[], direct(exe, &[], &[]), windows, "windows"),
+            None
+        );
+        assert_eq!(
+            shell_of(
+                &[],
+                direct(exe, &[], &[("SHELL", "/bin/fish")]),
+                windows,
+                "windows"
+            ),
+            None
+        );
+        assert_eq!(
+            shell_of(
+                &[],
+                direct(exe, &[("SHELL", "/bin/sh")], &[]),
+                windows,
+                "windows"
+            ),
+            None
+        );
+        // a POSIX runner: SHELL is it, over the intent's own
         assert_eq!(
             shell_of(
                 &msys,
-                &[("SHELL", "/bin/fish")],
+                direct(exe, &[("SHELL", "/bin/sh")], &[("SHELL", "/bin/fish")]),
                 &WINDOWS_WITH_BASH,
                 "windows"
             )
@@ -1354,7 +1393,7 @@ mod tests {
         assert_eq!(
             shell_of(
                 &[("SHELL", "/bin/zsh")],
-                &[],
+                direct("/opt/bin/claude", &[], &[]),
                 ShellTable::for_os("macos"),
                 "macos"
             )
