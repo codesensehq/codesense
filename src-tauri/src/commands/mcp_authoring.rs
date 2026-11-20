@@ -404,9 +404,9 @@ impl ScopeLaunch {
     }
 }
 
-/// The built-in runtime whose CLI is `binary`, by basename.
+/// The built-in runtime whose CLI is `binary`, by its stem.
 fn runtime_of_binary(binary: &str) -> Option<AgentCli> {
-    codesense_pty_core::agent_cli::by_binary(Path::new(binary).file_name()?.to_str()?)
+    codesense_pty_core::agent_cli::by_binary(&codesense_pty_core::agent_cli::binary_stem(binary))
 }
 
 #[cfg(test)]
@@ -1008,6 +1008,11 @@ pub(crate) mod tests {
             runtime_of_binary("/opt/homebrew/bin/claude"),
             Some(AgentCli::Claude)
         );
+        assert_eq!(
+            runtime_of_binary(r"C:\Users\u\AppData\Roaming\npm\claude.cmd"),
+            Some(AgentCli::Claude)
+        );
+        assert_eq!(runtime_of_binary("CODEX.EXE"), Some(AgentCli::Codex));
         assert_eq!(runtime_of_binary("cursor-agent"), None);
         assert_eq!(runtime_of_binary("/x/acme"), None);
     }

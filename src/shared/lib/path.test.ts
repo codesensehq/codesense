@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: MIT
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
   basename,
+  binaryStem,
   canonicalPath,
   dirname,
   isAbsolute,
@@ -83,6 +86,23 @@ describe("basename", () => {
     expect(basename("C:/Users/a/repo")).toBe("repo");
     expect(basename("\\\\server\\share\\dir\\f.txt")).toBe("f.txt");
     expect(basename("C:\\Users/a\\repo/src")).toBe("src");
+  });
+});
+
+describe("binaryStem", () => {
+  // The backend's `agent_cli::binary_stem` asserts the same table.
+  const { rows } = JSON.parse(
+    readFileSync(
+      resolve(
+        __dirname,
+        "../../../src-tauri/crates/codesense-pty-core/src/agent_cli/fixtures/binary-stem.json",
+      ),
+      "utf-8",
+    ),
+  ) as { rows: [string, string][] };
+
+  it.each(rows)("%s names %s", (path, stem) => {
+    expect(binaryStem(path)).toBe(stem);
   });
 });
 

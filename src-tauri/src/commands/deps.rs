@@ -14,7 +14,7 @@ use tauri::{Emitter, Manager};
 use crate::agents::launch_check::{cli_version_warning, LaunchWarning};
 use codesense_platform::cli;
 use codesense_platform::fs::is_executable;
-use codesense_pty_core::agent_cli::{by_binary, descriptor, AgentCli};
+use codesense_pty_core::agent_cli::{binary_stem, by_binary, descriptor, AgentCli};
 
 /// Minimum required git version for Code Sense sync operations.
 const MIN_GIT_VERSION: (u32, u32) = (2, 44);
@@ -831,7 +831,7 @@ impl DependencyManager {
                             source: entry.source,
                             shadowed: entry.shadowed.clone(),
                             qualified: Self::version_qualified(basename, entry.version.as_deref()),
-                            supported: by_binary(basename).map(|cli| {
+                            supported: by_binary(&binary_stem(basename)).map(|cli| {
                                 descriptor(cli)
                                     .release
                                     .supported_for(std::env::consts::OS)
@@ -846,7 +846,7 @@ impl DependencyManager {
 
     /// Whether the CLI `basename` at `version` is inside its qualified range.
     fn version_qualified(basename: &str, version: Option<&str>) -> Option<bool> {
-        let cli = by_binary(basename)?;
+        let cli = by_binary(&binary_stem(basename))?;
         Some(descriptor(cli).release.version_qualified(version?))
     }
 
@@ -894,8 +894,7 @@ impl DependencyManager {
     /// any parseable version (the `(0, 0)` sentinel — never a bypass; a 2-part
     /// parse is still required upstream in [`check_version_minimum`]).
     fn floor_for_basename(basename: &str) -> (u32, u32) {
-        codesense_pty_core::agent_cli::by_binary(basename)
-            .map_or((0, 0), |cli| descriptor(cli).min_version)
+        by_binary(&binary_stem(basename)).map_or((0, 0), |cli| descriptor(cli).min_version)
     }
 }
 
@@ -907,7 +906,7 @@ pub(crate) fn note_cli_version<R: tauri::Runtime>(
 ) {
     let (Some(deps), Some(cli)) = (
         app.try_state::<DependencyManager>(),
-        by_binary(&resolved.launch.binary),
+        by_binary(&binary_stem(&resolved.launch.binary)),
     ) else {
         return;
     };
@@ -1742,7 +1741,7 @@ fn parse_agent_version(agent_path: &Path) -> Option<String> {
     let probe = agent_path
         .file_name()
         .and_then(|name| name.to_str())
-        .and_then(codesense_pty_core::agent_cli::by_binary)
+        .and_then(|name| by_binary(&binary_stem(name)))
         .map(|cli| {
             codesense_pty_core::agent_cli::AgentCliAdapter::probe(
                 codesense_pty_core::agent_cli::adapter(cli),

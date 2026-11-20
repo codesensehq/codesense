@@ -261,7 +261,22 @@ pub fn validate_startup(startup: &AgentStartup, launch: NativeLaunch) -> Result<
     startup.validate(&descriptor(cli).startup)
 }
 
-/// The CLI whose binary is `basename`.
+/// The runtime name of the program at `path`: its last component (split on `/` or `\`),
+/// lowercased, with a trailing `.exe`, `.cmd` or `.bat` dropped, so `C:\npm\claude.cmd`,
+/// `CLAUDE.EXE` and `/usr/local/bin/claude` all name `claude`. The one place an agent
+/// path becomes the name [`by_binary`] and the process matcher compare.
+pub fn binary_stem(path: &str) -> String {
+    let base = path.rsplit(['/', '\\']).next().unwrap_or(path).to_lowercase();
+    match [".exe", ".cmd", ".bat"]
+        .iter()
+        .find_map(|ext| base.strip_suffix(ext))
+    {
+        Some(stem) => stem.to_string(),
+        None => base,
+    }
+}
+
+/// The CLI whose binary is `basename` (a [`binary_stem`]).
 pub fn by_binary(basename: &str) -> Option<AgentCli> {
     AgentCli::ALL
         .into_iter()

@@ -1,0 +1,12 @@
+{
+  "rows": [
+    ["claude", "claude"],
+    ["/usr/local/bin/claude", "claude"],
+    ["C:\\npm\\claude.cmd", "claude"],
+    ["C:\\Users\\u\\AppData\\Roaming\\npm\\claude.exe", "claude"],
+    ["CLAUDE.EXE", "claude"],
+    ["codex.bat", "codex"],
+    ["claude.js", "claude.js"],
+    ["C:\\Program Files\\nodejs\\node.exe", "node"]
+  ]
+}

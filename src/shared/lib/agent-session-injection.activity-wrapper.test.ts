@@ -42,6 +42,9 @@ describe("the page's agent launch line runs under the activity wrapper", () => {
   it.each([
     ["claude", "'/opt/bin/claude' '--settings' '/tmp/s.json'"],
     ["codex", "'/opt/bin/codex' '--model' 'gpt-5'"],
+    // Windows names: the shim's or the exe's stem is the CLI.
+    ["claude", "'C:\\npm\\claude.cmd' '--settings' 's.json'"],
+    ["codex", "'C:\\Tools\\CODEX.EXE' '--model' 'gpt-5'"],
   ])("a %s line goes through terminalLaunchActivityLine, never raw", async (provider, line) => {
     await expect(launchAgentLineInShell("s1", line)).resolves.toEqual({
       ok: true,

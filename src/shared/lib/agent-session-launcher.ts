@@ -23,7 +23,7 @@ import {
 import { whenTerminalLayoutHydrated } from "@/shared/lib/terminal-layout";
 import { logger } from "@/shared/lib/logger";
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
-import { basename } from "@/shared/lib/path";
+import { binaryStem } from "@/shared/lib/path";
 import { platformName } from "@/shared/lib/capabilities";
 
 /**
@@ -610,9 +610,9 @@ export async function relaunchAgentInLiveShell(
   return launched.ok ? { ok: true } : { ok: false, reason: injectFailure(launched) };
 }
 
-/** The process name the AC-12 liveness probe matches: the agent exe basename. */
+/** The process name the AC-12 liveness probe matches: the agent's {@link binaryStem}. */
 export function agentBasename(agentPath: string): string {
-  return basename(agentPath) || agentPath;
+  return binaryStem(agentPath) || agentPath;
 }
 
 /** AC-12: true `<agent>`-process liveness in the owned tab (connected vs dropped
