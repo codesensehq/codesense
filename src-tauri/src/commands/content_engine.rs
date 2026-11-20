@@ -3611,7 +3611,7 @@ fn ensure_epic_workspace_inner(
     ))
 }
 
-/// SW-EW-35: the lifecycle events `cli`'s status hook (`codesense-bridge hook notify`)
+/// The lifecycle events `cli`'s status hook (`codesense-bridge hook notify`)
 /// listens on to drive the per-tab agent-status dot: exactly the events the status receiver
 /// maps for it (its adapter's status hooks).
 fn status_hook_events(cli: AgentCli) -> impl Iterator<Item = &'static str> {
