@@ -242,6 +242,9 @@ pub(crate) trait OpenHost: Send + Sync {
     fn role_join_error(&self, _handle: &str) -> Option<String> {
         None
     }
+    /// After a launch into `story_id`'s workspace, start the background cleanup of its
+    /// seat worktrees ([`spawn_seat_sweep`](super::mcp_workspace::spawn_seat_sweep)).
+    fn sweep_seats(&self, _story_id: &str) {}
     /// Where `story_id`'s workspace lives (open or minimized), or `None` when it has none.
     async fn story_workspace_place(
         &self,
@@ -966,6 +969,10 @@ async fn open_agent_as(
         },
         (_, target) => target,
     };
+    let swept_story = match &target {
+        LaunchTarget::Story { story_id, .. } => Some(story_id.clone()),
+        LaunchTarget::Dir { .. } => None,
+    };
 
     // With no prompt of its own, an agent starts with its default one.
     let initial_prompt = non_blank(req.initial_prompt.as_deref())
@@ -1006,6 +1013,9 @@ async fn open_agent_as(
         provenance,
     };
     let outcome = host.launch(launch).await;
+    if let Some(story_id) = &swept_story {
+        host.sweep_seats(story_id);
+    }
     if let (Err(_), Some(destination)) = (&outcome, &destination) {
         host.rollback_context_worktree(destination).await;
     }
@@ -1594,7 +1604,7 @@ impl OpenWorkspacePort for AppOpenWorkspacePort {
             )
         })
         .await?;
-        super::mcp_workspace::launch_story_session(
+        let outcome = super::mcp_workspace::launch_story_session(
             &self.app,
             story_id,
             Some(&story_org),
@@ -1603,7 +1613,9 @@ impl OpenWorkspacePort for AppOpenWorkspacePort {
             None,
             view,
         )
-        .await
+        .await;
+        super::mcp_workspace::spawn_seat_sweep(&self.app, story_id);
+        outcome
     }
 
     async fn targeted(&self) -> Result<(ActiveTeam, Box<dyn OpenHost>), String> {
@@ -2412,6 +2424,10 @@ impl AppOpenHost {
 
 #[async_trait::async_trait]
 impl OpenHost for AppOpenHost {
+    fn sweep_seats(&self, story_id: &str) {
+        super::mcp_workspace::spawn_seat_sweep(&self.app, story_id);
+    }
+
     fn role_join_error(&self, handle: &str) -> Option<String> {
         use tauri::Manager;
         crate::commands::dashboard_launch::DashboardLaunchState::snapshot(

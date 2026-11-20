@@ -4053,6 +4053,7 @@ mod tests {
             name: "dev".into(),
             kind: SeatKind::Branch,
             pinned_commit: None,
+            kept: None,
         });
         for rec in [&base, &seat] {
             worktree_index::write_record(home.path(), &principal, rec).unwrap();

@@ -1925,6 +1925,162 @@ pub(crate) async fn prune_worktree_locked(
     result
 }
 
+/// What removing a seat worktree may discard: its ignored files (installed dependencies,
+/// prepared context), never uncommitted code. [`reap_seat_worktree`] has checked dirt and
+/// unpublished context itself, so the ignored-file guard would only refuse a clean seat.
+pub(crate) const SEAT_REMOVAL_CONSENT: RemovalConsent = RemovalConsent {
+    discard_context: true,
+    discard_code: false,
+};
+
+/// What a seat worktree's cleanup did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SeatReap {
+    Reaped,
+    Kept(crate::install::worktree_index::SeatKeep),
+}
+
+/// The single seat-removal check. The seat worktree `record` names is removed when, in
+/// order: no session runs in its folder (waiting up to `wait_for_exit` for one that was
+/// just ended to exit), its git status is clean, it has no unpublished context, and
+/// [`seat::seat_removal_plan`] finds its commits merged. It goes through the removal
+/// funnel [`prune_worktree_locked`] (which prunes its record), and then its seat branch is
+/// deleted. Otherwise it is kept and the reason is noted on its record for
+/// `list_worktrees`. A record without a seat is never touched (`None`).
+pub(crate) async fn reap_seat_worktree(
+    app: &tauri::AppHandle,
+    home: &Path,
+    principal: &Principal,
+    record: &crate::install::worktree_index::WorktreeStoryRecord,
+    wait_for_exit: Duration,
+) -> Option<SeatReap> {
+    let seat = record.seat.clone()?;
+    let path = record.code_repo_path.as_path();
+    let reap = seat_reap(app, path, &seat, wait_for_exit).await;
+    if let SeatReap::Kept(reason) = reap {
+        note_seat_kept(home, principal, path, reason);
+    }
+    Some(reap)
+}
+
+async fn seat_reap(
+    app: &tauri::AppHandle,
+    path: &Path,
+    seat: &crate::install::worktree_index::SeatRecord,
+    wait_for_exit: Duration,
+) -> SeatReap {
+    use crate::install::worktree_index::SeatKeep;
+    if !seat_folder_idle(app, path, wait_for_exit).await {
+        return SeatReap::Kept(SeatKeep::Live);
+    }
+    let status_path = path.to_path_buf();
+    let dirty = crate::commands::await_blocking("reap_seat_worktree.status", move || {
+        Ok(worktree_git_dirty_opt(&status_path))
+    })
+    .await;
+    if !matches!(dirty, Ok(Some(false))) {
+        return SeatReap::Kept(SeatKeep::Dirty);
+    }
+    let path_text = path.to_string_lossy().into_owned();
+    let unpublished = crate::commands::team_file_edits::worktree_unpublished_context(
+        app.clone(),
+        path_text.clone(),
+    )
+    .await;
+    if let Some(keep) = seat_keep_for_unpublished(&unpublished) {
+        return SeatReap::Kept(keep);
+    }
+    let (plan_path, plan_seat) = (path.to_path_buf(), seat.clone());
+    let plan = crate::commands::await_blocking("reap_seat_worktree.plan", move || {
+        Ok(seat::seat_removal_plan(&plan_path, &plan_seat))
+    })
+    .await;
+    let plan: seat::SeatRemoval = match plan {
+        Ok(Ok(plan)) => plan,
+        Ok(Err(keep)) => return SeatReap::Kept(keep),
+        Err(_) => return SeatReap::Kept(SeatKeep::Dirty),
+    };
+    let repo_text = plan.repo.to_string_lossy().into_owned();
+    if let Err(error) =
+        prune_worktree_locked(app, path, repo_text, path_text, SEAT_REMOVAL_CONSENT).await
+    {
+        log::warn!(
+            target: "commands::worktree",
+            "seat worktree {path:?} was kept: removing it failed: {error}"
+        );
+        return SeatReap::Kept(SeatKeep::RemoveFailed);
+    }
+    if let Some(branch) = plan.branch {
+        let repo = plan.repo;
+        let deleted = crate::commands::await_blocking("reap_seat_worktree.branch", move || {
+            seat::delete_seat_branch(&repo, &branch)
+        })
+        .await;
+        if let Err(error) = deleted {
+            log::warn!(
+                target: "commands::worktree",
+                "the branch of removed seat worktree {path:?} was kept: {error}"
+            );
+        }
+    }
+    SeatReap::Reaped
+}
+
+/// Whether a seat's unpublished-context count keeps it: any team-file edit not published
+/// (an edited mirrored context file is git-ignored, so only this count sees it), or a
+/// count that couldn't be taken.
+pub(crate) fn seat_keep_for_unpublished(
+    found: &Result<crate::commands::team_file_edits::WorktreeUnpublished, String>,
+) -> Option<crate::install::worktree_index::SeatKeep> {
+    match found {
+        Ok(found) if found.count == 0 => None,
+        _ => Some(crate::install::worktree_index::SeatKeep::UnpublishedContext),
+    }
+}
+
+/// Whether no session runs in `path` ([`worktree_live_session_count`]'s count is 0),
+/// asking again until `wait` has passed. Sessions that can't be counted are not idle.
+///
+/// [`worktree_live_session_count`]: crate::commands::worktree_liveness::worktree_live_session_count
+async fn seat_folder_idle(app: &tauri::AppHandle, path: &Path, wait: Duration) -> bool {
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        let live: Liveness<Vec<PathBuf>> =
+            crate::commands::pty_backend::live_session_home_dirs_off_thread(app).await;
+        if crate::commands::worktree_liveness::live_sessions_inside(&live, path) == Some(0) {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+/// Note on the seat record at `path` why its cleanup kept it. Best-effort: the row only
+/// shows a stale reason, or none, when this fails.
+fn note_seat_kept(
+    home: &Path,
+    principal: &Principal,
+    path: &Path,
+    reason: crate::install::worktree_index::SeatKeep,
+) {
+    let noted =
+        crate::install::worktree_index::update_record_with(home, principal, path, |current| {
+            let mut record = current.ok_or_else(|| "its record is gone".to_string())?;
+            if let Some(seat) = record.seat.as_mut() {
+                seat.kept = Some(reason);
+            }
+            Ok(record)
+        });
+    if let Err(error) = noted {
+        log::warn!(
+            target: "commands::worktree",
+            "the keep reason of seat worktree {path:?} was not noted: {error}"
+        );
+    }
+}
+
 /// SLW-WL-2: the tri-state core of the worktree dirty check. Runs `git status
 /// --porcelain` (materialized context files are `.git/info/exclude`-hidden, so this
 /// sees only genuine tracked/untracked developer work) and returns
@@ -2445,6 +2601,12 @@ pub struct ManagedWorktreeRow {
     /// SV-CDE-7: whether line-attribution capture was working at the last agent launch
     /// here (`active`, `off`, `not_installed`, ...); `null` before any launch.
     pub attribution: Option<crate::attribution::AttributionState>,
+    /// The seat name, when this is one of its story's seat worktrees.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seat: Option<String>,
+    /// Why the seat's last cleanup kept it; absent before any cleanup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seat_kept: Option<crate::install::worktree_index::SeatKeep>,
 }
 
 /// SLW-WL-2: enrich one index record into a [`ManagedWorktreeRow`] — the record's
@@ -2476,6 +2638,10 @@ fn managed_row_with_facts(
     // story file was deleted is Orphaned (ranked above Merged), while a healthy post-merge
     // worktree with both parent + story intact is not.
     let orphaned = repo_path.is_none() || !r.story_source_path.exists();
+    let (seat, seat_kept) = match r.seat {
+        Some(seat) => (Some(seat.name), seat.kept),
+        None => (None, None),
+    };
     ManagedWorktreeRow {
         path: r.code_repo_path.to_string_lossy().into_owned(),
         branch,
@@ -2493,6 +2659,8 @@ fn managed_row_with_facts(
         last_reverse_sync_at: r.last_reverse_sync_at,
         last_reverse_sync_by: r.last_reverse_sync_by,
         attribution: r.attribution,
+        seat,
+        seat_kept,
     }
 }
 
@@ -2548,6 +2716,13 @@ pub struct WorktreeRow {
     /// SV-CDE-7: whether line-attribution capture was working at the last agent launch
     /// here (`active`, `off`, `not_installed`, ...); `null` before any launch.
     pub attribution: Option<crate::attribution::AttributionState>,
+    /// The seat name of a story's seat worktree (story rows only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seat: Option<String>,
+    /// Why the seat's last cleanup kept it (`live`, `dirty`, `unpublished-context`,
+    /// `unmerged` or `remove-failed`); absent before any cleanup.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seat_kept: Option<crate::install::worktree_index::SeatKeep>,
     // --- Epic-only (None for story + orphan) ---
     pub epic_id: Option<String>,
     pub owner: Option<String>,
@@ -2605,6 +2780,8 @@ impl WorktreeRow {
             last_reverse_sync_at: r.last_reverse_sync_at,
             last_reverse_sync_by: r.last_reverse_sync_by,
             attribution: r.attribution,
+            seat: r.seat,
+            seat_kept: r.seat_kept,
             epic_id: None,
             owner: None,
             repo: None,
@@ -2645,6 +2822,8 @@ impl WorktreeRow {
             last_reverse_sync_at: None,
             last_reverse_sync_by: None,
             attribution: None,
+            seat: None,
+            seat_kept: None,
             epic_id: None,
             owner: None,
             repo: None,
@@ -5641,6 +5820,40 @@ detached
         assert!(rows[0].live_cli_session);
     }
 
+    /// A seat worktree's row names its seat and why its last cleanup kept it; a base
+    /// worktree's row has neither field.
+    #[test]
+    fn a_seat_row_names_the_seat_and_why_it_was_kept() {
+        use crate::install::worktree_index::{SeatKeep, SeatKind, SeatRecord};
+        let tmp = TempDir::new().unwrap();
+        let mut record = wl2_record(&tmp.path().join("app-seat-dev"), "S-1");
+        record.seat = Some(SeatRecord {
+            name: "dev".into(),
+            kind: SeatKind::Branch,
+            pinned_commit: None,
+            kept: Some(SeatKeep::UnpublishedContext),
+        });
+        let row = WorktreeRow::story(managed_row_from_record(record, false));
+        let json = serde_json::to_value(&row).unwrap();
+        assert_eq!(json["seat"], "dev");
+        assert_eq!(json["seatKept"], "unpublished-context");
+        let base = wl2_record(&tmp.path().join("app"), "S-1");
+        let json =
+            serde_json::to_value(WorktreeRow::story(managed_row_from_record(base, false))).unwrap();
+        assert!(
+            json.get("seat").is_none() && json.get("seatKept").is_none(),
+            "{json}"
+        );
+        for (keep, wire) in [
+            (SeatKeep::Live, "live"),
+            (SeatKeep::Dirty, "dirty"),
+            (SeatKeep::Unmerged, "unmerged"),
+            (SeatKeep::RemoveFailed, "remove-failed"),
+        ] {
+            assert_eq!(serde_json::to_value(keep).unwrap(), wire);
+        }
+    }
+
     /// SW-XS-17 (AC-2): a clean, not-live, attached worktree last touched 30 days ago
     /// (its store row's `updated_at`, the recency the removed reaper read) survives
     /// both the launch/in-session reconcile and the Worktrees listing: the directory
@@ -5916,16 +6129,18 @@ detached
         assert_eq!(distinct_clone_dirs(&paths).len(), 2);
     }
 
-    /// SW-XS-17 (AC-2): the only path that deletes a worktree from disk is the
-    /// explicit `remove_worktree` command. Every production caller of the prune
-    /// chain (`remove_worktree` → `prune_worktree_locked` → `remove_registered_worktree`
-    /// → `remove_worktree_prune_core`) is the link above it; nothing else in the
-    /// crate reaches it.
+    /// SW-XS-17 (AC-2): the only paths that delete a worktree from disk are the
+    /// explicit `remove_worktree` command and the cleanup of a seat worktree
+    /// (`seat_reap`, behind `reap_seat_worktree`, which never touches a record without
+    /// a seat). Every production caller of the prune chain (`remove_worktree` /
+    /// `seat_reap` → `prune_worktree_locked` → `remove_registered_worktree` →
+    /// `remove_worktree_prune_core`) is the link above it; nothing else in the crate
+    /// reaches it.
     #[test]
     fn worktree_prune_is_reachable_only_from_remove_worktree() {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let allowed: [(&str, &[&str]); 3] = [
-            ("prune_worktree_locked", &["remove_worktree"]),
+            ("prune_worktree_locked", &["remove_worktree", "seat_reap"]),
             ("remove_registered_worktree", &["prune_worktree_locked"]),
             (
                 "remove_worktree_prune_core",

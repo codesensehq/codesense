@@ -3624,6 +3624,10 @@ export interface ManagedWorktreeInfo extends WorktreeRowBase {
   /** SV-CDE-7: whether git-ai line-attribution capture was working at the last agent
    *  launch here; `null` (or absent) before any launch. */
   attribution?: AttributionState | null;
+  /** The seat name, on one of its story's seat worktrees only. */
+  seat?: string;
+  /** Why the seat's last cleanup kept it; absent before one ran. */
+  seatKept?: "live" | "dirty" | "unpublished-context" | "unmerged" | "remove-failed";
 }
 
 /** Why line-attribution capture is off for a worktree. `notes_would_push`: the git-ai in
