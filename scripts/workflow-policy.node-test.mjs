@@ -450,7 +450,7 @@ test("rust.yml skips its test jobs only when the changes job finds nothing Rust-
 // The Linux app job is not a required check: it carries the path filter and nothing else, so it
 // runs on pull requests, merge groups, main and the nightly run, and its tests (ignored
 // everywhere else) run in one place, under a private session bus with the keyring unlocked.
-test("rust.yml's Linux app job runs the credential store tests under a session bus", () => {
+test("rust.yml's Linux app job runs the shared suites and the Secret Service tests", () => {
   const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
   const job = workflow.jobs["rust-linux-app"];
   assert.equal(job.name, "Rust (Linux app)");
@@ -485,26 +485,31 @@ test("rust.yml's Linux app job runs the credential store tests under a session b
   // The helper tests the others start as child processes pass alone, so they are left out.
   assert.match(runs[0], /- test\(~::reader_process\) - test\(~::no_bus_child\)/);
   assert.match(runs[1], /test\(~credential_store::tests::linux_\)/);
-  // The pty contract runs here on Linux, against the worker the sidecar build makes, with the
-  // session with no viewer and the cursor-query answer.
+  // The whole of pty-core, session-server and the app's unit tests run here, unfiltered, after
+  // the sidecar build makes the emulator worker the pty tests run, each run's JUnit report kept.
   const names = job.steps.map((step) => step.name);
   const sidecars = names.indexOf("Build sidecars");
-  const pty = names.indexOf(
-    "Test the pty contract, the cursor-query answer and a session with no viewer",
-  );
+  const suites = names.indexOf("Test pty-core, session-server and the app");
   assert.equal(job.steps[sidecars].run, "bash scripts/build-session-server.sh");
-  assert.ok(sidecars >= 0 && pty >= 0 && sidecars < pty);
+  assert.ok(sidecars >= 0 && suites >= 0 && sidecars < suites);
   const sidecarScript = fs.readFileSync(
     new URL("build-session-server.sh", import.meta.url),
     "utf8",
   );
   assert.match(sidecarScript, /^bash "\$SCRIPT_DIR\/build-emulator\.sh"/m);
-  assert.equal(
-    job.steps[pty].run,
-    "cargo nextest run --profile ci --locked -p codesense-pty-core --test pty_contract --test headless_session\n" +
-      "cargo nextest run --profile ci --locked -p codesense-pty-core --lib -E 'test(/^runner::cursor_reply::/)'\n",
+  const suitesRun = job.steps[suites].run;
+  for (const packages of [
+    "pty-core) packages=(-p codesense-pty-core) ;;",
+    "session-server) packages=(-p codesense-session-server) ;;",
+    "app) packages=(-p codesense --lib) ;;",
+  ])
+    assert.ok(suitesRun.includes(packages), packages);
+  assert.ok(
+    suitesRun.includes('cargo nextest run --profile ci --locked "${packages[@]}" || status=1'),
   );
-  assert.ok(!workflow.jobs["flaky-issues"].needs.includes("rust-linux-app"));
+  assert.ok(suitesRun.includes('mv target/nextest/ci/junit.xml "$RUNNER_TEMP/junit/$part.xml"'));
+  assert.ok(job.steps.every((step) => !/ -E /.test(step.run ?? "")));
+  assert.ok(workflow.jobs["flaky-issues"].needs.includes("rust-linux-app"));
 });
 
 // A push diffs before..after; a new branch tip (before all zeros) tests everything.
@@ -1643,6 +1648,11 @@ test("Rust test jobs list flaky tests after nextest and only flaky-issues writes
       "(success() || failure()) && steps.compile.outcome == 'success'",
       "node scripts/flaky-tests.mjs summary target/nextest/ci/junit.xml",
     ],
+    [
+      "rust-linux-app",
+      "(success() || failure()) && steps.compile.outcome == 'success'",
+      'for report in "$RUNNER_TEMP"/junit/*.xml; do node scripts/flaky-tests.mjs summary "$report"; done',
+    ],
   ]) {
     const job = workflow.jobs[name];
     assert.deepEqual(job.permissions, { contents: "read" });
@@ -1671,7 +1681,7 @@ test("Rust test jobs list flaky tests after nextest and only flaky-issues writes
     );
   }
   const issues = workflow.jobs["flaky-issues"];
-  assert.deepEqual([...issues.needs].sort(), ["rust-linux", "rust-macos"]);
+  assert.deepEqual([...issues.needs].sort(), ["rust-linux", "rust-linux-app", "rust-macos"]);
   assert.deepEqual(issues.concurrency, { group: "flaky-issues", "cancel-in-progress": false });
   assert.ok(issues.steps.every((step) => !/\bcargo\b/.test(step.run ?? "")));
   const download = issues.steps.find((step) => step.uses?.startsWith("actions/download-artifact@"));
@@ -1686,6 +1696,7 @@ test("Rust test jobs list flaky tests after nextest and only flaky-issues writes
     ["rust-macos-build", 0],
     ["rust-macos-test", 1],
     ["rust-linux", 1],
+    ["rust-linux-app", 1],
   ]) {
     const uploads = workflow.jobs[name].steps.filter((step) =>
       step.uses?.startsWith("actions/upload-artifact@"),
@@ -2144,8 +2155,8 @@ test("smoke images: the policy rejects a bare tag, a short digest, a duplicate o
 });
 
 // Linux compiles the code a platform without git-ai builds (the facade's off arms, with the
-// gated parts left out), and the Linux app job runs the facade's tests with git-ai off.
-test("rust.yml checks the app with git-ai off and runs the git-ai facade's tests", () => {
+// gated parts left out); the Linux app job runs the facade's tests, with the rest of the app's.
+test("rust.yml checks the app with git-ai off", () => {
   const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
   const steps = workflow.jobs["rust-check-linux"].steps;
   const off = steps.filter((step) => step.env?.CODESENSE_CAPS_OFF !== undefined);
@@ -2156,9 +2167,4 @@ test("rust.yml checks the app with git-ai off and runs the git-ai facade's tests
     off[0].run,
     "cargo check --locked -p codesense --lib --tests --features dashboard-publish",
   );
-  const pins = workflow.jobs["rust-linux-app"].steps.find(
-    (step) => step.name === "Test the git-ai pins and the capability table",
-  );
-  for (const module of ["platform_caps::tests", "attribution::facade::tests"])
-    assert.ok(pins.run.includes(`test(/^${module}::/)`), module);
 });

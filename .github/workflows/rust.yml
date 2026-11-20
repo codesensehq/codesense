@@ -554,8 +554,8 @@ jobs:
       CARGO_INCREMENTAL: "0"
       RUST_BACKTRACE: "1"
       CARGO_TERM_COLOR: always
-      # Only the crates that pass on Linux today, and the bridge; macOS also runs pty-core,
-      # session-server, guards and the desktop app.
+      # The host crates and the bridge; Rust (Linux app) runs pty-core, session-server and the
+      # desktop app's unit tests, and macOS runs them all with guards.
       RUST_PACKAGES: -p codesense-platform -p codesense-host-proto -p codesense-fs-core -p codesense-bridge
     steps:
       # All paths below are relative to this repository's checkout.
@@ -711,10 +711,10 @@ jobs:
 
   rust-linux-app:
     name: Rust (Linux app)
-    # The app crate's Linux-relevant tests, starting with the credential store against a real
-    # Secret Service (GNOME Keyring on a private session bus). Not a required check. The tests are
-    # `#[ignore]`d everywhere else, so only this job runs them. It widens as more of the app's
-    # Linux tests move here. It also runs pty-core's pty contract against the unix pty. Like the
+    # The shared suites on Linux: all of pty-core, session-server and the app's unit tests, plus
+    # the credential store against a real Secret Service (GNOME Keyring on a private session bus),
+    # whose tests are `#[ignore]`d everywhere else, so only this job runs them. A test that cannot
+    # run on Linux is gated off it on its module, with the reason. Not a required check. Like the
     # macOS and Windows jobs it skips merge groups, and runs on pull requests, main and the nightly
     # run.
     needs: changes
@@ -774,31 +774,44 @@ jobs:
       - name: Build sidecars
         # The app's build script needs the bundled sidecars to exist.
         run: bash scripts/build-session-server.sh
-      - name: Compile the app's tests
-        run: cargo nextest run --profile ci --locked -p codesense --lib --no-run
-      - name: Test the git-ai pins and the capability table
-        # The pure tests of the pin each target installs and of where git-ai and the other
-        # capabilities are on, so Linux checks the pin and answer its own target runs with, and
-        # the git-ai facade's tests with the capability off.
-        run: >-
-          cargo nextest run --profile ci --locked -p codesense --lib --retries 0
-          -E 'test(/^platform_caps::tests::/) | test(/^attribution::facade::tests::/) | test(/^attribution::install::tests::(every_target_pin_parses_and_names_its_own_platform|every_git_ai_pin_file_has_a_target_and_every_target_a_file|linux_targets_pin_the_cs5_release|a_target_without_a_pin_has_none|the_running_pin_is_the_hosts_or_else_the_macos_one|a_pin_for_another_platform_is_refused|supported_needs_a_pin_and_the_capability)$/)'
-      - name: Test the machine values agents read
-        # The local machine stays "This Mac" as data off macOS too, while the text a person reads
-        # says "This computer".
-        run: >-
-          cargo nextest run --profile ci --locked -p codesense --lib --retries 0
-          -E 'test(/^mcp::(terminal_tabs|identity_tools)::tests::a_local_tab_is_on_this_mac_on_every_os$/) | test(/^commands::machines::tests::the_local_machine_is_labelled_this_mac_on_every_os$/)'
+      - name: Compile the tests
+        id: compile
+        run: cargo nextest run --profile ci --locked -p codesense-pty-core -p codesense-session-server -p codesense --lib --no-run
       - name: Test the credential store against Secret Service
         # A private session bus; the script unlocks the keyring, checks it, and runs the tests.
         run: dbus-run-session -- bash scripts/run-secret-service-tests.sh
-      - name: Test the pty contract, the cursor-query answer and a session with no viewer
-        # A real pty behind a host running the emulator worker (built with the sidecars above), as
-        # on Windows (ConPTY), a session that reports its exit with no viewer, and the runner's
-        # answer to a pseudo console's cursor query. nextest fails a run that matches no test.
+      - name: Test pty-core, session-server and the app
+        # A real pty behind a host running the emulator worker (built with the sidecars above).
+        # Runs after a failed Secret Service step, not when the test build never ran. Each run's
+        # JUnit report is kept before the next overwrites it.
+        if: (success() || failure()) && steps.compile.outcome == 'success'
         run: |
-          cargo nextest run --profile ci --locked -p codesense-pty-core --test pty_contract --test headless_session
-          cargo nextest run --profile ci --locked -p codesense-pty-core --lib -E 'test(/^runner::cursor_reply::/)'
+          mkdir -p "$RUNNER_TEMP/junit"
+          status=0
+          for part in pty-core session-server app; do
+            case "$part" in
+              pty-core) packages=(-p codesense-pty-core) ;;
+              session-server) packages=(-p codesense-session-server) ;;
+              app) packages=(-p codesense --lib) ;;
+            esac
+            cargo nextest run --profile ci --locked "${packages[@]}" || status=1
+            if [[ -f target/nextest/ci/junit.xml ]]; then mv target/nextest/ci/junit.xml "$RUNNER_TEMP/junit/$part.xml"; fi
+          done
+          exit "$status"
+      - name: List flaky tests
+        # A pass on nextest's one retry is flaky: listed in the job summary and the JUnit report,
+        # and tracked as a public issue by flaky-issues on main.
+        if: (success() || failure()) && steps.compile.outcome == 'success'
+        run: for report in "$RUNNER_TEMP"/junit/*.xml; do node scripts/flaky-tests.mjs summary "$report"; done
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          # flaky-issues reads rust-*-junit-<run>-<attempt>.
+          name: rust-linux-app-junit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/junit/
+          retention-days: 7
+          if-no-files-found: warn
 
   rust-check-windows:
     name: Rust check (Windows)
@@ -883,7 +896,7 @@ jobs:
 
   flaky-issues:
     name: Track flaky Rust tests
-    needs: [rust-macos, rust-linux]
+    needs: [rust-macos, rust-linux, rust-linux-app]
     # The only job that writes issues: the nightly run on main in this repository, never pull
     # requests, merge groups or forks. It reads the uploaded JUnit reports; the test jobs stay read-only.
     if: ${{ !cancelled() && github.event_name == 'schedule' && github.ref == 'refs/heads/main' && !github.event.repository.fork }}
