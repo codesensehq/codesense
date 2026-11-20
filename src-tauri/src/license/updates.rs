@@ -472,22 +472,18 @@ fn running_appimage(env: &tauri::Env) -> Option<PathBuf> {
 /// an AppImage header for this processor.
 fn appimage_file(executable: &Path, appimage: Option<&Path>, temp: &Path) -> Option<PathBuf> {
     let appimage = appimage.filter(|p| p.is_absolute())?;
-    let mounted = executable
-        .strip_prefix(temp)
-        .ok()
-        .and_then(|rest| rest.components().next())
-        .is_some_and(|dir| dir.as_os_str().to_string_lossy().starts_with(".mount_"));
+    let mounted = executable.strip_prefix(temp).is_ok_and(|rest| {
+        rest.components()
+            .next()
+            .is_some_and(|dir| dir.as_os_str().to_string_lossy().starts_with(".mount_"))
+    });
     if !mounted || !std::fs::symlink_metadata(appimage).is_ok_and(|m| m.is_file()) {
         return None;
     }
     let mut head = Vec::with_capacity(ELF64_HEADER_LEN);
-    std::fs::File::open(appimage)
-        .ok()?
-        .take(ELF64_HEADER_LEN as u64)
-        .read_to_end(&mut head)
-        .ok()?;
-    check_appimage(&head, std::env::consts::ARCH)
-        .is_ok()
+    let read = std::fs::File::open(appimage)
+        .and_then(|file| file.take(ELF64_HEADER_LEN as u64).read_to_end(&mut head));
+    (read.is_ok() && check_appimage(&head, std::env::consts::ARCH).is_ok())
         .then(|| appimage.to_path_buf())
 }
 
