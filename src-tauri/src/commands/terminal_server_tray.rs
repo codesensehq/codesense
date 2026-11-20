@@ -382,7 +382,7 @@ fn set_tray_visible(app: &AppHandle, visible: bool) {
         let hidden = !window.is_visible().unwrap_or(true);
         if show_hidden_window(tray_visible(), hidden, Restore::current()) {
             log::info!(target: "terminal_server_tray", "tray item gone: showing the hidden window");
-            let _ = window.show();
+            let _ = tauri::WebviewWindow::show(&window);
             let _ = window.set_focus();
         }
     });
