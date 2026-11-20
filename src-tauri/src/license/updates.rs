@@ -1234,8 +1234,8 @@ impl Drop for ReadOnly {
     }
 }
 
-// Fails on Linux (linux-test-defects): its fixtures are the macOS manifest route and .app bundle.
-#[cfg(all(test, not(cs_channel = "internal"), not(target_os = "linux")))]
+// macOS only (darwin route and .app fixtures) until the updater's Linux port (linux-test-defects).
+#[cfg(all(test, not(cs_channel = "internal"), target_os = "macos"))]
 pub(super) mod tests {
     use super::*;
     use crate::test_support::updater::{bad_signatures, shipped_pubkey, ANOTHER_KEY, TEST_PUBKEY};
