@@ -120,16 +120,18 @@ work in the story's worktree. An agent that launches a named session with
 
 | Kind | What the session gets |
 |---|---|
-| `branch` | A writable worktree on its own branch, `<story branch>-seat-<name>` (`feat/LL-214-seat-dev`), cut from the tip of the story's branch. The repo's setup commands run there. |
+| `branch` | A writable worktree on its own branch, `<story branch>-seat-<name>` (`feat/LL-214-seat-dev`), cut from the tip of the story's branch. The repo's setup commands run there. An earlier seat branch of that name is moved up to the story branch's tip when it has no commits of its own; one with commits of its own is reused as it stands. |
 | `commit` | A detached checkout pinned to that commit (a sha or a ref). No setup runs, so nothing is installed: it suits a reviewer that only reads the code. |
 
 The folder is the one `worktree_dir` gives a branch named
 `<story branch>-seat-<name>`, beside the story's own: `../api-wt/feat-LL-214-seat-dev`
 for the example. The tab opens in the story's workspace with the other sessions,
-under the same `<story>#<name>` handle. The seat worktree is linked to the story
-like the story's own worktree: context arrives when its agent launches,
-`hydrate_story` and reverse sync work there, and its sessions count toward the
-story.
+under the same `<story>#<name>` handle, and runs in its seat folder; a restart of
+the tab runs it there again. The seat worktree is linked to the story like the
+story's own worktree: context arrives when its agent launches, `hydrate_story`
+and reverse sync work there, and its sessions count toward the story. For now
+**Source diff** and the **Code editor** on a seat tab show the story's own
+worktree, not the seat's.
 
 - Launching the same name again reuses its seat worktree. A `commit` seat
   launched with another commit moves to it when it has no uncommitted changes;

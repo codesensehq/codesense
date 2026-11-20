@@ -605,6 +605,9 @@ pub(crate) struct LaunchHome {
     pub workspace: WorkspaceKey,
     pub descriptor: WorkspaceDescriptor,
     pub view: SessionView,
+    /// The tab's own working folder when it differs from the workspace's (a story seat
+    /// worktree); `None` runs it in the descriptor's `worktree_path`.
+    pub tab_cwd: Option<PathBuf>,
 }
 
 impl LaunchHome {
@@ -630,6 +633,7 @@ impl LaunchHome {
                 ..WorkspaceDescriptor::default()
             },
             view,
+            tab_cwd: None,
         }
     }
 }
@@ -879,15 +883,6 @@ pub(crate) fn story_launch_record(story_id: &str, launched_by: Option<String>) -
     }
 }
 
-/// Where a story launch's session runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LaunchCwd {
-    /// The story's base worktree, shared by its own session and its named ones.
-    StoryWorktree,
-    /// The session's own seat worktree.
-    SeatWorktree,
-}
-
 /// What a story launch does around its spawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StoryLaunchPlan {
@@ -895,26 +890,37 @@ pub(crate) struct StoryLaunchPlan {
     pub reconcile: bool,
     /// Snapshot the story branch's work product into the launch provenance.
     pub snapshot: bool,
-    pub cwd: LaunchCwd,
 }
 
 /// The one decision between a shared-worktree launch and a seat launch. Without a seat
-/// a launch runs exactly as it always has: in the story's worktree, with the branch
-/// reconcile and the work-product snapshot. A seat launch runs in its own worktree and
-/// does neither, so it never re-points the story's branch.
+/// a launch runs exactly as it always has, with the branch reconcile and the
+/// work-product snapshot. A seat launch does neither, so it never re-points the story's
+/// branch.
 pub(crate) fn story_launch_plan(seat: Option<&SeatLaunch>) -> StoryLaunchPlan {
-    match seat {
-        None => StoryLaunchPlan {
-            reconcile: true,
-            snapshot: true,
-            cwd: LaunchCwd::StoryWorktree,
-        },
-        Some(_) => StoryLaunchPlan {
-            reconcile: false,
-            snapshot: false,
-            cwd: LaunchCwd::SeatWorktree,
-        },
+    let shared = seat.is_none();
+    StoryLaunchPlan {
+        reconcile: shared,
+        snapshot: shared,
     }
+}
+
+/// Where a story session lives and runs. The workspace is always the story's, and its
+/// descriptor names the story's base worktree `story_dir`, so every tab of the story
+/// shares one workspace. A seat session's own folder `seat_dir` is its tab's cwd only:
+/// the host runs and counts the tab there and never moves the workspace to it. Returns
+/// the home and the spawn's cwd.
+pub(crate) fn story_launch_home(
+    org_slug: &str,
+    team_name: Option<&str>,
+    story_id: &str,
+    story_dir: &Path,
+    seat_dir: Option<PathBuf>,
+    view: SessionView,
+) -> (LaunchHome, PathBuf) {
+    let mut home = LaunchHome::new(org_slug, team_name, story_id, "story", story_dir, view);
+    let cwd = seat_dir.clone().unwrap_or_else(|| story_dir.to_path_buf());
+    home.tab_cwd = seat_dir;
+    (home, cwd)
 }
 
 /// Create or reuse the seat worktree `seat` of `story_id` and register it as a seat
@@ -931,9 +937,23 @@ async fn ensure_seat_worktree(
     story_id: &str,
     seat: &SeatLaunch,
 ) -> Result<PathBuf, LaunchError> {
-    use crate::commands::worktree::seat::{seat_needs_setup, seat_worktree_inner, SeatError};
+    use crate::commands::worktree::seat::{
+        seat_needs_setup, seat_worktree_inner, seat_worktree_path, SeatError,
+    };
 
     let checkout = resolve_story_checkout(app, ctx, story_id)?;
+    // A folder registered to anything but this seat of this story is refused before git
+    // creates a worktree or a branch there.
+    let path = seat_worktree_path(
+        &checkout.clone_path,
+        &checkout.branch,
+        &seat.name,
+        &checkout.config.worktree_dir,
+    )
+    .map_err(|e| format!("denied: {e}"))?;
+    let existing =
+        read_record(&ctx.codesense_home, &ctx.principal(), &path).map_err(|e| e.to_string())?;
+    seat_record_fits(ctx, story_id, &path, existing.as_ref()).map_err(LaunchError::Invalid)?;
     let outcome = {
         let repo = checkout.clone_path.clone();
         let branch = checkout.branch.clone();
@@ -956,8 +976,6 @@ async fn ensure_seat_worktree(
             "denied: seat worktree for story '{story_id}' failed: {reason}"
         )),
     })?;
-    let existing = read_record(&ctx.codesense_home, &ctx.principal(), &outcome.path)
-        .map_err(|e| e.to_string())?;
     let setup = seat_needs_setup(
         outcome.seat.kind,
         outcome.created,
@@ -987,9 +1005,31 @@ async fn ensure_seat_worktree(
     Ok(outcome.path)
 }
 
+/// Whether the record already at a seat folder, if any, is a seat of `story_id` (a
+/// relaunch). A base worktree or another story's folder is never taken over.
+fn seat_record_fits(
+    ctx: &ActiveContext,
+    story_id: &str,
+    path: &Path,
+    existing: Option<&WorktreeStoryRecord>,
+) -> Result<(), String> {
+    match existing {
+        Some(record)
+            if record.story_id != story_id
+                || record.org_slug != ctx.org_slug
+                || !record.is_seat() =>
+        {
+            Err(format!(
+                "{} is already registered as another worktree; remove it, or launch the seat under another name",
+                path.display()
+            ))
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Write the seat record of `story_id` for the seat worktree at `path`. `existing` is the
-/// record already there: it must be a seat of the same story (a relaunch), so a base
-/// worktree or another story's folder is never taken over.
+/// record already there, which [`seat_record_fits`] has accepted.
 #[allow(clippy::too_many_arguments)]
 fn register_seat_record(
     ctx: &ActiveContext,
@@ -1002,19 +1042,7 @@ fn register_seat_record(
     setup_complete: bool,
 ) -> Result<(), String> {
     let mut record = match existing {
-        Some(record)
-            if record.story_id == story_id
-                && record.org_slug == ctx.org_slug
-                && record.is_seat() =>
-        {
-            record
-        }
-        Some(_) => {
-            return Err(format!(
-                "denied: {} is already registered as another worktree; remove it, then retry",
-                path.display()
-            ))
-        }
+        Some(record) => record,
         None => WorktreeStoryRecord::new(
             path.to_path_buf(),
             ctx.org_slug.clone(),
@@ -1043,11 +1071,9 @@ pub(crate) async fn launch_story_session_typed(
     let prepare = with_story_prepare_lock(story_id, async {
         let (ctx, story_dir, source_repo, owning_team) =
             resolve_hydrated_story_worktree_unlocked(app, story_id, options.org.as_deref()).await?;
-        let worktree_dir = match (plan.cwd, options.seat.as_ref()) {
-            (LaunchCwd::SeatWorktree, Some(seat)) => {
-                ensure_seat_worktree(app, &ctx, story_id, seat).await?
-            }
-            _ => story_dir,
+        let seat_dir = match options.seat.as_ref() {
+            Some(seat) => Some(ensure_seat_worktree(app, &ctx, story_id, seat).await?),
+            None => None,
         };
         // SW-OR-1b: converge the story's `branch` frontmatter to the worktree's actual
         // HEAD before binding the session, so a board opening the story can trust the
@@ -1055,27 +1081,27 @@ pub(crate) async fn launch_story_session_typed(
         // sprint-run) — idempotent, so a no-drift reopen is a true no-op. A seat launch
         // skips it: its worktree is on the seat's branch, or detached.
         let (reconciled, canonical_branch) = if plan.reconcile {
-            reconcile_branch_on_open(app, story_id, &worktree_dir)
+            reconcile_branch_on_open(app, story_id, &story_dir)
         } else {
             (None, None)
         };
         if plan.snapshot {
             fill_launch_work_product(&mut options.provenance, canonical_branch, |branch| {
-                snapshot_story_work_product(app, source_repo, branch, &worktree_dir)
+                snapshot_story_work_product(app, source_repo, branch, &story_dir)
             })
             .await;
         }
-        Ok::<_, LaunchError>((ctx, worktree_dir, reconciled, owning_team))
+        Ok::<_, LaunchError>((ctx, story_dir, seat_dir, reconciled, owning_team))
     });
-    let (ctx, worktree_dir, reconciled, owning_team) = prepare.await?;
+    let (ctx, story_dir, seat_dir, reconciled, owning_team) = prepare.await?;
     // The session lives in the story's workspace — keyed by team + `story_id`,
-    // the key the frontend's story workspace has.
-    let home = LaunchHome::new(
+    // the key the frontend's story workspace has — and runs in its seat folder, if any.
+    let (home, worktree_dir) = story_launch_home(
         &ctx.org_slug,
         ctx.team_name.as_deref(),
         story_id,
-        "story",
-        &worktree_dir,
+        &story_dir,
+        seat_dir,
         options.view,
     );
     // The story's own team, where the session's inbox lives; a caller that already
@@ -2371,6 +2397,7 @@ fn agent_open_tab(
         workspace: home.workspace,
         session: PtySessionId::new(session_id.to_string()),
         descriptor: Some(home.descriptor),
+        cwd: home.tab_cwd,
         name,
         role: None,
         tags: Tags::from([
@@ -2566,24 +2593,48 @@ mod tests {
         .unwrap();
         assert_eq!(read().unwrap().seat, Some(seat("b2")));
 
-        // Another story's record, or a base worktree, at that folder is refused untouched.
+        // A relaunch of the same seat fits; another story's record, or a base worktree, at
+        // that folder doesn't (checked before git creates anything there).
+        let seat_rec = read().unwrap();
+        assert!(seat_record_fits(&ctx, "X-1", &root, Some(&seat_rec)).is_ok());
+        assert!(seat_record_fits(&ctx, "X-1", &root, None).is_ok());
         let other = WorktreeStoryRecord::new(&root, "acme", slug.clone(), "X-2", &story_path);
         let base = WorktreeStoryRecord::new(&root, "acme", slug.clone(), "X-1", &story_path);
-        for existing in [other, base] {
-            let before = read();
-            assert!(register_seat_record(
-                &ctx,
-                &root,
-                Some(existing),
-                seat("c3"),
-                slug.clone(),
-                "X-1",
-                story_path.clone(),
-                true,
-            )
-            .is_err());
-            assert_eq!(read(), before);
+        let mut elsewhere = seat_rec.clone();
+        elsewhere.org_slug = "other".into();
+        for existing in [other, base, elsewhere] {
+            assert!(seat_record_fits(&ctx, "X-1", &root, Some(&existing)).is_err());
         }
+    }
+
+    #[test]
+    fn a_seat_session_runs_in_its_folder_inside_the_story_workspace() {
+        let (base, seat) = (PathBuf::from("/wt/app"), PathBuf::from("/wt/app-seat-dev"));
+        let view = SessionView::Tab { focus: false };
+        let (shared, shared_cwd) =
+            story_launch_home("acme", Some("team"), "X-1", &base, None, view);
+        let (seated, seated_cwd) =
+            story_launch_home("acme", Some("team"), "X-1", &base, Some(seat.clone()), view);
+        // One workspace, its descriptor on the base worktree, for both sessions.
+        assert_eq!(seated.workspace, shared.workspace);
+        assert_eq!(seated.descriptor, shared.descriptor);
+        assert_eq!(
+            seated.descriptor.worktree_path.as_deref(),
+            Some(base.as_path())
+        );
+        // Only the seat tab carries its own folder, and spawns there.
+        assert_eq!((shared.tab_cwd.as_ref(), shared_cwd), (None, base.clone()));
+        assert_eq!(
+            (seated.tab_cwd.as_ref(), seated_cwd.clone()),
+            (Some(&seat), seat.clone())
+        );
+        let tab = agent_open_tab("X-1#dev", "sess-1", seated, None);
+        assert_eq!(tab.cwd, Some(seat));
+        assert_eq!(
+            tab.descriptor.and_then(|d| d.worktree_path),
+            Some(base.clone())
+        );
+        assert_eq!(agent_open_tab("X-1", "sess-2", shared, None).cwd, None);
     }
 
     #[test]

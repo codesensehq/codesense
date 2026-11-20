@@ -11,13 +11,17 @@ use std::path::{Path, PathBuf};
 
 use crate::install::worktree_index::{SeatKind, SeatRecord};
 
-/// What a seat launch asks for: `seatWorktree` on a story `open_workspace`.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, schemars::JsonSchema)]
-#[serde(tag = "kind", rename_all = "lowercase")]
+/// What a seat launch asks for: `seatWorktree` on a story `open_workspace`. Read by the
+/// hand-written [`Deserialize`](serde::Deserialize) below, which refuses an unknown key
+/// (a `commit` on a branch seat, a misspelled `commit`) instead of ignoring it; the
+/// `serde` attributes here shape only the JSON schema.
+#[derive(Debug, Clone, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 pub enum SeatWorktreeParam {
     /// A writable worktree on its own branch, `<story branch>-seat-<name>`, cut from the
     /// story branch tip. The repo's worktree.yaml setup runs there. A relaunch of the same
-    /// name reuses it.
+    /// name reuses it; an earlier seat branch of that name is fast-forwarded to the story
+    /// branch tip when it has no commits of its own, else reused as it stands.
     Branch,
     /// A detached checkout pinned to `commit`. No setup runs, so it has no installed
     /// dependencies. A relaunch with another commit re-pins it when it is clean.
@@ -25,6 +29,34 @@ pub enum SeatWorktreeParam {
         /// The commit to pin: a sha, or a ref that names a commit.
         commit: String,
     },
+}
+
+impl<'de> serde::Deserialize<'de> for SeatWorktreeParam {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Raw {
+            kind: String,
+            #[serde(default)]
+            commit: Option<String>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        match (raw.kind.as_str(), raw.commit) {
+            ("branch", None) => Ok(Self::Branch),
+            ("branch", Some(_)) => Err(D::Error::custom(
+                "seatWorktree: commit is only for kind \"commit\"",
+            )),
+            ("commit", Some(commit)) => Ok(Self::Commit { commit }),
+            ("commit", None) => Err(D::Error::custom(
+                "seatWorktree: kind \"commit\" needs a commit",
+            )),
+            (other, _) => Err(D::Error::custom(format!(
+                "seatWorktree: unknown kind {other:?} (use branch or commit)"
+            ))),
+        }
+    }
 }
 
 /// A story session launched into its own seat worktree.
@@ -61,9 +93,23 @@ pub(crate) fn seat_branch_name(story_branch: &str, slug: &str) -> String {
     format!("{story_branch}-seat-{slug}")
 }
 
+/// The folder of the seat named `slug` of the story on `story_branch`: the one
+/// `worktree_dir_template` renders for [`seat_branch_name`] beside `repo`, for both kinds.
+pub(crate) fn seat_worktree_path(
+    repo: &Path,
+    story_branch: &str,
+    slug: &str,
+    worktree_dir_template: &str,
+) -> Result<PathBuf, String> {
+    super::render_worktree_dir(
+        worktree_dir_template,
+        repo,
+        &seat_branch_name(story_branch, slug),
+    )
+}
+
 /// Create or reuse the seat worktree named `slug` of the story on `story_branch` in
-/// `repo` (the story's source clone), at the folder `worktree_dir_template` renders for
-/// [`seat_branch_name`]. Blocking: it runs git.
+/// `repo` (the story's source clone), at [`seat_worktree_path`]. Blocking: it runs git.
 pub(crate) fn seat_worktree_inner(
     repo: &Path,
     story_branch: &str,
@@ -72,7 +118,7 @@ pub(crate) fn seat_worktree_inner(
     worktree_dir_template: &str,
 ) -> Result<SeatOutcome, SeatError> {
     let branch = seat_branch_name(story_branch, slug);
-    let path = super::render_worktree_dir(worktree_dir_template, repo, &branch)
+    let path = seat_worktree_path(repo, story_branch, slug, worktree_dir_template)
         .map_err(SeatError::Failed)?;
     let path_text = path.to_string_lossy().into_owned();
     let listed =
@@ -103,6 +149,9 @@ pub(crate) fn seat_worktree_inner(
             }
             // Cut from the story branch itself, never from the clone's HEAD.
             let start = format!("refs/heads/{story_branch}");
+            if existing.is_none() {
+                catch_up_seat_branch(repo, &branch, &start)?;
+            }
             let opened = super::story_branch_worktree_inner(
                 repo,
                 &branch,
@@ -128,21 +177,19 @@ pub(crate) fn seat_worktree_inner(
             })
         }
         SeatWorktreeParam::Commit { commit } => {
-            let sha = resolve_commit(repo, commit)?;
-            let created = match &existing {
-                None => {
-                    create_pinned_checkout(repo, &path, &sha)?;
-                    true
-                }
+            let (sha, created) = match &existing {
+                None => (create_pinned_checkout(repo, &path, commit)?, true),
                 Some(entry) if entry.branch.is_some() => {
                     return Err(SeatError::Invalid(format!(
                         "seat {slug} already has a worktree on branch {branch} at {path_text}; launch it as a branch seat, or use another name"
                     )));
                 }
-                Some(entry) if entry.head_sha == sha => false,
-                Some(_) => {
-                    repin(&path, &sha)?;
-                    false
+                Some(entry) => {
+                    let sha = resolve_commit(repo, commit)?;
+                    if entry.head_sha != sha {
+                        repin(&path, &sha)?;
+                    }
+                    (sha, false)
                 }
             };
             Ok(SeatOutcome {
@@ -191,6 +238,29 @@ pub(crate) fn create_pinned_checkout(
     )
     .map_err(SeatError::Failed)?;
     Ok(sha)
+}
+
+/// Before an earlier seat branch with no worktree is checked out again, move it to the
+/// story branch tip (`story_ref`) when that only fast-forwards it: a seat branch with
+/// commits of its own (not yet in the story branch) is kept as it stands. A seat branch
+/// that doesn't exist locally is left to be cut from the story branch.
+fn catch_up_seat_branch(repo: &Path, branch: &str, story_ref: &str) -> Result<(), SeatError> {
+    let seat_ref = format!("refs/heads/{branch}");
+    let tip = |reference: &str| {
+        super::run_git(&["rev-parse", "--verify", "--quiet", reference], repo)
+            .ok()
+            .map(|out| out.trim().to_string())
+    };
+    let (Some(seat), Some(story)) = (tip(&seat_ref), tip(story_ref)) else {
+        return Ok(());
+    };
+    let behind = seat != story
+        && super::run_git(&["merge-base", "--is-ancestor", &seat, &story], repo).is_ok();
+    if behind {
+        super::run_git(&["update-ref", &seat_ref, &story, &seat], repo)
+            .map_err(SeatError::Failed)?;
+    }
+    Ok(())
 }
 
 /// Move a commit seat to `sha`. A worktree with uncommitted changes, or one whose status
@@ -343,6 +413,52 @@ mod tests {
         assert!(!again.created);
         assert_eq!(again.path, first.path);
         assert_eq!(git(&again.path, &["rev-parse", "HEAD"]), seat_commit);
+    }
+
+    #[test]
+    fn an_earlier_seat_branch_catches_up_with_the_story_or_keeps_its_own_work() {
+        let f = fixture();
+        let launch = |slug: &str| {
+            seat_worktree_inner(
+                &f.repo,
+                "feat/story",
+                slug,
+                &SeatWorktreeParam::Branch,
+                TEMPLATE,
+            )
+            .unwrap()
+        };
+        let remove = |path: &Path| {
+            git(&f.repo, &["worktree", "remove", path.to_str().unwrap()]);
+        };
+        // Two seats, removed by hand with their branches kept; one has a commit of its own.
+        let plain = launch("dev");
+        let busy = launch("dev-2");
+        let own = commit_file(&busy.path, "seat.txt", "seat work\n");
+        remove(&plain.path);
+        remove(&busy.path);
+        // The story moves on.
+        let story = f.repo.parent().unwrap().join("story-wt");
+        git(
+            &f.repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                story.to_str().unwrap(),
+                "feat/story",
+            ],
+        );
+        let new_tip = commit_file(&story, "more.txt", "more story work\n");
+
+        // No commits of its own: fast-forwarded to the new story tip.
+        let again = launch("dev");
+        assert!(again.created);
+        assert_eq!(git(&again.path, &["rev-parse", "HEAD"]), new_tip);
+        // Commits of its own: reused as it stands, its work kept.
+        let kept = launch("dev-2");
+        assert_eq!(git(&kept.path, &["rev-parse", "HEAD"]), own);
+        assert!(kept.path.join("seat.txt").exists());
     }
 
     #[test]
@@ -506,8 +622,16 @@ mod tests {
             read(serde_json::json!({"kind": "commit", "commit": "abc123"})).unwrap(),
             commit("abc123")
         );
-        assert!(read(serde_json::json!({"kind": "commit"})).is_err());
-        assert!(read(serde_json::json!({"kind": "shared"})).is_err());
-        assert!(read(serde_json::json!({})).is_err());
+        // A key that doesn't belong is refused, never ignored.
+        for refused in [
+            serde_json::json!({"kind": "commit"}),
+            serde_json::json!({"kind": "commit", "comit": "abc123"}),
+            serde_json::json!({"kind": "branch", "commit": "abc123"}),
+            serde_json::json!({"kind": "branch", "base": "main"}),
+            serde_json::json!({"kind": "shared"}),
+            serde_json::json!({}),
+        ] {
+            assert!(read(refused.clone()).is_err(), "{refused}");
+        }
     }
 }

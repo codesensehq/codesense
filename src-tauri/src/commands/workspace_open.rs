@@ -692,16 +692,12 @@ fn seat_name(handle: &str, req: &OpenRequest) -> Result<String, OpenResult> {
     Ok(name.to_string())
 }
 
-/// A `seatWorktree` launch on a machine is refused, worded for `os`.
-fn seat_worktree_runs_here_for(os: &str) -> String {
+/// Why a `seatWorktree` launch on a machine is refused.
+fn seat_worktree_runs_here() -> String {
     format!(
         "seatWorktree runs on {} only; drop machineId or set it to \"local\"",
-        machine_wording::machine_noun(os)
+        machine_wording::machine_noun(machine_wording::RUNNING_OS)
     )
-}
-
-fn seat_worktree_runs_here() -> String {
-    seat_worktree_runs_here_for(machine_wording::RUNNING_OS)
 }
 
 /// Resolve `req` into a launch plan, or the `invalid` result for input it cannot use.

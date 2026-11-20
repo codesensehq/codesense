@@ -1858,13 +1858,9 @@ async fn a_named_reviewer_seat_without_seat_worktree_shares_the_story_worktree()
         );
     }
     // And the spine's decision for a launch with no seat keeps today's reconcile and
-    // snapshot in the story's worktree.
+    // snapshot.
     let plan = crate::commands::mcp_workspace::story_launch_plan(None);
     assert!(plan.reconcile && plan.snapshot);
-    assert_eq!(
-        plan.cwd,
-        crate::commands::mcp_workspace::LaunchCwd::StoryWorktree
-    );
 }
 
 #[tokio::test]
@@ -1920,10 +1916,6 @@ async fn a_seat_worktree_launch_carries_its_seat_to_the_spine() {
     };
     let plan = crate::commands::mcp_workspace::story_launch_plan(Some(&seat));
     assert!(!plan.reconcile && !plan.snapshot);
-    assert_eq!(
-        plan.cwd,
-        crate::commands::mcp_workspace::LaunchCwd::SeatWorktree
-    );
 }
 
 #[tokio::test]
