@@ -13,6 +13,7 @@ const HTML = readFileSync(
   "utf8",
 );
 const APP_ORIGIN = "tauri://localhost";
+const PACKAGED = ["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"];
 
 type Sent = { data: { type: string; id?: number; command?: string }; target: string };
 
@@ -43,7 +44,17 @@ const ACCOUNT = {
   authState: "ready",
 };
 
-function listReply(id: number, remainingPercentage: unknown) {
+function usage(remainingPercentage: unknown, label = "5h", sequence = 1) {
+  return {
+    accountProfileId: "acct-1",
+    sequence,
+    usageReceivedAt: 1,
+    usageFreshness: "fresh",
+    allowanceWindows: [{ label, remainingPercentage, resetsAt: null }],
+  };
+}
+
+function listReply(id: number, remainingPercentage: unknown, label?: string) {
   return {
     type: "codesense:agent-accounts-result",
     channel: "chan-1",
@@ -52,15 +63,7 @@ function listReply(id: number, remainingPercentage: unknown) {
     data: {
       accounts: [ACCOUNT],
       detached: [],
-      usage: [
-        {
-          accountProfileId: "acct-1",
-          sequence: 1,
-          usageReceivedAt: 1,
-          usageFreshness: "fresh",
-          allowanceWindows: [{ label: "5h", remainingPercentage, resetsAt: null }],
-        },
-      ],
+      usage: [usage(remainingPercentage, label)],
       active: { claude: null, codex: null },
     },
   };
@@ -72,15 +75,31 @@ afterEach(async () => {
   open = [];
 });
 
+async function rendered(remainingPercentage: unknown, label?: string) {
+  const page = boot();
+  open.push(page.win);
+  page.post({ type: "codesense:agent-accounts-init", channel: "chan-1" });
+  await vi.waitFor(() => expect(page.sent.length).toBeGreaterThan(0));
+  page.post(listReply(page.sent[0].data.id!, remainingPercentage, label));
+  await vi.waitFor(() => expect(page.doc.querySelector('[data-id="acct-1"]')).not.toBeNull());
+  return page;
+}
+
+const bar = (page: { doc: Document }) => page.doc.querySelector('[role="progressbar"]')!;
+const fill = (page: { doc: Document }) => page.doc.querySelector<HTMLElement>(".fill")!;
+
 describe("agent usage dashboard", () => {
-  it("sends its requests only to the app origin that initialized it", async () => {
-    const page = boot();
-    open.push(page.win);
-    page.post({ type: "codesense:agent-accounts-init", channel: "chan-1" });
-    await vi.waitFor(() => expect(page.sent.length).toBeGreaterThan(0));
-    expect(page.sent[0].data.command).toBe("list");
-    expect(page.sent.every((s) => s.target === APP_ORIGIN)).toBe(true);
-  });
+  it.each(PACKAGED)(
+    "sends its requests only to %s when that app origin initialized it",
+    async (origin) => {
+      const page = boot();
+      open.push(page.win);
+      page.post({ type: "codesense:agent-accounts-init", channel: "chan-1" }, origin);
+      await vi.waitFor(() => expect(page.sent.length).toBeGreaterThan(0));
+      expect(page.sent[0].data.command).toBe("list");
+      expect(page.sent.every((s) => s.target === origin)).toBe(true);
+    },
+  );
 
   it("ignores an init from an origin that is not the app", async () => {
     const page = boot();
@@ -142,6 +161,34 @@ describe("agent usage dashboard", () => {
     expect(page.doc.getElementById("injected")).toBeNull();
     const bar = page.doc.querySelector('[role="progressbar"]')!;
     expect(bar.getAttribute("aria-valuenow")).toBe("0");
+  });
+
+  it("renders a usage update for one card only as a number", async () => {
+    const page = await rendered(50);
+    expect(bar(page).getAttribute("aria-valuenow")).toBe("50");
+    page.post({
+      type: "codesense:agent-accounts-changed",
+      channel: "chan-1",
+      event: "agent-usage-changed",
+      payload: usage('7%"><img src=x id=injected>', "5h", 2),
+    });
+    await vi.waitFor(() => expect(bar(page).getAttribute("aria-valuenow")).toBe("0"));
+    expect(page.doc.getElementById("injected")).toBeNull();
+    expect(fill(page).style.width).toBe("0%");
+  });
+
+  it("keeps the fill width and the remaining text within 0 to 100", async () => {
+    const page = await rendered(-20);
+    expect(fill(page).style.width).toBe("0%");
+    expect(page.doc.querySelector(".window-row strong")!.textContent).toBe("0% remaining");
+  });
+
+  it("shows a window label as text, in the row and in the bar's label", async () => {
+    const label = '5h"><img src=x id=injected-label>';
+    const page = await rendered(50, label);
+    expect(page.doc.getElementById("injected-label")).toBeNull();
+    expect(page.doc.querySelector(".window-row span")!.textContent).toBe(label);
+    expect(bar(page).getAttribute("aria-label")).toBe(`${label} remaining`);
   });
 
   it("clamps a usage number into 0 to 100", async () => {
