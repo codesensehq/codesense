@@ -5448,6 +5448,17 @@ pub(crate) fn register_story_workspace(
     Ok(record.setup_complete)
 }
 
+/// Whether registering the worktree at `code_path` may stamp its story's `branch`
+/// frontmatter from the worktree's HEAD. A seat worktree is on its own branch (or
+/// detached), so it never re-points the story's branch; a record that can't be read is
+/// treated as the story's base worktree, as before seats existed.
+fn stamps_story_branch(home: &Path, principal: &Principal, code_path: &Path) -> bool {
+    !worktree_index::read_record(home, principal, code_path)
+        .ok()
+        .flatten()
+        .is_some_and(|record| record.is_seat())
+}
+
 /// Disk-touching registration and wiring run only on the blocking pool.
 fn establish_worktree_story_link_blocking(
     _ctx: &crate::commands::async_helpers::BlockingCtx,
@@ -5467,10 +5478,12 @@ fn establish_worktree_story_link_blocking(
             "story workspace registration requires a durable team and source repository".into(),
         );
     };
-    let setup_complete =
-        register_story_workspace(&codesense_home, &Principal::from(user_id), record)?;
+    let principal = Principal::from(user_id);
+    let setup_complete = register_story_workspace(&codesense_home, &principal, record)?;
     crate::commands::managed_worktree_config::write(&code_path, &codesense_home);
-    let _ = write_story_branch(app, &story_path, &code_path);
+    if stamps_story_branch(&codesense_home, &principal, &code_path) {
+        let _ = write_story_branch(app, &story_path, &code_path);
+    }
 
     // Publish registration readiness to the existing workspace roster.
     crate::commands::worktree::emit_worktree_changed(app);
@@ -6515,6 +6528,44 @@ mod tests {
             "unchanged"
         );
         assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_seat_registration_keeps_its_seat_and_never_stamps_the_story_branch() {
+        let home = tempfile::tempdir().unwrap();
+        let (base, seat) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let principal = Principal::from(42);
+        let story = home
+            .path()
+            .join("users/42/orgs/acme/context/team/content/S-1.md");
+        let record = |root: &Path| {
+            WorktreeStoryRecord::new(
+                root,
+                "acme/context",
+                SourceRepoSlug::new("acme", "repo").unwrap(),
+                "S-1",
+                story.clone(),
+            )
+        };
+        // No record yet, and the story's base worktree: the branch is stamped as before.
+        assert!(stamps_story_branch(home.path(), &principal, base.path()));
+        register_story_workspace(home.path(), &principal, record(base.path())).unwrap();
+        assert!(stamps_story_branch(home.path(), &principal, base.path()));
+
+        let mut seated = record(seat.path());
+        seated.seat = Some(worktree_index::SeatRecord {
+            name: "dev".into(),
+            kind: worktree_index::SeatKind::Branch,
+            pinned_commit: None,
+        });
+        worktree_index::write_record(home.path(), &principal, &seated).unwrap();
+        // The launch re-registers with a plain record; the seat survives it.
+        register_story_workspace(home.path(), &principal, record(seat.path())).unwrap();
+        let after = worktree_index::read_record(home.path(), &principal, seat.path())
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.seat, seated.seat);
+        assert!(!stamps_story_branch(home.path(), &principal, seat.path()));
     }
 
     #[test]

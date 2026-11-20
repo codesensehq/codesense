@@ -4025,6 +4025,47 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_session_in_a_seat_worktree_gets_its_story_exactly() {
+        let (d, mut store) = store();
+        let base = story_worktree(
+            d.path(),
+            "ST-5",
+            "type: story\nstory_id: ST-5\ntitle: \"Redesign the site\"\nstatus: in-progress\nparent_epic: ST\n",
+        );
+        // A seat worktree of the same story, a sibling folder with its own record.
+        let seat_dir = d.path().join("wt-ST-5-seat-dev");
+        std::fs::create_dir_all(&seat_dir).unwrap();
+        let mut seat = base.clone();
+        seat.code_repo_path = seat_dir.clone();
+        seat.seat = Some(crate::install::worktree_index::SeatRecord {
+            name: "dev".into(),
+            kind: crate::install::worktree_index::SeatKind::Branch,
+            pinned_commit: None,
+        });
+        store
+            .ingest(&[
+                event_in("a", "lead", &base.code_repo_path, 1),
+                event_in("b", "dev", &seat_dir, 1),
+            ])
+            .unwrap();
+        let mut stories = StoryResolver::new(vec![base, seat], HashMap::new());
+        let r = store.report_with(&Filter::default(), &mut stories).unwrap();
+        let want = Some(UsageStory {
+            id: "ST-5".into(),
+            title: Some("Redesign the site".into()),
+            status: Some("in-progress".into()),
+            epic: Some("ST".into()),
+            basis: None,
+        });
+        assert_eq!(by_id(&r, "lead").story, want);
+        assert_eq!(
+            by_id(&r, "dev").story,
+            want,
+            "a seat session is the story's, with no basis"
+        );
+    }
+
+    #[test]
     fn a_story_file_that_does_not_say_leaves_title_status_and_epic_null_or_from_its_heading() {
         let (d, mut store) = store();
         let rec = story_worktree(d.path(), "SV-3", "type: story\nepic: SV-NAV\n");

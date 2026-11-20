@@ -1579,6 +1579,7 @@ async fn open_workspace_story_target_uses_the_story_id_as_handle() {
             story_id: "SW-1".into(),
             handle: "SW-1".into(),
             team: active(),
+            seat: None,
         }
     );
     assert!(!launch
@@ -1756,6 +1757,7 @@ async fn named_story_sessions_open_as_tabs_in_the_story_workspace() {
                 story_id: "SW-1".into(),
                 handle: handle.clone(),
                 team: active(),
+                seat: None,
             }
         );
         assert_eq!(launch.record.meta.story.as_deref(), Some("SW-1"));
@@ -1806,6 +1808,260 @@ async fn named_story_sessions_open_as_tabs_in_the_story_workspace() {
         .await
         .unwrap();
     assert_eq!(unusable.status, OpenStatus::Invalid);
+}
+
+fn seat_story(name: Option<&str>, seat: SeatWorktreeParam) -> OpenRequest {
+    OpenRequest {
+        seat_worktree: Some(seat),
+        ..named_story(name, None)
+    }
+}
+
+fn pinned(commit: &str) -> SeatWorktreeParam {
+    SeatWorktreeParam::Commit {
+        commit: commit.into(),
+    }
+}
+
+#[tokio::test]
+async fn a_named_reviewer_seat_without_seat_worktree_shares_the_story_worktree() {
+    let home = tempfile::tempdir().unwrap();
+    let host = FakeHost::new(home.path(), 8);
+    open_agent(&host, &active(), &named_story(None, None))
+        .await
+        .unwrap();
+    let reviewer = open_agent(
+        &host,
+        &active(),
+        &OpenRequest {
+            role: Some("reviewer".into()),
+            ..named_story(Some("reviewer"), None)
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(reviewer.status, OpenStatus::Opened);
+    let launches = host.launches();
+    // The lead and the reviewer launch into the same story worktree: no seat on either.
+    assert_eq!(
+        launches[1].target,
+        LaunchTarget::Story {
+            story_id: "SW-1".into(),
+            handle: "SW-1#reviewer".into(),
+            team: active(),
+            seat: None,
+        }
+    );
+    for launch in &launches {
+        assert!(
+            matches!(&launch.target, LaunchTarget::Story { story_id, seat: None, .. } if story_id == "SW-1")
+        );
+    }
+    // And the spine's decision for a launch with no seat keeps today's reconcile and
+    // snapshot in the story's worktree.
+    let plan = crate::commands::mcp_workspace::story_launch_plan(None);
+    assert!(plan.reconcile && plan.snapshot);
+    assert_eq!(
+        plan.cwd,
+        crate::commands::mcp_workspace::LaunchCwd::StoryWorktree
+    );
+}
+
+#[tokio::test]
+async fn a_seat_worktree_launch_carries_its_seat_to_the_spine() {
+    let home = tempfile::tempdir().unwrap();
+    let host = FakeHost::new(home.path(), 8);
+    let dev = open_agent(
+        &host,
+        &active(),
+        &seat_story(Some("Worker 2"), SeatWorktreeParam::Branch),
+    )
+    .await
+    .unwrap();
+    assert_eq!(dev.status, OpenStatus::Opened, "{}", dev.message);
+    // Same handle and workspace as a shared named session; only the seat differs.
+    assert_eq!(dev.handle.as_deref(), Some("SW-1#worker-2"));
+    let review = open_agent(
+        &host,
+        &active(),
+        &seat_story(Some("review"), pinned("abc123")),
+    )
+    .await
+    .unwrap();
+    assert_eq!(review.status, OpenStatus::Opened, "{}", review.message);
+    let targets: Vec<_> = host.launches().into_iter().map(|l| l.target).collect();
+    assert_eq!(
+        targets,
+        vec![
+            LaunchTarget::Story {
+                story_id: "SW-1".into(),
+                handle: "SW-1#worker-2".into(),
+                team: active(),
+                seat: Some(SeatLaunch {
+                    name: "worker-2".into(),
+                    worktree: SeatWorktreeParam::Branch,
+                }),
+            },
+            LaunchTarget::Story {
+                story_id: "SW-1".into(),
+                handle: "SW-1#review".into(),
+                team: active(),
+                seat: Some(SeatLaunch {
+                    name: "review".into(),
+                    worktree: pinned("abc123"),
+                }),
+            },
+        ]
+    );
+    // A seat launch neither reconciles nor snapshots the story branch.
+    let seat = SeatLaunch {
+        name: "worker-2".into(),
+        worktree: SeatWorktreeParam::Branch,
+    };
+    let plan = crate::commands::mcp_workspace::story_launch_plan(Some(&seat));
+    assert!(!plan.reconcile && !plan.snapshot);
+    assert_eq!(
+        plan.cwd,
+        crate::commands::mcp_workspace::LaunchCwd::SeatWorktree
+    );
+}
+
+#[tokio::test]
+async fn seat_worktree_needs_a_named_story_session_on_this_mac() {
+    let home = tempfile::tempdir().unwrap();
+    let host = FakeHost::new(home.path(), 8);
+    let refused = [
+        // The story's own session runs in its base worktree.
+        seat_story(None, SeatWorktreeParam::Branch),
+        OpenRequest {
+            machine_id: Some("box".into()),
+            ..seat_story(Some("dev"), SeatWorktreeParam::Branch)
+        },
+        OpenRequest {
+            seat_worktree: Some(SeatWorktreeParam::Branch),
+            ..team_workspace("Sprint 1", None)
+        },
+    ];
+    for req in &refused {
+        let result = open_agent(&host, &active(), req).await.unwrap();
+        assert_eq!(result.status, OpenStatus::Invalid, "{req:?}");
+        assert!(
+            result.message.contains("seatWorktree"),
+            "{}",
+            result.message
+        );
+    }
+    // A story whose workspace lives on a machine has no seat worktrees there.
+    host.place("SW-9", WorkspacePlace::Machine("box".into()));
+    let elsewhere = open_agent(
+        &host,
+        &active(),
+        &OpenRequest {
+            story_id: Some("SW-9".into()),
+            ..seat_story(Some("dev"), SeatWorktreeParam::Branch)
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(elsewhere.status, OpenStatus::Invalid);
+    assert!(host.launches().is_empty());
+    assert!(host.remote_launches().is_empty());
+    assert_eq!(host.stagings.load(Ordering::SeqCst), 0);
+    // `local` is This Mac.
+    let local = open_agent(
+        &host,
+        &active(),
+        &OpenRequest {
+            machine_id: Some("local".into()),
+            ..seat_story(Some("dev"), SeatWorktreeParam::Branch)
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(local.status, OpenStatus::Opened, "{}", local.message);
+}
+
+#[tokio::test]
+async fn an_already_live_seat_name_creates_and_changes_nothing() {
+    let home = tempfile::tempdir().unwrap();
+    let host = FakeHost::new(home.path(), 8);
+    let seat_warning = |result: &OpenResult| {
+        result
+            .warnings
+            .iter()
+            .any(|w| matches!(w.code, LaunchWarningCode::SeatWorktreeIgnored))
+    };
+    // A live tab in its own seat worktree.
+    let first = open_agent(
+        &host,
+        &active(),
+        &seat_story(Some("dev"), SeatWorktreeParam::Branch),
+    )
+    .await
+    .unwrap();
+    assert!(!seat_warning(&first));
+    // A live tab in the story's shared worktree.
+    open_agent(&host, &active(), &named_story(Some("qa"), None))
+        .await
+        .unwrap();
+    let launched = host.launches().len();
+    for (name, seat) in [
+        ("dev", SeatWorktreeParam::Branch),
+        ("dev", pinned("abc123")),
+        ("qa", pinned("abc123")),
+    ] {
+        let again = open_agent(&host, &active(), &seat_story(Some(name), seat))
+            .await
+            .unwrap();
+        assert_eq!(again.status, OpenStatus::AlreadyLive, "{name}");
+        assert!(seat_warning(&again), "{name}: {:?}", again.warnings);
+    }
+    // Nothing reached the spine, so no seat worktree was created or changed.
+    assert_eq!(host.launches().len(), launched);
+    // Without the option an already-live reopen carries no seat warning.
+    let plain = open_agent(&host, &active(), &named_story(Some("dev"), None))
+        .await
+        .unwrap();
+    assert_eq!(plain.status, OpenStatus::AlreadyLive);
+    assert!(!seat_warning(&plain));
+}
+
+#[tokio::test]
+async fn a_seat_the_spine_cannot_use_is_invalid_not_an_error() {
+    let home = tempfile::tempdir().unwrap();
+    let host = FakeHost::new(home.path(), 8);
+    *host.launch_error.lock().unwrap() =
+        Some(LaunchError::Invalid("unknown commit \"nope\"".into()));
+    let result = open_agent(
+        &host,
+        &active(),
+        &seat_story(Some("review"), pinned("nope")),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.status, OpenStatus::Invalid);
+    assert_eq!(result.message, "Not opened: unknown commit \"nope\".");
+    assert!(!host.is_live("SW-1#review"));
+}
+
+#[tokio::test]
+async fn the_verb_reads_seat_worktree_and_refuses_it_without_a_target() {
+    let port = FakePort::default();
+    let result = open_workspace_call(
+        &port,
+        params(serde_json::json!({"story_id": "SW-1", "seatWorktree": {"kind": "branch"}})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result["status"], "invalid");
+    assert!(port.story_launches.lock().unwrap().is_empty());
+    let read = params(serde_json::json!({
+        "target": "story", "story_id": "SW-1", "name": "review",
+        "seatWorktree": {"kind": "commit", "commit": "abc123"},
+    }));
+    assert_eq!(read.seat_worktree, Some(pinned("abc123")));
+    let snake = params(serde_json::json!({"seat_worktree": {"kind": "branch"}}));
+    assert_eq!(snake.seat_worktree, Some(SeatWorktreeParam::Branch));
 }
 
 #[tokio::test]
@@ -3411,6 +3667,7 @@ pub(crate) mod agent_opens {
                     org: AGENT_ORG.to_string(),
                     team: AGENT_TEAM.to_string(),
                 },
+                seat: None,
             }
         );
         // No prompt of its own: the agent starts with its default one.

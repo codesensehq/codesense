@@ -226,6 +226,11 @@ pub struct WorktreeStoryRecord {
     /// here. `None` before any launch (or for a record an older client wrote).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attribution: Option<crate::attribution::AttributionState>,
+    /// The seat this worktree belongs to when it is one of the story's seat worktrees
+    /// (`open_workspace` `seatWorktree`), beside the story's base worktree. `None` for the
+    /// base worktree, and for every record an older client wrote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seat: Option<SeatRecord>,
     /// Preserve fields written by newer clients when updating this record.
     #[serde(flatten)]
     pub extras: std::collections::BTreeMap<String, serde_json::Value>,
@@ -284,9 +289,47 @@ impl WorktreeStoryRecord {
             // this to `false` before setup and back to `true` on setup success.
             setup_complete: true,
             attribution: None,
+            seat: None,
             extras: Default::default(),
         }
     }
+
+    /// Whether this is one of the story's seat worktrees rather than its base worktree.
+    pub fn is_seat(&self) -> bool {
+        self.seat.is_some()
+    }
+}
+
+/// What a seat worktree is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SeatKind {
+    /// A writable worktree on the seat's own branch, cut from the story branch.
+    Branch,
+    /// A detached checkout pinned to one commit.
+    Commit,
+}
+
+/// A seat worktree's mark on its story record: which named session of the story it
+/// belongs to and what it checks out.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SeatRecord {
+    /// The seat's normalized name: the `<name>` of its `<storyId>#<name>` handle.
+    pub name: String,
+    pub kind: SeatKind,
+    /// The full sha a `commit` seat is pinned to; `None` for a `branch` seat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_commit: Option<String>,
+}
+
+/// The records that can be a story's base worktree: every record but its seat
+/// worktrees. Use it where a caller picks *the* worktree of a story (the launch cwd, a
+/// story move, the attribution diff); a caller that follows every worktree of a story
+/// (relink, rekey, branch tips, story changes) reads all of them.
+pub fn base_story_records<'a>(
+    records: impl IntoIterator<Item = &'a WorktreeStoryRecord>,
+) -> impl Iterator<Item = &'a WorktreeStoryRecord> {
+    records.into_iter().filter(|record| !record.is_seat())
 }
 
 fn extend_hydrated_epics(epics: &mut Vec<PathBuf>, epic: PathBuf) -> bool {
@@ -1504,6 +1547,80 @@ mod tests {
         let read = read_record(home.path(), &Principal::from(UID), wt.path()).unwrap();
 
         assert_eq!(read, Some(rec));
+    }
+
+    fn seat_sample(code_repo_path: &Path, story_id: &str, name: &str) -> WorktreeStoryRecord {
+        let mut rec = sample(code_repo_path, "alpha", story_id);
+        rec.seat = Some(SeatRecord {
+            name: name.into(),
+            kind: SeatKind::Commit,
+            pinned_commit: Some("0123456789abcdef0123456789abcdef01234567".into()),
+        });
+        rec
+    }
+
+    #[test]
+    fn a_seat_round_trips_and_a_record_without_one_is_a_base_worktree() {
+        let home = TempDir::new().unwrap();
+        let wt = TempDir::new().unwrap();
+        let seat = seat_sample(wt.path(), "SW-TS-1", "review");
+        write_record(home.path(), &Principal::from(UID), &seat).unwrap();
+        let read = read_record(home.path(), &Principal::from(UID), wt.path())
+            .unwrap()
+            .unwrap();
+        assert_eq!(read, seat);
+        assert!(read.is_seat());
+        let json = serde_json::to_value(&read).unwrap();
+        assert_eq!(
+            json["seat"],
+            serde_json::json!({"name": "review", "kind": "commit", "pinned_commit": "0123456789abcdef0123456789abcdef01234567"})
+        );
+
+        // A base record writes no `seat` key, and a record without one reads as a base.
+        let base = sample(wt.path(), "alpha", "SW-TS-1");
+        let json = serde_json::to_value(&base).unwrap();
+        assert!(json.get("seat").is_none());
+        let parsed: WorktreeStoryRecord = serde_json::from_value(json).unwrap();
+        assert!(!parsed.is_seat());
+    }
+
+    #[test]
+    fn base_story_records_skip_seats_while_find_by_story_id_keeps_them() {
+        let home = TempDir::new().unwrap();
+        let (base_wt, seat_wt) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let base = sample(base_wt.path(), "alpha", "SW-TS-1");
+        let seat = seat_sample(seat_wt.path(), "SW-TS-1", "review");
+        // The seat comes first, so a find-first without the filter would pick it.
+        let records = vec![seat.clone(), base.clone()];
+        let picked: Vec<_> = base_story_records(&records).collect();
+        assert_eq!(picked, vec![&base]);
+
+        for rec in [&base, &seat] {
+            write_record(home.path(), &Principal::from(UID), rec).unwrap();
+        }
+        let mut all = find_by_story_id(home.path(), &Principal::from(UID), "SW-TS-1").unwrap();
+        all.sort_by(|a, b| a.code_repo_path.cmp(&b.code_repo_path));
+        let mut want = vec![base, seat];
+        want.sort_by(|a, b| a.code_repo_path.cmp(&b.code_repo_path));
+        assert_eq!(all, want);
+    }
+
+    #[test]
+    fn a_registered_seat_worktree_is_a_managed_launch_target() {
+        let home = TempDir::new().unwrap();
+        let seat_wt = TempDir::new().unwrap();
+        assert!(!is_codesense_managed_target(seat_wt.path(), home.path()));
+        write_record(
+            home.path(),
+            &Principal::from(UID),
+            &seat_sample(seat_wt.path(), "SW-TS-1", "dev"),
+        )
+        .unwrap();
+        assert!(is_codesense_managed_target(seat_wt.path(), home.path()));
+        assert!(is_codesense_managed_target(
+            &seat_wt.path().join("src"),
+            home.path()
+        ));
     }
 
     #[test]

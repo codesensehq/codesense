@@ -160,9 +160,10 @@ fn resolve_then(
             params.story_id.as_deref().unwrap(),
         )
         .map_err(|e| e.to_string())?;
-        let (visible, hidden): (Vec<_>, Vec<_>) = records
-            .into_iter()
-            .partition(|record| scope.allows(&record.story_source_path));
+        // The story's live work is its base worktree; its seat worktrees are not.
+        let (visible, hidden): (Vec<_>, Vec<_>) =
+            crate::install::worktree_index::base_story_records(&records)
+                .partition(|record| scope.allows(&record.story_source_path));
         if std::vec::Vec::is_empty(&visible) && !std::vec::Vec::is_empty(&hidden) {
             return Ok(state("refused", "This story's worktree is outside this view"));
         }
@@ -535,6 +536,38 @@ mod tests {
         git(repo.path(), &["worktree", "add", "-qb", "feat/SV-X-2", second.to_str().unwrap()]);
         record_story_worktree(home.path(), &second, home.path().join("story.md"));
         assert_eq!(read(home.path(), &Principal::from(1), &CallerScope::Human, &params)["status"], "refused");
+    }
+    #[test]
+    fn a_seat_worktree_beside_the_story_worktree_is_not_a_second_match() {
+        let (home, repo, _live, params) = live_fixture();
+        let seat = home.path().join("seat");
+        git(
+            repo.path(),
+            &["worktree", "add", "-q", "--detach", seat.to_str().unwrap()],
+        );
+        let mut record = crate::install::worktree_index::WorktreeStoryRecord::new(
+            &seat,
+            "acme",
+            crate::domain::SourceRepoSlug::new("acme", "api").unwrap(),
+            params.story_id.as_deref().unwrap(),
+            home.path().join("story.md"),
+        );
+        record.seat = Some(crate::install::worktree_index::SeatRecord {
+            name: "review".into(),
+            kind: crate::install::worktree_index::SeatKind::Commit,
+            pinned_commit: None,
+        });
+        crate::install::worktree_index::write_record(home.path(), &Principal::from(1), &record)
+            .unwrap();
+        assert_eq!(
+            read(
+                home.path(),
+                &Principal::from(1),
+                &CallerScope::Human,
+                &params
+            )["status"],
+            "opened"
+        );
     }
     #[test]
     fn a_path_missing_at_the_revision_is_unavailable() {
