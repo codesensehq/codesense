@@ -3585,7 +3585,9 @@
         // Host-forwarded file drops (WKWebView frames never see OS paths): a drop inserts the
         // paths at the composer cursor, like the CLI. Dormant until the host sends them.
         function quotePath(path) {
-          return /\s/.test(path) ? '"' + path.replace(/"/g, '\\"') + '"' : path;
+          // A space, quote or backslash needs quotes; inside them both quote and backslash are
+          // escaped, so a trailing backslash cannot escape the closing quote.
+          return /[\s"\\]/.test(path) ? '"' + path.replace(/["\\]/g, "\\$&") + '"' : path;
         }
         window.addEventListener("message", (event) => {
           const d = event.data;
