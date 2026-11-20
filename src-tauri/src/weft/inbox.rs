@@ -2538,3 +2538,38 @@ pub(crate) fn inbox_set_attachments(
     tx.commit()?;
     Ok(())
 }
+
+/// Every message that carries attachments: its id, creation time (ms) and the stored
+/// attachments JSON, untouched.
+pub(crate) fn inbox_attachments_raw(store: &WeftStore) -> WvWriteResult<Vec<(i64, i64, String)>> {
+    let conn = store.conn()?;
+    let mut stmt = conn.prepare(
+        "SELECT id, created_at, attachments FROM wv_inbox \
+         WHERE attachments IS NOT NULL AND attachments NOT IN ('', '[]') ORDER BY id",
+    )?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// Replace a message's attachments JSON with `json`, only while it still reads `was`.
+/// Returns whether it changed.
+pub(crate) fn inbox_replace_attachments_raw(
+    store: &WeftStore,
+    id: i64,
+    was: &str,
+    json: &str,
+) -> WvWriteResult<bool> {
+    let mut conn = store.conn()?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let changed = tx.execute(
+        "UPDATE wv_inbox SET attachments=?3 WHERE id=?1 AND attachments=?2",
+        params![id, was, json],
+    )?;
+    if changed > 0 {
+        write_audit_public(&tx, INBOX, "mutate", id)?;
+    }
+    tx.commit()?;
+    Ok(changed > 0)
+}

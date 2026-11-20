@@ -1,5 +1,15 @@
 // SPDX-License-Identifier: MIT
 //! Host-fetched inbox images. Frames only see verified, content-addressed bytes.
+//! Provider media (GIPHY, KLIPY) is held in memory only, never on disk, as their terms
+//! require; everything else keeps the content-addressed disk cache.
+pub(crate) mod index;
+pub(crate) mod memory;
+pub(crate) mod purge;
+mod state;
+pub(crate) use state::MediaState;
+#[cfg(test)]
+pub(crate) use state::{FakeFetch, Fetch};
+
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -10,6 +20,51 @@ use tauri::Manager;
 
 pub const MAX_BYTES: usize = 8 * 1024 * 1024;
 const CACHE_BYTES: u64 = 256 * 1024 * 1024;
+/// Held while the disk cache is written or a memory-only sha's file is deleted, so a
+/// store never writes back a sha the index has just made memory-only.
+static DISK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// GIPHY's hosts, fixed: not Settings, the selected provider, a key or `inbox.yml`.
+pub const GIPHY_HOSTS: &[&str] = &["giphy.com", "*.giphy.com"];
+/// KLIPY's hosts, fixed like [`GIPHY_HOSTS`].
+pub const KLIPY_HOSTS: &[&str] = &["klipy.com", "*.klipy.com"];
+/// Every provider host: [`GIPHY_HOSTS`] and [`KLIPY_HOSTS`].
+pub const PROVIDER_HOSTS: &[&str] = &["giphy.com", "*.giphy.com", "klipy.com", "*.klipy.com"];
+
+/// Whether `host` matches `pattern`: exactly, or `*.suffix` for any subdomain of it.
+fn host_matches(pattern: &str, host: &str) -> bool {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    let pattern = pattern.to_ascii_lowercase();
+    if let Some(suffix) = pattern.strip_prefix("*.") {
+        host.strip_suffix(suffix)
+            .is_some_and(|prefix| prefix.ends_with('.') && prefix.len() > 1)
+    } else {
+        host == pattern
+    }
+}
+
+/// Whose terms govern an image's bytes, from the host they finally came from.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum MediaProvider {
+    Giphy,
+    Klipy,
+    None,
+}
+impl MediaProvider {
+    pub fn of_host(host: &str) -> Self {
+        if GIPHY_HOSTS.iter().any(|p| host_matches(p, host)) {
+            Self::Giphy
+        } else if KLIPY_HOSTS.iter().any(|p| host_matches(p, host)) {
+            Self::Klipy
+        } else {
+            Self::None
+        }
+    }
+    pub fn is_provider(self) -> bool {
+        self != Self::None
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct MediaInput {
@@ -50,7 +105,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             remote: Remote::Auto,
-            hosts: vec!["*.giphy.com".into(), "static.klipy.com".into()],
+            hosts: vec!["*.giphy.com".into(), "*.klipy.com".into()],
         }
     }
 }
@@ -76,18 +131,9 @@ impl Config {
         }
     }
     pub fn allows(&self, host: &str) -> bool {
-        let host = host.to_ascii_lowercase();
-        self.hosts.iter().any(|pattern| {
-            let pattern = pattern.to_ascii_lowercase();
-            if let Some(suffix) = pattern.strip_prefix("*.") {
-                host.strip_suffix(suffix)
-                    .is_some_and(|prefix| prefix.ends_with('.') && prefix.len() > 1)
-            } else {
-                host == pattern
-            }
-        })
+        self.hosts.iter().any(|pattern| host_matches(pattern, host))
     }
-    fn should_auto_fetch(&self, host: &str, own: bool) -> bool {
+    pub(crate) fn should_auto_fetch(&self, host: &str, own: bool) -> bool {
         self.remote == Remote::Auto && own && self.allows(host)
     }
     pub fn apply(&self, attachments: &mut [Attachment]) {
@@ -123,6 +169,14 @@ pub struct Attachment {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     pub retryable: bool,
+    /// The provider whose host the bytes finally came from (after redirects), written
+    /// on every fetch; `none` for other media. Missing only on an old message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_provider: Option<MediaProvider>,
+    /// The sender was a session on this machine when it sent: an automatic re-fetch
+    /// may use this attachment's URL. Missing reads as false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub own_sender: bool,
 }
 impl Attachment {
     pub fn remote(url: &str, alt: &str, config: &Config, own: bool) -> Result<Self, Failure> {
@@ -147,6 +201,7 @@ impl Attachment {
         );
         a.source_host = Some(host);
         a.source_url = Some(url.to_string());
+        a.own_sender = own;
         Ok(a)
     }
     fn empty(alt: &str) -> Self {
@@ -163,6 +218,19 @@ impl Attachment {
             state: "pending".into(),
             reason: None,
             retryable: false,
+            media_provider: None,
+            own_sender: false,
+        }
+    }
+    /// Provider media: `mediaProvider` says so or, on an old message without it, the
+    /// source host is a provider host.
+    pub fn is_provider_media(&self) -> bool {
+        match self.media_provider {
+            Some(provider) => provider.is_provider(),
+            None => self
+                .source_host
+                .as_deref()
+                .is_some_and(|h| MediaProvider::of_host(h).is_provider()),
         }
     }
     fn failed(mut self, error: Failure) -> Self {
@@ -172,7 +240,7 @@ impl Attachment {
         self
     }
 }
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Failure {
     pub reason: &'static str,
     pub retryable: bool,
@@ -290,7 +358,15 @@ fn client_builder(config: &Config) -> reqwest::ClientBuilder {
         .timeout(Duration::from_secs(10))
         .redirect(redirect_policy(config))
 }
-async fn download(url: &str, config: &Config) -> Result<Vec<u8>, Failure> {
+/// A fetched body, the URL it finally came from after redirects, and its
+/// `Cache-Control`.
+#[derive(Debug)]
+pub(crate) struct Downloaded {
+    pub bytes: Vec<u8>,
+    pub final_url: url::Url,
+    pub cache_control: Option<String>,
+}
+async fn download(url: &str, config: &Config) -> Result<Downloaded, Failure> {
     let url = remote_url(url)?;
     if !public_url(&url) {
         return Err(failure("address"));
@@ -299,6 +375,9 @@ async fn download(url: &str, config: &Config) -> Result<Vec<u8>, Failure> {
         .https_only(true)
         .build()
         .map_err(network)?;
+    send(&client, url).await
+}
+async fn send(client: &reqwest::Client, url: url::Url) -> Result<Downloaded, Failure> {
     let response = client.get(url).send().await.map_err(|e| {
         let mut cause: Option<&dyn std::error::Error> = Some(&e);
         while let Some(error) = cause {
@@ -315,7 +394,13 @@ async fn download(url: &str, config: &Config) -> Result<Vec<u8>, Failure> {
     })?;
     read_response(response).await
 }
-async fn read_response(mut response: reqwest::Response) -> Result<Vec<u8>, Failure> {
+async fn read_response(mut response: reqwest::Response) -> Result<Downloaded, Failure> {
+    let final_url = response.url().clone();
+    let cache_control = response
+        .headers()
+        .get(reqwest::header::CACHE_CONTROL)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
     if !response.status().is_success() {
         return Err(Failure {
             reason: "http",
@@ -335,7 +420,11 @@ async fn read_response(mut response: reqwest::Response) -> Result<Vec<u8>, Failu
         }
         bytes.extend_from_slice(&chunk);
     }
-    Ok(bytes)
+    Ok(Downloaded {
+        bytes,
+        final_url,
+        cache_control,
+    })
 }
 fn cache_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(app
@@ -383,10 +472,23 @@ pub fn read_cached(dir: &Path, sha: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 fn store_bytes(dir: &Path, bytes: &[u8], a: &mut Attachment) -> Result<(), Failure> {
-    static WRITES: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _guard = WRITES.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = DISK.lock().unwrap_or_else(|e| e.into_inner());
     let (mime, w, h) = inspect(bytes)?;
     let sha = format!("{:x}", Sha256::digest(bytes));
+    write_file(dir, &sha, bytes)?;
+    a.sha256 = Some(sha);
+    a.mime = Some(mime.into());
+    a.width = Some(w);
+    a.height = Some(h);
+    a.bytes = Some(bytes.len() as u64);
+    a.state = "cached".into();
+    a.reason = None;
+    a.retryable = false;
+    Ok(())
+}
+/// Write verified `bytes` as `dir/<sha>`, evicting the oldest files over the cap.
+/// The caller holds [`DISK`].
+fn write_file(dir: &Path, sha: &str, bytes: &[u8]) -> Result<(), Failure> {
     std::fs::create_dir_all(dir).map_err(network)?;
     let mut entries: Vec<_> = std::fs::read_dir(dir)
         .map_err(network)?
@@ -408,15 +510,7 @@ fn store_bytes(dir: &Path, bytes: &[u8], a: &mut Attachment) -> Result<(), Failu
     }
     let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(network)?;
     std::io::Write::write_all(&mut temp, bytes).map_err(network)?;
-    temp.persist(dir.join(&sha)).map_err(network)?;
-    a.sha256 = Some(sha);
-    a.mime = Some(mime.into());
-    a.width = Some(w);
-    a.height = Some(h);
-    a.bytes = Some(bytes.len() as u64);
-    a.state = "cached".into();
-    a.reason = None;
-    a.retryable = false;
+    temp.persist(dir.join(sha)).map_err(network)?;
     Ok(())
 }
 
@@ -603,6 +697,7 @@ fn cache_local_media(
     cache_dir: &std::path::Path,
 ) -> Result<Attachment, String> {
     let mut attachment = Attachment::empty(alt);
+    attachment.media_provider = Some(MediaProvider::None);
     Ok(match store_bytes(cache_dir, bytes, &mut attachment) {
         Ok(()) => attachment,
         Err(error) => attachment.failed(Failure {
@@ -612,70 +707,147 @@ fn cache_local_media(
     })
 }
 
-pub(crate) async fn fetch(
-    app: &tauri::AppHandle,
-    team: &crate::commands::dashboard_launch::LaunchTeam,
-    mut a: Attachment,
-    automatic: bool,
-) -> Result<Attachment, String> {
-    let config = config(app, team).await?;
-    if config.remote == Remote::Off {
-        return Ok(Attachment {
-            state: "blocked".into(),
-            ..a
-        });
-    }
-    if automatic && !config.should_auto_fetch(a.source_host.as_deref().unwrap_or(""), true) {
-        a.state = "pending".into();
-        a.reason = Some(
-            if config.remote == Remote::Ask {
-                "ask"
-            } else {
-                "host"
-            }
-            .into(),
-        );
-        return Ok(a);
-    }
-    let bytes = match download(
-        a.source_url.as_deref().ok_or("media source missing")?,
-        &config,
-    )
-    .await
-    {
-        Ok(bytes) => bytes,
-        Err(e) => return Ok(a.failed(e)),
-    };
-    let dir = cache_dir(app)?;
-    crate::commands::await_blocking("media.cache", move || {
-        let mut a = a;
-        Ok(match store_bytes(&dir, &bytes, &mut a) {
-            Ok(()) => a,
-            Err(e) => a.failed(e),
-        })
-    })
-    .await
+/// The app's media state, once [`install`] has run.
+pub(crate) fn app_state(app: &tauri::AppHandle) -> Option<std::sync::Arc<MediaState>> {
+    app.try_state::<std::sync::Arc<MediaState>>()
+        .map(|s| s.inner().clone())
 }
-fn cached_presence(dir: &Path, attachments: &mut [Attachment]) {
-    for a in attachments {
-        if a.state == "cached"
-            && a.sha256
-                .as_ref()
-                .is_some_and(|sha| !dir.join(sha).is_file())
+
+/// Hold the media state and, in the background, index every synced team's messages
+/// and run the one-time purge.
+pub(crate) fn install(app: &tauri::AppHandle) {
+    let dir = match cache_dir(app) {
+        Ok(dir) => dir,
+        Err(e) => {
+            log::warn!("inbox media: no cache dir: {e}");
+            return;
+        }
+    };
+    let state = std::sync::Arc::new(MediaState::new(dir, std::sync::Arc::new(state::Http)));
+    app.manage(state.clone());
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = startup(&app, &state).await {
+            log::warn!("inbox media: provider purge not finished, it runs again next start: {e}");
+        }
+    });
+}
+
+async fn startup(app: &tauri::AppHandle, state: &std::sync::Arc<MediaState>) -> Result<(), String> {
+    use crate::commands::agent_inbox::InboxHost;
+    let host = crate::commands::agent_inbox::AppInboxHost { app: app.clone() };
+    // `synced_teams` indexes each team it has not seen yet before returning it.
+    let teams = host.synced_teams().await;
+    state.set_ready();
+    let mut stores = Vec::new();
+    for team in teams? {
+        let path = host.team_store(&team).await?;
+        stores.push((team, path));
+    }
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let state = state.clone();
+    let purged = crate::commands::await_blocking("media.purge", move || {
+        purge::run(&state, &stores, &data_dir)
+    })
+    .await?;
+    if let purge::Purged::Done {
+        deleted,
+        backfilled,
+    } = purged
+    {
+        log::info!(
+            "inbox media: purged {deleted} provider files, backfilled {backfilled} messages"
+        );
+    }
+    Ok(())
+}
+
+/// Index each of `teams` the media index hasn't seen yet (a team attached after
+/// startup), before any of its media is served.
+pub(crate) async fn index_new_teams(
+    state: &std::sync::Arc<MediaState>,
+    host: &dyn crate::commands::agent_inbox::InboxHost,
+    teams: &[crate::commands::dashboard_launch::LaunchTeam],
+) {
+    for team in teams {
+        if state.index.is_team_indexed(&team.org, &team.team) {
+            continue;
+        }
+        let path = match host.team_store(team).await {
+            Ok(path) => path,
+            Err(e) => {
+                log::warn!("inbox media: no store to index: {e}");
+                continue;
+            }
+        };
+        let (state, team) = (state.clone(), team.clone());
+        if let Err(e) = crate::commands::await_blocking("media.index", move || {
+            purge::index_store(&state, &team, &path)
+        })
+        .await
         {
-            a.state = "failed".into();
-            a.reason = Some("cache".into());
-            a.retryable = a.source_url.is_some();
+            log::warn!("inbox media: could not index a team: {e}");
         }
     }
 }
-pub(crate) fn present_cached(app: &tauri::AppHandle, attachments: &mut [Attachment]) {
-    if let Ok(dir) = cache_dir(app) {
-        cached_presence(&dir, attachments);
+
+/// Fetch `a` for `team` (send time or a tap), storing it by the final host.
+pub(crate) async fn fetch(
+    app: &tauri::AppHandle,
+    team: &crate::commands::dashboard_launch::LaunchTeam,
+    a: Attachment,
+    automatic: bool,
+) -> Result<Attachment, String> {
+    let config = config(app, team).await?;
+    let state = app_state(app).ok_or("media unavailable")?;
+    state.fetch(&config, a, automatic).await
+}
+
+/// Memory-aware presence of `attachments` under `config` (see [`MediaState::present`]).
+pub(crate) fn present_cached(
+    app: &tauri::AppHandle,
+    config: &Config,
+    attachments: &mut [Attachment],
+) {
+    if let Some(state) = app_state(app) {
+        state.present(config, attachments);
     }
 }
-pub(crate) fn cached(app: &tauri::AppHandle, sha: &str) -> Result<Vec<u8>, String> {
-    read_cached(&cache_dir(app)?, sha)
+
+/// The bytes of `sha` for a reader of `team`'s inbox that has already confirmed the
+/// sha is a cached image of one of its messages: memory, then disk, then a re-fetch
+/// when `config` admits one.
+pub(crate) async fn fetch_or_cached(
+    app: &tauri::AppHandle,
+    config: &Config,
+    sha: &str,
+) -> Result<axum::body::Bytes, String> {
+    let state = app_state(app).ok_or("media unavailable")?;
+    let source = state.admission(config, sha);
+    state.fetch_or_cached(sha, source).await
+}
+
+/// Record a message's attachments in the sha index.
+pub(crate) async fn note(
+    app: &tauri::AppHandle,
+    team: &crate::commands::dashboard_launch::LaunchTeam,
+    message_id: i64,
+    attachments: Vec<Attachment>,
+) {
+    let Some(state) = app_state(app) else {
+        return;
+    };
+    let owner = index::Owner {
+        org: team.org.clone(),
+        team: team.team.clone(),
+        message_id,
+    };
+    let at = crate::weft::inbox::now_ms();
+    let _ = crate::commands::await_blocking("media.note", move || {
+        state.note(&owner, at, &attachments);
+        Ok(())
+    })
+    .await;
 }
 
 #[cfg(test)]

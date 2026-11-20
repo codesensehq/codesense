@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! The hosted `media` query: the bytes of one image cached on this Mac, for a
 //! message in the dashboard team's inbox, in chunks that fit one live answer.
-//! It reads the content-addressed cache only and never fetches anything.
+//! The request is authorized first; only a confirmed image attachment of that message
+//! is then read from memory or the disk cache, or fetched again (provider media, which
+//! is never kept on disk).
 
 use std::sync::Arc;
 
@@ -44,7 +46,7 @@ pub(crate) fn projected(a: &crate::media::Attachment) -> Value {
     out
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Clone, serde::Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Args {
     message_id: i64,
@@ -106,12 +108,42 @@ pub(crate) fn query(ctx: LiveCtx, call: Call) -> BoxFuture<'static, Result<Value
         // Only this team's store is opened, so a message or hash of another team is
         // simply not there.
         let path = host.team_store(&team).await.map_err(|_| super::failed())?;
-        catalog::blocking(call.hold, "live.media", move || {
-            Ok(chunk(&*host, &team, path, &args, media, faces.as_ref()))
+        // 1. Authorize: the sha must be an image attachment of this message in this team
+        //    (or its sender's face). Nothing is fetched before this answers.
+        let (step_host, step_team, step_args) = (host.clone(), team.clone(), args.clone());
+        let step = catalog::blocking(call.hold.clone(), "live.media", move || {
+            Ok(chunk(
+                &*step_host,
+                &step_team,
+                path,
+                &step_args,
+                media,
+                faces.as_ref(),
+            ))
         })
         .await
-        .map_err(|_| super::failed())?
+        .map_err(|_| super::failed())??;
+        match step {
+            Step::Answer(answer) => Ok(answer),
+            // 2. Only for a confirmed attachment: its bytes, from memory or disk, or
+            //    fetched again. 3. Served with the size and hash re-checks.
+            Step::Attachment => {
+                let _slot = call.hold;
+                match host.cached_media(&team, &args.sha256).await {
+                    Ok(bytes) => serve(&bytes, &args),
+                    Err(_) => Ok(refused("not_cached")),
+                }
+            }
+        }
     })
+}
+
+/// What the authorization step decided.
+enum Step {
+    /// Answered without reading attachment bytes: a refusal, or a face.
+    Answer(Value),
+    /// A cached image attachment of the requested message: read its bytes.
+    Attachment,
 }
 
 /// What proves a face hash: the sender's face is drawn again from the same sources the
@@ -131,13 +163,13 @@ fn chunk(
     args: &Args,
     attachments_declared: bool,
     faces: Option<&FaceProof>,
-) -> Result<Value, QueryError> {
+) -> Result<Step, QueryError> {
     // RI-2-ALLOW: SQLite work runs on the blocking pool.
     let store = crate::weft::WeftStore::open(path).map_err(|_| super::failed())?;
     let Some(message) =
         crate::weft::inbox::inbox_get(&store, args.message_id).map_err(|_| super::failed())?
     else {
-        return Ok(refused("not_found"));
+        return Ok(Step::Answer(refused("not_found")));
     };
     if attachments_declared {
         let mut attachments = message.attachments;
@@ -146,7 +178,7 @@ fn chunk(
             .iter()
             .find(|a| a.kind == "image" && a.sha256.as_deref() == Some(args.sha256.as_str()))
         {
-            return attachment_chunk(host, attachment, args);
+            return Ok(attachment_chunk(attachment));
         }
     }
     // Not an attachment of this message (or attachments are not declared): the face of its
@@ -159,28 +191,23 @@ fn chunk(
             )
         {
             if image.sha256 == args.sha256 {
-                return serve(&image.png, args);
+                return serve(&image.png, args).map(Step::Answer);
             }
         }
     }
-    Ok(refused("not_found"))
+    Ok(Step::Answer(refused("not_found")))
 }
 
-fn attachment_chunk(
-    host: &dyn InboxHost,
-    attachment: &crate::media::Attachment,
-    args: &Args,
-) -> Result<Value, QueryError> {
+/// The authorization of an image attachment the message carries: only a `cached` one
+/// within the size cap goes on to have its bytes read.
+fn attachment_chunk(attachment: &crate::media::Attachment) -> Step {
     if attachment.state != "cached" {
-        return Ok(refused("not_cached"));
+        return Step::Answer(refused("not_cached"));
     }
     if attachment.bytes.is_some_and(|n| n > MAX_MEDIA_BYTES as u64) {
-        return Ok(json!({"refused": "too_large", "bytes": attachment.bytes}));
+        return Step::Answer(json!({"refused": "too_large", "bytes": attachment.bytes}));
     }
-    let Ok(bytes) = host.cached_media(&args.sha256) else {
-        return Ok(refused("not_cached"));
-    };
-    serve(&bytes, args)
+    Step::Attachment
 }
 
 /// One chunk of `bytes`, which must be an image of at most [`MAX_MEDIA_BYTES`] that still
