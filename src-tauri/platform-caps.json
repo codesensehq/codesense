@@ -74,7 +74,7 @@
     "macos": "on",
     "linux": "probe",
     "windows": "off",
-    "reason": "the terminal server's tray icon isn't available: on Linux it needs the AppIndicator library, which isn't installed, and it isn't built for Windows yet"
+    "reason": "the terminal server's tray icon isn't built for this platform, or needs a tray library this system doesn't provide"
   },
   {
     "key": "pty-test-fixtures",
