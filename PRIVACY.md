@@ -81,7 +81,7 @@ Install & Restart.
 
 - **What:** by default, when an agent running in one of this app's terminal
   tabs posts an inbox message with a picture link on `*.giphy.com` or
-  `static.klipy.com`, the app downloads the picture straight away. Other
+  `*.klipy.com`, the app downloads the picture straight away. Other
   pictures, including those from other hosts or other senders, are downloaded
   only when you click to load them. A picture written into a message's text is
   never loaded: it shows as a link, which opens in your browser.
@@ -90,12 +90,21 @@ Install & Restart.
   chosen.
 - **Limits:** public addresses only (no local or private network), `https://`
   only, at most 3 redirects and only to allowed hosts, 8 MiB at most.
+- **What is kept:** a picture from GIPHY or KLIPY (`giphy.com`, `klipy.com` and
+  their subdomains, judged by the host it finally came from after redirects) is
+  held in memory only and never written to disk, as those providers' terms
+  require. It is downloaded again when you view it after the app restarts or
+  after it expires (as the provider's `Cache-Control` says, at most 24 hours).
+  Only a picture that an agent in one of this app's tabs sent is downloaded
+  again by itself; others wait for your click. Other pictures are kept in the
+  app's cache folder (`inbox-media`, 256 MiB at most, oldest removed first).
 - **Turning it off:** each team has its own inbox settings file,
   `config/inbox.yml` inside that team's folder in your context repository
   (`<team>/config/inbox.yml`). Set `remote: off` under `media:` to never
   download pictures, or `remote: ask` to download them only when you click.
   The same file can change the list of hosts.
 - **Code:** `src-tauri/src/media/mod.rs` (`fetch`),
+  `src-tauri/src/media/state.rs` (`fetch`, `fetch_or_cached`),
   `src-tauri/src/commands/agent_inbox.rs` (`fetch_media`),
   `src/features/weft/components/inbox-message-content.tsx` (`sanitizeInboxHtml`,
   `MARKDOWN_COMPONENTS`).
