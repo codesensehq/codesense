@@ -2101,7 +2101,10 @@ impl DashboardLaunchState {
         // (the one its authority verifies a remote caller as).
         let launcher_session = launcher_entry.and_then(|launcher| {
             launcher.session_id.clone().or_else(|| {
-                launcher.remote_shell.as_ref().map(|remote| remote.target.session.as_str().to_owned())
+                launcher
+                    .remote_shell
+                    .as_ref()
+                    .map(|remote| codesense_pty_core::domain::PtySessionId::as_str(&remote.target.session).to_owned())
             })
         });
         let launcher = launcher_entry.and_then(|launcher| {

@@ -293,13 +293,13 @@ async fn resolve_at_holding(
         }
         let id = Value::as_str(&range["nativeSessionId"]).and_then(|native| native_to_session.get(native));
         if let (Some(id), Some(commit)) = (id, Value::as_str(&range["commit"])) {
-            if sessions[id.as_str()]["charges"].as_array().is_some_and(|c| !c.is_empty()) {
+            if sessions[id.as_str()]["charges"].as_array().is_some_and(|c| !std::vec::Vec::is_empty(c)) {
                 charged.entry(id.clone()).or_default().insert(commit.to_owned());
             }
         }
     }
     let stories_at: HashMap<(String, String), Option<String>> = match checkout {
-        Some(checkout) if !charged.is_empty() => {
+        Some(checkout) if !BTreeMap::is_empty(&charged) => {
             let (at_store, at_home, at_scope) = (store.to_owned(), home.to_owned(), scope.clone());
             crate::commands::await_blocking("why_line.story_at", move || {
                 let times = super::turns::committer_times(

@@ -198,7 +198,8 @@ pub(super) fn committer_times<'a>(repo: &Path, commits: impl IntoIterator<Item =
     commits
         .into_iter()
         .filter_map(|commit| {
-            let found = repository.find_commit(git2::Oid::from_str(commit).ok()?).ok()?;
+            let oid = Result::ok(git2::Oid::from_str(commit))?;
+            let found = Result::ok(repository.find_commit(oid))?;
             let at = found.committer().when().seconds() * 1000 + 999;
             Some((commit.to_owned(), at))
         })

@@ -163,7 +163,7 @@ pub(super) fn session_row(store: &UsageStore, session: &str, usages: &[&SessionU
     let timing = record.as_ref().and_then(|r| r.timing.clone());
     let mut row = Contribution::new();
     let segments: Vec<Segment> = usages.iter().filter_map(|u| u.segment).collect();
-    let cost = if segments.is_empty() {
+    let cost = if std::vec::Vec::is_empty(&segments) {
         CostRollup::total(&store.session_cost(session)?)
     } else {
         // Null when any segment has an unpriced model, never partial.
@@ -175,7 +175,7 @@ pub(super) fn session_row(store: &UsageStore, session: &str, usages: &[&SessionU
     let usage_last = used.iter().map(|u| u.last_at_ms).max();
     let mut recent = usage_last;
     match &timing {
-        Some(t) if !segments.is_empty() => {
+        Some(t) if !std::vec::Vec::is_empty(&segments) => {
             // Each segment's time inside the session's observed span (an open bound is the span's
             // own); the session's end belongs to its last segment only.
             let (start, end) = (t.started_at_ms, t.started_at_ms + t.wall_ms);
@@ -224,7 +224,7 @@ pub(super) fn session_row(store: &UsageStore, session: &str, usages: &[&SessionU
         }
         None => {
             row.num("untimed", Some(1.0), "");
-            if !segments.is_empty() {
+            if !std::vec::Vec::is_empty(&segments) {
                 row.extra.insert("segments".into(), json!(segments));
             }
         }

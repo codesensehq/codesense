@@ -70,15 +70,15 @@ pub(crate) fn charge(
     normalize: &dyn Fn(&str) -> String,
 ) -> Result<Value, String> {
     let story = params.story.trim();
-    if story.is_empty() {
+    if str::is_empty(story) {
         return Err("invalid: story must be a story id".into());
     }
     let named = params
         .session_id
         .as_deref()
         .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .unwrap_or(caller.session.as_str());
+        .filter(|id| !str::is_empty(id))
+        .unwrap_or(std::string::String::as_str(&caller.session));
     let target = store.read_session_record(named)?.ok_or_else(|| {
         format!("invalid: session {named} has no session record here; only a session CodeSense launched can be charged")
     })?;
@@ -116,14 +116,14 @@ pub(crate) fn charge(
         ));
     }
     let existing = store.charges_for(&target.session_id)?;
-    match existing.iter().find(|c| c.from_ms == from_ms) {
+    match Iterator::find(&mut existing.iter(), |c| c.from_ms == from_ms) {
         // A charge at the same moment is replaced only by whoever made it, so no seat can rewrite
         // another's charge and its record of who made it.
         Some(earlier) if earlier.charged_by_session != caller.session => {
             return Err(format!(
                 "invalid: session {}'s charge at {from_ms} was made by {}; charge at another moment instead",
                 target.session_id,
-                earlier.charged_by.as_deref().unwrap_or(earlier.charged_by_session.as_str())
+                earlier.charged_by.as_deref().unwrap_or(std::string::String::as_str(&earlier.charged_by_session))
             ));
         }
         Some(_) => {}
@@ -176,7 +176,7 @@ fn authorize(
     let mut current = target.clone();
     for _ in 0..MAX_HOPS {
         // The recorded launcher tab is the caller's, even when its record is not here (a remote tab).
-        if current.launched_by_session.as_deref() == Some(caller.session.as_str()) {
+        if current.launched_by_session.as_deref() == Some(std::string::String::as_str(&caller.session)) {
             return Ok(());
         }
         let Some(launcher) = launcher_of(store, &current, normalize)? else {
@@ -207,10 +207,10 @@ fn launcher_of(
             .read_session_record(tab)?
             .filter(|r| r.session_id == tab && r.recorded_at_ms <= record.recorded_at_ms))
     };
-    if let Some(tab) = record.launched_by_session.as_deref().filter(|t| !t.is_empty()) {
+    if let Some(tab) = record.launched_by_session.as_deref().filter(|t| !str::is_empty(t)) {
         return launched_before(tab);
     }
-    let Some(launcher) = record.launched_by.as_deref().map(str::trim).filter(|l| !l.is_empty()) else {
+    let Some(launcher) = record.launched_by.as_deref().map(str::trim).filter(|l| !str::is_empty(l)) else {
         return Ok(None);
     };
     // A launcher recorded by its tab is that tab, or nobody when the tab was recorded later.
