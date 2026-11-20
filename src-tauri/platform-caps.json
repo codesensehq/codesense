@@ -74,7 +74,7 @@
     "macos": "on",
     "linux": "probe",
     "windows": "off",
-    "reason": "the terminal server's tray icon isn't built for this platform, or needs a tray library this system doesn't provide"
+    "reason": "the terminal server's tray icon can't be shown on this system"
   },
   {
     "key": "pty-test-fixtures",
