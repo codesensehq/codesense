@@ -109,9 +109,17 @@ pub fn host_environment() -> HostEnvironment {
     )
 }
 
+/// An empty directory for a spawn's `HOME`, so no profile of the machine's
+/// user runs there. It must exist: with no `cwd` the child starts in `HOME`
+/// (`/var/empty` exists only on macOS).
+pub fn empty_home() -> String {
+    let home = std::env::temp_dir().join("codesense-test-empty-home");
+    std::fs::create_dir_all(&home).expect("the empty home");
+    home.to_string_lossy().into_owned()
+}
+
 /// `script`, run by the user's shell of whichever host resolves it — `/bin/bash`
-/// on a test host — with an empty home, so no profile of the machine's user
-/// runs there.
+/// on a test host — with an [`empty_home`].
 pub fn sh(script: &str) -> SpawnIntent {
     SpawnIntent {
         remote_launch: Default::default(),
@@ -125,7 +133,7 @@ pub fn sh(script: &str) -> SpawnIntent {
         starship_preset: None,
         api_port: None,
         env_remove: Vec::new(),
-        env: vec![("HOME".to_string(), "/var/empty".to_string())],
+        env: vec![("HOME".to_string(), empty_home())],
         agent_env: Vec::new(),
         login_path: None,
     }
