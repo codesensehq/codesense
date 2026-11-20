@@ -34,6 +34,8 @@ const TARGET_TOOLS: &[&str] = &[
     "read_run_evidence",
     "read_run_work_product",
     "wv_upsert_attention",
+    // Its `sessionId` names the session charged; the caller is the verified connection.
+    "charge_session_story",
 ];
 // These tools operate on WorkspaceTarget::Local; its session names the workspace
 // subject at target.sessionId, not the caller. No other nested path is exempt.

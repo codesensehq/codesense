@@ -468,7 +468,7 @@ send_message { to: 'human', text }</code></pre>
           <!--tool-reference-->
       <section id="tool-reference" data-search="Tool reference">
         <h2>Tool reference</h2>
-        <p>Reference for the tools an agent uses to ask the human, report progress and results, finish, hand off, spawn workers and read usage. Where a tool takes <code>sessionId</code> to identify the caller, identity comes from the verified MCP connection; a supplied <code>sessionId</code> must name the caller itself, and an unbound caller is refused (start the CLI in a CodeSense terminal). Three tools below are exceptions: in <code>dismiss_agent_mark</code>, <code>session_usage</code> and <code>session_read</code>, <code>sessionId</code> names a target session, not the caller.</p>
+        <p>Reference for the tools an agent uses to ask the human, report progress and results, finish, hand off, spawn workers and read usage. Where a tool takes <code>sessionId</code> to identify the caller, identity comes from the verified MCP connection; a supplied <code>sessionId</code> must name the caller itself, and an unbound caller is refused (start the CLI in a CodeSense terminal). Four tools below are exceptions: in <code>dismiss_agent_mark</code>, <code>session_usage</code>, <code>session_read</code> and <code>charge_session_story</code>, <code>sessionId</code> names a target session, not the caller.</p>
         <p id="talk"><strong>Talking to the user</strong></p>
         <h3 id="tool-ask_user"><code>ask_user</code></h3>
         <p>Asks the human a blocking question through the CodeSense UI and waits for the answer. Inputs: <code>sessionId</code> and <code>question</code>; optional <code>options</code> (discrete choices) and <code>category</code>/<code>stakes</code> triage hints, which are never used to auto-answer. Returns <code>{action, content}</code> where <code>action</code> is <code>accept</code> (<code>content</code> is the answer), <code>decline</code>, <code>cancel</code> (dismissed, timed out or the session died) or <code>handled</code> (the human settled it outside the question: check the current state before acting). Always branch on <code>action</code>. Contrast <code>post_agent_message</code>, which is fire-and-forget.</p>
@@ -620,6 +620,17 @@ send_message { to: 'human', text }</code></pre>
   &quot;arguments&quot;: {
     &quot;story&quot;: &quot;DEMO-5&quot;,
     &quot;limit&quot;: 10
+  }
+}</code></pre>
+        <h3 id="tool-charge_session_story"><code>charge_session_story</code>: charge a seat to the story it works on</h3>
+        <p>A seat that works more than one story, such as a kept seat its lead starts on another story, or a lead that moves on to its next one, is charged to each story from the moment it starts it, so its cost splits between them. Call <code>charge_session_story({story, sessionId?, fromMs?})</code>: from <code>fromMs</code> (default now; at most 60 s ahead, and not before the session's first usage or its record) until the session's next charge, its usage counts to <code>story</code>, a story of the session's own team. Usage before the first charge stays on the story it resolved to, and a second charge at the same moment replaces the story. A lead charges a re-tasked seat before the seat's first prompt for the new story.</p>
+        <p><code>session_usage</code> then returns a charged session as one row per segment, each with <code>segment {fromMs, toMs}</code> (<code>fromMs</code> is null for the usage before the first charge, <code>toMs</code> for the open last segment; an uncharged session has no <code>segment</code>), and a charged segment's <code>story.basis</code> is <code>charged</code>, an exact link. A walk of its pages is complete when its distinct <code>(sessionId, segment.fromMs)</code> rows equal <code>total</code>. <code>story_totals</code> and <code>story_changes</code> cost each story from its own segments, and <code>session_read</code> names the story of the latest segment and lists the session's <code>charges</code>.</p>
+        <p>You may charge only your own session (omit <code>sessionId</code>) or a session your launch chain started, up to 8 launches back, in your own org and team. Handles are reused, so each launcher in the chain is the session that held its handle when it launched the next. Anything else is refused with the rule, and an unbound caller is refused. Each charge keeps the charging seat's handle and session, so a wrong charge is visible in <code>session_read</code>, and a later charge corrects it.</p>
+        <pre data-tool-example="charge_session_story"><code>{
+  &quot;tool&quot;: &quot;charge_session_story&quot;,
+  &quot;arguments&quot;: {
+    &quot;story&quot;: &quot;DEMO-6&quot;,
+    &quot;sessionId&quot;: &quot;your-seat-session-id&quot;
   }
 }</code></pre>
         <h3 id="tool-open_workspace"><code>open_workspace</code></h3>
