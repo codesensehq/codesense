@@ -44,6 +44,7 @@ import {
   useDynamicShortcutActions,
 } from "@/shared/lib/shortcuts/registry";
 import { useShortcutsStore } from "@/shared/stores/shortcuts-store";
+import { useConfigStore } from "@/shared/stores/config-store";
 import { panePanelTitle } from "@/features/shell/right-pane/panes/use-register-pane-panels";
 import { openAppSettings } from "@/features/settings/lib/open-settings";
 import { openSourceRepos } from "@/features/dashboard/source-repos-virtual-tab";
@@ -116,6 +117,8 @@ export function CommandPaletteMount() {
   // Active slot-dashboard commands, each with its current chord.
   const dashboardActions = useDynamicShortcutActions((s) => s.actions);
   const shortcuts = useShortcutsStore((s) => s.shortcuts);
+  // The capabilities load can free a chord (an action whose capability is off holds none).
+  const platformCaps = useConfigStore((s) => s.platformCaps);
   const commands = useMemo<PaletteCommand[]>(() => {
     const bindings = resolveBindings(shortcuts);
     return dashboardActions
@@ -127,7 +130,8 @@ export function CommandPaletteMount() {
         icon: paneIcon(a.command!.icon),
         chord: formatKeystrokeDisplay(bindings.get(a.id)?.keystroke ?? ""),
       }));
-  }, [dashboardActions, shortcuts]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the capabilities change the bindings
+  }, [dashboardActions, shortcuts, platformCaps]);
   // The Story dashboard row's chord. `resolveBindings` reads the full action list, so this is
   // keyed like `commands` above, not on `shortcuts` alone.
   const storyDashboardChord = useMemo(
@@ -136,7 +140,7 @@ export function CommandPaletteMount() {
         resolveBindings(shortcuts).get(STORY_DASHBOARD_ACTION_ID)?.keystroke ?? "",
       ),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- a new action list can take the chord
-    [dashboardActions, shortcuts],
+    [dashboardActions, shortcuts, platformCaps],
   );
 
   // The Routines row carries the needs-you count the title-bar entry keeps live.

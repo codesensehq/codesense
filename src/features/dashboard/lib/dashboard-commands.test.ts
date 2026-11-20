@@ -30,7 +30,10 @@ import {
   setActiveDashboardCommands,
   setSlotDisplayedBody,
   syncDashboardCommands,
+  useDashboardCommandsSync,
 } from "./dashboard-commands";
+import { renderHook } from "@testing-library/react";
+import { resetPlatformCaps, setPlatformCaps } from "@/shared/lib/__test-utils__/platform-caps";
 import {
   markFrameLive,
   markFrameReady,
@@ -193,6 +196,7 @@ beforeEach(() => {
   toastWarning.mockClear();
 });
 afterEach(() => {
+  resetPlatformCaps();
   resetShownBodies();
   usePaneStore.setState({ sourceRows: {} });
   frames.forEach((dispose) => dispose());
@@ -900,6 +904,18 @@ describe("the host registry (agents and page verbs)", () => {
     expect((commandsSync.mock.lastCall as unknown as [{ binding: string }[]])[0][0].binding).toBe(
       "CmdOrCtrl+Alt+A",
     );
+  });
+
+  it("pushes a command again once the capabilities load frees the chord it wants", () => {
+    const { unmount } = renderHook(() => useDashboardCommandsSync());
+    // Export to PDF holds this chord until the capabilities say it can't run here.
+    install([pane(inboxRef, "Inbox", [{ ...ARCHIVE, defaultChord: "CmdOrCtrl+Shift+E" }])]);
+    const binding = () =>
+      (commandsSync.mock.lastCall as unknown as [{ binding: string }[]])[0][0].binding;
+    expect(binding()).toBe("");
+    setPlatformCaps({ "pdf-export": "printing isn't built here" });
+    expect(binding()).toBe("CmdOrCtrl+Shift+E");
+    unmount();
   });
 
   it("runs a command the host asks for through the chord's dispatch, with its args", () => {

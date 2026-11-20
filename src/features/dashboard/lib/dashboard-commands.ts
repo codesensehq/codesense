@@ -15,6 +15,7 @@ import {
   type ShortcutAction,
 } from "@/shared/lib/shortcuts/registry";
 import { createListenerGroup } from "@/shared/lib/tauri-listeners";
+import { useConfigStore } from "@/shared/stores/config-store";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useShortcutsStore } from "@/shared/stores/shortcuts-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
@@ -282,6 +283,10 @@ export function useDashboardCommandsSync(): void {
       // A rebind changes the chord the host lists.
       useShortcutsStore.subscribe((s, p) => {
         if (s.shortcuts !== p.shortcuts) pushCommandsToHost();
+      }),
+      // So does the capabilities load: an action whose capability is off frees its chord.
+      useConfigStore.subscribe((s, p) => {
+        if (s.platformCaps !== p.platformCaps) pushCommandsToHost();
       }),
     ];
     const listeners = createListenerGroup();

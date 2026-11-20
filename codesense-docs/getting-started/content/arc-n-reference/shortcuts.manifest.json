@@ -409,7 +409,6 @@
           "id": "viewer.export-pdf",
           "label": "Export to PDF",
           "mac": "⌘⇧E",
-          "winLinux": "Ctrl+Shift+E",
           "menu": "Document tab, right-click → Export to PDF"
         }
       ]
