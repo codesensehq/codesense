@@ -260,7 +260,7 @@ impl ScopeLaunch {
         String,
     > {
         let (mut outcome, creation) = if self.agent {
-            // SW-AN-52: this authoring path previews MCP projection outside the
+            // This authoring path previews MCP projection outside the
             // full agent-launch spine, so there is no resolved content-layer
             // base to thread. Cwd-only projection — matches today's behavior.
             let authority = authority.ok_or("missing launch profile")?;
@@ -329,15 +329,14 @@ impl ScopeLaunch {
             if launch.runtime != runtime {
                 return Err("cached launch runtime does not match this tab".into());
             }
-            let (outcome, creation, applied) =
-                crate::agents::launch::project_and_apply_for_cli(
-                    &launch,
-                    session_id,
-                    workdir,
-                    account_home,
-                    cli,
-                    str::to_string,
-                )?;
+            let (outcome, creation, applied) = crate::agents::launch::project_and_apply_for_cli(
+                &launch,
+                session_id,
+                workdir,
+                account_home,
+                cli,
+                str::to_string,
+            )?;
             debug_assert!(
                 applied.settings.is_none(),
                 "home settings never own a separate file"
@@ -345,7 +344,10 @@ impl ScopeLaunch {
             // The managed projection above already refused a launch without its exact
             // executable; its direct exec (composed by `project_launch`) needs the same
             // one, never a shell line.
-            Option::ok_or(cli, "managed runtime requires its exact selected executable")?;
+            Option::ok_or(
+                cli,
+                "managed runtime requires its exact selected executable",
+            )?;
             return Ok((outcome, creation));
         }
         let (mut outcome, creation) = super::mcp_scope::project_scope_for_cli(

@@ -620,7 +620,7 @@ export async function relaunchAgentInLiveShell(
   return launched.ok ? { ok: true } : { ok: false, reason: injectFailure(launched) };
 }
 
-/** The process name the AC-12 liveness probe matches: the agent's {@link binaryStem}. */
+/** The process name the liveness probe matches: the agent's {@link binaryStem}. */
 export function agentBasename(agentPath: string): string {
   return binaryStem(agentPath) || agentPath;
 }
