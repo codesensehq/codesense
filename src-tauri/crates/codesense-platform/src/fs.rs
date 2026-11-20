@@ -3,8 +3,8 @@
 //! owner-only creates of files and directories, opens that refuse links,
 //! atomic replace, exclusive and shared locks, links with a copy fallback,
 //! canonical paths, names that are valid on every OS, execute bits, busy
-//! files, whether a file is executable, world-writable files, link counts
-//! and change stamps.
+//! files, whether a file is executable, world-writable files, link counts,
+//! change stamps, the space left on a volume and positioned reads.
 
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -402,6 +402,25 @@ pub fn is_world_writable(file: &File) -> io::Result<bool> {
 /// `nNumberOfLinks` on Windows.
 pub fn link_count(file: &File) -> io::Result<u64> {
     sys::link_count(file)
+}
+
+/// The bytes this user may still write on the volume that holds `path`, an
+/// existing directory or file (links followed): on unix `f_bavail ×
+/// f_frsize` from `fstatvfs` on `path` opened for reading, so the blocks
+/// kept for root do not count; on Windows `GetDiskFreeSpaceExW`'s
+/// `FreeBytesAvailableToCaller`, which a disk quota lowers (for a file, its
+/// directory's volume).
+pub fn available_space(path: &Path) -> io::Result<u64> {
+    sys::available_space(path)
+}
+
+/// Read exactly `buf.len()` bytes of `file` starting at `offset`, whatever
+/// its cursor: unix `pread` (std's `FileExt::read_exact_at`), which leaves
+/// the cursor where it was; on Windows `seek_read` until `buf` is full,
+/// which moves it, so a caller that also reads at the cursor seeks first.
+/// `UnexpectedEof` when the file ends before `buf` is full.
+pub fn read_exact_at(file: &File, buf: &mut [u8], offset: u64) -> io::Result<()> {
+    sys::read_exact_at(file, buf, offset)
 }
 
 /// [`open_nofollow`] that never waits for the file: on unix also

@@ -74,8 +74,7 @@ pub enum Scope {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FileRevision {
     pub path: PathBuf,
-    pub device: u64,
-    pub inode: u64,
+    pub id: codesense_platform::fs::FileId,
     pub modified_nanos: u128,
     pub len: u64,
     pub contents: Vec<u8>,
@@ -242,30 +241,31 @@ pub(crate) struct UnreadableFile {
 
 impl Registry {
     pub(crate) fn file_revision(path: &Path) -> Result<Option<FileRevision>, String> {
-        let metadata = match std::fs::metadata(path) {
-            Ok(metadata) => metadata,
+        use std::io::Read as _;
+        // One open, followed through a link as before: its identity, times and
+        // bytes are all the same file's.
+        let mut file = match std::fs::File::open(path) {
+            Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(format!("stat {path:?}: {error}")),
+            Err(error) => return Err(format!("read {path:?}: {error}")),
         };
+        let metadata = file
+            .metadata()
+            .map_err(|error| format!("stat {path:?}: {error}"))?;
+        let id = codesense_platform::fs::file_id_of(&file)
+            .map_err(|error| format!("stat {path:?}: {error}"))?;
         let modified_nanos = metadata
             .modified()
             .map_err(|error| format!("modified time {path:?}: {error}"))?
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|error| format!("modified time {path:?}: {error}"))?
             .as_nanos();
-        let contents = std::fs::read(path).map_err(|error| format!("read {path:?}: {error}"))?;
-        #[cfg(unix)]
-        use std::os::unix::fs::MetadataExt as _;
+        let mut contents = Vec::new();
+        file.read_to_end(&mut contents)
+            .map_err(|error| format!("read {path:?}: {error}"))?;
         Ok(Some(FileRevision {
             path: path.to_path_buf(),
-            #[cfg(unix)]
-            device: metadata.dev(),
-            #[cfg(not(unix))]
-            device: 0,
-            #[cfg(unix)]
-            inode: metadata.ino(),
-            #[cfg(not(unix))]
-            inode: 0,
+            id,
             modified_nanos,
             len: metadata.len(),
             contents,
@@ -698,7 +698,6 @@ fn update_json<V, T>(path: &Path, change: impl FnOnce(&mut V) -> T) -> Result<T,
 where
     V: serde::de::DeserializeOwned + Serialize + Default,
 {
-    use std::os::unix::fs::PermissionsExt;
     let _held = USER_FILES.lock().unwrap_or_else(|e| e.into_inner());
     let mut value: V = read_json(path)?;
     let out = change(&mut value);
@@ -707,7 +706,7 @@ where
     let staged = path.with_extension("json.incoming");
     let text = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
     std::fs::write(&staged, text)
-        .and_then(|()| std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o600)))
+        .and_then(|()| codesense_platform::fs::set_owner_only(&staged))
         .and_then(|()| std::fs::rename(&staged, path))
         .map_err(|e| format!("write {path:?}: {e}"))?;
     Ok(out)

@@ -154,6 +154,176 @@ fn rm4d_machine_status_serializes_phase_contract_in_camel_case() {
     );
 }
 
+/// The JSON `MachineSummary` sends over IPC: This Mac's row, and a row with
+/// every field set.
+#[test]
+fn machine_summary_wire_shape_is_pinned() {
+    assert_eq!(
+        serde_json::to_value(this_mac(3)).unwrap(),
+        serde_json::json!({
+            "machineId": "local",
+            "kind": "local",
+            "label": "This Mac",
+            "scope": null,
+            "declaration": null,
+            "binding": null,
+            "canPublish": false,
+            "remoteMcpControl": false,
+            "status": {"state": "connected", "workspaces": 3},
+            "attention": 0,
+            "capabilities": {"agentCallbacks": true},
+        })
+    );
+
+    let full = MachineSummary {
+        machine_stats: Some(codesense_host_proto::machine_stats::MachineStats {
+            load1: 1.5,
+            cpu_count: 8,
+            mem_used_bytes: 12,
+            mem_total_bytes: 16,
+            disk_free_bytes: 84,
+            disk_total_bytes: 460,
+            disk_path: "/workspaces".into(),
+            sampled_at: 1000,
+        }),
+        machine_stats_supported: Some(true),
+        machine_id: "m-1".into(),
+        kind: "remote",
+        label: "Build box".into(),
+        scope: Some(Scope::Team {
+            org_slug: "acme".into(),
+            team: "core".into(),
+        }),
+        declaration: Some(MachineDeclarationDto {
+            mode: MachineMode::PrivateAccount,
+            host: "build.example".into(),
+            port: 2222,
+            jump_host: Some("jump.example".into()),
+            default_base_dir: Some("~/work".into()),
+            pinned_host_key_fp: Some("SHA256:abc".into()),
+            pinned_server_id: Some("server-a".into()),
+            revision: "rev-1".into(),
+            identity_change: Some(identity::IdentityChange::sample()),
+            configuration_refused: true,
+        }),
+        binding: Some(MachineBindingDto {
+            username: Some("dev".into()),
+            key_path: Some("~/keys/build".into()),
+            credential_ref: Some(CredentialRef {
+                provider: "machine-passphrase".into(),
+                account: "m-1".into(),
+            }),
+            auto_connect: true,
+            hidden: true,
+            reconnect_at_launch: true,
+        }),
+        can_publish: true,
+        remote_mcp_control: true,
+        status: MachineStatus::Connected {
+            workspaces: Some(2),
+            terminal_server_update: true,
+            terminal_server_sessions: Some(4),
+        },
+        attention: 5,
+        capabilities: MachineCapabilities {
+            agent_callbacks: true,
+        },
+        terminal_server: Some(terminal_server_info::TerminalServerInfo {
+            server_version: Some("1.2.0".into()),
+            app_version: "1.3.0".into(),
+            up_to_date: false,
+            relation: terminal_server_info::ServerRelation::Older,
+            announced_version: "0.1.0+d1".into(),
+            build_commit: Some("c0ffee".into()),
+            built_at_ms: Some(7),
+            build_digest: Some("d1".into()),
+            server_path: Some("/opt/server".into()),
+            app_server_path: Some("/opt/app-server".into()),
+            started_at_ms: Some(9),
+            pid: Some(42),
+            dev_build: true,
+        }),
+    };
+    let identity_json = |host: &str, server_id: &str| {
+        serde_json::json!({
+            "host": host,
+            "port": 22,
+            "jumpHost": "jump.example",
+            "hostKeyFingerprint": "SHA256:abc",
+            "serverId": server_id,
+        })
+    };
+    assert_eq!(
+        serde_json::to_value(full).unwrap(),
+        serde_json::json!({
+            "load1": 1.5,
+            "cpuCount": 8,
+            "memUsedBytes": 12,
+            "memTotalBytes": 16,
+            "diskFreeBytes": 84,
+            "diskTotalBytes": 460,
+            "diskPath": "/workspaces",
+            "sampledAt": 1000,
+            "machineStatsSupported": true,
+            "machineId": "m-1",
+            "kind": "remote",
+            "label": "Build box",
+            "scope": {"kind": "team", "orgSlug": "acme", "team": "core"},
+            "declaration": {
+                "mode": "private-account",
+                "host": "build.example",
+                "port": 2222,
+                "jumpHost": "jump.example",
+                "defaultBaseDir": "~/work",
+                "pinnedHostKeyFp": "SHA256:abc",
+                "pinnedServerId": "server-a",
+                "revision": "rev-1",
+                "identityChange": {
+                    "accepted": identity_json("old.example", "server-a"),
+                    "declared": identity_json("new.example", "server-b"),
+                    "revision": "rev-1",
+                    "author": "Ada",
+                    "date": "2026-01-02T03:04:05Z",
+                    "observedServerId": "server-c",
+                },
+            },
+            "binding": {
+                "username": "dev",
+                "keyPath": "~/keys/build",
+                "credentialRef": {"provider": "machine-passphrase", "account": "m-1"},
+                "autoConnect": true,
+                "hidden": true,
+                "reconnectAtLaunch": true,
+            },
+            "canPublish": true,
+            "remoteMcpControl": true,
+            "status": {
+                "state": "connected",
+                "workspaces": 2,
+                "terminalServerUpdate": true,
+                "terminalServerSessions": 4,
+            },
+            "attention": 5,
+            "capabilities": {"agentCallbacks": true},
+            "terminalServer": {
+                "serverVersion": "1.2.0",
+                "appVersion": "1.3.0",
+                "upToDate": false,
+                "relation": "older",
+                "announcedVersion": "0.1.0+d1",
+                "buildCommit": "c0ffee",
+                "builtAtMs": 7,
+                "buildDigest": "d1",
+                "serverPath": "/opt/server",
+                "appServerPath": "/opt/app-server",
+                "startedAtMs": 9,
+                "pid": 42,
+                "devBuild": true,
+            },
+        })
+    );
+}
+
 #[test]
 fn rm4d_pid_reuse_after_probe() {
     let proof = LegacyHostProof::test_proof("server-a");
@@ -1100,7 +1270,7 @@ fn pinned_transport_is_raw_duplex_and_explicit_close_reaps_its_process_group() {
         descendant_file.as_os_str().to_owned(),
     )]);
     let (reader, mut writer, child_guard) = spawn_pinned(ssh, "1.0.0", None).unwrap();
-    let child_pid = child_guard.child.as_ref().unwrap().id() as libc::pid_t;
+    let child_pid = child_guard.tree.as_ref().unwrap().pid().as_raw() as libc::pid_t;
     writeln!(writer, "protocol-frame").unwrap();
     writer.flush().unwrap();
     let mut line = String::new();
@@ -1168,7 +1338,7 @@ fn pinned_transport_handles_natural_exit_and_drop_cancellation() {
     std::fs::set_permissions(&sleeping, std::fs::Permissions::from_mode(0o700)).unwrap();
     let (reader, writer, guard) =
         spawn_pinned(install::Ssh::new(&sleeping, Vec::new()), "1.0.0", None).unwrap();
-    let pid = guard.child.as_ref().unwrap().id() as libc::pid_t;
+    let pid = guard.tree.as_ref().unwrap().pid().as_raw() as libc::pid_t;
     drop(reader);
     drop(writer);
     drop(guard);
@@ -1191,7 +1361,7 @@ fn bounded_drop_fallback_eventually_reaps_after_returning() {
     std::fs::set_permissions(&sleeping, std::fs::Permissions::from_mode(0o700)).unwrap();
     let (_, _, guard) =
         spawn_pinned(install::Ssh::new(&sleeping, Vec::new()), "1.0.0", None).unwrap();
-    let pid = guard.child.as_ref().unwrap().id() as libc::pid_t;
+    let pid = guard.tree.as_ref().unwrap().pid().as_raw() as libc::pid_t;
     DEFER_DROP_REAP.with(|defer| defer.set(true));
     drop(guard);
     DEFER_DROP_REAP.with(|defer| defer.set(false));
@@ -1465,7 +1635,7 @@ fn stale_transport_generation_is_closed_before_publication() {
     std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
     let (reader, writer, guard) =
         spawn_pinned(install::Ssh::new(&program, Vec::new()), "1.0.0", None).unwrap();
-    let child_pid = guard.child.as_ref().unwrap().id() as libc::pid_t;
+    let child_pid = guard.tree.as_ref().unwrap().pid().as_raw() as libc::pid_t;
     let env = std::sync::Arc::new(env);
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
@@ -3646,7 +3816,7 @@ pub(super) mod container {
         runtime.block_on(async {
             let transport = open_pinned_saved(&env, store.as_ref(), &machine_id).unwrap();
             let generation = transport.generation.clone();
-            let ssh_pid = transport.child_guard.child.as_ref().unwrap().id() as libc::pid_t;
+            let ssh_pid = transport.child_guard.tree.as_ref().unwrap().pid().as_raw() as libc::pid_t;
             revalidate_transport_generation(&env, &machine_id, &generation).unwrap();
             let pending = RemoteTransportOwner::from_pinned(transport).into_pending();
             let admitted = pending

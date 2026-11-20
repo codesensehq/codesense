@@ -204,10 +204,11 @@ impl OwnedMachines {
             owned.owners.lock().unwrap().push(SshOwnerObservation {
                 pid: transport
                     .child_guard
-                    .child
+                    .tree
                     .as_ref()
                     .expect("open SSH child")
-                    .id() as libc::pid_t,
+                    .pid()
+                    .as_raw() as libc::pid_t,
                 retired: false,
             });
             if let Some(gate) = gate {

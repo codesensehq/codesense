@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Unix: permission modes, uid, (dev, ino), link counts and ctime,
-//! `O_NOFOLLOW`, `rename`, `flock` and `ETXTBSY`.
+//! `O_NOFOLLOW`, `rename`, `flock`, `ETXTBSY`, `fstatvfs` and `pread`.
 
 use std::fs::{File, Metadata, OpenOptions};
 use std::io;
@@ -186,6 +186,28 @@ pub(super) fn is_world_writable(file: &File) -> io::Result<bool> {
 
 pub(super) fn link_count(file: &File) -> io::Result<u64> {
     Ok(file.metadata()?.nlink())
+}
+
+#[allow(
+    clippy::unnecessary_cast,
+    reason = "statvfs field widths differ between unix targets"
+)]
+pub(super) fn available_space(path: &Path) -> io::Result<u64> {
+    let file = File::open(path)?;
+    let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: `file` owns a live descriptor for the call, and `stat` is
+    // storage of the type `fstatvfs` fills.
+    if unsafe { libc::fstatvfs(file.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `fstatvfs` succeeded, so it filled `stat`.
+    let stat = unsafe { stat.assume_init() };
+    Ok((stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64))
+}
+
+pub(super) fn read_exact_at(file: &File, buf: &mut [u8], offset: u64) -> io::Result<()> {
+    use std::os::unix::fs::FileExt;
+    file.read_exact_at(buf, offset)
 }
 
 pub(super) fn change_stamp(path: &Path) -> io::Result<ChangeStamp> {

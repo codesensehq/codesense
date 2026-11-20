@@ -3,8 +3,8 @@
 //! and owner checks, and writes the DACL allows anyone; volume serial and
 //! 128-bit file id, link counts and change stamps; reparse-point refusal;
 //! std's rename with a bounded retry, std's file locks, sharing violations,
-//! and a copy where symlinks need Developer Mode. Execute bits do not exist:
-//! the extension decides.
+//! a copy where symlinks need Developer Mode, the caller's free space and
+//! positioned reads. Execute bits do not exist: the extension decides.
 
 use std::ffi::{c_void, OsString};
 use std::fs::{File, OpenOptions};
@@ -32,7 +32,7 @@ use windows_sys::Win32::Security::{
     SECURITY_DESCRIPTOR, SE_DACL_PROTECTED,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateDirectoryW, CreateFileW, FileIdInfo, GetFileInformationByHandle,
+    CreateDirectoryW, CreateFileW, FileIdInfo, GetDiskFreeSpaceExW, GetFileInformationByHandle,
     GetFileInformationByHandleEx, BY_HANDLE_FILE_INFORMATION, CREATE_NEW, DELETE, FILE_ALL_ACCESS,
     FILE_APPEND_DATA, FILE_ATTRIBUTE_NORMAL, FILE_DELETE_CHILD, FILE_FLAG_BACKUP_SEMANTICS,
     FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE,
@@ -624,6 +624,54 @@ unsafe fn grants_anyone_write(dacl: *const ACL) -> bool {
 
 pub(super) fn link_count(file: &File) -> io::Result<u64> {
     Ok(u64::from(handle_information(file)?.nNumberOfLinks))
+}
+
+pub(super) fn available_space(path: &Path) -> io::Result<u64> {
+    // GetDiskFreeSpaceExW takes a directory: a file's is the one it is in.
+    let dir = if std::fs::metadata(path)?.is_dir() {
+        path
+    } else {
+        match path.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent,
+            _ => Path::new("."),
+        }
+    };
+    let mut available = 0u64;
+    // SAFETY: a NUL-terminated path, a live out-pointer, and the two totals
+    // the call allows to be null.
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide(dir).as_ptr(),
+            &mut available,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(available)
+}
+
+pub(super) fn read_exact_at(file: &File, mut buf: &mut [u8], mut offset: u64) -> io::Result<()> {
+    use std::os::windows::fs::FileExt;
+    while !buf.is_empty() {
+        match file.seek_read(buf, offset) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "failed to fill whole buffer",
+                ))
+            }
+            Ok(read) => {
+                buf = &mut std::mem::take(&mut buf)[read..];
+                offset += read as u64;
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 /// The last-write time's 100 ns ticks in a second.

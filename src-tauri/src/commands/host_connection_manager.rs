@@ -5680,8 +5680,7 @@ mod tests {
         super::super::machines::registry::RegistryRevision {
             declaration: Some(super::super::machines::registry::FileRevision {
                 path: path.into(),
-                device: 1,
-                inode: modified_nanos as u64,
+                id: codesense_platform::fs::file_id(&std::env::temp_dir()).unwrap(),
                 modified_nanos,
                 len: contents.len() as u64,
                 contents: contents.to_vec(),

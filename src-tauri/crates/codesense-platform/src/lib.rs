@@ -14,7 +14,8 @@
 //! - [`fs`]: owner-only files, directories and checks, file identity,
 //!   no-follow opens, atomic replace, exclusive and shared locks, links,
 //!   canonical paths, portable names, execute bits, busy files, executable
-//!   files and whether this process may run one.
+//!   files and whether this process may run one, the space left on a volume
+//!   and positioned reads.
 //! - [`cli`]: finding a command-line tool on `PATH` and in package-manager
 //!   directories.
 //! - [`dirs`]: the codesense home and the shared lock directory.
