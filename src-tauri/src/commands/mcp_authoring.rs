@@ -329,7 +329,7 @@ impl ScopeLaunch {
             if launch.runtime != runtime {
                 return Err("cached launch runtime does not match this tab".into());
             }
-            let (mut outcome, creation, applied) =
+            let (outcome, creation, applied) =
                 crate::agents::launch::project_and_apply_for_cli(
                     &launch,
                     session_id,
@@ -343,16 +343,9 @@ impl ScopeLaunch {
                 "home settings never own a separate file"
             );
             // The managed projection above already refused a launch without its exact
-            // executable; a direct exec needs the same one, never a shell line.
-            let cli = Option::ok_or(
-                cli,
-                "managed runtime requires its exact selected executable",
-            )?;
-            outcome.execution = super::mcp_scope::scoped_execution(
-                runtime,
-                cli.binary,
-                super::mcp_scope::compose_args(recorded_args.to_vec(), outcome.extra_args.clone()),
-            );
+            // executable; its direct exec (composed by `project_launch`) needs the same
+            // one, never a shell line.
+            Option::ok_or(cli, "managed runtime requires its exact selected executable")?;
             return Ok((outcome, creation));
         }
         let (mut outcome, creation) = super::mcp_scope::project_scope_for_cli(

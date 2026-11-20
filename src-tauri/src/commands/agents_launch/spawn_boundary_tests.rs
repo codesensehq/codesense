@@ -194,16 +194,16 @@ pub(super) async fn run_parity() {
     );
     assert!(!mcp_scope::mcp_scope_session_dir(&id).exists());
     let (mut outcome, creation) = producer
-        .project_agent_scope(
+        .project_launch(
             AgentCli::Hermes,
             &id,
             &cwd,
-            respawn.mcp_allow.as_deref().unwrap_or_default(),
-            launch.launch.mcp_scope.as_ref(),
+            respawn.mcp_allow.as_deref(),
             None,
             Some(&cli),
-            (&launch.startup_context.home, &alice()),
+            Some((&launch.startup_context.home, &alice())),
             &prepared.launch.args,
+            std::env::consts::OS,
         )
         .unwrap();
     crate::commands::mcp_authoring::bind_projected_scope_environment(
