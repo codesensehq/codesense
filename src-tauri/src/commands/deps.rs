@@ -650,11 +650,10 @@ impl DependencyManager {
 
     /// What each known install location of `basename` holds now.
     fn known_marks(&self, basename: &str) -> Vec<LocationMark> {
-        Vec::from_iter(
-            (self.known_locations)(basename)
-                .iter()
-                .map(|path| LocationMark::of(path)),
-        )
+        (self.known_locations)(basename)
+            .iter()
+            .map(|path| LocationMark::of(path))
+            .collect()
     }
 
     /// Whether a binary a launch found gone is executable at one of its known install
