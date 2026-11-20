@@ -401,7 +401,7 @@ fn parse_cursor(filter: &Filter) -> Result<Option<CursorAt>, String> {
         ["v", key, at, from, id] if !id.is_empty() => {
             let from = match *from {
                 "-" => Some(None),
-                from => from.parse::<i64>().ok().map(Some),
+                from => Result::ok(from.parse::<i64>()).map(Some),
             };
             u64::from_str_radix(key, 16)
                 .ok()
@@ -1405,13 +1405,13 @@ impl UsageStore {
                 .launch_session_id
                 .as_deref()
                 .and_then(|tab| charges.get(tab))
-                .filter(|tab_charges| !tab_charges.is_empty());
+                .filter(|tab_charges| !std::vec::Vec::is_empty(tab_charges));
             let segment = tab_charges.map(|tab_charges| Segment {
                 from_ms: charge_from,
                 to_ms: charge::segment_end(tab_charges, charge_from),
             });
             let charged = charge_from.and_then(|from| {
-                tab_charges.and_then(|tab_charges| tab_charges.iter().find(|c| c.from_ms == from))
+                tab_charges.and_then(|tab_charges| Iterator::find(&mut tab_charges.iter(), |c| c.from_ms == from))
             });
             // A charge first, then the stored link (the worktree the session's usage was recorded
             // in), then a story worktree holding its folder now (kept, so it outlives the

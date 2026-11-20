@@ -69,10 +69,7 @@ fn charge_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<(String, Charge)> {
 /// Where the segment that starts at `from` (`None`: before the first charge) ends: the next
 /// charge's start, or `None` for the open last segment.
 pub(super) fn segment_end(charges: &[Charge], from: Option<i64>) -> Option<i64> {
-    charges
-        .iter()
-        .map(|c| c.from_ms)
-        .find(|at| from.is_none_or(|from| *at > from))
+    Iterator::find(&mut charges.iter().map(|c| c.from_ms), |at| from.is_none_or(|from| *at > from))
 }
 
 /// The story a charge names, with its title, status and epic from the story file of its org.
@@ -92,7 +89,7 @@ pub(crate) fn current_story(
     charges: &[Charge],
     stories: &mut StoryResolver,
 ) -> Option<UsageStory> {
-    match charges.last() {
+    match <[Charge]>::last(charges) {
         Some(charge) => Some(charged_story(stories, charge)),
         None => report.latest_story().cloned(),
     }
@@ -204,7 +201,7 @@ impl UsageStore {
         let mut before_charges: Option<Option<String>> = None;
         let mut found = Vec::with_capacity(times.len());
         for &at_ms in times {
-            if let Some(charge) = charges.iter().rev().find(|c| c.from_ms <= at_ms) {
+            if let Some(charge) = Iterator::find(&mut charges.iter().rev(), |c| c.from_ms <= at_ms) {
                 found.push(Some(charge.story_id.clone()));
                 continue;
             }
