@@ -4,7 +4,7 @@
 //! The web view is not a Tauri window and has no IPC bridge: the page is repo
 //! content with its own scripts, and it must not reach app commands. Each
 //! export gets its own ephemeral web context, so no cookie or storage carries
-//! from one export to the next.
+//! from one export to the next, and the page can't download a file.
 //!
 //! The page loads, then a WebKitGTK print operation prints it, with no dialog,
 //! through GTK's file printer to `out.pdf` in a temporary directory, and
@@ -27,11 +27,16 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use gtk::glib;
-use gtk::glib::ffi::{gboolean, gpointer, GDestroyNotify, GTRUE};
+use gtk::glib::ffi::{gboolean, gpointer, GDestroyNotify, GFALSE};
 use gtk::prelude::*;
 use log::{debug, error};
 use tokio::sync::oneshot;
-use webkit2gtk::{LoadEvent, PrintOperation, PrintOperationExt, WebContext, WebView, WebViewExt};
+use webkit2gtk::{
+    DownloadExt, LoadEvent, NavigationPolicyDecision, NavigationPolicyDecisionExt, NavigationType,
+    PolicyDecision, PolicyDecisionExt, PolicyDecisionType, PrintOperation, PrintOperationExt,
+    ResponsePolicyDecision, ResponsePolicyDecisionExt, URIResponseExt, WebContext, WebContextExt,
+    WebView, WebViewExt,
+};
 
 use super::ContentSource;
 
@@ -117,16 +122,109 @@ fn release(id: usize) {
 // The web view and the print
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
+thread_local! {
+    /// How many web views `offscreen_view` has made on this thread.
+    static VIEWS_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// A bare web view on its own ephemeral context, in an offscreen window sized
-/// to a US Letter page at 96 dpi. Main thread only.
+/// to a US Letter page at 96 dpi. The page can't download: a download it
+/// starts is refused at the policy decision, and one that starts anyway is
+/// cancelled, so an export never writes a file of the page's choosing. Main
+/// thread only.
 fn offscreen_view() -> (gtk::OffscreenWindow, WebView) {
+    #[cfg(test)]
+    VIEWS_MADE.with(|made| made.set(made.get() + 1));
     let context = WebContext::new_ephemeral();
+    context.connect_download_started(|_, download| {
+        debug!(target: "export_pdf", "Cancelling a download the page started");
+        download.cancel();
+    });
     let web_view = WebView::with_context(&context);
+    web_view.connect_decide_policy(|_, decision, kind| {
+        if allowed(&decided(decision, kind)) {
+            return false;
+        }
+        debug!(target: "export_pdf", "Ignoring a {:?} the page asked for", kind);
+        decision.ignore();
+        true
+    });
     let window = gtk::OffscreenWindow::new();
     window.set_default_size(816, 1056);
     window.add(&web_view);
     window.show_all();
     (window, web_view)
+}
+
+/// A policy decision, as far as telling a download from a page load needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Decided {
+    /// Navigating a frame, and how.
+    Navigation(NavigationType),
+    /// Opening a new window.
+    NewWindow,
+    /// A frame's response: whether the web view can show it, and whether it
+    /// is sent as an attachment (`Content-Disposition: attachment`).
+    Response {
+        displayable: bool,
+        attachment: bool,
+    },
+    Other,
+}
+
+fn decided(decision: &PolicyDecision, kind: PolicyDecisionType) -> Decided {
+    match kind {
+        PolicyDecisionType::NavigationAction => decision
+            .downcast_ref::<NavigationPolicyDecision>()
+            .and_then(|navigation| navigation.navigation_action())
+            .map_or(Decided::Other, |action| {
+                Decided::Navigation(action.navigation_type())
+            }),
+        PolicyDecisionType::NewWindowAction => Decided::NewWindow,
+        PolicyDecisionType::Response => {
+            let Some(response) = decision.downcast_ref::<ResponsePolicyDecision>() else {
+                return Decided::Other;
+            };
+            let attachment = response
+                .response()
+                .and_then(|response| response.http_headers())
+                .and_then(|headers| headers.one("Content-Disposition"))
+                .is_some_and(|value| {
+                    value
+                        .trim_start()
+                        .get(..10)
+                        .is_some_and(|kind| kind.eq_ignore_ascii_case("attachment"))
+                });
+            Decided::Response {
+                displayable: response.is_mime_type_supported(),
+                attachment,
+            }
+        }
+        _ => Decided::Other,
+    }
+}
+
+/// Whether an export's web view goes ahead with `decision`. The page loads,
+/// with its frames and their redirects, but a download goes no further: an
+/// attachment, a response it can't show (WebKit downloads those), a link
+/// click or a form submission (where a `download` attribute acts; a printed
+/// page has no one to click) and a new window are all ignored.
+fn allowed(decision: &Decided) -> bool {
+    match *decision {
+        Decided::Navigation(how) => !matches!(
+            how,
+            NavigationType::LinkClicked
+                | NavigationType::FormSubmitted
+                | NavigationType::FormResubmitted
+        ),
+        Decided::NewWindow => false,
+        Decided::Response {
+            displayable,
+            attachment,
+        } => displayable && !attachment,
+        Decided::Other => true,
+    }
 }
 
 /// The outcome callback, taken by whichever signal ends the export first.
@@ -245,8 +343,9 @@ extern "C" {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Printer {
     name: String,
-    /// Virtual (it writes a file) and takes PDF.
-    pdf_file: bool,
+    /// It writes a file rather than reach a device.
+    is_virtual: bool,
+    accepts_pdf: bool,
 }
 
 /// GTK's translation of its file printer's name, in this process's locale.
@@ -254,47 +353,74 @@ fn file_printer_name() -> String {
     glib::dgettext(Some("gtk30"), "Print to File").to_string()
 }
 
-/// The name of the printer to print PDF files through. Main thread only: it
-/// runs a nested main loop until every print backend has listed its printers,
-/// or until GTK's own file printer turns up.
+/// The printers GTK has listed so far, filled in by [`each_printer`].
+struct Search {
+    preferred: String,
+    printers: Vec<Printer>,
+}
+
+/// GTK's printer callback: note the printer, and stop at GTK's own file printer.
+extern "C" fn each_printer(printer: *mut GtkPrinter, data: gpointer) -> gboolean {
+    // SAFETY: `data` is the `Rc<RefCell<Search>>` reference `file_printer`
+    // gave GTK, which only `free_search` releases, and GTK passes a live
+    // printer whose name it owns. GTK calls this on the main thread only, and
+    // never while `file_printer` holds a borrow.
+    let search = unsafe { &*data.cast::<RefCell<Search>>() };
+    let name = unsafe { gtk_printer_get_name(printer) };
+    if name.is_null() {
+        return GFALSE;
+    }
+    let name = unsafe { CStr::from_ptr(name) }
+        .to_string_lossy()
+        .into_owned();
+    let (is_virtual, accepts_pdf) = unsafe {
+        (
+            gtk_printer_is_virtual(printer) != 0,
+            gtk_printer_accepts_pdf(printer) != 0,
+        )
+    };
+    let mut search = search.borrow_mut();
+    let found = is_virtual && accepts_pdf && name == search.preferred;
+    search.printers.push(Printer {
+        name,
+        is_virtual,
+        accepts_pdf,
+    });
+    gboolean::from(found)
+}
+
+/// GTK's destroy notify for the enumeration: release its `Search` reference.
+unsafe extern "C" fn free_search(data: gpointer) {
+    // SAFETY: `data` came from `Rc::into_raw` in `file_printer`, and GTK
+    // calls this once, after its last `each_printer`.
+    drop(unsafe { Rc::from_raw(data.cast::<RefCell<Search>>().cast_const()) });
+}
+
+/// The name of the printer to print PDF files through, from the printers GTK
+/// lists at once. GTK's file printer is one of them, since its backend lists
+/// it as it loads; waiting for the others (CUPS on the network) could block
+/// the main thread, so they are not waited for. GTK holds its own reference
+/// to the search, and may still call into it after this returns, until it
+/// frees it through `free_search`. Main thread only.
 fn file_printer() -> Result<String, String> {
-    struct Search {
-        preferred: String,
-        printers: Vec<Printer>,
-    }
-    extern "C" fn each(printer: *mut GtkPrinter, data: gpointer) -> gboolean {
-        // SAFETY: `data` is the `Search` below, alive until enumeration returns,
-        // and GTK passes a live printer whose name it owns.
-        let search = unsafe { &mut *data.cast::<Search>() };
-        let name = unsafe { gtk_printer_get_name(printer) };
-        if name.is_null() {
-            return 0;
-        }
-        let name = unsafe { CStr::from_ptr(name) }
-            .to_string_lossy()
-            .into_owned();
-        let pdf_file = unsafe {
-            gtk_printer_is_virtual(printer) != 0 && gtk_printer_accepts_pdf(printer) != 0
-        };
-        let found = pdf_file && name == search.preferred;
-        search.printers.push(Printer { name, pdf_file });
-        gboolean::from(found)
-    }
-    let mut search = Search {
+    let search = Rc::new(RefCell::new(Search {
         preferred: file_printer_name(),
         printers: Vec::new(),
-    };
-    // SAFETY: with `wait`, GTK calls `each` only before it returns, so the
-    // pointer to `search` never outlives it.
-    unsafe { gtk_enumerate_printers(each, std::ptr::addr_of_mut!(search).cast(), None, GTRUE) };
+    }));
+    let data = Rc::into_raw(search.clone()).cast_mut().cast();
+    // SAFETY: GTK owns the reference in `data` until it calls `free_search`.
+    unsafe { gtk_enumerate_printers(each_printer, data, Some(free_search), GFALSE) };
+    let search = search.borrow();
     choose_file_printer(&search.printers, &search.preferred)
 }
 
-/// The virtual printer that writes PDF, preferring the one named `preferred`
+/// The virtual printer that takes PDF, preferring the one named `preferred`
 /// (GTK's file printer, in this locale) when more than one does. A real
 /// printer is never chosen: with no such printer, an error.
 fn choose_file_printer(printers: &[Printer], preferred: &str) -> Result<String, String> {
-    let mut candidates = printers.iter().filter(|printer| printer.pdf_file);
+    let mut candidates = printers
+        .iter()
+        .filter(|printer| printer.is_virtual && printer.accepts_pdf);
     let first = candidates.clone().next().ok_or_else(|| {
         "No print-to-file printer: GTK's file print backend (libprintbackend-file.so) is missing"
             .to_string()
@@ -320,10 +446,12 @@ mod tests {
     use std::process::Command;
     use std::time::{Duration, Instant};
 
+    /// A virtual printer that takes PDF when `pdf_file`, else a real one that doesn't.
     fn printer(name: &str, pdf_file: bool) -> Printer {
         Printer {
             name: name.to_string(),
-            pdf_file,
+            is_virtual: pdf_file,
+            accepts_pdf: pdf_file,
         }
     }
 
@@ -359,6 +487,50 @@ mod tests {
         ];
         assert!(choose_file_printer(&printers, "Print to File").is_err());
         assert!(choose_file_printer(&[], "Print to File").is_err());
+    }
+
+    #[test]
+    fn a_virtual_printer_without_pdf_is_not_chosen() {
+        let lpr = Printer {
+            name: "Print to LPR".to_string(),
+            is_virtual: true,
+            accepts_pdf: false,
+        };
+        assert!(choose_file_printer(&[lpr], "Print to File").is_err());
+        // A real printer that takes PDF isn't a file printer either.
+        let device = Printer {
+            name: "Office laser".to_string(),
+            is_virtual: false,
+            accepts_pdf: true,
+        };
+        assert!(choose_file_printer(&[device], "Print to File").is_err());
+    }
+
+    #[test]
+    fn the_page_loads_but_never_downloads() {
+        for how in [
+            NavigationType::Other,
+            NavigationType::Reload,
+            NavigationType::BackForward,
+        ] {
+            assert!(allowed(&Decided::Navigation(how)), "{how:?}");
+        }
+        for how in [
+            NavigationType::LinkClicked,
+            NavigationType::FormSubmitted,
+            NavigationType::FormResubmitted,
+        ] {
+            assert!(!allowed(&Decided::Navigation(how)), "{how:?}");
+        }
+        assert!(!allowed(&Decided::NewWindow));
+        let response = |displayable, attachment| Decided::Response {
+            displayable,
+            attachment,
+        };
+        assert!(allowed(&response(true, false)));
+        assert!(!allowed(&response(true, true)));
+        assert!(!allowed(&response(false, false)));
+        assert!(!allowed(&response(false, true)));
     }
 
     fn init_gtk() {
@@ -438,7 +610,8 @@ mod tests {
         );
     }
 
-    /// Serve `page` to every request on a local port; storage needs an http origin.
+    /// Serve `page` to every request on a local port, but `/attachment` as a
+    /// download (`Content-Disposition: attachment`); storage needs an http origin.
     fn serve(page: &'static str) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/", listener.local_addr().unwrap());
@@ -451,12 +624,23 @@ mod tests {
                         Ok(n) => request.extend_from_slice(&buf[..n]),
                     }
                 }
+                let (kind, extra, body) = if request.starts_with(b"GET /attachment ") {
+                    (
+                        "text/plain",
+                        "Content-Disposition: attachment; filename=\"attached.txt\"\r\n",
+                        "attached",
+                    )
+                } else {
+                    ("text/html; charset=utf-8", "", page)
+                };
                 let _ = write!(
                     stream,
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\
+                    "HTTP/1.1 200 OK\r\nContent-Type: {}\r\n{}\
                      Content-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    page.len(),
-                    page
+                    kind,
+                    extra,
+                    body.len(),
+                    body
                 );
             }
         });
@@ -574,7 +758,64 @@ mod tests {
         drop(export);
         let context = glib::MainContext::default();
         while context.iteration(false) {}
+        assert_eq!(VIEWS_MADE.with(|made| made.get()), 0, "a web view was made");
         assert!(PARKED.with(|parked| parked.borrow().is_empty()));
         assert!(rx.try_recv().is_err(), "no export ran");
+    }
+
+    /// Every file under `dir`, at any depth.
+    fn files_under(dir: &Path) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                found.extend(files_under(&path));
+            } else {
+                found.push(path);
+            }
+        }
+        found
+    }
+
+    #[test]
+    #[ignore = "needs a display and GTK's print backends: rust-linux-app runs it under xvfb-run"]
+    fn a_page_that_downloads_still_exports_and_writes_no_file() {
+        // A home and Downloads folder of the test's own, before GLib reads them.
+        let home = tempfile::tempdir().unwrap();
+        let downloads = home.path().join("Downloads");
+        let config = home.path().join(".config");
+        fs::create_dir_all(&downloads).unwrap();
+        fs::create_dir_all(&config).unwrap();
+        fs::write(
+            config.join("user-dirs.dirs"),
+            format!("XDG_DOWNLOAD_DIR=\"{}\"\n", downloads.display()),
+        )
+        .unwrap();
+        std::env::set_var("HOME", home.path());
+        std::env::set_var("XDG_CONFIG_HOME", &config);
+        std::env::set_var("XDG_DOWNLOAD_DIR", &downloads);
+        init_gtk();
+        // A script-clicked download link, an attachment in a frame, and one in a new window.
+        let url = serve(
+            "<!DOCTYPE html><html><body><p>Exported despite the downloads.</p>\
+             <a id=\"save\" download=\"leaked.txt\" href=\"data:text/plain,leaked\">save</a>\
+             <iframe src=\"/attachment\"></iframe>\
+             <script>document.getElementById('save').click();\
+             window.open('/attachment');</script></body></html>",
+        );
+        let bytes = print(ContentSource::Url(url)).expect("the export");
+        assert_pdf_with_text(&bytes, "Exported despite the downloads.");
+        // Time for a download that got through to land.
+        let settle = Instant::now() + Duration::from_secs(2);
+        run_until(|| (Instant::now() >= settle).then_some(()));
+        assert_eq!(files_under(&downloads), Vec::<PathBuf>::new());
+        let leaked: Vec<_> = files_under(home.path())
+            .into_iter()
+            .filter(|path| {
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                name.contains("leaked") || name.contains("attached")
+            })
+            .collect();
+        assert_eq!(leaked, Vec::<PathBuf>::new());
     }
 }

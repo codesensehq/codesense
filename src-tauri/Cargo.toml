@@ -178,8 +178,8 @@ keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 # Probes the session bus for the default collection without unlocking it. The same
 # crate (and version) keyring's `sync-secret-service` already builds.
 dbus-secret-service = "4.0.0-rc.2"
-# PDF export's bare offscreen web view and its print operation. The versions and features wry
-# already builds; GLib comes through `gtk::glib`.
+# PDF export's bare offscreen web view and its print operation. The versions and features Tauri's
+# runtime already builds; GLib comes through `gtk::glib`.
 gtk = "0.18"
 webkit2gtk = { version = "2.0", features = ["v2_40"] }
 

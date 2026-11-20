@@ -784,9 +784,9 @@ jobs:
         run: dbus-run-session -- bash scripts/run-secret-service-tests.sh
       - name: Test PDF export's renderer on a virtual display
         # A bare WebKitGTK web view prints HTML, a file URL and an http page to GTK's file printer,
-        # in English and in German, and poppler reads the text back; a failed load is an error and
-        # a dropped export destroys its window. The tests are ignored without a display. The
-        # WebKit setting is the app's own default (linux_startup.rs).
+        # in English and in German, and poppler reads the text back; a failed load is an error, a
+        # page's downloads write no file, and a dropped export destroys its window. The tests are
+        # ignored without a display. The WebKit setting is the app's own default (linux_startup.rs).
         env:
           WEBKIT_DISABLE_DMABUF_RENDERER: "1"
         run: |
