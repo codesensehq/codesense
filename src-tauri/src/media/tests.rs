@@ -868,14 +868,46 @@ async fn ask_or_an_unlisted_host_shows_tap_to_load_and_never_refetches_by_itself
         hosts: vec!["example.com".into()],
         ..Config::default()
     };
-    for (config, reason) in [(&ask, "ask"), (&unlisted, "host")] {
-        let mut listed = vec![own.clone()];
+    let off = Config {
+        remote: Remote::Off,
+        ..Config::default()
+    };
+    // With no source link (else `off` shows the link card), off has its own reason.
+    let mut unlinked = own.clone();
+    unlinked.source_url = None;
+    for (config, a, reason) in [
+        (&ask, &own, "ask"),
+        (&unlisted, &own, "host"),
+        (&off, &unlinked, "off"),
+    ] {
+        let mut listed = vec![a.clone()];
         state.present(config, &mut listed);
         assert_eq!(listed[0].state, "pending");
         assert_eq!(listed[0].reason.as_deref(), Some(reason));
-        assert!(state.read(config, &own).await.is_err());
+        assert!(state.read(config, a).await.is_err());
     }
     assert!(fetch.calls().is_empty(), "no automatic re-fetch");
+}
+
+#[tokio::test(start_paused = true)]
+async fn reads_wait_for_the_startup_index_at_most_ready_wait_from_install() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = Arc::new(MediaState::new(
+        dir.path().join("inbox-media"),
+        Arc::new(Unreachable),
+    ));
+    let sha = sha_of(&gif(16));
+    let start = tokio::time::Instant::now();
+    assert!(state.fetch_or_cached(&sha, None, None).await.is_err());
+    assert!(
+        start.elapsed() >= state::READY_WAIT,
+        "the first read waits out the window"
+    );
+    // The window has passed: later reads proceed at once, though the index never came.
+    let later = tokio::time::Instant::now();
+    assert!(state.fetch_or_cached(&sha, None, None).await.is_err());
+    assert!(later.elapsed() < std::time::Duration::from_secs(1));
+    assert!(!state.is_ready());
 }
 
 #[test]

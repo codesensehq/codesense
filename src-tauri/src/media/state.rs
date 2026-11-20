@@ -55,8 +55,9 @@ struct Failed {
 
 type Refetch = Shared<BoxFuture<'static, Result<Bytes, Failure>>>;
 
-/// How long a reader waits for the startup index before it decides without it.
-const READY_WAIT: Duration = Duration::from_secs(10);
+/// The longest any reader waits for the startup index, counted from install: after
+/// that, reads decide without it.
+pub(crate) const READY_WAIT: Duration = Duration::from_secs(10);
 
 pub(crate) struct MediaState {
     dir: PathBuf,
@@ -66,6 +67,8 @@ pub(crate) struct MediaState {
     inflight: Mutex<HashMap<String, Refetch>>,
     fetcher: Arc<dyn Fetch>,
     ready: tokio::sync::watch::Sender<bool>,
+    /// When this state was made, which starts the [`READY_WAIT`] window.
+    started: tokio::time::Instant,
     /// Teams being indexed on their first sighting, so concurrent readers share one scan.
     #[allow(clippy::type_complexity)]
     indexing: Mutex<HashMap<(String, String), Arc<tokio::sync::OnceCell<()>>>>,
@@ -86,6 +89,7 @@ impl MediaState {
             inflight: Mutex::default(),
             fetcher,
             ready: tokio::sync::watch::channel(false).0,
+            started: tokio::time::Instant::now(),
             indexing: Mutex::default(),
         }
     }
@@ -102,17 +106,25 @@ impl MediaState {
     }
 
     /// The startup index is built: readers and writers may decide storage.
-    pub(crate) fn set_ready(&self) {
-        self.ready.send_replace(true);
+    /// Returns whether this call made it ready (the first one does).
+    pub(crate) fn set_ready(&self) -> bool {
+        !self.ready.send_replace(true)
     }
 
-    fn is_ready(&self) -> bool {
+    pub(crate) fn is_ready(&self) -> bool {
         *self.ready.borrow()
     }
 
     async fn ready(&self) {
+        if self.is_ready() {
+            return;
+        }
+        let left = READY_WAIT.saturating_sub(self.started.elapsed());
+        if left.is_zero() {
+            return;
+        }
         let mut ready = self.ready.subscribe();
-        if tokio::time::timeout(READY_WAIT, ready.wait_for(|r| *r))
+        if tokio::time::timeout(left, ready.wait_for(|r| *r))
             .await
             .is_err()
         {
@@ -158,12 +170,15 @@ impl MediaState {
         }
     }
 
-    /// The automatic re-fetch `config` admits for `sha`, or the tap-to-load reason
-    /// there is none: `sender` without a URL sent from this machine, `ask` unless remote
-    /// media is `auto`, `host` when the team doesn't list the URL's host.
+    /// The automatic re-fetch `config` admits for `sha`, or the reason there is none:
+    /// `off` when remote media is off, `sender` without a URL sent from this machine,
+    /// `ask` when the team asks first, `host` when the team doesn't list the URL's host.
     pub(crate) fn admission(&self, config: &Config, sha: &str) -> Result<Source, &'static str> {
+        if config.remote == Remote::Off {
+            return Err("off");
+        }
         let url = self.index.refetch_url(sha).ok_or("sender")?;
-        if config.remote != Remote::Auto {
+        if config.remote == Remote::Ask {
             return Err("ask");
         }
         let host = url::Url::parse(&url)

@@ -3128,6 +3128,11 @@ impl InboxHost for AppInboxHost {
         // indexed on its first sighting, before any of its media is served.
         if let Some(media) = crate::media::app_state(&self.app) {
             crate::media::index_new_teams(&media, self, &teams).await;
+            // The first answer completes the startup index: listings drawn before it
+            // left cached images as they were, so they are drawn again.
+            if media.set_ready() {
+                self.inbox_changed(&[]);
+            }
         }
         Ok(teams)
     }

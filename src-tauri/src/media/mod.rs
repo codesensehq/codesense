@@ -743,13 +743,14 @@ async fn startup(app: &tauri::AppHandle, state: &std::sync::Arc<MediaState>) -> 
             Err(e) => {
                 log::warn!("inbox media: synced teams unavailable, retrying: {e}");
                 tokio::time::sleep(wait).await;
-                wait = (wait * 2).min(std::time::Duration::from_secs(300));
+                wait = (wait * 2).min(std::time::Duration::from_secs(30));
             }
         }
     };
-    state.set_ready();
-    // Listings drawn before the index was ready are drawn again.
-    host.inbox_changed(&[]);
+    // `synced_teams` normally marked the index ready on its first answer already.
+    if state.set_ready() {
+        host.inbox_changed(&[]);
+    }
     let mut stores = Vec::new();
     for team in teams {
         let path = host.team_store(&team).await?;
