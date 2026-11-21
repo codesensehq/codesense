@@ -4,6 +4,7 @@
     "macos": { "on": ["aarch64"] },
     "linux": { "on": ["x86_64", "aarch64"] },
     "windows": "off",
+    "tracked": { "macos": "macos-intel", "windows": "git-ai" },
     "reason": "the bundled git-ai binary is shipped for macOS on Apple silicon and Linux on x86_64 and aarch64"
   },
   {
@@ -11,6 +12,7 @@
     "macos": { "on": ["aarch64"] },
     "linux": { "on": ["x86_64", "aarch64"] },
     "windows": "off",
+    "tracked": { "macos": "macos-intel", "windows": "starship" },
     "reason": "the bundled starship binary is shipped for macOS on Apple silicon and Linux on x86_64 and aarch64"
   },
   {
@@ -18,6 +20,7 @@
     "macos": "probe",
     "linux": "probe",
     "windows": "off",
+    "tracked": { "windows": "secret-store" },
     "reason": "needs a system secret store that can be reached; values injected through the process environment are never saved"
   },
   {
@@ -25,6 +28,7 @@
     "macos": "on",
     "linux": "on",
     "windows": "off",
+    "tracked": { "windows": "mcp-bridge" },
     "reason": "agents can't reach CodeSense from inside a session"
   },
   {
@@ -32,6 +36,7 @@
     "macos": "on",
     "linux": "on",
     "windows": "off",
+    "tracked": { "windows": "sidecar" },
     "reason": "the terminal server that keeps sessions running while the app restarts is not built for this platform yet; terminals run inside the app"
   },
   {
@@ -39,6 +44,7 @@
     "macos": "on",
     "linux": "on",
     "windows": "off",
+    "tracked": { "windows": "remote" },
     "reason": "CodeSense can't connect to other machines"
   },
   {
@@ -46,6 +52,7 @@
     "macos": "on",
     "linux": "on",
     "windows": "off",
+    "tracked": { "windows": "agent-cli-sockets" },
     "reason": "agent CLIs that are driven over Unix sockets (the Codex app server, the Hermes gateway) are not ported to this platform yet"
   },
   {
@@ -53,6 +60,7 @@
     "macos": "on",
     "linux": "on",
     "windows": "off",
+    "tracked": { "windows": "shell-integration" },
     "reason": "shell integration (prompt marks and the working directory) is not built for this platform's shells yet"
   },
   {
@@ -60,6 +68,7 @@
     "macos": "on",
     "linux": "on",
     "windows": "off",
+    "tracked": { "windows": "pdf-export" },
     "reason": "PDF printing isn't built for this platform's web view"
   },
   {
@@ -67,6 +76,7 @@
     "macos": "on",
     "linux": "on",
     "windows": "off",
+    "tracked": { "windows": "tray-background" },
     "reason": "closing the window quits CodeSense"
   },
   {
@@ -74,6 +84,7 @@
     "macos": "on",
     "linux": "probe",
     "windows": "off",
+    "tracked": { "windows": "tray-background" },
     "reason": "the terminal server's tray icon can't be shown on this system"
   },
   {
