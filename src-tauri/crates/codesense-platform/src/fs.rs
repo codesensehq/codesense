@@ -34,6 +34,15 @@ pub fn set_owner_only(path: &Path) -> io::Result<()> {
     sys::set_owner_only(path, metadata.is_dir())
 }
 
+/// Whether the open `file` is exactly as [`set_owner_only`] leaves it, so
+/// setting it again would change nothing: on unix [`is_owner_only`] with the
+/// owner's full mode, 0700 for a directory and 0600 for a file (an owner-only
+/// mode with fewer owner bits, such as 0500, is not); on Windows the same as
+/// [`is_owner_only`]. Open `file` as [`is_owner_only`] needs.
+pub fn is_exactly_owner_only(file: &File) -> io::Result<bool> {
+    sys::is_exactly_owner_only(file)
+}
+
 /// Whether only this user may use the open `file` (open it with
 /// [`open_nofollow`], so a link is never followed, and with read or write
 /// access: on Windows the check needs `READ_CONTROL`, so a handle with less,

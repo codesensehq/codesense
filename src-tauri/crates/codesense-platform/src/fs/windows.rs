@@ -144,6 +144,11 @@ impl Drop for Security {
     }
 }
 
+/// Windows has no mode bits: owner-only is all [`super::set_owner_only`] sets.
+pub(super) fn is_exactly_owner_only(file: &File) -> io::Result<bool> {
+    is_owner_only(file)
+}
+
 pub(super) fn is_owner_only(file: &File) -> io::Result<bool> {
     let user = CurrentUser::read()?;
     let security = Security::of(file)?;
