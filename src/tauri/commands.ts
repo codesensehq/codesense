@@ -4475,8 +4475,9 @@ export const connectContextRemote = (repoPath: string, remoteUrl: string) =>
 export const revealContextRepo = (repoPath: string) =>
   invoke<void>("reveal_context_repo", { repoPath });
 
-/** Open a folder in the file manager. Rust side rejects paths outside
- *  the codesense-managed roots (`~/.codesense/users`, `~/.codesense/core`),
+/** Reveal a folder: on macOS it is selected in its parent in Finder, on
+ *  Linux the file manager opens at it. Rust side rejects paths outside the
+ *  codesense-managed roots (`~/.codesense/users`, `~/.codesense/core`),
  *  checked after resolving links, and anything that isn't a folder. */
 export const revealPath = (path: string) => invoke<void>("reveal_path", { path });
 
