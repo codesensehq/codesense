@@ -9,7 +9,7 @@
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -95,7 +95,7 @@ impl Launch {
 pub(crate) enum TextDefaultMissing {
     /// `xdg-mime` isn't installed.
     NoXdgMime,
-    /// `xdg-mime` couldn't run or exited non-zero.
+    /// `xdg-mime` couldn't run, exited non-zero or ran past its limit.
     QueryFailed(String),
     /// `xdg-mime` printed nothing.
     Empty,
@@ -148,18 +148,29 @@ fn host_is_wsl() -> bool {
 }
 
 fn query_text_default() -> Result<String, TextDefaultMissing> {
-    let output = Launch::new("xdg-mime", ["query", "default", "text/plain"])
-        .command()
-        .stdout(Stdio::piped())
-        .output()
+    let command = Launch::new("xdg-mime", ["query", "default", "text/plain"]).command();
+    let captured = HostSpawn
+        .capture(command, QUERY_LIMIT)
         .map_err(|e| match e.kind() {
             io::ErrorKind::NotFound => TextDefaultMissing::NoXdgMime,
             _ => TextDefaultMissing::QueryFailed(e.to_string()),
         })?;
-    if !output.status.success() {
-        return Err(TextDefaultMissing::QueryFailed(output.status.to_string()));
+    match captured.exit {
+        Exit::Status { success: true, .. } => {}
+        Exit::Status { describe, .. } => return Err(TextDefaultMissing::QueryFailed(describe)),
+        Exit::TimedOut { .. } => {
+            return Err(TextDefaultMissing::QueryFailed(format!(
+                "timed out after {}",
+                describe_limit(QUERY_LIMIT)
+            )))
+        }
+        Exit::Detached => {
+            return Err(TextDefaultMissing::QueryFailed(
+                "it wasn't waited for".into(),
+            ))
+        }
     }
-    let id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let id = String::from_utf8_lossy(&captured.stdout).trim().to_string();
     if id.is_empty() {
         return Err(TextDefaultMissing::Empty);
     }
@@ -478,10 +489,20 @@ pub(crate) enum Exit {
     TimedOut { pid: u32 },
 }
 
+/// What a captured command printed, and how it ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Captured {
+    pub exit: Exit,
+    pub stdout: Vec<u8>,
+}
+
 /// Starts a command, injected so tests record instead of spawning. An `Err` means it couldn't be
 /// started; once it has started, every outcome is an [`Exit`].
 pub(crate) trait Spawn {
     fn start(&self, command: Command, wait: Option<Duration>) -> io::Result<Exit>;
+    /// Runs `command` for its stdout, at most `limit`. Nothing it started outlives it. An `Err`
+    /// also covers output whose pipe stayed open past the root's end.
+    fn capture(&self, command: Command, limit: Duration) -> io::Result<Captured>;
 }
 
 /// Spawns for real. A detached child is reaped on a thread, with a non-zero exit logged; a waited
@@ -510,7 +531,50 @@ impl Spawn for HostSpawn {
         }
         Ok(Exit::Detached)
     }
+
+    /// The tree's stdout is read on a thread, so a child that writes more than the pipe holds
+    /// still finishes. Once the root ends, in time or killed at the limit, the rest of its tree
+    /// is killed and the reader joined, waiting at most [`READER_LIMIT`]: a descendant that left
+    /// the process group could still hold the pipe, and its reader is then left behind.
+    fn capture(&self, mut command: Command, limit: Duration) -> io::Result<Captured> {
+        command.stdout(Stdio::piped());
+        let mut tree = ProcessTree::spawn(&mut command)?;
+        let program = command.get_program().to_string_lossy().into_owned();
+        let Some(mut stdout) = tree.child().stdout.take() else {
+            return Err(io::Error::other(format!("{program} has no stdout")));
+        };
+        let (sent, received) = std::sync::mpsc::channel();
+        let reader = std::thread::Builder::new()
+            .name("opener-capture".into())
+            .spawn(move || {
+                let mut bytes = Vec::new();
+                let read = stdout.read_to_end(&mut bytes).map(|_| bytes);
+                let _ = sent.send(read);
+            })?;
+        let exit = wait_bounded(&mut tree, limit, Rest::Kill);
+        let stdout = match received.recv_timeout(READER_LIMIT) {
+            Ok(read) => {
+                // It has sent, its last act, so this join returns at once.
+                let _ = reader.join();
+                read?
+            }
+            Err(_) => {
+                warn!(target: "opener", "{program}'s output is still open; leaving its reader");
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!(
+                        "its output was still open {} after it ended",
+                        describe_limit(READER_LIMIT)
+                    ),
+                ));
+            }
+        };
+        Ok(Captured { exit, stdout })
+    }
 }
+
+/// How long a capture waits for its output to close once its process tree has ended.
+const READER_LIMIT: Duration = Duration::from_secs(1);
 
 /// What a bounded wait does with what the root left running once the root exits in time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

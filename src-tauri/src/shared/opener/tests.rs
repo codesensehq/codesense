@@ -80,6 +80,10 @@ impl Spawn for Recorder {
             .pop_front()
             .unwrap_or(Ok(Exit::Detached))
     }
+
+    fn capture(&self, _command: Command, _limit: Duration) -> io::Result<Captured> {
+        unreachable!("these tests don't capture")
+    }
 }
 
 fn not_found() -> io::Result<Exit> {

@@ -399,6 +399,14 @@ impl crate::shared::opener::Spawn for Recorder {
         ));
         Ok(crate::shared::opener::Exit::Detached)
     }
+
+    fn capture(
+        &self,
+        _command: std::process::Command,
+        _limit: std::time::Duration,
+    ) -> std::io::Result<crate::shared::opener::Captured> {
+        unreachable!("opening a terminal captures nothing")
+    }
 }
 
 /// x-terminal-emulator, `$TERMINAL` and xterm take no folder flag: the folder reaches them only
