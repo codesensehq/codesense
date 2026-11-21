@@ -161,6 +161,8 @@ fn macos_detection_is_todays_list_and_default() {
         terminal_rows("macos")[2].find,
         Find::Always("/usr/bin/open")
     );
+    // `open -a` is handed the bundle detection checks.
+    assert_eq!(mac_app_bundle("iTerm"), PathBuf::from(ITERM_APP));
     let programs: Vec<_> = all.iter().map(|d| d.program.clone()).collect();
     assert_eq!(
         programs,

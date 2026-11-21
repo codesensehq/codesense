@@ -123,8 +123,13 @@ const fn open_app_row(
 /// on, so LaunchServices can't pick another app of the same name.
 pub(crate) const TERMINAL_APP: &str = "/System/Applications/Utilities/Terminal.app";
 
-/// iTerm2's bundle, the one `Find::MacApp { app: "iTerm", .. }` checks.
+/// iTerm2's bundle, the one `Find::MacApp { app: "iTerm", .. }` checks: [`mac_app_bundle`].
 pub(crate) const ITERM_APP: &str = "/Applications/iTerm.app";
+
+/// The bundle a `Find::MacApp { app, .. }` row is detected by.
+pub(crate) fn mac_app_bundle(app: &str) -> PathBuf {
+    Path::new("/Applications").join(format!("{app}.app"))
+}
 
 /// iTerm2: a new window whose session `cd`s to the folder (argv item 1) and runs the command
 /// (item 2) or the login shell. The folder never appears in the script or the shell text.
@@ -581,9 +586,9 @@ pub(crate) fn host_find(find: &Find) -> Option<PathBuf> {
             .next()
     };
     match find {
-        Find::MacApp { app, program } => Path::new(&format!("/Applications/{app}.app"))
-            .exists()
-            .then(|| PathBuf::from(program)),
+        Find::MacApp { app, program } => {
+            mac_app_bundle(app).exists().then(|| PathBuf::from(program))
+        }
         Find::Always(program) => Some(PathBuf::from(program)),
         Find::OnPath(name) => on_path(name),
         Find::EnvVar(var) => env_terminal(
