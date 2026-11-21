@@ -55,7 +55,7 @@ pub(crate) fn is_provider(
 }
 
 /// Whose terms govern an image's bytes, from the host they finally came from.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Hash, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum MediaProvider {
     Giphy,
@@ -75,13 +75,69 @@ impl MediaProvider {
     pub fn is_provider(self) -> bool {
         self != Self::None
     }
+    /// The hosts this provider's media comes from: [`GIPHY_HOSTS`], [`KLIPY_HOSTS`], or none.
+    pub fn host_list(self) -> &'static [&'static str] {
+        match self {
+            Self::Giphy => GIPHY_HOSTS,
+            Self::Klipy => KLIPY_HOSTS,
+            Self::None => &[],
+        }
+    }
 }
 
+/// Whether `url` is https on one of `hosts`, with no credentials in it.
+pub(crate) fn on_hosts(hosts: &[&str], url: &str) -> bool {
+    let Ok(url) = url.parse::<url::Url>() else {
+        return false;
+    };
+    url.scheme() == "https"
+        && url.username() == ""
+        && url.password().is_none()
+        && url
+            .host_str()
+            .is_some_and(|host| hosts.iter().any(|pattern| host_matches(pattern, host)))
+}
+
+/// Why a send's provider claim (`provider` with `providerId`) was refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClaimError {
+    /// Only one of `provider` and `providerId` was given.
+    Unpaired,
+    /// `provider` is `none`.
+    NotAProvider,
+    /// `providerId` is not a provider GIF id.
+    BadId,
+    /// The URL is not https on that provider's hosts.
+    WrongHost,
+    /// `provider` came with `path`: a local file has no provider.
+    LocalFile,
+}
+impl std::fmt::Display for ClaimError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Unpaired => "media.provider and media.providerId go together",
+            Self::NotAProvider => "media.provider is giphy or klipy",
+            Self::BadId => "media.providerId is not a provider GIF id",
+            Self::WrongHost => "media.url is not on that provider's hosts",
+            Self::LocalFile => "media.provider is for a url, not a path",
+        })
+    }
+}
+impl std::error::Error for ClaimError {}
+
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct MediaInput {
     pub url: Option<String>,
     pub path: Option<String>,
     pub alt: String,
+    /// The GIF provider `url` came from, `giphy` or `klipy`, as `gif_search` named it.
+    /// Set with `providerId` or not at all; it registers the send with the provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<MediaProvider>,
+    /// The provider's id for the GIF, as `gif_search` returned it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
 }
 impl MediaInput {
     pub fn validate(&self) -> Result<(), String> {
@@ -95,7 +151,32 @@ impl MediaInput {
             (None, Some(path)) if !path.trim().is_empty() => {}
             _ => return Err("media requires exactly one of url or path".into()),
         }
+        Self::provider_claim(self).map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    /// The checked provider claim, `None` when there is none: both fields, a provider that
+    /// is one, an id of the shared GIF id pattern, and a URL on that provider's own hosts.
+    pub fn provider_claim(&self) -> Result<Option<(MediaProvider, &str)>, ClaimError> {
+        let (provider, id) = match (self.provider, self.provider_id.as_deref()) {
+            (None, None) => return Ok(None),
+            (Some(provider), Some(id)) => (provider, id),
+            _ => return Err(ClaimError::Unpaired),
+        };
+        if self.path.is_some() {
+            return Err(ClaimError::LocalFile);
+        }
+        if !MediaProvider::is_provider(provider) {
+            return Err(ClaimError::NotAProvider);
+        }
+        if !crate::gif::valid_id(id) {
+            return Err(ClaimError::BadId);
+        }
+        let url = self.url.as_deref().unwrap_or("");
+        if !on_hosts(MediaProvider::host_list(provider), url) {
+            return Err(ClaimError::WrongHost);
+        }
+        Ok(Some((provider, id)))
     }
 }
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -188,6 +269,17 @@ pub struct Attachment {
     /// may use this attachment's URL. Missing reads as false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub own_sender: bool,
+    /// The provider the sender said the GIF came from, with its id: what registers the
+    /// send and the first view with the provider. Dropped when a fetch ends on another
+    /// host than that provider's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<MediaProvider>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
+    /// The provider's view ping for this attachment was sent, or never will be: set on
+    /// its first view on the sending machine. Missing reads as false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub onload_sent: bool,
 }
 impl Attachment {
     pub fn remote(url: &str, alt: &str, config: &Config, own: bool) -> Result<Self, Failure> {
@@ -231,7 +323,29 @@ impl Attachment {
             retryable: false,
             media_provider: None,
             own_sender: false,
+            provider: None,
+            provider_id: None,
+            onload_sent: false,
         }
+    }
+    /// `self` with `input`'s provider claim, once [`MediaInput::validate`] has passed it.
+    pub fn claimed(mut self, input: &MediaInput) -> Self {
+        if let Ok(Some((provider, id))) = MediaInput::provider_claim(input) {
+            self.provider = Some(provider);
+            self.provider_id = Some(id.to_string());
+        }
+        self
+    }
+    /// Whose attribution the image shows, in every state: the sender's provider claim, else
+    /// the provider whose host the bytes came from (which covers redirects), else (an old
+    /// message, or one never fetched) the provider whose host the URL names. `None` for
+    /// other media.
+    pub fn attribution(&self) -> Option<MediaProvider> {
+        let provider = match (self.provider, self.media_provider) {
+            (Some(provider), _) | (None, Some(provider)) => provider,
+            (None, None) => MediaProvider::of_host(self.source_host.as_deref().unwrap_or("")),
+        };
+        MediaProvider::is_provider(provider).then_some(provider)
     }
     /// Provider media (see [`is_provider`]).
     pub fn is_provider_media(&self) -> bool {
@@ -552,6 +666,7 @@ pub(crate) async fn prepare(
     if let Some(url) = &input.url {
         let a =
             Attachment::remote(url, &input.alt, &config, own).map_err(|e| e.reason.to_string())?;
+        let a = Attachment::claimed(a, input);
         let auto = config.should_auto_fetch(a.source_host.as_deref().unwrap(), own);
         return Ok((a, auto));
     }

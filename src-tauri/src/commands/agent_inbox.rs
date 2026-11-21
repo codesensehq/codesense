@@ -143,7 +143,7 @@ pub(crate) trait InboxHost: Send + Sync {
             own,
         )
         .map_err(|e| e.reason.to_string())?;
-        Ok((attachment, false))
+        Ok((crate::media::Attachment::claimed(attachment, input), false))
     }
     async fn fetch_media(
         &self,

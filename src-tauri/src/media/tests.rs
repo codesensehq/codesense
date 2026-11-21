@@ -51,6 +51,8 @@ fn media_requires_alt_and_exactly_one_source() {
         url,
         path,
         alt: alt.into(),
+        provider: None,
+        provider_id: None,
     };
     assert!(input(None, None, "cat").validate().is_err());
     assert!(input(Some("https://i.giphy.com/cat.gif".into()), None, "")
@@ -1065,4 +1067,249 @@ async fn disk_shas_are_read_from_disk_and_never_fetched() {
     );
     std::fs::remove_file(state.dir().join(&sha)).unwrap();
     assert!(state.fetch_or_cached(&sha, None, None).await.is_err());
+}
+
+fn claim(
+    url: Option<&str>,
+    path: Option<&str>,
+    provider: Option<MediaProvider>,
+    id: Option<&str>,
+) -> MediaInput {
+    MediaInput {
+        url: url.map(String::from),
+        path: path.map(String::from),
+        alt: "cat".into(),
+        provider,
+        provider_id: id.map(String::from),
+    }
+}
+
+#[test]
+fn a_provider_claim_is_paired_known_well_formed_and_on_its_own_hosts() {
+    use MediaProvider::{Giphy, Klipy};
+    let giphy_url = Some("https://media.giphy.com/media/abc/giphy.gif");
+    let klipy_url = Some("https://static.klipy.com/a.gif");
+    let refused = [
+        (
+            claim(giphy_url, None, Some(Giphy), None),
+            ClaimError::Unpaired,
+        ),
+        (
+            claim(giphy_url, None, None, Some("abc")),
+            ClaimError::Unpaired,
+        ),
+        (
+            claim(giphy_url, None, Some(MediaProvider::None), Some("abc")),
+            ClaimError::NotAProvider,
+        ),
+        (
+            claim(giphy_url, None, Some(Giphy), Some("bad id!")),
+            ClaimError::BadId,
+        ),
+        (
+            claim(giphy_url, None, Some(Giphy), Some(&"a".repeat(65))),
+            ClaimError::BadId,
+        ),
+        (
+            claim(klipy_url, None, Some(Giphy), Some("abc")),
+            ClaimError::WrongHost,
+        ),
+        (
+            claim(giphy_url, None, Some(Klipy), Some("abc")),
+            ClaimError::WrongHost,
+        ),
+        (
+            claim(
+                Some("https://giphy.com.evil.test/a.gif"),
+                None,
+                Some(Giphy),
+                Some("abc"),
+            ),
+            ClaimError::WrongHost,
+        ),
+        (
+            claim(None, Some("cat.gif"), Some(Giphy), Some("abc")),
+            ClaimError::LocalFile,
+        ),
+    ];
+    for (input, error) in refused {
+        assert_eq!(input.provider_claim(), Err(error), "{input:?}");
+        assert_eq!(input.validate(), Err(error.to_string()), "{input:?}");
+    }
+    let good = claim(giphy_url, None, Some(Giphy), Some("abc-12_X"));
+    assert_eq!(good.provider_claim(), Ok(Some((Giphy, "abc-12_X"))));
+    assert!(good.validate().is_ok());
+    let klipy = claim(klipy_url, None, Some(Klipy), Some("k1"));
+    assert_eq!(klipy.provider_claim(), Ok(Some((Klipy, "k1"))));
+    // A provider-host URL with no claim is sent, untagged.
+    let bare = claim(giphy_url, None, None, None);
+    assert_eq!(bare.provider_claim(), Ok(None));
+    assert!(bare.validate().is_ok());
+    // An unknown provider is refused when the input is read.
+    let unknown = serde_json::json!({"url": giphy_url, "alt": "cat", "provider": "tenor", "providerId": "abc"});
+    assert!(serde_json::from_value::<MediaInput>(unknown).is_err());
+    // The wire names are camelCase, and an input with no claim serializes as before, so a
+    // request id's payload hash is unchanged.
+    let wire = serde_json::json!({"url": giphy_url, "alt": "cat", "provider": "giphy", "providerId": "abc"});
+    let read: MediaInput = serde_json::from_value(wire).unwrap();
+    assert_eq!(read.provider_claim(), Ok(Some((Giphy, "abc"))));
+    assert_eq!(
+        serde_json::to_value(&bare).unwrap(),
+        serde_json::json!({"url": giphy_url, "path": null, "alt": "cat"})
+    );
+}
+
+#[test]
+fn provider_fields_round_trip_and_messages_without_them_read_unchanged() {
+    let old = r#"{"kind":"image","alt":"cat","sourceUrl":"https://i.giphy.com/a.gif","sourceHost":"i.giphy.com","state":"pending","retryable":false}"#;
+    let a: Attachment = serde_json::from_str(old).unwrap();
+    assert_eq!(
+        (a.provider, a.provider_id.as_deref(), a.onload_sent),
+        (None, None, false)
+    );
+    assert_eq!(serde_json::to_string(&a).unwrap(), old);
+    let input = claim(
+        Some("https://i.giphy.com/a.gif"),
+        None,
+        Some(MediaProvider::Giphy),
+        Some("abc"),
+    );
+    let mut tagged = Attachment::claimed(a.clone(), &input);
+    assert_eq!(tagged.provider, Some(MediaProvider::Giphy));
+    assert_eq!(tagged.provider_id.as_deref(), Some("abc"));
+    tagged.onload_sent = true;
+    let json = serde_json::to_string(&tagged).unwrap();
+    for field in [
+        r#""provider":"giphy""#,
+        r#""providerId":"abc""#,
+        r#""onloadSent":true"#,
+    ] {
+        assert!(json.contains(field), "{json}");
+    }
+    assert_eq!(serde_json::from_str::<Attachment>(&json).unwrap(), tagged);
+    // A claim that fails its check never tags the attachment.
+    let wrong = claim(
+        Some("https://i.giphy.com/a.gif"),
+        None,
+        Some(MediaProvider::Klipy),
+        Some("abc"),
+    );
+    assert_eq!(Attachment::claimed(a, &wrong).provider, None);
+}
+
+#[test]
+fn attribution_comes_from_the_claim_then_the_final_host_then_the_url_host() {
+    let with =
+        |url: &str, state: &str, claim: Option<MediaProvider>, media: Option<MediaProvider>| {
+            let mut a = remote(url, true);
+            a.state = state.into();
+            a.provider = claim;
+            a.media_provider = media;
+            a.attribution()
+        };
+    use MediaProvider::{Giphy, Klipy};
+    let giphy = "https://i.giphy.com/a.gif";
+    let klipy = "https://static.klipy.com/a.gif";
+    let plain = "https://example.com/a.gif";
+    // The claim first.
+    assert_eq!(with(klipy, "cached", Some(Klipy), Some(Klipy)), Some(Klipy));
+    // Then the final host: a plain URL redirected to GIPHY, a GIPHY URL redirected away.
+    assert_eq!(with(plain, "cached", None, Some(Giphy)), Some(Giphy));
+    assert_eq!(with(giphy, "cached", None, Some(MediaProvider::None)), None);
+    // Never fetched (pending, blocked) or an old message: the URL's host.
+    for state in ["pending", "blocked", "failed", "cached"] {
+        assert_eq!(with(giphy, state, None, None), Some(Giphy), "{state}");
+        assert_eq!(
+            with(giphy, state, Some(Giphy), None),
+            Some(Giphy),
+            "{state}"
+        );
+    }
+    assert_eq!(with(klipy, "pending", None, None), Some(Klipy));
+    assert_eq!(with(plain, "cached", None, None), None);
+    assert_eq!(with(plain, "cached", None, Some(MediaProvider::None)), None);
+}
+
+#[tokio::test]
+async fn a_tagged_url_redirected_off_its_provider_loses_its_tag() {
+    use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
+    let server = MockServer::start().await;
+    let port = server.address().port();
+    Mock::given(path("/away"))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .insert_header("location", format!("http://example.test:{port}/plain")),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(path("/plain"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(gif(7)))
+        .mount(&server)
+        .await;
+    Mock::given(path("/stays"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(gif(8)))
+        .mount(&server)
+        .await;
+    let client = client_builder(&Config::default())
+        .redirect(reqwest::redirect::Policy::limited(3))
+        .resolve("i.giphy.com", *server.address())
+        .resolve("example.test", *server.address())
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let state = MediaState::for_test(dir.path().join("inbox-media"), Arc::new(Local(client)));
+    let tagged = |path: &str| {
+        let url = format!("http://i.giphy.com:{port}{path}");
+        let mut a = Attachment::empty("cat");
+        a.source_host = Some("i.giphy.com".into());
+        a.source_url = Some(url);
+        a.own_sender = true;
+        a.provider = Some(MediaProvider::Giphy);
+        a.provider_id = Some("abc".into());
+        a
+    };
+    let config = Config::default();
+    let away = state.fetch(&config, tagged("/away"), false).await.unwrap();
+    assert_eq!(away.state, "cached");
+    assert_eq!(away.media_provider, Some(MediaProvider::None));
+    assert_eq!((away.provider, away.provider_id.as_deref()), (None, None));
+    assert_eq!(
+        away.attribution(),
+        None,
+        "attribution follows the final host"
+    );
+    let stays = state.fetch(&config, tagged("/stays"), false).await.unwrap();
+    assert_eq!(stays.media_provider, Some(MediaProvider::Giphy));
+    assert_eq!(stays.provider, Some(MediaProvider::Giphy));
+    assert_eq!(stays.provider_id.as_deref(), Some("abc"));
+}
+
+#[tokio::test]
+async fn every_serve_is_told_to_the_serve_hook_and_a_failed_read_is_not() {
+    let fetch = Arc::new(FakeFetch::default());
+    let url = "https://i.giphy.com/served.gif";
+    fetch.serve(url, &gif(9), url, None);
+    let (_dir, state) = state_over(&fetch);
+    let served = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let seen = served.clone();
+    state.when_served(Arc::new(move |sha: &str| {
+        seen.lock().unwrap().push(sha.to_string())
+    }));
+    let config = Config::default();
+    let a = state
+        .fetch(&config, remote(url, true), false)
+        .await
+        .unwrap();
+    let sha = a.sha256.clone().unwrap();
+    state.note(&owner("a", 1), 1, std::slice::from_ref(&a));
+    for _ in 0..2 {
+        assert!(state.read(&config, &a).await.is_ok());
+    }
+    assert_eq!(*served.lock().unwrap(), vec![sha.clone(), sha]);
+    // Bytes that can't be read are not a serve.
+    let mut gone = remote("https://i.giphy.com/gone.gif", false);
+    gone.sha256 = Some(sha_of(b"never fetched"));
+    gone.state = "cached".into();
+    assert!(state.read(&config, &gone).await.is_err());
+    assert_eq!(served.lock().unwrap().len(), 2);
 }
