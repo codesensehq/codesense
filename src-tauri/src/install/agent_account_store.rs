@@ -666,8 +666,9 @@ impl StoreLock {
         let root = user_root(codesense_home, principal);
         ensure_private_dir(&root)?;
         let path = root.join(LOCK_FILE);
+        // A link at the lock path is refused before anything is created.
         let file =
-            codesense_platform::fs::create_owner_only(&path, Open::Follow).map_err(io_error)?;
+            codesense_platform::fs::create_owner_only(&path, Open::NoFollow).map_err(io_error)?;
         set_owner_only(&path)?;
         for _ in 0..LOCK_ATTEMPTS {
             if codesense_platform::fs::try_lock_exclusive(&file).map_err(io_error)? {
@@ -1259,6 +1260,19 @@ mod tests {
         ));
         drop(first);
         drop(StoreLock::acquire(temp.path(), &principal()).unwrap());
+    }
+
+    #[test]
+    fn a_link_at_the_store_lock_is_refused_before_anything_is_created() {
+        use crate::test_support::owner_only::file_symlink;
+        let temp = TempDir::new().unwrap();
+        let root = user_root(temp.path(), &principal());
+        fs::create_dir_all(&root).unwrap();
+        let target = temp.path().join("elsewhere");
+        if file_symlink(&target, &root.join(LOCK_FILE)) {
+            assert!(StoreLock::acquire(temp.path(), &principal()).is_err());
+            assert!(!target.exists());
+        }
     }
 
     #[test]

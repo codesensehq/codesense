@@ -1226,7 +1226,7 @@ impl ClaudeSettingsLock {
     fn acquire(home: &std::path::Path) -> Result<Self, String> {
         let file = codesense_platform::fs::create_owner_only(
             &home.join(".codesense-settings.lock"),
-            codesense_platform::fs::Open::Follow,
+            codesense_platform::fs::Open::NoFollow,
         )
         .map_err(|error| error.to_string())?;
         match codesense_platform::fs::try_lock_exclusive(&file) {
@@ -2524,6 +2524,17 @@ mod tests {
             .lock()
             .unwrap()
             .contains_key(&(7, "account".into())));
+    }
+
+    #[test]
+    fn a_link_at_the_claude_settings_lock_is_refused_before_anything_is_created() {
+        use crate::test_support::owner_only::file_symlink;
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("elsewhere");
+        if file_symlink(&target, &temp.path().join(".codesense-settings.lock")) {
+            assert!(ClaudeSettingsLock::acquire(temp.path()).is_err());
+            assert!(!target.exists());
+        }
     }
 
     #[test]
