@@ -15237,6 +15237,10 @@ pub struct CodesenseSearchToolsParams {
     /// Max rows to return (default 20, max 100).
     #[serde(default)]
     pub limit: Option<u32>,
+    /// Proof only: an optional input the committed export does not list yet.
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub proof_only: Option<bool>,
 }
 
 /// `codesense_get_tool_schema` inputs.

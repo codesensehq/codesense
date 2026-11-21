@@ -47,7 +47,7 @@
       "tools": ["codesense_search_tools", "codesense_get_tool_schema", "codesense_call_tool"],
       "docs": "mcp-explorer.html",
       "searchTerms": ["finding", "tools"],
-      "calls": [{"tool": "codesense_search_tools", "arguments": {"query": "dashboard"}}]
+      "calls": [{"tool": "codesense_search_tools", "arguments": {"query": "dashboard"}}, {"tool": "codesense_search_tools", "arguments": {"query": "inbox", "proofOnly": true}}]
     },
     {
       "id": "inbox",
