@@ -1288,6 +1288,21 @@ impl TerminalRegistry for PtyState {
         // Trace every write here (not at the command edge) so the submit protocol's
         // per-line/nudge writes are logged identically to a direct `write_pty`.
         trace!(target: "pty", "write_pty: session_id={}", session);
+        // A Linux pty master accepts bytes after its child exits, where Darwin's
+        // write fails below: refuse a write into an exited child first.
+        if codesense_platform::process::PTY_ACCEPTS_WRITES_AFTER_EXIT {
+            let exited = self
+                .sessions
+                .lock()
+                .map_err(|e| format!("Lock error: {}", e))?
+                .get(session)
+                .is_some_and(|s| !s.pty.is_alive());
+            if exited {
+                warn!(target: "pty", "write_pty: session {} has exited", session);
+                self.redeliver_exit_on_use(session);
+                return Err(format!("Write error: session {} has exited", session));
+            }
+        }
         // Hold the map-wide `sessions` lock ONLY to clone out this
         // session's own writer handle, then release it before `write_all`+`flush`
         // so terminal A's I/O never blocks terminal B's keystroke on the map lock.

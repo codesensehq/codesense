@@ -967,8 +967,6 @@ fn exits_of(events: &[TerminalDomainEvent], id: &str) -> Vec<Option<ExitInfo>> {
         .collect()
 }
 
-// Fails on Linux (linux-test-defects): a write into an exited session succeeds.
-#[cfg(not(target_os = "linux"))]
 mod write_after_exit {
     use super::*;
 

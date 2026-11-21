@@ -3,7 +3,7 @@
 //! `hermes_cli.main gateway run` born after the home, leading its own group and
 //! holding the home's gateway lock.
 use super::*;
-use std::{fs, process::Command};
+use std::fs;
 
 fn owns_lock(pid: u32, home: &Path) -> bool {
     let path = home.join("gateway.lock");
@@ -23,23 +23,10 @@ fn owns_lock(pid: u32, home: &Path) -> bool {
     if !matches!(codesense_platform::fs::try_lock_exclusive(&lock), Ok(false)) {
         return false;
     }
-    // Darwin lsof does not expose flock's owner. Require all three facts: the live
-    // gateway's lock record, a held kernel lock and that process's open file.
-    let Ok(output) = Command::new("/usr/sbin/lsof")
-        .args(["-a", "-p", &pid.to_string(), "-Fpn"])
-        .arg(&path)
-        .output()
-    else {
-        return false;
-    };
-    let Ok(canonical) = fs::canonicalize(path) else {
-        return false;
-    };
-    output.status.success()
-        && String::from_utf8_lossy(&output.stdout).lines().any(|line| {
-            line.strip_prefix('n')
-                .is_some_and(|name| Path::new(name) == canonical)
-        })
+    // Neither Darwin lsof nor Linux /proc exposes flock's owner. Require all three
+    // facts: the live gateway's lock record, a held kernel lock and that process's
+    // open file.
+    codesense_platform::process::has_file_open(Pid::from_raw(pid), &path)
 }
 
 pub(super) fn verified_gateway(home: &Path) -> Option<peer::PeerProcess> {
@@ -74,4 +61,61 @@ pub(super) fn verified_gateway(home: &Path) -> Option<peer::PeerProcess> {
         return None;
     }
     Some(identity)
+}
+
+#[cfg(test)]
+mod owner_tests {
+    use super::super::Ready;
+    use super::*;
+    use std::os::unix::process::CommandExt;
+    use std::process::Command;
+
+    /// `code` under python3 with `args`.
+    fn python(code: &str, args: &[&str]) -> Command {
+        let mut command = Command::new("python3");
+        command.args(["-c", code]).args(args);
+        command
+    }
+
+    /// A process named in the lock record, born after the home and leading its own
+    /// group, is not the home's gateway when it doesn't have `gateway.lock` open,
+    /// even while another process holds the lock: the teardown signals none of it.
+    #[test]
+    fn a_recorded_gateway_without_the_lock_file_open_is_never_signaled() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let mut gateway = Ready::start(
+            python(
+                r#"import json,os,pathlib,signal,sys,time
+h=pathlib.Path(sys.argv[1])
+(h/'gateway.pid').write_text(json.dumps({'pid':os.getpid()}))
+def stop(*args):
+ (h/'signaled').write_text('1'); sys.exit(0)
+signal.signal(signal.SIGTERM,stop)
+print('ready',flush=True)
+while True: time.sleep(.05)
+"#,
+                &[home.to_str().unwrap(), "hermes_cli.main", "gateway", "run"],
+            )
+            .process_group(0),
+        );
+        let pid = gateway.0.id();
+        let _holder = Ready::start(&mut python(
+            r#"import fcntl,json,pathlib,sys,time
+f=open(pathlib.Path(sys.argv[1])/'gateway.lock','w+')
+json.dump({'pid':int(sys.argv[2])},f); f.flush(); fcntl.flock(f,fcntl.LOCK_EX)
+print('ready',flush=True)
+while True: time.sleep(.05)
+"#,
+            &[home.to_str().unwrap(), &pid.to_string()],
+        ));
+        assert!(
+            !owns_lock(pid, home),
+            "the recorded pid has no open lock file"
+        );
+        assert!(verified_gateway(home).is_none());
+        super::super::teardown_home(home, false);
+        assert!(gateway.0.try_wait().unwrap().is_none(), "never signaled");
+        assert!(!home.join("signaled").exists());
+    }
 }

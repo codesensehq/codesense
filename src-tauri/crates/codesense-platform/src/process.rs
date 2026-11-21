@@ -299,3 +299,18 @@ pub fn group_and_foreground(pid: Pid) -> Option<(i32, i32)> {
 pub fn is_alive(pid: Pid) -> bool {
     sys::is_alive(pid.0)
 }
+
+/// Whether process `pid` has the file at `path` open. Read through lsof on
+/// macOS and `/proc/<pid>/fd` on Linux; anything that can't be read, and every
+/// other OS, is no.
+pub fn has_file_open(pid: Pid, path: &std::path::Path) -> bool {
+    let Ok(canonical) = std::fs::canonicalize(path) else {
+        return false;
+    };
+    sys::has_file_open(pid.0, path, &canonical)
+}
+
+/// Whether a pty master still accepts writes after its child exits: Linux
+/// buffers them, where Darwin's write fails. A writer that must refuse input
+/// to an exited child checks the child first where this is true.
+pub const PTY_ACCEPTS_WRITES_AFTER_EXIT: bool = sys::PTY_ACCEPTS_WRITES_AFTER_EXIT;
