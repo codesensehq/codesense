@@ -408,6 +408,9 @@ describe("a stale export in write mode and the PR gate", () => {
         });
     });
     try {
+      // Main changed handler.rs to add the tool, so the seal names it as drifted.
+      const handler = join(root, "src-tauri/src/mcp/handler.rs");
+      writeFileSync(handler, readFileSync(handler, "utf8") + "\n// records_read added\n");
       const notices: string[] = [];
       expect(() =>
         mod.generateReference(root, { strict: false, warn: (line) => notices.push(line) }),
@@ -421,6 +424,11 @@ describe("a stale export in write mode and the PR gate", () => {
         mod.generateReference(root, { check: true, allowStaleExport: true, warn: () => {} }),
       ).not.toBeNull();
       expect(() => mod.generateReference(root, { check: true })).toThrow(/Stale MCP registry/);
+      // With a fresh seal the tool is not pending but missing from the export: fatal.
+      mod.sealReference(root);
+      expect(() => mod.generateReference(root, { strict: false, warn: () => {} })).toThrow(
+        /records_read: catalog tool not exported/,
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -461,50 +469,109 @@ describe("a stale export in write mode and the PR gate", () => {
     }
   });
 
-  it("drops a tool the PR removed from META or the catalog, with a notice", async () => {
+  it("drops a tool only when a stale seal explains it; with a fresh seal META and family gaps fail", async () => {
     const { root, mod } = await staleScratch("mcp-reference-removed-");
     try {
-      const catalog = mod.readCatalog(root);
-      const records = catalog.families.find((f: { id: string }) => f.id === "records");
-      records.tools = records.tools.filter((t: string) => t !== "records_search");
-      records.calls = records.calls.filter((c: { tool: string }) => c.tool !== "records_search");
+      const withoutSearch = () => {
+        const catalog = mod.readCatalog(root);
+        const records = catalog.families.find((f: { id: string }) => f.id === "records");
+        records.tools = records.tools.filter((t: string) => t !== "records_search");
+        records.calls = records.calls.filter((c: { tool: string }) => c.tool !== "records_search");
+        return catalog;
+      };
       const metadata = { ...META };
-      delete metadata.records_read;
-      const notices: string[] = [];
-      const doc = mod.buildManifest(root, metadata, catalog, [], (line: string) =>
-        notices.push(line),
+      delete metadata.records_search;
+      // A fresh seal: the payload is current, so a missing META entry or family is a real error.
+      mod.sealReference(root);
+      expect(mod.driftExplainer(root)).toBeNull();
+      expect(() => mod.buildManifest(root, metadata, mod.readCatalog(root), [], () => {})).toThrow(
+        /records_search: missing META entry/,
       );
-      const names = doc.tools.map((t: { name: string }) => t.name);
-      expect(names).not.toContain("records_search");
-      expect(names).not.toContain("records_read");
-      expect(notices.join("\n")).toMatch(/NOTICE: records_search: .*no family/);
-      expect(notices.join("\n")).toMatch(/NOTICE: records_read: .*no META entry/);
-      expect(() => mod.buildManifest(root, metadata, mod.readCatalog(root))).toThrow(
-        /records_read: missing META entry/,
-      );
-      expect(() => mod.buildManifest(root, META, catalog)).toThrow(
+      const catalogPath = join(root, mod.CATALOG);
+      const catalogBefore = readFileSync(catalogPath, "utf8");
+      writeFileSync(catalogPath, JSON.stringify(withoutSearch(), null, 2) + "\n");
+      expect(() => mod.generateReference(root, { strict: false, warn: () => {} })).toThrow(
         /records_search: missing family/,
       );
+      commitAsMain(root);
+      expect(() =>
+        mod.generateReference(root, { check: true, allowStaleExport: true, warn: () => {} }),
+      ).toThrow(/records_search: missing family/);
+      writeFileSync(catalogPath, catalogBefore);
+      // The PR removes the tool from handler.rs, META and the catalog: the seal is stale.
+      const handler = join(root, "src-tauri/src/mcp/handler.rs");
+      writeFileSync(
+        handler,
+        readFileSync(handler, "utf8").replace(/fn records_search\s*\(/, "fn records_search_gone("),
+      );
+      const drift = mod.driftExplainer(root);
+      expect(drift).not.toBeNull();
+      const notices: string[] = [];
+      const doc = mod.buildManifest(
+        root,
+        metadata,
+        withoutSearch(),
+        [],
+        (line: string) => notices.push(line),
+        drift,
+      );
+      expect(doc.tools.map((t: { name: string }) => t.name)).not.toContain("records_search");
+      expect(notices.join("\n")).toMatch(/NOTICE: records_search: dropped/);
+      // A META gap for a tool still in handler.rs is a typo, stale seal or not.
+      const typo = { ...META };
+      delete typo.records_read;
+      expect(() =>
+        mod.buildManifest(root, typo, mod.readCatalog(root), [], () => {}, drift),
+      ).toThrow(/records_read: missing META entry/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it("notes, not fails, an example that uses a param the stale export lacks", async () => {
+  it("leaves out an example whose new param a stale seal explains; a typo still fails", async () => {
     const { root, mod } = await staleScratch("mcp-reference-param-");
     try {
-      const catalog = mod.readCatalog(root);
-      const call = catalog.families.find((f: { id: string }) => f.id === "discovery").calls[0];
-      call.arguments = { ...call.arguments, brand_new_param: 1 };
+      writeFileSync(
+        join(root, "src-tauri/src/nested.rs"),
+        "// JsonSchema nested DTO changed\npub brand_new_param: u32,\n",
+      );
+      const drift = mod.driftExplainer(root);
+      const withArg = (arg: string) => {
+        const catalog = mod.readCatalog(root);
+        const call = catalog.families.find((f: { id: string }) => f.id === "discovery").calls[0];
+        call.arguments = { ...call.arguments, [arg]: 1 };
+        return catalog;
+      };
       const notices: string[] = [];
-      const doc = mod.buildManifest(root, META, catalog, [], (line: string) => notices.push(line));
+      const doc = mod.buildManifest(
+        root,
+        META,
+        withArg("brand_new_param"),
+        [],
+        (line: string) => notices.push(line),
+        drift,
+      );
       expect(notices.join("\n")).toMatch(
         /NOTICE: codesense_search_tools: unknown example input brand_new_param/,
       );
       const tool = doc.tools.find((t: { name: string }) => t.name === "codesense_search_tools");
-      expect(tool.examples[0].arguments).toHaveProperty("brand_new_param", 1);
-      expect(() => mod.buildManifest(root, META, catalog)).toThrow(
-        /codesense_search_tools: unknown example input brand_new_param/,
+      const published = JSON.stringify([tool.examples, doc.families]);
+      expect(published).not.toContain("brand_new_param");
+      // Not named in the drifted Rust: a typo, fatal.
+      expect(() =>
+        mod.buildManifest(root, META, withArg("brand_new_parm"), [], () => {}, drift),
+      ).toThrow(/codesense_search_tools: unknown example input brand_new_parm/);
+      // A fresh seal explains nothing.
+      expect(() => mod.buildManifest(root, META, withArg("brand_new_param"), [], () => {})).toThrow(
+        /unknown example input brand_new_param/,
+      );
+      // A wrong type on a known param is never the export's lag.
+      const wrongType = mod.readCatalog(root);
+      wrongType.families.find((f: { id: string }) => f.id === "discovery").calls[0].arguments = {
+        query: 5,
+      };
+      expect(() => mod.buildManifest(root, META, wrongType, [], () => {}, drift)).toThrow(
+        /invalid family example/,
       );
     } finally {
       rmSync(root, { recursive: true, force: true });

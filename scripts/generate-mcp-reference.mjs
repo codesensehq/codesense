@@ -439,6 +439,32 @@ function sealDrift(root) {
 // Whether the committed MCP export lags its inputs (a stale or missing seal).
 export const exportStale = (root = ROOT) => sealDrift(root) !== null;
 
+const HANDLER = "src-tauri/src/mcp/handler.rs";
+// What a stale seal can explain: null with a fresh seal or no changed or added Rust input (a
+// non-Rust drift such as a seal that still lists the catalog explains nothing). Otherwise the
+// drifted Rust paths, and `explains(name)`: whether a drifted Rust file names `name` as an
+// identifier or string, or its snake_case form (a serde field the PR added).
+export function driftExplainer(root = ROOT) {
+  const drift = sealDrift(root);
+  const paths = drift
+    ? [...drift.changedInputs, ...drift.addedInputs].filter((path) => path.endsWith(".rs"))
+    : [];
+  if (!paths.length) return null;
+  let text;
+  const snake = (name) => name.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+  const escape = (name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return {
+    paths,
+    explains(value) {
+      if (typeof value !== "string" || !value) return false;
+      text ??= paths.map((path) => readFileSync(resolve(root, path), "utf8")).join("\n");
+      return [value, snake(value)].some((name) =>
+        new RegExp(`(?<![\\w])${escape(name)}(?![\\w])`).test(text),
+      );
+    },
+  };
+}
+
 function staleSealMessage(drift) {
   const details = [];
   const changes = [
@@ -486,35 +512,38 @@ export function validateInputReferences(tool) {
 }
 // The manifest the export knows: pending tools and their examples dropped, so it still equals the
 // committed one unless the PR changed something else.
-const withoutPending = (families, pending) =>
-  families
-    .map((f) => ({
-      ...f,
-      tools: f.tools.filter((t) => !pending.includes(t)),
-      calls: f.calls.filter((c) => !pending.includes(c.tool)),
-    }))
-    .filter((f) => f.tools.length);
+const withoutPending = (families, pending, leftOut = new Set()) =>
+  pending.length || leftOut.size
+    ? families
+        .map((f) => ({
+          ...f,
+          tools: f.tools.filter((t) => !pending.includes(t)),
+          calls: f.calls.filter((c) => !pending.includes(c.tool) && !leftOut.has(c)),
+        }))
+        .filter((f) => f.tools.length)
+    : families;
 const handlerFn = (root, name) =>
   new RegExp(`\\b(?:async\\s+)?fn\\s+${name}\\s*\\(`).test(
     readFileSync(resolve(root, "src-tauri/src/mcp/handler.rs"), "utf8"),
   );
-// `pending` (PR gate and write mode) is an array collecting catalog tools the sealed export lacks:
-// PRs never re-export, the maintainer refresh does. Omitted (strict), such a tool is fatal. With it,
-// the export is tolerated as stale, so the catalog and META win over the payload: each description's
-// Docs line comes from the catalog (as served_tool_router does), an example the stale schema rejects
-// is a notice, and a payload tool with no META entry, family or handler fn is dropped with a notice.
+// `pending` (PR gate and write mode, omitted when strict) is an array: each description's Docs line
+// then comes from the catalog, as served_tool_router builds it, since the catalog is not a seal input.
+// `drift` (driftExplainer, only with a stale seal) tolerates what the drifted Rust inputs explain,
+// each with a notice: a catalog tool the export lacks is pending while handler.rs drifted; a payload
+// tool whose handler fn is gone from a drifted handler.rs is dropped; and an example naming a param
+// or value the drifted Rust names is left out. Everything else stays fatal: a META entry or family
+// missing for a tool still in handler.rs, a wrong type, an unexplained name.
 export function buildManifest(
   root = ROOT,
   metadata = META,
   catalog = readCatalog(root),
   pending = null,
   warn = console.warn,
+  drift = null,
 ) {
-  // Strict, a problem is fatal; tolerated as stale, it is a notice.
-  const fault = (message) => {
-    if (!pending) throw new Error(message);
-    warn(`NOTICE: ${message}; ${REFRESH_ROUTE}`);
-  };
+  const handlerDrifted = Boolean(pending && drift?.paths.includes(HANDLER));
+  const explained = (value) => Boolean(pending && drift?.explains(value));
+  const leftOut = new Set();
   const baseline = json(payloadPath("default"), root).tools;
   const full = json(payloadPath("dashboard-publish"), root).tools;
   const baseNames = new Set(baseline.map((t) => t.name));
@@ -546,7 +575,7 @@ export function buildManifest(
       if (catalogNames.has(name)) throw new Error(`${name}: duplicate family`);
       catalogNames.add(name);
       if (!fullNames.has(name)) {
-        if (!pending) throw new Error(`${name}: catalog tool not exported`);
+        if (!handlerDrifted) throw new Error(`${name}: catalog tool not exported`);
         // Pending means implemented (META entry and handler fn) but not yet exported.
         if (!metadata[name] || !handlerFn(root, name))
           throw new Error(`${name}: unknown catalog tool (no META entry or handler fn)`);
@@ -559,14 +588,28 @@ export function buildManifest(
       if (!f.tools.includes(call.tool)) throw new Error(`${f.id}: example tool outside family`);
       if (pending?.includes(call.tool)) continue;
       const tool = full.find((t) => t.name === call.tool);
+      const problems = [];
       const validate = ajv.compile(tool.inputSchema);
-      if (!validate(call.arguments))
-        fault(`${call.tool}: invalid family example ${ajv.errorsText(validate.errors)}`);
+      if (!validate(call.arguments)) {
+        // Only a value the stale schema does not list (a new enum variant) can be lag.
+        const lag = validate.errors.every(
+          (e) => (e.keyword === "enum" || e.keyword === "const") && explained(e.data),
+        );
+        problems.push([
+          `${call.tool}: invalid family example ${ajv.errorsText(validate.errors)}`,
+          lag,
+        ]);
+      }
       // serde allows unknown fields on many structs: examples still must name
       // real canonical inputs rather than an ignored typo or accepted alias.
       for (const key of Object.keys(call.arguments))
         if (!Object.hasOwn(tool.inputSchema.properties ?? {}, key))
-          fault(`${call.tool}: unknown example input ${key}`);
+          problems.push([`${call.tool}: unknown example input ${key}`, explained(key)]);
+      const fatal = problems.find(([, lag]) => !lag);
+      if (fatal) throw new Error(fatal[0]);
+      for (const [message] of problems)
+        warn(`NOTICE: ${message}, left out of the reference; ${REFRESH_ROUTE}`);
+      if (problems.length) leftOut.add(call);
     }
   }
   const handler = readFileSync(resolve(root, "src-tauri/src/mcp/handler.rs"), "utf8");
@@ -575,14 +618,9 @@ export function buildManifest(
       const meta = metadata[served.name];
       const family = families.get(served.name);
       const match = new RegExp(`\\b(?:async\\s+)?fn\\s+${served.name}\\s*\\(`).exec(handler);
-      if (pending && (!meta || !family || !match)) {
-        const missing = !meta
-          ? "no META entry"
-          : !family
-            ? "no family in examples.yml"
-            : "no handler fn";
+      if (handlerDrifted && !match) {
         warn(
-          `NOTICE: ${served.name}: dropped, the committed export still serves it but it has ${missing}; ${REFRESH_ROUTE}`,
+          `NOTICE: ${served.name}: dropped, the committed export still serves it but handler.rs no longer has it; ${REFRESH_ROUTE}`,
         );
         return null;
       }
@@ -623,7 +661,9 @@ export function buildManifest(
         params: raw.inputSchema,
         returns: raw.outputSchema ?? null,
         outputSchemaAvailable: raw.outputSchema != null,
-        examples: family.calls.filter((call) => !pending?.includes(call.tool)),
+        examples: family.calls.filter(
+          (call) => !pending?.includes(call.tool) && !leftOut.has(call),
+        ),
         sourceRef: `handler.rs:${handler.slice(0, match.index).split("\n").length}`,
       };
     })
@@ -633,7 +673,7 @@ export function buildManifest(
     schema: 1,
     generatedAt: "deterministic",
     commit: "deterministic",
-    families: pending?.length ? withoutPending(catalog.families, pending) : catalog.families,
+    families: withoutPending(catalog.families, pending ?? [], leftOut),
     coverage: {
       familyCovered: tools.length,
       namedOnPage: tools.filter((tool) => tool.namedOnPage).length,
@@ -707,7 +747,14 @@ export function generateReference(
   // META are not seal inputs. Strict check mode and `strict` write mode (the export and refresh
   // runs) do not.
   const pending = allowStaleExport || (!check && !strict) ? [] : null;
-  const doc = buildManifest(root, META, readCatalog(root), pending, warn);
+  const doc = buildManifest(
+    root,
+    META,
+    readCatalog(root),
+    pending,
+    warn,
+    pending && drift ? driftExplainer(root) : null,
+  );
   for (const name of pending ?? [])
     warn(`NOTICE: ${name} is not in the committed export yet; ${REFRESH_ROUTE}`);
   const fresh = serialize(doc);
