@@ -102,6 +102,24 @@ test("a stale fixture fails the strict check, and write mode and the PR gate ren
   }
 });
 
+test("a deleted fixture source is stale, not a crash", () => {
+  const root = scratchRoot();
+  try {
+    rmSync(join(root, MODEL));
+    const fixture = JSON.parse(readFileSync(join(root, FIXTURE), "utf8"));
+    assert.ok(staleSources(fixture, (path) => readFileSync(join(root, path))).includes(MODEL));
+    const notices = [];
+    assert.doesNotThrow(() => generate(false, { root, warn: (line) => notices.push(line) }));
+    assert.match(
+      notices.join("\n"),
+      /fixture is stale: (?:\S+, )*src-tauri\/src\/routines\/model.rs/,
+    );
+    assert.throws(() => generate(true, { root }), /fixture is stale/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("the PR gate still rejects a stale standalone schema without repairing it", () => {
   const root = scratchRoot();
   try {

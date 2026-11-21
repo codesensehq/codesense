@@ -20,13 +20,19 @@ export const FIXTURE = "src-tauri/src/docs_schemas.generated.json";
 const CONTENT = "codesense-docs/getting-started/content";
 const staleMessage = (paths) =>
   `Model schema fixture is stale: ${paths.join(", ")}; ${REFRESH_ROUTE}. Do not rehash the fixture.`;
-// The fixture's sources whose bytes no longer match the hashes it was exported from.
+// The fixture's sources whose bytes no longer match the hashes it was exported from. A source the
+// branch deleted or renamed is stale too; any other read error still throws.
 export function staleSources(fixture, readSource = (path) => readFileSync(join(ROOT, path))) {
+  const digest = (path) => {
+    try {
+      return createHash("sha256").update(readSource(path)).digest("hex");
+    } catch (error) {
+      if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return null;
+      throw error;
+    }
+  };
   return Object.entries(fixture.sources)
-    .filter(
-      ([path, expected]) =>
-        createHash("sha256").update(readSource(path)).digest("hex") !== expected,
-    )
+    .filter(([path, expected]) => digest(path) !== expected)
     .map(([path]) => path);
 }
 // The strict freshness check.
