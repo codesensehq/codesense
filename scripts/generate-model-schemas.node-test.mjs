@@ -29,6 +29,10 @@ import {
 } from "./generate-model-schemas.mjs";
 import { REFRESH_ROUTE } from "./lib/sealed-export.mjs";
 
+// The scratch repos below start with one commit, so a merge group's drift base (HEAD^1) does not exist
+// in them: the fixtures must not inherit a merge-group runner's event. The merge-group test sets it.
+delete process.env.GITHUB_EVENT_NAME;
+
 // A scratch checkout holding the fixture, its sources and the Node outputs, with origin/main at
 // its first commit, so the PR gate's "untouched since main" rule runs against real git.
 function scratchRoot() {
@@ -113,6 +117,53 @@ test("a stale fixture fails the strict check, and write mode and the PR gate ren
   }
 });
 
+test("in a merge group, the PR gate measures against the group's parent", () => {
+  const root = scratchRoot();
+  const git = (...args) =>
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.email=t@example.com",
+        "-c",
+        "user.name=t",
+        "-c",
+        "commit.gpgsign=false",
+        ...args,
+      ],
+      { cwd: root, stdio: "pipe" },
+    );
+  const gate = () => {
+    const notices = [];
+    generate(true, {
+      root,
+      allowStaleExport: true,
+      strict: false,
+      warn: (line) => notices.push(line),
+    });
+    return notices.join("\n");
+  };
+  try {
+    // An entry queued ahead touched the fixture and an input; this entry is the next commit, and
+    // origin/main still points at the base.
+    addField(root);
+    writeFileSync(join(root, FIXTURE), `${readFileSync(join(root, FIXTURE), "utf8")}\n`);
+    git("commit", "-qam", "an entry queued ahead");
+    git("commit", "-q", "--allow-empty", "-m", "this entry");
+    process.env.GITHUB_EVENT_NAME = "merge_group";
+    assert.match(
+      gate(),
+      /^NOTICE: Model schema fixture is stale: (?:\S+, )*src-tauri\/src\/routines\/model.rs/,
+    );
+    // Against origin/main the earlier entry's fixture edit would read as this entry's: strict.
+    process.env.GITHUB_EVENT_NAME = "pull_request";
+    assert.throws(gate, /fixture is stale/);
+  } finally {
+    delete process.env.GITHUB_EVENT_NAME;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a deleted fixture source is stale, not a crash", () => {
   const root = scratchRoot();
   try {
@@ -148,7 +199,7 @@ test("the PR gate still rejects a stale standalone schema without repairing it",
       }) + "\n";
     writeFileSync(path, stale);
     assert.throws(
-      () => generate(true, { root, allowStaleExport: true, warn: () => {} }),
+      () => generate(true, { root, allowStaleExport: true, strict: false, warn: () => {} }),
       /routine-yml\.schema\.json is stale/,
     );
     assert.equal(readFileSync(path, "utf8"), stale, "check mode must preserve the stale bytes");
