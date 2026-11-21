@@ -56,6 +56,9 @@ pub(crate) struct ConnectionState {
 }
 
 /// Ends readiness with the transport, even if an in-flight tool retains a handler.
+/// Only the local MCP socket makes one (`cap_mcp_bridge`); the transport names it
+/// everywhere.
+#[cfg_attr(not(cap_mcp_bridge), allow(dead_code))]
 pub(crate) struct Lifetime(pub(crate) Arc<Mutex<ConnectionState>>);
 impl Lifetime {
     pub(crate) fn close(slot: &Arc<Mutex<ConnectionState>>) {

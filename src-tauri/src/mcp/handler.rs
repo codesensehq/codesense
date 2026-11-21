@@ -192,11 +192,14 @@ impl CodesenseHandler {
         }
     }
 
+    /// Only a local MCP socket connection has one (`cap_mcp_bridge`).
+    #[cfg(cap_mcp_bridge)]
     pub(crate) fn local_tools_lifetime(&self) -> super::local_tools::Lifetime {
         super::local_tools::Lifetime(self.local_tools.clone())
     }
 
     /// The handler of a local MCP socket connection whose peer is `peer`.
+    #[cfg(cap_mcp_bridge)]
     pub(crate) fn with_local_peer(
         mut self,
         peer: Option<codesense_pty_core::activity::peer::PeerProcess>,
