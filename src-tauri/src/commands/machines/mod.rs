@@ -3687,7 +3687,8 @@ fn plain_file(path: &Path) -> Result<&Path, String> {
 
 /// Open an unreadable machine file as text, to repair it. Only a plain file
 /// the team's list reports as unreadable is opened, and only in the text
-/// editor: never with the file's own handler, which could run it.
+/// editor (on Linux the user's `text/plain` default): never with the file's
+/// own handler, which could run it.
 #[tauri::command]
 pub async fn open_unreadable_machine_file(
     app: tauri::AppHandle,
@@ -3699,19 +3700,8 @@ pub async fn open_unreadable_machine_file(
     crate::commands::await_blocking("open_unreadable_machine_file", move || {
         let file = unreadable_machine_file(&env, &org_slug, team.as_deref(), &machine_id)?;
         let path = plain_file(Path::new(&file.path))?;
-        let status = std::process::Command::new("/usr/bin/open")
-            .arg("-t")
-            .arg(path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map_err(|e| format!("Couldn't open {}: {e}", file.path))?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(format!("Couldn't open {} as text", file.path))
-        }
+        crate::shared::opener::open(crate::shared::opener::Open::Text(path))
+            .map_err(|e| format!("Couldn't open {} as text: {e}", file.path))
     })
     .await
 }
