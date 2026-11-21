@@ -553,14 +553,15 @@ impl Spawn for HostSpawn {
     }
 
     /// The tree's stdout is read on a thread, at most [`CAPTURE_CAP`] of it, so a child that
-    /// writes more than the pipe holds still finishes. Once the root ends, in time or killed at the limit, the rest of its tree
-    /// is killed and the reader joined, waiting at most [`READER_LIMIT`]: a descendant that left
-    /// the process group could still hold the pipe, and its reader is then left behind.
+    /// writes more than the pipe holds still finishes. Once the root ends, in time or killed at
+    /// the limit, the rest of its tree is killed and the reader joined, waiting at most
+    /// [`READER_LIMIT`]: a descendant that left the process group could still hold the pipe, and
+    /// its reader is then left behind.
     fn capture(&self, mut command: Command, limit: Duration) -> io::Result<Captured> {
         command.stdout(Stdio::piped());
         let mut tree = ProcessTree::spawn(&mut command)?;
         let program = command.get_program().to_string_lossy().into_owned();
-        let Some(mut stdout) = tree.child().stdout.take() else {
+        let Some(stdout) = tree.child().stdout.take() else {
             return Err(io::Error::other(format!("{program} has no stdout")));
         };
         let (sent, received) = std::sync::mpsc::channel();
