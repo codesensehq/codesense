@@ -81,6 +81,44 @@ pub struct BindingSummary {
     pub write: BTreeSet<String>,
 }
 
+/// One declared production server as a launch preview shows it
+/// (`resolved.launch.production`): the declaration, and why it is not
+/// available now, if it is not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductionLaunchEntry {
+    pub name: String,
+    pub url: String,
+    #[serde(rename = "ref")]
+    pub reference: String,
+    pub headers: Vec<String>,
+    pub write: Vec<String>,
+    /// Set while the person's binding does not cover this declaration: the
+    /// server gives this agent no tools until a person binds it again and the
+    /// agent is relaunched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub production_pending: Option<&'static str>,
+}
+
+impl ProductionLaunchEntry {
+    pub fn new(entry: &ProductionServer, pending: Option<Pending>) -> Self {
+        Self {
+            name: entry.name.clone(),
+            url: entry.url.clone(),
+            reference: entry.credential.reference.clone(),
+            headers: entry.credential.headers.clone(),
+            write: entry.write.clone(),
+            production_pending: pending.map(Pending::as_str),
+        }
+    }
+}
+
+/// The refusal a preview and a launch give an agent that declares production
+/// servers on a platform without a guarded credential store.
+pub fn platform_refusal(entries: &[ProductionServer]) -> Option<String> {
+    (!entries.is_empty() && !platform_supported()).then(|| UNSUPPORTED_PLATFORM.to_string())
+}
+
 /// Production servers run only where the credential store has a per-app ACL.
 pub fn platform_supported() -> bool {
     cfg!(target_os = "macos")

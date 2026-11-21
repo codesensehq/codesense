@@ -1338,8 +1338,11 @@ describe("Tauri IPC Contract", () => {
     // +5 on both sides for gifSettingsGet/gif_settings_get, gifSettingsSet/gif_settings_set,
     // gifKeyStatus/gif_key_status, gifKeySave/gif_key_save and gifKeyRemove/gif_key_remove
     // (Settings → Messaging's GIF search card), so 544/563.
-    const EXPECTED_TS_COMMAND_COUNT = 544;
-    const EXPECTED_RUST_COMMAND_COUNT = 563;
+    // +3 on both sides for mcpProductionStatus/mcp_production_status,
+    // mcpProductionBind/mcp_production_bind and mcpProductionRemove/mcp_production_remove
+    // (native-only production MCP credential bindings), so 547/566.
+    const EXPECTED_TS_COMMAND_COUNT = 547;
+    const EXPECTED_RUST_COMMAND_COUNT = 566;
     // The Rust count runs ahead of the TS count by the RUST_ONLY_COMMANDS that have no
     // renderer IPC wrapper (the access revocation and two session watchers plus the WV-B5/C6
     // scope-layer and harvest-norm Tauri commands whose FE wrappers land in later WV stories):

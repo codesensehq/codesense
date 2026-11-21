@@ -311,6 +311,9 @@ fn prepare_resolved(
     if !admission.allowed {
         return Err(admission.reason.unwrap_or_default());
     }
+    if let Some(reason) = super::production::platform_refusal(&agent.mcp.production) {
+        return Err(reason);
+    }
     let declared = match agent.launch {
         model::LaunchMode::Foreground => LaunchMode::Interactive,
         model::LaunchMode::Headless => LaunchMode::Headless,

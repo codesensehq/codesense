@@ -10533,6 +10533,35 @@ export const spendCapAccept = (
   keep = false,
 ) => invoke<void>("spend_cap_accept", { scopeKind, key, budgetUsd, keep });
 
+/** One production MCP binding as status lists it: never a header value. */
+export interface McpProductionBinding {
+  ref: string;
+  /** The canonical agent id (`agent_list` `id`) the server is granted to. */
+  agent: string;
+  url: string;
+  headers: string[];
+  write: string[];
+}
+
+/** Every production MCP binding, including those whose agent is gone. Native window only. */
+export const mcpProductionStatus = () => invoke<McpProductionBinding[]>("mcp_production_status");
+
+/**
+ * Bind a production MCP server's header values to one agent, from the native window.
+ * `expected` is the fingerprint of the declaration the person was shown; a declaration
+ * edited since binds nothing. No dashboard bridge verb exists.
+ */
+export const mcpProductionBind = (
+  agent: string,
+  entry: string,
+  headers: Record<string, string>,
+  expected: string,
+) => invoke<void>("mcp_production_bind", { agent, entry, headers, expected });
+
+/** Remove the binding of a credential ref, whatever agent it names. Native window only. */
+export const mcpProductionRemove = (reference: string) =>
+  invoke<void>("mcp_production_remove", { reference });
+
 /** Apply exactly the reviewed pending rate request from the native window. */
 export interface PendingModelRate {
   modelPrefix: string;

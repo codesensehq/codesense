@@ -188,6 +188,74 @@ fn bridge_tool_launch_profile_follows_the_runtime_capability() {
     }
 }
 
+fn production_entry() -> crate::agents::production::ProductionServer {
+    serde_json::from_value(json!({
+        "name": "logs",
+        "url": "https://mcp.example.com/mcp?toolsets=logs",
+        "credential": {"ref": "logs-read", "headers": ["X-Api-Key"]},
+        "write": ["create_note"],
+    }))
+    .unwrap()
+}
+
+#[test]
+fn production_servers_show_in_the_preview_and_are_pending_until_bound() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    team_content(home, &alice());
+    let mut definition = draft("triage", AgentCli::Claude);
+    definition.mcp.production = vec![production_entry()];
+    let key = save(home, &alice(), definition);
+
+    let r = resolve(home, &alice(), &key);
+    let launch = serde_json::to_value(&r.launch).unwrap();
+    // No binding exists, so the declared server is shown and pending.
+    assert_eq!(
+        launch["production"],
+        json!([{
+            "name": "logs",
+            "url": "https://mcp.example.com/mcp?toolsets=logs",
+            "ref": "logs-read",
+            "headers": ["X-Api-Key"],
+            "write": ["create_note"],
+            "productionPending": "unbound",
+        }])
+    );
+    // Off macOS the preview refuses the launch; on macOS the declaration alone does not.
+    if cfg!(target_os = "macos") {
+        assert!(
+            r.launch_admission.allowed,
+            "{:?}",
+            r.launch_admission.reason
+        );
+    } else {
+        assert!(!r.launch_admission.allowed);
+        assert!(r
+            .launch_admission
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("only on macOS"));
+    }
+
+    // An agent without production servers previews no `production` key at all.
+    let plain = save(home, &alice(), draft("plain", AgentCli::Claude));
+    let launch = serde_json::to_value(resolve(home, &alice(), &plain).launch).unwrap();
+    assert!(launch.get("production").is_none(), "{launch}");
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn production_refused_off_macos_at_preview() {
+    let mut definition = draft("triage", AgentCli::Claude);
+    definition.mcp.production = vec![production_entry()];
+    assert_eq!(
+        crate::agents::production::platform_refusal(&definition.mcp.production).as_deref(),
+        Some(crate::agents::production::UNSUPPORTED_PLATFORM)
+    );
+    assert!(crate::agents::production::platform_refusal(&[]).is_none());
+}
+
 /// Save `agent` through the real store as `user`, into the team.
 pub(crate) fn save(home: &Path, user: &Principal, agent: Agent) -> AgentKey {
     service::save(

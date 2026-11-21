@@ -348,7 +348,7 @@ fn compose_with_reader(
     let provides =
         provides::derive(agent.runtime, &manifest).allowing(launch.skill_allowlist.as_deref());
 
-    let launch_admission = adapter::launch_admission(
+    let mut launch_admission = adapter::launch_admission(
         agent.runtime,
         home,
         principal,
@@ -357,6 +357,10 @@ fn compose_with_reader(
         reader,
         Some(&agent.default_prompt),
     );
+    if let Some(reason) = super::production::platform_refusal(&agent.mcp.production) {
+        launch_admission.allowed = false;
+        launch_admission.reason.get_or_insert(reason);
+    }
     let mut resolved = ResolvedAgent {
         launch_admission,
         agent: reference,
@@ -526,6 +530,17 @@ fn launch_profile(agent: &Agent, key: &AgentKey) -> ResolvedLaunchProfile {
         bridge_tools: projects_bridge_tool_allowlist
             .then(|| agent.mcp.bridge_tools.clone())
             .flatten(),
+        production: agent
+            .mcp
+            .production
+            .iter()
+            .map(|entry| {
+                super::production::ProductionLaunchEntry::new(
+                    entry,
+                    crate::mcp::local_mcp_relay::production::pending(&key.to_string(), entry),
+                )
+            })
+            .collect(),
         effective_bridge_tools: if projects_bridge_tool_allowlist {
             let always_on = permissions::always_on_bridge_tools(agent.runtime);
             served_bridge_tools()

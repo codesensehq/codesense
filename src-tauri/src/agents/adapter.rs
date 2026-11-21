@@ -181,7 +181,9 @@ pub fn launch_admission(
     };
     let reason = reason.or_else(|| initial_prompt_refusal(runtime, prompt));
     LaunchAdmission {
-        model_arguments: desktop.model_endpoint.map(|port| (port.model_arguments)(args)),
+        model_arguments: desktop
+            .model_endpoint
+            .map(|port| (port.model_arguments)(args)),
         permission_display: desktop.permission_display.map(|describe| {
             let empty = serde_json::Value::Null;
             let settings = std::iter::Iterator::find(&mut manifest.generated.iter(), |entry| {
@@ -388,6 +390,9 @@ pub struct ResolvedLaunchProfile {
     pub mcp_allow: Option<Vec<String>>,
     /// The declared bridge restriction: null allows all, [] allows none.
     pub bridge_tools: Option<Vec<String>>,
+    /// The agent's declared production MCP servers, each with its pending state.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub production: Vec<super::production::ProductionLaunchEntry>,
     /// Registered bridge tools this launch can call, after the restriction.
     pub effective_bridge_tools: Vec<String>,
     /// The agent's `skill_allowlist`, where the runtime enforces one: every other skill
@@ -438,6 +443,7 @@ impl ResolvedLaunchProfile {
             escalating,
             mcp_allow: Some(mcp_allow),
             bridge_tools: None,
+            production: Vec::new(),
             effective_bridge_tools: Vec::new(),
             skill_allowlist: None,
             mode,

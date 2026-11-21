@@ -32,6 +32,18 @@ ui_only:
     rationale: >-
       Only a person in the native app can loosen the local accepted spend cap.
       MCP and embedded pages may request a raise but cannot accept it.
+  - name: mcp_production_status
+    rationale: >-
+      Lists production MCP credential bindings for the person in the native
+      window. No agent may read what credentials are bound.
+  - name: mcp_production_bind
+    rationale: >-
+      Only a person in the native app may bind a production MCP credential to an
+      agent. No MCP tool or embedded page can write a binding.
+  - name: mcp_production_remove
+    rationale: >-
+      Only a person in the native app removes a production MCP binding, so an
+      agent cannot drop another agent's access or re-bind a ref to itself.
   - name: spend_rate_accept
     rationale: >-
       Only a person in the native app can apply a pending rate reduction or

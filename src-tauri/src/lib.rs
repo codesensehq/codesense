@@ -616,6 +616,7 @@ pub fn run() {
             // First, so the secret store probe has the whole of setup to finish: it runs on a
             // background thread, because `.setup()` never blocks on the session bus.
             commands::credential_store::start_secret_store_probe();
+            commands::mcp_credentials::install();
             commands::team_resolution_cache::listen(app.handle());
             live_hub::start(app.handle());
             log::info!(target: "system", "CodeSense v{} starting (log_level={:?}, platform={})",
@@ -1409,6 +1410,9 @@ pub fn run() {
             commands::data_read_model::session_set_model_rate,
             commands::data_read_model::spend_cap_set,
             commands::data_read_model::spend_cap_accept,
+            commands::mcp_credentials::mcp_production_status,
+            commands::mcp_credentials::mcp_production_bind,
+            commands::mcp_credentials::mcp_production_remove,
             commands::data_read_model::spend_rate_accept,
             commands::data_read_model::session_read_model_rates,
             commands::role_inbox::register_role_cmd,

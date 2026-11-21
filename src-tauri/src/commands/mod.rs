@@ -70,6 +70,8 @@ pub mod layout_resolver;
 pub mod machines;
 // SW-AN-42: the interactive launch's MCP scope projection (project_mcp_scope_config).
 pub mod mcp_authoring;
+// Native-only binding of a production MCP server credential to one agent.
+pub mod mcp_credentials;
 // SW-OR-1 (AC-1): the trusted-side story-session launch spine `open_workspace`
 // drives — the Rust mirror of the FE `launchAgentSession` orchestration.
 pub mod managed_worktree_config;
