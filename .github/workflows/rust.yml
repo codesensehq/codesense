@@ -484,6 +484,9 @@ jobs:
         run: pnpm run build:emulator
       - name: Test macOS crates
         id: test
+        # Proof only, never merged: run the export pins strictly against this branch's stale fixture.
+        env:
+          CS_STRICT_EXPORTS: "1"
         # Each archive is extracted into the checkout, so the target directory is where the build
         # job's was. Both run, and each one's JUnit report is kept before the next overwrites it.
         # Exercises macOS cfg tests in the host crates as well as the desktop app.
