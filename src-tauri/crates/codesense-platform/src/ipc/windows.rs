@@ -372,12 +372,9 @@ pub(crate) mod blocking {
     // timeout. A timed-out operation is cancelled with `CancelIoEx`, which
     // names that one operation, and waited out before its buffer is let go.
     // A stream's clones share its pipe, each with its own event, so one clone
-    // reads while another writes; a stream's operations wait in slices of
-    // `SHUT_POLL`, so a shutdown on any clone ends them within one.
-
-    /// How long an operation on a stream waits before it looks again whether
-    /// a clone shut the stream down.
-    const SHUT_POLL: Duration = Duration::from_millis(50);
+    // reads while another writes. A shutdown sets the pipe's flag, then
+    // cancels what is in flight on it; an operation looks at the flag once it
+    // has started, so one that started too late for the cancel ends itself.
 
     /// `duration` as a wait's milliseconds: at least 1, short of `INFINITE`.
     fn wait_millis(duration: Duration) -> u32 {
@@ -412,9 +409,9 @@ pub(crate) mod blocking {
     /// The outcome of the operation `started` on `handle` with `overlapped`
     /// (whether its call returned true), waiting up to `timeout`, for ever
     /// when `None`: its byte count. One still pending then is cancelled and
-    /// waited out, and is [`io::ErrorKind::TimedOut`]. With `shut`, the wait
-    /// also ends within [`SHUT_POLL`] of `shut` being set, the operation
-    /// cancelled the same way, and is [`io::ErrorKind::NotConnected`].
+    /// waited out, and is [`io::ErrorKind::TimedOut`]. With `shut`, an
+    /// operation the stream's shutdown cancelled, or that started after it,
+    /// is [`io::ErrorKind::NotConnected`].
     fn finish(
         handle: HANDLE,
         overlapped: &OVERLAPPED,
@@ -428,17 +425,12 @@ pub(crate) mod blocking {
                 return Err(error);
             }
         }
-        let is_shut = || shut.is_some_and(|shut| shut.load(Ordering::Acquire));
-        let deadline = timeout.map(|timeout| Instant::now() + timeout);
+        let is_shut = || shut.is_some_and(|shut| shut.load(Ordering::SeqCst));
         let mut transferred: u32 = 0;
-        let ended_by_shut = loop {
-            let left = deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
-            let slice = match (left, shut) {
-                (Some(left), Some(_)) => Some(left.min(SHUT_POLL)),
-                (left, None) => left,
-                (None, Some(_)) => Some(SHUT_POLL),
-            };
-            let millis = slice.map_or(INFINITE, wait_millis);
+        // A shutdown that set the flag before this operation started may have
+        // cancelled before it too: then it is ended here.
+        if !is_shut() {
+            let millis = timeout.map_or(INFINITE, wait_millis);
             // SAFETY: the operation was started on `handle` with
             // `overlapped`, which outlives this wait.
             if unsafe { GetOverlappedResultEx(handle, overlapped, &mut transferred, millis, 0) }
@@ -451,13 +443,7 @@ pub(crate) mod blocking {
                 // A shutdown's own cancel ends the operation this way.
                 return Err(if is_shut() { shut_down() } else { error });
             }
-            if is_shut() {
-                break true;
-            }
-            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-                break false;
-            }
-        };
+        }
         // SAFETY: cancels this one operation; then wait until it is done, so
         // the caller's buffer and `overlapped` are no longer in use.
         unsafe { CancelIoEx(handle, overlapped) };
@@ -468,7 +454,7 @@ pub(crate) mod blocking {
         if completed || transferred > 0 {
             return Ok(transferred);
         }
-        Err(if ended_by_shut {
+        Err(if is_shut() {
             shut_down()
         } else {
             io::Error::new(io::ErrorKind::TimedOut, "the pipe timed out")
@@ -563,10 +549,12 @@ pub(crate) mod blocking {
         }
 
         /// Shut the stream and every clone down: an operation in flight on
-        /// any of them ends within [`SHUT_POLL`], and every later one fails.
+        /// any of them ends at once, and every later one fails.
         /// The pipe itself closes once the last clone is dropped.
         pub(crate) fn shutdown(&self) -> io::Result<()> {
-            self.pipe.shut.store(true, Ordering::Release);
+            // SeqCst, as `finish` reads it: either an operation sees the flag
+            // once it has started, or it started before the cancel below.
+            self.pipe.shut.store(true, Ordering::SeqCst);
             // SAFETY: cancels what this process has in flight on the pipe;
             // each operation's own wait sees it end. Nothing in flight is
             // `ERROR_NOT_FOUND`, which is not a failure here.
@@ -575,7 +563,7 @@ pub(crate) mod blocking {
         }
 
         fn check_open(&self) -> io::Result<()> {
-            if self.pipe.shut.load(Ordering::Acquire) {
+            if self.pipe.shut.load(Ordering::SeqCst) {
                 return Err(shut_down());
             }
             Ok(())

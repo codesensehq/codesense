@@ -232,9 +232,9 @@ pub mod blocking {
         /// blocked on any of them ends, and later writes fail. On unix this is
         /// the socket's `shutdown(Both)`: a read then returns the end of the
         /// stream, and the other end sees it too. On Windows a read in flight
-        /// on any clone ends within a bound (about 50 ms), later reads and
-        /// writes fail with [`io::ErrorKind::NotConnected`], and the other end
-        /// sees the pipe close only once every clone is dropped.
+        /// on any clone ends at once, later reads and writes fail with
+        /// [`io::ErrorKind::NotConnected`], and the other end sees the pipe
+        /// close only once every clone is dropped.
         pub fn shutdown(&self) -> io::Result<()> {
             self.0.shutdown()
         }
