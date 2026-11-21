@@ -2,7 +2,6 @@
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -59,7 +58,9 @@ fn sole_live_instance_at(path: &Path, pid: u32) -> std::io::Result<bool> {
 
 /// Remove entries whose PID is no longer alive.
 pub fn prune_stale(registry: &mut Registry) {
-    registry.retain(|_, entry| is_pid_alive(entry.pid));
+    registry.retain(|_, entry| {
+        codesense_platform::process::is_alive(codesense_platform::process::Pid::from_raw(entry.pid))
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -75,7 +76,7 @@ fn read_registry_from(path: &Path) -> Registry {
     serde_json::from_str(&content).unwrap_or_default()
 }
 
-/// Open (or create) the registry file, acquire an exclusive `flock`,
+/// Open (or create) the registry file, acquire an exclusive lock,
 /// read-modify-write under the lock.
 fn with_locked_registry<F>(path: &Path, f: F) -> std::io::Result<()>
 where
@@ -92,11 +93,8 @@ where
         .truncate(false)
         .open(path)?;
 
-    // Acquire exclusive advisory lock (blocks until available).
-    let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
-    if ret != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
+    // Acquire an exclusive lock (blocks until available).
+    codesense_platform::fs::lock_exclusive(&file)?;
 
     // Read current content.
     let mut content = String::new();
@@ -140,22 +138,6 @@ fn deregister_at(path: &Path, pid: u32) -> std::io::Result<()> {
     with_locked_registry(path, |registry| {
         registry.remove(&pid.to_string());
     })
-}
-
-/// Check whether a PID is still alive using `kill(pid, 0)`.
-///
-/// Returns `false` for PID 0 (kernel) and PIDs exceeding `i32::MAX`
-/// (invalid for `kill(2)`).
-fn is_pid_alive(pid: u32) -> bool {
-    if pid == 0 || pid > i32::MAX as u32 {
-        return false;
-    }
-    let ret = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    if ret == 0 {
-        return true;
-    }
-    // EPERM means the process exists but we lack permission to signal it.
-    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 #[cfg(test)]

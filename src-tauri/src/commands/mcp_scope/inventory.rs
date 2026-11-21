@@ -858,7 +858,7 @@ fn restore_relay(
     let descriptor_path = dir.join("local-relay.json");
     let old = codesense_host_proto::scoped_mcp::read_descriptor(&descriptor_path)?;
     // A second app must not replace a relay that still owns the live grant.
-    if std::os::unix::net::UnixStream::connect(&old.socket).is_ok() {
+    if relay_answers(&old.socket) {
         return Ok(());
     }
     let identity = scope_identity(dir)?;
@@ -888,6 +888,14 @@ fn restore_relay(
         Ok(())
     });
     publish_relay(dir, saved, validate)
+}
+
+/// Whether a relay answers at the endpoint a descriptor's `socket` names (its
+/// wire form: a socket path on unix, a pipe name on Windows).
+pub(super) fn relay_answers(socket: &Path) -> bool {
+    codesense_platform::ipc::Endpoint::from_wire(socket.as_os_str())
+        .and_then(|endpoint| codesense_platform::ipc::blocking::LocalStream::connect(&endpoint))
+        .is_ok()
 }
 
 fn publish_relay(

@@ -338,13 +338,7 @@ impl SessionTurnState {
         if requested {
             return false;
         }
-        if !pty
-            && code.is_some_and(|code| {
-                [libc::SIGSTOP, libc::SIGTSTP, libc::SIGTTIN, libc::SIGTTOU]
-                    .into_iter()
-                    .any(|signal| code == i64::from(128 + signal))
-            })
-        {
+        if !pty && code.is_some_and(codesense_platform::process::is_job_control_stop) {
             return false;
         }
         let Ok(mut last) = self.last.lock() else {

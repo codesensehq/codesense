@@ -257,11 +257,14 @@ fn server_exe(process: &ServerProcess, kernel: PathBuf) -> Option<PathBuf> {
 }
 
 /// Whether two paths name the same file: the same path, or another hard link
-/// to it (a server read through its `activity-helper` link).
+/// to it (a server read through its `activity-helper` link). Links on the way
+/// are followed, so a server started through a symlinked path still matches.
 pub(crate) fn same_file(a: &Path, b: &Path) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    match (std::fs::metadata(a), std::fs::metadata(b)) {
-        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+    let id = |path: &Path| {
+        std::fs::canonicalize(path).and_then(|path| codesense_platform::fs::file_id(&path))
+    };
+    match (id(a), id(b)) {
+        (Ok(a), Ok(b)) => a == b,
         _ => false,
     }
 }
@@ -374,9 +377,10 @@ fn sessions_of(root: &Path, pid: u32) -> Option<u32> {
     }
 }
 
-fn current_uid() -> u32 {
-    // SAFETY: getuid has no preconditions and cannot fail.
-    unsafe { libc::getuid() }
+/// The terminal servers this user runs; none where users have no uid
+/// (Windows), whose servers are not recognised here.
+fn own_server_processes() -> Vec<ServerProcess> {
+    codesense_platform::user::current_uid().map_or_else(Vec::new, server_processes)
 }
 
 /// Every stray terminal server this user runs.
@@ -386,7 +390,7 @@ pub fn strays(
     own_root: Option<&Path>,
 ) -> Vec<StrayServer> {
     let owner = own_root.and_then(codesense_pty_core::protocol::host_pid);
-    let found: Vec<(ServerProcess, StrayKind)> = server_processes(current_uid())
+    let found: Vec<(ServerProcess, StrayKind)> = own_server_processes()
         .into_iter()
         .filter_map(|process| {
             let kind = classify(&process, attached_pid, owner, bundled, own_root)?;
@@ -423,17 +427,13 @@ pub fn strays(
 /// Whether `pid` names a live process (one this user may not signal counts
 /// as alive: never taken for gone).
 fn alive(pid: u32) -> bool {
-    // SAFETY: signal 0 only checks the pid exists.
-    if unsafe { libc::kill(pid as libc::pid_t, 0) } == 0 {
-        return true;
-    }
-    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    codesense_platform::process::is_alive(codesense_platform::process::Pid::from_raw(pid))
 }
 
 /// Whether the confirmed process still runs as it was: the same pid, start
 /// time and root.
 fn still_the_same(target: &StrayTarget) -> bool {
-    server_processes(current_uid()).iter().any(|process| {
+    own_server_processes().iter().any(|process| {
         process.pid == target.pid
             && process.started == target.started
             && canonical(&process.root) == canonical(&target.root)
@@ -461,14 +461,12 @@ pub fn stop(target: &StrayTarget, attached_pid: Option<u32>, own_root: Option<&P
     if !still_the_same(target) {
         return StrayStop::Gone;
     }
-    let signal = |sig| {
-        // SAFETY: the pid was just checked to be the confirmed process.
-        unsafe { libc::kill(target.pid as libc::pid_t, sig) == 0 }
-    };
-    if !signal(libc::SIGTERM) {
+    // The pid was just checked to be the confirmed process.
+    let pid = codesense_platform::process::Pid::from_raw(target.pid);
+    if let Err(error) = codesense_platform::process::terminate_pid(pid) {
         return if alive(target.pid) {
             StrayStop::Failed {
-                message: std::io::Error::last_os_error().to_string(),
+                message: error.to_string(),
             }
         } else {
             StrayStop::Gone
@@ -487,7 +485,7 @@ pub fn stop(target: &StrayTarget, attached_pid: Option<u32>, own_root: Option<&P
             StrayStop::Stopped { killed: false }
         };
     }
-    signal(libc::SIGKILL);
+    let _ = codesense_platform::process::kill_pid(pid);
     if wait_gone(target.pid, KILL_GRACE) {
         StrayStop::Stopped { killed: true }
     } else {

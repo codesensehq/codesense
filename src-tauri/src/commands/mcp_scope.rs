@@ -1781,12 +1781,21 @@ pub(crate) fn with_bridge_server(
     let mut entry = scope.bridge_entry.render(bridge, session_id);
     if let (Some(key), Some(session)) = (scope.bridge_entry.explicit_environment_key(), session_id)
     {
-        entry[key] = serde_json::json!({
-            "CODESENSE_MCP_SOCK": crate::mcp::mcp_socket_path(),
-            "CODESENSE_TAB_SESSION_ID": session,
-        });
+        entry[key] = bridge_environment(crate::mcp::mcp_socket_path().as_deref(), session);
     }
     servers.insert(scope.bridge_id.clone(), entry);
+}
+
+/// The variables a bridge entry names explicitly: the calling tab's session, and the
+/// MCP socket that routes it to this instance, which is left out where there is none
+/// (the MCP bridge is off on this OS).
+fn bridge_environment(socket: Option<&Path>, session: &str) -> Value {
+    let mut environment = serde_json::Map::new();
+    if let Some(socket) = socket {
+        environment.insert("CODESENSE_MCP_SOCK".into(), serde_json::json!(socket));
+    }
+    environment.insert(TAB_SESSION_ENV.into(), serde_json::json!(session));
+    Value::Object(environment)
 }
 
 /// The variable the bridge reads the calling tab's session from (`codesense-bridge`).
@@ -1921,8 +1930,7 @@ fn sweep_configs_in(
         let relay = path.join("local-relay.json");
         if relay.exists() {
             match codesense_host_proto::scoped_mcp::read_descriptor(&relay) {
-                Ok(descriptor)
-                    if std::os::unix::net::UnixStream::connect(&descriptor.socket).is_err() => {}
+                Ok(descriptor) if !inventory::relay_answers(&descriptor.socket) => {}
                 _ => continue,
             }
         }
@@ -1977,6 +1985,26 @@ mod tests {
     use super::*;
     use codesense_pty_core::agent_cli::ConfigFragmentFormat;
     use serde_json::json;
+
+    /// An agent's config routes its bridge to this instance's MCP socket only where
+    /// there is one: with the MCP bridge off, no `CODESENSE_MCP_SOCK` is written.
+    #[test]
+    fn the_bridge_environment_names_the_mcp_socket_only_where_there_is_one() {
+        let socket = Path::new("/home/me/.codesense/mcp.sock");
+        assert_eq!(
+            bridge_environment(Some(socket), "tab-1"),
+            json!({"CODESENSE_MCP_SOCK": socket, "CODESENSE_TAB_SESSION_ID": "tab-1"})
+        );
+        assert_eq!(
+            bridge_environment(None, "tab-1"),
+            json!({"CODESENSE_TAB_SESSION_ID": "tab-1"})
+        );
+        let live = bridge_environment(crate::mcp::mcp_socket_path().as_deref(), "tab-1");
+        assert_eq!(
+            live.get("CODESENSE_MCP_SOCK").is_some(),
+            cfg!(cap_mcp_bridge)
+        );
+    }
 
     /// The bridge (a separate binary crate) reads the tab session from its own copy of
     /// the variable name; a rename on either side would silently drop Codex's
