@@ -735,6 +735,10 @@ jobs:
         run: bash scripts/build-session-server.sh
       - name: Check the desktop app
         run: cargo check --locked -p codesense --lib --tests --features dashboard-publish
+      - name: Check the platform crate's PDF renderers
+        # The renderers and their tests, behind the platform crate's pdf feature, which only the app
+        # enables; the check above builds the renderers but not their tests.
+        run: cargo check --locked -p codesense-platform --features pdf --lib --tests
       - name: Check the desktop app with git-ai and agent-cli-sockets off
         # CODESENSE_CAPS_OFF turns capabilities off for one build, so Linux compiles the code a
         # platform without them builds: their facades' off arms, with the gated parts left out.
@@ -843,13 +847,19 @@ jobs:
         # A bare WebKitGTK web view prints HTML, a file URL and an http page to GTK's file printer,
         # in English and in German, and poppler reads the text back; a failed load is an error, a
         # page's downloads write no file, and a dropped export destroys its window. The tests are
-        # ignored without a display. The WebKit setting is the app's own default (linux_startup.rs).
+        # ignored without a display. They live in the platform crate behind its pdf feature, with
+        # the source policy's tests. The WebKit setting is the app's own default (linux_startup.rs).
+        # The JUnit report goes to the uploaded folder, where the next step's rm -f can't reach it.
         env:
           WEBKIT_DISABLE_DMABUF_RENDERER: "1"
         run: |
           sudo locale-gen de_DE.UTF-8
-          xvfb-run -a cargo nextest run --profile ci --locked -p codesense --lib --retries 0 \
-            --run-ignored all -E 'test(/^commands::export_pdf::render::tests::/)'
+          mkdir -p "$RUNNER_TEMP/junit"
+          status=0
+          xvfb-run -a cargo nextest run --profile ci --locked -p codesense-platform --features pdf --lib \
+            --retries 0 --run-ignored all -E 'test(/^pdf::/)' || status=1
+          if [[ -f target/nextest/ci/junit.xml ]]; then mv target/nextest/ci/junit.xml "$RUNNER_TEMP/junit/pdf.xml"; fi
+          exit "$status"
       - name: Test pty-core, session-server and the app
         # A real pty behind a host running the emulator worker (built with the sidecars above).
         # Runs after a failed Secret Service step, not when the test build never ran. Each run's
@@ -965,7 +975,8 @@ jobs:
       - name: Check the Windows crates
         run: cargo check --locked -p codesense-platform -p codesense-host-proto -p codesense-fs-core -p codesense-pty-core -p codesense-session-server --all-targets
       - name: Test the platform crate
-        run: cargo test --locked -p codesense-platform
+        # With pdf: the source policy compiles for the Windows renderer to come.
+        run: cargo test --locked -p codesense-platform --features pdf
       - name: Test Claude's hooks
         run: "cargo test --locked -p codesense-host-proto --lib hook::"
       - name: Test the session server's portable items
