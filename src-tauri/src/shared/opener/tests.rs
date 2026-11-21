@@ -178,8 +178,8 @@ fn macos_plans_are_todays_programs() {
     assert_eq!(
         folder,
         vec![Launch {
-            program: "open".into(),
-            args: vec![DIR.into()],
+            program: "/usr/bin/open".into(),
+            args: vec!["-R".into(), DIR.into()],
             cwd: None,
             wait: false,
             note: None,
@@ -198,6 +198,22 @@ fn macos_plans_are_todays_programs() {
     );
 }
 
+/// A package folder is a directory, and `open` would launch it: macOS only ever selects a folder
+/// in Finder (`-R`), never opens it.
+#[test]
+fn macos_reveals_a_package_folder_without_launching_it() {
+    let app = "/home/u/team/Evil.app";
+    let fs = FakeFs::with(&["/home/u/team/Evil.app/Contents/Info.plist"], &[app]);
+    let launches = plans("macos", Open::Folder(Path::new(app)), &facts(Ok("")), &fs).unwrap();
+    assert_eq!(launches.len(), 1);
+    assert_eq!(launches[0].program, OsString::from("/usr/bin/open"));
+    assert_eq!(
+        launches[0].args,
+        vec![OsString::from("-R"), OsString::from(app)]
+    );
+    assert!(!launches[0].wait);
+}
+
 #[test]
 fn windows_and_unknown_oses_are_unsupported() {
     let fs = FakeFs::with(&[FILE], &[DIR]);
@@ -206,6 +222,10 @@ fn windows_and_unknown_oses_are_unsupported() {
             assert_eq!(
                 plans(os, req, &facts(Ok("gedit.desktop")), &fs),
                 Err(OpenError::Unsupported { os: os.into() })
+            );
+            assert_eq!(
+                OpenError::Unsupported { os: os.into() }.to_string(),
+                format!("opening folders and files isn't supported on {os} yet")
             );
         }
     }
@@ -322,7 +342,7 @@ fn linux_text_names_each_missing_piece() {
     let no_gio = spawn_first(&launches, &Recorder::answering(vec![not_found()])).unwrap_err();
     let message = no_gio.to_string();
     assert!(
-        message.contains("gio") && message.contains("GLib 2.68"),
+        message.contains("couldn't start gio") && !message.contains("GLib"),
         "{message}"
     );
     let old_gio = spawn_first(

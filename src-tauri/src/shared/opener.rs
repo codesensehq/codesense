@@ -18,7 +18,8 @@ use log::warn;
 /// What to open.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Open<'a> {
-    /// A folder, in the file manager. Never a file: that would run the file's own handler.
+    /// A folder, in the file manager. Never a file, and never a macOS package folder: either
+    /// would run with its own handler.
     Folder(&'a Path),
     /// A file, in the user's text editor. Never with the file's own handler, which could run it.
     Text(&'a Path),
@@ -32,7 +33,7 @@ pub(crate) struct Launch {
     pub cwd: Option<PathBuf>,
     /// Wait for it and check its exit status; otherwise it is left running and reaped on a thread.
     pub wait: bool,
-    /// Said with any error from this launcher.
+    /// Said when this launcher ran and failed.
     pub note: Option<&'static str>,
 }
 
@@ -136,12 +137,9 @@ fn host_is_wsl() -> bool {
 }
 
 fn query_text_default() -> Result<String, TextDefaultMissing> {
-    let mut command = Command::new("xdg-mime");
-    crate::linux_startup::remove_app_webkit_env(&mut command);
-    let output = command
-        .args(["query", "default", "text/plain"])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
+    let output = Launch::new("xdg-mime", ["query", "default", "text/plain"])
+        .command()
+        .stdout(Stdio::piped())
         .output()
         .map_err(|e| match e.kind() {
             io::ErrorKind::NotFound => TextDefaultMissing::NoXdgMime,
@@ -206,7 +204,6 @@ impl Fs for HostFs {
 pub(crate) struct Tried {
     pub program: String,
     pub error: String,
-    pub note: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -234,17 +231,13 @@ pub(crate) enum OpenError {
 
 impl fmt::Display for OpenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fn note(f: &mut fmt::Formatter<'_>, note: &Option<&'static str>) -> fmt::Result {
-            match note {
-                Some(note) => write!(f, " ({note})"),
-                None => Ok(()),
-            }
-        }
         match self {
             Self::NotAbsolute(path) => write!(f, "{} is not an absolute path", path.display()),
             Self::NotADirectory(path) => write!(f, "{} is not a folder", path.display()),
             Self::NotAFile(path) => write!(f, "{} is not a file", path.display()),
-            Self::Unsupported { os } => write!(f, "opening files isn't supported on {os} yet"),
+            Self::Unsupported { os } => {
+                write!(f, "opening folders and files isn't supported on {os} yet")
+            }
             Self::NoTextEditor { reason } => match reason {
                 TextDefaultMissing::NoXdgMime => write!(
                     f,
@@ -279,7 +272,6 @@ impl fmt::Display for OpenError {
                         write!(f, ", ")?;
                     }
                     write!(f, "{}: {}", t.program, t.error)?;
-                    note(f, &t.note)?;
                 }
                 Ok(())
             }
@@ -289,7 +281,10 @@ impl fmt::Display for OpenError {
                 note: n,
             } => {
                 write!(f, "{program} failed ({status})")?;
-                note(f, n)
+                match n {
+                    Some(note) => write!(f, " ({note})"),
+                    None => Ok(()),
+                }
             }
         }
     }
@@ -334,7 +329,12 @@ pub(crate) fn plans(
                 return Err(OpenError::NotADirectory(dir.into()));
             }
             Ok(match os {
-                "macos" => vec![Launch::new("open", [dir])],
+                // `-R` selects the folder in Finder: a package folder (`X.app`, `.prefPane`) is
+                // a directory too, and plain `open` would launch it.
+                "macos" => vec![Launch::new(
+                    "/usr/bin/open",
+                    [OsStr::new("-R"), dir.as_os_str()],
+                )],
                 _ => LINUX_FOLDER
                     .iter()
                     .filter(|(program, _)| facts.is_wsl || *program != "wslview")
@@ -499,7 +499,6 @@ pub(crate) fn spawn_first(launches: &[Launch], spawner: &dyn Spawn) -> Result<()
                 tried.push(Tried {
                     program: launch.name(),
                     error: e.to_string(),
-                    note: launch.note,
                 });
             }
         }
