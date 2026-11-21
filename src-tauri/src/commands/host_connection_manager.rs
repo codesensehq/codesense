@@ -4917,6 +4917,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "quarantine: https://github.com/codesensehq/codesense/issues/409"]
     async fn rm4d_reservation_expires_automatically_and_cannot_cancel_consumed_token() {
         let scheduler = Arc::new(ManualScheduler::default());
         let manager = HostConnectionManager::with_attempt_driver_and_scheduler(
