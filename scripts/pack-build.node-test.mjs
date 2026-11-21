@@ -28,6 +28,7 @@ import {
   parseArgs,
   run as runPacks,
   schemaErrors,
+  staleSchemaTolerated,
   skillCopies,
   syncDocs,
 } from "./pack-build.mjs";
@@ -525,4 +526,27 @@ test("the docs bundle ships the Foreman agent, and only the agent", () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("a stale schema fixture makes an unknown pack.yml property a notice, not an error", () => {
+  const kit = { ...yaml(join(fixture("good"), "pack.yml")) };
+  const manifest = { ...kit, requires: { kit: { brandNewField: 1 } } };
+  assert.match(schemaErrors(manifest).join("|"), /must NOT have additional properties/);
+  const notices = [];
+  assert.deepEqual(schemaErrors(manifest, { tolerateUnknown: true, notices }), []);
+  assert.match(
+    notices.join("|"),
+    /pack\.yml\/requires\/kit has brandNewField, unknown to the stale schema fixture/,
+  );
+  // Other errors stay errors.
+  assert.match(
+    schemaErrors({ ...kit, requires: { kit: { chat: "1" } } }, { tolerateUnknown: true }).join("|"),
+    /must be/,
+  );
+  const decide = (check, env, stale) => staleSchemaTolerated({ check, env, stale: () => stale });
+  assert.equal(decide(true, { DOCS_ALLOW_STALE_EXPORT: "1" }, true), true);
+  assert.equal(decide(false, {}, true), true, "write mode");
+  assert.equal(decide(true, {}, true), false, "strict check");
+  assert.equal(decide(true, { DOCS_ALLOW_STALE_EXPORT: "1" }, false), false, "fresh fixture");
+  assert.equal(decide(false, { CS_STRICT_EXPORTS: "1" }, true), false, "the refresh run");
 });

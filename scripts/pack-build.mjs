@@ -40,6 +40,8 @@ import { fileURLToPath } from "node:url";
 import Ajv2020 from "ajv/dist/2020.js";
 import { parse, parseDocument } from "yaml";
 import { stepErrors } from "./lib/pack-steps.mjs";
+import { REFRESH_ROUTE, allowStaleExport, strictExports } from "./lib/sealed-export.mjs";
+import { fixtureStale } from "./generate-model-schemas.mjs";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const PACKS_ROOT = join(ROOT, "codesense-docs/packs");
@@ -68,40 +70,70 @@ export const MAX_FILE = 5 * 1024 * 1024;
 const NAME = /^[a-z0-9][a-z0-9-]*$/;
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
-let ajv;
-function schemaAjv() {
-  if (!ajv) {
-    ajv = new Ajv2020({ allErrors: true, strict: false });
+const ajvs = new Map();
+// `open` drops every `additionalProperties: false`, so an unknown property fails nothing else.
+function schemaAjv(open = false) {
+  if (!ajvs.has(open)) {
+    const ajv = new Ajv2020({ allErrors: true, strict: false });
     ajv.addFormat("uint32", {
       type: "number",
       validate: (n) => Number.isInteger(n) && n >= 0 && n <= 4294967295,
     });
-    ajv.addSchema(JSON.parse(readFileSync(SCHEMA_PATH, "utf8")), "pack");
+    const text = readFileSync(SCHEMA_PATH, "utf8");
+    ajv.addSchema(
+      JSON.parse(text, (key, value) =>
+        open && key === "additionalProperties" && value === false ? undefined : value,
+      ),
+      "pack",
+    );
+    ajvs.set(open, ajv);
   }
-  return ajv;
+  return ajvs.get(open);
 }
 
-// A part is a tagged union (`oneOf`, one branch per `kind`); a generic validation reports
-// every branch's failures. So the parts are checked one at a time against the branch their
-// own `kind` selects, and the rest of the manifest against the root.
-export function schemaErrors(manifest) {
-  const ajv = schemaAjv();
+// Each failure as `[where, error]`. A part is a tagged union (`oneOf`, one branch per `kind`); a
+// generic validation reports every branch's failures. So the parts are checked one at a time
+// against the branch their own `kind` selects, and the rest of the manifest against the root.
+function schemaFailures(manifest, open) {
+  const ajv = schemaAjv(open);
   const root = ajv.getSchema("pack");
   const branches = root.schema.$defs.Part.oneOf;
-  const errors = [];
+  const failures = [];
   root(manifest);
   for (const e of root.errors ?? [])
-    if (!e.instancePath.startsWith("/parts/"))
-      errors.push(`pack.yml${e.instancePath} ${e.message}`);
+    if (!e.instancePath.startsWith("/parts/")) failures.push([`pack.yml${e.instancePath}`, e]);
   (Array.isArray(manifest?.parts) ? manifest.parts : []).forEach((part, i) => {
     const branch = branches.findIndex((b) => b.properties.kind.const === part?.kind);
-    if (branch < 0) return errors.push(`pack.yml/parts/${i} has an unknown kind: ${part?.kind}`);
+    if (branch < 0)
+      return failures.push([
+        `pack.yml/parts/${i}`,
+        { message: `has an unknown kind: ${part?.kind}` },
+      ]);
     const validate = ajv.getSchema(`pack#/$defs/Part/oneOf/${branch}`);
     if (!validate(part))
-      for (const e of validate.errors)
-        errors.push(`pack.yml/parts/${i}${e.instancePath} ${e.message}`);
+      for (const e of validate.errors) failures.push([`pack.yml/parts/${i}${e.instancePath}`, e]);
   });
-  return errors;
+  return failures;
+}
+
+// `tolerateUnknown` (a stale schema fixture, see staleSchemaTolerated) turns an unknown property,
+// which may be a field the PR adds to the Rust model, into a notice: the manifest is checked
+// against the schema without `additionalProperties: false`, and the strict run names the property.
+export function schemaErrors(manifest, { tolerateUnknown = false, notices = [] } = {}) {
+  if (tolerateUnknown)
+    for (const [where, e] of schemaFailures(manifest, false))
+      if (e.keyword === "additionalProperties")
+        notices.push(
+          `${where} has ${e.params.additionalProperty}, unknown to the stale schema fixture; ${REFRESH_ROUTE}`,
+        );
+  return schemaFailures(manifest, tolerateUnknown).map(([where, e]) => `${where} ${e.message}`);
+}
+
+// pack-yml.schema.json is rendered from the cargo-written model fixture, which PRs never re-export.
+// Write mode and the PR gate tolerate an unknown property while the fixture is stale; strict check
+// mode and the refresh run (CS_STRICT_EXPORTS=1) do not.
+export function staleSchemaTolerated({ check, env = process.env, stale = () => fixtureStale() }) {
+  return (allowStaleExport([], env) || !check) && !strictExports(env) && stale();
 }
 
 /**
@@ -236,7 +268,7 @@ export function chatCodeErrors(dir, manifest, files) {
  * Build or check one pack folder. Returns the problems found and the files written.
  * `check` writes nothing.
  */
-export function buildPack(dir, { check = false, force = false } = {}) {
+export function buildPack(dir, { check = false, force = false, tolerateUnknown = false } = {}) {
   dir = resolve(dir);
   const errors = [];
   const written = [];
@@ -256,7 +288,9 @@ export function buildPack(dir, { check = false, force = false } = {}) {
   } catch (e) {
     return { errors: [`pack.yml: cannot parse: ${e.message.split("\n")[0]}`], written };
   }
-  errors.push(...schemaErrors(manifest));
+  const notices = [];
+  errors.push(...schemaErrors(manifest, { tolerateUnknown, notices }));
+  for (const notice of notices) console.warn(`NOTICE: ${basename(dir)}: ${notice}`);
   if (errors.length) return { errors, written };
 
   const copies = skillCopies(manifest);
@@ -503,9 +537,10 @@ export function packDirs(root) {
 
 export function run(dirs, { check, force = false, docsRoot = DOCS_ROOT }) {
   let failed = false;
+  const tolerateUnknown = staleSchemaTolerated({ check });
   for (const dir of dirs) {
     const name = relative(ROOT, dir) || dir;
-    const { errors, written, legacy } = buildPack(dir, { check, force });
+    const { errors, written, legacy } = buildPack(dir, { check, force, tolerateUnknown });
     // A legacy pack's own files are never rewritten, but the bundle still carries its agent.
     if (!errors.length && DOCS_BUNDLED.includes(basename(dir))) {
       const docs = syncDocs(dir, parse(readFileSync(join(dir, "pack.yml"), "utf8")), {

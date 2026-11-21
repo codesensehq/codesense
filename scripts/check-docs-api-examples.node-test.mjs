@@ -16,6 +16,7 @@ import {
   extractSnippets,
   loadTruth,
   parseAliases,
+  splitStaleParams,
   topLevelKeys,
 } from "./check-docs-api-examples.mjs";
 
@@ -598,4 +599,61 @@ test("siteInside: by real path, and `..x` is a name, not a parent", async (t) =>
   assert.equal(siteInside(root, join(base, "elsewhere")), false);
   symlinkSync(root, join(base, "alias"));
   assert.equal(siteInside(join(base, "alias"), join(root, "site")), true);
+});
+
+test("a stale MCP export makes an unknown tool parameter a notice; other findings stay", () => {
+  const findings = checkFile("a.html", html("reply({ body })\ncodesense.nope()"), truth);
+  const { problems: kept, notices } = splitStaleParams(findings, true);
+  assert.deepEqual(
+    kept.map((f) => f.rule),
+    ["R2"],
+  );
+  assert.match(notices.map((f) => f.message).join("|"), /reply: `body` is not a parameter/);
+  assert.deepEqual(splitStaleParams(findings, false), { problems: findings, notices: [] });
+  // An alias is the PR's own mistake, never the export's lag.
+  const alias = checkFile("a.html", html("reply({ messageId: 1 })"), truth);
+  assert.equal(splitStaleParams(alias, true).problems.length, 1);
+});
+
+test("CLI: an unknown parameter is a notice only in the PR gate with a stale MCP seal", () => {
+  const root = mkdtempSync(join(tmpdir(), "api-lint-stale-"));
+  const content = join(root, "codesense-docs/getting-started/content");
+  const gen = join(content, "generated");
+  mkdirSync(gen, { recursive: true });
+  mkdirSync(join(root, "src-tauri/src"), { recursive: true });
+  mkdirSync(join(root, "src-tauri/crates/codesense-pty-core/src/agent_cli"), { recursive: true });
+  for (const path of [
+    "Cargo.lock",
+    "src-tauri/Cargo.toml",
+    "src-tauri/build.rs",
+    "src-tauri/crates/codesense-pty-core/src/agent_cli/codex.rs",
+    "src-tauri/crates/codesense-pty-core/src/agent_cli/claude.rs",
+  ])
+    writeFileSync(join(root, path), "");
+  writeFileSync(join(gen, "page-sdk.json"), JSON.stringify({ verbs: [], members: [] }));
+  writeFileSync(
+    join(gen, "mcp-tools.json"),
+    JSON.stringify({ tools: [{ name: "reply", description: "Reply.", params: params("text") }] }),
+  );
+  writeFileSync(join(content, "page.html"), html("reply({ text, new_param: 1 })"));
+  const script = fileURLToPath(new URL("./check-docs-api-examples.mjs", import.meta.url));
+  const run = (env, seal) => {
+    writeFileSync(
+      join(gen, "mcp-tools.inputs.json"),
+      JSON.stringify({ schema: 1, profiles: ["default", "dashboard-publish"], inputs: seal }),
+    );
+    return spawnSync(process.execPath, [script, "--root", root], {
+      encoding: "utf8",
+      env: { ...process.env, DOCS_ALLOW_STALE_EXPORT: env },
+    });
+  };
+  try {
+    // The seal lists none of the inputs it should: stale.
+    const tolerant = run("1", {});
+    assert.equal(tolerant.status, 0, tolerant.stderr);
+    assert.match(tolerant.stderr, /NOTICE: .*reply: `new_param` is not a parameter/);
+    assert.equal(run("", {}).status, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

@@ -36,6 +36,11 @@ export function staleSources(fixture, readSource = (path) => readFileSync(join(R
     .filter(([path, expected]) => digest(path) !== expected)
     .map(([path]) => path);
 }
+// Whether the committed fixture lags any of its sources.
+export const fixtureStale = (root = ROOT) =>
+  staleSources(JSON.parse(readFileSync(join(root, FIXTURE), "utf8")), (path) =>
+    readFileSync(join(root, path)),
+  ).length > 0;
 // The strict freshness check.
 export function verifySources(fixture, readSource) {
   const stale = staleSources(fixture, readSource);

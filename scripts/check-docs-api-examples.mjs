@@ -44,6 +44,8 @@ import { fileURLToPath } from "node:url";
 import { parseItems } from "./lib/rust.mjs";
 import { isMain } from "./lib/is-main.mjs";
 import { HANDBOOK_DIR, siteRoot } from "./lib/site-root.mjs";
+import { REFRESH_ROUTE, allowStaleExport } from "./lib/sealed-export.mjs";
+import { exportStale } from "./generate-mcp-reference.mjs";
 
 const DEFAULT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CONTENT = "codesense-docs/getting-started/content";
@@ -426,7 +428,8 @@ function checkArgs(tool, schema, obj, at, lineOf, aliases, out, path = "", rule 
       const message = canon
         ? `${tool}: \`${path}${key}\` is an alias; use \`${path}${canon}\``
         : `${tool}: \`${path}${key}\` is not a parameter (has: ${[...names.keys()].join(", ") || "none"})`;
-      out.push({ line: lineOf(at + off), rule, message });
+      // An unknown tool parameter may be one the PR adds before the export is refreshed.
+      out.push({ line: lineOf(at + off), rule, message, unknownParam: !canon && rule === "R3" });
       if (!canon) continue;
       name = canon;
     }
@@ -670,6 +673,27 @@ export function corpus(root = DEFAULT_ROOT, env = process.env) {
   return [...content, ...handbook].sort();
 }
 
+// Tool parameters come from mcp-tools.json, which Node renders from the cargo export. PRs never
+// re-export it, so in the PR gate with a stale export an unknown parameter may be one the PR adds:
+// a notice, not a problem. Every other finding stays.
+export function splitStaleParams(findings, tolerate) {
+  if (!tolerate) return { problems: findings, notices: [] };
+  return {
+    problems: findings.filter((f) => !f.unknownParam),
+    notices: findings.filter((f) => f.unknownParam),
+  };
+}
+
+// The PR gate's switch is on and the MCP seal is stale. An unreadable tree counts as fresh (strict).
+export function staleMcpExport(root, argv = process.argv, env = process.env) {
+  if (!allowStaleExport(argv, env)) return false;
+  try {
+    return exportStale(root);
+  } catch {
+    return false;
+  }
+}
+
 function main(argv) {
   const args = argv.flatMap((a) => (a.startsWith("--root=") ? ["--root", a.slice(7)] : [a]));
   const dir = args[0] === "--root" ? args[1] : undefined;
@@ -679,10 +703,17 @@ function main(argv) {
   }
   const root = dir ? resolve(dir) : DEFAULT_ROOT;
   const truth = loadTruth(root);
+  const tolerate = staleMcpExport(root);
   let count = 0;
   // An explicit --root wins over CODESENSE_SITE_ROOT: the checkout it names brings its own site.
   for (const path of corpus(root, dir ? {} : process.env)) {
-    for (const f of checkFile(path, readFileSync(path, "utf8"), truth)) {
+    const findings = checkFile(path, readFileSync(path, "utf8"), truth);
+    const { problems, notices } = splitStaleParams(findings, tolerate);
+    for (const f of notices)
+      console.warn(
+        `NOTICE: ${relative(root, path)}:${f.line}: ${f.rule} ${f.message} (the MCP export is stale; ${REFRESH_ROUTE})`,
+      );
+    for (const f of problems) {
       console.error(`${relative(root, path)}:${f.line}: ${f.rule} ${f.message}`);
       count++;
     }

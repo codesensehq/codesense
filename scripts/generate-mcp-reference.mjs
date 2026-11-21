@@ -436,6 +436,9 @@ function sealDrift(root) {
   return { addedInputs, changedInputs, removedInputs, changedPayloads, profileDrift };
 }
 
+// Whether the committed MCP export lags its inputs (a stale or missing seal).
+export const exportStale = (root = ROOT) => sealDrift(root) !== null;
+
 function staleSealMessage(drift) {
   const details = [];
   const changes = [
