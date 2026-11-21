@@ -338,8 +338,8 @@ mod tests {
         );
     }
 
-    // Fails on Linux (linux-test-defects): input to an exited session is accepted.
-    #[cfg(target_os = "macos")]
+    // macOS and Linux, where input to an exited session is refused.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     mod ended_session_input {
         use super::*;
 
