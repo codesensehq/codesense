@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: MIT
+name: Exports guard
+
+# Pull requests leave the cargo-written exports (FROZEN_EXPORTS in scripts/lib/sealed-export.mjs)
+# alone; maintainers refresh them in a pull request of their own. The guard job fails a pull
+# request that changes one, unless it is the refresh pull request: the `chore/refresh-exports`
+# branch of this repository with the `exports-refresh` label. It runs on label events too, in its
+# own workflow, so adding or removing a label never re-runs or cancels the CI suite.
+#
+# The guard job holds the only API token, so it runs no pull request code: it checks out the base
+# commit and runs the base's scripts/exports-guard.mjs with plain node, which reads the pull
+# request's files, labels and head through the API.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  merge_group:
+
+permissions: {}
+
+concurrency:
+  # A label event supersedes this workflow's earlier run for the same pull request.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  guard:
+    name: Exports guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      refresh: ${{ steps.guard.outputs.refresh }}
+    steps:
+      - name: Check out the base
+        # In a merge group the base holds the entries queued ahead, each of which passed this
+        # guard against main first.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: Check the changed files
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/exports-guard.mjs
