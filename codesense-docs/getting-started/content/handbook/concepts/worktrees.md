@@ -142,13 +142,23 @@ worktree, not the seat's.
 - A seat worktree needs a `name`, runs on This Mac only, and can't be asked for
   from a dashboard page yet. Without `seatWorktree` a named session shares the
   story's worktree, as always.
-- Seat worktrees stay until you remove them, like any worktree (see below).
+- A seat worktree cleans itself up. When its tab is closed (`close_terminal_tab`,
+  `close_workspace`), and in a background sweep after each launch into the story,
+  it is removed when no session runs in it, it has no uncommitted changes, its
+  context edits are published and, for a `branch` seat, its commits are in the
+  story branch or `origin/<story branch>`. Its seat branch is deleted with it, and
+  so are its git-ignored files: installed dependencies, build output and any local
+  ignored files, such as notes in an ignored folder. Otherwise it is kept, and its
+  `list_worktrees` row says why in `seatKept`: `live`, `dirty`,
+  `unpublished-context`, `unmerged` or `remove-failed`. A seat being launched is
+  never removed, and the story's own worktree never is.
 
 ## Clean-up
 
 A worktree is removed only when you remove it, for example with
 `git worktree remove` in the repo. Closing its tabs or ending its workspace
-keeps it. CodeSense never limits how many worktrees you have, and never
+keeps it; the one exception is a seat worktree, which cleans itself up once it
+holds nothing unsaved (see above). CodeSense never limits how many worktrees you have, and never
 removes one because it is idle or because its pull request merged.
 
 Removal never publishes context. Normal removal preserves dirty files and refuses ignored

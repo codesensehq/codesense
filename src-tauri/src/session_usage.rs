@@ -4041,6 +4041,7 @@ pub(crate) mod tests {
             name: "dev".into(),
             kind: crate::install::worktree_index::SeatKind::Branch,
             pinned_commit: None,
+            kept: None,
         });
         store
             .ingest(&[

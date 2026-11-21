@@ -465,6 +465,18 @@ fn start_beside_gone_folder(spawn: &mut TabSpawn, gone: &Path, ws_dir: Option<&P
     }
 }
 
+/// An agent's Relaunch (`relaunch`: it carries a scope) whose start folder `gone` is
+/// gone is refused, before the ended session is reaped; a shell's Restart goes on in its
+/// workspace's folder ([`start_beside_gone_folder`]).
+fn refuse_relaunch_in_gone_folder(gone: &Path, relaunch: bool) -> Result<(), String> {
+    if relaunch {
+        return Err(format!(
+            "its folder {gone:?} is gone, so the agent was not relaunched; open it again with open_workspace"
+        ));
+    }
+    Ok(())
+}
+
 /// The folder of the workspace holding `session`, as This Mac's hosts record it.
 fn recorded_workspace_folder(app: &tauri::AppHandle, session: &PtySessionId) -> Option<PathBuf> {
     let boot = webview_boot()?;
@@ -794,7 +806,9 @@ pub struct RespawnedTab {
 /// and in the same place (its workspace, position, name, role and tags), for
 /// Restart and Relaunch on an ended pane:
 ///
-/// - refused while the tab or its process is still running;
+/// - refused while the tab or its process is still running, and for an agent's
+///   Relaunch (with `scope`) whose start folder on This Mac is gone; a shell's
+///   Restart there starts in its workspace's folder;
 /// - the ended session is reaped on the host that holds it — the sidecar
 ///   answers once its teardown is complete — keeping the tab, its dashboard
 ///   binding and its launch provenance (nothing is audited as a kill);
@@ -829,16 +843,15 @@ pub async fn terminal_respawn_tab(
             )?;
         }
         let session = PtySessionId::new(session.session());
-        // A tab whose own folder went away restarts in its workspace's folder, and
-        // its agent's scope with it.
-        let (mut spawn, mut scope) = (spawn, scope);
+        // A shell whose own folder went away restarts in its workspace's folder. An
+        // agent's Relaunch there is refused: in a seat's folder it would run in the
+        // story's base worktree instead.
+        let mut spawn = spawn;
         let start = PathBuf::from(spawn.cwd_mut().as_str());
         if !backend.is_remote() && !start.is_dir() {
+            refuse_relaunch_in_gone_folder(&start, scope.is_some())?;
             let ws_dir = recorded_workspace_folder(&app, &session);
             start_beside_gone_folder(&mut spawn, &start, ws_dir.as_deref());
-            if let Some(scope) = scope.as_mut().filter(|s| Path::new(&s.cwd) == start) {
-                scope.cwd = spawn.cwd_mut().clone();
-            }
         }
         let spawner = app.clone();
         let session_id = session.as_str().to_string();
@@ -1566,6 +1579,28 @@ mod tests {
         let mut no_folder = cold("/w/app-seat-dev");
         start_beside_gone_folder(&mut no_folder, gone, None);
         assert_eq!(no_folder.cwd_mut().as_str(), "/w/app-seat-dev");
+    }
+
+    /// An agent's Relaunch in a folder that is gone is refused (it would run in the
+    /// workspace's folder, a seat's story base worktree); a shell's Restart is not.
+    #[test]
+    fn a_relaunch_in_a_gone_folder_is_refused_and_a_restart_is_not() {
+        let gone = Path::new("/w/app-seat-dev");
+        let refused = refuse_relaunch_in_gone_folder(gone, true).unwrap_err();
+        assert!(refused.contains("/w/app-seat-dev"), "{refused}");
+        assert!(refuse_relaunch_in_gone_folder(gone, false).is_ok());
+        // The refusal comes before the ended session is reaped and before any
+        // folder is moved.
+        let source = include_str!("pty_layout.rs");
+        let start = source.find("pub async fn terminal_respawn_tab(").unwrap();
+        let body = &source[start..start + source[start..].find("\n}\n").unwrap()];
+        let refuse = body.find("refuse_relaunch_in_gone_folder(").unwrap();
+        assert!(refuse < body.find("start_beside_gone_folder(").unwrap());
+        assert!(refuse < body.find("respawn_tab_admitted(").unwrap());
+        assert!(
+            !body.contains("scope.cwd ="),
+            "a scope never follows a gone folder"
+        );
     }
 
     /// A Relaunch the host answers by reviving an earlier respawn's process (its

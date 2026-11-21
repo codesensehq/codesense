@@ -556,6 +556,7 @@ mod tests {
             name: "review".into(),
             kind: crate::install::worktree_index::SeatKind::Commit,
             pinned_commit: None,
+            kept: None,
         });
         crate::install::worktree_index::write_record(home.path(), &Principal::from(1), &record)
             .unwrap();

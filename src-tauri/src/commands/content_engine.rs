@@ -6577,6 +6577,7 @@ mod tests {
             name: "dev".into(),
             kind: worktree_index::SeatKind::Branch,
             pinned_commit: None,
+            kept: None,
         });
         worktree_index::write_record(home.path(), &principal, &seated).unwrap();
         // The launch re-registers with a plain record; the seat survives it.
@@ -6961,6 +6962,7 @@ mod tests {
             name: "dev".into(),
             kind: worktree_index::SeatKind::Branch,
             pinned_commit: None,
+            kept: None,
         };
         let mut seated = wt_record("/abs/wt-seat", &story);
         seated.seat = Some(seat.clone());
