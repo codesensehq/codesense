@@ -595,7 +595,7 @@ test("rust.yml's Linux app job runs PDF export's renderer tests under xvfb", () 
       "  --run-ignored all -E 'test(/^commands::export_pdf::render::tests::/)'\n",
   );
   const names = job.steps.map((step) => step.name);
-  assert.ok(names.indexOf("Compile the app's tests") < names.indexOf(pdf.name));
+  assert.ok(names.indexOf("Compile the tests") < names.indexOf(pdf.name));
 });
 
 // A push diffs before..after; a new branch tip (before all zeros) tests everything.
