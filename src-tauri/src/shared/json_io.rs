@@ -254,17 +254,15 @@ fn write_atomic_inner(path: &Path, json: &str, private: bool) -> Result<(), Json
 /// symlink, whose target is not ours to change) must not block the write;
 /// the file itself is still owner-only.
 fn create_private_parent(parent: &Path) -> std::io::Result<()> {
-    if let Some(above) = parent
-        .parent()
-        .filter(|above| !above.as_os_str().is_empty())
-    {
-        std::fs::create_dir_all(above)?;
+    use crate::shared::private_dir::{create_or_tighten, PrivateDirError};
+    match create_or_tighten(parent) {
+        Ok(()) => Ok(()),
+        Err(PrivateDirError::Create(e)) => Err(e),
+        Err(PrivateDirError::Tighten(e)) => {
+            log::warn!("could not make {} owner-only: {e}", parent.display());
+            Ok(())
+        }
     }
-    codesense_platform::fs::create_dir_owner_only(parent)?;
-    if let Err(e) = codesense_platform::fs::set_owner_only(parent) {
-        log::warn!("could not make {} owner-only: {e}", parent.display());
-    }
-    Ok(())
 }
 
 fn write_tmp(tmp_path: &Path, json: &str, private: bool) -> std::io::Result<()> {

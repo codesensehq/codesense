@@ -527,7 +527,7 @@ fn persist_active_record(
     let parent = path
         .parent()
         .ok_or_else(|| invalid("active account record has no parent"))?;
-    ensure_private_dir(parent)?;
+    create_or_tighten_dir(parent)?;
     let bytes = serde_json::to_vec_pretty(&record).map_err(io_error)?;
     write_tmp_fsync_rename(path, &bytes).map_err(|error: Error| io_error(error))?;
     set_owner_only(path)?;
@@ -630,14 +630,10 @@ fn set_owner_only(path: &Path) -> Result<(), StoreMutationError> {
     codesense_platform::fs::set_owner_only(path).map_err(io_error)
 }
 
-/// Create the directory `dir` owner-only (its missing parents plainly), or
-/// tighten it to owner-only when it already exists.
-fn ensure_private_dir(dir: &Path) -> Result<(), StoreMutationError> {
-    if let Some(parent) = dir.parent().filter(|parent| !parent.as_os_str().is_empty()) {
-        fs::create_dir_all(parent).map_err(io_error)?;
-    }
-    codesense_platform::fs::create_dir_owner_only(dir).map_err(io_error)?;
-    set_owner_only(dir)
+/// Create the directory `dir` owner-only, or tighten it to owner-only when
+/// it already exists.
+fn create_or_tighten_dir(dir: &Path) -> Result<(), StoreMutationError> {
+    crate::shared::private_dir::create_or_tighten(dir).map_err(io_error)
 }
 
 pub fn ensure_managed_home(
@@ -650,12 +646,8 @@ pub fn ensure_managed_home(
     // follow it. The parent was checked by `managed_home` and every remaining
     // component is a backend-derived opaque token.
     reject_symlink_components(&path)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(io_error)?;
-    }
-    codesense_platform::fs::create_dir_owner_only(&path).map_err(io_error)?;
-    reject_symlink_components(&path)?;
-    set_owner_only(&path)?;
+    // Tightening refuses a symlink that replaced the home meanwhile.
+    create_or_tighten_dir(&path)?;
     Ok(path)
 }
 
@@ -664,7 +656,7 @@ struct StoreLock(File);
 impl StoreLock {
     fn acquire(codesense_home: &Path, principal: &Principal) -> Result<Self, StoreMutationError> {
         let root = user_root(codesense_home, principal);
-        ensure_private_dir(&root)?;
+        create_or_tighten_dir(&root)?;
         let path = root.join(LOCK_FILE);
         // A link at the lock path is refused before anything is created.
         let file =
@@ -812,7 +804,7 @@ pub fn create_profile(
     let _lock = StoreLock::acquire(codesense_home, principal)?;
     let label = validate_label(label)?;
     let profiles_root = accounts_root(codesense_home, principal);
-    ensure_private_dir(&profiles_root)?;
+    create_or_tighten_dir(&profiles_root)?;
     // Provision the per-user digest key while the store is still empty. Once
     // profiles exist, `identity_key` deliberately refuses silent rotation.
     let _ = identity_key(codesense_home, principal)?;

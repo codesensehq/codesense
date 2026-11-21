@@ -10,6 +10,7 @@ pub mod lock_ext;
 pub(crate) mod opener;
 pub use codesense_host_proto::machine_wording;
 pub mod panic_guard;
+pub(crate) mod private_dir;
 pub mod proc_capture;
 pub mod revisioned_defs;
 pub mod secret_scan;
