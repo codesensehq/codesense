@@ -24,9 +24,10 @@ type Page = {
 function openPage(noun: string): Page {
   const body = /<body[^>]*>([\s\S]*)<\/body>/.exec(INDEX_HTML)![1];
   document.body.innerHTML = body
-    .replace(/<script[^>]*><\/script>/g, "")
     .replaceAll("{{title}}", "Team")
     .replaceAll("{{owner_machine}}", noun);
+  // The template's script tags (xterm, cs-live, app.js) are not run here: app.js runs below over the stub.
+  document.body.querySelectorAll("script").forEach((script) => script.remove());
   const caught: Partial<Record<"presence" | "agents" | "workspaces" | "inbox", unknown>> = {};
   const capture = (key: keyof typeof caught) => (cb: unknown) => {
     caught[key] = cb;
