@@ -626,7 +626,11 @@ mod tests {
             r#", "scope": "Test""#,
             r#", "scope": 1"#,
         ] {
-            assert!(scoped(bad).is_err(), "{bad}");
+            let error = scoped(bad).err().unwrap_or_default();
+            assert!(
+                error.contains(r#"`x`.scope: "#) && error.contains(r#"is not "product" or "test""#),
+                "{bad}: {error}"
+            );
         }
     }
 
@@ -672,7 +676,11 @@ mod tests {
         };
         for key in ["", "Git-ai", "git_ai", "git ai", "git.ai", "gît"] {
             let table = format!("[{}]", row(key));
-            assert!(caps_table::parse_caps(&table).is_err(), "{key:?}");
+            let error = caps_table::parse_caps(&table).err().unwrap_or_default();
+            assert!(
+                error.contains("has no `key` of a-z, 0-9 and `-`"),
+                "{key:?}: {error}"
+            );
         }
         let twice = format!("[{}, {}]", row("git-ai"), row("git-ai"));
         let error = caps_table::parse_caps(&twice).err().unwrap_or_default();

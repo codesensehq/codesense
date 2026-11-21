@@ -88,13 +88,9 @@ pub const SHIPPED_ARCHS: [(&str, &[&str]); 3] = [
     ("windows", &["x86_64"]),
 ];
 
-/// The shipped architectures of `os` (see [`SHIPPED_ARCHS`]) that `support`
-/// leaves out: none for `"on"` and `"probe"`, every one for `"off"`.
-pub fn missing_archs(os: &str, support: &Support) -> Vec<&'static str> {
-    let shipped = SHIPPED_ARCHS
-        .iter()
-        .find_map(|(name, archs)| (*name == os).then_some(*archs))
-        .unwrap_or_default();
+/// The architectures of `shipped` that `support` leaves out: none for `"on"`
+/// and `"probe"`, every one for `"off"`.
+pub fn missing_archs(shipped: &[&'static str], support: &Support) -> Vec<&'static str> {
     match support {
         Support::On | Support::Probe => Vec::new(),
         Support::Off => shipped.to_vec(),
@@ -124,16 +120,13 @@ pub fn validate_tracked_key(key: &str) -> Result<(), String> {
     }
 }
 
-/// A row's `tracked` object: a tracking key for each OS where the capability
-/// is not fully on ([`missing_archs`]), and for no other. A test-scope row
-/// has none. Checked here and then dropped; nothing reads it at runtime.
-fn check_tracked(
-    key: &str,
-    tracked: Option<&serde_json::Value>,
-    scope: Scope,
-    columns: [(&str, &Support); 3],
-) -> Result<(), String> {
-    let entries = match (tracked, scope) {
+/// A row's `tracked` object: a tracking key for each OS of [`SHIPPED_ARCHS`]
+/// where the capability is not fully on ([`missing_archs`]), and for no other.
+/// A test-scope row has none. Checked here and then dropped; nothing reads it
+/// at runtime.
+fn check_tracked(row: &Row, tracked: Option<&serde_json::Value>) -> Result<(), String> {
+    let key = &row.key;
+    let entries = match (tracked, row.scope) {
         (None, Scope::Test) => return Ok(()),
         (Some(_), Scope::Test) => {
             return Err(format!(
@@ -150,7 +143,7 @@ fn check_tracked(
     };
     if let Some(entries) = entries {
         for (os, entry) in entries {
-            if !columns.iter().any(|(name, _)| *name == os.as_str()) {
+            if !SHIPPED_ARCHS.iter().any(|(name, _)| *name == os.as_str()) {
                 return Err(format!(
                     "`{key}`.tracked.{os}: `{os}` is not \"macos\", \"linux\" or \"windows\""
                 ));
@@ -162,8 +155,11 @@ fn check_tracked(
                 .map_err(|error| format!("`{key}`.tracked.{os}: {error}"))?;
         }
     }
-    for (os, support) in columns {
-        let missing = missing_archs(os, support);
+    for (os, shipped) in SHIPPED_ARCHS {
+        let support = row
+            .support(os)
+            .ok_or_else(|| format!("`{key}` has no `{os}`"))?;
+        let missing = missing_archs(shipped, support);
         let entry = entries.and_then(|entries| entries.get(os));
         match (missing.is_empty(), entry) {
             (true, Some(_)) => {
@@ -230,21 +226,16 @@ pub fn parse_caps(table: &str) -> Result<Vec<Row>, String> {
                     }
                 },
             };
-            let (macos, linux, windows) = (column("macos")?, column("linux")?, column("windows")?);
-            check_tracked(
-                key,
-                row.get("tracked"),
-                scope,
-                [("macos", &macos), ("linux", &linux), ("windows", &windows)],
-            )?;
-            Ok(Row {
+            let parsed = Row {
                 key: key.to_string(),
-                macos,
-                linux,
-                windows,
+                macos: column("macos")?,
+                linux: column("linux")?,
+                windows: column("windows")?,
                 reason: reason.to_string(),
                 scope,
-            })
+            };
+            check_tracked(&parsed, row.get("tracked"))?;
+            Ok(parsed)
         })
         .collect()
 }
