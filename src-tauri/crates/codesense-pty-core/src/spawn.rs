@@ -1436,29 +1436,42 @@ mod tests {
     mod os_rules {
         use super::*;
 
-        /// What a Windows spawn runs once it unwraps npm's shims
-        /// (`codesense-platform/tests/fixtures/npm-shims`) is still recognised as the agent: Codex's
-        /// node script by its npm entry, Claude's `.exe` by its name.
+        /// What a Windows spawn runs once it unwraps npm's shims is still recognised as the
+        /// agent: the script each node-form fixture names by Codex's npm entry, the `.exe`
+        /// Claude's names by its name.
         #[test]
         fn an_unwrapped_npm_shim_is_still_its_agent() {
-            let codex = r"C:\Users\u\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js";
-            assert!(crate::process::is_npm_entry(codex, "codex"));
-            assert!(!crate::process::is_npm_entry(codex, "claude"));
-            assert!(!crate::process::is_npm_entry(
+            use crate::process::{agent_signature_matches, is_npm_entry};
+            let shim = Path::new("npm").join("codex.cmd");
+            for fixture in [CODEX_SHIM, CODEX_SHIM_V8] {
+                let Ok(Some(cli::NpmShim::Node { script })) = cli::npm_shim_script(&shim, fixture)
+                else {
+                    panic!("the Codex fixture is a node-form shim");
+                };
+                let script = script.to_string_lossy();
+                assert!(is_npm_entry(&script, "codex"), "{script}");
+                assert!(!is_npm_entry(&script, "claude"), "{script}");
+                assert!(agent_signature_matches(
+                    "node.exe",
+                    Some(r"C:\Program Files\nodejs\node.exe"),
+                    &[r"C:\Program Files\nodejs\node.exe", &*script, "--yolo"],
+                    "codex"
+                ));
+            }
+            assert!(!is_npm_entry(
                 r"C:\npm\node_modules\@openai\other\bin\codex.js",
                 "codex"
             ));
-            assert!(crate::process::agent_signature_matches(
-                "node.exe",
-                Some(r"C:\Program Files\nodejs\node.exe"),
-                &[r"C:\Program Files\nodejs\node.exe", codex, "--yolo"],
-                "codex"
-            ));
-            let claude = r"C:\Users\u\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe";
-            assert!(crate::process::agent_signature_matches(
+            let shim = Path::new("npm").join("claude.cmd");
+            let Ok(Some(cli::NpmShim::Exe { program })) = cli::npm_shim_script(&shim, CLAUDE_SHIM)
+            else {
+                panic!("the Claude fixture is a direct-program shim");
+            };
+            let program = program.to_string_lossy();
+            assert!(agent_signature_matches(
                 "claude.exe",
-                Some(claude),
-                &[claude, "--resume"],
+                Some(&*program),
+                &[&*program, "--resume"],
                 "claude"
             ));
         }
@@ -1551,6 +1564,8 @@ mod tests {
             include_str!("../../codesense-platform/tests/fixtures/npm-shims/claude.cmd");
         const CODEX_SHIM: &str =
             include_str!("../../codesense-platform/tests/fixtures/npm-shims/codex.cmd");
+        const CODEX_SHIM_V8: &str =
+            include_str!("../../codesense-platform/tests/fixtures/npm-shims/codex-cmd-shim-8.cmd");
         const CLAUDE_TARGET: &str = r"node_modules\@anthropic-ai\claude-code\bin\claude.exe";
         const CODEX_TARGET: &str = r"node_modules\@openai\codex\bin\codex.js";
         /// Arguments a batch layer would act on; the argv carries them unchanged.
