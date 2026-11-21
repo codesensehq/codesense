@@ -13,6 +13,7 @@ import {
   exportsUntouchedSinceMain,
   frozenExport,
   inheritedNotice,
+  strictExports,
 } from "./lib/sealed-export.mjs";
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const output = "codesense-docs/getting-started/content/generated/live-data-contract.json";
@@ -71,11 +72,12 @@ export function sealContract(root = ROOT) {
     ) + "\n",
   );
 }
-// Write mode (`check: false`, `pnpm gen:docs`) warns on a stale seal and never throws: the contract
-// is cargo-written and PRs leave it alone. Check mode throws unless the PR gate tolerates the drift.
+// Write mode (`check: false`, `pnpm gen:docs`) warns on a stale seal: the contract is cargo-written
+// and PRs leave it alone. It throws only when `strict` (CS_STRICT_EXPORTS=1, the refresh run). Check
+// mode throws unless the PR gate tolerates the drift.
 export function checkContract(
   root = ROOT,
-  { check = true, allowStaleExport = false, warn = console.warn } = {},
+  { check = true, allowStaleExport = false, strict = strictExports(), warn = console.warn } = {},
 ) {
   const message = (what) => `Stale generated file: ${output} (${what}); ${REFRESH_ROUTE}`;
   const missing = !existsSync(resolve(root, manifest)) || !existsSync(resolve(root, output));
@@ -94,6 +96,7 @@ export function checkContract(
     : [...new Set([...Object.keys(stored.inputs), ...Object.keys(inputs)])].filter(
         (path) => stored.inputs[path] !== inputs[path],
       );
+  if (!check && strict) throw new Error(message(what));
   if (!check) return warn(`NOTICE: ${message(what)}`);
   const untouched =
     allowStaleExport &&

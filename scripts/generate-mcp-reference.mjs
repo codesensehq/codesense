@@ -27,6 +27,7 @@ import {
   exportsUntouchedSinceMain,
   frozenExport,
   inheritedNotice,
+  strictExports,
 } from "./lib/sealed-export.mjs";
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const CONTENT = "codesense-docs/getting-started/content";
@@ -646,7 +647,7 @@ export function generateReference(
     check = false,
     buildScript = false,
     allowStaleExport = false,
-    strict = false,
+    strict = strictExports(),
     warn = console.warn,
     stdout = console.log,
   } = {},
@@ -672,8 +673,9 @@ export function generateReference(
     // payloads are main's, the sourceRef lines are normalised, so the PR cannot have changed it.
     // (Rust inputs, handler.rs included, may differ.) Anything else runs the strict check.
     // mcp-tools.json is Node-rendered, so input-only drift leaves it out of the exports and compares
-    // it with the manifest built from the committed exports below. Write mode always renders.
-    let untouched = !check;
+    // it with the manifest built from the committed exports below. Write mode renders, unless
+    // `strict` (CS_STRICT_EXPORTS=1, the refresh run).
+    let untouched = !check && !strict;
     if (check && allowStaleExport) {
       try {
         const exports = frozenExport(`${CONTENT}/generated/mcp-tools`);
@@ -698,9 +700,10 @@ export function generateReference(
       return null;
     }
   }
-  // Write mode and the PR gate tolerate the export as stale even with a fresh seal: the catalog and
-  // META are not seal inputs. The export run itself (`strict`) and strict check mode do not.
-  const pending = (allowStaleExport || !check || tolerant) && !strict ? [] : null;
+  // The PR gate and write mode tolerate the export as stale even with a fresh seal: the catalog and
+  // META are not seal inputs. Strict check mode and `strict` write mode (the export and refresh
+  // runs) do not.
+  const pending = allowStaleExport || (!check && !strict) ? [] : null;
   const doc = buildManifest(root, META, readCatalog(root), pending, warn);
   for (const name of pending ?? [])
     warn(`NOTICE: ${name} is not in the committed export yet; maintainers refresh it`);

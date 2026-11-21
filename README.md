@@ -179,9 +179,18 @@ git status --short
 git commit -s -m "Refresh the generated exports"
 ```
 
+Before you open the pull request, check that the refresh is complete. The
+strict check fails on any export still stale, and `CS_STRICT_EXPORTS=1` makes
+`pnpm gen:docs` and the tests that pin an export strict too:
+
+```bash
+CS_STRICT_EXPORTS=1 pnpm gen:docs:check
+CS_STRICT_EXPORTS=1 node --test scripts/generate-model-schemas.node-test.mjs
+```
+
 Open the pull request and merge it on its own. When `live-data-contract.json`
 changed, add the `ci:macos` label: the test that pins the contract runs only on
-macOS. When nothing changed, the summary says so and there is no artifact. With
+macOS, and strictly only where `CS_STRICT_EXPORTS=1` is set. When nothing changed, the summary says so and there is no artifact. With
 a local Rust build, `pnpm docs:refresh-mcp` writes the MCP and live-data
 exports and `node scripts/generate-model-schemas.mjs --queued-export` the model
 schemas fixture, instead of the workflow.

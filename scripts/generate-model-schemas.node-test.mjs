@@ -78,7 +78,12 @@ test("a stale fixture fails the strict check, and write mode and the PR gate ren
     for (const options of [{}, { check: true, allowStaleExport: true }]) {
       const notices = [];
       assert.doesNotThrow(() =>
-        generate(options.check ?? false, { ...options, root, warn: (line) => notices.push(line) }),
+        generate(options.check ?? false, {
+          ...options,
+          root,
+          strict: false,
+          warn: (line) => notices.push(line),
+        }),
       );
       assert.match(
         notices.join("\n"),
@@ -86,6 +91,8 @@ test("a stale fixture fails the strict check, and write mode and the PR gate ren
       );
     }
     assert.equal(readFileSync(join(root, FIXTURE), "utf8"), before, "never rehash the fixture");
+    // Under CS_STRICT_EXPORTS=1 (the refresh run) write mode is strict.
+    assert.throws(() => generate(false, { root, strict: true }), /fixture is stale/);
     assert.throws(
       () => generate(true, { root }),
       (error) =>
@@ -110,7 +117,9 @@ test("a deleted fixture source is stale, not a crash", () => {
     const fixture = JSON.parse(readFileSync(join(root, FIXTURE), "utf8"));
     assert.ok(staleSources(fixture, (path) => readFileSync(join(root, path))).includes(MODEL));
     const notices = [];
-    assert.doesNotThrow(() => generate(false, { root, warn: (line) => notices.push(line) }));
+    assert.doesNotThrow(() =>
+      generate(false, { root, strict: false, warn: (line) => notices.push(line) }),
+    );
     assert.match(
       notices.join("\n"),
       /fixture is stale: (?:\S+, )*src-tauri\/src\/routines\/model.rs/,
@@ -157,12 +166,12 @@ function withCliCopies(root) {
     mkdirSync(dirname(join(root, path)), { recursive: true });
     copyFileSync(join(ROOT, path), join(root, path));
   }
-  return (script, env) =>
+  return (script, env, { args = ["--check"], strict = "" } = {}) =>
     // The real path: each CLI runs only when argv[1] equals its own (symlink-free) module path.
-    spawnSync(process.execPath, [join(realpathSync(root), "scripts", script), "--check"], {
+    spawnSync(process.execPath, [join(realpathSync(root), "scripts", script), ...args], {
       cwd: root,
       encoding: "utf8",
-      env: { ...process.env, DOCS_ALLOW_STALE_EXPORT: env, CS_STRICT_EXPORTS: "" },
+      env: { ...process.env, DOCS_ALLOW_STALE_EXPORT: env, CS_STRICT_EXPORTS: strict },
     });
 }
 
@@ -178,6 +187,12 @@ test("each CLI's --check passes the stale switch through", () => {
       const strict = cli(script, "");
       assert.notEqual(strict.status, 0, script);
       assert.match(strict.stderr, /fixture is stale/, script);
+      // Write mode warns, unless CS_STRICT_EXPORTS=1 (the refresh run).
+      const write = cli(script, "", { args: [] });
+      assert.equal(write.status, 0, `${script}: ${write.stderr}`);
+      const strictWrite = cli(script, "", { args: [], strict: "1" });
+      assert.notEqual(strictWrite.status, 0, script);
+      assert.match(strictWrite.stderr, /fixture is stale/, script);
     }
     const schema = join(
       root,

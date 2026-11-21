@@ -71,8 +71,14 @@ describe("live-data contract PR gate", () => {
       // Write mode (`pnpm gen:docs`) warns on any stale seal and never throws.
       const written: string[] = [];
       expect(() =>
-        checkContract(root, { check: false, warn: (line: string) => written.push(line) }),
+        checkContract(root, {
+          check: false,
+          strict: false,
+          warn: (line: string) => written.push(line),
+        }),
       ).not.toThrow();
+      // Under CS_STRICT_EXPORTS=1 (the refresh run) write mode is strict.
+      expect(() => checkContract(root, { check: false, strict: true })).toThrow(/payload changed/);
       expect(written.join("\n")).toMatch(/^NOTICE: Stale generated file: .*payload changed/);
       expect(written.join("\n")).toContain(REFRESH_ROUTE);
     } finally {

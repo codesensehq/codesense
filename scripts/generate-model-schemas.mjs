@@ -92,17 +92,19 @@ export function schemaFields(root) {
 }
 // A stale fixture: write mode (`pnpm gen:docs`, and build.rs through generate-yaml-schemas) renders
 // from the committed fixture with a notice. So does the PR gate (`allowStaleExport`) while this PR
-// leaves the fixture as main has it, or the drift is main's; strict check mode throws.
+// leaves the fixture as main has it, or the drift is main's; strict check mode throws, and so does
+// write mode when `strict` (CS_STRICT_EXPORTS=1, the refresh run).
 export function modelSchemas(
   root = ROOT,
-  { check = false, allowStaleExport = false, warn = console.warn } = {},
+  { check = false, allowStaleExport = false, strict = strictExports(), warn = console.warn } = {},
 ) {
   const fixture = JSON.parse(readFileSync(join(root, FIXTURE), "utf8"));
   const stale = staleSources(fixture, (path) => readFileSync(join(root, path)));
   if (stale.length) {
     const tolerated =
-      !check ||
-      (allowStaleExport &&
+      (!check && !strict) ||
+      (check &&
+        allowStaleExport &&
         (exportsUntouchedSinceMain(root, frozenExport(FIXTURE)) ||
           driftInheritedFromMain(root, stale)));
     if (!tolerated) throw new Error(staleMessage(stale));
@@ -117,7 +119,7 @@ export function modelSchemas(
 }
 // The model pin the tests read: the committed fixture, strict only with CS_STRICT_EXPORTS=1.
 export const pinnedModels = (root = ROOT, env = process.env, warn = console.warn) =>
-  modelSchemas(root, { check: strictExports(env), warn });
+  modelSchemas(root, { check: strictExports(env), strict: strictExports(env), warn });
 function output(path, content, check) {
   if (check) {
     if (readFileSync(path, "utf8") !== content)
@@ -129,9 +131,9 @@ function output(path, content, check) {
 }
 export function generate(
   check = false,
-  { root = ROOT, allowStaleExport = false, warn = console.warn } = {},
+  { root = ROOT, allowStaleExport = false, strict = strictExports(), warn = console.warn } = {},
 ) {
-  const models = modelSchemas(root, { check, allowStaleExport, warn });
+  const models = modelSchemas(root, { check, allowStaleExport, strict, warn });
   for (const [slug, { schema }] of Object.entries(models))
     output(
       join(root, CONTENT, "generated/schemas", `${slug}.schema.json`),

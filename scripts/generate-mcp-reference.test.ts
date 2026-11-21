@@ -245,7 +245,13 @@ describe("Node-only freshness and resolving teaching links", () => {
       ).toThrow(/src-tauri\/src\/nested\.rs/);
       // Write mode renders mcp-tools.json from the committed exports and warns.
       const written: string[] = [];
-      expect(generateReference(root, { warn: (line) => written.push(line) })).not.toBeNull();
+      expect(
+        generateReference(root, { strict: false, warn: (line) => written.push(line) }),
+      ).not.toBeNull();
+      // Under CS_STRICT_EXPORTS=1 (the refresh run) write mode is strict.
+      expect(() => generateReference(root, { strict: true, warn: () => {} })).toThrow(
+        /Stale MCP registry export.*nested\.rs/,
+      );
       expect(written.join("\n")).toMatch(/^NOTICE: Stale MCP registry export.*nested\.rs/);
       expect(readFileSync(outputPath, "utf8")).toBe(outputBeforeWarning);
       // mcp-tools.json is Node-rendered: the PR gate compares it with the committed exports.
@@ -292,7 +298,7 @@ describe("Node-only freshness and resolving teaching links", () => {
       catalog.families[0].searchTerms.push("an added search term");
       writeFileSync(catalogPath, JSON.stringify(catalog, null, 2) + "\n");
       writeFileSync(source, `// prepended comment\n${before}`);
-      expect(() => generateReference(root, { warn: () => {} })).not.toThrow();
+      expect(() => generateReference(root, { strict: false, warn: () => {} })).not.toThrow();
       expect(readFileSync(outputPath, "utf8")).toContain("an added search term");
       expect(tolerate()).not.toBeNull();
       writeFileSync(catalogPath, catalogBefore);
@@ -404,7 +410,7 @@ describe("a stale export in write mode and the PR gate", () => {
     try {
       const notices: string[] = [];
       expect(() =>
-        mod.generateReference(root, { warn: (line) => notices.push(line) }),
+        mod.generateReference(root, { strict: false, warn: (line) => notices.push(line) }),
       ).not.toThrow();
       expect(notices.join("\n")).toMatch(/NOTICE: records_read is not in the committed export yet/);
       const written = JSON.parse(readFileSync(join(root, mod.OUTPUT), "utf8"));
@@ -431,12 +437,12 @@ describe("a stale export in write mode and the PR gate", () => {
       mod.sealReference(root);
       const catalogBefore = readFileSync(join(root, mod.CATALOG), "utf8");
       movePointer();
-      expect(() => mod.generateReference(root, { warn: () => {} })).not.toThrow();
+      expect(() => mod.generateReference(root, { strict: false, warn: () => {} })).not.toThrow();
       writeFileSync(join(root, mod.CATALOG), catalogBefore);
       writeFileSync(join(root, "src-tauri/src/nested.rs"), "// JsonSchema nested DTO, main's\n");
       commitAsMain(root);
       movePointer();
-      expect(() => mod.generateReference(root, { warn: () => {} })).not.toThrow();
+      expect(() => mod.generateReference(root, { strict: false, warn: () => {} })).not.toThrow();
       const written = JSON.parse(readFileSync(join(root, mod.OUTPUT), "utf8"));
       const tool = written.tools.find((t: { name: string }) => t.name === "read_messages");
       expect(tool.docs).toBe(moved);
