@@ -405,8 +405,9 @@ pub fn run() {
         // thus the MCP host, the sync engine, and `ActiveTeamState` — alive, so a
         // running agent can keep driving codesense with no window on screen.
         // Where the background-on-close capability is on: macOS backgrounds to the
-        // Dock, Linux only while the terminal-server tray item shows (its atomic is
-        // read here, never the tray itself). Cmd-Q / menu-Quit fire
+        // Dock; Linux and Windows only while the terminal-server tray item shows in
+        // the tray or the notification area (its atomic is read here, never the tray
+        // itself). Cmd-Q / menu-Quit fire
         // `RunEvent::ExitRequested`, NOT this event, so hiding on close can never
         // swallow a real quit — no "quitting" guard is needed. This arm is
         // deliberately thin: one lock-free atomic read plus native calls, with no

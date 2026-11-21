@@ -6,10 +6,11 @@
 //! dock-resident behavior. "Open" comes to mean *process-alive*, not
 //! *window-visible*, which is the contract a leave-it-running agent
 //! needs. The window-close handler in `lib.rs` reads a single process-global flag
-//! (the user's quit-on-close preference) to decide hide-vs-quit. On Linux, which
-//! has no Dock, the window backgrounds only while the terminal-server tray item
-//! shows (its own atomic, [`crate::commands::terminal_server_tray::tray_visible`]),
-//! since that item is the only way back; otherwise close quits.
+//! (the user's quit-on-close preference) to decide hide-vs-quit. On Linux and
+//! Windows, which have no Dock, the window backgrounds only while the
+//! terminal-server tray item shows in the tray or the notification area (its own
+//! atomic, [`crate::commands::terminal_server_tray::tray_visible`]), since that
+//! item is the only way back; otherwise close quits.
 //!
 //! The flag is mirrored from the frontend `settings.quitOnClose` via
 //! [`set_quit_on_close`] — one value, one atomic, no `AppHandle`/`State`. That is what keeps the read on

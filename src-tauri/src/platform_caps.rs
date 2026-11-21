@@ -248,8 +248,8 @@ mod tests {
         }
     }
 
-    /// The tray item follows its probe (the AppIndicator library loads) on Linux, is on on macOS
-    /// whatever a probe would say, and off on Windows; background-on-close is on for both.
+    /// The tray item follows its probe (the AppIndicator library loads) on Linux and is on on
+    /// macOS and Windows whatever a probe would say; background-on-close is on for all three.
     #[test]
     fn the_tray_follows_its_probe_on_linux() {
         let state = |os, arch, probe, key| {
@@ -265,11 +265,32 @@ mod tests {
                 assert_eq!(tray.reason.is_some(), !probe);
                 assert!(state("linux", arch, probe, "background-on-close").on);
                 assert!(state("macos", "aarch64", probe, TERMINAL_SERVER_TRAY).on);
-                assert!(!state("windows", "x86_64", probe, TERMINAL_SERVER_TRAY).on);
-                assert!(!state("windows", "x86_64", probe, "background-on-close").on);
+                assert!(state("windows", "x86_64", probe, TERMINAL_SERVER_TRAY).on);
+                assert!(state("windows", "x86_64", probe, "background-on-close").on);
             }
         }
         assert!(probe_for(TERMINAL_SERVER_TRAY).is_some());
+    }
+
+    /// Windows always has a notification area, so the tray item and background-on-close are on
+    /// there with no reason, whatever a probe would say; the rest stays off.
+    #[test]
+    fn tray_and_background_are_on_on_windows() {
+        for probe in [true, false] {
+            let caps = resolved("windows", "x86_64", probe);
+            for key in [TERMINAL_SERVER_TRAY, "background-on-close"] {
+                let cap = caps.iter().find(|cap| cap.key == key).unwrap();
+                assert!(cap.on, "{key} {probe}");
+                assert_eq!(cap.reason, None, "{key} {probe}");
+            }
+            assert_eq!(
+                line("windows", "x86_64", probe),
+                "caps: git-ai=off starship=off secret-store=off mcp-bridge=off \
+                 terminal-server-sidecar=off remote-machines=off agent-cli-sockets=off \
+                 shell-integration=off pdf-export=off background-on-close=on \
+                 terminal-server-tray=on"
+            );
+        }
     }
 
     /// Windows has no support for it, whatever a probe would say.
@@ -336,7 +357,6 @@ mod tests {
                        terminal-server-sidecar=off remote-machines=off agent-cli-sockets=off \
                        shell-integration=off pdf-export=off background-on-close=off \
                        terminal-server-tray=off";
-        assert_eq!(line("windows", "x86_64", true), all_off);
         assert_eq!(line("freebsd", "x86_64", true), all_off);
     }
 

@@ -168,7 +168,8 @@ pub mod role_inbox;
 pub(crate) mod role_startup;
 pub mod roles;
 pub mod system;
-// SV-8: this instance's terminal server in the macOS menu bar.
+// This instance's terminal server in the macOS menu bar, the Linux tray or the
+// Windows notification area.
 pub mod terminal_server_tray;
 pub mod tools;
 pub mod update;

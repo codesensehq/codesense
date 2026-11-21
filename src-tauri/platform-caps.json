@@ -75,16 +75,14 @@
     "key": "background-on-close",
     "macos": "on",
     "linux": "on",
-    "windows": "off",
-    "tracked": { "windows": "tray-background" },
+    "windows": "on",
     "reason": "closing the window quits CodeSense"
   },
   {
     "key": "terminal-server-tray",
     "macos": "on",
     "linux": "probe",
-    "windows": "off",
-    "tracked": { "windows": "tray-background" },
+    "windows": "on",
     "reason": "the terminal server's tray icon can't be shown on this system"
   },
   {
