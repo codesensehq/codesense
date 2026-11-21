@@ -2,7 +2,7 @@
 /**
  * The "Show terminal server in the menu bar" row ("in the tray" off macOS) — off
  * by default, an On | Off radio writing `updateSettings({ terminalServerMenuBar })`,
- * shown only where the tray capability is on. Also the Quit on window close
+ * explained and disabled where the tray capability is off. Also the Quit on window close
  * footer, which says how a closed window comes back on this OS.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -53,10 +53,15 @@ describe("GeneralSection — terminal server in the menu bar", () => {
     expect(useViewerStore.getState().settings.terminalServerMenuBar).toBe(false);
   });
 
-  it("is not offered where the tray capability is off", () => {
+  it("is still found, but explained and disabled, where the tray capability is off", () => {
+    setPlatform("Win32");
     setPlatformCaps({ "terminal-server-tray": "no tray" });
     render(<GeneralSection query="menu bar" />);
-    expect(screen.queryByTestId("settings-terminal-server-menu-bar")).not.toBeInTheDocument();
+    const row = screen.getByTestId("settings-terminal-server-menu-bar");
+    expect(row).toHaveAttribute("aria-disabled", "true");
+    expect(row).toHaveAttribute("title", "Not yet available on Windows: no tray.");
+    fireEvent.click(screen.getByTestId("settings-terminal-server-menu-bar-on"));
+    expect(useViewerStore.getState().settings.terminalServerMenuBar).toBeUndefined();
   });
 
   it.each([

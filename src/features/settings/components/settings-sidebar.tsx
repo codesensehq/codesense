@@ -18,7 +18,7 @@ import { WORKSPACE_ROW_SPECS } from "@/features/settings/components/workspace-se
 import type { SectionKey } from "@/features/settings/lib/types";
 import { rowMatches, type SettingRowSpec } from "@/features/settings/lib/row-matches";
 import { DASHBOARDS_SECTION_SPEC } from "./dashboards-section";
-import { useGeneralRowSpecs } from "./general-section";
+import { GENERAL_ROW_SPEC_LIST } from "./general-section";
 import { IDENTITY_SECTION_SPECS } from "./identity-section";
 import { REPO_SECTION_SPEC } from "./repo-section";
 import { shortcutRowSpecs } from "./shortcuts-section";
@@ -52,8 +52,8 @@ export const SECTION_NAV_ITEMS: SectionNavItem[] = [
 /** Maps each section to the row specs that determine whether it has
  *  visible content for a given query. The sidebar dims sections where
  *  no row spec matches — ensuring the enabled state reflects actual
- *  content, not a static keyword approximation. General isn't here: its rows depend on this OS's
- *  capabilities, so callers pass `useGeneralRowSpecs()` to `sectionHasContent`. */
+ *  content, not a static keyword approximation. General isn't here: callers pass
+ *  `GENERAL_ROW_SPEC_LIST` to `sectionHasContent`. */
 const SECTION_ROW_SPECS: Record<Exclude<SectionKey, "general">, readonly SettingRowSpec[]> = {
   appearance: APPEARANCE_ROW_SPECS,
   dashboards: [DASHBOARDS_SECTION_SPEC],
@@ -69,8 +69,9 @@ const SECTION_ROW_SPECS: Record<Exclude<SectionKey, "general">, readonly Setting
   account: [ACCOUNT_SECTION_SPEC],
 };
 
-/** Returns true if the section has at least one row that matches the query. `generalSpecs`
- *  comes from `useGeneralRowSpecs`, so General's hidden rows never match. */
+/** Returns true if the section has at least one row that matches the query. `generalSpecs` is
+ *  `GENERAL_ROW_SPEC_LIST`, every General row: a row whose capability is off on this OS is
+ *  shown disabled with the off sentence, never hidden, so it matches like any other. */
 export function sectionHasContent(
   key: SectionKey,
   query: string,
@@ -96,10 +97,9 @@ export function SettingsSidebar({
   query,
   collapsed,
 }: SettingsSidebarProps) {
-  const generalSpecs = useGeneralRowSpecs();
   const enabledItems = SECTION_NAV_ITEMS.map((item) => ({
     ...item,
-    enabled: sectionHasContent(item.key, query, generalSpecs),
+    enabled: sectionHasContent(item.key, query, GENERAL_ROW_SPEC_LIST),
   }));
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
