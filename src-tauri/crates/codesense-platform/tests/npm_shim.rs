@@ -6,7 +6,10 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
-use codesense_platform::cli::{npm_shim_script, shim_argv, windows_extension, NpmShim, ShimError};
+use codesense_platform::cli::{
+    names_a_stream, npm_shim_script, root_relative, shim_argv, windows_absolute, windows_extension,
+    NpmShim, ShimError,
+};
 use codesense_platform::fs::{set_executable, Reach};
 
 const CLAUDE: &str = include_str!("fixtures/npm-shims/claude.cmd");
@@ -81,6 +84,33 @@ fn the_extension_is_read_as_windows_reads_it() {
         ("claude", None),
     ] {
         assert_eq!(windows_extension(name).as_deref(), ext, "{name:?}");
+    }
+}
+
+#[test]
+fn windows_paths_are_read_as_windows_reads_them() {
+    // (path, absolute, root- or drive-relative, names a stream)
+    for (path, absolute, root_rel, stream) in [
+        (r"C:\npm\claude.exe", true, false, false),
+        ("C:/npm/claude.exe", true, false, false),
+        (r"\\server\share\claude.exe", true, false, false),
+        (r"\\?\C:\npm\claude.exe", true, false, false),
+        (r"\\?\UNC\server\share\claude.exe", true, false, false),
+        (r"\\.\C:\npm\claude.exe", true, false, false),
+        ("claude.exe", false, false, false),
+        (r"npm\claude.exe", false, false, false),
+        (r"\claude.exe", false, true, false),
+        ("/claude.exe", false, true, false),
+        ("C:claude.exe", false, true, false),
+        (r"C:\npm\claude.exe:x.cmd", true, false, true),
+        (r"C:\npm\claude.cmd::$DATA", true, false, true),
+        (r"\\?\C:\npm\claude.exe:x", true, false, true),
+        ("claude.exe:x.cmd", false, false, true),
+        ("//?/C:/npm/claude.exe", false, true, true),
+    ] {
+        assert_eq!(windows_absolute(path), absolute, "absolute {path:?}");
+        assert_eq!(root_relative(path), root_rel, "root-relative {path:?}");
+        assert_eq!(names_a_stream(path), stream, "stream {path:?}");
     }
 }
 

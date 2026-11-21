@@ -673,13 +673,11 @@ fn windows_argv(
     exists: impl Fn(&Path) -> bool,
 ) -> Result<Vec<OsString>, SpawnError> {
     if os != "windows" {
-        return Ok(std::iter::once(OsString::from(program))
-            .chain(args.iter().map(OsString::from))
-            .collect());
+        return Ok(plain_argv(program, args));
     }
     let argv = unwrapped_argv(program, args, child_path)?;
     let last = argv[0].to_string_lossy();
-    if names_a_stream(&last) {
+    if cli::names_a_stream(&last) {
         return Err(SpawnError::BatchProgram(last.into_owned()));
     }
     direct_program(&last, os, exists)?;
@@ -694,10 +692,10 @@ fn unwrapped_argv(
     child_path: &str,
 ) -> Result<Vec<OsString>, SpawnError> {
     let refused = |program: &str| SpawnError::BatchProgram(program.to_string());
-    if names_a_stream(program) || root_relative(program) {
+    if cli::names_a_stream(program) || cli::root_relative(program) {
         return Err(refused(program));
     }
-    let found = if windows_absolute(program) {
+    let found = if cli::windows_absolute(program) {
         PathBuf::from(program)
     } else {
         cli::candidates(OsStr::new(child_path), program)
@@ -709,9 +707,7 @@ fn unwrapped_argv(
     let program = canonical(&found);
     let mut argv = match cli::shim_argv(&program, args, OsStr::new(child_path)) {
         Ok(Some(argv)) => argv,
-        Ok(None) => std::iter::once(program.into_os_string())
-            .chain(args.iter().map(OsString::from))
-            .collect(),
+        Ok(None) => plain_argv(program, args),
         Err(cli::ShimError::NotAnNpmShim { path }) => {
             return Err(refused(&path.to_string_lossy()));
         }
@@ -721,37 +717,11 @@ fn unwrapped_argv(
     Ok(argv)
 }
 
-/// Whether the Windows path `program` names an alternate data stream: a `:` after its
-/// verbatim (`\\?\`, `\\.\`, `\??\`) and drive (`C:`) prefixes.
-fn names_a_stream(program: &str) -> bool {
-    let rest = [r"\\?\", r"\\.\", r"\??\"]
-        .iter()
-        .find_map(|prefix| program.strip_prefix(prefix))
-        .unwrap_or(program);
-    let rest = match rest.as_bytes() {
-        [drive, b':', ..] if drive.is_ascii_alphabetic() => &rest[2..],
-        _ => rest,
-    };
-    rest.contains(':')
-}
-
-/// Whether the Windows path `program` is absolute: `\\server\…`, `\\?\…` or a drive
-/// with a separator (`C:\`, `C:/`).
-fn windows_absolute(program: &str) -> bool {
-    let bytes = program.as_bytes();
-    program.starts_with(r"\\")
-        || (bytes.len() > 2
-            && bytes[0].is_ascii_alphabetic()
-            && bytes[1] == b':'
-            && matches!(bytes[2], b'\\' | b'/'))
-}
-
-/// Whether the Windows path `program` is relative to the current drive's root
-/// (`\claude.exe`) or to a drive's current directory (`C:claude.exe`): neither absolute
-/// nor a name a `PATH` search can resolve.
-fn root_relative(program: &str) -> bool {
-    !windows_absolute(program)
-        && (program.starts_with(['\\', '/']) || program.as_bytes().get(1) == Some(&b':'))
+/// `program` and then `args`, as an argv.
+fn plain_argv(program: impl Into<OsString>, args: &[String]) -> Vec<OsString> {
+    std::iter::once(program.into())
+        .chain(args.iter().map(OsString::from))
+        .collect()
 }
 
 /// The `SHELL` an argv-direct child on `os` carries, set last over everything the
@@ -790,7 +760,7 @@ fn direct_program(
         return Ok(());
     }
     let exe = cli::windows_extension(program).as_deref() == Some("exe");
-    if windows_absolute(program) && exe && exists(Path::new(program)) {
+    if cli::windows_absolute(program) && exe && exists(Path::new(program)) {
         Ok(())
     } else {
         Err(SpawnError::BatchProgram(program.to_string()))
