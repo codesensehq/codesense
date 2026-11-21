@@ -25,6 +25,7 @@ import {
   diskGate,
   driftInheritedFromMain,
   exportsUntouchedSinceMain,
+  frozenExport,
   inheritedNotice,
 } from "./lib/sealed-export.mjs";
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -368,7 +369,6 @@ export function referenceInputs(root = ROOT) {
     "Cargo.lock",
     "src-tauri/Cargo.toml",
     "src-tauri/build.rs",
-    CATALOG,
     "src-tauri/crates/codesense-pty-core/src/agent_cli/codex.rs",
     "src-tauri/crates/codesense-pty-core/src/agent_cli/claude.rs",
     ...candidates,
@@ -412,7 +412,9 @@ function sealDrift(root) {
     };
 
   const seal = json(SEAL, root);
-  const previousInputs = seal.inputs ?? {};
+  // The catalog left the seal's inputs (Node renders it into mcp-tools.json); a seal exported
+  // before that still lists it, which is not drift.
+  const { [CATALOG]: _catalog, ...previousInputs } = seal.inputs ?? {};
   const addedInputs = Object.keys(currentInputs).filter((path) => !(path in previousInputs));
   const removedInputs = Object.keys(previousInputs).filter((path) => !(path in currentInputs));
   const changedInputs = Object.keys(currentInputs).filter(
@@ -645,7 +647,7 @@ export function generateReference(
     let untouched = !check;
     if (check && allowStaleExport) {
       try {
-        const exports = [SEAL, ...PROFILES.map(payloadPath)];
+        const exports = frozenExport(`${CONTENT}/generated/mcp-tools`);
         untouched =
           exportsUntouchedSinceMain(
             root,

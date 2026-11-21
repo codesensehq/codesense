@@ -2,6 +2,22 @@
 // Shared by the two sealed Cargo exports (MCP reference, live-data contract).
 import { execFileSync, spawnSync } from "node:child_process";
 
+const GENERATED = "codesense-docs/getting-started/content/generated";
+// The one list of cargo-written exports, for every reader. PRs leave these alone and maintainers
+// refresh them; the files Node renders from them (mcp-tools.json, generated/schemas/*.schema.json,
+// the routine-yml.html field rows, the html pages) stay editable in a PR.
+export const FROZEN_EXPORTS = Object.freeze([
+  `${GENERATED}/live-data-contract.json`,
+  `${GENERATED}/live-data-contract.inputs.json`,
+  `${GENERATED}/mcp-tools.default.json`,
+  `${GENERATED}/mcp-tools.dashboard-publish.json`,
+  `${GENERATED}/mcp-tools.inputs.json`,
+  "src-tauri/src/docs_schemas.generated.json",
+]);
+// One export's frozen files: those named `<prefix>.*` or `<prefix>` itself.
+export const frozenExport = (prefix) =>
+  FROZEN_EXPORTS.filter((path) => path === prefix || path.startsWith(`${prefix}.`));
+
 // `gen:docs:check:pr` sets the env var: the PR gate tolerates input-only and inherited drift,
 // whether a PR left the exports alone or re-exported before main moved inputs it did not touch.
 // Strict `gen:docs:check` (the wave) leaves it unset.

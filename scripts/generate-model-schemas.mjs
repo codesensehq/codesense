@@ -11,6 +11,7 @@ import {
   diskGate,
   driftInheritedFromMain,
   exportsUntouchedSinceMain,
+  frozenExport,
 } from "./lib/sealed-export.mjs";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -94,7 +95,8 @@ export function modelSchemas(
     const tolerated =
       !check ||
       (allowStaleExport &&
-        (exportsUntouchedSinceMain(root, [FIXTURE]) || driftInheritedFromMain(root, stale)));
+        (exportsUntouchedSinceMain(root, frozenExport(FIXTURE)) ||
+          driftInheritedFromMain(root, stale)));
     if (!tolerated) throw new Error(staleMessage(stale));
     warn(`NOTICE: ${staleMessage(stale)}`);
   }

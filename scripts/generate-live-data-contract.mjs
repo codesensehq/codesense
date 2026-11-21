@@ -11,6 +11,7 @@ import {
   diskGate,
   driftInheritedFromMain,
   exportsUntouchedSinceMain,
+  frozenExport,
   inheritedNotice,
 } from "./lib/sealed-export.mjs";
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -97,7 +98,8 @@ export function checkContract(
   if (!check) return warn(`NOTICE: ${message(what)}`);
   const untouched =
     allowStaleExport &&
-    (exportsUntouchedSinceMain(root, [manifest, output]) || driftInheritedFromMain(root, drifted));
+    (exportsUntouchedSinceMain(root, frozenExport(output.slice(0, -".json".length))) ||
+      driftInheritedFromMain(root, drifted));
   if (untouched)
     return warn(payloadDrift ? inheritedNotice(root, message(what)) : `NOTICE: ${message(what)}`);
   throw new Error(message(what));

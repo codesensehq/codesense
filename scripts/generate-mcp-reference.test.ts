@@ -148,6 +148,15 @@ describe("Node-only freshness and resolving teaching links", () => {
       git("-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "sealed");
       git("update-ref", "refs/remotes/origin/main", "HEAD");
       expect(() => generateReference(root, { check: true })).not.toThrow();
+      // A seal from before the catalog left its inputs still lists it; that is not drift.
+      const sealPath = join(root, SEAL_PATH);
+      const sealBytes = readFileSync(sealPath, "utf8");
+      const seal = JSON.parse(sealBytes);
+      expect(seal.inputs).not.toHaveProperty([CATALOG]);
+      seal.inputs[CATALOG] = "0".repeat(64);
+      writeFileSync(sealPath, JSON.stringify(seal, null, 2) + "\n");
+      expect(() => generateReference(root, { check: true })).not.toThrow();
+      writeFileSync(sealPath, sealBytes);
       writeFileSync(unrelated, "// unrelated backend edit\n");
       expect(() => generateReference(root, { check: true })).not.toThrow();
       writeFileSync(nested, "// JsonSchema nested DTO changed\n");
