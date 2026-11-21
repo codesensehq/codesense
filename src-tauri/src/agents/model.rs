@@ -48,6 +48,11 @@ pub struct McpAccess {
     /// requires both the wrapper and its target in this list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bridge_tools: Option<Vec<String>>,
+    /// Remote production servers only this agent reaches, read-only by
+    /// default, through a credential a person binds to this agent
+    /// ([`super::production`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub production: Vec<super::production::ProductionServer>,
     #[serde(flatten)]
     #[schemars(with = "BTreeMap<String, serde_json::Value>")]
     pub extra: BTreeMap<String, serde_yaml::Value>,
@@ -269,6 +274,18 @@ pub enum ValidationError {
     InvalidBridgeTool(String),
     DuplicateBridgeTool(String),
     BridgeToolsUnsupported,
+    /// A `mcp.production` name that is not a valid server name.
+    InvalidProductionServer(String),
+    /// A `mcp.production` name already used by `mcp.servers`, the bridge or
+    /// another production entry.
+    ProductionNameCollision(String),
+    /// Two `mcp.production` entries use one credential ref.
+    DuplicateProductionRef(String),
+    /// A `mcp.production` entry's URL, credential or `write` is refused.
+    InvalidProduction {
+        server: String,
+        why: String,
+    },
     InvalidSkill(String),
     DuplicateSkill(String),
     InvalidStartupPath(StartupPathError),
@@ -342,6 +359,21 @@ impl fmt::Display for ValidationError {
                 "mcp.bridge_tools is supported only for {} agents",
                 bridge_tool_runtimes()
             ),
+            Self::InvalidProductionServer(name) => write!(
+                f,
+                "production MCP server name {name:?} must be 1-64 lowercase letters, digits or '-'"
+            ),
+            Self::ProductionNameCollision(name) => write!(
+                f,
+                "production MCP server {name:?} collides with another MCP server name"
+            ),
+            Self::DuplicateProductionRef(reference) => write!(
+                f,
+                "credential ref {reference:?} is used by two production MCP servers"
+            ),
+            Self::InvalidProduction { server, why } => {
+                write!(f, "production MCP server {server:?}: {why}")
+            }
             Self::InvalidSkill(name) => write!(f, "skill {name:?} must be a skill name of 1-128 ASCII letters, digits, '_', '-' or ':'"),
             Self::DuplicateSkill(name) => write!(f, "skill {name:?} is listed twice"),
             Self::InvalidStartupPath(e) => write!(f, "{e}"),
@@ -698,6 +730,7 @@ impl Agent {
                 return Err(ValidationError::DuplicateMcpServer(server.clone()));
             }
         }
+        self.validate_production(&servers)?;
         self.startup_paths()?;
         if let Some(tools) = &self.mcp.bridge_tools {
             let desktop = crate::agents::adapter::desktop(self.runtime);
@@ -729,6 +762,37 @@ impl Agent {
             normalize_entries(context).map_err(ValidationError::InvalidContext)?;
         }
         self.validate_permissions()
+    }
+
+    /// `mcp.production`: each entry's own checks, and names and refs unique
+    /// across the agent. Off macOS a save still passes, so a teammate there can
+    /// edit the agent; preview and launch refuse it.
+    fn validate_production(&self, servers: &BTreeSet<&str>) -> Result<(), ValidationError> {
+        let mut names = BTreeSet::new();
+        let mut refs = BTreeSet::new();
+        for entry in &self.mcp.production {
+            if !super::production::is_valid_name(&entry.name) {
+                return Err(ValidationError::InvalidProductionServer(entry.name.clone()));
+            }
+            if entry.name == BRIDGE_SERVER
+                || servers.contains(entry.name.as_str())
+                || !names.insert(entry.name.as_str())
+            {
+                return Err(ValidationError::ProductionNameCollision(entry.name.clone()));
+            }
+            entry
+                .check()
+                .map_err(|why| ValidationError::InvalidProduction {
+                    server: entry.name.clone(),
+                    why,
+                })?;
+            if !refs.insert(entry.credential.reference.as_str()) {
+                return Err(ValidationError::DuplicateProductionRef(
+                    entry.credential.reference.clone(),
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Only the block of the agent's own runtime applies; any other is carried untouched.

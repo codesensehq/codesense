@@ -54,6 +54,7 @@ pub mod model;
 pub mod paths;
 pub mod permissions;
 pub mod prepare;
+pub mod production;
 pub(crate) mod product_bootstrap;
 pub mod provides;
 pub(crate) mod remote_launch;

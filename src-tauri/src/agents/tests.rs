@@ -100,6 +100,7 @@ fn agent(id: &str) -> Agent {
         launch: LaunchMode::Foreground,
         mcp: McpAccess {
             bridge_tools: None,
+            production: Vec::new(),
             servers: vec!["slack".into(), "github".into()],
             extra: BTreeMap::new(),
         },
@@ -279,6 +280,208 @@ fn an_env_value_that_is_not_a_string_is_a_validation_error_naming_it() {
     let def = yaml("id: x\nname: X\nruntime: claude\nrevision: 1\nenv:\n  MODE: 0755\n");
     def.validate().unwrap();
     assert_eq!(def.env.get("MODE").map(String::as_str), Some("0755"));
+}
+
+/// An agent with one `mcp.production` entry whose body is `entry` (indented
+/// under the list item).
+fn production_yaml(entry: &str) -> String {
+    let body = entry
+        .lines()
+        .map(|line| format!("      {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "id: x\nname: X\nruntime: claude\nrevision: 1\nmcp:\n  servers: [slack]\n  production:\n    - {}\n",
+        body.trim_start()
+    )
+}
+
+const PRODUCTION_ENTRY: &str = "name: logs
+url: https://mcp.example.com/api/mcp?toolsets=logs,metrics
+credential: {ref: logs-read, headers: [X-Api-Key, X-App-Key]}
+write: [create_note]";
+
+#[test]
+fn production_field_rejects_literal_secret_and_unknown_ref() {
+    use super::production::ProductionServer;
+    // Accepted: an https URL with a `toolsets` query, two header names, one write tool.
+    let def = yaml(&production_yaml(PRODUCTION_ENTRY));
+    def.validate().unwrap();
+    let entry: &ProductionServer = &def.mcp.production[0];
+    assert_eq!(entry.credential.reference, "logs-read");
+    assert_eq!(entry.write, vec!["create_note".to_string()]);
+    // It round-trips, and an agent without it serializes no `production` key.
+    let text = serde_yaml::to_string(&def).unwrap();
+    assert_eq!(serde_yaml::from_str::<Agent>(&text).unwrap(), def);
+    let plain = serde_yaml::to_string(&agent("x")).unwrap();
+    assert!(!plain.contains("production"), "{plain}");
+
+    // Refused by the shape itself: stdio fields and literal value maps.
+    for (case, extra) in [
+        ("command", "command: npx"),
+        ("args", "args: [server.js]"),
+        ("env map", "env: {API_KEY: x}"),
+        ("headers map", "headers: {X-Api-Key: x}"),
+    ] {
+        let text = production_yaml(&format!("{PRODUCTION_ENTRY}\n{extra}"));
+        assert!(
+            serde_yaml::from_str::<Agent>(&text).is_err(),
+            "{case} must not parse"
+        );
+    }
+    let values_in_credential = production_yaml(
+        "name: logs\nurl: https://mcp.example.com/mcp\ncredential: {ref: logs-read, headers: {X-Api-Key: x}}",
+    );
+    assert!(serde_yaml::from_str::<Agent>(&values_in_credential).is_err());
+    let value_beside_ref = production_yaml(
+        "name: logs\nurl: https://mcp.example.com/mcp\ncredential: {ref: logs-read, headers: [X-Api-Key], value: x}",
+    );
+    assert!(serde_yaml::from_str::<Agent>(&value_beside_ref).is_err());
+
+    // Refused by validation, each naming the server.
+    let invalid = |entry: &str| yaml(&production_yaml(entry)).validate().expect_err(entry);
+    let why = |entry: &str| match invalid(entry) {
+        ValidationError::InvalidProduction { server, why } => {
+            assert_eq!(server, "logs");
+            why
+        }
+        other => panic!("{entry}: {other:?}"),
+    };
+    let with_url = |url: &str| {
+        format!("name: logs\nurl: {url}\ncredential: {{ref: logs-read, headers: [X-Api-Key]}}")
+    };
+    assert!(why(&with_url("http://mcp.example.com/mcp")).contains("https"));
+    assert!(why(&with_url("https://user:pw@mcp.example.com/mcp")).contains("user info"));
+    assert!(why(&with_url("https://user@mcp.example.com/mcp")).contains("user info"));
+    assert!(why(&with_url("https://mcp.example.com/mcp#frag")).contains("fragment"));
+    for key in [
+        "token",
+        "api_key",
+        "apiKey",
+        "API-KEY",
+        "secret",
+        "password",
+        "passwd",
+        "auth",
+        "bearer",
+        "credential",
+        "signature",
+        "sig",
+        "X-Amz-Signature",
+    ] {
+        let refused = why(&with_url(&format!(
+            "https://mcp.example.com/mcp?toolsets=a&{key}=x"
+        )));
+        assert!(refused.contains("looks like a secret"), "{key}: {refused}");
+    }
+    let with_headers = |headers: &str| {
+        format!("name: logs\nurl: https://mcp.example.com/mcp\ncredential: {{ref: logs-read, headers: {headers}}}")
+    };
+    assert!(why(&with_headers("[]")).contains("at least one"));
+    assert!(why(&with_headers("[A, B, C, D, E]")).contains("at most 4"));
+    assert!(why(&with_headers("[X-Api-Key, x-api-key]")).contains("twice"));
+    for reserved in ["Host", "content-type", "Accept", "Mcp-Session-Id"] {
+        assert!(
+            why(&with_headers(&format!("[{reserved}]"))).contains("transport"),
+            "{reserved}"
+        );
+    }
+    assert!(why(&with_headers("[\"bad header\"]")).contains("not valid"));
+    // An unknown ref: not a ref this store can hold.
+    for reference in ["\"\"", "Logs_Read", "\"../x\"", "a/b"] {
+        let entry = format!(
+            "name: logs\nurl: https://mcp.example.com/mcp\ncredential: {{ref: {reference}, headers: [X-Api-Key]}}"
+        );
+        assert!(why(&entry).contains("unknown"), "{reference}");
+    }
+    assert!(why(&format!(
+        "{}\nwrite: [a, a]",
+        with_url("https://mcp.example.com/mcp")
+    ))
+    .contains("twice"));
+
+    // Name rules: a valid name, unique across mcp.servers, the bridge and production.
+    for name in ["slack", "codesense"] {
+        let entry = PRODUCTION_ENTRY.replacen("name: logs", &format!("name: {name}"), 1);
+        assert_eq!(
+            invalid(&entry),
+            ValidationError::ProductionNameCollision(name.into())
+        );
+    }
+    let entry = PRODUCTION_ENTRY.replacen("name: logs", "name: Logs__x", 1);
+    assert_eq!(
+        invalid(&entry),
+        ValidationError::InvalidProductionServer("Logs__x".into())
+    );
+    let mut twice = yaml(&production_yaml(PRODUCTION_ENTRY));
+    twice.mcp.production.push(twice.mcp.production[0].clone());
+    assert_eq!(
+        twice.validate().unwrap_err(),
+        ValidationError::ProductionNameCollision("logs".into())
+    );
+    twice.mcp.production[1].name = "logs-two".into();
+    assert_eq!(
+        twice.validate().unwrap_err(),
+        ValidationError::DuplicateProductionRef("logs-read".into())
+    );
+}
+
+#[test]
+fn production_fingerprint_and_binding_cover_rule() {
+    use super::production::{covers, Pending, ProductionServer};
+    let def = yaml(&production_yaml(PRODUCTION_ENTRY));
+    let entry = &def.mcp.production[0];
+    let agent_id = "acme/api/backend/x";
+    let print = entry.fingerprint(agent_id);
+    assert_eq!(print.len(), 64);
+    // Header case and list order do not change it; every declared field does.
+    let mut same = entry.clone();
+    same.credential.headers = vec!["x-app-key".into(), "x-api-key".into()];
+    assert_eq!(same.fingerprint(agent_id), print);
+    assert_ne!(entry.fingerprint("acme/api/frontend/x"), print);
+    let changes: [fn(&mut ProductionServer); 5] = [
+        |e| e.name = "other".into(),
+        |e| e.credential.reference = "other".into(),
+        |e| e.url.push_str("&x=1"),
+        |e| drop(e.credential.headers.pop()),
+        |e| e.write.push("delete".into()),
+    ];
+    for change in changes {
+        let mut changed = entry.clone();
+        change(&mut changed);
+        assert_ne!(changed.fingerprint(agent_id), print);
+    }
+
+    let bound = entry.binding_for(agent_id);
+    assert_eq!(
+        covers(Some(&bound), agent_id, entry).unwrap(),
+        entry.write_set()
+    );
+    assert_eq!(covers(None, agent_id, entry), Err(Pending::Unbound));
+    assert_eq!(
+        covers(Some(&bound), "acme/api/backend/y", entry),
+        Err(Pending::OtherAgent)
+    );
+    let mut moved = entry.clone();
+    moved.url = "https://elsewhere.example.com/mcp".into();
+    assert_eq!(covers(Some(&bound), agent_id, &moved), Err(Pending::Url));
+    let mut renamed = entry.clone();
+    renamed.credential.headers = vec!["X-Api-Key".into()];
+    assert_eq!(
+        covers(Some(&bound), agent_id, &renamed),
+        Err(Pending::Headers)
+    );
+    let mut widened = entry.clone();
+    widened.write.push("delete_monitor".into());
+    assert_eq!(
+        covers(Some(&bound), agent_id, &widened),
+        Err(Pending::Write)
+    );
+    let mut narrowed = entry.clone();
+    narrowed.write.clear();
+    assert!(covers(Some(&bound), agent_id, &narrowed)
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
@@ -493,6 +696,7 @@ fn every_validation_error_is_typed() {
             Agent {
                 mcp: McpAccess {
                     bridge_tools: None,
+                    production: Vec::new(),
                     servers: vec!["".into()],
                     extra: BTreeMap::new(),
                 },
@@ -504,6 +708,7 @@ fn every_validation_error_is_typed() {
             Agent {
                 mcp: McpAccess {
                     bridge_tools: None,
+                    production: Vec::new(),
                     servers: vec!["slack".into(), "slack".into()],
                     extra: BTreeMap::new(),
                 },
@@ -515,6 +720,7 @@ fn every_validation_error_is_typed() {
             Agent {
                 mcp: McpAccess {
                     bridge_tools: None,
+                    production: Vec::new(),
                     servers: vec!["codesense".into()],
                     extra: BTreeMap::new(),
                 },

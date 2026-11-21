@@ -303,6 +303,7 @@ fn codex_triage(home: &std::path::Path) -> (AgentKey, String) {
             args: vec!["--model".into(), "gpt-5".into()],
             mcp: crate::agents::model::McpAccess {
                 bridge_tools: None,
+                production: Vec::new(),
                 servers: vec!["slack".into()],
                 extra: Default::default(),
             },
@@ -789,7 +790,10 @@ fn an_older_coordinator_file_gains_the_runs_agent_column() {
     let store = RoutineStateStore::open_at(&path).unwrap();
     let before = store.run("before").unwrap().unwrap();
     assert_eq!(before.agent, None);
-    assert_eq!(before.detail, None, "a run from before the column reads no detail");
+    assert_eq!(
+        before.detail, None,
+        "a run from before the column reads no detail"
+    );
     assert_eq!(before.phase, "succeeded");
 }
 

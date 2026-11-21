@@ -361,6 +361,16 @@ pub struct AgentDraft {
         deserialize_with = "crate::mcp::routine_tools::deserialize_patch"
     )]
     pub mcp_bridge_tools: Option<Option<Vec<String>>>,
+    /// Remote production MCP servers only this agent reaches (agent.yaml
+    /// `mcp.production`): each `{name, url, credential: {ref, headers: [name]},
+    /// write: [tool]}`. `url` must be https and is public (stored in git): never
+    /// put a secret in it. Header names only, never values: a person binds the
+    /// values to this agent in the CodeSense app, and the server stays
+    /// `productionPending` until then. Read-only by default: only tools the
+    /// server marks `readOnlyHint` (and not `destructiveHint`) are callable, plus
+    /// `write` tools the binding also allows. macOS only. Default none.
+    #[serde(default, alias = "mcp_production")]
+    pub mcp_production: Option<Vec<crate::agents::production::ProductionServer>>,
     /// The skills a launch offers, by name (e.g. `["bmad-build"]`); null/omitted
     /// offers every skill the workspace has. A Claude launch turns off every other
     /// skill its startup places or the workspace's `.claude/skills/` holds, context
@@ -553,6 +563,12 @@ pub struct AgentUpdateParams {
         deserialize_with = "crate::mcp::routine_tools::deserialize_patch"
     )]
     pub mcp_bridge_tools: Option<Option<Vec<String>>>,
+    /// Replaces the production MCP servers whole; `[]` clears them. A change to
+    /// an entry's `url` or header names, or a `write` tool added, makes it
+    /// `productionPending` until a person binds it again; removing a `write`
+    /// tool narrows it at once.
+    #[serde(default, alias = "mcp_production")]
+    pub mcp_production: Option<Vec<crate::agents::production::ProductionServer>>,
     /// Replaces the skill allowlist. Omit to keep it, null to offer every skill.
     #[serde(
         default,
@@ -994,6 +1010,10 @@ fn field_of(e: &ValidationError) -> Option<String> {
         ValidationError::InvalidBridgeTool(_)
         | ValidationError::DuplicateBridgeTool(_)
         | ValidationError::BridgeToolsUnsupported => "mcpBridgeTools".into(),
+        ValidationError::InvalidProductionServer(_)
+        | ValidationError::ProductionNameCollision(_)
+        | ValidationError::DuplicateProductionRef(_)
+        | ValidationError::InvalidProduction { .. } => "mcpProduction".into(),
         ValidationError::InvalidSkill(_) | ValidationError::DuplicateSkill(_) => {
             "skillAllowlist".into()
         }
@@ -1249,6 +1269,7 @@ fn draft_agent(
         mcp: McpAccess {
             servers: draft.mcp_servers.unwrap_or_default(),
             bridge_tools: draft.mcp_bridge_tools.flatten(),
+            production: draft.mcp_production.unwrap_or_default(),
             ..McpAccess::default()
         },
         startup: draft.startup.unwrap_or_default(),
@@ -1656,6 +1677,7 @@ fn draft_fields(draft: &AgentDraft) -> Vec<&'static str> {
     given(draft.launch.is_some(), "launch");
     given(draft.mcp_servers.is_some(), "mcpServers");
     given(draft.mcp_bridge_tools.is_some(), "mcpBridgeTools");
+    given(draft.mcp_production.is_some(), "mcpProduction");
     given(draft.skill_allowlist.is_some(), "skillAllowlist");
     given(draft.startup.is_some(), "startup");
     given(draft.context.is_some(), "context");
@@ -1897,6 +1919,9 @@ fn patched(mut agent: Agent, params: AgentUpdateParams) -> Result<Agent, Refusal
     }
     if let Some(tools) = params.mcp_bridge_tools {
         agent.mcp.bridge_tools = tools;
+    }
+    if let Some(production) = params.mcp_production {
+        agent.mcp.production = production;
     }
     if let Some(skills) = params.skill_allowlist {
         agent.skill_allowlist = skills;

@@ -114,6 +114,7 @@ pub(crate) fn draft(id: &str, runtime: AgentCli) -> Agent {
         launch: LaunchMode::Foreground,
         mcp: McpAccess {
             bridge_tools: None,
+            production: Vec::new(),
             servers: vec!["slack".into()],
             extra: BTreeMap::new(),
         },
@@ -627,6 +628,7 @@ fn unknown_mcp_servers_are_reported_and_a_stale_lock_file_adds_none() {
         Agent {
             mcp: McpAccess {
                 bridge_tools: None,
+                production: Vec::new(),
                 servers: vec![
                     "slack".into(),
                     "github".into(),
@@ -791,6 +793,7 @@ fn an_agent_naming_a_server_the_team_does_not_offer_gets_a_dropped_warning() {
         Agent {
             mcp: McpAccess {
                 bridge_tools: None,
+                production: Vec::new(),
                 servers: vec!["slack".into(), "atlassian".into()],
                 extra: BTreeMap::new(),
             },
