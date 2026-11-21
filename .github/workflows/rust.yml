@@ -653,6 +653,13 @@ jobs:
           read -r -a packages <<< "$RUST_PACKAGES"
           cargo test --doc "${packages[@]}" --no-fail-fast \
           2>&1 | tee "$RUNNER_TEMP/rust-ci-logs/cargo-doctest.log"
+      - name: Test the spawn's OS rules
+        # The agent spawn's Windows argv and saved-Agent variable rules take the OS as an
+        # argument, so Linux runs them too. A filter that matches no test passes in libtest, so
+        # the step fails unless one ran.
+        run: |
+          cargo test --locked -p codesense-pty-core --lib spawn::tests::os_rules:: 2>&1 | tee "$RUNNER_TEMP/rust-ci-logs/spawn-os-rules.log"
+          grep -Eq '^test result: ok\. [1-9][0-9]* passed' "$RUNNER_TEMP/rust-ci-logs/spawn-os-rules.log"
       - name: Upload JUnit report
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -973,6 +980,13 @@ jobs:
         run: |
           cargo test --locked -p codesense-pty-core --lib runner::cursor_reply:: 2>&1 | tee "$RUNNER_TEMP/cursor-reply-tests.log"
           grep -Eq '^test result: ok\. [1-9][0-9]* passed' "$RUNNER_TEMP/cursor-reply-tests.log"
+      - name: Test the spawn's OS rules
+        # The agent spawn's Windows argv (npm shims, the final .exe check) and saved-Agent
+        # variable rules. A filter that matches no test passes in libtest, so the step fails
+        # unless one ran.
+        run: |
+          cargo test --locked -p codesense-pty-core --lib spawn::tests::os_rules:: 2>&1 | tee "$RUNNER_TEMP/spawn-os-rules-tests.log"
+          grep -Eq '^test result: ok\. [1-9][0-9]* passed' "$RUNNER_TEMP/spawn-os-rules-tests.log"
       - name: Build the emulator worker
         # After Rust: the script takes the host triple from rustc.
         run: pnpm run build:emulator
