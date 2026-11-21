@@ -24,7 +24,7 @@
 | Configure the roles registry | `role_save`, `roles_list`, `role_state` | [Role configuration](arc-f-inboxes-and-triage/roles.html#configuration) |
 | Group workspaces | `workspace_group_create`, `workspace_group_add`, `workspace_group_list` | [Workspace group tools](generated/mcp-tools.json) |
 | Create and verify a canvas | `apply_canvas`, `render_canvas` | [Canvas tools](generated/mcp-tools.json) |
-| Send a GIF, meme or document attachment; configure remote media | `send_message`, `reply` | [Send a GIF or image](arc-f-inboxes-and-triage/messages.html#send-media) |
+| Find and send a GIF, meme or document attachment; configure remote media | `gif_search`, `send_message`, `reply` | [Send a GIF or image](arc-f-inboxes-and-triage/messages.html#send-media) |
 | Keep a badge fresh while hidden | `get_live_data_contract` | [Live pane badges, with the Inbox example](arc-i-dashboard-primitives/reacting-to-state.html#live-badge) |
 | See which Claude or Codex account a launch uses, or why one was refused | `list_agent_accounts`, `resolve_agent_account`, `agent_get` | [Agent accounts](arc-e-agents/agent-accounts.html) |
 | Set or review an agent or fresh routine's spend cap | `agent_update`, `routine_update` | [Spend caps](arc-e-agents/spend-caps.html) |
