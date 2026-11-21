@@ -85,6 +85,19 @@ describe("Settings → Shortcuts with PDF export off", () => {
     expect(within(screen.getByTestId(EXPORT_ROW)).queryByRole("note")).toBeNull();
   });
 
+  it("on Linux with the capability on, shows the chord and an Edit that works", () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux x86_64");
+    setPlatformCaps();
+    render(<ShortcutsSection query="" />);
+    const row = screen.getByTestId(EXPORT_ROW);
+    expect(within(row).getByTestId(`${EXPORT_ROW}-current`)).toHaveTextContent("Ctrl+Shift+E");
+    expect(within(row).queryByRole("note")).toBeNull();
+    const edit = within(row).getByTestId(`${EXPORT_ROW}-edit`);
+    expect(edit).not.toHaveAttribute("aria-disabled");
+    fireEvent.click(edit);
+    expect(within(row).getByTestId(`${EXPORT_ROW}-capture`)).toBeInTheDocument();
+  });
+
   it("keeps a dashboard command's row though its available() is false", () => {
     setPlatformCaps(OFF);
     render(<ShortcutsSection query="" />);

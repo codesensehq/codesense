@@ -60,6 +60,35 @@ test("check-listing: a missing sidecar, a wrong app binary or an extra file in /
   );
 });
 
+// What `find squashfs-root` prints for the extracted AppImage, around GTK's print backends.
+const appimageListing = (backend) => [
+  "/out/squashfs-root",
+  "/out/squashfs-root/usr/bin/codesense",
+  "/out/squashfs-root/usr/lib/gtk-3.0/3.0.0/printbackends",
+  "/out/squashfs-root/usr/lib/gtk-3.0/3.0.0/printbackends/libprintbackend-cups.so",
+  `/out/squashfs-root/usr/lib/gtk-3.0/3.0.0/printbackends/${backend}`,
+];
+
+test("print-backend: the AppImage holds GTK's file print backend", () => {
+  const result = smoke("print-backend", fixture(appimageListing("libprintbackend-file.so")));
+  passes(result);
+  assert.match(
+    result.stdout,
+    /usr\/lib\/gtk-3\.0\/3\.0\.0\/printbackends\/libprintbackend-file\.so/,
+  );
+});
+
+test("print-backend: an AppImage without it, or with it outside printbackends, fails", () => {
+  fails(
+    smoke("print-backend", fixture(appimageListing("libprintbackend-lpr.so"))),
+    /no GTK file print backend/,
+  );
+  fails(
+    smoke("print-backend", fixture(["/out/squashfs-root/usr/lib/libprintbackend-file.so"])),
+    /no GTK file print backend/,
+  );
+});
+
 test("same-resources: the deb and the rpm must ship the same starship and git-ai", () => {
   const starship = "/usr/lib/CodeSense/resources/starship";
   const gitAi = "/usr/lib/CodeSense/resources/git-ai";

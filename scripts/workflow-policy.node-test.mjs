@@ -461,7 +461,7 @@ test("rust.yml's Linux app job runs the credential store tests under a session b
   const libs = job.steps.find((step) => step.name === "Install system libraries");
   assert.match(
     libs.run,
-    /^bash scripts\/install-linux-app-libs\.sh dbus gnome-keyring libsecret-tools$/,
+    /^bash scripts\/install-linux-app-libs\.sh dbus gnome-keyring libsecret-tools xvfb xauth language-pack-gnome-de-base language-pack-de poppler-utils$/,
   );
   // One apt list for every Linux job that builds the app.
   assert.equal(
@@ -505,6 +505,26 @@ test("rust.yml's Linux app job runs the credential store tests under a session b
       "cargo nextest run --profile ci --locked -p codesense-pty-core --lib -E 'test(/^runner::cursor_reply::/)'\n",
   );
   assert.ok(!workflow.jobs["flaky-issues"].needs.includes("rust-linux-app"));
+});
+
+// PDF export's renderer tests are ignored without a display: this job runs them, and only them,
+// on a virtual display with a German locale generated for the translation test.
+test("rust.yml's Linux app job runs PDF export's renderer tests under xvfb", () => {
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  const job = workflow.jobs["rust-linux-app"];
+  const pdf = job.steps.find(
+    (step) => step.name === "Test PDF export's renderer on a virtual display",
+  );
+  assert.ok(pdf, "the PDF renderer step");
+  assert.deepEqual(pdf.env, { WEBKIT_DISABLE_DMABUF_RENDERER: "1" });
+  assert.equal(
+    pdf.run,
+    "sudo locale-gen de_DE.UTF-8\n" +
+      "xvfb-run -a cargo nextest run --profile ci --locked -p codesense --lib --retries 0 \\\n" +
+      "  --run-ignored all -E 'test(/^commands::export_pdf::render::tests::/)'\n",
+  );
+  const names = job.steps.map((step) => step.name);
+  assert.ok(names.indexOf("Compile the app's tests") < names.indexOf(pdf.name));
 });
 
 // A push diffs before..after; a new branch tip (before all zeros) tests everything.
