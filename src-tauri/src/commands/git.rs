@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::system::contexts_dir;
+use crate::shared::opener;
 
 /// Sanitize a repo path into a safe directory name.
 fn sanitize_repo_name(repo_path: &str) -> Result<String, String> {
@@ -85,11 +86,28 @@ pub async fn reveal_path(path: String) -> Result<(), String> {
     crate::commands::await_blocking("reveal_path", move || {
         let home = crate::commands::paths::codesense_home_dir()
             .ok_or_else(|| "codesense home unavailable".to_string())?;
-        let target = reveal_target(&path, &home)?;
-        crate::shared::opener::open(crate::shared::opener::Open::Folder(&target))
+        // Only the kind of request matters to the facts: a folder.
+        let facts = opener::HostFacts::gather(&opener::Open::Folder(std::path::Path::new(&path)));
+        let launches =
+            reveal_launches(std::env::consts::OS, &path, &home, &facts, &opener::HostFs)?;
+        opener::spawn_first(&launches, &opener::HostSpawn)
             .map_err(|e| format!("failed to open the file manager: {e}"))
     })
     .await
+}
+
+/// The launchers that reveal `path` on `os`, each given exactly the canonical path
+/// [`reveal_target`] checked against the managed roots, never the spelled one.
+fn reveal_launches(
+    os: &str,
+    path: &str,
+    home: &std::path::Path,
+    facts: &opener::HostFacts,
+    fs: &dyn opener::Fs,
+) -> Result<Vec<opener::Launch>, String> {
+    let target = reveal_target(path, home)?;
+    opener::plans(os, opener::Open::Folder(&target), facts, fs)
+        .map_err(|e| format!("failed to open the file manager: {e}"))
 }
 
 /// The folder `path` names, canonicalized, if it lives under a
