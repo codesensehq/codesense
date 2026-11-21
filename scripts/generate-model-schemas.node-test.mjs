@@ -23,6 +23,7 @@ import {
   queuedExport,
   schemaFields,
 } from "./generate-model-schemas.mjs";
+import { strictExports } from "./lib/sealed-export.mjs";
 
 // A scratch checkout holding the fixture, its sources and the Node outputs, with origin/main at
 // its first commit, so the PR gate's "untouched since main" rule runs against real git.
@@ -71,7 +72,7 @@ test("a stale fixture fails the strict check, and write mode and the PR gate ren
     const before = readFileSync(join(root, FIXTURE), "utf8");
     assert.throws(
       () => generate(true, { root }),
-      /fixture is stale: src-tauri\/src\/routines\/model.rs/,
+      /fixture is stale: (?:\S+, )*src-tauri\/src\/routines\/model.rs/,
     );
     for (const options of [{}, { check: true, allowStaleExport: true }]) {
       const notices = [];
@@ -80,7 +81,7 @@ test("a stale fixture fails the strict check, and write mode and the PR gate ren
       );
       assert.match(
         notices.join("\n"),
-        /^NOTICE: Model schema fixture is stale: src-tauri\/src\/routines\/model.rs/,
+        /^NOTICE: Model schema fixture is stale: (?:\S+, )*src-tauri\/src\/routines\/model.rs/,
       );
     }
     assert.equal(readFileSync(join(root, FIXTURE), "utf8"), before, "never rehash the fixture");
@@ -129,16 +130,49 @@ test("verifySources is the strict freshness check and never rehashes the fixture
       ? bytes.replace("pub name: String,", "pub name: String,\n    pub newly_added_field: String,")
       : bytes;
   };
-  assert.deepEqual(staleSources(fixture, mutated), [MODEL]);
+  // Only the mutation is new: main's fixture may already lag a source this branch changed.
+  const lagging = staleSources(fixture);
+  assert.deepEqual(
+    staleSources(fixture, mutated).filter((path) => !lagging.includes(path)),
+    [MODEL],
+  );
   assert.throws(
     () => verifySources(fixture, mutated),
-    /fixture is stale: src-tauri\/src\/routines\/model.rs/,
+    /fixture is stale: (?:\S+, )*src-tauri\/src\/routines\/model.rs/,
   );
   assert.equal(readFileSync(path, "utf8"), bytes, "freshness checks never rehash the fixture");
 });
 
+// The pin on the committed fixture: strict with CS_STRICT_EXPORTS=1, else a stale fixture is a notice.
+const pinnedModels = () => modelSchemas(ROOT, { check: strictExports(), warn: () => {} });
+
+test("the model pin is strict only with CS_STRICT_EXPORTS=1", () => {
+  const root = scratchRoot();
+  try {
+    addField(root);
+    const run = (env) =>
+      spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `import { modelSchemas } from ${JSON.stringify(join(ROOT, "scripts/generate-model-schemas.mjs"))};
+           import { strictExports } from ${JSON.stringify(join(ROOT, "scripts/lib/sealed-export.mjs"))};
+           modelSchemas(${JSON.stringify(root)}, { check: strictExports(), warn: () => {} });`,
+        ],
+        { encoding: "utf8", env: { ...process.env, CS_STRICT_EXPORTS: env } },
+      );
+    assert.equal(run("").status, 0, run("").stderr);
+    const strict = run("1");
+    assert.notEqual(strict.status, 0);
+    assert.match(strict.stderr, /fixture is stale: (?:\S+, )*src-tauri\/src\/routines\/model.rs/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("the browser rows retain all root fields and nested custom wire shapes", () => {
-  const models = modelSchemas();
+  const models = pinnedModels();
   for (const model of Object.values(models)) {
     for (const key of Object.keys(model.schema.properties))
       assert.ok(

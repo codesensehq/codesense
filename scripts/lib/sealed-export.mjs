@@ -8,6 +8,11 @@ import { execFileSync, spawnSync } from "node:child_process";
 export const allowStaleExport = (argv = process.argv, env = process.env) =>
   argv.includes("--allow-stale-export") || env.DOCS_ALLOW_STALE_EXPORT === "1";
 
+// The export pins (the Rust, Vitest and Node tests that compare a committed export with its
+// source) compare strictly only with CS_STRICT_EXPORTS=1. PRs leave the cargo-written exports alone,
+// so without it a stale export is a notice. The regenerate run and the nightly probe set it.
+export const strictExports = (env = process.env) => env.CS_STRICT_EXPORTS === "1";
+
 // The refresh command shown to the user, with the CI route for a checkout without a Rust build. A
 // template literal stays on the `=` line at any length, so a longer or shorter command keeps the
 // same formatting.
