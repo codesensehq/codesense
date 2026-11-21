@@ -93,14 +93,14 @@ export function schemaFields(root) {
 }
 // A stale fixture: write mode (`pnpm gen:docs`, and build.rs through generate-yaml-schemas) renders
 // from the committed fixture with a notice. So does the PR gate (`allowStaleExport`) while this PR
-// leaves the fixture as main has it, or the drift is main's; strict check mode throws, and so does
-// write mode when `strict` (CS_STRICT_EXPORTS=1, the refresh run).
+// leaves the fixture as main has it, or the drift is main's; strict check mode throws. `strict`
+// (CS_STRICT_EXPORTS=1, the refresh run) makes write mode and the PR gate throw too.
 const tolerated = (root, stale, { check, allowStaleExport, strict }) =>
-  (!check && !strict) ||
-  (check &&
-    allowStaleExport &&
-    (exportsUntouchedSinceMain(root, frozenExport(FIXTURE)) ||
-      driftInheritedFromMain(root, stale)));
+  !strict &&
+  (!check ||
+    (allowStaleExport &&
+      (exportsUntouchedSinceMain(root, frozenExport(FIXTURE)) ||
+        driftInheritedFromMain(root, stale))));
 const readStale = (root) =>
   staleSources(JSON.parse(readFileSync(join(root, FIXTURE), "utf8")), (path) =>
     readFileSync(join(root, path)),

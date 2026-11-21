@@ -555,4 +555,11 @@ test("a stale schema fixture makes an unknown pack.yml property the stale source
   // Strict check mode and the refresh run explain nothing, whatever the fixture's state.
   assert.equal(staleSchemaExplainer({ check: true, env: {} }), null);
   assert.equal(staleSchemaExplainer({ check: false, env: { CS_STRICT_EXPORTS: "1" } }), null);
+  assert.equal(
+    staleSchemaExplainer({
+      check: true,
+      env: { DOCS_ALLOW_STALE_EXPORT: "1", CS_STRICT_EXPORTS: "1" },
+    }),
+    null,
+  );
 });

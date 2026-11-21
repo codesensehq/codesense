@@ -21,6 +21,7 @@ import {
   generate,
   verifySources,
   staleSources,
+  modelSchemas,
   pinnedModels,
   staleFixtureExplainer,
   queuedExport,
@@ -238,6 +239,15 @@ test("staleFixtureExplainer names the stale sources' identifiers under the same 
     assert.equal(staleFixtureExplainer(root, gate)("newly_added_field"), true);
     assert.equal(staleFixtureExplainer(root, { check: true, strict: false }), null, "strict check");
     assert.equal(staleFixtureExplainer(root, { strict: true }), null, "the refresh run");
+    assert.equal(
+      staleFixtureExplainer(root, { ...gate, strict: true }),
+      null,
+      "the PR gate under CS_STRICT_EXPORTS=1",
+    );
+    assert.throws(
+      () => modelSchemas(root, { ...gate, strict: true, warn: () => {} }),
+      /fixture is stale/,
+    );
     writeFileSync(join(root, FIXTURE), readFileSync(join(root, FIXTURE), "utf8") + "\n");
     assert.equal(staleFixtureExplainer(root, gate), null, "the PR touched the fixture");
   } finally {
