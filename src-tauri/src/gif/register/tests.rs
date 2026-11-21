@@ -17,8 +17,10 @@ const SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
 /// GIPHY's network as the tests need it: the random id call answers [`Wire::random`], a
 /// pingback answers [`Wire::ping_status`], a search answers no results. Every URL is kept.
-struct Wire {
+pub(crate) struct Wire {
     urls: Mutex<Vec<url::Url>>,
+    /// Every pingback waits this long first.
+    pub(crate) ping_delay: Mutex<Option<Duration>>,
     random: Mutex<Result<Reply, Failure>>,
     ping_status: Mutex<u16>,
     /// Runs while the random id call is in flight.
@@ -31,6 +33,7 @@ impl Wire {
             random: Mutex::new(Ok(reply(200, r#"{"data":{"random_id":"rid-123"}}"#))),
             ping_status: Mutex::new(200),
             during_random: Mutex::new(None),
+            ping_delay: Mutex::new(None),
         }
     }
     fn urls(&self) -> Vec<url::Url> {
@@ -43,7 +46,7 @@ impl Wire {
             .filter(|u| u.host_str() == Some("pingback.giphy.com"))
             .collect()
     }
-    fn actions(&self) -> Vec<String> {
+    pub(crate) fn actions(&self) -> Vec<String> {
         self.pings()
             .iter()
             .map(|u| pair(u, "action_type").unwrap_or_default())
@@ -81,19 +84,27 @@ impl Transport for Wire {
         } else {
             Ok(reply(200, r#"{"data":[]}"#))
         };
-        Box::pin(async move { answer })
+        let delay = *self.ping_delay.lock().unwrap();
+        Box::pin(async move {
+            if let Some(delay) = delay {
+                tokio::time::sleep(delay).await;
+            }
+            answer
+        })
     }
 }
 
-struct Harness {
+/// A registration over a temp data dir with a saved key, GIF search On, the [`Wire`] and a
+/// clock the test moves.
+pub(crate) struct Harness {
     dir: tempfile::TempDir,
-    wire: Arc<Wire>,
+    pub(crate) wire: Arc<Wire>,
     now: Arc<AtomicI64>,
     service: Arc<GifService>,
-    registration: Registration,
+    pub(crate) registration: Arc<Registration>,
 }
 impl Harness {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(FakeStore::default());
         store.set(ACCOUNT, &Secret::new(KEY)).unwrap();
@@ -114,7 +125,7 @@ impl Harness {
             adapters,
             clock.clone(),
         ));
-        let registration = Registration::new(service.clone(), wire.clone(), clock);
+        let registration = Arc::new(Registration::new(service.clone(), wire.clone(), clock));
         Self {
             dir,
             wire,
@@ -153,7 +164,7 @@ impl Harness {
             self.now(),
         );
     }
-    fn found_all(&self, id: &str) {
+    pub(crate) fn found_all(&self, id: &str) {
         self.found(id, all_pingbacks());
     }
     fn keys(&self) -> Keys {
@@ -263,9 +274,13 @@ async fn each_skip_sends_nothing() {
     );
     h.send(4, "g2", URL).await;
     assert!(h.wire.urls().is_empty(), "{:?}", h.wire.urls());
-    // An unbound send arms no onload, even once its fetch finishes.
+    // An unbound send arms no onload, even once its fetch finishes: its serve marks it.
     h.registration.note_fetched(&slot(3), Some(SHA), true);
-    assert!(h.registration.take_onloads(SHA).is_empty());
+    let taken = h.registration.take_onloads(SHA);
+    assert!(taken.iter().all(|(_, p)| p.onload.is_none()));
+    let settled = h.registration.settle_serve(vec![slot(3)], taken).await;
+    assert_eq!(settled.marks, vec![slot(3)]);
+    assert!(h.wire.urls().is_empty());
 }
 
 #[tokio::test]
@@ -286,7 +301,11 @@ async fn off_or_no_key_makes_no_call_and_turning_off_or_removing_the_key_deletes
     h.send(2, "g1", URL).await;
     let taken = h.registration.take_onloads(SHA);
     assert!(taken.is_empty(), "Off lets go of pending onloads");
-    let marks = h.registration.settle_serve(vec![slot(1)], taken).await;
+    let marks = h
+        .registration
+        .settle_serve(vec![slot(1)], taken)
+        .await
+        .marks;
     assert_eq!(marks, vec![slot(1)], "marked, so it never fires later");
     assert_eq!(
         h.wire.urls().len(),
@@ -411,7 +430,11 @@ async fn onload_fires_once_within_the_hour_from_the_send_not_the_search() {
     h.advance(30 * MINUTE);
     let taken = h.registration.take_onloads(SHA);
     assert_eq!(taken.len(), 1);
-    let marks = h.registration.settle_serve(vec![slot(1)], taken).await;
+    let marks = h
+        .registration
+        .settle_serve(vec![slot(1)], taken)
+        .await
+        .marks;
     assert_eq!(marks, vec![slot(1)]);
     assert_eq!(h.wire.actions(), vec!["SENT", "SEEN"]);
     let seen = &h.wire.pings()[1];
@@ -447,7 +470,8 @@ async fn a_serve_of_a_shared_sha_fires_and_marks_both_attachments() {
     let marks = h
         .registration
         .settle_serve(vec![slot(1), slot(2)], taken)
-        .await;
+        .await
+        .marks;
     assert_eq!(marks.len(), 2);
     assert_eq!(h.wire.actions(), vec!["SENT", "SENT", "SEEN", "SEEN"]);
 }
@@ -476,7 +500,11 @@ async fn an_expired_onload_is_marked_without_firing() {
     h.registration.note_fetched(&slot(1), Some(SHA), true);
     h.advance(ONLOAD_WINDOW_MS + 1);
     let taken = h.registration.take_onloads(SHA);
-    let marks = h.registration.settle_serve(vec![slot(1)], taken).await;
+    let marks = h
+        .registration
+        .settle_serve(vec![slot(1)], taken)
+        .await
+        .marks;
     assert_eq!(marks, vec![slot(1)]);
     assert_eq!(h.wire.actions(), vec!["SENT"]);
 }
@@ -485,7 +513,11 @@ async fn an_expired_onload_is_marked_without_firing() {
 async fn after_a_restart_the_first_view_marks_without_firing() {
     let h = Harness::new();
     // Nothing pending in this run: the send was before the restart.
-    let marks = h.registration.settle_serve(vec![slot(1)], Vec::new()).await;
+    let marks = h
+        .registration
+        .settle_serve(vec![slot(1)], Vec::new())
+        .await
+        .marks;
     assert_eq!(marks, vec![slot(1)]);
     assert!(h.wire.urls().is_empty());
 }
@@ -529,17 +561,29 @@ async fn a_failing_random_id_call_is_retried_at_most_every_fifteen_minutes() {
         h.send(message, "g1", URL).await;
         h.registration.note_fetched(&slot(message), Some(SHA), true);
     }
-    // A serve with onloads due asks for no id either.
+    // A serve with onloads due asks for no id either, and its onloads stay pending.
     let taken = h.registration.take_onloads(SHA);
     assert_eq!(taken.len(), 5);
-    h.registration
+    let settled = h
+        .registration
         .settle_serve((0..5).map(slot).collect(), taken)
         .await;
+    assert!(settled.marks.is_empty());
+    assert_eq!(settled.retry.len(), 5);
     assert_eq!(h.wire.random_calls(), 1);
     assert!(h.wire.pings().is_empty());
+    // Once the id can be had, a later serve fires them.
     h.advance(RANDOM_ID_RETRY_MS);
-    h.send(9, "g1", URL).await;
+    *h.wire.random.lock().unwrap() = Ok(reply(200, r#"{"data":{"random_id":"rid-1"}}"#));
+    let taken = h.registration.take_onloads(SHA);
+    assert_eq!(taken.len(), 5);
+    let settled = h
+        .registration
+        .settle_serve((0..5).map(slot).collect(), taken)
+        .await;
+    assert_eq!(settled.marks.len(), 5);
     assert_eq!(h.wire.random_calls(), 2);
+    assert_eq!(h.wire.actions(), vec!["SEEN"; 5]);
 }
 
 #[tokio::test]
@@ -638,4 +682,85 @@ impl CredentialStore for CountingStore {
     fn delete(&self, _: &str) -> Result<(), crate::commands::credential_store::CredentialError> {
         Ok(())
     }
+}
+
+#[tokio::test]
+async fn a_serve_before_the_send_is_registered_keeps_the_onload_pending() {
+    let h = Harness::new();
+    h.found_all("g1");
+    h.registration.expect_send(&slot(1));
+    h.registration.note_fetched(&slot(1), Some(SHA), true);
+    let taken = h.registration.take_onloads(SHA);
+    let settled = h.registration.settle_serve(vec![slot(1)], taken).await;
+    assert_eq!(
+        (settled.marks.len(), settled.retry.clone()),
+        (0, vec![slot(1)])
+    );
+    h.send(1, "g1", URL).await;
+    let taken = h.registration.take_onloads(SHA);
+    let settled = h.registration.settle_serve(vec![slot(1)], taken).await;
+    assert_eq!(settled.marks, vec![slot(1)]);
+    assert_eq!(h.wire.actions(), vec!["SENT", "SEEN"]);
+}
+
+#[tokio::test]
+async fn a_failed_fetch_keeps_the_onload_for_a_retry() {
+    let h = Harness::new();
+    h.found_all("g1");
+    h.send(1, "g1", URL).await;
+    h.registration.note_fetched(&slot(1), None, true);
+    h.registration.note_fetched(&slot(1), Some(SHA), true);
+    let taken = h.registration.take_onloads(SHA);
+    assert!(taken[0].1.onload.is_some());
+    h.registration.settle_serve(vec![slot(1)], taken).await;
+    assert_eq!(h.wire.actions(), vec!["SENT", "SEEN"]);
+}
+
+#[tokio::test]
+async fn a_taken_onload_the_index_did_not_claim_goes_back() {
+    let h = Harness::new();
+    h.found_all("g1");
+    h.send(1, "g1", URL).await;
+    h.registration.note_fetched(&slot(1), Some(SHA), true);
+    let taken = h.registration.take_onloads(SHA);
+    let settled = h.registration.settle_serve(Vec::new(), taken).await;
+    assert_eq!(settled, Settled::default());
+    assert_eq!(h.registration.take_onloads(SHA).len(), 1);
+}
+
+#[test]
+fn a_sent_url_binds_in_either_form() {
+    let entry = crate::gif::analytics::Entry {
+        url: "https://MEDIA.giphy.com/media/g1/giphy.gif".into(),
+        preview_url: STILL.into(),
+        pingbacks: all_pingbacks(),
+    };
+    assert!(crate::gif::analytics::Entry::binds(&entry, URL));
+    assert!(crate::gif::analytics::Entry::binds(&entry, STILL));
+    assert!(!crate::gif::analytics::Entry::binds(
+        &entry,
+        "https://media.giphy.com/media/g2/giphy.gif"
+    ));
+}
+
+#[test]
+fn only_a_send_from_this_machine_registers() {
+    let mut attachment =
+        crate::media::Attachment::remote(URL, "cat", &crate::media::Config::default(), false)
+            .unwrap();
+    attachment.provider = Some(MediaProvider::Giphy);
+    attachment.provider_id = Some("g1".into());
+    let media = crate::commands::agent_inbox::StoredMedia {
+        team: crate::commands::dashboard_launch::LaunchTeam {
+            org: "acme".into(),
+            team: "core".into(),
+        },
+        message_id: 1,
+        slot: 0,
+        attachment,
+    };
+    assert_eq!(sent_of(&media), None);
+    let mut own = media.clone();
+    own.attachment.own_sender = true;
+    assert_eq!(sent_of(&own), Some(sent(1, "g1", URL)));
 }

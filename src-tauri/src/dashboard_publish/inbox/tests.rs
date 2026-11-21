@@ -837,6 +837,12 @@ async fn hosted_media_refetches_a_memory_only_sha_once_and_only_after_authorizin
     }
     assert!(fetch.calls().is_empty(), "nothing is fetched before the attachment is confirmed");
 
+    // Every chunk, at every offset, is a serve the serve hook hears (the provider view pings).
+    let served = Arc::new(AtomicUsize::new(0));
+    let count = served.clone();
+    state.when_served(Arc::new(move |_: &str| {
+        count.fetch_add(1, Ordering::SeqCst);
+    }));
     // Every chunk of one render within the no-store pin shares one fetch.
     let (mut got, mut asks) = (Vec::new(), 0);
     loop {
@@ -851,6 +857,7 @@ async fn hosted_media_refetches_a_memory_only_sha_once_and_only_after_authorizin
     }
     assert_eq!(got, bytes);
     assert!(asks >= 3);
+    assert_eq!(served.load(Ordering::SeqCst), asks, "chunks at a non-zero offset included");
     assert_eq!(fetch.calls(), vec![url.to_string()]);
     assert!(!host.dir.path().join("media-cache").join(&sha).exists());
 }

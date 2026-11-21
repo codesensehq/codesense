@@ -66,8 +66,8 @@ pub(crate) struct FakeHost {
     media_sent: Mutex<Vec<(StoredMedia, bool)>>,
     /// Every `media_fetched` call: the message and the fetched attachment.
     media_fetched: Mutex<Vec<(i64, crate::media::Attachment)>>,
-    /// Each `media_sent` starts a registration this slow in the background.
-    slow_registration: Mutex<Option<std::time::Duration>>,
+    /// The provider registration `media_sent` and `media_fetched` reach, as the app's do.
+    registration: Mutex<Option<Arc<crate::gif::register::Registration>>>,
 }
 
 impl FakeHost {
@@ -116,7 +116,7 @@ impl FakeHost {
             own_media: Mutex::default(),
             media_sent: Mutex::default(),
             media_fetched: Mutex::default(),
-            slow_registration: Mutex::default(),
+            registration: Mutex::default(),
         })
     }
 
@@ -275,14 +275,14 @@ impl InboxHost for FakeHost {
             .lock()
             .unwrap()
             .push((media.clone(), stored));
-        if let Some(delay) = *self.slow_registration.lock().unwrap() {
-            tokio::spawn(tokio::time::sleep(delay));
+        if let Some(registration) = self.registration.lock().unwrap().clone() {
+            crate::gif::register::send_in_background(&registration, media);
         }
     }
 
     fn media_fetched(
         &self,
-        _team: &LaunchTeam,
+        team: &LaunchTeam,
         message_id: i64,
         attachment: &crate::media::Attachment,
     ) {
@@ -290,6 +290,9 @@ impl InboxHost for FakeHost {
             .lock()
             .unwrap()
             .push((message_id, attachment.clone()));
+        if let Some(registration) = self.registration.lock().unwrap().clone() {
+            crate::gif::register::fetched(&registration, team, message_id, MEDIA_SLOT, attachment);
+        }
     }
 
     async fn fetch_media(
@@ -6662,7 +6665,11 @@ async fn a_send_call_registers_once_after_the_store_and_a_replay_never() {
 #[tokio::test]
 async fn a_slow_registration_never_delays_the_send() {
     let fake = FakeHost::new();
-    *fake.slow_registration.lock().unwrap() = Some(std::time::Duration::from_secs(5));
+    let gif = crate::gif::register::tests::Harness::new();
+    gif.found_all("g1");
+    *gif.wire.ping_delay.lock().unwrap() = Some(std::time::Duration::from_secs(5));
+    *fake.registration.lock().unwrap() = Some(gif.registration.clone());
+    fake.own_media.lock().unwrap().insert("H1".to_string());
     let host = port(&fake);
     let started = std::time::Instant::now();
     sent_id(send_tagged(&host, None).await);
@@ -6720,4 +6727,107 @@ async fn a_settled_view_ping_is_marked_on_the_message_and_in_the_index() {
     host.note_media(&launch_team("default"), id, &restarted)
         .await;
     assert!(media.index.claim_onloads(&gif_sha()).is_empty());
+}
+
+/// Wait until `check` holds, for at most 2 s.
+async fn eventually(check: impl Fn() -> bool) {
+    for _ in 0..200 {
+        if check() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("never happened");
+}
+
+#[tokio::test]
+async fn a_sent_gif_registers_and_its_first_view_pings_and_marks_through_the_real_wiring() {
+    let fake = FakeHost::new();
+    let gif = crate::gif::register::tests::Harness::new();
+    gif.found_all("g1");
+    *fake.registration.lock().unwrap() = Some(gif.registration.clone());
+    let fetch = Arc::new(crate::media::FakeFetch::default());
+    fetch.serve(TAGGED_URL, GIF, TAGGED_URL, None);
+    let media = fake.use_media(fetch);
+    fake.own_media.lock().unwrap().insert("H1".to_string());
+    let host = port(&fake);
+    let (registration, persist) = (gif.registration.clone(), host.clone());
+    media.when_served(crate::gif::register::serve_hook(
+        move || Some(registration.clone()),
+        Arc::downgrade(&media),
+        move || persist.clone(),
+    ));
+    let id = sent_id(send_tagged(&host, None).await);
+    settled(&fake, id).await;
+    // The fetch has told registration its sha and the index its reference.
+    eventually(|| {
+        fake.media_fetched.lock().unwrap().len() == 1
+            && media
+                .index
+                .references(&gif_sha())
+                .iter()
+                .any(|r| r.provider.is_some())
+    })
+    .await;
+    eventually(|| gif.wire.actions() == ["SENT"]).await;
+    read_media(&host, launch_team("default"), id, gif_sha())
+        .await
+        .unwrap();
+    eventually(|| gif.wire.actions() == ["SENT", "SEEN"]).await;
+    eventually(|| {
+        fake.rows()
+            .into_iter()
+            .any(|m| m.id == id && m.attachments[0].onload_sent)
+    })
+    .await;
+    // Later views, by any reader, never ping again.
+    read_media(&host, launch_team("default"), id, gif_sha())
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert_eq!(gif.wire.actions(), ["SENT", "SEEN"]);
+}
+
+#[tokio::test]
+async fn a_reply_queued_for_a_role_registers_once_and_its_replay_never() {
+    let fake = FakeHost::new();
+    let host = port(&fake);
+    let asked = sent_id(
+        send_message_request(
+            &host,
+            Some("S1"),
+            "H2",
+            "who can take this?",
+            None,
+            None,
+            None,
+            Some("role:manager"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap(),
+    );
+    let media = tagged_media();
+    let reply = || {
+        reply_request(
+            &host,
+            Some("S2"),
+            asked,
+            "",
+            None,
+            None,
+            None,
+            Some("role-gif"),
+            Some(&media),
+        )
+    };
+    let first = sent_id(reply().await.unwrap());
+    assert_eq!(sent_id(reply().await.unwrap()), first);
+    let sent = fake.media_sent.lock().unwrap();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].0.message_id, first);
+    assert_eq!(fake.queued.lock().unwrap().len(), 1, "queued for the role");
 }
