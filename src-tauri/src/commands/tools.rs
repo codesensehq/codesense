@@ -106,14 +106,17 @@ fn open_terminal_impl(
         &|path: &Path| path.is_dir(),
     )?;
     // Ghostty can't be handed a command, so it goes on the clipboard to paste.
-    if let Some(text) = &chosen.clipboard {
-        let _ = std::process::Command::new("pbcopy")
+    if let Some(clipboard) = &chosen.clipboard {
+        let _ = clipboard
+            .launch
+            .command()
             .stdin(std::process::Stdio::piped())
             .spawn()
             .and_then(|mut child| {
                 use std::io::Write;
-                if let Some(stdin) = child.stdin.as_mut() {
-                    stdin.write_all(text.as_bytes())?;
+                // Dropped before the wait: pbcopy reads to end of input.
+                if let Some(mut stdin) = child.stdin.take() {
+                    stdin.write_all(clipboard.text.as_bytes())?;
                 }
                 child.wait()
             });

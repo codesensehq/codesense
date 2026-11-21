@@ -46,9 +46,10 @@ pub(crate) enum Arg {
     Cwd,
     /// The folder appended to a prefix, as one element (`--working-directory=<cwd>`).
     Joined(&'static str),
-    /// The folder as its own element for an AppleScript that hands it to the login shell through
-    /// `quoted form of`. That is POSIX quoting, which fish reads differently for `\`, so a folder
-    /// holding `\` is refused.
+    /// The folder as its own element for an AppleScript that types it into the login shell
+    /// through `quoted form of`. That is POSIX quoting, which fish reads differently for `\`, and
+    /// typed control bytes act before any quoting (`^U` kills the line, `^C` drops it), so a
+    /// folder holding `\`, a C0 control byte or DEL is refused.
     ShellQuotedCwd,
 }
 
@@ -120,7 +121,7 @@ const MACOS: &[TerminalRow] = &[
         "iTerm2",
         Find::MacApp {
             app: "iTerm",
-            program: "osascript",
+            program: "/usr/bin/osascript",
         },
         &[Arg::Lit("-e"), Arg::Lit(ITERM2_SCRIPT), Arg::ShellQuotedCwd],
     ),
@@ -128,7 +129,7 @@ const MACOS: &[TerminalRow] = &[
     row(
         "terminal",
         "Terminal",
-        Find::Always("osascript"),
+        Find::Always("/usr/bin/osascript"),
         &[
             Arg::Lit("-e"),
             Arg::Lit(TERMINAL_SCRIPT),
@@ -313,11 +314,23 @@ pub(crate) fn env_terminal(
 pub(crate) enum TerminalError {
     NotAbsolute(PathBuf),
     NotADirectory(PathBuf),
-    NotInstalled { label: String },
-    NoTerminal { tried: Vec<String> },
-    Unsupported { os: String },
-    RunCommandUnsupported { os: String },
-    Backslash { label: String, cwd: PathBuf },
+    NotInstalled {
+        label: String,
+    },
+    NoTerminal {
+        tried: Vec<String>,
+    },
+    Unsupported {
+        os: String,
+    },
+    RunCommandUnsupported {
+        os: String,
+    },
+    ShellUnsafe {
+        label: String,
+        cwd: PathBuf,
+        what: &'static str,
+    },
 }
 
 impl fmt::Display for TerminalError {
@@ -353,9 +366,9 @@ impl fmt::Display for TerminalError {
                 f,
                 "Running a command in an external terminal isn't supported on {os}"
             ),
-            Self::Backslash { label, cwd } => write!(
+            Self::ShellUnsafe { label, cwd, what } => write!(
                 f,
-                "{label} can't open {}: the path contains a backslash",
+                "{label} can't open {}: the path contains {what}",
                 cwd.display()
             ),
         }
@@ -365,6 +378,18 @@ impl fmt::Display for TerminalError {
 impl From<TerminalError> for String {
     fn from(e: TerminalError) -> Self {
         e.to_string()
+    }
+}
+
+/// What in `cwd` the AppleScript rows can't type safely: a backslash, a C0 control byte or DEL.
+fn shell_unsafe(cwd: &Path) -> Option<&'static str> {
+    let bytes = cwd.as_os_str().as_encoded_bytes();
+    if bytes.contains(&b'\\') {
+        Some("a backslash")
+    } else if bytes.iter().any(|&b| b < 0x20 || b == 0x7f) {
+        Some("a control character")
+    } else {
+        None
     }
 }
 
@@ -382,10 +407,11 @@ pub(crate) fn plan(row: &TerminalRow, program: &Path, cwd: &Path) -> Result<Laun
                 joined
             }
             Arg::ShellQuotedCwd => {
-                if cwd.as_os_str().as_encoded_bytes().contains(&b'\\') {
-                    return Err(TerminalError::Backslash {
+                if let Some(what) = shell_unsafe(cwd) {
+                    return Err(TerminalError::ShellUnsafe {
                         label: row.label.into(),
                         cwd: cwd.into(),
+                        what,
                     });
                 }
                 cwd.as_os_str().to_os_string()
@@ -398,12 +424,19 @@ pub(crate) fn plan(row: &TerminalRow, program: &Path, cwd: &Path) -> Result<Laun
 }
 
 /// What `open_terminal` runs: the launch, and on macOS Ghostty the command to put on the
-/// clipboard (as before).
+/// clipboard first (as before).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TerminalLaunch {
     pub label: String,
     pub launch: Launch,
-    pub clipboard: Option<String>,
+    pub clipboard: Option<Clipboard>,
+}
+
+/// `text` written to `launch`'s stdin: `/usr/bin/pbcopy`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Clipboard {
+    pub launch: Launch,
+    pub text: String,
 }
 
 /// Picks and plans the terminal for `id` in `cwd` on `os`:
@@ -451,7 +484,10 @@ pub(crate) fn terminal_launch(
         if chosen.row.argv.contains(&Arg::ShellQuotedCwd) {
             launch.args.push(run_command.into());
         } else {
-            clipboard = Some(run_command.to_string());
+            clipboard = Some(Clipboard {
+                launch: Launch::new("/usr/bin/pbcopy", std::iter::empty::<&str>()),
+                text: run_command.to_string(),
+            });
         }
     }
     Ok(TerminalLaunch {

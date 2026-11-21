@@ -297,7 +297,10 @@ fn macos_ghostty_is_the_binary_plus_the_clipboard() {
         args(&chosen.launch),
         [format!("--working-directory={}", cwd.to_str().unwrap())]
     );
-    assert_eq!(chosen.clipboard.as_deref(), Some("make dev"));
+    let clipboard = chosen.clipboard.expect("the command goes on the clipboard");
+    assert_eq!(clipboard.launch.program, OsString::from("/usr/bin/pbcopy"));
+    assert!(clipboard.launch.args.is_empty());
+    assert_eq!(clipboard.text, "make dev");
     let plain = terminal_launch("macos", "ghostty", &cwd, "", &finds_all(None), &is_dir).unwrap();
     assert_eq!(plain.clipboard, None);
 }
@@ -312,7 +315,11 @@ fn macos_applescript_rows_take_the_folder_as_argv() {
     let is_dir = |p: &Path| p.is_dir();
     for (id, script) in [("iterm2", ITERM2_SCRIPT), ("terminal", TERMINAL_SCRIPT)] {
         let chosen = terminal_launch("macos", id, &cwd, "", &finds_all(None), &is_dir).unwrap();
-        assert_eq!(chosen.launch.program, OsString::from("osascript"), "{id}");
+        assert_eq!(
+            chosen.launch.program,
+            OsString::from("/usr/bin/osascript"),
+            "{id}"
+        );
         let a = args(&chosen.launch);
         assert_eq!(a, ["-e", script, cwd.to_str().unwrap()], "{id}");
         assert!(
@@ -337,23 +344,113 @@ fn macos_applescript_rows_take_the_folder_as_argv() {
     }
 }
 
+/// Typed into an interactive shell, a backslash reads differently in fish and control bytes act
+/// before any quoting (`^U` kills the line), so the AppleScript rows refuse them.
 #[test]
-fn macos_applescript_rows_refuse_a_backslash() {
+fn macos_applescript_rows_refuse_a_backslash_or_control_bytes() {
     let root = tempfile::tempdir().unwrap();
-    let cwd = root.path().join("back\\slash");
-    std::fs::create_dir(&cwd).unwrap();
     let is_dir = |p: &Path| p.is_dir();
-    for (id, label) in [("iterm2", "iTerm2"), ("terminal", "Terminal")] {
-        let err = terminal_launch("macos", id, &cwd, "", &finds_all(None), &is_dir).unwrap_err();
-        assert_eq!(
-            err,
-            TerminalError::Backslash {
-                label: label.into(),
-                cwd: cwd.clone()
-            }
+    for (name, what) in [
+        ("back\\slash", "a backslash"),
+        ("x\u{3}y", "a control character"),
+        ("x\u{15}touch pwned; :", "a control character"),
+        ("x\u{1b}y", "a control character"),
+        ("x\ny", "a control character"),
+        ("x\ty", "a control character"),
+        ("x\u{7f}y", "a control character"),
+    ] {
+        let cwd = root.path().join(name);
+        std::fs::create_dir(&cwd).unwrap();
+        for (id, label) in [("iterm2", "iTerm2"), ("terminal", "Terminal")] {
+            let err =
+                terminal_launch("macos", id, &cwd, "", &finds_all(None), &is_dir).unwrap_err();
+            assert_eq!(
+                err,
+                TerminalError::ShellUnsafe {
+                    label: label.into(),
+                    cwd: cwd.clone(),
+                    what,
+                },
+                "{name:?}"
+            );
+            assert!(err.to_string().contains(what));
+        }
+        // Ghostty takes the folder as its own flag, so it opens there.
+        assert!(
+            terminal_launch("macos", "ghostty", &cwd, "", &finds_all(None), &is_dir).is_ok(),
+            "{name:?}"
         );
-        assert!(err.to_string().contains("backslash"));
     }
-    // Ghostty takes the folder as its own flag, so a backslash is fine there.
-    assert!(terminal_launch("macos", "ghostty", &cwd, "", &finds_all(None), &is_dir).is_ok());
+}
+
+/// Records the commands it is handed, so a test sees what the spawn would get.
+#[derive(Default)]
+struct Recorder(std::cell::RefCell<Vec<(OsString, Option<PathBuf>)>>);
+
+impl crate::shared::opener::Spawn for Recorder {
+    fn start(
+        &self,
+        command: std::process::Command,
+        _wait: bool,
+    ) -> std::io::Result<crate::shared::opener::Exit> {
+        self.0.borrow_mut().push((
+            command.get_program().to_os_string(),
+            command.get_current_dir().map(Path::to_path_buf),
+        ));
+        Ok(crate::shared::opener::Exit::Detached)
+    }
+}
+
+/// x-terminal-emulator, `$TERMINAL` and xterm take no folder flag: the folder reaches them only
+/// as the spawned command's working directory.
+#[test]
+fn rows_without_a_folder_flag_start_in_the_folder() {
+    let (_root, cwd) = nasty_dir();
+    let is_dir = |p: &Path| p.is_dir();
+    const ROWS: [(&str, &[&str]); 3] = [
+        ("x-terminal-emulator", &["x-terminal-emulator"]),
+        ("env-terminal", &["$TERMINAL"]),
+        ("xterm", &["xterm"]),
+    ];
+    for (id, names) in ROWS {
+        let chosen = terminal_launch("linux", id, &cwd, "", &finds_only(names), &is_dir).unwrap();
+        assert!(chosen.launch.args.is_empty(), "{id}");
+        let recorder = Recorder::default();
+        crate::shared::opener::spawn_first(std::slice::from_ref(&chosen.launch), &recorder)
+            .unwrap();
+        let started = recorder.0.borrow();
+        assert_eq!(started.len(), 1, "{id}");
+        assert_eq!(started[0].0, chosen.launch.program, "{id}");
+        assert_eq!(started[0].1.as_deref(), Some(cwd.as_path()), "{id}");
+    }
+}
+
+/// The host lookups, on the host: macOS always has Terminal and a default; Linux never lists the
+/// macOS Terminal, and its default is the first terminal found or none. A bare name resolves to
+/// an absolute path on `PATH`.
+#[test]
+fn host_detection_on_this_host() {
+    let os = std::env::consts::OS;
+    if os != "macos" && os != "linux" {
+        return;
+    }
+    let tools = super::super::detect_tools_impl().unwrap();
+    let ids: Vec<_> = tools.terminals.iter().map(|t| t.id.as_str()).collect();
+    if os == "macos" {
+        assert!(ids.contains(&"terminal"), "{ids:?}");
+        assert!(!tools.default_terminal.is_empty());
+        assert_eq!(
+            host_find(&Find::Always("/usr/bin/osascript")),
+            Some(PathBuf::from("/usr/bin/osascript"))
+        );
+    } else {
+        assert!(!ids.contains(&"terminal"), "{ids:?}");
+        assert_eq!(
+            tools.default_terminal,
+            ids.first().copied().unwrap_or_default()
+        );
+    }
+    let sh = host_find(&Find::OnPath("sh")).expect("sh is on PATH");
+    assert!(sh.is_absolute() && sh.ends_with("sh"), "{sh:?}");
+    assert_eq!(host_find(&Find::OnPath("no-such-terminal-here")), None);
 }
