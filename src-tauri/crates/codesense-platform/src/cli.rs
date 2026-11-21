@@ -282,9 +282,9 @@ fn is_batch(path: &Path) -> bool {
 ///
 /// A direct-program shim is `[<program>, args…]`. A node-form shim is
 /// `[node, <script>, args…]`, where `node` is `node.exe` beside the shim when
-/// that file exists, else the first `node.exe` [`candidates`] finds on
-/// `path_env` (the child's `PATH`), so a `node.cmd` or `node.bat` earlier on
-/// it never runs. The shim is read up to 64 KiB; a larger, unreadable or
+/// that file exists, else the first install of `node` [`candidates`] finds on
+/// `path_env` (the child's `PATH`) whose extension is `.exe`, so a `node.cmd`
+/// or `node.bat` earlier on it never runs. The shim is read up to 64 KiB; a larger, unreadable or
 /// non-UTF-8 one is [`ShimError::Unreadable`], and any form
 /// [`npm_shim_script`] refuses is [`ShimError::NotAnNpmShim`].
 pub fn shim_argv(
@@ -346,9 +346,9 @@ fn shim_node(shim: &Path, path_env: &OsStr) -> Result<PathBuf, ShimError> {
     {
         return Ok(beside);
     }
-    candidates(path_env, "node.exe")
+    candidates(path_env, "node")
         .into_iter()
-        .next()
+        .find(|node| windows_extension(&node.to_string_lossy()).as_deref() == Some("exe"))
         .ok_or_else(|| ShimError::NodeNotFound {
             path: shim.to_path_buf(),
         })

@@ -319,12 +319,31 @@ fn the_argv_runs_node_beside_the_shim_or_the_first_node_exe_on_path() {
     let script = npm.join(CODEX_TARGET);
 
     // No node.exe beside the shim: the first node.exe on PATH, past node.cmd and node.bat.
-    let mut expected = vec![
-        late.join("node.exe").into_os_string(),
-        script.clone().into(),
-    ];
-    expected.extend(os(&args));
-    assert_eq!(shim_argv(&codex, &args, &path), Ok(Some(expected)));
+    // Only Windows names `node` by its PATHEXT extensions.
+    if std::env::consts::OS == "windows" {
+        let Ok(Some(argv)) = shim_argv(&codex, &args, &path) else {
+            panic!("node.exe on PATH runs the shim");
+        };
+        // The install is spelled with PATHEXT's case (`node.EXE`).
+        let node = argv[0].to_string_lossy();
+        let wanted = late.join("node.exe");
+        assert!(
+            node.eq_ignore_ascii_case(&wanted.to_string_lossy()),
+            "{node}"
+        );
+        let mut rest = vec![script.clone().into_os_string()];
+        rest.extend(os(&args));
+        assert_eq!(argv[1..], rest[..]);
+    }
+    // A `node` with no extension is no node.exe, on any OS.
+    let bare = tmp.path().join("bare");
+    install(&bare.join("node"), "");
+    assert_eq!(
+        shim_argv(&codex, &args, &path_env(&[&bare])),
+        Err(ShimError::NodeNotFound {
+            path: codex.clone()
+        })
+    );
 
     // node.exe beside the shim wins over PATH.
     install(&npm.join("node.exe"), "");

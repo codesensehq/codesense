@@ -1688,21 +1688,24 @@ mod tests {
         fn a_windows_npm_shim_runs_its_target_without_cmd() {
             let p = prefix();
             let npm = canonical(&p.npm);
-            let node = canonical(&p.bin.join("node.exe"));
             let path = path_of(&[&p.npm, &p.bin]);
 
             // The node form: node.exe on PATH runs the script under the canonical shim dir.
-            let mut codex = vec![node.into_os_string(), npm.join(CODEX_TARGET).into()];
-            codex.extend(ARGS.iter().map(OsString::from));
-            assert_runs("codex.cmd", &path, codex.clone());
-            // A relative program resolves on PATH too.
-            let relative = format!("npm{}codex.cmd", std::path::MAIN_SEPARATOR);
-            assert_runs(&relative, &path_of(&[&p.root, &p.bin]), codex.clone());
-            // node.cmd and node.bat earlier on PATH never run.
-            let early = p.root.join("early");
-            write(&early.join("node.cmd"), "@echo off\r\n");
-            write(&early.join("node.bat"), "@echo off\r\n");
-            assert_runs("codex.cmd", &path_of(&[&p.npm, &early, &p.bin]), codex);
+            // Only Windows names `node` by its PATHEXT extensions, so the PATH rows need it.
+            if std::env::consts::OS == "windows" {
+                let node = canonical(&p.bin.join("node.exe"));
+                let mut codex = vec![node.into_os_string(), npm.join(CODEX_TARGET).into()];
+                codex.extend(ARGS.iter().map(OsString::from));
+                assert_runs("codex.cmd", &path, codex.clone());
+                // A relative program resolves on PATH too.
+                let relative = format!("npm{}codex.cmd", std::path::MAIN_SEPARATOR);
+                assert_runs(&relative, &path_of(&[&p.root, &p.bin]), codex.clone());
+                // node.cmd and node.bat earlier on PATH never run.
+                let early = p.root.join("early");
+                write(&early.join("node.cmd"), "@echo off\r\n");
+                write(&early.join("node.bat"), "@echo off\r\n");
+                assert_runs("codex.cmd", &path_of(&[&p.npm, &early, &p.bin]), codex);
+            }
             // node.exe beside the shim wins.
             let local = p.root.join("local");
             write(&local.join("codex.cmd"), CODEX_SHIM);
@@ -1711,6 +1714,20 @@ mod tests {
             assert_runs(
                 "codex.cmd",
                 &path_of(&[&local, &p.bin]),
+                [
+                    local_dir.join("node.exe").into_os_string(),
+                    local_dir.join(CODEX_TARGET).into(),
+                ]
+                .into_iter()
+                .chain(ARGS.iter().map(OsString::from))
+                .collect(),
+            );
+
+            // A relative program resolves on PATH too.
+            let relative = format!("local{}codex.cmd", std::path::MAIN_SEPARATOR);
+            assert_runs(
+                &relative,
+                &path_of(&[&p.root]),
                 [
                     local_dir.join("node.exe").into_os_string(),
                     local_dir.join(CODEX_TARGET).into(),
