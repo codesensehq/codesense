@@ -9,7 +9,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use super::Tool;
-use crate::shared::opener::Launch;
+use crate::shared::opener::{Launch, LAUNCH_LIMIT};
 
 /// How a terminal is found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,9 +48,18 @@ pub(crate) enum Arg {
     Joined(&'static str),
     /// The folder as its own element for an AppleScript that types it into the login shell
     /// through `quoted form of`. That is POSIX quoting, which fish reads differently for `\`, and
-    /// typed control bytes act before any quoting (`^U` kills the line, `^C` drops it), so a
-    /// folder holding `\`, a C0 control byte or DEL is refused.
+    /// typed control bytes act before any quoting (`^U` kills the line, `^C` drops it). Bash's
+    /// readline in a non-UTF-8 locale strips the eighth bit, so a byte >= 0x80 can act as one
+    /// too (0x95 as `^U`, 0x9b as ESC). A folder holding `\`, a C0 control byte, DEL or a byte
+    /// of 0x80 or more is refused.
     ShellQuotedCwd,
+}
+
+/// How a row runs a command: its own program and argv, with the command appended last.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CommandForm {
+    pub program: &'static str,
+    pub argv: &'static [Arg],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +68,10 @@ pub(crate) struct TerminalRow {
     pub label: &'static str,
     pub find: Find,
     pub argv: &'static [Arg],
+    /// Wait for the launch, at most [`LAUNCH_LIMIT`], so a launcher that fails says so.
+    pub waited: bool,
+    /// How the row runs a command. A macOS row without one puts the command on the clipboard.
+    pub with_command: Option<CommandForm>,
 }
 
 const fn row(
@@ -72,7 +85,50 @@ const fn row(
         label,
         find,
         argv,
+        waited: false,
+        with_command: None,
     }
+}
+
+/// A macOS row that opens the folder with `open -a <bundle> <folder>`, waited, and runs a command
+/// through its AppleScript. With no command nothing is typed into a shell, so any folder name
+/// opens.
+///
+/// Accepted residual: `open -a` is handed a folder [`terminal_launch`] checked with `is_dir`, and
+/// opens whatever that path names when it runs. Were the folder swapped for a regular file in
+/// between, the app would open that file, and Terminal (or iTerm2, which opens scripts too) runs
+/// a `.command` or shell script it is handed. It is the same window as reveal's: the path is
+/// resolved again by name, by a process that can't be handed our check.
+const fn open_app_row(
+    id: &'static str,
+    label: &'static str,
+    find: Find,
+    argv: &'static [Arg],
+    script: &'static [Arg],
+) -> TerminalRow {
+    TerminalRow {
+        id,
+        label,
+        find,
+        argv,
+        waited: true,
+        with_command: Some(CommandForm {
+            program: "/usr/bin/osascript",
+            argv: script,
+        }),
+    }
+}
+
+/// Terminal's bundle, always there on macOS. `open -a` is handed the bundle detection relies
+/// on, so LaunchServices can't pick another app of the same name.
+pub(crate) const TERMINAL_APP: &str = "/System/Applications/Utilities/Terminal.app";
+
+/// iTerm2's bundle, the one `Find::MacApp { app: "iTerm", .. }` checks: [`mac_app_bundle`].
+pub(crate) const ITERM_APP: &str = "/Applications/iTerm.app";
+
+/// The bundle a `Find::MacApp { app, .. }` row is detected by.
+pub(crate) fn mac_app_bundle(app: &str) -> PathBuf {
+    Path::new("/Applications").join(format!("{app}.app"))
 }
 
 /// iTerm2: a new window whose session `cd`s to the folder (argv item 1) and runs the command
@@ -116,20 +172,22 @@ const MACOS: &[TerminalRow] = &[
         },
         &[Arg::Joined("--working-directory=")],
     ),
-    row(
+    open_app_row(
         "iterm2",
         "iTerm2",
         Find::MacApp {
             app: "iTerm",
-            program: "/usr/bin/osascript",
+            program: "/usr/bin/open",
         },
+        &[Arg::Lit("-a"), Arg::Lit(ITERM_APP), Arg::Cwd],
         &[Arg::Lit("-e"), Arg::Lit(ITERM2_SCRIPT), Arg::ShellQuotedCwd],
     ),
     // Terminal.app is always there on macOS.
-    row(
+    open_app_row(
         "terminal",
         "Terminal",
-        Find::Always("/usr/bin/osascript"),
+        Find::Always("/usr/bin/open"),
+        &[Arg::Lit("-a"), Arg::Lit(TERMINAL_APP), Arg::Cwd],
         &[
             Arg::Lit("-e"),
             Arg::Lit(TERMINAL_SCRIPT),
@@ -331,6 +389,12 @@ pub(crate) enum TerminalError {
         cwd: PathBuf,
         what: &'static str,
     },
+    /// The command an AppleScript row would type holds a byte it can't type safely.
+    CommandShellUnsafe {
+        label: String,
+        command: String,
+        what: &'static str,
+    },
 }
 
 impl fmt::Display for TerminalError {
@@ -371,6 +435,14 @@ impl fmt::Display for TerminalError {
                 "{label} can't open {}: the path contains {what}",
                 cwd.display()
             ),
+            Self::CommandShellUnsafe {
+                label,
+                command,
+                what,
+            } => write!(
+                f,
+                "{label} can't run {command:?}: the command contains {what}"
+            ),
         }
     }
 }
@@ -381,13 +453,25 @@ impl From<TerminalError> for String {
     }
 }
 
-/// What in `cwd` the AppleScript rows can't type safely: a backslash, a C0 control byte or DEL.
+/// What in `cwd` the AppleScript rows can't type safely: a backslash, a C0 control byte, DEL, or
+/// a byte >= 0x80 (see [`Arg::ShellQuotedCwd`]).
 fn shell_unsafe(cwd: &Path) -> Option<&'static str> {
     let bytes = cwd.as_os_str().as_encoded_bytes();
     if bytes.contains(&b'\\') {
         Some("a backslash")
-    } else if bytes.iter().any(|&b| b < 0x20 || b == 0x7f) {
+    } else {
+        untypeable(bytes)
+    }
+}
+
+/// What in `bytes` acts as a key when typed into the shell, before any quoting: a C0 control
+/// byte, DEL, or a byte >= 0x80 (see [`Arg::ShellQuotedCwd`]). The AppleScript rows screen the
+/// command they run with it as well as the folder.
+fn untypeable(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.iter().any(|&b| b < 0x20 || b == 0x7f) {
         Some("a control character")
+    } else if bytes.iter().any(|&b| b >= 0x80) {
+        Some("a non-ASCII character")
     } else {
         None
     }
@@ -396,8 +480,23 @@ fn shell_unsafe(cwd: &Path) -> Option<&'static str> {
 /// The launch for `row`'s `program` in `cwd`: the folder is one argv element and the working
 /// directory, never shell text.
 pub(crate) fn plan(row: &TerminalRow, program: &Path, cwd: &Path) -> Result<Launch, TerminalError> {
-    let mut args = Vec::with_capacity(row.argv.len());
-    for arg in row.argv {
+    let launch = plan_argv(row.label, program, row.argv, cwd)?;
+    Ok(if row.waited {
+        launch.waited(LAUNCH_LIMIT)
+    } else {
+        launch
+    })
+}
+
+/// `program` with `argv` in `cwd`; `label` names the row when the folder is refused.
+fn plan_argv(
+    label: &str,
+    program: &Path,
+    argv: &[Arg],
+    cwd: &Path,
+) -> Result<Launch, TerminalError> {
+    let mut args = Vec::with_capacity(argv.len());
+    for arg in argv {
         args.push(match arg {
             Arg::Lit(lit) => (*lit).into(),
             Arg::Cwd => cwd.as_os_str().to_os_string(),
@@ -409,7 +508,7 @@ pub(crate) fn plan(row: &TerminalRow, program: &Path, cwd: &Path) -> Result<Laun
             Arg::ShellQuotedCwd => {
                 if let Some(what) = shell_unsafe(cwd) {
                     return Err(TerminalError::ShellUnsafe {
-                        label: row.label.into(),
+                        label: label.into(),
                         cwd: cwd.into(),
                         what,
                     });
@@ -444,7 +543,9 @@ pub(crate) struct Clipboard {
 /// - a detected row of that id is launched; a known row that isn't installed is an error naming
 ///   it; an empty or unknown id (the legacy `terminal` on Linux too) takes the first detected
 ///   row; none detected is an error naming every row tried;
-/// - `run_command` is macOS only: Ghostty puts it on the clipboard, the AppleScript rows run it.
+/// - `run_command` is macOS only. A row with a [`CommandForm`] (Terminal, iTerm2) runs it through
+///   that form, its AppleScript; Ghostty puts it on the clipboard. With no command, Terminal and
+///   iTerm2 open the folder with `open -a`.
 pub(crate) fn terminal_launch(
     os: &str,
     id: &str,
@@ -478,18 +579,28 @@ pub(crate) fn terminal_launch(
             tried: rows.iter().map(|row| row.find.tried_name()).collect(),
         })?,
     };
-    let mut launch = plan(&chosen.row, &chosen.program, cwd)?;
-    let mut clipboard = None;
-    if !run_command.is_empty() {
-        if chosen.row.argv.contains(&Arg::ShellQuotedCwd) {
+    let command_form = chosen.row.with_command.filter(|_| !run_command.is_empty());
+    let launch = match command_form {
+        Some(form) => {
+            let mut launch = plan_argv(chosen.row.label, Path::new(form.program), form.argv, cwd)?;
+            // The script types the command after the folder, so it gets the same screen.
+            if let Some(what) = untypeable(run_command.as_bytes()) {
+                return Err(TerminalError::CommandShellUnsafe {
+                    label: chosen.row.label.into(),
+                    command: run_command.into(),
+                    what,
+                });
+            }
             launch.args.push(run_command.into());
-        } else {
-            clipboard = Some(Clipboard {
-                launch: Launch::new("/usr/bin/pbcopy", std::iter::empty::<&str>()),
-                text: run_command.to_string(),
-            });
+            launch
         }
-    }
+        None => plan(&chosen.row, &chosen.program, cwd)?,
+    };
+    let clipboard =
+        (!run_command.is_empty() && chosen.row.with_command.is_none()).then(|| Clipboard {
+            launch: Launch::new("/usr/bin/pbcopy", std::iter::empty::<&str>()),
+            text: run_command.to_string(),
+        });
     Ok(TerminalLaunch {
         label: chosen.tool().label,
         launch,
@@ -506,9 +617,9 @@ pub(crate) fn host_find(find: &Find) -> Option<PathBuf> {
             .next()
     };
     match find {
-        Find::MacApp { app, program } => Path::new(&format!("/Applications/{app}.app"))
-            .exists()
-            .then(|| PathBuf::from(program)),
+        Find::MacApp { app, program } => {
+            mac_app_bundle(app).exists().then(|| PathBuf::from(program))
+        }
         Find::Always(program) => Some(PathBuf::from(program)),
         Find::OnPath(name) => on_path(name),
         Find::EnvVar(var) => env_terminal(

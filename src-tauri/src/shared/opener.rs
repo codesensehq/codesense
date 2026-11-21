@@ -9,11 +9,20 @@
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
+use codesense_platform::process::{kill_hard, ProcessTree};
 use log::warn;
+
+/// How long `xdg-mime query default text/plain` may take before it is killed.
+pub(crate) const QUERY_LIMIT: Duration = Duration::from_secs(10);
+
+/// How long a waited launcher (`gio launch`, `open -t`, `open -a`) may take before it is killed.
+/// `gio launch` of a D-Bus-activated editor waits on the bus, whose default timeout is 25 s.
+pub(crate) const LAUNCH_LIMIT: Duration = Duration::from_secs(30);
 
 /// What to open.
 #[derive(Debug, Clone, Copy)]
@@ -31,8 +40,9 @@ pub(crate) struct Launch {
     pub program: OsString,
     pub args: Vec<OsString>,
     pub cwd: Option<PathBuf>,
-    /// Wait for it and check its exit status; otherwise it is left running and reaped on a thread.
-    pub wait: bool,
+    /// Wait for it, at most this long, and check its exit status; `None` leaves it running and
+    /// reaps it on a thread.
+    pub wait: Option<Duration>,
     /// Said when this launcher ran and failed.
     pub note: Option<&'static str>,
 }
@@ -48,13 +58,14 @@ impl Launch {
             program: program.into(),
             args: args.into_iter().map(Into::into).collect(),
             cwd: None,
-            wait: false,
+            wait: None,
             note: None,
         }
     }
 
-    fn waited(mut self) -> Self {
-        self.wait = true;
+    /// Wait for it, at most `limit`.
+    pub(crate) fn waited(mut self, limit: Duration) -> Self {
+        self.wait = Some(limit);
         self
     }
 
@@ -84,7 +95,7 @@ impl Launch {
 pub(crate) enum TextDefaultMissing {
     /// `xdg-mime` isn't installed.
     NoXdgMime,
-    /// `xdg-mime` couldn't run or exited non-zero.
+    /// `xdg-mime` couldn't run, exited non-zero or ran past its limit.
     QueryFailed(String),
     /// `xdg-mime` printed nothing.
     Empty,
@@ -105,50 +116,81 @@ pub(crate) struct HostFacts {
 }
 
 impl HostFacts {
-    /// Reads the host for `req`: whether this is WSL (a folder on Linux), and the XDG data
-    /// directories and the `text/plain` default (text on Linux). Nothing is run off Linux.
+    /// Reads this host for `req`, as [`HostFacts::gather_with`] does.
     pub(crate) fn gather(req: &Open) -> Self {
-        let linux = std::env::consts::OS == "linux";
+        Self::gather_with(
+            std::env::consts::OS,
+            req,
+            &host_env,
+            dirs::home_dir().as_deref(),
+            &|path: &Path| std::fs::read_to_string(path).ok(),
+            &HostSpawn,
+        )
+    }
+
+    /// Reads the host for `req` on `os`: whether this is WSL (a folder on Linux), and the XDG
+    /// data directories and the `text/plain` default (text on Linux). Nothing is run off Linux.
+    /// The environment, the home folder, file reads and the spawner are injected.
+    pub(crate) fn gather_with(
+        os: &str,
+        req: &Open,
+        env: &dyn Fn(&str) -> Option<OsString>,
+        home: Option<&Path>,
+        read: &dyn Fn(&Path) -> Option<String>,
+        spawner: &dyn Spawn,
+    ) -> Self {
+        let linux = os == "linux";
         let text_default = match req {
-            Open::Text(_) if linux => query_text_default(),
+            Open::Text(_) if linux => query_text_default(spawner),
             _ => Err(TextDefaultMissing::NotQueried),
         };
         Self {
-            is_wsl: linux && matches!(req, Open::Folder(_)) && host_is_wsl(),
-            xdg_data_home: data_home(
-                std::env::var_os("XDG_DATA_HOME").as_deref(),
-                dirs::home_dir().as_deref(),
-            ),
-            xdg_data_dirs: data_dirs(std::env::var_os("XDG_DATA_DIRS").as_deref()),
+            is_wsl: linux && matches!(req, Open::Folder(_)) && host_is_wsl(read),
+            xdg_data_home: data_home(env("XDG_DATA_HOME").as_deref(), home),
+            xdg_data_dirs: data_dirs(env("XDG_DATA_DIRS").as_deref()),
             text_default,
         }
     }
 }
 
+fn host_env(key: &str) -> Option<OsString> {
+    std::env::var_os(key)
+}
+
 /// WSL's kernel names Microsoft in its release string, as the `is-wsl` crate checks.
-fn host_is_wsl() -> bool {
+fn host_is_wsl(read: &dyn Fn(&Path) -> Option<String>) -> bool {
     ["/proc/sys/kernel/osrelease", "/proc/version"]
         .iter()
         .any(|file| {
-            std::fs::read_to_string(file)
-                .map(|text| text.to_lowercase().contains("microsoft"))
-                .unwrap_or(false)
+            read(Path::new(file)).is_some_and(|text| text.to_lowercase().contains("microsoft"))
         })
 }
 
-fn query_text_default() -> Result<String, TextDefaultMissing> {
-    let output = Launch::new("xdg-mime", ["query", "default", "text/plain"])
-        .command()
-        .stdout(Stdio::piped())
-        .output()
+/// What `xdg-mime query default text/plain` prints, trimmed, run through `spawner`.
+fn query_text_default(spawner: &dyn Spawn) -> Result<String, TextDefaultMissing> {
+    let command = Launch::new("xdg-mime", ["query", "default", "text/plain"]).command();
+    let captured = spawner
+        .capture(command, QUERY_LIMIT)
         .map_err(|e| match e.kind() {
             io::ErrorKind::NotFound => TextDefaultMissing::NoXdgMime,
             _ => TextDefaultMissing::QueryFailed(e.to_string()),
         })?;
-    if !output.status.success() {
-        return Err(TextDefaultMissing::QueryFailed(output.status.to_string()));
+    match captured.exit {
+        Exit::Status { success: true, .. } => {}
+        Exit::Status { describe, .. } => return Err(TextDefaultMissing::QueryFailed(describe)),
+        Exit::TimedOut { .. } => {
+            return Err(TextDefaultMissing::QueryFailed(format!(
+                "timed out after {}",
+                describe_limit(QUERY_LIMIT)
+            )))
+        }
+        Exit::Detached => {
+            return Err(TextDefaultMissing::QueryFailed(
+                "it wasn't waited for".into(),
+            ))
+        }
     }
-    let id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let id = String::from_utf8_lossy(&captured.stdout).trim().to_string();
     if id.is_empty() {
         return Err(TextDefaultMissing::Empty);
     }
@@ -227,6 +269,21 @@ pub(crate) enum OpenError {
         status: String,
         note: Option<&'static str>,
     },
+    /// A waited launcher still ran at its limit and was killed. What it asked for may still
+    /// happen: `gio launch` hands the file to a D-Bus-activated editor that can open it later.
+    TimedOut {
+        program: String,
+        limit: Duration,
+    },
+}
+
+/// `limit` as the errors say it: whole seconds, else milliseconds.
+fn describe_limit(limit: Duration) -> String {
+    if limit.subsec_nanos() == 0 && limit.as_secs() > 0 {
+        format!("{} s", limit.as_secs())
+    } else {
+        format!("{} ms", limit.as_millis())
+    }
 }
 
 impl fmt::Display for OpenError {
@@ -286,6 +343,11 @@ impl fmt::Display for OpenError {
                     None => Ok(()),
                 }
             }
+            Self::TimedOut { program, limit } => write!(
+                f,
+                "{program} didn't finish within {}; it may still open",
+                describe_limit(*limit)
+            ),
         }
     }
 }
@@ -357,7 +419,7 @@ pub(crate) fn plans(
                     "/usr/bin/open",
                     [OsStr::new("-t"), file.as_os_str()],
                 )
-                .waited()]),
+                .waited(LAUNCH_LIMIT)]),
                 _ => {
                     let id =
                         facts
@@ -382,7 +444,7 @@ pub(crate) fn plans(
                         "gio",
                         [OsStr::new("launch"), desktop.as_os_str(), file.as_os_str()],
                     )
-                    .waited();
+                    .waited(LAUNCH_LIMIT);
                     launch.note = Some(GIO_LAUNCH_NOTE);
                     Ok(vec![launch])
                 }
@@ -443,24 +505,35 @@ pub(crate) enum Exit {
     Detached,
     /// Waited for.
     Status { success: bool, describe: String },
+    /// Still running at its limit: its whole tree was killed and the root (`pid`) reaped.
+    TimedOut { pid: u32 },
 }
 
-/// Starts a command, injected so tests record instead of spawning.
+/// What a captured command printed, and how it ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Captured {
+    pub exit: Exit,
+    pub stdout: Vec<u8>,
+}
+
+/// Starts a command, injected so tests record instead of spawning. An `Err` means it couldn't be
+/// started; once it has started, every outcome is an [`Exit`].
 pub(crate) trait Spawn {
-    fn start(&self, command: Command, wait: bool) -> io::Result<Exit>;
+    fn start(&self, command: Command, wait: Option<Duration>) -> io::Result<Exit>;
+    /// Runs `command` for its stdout, at most `limit`. Nothing it started outlives it. An `Err`
+    /// also covers output whose pipe stayed open past the root's end.
+    fn capture(&self, command: Command, limit: Duration) -> io::Result<Captured>;
 }
 
-/// Spawns for real. A detached child is reaped on a thread, with a non-zero exit logged.
+/// Spawns for real. A detached child is reaped on a thread, with a non-zero exit logged; a waited
+/// one runs as a [`ProcessTree`], bounded by its limit.
 pub(crate) struct HostSpawn;
 
 impl Spawn for HostSpawn {
-    fn start(&self, mut command: Command, wait: bool) -> io::Result<Exit> {
-        if wait {
-            let status = command.status()?;
-            return Ok(Exit::Status {
-                success: status.success(),
-                describe: status.to_string(),
-            });
+    fn start(&self, mut command: Command, wait: Option<Duration>) -> io::Result<Exit> {
+        if let Some(limit) = wait {
+            let mut tree = ProcessTree::spawn(&mut command)?;
+            return Ok(wait_bounded(&mut tree, limit, Rest::Leave));
         }
         let mut child = command.spawn()?;
         let program = command.get_program().to_string_lossy().into_owned();
@@ -478,15 +551,128 @@ impl Spawn for HostSpawn {
         }
         Ok(Exit::Detached)
     }
+
+    /// The tree's stdout is read on a thread, at most [`CAPTURE_CAP`] of it, so a child that
+    /// writes more than the pipe holds still finishes. Once the root ends, in time or killed at
+    /// the limit, the rest of its tree is killed and the reader joined, waiting at most
+    /// [`READER_LIMIT`]: a descendant that left the process group could still hold the pipe, and
+    /// its reader is then left behind.
+    fn capture(&self, mut command: Command, limit: Duration) -> io::Result<Captured> {
+        command.stdout(Stdio::piped());
+        let mut tree = ProcessTree::spawn(&mut command)?;
+        let program = command.get_program().to_string_lossy().into_owned();
+        let Some(stdout) = tree.child().stdout.take() else {
+            return Err(io::Error::other(format!("{program} has no stdout")));
+        };
+        let (sent, received) = std::sync::mpsc::channel();
+        let reader = std::thread::Builder::new()
+            .name("opener-capture".into())
+            .spawn(move || {
+                let mut bytes = Vec::new();
+                // Past the cap the pipe is dropped, so a child that keeps writing gets EPIPE.
+                let read = stdout
+                    .take(CAPTURE_CAP)
+                    .read_to_end(&mut bytes)
+                    .map(|_| bytes);
+                let _ = sent.send(read);
+            })?;
+        let exit = wait_bounded(&mut tree, limit, Rest::Kill);
+        let stdout = match received.recv_timeout(READER_LIMIT) {
+            Ok(read) => {
+                // It has sent, its last act, so this join returns at once.
+                let _ = reader.join();
+                read?
+            }
+            Err(_) => {
+                warn!(target: "opener", "{program}'s output is still open; leaving its reader");
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!(
+                        "its output was still open {} after it ended",
+                        describe_limit(READER_LIMIT)
+                    ),
+                ));
+            }
+        };
+        Ok(Captured { exit, stdout })
+    }
+}
+
+/// How long a capture waits for its output to close once its process tree has ended.
+const READER_LIMIT: Duration = Duration::from_secs(1);
+
+/// The most a capture keeps of its stdout; the rest is never read.
+const CAPTURE_CAP: u64 = 1 << 20;
+
+/// What a bounded wait does with what the root left running once the root exits in time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Rest {
+    /// Leave it running: a launcher's job is to start something that outlives it.
+    Leave,
+    /// Kill it, so nothing it started keeps a pipe open.
+    Kill,
+}
+
+/// How often a bounded wait looks at its root.
+const POLL: Duration = Duration::from_millis(20);
+
+/// Waits at most `limit` for `tree`'s root. In time, the root's status, with what it started
+/// left or killed per `rest`. At the limit, the whole tree is killed (`kill_hard`) and the root
+/// reaped: [`Exit::TimedOut`]. The root's exit that can't be read is a failed [`Exit::Status`],
+/// never an `Err`, so the caller never takes a launcher that started for one that couldn't.
+fn wait_bounded(tree: &mut ProcessTree, limit: Duration, rest: Rest) -> Exit {
+    let deadline = Instant::now() + limit;
+    loop {
+        let polled = match rest {
+            Rest::Leave => tree.try_wait_leaving_rest(),
+            Rest::Kill => tree.try_wait(),
+        };
+        match polled {
+            Ok(Some(status)) => {
+                return Exit::Status {
+                    success: status.success(),
+                    describe: status.to_string(),
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                return Exit::Status {
+                    success: false,
+                    describe: format!("its exit couldn't be read: {e}"),
+                }
+            }
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            let pid = tree.pid().as_raw();
+            if let Err(e) = kill_hard(tree) {
+                warn!(target: "opener", "killing process tree {pid}: {e}");
+                let _ = tree.child().kill();
+            }
+            if let Err(e) = tree.wait() {
+                warn!(target: "opener", "reaping process {pid}: {e}");
+            }
+            return Exit::TimedOut { pid };
+        }
+        std::thread::sleep(POLL.min(deadline - now));
+    }
 }
 
 /// Starts the first launcher that spawns. One that fails to spawn is logged and the next is
-/// tried; one that spawns but exits non-zero (only waited rows see it) is an error, not retried.
+/// tried; one that spawns but exits non-zero or runs past its limit (only waited rows see
+/// either) is an error, not retried.
 pub(crate) fn spawn_first(launches: &[Launch], spawner: &dyn Spawn) -> Result<(), OpenError> {
     let mut tried = Vec::new();
     for launch in launches {
         match spawner.start(launch.command(), launch.wait) {
             Ok(Exit::Detached) | Ok(Exit::Status { success: true, .. }) => return Ok(()),
+            // It started, so the next launcher isn't tried: it may still be opening this.
+            Ok(Exit::TimedOut { .. }) => {
+                return Err(OpenError::TimedOut {
+                    program: launch.name(),
+                    limit: launch.wait.unwrap_or_default(),
+                })
+            }
             Ok(Exit::Status { describe, .. }) => {
                 return Err(OpenError::Failed {
                     program: launch.name(),

@@ -109,7 +109,7 @@ fn each_linux_row_puts_the_folder_in_one_argv_element() {
         assert_eq!(launch.program, OsString::from(&program), "{}", row.id);
         assert_eq!(args(&launch), expected[&row.id], "{}", row.id);
         assert_eq!(launch.cwd.as_deref(), Some(cwd.as_path()), "{}", row.id);
-        assert!(!launch.wait, "{}", row.id);
+        assert_eq!(launch.wait, None, "{}", row.id);
     }
 }
 
@@ -149,6 +149,29 @@ fn macos_detection_is_todays_list_and_default() {
     assert_eq!(default_terminal("macos", &bare, "iTerm.app"), "terminal");
     let labels: Vec<_> = all.iter().map(|d| d.tool().label).collect();
     assert_eq!(labels, ["Ghostty", "iTerm2", "Terminal"]);
+    // iTerm2 is still found by its bundle, Terminal always; both run `open`.
+    assert_eq!(
+        terminal_rows("macos")[1].find,
+        Find::MacApp {
+            app: "iTerm",
+            program: "/usr/bin/open"
+        }
+    );
+    assert_eq!(
+        terminal_rows("macos")[2].find,
+        Find::Always("/usr/bin/open")
+    );
+    // `open -a` is handed the bundle detection checks.
+    assert_eq!(mac_app_bundle("iTerm"), PathBuf::from(ITERM_APP));
+    let programs: Vec<_> = all.iter().map(|d| d.program.clone()).collect();
+    assert_eq!(
+        programs,
+        [
+            PathBuf::from("/Applications/Ghostty.app/Contents/MacOS/ghostty"),
+            PathBuf::from("/usr/bin/open"),
+            PathBuf::from("/usr/bin/open"),
+        ]
+    );
 }
 
 #[test]
@@ -305,23 +328,43 @@ fn macos_ghostty_is_the_binary_plus_the_clipboard() {
     assert_eq!(plain.clipboard, None);
 }
 
-/// The folder reaches AppleScript only as an argv element, and the shell only through
-/// `quoted form of`: it appears in no script or shell text.
+/// With no command, Terminal and iTerm2 open the folder with `open -a <bundle>`, waited, the
+/// folder one argv element. With one, the folder reaches AppleScript only as an argv element, and
+/// the shell only through `quoted form of`: it appears in no script or shell text.
 #[test]
 fn macos_applescript_rows_take_the_folder_as_argv() {
     let root = tempfile::tempdir().unwrap();
     let cwd = root.path().join("it's \"a\"; $(touch pwned) `x` dir");
     std::fs::create_dir(&cwd).unwrap();
     let is_dir = |p: &Path| p.is_dir();
-    for (id, script) in [("iterm2", ITERM2_SCRIPT), ("terminal", TERMINAL_SCRIPT)] {
+    for (id, bundle, script) in [
+        ("iterm2", ITERM_APP, ITERM2_SCRIPT),
+        ("terminal", TERMINAL_APP, TERMINAL_SCRIPT),
+    ] {
         let chosen = terminal_launch("macos", id, &cwd, "", &finds_all(None), &is_dir).unwrap();
         assert_eq!(
             chosen.launch.program,
+            OsString::from("/usr/bin/open"),
+            "{id}"
+        );
+        assert_eq!(
+            args(&chosen.launch),
+            ["-a", bundle, cwd.to_str().unwrap()],
+            "{id}"
+        );
+        assert_eq!(chosen.launch.wait, Some(LAUNCH_LIMIT), "{id}");
+        assert_eq!(chosen.clipboard, None);
+
+        // A command runs through the AppleScript: the folder and the command are argv items.
+        let with_cmd =
+            terminal_launch("macos", id, &cwd, "make dev", &finds_all(None), &is_dir).unwrap();
+        assert_eq!(
+            with_cmd.launch.program,
             OsString::from("/usr/bin/osascript"),
             "{id}"
         );
-        let a = args(&chosen.launch);
-        assert_eq!(a, ["-e", script, cwd.to_str().unwrap()], "{id}");
+        let a = args(&with_cmd.launch);
+        assert_eq!(a, ["-e", script, cwd.to_str().unwrap(), "make dev"], "{id}");
         assert!(
             script.contains("on run argv") && script.contains("quoted form of (item 1 of argv)")
         );
@@ -331,21 +374,14 @@ fn macos_applescript_rows_take_the_folder_as_argv() {
                 "{id}: {text}"
             );
         }
-        assert_eq!(chosen.clipboard, None);
-
-        // A command to run is the second argv item, not script text.
-        let with_cmd =
-            terminal_launch("macos", id, &cwd, "make dev", &finds_all(None), &is_dir).unwrap();
-        assert_eq!(
-            args(&with_cmd.launch)[2..],
-            [cwd.to_str().unwrap(), "make dev"]
-        );
+        assert_eq!(with_cmd.launch.wait, None, "{id}");
         assert_eq!(with_cmd.clipboard, None);
     }
 }
 
 /// Typed into an interactive shell, a backslash reads differently in fish and control bytes act
-/// before any quoting (`^U` kills the line), so the AppleScript rows refuse them.
+/// before any quoting (`^U` kills the line), so the AppleScript rows refuse them when they run a
+/// command. With no command nothing is typed, so `open -a` opens any folder.
 #[test]
 fn macos_applescript_rows_refuse_a_backslash_or_control_bytes() {
     let root = tempfile::tempdir().unwrap();
@@ -363,7 +399,7 @@ fn macos_applescript_rows_refuse_a_backslash_or_control_bytes() {
         std::fs::create_dir(&cwd).unwrap();
         for (id, label) in [("iterm2", "iTerm2"), ("terminal", "Terminal")] {
             let err =
-                terminal_launch("macos", id, &cwd, "", &finds_all(None), &is_dir).unwrap_err();
+                terminal_launch("macos", id, &cwd, "pwd", &finds_all(None), &is_dir).unwrap_err();
             assert_eq!(
                 err,
                 TerminalError::ShellUnsafe {
@@ -374,12 +410,128 @@ fn macos_applescript_rows_refuse_a_backslash_or_control_bytes() {
                 "{name:?}"
             );
             assert!(err.to_string().contains(what));
+            let opened = terminal_launch("macos", id, &cwd, "", &finds_all(None), &is_dir);
+            assert_eq!(
+                opened.map(|chosen| chosen.launch.args.last().cloned()),
+                Ok(Some(cwd.clone().into_os_string())),
+                "{id} {name:?}"
+            );
         }
         // Ghostty takes the folder as its own flag, so it opens there.
         assert!(
             terminal_launch("macos", "ghostty", &cwd, "", &finds_all(None), &is_dir).is_ok(),
             "{name:?}"
         );
+    }
+}
+
+/// A folder named with non-ASCII text opens with `open -a` when no command runs, and is refused
+/// when the AppleScript would type it. The folder is planned, never created: `is_dir` is injected.
+#[test]
+fn macos_rows_open_a_non_ascii_folder_only_without_a_command() {
+    let cwd = Path::new("/tmp/caf\u{e9}");
+    let is_dir = |_: &Path| true;
+    for (id, label, bundle) in [
+        ("iterm2", "iTerm2", ITERM_APP),
+        ("terminal", "Terminal", TERMINAL_APP),
+    ] {
+        let opened = terminal_launch("macos", id, cwd, "", &finds_all(None), &is_dir).unwrap();
+        assert_eq!(opened.launch.program, OsString::from("/usr/bin/open"));
+        assert_eq!(
+            args(&opened.launch),
+            ["-a", bundle, "/tmp/caf\u{e9}"],
+            "{id}"
+        );
+        assert_eq!(opened.launch.wait, Some(LAUNCH_LIMIT), "{id}");
+
+        let refused =
+            terminal_launch("macos", id, cwd, "pwd", &finds_all(None), &is_dir).unwrap_err();
+        assert_eq!(
+            refused,
+            TerminalError::ShellUnsafe {
+                label: label.into(),
+                cwd: cwd.into(),
+                what: "a non-ASCII character",
+            },
+            "{id}"
+        );
+        assert!(refused.to_string().contains("a non-ASCII character"));
+    }
+}
+
+/// The AppleScript rows type the command into the shell after the folder, so it is screened the
+/// same way: a control byte or a non-ASCII byte in it is refused, naming the command.
+#[test]
+fn macos_applescript_rows_refuse_an_untypeable_command() {
+    let cwd = Path::new("/tmp/repo");
+    let is_dir = |_: &Path| true;
+    for (id, label) in [("iterm2", "iTerm2"), ("terminal", "Terminal")] {
+        for (command, what) in [
+            ("make\u{15}dev", "a control character"),
+            ("make\ndev", "a control character"),
+            ("make\u{7f}", "a control character"),
+            ("echo caf\u{e9}", "a non-ASCII character"),
+        ] {
+            let refused =
+                terminal_launch("macos", id, cwd, command, &finds_all(None), &is_dir).unwrap_err();
+            assert_eq!(
+                refused,
+                TerminalError::CommandShellUnsafe {
+                    label: label.into(),
+                    command: command.into(),
+                    what,
+                },
+                "{id} {command:?}"
+            );
+            assert!(refused.to_string().contains(what), "{refused}");
+        }
+        let ok = terminal_launch(
+            "macos",
+            id,
+            cwd,
+            "make dev && echo 'done'",
+            &finds_all(None),
+            &is_dir,
+        )
+        .unwrap();
+        assert_eq!(
+            ok.launch.args.last(),
+            Some(&OsString::from("make dev && echo 'done'"))
+        );
+    }
+}
+
+/// A raw byte of 0x80 or more, which readline in a non-UTF-8 locale can read as a control key
+/// (0x95 as `^U`, 0x9b as ESC), is refused with a command and kept intact without one.
+#[cfg(unix)]
+#[test]
+fn macos_rows_refuse_a_raw_high_byte_with_a_command() {
+    use std::os::unix::ffi::OsStrExt;
+    let is_dir = |_: &Path| true;
+    for byte in [0x80u8, 0x95, 0x9b, 0xff] {
+        let raw = [b"/tmp/x".as_slice(), &[byte][..], b"y".as_slice()].concat();
+        let cwd = Path::new(OsStr::from_bytes(&raw));
+        for id in ["iterm2", "terminal"] {
+            let refused =
+                terminal_launch("macos", id, cwd, "pwd", &finds_all(None), &is_dir).unwrap_err();
+            assert!(
+                matches!(
+                    refused,
+                    TerminalError::ShellUnsafe {
+                        what: "a non-ASCII character",
+                        ..
+                    }
+                ),
+                "{id} {byte:#x}: {refused:?}"
+            );
+            let opened = terminal_launch("macos", id, cwd, "", &finds_all(None), &is_dir).unwrap();
+            assert_eq!(opened.launch.program, OsString::from("/usr/bin/open"));
+            assert_eq!(
+                opened.launch.args.last(),
+                Some(&cwd.as_os_str().to_os_string()),
+                "{id} {byte:#x}"
+            );
+        }
     }
 }
 
@@ -391,13 +543,21 @@ impl crate::shared::opener::Spawn for Recorder {
     fn start(
         &self,
         command: std::process::Command,
-        _wait: bool,
+        _wait: Option<std::time::Duration>,
     ) -> std::io::Result<crate::shared::opener::Exit> {
         self.0.borrow_mut().push((
             command.get_program().to_os_string(),
             command.get_current_dir().map(Path::to_path_buf),
         ));
         Ok(crate::shared::opener::Exit::Detached)
+    }
+
+    fn capture(
+        &self,
+        _command: std::process::Command,
+        _limit: std::time::Duration,
+    ) -> std::io::Result<crate::shared::opener::Captured> {
+        unreachable!("opening a terminal captures nothing")
     }
 }
 
@@ -440,8 +600,8 @@ fn host_detection_on_this_host() {
         assert!(ids.contains(&"terminal"), "{ids:?}");
         assert!(!tools.default_terminal.is_empty());
         assert_eq!(
-            host_find(&Find::Always("/usr/bin/osascript")),
-            Some(PathBuf::from("/usr/bin/osascript"))
+            host_find(&Find::Always("/usr/bin/open")),
+            Some(PathBuf::from("/usr/bin/open"))
         );
     } else {
         assert!(!ids.contains(&"terminal"), "{ids:?}");

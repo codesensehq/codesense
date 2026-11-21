@@ -2592,7 +2592,11 @@ const MAX_UNRESOLVED_PATHS: usize = 279;
 /// (commands/git.rs) and `.status()` in `open_unreadable_machine_file` (commands/machines). They
 /// are std string, path, iterator, io-error, command and thread-builder calls; none calls a
 /// write primitive.
-const MAX_UNRESOLVED_METHODS: usize = 6_596;
+/// The opener's bounded waits and capture (shared/opener.rs) and the terminals' command
+/// screening (commands/tools/terminals.rs) add two more, taking it to 6_598: std process, io,
+/// channel and thread calls on the `ProcessTree` child and its reader. None calls a write
+/// primitive (`no_unresolved_call_may_hide_a_writer` still passes).
+const MAX_UNRESOLVED_METHODS: usize = 6_598;
 
 /// The most lines each census list prints on failure; the env vars print them all.
 const LISTING_CAP: usize = 100;

@@ -36,21 +36,30 @@ struct Started {
     args: Vec<OsString>,
     cwd: Option<PathBuf>,
     removed: Vec<OsString>,
-    wait: bool,
+    wait: Option<Duration>,
 }
 
-/// Records each command and answers from a script (spawned and detached once it runs out).
+/// Records each command and answers from a script (spawned and detached once it runs out). A
+/// capture is recorded with its limit as `wait` and answered from its own script, which a test
+/// that captures must fill.
 #[derive(Default)]
 struct Recorder {
     started: RefCell<Vec<Started>>,
     answers: RefCell<VecDeque<io::Result<Exit>>>,
+    captures: RefCell<VecDeque<io::Result<Captured>>>,
 }
 
 impl Recorder {
     fn answering(answers: Vec<io::Result<Exit>>) -> Self {
         Self {
-            started: RefCell::default(),
             answers: RefCell::new(answers.into()),
+            ..Self::default()
+        }
+    }
+    fn capturing(captures: Vec<io::Result<Captured>>) -> Self {
+        Self {
+            captures: RefCell::new(captures.into()),
+            ..Self::default()
         }
     }
     fn programs(&self) -> Vec<String> {
@@ -62,8 +71,8 @@ impl Recorder {
     }
 }
 
-impl Spawn for Recorder {
-    fn start(&self, command: Command, wait: bool) -> io::Result<Exit> {
+impl Recorder {
+    fn record(&self, command: &Command, wait: Option<Duration>) {
         self.started.borrow_mut().push(Started {
             program: command.get_program().to_os_string(),
             args: command.get_args().map(OsStr::to_os_string).collect(),
@@ -75,10 +84,24 @@ impl Spawn for Recorder {
                 .collect(),
             wait,
         });
+    }
+}
+
+impl Spawn for Recorder {
+    fn start(&self, command: Command, wait: Option<Duration>) -> io::Result<Exit> {
+        self.record(&command, wait);
         self.answers
             .borrow_mut()
             .pop_front()
             .unwrap_or(Ok(Exit::Detached))
+    }
+
+    fn capture(&self, command: Command, limit: Duration) -> io::Result<Captured> {
+        self.record(&command, Some(limit));
+        self.captures
+            .borrow_mut()
+            .pop_front()
+            .expect("a capture this test didn't script")
     }
 }
 
@@ -130,7 +153,7 @@ fn linux_folder_is_the_open_crate_list_in_order() {
     .map(|(p, a)| (p.to_string(), a.into_iter().map(String::from).collect()))
     .collect();
     assert_eq!(programs_and_args(&launches), expected);
-    assert!(launches.iter().all(|l| !l.wait && l.cwd.is_none()));
+    assert!(launches.iter().all(|l| l.wait.is_none() && l.cwd.is_none()));
 
     let wsl = HostFacts {
         is_wsl: true,
@@ -181,7 +204,7 @@ fn macos_plans_are_todays_programs() {
             program: "/usr/bin/open".into(),
             args: vec!["-R".into(), DIR.into()],
             cwd: None,
-            wait: false,
+            wait: None,
             note: None,
         }]
     );
@@ -192,7 +215,7 @@ fn macos_plans_are_todays_programs() {
             program: "/usr/bin/open".into(),
             args: vec!["-t".into(), FILE.into()],
             cwd: None,
-            wait: true,
+            wait: Some(LAUNCH_LIMIT),
             note: None,
         }]
     );
@@ -211,7 +234,7 @@ fn macos_reveals_a_package_folder_without_launching_it() {
         launches[0].args,
         vec![OsString::from("-R"), OsString::from(app)]
     );
-    assert!(!launches[0].wait);
+    assert_eq!(launches[0].wait, None);
 }
 
 #[test]
@@ -288,7 +311,7 @@ fn linux_text_launches_the_text_plain_default_through_gio_waited() {
             program: "gio".into(),
             args: vec!["launch".into(), desktop.into(), FILE.into()],
             cwd: None,
-            wait: true,
+            wait: Some(LAUNCH_LIMIT),
             note: Some(GIO_LAUNCH_NOTE),
         }]
     );
@@ -540,7 +563,11 @@ fn spawn_first_tries_the_next_launcher_only_when_one_cannot_start() {
     assert_eq!(tried, ["xdg-open", "gio", "gnome-open", "kde-open"]);
 
     // A waited launcher that ran and failed is an error; the next isn't tried.
-    let waited: Vec<Launch> = launches.iter().cloned().map(Launch::waited).collect();
+    let waited: Vec<Launch> = launches
+        .iter()
+        .cloned()
+        .map(|l| l.waited(LAUNCH_LIMIT))
+        .collect();
     let recorder = Recorder::answering(vec![Ok(Exit::Status {
         success: false,
         describe: "exit status: 2".into(),
@@ -554,7 +581,7 @@ fn spawn_first_tries_the_next_launcher_only_when_one_cannot_start() {
         })
     );
     assert_eq!(recorder.programs(), ["xdg-open"]);
-    assert!(recorder.started.borrow()[0].wait);
+    assert_eq!(recorder.started.borrow()[0].wait, Some(LAUNCH_LIMIT));
 
     assert_eq!(
         spawn_first(&[], &Recorder::default()),
@@ -585,4 +612,406 @@ fn every_launch_drops_the_app_owned_webkit_env() {
         assert_eq!(s.args.last(), Some(&OsString::from(DIR)));
         assert_eq!(s.cwd, None);
     }
+}
+
+#[test]
+fn a_timed_out_launcher_is_an_error_and_the_next_is_not_tried() {
+    let fs = FakeFs::with(&[], &[DIR]);
+    let launches: Vec<Launch> = plans("linux", Open::Folder(Path::new(DIR)), &facts(Ok("")), &fs)
+        .unwrap()
+        .into_iter()
+        .map(|l| l.waited(Duration::from_secs(30)))
+        .collect();
+    let recorder = Recorder::answering(vec![Ok(Exit::TimedOut { pid: 4242 })]);
+    let error = spawn_first(&launches, &recorder).unwrap_err();
+    assert_eq!(
+        error,
+        OpenError::TimedOut {
+            program: "xdg-open".into(),
+            limit: Duration::from_secs(30),
+        }
+    );
+    assert_eq!(recorder.programs(), ["xdg-open"]);
+    assert_eq!(
+        error.to_string(),
+        "xdg-open didn't finish within 30 s; it may still open"
+    );
+    let short = OpenError::TimedOut {
+        program: "gio".into(),
+        limit: Duration::from_millis(250),
+    };
+    assert_eq!(
+        short.to_string(),
+        "gio didn't finish within 250 ms; it may still open"
+    );
+}
+
+/// Every launcher the executor waits for reaches it with a limit; the folder launchers aren't
+/// waited.
+#[test]
+fn every_waited_row_carries_a_limit() {
+    let desktop = "/usr/share/applications/gedit.desktop";
+    let fs = FakeFs::with(&[FILE, desktop], &[DIR]);
+    let facts = facts(Ok("gedit.desktop"));
+    for os in ["macos", "linux"] {
+        let text = plans(os, Open::Text(Path::new(FILE)), &facts, &fs).unwrap();
+        let recorder = Recorder::answering(vec![Ok(Exit::Status {
+            success: true,
+            describe: "exit status: 0".into(),
+        })]);
+        assert_eq!(spawn_first(&text, &recorder), Ok(()), "{os}");
+        let waits: Vec<_> = recorder.started.borrow().iter().map(|s| s.wait).collect();
+        assert_eq!(waits, [Some(LAUNCH_LIMIT)], "{os}");
+
+        let folder = plans(os, Open::Folder(Path::new(DIR)), &facts, &fs).unwrap();
+        assert!(folder.iter().all(|l| l.wait.is_none()), "{os}");
+    }
+    assert_eq!(QUERY_LIMIT, Duration::from_secs(10));
+    assert_eq!(LAUNCH_LIMIT, Duration::from_secs(30));
+}
+
+#[cfg(unix)]
+fn sh(script: &str, args: &[&OsStr]) -> Command {
+    let mut command = Command::new("/bin/sh");
+    command.arg("-c").arg(script).arg("sh").args(args);
+    command
+}
+
+/// Whether `kill(pid, 0)` finds nothing (ESRCH).
+#[cfg(unix)]
+fn pid_is_gone(pid: u32) -> bool {
+    let found = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    found == -1 && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+}
+
+/// A real child still running at its limit is killed and reaped well within the test's time,
+/// and its pid is gone afterwards.
+#[cfg(unix)]
+#[test]
+fn a_waited_child_past_its_limit_is_killed_and_reaped() {
+    let started = Instant::now();
+    let exit = HostSpawn
+        .start(sh("sleep 5", &[]), Some(Duration::from_millis(200)))
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(2), "{exit:?}");
+    let Exit::TimedOut { pid } = exit else {
+        panic!("expected TimedOut, got {exit:?}");
+    };
+    assert!(pid_is_gone(pid), "pid {pid} is still there");
+}
+
+/// A launcher that exits in time reports its status and leaves what it started running.
+#[cfg(unix)]
+#[test]
+fn a_waited_launcher_that_exits_in_time_leaves_what_it_started() {
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("pid");
+    let exit = HostSpawn
+        .start(
+            sh(
+                "sleep 5 >/dev/null 2>&1 & echo $! > \"$1\"",
+                &[pid_file.as_os_str()],
+            ),
+            Some(Duration::from_secs(5)),
+        )
+        .unwrap();
+    assert!(
+        matches!(exit, Exit::Status { success: true, .. }),
+        "{exit:?}"
+    );
+    let pid: u32 = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let alive = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
+    unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+    assert!(alive, "the launcher's child {pid} was killed");
+
+    let failed = HostSpawn
+        .start(sh("exit 3", &[]), Some(Duration::from_secs(5)))
+        .unwrap();
+    assert!(
+        matches!(&failed, Exit::Status { success: false, describe } if describe.contains('3')),
+        "{failed:?}"
+    );
+}
+
+/// The reader drains the pipe while the child runs, so more output than a pipe holds still
+/// completes.
+#[cfg(unix)]
+#[test]
+fn a_capture_of_more_than_a_pipe_holds_completes() {
+    let captured = HostSpawn
+        .capture(sh("head -c 100000 /dev/zero", &[]), Duration::from_secs(10))
+        .unwrap();
+    assert!(
+        matches!(captured.exit, Exit::Status { success: true, .. }),
+        "{:?}",
+        captured.exit
+    );
+    assert_eq!(captured.stdout.len(), 100_000);
+}
+
+/// A capture returns at its root's exit even when the root left a child holding stdout: the
+/// rest of the tree is killed then, which closes the pipe.
+#[cfg(unix)]
+#[test]
+fn a_capture_returns_when_its_root_exits_despite_a_child_holding_stdout() {
+    let started = Instant::now();
+    let captured = HostSpawn
+        .capture(sh("sleep 5 & echo $!", &[]), Duration::from_secs(10))
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(2), "{captured:?}");
+    assert!(
+        matches!(captured.exit, Exit::Status { success: true, .. }),
+        "{:?}",
+        captured.exit
+    );
+    let printed = String::from_utf8_lossy(&captured.stdout);
+    assert!(printed.trim().parse::<u32>().is_ok(), "{printed:?}");
+}
+
+/// A capture still running at its limit is killed, and its reader returns.
+#[cfg(unix)]
+#[test]
+fn a_capture_past_its_limit_is_killed() {
+    let started = Instant::now();
+    let captured = HostSpawn
+        .capture(sh("echo early; sleep 5", &[]), Duration::from_millis(200))
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(2), "{captured:?}");
+    let Exit::TimedOut { pid } = captured.exit else {
+        panic!("expected TimedOut, got {:?}", captured.exit);
+    };
+    assert!(pid_is_gone(pid), "pid {pid} is still there");
+    assert_eq!(captured.stdout, b"early\n");
+}
+
+fn printed(success: bool, describe: &str, stdout: &str) -> io::Result<Captured> {
+    Ok(Captured {
+        exit: Exit::Status {
+            success,
+            describe: describe.into(),
+        },
+        stdout: stdout.as_bytes().to_vec(),
+    })
+}
+
+#[test]
+fn query_text_default_names_each_missing_outcome() {
+    let denied = io::Error::from(io::ErrorKind::PermissionDenied);
+    let denied_text = denied.to_string();
+    for (answer, expected) in [
+        (
+            Err(io::Error::from(io::ErrorKind::NotFound)),
+            Err(TextDefaultMissing::NoXdgMime),
+        ),
+        (
+            Err(denied),
+            Err(TextDefaultMissing::QueryFailed(denied_text)),
+        ),
+        (
+            printed(false, "exit status: 4", "gedit.desktop\n"),
+            Err(TextDefaultMissing::QueryFailed("exit status: 4".into())),
+        ),
+        (
+            Ok(Captured {
+                exit: Exit::TimedOut { pid: 7 },
+                stdout: Vec::new(),
+            }),
+            Err(TextDefaultMissing::QueryFailed(
+                "timed out after 10 s".into(),
+            )),
+        ),
+        (
+            printed(true, "exit status: 0", ""),
+            Err(TextDefaultMissing::Empty),
+        ),
+        (
+            printed(true, "exit status: 0", "  \n\t"),
+            Err(TextDefaultMissing::Empty),
+        ),
+        (
+            printed(true, "exit status: 0", " kate.desktop\n"),
+            Ok("kate.desktop".to_string()),
+        ),
+    ] {
+        let recorder = Recorder::capturing(vec![answer]);
+        assert_eq!(query_text_default(&recorder), expected);
+        let started = recorder.started.borrow();
+        assert_eq!(started.len(), 1);
+        assert_eq!(started[0].program, OsString::from("xdg-mime"));
+        assert_eq!(started[0].args, ["query", "default", "text/plain"]);
+        assert_eq!(started[0].wait, Some(QUERY_LIMIT));
+    }
+}
+
+fn no_env(_: &str) -> Option<OsString> {
+    None
+}
+
+fn no_read(_: &Path) -> Option<String> {
+    None
+}
+
+#[test]
+fn gather_with_queries_the_text_default_only_for_text_on_linux() {
+    let home = Some(Path::new("/home/u"));
+    let file = Open::Text(Path::new(FILE));
+    let dir = Open::Folder(Path::new(DIR));
+
+    for (os, req) in [("macos", file), ("macos", dir), ("linux", dir)] {
+        let recorder = Recorder::default();
+        let gathered = HostFacts::gather_with(os, &req, &no_env, home, &no_read, &recorder);
+        assert_eq!(
+            gathered.text_default,
+            Err(TextDefaultMissing::NotQueried),
+            "{os} {req:?}"
+        );
+        assert!(recorder.started.borrow().is_empty(), "{os} {req:?}");
+    }
+
+    let recorder = Recorder::capturing(vec![printed(true, "exit status: 0", "gedit.desktop\n")]);
+    let gathered = HostFacts::gather_with("linux", &file, &no_env, home, &no_read, &recorder);
+    assert_eq!(gathered.text_default, Ok("gedit.desktop".into()));
+    assert_eq!(recorder.programs(), ["xdg-mime"]);
+}
+
+#[test]
+fn gather_with_detects_wsl_only_for_a_folder_on_linux() {
+    let home = Some(Path::new("/home/u"));
+    let dir = Open::Folder(Path::new(DIR));
+    let release = |path: &Path| {
+        (path == Path::new("/proc/sys/kernel/osrelease"))
+            .then(|| "5.15.153.1-microsoft-standard-WSL2\n".to_string())
+    };
+    let version = |path: &Path| {
+        (path == Path::new("/proc/version")).then(|| {
+            "Linux version 4.4.0-19041-Microsoft (gcc version 5.4.0) #1-Microsoft".to_string()
+        })
+    };
+    let plain = |_: &Path| Some("6.8.0-45-generic\n".to_string());
+    let spawner = Recorder::default();
+    let wsl = |os: &str, req: &Open, read: &dyn Fn(&Path) -> Option<String>| {
+        HostFacts::gather_with(os, req, &no_env, home, read, &spawner).is_wsl
+    };
+
+    assert!(wsl("linux", &dir, &release));
+    assert!(wsl("linux", &dir, &version));
+    assert!(!wsl("linux", &dir, &plain));
+    assert!(!wsl("linux", &dir, &no_read));
+    assert!(!wsl("macos", &dir, &release));
+
+    // Text never asks: WSL only changes the folder launchers.
+    let text = Recorder::capturing(vec![printed(true, "exit status: 0", "gedit.desktop")]);
+    let file = Open::Text(Path::new(FILE));
+    let gathered = HostFacts::gather_with("linux", &file, &no_env, home, &release, &text);
+    assert!(!gathered.is_wsl);
+}
+
+#[test]
+fn gather_with_reads_the_xdg_folders_from_the_injected_env() {
+    let dir = Open::Folder(Path::new(DIR));
+    let spawner = Recorder::default();
+    let set = |key: &str| match key {
+        "XDG_DATA_HOME" => Some(OsString::from("/data")),
+        "XDG_DATA_DIRS" => Some(OsString::from("/opt/share:rel:/usr/share")),
+        _ => None,
+    };
+    let gathered = HostFacts::gather_with(
+        "linux",
+        &dir,
+        &set,
+        Some(Path::new("/home/u")),
+        &no_read,
+        &spawner,
+    );
+    assert_eq!(gathered.xdg_data_home, Some(PathBuf::from("/data")));
+    assert_eq!(
+        gathered.xdg_data_dirs,
+        [PathBuf::from("/opt/share"), PathBuf::from("/usr/share")]
+    );
+
+    let relative = |key: &str| (key == "XDG_DATA_HOME").then(|| OsString::from("rel/share"));
+    let gathered = HostFacts::gather_with(
+        "linux",
+        &dir,
+        &relative,
+        Some(Path::new("/home/u")),
+        &no_read,
+        &spawner,
+    );
+    assert_eq!(
+        gathered.xdg_data_home,
+        Some(PathBuf::from("/home/u/.local/share"))
+    );
+    assert_eq!(
+        gathered.xdg_data_dirs,
+        [
+            PathBuf::from("/usr/local/share"),
+            PathBuf::from("/usr/share")
+        ]
+    );
+    let homeless = HostFacts::gather_with("linux", &dir, &no_env, None, &no_read, &spawner);
+    assert_eq!(homeless.xdg_data_home, None);
+}
+
+/// A descendant that leaves the process group survives the tree's kill and holds stdout open:
+/// the capture gives up on its reader after `READER_LIMIT` with a `TimedOut` error (which the
+/// query reports as `QueryFailed`) instead of hanging. The child marks the file only once it is
+/// in its own group, and the root waits for that, so the kill never races the move.
+#[cfg(unix)]
+#[test]
+fn a_capture_leaves_a_reader_held_by_an_escaped_child_behind() {
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("pid");
+    let script = "perl -e 'setpgrp(0, 0); open(my $f, \">\", $ARGV[0]) or die; close $f; \
+                  sleep 3' \"$1.ready\" & echo $! > \"$1\"; \
+                  while [ ! -e \"$1.ready\" ]; do sleep 0.05; done; echo x";
+    let started = Instant::now();
+    let result = HostSpawn.capture(sh(script, &[pid_file.as_os_str()]), Duration::from_secs(10));
+    let elapsed = started.elapsed();
+    if let Some(pid) = std::fs::read_to_string(&pid_file)
+        .ok()
+        .and_then(|text| text.trim().parse::<libc::pid_t>().ok())
+    {
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+    }
+    let error = result.expect_err("the escaped child holds stdout open");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut, "{error}");
+    assert!(error.to_string().contains("still open"), "{error}");
+    assert!(
+        elapsed >= READER_LIMIT && elapsed < READER_LIMIT + Duration::from_secs(2),
+        "{elapsed:?}"
+    );
+    // The query reports it as a failed lookup.
+    let message = error.to_string();
+    let recorder = Recorder::capturing(vec![Err(error)]);
+    assert_eq!(
+        query_text_default(&recorder),
+        Err(TextDefaultMissing::QueryFailed(message))
+    );
+}
+
+/// A capture keeps at most `CAPTURE_CAP` bytes and drops the pipe there, so a child writing
+/// without end can't grow it or keep it open.
+#[cfg(unix)]
+#[test]
+fn a_capture_stops_reading_at_its_cap() {
+    let started = Instant::now();
+    let captured = HostSpawn
+        .capture(sh("cat /dev/zero", &[]), Duration::from_secs(10))
+        .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        captured.exit
+    );
+    assert_eq!(captured.stdout.len() as u64, CAPTURE_CAP);
+    assert!(
+        !matches!(captured.exit, Exit::TimedOut { .. }),
+        "{:?}",
+        captured.exit
+    );
 }
