@@ -21,6 +21,8 @@ struct Wire {
     urls: Mutex<Vec<url::Url>>,
     random: Mutex<Result<Reply, Failure>>,
     ping_status: Mutex<u16>,
+    /// Runs while the random id call is in flight.
+    during_random: Mutex<Option<Box<dyn Fn() + Send>>>,
 }
 impl Wire {
     fn new() -> Self {
@@ -28,6 +30,7 @@ impl Wire {
             urls: Mutex::new(Vec::new()),
             random: Mutex::new(Ok(reply(200, r#"{"data":{"random_id":"rid-123"}}"#))),
             ping_status: Mutex::new(200),
+            during_random: Mutex::new(None),
         }
     }
     fn urls(&self) -> Vec<url::Url> {
@@ -69,6 +72,9 @@ impl Transport for Wire {
     fn get<'a>(&'a self, url: &'a url::Url) -> BoxFuture<'a, Result<Reply, Failure>> {
         self.urls.lock().unwrap().push(url.clone());
         let answer = if url.path() == "/v1/randomid" {
+            if let Some(during) = &*self.during_random.lock().unwrap() {
+                during();
+            }
             self.random.lock().unwrap().clone()
         } else if url.host_str() == Some("pingback.giphy.com") {
             Ok(reply(*self.ping_status.lock().unwrap(), ""))
@@ -135,6 +141,9 @@ impl Harness {
             height: 270,
             auto_loads: true,
         };
+        // As a search does: entries from before an epoch change go first.
+        let epoch = install_epoch(self.dir.path());
+        crate::gif::analytics::Analytics::start_epoch(&self.service.analytics, epoch);
         self.service.analytics.record(
             Provider::Giphy,
             &[Found {
@@ -276,7 +285,7 @@ async fn off_or_no_key_makes_no_call_and_turning_off_or_removing_the_key_deletes
     assert!(!h.install_file().exists(), "Off deletes the install id");
     h.send(2, "g1", URL).await;
     let taken = h.registration.take_onloads(SHA);
-    assert_eq!(taken.len(), 1);
+    assert!(taken.is_empty(), "Off lets go of pending onloads");
     let marks = h.registration.settle_serve(vec![slot(1)], taken).await;
     assert_eq!(marks, vec![slot(1)], "marked, so it never fires later");
     assert_eq!(
@@ -291,6 +300,7 @@ async fn off_or_no_key_makes_no_call_and_turning_off_or_removing_the_key_deletes
         ..SettingsUpdate::default()
     };
     settings::set_with(&h.keys(), h.dir.path(), on).unwrap();
+    h.found_all("g1");
     h.send(3, "g1", URL).await;
     assert!(h.install_file().exists());
     settings::remove_with(&h.keys(), h.dir.path()).unwrap();
@@ -330,15 +340,13 @@ async fn the_301st_ping_in_an_hour_is_dropped() {
     for message in 0..=PINGS_PER_HOUR as i64 {
         h.send(message, "g1", URL).await;
     }
-    assert_eq!(h.wire.pings().len(), PINGS_PER_HOUR);
+    // The install id call, which carries the key, counts as one of the hour's calls.
+    assert_eq!(h.wire.random_calls(), 1);
+    assert_eq!(h.wire.pings().len(), PINGS_PER_HOUR - 1);
     h.advance(ONLOAD_WINDOW_MS);
     h.found_all("g1");
     h.send(1_000, "g1", URL).await;
-    assert_eq!(
-        h.wire.pings().len(),
-        PINGS_PER_HOUR + 1,
-        "the hour rolls on"
-    );
+    assert_eq!(h.wire.pings().len(), PINGS_PER_HOUR, "the hour rolls on");
 }
 
 #[tokio::test]
@@ -349,12 +357,16 @@ async fn a_random_id_that_is_not_an_id_or_a_failed_call_skips_pings_and_search_s
     h.send(1, "g1", URL).await;
     assert!(h.wire.pings().is_empty());
     assert!(!h.install_file().exists(), "a refused id is never saved");
+    h.advance(RANDOM_ID_RETRY_MS);
     *h.wire.random.lock().unwrap() = Err(Failure::Timeout);
     h.send(2, "g1", URL).await;
     assert!(h.wire.pings().is_empty());
+    assert_eq!(h.wire.random_calls(), 2);
     let request = crate::gif::normalize(Some("cat"), None, None).unwrap();
     assert!(h.service.run(&request, None, None).await.is_ok());
     // Once GIPHY answers, pings go out.
+    h.advance(RANDOM_ID_RETRY_MS);
+    h.found_all("g1");
     *h.wire.random.lock().unwrap() = Ok(reply(200, r#"{"data":{"random_id":"rid-9"}}"#));
     h.send(3, "g1", URL).await;
     assert_eq!(h.wire.actions(), vec!["SENT"]);
@@ -369,6 +381,7 @@ async fn a_new_key_gets_a_new_install_id() {
     settings::save_with(&h.keys(), h.dir.path(), OTHER_KEY).unwrap();
     assert!(!h.install_file().exists());
     *h.wire.random.lock().unwrap() = Ok(reply(200, r#"{"data":{"random_id":"rid-new"}}"#));
+    h.found_all("g1");
     h.send(2, "g1", URL).await;
     assert_eq!(h.wire.random_calls(), 2);
     assert_eq!(
@@ -505,4 +518,124 @@ fn a_pingback_url_keeps_giphy_hosts_and_never_carries_a_key() {
 #[test]
 fn the_registration_client_builds() {
     assert!(ping_client().is_ok());
+}
+
+#[tokio::test]
+async fn a_failing_random_id_call_is_retried_at_most_every_fifteen_minutes() {
+    let h = Harness::new();
+    h.found_all("g1");
+    *h.wire.random.lock().unwrap() = Ok(reply(500, ""));
+    for message in 0..5 {
+        h.send(message, "g1", URL).await;
+        h.registration.note_fetched(&slot(message), Some(SHA), true);
+    }
+    // A serve with onloads due asks for no id either.
+    let taken = h.registration.take_onloads(SHA);
+    assert_eq!(taken.len(), 5);
+    h.registration
+        .settle_serve((0..5).map(slot).collect(), taken)
+        .await;
+    assert_eq!(h.wire.random_calls(), 1);
+    assert!(h.wire.pings().is_empty());
+    h.advance(RANDOM_ID_RETRY_MS);
+    h.send(9, "g1", URL).await;
+    assert_eq!(h.wire.random_calls(), 2);
+}
+
+#[tokio::test]
+async fn no_random_id_call_during_a_provider_backoff() {
+    let h = Harness::new();
+    h.found_all("g1");
+    h.service.bucket.back_off(&h.bucket_key(), 60, h.now());
+    h.send(1, "g1", URL).await;
+    assert!(h.wire.urls().is_empty(), "{:?}", h.wire.urls());
+}
+
+#[tokio::test]
+async fn an_id_made_while_search_is_turned_off_is_never_saved() {
+    let h = Harness::new();
+    h.found_all("g1");
+    let dir = h.dir.path().to_path_buf();
+    *h.wire.during_random.lock().unwrap() = Some(Box::new(move || forget_install(&dir)));
+    h.send(1, "g1", URL).await;
+    assert_eq!(h.wire.random_calls(), 1);
+    assert!(!h.install_file().exists());
+    assert!(h.wire.pings().is_empty());
+}
+
+#[tokio::test]
+async fn turning_search_off_and_on_or_replacing_the_key_forgets_what_the_old_id_held() {
+    let h = Harness::new();
+    h.found_all("g1");
+    h.send(1, "g1", URL).await;
+    h.registration.note_fetched(&slot(1), Some(SHA), true);
+    for enabled in [false, true] {
+        let change = SettingsUpdate {
+            enabled: Some(enabled),
+            ..SettingsUpdate::default()
+        };
+        settings::set_with(&h.keys(), h.dir.path(), change).unwrap();
+    }
+    let calls = h.wire.urls().len();
+    // The search entry, the pending onload and the sent record are gone: the GIF needs a new
+    // search before it registers again, so no ping repeats the old payload with a new id.
+    assert!(h.registration.take_onloads(SHA).is_empty());
+    h.send(1, "g1", URL).await;
+    assert_eq!(h.wire.urls().len(), calls);
+    assert_eq!(h.service.analytics.held_count(), 0);
+    // Replacing the key forgets them too.
+    h.found_all("g1");
+    settings::save_with(&h.keys(), h.dir.path(), OTHER_KEY).unwrap();
+    h.send(2, "g1", URL).await;
+    assert_eq!(h.wire.urls().len(), calls);
+    assert_eq!(h.service.analytics.held_count(), 0);
+}
+
+#[tokio::test]
+async fn a_send_that_cannot_register_never_reads_the_keychain() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(CountingStore::default());
+    let keys = Keys::new(store.clone(), true, Some(ACCOUNT), Duration::from_secs(3));
+    let wire = Arc::new(Wire::new());
+    let adapters: Adapters = Arc::new(
+        move |_: Provider, key: Secret, now: i64| -> Box<dyn GifProvider> {
+            Box::new(Giphy::new(key, Arc::new(Wire::new()), now))
+        },
+    );
+    let clock: crate::gif::Clock = Arc::new(|| START_MS);
+    let service = Arc::new(GifService::new(
+        dir.path().to_path_buf(),
+        keys,
+        adapters,
+        clock.clone(),
+    ));
+    let registration = Registration::new(service, wire, clock);
+    // No search returned it, and an id with another GIF's URL: neither reads the keychain.
+    registration.register_send(sent(1, "unknown", URL)).await;
+    assert_eq!(store.gets.load(Ordering::SeqCst), 0);
+}
+
+/// A keychain with no key that counts its reads.
+#[derive(Default)]
+struct CountingStore {
+    gets: std::sync::atomic::AtomicUsize,
+}
+impl CredentialStore for CountingStore {
+    fn get(
+        &self,
+        _: &str,
+    ) -> Result<Option<Secret>, crate::commands::credential_store::CredentialError> {
+        self.gets.fetch_add(1, Ordering::SeqCst);
+        Ok(None)
+    }
+    fn set(
+        &self,
+        _: &str,
+        _: &Secret,
+    ) -> Result<(), crate::commands::credential_store::CredentialError> {
+        Ok(())
+    }
+    fn delete(&self, _: &str) -> Result<(), crate::commands::credential_store::CredentialError> {
+        Ok(())
+    }
 }

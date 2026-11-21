@@ -34,6 +34,8 @@ struct Held {
     entries: HashMap<Key, (i64, Entry)>,
     /// Keys in the order they were recorded, oldest first; a key recorded again moves to the end.
     order: VecDeque<Key>,
+    /// The install epoch the entries belong to.
+    epoch: u64,
 }
 
 pub(crate) struct Analytics {
@@ -46,7 +48,19 @@ impl Analytics {
             held: std::sync::Mutex::new(Held {
                 entries: HashMap::new(),
                 order: VecDeque::new(),
+                epoch: 0,
             }),
+        }
+    }
+
+    /// Drop every entry held for an earlier install epoch (search was turned Off, or the key
+    /// removed or replaced), so a new install id never registers a GIF found under the old one.
+    pub(crate) fn start_epoch(&self, epoch: u64) {
+        let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
+        if held.epoch != epoch {
+            held.epoch = epoch;
+            held.entries.clear();
+            held.order.clear();
         }
     }
 
@@ -54,7 +68,7 @@ impl Analytics {
     /// then the oldest past the cap.
     pub(crate) fn record(&self, provider: Provider, found: &[Found], now_ms: i64) {
         let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
-        let Held { entries, order } = &mut *held;
+        let Held { entries, order, .. } = &mut *held;
         for f in found {
             if let Some(pingbacks) = &f.pingbacks {
                 let key = (provider, f.candidate.id.clone());
