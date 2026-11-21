@@ -862,7 +862,9 @@ fn workspaces_html_for(os: &str, template: Template, work_it: bool, title: &str)
             "data-template=\"workspaces\"",
             "data-template=\"mission-control\"",
         ),
-        Template::Workspaces | Template::Starter => WORKSPACES_HTML.to_string(),
+        Template::Workspaces => WORKSPACES_HTML.to_string(),
+        // create writes this page only in its workspaces arm; the starter writes its own pages.
+        Template::Starter => unreachable!("the starter template has no workspaces page"),
     };
     // The noun first, so a title that spells a placeholder stays as it was typed.
     html.replace("{{owner_machine}}", machine_wording::machine_kind(os))
