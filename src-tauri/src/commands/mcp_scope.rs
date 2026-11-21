@@ -4505,7 +4505,7 @@ mod tests {
                 .unwrap();
                 let checkpoint = runtime.join("checkpoint");
                 std::fs::create_dir_all(home.join("sessions")).unwrap();
-                // Reuse the existing final-capture fixture; Hermes DB parsing is SV-ENG-109.
+                // Reuse the existing final-capture fixture; Hermes DB parsing is tracked separately.
                 let record = codex_cleanup_source(&session, home);
                 if order != "exit-first" {
                     persist_cleanup_record(&record);
