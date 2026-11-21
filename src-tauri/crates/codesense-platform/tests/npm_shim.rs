@@ -11,6 +11,8 @@ use codesense_platform::fs::{set_executable, Reach};
 
 const CLAUDE: &str = include_str!("fixtures/npm-shims/claude.cmd");
 const CODEX: &str = include_str!("fixtures/npm-shims/codex.cmd");
+/// The same shim as cmd-shim 8 (npm 11) writes it.
+const CODEX_V8: &str = include_str!("fixtures/npm-shims/codex-cmd-shim-8.cmd");
 
 const CLAUDE_TARGET: &str = r"node_modules\@anthropic-ai\claude-code\bin\claude.exe";
 const CODEX_TARGET: &str = r"node_modules\@openai\codex\bin\codex.js";
@@ -48,13 +50,20 @@ fn refused(path: &Path) -> Result<Option<NpmShim>, ShimError> {
 }
 
 #[test]
-fn the_fixtures_are_the_two_forms_cmd_shim_writes() {
-    assert!(CLAUDE.ends_with("\r\n") && CODEX.ends_with("\r\n"));
-    assert!(!lf(CLAUDE).contains('\r') && !lf(CODEX).contains('\r'));
+fn the_fixtures_are_the_forms_cmd_shim_writes() {
+    for fixture in [CLAUDE, CODEX, CODEX_V8] {
+        assert!(fixture.ends_with("\r\n") && !lf(fixture).contains('\r'));
+    }
     let claude = Path::new("npm").join("claude.cmd");
     let codex = Path::new("npm").join("codex.cmd");
     assert_eq!(npm_shim_script(&claude, CLAUDE), exe(CLAUDE_TARGET));
     assert_eq!(npm_shim_script(&codex, CODEX), node(CODEX_TARGET));
+    assert_eq!(npm_shim_script(&codex, CODEX_V8), node(CODEX_TARGET));
+    // The two node forms differ only where PATHEXT is set.
+    assert_eq!(
+        CODEX_V8.replace("  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n", ""),
+        CODEX.replace("set PATHEXT=%PATHEXT:;.JS;=;% & ", "")
+    );
 }
 
 #[test]
@@ -81,8 +90,11 @@ fn only_npms_two_forms_with_a_contained_path_are_accepted() {
     for ending in endings {
         let claude = ending(CLAUDE);
         let codex = ending(CODEX);
+        let codex_v8 = ending(CODEX_V8);
         let direct = |to: &str| retarget(&claude, CLAUDE_TARGET, to);
         let script = |to: &str| retarget(&codex, CODEX_TARGET, to);
+        let script_v8 = |to: &str| retarget(&codex_v8, CODEX_TARGET, to);
+        assert_eq!(npm_shim_script(&shim(), &codex_v8), node(CODEX_TARGET));
 
         // Both forms, any batch spelling of the shim's name.
         for name in ["x.cmd", "x.CMD", "x.bat", "x.cmd.", "x.cmd "] {
@@ -97,6 +109,7 @@ fn only_npms_two_forms_with_a_contained_path_are_accepted() {
         // A space in the path is fine; it reaches the child as one argument.
         let spaced = r"node_modules\my tool\cli.js";
         assert_eq!(npm_shim_script(&shim(), &script(spaced)), node(spaced));
+        assert_eq!(npm_shim_script(&shim(), &script_v8(spaced)), node(spaced));
         assert_eq!(
             npm_shim_script(&shim(), &direct(r"node_modules\my tool\bin\t.EXE")),
             exe(r"node_modules\my tool\bin\t.EXE")
@@ -127,6 +140,11 @@ fn only_npms_two_forms_with_a_contained_path_are_accepted() {
                 npm_shim_script(&shim(), &script(relative)),
                 refused(&shim()),
                 "node form {relative:?}"
+            );
+            assert_eq!(
+                npm_shim_script(&shim(), &script_v8(relative)),
+                refused(&shim()),
+                "cmd-shim 8 node form {relative:?}"
             );
             let as_exe = format!("{relative}.exe");
             assert_eq!(
@@ -189,8 +207,19 @@ fn every_other_batch_file_is_refused() {
             CODEX.replace("\"_prog=%dp0%\\node.exe\"", "\"_prog=%dp0%\\evil.exe\""),
         ),
         (
-            "an older launch line, without the PATHEXT segment",
+            "cmd-shim 9's body with cmd-shim 8's launch line",
             CODEX.replace("set PATHEXT=%PATHEXT:;.JS;=;% & ", ""),
+        ),
+        (
+            "cmd-shim 8's body with cmd-shim 9's launch line",
+            CODEX_V8.replace(
+                "title %COMSPEC% & \"%_prog%\"",
+                "title %COMSPEC% & set PATHEXT=%PATHEXT:;.JS;=;% & \"%_prog%\"",
+            ),
+        ),
+        (
+            "cmd-shim 8's _prog naming something other than node",
+            CODEX_V8.replace("SET \"_prog=node\"", "SET \"_prog=deno\""),
         ),
         ("a command after the launch", format!("{CODEX}calc\r\n")),
         ("a command before the head", format!("calc\r\n{CODEX}")),

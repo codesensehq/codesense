@@ -114,7 +114,7 @@ impl std::error::Error for ShimError {}
 /// The most of a shim [`shim_argv`] reads: npm's are under 1 KiB.
 const MAX_SHIM_BYTES: u64 = 64 * 1024;
 
-/// The lines every cmd-shim 9 `.cmd` file starts with (`tests/fixtures/npm-shims`).
+/// The lines every cmd-shim 6 to 9 `.cmd` file starts with (`tests/fixtures/npm-shims`).
 const SHIM_HEAD: [&str; 8] = [
     "@ECHO off",
     "GOTO start",
@@ -126,8 +126,9 @@ const SHIM_HEAD: [&str; 8] = [
     "CALL :find_dp0",
 ];
 
-/// The node form's lines between the head and its launch line: `_prog` is
-/// `node.exe` beside the shim, else `node`.
+/// cmd-shim 9's node form: the lines between the head and its launch line
+/// (`_prog` is `node.exe` beside the shim, else `node`), and the launch line
+/// around the script's relative path.
 const NODE_BODY: [&str; 7] = [
     "",
     r#"IF EXIST "%dp0%\node.exe" ("#,
@@ -137,12 +138,32 @@ const NODE_BODY: [&str; 7] = [
     ")",
     "",
 ];
-
-/// The node form's launch line around the script's relative path.
 const NODE_LAUNCH: (&str, &str) = (
     r#"endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & set PATHEXT=%PATHEXT:;.JS;=;% & "%_prog%"  "%dp0%\"#,
     r#"" %*"#,
 );
+
+/// cmd-shim 6 to 8's node form (npm 9 to 11): `PATHEXT` is set in the `ELSE`
+/// branch rather than on the launch line.
+const NODE_BODY_V8: [&str; 8] = [
+    "",
+    r#"IF EXIST "%dp0%\node.exe" ("#,
+    r#"  SET "_prog=%dp0%\node.exe""#,
+    ") ELSE (",
+    r#"  SET "_prog=node""#,
+    "  SET PATHEXT=%PATHEXT:;.JS;=;%",
+    ")",
+    "",
+];
+const NODE_LAUNCH_V8: (&str, &str) = (
+    r#"endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\"#,
+    r#"" %*"#,
+);
+
+/// Each accepted node form, its body and its own launch line: a body of one
+/// version with the launch line of another is no form cmd-shim writes.
+const NODE_FORMS: [(&[&str], (&str, &str)); 2] =
+    [(&NODE_BODY, NODE_LAUNCH), (&NODE_BODY_V8, NODE_LAUNCH_V8)];
 
 /// The direct-program form's launch line around the program's relative path.
 const DIRECT_LAUNCH: (&str, &str) = (r#""%dp0%\"#, r#""   %*"#);
@@ -150,10 +171,11 @@ const DIRECT_LAUNCH: (&str, &str) = (r#""%dp0%\"#, r#""   %*"#);
 /// What the npm shim `shim` runs, read from its `text`: `Ok(None)` when
 /// `shim` is not a batch file ([`windows_extension`] is not `cmd` or `bat`).
 ///
-/// Accepts only the two forms cmd-shim 9 writes for a global install, matched
-/// line for line against `tests/fixtures/npm-shims` with LF or CRLF line ends
-/// and the relative path the only part that varies: the node form (the script
-/// `shim_dir\<relative>` runs under `node`) and the direct-program form when
+/// Accepts only the forms cmd-shim 6 to 9 (npm 9 to 12) writes for a global
+/// install, matched line for line against `tests/fixtures/npm-shims` with LF
+/// or CRLF line ends and the relative path the only part that varies: the node
+/// form, as cmd-shim 9 or as cmd-shim 6 to 8 writes it (the script
+/// `shim_dir\<relative>` runs under `node`), and the direct-program form when
 /// `<relative>` is an `.exe` (`shim_dir\<relative>` runs as itself). The
 /// relative path must stay inside the shim's directory tree, checked as text
 /// before any file is touched: split on `\` and `/`, no segment may be empty
@@ -187,13 +209,17 @@ pub fn npm_shim_script(shim: &Path, text: &str) -> Result<Option<NpmShim>, ShimE
                 program: dir.join(relative),
             }))
         }
-        [node @ .., launch] if node == NODE_BODY => {
-            let relative = launch_target(launch, NODE_LAUNCH).ok_or_else(refused)?;
+        [node @ .., launch] => {
+            let relative = NODE_FORMS
+                .iter()
+                .find(|(form, _)| node == *form)
+                .and_then(|(_, around)| launch_target(launch, *around))
+                .ok_or_else(refused)?;
             Ok(Some(NpmShim::Node {
                 script: dir.join(relative),
             }))
         }
-        _ => Err(refused()),
+        [] => Err(refused()),
     }
 }
 
