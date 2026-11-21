@@ -331,8 +331,9 @@ jobs:
           restore-keys: ${{ steps.apt-key.outputs.restore }}
       - name: Install the package in a clean container
         id: install
-        # A healthy install takes about 2 minutes, less with the archives cached. The timeout is
-        # a backstop: a crawling mirror fails here, by name, before the job's timeout.
+        # A healthy install takes about 2 minutes, less with the archives cached, and the launch
+        # of the installed app about 2 more. The timeout is a backstop: a crawling mirror fails
+        # here, by name, before the job's timeout.
         timeout-minutes: 30
         env:
           TYPE: ${{ matrix.type }}
@@ -362,9 +363,13 @@ jobs:
           key: ${{ steps.install.outcome == 'success' && steps.apt-key.outputs.key || format('{0}-partial-{1}-{2}', steps.apt-key.outputs.key, github.run_id, github.run_attempt) }}
       - name: Name the listing
         id: listing
+        # Also after a failed install, so its launch log is uploaded by name.
+        if: always()
         env:
           LEG: ${{ matrix.arch }}-${{ matrix.type }}-${{ matrix.image }}
-        run: echo "name=linux-install-${LEG//:/-}" >>"$GITHUB_OUTPUT"
+        run: |
+          echo "name=linux-install-${LEG//:/-}" >>"$GITHUB_OUTPUT"
+          echo "launch=linux-launch-${LEG//:/-}" >>"$GITHUB_OUTPUT"
       - name: Upload the listing
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -372,6 +377,16 @@ jobs:
           path: ${{ runner.temp }}/smoke/${{ matrix.type }}.list
           retention-days: 7
           if-no-files-found: error
+      - name: Upload the launch log and screenshot
+        if: always() && steps.listing.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.listing.outputs.launch }}
+          path: |
+            ${{ runner.temp }}/smoke/launch/*.log
+            ${{ runner.temp }}/smoke/launch/*.png
+          retention-days: 7
+          if-no-files-found: warn
 
   linux-resources:
     name: Linux deb and rpm ship the same resources

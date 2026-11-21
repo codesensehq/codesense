@@ -447,6 +447,70 @@ test("cache-key: an image not pinned in smoke-images.txt or a malformed week fai
   fails(cacheKey("ubuntu:22.04", "2026-47", "libgtk-3-0").result, /not a week as YYYY-Www/);
 });
 
+// depends reads the deb with the dpkg-deb stand-in above and the rpm with one that prints
+// FAKE_REQUIRES, or fails when FAKE_RPM_STATUS says so.
+fs.writeFileSync(
+  path.join(fakeBin, "rpm"),
+  '#!/bin/bash\nprintf "%s\\n" "$FAKE_REQUIRES"\nexit "${FAKE_RPM_STATUS:-0}"\n',
+  { mode: 0o755 },
+);
+const rpmPackage = path.join(packages, "CodeSense-0.1.0-1.x86_64.rpm");
+fs.writeFileSync(rpmPackage, "");
+const depends = (type, fields, status) =>
+  spawnSync(
+    "bash",
+    [
+      script,
+      "depends",
+      type,
+      type === "deb" ? path.join(packages, "CodeSense_0.1.0_amd64.deb") : rpmPackage,
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}:${process.env.PATH}`,
+        FAKE_DEPENDS: fields,
+        FAKE_REQUIRES: fields,
+        FAKE_RPM_STATUS: status,
+      },
+    },
+  );
+
+test("depends: the deb's Depends names WebKitGTK 4.1 and GTK 3", () => {
+  passes(depends("deb", "libwebkit2gtk-4.1-0, libgtk-3-0, libayatana-appindicator3-1"));
+  // Versions, architecture qualifiers and alternatives do not hide a name.
+  passes(
+    depends(
+      "deb",
+      "libc6 (>= 2.35), libwebkit2gtk-4.1-0:amd64 (>= 2.40), libfoo | libgtk-3-0 (>= 3.24)",
+    ),
+  );
+  fails(
+    depends("deb", "libwebkit2gtk-4.1-0, libgtk-3-dev"),
+    /does not depend on libgtk-3-0; it depends on: libgtk-3-dev libwebkit2gtk-4.1-0/,
+  );
+  // A name that only contains the wanted one is another package.
+  fails(
+    depends("deb", "libwebkit2gtk-4.1-0-dbg, libgtk-3-0"),
+    /does not depend on libwebkit2gtk-4.1-0/,
+  );
+  fails(depends("deb", ""), /does not depend on libwebkit2gtk-4.1-0/);
+});
+
+test("depends: the rpm's Requires names WebKitGTK 4.1 and GTK 3", () => {
+  passes(depends("rpm", "webkit2gtk4.1\ngtk3\nrpmlib(CompressedFileNames) <= 3.0.4-1"));
+  passes(depends("rpm", "gtk3 >= 3.24\nwebkit2gtk4.1 >= 2.40"));
+  fails(depends("rpm", "webkit2gtk4.1\nlibgtk-3.so.0()(64bit)"), /does not depend on gtk3/);
+  fails(depends("rpm", "webkit2gtk4.1-devel\ngtk3"), /does not depend on webkit2gtk4.1/);
+  fails(depends("rpm", "webkit2gtk4.1\ngtk3", "1"), /rpm cannot read/);
+});
+
+test("depends: a missing package or an unknown type is refused", () => {
+  fails(smoke("depends", "deb", path.join(packages, "absent.deb")), /is not a file/);
+  assert.equal(smoke("depends", "tar", rpmPackage).status, 2);
+});
+
 test("apt-keep: docker-clean goes and apt keeps the packages it downloads", () => {
   const conf = path.join(dir, "apt.conf.d");
   fs.mkdirSync(conf);
@@ -476,7 +540,6 @@ fs.writeFileSync(
   ].join("\n"),
   { mode: 0o755 },
 );
-fs.writeFileSync(path.join(packages, "CodeSense-0.1.0-1.x86_64.rpm"), "");
 const install = (type, image, cache) => {
   const args = path.join(dir, `docker-args-${fixtures++}`);
   const result = spawnSync(
@@ -506,6 +569,23 @@ test("install: a deb container mounts SMOKE_APT_CACHE as its apt archives and ke
   assert.ok(flagged(argv, "-v").includes(`${cache}:/var/cache/apt/archives`));
   assert.ok(flagged(argv, "-e").includes("SMOKE_KEEP_ARCHIVES=1"));
   assert.ok(argv.some((arg) => arg.startsWith(`ubuntu:22.04@sha256:${jammy}`)));
+});
+
+test("install: the container runs the smoke from the checkout, mounted read-only, with IPC_LOCK for an rpm", () => {
+  const root = path.resolve(path.dirname(script), "../..");
+  const argv = install("rpm", "fedora:44", "");
+  assert.ok(flagged(argv, "-v").includes(`${root}:/src:ro`));
+  // Fedora's keyring daemon, started as root, keeps IPC_LOCK or aborts; Ubuntu's does not ask.
+  assert.deepEqual(flagged(argv, "--cap-add"), ["IPC_LOCK"]);
+  assert.deepEqual(flagged(install("deb", "ubuntu:24.04", ""), "--cap-add"), []);
+  assert.deepEqual(argv.slice(-6), [
+    "bash",
+    "/src/scripts/ci/smoke-linux.sh",
+    "in-container",
+    "rpm",
+    "/package/CodeSense-0.1.0-1.x86_64.rpm",
+    "/out/rpm.list",
+  ]);
 });
 
 test("install: an rpm container, or a deb one without SMOKE_APT_CACHE, gets no archive mount", () => {
