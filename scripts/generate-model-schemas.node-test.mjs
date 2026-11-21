@@ -7,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -139,6 +140,55 @@ test("the PR gate still rejects a stale standalone schema without repairing it",
       /routine-yml\.schema\.json is stale/,
     );
     assert.equal(readFileSync(path, "utf8"), stale, "check mode must preserve the stale bytes");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// The CLIs resolve their root from their own path, so the scratch checkout gets copies of them.
+function withCliCopies(root) {
+  for (const path of [
+    "scripts/generate-model-schemas.mjs",
+    "scripts/generate-yaml-schemas.mjs",
+    "scripts/lib/sealed-export.mjs",
+    "scripts/lib/generator-inputs.mjs",
+    "codesense-docs/getting-started/content/generated/schemas/factory-phase.schema.json",
+  ]) {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    copyFileSync(join(ROOT, path), join(root, path));
+  }
+  return (script, env) =>
+    // The real path: each CLI runs only when argv[1] equals its own (symlink-free) module path.
+    spawnSync(process.execPath, [join(realpathSync(root), "scripts", script), "--check"], {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, DOCS_ALLOW_STALE_EXPORT: env, CS_STRICT_EXPORTS: "" },
+    });
+}
+
+test("each CLI's --check passes the stale switch through", () => {
+  const root = scratchRoot();
+  try {
+    const cli = withCliCopies(root);
+    addField(root);
+    for (const script of ["generate-model-schemas.mjs", "generate-yaml-schemas.mjs"]) {
+      const tolerant = cli(script, "1");
+      assert.equal(tolerant.status, 0, `${script}: ${tolerant.stderr}`);
+      assert.match(tolerant.stderr, /NOTICE: Model schema fixture is stale/, script);
+      const strict = cli(script, "");
+      assert.notEqual(strict.status, 0, script);
+      assert.match(strict.stderr, /fixture is stale/, script);
+    }
+    const schema = join(
+      root,
+      "codesense-docs/getting-started/content/generated/schemas/routine-yml.schema.json",
+    );
+    const stale = readFileSync(schema, "utf8").replace(/\n$/, "\n\n");
+    writeFileSync(schema, stale);
+    const result = cli("generate-model-schemas.mjs", "1");
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /routine-yml\.schema\.json is stale/);
+    assert.equal(readFileSync(schema, "utf8"), stale);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
