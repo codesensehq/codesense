@@ -91,9 +91,9 @@ function ensureEntry(key: string): WatchEntry {
 }
 
 /** Spawn the Tauri event-listen for this `(machineId, handle)`'s event stream.
- *  Captures the entry in the closure (not just the key) so that if the nonce GC
- *  drops the entry while `listen()` is pending and a new acquire keys a
- *  successor, the settle cannot write `unlisten` onto the successor. */
+ *  Captures the entry in the closure (not just the key) so that if `retire` or
+ *  the nonce GC drops the entry while `listen()` is pending and a new acquire
+ *  keys a successor, the settle cannot write `unlisten` onto the successor. */
 function startListen(machineId: string, handle: string, bound: WatchEntry): void {
   const key = watchKey(machineId, handle);
   const eventName = `remote-worktree-file-change-${machineId}-${handle}`;
