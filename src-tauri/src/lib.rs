@@ -307,7 +307,7 @@ fn in_process_activity_root(home: &std::path::Path) -> std::io::Result<std::path
     let root = home.join("in-process-activity");
     match codesense_platform::fs::create_dir_new_owner_only(&root) {
         Ok(()) => Ok(root),
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(root),
+        Err(error) if std::io::Error::kind(&error) == std::io::ErrorKind::AlreadyExists => Ok(root),
         Err(error) => Err(error),
     }
 }

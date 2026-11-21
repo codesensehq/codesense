@@ -226,7 +226,7 @@ pub fn union_array(
 /// parent directory to owner-only.
 fn write_atomic_inner(path: &Path, json: &str, private: bool) -> Result<(), JsonIoError> {
     if let Some(parent) = path.parent() {
-        if private && !parent.as_os_str().is_empty() {
+        if private && !std::ffi::OsStr::is_empty(parent.as_os_str()) {
             create_private_parent(parent).map_err(JsonIoError::Io)?;
         } else {
             std::fs::create_dir_all(parent).map_err(JsonIoError::Io)?;
@@ -259,7 +259,10 @@ fn create_private_parent(parent: &Path) -> std::io::Result<()> {
         Ok(()) => Ok(()),
         Err(PrivateDirError::Create(e)) => Err(e),
         Err(PrivateDirError::Tighten(e)) => {
-            log::warn!("could not make {} owner-only: {e}", parent.display());
+            log::warn!(
+                "could not make {} owner-only: {e}",
+                std::path::Path::display(parent)
+            );
             Ok(())
         }
     }

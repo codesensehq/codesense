@@ -28,7 +28,10 @@ impl std::fmt::Display for PrivateDirError {
 /// even when it already existed. Unlike `commands::paths::ensure_private_dir`,
 /// an existing directory is tightened.
 pub(crate) fn create_or_tighten(dir: &Path) -> Result<(), PrivateDirError> {
-    if let Some(parent) = dir.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+    if let Some(parent) = dir
+        .parent()
+        .filter(|parent| !std::ffi::OsStr::is_empty(parent.as_os_str()))
+    {
         std::fs::create_dir_all(parent).map_err(PrivateDirError::Create)?;
     }
     codesense_platform::fs::create_dir_owner_only(dir).map_err(PrivateDirError::Create)?;
