@@ -66,18 +66,13 @@ pub async fn reveal_context_repo(app: tauri::AppHandle, repo_path: String) -> Re
             return Err(format!("context repo not found for {}", repo_name));
         }
 
-        // Open in Finder via macOS `open` command
-        std::process::Command::new("open")
-            .arg(&ctx_dir)
-            .spawn()
-            .map_err(|e| format!("failed to open Finder: {}", e))?;
-
-        Ok(())
+        crate::shared::opener::open(crate::shared::opener::Open::Folder(&ctx_dir))
+            .map_err(|e| format!("failed to open the file manager: {e}"))
     })
     .await
 }
 
-/// Open an arbitrary directory in Finder. Used by Settings to reveal
+/// Open a directory in the file manager. Used by Settings to reveal
 /// CodeSense-managed dirs (team content and the like) so users can drop
 /// files in or edit them externally.
 ///
@@ -88,43 +83,48 @@ pub async fn reveal_context_repo(app: tauri::AppHandle, repo_path: String) -> Re
 #[tauri::command]
 pub async fn reveal_path(path: String) -> Result<(), String> {
     crate::commands::await_blocking("reveal_path", move || {
-        let target = std::path::PathBuf::from(&path);
-
-        // Normalize and verify it lives under a codesense-managed root.
-        let mut normalized = std::path::PathBuf::new();
-        for component in target.components() {
-            match component {
-                std::path::Component::ParentDir => {
-                    normalized.pop();
-                }
-                std::path::Component::CurDir => {}
-                other => normalized.push(other),
-            }
-        }
         let home = crate::commands::paths::codesense_home_dir()
             .ok_or_else(|| "codesense home unavailable".to_string())?;
-        let users_root = home.join(crate::context_repo::USERS_DIR);
-        let core_root = home.join("core");
-        let allowed = normalized.starts_with(&users_root) || normalized.starts_with(&core_root);
-        if !allowed {
-            return Err(format!(
-                "refusing to reveal path outside codesense home: {}",
-                path
-            ));
-        }
-
-        if !target.exists() {
-            return Err(format!("path does not exist: {}", path));
-        }
-
-        std::process::Command::new("open")
-            .arg(&target)
-            .spawn()
-            .map_err(|e| format!("failed to open Finder: {}", e))?;
-
-        Ok(())
+        let target = reveal_target(&path, &home)?;
+        crate::shared::opener::open(crate::shared::opener::Open::Folder(&target))
+            .map_err(|e| format!("failed to open the file manager: {e}"))
     })
     .await
+}
+
+/// The folder `path` names, canonicalized, if it lives under a
+/// codesense-managed root of `home`. The roots are checked on the spelled
+/// path and again on the canonical one, so a symlink can't step outside them.
+fn reveal_target(path: &str, home: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let refuse = || format!("refusing to reveal path outside codesense home: {}", path);
+    let roots = [home.join(crate::context_repo::USERS_DIR), home.join("core")];
+
+    // Normalize and verify it lives under a codesense-managed root.
+    let mut normalized = std::path::PathBuf::new();
+    for component in std::path::Path::new(path).components() {
+        match component {
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => normalized.push(other),
+        }
+    }
+    if !roots.iter().any(|root| normalized.starts_with(root)) {
+        return Err(refuse());
+    }
+
+    let target =
+        std::fs::canonicalize(path).map_err(|_| format!("path does not exist: {}", path))?;
+    let inside = roots.iter().any(|root| {
+        std::fs::canonicalize(root)
+            .map(|root| target.starts_with(root))
+            .unwrap_or(false)
+    });
+    if !inside {
+        return Err(refuse());
+    }
+    Ok(target)
 }
 
 /// Return the URL of the `origin` remote for a source repo on disk.
@@ -306,6 +306,47 @@ mod tests {
         assert_eq!(sanitize_repo_name("/Users/dev/simple").unwrap(), "simple");
         assert!(sanitize_repo_name("/").is_err());
         assert!(sanitize_repo_name("").is_err());
+    }
+
+    #[test]
+    fn reveal_target_keeps_to_the_managed_roots_after_links() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let team = home.join(crate::context_repo::USERS_DIR).join("u/team");
+        let core = home.join("core/docs");
+        let outside = root.path().join("outside");
+        for dir in [&team, &core, &outside] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let s = |p: &std::path::Path| p.to_str().unwrap().to_string();
+
+        let canonical = |p: &std::path::Path| std::fs::canonicalize(p).unwrap();
+        assert_eq!(reveal_target(&s(&team), &home), Ok(canonical(&team)));
+        assert_eq!(reveal_target(&s(&core), &home), Ok(canonical(&core)));
+
+        // A link inside a root that points out of it is refused.
+        let link = team.join("escape");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        let refused = reveal_target(&s(&link), &home).unwrap_err();
+        assert!(refused.starts_with("refusing to reveal"), "{refused}");
+        // A link inside a root that stays inside resolves to its target.
+        let inner = team.join("to-core");
+        std::os::unix::fs::symlink(&core, &inner).unwrap();
+        assert_eq!(reveal_target(&s(&inner), &home), Ok(canonical(&core)));
+
+        // `..` out of a root, a path outside, and a missing path inside.
+        let dotdot = format!("{}/../../../outside", s(&team));
+        assert!(reveal_target(&dotdot, &home)
+            .unwrap_err()
+            .starts_with("refusing to reveal"));
+        assert!(reveal_target(&s(&outside), &home)
+            .unwrap_err()
+            .starts_with("refusing to reveal"));
+        let missing = team.join("gone");
+        assert_eq!(
+            reveal_target(&s(&missing), &home),
+            Err(format!("path does not exist: {}", s(&missing)))
+        );
     }
 
     #[test]
