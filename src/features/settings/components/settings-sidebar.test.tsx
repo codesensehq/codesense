@@ -2,6 +2,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@/test-utils";
 
+import { resetPlatformCaps, setPlatformCaps } from "@/shared/lib/__test-utils__/platform-caps";
+
 import { SettingsSidebar, SECTION_NAV_ITEMS } from "./settings-sidebar";
 
 // Stub Tooltip to render children directly — avoids Radix portal issues in happy-dom.
@@ -154,5 +156,17 @@ describe("SettingsSidebar — collapsed mode", () => {
     render(<SettingsSidebar {...defaultProps} collapsed={false} />);
     const tablist = screen.getByRole("tablist");
     expect(tablist.className).toContain("w-[150px]");
+  });
+});
+
+describe("SettingsSidebar — Messaging", () => {
+  it("lists Messaging, and a key search finds it where the secret store is off", () => {
+    setPlatformCaps({ "secret-store": "the secret store isn't supported here yet" });
+    render(<SettingsSidebar {...defaultProps} query="giphy key" />);
+    const messaging = screen.getByTestId("settings-nav-messaging");
+    expect(messaging).toHaveTextContent("Messaging");
+    expect(messaging.className).not.toContain("opacity-40");
+    expect(screen.getByTestId("settings-nav-general").className).toContain("opacity-40");
+    resetPlatformCaps();
   });
 });

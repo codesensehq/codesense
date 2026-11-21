@@ -4064,16 +4064,28 @@ export interface SessionUsageStory {
   title: string | null;
   status: string | null;
   epic: string | null;
-  /** `associated` when only a context worktree's name ties the session to the story. */
-  basis?: "associated";
+  /** `associated` when only a context worktree's name ties the session to the story; `charged`
+   *  when a charge to the story does, which counts as exact. Absent: exact. */
+  basis?: "associated" | "charged";
+}
+
+/** The span of a charged session's row, epoch ms: `fromMs` null for its usage before its first
+ *  charge, `toMs` null for the open last segment. */
+export interface SessionUsageSegment {
+  fromMs: number | null;
+  toMs: number | null;
 }
 
 /** One agent session's token use and spend, from its agent CLI's own reports (`session_read_usage`).
- *  `costUsd` is null when any of its models has no rate in the price list. */
+ *  A session charged to more than one story is one row per segment, keyed by
+ *  `[cli, sessionId, segment?.fromMs ?? null]`. `costUsd` is null when any of its models has no
+ *  rate in the price list. */
 export interface SessionUsageRow {
   /** The agent CLI the session ran in. The same session id in two CLIs is two rows. */
   cli: "claude" | "codex" | "opencode" | "hermes";
   sessionId: string;
+  /** The CodeSense session id (tab) of the launch it ran under; null with no launch record. */
+  tabSessionId: string | null;
   /** Who ran the session, recorded at launch. Null for sessions CodeSense did not launch. */
   org: string | null;
   team: string | null;
@@ -4094,6 +4106,8 @@ export interface SessionUsageRow {
   tokens: SessionTokens;
   costUsd: number | null;
   unpricedModels: string[];
+  /** Present only on a charged session's rows. */
+  segment?: SessionUsageSegment;
 }
 
 /** One local day's usage across every session and model. */
@@ -4114,10 +4128,12 @@ export interface SessionUsageReport {
   totals: {
     tokens: SessionTokens;
     costUsd: number;
+    /** Rows, so a session charged to more than one story counts once per segment. */
     pricedSessions: number;
     unpricedSessions: number;
   };
-  /** Current full count of matching sessions before any page cut. */
+  /** Current full count of matching rows (sessions, or segments of a charged session) before
+   *  any page cut. */
   total: number;
   /** Present only when more sessions follow; pass it back as `cursor` for the next page. */
   nextCursor?: string;
@@ -10201,6 +10217,29 @@ export const dashboardPublisherKeySave = (key: string) =>
   invoke<DashboardPublisherKeyStatus>("dashboard_publisher_key_save", { key });
 export const dashboardPublisherKeyRemove = () =>
   invoke<DashboardPublisherKeyStatus>("dashboard_publisher_key_remove");
+
+export type GifRating = "g" | "pg" | "pg-13";
+export interface GifSettings {
+  enabled: boolean;
+  provider: "giphy";
+  ceiling: GifRating;
+}
+export interface GifSettingsUpdate {
+  enabled?: boolean;
+  ceiling?: GifRating;
+  production?: boolean;
+}
+export interface GifKeyStatus {
+  status: "missing" | "saved" | "unavailable";
+  hint: string | null;
+  production: boolean;
+}
+export const gifSettingsGet = () => invoke<GifSettings>("gif_settings_get");
+export const gifSettingsSet = (update: GifSettingsUpdate) =>
+  invoke<GifSettings>("gif_settings_set", { update });
+export const gifKeyStatus = () => invoke<GifKeyStatus>("gif_key_status");
+export const gifKeySave = (key: string) => invoke<GifKeyStatus>("gif_key_save", { key });
+export const gifKeyRemove = () => invoke<GifKeyStatus>("gif_key_remove");
 
 export const dashboardInventory = (folder?: string, localOnly = false) =>
   invoke<import("@/features/dashboard-publishing/types").DashboardInventory>(

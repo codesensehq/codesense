@@ -15,6 +15,7 @@ import { AccountSection } from "./account-section";
 import { DashboardsSection } from "./dashboards-section";
 import { GeneralSection, GENERAL_ROW_SPEC_LIST } from "./general-section";
 import { IdentitySection } from "./identity-section";
+import { MessagingSection } from "./messaging-section";
 import { PhasesSection } from "./phases-section/phases-section";
 import { ProjectionExcludesSection } from "./projection-excludes-section";
 import { RepoSection } from "./repo-section";
@@ -163,6 +164,7 @@ export function SettingsPanel() {
             {activeSection === "general" && <GeneralSection query={query} />}
             {activeSection === "appearance" && <AppearanceSection query={query} />}
             {activeSection === "dashboards" && <DashboardsSection query={query} />}
+            {activeSection === "messaging" && <MessagingSection query={query} />}
             {activeSection === "identity" && <IdentitySection query={query} />}
             {activeSection === "shortcuts" && <ShortcutsSection query={query} />}
             {activeSection === "repo" && (

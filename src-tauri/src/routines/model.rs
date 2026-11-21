@@ -1758,7 +1758,10 @@ future_top_key: kept
             .key_for(&team)
             .unwrap_err()
             .to_string()
-            .contains("lives in team acme/api/frontend, which the Mac of a teammate running this team routine may not have"));
+            .contains(&format!(
+                "lives in team acme/api/frontend, which the {} of a teammate running this team routine may not have",
+                machine_wording::machine_kind(machine_wording::RUNNING_OS)
+            )));
         assert_eq!(
             AgentRef::from("acme/api/frontend/triage").key_for(&mine),
             Ok(other_team.clone())

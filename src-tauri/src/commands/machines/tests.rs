@@ -6,6 +6,14 @@ use std::process::Command;
 use super::registry::{Binding, Declaration, Registry, Scope};
 use super::*;
 
+/// The refusal of a team machine's rename, naming the computer the tests run on.
+fn cant_change_here() -> String {
+    format!(
+        "can't be changed from {}",
+        machine_wording::machine_noun_lower(machine_wording::RUNNING_OS)
+    )
+}
+
 #[tokio::test]
 async fn a_stalled_open_names_the_step_it_is_in() {
     let (release, wait) = std::sync::mpsc::channel::<()>();
@@ -1231,7 +1239,7 @@ fn auto_connect_refuses_local_missing_and_needs_setup_bindings() {
     let store = FakeStore::default();
     assert!(set_auto_connect(&env, LOCAL_MACHINE_ID, true)
         .unwrap_err()
-        .contains("This Mac"));
+        .contains(machine_wording::machine_noun(machine_wording::RUNNING_OS)));
     env.registry
         .write(&Scope::Personal, &declaration("gpu-box-1a2b3c"))
         .unwrap();
@@ -2688,7 +2696,7 @@ fn stale_label_save_keeps_the_newer_declaration() {
             false,
         )
         .expect_err(case);
-        assert!(error.contains(refusal), "{case}: {error}");
+        assert!(error.contains(&refusal), "{case}: {error}");
         assert_eq!(
             std::fs::read(&file).unwrap(),
             before,
@@ -5231,7 +5239,7 @@ async fn refused_private_switch_never_disconnects() {
     ] {
         let (result, disconnects) = run(env, input, rewrites).await;
         let error = result.expect_err(case);
-        assert!(error.contains(refusal), "{case}: {error}");
+        assert!(error.contains(&refusal), "{case}: {error}");
         assert_eq!(disconnects, 0, "{case} ended the working connection");
     }
     assert!(!private_setup::claims(&env, id).unwrap());
@@ -5462,7 +5470,7 @@ async fn a_team_switch_that_relabels_is_refused_before_disconnect_or_conversion(
         .await
         .map(drop)
         .unwrap_err();
-    assert!(error.contains("can't be changed from this Mac"), "{error}");
+    assert!(error.contains(&cant_change_here()), "{error}");
     assert_eq!(disconnects.load(std::sync::atomic::Ordering::SeqCst), 0);
 
     // The panel enrolls before it saves: the enroll's preflight and its
@@ -5476,13 +5484,13 @@ async fn a_team_switch_that_relabels_is_refused_before_disconnect_or_conversion(
         .await
         .map(drop)
         .unwrap_err();
-    assert!(error.contains("can't be changed from this Mac"), "{error}");
+    assert!(error.contains(&cant_change_here()), "{error}");
     assert_eq!(disconnects.load(std::sync::atomic::Ordering::SeqCst), 0);
     let error = based_setup(&env, Some(id), &renamed, || {
         private_setup::convert_if_legacy(&env, Some(id), &renamed)
     })
     .unwrap_err();
-    assert!(error.contains("can't be changed from this Mac"), "{error}");
+    assert!(error.contains(&cant_change_here()), "{error}");
     assert_eq!(std::fs::read(&file).unwrap(), before);
     assert!(!private_setup::claims(&env, id).unwrap());
 
@@ -5496,7 +5504,7 @@ async fn a_team_switch_that_relabels_is_refused_before_disconnect_or_conversion(
         false,
     )
     .unwrap_err();
-    assert!(error.contains("can't be changed from this Mac"), "{error}");
+    assert!(error.contains(&cant_change_here()), "{error}");
     assert_eq!(std::fs::read(&file).unwrap(), before);
     assert!(!private_setup::claims(&env, id).unwrap());
 
@@ -5651,7 +5659,7 @@ fn a_private_label_edit_is_written_or_refused_never_dropped() {
             }
             "team private" => {
                 let error = result.unwrap_err();
-                assert!(error.contains("can't be changed from this Mac"), "{error}");
+                assert!(error.contains(&cant_change_here()), "{error}");
                 assert_eq!(listed.label, "Dev Box");
             }
             "stale private" => {
@@ -5703,24 +5711,24 @@ fn a_refused_private_edit_writes_nothing_first() {
         let refusal = match case {
             "label" => {
                 edit.label = "Renamed".into();
-                "can't be changed from this Mac"
+                cant_change_here()
             }
             "host" => {
                 edit.host = "elsewhere.int".into();
-                "address changed"
+                "address changed".into()
             }
             "port" => {
                 edit.port = 2223;
-                "address changed"
+                "address changed".into()
             }
             "jump host" => {
                 edit.jump_host = Some("bastion.int".into());
-                "address changed"
+                "address changed".into()
             }
             _ => unreachable!(),
         };
         let error = save(&env, &store, Some(&id), &edit, &scope, false).unwrap_err();
-        assert!(error.contains(refusal), "{case}: {error}");
+        assert!(error.contains(&refusal), "{case}: {error}");
         assert_eq!(std::fs::read(&file).unwrap(), bytes, "{case}");
         assert_eq!(
             serde_json::to_value(private.binding(&id).unwrap()).unwrap(),

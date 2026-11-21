@@ -716,6 +716,19 @@ describe("kit.queryAll", () => {
     expect(r.days).toEqual(days);
   });
 
+  it("keeps both segments of a session charged to two stories and completes", async () => {
+    const { cs, resolve } = mockKitQueries();
+    const k = loadKit(cs);
+    const p = k.queryAll("sessionUsage", {}, { limit: 2 });
+    await vi.advanceTimersByTimeAsync(0);
+    const charged = { ...ks("seat", 20), cli: "claude", segment: { fromMs: 10, toMs: null } };
+    const before = { ...ks("seat", 9), cli: "claude", segment: { fromMs: null, toMs: 10 } };
+    resolve({ sessions: [charged, before], total: 2 });
+    const r = await p;
+    expect(r.rows).toEqual([charged, before]);
+    expect(r.complete).toBe(true);
+  });
+
   it("walks queryContext rows", async () => {
     const { cs, resolve } = mockKitQueries();
     const k = loadKit(cs);

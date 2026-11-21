@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+pub(crate) mod gif;
 pub(crate) mod media;
 /// Rust mirror of the canonical agent-state literals (TS home: `agent-state.ts`).
 pub mod agent_state;
@@ -802,6 +803,9 @@ pub fn run() {
             app.manage(commands::local_profile::LocalProfileState::load(&profile_home)?);
             commands::local_profile::LocalProfileState::start_import(handle.clone());
             app.manage(commands::guest_session::GuestSessionState::load(commands::paths::codesense_home_dir().as_deref()));
+            // Inbox media: provider media held in memory only, the sha index over every
+            // synced team and the one-time purge of provider files from the disk cache.
+            media::install(app.handle());
             // Local HTML query/routine capabilities remain independent of service access.
             // Registry observation may immediately schedule auto-connect, so
             // every terminal/session and ambient-profile dependency must already be
@@ -1153,6 +1157,11 @@ pub fn run() {
             dashboard_publish::keys::dashboard_publisher_key_save,
             #[cfg(feature = "dashboard-publish")]
             dashboard_publish::keys::dashboard_publisher_key_remove,
+            gif::settings::gif_settings_get,
+            gif::settings::gif_settings_set,
+            gif::settings::gif_key_status,
+            gif::settings::gif_key_save,
+            gif::settings::gif_key_remove,
             #[cfg(not(cs_channel = "internal"))]
             license::commands::license_state,
             #[cfg(not(cs_channel = "internal"))]

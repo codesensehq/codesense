@@ -97,8 +97,11 @@ fn hermes_admin_policy_blocks_preview_and_launch_with_exact_message() {
     std::env::set_var("HERMES_MANAGED_DIR", &policy);
     let launch = prepared(&fixture);
     std::fs::write(policy.join("config.yaml"), "admin: true").unwrap();
-    let message = "This Mac has an admin-managed Hermes policy; CodeSense-managed Hermes sessions aren't supported here yet.";
-    assert!(prepared_with_args(&fixture, Vec::new()).unwrap_err().contains(message));
+    let message = format!(
+        "{} has an admin-managed Hermes policy; CodeSense-managed Hermes sessions aren't supported here yet.",
+        crate::shared::machine_wording::machine_noun(crate::shared::machine_wording::RUNNING_OS)
+    );
+    assert!(prepared_with_args(&fixture, Vec::new()).unwrap_err().contains(&message));
     let cwd = worktree(fixture.root());
     let id = session("hermes-admin-policy");
     let error = apply_for_session(launch, &fixture.managed_program(), &id, &cwd, None, false).err().unwrap();

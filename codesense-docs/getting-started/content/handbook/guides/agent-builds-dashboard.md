@@ -62,9 +62,9 @@ const { sessions, days, totals } = await codesense.sessionUsage({
 // One story only: codesense.sessionUsage({ story: "LL-233" })
 ```
 
-- `sessions`: one row per session, newest first, with `cli` (`claude`, `codex` or `opencode`), `agent`, `models`, `tokens` (`input`, `output`, `cacheRead`, `cacheWrite`), `costUsd`, and `story` as `{id, title, status, epic}`, or `null` when the session was not tied to a story. A session belongs to the story of its story worktree, or else the story its launch was opened for.
+- `sessions`: one row per session, newest first, with `cli` (`claude`, `codex` or `opencode`), `agent`, `models`, `tokens` (`input`, `output`, `cacheRead`, `cacheWrite`), `costUsd`, and `story` as `{id, title, status, epic}`, or `null` when the session was not tied to a story. A session belongs to the story of its story worktree, or else the story its launch was opened for. A session charged to more than one story (`charge_session_story`) is one row per segment instead, each with `segment {fromMs, toMs}` and its own usage, cost and story, so key rows by `sessionId` and `segment.fromMs` and add a session's rows for its whole cost.
 - `days`: totals per local day. `totals`: the whole range.
-- `story: "LL-233"` keeps only that story's sessions, and the days and totals cover only them. `sinceMs`, `untilMs`, `sessionId`, `cwd` and `limit` narrow it further.
+- `story: "LL-233"` keeps only that story's rows, and the days and totals cover only them. `sinceMs`, `untilMs`, `sessionId`, `cwd` and `limit` narrow it further.
 
 `costUsd` is `null` when a model has no price on file; `unpricedModels` names those models. Set a price with `codesense.setModelRate({modelPrefix, effectiveFrom, inputPerMtok, outputPerMtok})`. Only sessions CodeSense launched are counted, and CodeSense never measures time saved: any hours on the page are your team's estimate.
 

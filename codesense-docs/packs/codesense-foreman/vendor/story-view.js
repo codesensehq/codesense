@@ -1,4 +1,4 @@
-// vendored story-view build kit-rev:2 sha256:5a2b599b8f002e06358a3208f6e979e4fb20d5f6eb7527171f0fcaf1e6ac847e
+// vendored story-view build kit-rev:2 sha256:7ff46a3c415799aea6430da8befa3a72e0f729b4f3f73f85c6c78d1892ba5bd3
 (function(){
 'use strict';
 const SCRIPT_SRC=document.currentScript&&document.currentScript.src||'';
@@ -421,12 +421,13 @@ function spendFromTotals(answer,id){
  }
  return {text:`${Number.isFinite(entry.openSessions)&&entry.openSessions>0?'≥ ':''}${money(totals.costUsd)}`,known:true};
 }
+function distinctSessions(rows){return new Set(rows.map(row=>`${row&&row.cli}|${row&&row.sessionId}`)).size;}
 function spendFromUsage(usage,{open=false}={}){
  const sessions=usage&&Array.isArray(usage.sessions)?usage.sessions:null;
  if(!sessions||!sessions.length)return null;
  const priced=sessions.filter(row=>row&&Number.isFinite(row.costUsd));
  if(!priced.length)return null;
- const unpriced=sessions.length-priced.length,notes=[usage.nextCursor?COPY.spend.partial:'',unpriced?COPY.spend.unpricedSome(unpriced):''].filter(Boolean);
+ const unpriced=distinctSessions(sessions.filter(row=>!(row&&Number.isFinite(row.costUsd)))),notes=[usage.nextCursor?COPY.spend.partial:'',unpriced?COPY.spend.unpricedSome(unpriced):''].filter(Boolean);
  return {text:`${open?'≥ ':''}${money(priced.reduce((sum,row)=>sum+row.costUsd,0))}${notes.length?` · ${notes.join(' · ')}`:''}`,known:true};
 }
 function stageModel(status,config){
@@ -3844,8 +3845,9 @@ const costReader=({usage,unknown,dead,settled,wait=Promise.resolve()})=>{
   if(known&&known.state==='loading')return;
   costs.set(pill.sessionId,known||{state:'loading'});
   wait.then(()=>usage({sessionId:pill.sessionId})).then(answer=>{
-   const first=answer&&Array.isArray(answer.sessions)?answer.sessions[0]:null;
-   costs.set(pill.sessionId,Number.isFinite(first&&first.costUsd)?{state:'known',usd:first.costUsd}:{state:'unknown'});
+   const rows=answer&&Array.isArray(answer.sessions)?answer.sessions:[];
+   const usd=rows.length&&rows.every(row=>Number.isFinite(row&&row.costUsd))?rows.reduce((sum,row)=>sum+row.costUsd,0):null;
+   costs.set(pill.sessionId,usd===null?{state:'unknown'}:{state:'known',usd});
   },()=>costs.set(pill.sessionId,{state:'unknown'})).then(()=>{if(!dead())settled(pill);});
  };
  return {text,read,has:pill=>costs.has(pill.sessionId)};
@@ -3863,7 +3865,7 @@ const sumKnown=values=>{const known=values.filter(Number.isFinite);return known.
 function groups(rows,keyOf){
  const by=new Map();
  for(const row of rows){const key=keyOf(row);if(!by.has(key))by.set(key,[]);by.get(key).push(row);}
- const list=[...by].map(([label,members])=>({label,usd:sumKnown(members.map(row=>row.costUsd)),sessions:members.length,unpriced:members.filter(row=>!Number.isFinite(row.costUsd)).length}));
+ const list=[...by].map(([label,members])=>({label,usd:sumKnown(members.map(row=>row.costUsd)),sessions:distinctSessions(members),unpriced:distinctSessions(members.filter(row=>!Number.isFinite(row.costUsd)))}));
  const top=Math.max(...list.map(group=>group.usd===null?-Infinity:group.usd));
  return list.sort((a,b)=>(b.usd===null?-1:b.usd)-(a.usd===null?-1:a.usd)||a.label.localeCompare(b.label)).map(group=>({...group,share:group.usd!==null&&top>0?group.usd/top:null}));
 }
@@ -3871,10 +3873,10 @@ function usageModel(usage,points,sessions){
  const rows=Array.isArray(usage&&usage.sessions)?usage.sessions:null;
  if(!rows)return {kind:'error'};
  if(!rows.length)return {kind:'empty'};
- const handles=handlesOf(sessions),usd=sumKnown(rows.map(row=>row.costUsd)),unpriced=rows.filter(row=>!Number.isFinite(row.costUsd)).length;
+ const handles=handlesOf(sessions),usd=sumKnown(rows.map(row=>row.costUsd)),unpriced=distinctSessions(rows.filter(row=>!Number.isFinite(row.costUsd)));
  const tokens=sumKnown(rows.map(row=>row.tokens&&typeof row.tokens==='object'?sumKnown(TOKEN_KEYS.map(key=>row.tokens[key])):null));
  const perPoint=usd!==null&&Number.isFinite(points)&&points>0?usd/points:null;
- return {kind:'ok',sessions:rows.length,usd,unpriced,partial:Boolean(usage.nextCursor),tokens,perPoint,
+ return {kind:'ok',sessions:distinctSessions(rows),usd,unpriced,partial:Boolean(usage.nextCursor),tokens,perPoint,
   roles:groups(rows,row=>launchRole({role:row.role,handle:handles.get(String(row.sessionId)),agent:row.agent},'unattributed')),models:groups(rows,row=>(Array.isArray(row.models)&&row.models.length?row.models.map(modelName).join(' + '):'unknown model'))};
 }
 const tokensText=count=>count>=1e6?`${(count/1e6).toFixed(1)} M`:count>=1e3?`${(count/1e3).toFixed(1)} k`:String(count);

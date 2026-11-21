@@ -10,6 +10,7 @@ export type SectionKey =
   | "general"
   | "appearance"
   | "dashboards"
+  | "messaging"
   | "identity"
   | "shortcuts"
   | "account"

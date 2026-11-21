@@ -580,8 +580,8 @@ jobs:
       CARGO_INCREMENTAL: "0"
       RUST_BACKTRACE: "1"
       CARGO_TERM_COLOR: always
-      # Only the crates that pass on Linux today, and the bridge; macOS also runs pty-core,
-      # session-server, guards and the desktop app.
+      # The host crates and the bridge; Rust (Linux app) runs pty-core, session-server and the
+      # desktop app's unit tests, and macOS runs them all with guards.
       RUST_PACKAGES: -p codesense-platform -p codesense-host-proto -p codesense-fs-core -p codesense-bridge
     steps:
       # All paths below are relative to this repository's checkout.
@@ -676,9 +676,9 @@ jobs:
   rust-check-linux:
     name: Rust check (Linux)
     # A compile check of the desktop app and its tests on pull requests, merge groups, main and the
-    # nightly run: the only compile of the app before a merge. Check only: the tests themselves run
-    # on macOS, after the merge. It also builds the release-only `dashboard-publish` feature, which
-    # no other public job compiles.
+    # nightly run: the only compile of the app before a merge. Check only: the app's unit tests run
+    # in Rust (Linux app) and on macOS. It also checks the release-only `dashboard-publish` feature
+    # on the internal channel; Rust (Linux app) builds that feature only for its beta-channel tests.
     # Gap: code behind `cfg(target_os = "macos")` and the macOS-only dependencies is not compiled
     # on Linux. A change to that code first compiles on main, after the merge; add the `ci:macos`
     # label to the pull request to run the macOS job before the queue.
@@ -737,16 +737,18 @@ jobs:
 
   rust-linux-app:
     name: Rust (Linux app)
-    # The app crate's Linux-relevant tests, starting with the credential store against a real
-    # Secret Service (GNOME Keyring on a private session bus). Not a required check. The tests are
-    # `#[ignore]`d everywhere else, so only this job runs them. It widens as more of the app's
-    # Linux tests move here. It also runs pty-core's pty contract against the unix pty. Like the
+    # The shared suites on Linux: all of pty-core, session-server and the app's unit tests, plus
+    # the credential store against a real Secret Service (GNOME Keyring on a private session bus),
+    # whose tests are `#[ignore]`d everywhere else, so only this job runs them. A test that cannot
+    # run on Linux is gated off it on its module, with the reason. Not a required check. Like the
     # macOS and Windows jobs it skips merge groups, and runs on pull requests, main and the nightly
     # run.
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' && github.event_name != 'merge_group' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # Measured: about 38 minutes (compile 5, Secret Service 5, the suites 26), before the updater's
+    # beta build, which compiles the app once more.
+    timeout-minutes: 60
     permissions:
       contents: read
     defaults:
@@ -762,11 +764,21 @@ jobs:
         with:
           persist-credentials: false
       - name: Install system libraries
-        # The shared app list, plus a session bus, the keyring daemon and its CLI, and for PDF
-        # export's renderer a virtual display, GTK's German translations and poppler's readers.
+        # The shared app list, plus a session bus, the keyring daemon and its CLI, zsh for the spawn
+        # tests of a zsh user, and for PDF export's renderer a virtual display, GTK's German
+        # translations and poppler's readers.
         run: >-
-          bash scripts/install-linux-app-libs.sh dbus gnome-keyring libsecret-tools
+          bash scripts/install-linux-app-libs.sh dbus gnome-keyring libsecret-tools zsh
           xvfb xauth language-pack-gnome-de-base language-pack-de poppler-utils
+      - name: Make zsh's completion directories private
+        # zsh's compinit stops at a prompt over the runner's group-writable function directories,
+        # so a zsh test session never reaches its first prompt.
+        run: |
+          insecure=$(zsh -fc 'autoload -Uz compaudit; compaudit' 2>/dev/null || true)
+          if [[ -n "$insecure" ]]; then printf '%s\n' "$insecure" | xargs sudo chmod g-w,o-w; fi
+      - name: Allow unprivileged user namespaces
+        # Ubuntu 24.04 restricts them, and Codex's launch preflight then refuses (the remedy it names).
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Set up pnpm
         uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - name: Set up Node
@@ -803,21 +815,20 @@ jobs:
       - name: Build sidecars
         # The app's build script needs the bundled sidecars to exist.
         run: bash scripts/build-session-server.sh
-      - name: Compile the app's tests
-        run: cargo nextest run --profile ci --locked -p codesense --lib --no-run
-      - name: Test the git-ai pins and the capability table
-        # The pure tests of the pin each target installs and of where git-ai and the other
-        # capabilities are on, so Linux checks the pin and answer its own target runs with, and
-        # the git-ai facade's tests with the capability off.
-        run: >-
-          cargo nextest run --profile ci --locked -p codesense --lib --retries 0
-          -E 'test(/^platform_caps::tests::/) | test(/^attribution::facade::tests::/) | test(/^attribution::install::tests::(every_target_pin_parses_and_names_its_own_platform|every_git_ai_pin_file_has_a_target_and_every_target_a_file|linux_targets_pin_the_cs5_release|a_target_without_a_pin_has_none|the_running_pin_is_the_hosts_or_else_the_macos_one|a_pin_for_another_platform_is_refused|supported_needs_a_pin_and_the_capability)$/)'
-      - name: Test the machine values agents read
-        # The local machine stays "This Mac" as data off macOS too, while the text a person reads
-        # says "This computer".
-        run: >-
-          cargo nextest run --profile ci --locked -p codesense --lib --retries 0
-          -E 'test(/^mcp::(terminal_tabs|identity_tools)::tests::a_local_tab_is_on_this_mac_on_every_os$/) | test(/^commands::machines::tests::the_local_machine_is_labelled_this_mac_on_every_os$/)'
+      - name: Compile the tests
+        id: compile
+        # Each suite with the arguments its run below takes (one --lib would apply to every package).
+        env:
+          SUITES: &suites |-
+            pty-core -p codesense-pty-core
+            session-server -p codesense-session-server
+            app -p codesense --lib
+        run: |
+          while read -r _ packages; do
+            [[ -n $packages ]] || continue
+            read -r -a args <<< "$packages"
+            cargo nextest run --profile ci --locked "${args[@]}" --no-run
+          done <<< "$SUITES"
       - name: Test the credential store against Secret Service
         # A private session bus; the script unlocks the keyring, checks it, and runs the tests.
         run: dbus-run-session -- bash scripts/run-secret-service-tests.sh
@@ -832,13 +843,65 @@ jobs:
           sudo locale-gen de_DE.UTF-8
           xvfb-run -a cargo nextest run --profile ci --locked -p codesense --lib --retries 0 \
             --run-ignored all -E 'test(/^commands::export_pdf::render::tests::/)'
-      - name: Test the pty contract, the cursor-query answer and a session with no viewer
-        # A real pty behind a host running the emulator worker (built with the sidecars above), as
-        # on Windows (ConPTY), a session that reports its exit with no viewer, and the runner's
-        # answer to a pseudo console's cursor query. nextest fails a run that matches no test.
+      - name: Test pty-core, session-server and the app
+        # A real pty behind a host running the emulator worker (built with the sidecars above).
+        # Runs after a failed Secret Service step, not when the test build never ran. Each run's
+        # JUnit report is kept before the next overwrites it.
+        if: (success() || failure()) && steps.compile.outcome == 'success'
+        env:
+          SUITES: *suites
         run: |
-          cargo nextest run --profile ci --locked -p codesense-pty-core --test pty_contract --test headless_session
-          cargo nextest run --profile ci --locked -p codesense-pty-core --lib -E 'test(/^runner::cursor_reply::/)'
+          mkdir -p "$RUNNER_TEMP/junit"
+          # A report left by the Secret Service runs is not one of these.
+          rm -f target/nextest/ci/junit.xml
+          status=0
+          while read -r part packages; do
+            [[ -n $packages ]] || continue
+            read -r -a args <<< "$packages"
+            cargo nextest run --profile ci --locked "${args[@]}" || status=1
+            if [[ -f target/nextest/ci/junit.xml ]]; then mv target/nextest/ci/junit.xml "$RUNNER_TEMP/junit/$part.xml"; fi
+          done <<< "$SUITES"
+          exit "$status"
+      - name: Test the updater on the beta channel
+        # The license module (the beta channels' updater) compiles only off the internal channel,
+        # the default, so its tests need a beta build of the app of their own, with the dashboard
+        # publishing a beta release turns on. The beta channel reads only public config
+        # (tauri.beta-prod.conf.json) and a release time.
+        if: (success() || failure()) && steps.compile.outcome == 'success'
+        env:
+          CODESENSE_CHANNEL: beta
+          # The production share host a beta build names, which its share-host test checks.
+          CODESENSE_DASH_HOST: https://share.codesense.ai
+          BETA_TESTS: >-
+            test(/^license::/)
+            | test(=commands::dashboard_launch::tests::license_headless_runs_count_a_starting_run_until_it_is_released)
+            | test(=mcp::feedback_tool::tests::in_the_beta_the_tool_refuses_and_says_why)
+            | test(=dashboard_publish::client::tests::a_beta_channel_uses_only_its_share_host)
+        run: |
+          mkdir -p "$RUNNER_TEMP/junit"
+          status=0
+          # Every test that compiles only off the internal channel: the license module's and the
+          # three outside it gated not(cs_channel = "internal") or on a beta channel.
+          # updates.rs's and static_channel.rs's tests are macOS-only until the updater's Linux port.
+          CODESENSE_RELEASED_AT="$(git log -1 --format=%ct)" \
+            cargo nextest run --profile ci --locked -p codesense --lib --features dashboard-publish \
+            -E "$BETA_TESTS" || status=1
+          if [[ -f target/nextest/ci/junit.xml ]]; then mv target/nextest/ci/junit.xml "$RUNNER_TEMP/junit/license.xml"; fi
+          exit "$status"
+      - name: List flaky tests
+        # A pass on nextest's one retry is flaky: listed in the job summary and the JUnit report,
+        # and tracked as a public issue by flaky-issues on main.
+        if: (success() || failure()) && steps.compile.outcome == 'success'
+        run: for report in "$RUNNER_TEMP"/junit/*.xml; do node scripts/flaky-tests.mjs summary "$report"; done
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          # flaky-issues reads rust-*-junit-<run>-<attempt>.
+          name: rust-linux-app-junit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/junit/
+          retention-days: 7
+          if-no-files-found: warn
 
   rust-check-windows:
     name: Rust check (Windows)
@@ -923,7 +986,7 @@ jobs:
 
   flaky-issues:
     name: Track flaky Rust tests
-    needs: [rust-macos, rust-linux]
+    needs: [rust-macos, rust-linux, rust-linux-app]
     # The only job that writes issues: the nightly run on main in this repository, never pull
     # requests, merge groups or forks. It reads the uploaded JUnit reports; the test jobs stay read-only.
     if: ${{ !cancelled() && github.event_name == 'schedule' && github.ref == 'refs/heads/main' && !github.event.repository.fork }}
