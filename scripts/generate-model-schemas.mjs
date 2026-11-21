@@ -13,6 +13,7 @@ import {
   driftInheritedFromMain,
   exportsUntouchedSinceMain,
   frozenExport,
+  strictExports,
 } from "./lib/sealed-export.mjs";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -114,6 +115,9 @@ export function modelSchemas(
     ]),
   );
 }
+// The model pin the tests read: the committed fixture, strict only with CS_STRICT_EXPORTS=1.
+export const pinnedModels = (root = ROOT, env = process.env, warn = console.warn) =>
+  modelSchemas(root, { check: strictExports(env), warn });
 function output(path, content, check) {
   if (check) {
     if (readFileSync(path, "utf8") !== content)

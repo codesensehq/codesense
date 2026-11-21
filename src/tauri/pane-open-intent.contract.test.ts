@@ -101,6 +101,8 @@ describe("pane_open intent parity", () => {
 
   // The generated reference is rendered from the cargo export, which PRs leave alone: it lags a
   // description change until the next refresh, so it is pinned only when CS_STRICT_EXPORTS=1.
+  // Restates strictExports() in scripts/lib/sealed-export.mjs, the one definition: that module
+  // has no type declarations for the frontend typecheck.
   it.runIf(process.env.CS_STRICT_EXPORTS === "1")(
     "publishes the channel and size limit in the generated MCP reference",
     () => {

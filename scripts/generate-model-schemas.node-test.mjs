@@ -19,11 +19,11 @@ import {
   generate,
   verifySources,
   staleSources,
-  modelSchemas,
+  pinnedModels,
   queuedExport,
   schemaFields,
 } from "./generate-model-schemas.mjs";
-import { REFRESH_ROUTE, strictExports } from "./lib/sealed-export.mjs";
+import { REFRESH_ROUTE } from "./lib/sealed-export.mjs";
 
 // A scratch checkout holding the fixture, its sources and the Node outputs, with origin/main at
 // its first commit, so the PR gate's "untouched since main" rule runs against real git.
@@ -167,36 +167,22 @@ test("verifySources is the strict freshness check and never rehashes the fixture
   assert.equal(readFileSync(path, "utf8"), bytes, "freshness checks never rehash the fixture");
 });
 
-// The pin on the committed fixture: strict with CS_STRICT_EXPORTS=1, else a stale fixture is a notice.
-const pinnedModels = () => modelSchemas(ROOT, { check: strictExports(), warn: () => {} });
-
 test("the model pin is strict only with CS_STRICT_EXPORTS=1", () => {
   const root = scratchRoot();
   try {
     addField(root);
-    const run = (env) =>
-      spawnSync(
-        process.execPath,
-        [
-          "--input-type=module",
-          "-e",
-          `import { modelSchemas } from ${JSON.stringify(join(ROOT, "scripts/generate-model-schemas.mjs"))};
-           import { strictExports } from ${JSON.stringify(join(ROOT, "scripts/lib/sealed-export.mjs"))};
-           modelSchemas(${JSON.stringify(root)}, { check: strictExports(), warn: () => {} });`,
-        ],
-        { encoding: "utf8", env: { ...process.env, CS_STRICT_EXPORTS: env } },
-      );
-    assert.equal(run("").status, 0, run("").stderr);
-    const strict = run("1");
-    assert.notEqual(strict.status, 0);
-    assert.match(strict.stderr, /fixture is stale: (?:\S+, )*src-tauri\/src\/routines\/model.rs/);
+    assert.doesNotThrow(() => pinnedModels(root, {}, () => {}));
+    assert.throws(
+      () => pinnedModels(root, { CS_STRICT_EXPORTS: "1" }),
+      /fixture is stale: (?:\S+, )*src-tauri\/src\/routines\/model.rs/,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
 test("the browser rows retain all root fields and nested custom wire shapes", () => {
-  const models = pinnedModels();
+  const models = pinnedModels(ROOT, process.env, () => {});
   for (const model of Object.values(models)) {
     for (const key of Object.keys(model.schema.properties))
       assert.ok(
