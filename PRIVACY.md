@@ -163,7 +163,7 @@ Install & Restart.
 - **Code:** `src-tauri/src/attribution/managed.rs` (`CONFIG`,
   `LOCAL_NOTES_CONFIG`), `src-tauri/src/attribution/prefs.rs`
   (`push_destinations`). The fetch after a pull or clone is in the git-ai build
-  CodeSense bundles (tag `v1.7.5-cs.4`): `src/daemon.rs`
+  CodeSense bundles (tag `v1.7.5-cs.7`): `src/daemon.rs`
   (`apply_pull_notes_sync_side_effect`, `apply_clone_notes_sync_side_effect`).
 
 ### 9. MCP servers you configure
