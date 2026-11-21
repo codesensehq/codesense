@@ -23,16 +23,20 @@ pub enum Verb {
     Notify,
     /// Deny a call that would read a credential file ([`super::secret_guard`]).
     SecretGuard,
+    /// Keep a turn going once when the agent hasn't answered the person in the chat
+    /// ([`super::reply_check`]).
+    ReplyCheck,
 }
 
 impl Verb {
-    pub const ALL: [Verb; 2] = [Verb::Notify, Verb::SecretGuard];
+    pub const ALL: [Verb; 3] = [Verb::Notify, Verb::SecretGuard, Verb::ReplyCheck];
 
     /// The subcommand as the bridge reads it.
     pub fn as_str(self) -> &'static str {
         match self {
             Verb::Notify => "notify",
             Verb::SecretGuard => "secret-guard",
+            Verb::ReplyCheck => "reply-check",
         }
     }
 }
@@ -185,6 +189,20 @@ mod tests {
                 None,
             ),
             (
+                Verb::ReplyCheck,
+                HookTarget::Posix,
+                r#"[ -x "$CODESENSE_ACTIVITY_HOST/codesense-bridge" ] && "$CODESENSE_ACTIVITY_HOST/codesense-bridge" hook reply-check || true"#,
+                None,
+                None,
+            ),
+            (
+                Verb::ReplyCheck,
+                HookTarget::Windows,
+                r#"if ($env:CODESENSE_ACTIVITY_HOST -and (Test-Path -LiteralPath "$env:CODESENSE_ACTIVITY_HOST\codesense-bridge.exe")) { & "$env:CODESENSE_ACTIVITY_HOST\codesense-bridge.exe" hook reply-check }; exit 0"#,
+                Some("powershell"),
+                Some("continue"),
+            ),
+            (
                 Verb::Notify,
                 HookTarget::Windows,
                 r#"if ($env:CODESENSE_ACTIVITY_HOST -and (Test-Path -LiteralPath "$env:CODESENSE_ACTIVITY_HOST\codesense-bridge.exe")) { & "$env:CODESENSE_ACTIVITY_HOST\codesense-bridge.exe" hook notify }; exit 0"#,
@@ -219,6 +237,11 @@ mod tests {
                 Verb::SecretGuard,
                 HookTarget::Posix,
                 r#"codesense-bridge" hook secret-guard"#,
+            ),
+            (
+                Verb::ReplyCheck,
+                HookTarget::Posix,
+                r#"codesense-bridge" hook reply-check"#,
             ),
             (
                 Verb::Notify,

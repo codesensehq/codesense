@@ -3794,9 +3794,9 @@ pub(crate) fn merge_remote_notify_hooks(
     Ok(())
 }
 
-/// [`merge_hook_entry`] of `cli`'s status hook at `events` and its secret-file guard, as
-/// `target` (the OS of the host that runs them) writes them; nothing for a CLI with no project
-/// hooks, which has no status hooks either.
+/// [`merge_hook_entry`] of `cli`'s status hook at `events`, its secret-file guard and its
+/// reply reminder, as `target` (the OS of the host that runs them) writes them; nothing for a
+/// CLI with no project hooks, which has no status hooks either.
 fn merge_notify_hooks(
     settings: &mut serde_json::Value,
     cli: AgentCli,
@@ -3819,8 +3819,18 @@ fn merge_notify_hooks(
         guard.entry(),
         &guard.marker,
     );
+    // The reply reminder rides every settings body the guard does. A folder's copy beside a
+    // launch's runs twice at one Stop; the app names each owed message once, so the two never
+    // name the same one.
+    let reply = match hooks.reply_verb {
+        Some(verb) => {
+            let reply = hook::command(verb, target);
+            merge_hook_entry(settings, &["Stop"], reply.entry(), &reply.marker)
+        }
+        None => Some(false),
+    };
     let deny = merge_deny_rules(settings, codesense_pty_core::notify_hook::deny_rules());
-    Some(replaced | status? | guard? | deny?)
+    Some(replaced | status? | guard? | reply? | deny?)
 }
 
 /// Rewrite in place, as `target` writes it now, each hook entry whose command is exactly one an
@@ -9842,10 +9852,15 @@ mod tests {
         }
         assert_eq!(v["permissions"]["allow"], serde_json::json!(["Read"]));
         let stop = hook_commands(&v, "Stop");
-        // A turn end re-arms the inbox waiter, which tells the agent about new mail.
+        // A turn end checks the agent answered the person, and re-arms the inbox waiter, which
+        // tells the agent about new mail.
         assert_eq!(
             stop,
-            vec![notify_command().to_string(), inbox_hook(&v, "Stop")]
+            vec![
+                notify_command().to_string(),
+                hook::command(Verb::ReplyCheck, HookTarget::local()).command,
+                inbox_hook(&v, "Stop")
+            ]
         );
         assert_eq!(
             hook_commands(&v, "SessionStart"),
@@ -9866,6 +9881,11 @@ mod tests {
                 "{ev}"
             );
         }
+        assert_eq!(
+            entries(&v, "Stop", Verb::ReplyCheck, HookTarget::local()).len(),
+            1,
+            "the reply reminder still once"
+        );
         assert!(
             !tmp.path().join(".claude").exists(),
             "the folder is only read"
@@ -10145,11 +10165,31 @@ mod tests {
                 [hook::command(Verb::SecretGuard, written).entry()],
                 "{row}"
             );
+            assert_eq!(
+                entries(&settings, "Stop", Verb::ReplyCheck, written),
+                [hook::command(Verb::ReplyCheck, written).entry()],
+                "{row}"
+            );
             if written == HookTarget::Posix {
                 let text = settings.to_string();
                 assert!(!text.contains("\"shell\""), "{row}: {text}");
                 assert!(!text.contains("onFailure"), "{row}: {text}");
             }
+        }
+    }
+
+    /// Only Claude's `Stop` can continue a turn, so no other CLI's settings get the reply
+    /// reminder.
+    #[test]
+    fn only_claude_gets_the_reply_reminder() {
+        let tmp = TempDir::new().unwrap();
+        for cli in [AgentCli::Codex, AgentCli::OpenCode] {
+            let mut settings = serde_json::json!({});
+            merge_launch_notify_hooks(&mut settings, tmp.path(), cli, HookTarget::local());
+            assert!(
+                !settings.to_string().contains("reply-check"),
+                "{cli:?}: {settings}"
+            );
         }
     }
 
@@ -10167,7 +10207,7 @@ mod tests {
                 merge_notify_hooks(&mut settings, AgentCli::Claude, &["PreToolUse"], target)
                     .unwrap();
             }
-            for verb in Verb::ALL {
+            for verb in [Verb::Notify, Verb::SecretGuard] {
                 assert_eq!(
                     entries(&settings, "PreToolUse", verb, target).len(),
                     1,
@@ -10244,6 +10284,11 @@ mod tests {
                 entries(&settings, "PreToolUse", Verb::SecretGuard, target),
                 [hook::command(Verb::SecretGuard, target).entry()],
                 "{writer:?} writer, remote {remote}"
+            );
+            assert_eq!(
+                entries(&settings, "Stop", Verb::ReplyCheck, target),
+                [hook::command(Verb::ReplyCheck, target).entry()],
+                "{writer:?} writer, remote {remote}: one reply reminder, in the host's form"
             );
             let text = settings.to_string();
             for (_, legacy) in hook::LEGACY_COMMANDS {

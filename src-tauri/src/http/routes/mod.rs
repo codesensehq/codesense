@@ -44,6 +44,7 @@ pub fn api_router(state: AppState) -> Router {
             paths(
                 health::health,
                 terminal::terminal_status,
+                terminal::reply_check,
                 viewer::serve_file,
                 viewer::serve_baseline_file,
                 viewer::serve_pane,
@@ -53,6 +54,7 @@ pub fn api_router(state: AppState) -> Router {
                 health::HealthResponse,
                 terminal::HookPayload,
                 terminal::StatusResponse,
+                terminal::ReplyCheckResponse,
             ))
         )]
         struct ApiDoc;

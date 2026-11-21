@@ -85,6 +85,11 @@ pub(crate) fn emit_inbox_changed<R: tauri::Runtime>(
 /// The registry and store side of the inbox.
 #[async_trait::async_trait]
 pub(crate) trait InboxHost: Send + Sync {
+    /// The person's messages each session took and hasn't answered (the reply reminder's
+    /// record): the app's one record.
+    fn replies_owed(&self) -> &super::reply_owed::RepliesOwed {
+        super::reply_owed::replies_owed()
+    }
     fn media_config(&self, _team: &LaunchTeam) -> crate::media::Config {
         crate::media::Config::default()
     }
@@ -316,6 +321,14 @@ impl KnownSessions {
     /// Every listed session, in the roster's order.
     pub(crate) fn iter(&self) -> impl Iterator<Item = &KnownSession> {
         self.0.iter()
+    }
+
+    /// The tab session of the running session with `handle`.
+    fn running_tab(&self, handle: &str) -> Option<&str> {
+        self.0
+            .iter()
+            .find(|s| s.running && s.handle == handle)
+            .and_then(|s| s.session.as_deref())
     }
 
     /// The session `id` names: by its handle, else by its tab session (a running one
@@ -928,6 +941,7 @@ async fn store_message(
     let fetch_location = location.clone();
     let text = text.to_string();
     let recipient = to.clone();
+    let sender = from.clone();
     let request_id = request_id.map(str::to_string);
     let stored = with_store("send_message", location.path, move |store| {
         inbox::inbox_insert_request_outcome(
@@ -953,6 +967,9 @@ async fn store_message(
         Ok(outcome) => outcome,
         Err(reason) => return Ok(SendResult::invalid(reason)),
     };
+    if recipient == HUMAN {
+        host.replies_owed().answered(&sender);
+    }
     if inserted {
         if let Some((attachment, true)) = prepared {
             start_media_fetch(host.clone(), fetch_location, message_id, attachment);
@@ -1999,10 +2016,19 @@ pub(crate) async fn read_messages<'a>(
         Ok(None) | Err(_) => return Ok(Vec::new()),
     };
     let InboxLocation { team, path } = session_store(host, &me).await?;
+    let reader = me.clone();
     let taken = with_store("read_messages", path, move |store| {
         inbox::inbox_take_unread(store, &me)
     })
     .await??;
+    // The person's messages this session took are owed an answer until it gives one.
+    if let Some(tab) = sessions.running_tab(&reader) {
+        host.replies_owed().took(
+            tab,
+            &reader,
+            taken.iter().map(|m| (m.id, m.from.as_str())),
+        );
+    }
     if !taken.is_empty() {
         host.inbox_event(InboxEvent::new(
             InboxChange::Read,

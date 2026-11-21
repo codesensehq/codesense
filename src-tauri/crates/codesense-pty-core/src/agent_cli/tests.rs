@@ -634,6 +634,10 @@ fn claudes_status_hooks_report_what_its_own_hooks_do_and_codex_has_none() {
     assert_eq!(hooks.committed, ".claude/settings.json");
     assert_eq!(hooks.local, ".claude/settings.local.json");
     assert_eq!(hooks.status_verb, codesense_host_proto::hook::Verb::Notify);
+    assert_eq!(
+        hooks.reply_verb,
+        Some(codesense_host_proto::hook::Verb::ReplyCheck)
+    );
 }
 
 #[test]

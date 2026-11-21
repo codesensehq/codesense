@@ -155,6 +155,8 @@ pub mod spawn_cap;
 // dashboard execution loop (openWorkspace / runPrompt).
 // The inbox agent sessions and the human message each other through.
 pub mod agent_inbox;
+// The person's messages each agent session took and hasn't answered (the reply reminder).
+pub(crate) mod reply_owed;
 // One read model of agents and their inboxes for dashboards and agents (sessions, an
 // agent's instances, the inbox, role queues, updates, the human's status).
 pub mod agent_read_model;

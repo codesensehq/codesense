@@ -1,4 +1,4 @@
-// vendored story-view build kit-rev:2 sha256:1eb6f4555f2662864941398e9971e5e822d632d039bf94dbf51a77c0d2fe89fd
+// vendored story-view build kit-rev:2 sha256:5a2b599b8f002e06358a3208f6e979e4fb20d5f6eb7527171f0fcaf1e6ac847e
 (function(){
 'use strict';
 const SCRIPT_SRC=document.currentScript&&document.currentScript.src||'';
@@ -212,6 +212,7 @@ const FOREMAN_COPY=mergeCopy({
   showTerminal:'Show terminal',restart:'Restart',
  },
  prompt:'You are the Foreman. From the Foreman page:',
+ mail:'A person wrote to you in the chat. Call read_messages and answer each message with reply.',
  handoffNote:'Foreman handoff:',
 });
 
@@ -860,7 +861,7 @@ function createTransport(cs,{config,storyId,rows=()=>[],on=()=>()=>{}}){
  const fresh={thread:sessionId=>cs.inbox({sessionId}).then(rowsOf),role:()=>cs.inbox({role:`${config.lead.queue}:${storyId}`}).then(rowsOf)};
  const take=(key,again)=>{const pending=early&&early[key];if(!pending)return again();early[key]=null;return stale?again():pending.catch(again);};
  return {
-  launch:prompt=>invoke('openWorkspace',{target:{kind:'story',storyId,agent:config.lead.agent,session:'lead'},initialPrompt:prompt}),
+  launch:prompt=>invoke('openWorkspace',{target:{kind:'story',storyId,agent:config.lead.agent,session:'lead'},initialPrompt:prompt}).then(result=>({...result,promptDelivered:false})),
   send:(handle,text)=>invoke('sendAsHuman',{to:handle,text}),
   reply:(messageId,text)=>invoke('replyAsHuman',{messageId,text}),
   stop:handle=>cs.act('stopSession',{handle}),
@@ -876,8 +877,8 @@ function createTransport(cs,{config,storyId,rows=()=>[],on=()=>()=>{}}){
   roleThread:()=>{const role=take('role',fresh.role);if(early)early.thread=null;offInbox();offInbox=()=>{};return role;},
  };
 }
-const storyCard=(meta,text)=>`Story ${meta['cs:story-id']||''}: ${meta['cs:title']||''}\nStatus: ${meta['cs:status']||'unknown'}\nYou are its story lead.${text?`\nFrom the story page:\n\n${text}`:''}`;
-const storyChatOptions=({storyId,config,meta,copy})=>({storyId,leadRole:config.lead.role,timers:config.timers,card:text=>storyCard(meta,text),layout:{source:copy.transcript,empty:copy.empty}});
+const storyCard=meta=>`Story ${meta['cs:story-id']||''}: ${meta['cs:title']||''}\nStatus: ${meta['cs:status']||'unknown'}\nYou are its story lead.\nA person wrote to you in the story page's chat. Call read_messages and answer each message with reply.`;
+const storyChatOptions=({storyId,config,meta,copy})=>({storyId,leadRole:config.lead.role,timers:config.timers,card:()=>storyCard(meta),layout:{source:copy.transcript,empty:copy.empty}});
 
 const LIVE_ROW=new Set(['running','idle','needs-you']);
 const sessionRows=answer=>Array.isArray(answer)?answer:Array.isArray(answer&&answer.sessions)?answer.sessions:[];
@@ -6563,7 +6564,7 @@ function createForemanSession({cs,reads,config,win=globalThis,launches=false}){
  };
  let sendersRead=null,pushed=false;
  const openSenders=()=>sendersRead||(pushed=false,sendersRead=bridge.readSenders((list,state)=>{pushed=true;setSenders(list);takeExtras(state);},(state,first)=>{if(!(first&&pushed))head.state(state);}));
- const card=text=>promptFor(text,handoffOf({thread:chat?chat.thread():[],rows:reads.latestSessions(),senders:S.senders,copy}),copy);
+ const card=()=>promptFor(copy.mail,handoffOf({thread:chat?chat.thread():[],rows:reads.latestSessions(),senders:S.senders,copy}),copy);
  let chatState=null;
  const clock={now:()=>win.Date.now(),setTimeout:(fn,ms)=>win.setTimeout(fn,ms),clearTimeout:id=>win.clearTimeout(id)};
  const life=config.foreman.lifecycle;
@@ -6613,11 +6614,12 @@ function createForemanSession({cs,reads,config,win=globalThis,launches=false}){
  const launchFor=prompt=>{
   if(relaunch.pending())return relaunch.pending();
   retiring=null;
-  const carried=waiting;if(!carried.length)return launch(prompt);
+  const asMail=result=>result&&{...result,promptDelivered:false};
+  const carried=waiting;if(!carried.length)return launch(prompt).then(asMail);
   return launch(mailPrompt(prompt,carried)).then(result=>{
    if(result&&result.promptDelivered!==false)markHandled(carried);
    const sent=new Set(carried.map(row=>String(row.messageId)));waiting=waiting.filter(row=>!sent.has(String(row.messageId)));
-   return result;
+   return asMail(result);
   });
  };
  const homed=new Set();
