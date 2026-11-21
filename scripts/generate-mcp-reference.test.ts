@@ -9,7 +9,8 @@ vi.mock("node:child_process", async (importOriginal) => {
   return { ...actual, spawnSync, default: { ...actual, spawnSync } };
 });
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { buildManifest, META, validateInputReferences } from "./generate-mcp-reference.mjs";
 import { REFRESH_ROUTE } from "./lib/sealed-export.mjs";
 const GENERATED = "codesense-docs/getting-started/content/generated";
@@ -24,6 +25,57 @@ const reference = () =>
       "utf8",
     ),
   );
+// A scratch checkout with the MCP export's inputs, sealed, then given input-only drift (a nested
+// schema source changed), committed as origin/main: the stale export a PR inherits. `before` runs
+// on the tree ahead of the seal, so it can model main's catalog and payload state.
+async function staleScratch(prefix: string, before: (root: string) => void = () => {}) {
+  const { mkdtempSync, mkdirSync, copyFileSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { dirname } = await import("node:path");
+  const mod = await import("./generate-mcp-reference.mjs");
+  const { ROOT, CONTENT, CATALOG } = mod;
+  const root = mkdtempSync(join(tmpdir(), prefix));
+  const copy = (path: string) => {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    copyFileSync(join(ROOT, path), join(root, path));
+  };
+  mkdirSync(join(root, "src-tauri/crates"), { recursive: true });
+  for (const path of [
+    "Cargo.lock",
+    "src-tauri/Cargo.toml",
+    "src-tauri/build.rs",
+    "src-tauri/crates/codesense-pty-core/src/agent_cli/codex.rs",
+    "src-tauri/crates/codesense-pty-core/src/agent_cli/claude.rs",
+    "src-tauri/src/mcp/handler.rs",
+    CATALOG,
+    ...PAYLOAD_PATHS,
+  ])
+    copy(path);
+  for (const f of readCatalog().families) copy(`${CONTENT}/${f.docs.split("#")[0]}`);
+  writeFileSync(join(root, CATALOG), JSON.stringify(readCatalog(), null, 2) + "\n");
+  const nested = join(root, "src-tauri/src/nested.rs");
+  writeFileSync(nested, "// JsonSchema nested DTO source\n");
+  before(root);
+  mod.sealReference(root);
+  writeFileSync(nested, "// JsonSchema nested DTO changed\n");
+  return { root, mod };
+}
+const commitAsMain = (root: string) => {
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", ...args], {
+      cwd: root,
+      stdio: "pipe",
+    });
+  git("init", "-q", "-b", "main");
+  git("add", "-A");
+  git("commit", "-q", "-m", "main");
+  git("update-ref", "refs/remotes/origin/main", "HEAD");
+};
+const editJson = (path: string, edit: (value: any) => void) => {
+  const value = JSON.parse(readFileSync(path, "utf8"));
+  edit(value);
+  writeFileSync(path, JSON.stringify(value, null, 2) + "\n");
+};
 describe("served MCP reference", () => {
   it("has real contracts, long descriptions and explicit absent output schemas", () => {
     const doc = buildManifest(undefined, META, readCatalog());
@@ -329,6 +381,34 @@ describe("Node-only freshness and resolving teaching links", () => {
       const output = join(root, `${CONTENT}/generated/mcp-tools.json`);
       writeFileSync(output, readFileSync(output, "utf8").replace("pane_write", "pane_edit"));
       expect(tolerant).toThrow(/stale .*mcp-tools\.json/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("a stale export in write mode and the PR gate", () => {
+  it("leaves a catalog tool the export lacks out, with a notice, and the gate accepts it", async () => {
+    // Main added records_read to handler.rs, META and the catalog without re-exporting.
+    const { root, mod } = await staleScratch("mcp-reference-pending-", (root) => {
+      for (const path of PAYLOAD_PATHS)
+        editJson(join(root, path), (payload) => {
+          payload.tools = payload.tools.filter((t: { name: string }) => t.name !== "records_read");
+        });
+    });
+    try {
+      const notices: string[] = [];
+      expect(() =>
+        mod.generateReference(root, { warn: (line) => notices.push(line) }),
+      ).not.toThrow();
+      expect(notices.join("\n")).toMatch(/NOTICE: records_read is not in the committed export yet/);
+      const written = JSON.parse(readFileSync(join(root, mod.OUTPUT), "utf8"));
+      expect(written.tools.map((t: { name: string }) => t.name)).not.toContain("records_read");
+      commitAsMain(root);
+      expect(
+        mod.generateReference(root, { check: true, allowStaleExport: true, warn: () => {} }),
+      ).not.toBeNull();
+      expect(() => mod.generateReference(root, { check: true })).toThrow(/Stale MCP registry/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
