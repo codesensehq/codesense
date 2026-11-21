@@ -10,11 +10,11 @@
 #       smoke-images.txt and run by its pinned digest. The distribution's resolver must find
 #       every dependency, ldconfig must then find the AppIndicator library the tray icon loads
 #       (the package depends on it), and the package's file list (kept as
-#       <out-dir>/<deb|rpm>.list) must hold the app binary and its three sidecars. Then the
-#       installed app launches once in the container, as run launches the AppImage (the default
-#       launch, leaving default.log and default.png in <out-dir>/launch), with the session tools
+#       <out-dir>/<deb|rpm>.list) must hold the app binary and its three sidecars. The package
+#       must name WebKitGTK 4.1 and GTK 3 among its dependencies (depends). Then the installed
+#       app launches once in the container, as run launches the AppImage (the default launch,
+#       leaving default.log and default.png in <out-dir>/launch), with the session tools
 #       installed only after the package, so they cannot stand in for a dependency it lacks.
-#       Last, the package must name WebKitGTK 4.1 and GTK 3 among its dependencies (depends).
 #       A deb image's apt fetches from
 #       SMOKE_APT_MIRROR (apt-mirror), with retries and short timeouts. When SMOKE_APT_CACHE names
 #       a directory, a deb image uses it as its apt archives and keeps what it fetches there
@@ -107,11 +107,12 @@ APP_ID=ai.codesense
 DEB_DEPENDS=(libwebkit2gtk-4.1-0 libgtk-3-0)
 RPM_DEPENDS=(webkit2gtk4.1 gtk3)
 # The tools the launch uses inside an install container, beside what the package brings: the X
-# server, window and screenshot tools, the session bus and keyring, pgrep, and the Mesa GL and
+# server and what xvfb-run calls, window and screenshot tools, the session bus and keyring, pgrep, and the Mesa GL and
 # EGL drivers WebKit renders with. An rpm image's dnf installs them by the files the launch runs.
 DEB_SESSION_TOOLS=(xvfb xauth x11-utils xdotool dbus gnome-keyring imagemagick procps libegl1 libgl1
     libgles2 libgl1-mesa-dri)
-RPM_SESSION_TOOLS=(/usr/bin/xvfb-run /usr/bin/xauth /usr/bin/xdotool /usr/bin/xwininfo
+RPM_SESSION_TOOLS=(/usr/bin/xvfb-run /usr/bin/xauth /usr/bin/mcookie /usr/bin/getopt /usr/bin/xdotool
+    /usr/bin/xwininfo
     /usr/bin/dbus-run-session /usr/bin/dbus-send /usr/bin/gnome-keyring-daemon /usr/bin/import
     /usr/bin/identify /usr/bin/pgrep mesa-dri-drivers mesa-libEGL mesa-libGL)
 
@@ -339,7 +340,7 @@ package_depends() {
 }
 
 # Runs inside the clean container: install with the distribution's resolver, list the files the
-# package owns, launch the installed app, then read the package's dependencies.
+# package owns, read its dependencies, then launch the installed app.
 in_container() {
     local type="$1" package="$2" listing="$3"
     case "$type" in
@@ -367,8 +368,8 @@ in_container() {
         *) usage ;;
     esac
     installed_appindicator
-    launch_installed "$type" "$listing"
     package_depends "$type" "$package"
+    launch_installed "$type" "$listing"
 }
 
 # Launch the installed app as run launches the AppImage. The session tools are installed only
@@ -381,6 +382,8 @@ launch_installed() {
         deb) apt-get install -y --no-install-recommends "${DEB_SESSION_TOOLS[@]}" ;;
         rpm) dnf install -y "${RPM_SESSION_TOOLS[@]}" ;;
     esac
+    # A container image has no machine id, which D-Bus clients read.
+    dbus-uuidgen --ensure
     out="$(dirname "$listing")/launch"
     rm -rf "$out"
     mkdir -p "$out"
@@ -586,9 +589,11 @@ window_drawn() {
 launch() {
     local mode="$1" out="$2" log="$1.log" shot="$1.png" pid waited pin store=secret-service app tree
     if [[ "$mode" == no-dbus ]]; then store=unavailable; fi
-    # What the trap kills: the AppImage's tree, or the installed binary and its sidecars beside it.
+    # What the trap kills (a pattern): the AppImage's tree, or the installed binary, its sidecars
+    # beside it and the system WebKit's helper processes.
     app="${SMOKE_APP:-$out/squashfs-root/AppRun}"
-    tree="${SMOKE_APP:-$out/squashfs-root/}"
+    tree="$out/squashfs-root/"
+    if [[ -n "${SMOKE_APP:-}" ]]; then tree="$SMOKE_APP|/webkit2gtk-4\\.1/"; fi
     cd "$out"
     "$app" >"$log" 2>&1 &
     pid=$!

@@ -12,7 +12,7 @@ The first time it opens, CodeSense opens **CodeSense Docs**: a read-only context
 
 ### Linux
 
-The Linux downloads (the AppImage, the `.deb` and the `.rpm`) come with a checksum list, `SHA256SUMS`, and its signature, `SHA256SUMS.asc`, made with the CodeSense release key. The release key's public half is [`codesense-release.asc`](https://github.com/codesensehq/codesense/blob/main/codesense-release.asc), in the root of the CodeSense repository. Its fingerprint is:
+The Linux downloads (the AppImage, the `.deb` and the `.rpm`) come with a checksum list, `SHA256SUMS`, and its signature, `SHA256SUMS.asc`, made with the CodeSense release key. The release key's public half is [`codesense-release.asc`](https://raw.githubusercontent.com/codesensehq/codesense/main/codesense-release.asc), in the root of the CodeSense repository. Its fingerprint is:
 
 ```text
 FB7C 0E5F 0FAF AB81 2A72  FE13 03DD 39B8 5420 866B
@@ -26,9 +26,9 @@ gpg --verify SHA256SUMS.asc SHA256SUMS
 sha256sum --ignore-missing -c SHA256SUMS
 ```
 
-`gpg --verify` must report a good signature from the key with the fingerprint above; it may also warn that the key isn't certified, which only means you haven't signed it yourself. `sha256sum` must print `OK` for each file you downloaded. If either fails, don't install the file.
+`gpg --verify` must report a good signature, and the key it names on its `using EDDSA key` line must be the fingerprint above, without the spaces. A good signature from any other key doesn't count. It may also warn that the key isn't certified, which only means you haven't signed it yourself. `sha256sum` must print `OK` for the file you downloaded; if your file isn't listed with `OK`, check its name. If either check fails, don't install the file. The key expires on 2028-11-19; its extension will be published here.
 
-The `.deb` and `.rpm` depend on WebKitGTK 4.1 and GTK 3, so install them with your package manager to pull those in: `sudo apt install ./<file>.deb` or `sudo dnf install ./<file>.rpm`.
+The `.deb` (Ubuntu, Debian) and the `.rpm` (Fedora) depend on WebKitGTK 4.1 and GTK 3, so install them with your package manager to pull those in: `sudo apt install ./<file>.deb` or `sudo dnf install ./<file>.rpm`.
 
 ## Your local profile
 
