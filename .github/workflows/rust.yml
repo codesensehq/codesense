@@ -963,7 +963,8 @@ jobs:
           node-version-file: .nvmrc
           cache: ${{ github.event_name != 'merge_group' && 'pnpm' || '' }}
       - name: Install dependencies
-        # The emulator worker's build runs tsc and esbuild.
+        # The emulator worker's build runs tsc and esbuild, and the app's build.rs runs the docs
+        # generators, which import packages.
         run: pnpm install --frozen-lockfile
       - name: Set up Rust
         # Matches ci.yml; rustup's proxies read the channel in rust-toolchain.toml.
