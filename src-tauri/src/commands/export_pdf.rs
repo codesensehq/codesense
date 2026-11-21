@@ -5,41 +5,27 @@
 //! - `export_pdf_from_url`: loads a URL and exports to PDF
 //! - `export_pdf_from_html`: loads an HTML string and exports to PDF
 //!
-//! Each OS renders in its own `render` module, which turns a [`ContentSource`]
-//! into PDF bytes: `export_pdf/macos.rs` (WKWebView `createPDF`) and
-//! `export_pdf/linux.rs` (a WebKitGTK print operation). The commands here own
-//! the timeout and the write.
+//! `codesense_platform::pdf::render` checks the source and turns it into PDF
+//! bytes with this OS's renderer (WKWebView `createPDF` on macOS, a WebKitGTK
+//! print operation on Linux). The commands here own the timeout and the write.
 //!
 //! Plus a utility command, compiled on every OS (canvas PNG and SVG export):
 //! - `write_binary_file`: decodes base64 data and writes raw bytes to disk
 
 use base64::Engine as _;
+#[cfg(cap_pdf_export)]
+use codesense_platform::pdf::{self, ContentSource};
 use log::debug;
 use std::fs;
 use std::path::PathBuf;
 
-#[cfg(all(cap_pdf_export, target_os = "macos"))]
-#[path = "export_pdf/macos.rs"]
-mod render;
-#[cfg(all(cap_pdf_export, target_os = "linux"))]
-#[path = "export_pdf/linux.rs"]
-mod render;
-
-/// What an export loads: a URL, or an HTML string.
-#[cfg(cap_pdf_export)]
-enum ContentSource {
-    Url(String),
-    Html(String),
-}
-
 /// Render `source` to PDF within 30 seconds and write it to `output_path`.
 #[cfg(cap_pdf_export)]
 async fn export(source: ContentSource, output_path: String) -> Result<(), String> {
-    let pdf_bytes =
-        tokio::time::timeout(std::time::Duration::from_secs(30), render::render(source))
-            .await
-            .map_err(|_| "PDF export timed out after 30 seconds".to_string())?
-            .map_err(|e| format!("PDF generation failed: {}", e))?;
+    let pdf_bytes = tokio::time::timeout(std::time::Duration::from_secs(30), pdf::render(source))
+        .await
+        .map_err(|_| "PDF export timed out after 30 seconds".to_string())?
+        .map_err(|e| format!("PDF generation failed: {}", e))?;
 
     let path = PathBuf::from(&output_path);
     if let Some(parent) = path.parent() {
@@ -91,4 +77,31 @@ pub async fn write_binary_file(base64_data: String, output_path: String) -> Resu
         Ok(())
     })
     .await
+}
+
+#[cfg(all(test, cap_pdf_export))]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[tokio::test]
+    async fn a_refused_url_writes_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.pdf");
+        let url = "file:///etc/hosts".to_string();
+        let refusal = pdf::allowed_source(&ContentSource::Url(url.clone())).unwrap_err();
+
+        let started = Instant::now();
+        let err = export(ContentSource::Url(url), out.to_string_lossy().into_owned())
+            .await
+            .unwrap_err();
+
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "refused at once, not at the timeout: {:?}",
+            started.elapsed()
+        );
+        assert!(err.contains(&refusal), "{err}");
+        assert!(!out.exists(), "a refused export writes no file");
+    }
 }
