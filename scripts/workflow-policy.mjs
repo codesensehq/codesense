@@ -66,17 +66,49 @@ const TEST_BUILD = {
     "linux-smoke": "linux-app",
   },
 };
-// The export regeneration is dispatched by hand and only reads the repository: whoever ran it
+// The export regeneration runs nightly or by hand and only reads the repository: whoever ran it
 // commits its artifact. Its `exports` input names scripts/generate-<name>.mjs (or all), and reaches
-// the run script through env, so no run script expands an expression.
+// the run script through env, so no run script expands an expression. A scheduled run has no
+// inputs, so every use of the input falls back to all, and the run name says which exports ran.
+const ALL_EXPORTS = "${{ inputs.exports || 'all' }}";
 const REGENERATE_EXPORTS = {
   file: "regenerate-exports.yml",
-  triggers: ["workflow_dispatch"],
+  triggers: ["schedule", "workflow_dispatch"],
   exports: ["all", "model-schemas", "live-data-contract", "mcp-reference"],
+  input: ALL_EXPORTS,
+  runName: `Regenerate exports (${ALL_EXPORTS})`,
+  group: `\${{ github.workflow }}-\${{ github.ref }}-\${{ github.event_name }}-${ALL_EXPORTS}`,
+};
+// The exports guard keeps cargo-written exports out of pull requests. Its guard job holds the only
+// token (pull-requests: read), so it checks out the base commit and runs no pull request code. Only
+// the strict-pins job's two strict steps set CS_STRICT_EXPORTS: the build script's write mode
+// inherits it, so anywhere else it would fail a refresh's own export on a stale fixture. The two
+// required checks are named only here, so no other job can report a same-named check.
+const EXPORTS_GUARD = {
+  file: "exports-guard.yml",
+  job: "guard",
+  baseRef: "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}",
+  // The guard step runs on every pull request, and in a merge group whenever the base has the
+  // script: the one skip is the merge group that lands the workflow, before main has the script.
+  step: "Check the changed files",
+  stepIf: "github.event_name == 'pull_request' || hashFiles('scripts/exports-guard.mjs') != ''",
+  strictJob: "strict-pins",
+  strictSteps: ["Strict gen:docs check", "Strict Rust pins"],
+  checks: { guard: "Exports guard", "strict-pins": "Exports strict pins" },
+};
+const STRICT_EXPORTS = "CS_STRICT_EXPORTS";
+// Whether a job name could render as `check`, each ${{ }} span standing for any text (and an
+// unclosed one for the rest). Case is ignored, to be safe.
+const couldRender = (name, check) => {
+  const literal = String(name)
+    .split(/\$\{\{[\s\S]*?(?:\}\}|$)/)
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(`^${literal.join("[\\s\\S]*")}$`, "i").test(check);
 };
 const JOB_PERMISSIONS = new Map([
   [`${COMMIT_EMAILS.file}:${COMMIT_EMAILS.job}`, { contents: "read" }],
   ["dco.yml:dco", { contents: "read", "pull-requests": "read" }],
+  [`${EXPORTS_GUARD.file}:${EXPORTS_GUARD.job}`, { contents: "read", "pull-requests": "read" }],
   ["quarantine.yml:quarantine-issues", { contents: "read", issues: "read" }],
   [`${FLAKY_ISSUES.file}:${FLAKY_ISSUES.job}`, { contents: "read", issues: "write" }],
   [`${CACHE_PRUNE.file}:${CACHE_PRUNE.job}`, { actions: "write" }],
@@ -221,7 +253,7 @@ export function workflowPolicy(text, file = "") {
         : allowedTriggers;
   if (!triggers.length || triggers.some((t) => !permittedTriggers.includes(t)))
     errors.push(
-      "triggers must match the workflow allowlist; Scorecard and commit emails forbid pull requests, export regeneration allows only workflow_dispatch",
+      "triggers must match the workflow allowlist; Scorecard and commit emails forbid pull requests, export regeneration allows only schedule and workflow_dispatch",
     );
   if (triggers.includes("merge_group")) {
     const mergeGroup = mapping(workflow.on) ? workflow.on.merge_group : null;
@@ -293,13 +325,64 @@ export function workflowPolicy(text, file = "") {
       errors.push(
         `export regeneration: the only input must be exports, a choice of ${REGENERATE_EXPORTS.exports.join(", ")} defaulting to all`,
       );
+    if (workflow["run-name"] !== REGENERATE_EXPORTS.runName)
+      errors.push(`export regeneration: run-name must be ${REGENERATE_EXPORTS.runName}`);
+    if (workflow.concurrency?.group !== REGENERATE_EXPORTS.group)
+      errors.push(`export regeneration: the concurrency group must be ${REGENERATE_EXPORTS.group}`);
+    for (const [name, job] of Object.entries(workflow.jobs ?? {}))
+      for (const step of Array.isArray(job?.steps) ? job.steps : [])
+        for (const value of Object.values(mapping(step?.env) ? step.env : {}))
+          if (String(value).includes("inputs.exports") && value !== REGENERATE_EXPORTS.input)
+            errors.push(
+              `${name}: step "${step.name ?? step.run}" must read the exports input as ${REGENERATE_EXPORTS.input}`,
+            );
+  }
+  if (file === REGENERATE_EXPORTS.file || file === EXPORTS_GUARD.file)
     for (const [name, job] of Object.entries(workflow.jobs ?? {}))
       for (const step of Array.isArray(job?.steps) ? job.steps : [])
         if (mapping(step) && String(step.run ?? "").includes("${{"))
           errors.push(
             `${name}: step "${step.name ?? step.run}" expands an expression in run; pass it through env`,
           );
+  if (file === EXPORTS_GUARD.file) {
+    const steps = workflow.jobs?.[EXPORTS_GUARD.job]?.steps;
+    const checkouts = (Array.isArray(steps) ? steps : []).filter(
+      (step) => mapping(step) && String(step.uses ?? "").startsWith("actions/checkout@"),
+    );
+    if (!checkouts.length || checkouts.some((step) => step.with?.ref !== EXPORTS_GUARD.baseRef))
+      errors.push(`${EXPORTS_GUARD.job}: checkout must check out ref ${EXPORTS_GUARD.baseRef}`);
+    const guardSteps = (Array.isArray(steps) ? steps : []).filter(
+      (step) => mapping(step) && step.name === EXPORTS_GUARD.step,
+    );
+    if (guardSteps.length !== 1 || guardSteps[0].if !== EXPORTS_GUARD.stepIf)
+      errors.push(
+        `${EXPORTS_GUARD.job}: step "${EXPORTS_GUARD.step}" must be one step with if: ${EXPORTS_GUARD.stepIf}`,
+      );
+    for (const [job, check] of Object.entries(EXPORTS_GUARD.checks))
+      if (workflow.jobs?.[job]?.name !== check) errors.push(`${job}: name must be ${check}`);
+    const strictSteps = workflow.jobs?.[EXPORTS_GUARD.strictJob]?.steps;
+    for (const stepName of EXPORTS_GUARD.strictSteps) {
+      const named = (Array.isArray(strictSteps) ? strictSteps : []).filter(
+        (candidate) => candidate?.name === stepName,
+      );
+      if (named.length !== 1 || named[0]?.env?.[STRICT_EXPORTS] !== "1")
+        errors.push(
+          `${EXPORTS_GUARD.strictJob}: step "${stepName}" must be one step that sets ${STRICT_EXPORTS}: "1" in its env`,
+        );
+    }
   }
+  // A required check's name belongs to the exports guard alone.
+  for (const [name, job] of Object.entries(mapping(workflow.jobs) ? workflow.jobs : {}))
+    for (const [owner, check] of Object.entries(EXPORTS_GUARD.checks))
+      if (
+        mapping(job) &&
+        Object.hasOwn(job, "name") &&
+        couldRender(job.name, check) &&
+        !(file === EXPORTS_GUARD.file && name === owner)
+      )
+        errors.push(
+          `${name}: the job name could report ${check}, a check only ${EXPORTS_GUARD.file} reports`,
+        );
   if (
     file === COMMIT_EMAILS.file &&
     JSON.stringify(Object.keys(workflow.jobs ?? {})) !== JSON.stringify([COMMIT_EMAILS.job])
@@ -472,6 +555,29 @@ export function workflowPolicy(text, file = "") {
       }
     }
   }
+
+  // CS_STRICT_EXPORTS appears only as the env key of the guard's two strict steps.
+  let strictUses = 0;
+  visit(doc, {
+    Scalar(_, scalar) {
+      if (String(scalar.value).includes(STRICT_EXPORTS)) strictUses++;
+    },
+  });
+  const strictJobSteps = workflow.jobs?.[EXPORTS_GUARD.strictJob]?.steps;
+  const allowedStrict =
+    file === EXPORTS_GUARD.file && Array.isArray(strictJobSteps)
+      ? strictJobSteps.filter(
+          (step) =>
+            mapping(step) &&
+            EXPORTS_GUARD.strictSteps.includes(step.name) &&
+            mapping(step.env) &&
+            Object.hasOwn(step.env, STRICT_EXPORTS),
+        ).length
+      : 0;
+  if (strictUses !== allowedStrict)
+    errors.push(
+      `${STRICT_EXPORTS} may be set only in the env of ${EXPORTS_GUARD.file}'s ${EXPORTS_GUARD.strictSteps.join(" and ")} steps`,
+    );
 
   visit(doc, {
     Pair(_, pair) {

@@ -1103,7 +1103,7 @@ test("rust.yml caches the macOS workspace build from the nightly, dated by commi
   );
 });
 
-test("pull-requests read is limited to the DCO job", () => {
+test("pull-requests read is limited to the DCO job and the exports guard job", () => {
   const dco = good
     .replace("  static:\n", "  dco:\n")
     .replace("      contents: read", "      contents: read\n      pull-requests: read");
@@ -1118,6 +1118,16 @@ test("pull-requests read is limited to the DCO job", () => {
       "\n",
     ),
     /permissions must grant exactly/,
+  );
+  const guard = dco.replace("  dco:\n", "  guard:\n");
+  assert.deepEqual(
+    workflowPolicy(guard, "exports-guard.yml").filter((e) => e.includes("permissions")),
+    [],
+  );
+  assert.match(workflowPolicy(guard, "ci.yml").join("\n"), /permissions must grant exactly/);
+  assert.match(
+    workflowPolicy(guard.replace("  guard:\n", "  strict-pins:\n"), "exports-guard.yml").join("\n"),
+    /strict-pins: permissions must grant exactly contents: read/,
   );
 });
 
@@ -2224,7 +2234,13 @@ const regenerateExports = () =>
 
 test("export regeneration: each option runs its script's own queued export, read-only", () => {
   const workflow = parse(regenerateExports());
-  assert.deepEqual(Object.keys(workflow.on), ["workflow_dispatch"]);
+  // Nightly and by hand; a scheduled run has no inputs, so it does all, and says so in its name.
+  assert.deepEqual(Object.keys(workflow.on), ["schedule", "workflow_dispatch"]);
+  assert.equal(workflow["run-name"], "Regenerate exports (${{ inputs.exports || 'all' }})");
+  assert.equal(
+    workflow.concurrency.group,
+    "${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.exports || 'all' }}",
+  );
   const { exports } = workflow.on.workflow_dispatch.inputs;
   assert.equal(exports.type, "choice");
   assert.equal(exports.default, "all");
@@ -2237,7 +2253,7 @@ test("export regeneration: each option runs its script's own queued export, read
   const { steps, permissions } = workflow.jobs.regenerate;
   assert.deepEqual(permissions, { contents: "read" });
   const run = steps.find((step) => step.name === "Run the exports");
-  assert.deepEqual(run.env, { EXPORTS: "${{ inputs.exports }}" });
+  assert.deepEqual(run.env, { EXPORTS: "${{ inputs.exports || 'all' }}" });
   assert.ok(run.run.includes(`set -- ${exports.options.slice(1).join(" ")}\n`), "all runs each");
   assert.ok(run.run.includes('node "scripts/generate-$name.mjs" --queued-export'));
   assert.ok(run.run.trimEnd().endsWith("pnpm gen:docs"));
@@ -2246,6 +2262,15 @@ test("export regeneration: each option runs its script's own queued export, read
   assert.equal(upload.with.name, "generated-exports");
   assert.equal(upload.with["retention-days"], 7);
   assert.equal(upload.with["include-hidden-files"], true);
+  // The manifest is uploaded after every collect, an empty list included.
+  const manifest = steps.find((step) => step.with?.name === "exports-manifest");
+  assert.equal(manifest.if, undefined);
+  assert.equal(manifest.with.path, "${{ runner.temp }}/exports-manifest/exports-manifest.json");
+  assert.equal(manifest.with["retention-days"], 7);
+  const collect = steps.find((step) => step.id === "collect").run;
+  assert.ok(collect.includes('"$list" "$manifest/exports-manifest.json"'), "manifest written");
+  // No strict mode anywhere in the refresh run: the build script's write mode would inherit it.
+  assert.ok(!regenerateExports().includes("CS_STRICT_EXPORTS"));
   // rust-cache keys on the env, so it restores the Linux app job's cache only with the same env.
   const linuxApp = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8")).jobs[
     "rust-linux-app"
@@ -2260,11 +2285,11 @@ test("export regeneration: the policy rejects another trigger, a write, a change
   const cases = [
     [
       regenerateExports().replace("on:\n", "on:\n  pull_request:\n"),
-      /export regeneration allows only workflow_dispatch/,
+      /export regeneration allows only schedule and workflow_dispatch/,
     ],
     [
       regenerateExports().replace("on:\n", "on:\n  push:\n    branches: [main]\n"),
-      /export regeneration allows only workflow_dispatch/,
+      /export regeneration allows only schedule and workflow_dispatch/,
     ],
     [
       regenerateExports().replace("      contents: read", "      contents: write"),
@@ -2303,12 +2328,58 @@ test("export regeneration: the policy rejects another trigger, a write, a change
       ),
       /regenerate: step "Run the exports" expands an expression in run; pass it through env/,
     ],
+    [
+      regenerateExports().replace(
+        "run-name: Regenerate exports (${{ inputs.exports || 'all' }})",
+        "run-name: Regenerate exports (${{ inputs.exports }})",
+      ),
+      /export regeneration: run-name must be Regenerate exports \(\$\{\{ inputs\.exports \|\| 'all' \}\}\)/,
+    ],
+    [
+      regenerateExports().replace("-${{ github.event_name }}", ""),
+      /export regeneration: the concurrency group must be/,
+    ],
+    [
+      regenerateExports().replace(
+        "EXPORTS: ${{ inputs.exports || 'all' }}",
+        "EXPORTS: ${{ inputs.exports }}",
+      ),
+      /regenerate: step "Run the exports" must read the exports input as \$\{\{ inputs\.exports \|\| 'all' \}\}/,
+    ],
+    // The refresh run sets no strict mode: its build script's write mode would inherit it.
+    [
+      regenerateExports().replace(
+        "      CARGO_INCREMENTAL:",
+        '      CS_STRICT_EXPORTS: "1"\n      CARGO_INCREMENTAL:',
+      ),
+      /CS_STRICT_EXPORTS may be set only in the env of exports-guard\.yml's/,
+    ],
+    [
+      regenerateExports().replace(
+        "          EXPORTS: ${{ inputs.exports || 'all' }}",
+        "          EXPORTS: ${{ inputs.exports || 'all' }}\n          CS_STRICT_EXPORTS: \"1\"",
+      ),
+      /CS_STRICT_EXPORTS may be set only/,
+    ],
+    [
+      regenerateExports().replace(
+        "          pnpm gen:docs\n",
+        "          CS_STRICT_EXPORTS=1 pnpm gen:docs\n",
+      ),
+      /CS_STRICT_EXPORTS may be set only/,
+    ],
   ];
   for (const [fixture, error] of cases)
     assert.match(workflowPolicy(fixture, regenerateExportsFile).join("\n"), error);
   // The rules are this file's: another dispatch-only workflow keeps the general allowlist.
-  const expanded = regenerateExports().replace('"$EXPORTS"', "'${{ inputs.exports }}'");
+  const expanded = regenerateExports()
+    .replace('"$EXPORTS"', "'${{ inputs.exports }}'")
+    .replace(/ {2}schedule:\n {4}- cron: .*\n/, "");
   assert.deepEqual(workflowPolicy(expanded, "other.yml"), []);
+  assert.match(
+    workflowPolicy(regenerateExports(), "other.yml").join("\n"),
+    /triggers must match the workflow allowlist/,
+  );
   assert.deepEqual(workflowPolicy(regenerateExports(), regenerateExportsFile), []);
 });
 
@@ -2346,4 +2417,270 @@ test("rust.yml checks the app with git-ai and agent-cli-sockets off", () => {
     off[0].run,
     "cargo check --locked -p codesense --lib --tests --features dashboard-publish",
   );
+});
+
+const exportsGuardFile = "exports-guard.yml";
+const exportsGuard = () => fs.readFileSync(path.join(directory, exportsGuardFile), "utf8");
+const GUARD_BASE = "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}";
+
+test("exports guard: the guard runs the base's script with the token, strict-pins runs PR code without one", () => {
+  const workflow = parse(exportsGuard());
+  assert.deepEqual(workflow.on.pull_request.types, [
+    "opened",
+    "synchronize",
+    "reopened",
+    "edited",
+    "labeled",
+    "unlabeled",
+  ]);
+  assert.ok(Object.hasOwn(workflow.on, "merge_group"));
+  assert.deepEqual(workflow.concurrency, {
+    group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}",
+    "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+  });
+  const { guard, "strict-pins": strict } = workflow.jobs;
+  assert.deepEqual(Object.keys(workflow.jobs), ["guard", "strict-pins"]);
+  assert.deepEqual(guard.permissions, { contents: "read", "pull-requests": "read" });
+  assert.equal(guard.steps[0].with.ref, GUARD_BASE);
+  // Plain node from the base checkout: no install, so no pull request code or package runs.
+  assert.deepEqual(
+    guard.steps.filter((step) => step.run).map((step) => step.run),
+    ["node scripts/exports-guard.mjs"],
+  );
+  const check = guard.steps.find((step) => step.run);
+  assert.deepEqual(check.env, { GH_TOKEN: "${{ github.token }}" });
+  assert.equal(guard.outputs.refresh, `\${{ steps.${check.id}.outputs.refresh }}`);
+
+  assert.equal(strict.needs, "guard");
+  assert.equal(
+    strict.if,
+    "github.event_name != 'pull_request' || needs.guard.outputs.refresh == 'true'",
+  );
+  assert.deepEqual(strict.permissions, { contents: "read" });
+  assert.ok(!JSON.stringify(strict).includes("token"), "no token in strict-pins");
+  // Every step is skipped in a merge group, and the checkout is the pull request head.
+  for (const step of strict.steps)
+    assert.equal(step.if, "github.event_name == 'pull_request'", step.name);
+  assert.equal(strict.steps[0].with.ref, "${{ github.event.pull_request.head.sha }}");
+  assert.equal(strict.steps[0].with["persist-credentials"], false);
+  const named = (name) => strict.steps.find((step) => step.name === name);
+  assert.deepEqual(named("Strict gen:docs check").env, { CS_STRICT_EXPORTS: "1" });
+  assert.equal(named("Strict gen:docs check").run, "pnpm gen:docs:check");
+  assert.deepEqual(named("Strict Rust pins").env, { CS_STRICT_EXPORTS: "1" });
+  assert.match(named("Strict Rust pins").run, /^cargo test /);
+  assert.ok(!named("Strict Rust pins").run.includes("--queued-export"));
+  assert.ok(!named("Strict Rust pins").run.includes("UPDATE_DOCS_SCHEMAS"));
+  // The setup restores rust.yml's Linux app cache, as the refresh run does.
+  const linuxApp = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8")).jobs[
+    "rust-linux-app"
+  ];
+  assert.deepEqual(strict.env, linuxApp.env);
+});
+
+test("exports guard: the policy pins the base checkout, the token, the names and no expression in run", () => {
+  const cases = [
+    [
+      exportsGuard().replace(
+        `ref: ${GUARD_BASE}`,
+        "ref: ${{ github.event.pull_request.head.sha }}",
+      ),
+      /guard: checkout must check out ref/,
+    ],
+    [
+      exportsGuard().replace(`          ref: ${GUARD_BASE}\n`, ""),
+      /guard: checkout must check out ref/,
+    ],
+    [
+      exportsGuard().replace("      pull-requests: read", "      pull-requests: write"),
+      /guard: permissions must grant exactly contents: read, pull-requests: read/,
+    ],
+    [
+      exportsGuard().replace(
+        "    permissions:\n      contents: read\n    defaults:",
+        "    permissions:\n      contents: read\n      pull-requests: read\n    defaults:",
+      ),
+      /strict-pins: permissions must grant exactly contents: read/,
+    ],
+    [
+      exportsGuard().replace(
+        "run: node scripts/exports-guard.mjs",
+        "run: node scripts/exports-guard.mjs ${{ github.head_ref }}",
+      ),
+      /guard: step "Check the changed files" expands an expression in run/,
+    ],
+    [
+      exportsGuard().replace("    name: Exports guard\n", "    name: Guard\n"),
+      /guard: name must be Exports guard/,
+    ],
+    [
+      exportsGuard().replace("    name: Exports strict pins\n", "    name: Strict pins\n"),
+      /strict-pins: name must be Exports strict pins/,
+    ],
+    [
+      exportsGuard().replace(
+        "    if: github.event_name != 'pull_request' || needs.guard.outputs.refresh == 'true'",
+        "    if: needs.guard.outputs.refresh == 'true'",
+      ),
+      /strict-pins: if must begin with github.event_name != 'pull_request' \|\|/,
+    ],
+  ];
+  for (const [fixture, error] of cases)
+    assert.match(workflowPolicy(fixture, exportsGuardFile).join("\n"), error);
+  assert.deepEqual(workflowPolicy(exportsGuard(), exportsGuardFile), []);
+});
+
+test("exports guard: the guard step skips only a merge group whose base lacks the script", () => {
+  const exact =
+    "        if: github.event_name == 'pull_request' || hashFiles('scripts/exports-guard.mjs') != ''\n";
+  assert.ok(exportsGuard().includes(exact));
+  assert.deepEqual(workflowPolicy(exportsGuard(), exportsGuardFile), []);
+  const step = parse(exportsGuard()).jobs.guard.steps.find(
+    (s) => s.name === "Check the changed files",
+  );
+  assert.equal(step.run, "node scripts/exports-guard.mjs");
+  for (const [name, condition] of [
+    ["no pull_request clause", "hashFiles('scripts/exports-guard.mjs') != ''"],
+    ["no hashFiles clause", "github.event_name == 'pull_request'"],
+    [
+      "all merge groups",
+      "github.event_name == 'pull_request' || github.event_name == 'merge_group'",
+    ],
+    [
+      "another condition",
+      "github.event_name == 'pull_request' || hashFiles('scripts/exports-guard.mjs') != '' || always()",
+    ],
+    [
+      "another condition, and-ed",
+      "(github.event_name == 'pull_request' || hashFiles('scripts/exports-guard.mjs') != '') && github.actor != 'x'",
+    ],
+    ["another file", "github.event_name == 'pull_request' || hashFiles('scripts/other.mjs') != ''"],
+    [
+      "wrapped",
+      "${{ github.event_name == 'pull_request' || hashFiles('scripts/exports-guard.mjs') != '' }}",
+    ],
+  ])
+    assert.match(
+      workflowPolicy(
+        exportsGuard().replace(exact, `        if: "${condition}"\n`),
+        exportsGuardFile,
+      ).join("\n"),
+      /guard: step "Check the changed files" must be one step with if:/,
+      name,
+    );
+  // No if at all, or a second step under the name, fails too.
+  for (const [name, fixture] of [
+    ["no if", exportsGuard().replace(exact, "")],
+    [
+      "second step",
+      exportsGuard().replace(
+        "      - name: Check the changed files\n",
+        "      - name: Check the changed files\n        run: true\n      - name: Check the changed files\n",
+      ),
+    ],
+  ])
+    assert.match(
+      workflowPolicy(fixture, exportsGuardFile).join("\n"),
+      /guard: step "Check the changed files" must be one step with if:/,
+      name,
+    );
+  // The job itself stays unconditional.
+  assert.equal(parse(exportsGuard()).jobs.guard.if, undefined);
+});
+
+test("exports guard: CS_STRICT_EXPORTS is set only on the two strict steps, and on both", () => {
+  const strictEnv =
+    '        env:\n          CS_STRICT_EXPORTS: "1"\n        run: pnpm gen:docs:check\n';
+  const rustEnv = '        env:\n          CS_STRICT_EXPORTS: "1"\n        run: >-\n';
+  assert.ok(exportsGuard().includes(strictEnv) && exportsGuard().includes(rustEnv));
+  const cases = [
+    // Job-wide or workflow-wide.
+    exportsGuard().replace(
+      "      CARGO_TERM_COLOR: always\n    steps:\n      - name: Check out the pull request head",
+      '      CARGO_TERM_COLOR: always\n      CS_STRICT_EXPORTS: "1"\n    steps:\n      - name: Check out the pull request head',
+    ),
+    exportsGuard().replace(
+      "permissions: {}\n",
+      'permissions: {}\nenv:\n  CS_STRICT_EXPORTS: "1"\n',
+    ),
+    // On another step.
+    exportsGuard().replace(
+      "        run: bash scripts/build-session-server.sh\n",
+      '        env:\n          CS_STRICT_EXPORTS: "1"\n        run: bash scripts/build-session-server.sh\n',
+    ),
+    exportsGuard().replace(
+      "        run: pnpm install --frozen-lockfile\n",
+      "        run: CS_STRICT_EXPORTS=1 pnpm install --frozen-lockfile\n",
+    ),
+    // Either strict step without it.
+    exportsGuard().replace(strictEnv, "        run: pnpm gen:docs:check\n"),
+    exportsGuard().replace(rustEnv, "        run: >-\n"),
+    // Either strict step with another value.
+    exportsGuard().replace(strictEnv, strictEnv.replace('"1"', '"0"')),
+    // A second step under a strict step's name.
+    exportsGuard().replace(
+      "      - name: Strict gen:docs check\n",
+      "      - name: Strict gen:docs check\n        if: github.event_name == 'pull_request'\n" +
+        strictEnv +
+        "      - name: Strict gen:docs check\n",
+    ),
+  ];
+  for (const fixture of cases)
+    assert.match(
+      workflowPolicy(fixture, exportsGuardFile).join("\n"),
+      /CS_STRICT_EXPORTS/,
+      fixture,
+    );
+  // Any other workflow, at any level.
+  assert.match(
+    workflowPolicy(
+      good.replace(
+        "    timeout-minutes: 15\n",
+        '    timeout-minutes: 15\n    env:\n      CS_STRICT_EXPORTS: "1"\n',
+      ),
+    ).join("\n"),
+    /CS_STRICT_EXPORTS may be set only/,
+  );
+  assert.match(
+    workflowPolicy(exportsGuard(), "ci.yml").join("\n"),
+    /CS_STRICT_EXPORTS may be set only/,
+  );
+});
+
+test("exports guard: no other job may report a check named Exports guard or Exports strict pins", () => {
+  const named = (name) =>
+    good.replace("    runs-on: ubuntu-24.04\n", `    name: ${name}\n    runs-on: ubuntu-24.04\n`);
+  for (const name of [
+    "Exports guard",
+    "exports STRICT pins",
+    "\"${{ 'Exports guard' }}\"",
+    "Exports ${{ matrix.x }}",
+    '"${{ matrix.x }} strict pins"',
+    "Exports guard${{ matrix.unclosed",
+  ])
+    assert.match(
+      workflowPolicy(named(name), "ci.yml").join("\n"),
+      /static: the job name could report Exports (guard|strict pins), a check only exports-guard\.yml reports/,
+      name,
+    );
+  for (const name of [
+    "Rust (macOS arm64) tests ${{ matrix.shard }}/3",
+    "Exports guard tests",
+    "Static checks",
+  ])
+    assert.deepEqual(workflowPolicy(named(name), "ci.yml"), [], name);
+  // Inside the guard's workflow, only its own job reports each name.
+  const extra = exportsGuard().replace(
+    "jobs:\n",
+    "jobs:\n  shadow:\n    name: Exports ${{ 'strict pins' }}\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n    timeout-minutes: 5\n    steps:\n      - run: true\n",
+  );
+  assert.match(
+    workflowPolicy(extra, exportsGuardFile).join("\n"),
+    /shadow: the job name could report Exports strict pins/,
+  );
+  for (const file of files)
+    if (file !== exportsGuardFile)
+      for (const job of Object.values(
+        parse(fs.readFileSync(path.join(directory, file), "utf8")).jobs,
+      ))
+        assert.ok(!/^Exports (guard|strict pins)$/i.test(job.name ?? ""), file);
 });

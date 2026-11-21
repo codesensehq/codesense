@@ -13,6 +13,11 @@ import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildManifest, META, validateInputReferences } from "./generate-mcp-reference.mjs";
 import { REFRESH_ROUTE, strictExports } from "./lib/sealed-export.mjs";
+
+// The scratch repos below model a pull_request run (origin/main as the drift base), so they must not
+// inherit a merge-group runner's event: there the drift base is HEAD^1, which these fixtures don't model.
+delete process.env.GITHUB_EVENT_NAME;
+
 const GENERATED = "codesense-docs/getting-started/content/generated";
 const SEAL_PATH = `${GENERATED}/mcp-tools.inputs.json`;
 const PAYLOAD_PATHS = ["default", "dashboard-publish"].map(
