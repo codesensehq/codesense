@@ -6,9 +6,9 @@ pub(crate) mod index;
 pub(crate) mod memory;
 pub(crate) mod purge;
 mod state;
-pub(crate) use state::MediaState;
 #[cfg(test)]
 pub(crate) use state::{FakeFetch, Fetch};
+pub(crate) use state::{MediaState, ServeHook};
 
 use serde::{Deserialize, Serialize};
 use std::{
@@ -849,10 +849,12 @@ pub(crate) fn install(app: &tauri::AppHandle) {
     };
     let state = std::sync::Arc::new(MediaState::new(dir, std::sync::Arc::new(state::Http)));
     // Every serve settles the provider view pings it owes.
-    let served = app.clone();
-    state.when_served(std::sync::Arc::new(move |sha: &str| {
-        crate::gif::register::on_served(&served, sha)
-    }));
+    let (registered, persisted) = (app.clone(), app.clone());
+    state.when_served(crate::gif::register::serve_hook(
+        move || Result::ok(crate::gif::register::registration(&registered)),
+        std::sync::Arc::downgrade(&state),
+        move || crate::commands::agent_inbox::AppInboxHost::port(persisted.clone()),
+    ));
     app.manage(state.clone());
     let app = app.clone();
     tauri::async_runtime::spawn(async move {

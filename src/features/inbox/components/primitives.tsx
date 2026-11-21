@@ -382,8 +382,7 @@ const FAILURE_REASONS: Record<string, string> = {
 };
 
 /** Whether `host` is `domain` or one of its subdomains. */
-const onDomain = (host: string, domain: string) =>
-  host === domain || (host.endsWith("." + domain) && host.length > domain.length + 1);
+const onDomain = (host: string, domain: string) => host === domain || host.endsWith("." + domain);
 
 /** Whose attribution an image carries, in every state: the sender's provider claim, else the
  *  provider whose host the bytes came from (which covers redirects), else (an old message, or

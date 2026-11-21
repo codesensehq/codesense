@@ -7,7 +7,7 @@
 //! removed, and never the key. They are fire-and-forget, never queued, outside the search rate
 //! limit, dropped while a provider backoff runs and capped at [`PINGS_PER_HOUR`] per provider and
 //! key. KLIPY's share trigger joins as a second [`Registrar`].
-use super::{analytics, bucket, giphy, settings, GifService, Provider};
+use super::{analytics, bucket, giphy, settings, GifError, GifService, Provider};
 use crate::commands::credential_store::Secret;
 use crate::media::{index::Owner, MediaProvider};
 use futures_util::future::BoxFuture;
@@ -210,6 +210,25 @@ pub(crate) struct Pending {
     pub onload: Option<String>,
     pub sha: Option<String>,
     pub expires: i64,
+    /// The send is still being registered: an onload may yet be armed.
+    pub waiting: bool,
+}
+
+/// Why no key is at hand.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NoKey {
+    /// GIF search is Off, or has no key or no secret store: nothing will be sent.
+    Off,
+    /// The key could not be read just now (a locked keychain, a prompt): try again later.
+    Unavailable,
+}
+
+/// What a serve settled: the attachments to mark `onloadSent`, and those whose view ping
+/// stays pending for a later serve (their claim is given back).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Settled {
+    pub marks: Vec<Slot>,
+    pub retry: Vec<Slot>,
 }
 
 /// Registration for the app: the GIF service's settings, keys, bucket and analytics, the
@@ -273,30 +292,43 @@ impl Registration {
             bucket::Bucket::backoff_until(&rate, &counted, now)
         })
         .await;
-        matches!(backoff, Ok(None))
+        match backoff {
+            Ok(until) => until.is_none(),
+            Err(e) => {
+                log::warn!(target: "gif", "gif registration: the backoff read stopped: {e}");
+                false
+            }
+        }
     }
 
     /// The provider's key and its fingerprint, while GIF search is On with that provider and
     /// a key; else `None`, logged.
-    async fn active_key(&self, provider: Provider) -> Option<(Secret, String, u64)> {
+    async fn active_key(&self, provider: Provider) -> Result<(Secret, String, u64), NoKey> {
         let dir = self.service.data_dir().to_path_buf();
         let epoch = install_epoch(&dir);
         let current = match tokio::task::spawn_blocking(move || settings::load(&dir)).await {
             Ok(current) => current,
-            Err(_) => return None,
+            Err(e) => {
+                log::warn!(target: "gif", "gif registration: the settings read stopped: {e}");
+                return Err(NoKey::Unavailable);
+            }
         };
         if !current.enabled || current.provider != provider {
             log::info!(target: "gif", "gif registration: GIF search is off; no ping");
-            return None;
+            return Err(NoKey::Off);
         }
         match settings::Keys::read_timed(&self.service.keys, provider).await {
             Ok(key) => {
                 let fp = super::fingerprint(&key);
-                Some((key, fp, epoch))
+                Ok((key, fp, epoch))
+            }
+            Err(error @ (GifError::NoProvider | GifError::NoSecretStore)) => {
+                log::info!(target: "gif", "gif registration: no key ({}); no ping", error.code());
+                Err(NoKey::Off)
             }
             Err(error) => {
-                log::info!(target: "gif", "gif registration: no usable key ({}); no ping", error.code());
-                None
+                log::info!(target: "gif", "gif registration: the key can't be read now ({})", error.code());
+                Err(NoKey::Unavailable)
             }
         }
     }
@@ -316,8 +348,12 @@ impl Registration {
         let (read_dir, read_fp) = (dir.clone(), fp.to_string());
         let saved =
             tokio::task::spawn_blocking(move || read_install(&read_dir, provider, &read_fp)).await;
-        if let Ok(Some(id)) = saved {
-            return Some(id);
+        match saved {
+            Ok(Some(id)) => return Some(id),
+            Ok(None) => {}
+            Err(e) => {
+                log::warn!(target: "gif", "gif registration: the install id read stopped: {e}")
+            }
         }
         // The call carries the key, so it is bounded like a ping: not during a backoff, within
         // the hour's pings, and not again within RANDOM_ID_RETRY_MS of a failure.
@@ -364,8 +400,12 @@ impl Registration {
                 log::info!(target: "gif", "gif registration: search was turned off or the key changed; id not saved");
                 None
             }
-            _ => {
-                log::warn!(target: "gif", "gif registration: the install id could not be saved");
+            Ok(Err(e)) => {
+                log::warn!(target: "gif", "gif registration: the install id could not be saved: {e}");
+                None
+            }
+            Err(e) => {
+                log::warn!(target: "gif", "gif registration: the install id write stopped: {e}");
                 None
             }
         }
@@ -448,8 +488,25 @@ impl Registration {
             onload: None,
             sha: None,
             expires: now + ONLOAD_WINDOW_MS,
+            waiting: false,
         });
         change(pending);
+    }
+
+    /// Put taken pending onloads back, for a later serve.
+    fn put_back(&self, pending: Vec<(Slot, Pending)>) {
+        let mut onloads = lock(&self.onloads);
+        for (slot, p) in pending {
+            onloads.insert(slot, p);
+        }
+    }
+
+    /// A send of `slot` is about to be registered: until it is, a serve keeps its view ping
+    /// pending instead of settling it.
+    pub(crate) fn expect_send(&self, slot: &Slot) {
+        self.follow_epoch();
+        let now = (self.clock)();
+        self.with_pending(slot, now, |p| p.waiting = true);
     }
 
     /// Register a stored message's provider GIF: its onload is armed, an hour from now, and its
@@ -457,6 +514,19 @@ impl Registration {
     /// is logged: GIF search Off, no key, no analytics entry, an id not bound to the sent URL,
     /// a second send of the GIF in the message, no onsent URL, no install id.
     pub(crate) async fn register_send(&self, sent: Sent) {
+        let slot = sent.slot.clone();
+        self.register_inner(sent).await;
+        // Registered: a slot whose onload was never armed has no ping to wait for.
+        let mut onloads = lock(&self.onloads);
+        if let Some(p) = onloads.get_mut(&slot) {
+            p.waiting = false;
+            if p.onload.is_none() {
+                onloads.remove(&slot);
+            }
+        }
+    }
+
+    async fn register_inner(&self, sent: Sent) {
         if sent.provider != MediaProvider::Giphy {
             log::info!(target: "gif", "gif registration: {:?} sends are not registered yet", sent.provider);
             return;
@@ -475,7 +545,7 @@ impl Registration {
             log::warn!(target: "gif", "gif registration: the GIF id was sent with another GIF's URL; not registered");
             return;
         }
-        let Some((key, fp, epoch)) = self.active_key(provider).await else {
+        let Ok((key, fp, epoch)) = self.active_key(provider).await else {
             return;
         };
         if let Some(onload) = entry.pingbacks.onload.clone() {
@@ -500,25 +570,27 @@ impl Registration {
     }
 
     /// A stored message's media fetch finished: a GIPHY-tagged attachment's pending onload gets
-    /// its sha; one that lost its tag (redirected away) or has no sha loses its pending onload.
+    /// its sha. One that lost its tag (redirected away) loses its pending onload; a failed fetch
+    /// keeps it, so a later Retry still fires it.
     pub(crate) fn note_fetched(&self, slot: &Slot, sha: Option<&str>, tagged: bool) {
         self.follow_epoch();
         let now = (self.clock)();
-        match sha.filter(|_| tagged) {
-            Some(sha) => self.with_pending(slot, now, |p| p.sha = Some(sha.to_string())),
-            None => {
+        match (tagged, sha) {
+            (false, _) => {
                 lock(&self.onloads).remove(slot);
             }
+            (true, Some(sha)) => self.with_pending(slot, now, |p| p.sha = Some(sha.to_string())),
+            (true, None) => {}
         }
     }
 
-    /// Take every pending onload armed for `sha`, so only this serve fires them.
+    /// Take every pending onload of `sha`, so only this serve settles them.
     pub(crate) fn take_onloads(&self, sha: &str) -> Vec<(Slot, Pending)> {
         self.follow_epoch();
         let mut onloads = lock(&self.onloads);
         let slots: Vec<Slot> = onloads
             .iter()
-            .filter(|(_, p)| p.sha.as_deref() == Some(sha) && p.onload.is_some())
+            .filter(|(_, p)| p.sha.as_deref() == Some(sha))
             .map(|(slot, _)| slot.clone())
             .collect();
         slots
@@ -527,48 +599,161 @@ impl Registration {
             .collect()
     }
 
-    /// Settle a serve: `claimed` are the attachments whose view ping the sha index gave this
-    /// serve, `taken` the pending onloads this serve took. Each claimed one with a pending
-    /// onload within its hour is pinged; the rest are only marked (an expired entry, or one
-    /// lost to a restart before the first view), logged. Returns the attachments to mark.
+    /// Settle a serve. `claimed` are the attachments whose view ping the sha index gave this
+    /// serve, `taken` the pending onloads it took. A claimed one with an armed onload within its
+    /// hour is pinged and marked. It is marked without a ping when its onload expired, was never
+    /// armed (an unbound send, or one sent before a restart), or GIF search is Off. It stays
+    /// pending, claim given back, while its send is still being registered or when the key or
+    /// the install id can't be had just now. A taken one the index didn't claim goes back.
     pub(crate) async fn settle_serve(
         &self,
         claimed: Vec<Slot>,
         mut taken: Vec<(Slot, Pending)>,
-    ) -> Vec<Slot> {
+    ) -> Settled {
         let now = (self.clock)();
-        let mut due = Vec::new();
-        for slot in &claimed {
-            let at = Iterator::position(&mut taken.iter(), |(s, _)| s == slot);
-            let pending = at.map(|at| taken.swap_remove(at).1);
-            match pending {
-                Some(Pending {
-                    onload: Some(onload),
-                    expires,
-                    ..
-                }) if expires > now => due.push(onload),
-                Some(_) => {
-                    log::info!(target: "gif", "gif registration: an onload expired before the first view; marked")
+        let mut settled = Settled {
+            marks: Vec::new(),
+            retry: Vec::new(),
+        };
+        let mut due: Vec<(Slot, Pending)> = Vec::new();
+        let mut back: Vec<(Slot, Pending)> = Vec::new();
+        for slot in claimed {
+            let at = Iterator::position(&mut taken.iter(), |(s, _)| *s == slot);
+            match at.map(|at| taken.swap_remove(at).1) {
+                Some(p) if p.waiting && p.onload.is_none() => {
+                    settled.retry.push(slot.clone());
+                    back.push((slot, p));
                 }
-                None => {
-                    log::info!(target: "gif", "gif registration: no pending onload (sent before a restart, or unbound); marked")
+                Some(p) if p.onload.is_some() && p.expires > now => due.push((slot, p)),
+                Some(p) if p.onload.is_some() => {
+                    log::info!(target: "gif", "gif registration: an onload expired before the first view; marked");
+                    settled.marks.push(slot);
+                }
+                _ => {
+                    log::info!(target: "gif", "gif registration: no armed onload (unbound, or sent before a restart); marked");
+                    settled.marks.push(slot);
                 }
             }
         }
+        if !Vec::is_empty(&taken) {
+            log::info!(target: "gif", "gif registration: {} pending onloads not yet indexed; kept", taken.len());
+            Vec::append(&mut back, &mut taken);
+        }
         if !Vec::is_empty(&due) {
-            // Taken under the current epoch only: a pending onload from before Off never fires.
-            let active = self.active_key(Provider::Giphy).await;
-            if let Some((key, fp, epoch)) = active.filter(|(_, _, e)| *e == *lock(&self.epoch)) {
-                if let Some(id) = self.install_id(Provider::Giphy, &key, &fp, epoch).await {
-                    for onload in &due {
-                        self.send_ping(Provider::Giphy, &fp, true, onload, &id)
-                            .await;
+            match self.active_key(Provider::Giphy).await {
+                Err(NoKey::Off) => {
+                    settled
+                        .marks
+                        .extend(Vec::drain(&mut due, ..).map(|(slot, _)| slot));
+                }
+                Err(NoKey::Unavailable) => {}
+                Ok((_, _, epoch)) if epoch != *lock(&self.epoch) => {
+                    // Taken under an earlier epoch: search was turned Off meanwhile.
+                    settled
+                        .marks
+                        .extend(Vec::drain(&mut due, ..).map(|(slot, _)| slot));
+                }
+                Ok((key, fp, epoch)) => {
+                    if let Some(id) = self.install_id(Provider::Giphy, &key, &fp, epoch).await {
+                        for (slot, p) in Vec::drain(&mut due, ..) {
+                            if let Some(onload) = &p.onload {
+                                self.send_ping(Provider::Giphy, &fp, true, onload, &id)
+                                    .await;
+                            }
+                            settled.marks.push(slot);
+                        }
                     }
                 }
             }
+            // What is still due could not be sent now: it waits for a later serve.
+            for (slot, p) in due {
+                settled.retry.push(slot.clone());
+                back.push((slot, p));
+            }
         }
-        claimed
+        self.put_back(back);
+        settled
     }
+}
+
+/// A stored message's provider-tagged GIF, as registration takes it. Only a send from a
+/// session on this machine registers, as only its view does.
+pub(crate) fn sent_of(media: &crate::commands::agent_inbox::StoredMedia) -> Option<Sent> {
+    let a = &media.attachment;
+    if !a.own_sender {
+        log::info!(target: "gif", "gif registration: not sent from this machine; not registered");
+        return None;
+    }
+    Some(Sent {
+        slot: (owner_of(&media.team, media.message_id), media.slot),
+        provider: a.provider?,
+        provider_id: a.provider_id.clone()?,
+        url: a.source_url.clone()?,
+    })
+}
+
+fn owner_of(team: &crate::commands::dashboard_launch::LaunchTeam, message_id: i64) -> Owner {
+    Owner {
+        org: team.org.clone(),
+        team: team.team.clone(),
+        message_id,
+    }
+}
+
+/// Register a stored message's GIF in the background: the send never waits on it.
+pub(crate) fn send_in_background(
+    registration: &Arc<Registration>,
+    media: &crate::commands::agent_inbox::StoredMedia,
+) {
+    let Some(sent) = sent_of(media) else {
+        return;
+    };
+    registration.expect_send(&sent.slot);
+    let registration = registration.clone();
+    tauri::async_runtime::spawn(async move { registration.register_send(sent).await });
+}
+
+/// A stored message's media fetch finished (see [`Registration::note_fetched`]).
+pub(crate) fn fetched(
+    registration: &Registration,
+    team: &crate::commands::dashboard_launch::LaunchTeam,
+    message_id: i64,
+    slot: usize,
+    a: &crate::media::Attachment,
+) {
+    let tagged = a.provider == Some(MediaProvider::Giphy);
+    registration.note_fetched(
+        &(owner_of(team, message_id), slot),
+        a.sha256.as_deref(),
+        tagged,
+    );
+}
+
+/// The serve hook: each serve takes the pending onloads of its sha and claims the view pings
+/// the sha index says it settles, then pings, gives back what must wait and marks the rest in
+/// the background.
+pub(crate) fn serve_hook(
+    registration_of: impl Fn() -> Option<Arc<Registration>> + Send + Sync + 'static,
+    media: std::sync::Weak<crate::media::MediaState>,
+    host: impl Fn() -> Arc<dyn crate::commands::agent_inbox::InboxHost> + Send + Sync + 'static,
+) -> crate::media::ServeHook {
+    let host = Arc::new(host);
+    Arc::new(move |sha: &str| {
+        let (Some(registration), Some(state)) = (registration_of(), media.upgrade()) else {
+            return;
+        };
+        let taken = registration.take_onloads(sha);
+        let claimed = crate::media::index::ShaIndex::claim_onloads(&state.index, sha);
+        if Vec::is_empty(&claimed) && Vec::is_empty(&taken) {
+            return;
+        }
+        let (host, sha) = (host(), sha.to_string());
+        tauri::async_runtime::spawn(async move {
+            let settled = registration.settle_serve(claimed, taken).await;
+            crate::media::index::ShaIndex::release_onloads(&state.index, &sha, &settled.retry);
+            crate::commands::agent_inbox::mark_onloads_sent(&host, settled.marks).await;
+        });
+    })
 }
 
 /// The app's registration, made on first use with the GIF service.
@@ -587,45 +772,5 @@ pub(crate) fn registration<R: tauri::Runtime>(
         .clone())
 }
 
-/// Register a sent GIF in the background: the send never waits on it.
-pub(crate) fn on_send(app: &tauri::AppHandle, sent: Sent) {
-    let registration = match registration(app) {
-        Ok(registration) => registration,
-        Err(e) => {
-            log::warn!(target: "gif", "gif registration: unavailable: {e}");
-            return;
-        }
-    };
-    tauri::async_runtime::spawn(async move { registration.register_send(sent).await });
-}
-
-/// A stored message's media fetch finished (see [`Registration::note_fetched`]).
-pub(crate) fn on_fetched(app: &tauri::AppHandle, slot: &Slot, a: &crate::media::Attachment) {
-    if let Ok(registration) = registration(app) {
-        let tagged = a.provider == Some(MediaProvider::Giphy);
-        registration.note_fetched(slot, a.sha256.as_deref(), tagged);
-    }
-}
-
-/// An image was served: take the pending onloads armed for its sha, claim the view pings the
-/// sha index says it settles, then ping and mark them in the background.
-pub(crate) fn on_served(app: &tauri::AppHandle, sha: &str) {
-    let (Ok(registration), Some(media)) = (registration(app), crate::media::app_state(app)) else {
-        return;
-    };
-    let taken = registration.take_onloads(sha);
-    let claimed = crate::media::index::ShaIndex::claim_onloads(&media.index, sha);
-    if Vec::is_empty(&claimed) && Vec::is_empty(&taken) {
-        return;
-    }
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let marks = registration.settle_serve(claimed, taken).await;
-        let host: Arc<dyn crate::commands::agent_inbox::InboxHost> =
-            crate::commands::agent_inbox::AppInboxHost::port(app);
-        crate::commands::agent_inbox::mark_onloads_sent(&host, marks).await;
-    });
-}
-
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

@@ -3668,7 +3668,7 @@
         function mediaAttribution(a) {
           const host = (a.sourceHost || "").toLowerCase().replace(/\.$/, "");
           const on = (domain) =>
-            host === domain || (host.endsWith("." + domain) && host.length > domain.length + 1);
+            host === domain || host.endsWith("." + domain);
           const provider =
             a.provider ||
             a.mediaProvider ||

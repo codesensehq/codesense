@@ -178,6 +178,22 @@ impl ShaIndex {
         claimed
     }
 
+    /// Give back claims [`Self::claim_onloads`] made for `sha` whose view ping must wait for a
+    /// later serve.
+    pub fn release_onloads(&self, sha: &str, slots: &[(Owner, usize)]) {
+        let mut inner = self.lock();
+        if let Some(refs) = inner.by_sha.get_mut(sha) {
+            for r in refs {
+                if slots
+                    .iter()
+                    .any(|(owner, slot)| *owner == r.owner && *slot == r.slot)
+                {
+                    r.onload_sent = false;
+                }
+            }
+        }
+    }
+
     /// Every sha with a provider reference.
     pub fn provider_shas(&self) -> Vec<String> {
         let inner = self.lock();

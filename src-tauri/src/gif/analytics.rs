@@ -24,9 +24,19 @@ pub(crate) struct Entry {
     pub pingbacks: Pingbacks,
 }
 impl Entry {
-    /// `url` is one this search returned for the GIF, so a send of it is this GIF.
+    /// `url` is one this search returned for the GIF, so a send of it is this GIF. Both sides
+    /// are compared as parsed URLs, as an attachment stores its URL re-serialised.
     pub(crate) fn binds(&self, url: &str) -> bool {
-        self.url == url || self.preview_url == url
+        let sent = same_form(url);
+        same_form(&self.url) == sent || same_form(&self.preview_url) == sent
+    }
+}
+
+/// `url` as a parsed URL writes it, or as given when it doesn't parse.
+fn same_form(url: &str) -> String {
+    match url.parse::<url::Url>() {
+        Ok(parsed) => parsed.to_string(),
+        Err(_) => url.to_string(),
     }
 }
 

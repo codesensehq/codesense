@@ -403,11 +403,15 @@ impl From<InboxTeam> for LaunchTeam {
 /// What a sender of an unmarked question to the human is told.
 const QUESTION_HINT: &str = "This reads like a question, but it was sent with no kind, so it defaults to update. Both kinds appear in the human Inbox; kind marks whether it waits on them for agent views and dashboards. If it needs an answer, send it with kind: \"needs-you\" (or ask with ask_user and wait).";
 
+/// The place of a message's media in its attachments: a message carries one, first.
+pub(crate) const MEDIA_SLOT: usize = 0;
+
 /// The media attachment a send call newly stored, which the send call registers once.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StoredMedia {
     pub team: LaunchTeam,
     pub message_id: i64,
+    pub slot: usize,
     pub attachment: crate::media::Attachment,
 }
 
@@ -1011,6 +1015,7 @@ async fn store_message(
             newly = Some(StoredMedia {
                 team: location.team.clone(),
                 message_id,
+                slot: MEDIA_SLOT,
                 attachment: attachment.clone(),
             });
         }
@@ -1365,7 +1370,6 @@ async fn send_message_stored(
     reply_to: Option<&str>,
     summary: Option<&str>,
     kind: Option<inbox::MessageKind>,
-
     request_id: Option<&str>,
     media: Option<&crate::media::MediaInput>,
 ) -> Result<(SendResult, Option<StoredMedia>), String> {
@@ -1757,6 +1761,7 @@ async fn queue_role_reply(
                     newly = Some(StoredMedia {
                         team: own.team.clone(),
                         message_id,
+                        slot: MEDIA_SLOT,
                         attachment: attachment.clone(),
                     });
                 }
@@ -2977,24 +2982,9 @@ impl InboxHost for AppInboxHost {
         crate::media::note(&self.app, team, message_id, attachments.to_vec()).await;
     }
     fn media_sent(&self, media: &StoredMedia) {
-        let a = &media.attachment;
-        if let (Some(provider), Some(provider_id), Some(url)) =
-            (a.provider, a.provider_id.clone(), a.source_url.clone())
-        {
-            let owner = crate::media::index::Owner {
-                org: media.team.org.clone(),
-                team: media.team.team.clone(),
-                message_id: media.message_id,
-            };
-            crate::gif::register::on_send(
-                &self.app,
-                crate::gif::register::Sent {
-                    slot: (owner, 0),
-                    provider,
-                    provider_id,
-                    url,
-                },
-            );
+        match crate::gif::register::registration(&self.app) {
+            Ok(registration) => crate::gif::register::send_in_background(&registration, media),
+            Err(e) => log::warn!(target: "gif", "gif registration: unavailable: {e}"),
         }
     }
     fn media_fetched(
@@ -3003,12 +2993,9 @@ impl InboxHost for AppInboxHost {
         message_id: i64,
         attachment: &crate::media::Attachment,
     ) {
-        let owner = crate::media::index::Owner {
-            org: team.org.clone(),
-            team: team.team.clone(),
-            message_id,
-        };
-        crate::gif::register::on_fetched(&self.app, &(owner, 0), attachment);
+        if let Ok(registration) = crate::gif::register::registration(&self.app) {
+            crate::gif::register::fetched(&registration, team, message_id, MEDIA_SLOT, attachment);
+        }
     }
     async fn own_media_sender(&self, sender: &str) -> bool {
         let tabs = crate::mcp::terminal_tabs::LiveTabs::read(&self.app).await;
