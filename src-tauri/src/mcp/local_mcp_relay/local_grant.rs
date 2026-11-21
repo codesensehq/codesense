@@ -36,7 +36,8 @@ pub(crate) fn start(
     let path = Endpoint::address(&endpoint).map_err(|_| "cannot name local MCP relay")?;
     let listener = {
         // The listener is polled on the app's runtime, so it binds there.
-        let _runtime = tokio::runtime::Handle::enter(tauri::async_runtime::handle().inner());
+        let runtime = tauri::async_runtime::handle();
+        let _entered = tokio::runtime::Handle::enter(runtime.inner());
         LocalListener::bind(&endpoint)
             .map_err(|_| "cannot bind private local MCP relay (launch path may be too long)")?
     };
