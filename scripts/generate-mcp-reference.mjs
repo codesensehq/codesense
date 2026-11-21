@@ -26,6 +26,7 @@ import {
   driftInheritedFromMain,
   exportsUntouchedSinceMain,
   frozenExport,
+  addedSince,
   inheritedNotice,
   namesIn,
   strictExports,
@@ -450,7 +451,7 @@ export function driftExplainer(root = ROOT) {
   if (!paths.length) return null;
   return {
     paths,
-    explains: namesIn(() => paths.map((path) => readFileSync(resolve(root, path), "utf8"))),
+    explains: namesIn(() => addedSince(root, SEAL, paths)),
   };
 }
 

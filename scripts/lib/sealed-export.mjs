@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Shared by the cargo-written exports (MCP reference, live-data contract, model schemas fixture).
 import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 const GENERATED = "codesense-docs/getting-started/content/generated";
 // The one list of cargo-written exports, for every reader. PRs leave these alone and maintainers
@@ -29,6 +31,35 @@ export const allowStaleExport = (argv = process.argv, env = process.env) =>
 // so without it a stale export is a notice. The regenerate run and a nightly probe will set it;
 // nothing in CI sets it yet.
 export const strictExports = (env = process.env) => env.CS_STRICT_EXPORTS === "1";
+
+// The text a drift added to `paths`: the lines added since the commit that last wrote `exportFile`
+// (the working tree included), and the whole of a path new since then. Without that history (no
+// git, a shallow clone, the export never committed) each whole file counts.
+export function addedSince(root, exportFile, paths) {
+  const read = (path) =>
+    existsSync(resolve(root, path)) ? [readFileSync(resolve(root, path), "utf8")] : [];
+  try {
+    const commit = git(root, ["log", "-1", "--format=%H", "--", exportFile]).toString().trim();
+    if (!commit) return paths.flatMap(read);
+    const tracked = new Set(
+      git(root, ["ls-tree", "-r", "--name-only", commit, "--", ...paths])
+        .toString()
+        .split("\n")
+        .filter(Boolean),
+    );
+    const diff = tracked.size
+      ? git(root, ["diff", "-U0", "--no-color", "--no-ext-diff", commit, "--", ...tracked])
+      : "";
+    const added = diff
+      .toString()
+      .split("\n")
+      .filter((line) => line.startsWith("+") && !line.startsWith("+++"))
+      .map((line) => line.slice(1));
+    return [added.join("\n"), ...paths.filter((path) => !tracked.has(path)).flatMap(read)];
+  } catch {
+    return paths.flatMap(read);
+  }
+}
 
 // What drifted sources can explain: `explains(value)` is whether any of the texts (read once, on the
 // first call) names `value`, or its snake_case form (a serde field), as a whole word.

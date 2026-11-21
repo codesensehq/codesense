@@ -577,4 +577,38 @@ describe("a stale export in write mode and the PR gate", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("explains only names on the Rust lines changed since the seal was committed", async () => {
+    const { root, mod } = await staleScratch("mcp-reference-narrow-");
+    try {
+      const handler = join(root, "src-tauri/src/mcp/handler.rs");
+      // Without history every word of a drifted file counts.
+      expect(mod.driftExplainer(root)!.paths).not.toContain("src-tauri/src/mcp/handler.rs");
+      writeFileSync(handler, readFileSync(handler, "utf8") + "\n// stale\n");
+      expect(mod.driftExplainer(root)!.explains("query")).toBe(true);
+      writeFileSync(handler, readFileSync(handler, "utf8").replace("\n// stale\n", ""));
+      writeFileSync(join(root, "src-tauri/src/nested.rs"), "// JsonSchema nested DTO source\n");
+      mod.sealReference(root);
+      commitAsMain(root);
+      writeFileSync(
+        handler,
+        readFileSync(handler, "utf8") + "\npub struct Added { pub brand_new_param: u32 }\n",
+      );
+      const added = join(root, "src-tauri/src/mcp/added.rs");
+      writeFileSync(added, "pub struct Fresh { pub fresh_param: u32 }\n");
+      const drift = mod.driftExplainer(root)!;
+      expect(drift.paths).toEqual(
+        expect.arrayContaining(["src-tauri/src/mcp/handler.rs", "src-tauri/src/mcp/added.rs"]),
+      );
+      expect(drift.explains("brand_new_param")).toBe(true);
+      expect(drift.explains("brandNewParam")).toBe(true);
+      // A file new since the seal counts whole.
+      expect(drift.explains("fresh_param")).toBe(true);
+      // handler.rs names `query` on lines the drift did not touch.
+      expect(readFileSync(handler, "utf8")).toMatch(/\bquery\b/);
+      expect(drift.explains("query")).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

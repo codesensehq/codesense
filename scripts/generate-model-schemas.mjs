@@ -3,7 +3,7 @@
 // The Rust exporter is the only writer of the fixture. Never rehash a stale fixture here.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -12,6 +12,7 @@ import {
   diskGate,
   driftInheritedFromMain,
   exportsUntouchedSinceMain,
+  addedSince,
   frozenExport,
   namesIn,
   strictExports,
@@ -132,11 +133,7 @@ export function staleFixtureExplainer(
 ) {
   const stale = readStale(root);
   if (!stale.length || !tolerated(root, stale, { check, allowStaleExport, strict })) return null;
-  return namesIn(() =>
-    stale
-      .filter((path) => existsSync(join(root, path)))
-      .map((path) => readFileSync(join(root, path), "utf8")),
-  );
+  return namesIn(() => addedSince(root, FIXTURE, stale));
 }
 // The model pin the tests read: the committed fixture, strict only with CS_STRICT_EXPORTS=1.
 export const pinnedModels = (root = ROOT, env = process.env, warn = console.warn) =>
