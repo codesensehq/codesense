@@ -19,9 +19,12 @@
 //! The server answers only a prompt for **its own key's** passphrase — the
 //! prompt must name that key file. A password, a PIN, a host-key question, or
 //! a jump host asking about anything else gets nothing. The one exception is
-//! [`check_passphrase`]: there the only asker is the `ssh-keygen -f <key>` it
-//! starts, so `ssh-keygen`'s bare "Enter passphrase: " (Linux names no file)
-//! is that key's prompt too.
+//! [`check_passphrase`], which also answers the bare "Enter passphrase: " of
+//! an `ssh-keygen` that names no file (Ubuntu 24.04's OpenSSH 9.6p1, for
+//! one). It runs `ssh-keygen -f <key>` itself and talks to no server, so no
+//! keyboard-interactive prompt can arrive. Another process of this user could
+//! reach the endpoint during the call (at most 15 s), but it could send the
+//! named prompt just as well, so that is no wider an exposure.
 
 use std::ffi::OsString;
 use std::io::{Read, Write};
@@ -50,20 +53,21 @@ const SOCKET_TIMEOUT: Duration = if cfg!(test) {
 const MAX_PROMPT: usize = 4096;
 
 /// Which prompts a served secret answers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 enum Asks {
     /// Git's password prompt for one credential, byte for byte.
     GitExact,
     /// `ssh`'s or `ssh-keygen`'s prompt naming the key ([`asks_for_key`]).
     SignInKey,
     /// The named prompts for the key, or exactly [`BARE_PROMPT`]. Only
-    /// [`check_passphrase`] serves it: the process asking is the
-    /// `ssh-keygen -f <key>` it started, and the endpoint lives only for that
-    /// call.
+    /// [`check_passphrase`] serves it: it runs `ssh-keygen -f <key>` itself
+    /// with no server, so no keyboard-interactive prompt can arrive, and the
+    /// endpoint lives only for that call.
     CheckKey,
 }
 
-/// `ssh-keygen`'s prompt when it names no file, as Linux's OpenSSH asks it.
+/// The prompt of an `ssh-keygen` that names no file (Ubuntu 24.04's OpenSSH
+/// 9.6p1, for one).
 const BARE_PROMPT: &[u8] = b"Enter passphrase: ";
 
 impl Asks {
@@ -279,8 +283,9 @@ fn framed(prompt: &[u8]) -> Result<Vec<u8>, String> {
 /// Whether `prompt` is `ssh`'s or `ssh-keygen`'s own question for the
 /// passphrase of `key` — never a server's keyboard-interactive text, which
 /// `ssh` shows prefixed with `(user@host)`. `ssh` quotes at most the first 100
-/// bytes of the path. Linux's `ssh-keygen` names no file (`BARE_PROMPT`),
-/// which only the check path admits.
+/// bytes of the path. An `ssh-keygen` that names no file (Ubuntu 24.04's
+/// OpenSSH 9.6p1, for one) asks `BARE_PROMPT`, which only the check path
+/// admits.
 pub fn asks_for_key(prompt: &[u8], key: &[u8]) -> bool {
     let named = prompt
         .strip_prefix(b"Enter passphrase for key '".as_slice())
