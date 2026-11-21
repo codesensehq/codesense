@@ -211,9 +211,11 @@ const DIRECT_LAUNCH: (&str, &str) = (r#""%dp0%\"#, r#""   %*"#);
 /// `shim_dir\<relative>` runs under `node`), and the direct-program form when
 /// `<relative>` is an `.exe` (`shim_dir\<relative>` runs as itself). The
 /// relative path must stay inside the shim's directory tree, checked as text
-/// before any file is touched: split on `\` and `/`, no segment may be empty
-/// or only dots and spaces (`..`, `.`, a leading separator), and it may not
-/// hold `:` (a drive or a stream), `%`, `!`, `"` or a control character. So
+/// before any file is touched: split on `\` and `/`, every segment must be a
+/// [`portable_name`](crate::fs::portable_name) (so none is empty, `.` or `..`,
+/// a leading separator is refused, and none holds `:` for a drive or a stream,
+/// `"`, `<>|?*`, a control character or a reserved device name such as `CON`
+/// or `nul.exe`), and the path may not hold `%` or `!`. So
 /// the shim's text never chooses the interpreter, nor a file outside its
 /// tree. Anything else is [`ShimError::NotAnNpmShim`].
 pub fn npm_shim_script(shim: &Path, text: &str) -> Result<Option<NpmShim>, ShimError> {
@@ -260,11 +262,10 @@ pub fn npm_shim_script(shim: &Path, text: &str) -> Result<Option<NpmShim>, ShimE
 /// stays inside the shim's directory tree (see [`npm_shim_script`]).
 fn launch_target<'a>(line: &'a str, (prefix, suffix): (&str, &str)) -> Option<&'a str> {
     let relative = line.strip_prefix(prefix)?.strip_suffix(suffix)?;
-    let contained = !relative.contains([':', '%', '!', '"'])
-        && !relative.contains(char::is_control)
+    let contained = !relative.contains(['%', '!'])
         && relative
             .split(['\\', '/'])
-            .all(|segment| !segment.trim_end_matches(['.', ' ']).is_empty());
+            .all(|segment| crate::fs::portable_name(segment).is_ok());
     contained.then_some(relative)
 }
 

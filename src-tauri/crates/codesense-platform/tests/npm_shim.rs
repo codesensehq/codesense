@@ -165,6 +165,13 @@ fn only_npms_two_forms_with_a_contained_path_are_accepted() {
             r"node_modules\!X!\cli.js",
             r#"node_modules\x" & calc & "\cli.js"#,
             "node_modules\\x\u{7}\\cli.js",
+            r"node_modules\x\CON.js",
+            r"node_modules\nul.exe\cli.js",
+            r"node_modules\com1\cli.js",
+            r"node_modules\x\b?c.js",
+            r"node_modules\a<b\cli.js",
+            r"node_modules\a|b\cli.js",
+            r"node_modules\x \cli.js",
         ] {
             assert_eq!(
                 npm_shim_script(&shim(), &script(relative)),
