@@ -1528,6 +1528,7 @@ fn builtin_adapter_launches_match_the_recorded_golden() {
     for (pattern, token) in [
         (r"_scope_[0-9a-f]{16}", "_scope_<ALIAS>"),
         (r#"[^"\\]*/csm-[A-Za-z0-9]+"#, "<RELAY_DIR>"),
+        (r"<RELAY_DIR>/[0-9a-f]{32}", "<RELAY_DIR>/<RELAY>"),
         (r"[0-9a-f]{64}", "<CAPABILITY>"),
     ] {
         text = regex::Regex::new(pattern)

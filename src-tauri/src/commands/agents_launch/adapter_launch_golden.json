@@ -1312,7 +1312,7 @@
     "scope_files": {
       "config.toml": "",
       "local-relay-grant.json": "{\"grant\":{\"codesense\":{\"endpoint\":{\"Stdio\":{\"command\":\"<CLI_DIR>/codex\",\"args\":[],\"env\":{\"CODESENSE_TAB_SESSION_ID\":\"<SESSION_ID>\"},\"cwd\":\"<TMP>/worktree\"}},\"enabled_tools\":null,\"disabled_tools\":[]}},\"aliases\":{\"codesense\":\"codesense_scope_<ALIAS>\"}}",
-      "local-relay.json": "{\"version\":1,\"socket\":\"<RELAY_DIR>/s\",\"capability\":\"<CAPABILITY>\"}",
+      "local-relay.json": "{\"version\":1,\"socket\":\"<RELAY_DIR>/<RELAY>\",\"capability\":\"<CAPABILITY>\"}",
       "owner.json": "{\"instance_root\":\"<INSTANCE_ROOT>\",\"server_id\":\"\"}"
     },
     "server_aliases": {
@@ -1447,7 +1447,7 @@
     "scope_files": {
       "config.toml": "",
       "local-relay-grant.json": "{\"grant\":{\"codesense\":{\"endpoint\":{\"Stdio\":{\"command\":\"<CLI_DIR>/codex\",\"args\":[],\"env\":{\"CODESENSE_TAB_SESSION_ID\":\"<SESSION_ID>\"},\"cwd\":\"<TMP>/worktree\"}},\"enabled_tools\":null,\"disabled_tools\":[]}},\"aliases\":{\"codesense\":\"codesense_scope_<ALIAS>\"}}",
-      "local-relay.json": "{\"version\":1,\"socket\":\"<RELAY_DIR>/s\",\"capability\":\"<CAPABILITY>\"}",
+      "local-relay.json": "{\"version\":1,\"socket\":\"<RELAY_DIR>/<RELAY>\",\"capability\":\"<CAPABILITY>\"}",
       "owner.json": "{\"instance_root\":\"<INSTANCE_ROOT>\",\"server_id\":\"\"}"
     },
     "server_aliases": {
@@ -1520,7 +1520,7 @@
     "scope_files": {
       "config.toml": "",
       "local-relay-grant.json": "{\"grant\":{\"codesense\":{\"endpoint\":{\"Stdio\":{\"command\":\"<CLI_DIR>/codex\",\"args\":[],\"env\":{\"CODESENSE_TAB_SESSION_ID\":\"<SESSION_ID>\"},\"cwd\":\"<TMP>/worktree\"}},\"enabled_tools\":null,\"disabled_tools\":[]}},\"aliases\":{\"codesense\":\"codesense_scope_<ALIAS>\"}}",
-      "local-relay.json": "{\"version\":1,\"socket\":\"<RELAY_DIR>/s\",\"capability\":\"<CAPABILITY>\"}",
+      "local-relay.json": "{\"version\":1,\"socket\":\"<RELAY_DIR>/<RELAY>\",\"capability\":\"<CAPABILITY>\"}",
       "owner.json": "{\"instance_root\":\"<INSTANCE_ROOT>\",\"server_id\":\"\"}"
     },
     "server_aliases": {
@@ -1655,7 +1655,7 @@
     "scope_files": {
       "config.toml": "",
       "local-relay-grant.json": "{\"grant\":{\"codesense\":{\"endpoint\":{\"Stdio\":{\"command\":\"<CLI_DIR>/codex\",\"args\":[],\"env\":{\"CODESENSE_TAB_SESSION_ID\":\"<SESSION_ID>\"},\"cwd\":\"<TMP>/worktree\"}},\"enabled_tools\":null,\"disabled_tools\":[]}},\"aliases\":{\"codesense\":\"codesense_scope_<ALIAS>\"}}",
-      "local-relay.json": "{\"version\":1,\"socket\":\"<RELAY_DIR>/s\",\"capability\":\"<CAPABILITY>\"}",
+      "local-relay.json": "{\"version\":1,\"socket\":\"<RELAY_DIR>/<RELAY>\",\"capability\":\"<CAPABILITY>\"}",
       "owner.json": "{\"instance_root\":\"<INSTANCE_ROOT>\",\"server_id\":\"\"}"
     },
     "server_aliases": {
@@ -4338,7 +4338,7 @@
     "scope_files": {
       "config.toml": "",
       "local-relay-grant.json": "{\"grant\":{\"codesense\":{\"endpoint\":{\"Stdio\":{\"command\":\"<CLI_DIR>/codex\",\"args\":[],\"env\":{\"CODESENSE_TAB_SESSION_ID\":\"<SESSION_ID>\"},\"cwd\":\"<TMP>/worktree\"}},\"enabled_tools\":null,\"disabled_tools\":[]},\"slack\":{\"endpoint\":{\"Stdio\":{\"command\":\"slack-mcp\",\"args\":[],\"env\":{},\"cwd\":\"<TMP>/worktree\"}},\"enabled_tools\":null,\"disabled_tools\":[]}},\"aliases\":{\"codesense\":\"codesense_scope_<ALIAS>\",\"slack\":\"codesense_scope_<ALIAS>\"}}",
-      "local-relay.json": "{\"version\":1,\"socket\":\"<RELAY_DIR>/s\",\"capability\":\"<CAPABILITY>\"}",
+      "local-relay.json": "{\"version\":1,\"socket\":\"<RELAY_DIR>/<RELAY>\",\"capability\":\"<CAPABILITY>\"}",
       "owner.json": "{\"instance_root\":\"<INSTANCE_ROOT>\",\"server_id\":\"\"}"
     },
     "server_aliases": {
@@ -4481,7 +4481,7 @@
     "scope_files": {
       "config.toml": "",
       "local-relay-grant.json": "{\"grant\":{\"codesense\":{\"endpoint\":{\"Stdio\":{\"command\":\"<CLI_DIR>/codex\",\"args\":[],\"env\":{\"CODESENSE_TAB_SESSION_ID\":\"<SESSION_ID>\"},\"cwd\":\"<TMP>/worktree\"}},\"enabled_tools\":null,\"disabled_tools\":[]},\"slack\":{\"endpoint\":{\"Stdio\":{\"command\":\"slack-mcp\",\"args\":[],\"env\":{},\"cwd\":\"<TMP>/worktree\"}},\"enabled_tools\":null,\"disabled_tools\":[]}},\"aliases\":{\"codesense\":\"codesense_scope_<ALIAS>\",\"slack\":\"codesense_scope_<ALIAS>\"}}",
-      "local-relay.json": "{\"version\":1,\"socket\":\"<RELAY_DIR>/s\",\"capability\":\"<CAPABILITY>\"}",
+      "local-relay.json": "{\"version\":1,\"socket\":\"<RELAY_DIR>/<RELAY>\",\"capability\":\"<CAPABILITY>\"}",
       "owner.json": "{\"instance_root\":\"<INSTANCE_ROOT>\",\"server_id\":\"\"}"
     },
     "server_aliases": {
@@ -4560,7 +4560,7 @@
     "scope_files": {
       "config.toml": "",
       "local-relay-grant.json": "{\"grant\":{\"codesense\":{\"endpoint\":{\"Stdio\":{\"command\":\"<CLI_DIR>/codex\",\"args\":[],\"env\":{\"CODESENSE_TAB_SESSION_ID\":\"<SESSION_ID>\"},\"cwd\":\"<TMP>/worktree\"}},\"enabled_tools\":null,\"disabled_tools\":[]}},\"aliases\":{\"codesense\":\"codesense_scope_<ALIAS>\"}}",
-      "local-relay.json": "{\"version\":1,\"socket\":\"<RELAY_DIR>/s\",\"capability\":\"<CAPABILITY>\"}",
+      "local-relay.json": "{\"version\":1,\"socket\":\"<RELAY_DIR>/<RELAY>\",\"capability\":\"<CAPABILITY>\"}",
       "owner.json": "{\"instance_root\":\"<INSTANCE_ROOT>\",\"server_id\":\"\"}"
     },
     "server_aliases": {
@@ -4700,7 +4700,7 @@
     "scope_files": {
       "config.toml": "",
       "local-relay-grant.json": "{\"grant\":{\"codesense\":{\"endpoint\":{\"Stdio\":{\"command\":\"<CLI_DIR>/codex\",\"args\":[],\"env\":{\"CODESENSE_TAB_SESSION_ID\":\"<SESSION_ID>\"},\"cwd\":\"<TMP>/worktree\"}},\"enabled_tools\":null,\"disabled_tools\":[]}},\"aliases\":{\"codesense\":\"codesense_scope_<ALIAS>\"}}",
-      "local-relay.json": "{\"version\":1,\"socket\":\"<RELAY_DIR>/s\",\"capability\":\"<CAPABILITY>\"}",
+      "local-relay.json": "{\"version\":1,\"socket\":\"<RELAY_DIR>/<RELAY>\",\"capability\":\"<CAPABILITY>\"}",
       "owner.json": "{\"instance_root\":\"<INSTANCE_ROOT>\",\"server_id\":\"\"}"
     },
     "server_aliases": {
