@@ -86,8 +86,6 @@ fn capture_the_ssh_keygen_prompt() {
     println!("askpass prompts recorded: {asked}");
 }
 
-// Fails on Linux (linux-test-defects): ssh-keygen's passphrase prompt gets no answer.
-#[cfg(target_os = "macos")]
 mod key_unlock {
     use super::*;
     use codesense_session_server::askpass::check_passphrase;
