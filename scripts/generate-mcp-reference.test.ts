@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { exportedCatalog as readCatalog } from "./mcp-reference-fixture";
+import { exportedCatalog, exportedCatalog as readCatalog } from "./mcp-reference-fixture";
 import { describe, expect, it, vi } from "vitest";
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -607,6 +607,30 @@ describe("a stale export in write mode and the PR gate", () => {
       // handler.rs names `query` on lines the drift did not touch.
       expect(readFileSync(handler, "utf8")).toMatch(/\bquery\b/);
       expect(drift.explains("query")).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("models the last refresh: the test catalog drops an example input the export lacks", async () => {
+    const { root, mod } = await staleScratch("mcp-reference-fixture-");
+    try {
+      // A PR adds a param in Rust and an example using it, without re-exporting.
+      editJson(join(root, mod.CATALOG), (catalog) => {
+        const discovery = catalog.families.find((f: { id: string }) => f.id === "discovery");
+        discovery.calls.push({
+          tool: "codesense_search_tools",
+          arguments: { query: "inbox", proofOnly: true },
+        });
+      });
+      const calls = exportedCatalog(root)
+        .families.flatMap((f) => f.calls)
+        .filter((c) => c.tool === "codesense_search_tools");
+      expect(calls.length).toBeGreaterThan(0);
+      for (const call of calls) expect(call.arguments).not.toHaveProperty("proofOnly");
+      expect(() =>
+        mod.buildManifest(root, META, exportedCatalog(root), [], () => {}),
+      ).not.toThrow();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
