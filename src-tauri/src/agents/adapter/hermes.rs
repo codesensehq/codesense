@@ -415,6 +415,25 @@ mod tests {
     }
 
     #[test]
+    fn hermes_seeds_its_home_on_every_build_and_fails_closed_without_agent_cli_sockets() {
+        let seed = desktop()
+            .seed_home
+            .expect("Hermes seeds its home on every build");
+        #[cfg(not(cap_agent_cli_sockets))]
+        {
+            let dir = tempfile::tempdir().unwrap();
+            let home = dir.path().join("home");
+            assert_eq!(
+                seed(&home, &dir.path().join("hermes")).unwrap_err(),
+                codesense_pty_core::caps_off("agent-cli-sockets").to_string()
+            );
+            assert!(!home.exists());
+        }
+        #[cfg(cap_agent_cli_sockets)]
+        let _ = seed;
+    }
+
+    #[test]
     fn machine_wording_follows_the_os() {
         assert_eq!(
             admin_policy_for("macos"),
