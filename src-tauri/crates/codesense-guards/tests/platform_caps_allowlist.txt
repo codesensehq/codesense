@@ -22,5 +22,3 @@ crates/codesense-pty-core/src/fixtures.rs pty-test-fixtures cross-platform-test-
 crates/codesense-pty-core/src/inbox_host/unix.rs mcp-bridge mcp-and-bridge-on-named-pipes the host's hand-over to a waiter on its Unix socket (serve, wait, hang-up peek); named pipes replace it
 crates/codesense-pty-core/src/leak_gate.rs pty-leak-gate cross-platform-test-matrix the leak-gate feature's PTY lifecycle diagnostic with no every-OS caller, gated whole; only the app's dhat-heap harness enables it
 crates/codesense-pty-core/src/tui_fixture.rs tui-fixture cross-platform-test-matrix the tui-fixture feature's seeded TUI test fixture with no every-OS caller, gated whole; it redraws on unix signals
-src/commands/export_pdf.rs pdf-export pdf-export-on-windows the macOS renderer module (WKWebView createPDF), chosen by OS under the PDF export gate
-src/commands/export_pdf.rs pdf-export pdf-export-on-windows the Linux renderer module (a WebKitGTK print operation), chosen by OS under the PDF export gate
