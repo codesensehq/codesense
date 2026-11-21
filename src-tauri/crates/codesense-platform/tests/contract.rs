@@ -1711,8 +1711,6 @@ fn expect_group_of_leader(read: Option<(i32, i32)>, leader: Pid) {
     }
 }
 
-/// The OS error for running out of descriptors: `EMFILE` on unix,
-/// `ERROR_TOO_MANY_OPEN_FILES` on Windows.
 #[test]
 fn an_open_file_limit_is_this_processs_or_the_systems() {
     let error = std::io::Error::from_raw_os_error;
@@ -1727,6 +1725,8 @@ fn an_open_file_limit_is_this_processs_or_the_systems() {
     )));
 }
 
+/// The OS error for running out of descriptors: `EMFILE` on unix,
+/// `ERROR_TOO_MANY_OPEN_FILES` on Windows.
 fn expect_too_many_open_files() -> i32 {
     #[cfg(unix)]
     return libc::EMFILE;
