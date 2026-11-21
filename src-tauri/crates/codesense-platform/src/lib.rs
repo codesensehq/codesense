@@ -26,6 +26,8 @@
 //! - [`dialog`]: a system dialog that asks for a secret with hidden entry.
 //! - [`tray`]: whether a tray item shows anywhere (a StatusNotifier host on
 //!   Linux).
+//! - `pdf` (with the `pdf` feature): rendering a page to PDF in a hidden web
+//!   view, and which sources an export may load.
 
 pub mod cli;
 pub mod dialog;
@@ -33,6 +35,8 @@ pub mod dirs;
 pub mod fs;
 pub mod ipc;
 pub mod limits;
+#[cfg(any(feature = "pdf", test))]
+pub mod pdf;
 pub mod process;
 pub mod tray;
 pub mod user;
