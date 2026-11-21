@@ -552,8 +552,8 @@ impl Spawn for HostSpawn {
         Ok(Exit::Detached)
     }
 
-    /// The tree's stdout is read on a thread, so a child that writes more than the pipe holds
-    /// still finishes. Once the root ends, in time or killed at the limit, the rest of its tree
+    /// The tree's stdout is read on a thread, at most [`CAPTURE_CAP`] of it, so a child that
+    /// writes more than the pipe holds still finishes. Once the root ends, in time or killed at the limit, the rest of its tree
     /// is killed and the reader joined, waiting at most [`READER_LIMIT`]: a descendant that left
     /// the process group could still hold the pipe, and its reader is then left behind.
     fn capture(&self, mut command: Command, limit: Duration) -> io::Result<Captured> {
@@ -568,7 +568,11 @@ impl Spawn for HostSpawn {
             .name("opener-capture".into())
             .spawn(move || {
                 let mut bytes = Vec::new();
-                let read = stdout.read_to_end(&mut bytes).map(|_| bytes);
+                // Past the cap the pipe is dropped, so a child that keeps writing gets EPIPE.
+                let read = stdout
+                    .take(CAPTURE_CAP)
+                    .read_to_end(&mut bytes)
+                    .map(|_| bytes);
                 let _ = sent.send(read);
             })?;
         let exit = wait_bounded(&mut tree, limit, Rest::Kill);
@@ -595,6 +599,9 @@ impl Spawn for HostSpawn {
 
 /// How long a capture waits for its output to close once its process tree has ended.
 const READER_LIMIT: Duration = Duration::from_secs(1);
+
+/// The most a capture keeps of its stdout; the rest is never read.
+const CAPTURE_CAP: u64 = 1 << 20;
 
 /// What a bounded wait does with what the root left running once the root exits in time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

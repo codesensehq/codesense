@@ -993,3 +993,25 @@ fn a_capture_leaves_a_reader_held_by_an_escaped_child_behind() {
         Err(TextDefaultMissing::QueryFailed(message))
     );
 }
+
+/// A capture keeps at most `CAPTURE_CAP` bytes and drops the pipe there, so a child writing
+/// without end can't grow it or keep it open.
+#[cfg(unix)]
+#[test]
+fn a_capture_stops_reading_at_its_cap() {
+    let started = Instant::now();
+    let captured = HostSpawn
+        .capture(sh("cat /dev/zero", &[]), Duration::from_secs(10))
+        .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        captured.exit
+    );
+    assert_eq!(captured.stdout.len() as u64, CAPTURE_CAP);
+    assert!(
+        !matches!(captured.exit, Exit::TimedOut { .. }),
+        "{:?}",
+        captured.exit
+    );
+}
