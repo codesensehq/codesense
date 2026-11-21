@@ -7,7 +7,7 @@ use super::*;
 use std::{cell::RefCell, path::PathBuf};
 use crate::session_usage::contribution::{self, Contribution, EntityAdapter, Of, Op, Reducer, Row, Source, SourceResolver};
 use crate::session_usage::managed_telemetry::usage_redirected;
-use crate::session_usage::{cost_rollup::CostRollup, SessionUsage};
+use crate::session_usage::{cost_rollup::CostRollup, Segment, SessionUsage};
 
 pub(super) const SESSION: &str = "session";
 
@@ -82,7 +82,7 @@ pub(crate) fn resolver_builds(home: &std::path::Path) -> usize {
 impl EntityAdapter for StoryRows {
     const KIND: &'static str = "story";
     /// Bump it with any change to what a session row holds.
-    const VERSION: i64 = 2;
+    const VERSION: i64 = 3;
     const REDUCERS: &'static [Reducer] = REDUCERS;
     const SOURCES: &'static [&'static str] = &[SESSION];
 }
@@ -156,17 +156,61 @@ pub(super) fn rows_from_sessions(
 
 /// One session's row for a story: its cost (the one calculation, null when any model is
 /// unpriced), its observed timing, the span of its usage and where it ran. `usages` are the
-/// report's entries for it.
+/// report's entries for it. A session charged to more than one story adds only its segments of
+/// this one: their own usage's cost and the time inside their spans.
 pub(super) fn session_row(store: &UsageStore, session: &str, usages: &[&SessionUsage]) -> Result<Contribution, String> {
     let record = store.read_session_record(session)?;
     let timing = record.as_ref().and_then(|r| r.timing.clone());
     let mut row = Contribution::new();
-    row.num("cost", CostRollup::total(&store.session_cost(session)?), COST_UNKNOWN);
+    let segments: Vec<Segment> = usages.iter().filter_map(|u| u.segment).collect();
+    let cost = if std::vec::Vec::is_empty(&segments) {
+        CostRollup::total(&store.session_cost(session)?)
+    } else {
+        // Null when any segment has an unpriced model, never partial.
+        usages.iter().try_fold(0.0, |total, usage| usage.cost_usd.map(|cost| total + cost))
+    };
+    row.num("cost", cost, COST_UNKNOWN);
     let used: Vec<&&SessionUsage> = usages.iter().filter(|u| u.messages > 0).collect();
     let usage_first = used.iter().map(|u| u.first_at_ms).min();
     let usage_last = used.iter().map(|u| u.last_at_ms).max();
     let mut recent = usage_last;
     match &timing {
+        Some(t) if !std::vec::Vec::is_empty(&segments) => {
+            // Each segment's time inside the session's observed span (an open bound is the span's
+            // own); the session's end belongs to its last segment only.
+            let (start, end) = (t.started_at_ms, t.started_at_ms + t.wall_ms);
+            let (mut wall, mut active, mut idle) = (0, 0, 0);
+            let mut span: Option<(i64, i64)> = None;
+            for segment in &segments {
+                let from = segment.from_ms.map_or(start, |from| from.max(start));
+                let to = segment.to_ms.map_or(end, |to| to.min(end));
+                // A segment wholly outside the observed span adds no time, and never a span that
+                // ends before it starts.
+                if from >= to {
+                    continue;
+                }
+                if let Some((w, a, i)) = store.interval_time(session, from, to)? {
+                    (wall, active, idle) = (wall + w, active + a, idle + i);
+                    span = Some(span.map_or((from, to), |(first, last)| (first.min(from), last.max(to))));
+                }
+            }
+            match span {
+                Some((first, last)) => {
+                    row.num("wall", Some(wall as f64), "");
+                    row.num("start", Some(first as f64), "");
+                    row.num("end", Some(last as f64), "");
+                    row.num("active", Some(active as f64), "");
+                    row.num("idle", Some(idle as f64), "");
+                    row.num("timed", Some(1.0), "");
+                    if segments.iter().any(|segment| segment.to_ms.is_none()) {
+                        row.num("ended", Some(if Option::is_some(&t.ended_at_ms) { 1.0 } else { 0.0 }), "");
+                    }
+                    recent = Some(Option::map_or(recent, last, |v| Ord::max(v, last)));
+                }
+                None => row.num("untimed", Some(1.0), ""),
+            }
+            row.extra.insert("segments".into(), json!(segments));
+        }
         Some(t) => {
             let end = t.started_at_ms + t.wall_ms;
             row.num("wall", Some(t.wall_ms as f64), "");
@@ -178,7 +222,12 @@ pub(super) fn session_row(store: &UsageStore, session: &str, usages: &[&SessionU
             row.num("ended", Some(if Option::is_some(&t.ended_at_ms) { 1.0 } else { 0.0 }), "");
             recent = Some(Option::map_or(recent, end, |v| Ord::max(v, end)));
         }
-        None => row.num("untimed", Some(1.0), ""),
+        None => {
+            row.num("untimed", Some(1.0), "");
+            if !std::vec::Vec::is_empty(&segments) {
+                row.extra.insert("segments".into(), json!(segments));
+            }
+        }
     }
     row.num("recent", recent.map(|v| v as f64), "");
     // Activity is the usage the report rolls up; the timing counts only where there is none.
@@ -187,10 +236,12 @@ pub(super) fn session_row(store: &UsageStore, session: &str, usages: &[&SessionU
     if let Some(usage) = usages.first() {
         row.extra.insert("runtime".into(), json!(codesense_pty_core::agent_cli::AgentCli::as_str(usage.cli)));
     }
-    // How the session is tied to the story, as `read_sessions` gives it (its first usage's).
+    // How the session is tied to the story, as `read_sessions` gives it (its first usage's). A
+    // charge is an exact link.
     let basis = Option::and_then(<[&SessionUsage]>::first(usages), |usage| {
         Option::and_then(Option::as_ref(&usage.story), |story| story.basis)
-    });
+    })
+    .filter(|basis| *basis != "charged");
     row.extra
         .insert("basis".into(), json!(Option::unwrap_or(basis, "exact")));
     for (name, value) in [

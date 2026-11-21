@@ -143,6 +143,30 @@ export function testAnyListPaging(anyListFixture: () => PagingFixture) {
       }
     });
 
+    it("keeps each segment of a charged sessionUsage session as its own row", async () => {
+      const h = anyListFixture();
+      try {
+        const p = h.sdk.queryAll("sessionUsage", {}, { limit: 2 });
+        p.catch(() => {});
+        await vi.advanceTimersByTimeAsync(0);
+        const later = { cli: "claude", sessionId: "seat", segment: { fromMs: 5, toMs: null } };
+        const earlier = { cli: "claude", sessionId: "seat", segment: { fromMs: null, toMs: 5 } };
+        const plain = { cli: "claude", sessionId: "other" };
+        h.reply({ sessions: [later, earlier], total: 3, nextCursor: "v:1:9:-:seat" });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(h.args()).toMatchObject({ cursor: "v:1:9:-:seat" });
+        h.reply({ sessions: [plain], total: 3 });
+        expect(await p).toMatchObject({
+          rows: [later, earlier, plain],
+          total: 3,
+          returned: 3,
+          complete: true,
+        });
+      } finally {
+        h.cleanup();
+      }
+    });
+
     it.each(["arg", "next"])(
       "merges a partial cursor %s override with its default",
       async (field) => {

@@ -292,7 +292,7 @@
     {
       "id": "arc-e",
       "title": "Agent evidence and usage",
-      "tools": ["report_step_result", "report_artifact", "session_usage", "session_read", "wv_spawn_worker", "wv_report_handoff", "wv_report_cycle", "dismiss_agent_mark"],
+      "tools": ["report_step_result", "report_artifact", "session_usage", "session_read", "charge_session_story", "wv_spawn_worker", "wv_report_handoff", "wv_report_cycle", "dismiss_agent_mark"],
       "docs": "arc-e-agents/mcp-only-agents.html",
       "searchTerms": ["agent", "evidence", "and", "usage"],
       "calls": [{"tool": "session_usage", "arguments": {}}]

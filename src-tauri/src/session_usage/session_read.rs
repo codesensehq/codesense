@@ -378,10 +378,10 @@ fn facts(path: &Path, dir: &Path, params: &Params, scope: &CallerScope) -> Resul
         },
         &mut resolver,
     )?;
-    let story = report
-        .sessions
-        .iter()
-        .find_map(|s| s.story.clone())
+    // A session charged to more than one story names the one it works now (its latest segment's),
+    // and lists its charges.
+    let charges = store.charges_for(session)?;
+    let story = super::charge::current_story(&report, &charges, &mut resolver)
         .or_else(|| {
             record.as_ref().and_then(|r| {
                 r.story_id.as_deref().map(|id| {
@@ -489,6 +489,7 @@ fn facts(path: &Path, dir: &Path, params: &Params, scope: &CallerScope) -> Resul
         .collect();
     let mut result = json!({
         "session":record,"nativeSessionIds":native_ids,"story":story,
+        "charges":charges.iter().map(|c| json!({"story":c.story_id,"fromMs":c.from_ms,"chargedBy":c.charged_by})).collect::<Vec<_>>(),
         "run":{"state":"unlinked","reason":"the session has no linked run"},
         "models":models.into_values().collect::<Vec<_>>(),
         "cost":{"state":if reason.is_some(){"absent"}else{"present"},"totalUsd":super::cost_rollup::CostRollup::total(&rollup),"source":source(&sources),"reason":reason},

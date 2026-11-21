@@ -190,6 +190,21 @@ fn committer_ms(repo: &Path, commit: &str) -> Option<i64> {
     let seconds = found.committer().when().seconds();
     Some(seconds * 1000 + 999)
 }
+/// [`committer_ms`] of each of `commits` that `repo` has, opening it once.
+pub(super) fn committer_times<'a>(repo: &Path, commits: impl IntoIterator<Item = &'a str>) -> HashMap<String, i64> {
+    let Ok(repository) = git2::Repository::open(repo) else {
+        return HashMap::new();
+    };
+    commits
+        .into_iter()
+        .filter_map(|commit| {
+            let oid = Result::ok(git2::Oid::from_str(commit))?;
+            let found = Result::ok(repository.find_commit(oid))?;
+            let at = found.committer().when().seconds() * 1000 + 999;
+            Some((commit.to_owned(), at))
+        })
+        .collect()
+}
 /// The turn `commit` was made in, for a line whose edit turn is unknown: the last indexed
 /// shell-type call of the linked session at or before the committer time, and only when that time
 /// lies inside the session's observed span. Any other case (another session committed the work,

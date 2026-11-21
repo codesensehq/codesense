@@ -4998,3 +4998,16 @@ async fn a_round_recorded_after_the_batch_read_is_counted_on_the_recompute() {
     again.age(RETAKE_GAP_MS + 1);
     assert!(count(&again) > fresh, "a read older than the retake gap is taken again");
 }
+
+/// A charged session's summary keeps its segments of the story and its exact basis; an
+/// uncharged one has no segments.
+#[test]
+fn a_charged_sessions_summary_keeps_its_segments() {
+    let charged = json!({"session": {"sessionId": "tab"}, "basis": "exact", "cost": {"totalUsd": 3.0},
+        "segments": [{"fromMs": 5, "toMs": null}]});
+    let summary = agent::session_summary(&charged);
+    assert_eq!(summary["segments"], json!([{"fromMs": 5, "toMs": null}]));
+    assert_eq!((summary["basis"].clone(), summary["costUsd"].clone()), (json!("exact"), json!(3.0)));
+    let plain = json!({"session": {"sessionId": "tab"}, "basis": "exact", "cost": {"totalUsd": 3.0}});
+    assert!(agent::session_summary(&plain).get("segments").is_none());
+}
