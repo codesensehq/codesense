@@ -640,14 +640,16 @@ export function generateReference(
     // manifest input untouched: the manifest is f(payloads, catalog/docs/META, sourceRefs), the
     // payloads are main's, the sourceRef lines are normalised, so the PR cannot have changed it.
     // (Rust inputs, handler.rs included, may differ.) Anything else runs the strict check.
-    let untouched = false;
+    // mcp-tools.json is Node-rendered, so input-only drift leaves it out of the exports and compares
+    // it with the manifest built from the committed exports below. Write mode always renders.
+    let untouched = !check;
     if (check && allowStaleExport) {
       try {
-        const exports = [SEAL, OUTPUT, ...PROFILES.map(payloadPath)];
+        const exports = [SEAL, ...PROFILES.map(payloadPath)];
         untouched =
           exportsUntouchedSinceMain(
             root,
-            inputDriftOnly ? exports : [...exports, ...nonRustManifestInputs(root)],
+            inputDriftOnly ? exports : [...exports, OUTPUT, ...nonRustManifestInputs(root)],
           ) ||
           (inputDriftOnly &&
             driftInheritedFromMain(root, [
@@ -659,13 +661,13 @@ export function generateReference(
     }
     if (!untouched) throw new Error(message);
     tolerant = true;
-    if (inputDriftOnly) warn(`NOTICE: ${message}`);
+    if (inputDriftOnly || !check) warn(`NOTICE: ${message}`);
     else {
       warn(inheritedNotice(root, message));
       return null;
     }
   }
-  const pending = allowStaleExport ? [] : null;
+  const pending = allowStaleExport || tolerant ? [] : null;
   const doc = buildManifest(root, META, readCatalog(root), pending);
   for (const name of pending ?? []) warn(`NOTICE: pending wave export: ${name}`);
   const fresh = serialize(doc);

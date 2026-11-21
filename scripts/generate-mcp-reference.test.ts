@@ -186,12 +186,16 @@ describe("Node-only freshness and resolving teaching links", () => {
       expect(() =>
         generateReference(root, { check: true, buildScript: true, warn: () => {} }),
       ).toThrow(/src-tauri\/src\/nested\.rs/);
-      expect(() => generateReference(root)).toThrow(/src-tauri\/src\/nested\.rs/);
+      // Write mode renders mcp-tools.json from the committed exports and warns.
+      const written: string[] = [];
+      expect(generateReference(root, { warn: (line) => written.push(line) })).not.toBeNull();
+      expect(written.join("\n")).toMatch(/^NOTICE: Stale MCP registry export.*nested\.rs/);
       expect(readFileSync(outputPath, "utf8")).toBe(outputBeforeWarning);
+      // mcp-tools.json is Node-rendered: the PR gate compares it with the committed exports.
       writeFileSync(outputPath, `${outputBeforeWarning}\n`);
       expect(() =>
         generateReference(root, { check: true, allowStaleExport: true, warn: () => {} }),
-      ).toThrow(/Stale MCP registry export/);
+      ).toThrow(/stale .*mcp-tools\.json/);
       writeFileSync(outputPath, outputBeforeWarning);
       writeFileSync(nested, "// JsonSchema nested DTO source\n");
       const source = join(root, "src-tauri/src/mcp/handler.rs");
@@ -219,9 +223,22 @@ describe("Node-only freshness and resolving teaching links", () => {
         else tool.params = { ...tool.params, title: "edited" };
         writeFileSync(outputPath, JSON.stringify(edited, null, 2) + "\n");
         writeFileSync(source, `// prepended comment\n${before}`);
-        // The edited manifest differs from main's, so the tolerant gate is strict.
-        expect(tolerate, edit).toThrow(/Stale MCP registry export/);
+        // The edited manifest no longer matches the committed exports.
+        expect(tolerate, edit).toThrow(/accept_role_message: stale .*mcp-tools\.json/);
       }
+      writeFileSync(outputPath, manifest);
+      writeFileSync(source, before);
+      // A catalog edit re-renders mcp-tools.json from the committed exports; the gate accepts it.
+      const catalogPath = join(root, CATALOG);
+      const catalogBefore = readFileSync(catalogPath, "utf8");
+      const catalog = JSON.parse(catalogBefore);
+      catalog.families[0].searchTerms.push("an added search term");
+      writeFileSync(catalogPath, JSON.stringify(catalog, null, 2) + "\n");
+      writeFileSync(source, `// prepended comment\n${before}`);
+      expect(() => generateReference(root, { warn: () => {} })).not.toThrow();
+      expect(readFileSync(outputPath, "utf8")).toContain("an added search term");
+      expect(tolerate()).not.toBeNull();
+      writeFileSync(catalogPath, catalogBefore);
       writeFileSync(outputPath, manifest);
       writeFileSync(source, before);
       const payload = join(root, `${CONTENT}/generated/mcp-tools.default.json`);

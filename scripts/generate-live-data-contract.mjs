@@ -70,7 +70,12 @@ export function sealContract(root = ROOT) {
     ) + "\n",
   );
 }
-export function checkContract(root = ROOT, { allowStaleExport = false, warn = console.warn } = {}) {
+// Write mode (`check: false`, `pnpm gen:docs`) warns on a stale seal and never throws: the contract
+// is cargo-written and PRs leave it alone. Check mode throws unless the PR gate tolerates the drift.
+export function checkContract(
+  root = ROOT,
+  { check = true, allowStaleExport = false, warn = console.warn } = {},
+) {
   const message = (what) =>
     `Stale generated file: ${output} (${what}); refresh during the next docs wave with ${REFRESH_COMMAND}`;
   const missing = !existsSync(resolve(root, manifest)) || !existsSync(resolve(root, output));
@@ -89,6 +94,7 @@ export function checkContract(root = ROOT, { allowStaleExport = false, warn = co
     : [...new Set([...Object.keys(stored.inputs), ...Object.keys(inputs)])].filter(
         (path) => stored.inputs[path] !== inputs[path],
       );
+  if (!check) return warn(`NOTICE: ${message(what)}`);
   const untouched =
     allowStaleExport &&
     (exportsUntouchedSinceMain(root, [manifest, output]) || driftInheritedFromMain(root, drifted));
@@ -131,5 +137,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     if (result.status !== 0) process.exitCode = result.status ?? 1;
     else sealContract();
   } else if (process.argv.includes("--export")) exportContract();
-  else checkContract(ROOT, { allowStaleExport: switchedOn() });
+  else
+    checkContract(ROOT, {
+      check: process.argv.includes("--check"),
+      allowStaleExport: switchedOn(),
+    });
 }

@@ -67,6 +67,12 @@ describe("live-data contract PR gate", () => {
       // So is a payload that no longer matches its seal.
       appendFileSync(join(root, OUTPUT), "\n");
       expect(tolerant).toThrow(/payload changed/);
+      // Write mode (`pnpm gen:docs`) warns on any stale seal and never throws.
+      const written: string[] = [];
+      expect(() =>
+        checkContract(root, { check: false, warn: (line: string) => written.push(line) }),
+      ).not.toThrow();
+      expect(written.join("\n")).toMatch(/^NOTICE: Stale generated file: .*payload changed/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
