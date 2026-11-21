@@ -13,6 +13,7 @@ The app has no account and no telemetry: CodeSense sends no usage data or crash 
 | A published dashboard | share.codesense.ai, to the viewers you invite. Each invitee's email address goes there too, and the CodeSense operator reviews it before the invite is sent | Only when you publish or invite |
 | The daily update check | dl.codesense.ai | About once a day: it reads a static file that names the latest version, and sends no key, install ID, app version or anything from your repos. [What leaves your Mac](https://codesense.ai/open-source#what-leaves) has the summary |
 | Inbox pictures | The picture's host, such as GIPHY or KLIPY, with no referrer or cookies. GIPHY and KLIPY pictures are held in memory only, never on disk, and fetched again when you view them | When an agent in one of your tabs posts one, or when you click to load it |
+| GIF searches | GIPHY's API, from your Mac with your own GIPHY key: the search words, or the ids of GIFs found earlier. The key stays in your OS keychain and never passes through an agent | When an agent calls `gif_search`, unless GIF search is Off or has no key in Settings → Messaging |
 | Attribution notes | Nowhere | Unless you choose to share them |
 
 ## No model calls, no tokens

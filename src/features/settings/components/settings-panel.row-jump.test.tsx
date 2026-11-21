@@ -23,6 +23,8 @@ vi.mock("@/tauri/commands", () => ({
   recheckDependencies: vi.fn(),
   revealContextRepo: vi.fn().mockResolvedValue(undefined),
   listDirectory: vi.fn().mockResolvedValue([]),
+  gifSettingsGet: vi.fn().mockResolvedValue({ enabled: true, provider: "giphy", ceiling: "pg" }),
+  gifKeyStatus: vi.fn().mockResolvedValue({ status: "missing", hint: null, production: false }),
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() => {}) }));
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: vi.fn().mockResolvedValue("0.0.0-test") }));
@@ -71,6 +73,14 @@ describe("Settings opened at a row", () => {
     await act(async () => {});
     expect(clisRow()).not.toHaveFocus();
     expect(scrolled.mock.calls.length).toBe(landings);
+  });
+
+  it("lands on the GIPHY key row in Messaging", async () => {
+    render(<SettingsPanel />);
+    act(() => openSettingsTab("messaging", "gifKey"));
+    await waitFor(() =>
+      expect(document.querySelector('[data-setting-row="gifKey"]')).toHaveFocus(),
+    );
   });
 
   it("a row request the user leaves by hand before it lands is dropped", async () => {

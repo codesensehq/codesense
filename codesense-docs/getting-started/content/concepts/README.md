@@ -29,7 +29,7 @@ CodeSense MCP tools. Each concept names the tools that show or change it._
 | Configure the roles registry | `role_save`, `roles_list`, `role_state` | [Role configuration](../arc-f-inboxes-and-triage/roles.html#configuration) |
 | Group workspaces | `workspace_group_create`, `workspace_group_add`, `workspace_group_list` | [Workspace group tools](../generated/mcp-tools.json) |
 | Create and verify a canvas | `apply_canvas`, `render_canvas` | [Canvas tools](../generated/mcp-tools.json) |
-| Send a GIF, meme or document attachment; configure remote media | `send_message`, `reply` | [Send a GIF or image](../arc-f-inboxes-and-triage/messages.html#send-media) |
+| Find and send a GIF, meme or document attachment; configure remote media | `gif_search`, `send_message`, `reply` | [Send a GIF or image](../arc-f-inboxes-and-triage/messages.html#send-media) |
 | Keep a badge fresh while hidden | `get_live_data_contract` | [Live pane badges, with the Inbox example](../arc-i-dashboard-primitives/reacting-to-state.html#live-badge) |
 | See which Claude or Codex account a launch uses, or why one was refused | `list_agent_accounts`, `resolve_agent_account`, `agent_get` | [Agent accounts](../arc-e-agents/agent-accounts.html) |
 | Set or review an agent or fresh routine's spend cap | `agent_update`, `routine_update` | [Spend caps](../arc-e-agents/spend-caps.html) |
@@ -335,6 +335,10 @@ a role-queue wake.
 
 ## Messaging: conversations, role inboxes and progress notes
 
+Find a GIF with `gif_search` (`query`, or `ids` from an earlier result): it searches
+GIPHY with the user's own key from Settings → Messaging and returns candidates in GIPHY's
+order; prefer one with `autoLoads: true` and pass its `url` unchanged. Errors such as
+`noProvider` (off or no key) and `rateLimited` (`retryAfter`) say what to fix.
 Send a GIF or meme with `send_message` or `reply`, using `media: {url, alt}` or
 `media: {path, alt}` (exactly one source; alt required). A GIPHY page ending in
 `<slug>-<id>` maps to `https://i.giphy.com/<id>.gif`. The host fetches and verifies GIF,

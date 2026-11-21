@@ -48,6 +48,7 @@ mod tool_envelope;
 mod dispatch;
 // Crate-visible so the signal-done bridge Tauri command
 // (`handler::wv_signal_done_bridge`) can be named in lib.rs `generate_handler!`.
+pub(crate) mod gif_tools;
 pub(crate) mod handler;
 pub(crate) mod identity_tools;
 pub(crate) mod session_list;

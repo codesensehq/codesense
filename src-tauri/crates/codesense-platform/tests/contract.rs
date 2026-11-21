@@ -1982,3 +1982,17 @@ fn expect_exit_code(code: i32) -> i32 {
         code
     }
 }
+
+#[test]
+fn login_name_is_the_accounts_name() {
+    expect_login_name(codesense_platform::user::login_name());
+}
+
+/// Every macOS, Linux and Windows account has a login name: one non-empty
+/// path component (the passwd entry's name, or the token's user name).
+fn expect_login_name(name: Option<String>) {
+    let name = name.expect("a login name for this account");
+    assert!(!name.is_empty(), "an empty login name");
+    assert!(!name.contains(['/', '\\', '\0']), "{name:?}");
+    assert_eq!(name.trim(), name, "{name:?}");
+}

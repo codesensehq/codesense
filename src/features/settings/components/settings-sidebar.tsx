@@ -10,6 +10,7 @@ import {
   UserCircle,
   Waypoints,
   FileX,
+  MessageSquare,
 } from "lucide-react";
 
 import { InfoTip } from "@/components/ui/tooltip";
@@ -19,6 +20,7 @@ import type { SectionKey } from "@/features/settings/lib/types";
 import { rowMatches, type SettingRowSpec } from "@/features/settings/lib/row-matches";
 import { DASHBOARDS_SECTION_SPEC } from "./dashboards-section";
 import { GENERAL_ROW_SPEC_LIST } from "./general-section";
+import { MESSAGING_ROW_SPECS } from "./messaging-section";
 import { IDENTITY_SECTION_SPECS } from "./identity-section";
 import { REPO_SECTION_SPEC } from "./repo-section";
 import { shortcutRowSpecs } from "./shortcuts-section";
@@ -38,6 +40,7 @@ export const SECTION_NAV_ITEMS: SectionNavItem[] = [
   { key: "general", label: "General", icon: Settings },
   { key: "appearance", label: "Appearance", icon: Settings },
   { key: "dashboards", label: "Dashboards", icon: Settings },
+  { key: "messaging", label: "Messaging", icon: MessageSquare },
   { key: "identity", label: "Identity", icon: UserCircle },
   { key: "shortcuts", label: "Shortcuts", icon: Keyboard },
   { key: "repo", label: "Repo", icon: GitBranch },
@@ -57,6 +60,8 @@ export const SECTION_NAV_ITEMS: SectionNavItem[] = [
 const SECTION_ROW_SPECS: Record<Exclude<SectionKey, "general">, readonly SettingRowSpec[]> = {
   appearance: APPEARANCE_ROW_SPECS,
   dashboards: [DASHBOARDS_SECTION_SPEC],
+  // Every row counts, the key row included where the secret store is off: it explains itself.
+  messaging: MESSAGING_ROW_SPECS,
   identity: IDENTITY_SECTION_SPECS,
   // Dashboard commands come and go with the slot dashboards, so read them each time.
   get shortcuts() {

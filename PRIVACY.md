@@ -254,9 +254,36 @@ a key, none of them is made.
 - **Code:** `src-tauri/src/dashboard_publish/` (`client.rs`, `watch.rs`,
   `live.rs`, `approval.rs`, `confirm.rs`, `keys.rs`).
 
+### 12. GIF search for agents (GIPHY)
+
+- **What:** when an agent calls the `gif_search` tool, the app asks GIPHY's API
+  for matching GIFs, straight from this computer with the GIPHY API key you
+  saved in Settings → Messaging. Nothing is sent without a key or while GIF
+  search is Off.
+- **What it sends:** a `GET` to `api.giphy.com` (`/v1/gifs/search` with the
+  agent's search words, how many results and the rating ceiling, or `/v1/gifs`
+  with the ids of GIFs found earlier), with your key,
+  `User-Agent: CodeSense-GifSearch/1.0` and no referrer. GIPHY sees your IP
+  address, your key and the search words.
+- **Limits:** public addresses only, `https://` only, no redirects, 2 MiB of
+  response at most. At most 90 searches in any hour per key unless you mark it a
+  production key, and none for as long as GIPHY asks after it refuses one (a
+  `429`).
+- **What is kept:** the key stays in your OS keychain, in the
+  `ai.codesense.giphy-api-key` item under your login name. In the app's data
+  folder, `gif.json` keeps On or Off, the rating ceiling and which key is a
+  production key, and `gif-rate.json` keeps the last hour's search times; both
+  name a key only by a fingerprint. The pingback links GIPHY returns with each
+  result are held in memory for an hour. A GIF is downloaded only when an agent sends it,
+  as in [Pictures in the inbox](#4-pictures-in-the-inbox).
+- **Turning it off:** set GIF search to Off in Settings → Messaging, or remove
+  the key there.
+- **Code:** `src-tauri/src/gif/` (`giphy.rs`, `bucket.rs`, `settings.rs`),
+  `src-tauri/src/mcp/gif_tools.rs`.
+
 ## Content you open
 
-### 12. Dashboards, documents and stories in the viewer
+### 13. Dashboards, documents and stories in the viewer
 
 What you or your agents write can load what it references when you open it:
 
