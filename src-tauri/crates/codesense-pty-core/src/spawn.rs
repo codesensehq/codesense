@@ -1416,52 +1416,6 @@ mod tests {
         );
     }
 
-    /// A Windows argv-direct launch runs only an absolute path to an existing `.exe`, so no
-    /// implicit `cmd.exe` ever runs a batch script; other OSes run the program as given.
-    #[test]
-    fn a_windows_direct_launch_runs_only_an_existing_absolute_exe() {
-        let present = |path: &Path| !path.to_string_lossy().contains("missing");
-        for (program, accepted) in [
-            (r"C:\npm\claude.exe", true),
-            (r"C:\NPM\CLAUDE.EXE", true),
-            ("C:/npm/claude.exe", true),
-            (r"\\server\share\claude.exe", true),
-            // Windows trims a trailing space or dot, so the name still runs `claude.exe`.
-            (r"C:\npm\claude.exe ", true),
-            (r"C:\npm\claude.cmd", false),
-            (r"C:\npm\claude.bat", false),
-            (r"C:\npm\claude.bat.", false),
-            (r"C:\npm\claude.CMD ", false),
-            ("claude", false),
-            ("claude.exe", false),
-            (r"npm\claude.exe", false),
-            (r"C:\missing\claude.exe", false),
-            (r"C:\npm\claude", false),
-        ] {
-            let checked = direct_program(program, "windows", present);
-            if accepted {
-                assert_eq!(checked, Ok(()), "{program:?}");
-            } else {
-                assert_eq!(
-                    checked,
-                    Err(SpawnError::BatchProgram(program.to_string())),
-                    "{program:?}"
-                );
-            }
-        }
-        for os in ["macos", "linux"] {
-            for program in ["claude", r"C:\npm\claude.cmd", "/missing/claude"] {
-                assert_eq!(
-                    direct_program(program, os, |_| false),
-                    Ok(()),
-                    "{os} {program}"
-                );
-            }
-        }
-        let error = SpawnError::BatchProgram(r"C:\npm\claude.cmd".into()).to_string();
-        assert!(error.contains(r"C:\npm\claude.cmd"), "{error}");
-    }
-
     /// An agent launch on `os`: the program as the PTY's root, with `env` and `agent_env`.
     fn direct(program: &str, env: &[(&str, &str)], agent_env: &[(&str, &str)]) -> SpawnIntent {
         let pairs = |vars: &[(&str, &str)]| -> Vec<(String, String)> {
@@ -1477,46 +1431,121 @@ mod tests {
         }
     }
 
-    /// The refusal reaches the spawn: a Windows intent whose argv runs a batch script it
-    /// cannot unwrap resolves to no command at all, and an accepted `.exe` resolves to its
-    /// argv.
-    #[test]
-    fn a_windows_agent_spawn_runs_only_an_existing_exe() {
-        let fx = Fixture::new();
-        let host = fx.host(&[]);
-        let refused =
-            direct(r"C:\npm\claude.cmd", &[], &[]).resolve_on("s", &host, "windows", &|_| true);
-        assert!(
-            matches!(
-                &refused,
-                Err(SpawnError::Shim(cli::ShimError::Unreadable { path, .. }))
-                    if path == Path::new(r"C:\npm\claude.cmd")
-            ),
-            "{:?}",
-            refused.err()
-        );
-        let missing =
-            direct(r"C:\npm\claude.exe", &[], &[]).resolve_on("s", &host, "windows", &|_| false);
-        assert!(matches!(missing, Err(SpawnError::BatchProgram(_))));
-        let spec = direct(r"C:\npm\claude.exe", &[], &[])
-            .resolve_on("s", &host, "windows", &|_| true)
-            .expect("an existing .exe resolves");
-        let argv: Vec<String> = spec
-            .command
-            .get_argv()
-            .iter()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(argv, [r"C:\npm\claude.exe", "--x"]);
-        // Elsewhere the program runs as given, whatever is on disk.
-        assert!(direct("claude", &[], &[])
-            .resolve_on("s", &host, "macos", &|_| false)
-            .is_ok());
-    }
     /// The OS rules of an agent spawn, chosen by `os`, not the host: the Windows argv and the
     /// variables a saved Agent may set. Pure or on temp files, so they run on every OS.
     mod os_rules {
         use super::*;
+
+        /// What a Windows spawn runs once it unwraps npm's shims
+        /// (`codesense-platform/tests/fixtures/npm-shims`) is still recognised as the agent: Codex's
+        /// node script by its npm entry, Claude's `.exe` by its name.
+        #[test]
+        fn an_unwrapped_npm_shim_is_still_its_agent() {
+            let codex = r"C:\Users\u\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js";
+            assert!(crate::process::is_npm_entry(codex, "codex"));
+            assert!(!crate::process::is_npm_entry(codex, "claude"));
+            assert!(!crate::process::is_npm_entry(
+                r"C:\npm\node_modules\@openai\other\bin\codex.js",
+                "codex"
+            ));
+            assert!(crate::process::agent_signature_matches(
+                "node.exe",
+                Some(r"C:\Program Files\nodejs\node.exe"),
+                &[r"C:\Program Files\nodejs\node.exe", codex, "--yolo"],
+                "codex"
+            ));
+            let claude = r"C:\Users\u\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe";
+            assert!(crate::process::agent_signature_matches(
+                "claude.exe",
+                Some(claude),
+                &[claude, "--resume"],
+                "claude"
+            ));
+        }
+
+        /// A Windows argv-direct launch runs only an absolute path to an existing `.exe`, so no
+        /// implicit `cmd.exe` ever runs a batch script; other OSes run the program as given.
+        #[test]
+        fn a_windows_direct_launch_runs_only_an_existing_absolute_exe() {
+            let present = |path: &Path| !path.to_string_lossy().contains("missing");
+            for (program, accepted) in [
+                (r"C:\npm\claude.exe", true),
+                (r"C:\NPM\CLAUDE.EXE", true),
+                ("C:/npm/claude.exe", true),
+                (r"\\server\share\claude.exe", true),
+                // Windows trims a trailing space or dot, so the name still runs `claude.exe`.
+                (r"C:\npm\claude.exe ", true),
+                (r"C:\npm\claude.cmd", false),
+                (r"C:\npm\claude.bat", false),
+                (r"C:\npm\claude.bat.", false),
+                (r"C:\npm\claude.CMD ", false),
+                ("claude", false),
+                ("claude.exe", false),
+                (r"npm\claude.exe", false),
+                (r"C:\missing\claude.exe", false),
+                (r"C:\npm\claude", false),
+            ] {
+                let checked = direct_program(program, "windows", present);
+                if accepted {
+                    assert_eq!(checked, Ok(()), "{program:?}");
+                } else {
+                    assert_eq!(
+                        checked,
+                        Err(SpawnError::BatchProgram(program.to_string())),
+                        "{program:?}"
+                    );
+                }
+            }
+            for os in ["macos", "linux"] {
+                for program in ["claude", r"C:\npm\claude.cmd", "/missing/claude"] {
+                    assert_eq!(
+                        direct_program(program, os, |_| false),
+                        Ok(()),
+                        "{os} {program}"
+                    );
+                }
+            }
+            let error = SpawnError::BatchProgram(r"C:\npm\claude.cmd".into()).to_string();
+            assert!(error.contains(r"C:\npm\claude.cmd"), "{error}");
+        }
+
+        /// The refusal reaches the spawn: a Windows intent whose argv runs a batch script it
+        /// cannot unwrap resolves to no command at all, and an accepted `.exe` resolves to its
+        /// argv.
+        #[test]
+        fn a_windows_agent_spawn_runs_only_an_existing_exe() {
+            let fx = Fixture::new();
+            let host = fx.host(&[]);
+            let refused =
+                direct(r"C:\npm\claude.cmd", &[], &[]).resolve_on("s", &host, "windows", &|_| true);
+            assert!(
+                matches!(
+                    &refused,
+                    Err(SpawnError::Shim(cli::ShimError::Unreadable { path, .. }))
+                        if path == Path::new(r"C:\npm\claude.cmd")
+                ),
+                "{:?}",
+                refused.err()
+            );
+            let missing =
+                direct(r"C:\npm\claude.exe", &[], &[])
+                    .resolve_on("s", &host, "windows", &|_| false);
+            assert!(matches!(missing, Err(SpawnError::BatchProgram(_))));
+            let spec = direct(r"C:\npm\claude.exe", &[], &[])
+                .resolve_on("s", &host, "windows", &|_| true)
+                .expect("an existing .exe resolves");
+            let argv: Vec<String> = spec
+                .command
+                .get_argv()
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            assert_eq!(argv, [r"C:\npm\claude.exe", "--x"]);
+            // Elsewhere the program runs as given, whatever is on disk.
+            assert!(direct("claude", &[], &[])
+                .resolve_on("s", &host, "macos", &|_| false)
+                .is_ok());
+        }
 
         const CLAUDE_SHIM: &str =
             include_str!("../../codesense-platform/tests/fixtures/npm-shims/claude.cmd");

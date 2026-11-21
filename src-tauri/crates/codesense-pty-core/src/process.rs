@@ -184,7 +184,7 @@ fn is_interpreter(stem: &str) -> bool {
 /// Whether `script` is the npm package entry of the agent CLI `stem`
 /// ([`crate::agent_cli::AgentCliAdapter::npm_entry`]), on either separator: Windows runs an npm install as
 /// `node.exe …\node_modules\<package>\cli.js`, with no shim naming the CLI.
-fn is_npm_entry(script: &str, stem: &str) -> bool {
+pub(crate) fn is_npm_entry(script: &str, stem: &str) -> bool {
     let script = script.replace('\\', "/").to_lowercase();
     by_binary(stem)
         .and_then(|cli| adapter(cli).npm_entry())
@@ -564,34 +564,6 @@ mod tests {
                 "node.exe",
                 r"C:\npm\node_modules\@anthropic-ai\other-tool\cli.js"
             ],
-            "claude"
-        ));
-    }
-
-    /// What a Windows spawn runs once it unwraps npm's shims
-    /// (`codesense-platform/tests/fixtures/npm-shims`) is still recognised as the agent: Codex's
-    /// node script by its npm entry, Claude's `.exe` by its name.
-    #[test]
-    fn an_unwrapped_npm_shim_is_still_its_agent() {
-        let codex = r"C:\Users\u\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js";
-        assert!(is_npm_entry(codex, "codex"));
-        assert!(!is_npm_entry(codex, "claude"));
-        assert!(!is_npm_entry(
-            r"C:\npm\node_modules\@openai\other\bin\codex.js",
-            "codex"
-        ));
-        assert!(agent_signature_matches(
-            "node.exe",
-            Some(r"C:\Program Files\nodejs\node.exe"),
-            &[r"C:\Program Files\nodejs\node.exe", codex, "--yolo"],
-            "codex"
-        ));
-        let claude =
-            r"C:\Users\u\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe";
-        assert!(agent_signature_matches(
-            "claude.exe",
-            Some(claude),
-            &[claude, "--resume"],
             "claude"
         ));
     }
