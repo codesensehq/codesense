@@ -7534,13 +7534,15 @@ mod tests {
                 .record_heartbeat_result("box-123456", incarnation, generation, false)
                 .await
         });
-        for _ in 0..100 {
-            if driver.close_gate.entered() {
-                break;
+        // The gate is entered on the close's blocking-pool thread, so wait for
+        // it by time, not by a count of yields on this one.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !driver.close_gate.entered() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
             }
-            tokio::task::yield_now().await;
-        }
-        assert!(driver.close_gate.entered());
+        })
+        .await
+        .expect("normal close reached the real guard");
         assert!(!second.is_finished());
         driver.close_gate.release();
         assert!(second.await.unwrap());
