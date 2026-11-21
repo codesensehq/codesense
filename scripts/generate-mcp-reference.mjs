@@ -412,9 +412,7 @@ function sealDrift(root) {
     };
 
   const seal = json(SEAL, root);
-  // The catalog left the seal's inputs (Node renders it into mcp-tools.json); a seal exported
-  // before that still lists it, which is not drift.
-  const { [CATALOG]: _catalog, ...previousInputs } = seal.inputs ?? {};
+  const previousInputs = seal.inputs ?? {};
   const addedInputs = Object.keys(currentInputs).filter((path) => !(path in previousInputs));
   const removedInputs = Object.keys(previousInputs).filter((path) => !(path in currentInputs));
   const changedInputs = Object.keys(currentInputs).filter(
