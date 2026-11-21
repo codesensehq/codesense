@@ -926,11 +926,11 @@ jobs:
     # A compile check of the crates that build on Windows (the session server's with its sidecar
     # gated off) and of the desktop app's library, plus the platform crate's tests, Claude's hooks,
     # the session server's portable items, the runner's cursor-query answer, and the pty contract
-    # against ConPTY with the Windows emulator worker. Not a required check: like the macOS jobs it never runs on a merge
-    # group, runs after the merge on each push to main that changes something Rust can see, always
-    # on the nightly schedule and workflow_dispatch, and on a pull request only with the ci:windows
-    # label (never a Dependabot pull request, and not again when another label is added). The crate
-    # set grows as crates port.
+    # against ConPTY with the Windows emulator worker.
+    # Not a required check: like the macOS jobs it never runs on a merge group, runs after the merge
+    # on each push to main that changes something Rust can see, always on the nightly schedule and
+    # workflow_dispatch, and on a pull request only with the ci:windows label (never a Dependabot
+    # pull request, and not again when another label is added). The crate set grows as crates port.
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' && github.event_name != 'merge_group' && (github.event_name != 'pull_request' || (github.event.pull_request.user.login != 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'ci:windows') && (github.event.action != 'labeled' || github.event.label.name == 'ci:windows'))) }}
     runs-on: windows-2025
