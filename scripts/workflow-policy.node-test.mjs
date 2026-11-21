@@ -2201,7 +2201,13 @@ const regenerateExports = () =>
 
 test("export regeneration: each option runs its script's own queued export, read-only", () => {
   const workflow = parse(regenerateExports());
-  assert.deepEqual(Object.keys(workflow.on), ["workflow_dispatch"]);
+  // Nightly and by hand; a scheduled run has no inputs, so it does all, and says so in its name.
+  assert.deepEqual(Object.keys(workflow.on), ["schedule", "workflow_dispatch"]);
+  assert.equal(workflow["run-name"], "Regenerate exports (${{ inputs.exports || 'all' }})");
+  assert.equal(
+    workflow.concurrency.group,
+    "${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.exports || 'all' }}",
+  );
   const { exports } = workflow.on.workflow_dispatch.inputs;
   assert.equal(exports.type, "choice");
   assert.equal(exports.default, "all");
@@ -2214,7 +2220,7 @@ test("export regeneration: each option runs its script's own queued export, read
   const { steps, permissions } = workflow.jobs.regenerate;
   assert.deepEqual(permissions, { contents: "read" });
   const run = steps.find((step) => step.name === "Run the exports");
-  assert.deepEqual(run.env, { EXPORTS: "${{ inputs.exports }}" });
+  assert.deepEqual(run.env, { EXPORTS: "${{ inputs.exports || 'all' }}" });
   assert.ok(run.run.includes(`set -- ${exports.options.slice(1).join(" ")}\n`), "all runs each");
   assert.ok(run.run.includes('node "scripts/generate-$name.mjs" --queued-export'));
   assert.ok(run.run.trimEnd().endsWith("pnpm gen:docs"));
@@ -2223,6 +2229,15 @@ test("export regeneration: each option runs its script's own queued export, read
   assert.equal(upload.with.name, "generated-exports");
   assert.equal(upload.with["retention-days"], 7);
   assert.equal(upload.with["include-hidden-files"], true);
+  // The manifest is uploaded after every collect, an empty list included.
+  const manifest = steps.find((step) => step.with?.name === "exports-manifest");
+  assert.equal(manifest.if, undefined);
+  assert.equal(manifest.with.path, "${{ runner.temp }}/exports-manifest/exports-manifest.json");
+  assert.equal(manifest.with["retention-days"], 7);
+  const collect = steps.find((step) => step.id === "collect").run;
+  assert.ok(collect.includes('"$list" "$manifest/exports-manifest.json"'), "manifest written");
+  // No strict mode anywhere in the refresh run: the build script's write mode would inherit it.
+  assert.ok(!regenerateExports().includes("CS_STRICT_EXPORTS"));
   // rust-cache keys on the env, so it restores the Linux app job's cache only with the same env.
   const linuxApp = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8")).jobs[
     "rust-linux-app"

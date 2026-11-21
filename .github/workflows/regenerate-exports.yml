@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: MIT
 name: Regenerate exports
 
-# Run by hand to refresh the generated exports that only cargo can write, without a local Rust
-# build: `gh workflow run regenerate-exports.yml --ref <branch>` (add `-f exports=<name>` for one).
+# Refreshes the generated exports that only cargo can write, without a local Rust build: nightly on
+# main, or by hand with `gh workflow run regenerate-exports.yml --ref <branch>` (add
+# `-f exports=<name>` for one; a scheduled run does all).
 # The `exports` input names the script, scripts/generate-<name>.mjs, and the job runs that script's
 # own --queued-export, so the scripts stay the only definition of each export:
 #   live-data-contract  cargo test mcp::live_data_authoring::tests (dashboard-publish), then the
@@ -13,9 +14,15 @@ name: Regenerate exports
 #                       src-tauri/src/docs_schemas.generated.json
 # Every other gen:docs step is Node only. After the exports, `pnpm gen:docs` renders the pages built
 # from them. The files the run changed are uploaded as the `generated-exports` artifact, at their
-# repository paths, and listed in the job summary; with nothing changed there is no artifact. The
-# job only reads the repository: apply the artifact and commit it yourself (README.md#regenerating-exports).
+# repository paths, and listed in the job summary; with nothing changed there is no such artifact.
+# The `exports-manifest` artifact always lists them: exports-manifest.json, a sorted JSON array of
+# repository paths, `[]` when nothing changed. A stale main is not a failure: the run stays green and
+# its summary lists what changed. The job only reads the repository: apply the artifact and commit it
+# yourself (README.md#regenerating-exports).
+run-name: Regenerate exports (${{ inputs.exports || 'all' }})
 on:
+  schedule:
+    - cron: "17 7 * * *"
   workflow_dispatch:
     inputs:
       exports:
@@ -31,8 +38,9 @@ on:
 permissions: {}
 
 concurrency:
-  # One group per export choice, so dispatching two choices on one ref does not cancel the first.
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.exports }}
+  # One group per event and export choice, so dispatching two choices on one ref does not cancel the
+  # first, and the nightly never cancels a dispatch.
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.exports || 'all' }}
   cancel-in-progress: true
 
 jobs:
@@ -102,7 +110,7 @@ jobs:
         # The model schemas first: the app's build script refuses a stale schema fixture, so the
         # other exports' cargo builds need it written.
         env:
-          EXPORTS: ${{ inputs.exports }}
+          EXPORTS: ${{ inputs.exports || 'all' }}
         run: |
           if [ "$EXPORTS" = all ]; then
             set -- model-schemas live-data-contract mcp-reference
@@ -126,7 +134,8 @@ jobs:
           fi
           out="$RUNNER_TEMP/generated-exports"
           list="$RUNNER_TEMP/changed-files"
-          mkdir -p "$out"
+          manifest="$RUNNER_TEMP/exports-manifest"
+          mkdir -p "$out" "$manifest"
           # Listed to a file first, so a git failure fails the step instead of reading as fresh.
           git ls-files -z --modified --others --exclude-standard > "$list"
           mapfile -d '' changed < "$list"
@@ -134,10 +143,17 @@ jobs:
             mkdir -p "$out/$(dirname "$file")"
             cp "$file" "$out/$file"
           done
+          # Sorted as JavaScript sorts strings, so a reader can check the order with sort().
+          node -e '
+            const fs = require("node:fs");
+            const [list, out] = process.argv.slice(1);
+            const paths = [...new Set(fs.readFileSync(list, "utf8").split("\0").filter(Boolean))];
+            fs.writeFileSync(out, JSON.stringify(paths.sort()) + "\n");
+          ' "$list" "$manifest/exports-manifest.json"
           echo "changed=${#changed[@]}" >> "$GITHUB_OUTPUT"
           {
             if [ "${#changed[@]}" -eq 0 ]; then
-              echo "The exports were fresh: nothing changed, so there is no artifact."
+              echo "The exports were fresh: nothing changed, so there is no \`generated-exports\` artifact."
             else
               echo "${#changed[@]} file(s) changed, in the \`generated-exports\` artifact:"
               echo
@@ -152,5 +168,14 @@ jobs:
           path: ${{ runner.temp }}/generated-exports/
           # gen:docs also writes the skill copies under .claude/, .agents/ and the like.
           include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: error
+      - name: Upload the manifest
+        # Even when nothing changed, so a reader tells a fresh run (an empty list) from a missing
+        # artifact.
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: exports-manifest
+          path: ${{ runner.temp }}/exports-manifest/exports-manifest.json
           retention-days: 7
           if-no-files-found: error
