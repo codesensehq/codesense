@@ -48,8 +48,10 @@ pub(crate) enum Arg {
     Joined(&'static str),
     /// The folder as its own element for an AppleScript that types it into the login shell
     /// through `quoted form of`. That is POSIX quoting, which fish reads differently for `\`, and
-    /// typed control bytes act before any quoting (`^U` kills the line, `^C` drops it), so a
-    /// folder holding `\`, a C0 control byte or DEL is refused.
+    /// typed control bytes act before any quoting (`^U` kills the line, `^C` drops it). Bash's
+    /// readline in a non-UTF-8 locale strips the eighth bit, so a byte >= 0x80 can act as one
+    /// too (0x95 as `^U`, 0x9b as ESC). A folder holding `\`, a C0 control byte, DEL or a byte
+    /// of 0x80 or more is refused.
     ShellQuotedCwd,
 }
 
@@ -426,13 +428,16 @@ impl From<TerminalError> for String {
     }
 }
 
-/// What in `cwd` the AppleScript rows can't type safely: a backslash, a C0 control byte or DEL.
+/// What in `cwd` the AppleScript rows can't type safely: a backslash, a C0 control byte, DEL, or
+/// a byte >= 0x80 (see [`Arg::ShellQuotedCwd`]).
 fn shell_unsafe(cwd: &Path) -> Option<&'static str> {
     let bytes = cwd.as_os_str().as_encoded_bytes();
     if bytes.contains(&b'\\') {
         Some("a backslash")
     } else if bytes.iter().any(|&b| b < 0x20 || b == 0x7f) {
         Some("a control character")
+    } else if bytes.iter().any(|&b| b >= 0x80) {
+        Some("a non-ASCII character")
     } else {
         None
     }
