@@ -654,7 +654,13 @@ pub(crate) mod blocking {
                     &mut reading,
                 )
             } != 0;
-            match finish(handle, &reading, started, self.read_timeout, Some(&self.pipe.shut)) {
+            match finish(
+                handle,
+                &reading,
+                started,
+                self.read_timeout,
+                Some(&self.pipe.shut),
+            ) {
                 Ok(read) => Ok(read as usize),
                 // The other end closed: the end of the stream.
                 Err(error) if error.raw_os_error() == Some(ERROR_BROKEN_PIPE as i32) => Ok(0),

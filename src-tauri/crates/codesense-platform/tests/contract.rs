@@ -306,7 +306,10 @@ fn kill_pid_and_terminate_pid_refuse_a_pid_that_names_no_single_process() {
     // Above `i32::MAX`, cast to a unix `pid_t`, a pid would name a group, or
     // with -1 every process this user may signal.
     for raw in [i32::MAX as u32 + 1, u32::MAX] {
-        for refused in [kill_pid(Pid::from_raw(raw)), terminate_pid(Pid::from_raw(raw))] {
+        for refused in [
+            kill_pid(Pid::from_raw(raw)),
+            terminate_pid(Pid::from_raw(raw)),
+        ] {
             expect_out_of_range_pid_refused(refused);
         }
     }
@@ -1301,7 +1304,10 @@ fn a_shutdown_on_one_clone_ends_a_read_blocked_on_another() {
     // Later reads and writes on any clone end too.
     let mut later = client.try_clone().unwrap();
     expect_read_after_shutdown(later.read(&mut [0; 16]));
-    assert!(writer.write_all(b"after").is_err(), "a write after shutdown");
+    assert!(
+        writer.write_all(b"after").is_err(),
+        "a write after shutdown"
+    );
 }
 
 #[test]
