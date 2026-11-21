@@ -771,8 +771,26 @@ test("a merge group runs only rust.yml's required jobs", () => {
 test("rust.yml's macOS build skips a push that main has moved past", (t) => {
   const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
   const build = workflow.jobs["rust-macos-build"];
-  assert.equal(build.concurrency, undefined);
-  assert.equal(workflow.jobs["rust-macos-test"].concurrency, undefined);
+  // A push to main also shares one group per part or shard with cancel-in-progress, so a newer
+  // push replaces a queued or running main macOS run; every other event gets a group per run.
+  for (const [job, key] of [
+    ["rust-macos-build", "part"],
+    ["rust-macos-test", "shard"],
+  ]) {
+    const kind = job.replace("rust-macos-", "");
+    assert.deepEqual(workflow.jobs[job].concurrency, {
+      group: `\${{ github.event_name == 'push' && format('rust-macos-main-${kind}-{0}', matrix.${key}) || format('rust-macos-${kind}-{0}-{1}', github.run_id, matrix.${key}) }}`,
+      "cancel-in-progress": "${{ github.event_name == 'push' }}",
+    });
+  }
+  // The workflow-level group stays per commit, so the Linux and required jobs are never cancelled.
+  assert.match(workflow.concurrency.group, /github\.event\.pull_request\.number \|\| github\.sha/);
+  // rust-macos reports a push run whose macOS jobs a newer push cancelled as superseded.
+  const result = workflow.jobs["rust-macos"].steps.at(-1).run;
+  assert.match(
+    result,
+    /"\$EVENT" == push && \( "\$BUILD" == cancelled \|\| "\$TESTS" == cancelled \)/,
+  );
   assert.equal(build.outputs.superseded, "${{ steps.superseded.outputs.superseded }}");
   const check = build.steps.findIndex((step) => step.id === "superseded");
   assert.ok(build.steps[check - 1].uses.startsWith("actions/checkout@"));
