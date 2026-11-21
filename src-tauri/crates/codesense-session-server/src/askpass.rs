@@ -18,7 +18,10 @@
 //!
 //! The server answers only a prompt for **its own key's** passphrase — the
 //! prompt must name that key file. A password, a PIN, a host-key question, or
-//! a jump host asking about anything else gets nothing.
+//! a jump host asking about anything else gets nothing. The one exception is
+//! [`check_passphrase`]: there the only asker is the `ssh-keygen -f <key>` it
+//! starts, so `ssh-keygen`'s bare "Enter passphrase: " (Linux names no file)
+//! is that key's prompt too.
 
 use std::ffi::OsString;
 use std::io::{Read, Write};
@@ -45,6 +48,35 @@ const SOCKET_TIMEOUT: Duration = if cfg!(test) {
 
 /// The longest prompt the server reads.
 const MAX_PROMPT: usize = 4096;
+
+/// Which prompts a served secret answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Asks {
+    /// Git's password prompt for one credential, byte for byte.
+    GitExact,
+    /// `ssh`'s or `ssh-keygen`'s prompt naming the key ([`asks_for_key`]).
+    SignInKey,
+    /// The named prompts for the key, or exactly [`BARE_PROMPT`]. Only
+    /// [`check_passphrase`] serves it: the process asking is the
+    /// `ssh-keygen -f <key>` it started, and the endpoint lives only for that
+    /// call.
+    CheckKey,
+}
+
+/// `ssh-keygen`'s prompt when it names no file, as Linux's OpenSSH asks it.
+const BARE_PROMPT: &[u8] = b"Enter passphrase: ";
+
+impl Asks {
+    /// Whether `prompt` is a question this secret answers; `expected` is the
+    /// key file, or Git's whole prompt.
+    fn admits(self, prompt: &[u8], expected: &[u8]) -> bool {
+        match self {
+            Self::GitExact => prompt == expected,
+            Self::SignInKey => asks_for_key(prompt, expected),
+            Self::CheckKey => prompt == BARE_PROMPT || asks_for_key(prompt, expected),
+        }
+    }
+}
 
 /// A secret whose `Debug` never shows it.
 struct Hidden(Vec<u8>);
@@ -78,12 +110,22 @@ impl Askpass {
     /// endpoint under `parent` (made owner-only), to be asked for by
     /// `program`: this binary.
     pub fn serve(parent: &Path, program: &Path, key: &Path, secret: &str) -> std::io::Result<Self> {
+        Self::serve_key(parent, program, key, secret, Asks::SignInKey)
+    }
+
+    fn serve_key(
+        parent: &Path,
+        program: &Path,
+        key: &Path,
+        secret: &str,
+        asks: Asks,
+    ) -> std::io::Result<Self> {
         Self::serve_prompt(
             parent,
             program,
             key.as_os_str().as_encoded_bytes().to_vec(),
             secret,
-            false,
+            asks,
         )
     }
 
@@ -109,7 +151,7 @@ impl Askpass {
             return Err(std::io::Error::other("invalid Git username"));
         }
         let prompt = format!("Password for 'https://{username}@{remote}': ");
-        Self::serve_prompt(parent, program, prompt.into_bytes(), secret, true)
+        Self::serve_prompt(parent, program, prompt.into_bytes(), secret, Asks::GitExact)
     }
 
     fn serve_prompt(
@@ -117,7 +159,7 @@ impl Askpass {
         program: &Path,
         key: Vec<u8>,
         secret: &str,
-        exact: bool,
+        asks: Asks,
     ) -> std::io::Result<Self> {
         codesense_platform::fs::create_dir_owner_only(parent)?;
         codesense_platform::fs::set_owner_only(parent)?;
@@ -145,7 +187,7 @@ impl Askpass {
                     // prompt. Serve clients independently so it cannot
                     // starve ssh's real askpass request.
                     let stopped = stop.clone();
-                    std::thread::spawn(move || answer_one(stream, &key, &secret, exact, &stopped));
+                    std::thread::spawn(move || answer_one(stream, &key, &secret, asks, &stopped));
                 }
             })
         };
@@ -191,14 +233,14 @@ impl Drop for Askpass {
     }
 }
 
-/// Serve one client: read its prompt, and answer it only when it asks for
-/// the passphrase of `key`. A client that stalls past `SOCKET_TIMEOUT`, or
+/// Serve one client: read its prompt, and answer it only when `asks` admits
+/// it for `key`. A client that stalls past `SOCKET_TIMEOUT`, or
 /// sends a prompt longer than `MAX_PROMPT`, gets nothing.
 fn answer_one(
     mut stream: LocalStream,
     key: &[u8],
     secret: &Hidden,
-    exact: bool,
+    asks: Asks,
     stopped: &AtomicBool,
 ) {
     let _ = stream.set_read_timeout(Some(SOCKET_TIMEOUT));
@@ -207,12 +249,7 @@ fn answer_one(
     let Some(prompt) = read_prompt(&mut stream) else {
         return;
     };
-    let matches = if exact {
-        prompt == key
-    } else {
-        asks_for_key(&prompt, key)
-    };
-    if matches && !stopped.load(Ordering::SeqCst) {
+    if asks.admits(&prompt, key) && !stopped.load(Ordering::SeqCst) {
         let _ = stream.write_all(&secret.0);
     }
 }
@@ -242,8 +279,8 @@ fn framed(prompt: &[u8]) -> Result<Vec<u8>, String> {
 /// Whether `prompt` is `ssh`'s or `ssh-keygen`'s own question for the
 /// passphrase of `key` — never a server's keyboard-interactive text, which
 /// `ssh` shows prefixed with `(user@host)`. `ssh` quotes at most the first 100
-/// bytes of the path; an `ssh-keygen` too old to name the file asks a bare
-/// "Enter passphrase:".
+/// bytes of the path. Linux's `ssh-keygen` names no file (`BARE_PROMPT`),
+/// which only the check path admits.
 pub fn asks_for_key(prompt: &[u8], key: &[u8]) -> bool {
     let named = prompt
         .strip_prefix(b"Enter passphrase for key '".as_slice())
@@ -334,9 +371,10 @@ pub fn run_client(args: &[OsString], endpoint: &Endpoint) -> i32 {
 }
 
 /// Whether `passphrase` unlocks the private key at `key`, asked through the
-/// askpass (`program`, serving from an endpoint under `dir`) exactly as sign-in
-/// asks it. A key that needs no passphrase is refused: there is nothing to
-/// keep.
+/// askpass (`program`, serving from an endpoint under `dir`) as sign-in asks
+/// it, except that `ssh-keygen`'s bare prompt is answered too
+/// (`Asks::CheckKey`). A key that needs no passphrase is refused: there is
+/// nothing to keep.
 pub fn check_passphrase(
     key: &Path,
     passphrase: &str,
@@ -365,7 +403,7 @@ pub fn check_passphrase(
             key.display()
         ));
     }
-    let askpass = Askpass::serve(dir, program, key, passphrase)
+    let askpass = Askpass::serve_key(dir, program, key, passphrase, Asks::CheckKey)
         .map_err(|e| format!("serve the passphrase: {e}"))?;
     match unlocked(askpass.env(), &["-y", "-f"])? {
         (true, _) => Ok(()),
@@ -439,7 +477,7 @@ mod tests {
         let stopped = AtomicBool::new(true);
         let secret = Hidden(b"never-send".to_vec());
         client.write_all(&framed(b"expected").unwrap()).unwrap();
-        answer_one(server, b"expected", &secret, true, &stopped);
+        answer_one(server, b"expected", &secret, Asks::GitExact, &stopped);
         let mut out = Vec::new();
         client.read_to_end(&mut out).unwrap();
         assert!(out.is_empty());
@@ -564,6 +602,78 @@ mod tests {
         cut.extend_from_slice(&accented.as_bytes()[..100]);
         cut.extend_from_slice(b"': ");
         assert!(asks_for_key(&cut, accented.as_bytes()));
+    }
+
+    /// The check path admits `ssh-keygen`'s bare prompt, byte for byte; sign-in
+    /// never does.
+    #[test]
+    fn only_the_check_path_admits_the_bare_prompt_exactly() {
+        let key = b"/k/id".as_slice();
+        assert!(Asks::CheckKey.admits(b"Enter passphrase: ", key));
+        assert!(!Asks::SignInKey.admits(b"Enter passphrase: ", key));
+        assert!(!Asks::GitExact.admits(b"Enter passphrase: ", key));
+        for near in [
+            "(u@h) Enter passphrase: ",
+            "Enter passphrase: x",
+            "Enter passphrase:  ",
+            "Enter passphrase: \n",
+            "Enter passphrase:",
+            "enter passphrase: ",
+            " Enter passphrase: ",
+            "Enter passphrase (empty for no passphrase): ",
+        ] {
+            assert!(!Asks::CheckKey.admits(near.as_bytes(), key), "{near:?}");
+            assert!(!Asks::SignInKey.admits(near.as_bytes(), key), "{near:?}");
+        }
+    }
+
+    /// Both key modes answer this key's named prompts and refuse the rest.
+    #[test]
+    fn both_key_modes_admit_only_this_keys_named_prompts() {
+        let key = b"/k/id".as_slice();
+        for asks in [Asks::SignInKey, Asks::CheckKey] {
+            for named in [
+                "Enter passphrase for key '/k/id': ",
+                "Enter passphrase for \"/k/id\": ",
+            ] {
+                assert!(asks.admits(named.as_bytes(), key), "{asks:?} {named}");
+            }
+            for other in [
+                "Enter passphrase for key '/k/other': ",
+                "Enter passphrase for \"/k/other\": ",
+                "(dev@box) Enter passphrase for key '/k/id': ",
+                "(dev@box) Enter passphrase: ",
+                "(dev@box) Password: ",
+                "dev@box's password: ",
+                "Enter PIN for ED25519-SK key /k/id: ",
+            ] {
+                assert!(!asks.admits(other.as_bytes(), key), "{asks:?} {other}");
+            }
+        }
+    }
+
+    /// Sign-in's server, through the real client, gives a bare prompt nothing;
+    /// the check path's server answers it.
+    #[test]
+    fn a_bare_prompt_gets_nothing_from_sign_in_and_its_answer_from_a_check() {
+        let parent = tempfile::tempdir().unwrap();
+        let key = Path::new("/k");
+        let sign_in =
+            Askpass::serve(parent.path(), Path::new("/bin/false"), key, "s3cret").unwrap();
+        let mut out = Vec::new();
+        assert!(answer(b"Enter passphrase: ", &sign_in.endpoint, &mut out).is_err());
+        assert!(out.is_empty(), "sign-in never answers a bare prompt");
+
+        let check = Askpass::serve_key(
+            parent.path(),
+            Path::new("/bin/false"),
+            key,
+            "s3cret",
+            Asks::CheckKey,
+        )
+        .unwrap();
+        answer(b"Enter passphrase: ", &check.endpoint, &mut out).unwrap();
+        assert_eq!(out, b"s3cret\n");
     }
 
     // Unix only: it reads the socket file's and its directory's mode bits.
