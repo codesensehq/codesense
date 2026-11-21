@@ -30,6 +30,21 @@ export const allowStaleExport = (argv = process.argv, env = process.env) =>
 // nothing in CI sets it yet.
 export const strictExports = (env = process.env) => env.CS_STRICT_EXPORTS === "1";
 
+// What drifted sources can explain: `explains(value)` is whether any of the texts (read once, on the
+// first call) names `value`, or its snake_case form (a serde field), as a whole word.
+export function namesIn(readTexts) {
+  let text;
+  const snake = (name) => name.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+  const escape = (name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return (value) => {
+    if (typeof value !== "string" || !value) return false;
+    text ??= readTexts().join("\n");
+    return [value, snake(value)].some((name) =>
+      new RegExp(`(?<![\\w])${escape(name)}(?![\\w])`).test(text),
+    );
+  };
+}
+
 // What a stale export message tells the reader. PRs never re-export the cargo-written files;
 // maintainers refresh them in a pull request of their own (README.md names the route). A template
 // literal stays on the `=` line at any length, so a longer or shorter text keeps the same formatting.

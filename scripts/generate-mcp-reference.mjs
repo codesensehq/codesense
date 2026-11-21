@@ -27,6 +27,7 @@ import {
   exportsUntouchedSinceMain,
   frozenExport,
   inheritedNotice,
+  namesIn,
   strictExports,
 } from "./lib/sealed-export.mjs";
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -447,18 +448,9 @@ export function driftExplainer(root = ROOT) {
     ? [...drift.changedInputs, ...drift.addedInputs].filter((path) => path.endsWith(".rs"))
     : [];
   if (!paths.length) return null;
-  let text;
-  const snake = (name) => name.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
-  const escape = (name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return {
     paths,
-    explains(value) {
-      if (typeof value !== "string" || !value) return false;
-      text ??= paths.map((path) => readFileSync(resolve(root, path), "utf8")).join("\n");
-      return [value, snake(value)].some((name) =>
-        new RegExp(`(?<![\\w])${escape(name)}(?![\\w])`).test(text),
-      );
-    },
+    explains: namesIn(() => paths.map((path) => readFileSync(resolve(root, path), "utf8"))),
   };
 }
 

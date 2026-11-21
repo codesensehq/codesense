@@ -28,7 +28,7 @@ import {
   parseArgs,
   run as runPacks,
   schemaErrors,
-  staleSchemaTolerated,
+  staleSchemaExplainer,
   skillCopies,
   syncDocs,
 } from "./pack-build.mjs";
@@ -528,25 +528,31 @@ test("the docs bundle ships the Foreman agent, and only the agent", () => {
   }
 });
 
-test("a stale schema fixture makes an unknown pack.yml property a notice, not an error", () => {
+test("a stale schema fixture makes an unknown pack.yml property the stale sources name a notice", () => {
   const kit = { ...yaml(join(fixture("good"), "pack.yml")) };
-  const manifest = { ...kit, requires: { kit: { brandNewField: 1 } } };
+  const manifest = { ...kit, requires: { kit: { brandNewField: 1, typoField: 2 } } };
   assert.match(schemaErrors(manifest).join("|"), /must NOT have additional properties/);
+  const explains = (name) => name === "brandNewField";
   const notices = [];
-  assert.deepEqual(schemaErrors(manifest, { tolerateUnknown: true, notices }), []);
+  const errors = schemaErrors(manifest, { explains, notices });
   assert.match(
     notices.join("|"),
     /pack\.yml\/requires\/kit has brandNewField, unknown to the stale schema fixture/,
   );
+  // A name the drifted model sources don't use is a typo: still an error.
+  assert.match(errors.join("|"), /must NOT have additional properties/);
+  assert.doesNotMatch(notices.join("|"), /typoField/);
+  const { typoField: _typo, ...kitOnly } = manifest.requires.kit;
+  assert.deepEqual(
+    schemaErrors({ ...manifest, requires: { kit: kitOnly } }, { explains, notices: [] }),
+    [],
+  );
   // Other errors stay errors.
   assert.match(
-    schemaErrors({ ...kit, requires: { kit: { chat: "1" } } }, { tolerateUnknown: true }).join("|"),
+    schemaErrors({ ...kit, requires: { kit: { chat: "1" } } }, { explains: () => true }).join("|"),
     /must be/,
   );
-  const decide = (check, env, stale) => staleSchemaTolerated({ check, env, stale: () => stale });
-  assert.equal(decide(true, { DOCS_ALLOW_STALE_EXPORT: "1" }, true), true);
-  assert.equal(decide(false, {}, true), true, "write mode");
-  assert.equal(decide(true, {}, true), false, "strict check");
-  assert.equal(decide(true, { DOCS_ALLOW_STALE_EXPORT: "1" }, false), false, "fresh fixture");
-  assert.equal(decide(false, { CS_STRICT_EXPORTS: "1" }, true), false, "the refresh run");
+  // Strict check mode and the refresh run explain nothing, whatever the fixture's state.
+  assert.equal(staleSchemaExplainer({ check: true, env: {} }), null);
+  assert.equal(staleSchemaExplainer({ check: false, env: { CS_STRICT_EXPORTS: "1" } }), null);
 });

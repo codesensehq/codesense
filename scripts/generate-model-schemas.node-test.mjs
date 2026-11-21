@@ -11,6 +11,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { execFileSync, spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
@@ -21,6 +22,7 @@ import {
   verifySources,
   staleSources,
   pinnedModels,
+  staleFixtureExplainer,
   queuedExport,
   schemaFields,
 } from "./generate-model-schemas.mjs";
@@ -204,6 +206,40 @@ test("each CLI's --check passes the stale switch through", () => {
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /routine-yml\.schema\.json is stale/);
     assert.equal(readFileSync(schema, "utf8"), stale);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("staleFixtureExplainer names the stale sources' identifiers under the same rule as the pin", () => {
+  const root = scratchRoot();
+  try {
+    // Rehash the scratch copy (never the real fixture) to make it fresh: nothing to explain.
+    const fixture = JSON.parse(readFileSync(join(root, FIXTURE), "utf8"));
+    for (const path of Object.keys(fixture.sources))
+      fixture.sources[path] = createHash("sha256")
+        .update(readFileSync(join(root, path)))
+        .digest("hex");
+    writeFileSync(join(root, FIXTURE), JSON.stringify(fixture, null, 2) + "\n");
+    assert.equal(staleFixtureExplainer(root, { strict: false }), null, "a fresh fixture");
+    const git = (...args) =>
+      execFileSync("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", ...args], {
+        cwd: root,
+        stdio: "pipe",
+      });
+    git("commit", "-q", "-am", "fresh");
+    git("update-ref", "refs/remotes/origin/main", "HEAD");
+    addField(root);
+    const write = staleFixtureExplainer(root, { strict: false });
+    assert.equal(write("newly_added_field"), true);
+    assert.equal(write("newlyAddedField"), true, "a camelCase serde name");
+    assert.equal(write("newly_added_feild"), false, "a typo");
+    const gate = { check: true, allowStaleExport: true, strict: false };
+    assert.equal(staleFixtureExplainer(root, gate)("newly_added_field"), true);
+    assert.equal(staleFixtureExplainer(root, { check: true, strict: false }), null, "strict check");
+    assert.equal(staleFixtureExplainer(root, { strict: true }), null, "the refresh run");
+    writeFileSync(join(root, FIXTURE), readFileSync(join(root, FIXTURE), "utf8") + "\n");
+    assert.equal(staleFixtureExplainer(root, gate), null, "the PR touched the fixture");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

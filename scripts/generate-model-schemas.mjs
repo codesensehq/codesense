@@ -3,7 +3,7 @@
 // The Rust exporter is the only writer of the fixture. Never rehash a stale fixture here.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -13,6 +13,7 @@ import {
   driftInheritedFromMain,
   exportsUntouchedSinceMain,
   frozenExport,
+  namesIn,
   strictExports,
 } from "./lib/sealed-export.mjs";
 
@@ -36,11 +37,6 @@ export function staleSources(fixture, readSource = (path) => readFileSync(join(R
     .filter(([path, expected]) => digest(path) !== expected)
     .map(([path]) => path);
 }
-// Whether the committed fixture lags any of its sources.
-export const fixtureStale = (root = ROOT) =>
-  staleSources(JSON.parse(readFileSync(join(root, FIXTURE), "utf8")), (path) =>
-    readFileSync(join(root, path)),
-  ).length > 0;
 // The strict freshness check.
 export function verifySources(fixture, readSource) {
   const stale = staleSources(fixture, readSource);
@@ -99,6 +95,16 @@ export function schemaFields(root) {
 // from the committed fixture with a notice. So does the PR gate (`allowStaleExport`) while this PR
 // leaves the fixture as main has it, or the drift is main's; strict check mode throws, and so does
 // write mode when `strict` (CS_STRICT_EXPORTS=1, the refresh run).
+const tolerated = (root, stale, { check, allowStaleExport, strict }) =>
+  (!check && !strict) ||
+  (check &&
+    allowStaleExport &&
+    (exportsUntouchedSinceMain(root, frozenExport(FIXTURE)) ||
+      driftInheritedFromMain(root, stale)));
+const readStale = (root) =>
+  staleSources(JSON.parse(readFileSync(join(root, FIXTURE), "utf8")), (path) =>
+    readFileSync(join(root, path)),
+  );
 export function modelSchemas(
   root = ROOT,
   { check = false, allowStaleExport = false, strict = strictExports(), warn = console.warn } = {},
@@ -106,13 +112,8 @@ export function modelSchemas(
   const fixture = JSON.parse(readFileSync(join(root, FIXTURE), "utf8"));
   const stale = staleSources(fixture, (path) => readFileSync(join(root, path)));
   if (stale.length) {
-    const tolerated =
-      (!check && !strict) ||
-      (check &&
-        allowStaleExport &&
-        (exportsUntouchedSinceMain(root, frozenExport(FIXTURE)) ||
-          driftInheritedFromMain(root, stale)));
-    if (!tolerated) throw new Error(staleMessage(stale));
+    if (!tolerated(root, stale, { check, allowStaleExport, strict }))
+      throw new Error(staleMessage(stale));
     warn(`NOTICE: ${staleMessage(stale)}`);
   }
   return Object.fromEntries(
@@ -120,6 +121,21 @@ export function modelSchemas(
       slug,
       { schema, fields: schemaFields(schema) },
     ]),
+  );
+}
+// For a Node output rendered from a stale fixture (pack-yml.schema.json): null unless the fixture is
+// stale and modelSchemas' rule tolerates it, else `explains(name)`, whether a stale source still
+// present names it (a field or variant the PR adds to the Rust model).
+export function staleFixtureExplainer(
+  root = ROOT,
+  { check = false, allowStaleExport = false, strict = strictExports() } = {},
+) {
+  const stale = readStale(root);
+  if (!stale.length || !tolerated(root, stale, { check, allowStaleExport, strict })) return null;
+  return namesIn(() =>
+    stale
+      .filter((path) => existsSync(join(root, path)))
+      .map((path) => readFileSync(join(root, path), "utf8")),
   );
 }
 // The model pin the tests read: the committed fixture, strict only with CS_STRICT_EXPORTS=1.

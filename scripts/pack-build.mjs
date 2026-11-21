@@ -41,7 +41,7 @@ import Ajv2020 from "ajv/dist/2020.js";
 import { parse, parseDocument } from "yaml";
 import { stepErrors } from "./lib/pack-steps.mjs";
 import { REFRESH_ROUTE, allowStaleExport, strictExports } from "./lib/sealed-export.mjs";
-import { fixtureStale } from "./generate-model-schemas.mjs";
+import { staleFixtureExplainer } from "./generate-model-schemas.mjs";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const PACKS_ROOT = join(ROOT, "codesense-docs/packs");
@@ -70,32 +70,24 @@ export const MAX_FILE = 5 * 1024 * 1024;
 const NAME = /^[a-z0-9][a-z0-9-]*$/;
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
-const ajvs = new Map();
-// `open` drops every `additionalProperties: false`, so an unknown property fails nothing else.
-function schemaAjv(open = false) {
-  if (!ajvs.has(open)) {
-    const ajv = new Ajv2020({ allErrors: true, strict: false });
+let ajv;
+function schemaAjv() {
+  if (!ajv) {
+    ajv = new Ajv2020({ allErrors: true, strict: false });
     ajv.addFormat("uint32", {
       type: "number",
       validate: (n) => Number.isInteger(n) && n >= 0 && n <= 4294967295,
     });
-    const text = readFileSync(SCHEMA_PATH, "utf8");
-    ajv.addSchema(
-      JSON.parse(text, (key, value) =>
-        open && key === "additionalProperties" && value === false ? undefined : value,
-      ),
-      "pack",
-    );
-    ajvs.set(open, ajv);
+    ajv.addSchema(JSON.parse(readFileSync(SCHEMA_PATH, "utf8")), "pack");
   }
-  return ajvs.get(open);
+  return ajv;
 }
 
 // Each failure as `[where, error]`. A part is a tagged union (`oneOf`, one branch per `kind`); a
 // generic validation reports every branch's failures. So the parts are checked one at a time
 // against the branch their own `kind` selects, and the rest of the manifest against the root.
-function schemaFailures(manifest, open) {
-  const ajv = schemaAjv(open);
+function schemaFailures(manifest) {
+  const ajv = schemaAjv();
   const root = ajv.getSchema("pack");
   const branches = root.schema.$defs.Part.oneOf;
   const failures = [];
@@ -116,25 +108,49 @@ function schemaFailures(manifest, open) {
   return failures;
 }
 
-// `tolerateUnknown` (a stale schema fixture, see staleSchemaTolerated) turns an unknown property,
-// which may be a field the PR adds to the Rust model, into a notice: the manifest is checked
-// against the schema without `additionalProperties: false`, and the strict run names the property.
-export function schemaErrors(manifest, { tolerateUnknown = false, notices = [] } = {}) {
-  if (tolerateUnknown)
-    for (const [where, e] of schemaFailures(manifest, false))
-      if (e.keyword === "additionalProperties")
-        notices.push(
-          `${where} has ${e.params.additionalProperty}, unknown to the stale schema fixture; ${REFRESH_ROUTE}`,
-        );
-  return schemaFailures(manifest, tolerateUnknown).map(([where, e]) => `${where} ${e.message}`);
+// `explains` (staleSchemaExplainer, a stale schema fixture) turns an unknown property that the
+// stale model sources name, a field the PR adds to the Rust model, into a notice: it is left out of
+// a copy of the manifest, which is then checked again. Any other unknown property (a typo) and
+// every other error stay errors. A renamed or removed required field and a new enum value are not
+// tolerated.
+export function schemaErrors(manifest, { explains = null, notices = [] } = {}) {
+  let checked = manifest;
+  for (let failures = schemaFailures(checked); explains; failures = schemaFailures(checked)) {
+    const lag = failures.filter(
+      ([, e]) => e.keyword === "additionalProperties" && explains(e.params.additionalProperty),
+    );
+    if (!lag.length) break;
+    checked = structuredClone(checked);
+    let removed = false;
+    for (const [where, e] of lag) {
+      const object = where
+        .slice("pack.yml".length)
+        .split("/")
+        .slice(1)
+        .map((part) => part.replaceAll("~1", "/").replaceAll("~0", "~"))
+        .reduce((node, part) => node?.[part], checked);
+      if (object && typeof object === "object" && e.params.additionalProperty in object) {
+        delete object[e.params.additionalProperty];
+        removed = true;
+      }
+      notices.push(
+        `${where} has ${e.params.additionalProperty}, unknown to the stale schema fixture; ${REFRESH_ROUTE}`,
+      );
+    }
+    if (!removed) break;
+  }
+  return schemaFailures(checked).map(([where, e]) => `${where} ${e.message}`);
 }
 
 // pack-yml.schema.json is rendered from the cargo-written model fixture, which PRs never re-export.
-// Write mode and the PR gate tolerate an unknown property while the fixture is stale; strict check
-// mode and the refresh run (CS_STRICT_EXPORTS=1) do not.
-export function staleSchemaTolerated({ check, env = process.env, stale = () => fixtureStale() }) {
-  return (allowStaleExport([], env) || !check) && !strictExports(env) && stale();
-}
+// The fixture's own rule decides (staleFixtureExplainer): write mode, and the PR gate while the PR
+// leaves the fixture as main has it; never strict check mode or the refresh run (CS_STRICT_EXPORTS=1).
+export const staleSchemaExplainer = ({ check, env = process.env, root = ROOT }) =>
+  staleFixtureExplainer(root, {
+    check,
+    allowStaleExport: allowStaleExport([], env),
+    strict: strictExports(env),
+  });
 
 /**
  * Every file of the pack except `pack.yml`, sorted. Symlinks, `.git` (in any case),
@@ -268,7 +284,7 @@ export function chatCodeErrors(dir, manifest, files) {
  * Build or check one pack folder. Returns the problems found and the files written.
  * `check` writes nothing.
  */
-export function buildPack(dir, { check = false, force = false, tolerateUnknown = false } = {}) {
+export function buildPack(dir, { check = false, force = false, explains = null } = {}) {
   dir = resolve(dir);
   const errors = [];
   const written = [];
@@ -289,7 +305,7 @@ export function buildPack(dir, { check = false, force = false, tolerateUnknown =
     return { errors: [`pack.yml: cannot parse: ${e.message.split("\n")[0]}`], written };
   }
   const notices = [];
-  errors.push(...schemaErrors(manifest, { tolerateUnknown, notices }));
+  errors.push(...schemaErrors(manifest, { explains, notices }));
   for (const notice of notices) console.warn(`NOTICE: ${basename(dir)}: ${notice}`);
   if (errors.length) return { errors, written };
 
@@ -537,10 +553,10 @@ export function packDirs(root) {
 
 export function run(dirs, { check, force = false, docsRoot = DOCS_ROOT }) {
   let failed = false;
-  const tolerateUnknown = staleSchemaTolerated({ check });
+  const explains = staleSchemaExplainer({ check });
   for (const dir of dirs) {
     const name = relative(ROOT, dir) || dir;
-    const { errors, written, legacy } = buildPack(dir, { check, force, tolerateUnknown });
+    const { errors, written, legacy } = buildPack(dir, { check, force, explains });
     // A legacy pack's own files are never rewritten, but the bundle still carries its agent.
     if (!errors.length && DOCS_BUNDLED.includes(basename(dir))) {
       const docs = syncDocs(dir, parse(readFileSync(join(dir, "pack.yml"), "utf8")), {
