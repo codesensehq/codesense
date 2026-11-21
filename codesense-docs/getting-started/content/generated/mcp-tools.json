@@ -1687,7 +1687,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9879"
+      "sourceRef": "handler.rs:9915"
     },
     {
       "name": "agent_create",
@@ -3135,7 +3135,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9794"
+      "sourceRef": "handler.rs:9830"
     },
     {
       "name": "ask_user",
@@ -3286,7 +3286,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9904"
+      "sourceRef": "handler.rs:9940"
     },
     {
       "name": "avatar_add",
@@ -3717,12 +3717,12 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9934"
+      "sourceRef": "handler.rs:9970"
     },
     {
       "name": "close_terminal_tab",
       "arc": "C",
-      "description": "Close a terminal tab opened with open_terminal_tab or open_remote_tab, the symmetric counterpart of the open verbs. Args: {handle} only, no {tab}/{machine}/{workspace} name address (the opaque handle from the open or from list_sessions; a raw sessionId is refused). Terminates the CLI if one is running (SIGTERM then SIGKILL via the host's kill path), closes the tab, drops it from list_sessions. Works for local AND remote tabs — the handle resolves to its host transparently (same way read_terminal_tab does). Idempotent: a handle whose session is already gone returns { closed: true, alreadyClosed: true } instead of refusing; a handle nothing ever had returns { closed: false, reason: \"unknownHandle\" }. A session trying to close its own tab mid-call is refused with { closed: false, reason: \"selfClose\" } (the reply would never reach it). Does NOT remove the worktree or its files: a tab close never touches them, even when it is the last tab. close_workspace ends every session in a workspace and keeps its files too. Removing a worktree is a separate, explicit act. Gated by the trusted-side Interactive tier. Returns { closed, hadCliRunning, remote, alreadyClosed? }.\nDocs: arc-c-workspaces-and-worktrees/workspace-and-tab-lifecycle.html",
+      "description": "Close a terminal tab opened with open_terminal_tab or open_remote_tab, the symmetric counterpart of the open verbs. Args: {handle} only, no {tab}/{machine}/{workspace} name address (the opaque handle from the open or from list_sessions; a raw sessionId is refused). Terminates the CLI if one is running (SIGTERM then SIGKILL via the host's kill path), closes the tab, drops it from list_sessions. Works for local AND remote tabs — the handle resolves to its host transparently (same way read_terminal_tab does). Idempotent: a handle whose session is already gone returns { closed: true, alreadyClosed: true } instead of refusing; a handle nothing ever had returns { closed: false, reason: \"unknownHandle\" }. A session trying to close its own tab mid-call is refused with { closed: false, reason: \"selfClose\" } (the reply would never reach it). Keeps the worktree and its files, even for the last tab. The one exception is a story seat's own seat worktree (handle <storyId>#<name>, opened with open_workspace seatWorktree): once its session has ended it is removed with its seat branch and its git-ignored files when it is clean, has no unpublished context and its commits are in the story branch, else kept with the reason on its list_worktrees row (seatKept). close_workspace ends every session in a workspace and keeps its files too. Removing any other worktree is a separate, explicit act. Gated by the trusted-side Interactive tier. Returns { closed, hadCliRunning, remote, alreadyClosed?, seatWorktreesRemoved? (paths) }.\nDocs: arc-c-workspaces-and-worktrees/workspace-and-tab-lifecycle.html",
       "write": true,
       "starter": false,
       "core": false,
@@ -3752,12 +3752,12 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8432"
+      "sourceRef": "handler.rs:8434"
     },
     {
       "name": "close_workspace",
       "arc": "C",
-      "description": "Close a workspace: ends every live terminal session in it (every tab, on every machine that holds it) and removes its pill from the workspace tray. Close keeps files: the worktree, its files and its git registration are never removed by this verb. Address it by {story_id} (the story) OR {workspace_id} (the raw viewer id — root:/story:/generic: etc.). A story with no tray row still closes the sessions filed under its story. REFUSALS: { closed: false, reason: \"discardUnsavedRefused\" } when discardUnsaved is true (close never removes a worktree; removing one is a separate explicit act in the Worktrees panel); { closed: false, reason: \"selfClose\" } when the caller's own session is one of the workspace's tabs; { closed: false, reason: \"ambiguousWorkspace\" } when a bare story_id has live sessions in more than one team; { closed: false, reason: \"unknownWorkspace\" } for a workspace_id nothing holds; { closed: false, reason: \"tabsNotClosed\", failed: [...] } when a session would not end (its pill stays). IDEMPOTENT: a workspace already closed returns { closed: true, alreadyClosed: true, tabsClosed: [], worktreeRemoved: false }. Returns { closed, tabsClosed: [handle...] (the sessions this call ended), workspaceRetired (its pill was removed from viewer state and the saved state), worktreeRemoved: false }. Does NOT archive the agent definition (agent_delete does that), and does NOT touch chat history or documents. Gated by the trusted-side Interactive tier.\nDocs: arc-c-workspaces-and-worktrees/workspace-and-tab-lifecycle.html",
+      "description": "Close a workspace: ends every live terminal session in it (every tab, on every machine that holds it) and removes its pill from the workspace tray. Close keeps files: the story's worktree, its files and its git registration are never removed by this verb. The exception is its seat worktrees (open_workspace seatWorktree): each is removed with its seat branch and its git-ignored files once its session has ended, when it is clean, has no unpublished context and its commits are in the story branch, else kept with the reason on its list_worktrees row (seatKept). Address it by {story_id} (the story) OR {workspace_id} (the raw viewer id — root:/story:/generic: etc.). A story with no tray row still closes the sessions filed under its story. REFUSALS: { closed: false, reason: \"discardUnsavedRefused\" } when discardUnsaved is true (close never discards unsaved work; removing a worktree with it is a separate explicit act in the Worktrees panel); { closed: false, reason: \"selfClose\" } when the caller's own session is one of the workspace's tabs; { closed: false, reason: \"ambiguousWorkspace\" } when a bare story_id has live sessions in more than one team; { closed: false, reason: \"unknownWorkspace\" } for a workspace_id nothing holds; { closed: false, reason: \"tabsNotClosed\", failed: [...] } when a session would not end (its pill stays). IDEMPOTENT: a workspace already closed returns { closed: true, alreadyClosed: true, tabsClosed: [], worktreeRemoved: false }. Returns { closed, tabsClosed: [handle...] (the sessions this call ended), workspaceRetired (its pill was removed from viewer state and the saved state), worktreeRemoved: false (the story's worktree), seatWorktreesRemoved: [path...] }. Does NOT archive the agent definition (agent_delete does that), and does NOT touch chat history or documents. Gated by the trusted-side Interactive tier.\nDocs: arc-c-workspaces-and-worktrees/workspace-and-tab-lifecycle.html",
       "write": true,
       "starter": false,
       "core": false,
@@ -3771,7 +3771,7 @@
         "properties": {
           "discardUnsaved": {
             "default": null,
-            "description": "Always refused. Close keeps the worktree and its files; removing a\nworktree is a separate, explicit act.",
+            "description": "Always refused. Close keeps the story's worktree and never discards unsaved\nwork (a seat worktree goes only when it holds none); removing a worktree with\nits unsaved work is a separate, explicit act.",
             "type": [
               "boolean",
               "null"
@@ -3812,7 +3812,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8551"
+      "sourceRef": "handler.rs:8577"
     },
     {
       "name": "codesense_call_tool",
@@ -3857,7 +3857,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:10243"
+      "sourceRef": "handler.rs:10279"
     },
     {
       "name": "codesense_get_tool_schema",
@@ -3893,7 +3893,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:10222"
+      "sourceRef": "handler.rs:10258"
     },
     {
       "name": "codesense_overview",
@@ -3971,7 +3971,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:10185"
+      "sourceRef": "handler.rs:10221"
     },
     {
       "name": "command_list",
@@ -4796,7 +4796,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9634"
+      "sourceRef": "handler.rs:9670"
     },
     {
       "name": "create_content_file",
@@ -4930,7 +4930,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:12088"
+      "sourceRef": "handler.rs:12124"
     },
     {
       "name": "create_local_organization",
@@ -5022,7 +5022,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9756"
+      "sourceRef": "handler.rs:9792"
     },
     {
       "name": "delete_content_file",
@@ -5101,7 +5101,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9805"
+      "sourceRef": "handler.rs:9841"
     },
     {
       "name": "describe_setup",
@@ -5126,7 +5126,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9748"
+      "sourceRef": "handler.rs:9784"
     },
     {
       "name": "detach_context_repository",
@@ -5240,7 +5240,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:10283"
+      "sourceRef": "handler.rs:10319"
     },
     {
       "name": "end_unowned_terminal_session",
@@ -6887,7 +6887,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9573"
+      "sourceRef": "handler.rs:9609"
     },
     {
       "name": "list_hydrated",
@@ -7062,7 +7062,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8981"
+      "sourceRef": "handler.rs:9017"
     },
     {
       "name": "list_out_of_date_terminal_servers",
@@ -7348,7 +7348,7 @@
     {
       "name": "list_worktrees",
       "arc": "C",
-      "description": "List worktrees — every managed git worktree on this Mac, as the Worktrees panel lists it (for remote machines' workspaces see list_hydrated). Read-only (it drops records of worktrees already deleted from disk and counts them in `reaped`). Optional {kind, org, team} filters. A context row is a team context worktree: id, name, orgSlug, team, branch, path, launchCwd, baseSha, createdAt, lastUsedAt, dirty, liveCliSession, agents:[{handle,name,role}], newest lastUsedAt first. Launch one with open_workspace {target:team-workspace, worktree:id or name}. Returns `{rows, reaped}`; each row has `kind` (`story` | `epicIntegration` | `orphan`: a git worktree of a managed clone with no record), `workspaceKey` (the story id, epic id, or parent clone path it groups under), `path`, `branch` (null when detached), `dirty` (uncommitted changes; null when unknown), `repoPath` (its parent clone; null when vanished), `liveCliSession` (a terminal is running in it). A `story` row adds `storyId`, `sourceRepo`, `syncStatus`, `failureReason`, `storySourcePath` (the story file), `orgSlug`, `team`, `orphaned` (its clone or story file is gone), `lastReverseSyncAt` (epoch ms its edits last synced back to context, or null) and `lastReverseSyncBy` (`user` | `agent`; `auto` only on records from before automatic sync was removed), and `attribution` (null before an agent launch; else `{status, gitAiVersion, checkedAt}`: whether git-ai line-attribution capture was working at the last launch here. `status.kind` is `active` (wired; no checkpoint proven), `off` with `reason` `disabled_for_repo` | `notes_would_push` (the git-ai in use cannot keep this repo's notes local, or the managed daemon still needs a restart: relaunch, or see describe_setup attribution warnings; notes:push publishes the repo's notes and is not a capture fix) | `not_managed_worktree` | `repo_not_attached` (this worktree's repo isn't attached on this Mac, so git-ai's daemon ignores it: attach its clone with save_source_repo_attachment to track the next launch, no app restart), `installing` (relaunch after completion), `install_failed` with `message`, `not_installed`, `unsupported_version` with `found`, `unsupported` with `reason` (e.g. `opencode`, `remote_machine`, `platform`, `newer`, `user_pinned`), or `error` with `message`; a launch never fails because of it). An `epicIntegration` row adds `epicId`, `owner`, `repo`. Empty when no team is active. A dashboard's codesense.worktrees() returns the same.\nDocs: arc-c-workspaces-and-worktrees/index.html",
+      "description": "List worktrees — every managed git worktree on this Mac, as the Worktrees panel lists it (for remote machines' workspaces see list_hydrated). Read-only (it drops records of worktrees already deleted from disk and counts them in `reaped`). Optional {kind, org, team} filters. A context row is a team context worktree: id, name, orgSlug, team, branch, path, launchCwd, baseSha, createdAt, lastUsedAt, dirty, liveCliSession, agents:[{handle,name,role}], newest lastUsedAt first. Launch one with open_workspace {target:team-workspace, worktree:id or name}. Returns `{rows, reaped}`; each row has `kind` (`story` | `epicIntegration` | `orphan`: a git worktree of a managed clone with no record), `workspaceKey` (the story id, epic id, or parent clone path it groups under), `path`, `branch` (null when detached), `dirty` (uncommitted changes; null when unknown), `repoPath` (its parent clone; null when vanished), `liveCliSession` (a terminal is running in it). A `story` row adds `storyId`, `sourceRepo`, `syncStatus`, `failureReason`, `storySourcePath` (the story file), `orgSlug`, `team`, `orphaned` (its clone or story file is gone), `lastReverseSyncAt` (epoch ms its edits last synced back to context, or null) and `lastReverseSyncBy` (`user` | `agent`; `auto` only on records from before automatic sync was removed), `seat` (the seat name, on a story's seat worktree only), `seatKept` (why its last cleanup kept it: `live` | `dirty` | `unpublished-context` | `unmerged` | `remove-failed`; absent before one ran), and `attribution` (null before an agent launch; else `{status, gitAiVersion, checkedAt}`: whether git-ai line-attribution capture was working at the last launch here. `status.kind` is `active` (wired; no checkpoint proven), `off` with `reason` `disabled_for_repo` | `notes_would_push` (the git-ai in use cannot keep this repo's notes local, or the managed daemon still needs a restart: relaunch, or see describe_setup attribution warnings; notes:push publishes the repo's notes and is not a capture fix) | `not_managed_worktree` | `repo_not_attached` (this worktree's repo isn't attached on this Mac, so git-ai's daemon ignores it: attach its clone with save_source_repo_attachment to track the next launch, no app restart), `installing` (relaunch after completion), `install_failed` with `message`, `not_installed`, `unsupported_version` with `found`, `unsupported` with `reason` (e.g. `opencode`, `remote_machine`, `platform`, `newer`, `user_pinned`), or `error` with `message`; a launch never fails because of it). An `epicIntegration` row adds `epicId`, `owner`, `repo`. Empty when no team is active. A dashboard's codesense.worktrees() returns the same.\nDocs: arc-c-workspaces-and-worktrees/index.html",
       "write": false,
       "starter": false,
       "core": false,
@@ -7560,7 +7560,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9623"
+      "sourceRef": "handler.rs:9659"
     },
     {
       "name": "move_content_file",
@@ -9534,7 +9534,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:12143"
+      "sourceRef": "handler.rs:12179"
     },
     {
       "name": "query_context",
@@ -9632,7 +9632,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:8965"
+      "sourceRef": "handler.rs:9001"
     },
     {
       "name": "react",
@@ -11962,7 +11962,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9645"
+      "sourceRef": "handler.rs:9681"
     },
     {
       "name": "remove_machine",
@@ -12044,7 +12044,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:10126"
+      "sourceRef": "handler.rs:10162"
     },
     {
       "name": "rename_team",
@@ -12088,7 +12088,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9783"
+      "sourceRef": "handler.rs:9819"
     },
     {
       "name": "rename_terminal_tab",
@@ -12194,7 +12194,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9868"
+      "sourceRef": "handler.rs:9904"
     },
     {
       "name": "render_canvas",
@@ -16427,7 +16427,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9700"
+      "sourceRef": "handler.rs:9736"
     },
     {
       "name": "set_epic_repos",
@@ -16739,7 +16739,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9710"
+      "sourceRef": "handler.rs:9746"
     },
     {
       "name": "set_team_parent",
@@ -16786,7 +16786,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9816"
+      "sourceRef": "handler.rs:9852"
     },
     {
       "name": "set_team_starter_page",
@@ -16837,7 +16837,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9838"
+      "sourceRef": "handler.rs:9874"
     },
     {
       "name": "set_viewer_state",
@@ -16925,7 +16925,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:12184"
+      "sourceRef": "handler.rs:12220"
     },
     {
       "name": "signal_done",
@@ -18115,7 +18115,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:12166"
+      "sourceRef": "handler.rs:12202"
     },
     {
       "name": "unroute_file_from_context",
@@ -18699,7 +18699,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:10172"
+      "sourceRef": "handler.rs:10208"
     },
     {
       "name": "workspace_chat_send",
@@ -18830,7 +18830,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:10159"
+      "sourceRef": "handler.rs:10195"
     },
     {
       "name": "workspace_group_add",
@@ -18905,7 +18905,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8790"
+      "sourceRef": "handler.rs:8826"
     },
     {
       "name": "workspace_group_create",
@@ -18980,7 +18980,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8754"
+      "sourceRef": "handler.rs:8790"
     },
     {
       "name": "workspace_group_delete",
@@ -19055,7 +19055,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8812"
+      "sourceRef": "handler.rs:8848"
     },
     {
       "name": "workspace_group_list",
@@ -19130,7 +19130,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8742"
+      "sourceRef": "handler.rs:8778"
     },
     {
       "name": "workspace_group_remove",
@@ -19205,7 +19205,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8801"
+      "sourceRef": "handler.rs:8837"
     },
     {
       "name": "workspace_group_rename",
@@ -19280,7 +19280,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8766"
+      "sourceRef": "handler.rs:8802"
     },
     {
       "name": "workspace_group_set_members",
@@ -19355,7 +19355,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8778"
+      "sourceRef": "handler.rs:8814"
     },
     {
       "name": "write_worktree_config",
@@ -19436,7 +19436,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9513"
+      "sourceRef": "handler.rs:9549"
     },
     {
       "name": "wv_audit_query",
@@ -19521,7 +19521,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9486"
+      "sourceRef": "handler.rs:9522"
     },
     {
       "name": "wv_check_t2_window",
@@ -19666,7 +19666,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9032"
+      "sourceRef": "handler.rs:9068"
     },
     {
       "name": "wv_classify_action",
@@ -19833,7 +19833,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9239"
+      "sourceRef": "handler.rs:9275"
     },
     {
       "name": "wv_coord_read",
@@ -19877,7 +19877,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9366"
+      "sourceRef": "handler.rs:9402"
     },
     {
       "name": "wv_dispatch_state",
@@ -19987,7 +19987,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9000"
+      "sourceRef": "handler.rs:9036"
     },
     {
       "name": "wv_escalate",
@@ -20039,7 +20039,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9434"
+      "sourceRef": "handler.rs:9470"
     },
     {
       "name": "wv_handoff_state",
@@ -20118,7 +20118,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9533"
+      "sourceRef": "handler.rs:9569"
     },
     {
       "name": "wv_mark_dispatched",
@@ -20176,7 +20176,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9175"
+      "sourceRef": "handler.rs:9211"
     },
     {
       "name": "wv_open_t2_window",
@@ -20306,7 +20306,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9401"
+      "sourceRef": "handler.rs:9437"
     },
     {
       "name": "wv_post_assertion",
@@ -20403,7 +20403,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9287"
+      "sourceRef": "handler.rs:9323"
     },
     {
       "name": "wv_read_posture",
@@ -20507,7 +20507,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9318"
+      "sourceRef": "handler.rs:9354"
     },
     {
       "name": "wv_report_handoff",
@@ -20624,7 +20624,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9104"
+      "sourceRef": "handler.rs:9140"
     },
     {
       "name": "wv_resume_t2_windows",

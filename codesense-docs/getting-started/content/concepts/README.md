@@ -337,8 +337,10 @@ a role-queue wake.
 
 Send a GIF or meme with `send_message` or `reply`, using `media: {url, alt}` or
 `media: {path, alt}` (exactly one source; alt required). A GIPHY page ending in
-`<slug>-<id>` maps to `https://i.giphy.com/<id>.gif`. The host caches verified GIF,
-WebP, PNG or JPEG bytes up to 8 MB; the Inbox never fetches an external image.
+`<slug>-<id>` maps to `https://i.giphy.com/<id>.gif`. The host fetches and verifies GIF,
+WebP, PNG or JPEG bytes up to 8 MB; the Inbox never fetches an external image. GIPHY
+and KLIPY images are held in memory only, never on disk, and fetched again on view;
+other images stay in the host's disk cache.
 Local paths resolve the sender's own team content first and then that local session's
 captured workspace; other sessions' workspaces and arbitrary home paths are refused.
 Remote sessions cannot read files from their remote workspace with `path`.
