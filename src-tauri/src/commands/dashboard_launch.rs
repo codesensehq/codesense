@@ -5041,12 +5041,13 @@ pub(crate) fn headless_capture_request(
         .collect();
     // The agent's own variables go first, so CodeSense's above win on a clash. `spawn_capture`
     // strips before it sets, so a variable the launch strips is left out here, as are the ones
-    // that are always CodeSense's and `PATH`, which a terminal spawn sets itself.
+    // that are always CodeSense's and `PATH`, which a terminal spawn sets itself. On Windows
+    // `Path` is `PATH`, as the spawn's own rule compares it.
     let mut env: Vec<(String, String)> = agent_env
         .into_iter()
         .filter(|(name, _)| {
             codesense_pty_core::spawn::agent_may_set(name)
-                && name != "PATH"
+                && !codesense_pty_core::spawn::same_env_name(std::env::consts::OS, name, "PATH")
                 && !env_remove.contains(name)
         })
         .chain(env)
