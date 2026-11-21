@@ -739,11 +739,11 @@ jobs:
         # The renderers and their tests, behind the platform crate's pdf feature, which only the app
         # enables; the check above builds the renderers but not their tests.
         run: cargo check --locked -p codesense-platform --features pdf --lib --tests
-      - name: Check the desktop app with git-ai and agent-cli-sockets off
+      - name: Check the desktop app with git-ai, agent-cli-sockets and mcp-bridge off
         # CODESENSE_CAPS_OFF turns capabilities off for one build, so Linux compiles the code a
         # platform without them builds: their facades' off arms, with the gated parts left out.
         env:
-          CODESENSE_CAPS_OFF: git-ai,agent-cli-sockets
+          CODESENSE_CAPS_OFF: git-ai,agent-cli-sockets,mcp-bridge
         run: cargo check --locked -p codesense --lib --tests --features dashboard-publish
 
   rust-linux-app:
@@ -924,7 +924,7 @@ jobs:
   rust-check-windows:
     name: Rust check (Windows)
     # A compile check of the crates that build on Windows, the session server's among them with its
-    # sidecar gated off, plus the platform crate's tests, Claude's hooks, the session server's
+    # sidecar gated off, and of the desktop app's library, plus the platform crate's tests, Claude's hooks, the session server's
     # portable items, the runner's cursor-query answer, and the pty contract against ConPTY with the
     # Windows emulator worker. Not a required check: like the macOS jobs it never runs on a merge
     # group, runs after the merge on each push to main that changes something Rust can see, always
@@ -976,6 +976,13 @@ jobs:
           cache-on-failure: true
       - name: Check the Windows crates
         run: cargo check --locked -p codesense-platform -p codesense-host-proto -p codesense-fs-core -p codesense-pty-core -p codesense-session-server --all-targets
+      - name: Check the desktop app library
+        # The app's library, its Windows capabilities off. A compile check needs no bundle, so
+        # the sidecars, the bundled git-ai and the emulator worker that tauri-build looks for
+        # are left out of the config for this step; Windows bundling adds them.
+        env:
+          TAURI_CONFIG: '{"bundle":{"externalBin":[],"resources":{"resources/git-ai":null,"binaries/codesense-emulator.cjs":null}}}'
+        run: cargo check --locked -p codesense --lib --features dashboard-publish
       - name: Test the platform crate
         # With pdf: the source policy compiles for the Windows renderer to come.
         run: cargo test --locked -p codesense-platform --features pdf
