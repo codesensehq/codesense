@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { StrictMode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { act, renderHook } from "@testing-library/react";
+import { logger } from "@/shared/lib/logger";
 
 const startMock = vi.fn();
 const stopMock = vi.fn();
@@ -19,9 +21,39 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 import {
   useRemoteWorktreeWatch,
+  useRemoteWatchNonce,
+  __fireRemoteWatchTickForTests,
   __resetRemoteWorktreeWatch,
+  __remoteWorktreeWatchPollMs,
   __remoteWorktreeWatchRefCount,
 } from "./use-remote-worktree-watch";
+
+interface Deferred<T> {
+  resolve: (value: T) => void;
+  reject: (err: unknown) => void;
+}
+
+/** Make every call to `mock` return its own pending promise, settled by hand
+ *  through the returned list (one entry per call, in call order). */
+function deferCalls<T>(mock: Mock): Deferred<T>[] {
+  const calls: Deferred<T>[] = [];
+  mock.mockImplementation(
+    () => new Promise<T>((resolve, reject) => calls.push({ resolve, reject })),
+  );
+  return calls;
+}
+
+/** Drain the microtasks a settle chains (start/listen `.then`, React updates). */
+async function flush(): Promise<void> {
+  await act(async () => {
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+  });
+}
+
+const mountWatch = (pollMs = 5000) =>
+  renderHook(() => useRemoteWorktreeWatch("m-1", "h-A", true, pollMs));
+const mountNonce = () => renderHook(() => useRemoteWatchNonce("m-1", "h-A"));
+const stopped = () => stopMock.mock.calls.map((c) => c[0]);
 
 /**
  * DESIGN-remote-source.md §3.3 / AD-2 — the ref-counted watcher lifecycle. Two
@@ -232,5 +264,261 @@ describe("useRemoteWatchNonce — B-4 ensure-entry defensive attach", () => {
     // the current one keeps the window it was started with (documented in
     // the hook — thrash protection).
     setRemoteTrackedCount("m-r", "h-r", LARGE_REPO_THRESHOLD + 1);
+  });
+});
+
+// A release to 0 and a re-acquire while the start or the event listen is still
+// in flight: one start and one listen per entry lifecycle, every token stopped
+// exactly once, and an entry left at count 0 with nothing in flight retired.
+describe("useRemoteWorktreeWatch — re-open while the attach is in flight", () => {
+  let unlisten: Mock;
+  let warn: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    __resetRemoteWorktreeWatch();
+    vi.clearAllMocks();
+    stopMock.mockResolvedValue(undefined);
+    unlisten = vi.fn();
+    listenMock.mockResolvedValue(unlisten);
+    trackedCountMock.mockReturnValue(new Promise(() => {}));
+    warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warn.mockRestore();
+  });
+
+  describe("a quick re-open leaks no poll task", () => {
+    it("one re-open: one start, its token stopped once", async () => {
+      const starts = deferCalls<number>(startMock);
+      mountWatch().unmount();
+      const b = mountWatch();
+      starts.forEach((d, i) => d.resolve(i + 1));
+      await flush();
+      b.unmount();
+      await flush();
+      expect(startMock).toHaveBeenCalledTimes(1);
+      expect(stopped()).toEqual([1]);
+    });
+
+    it("three cycles: the token lives while the last consumer is mounted", async () => {
+      const starts = deferCalls<number>(startMock);
+      mountWatch().unmount();
+      mountWatch().unmount();
+      const c = mountWatch();
+      starts.forEach((d, i) => d.resolve(i + 1));
+      await flush();
+      expect(startMock).toHaveBeenCalledTimes(1);
+      expect(stopMock).not.toHaveBeenCalled();
+      c.unmount();
+      await flush();
+      expect(stopped()).toEqual([1]);
+    });
+
+    it("StrictMode mount, unmount, mount: one start, its token stopped once", async () => {
+      const starts = deferCalls<number>(startMock);
+      const view = renderHook(() => useRemoteWorktreeWatch("m-1", "h-A", true, 5000), {
+        wrapper: StrictMode,
+      });
+      starts.forEach((d, i) => d.resolve(i + 1));
+      await flush();
+      view.unmount();
+      await flush();
+      expect(startMock).toHaveBeenCalledTimes(1);
+      expect(stopped()).toEqual([1]);
+    });
+  });
+
+  describe("a start that resolves at count 0 retires the entry", () => {
+    it("with no nonce listener: stops, unlistens and drops the entry", async () => {
+      const starts = deferCalls<number>(startMock);
+      const a = mountWatch();
+      await flush();
+      act(() => __fireRemoteWatchTickForTests("m-1", "h-A"));
+      a.unmount();
+      starts[0].resolve(1);
+      await flush();
+      expect(stopped()).toEqual([1]);
+      expect(unlisten).toHaveBeenCalledTimes(1);
+      mountWatch();
+      expect(startMock).toHaveBeenCalledTimes(2);
+      expect(listenMock).toHaveBeenCalledTimes(2);
+      expect(mountNonce().result.current).toBe(0);
+    });
+
+    it("with a nonce listener: stops and unlistens, the entry keeps ticking", async () => {
+      const starts = deferCalls<number>(startMock);
+      const nonce = mountNonce();
+      const a = mountWatch();
+      await flush();
+      act(() => __fireRemoteWatchTickForTests("m-1", "h-A"));
+      a.unmount();
+      starts[0].resolve(1);
+      await flush();
+      expect(stopped()).toEqual([1]);
+      expect(unlisten).toHaveBeenCalledTimes(1);
+      act(() => __fireRemoteWatchTickForTests("m-1", "h-A"));
+      expect(nonce.result.current).toBe(2);
+      mountWatch();
+      expect(startMock).toHaveBeenCalledTimes(2);
+      expect(listenMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("a rejected start leaves nothing pending", () => {
+    it("rejects after the release to 0", async () => {
+      const starts = deferCalls<number>(startMock);
+      const a = mountWatch();
+      await flush();
+      a.unmount();
+      starts[0].reject(new Error("transport failure"));
+      await flush();
+      expect(warn).toHaveBeenCalled();
+      expect(stopMock).not.toHaveBeenCalled();
+      expect(unlisten).toHaveBeenCalledTimes(1);
+      mountWatch();
+      expect(startMock).toHaveBeenCalledTimes(2);
+      expect(listenMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("rejects after a re-open joined it", async () => {
+      const starts = deferCalls<number>(startMock);
+      const a = mountWatch();
+      await flush();
+      a.unmount();
+      const b = mountWatch();
+      starts[0].reject(new Error("transport failure"));
+      await flush();
+      b.unmount();
+      await flush();
+      expect(warn).toHaveBeenCalled();
+      expect(stopMock).not.toHaveBeenCalled();
+      expect(unlisten).toHaveBeenCalledTimes(1);
+      mountWatch();
+      expect(startMock).toHaveBeenCalledTimes(2);
+      expect(listenMock).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+      ["rejects", false],
+      ["resolves", true],
+    ])(
+      "a start that %s after its entry was replaced leaves the new entry alone",
+      async (_name, resolves) => {
+        const starts = deferCalls<number>(startMock);
+        listenMock.mockRejectedValue(new Error("no event bridge"));
+        const nonce = mountNonce();
+        const a = mountWatch();
+        await flush();
+        a.unmount();
+        nonce.unmount(); // nothing holds the entry any more: the nonce GC drops it
+        const b = mountWatch();
+        expect(startMock).toHaveBeenCalledTimes(2);
+        if (resolves) starts[0].resolve(1);
+        else starts[0].reject(new Error("transport failure"));
+        await flush();
+        expect(stopped()).toEqual(resolves ? [1] : []);
+        expect(__remoteWorktreeWatchRefCount("m-1", "h-A")).toBe(1);
+        starts[1].resolve(2);
+        await flush();
+        b.unmount();
+        await flush();
+        expect(stopped().filter((t) => t === 2)).toEqual([2]);
+        expect(stopped().filter((t) => t === 1)).toEqual(resolves ? [1] : []);
+      },
+    );
+  });
+
+  describe("pollMs follows the start it belongs to", () => {
+    it("a joined start keeps the first pollMs", () => {
+      deferCalls<number>(startMock);
+      mountWatch(5000).unmount();
+      mountWatch(10000);
+      expect(startMock).toHaveBeenCalledTimes(1);
+      expect(startMock).toHaveBeenCalledWith("m-1", "h-A", 5000);
+      expect(__remoteWorktreeWatchPollMs("m-1", "h-A")).toBe(5000);
+    });
+
+    it("a fresh start on a kept entry uses the new pollMs", async () => {
+      const starts = deferCalls<number>(startMock);
+      mountNonce();
+      const a = mountWatch(5000);
+      starts[0].resolve(1);
+      await flush();
+      a.unmount();
+      mountWatch(10000);
+      expect(startMock).toHaveBeenCalledTimes(2);
+      expect(startMock).toHaveBeenLastCalledWith("m-1", "h-A", 10000);
+      expect(__remoteWorktreeWatchPollMs("m-1", "h-A")).toBe(10000);
+    });
+  });
+
+  describe("one listener per entry lifecycle", () => {
+    it("a re-open while the listen is pending starts no second listen", async () => {
+      const starts = deferCalls<number>(startMock);
+      const listens = deferCalls<Mock>(listenMock);
+      mountWatch().unmount();
+      const b = mountWatch();
+      listens.forEach((d) => d.resolve(unlisten));
+      starts.forEach((d, i) => d.resolve(i + 1));
+      await flush();
+      expect(listenMock).toHaveBeenCalledTimes(1);
+      b.unmount();
+      await flush();
+      expect(unlisten).toHaveBeenCalledTimes(1);
+    });
+
+    it("a listen that resolves at count 0 on a kept entry is unlistened at once", async () => {
+      const starts = deferCalls<number>(startMock);
+      const listens = deferCalls<Mock>(listenMock);
+      mountNonce();
+      mountWatch().unmount();
+      starts[0].resolve(1);
+      listens[0].resolve(unlisten);
+      await flush();
+      expect(unlisten).toHaveBeenCalledTimes(1);
+      mountWatch();
+      expect(listenMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("a rejected listen lets the next attach listen again", async () => {
+      const starts = deferCalls<number>(startMock);
+      const listens = deferCalls<Mock>(listenMock);
+      mountNonce();
+      const a = mountWatch();
+      listens[0].reject(new Error("no event bridge"));
+      await flush();
+      a.unmount();
+      starts[0].resolve(1);
+      await flush();
+      mountWatch();
+      expect(listenMock).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+      ["resolved", true],
+      ["rejected", false],
+    ])(
+      "a join after the listen %s at count 0 listens again and ticks once",
+      async (_name, resolves) => {
+        deferCalls<number>(startMock);
+        const listens = deferCalls<Mock>(listenMock);
+        mountWatch().unmount();
+        if (resolves) listens[0].resolve(unlisten);
+        else listens[0].reject(new Error("no event bridge"));
+        await flush();
+        expect(unlisten).toHaveBeenCalledTimes(resolves ? 1 : 0);
+        mountWatch();
+        expect(startMock).toHaveBeenCalledTimes(1);
+        expect(listenMock).toHaveBeenCalledTimes(2);
+        listens[1].resolve(vi.fn());
+        await flush();
+        const nonce = mountNonce();
+        const before = nonce.result.current;
+        const handler = listenMock.mock.calls[1][1] as () => void;
+        act(() => handler());
+        expect(nonce.result.current).toBe(before + 1);
+      },
+    );
   });
 });

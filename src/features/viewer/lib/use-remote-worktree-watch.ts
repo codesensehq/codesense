@@ -36,10 +36,13 @@ interface WatchEntry {
   count: number;
   /** The attach token once resolved; `null` while the attach is in flight. */
   token: number | null;
-  /** Released to 0 before the in-flight attach resolved → its `.then` detaches. */
-  detached: boolean;
+  /** An attach is in flight. A re-acquire joins it rather than starting a
+   *  second one, and its settle retires the entry if the count is 0 by then. */
+  startPending: boolean;
   /** The Tauri event unlisten for this `(machineId, handle)`'s event stream. */
   unlisten: UnlistenFn | null;
+  /** The event `listen` is in flight; a re-acquire starts no second one. */
+  listenPending: boolean;
   /** Monotonic tick count for `useRemoteWatchNonce`. */
   nonce: number;
   /** Change listeners for `useRemoteWatchNonce` (bump React state on tick). */
@@ -73,8 +76,9 @@ function ensureEntry(key: string): WatchEntry {
     entry = {
       count: 0,
       token: null,
-      detached: false,
+      startPending: false,
       unlisten: null,
+      listenPending: false,
       nonce: 0,
       listeners: new Set(),
       trackedProbed: false,
@@ -92,6 +96,7 @@ function ensureEntry(key: string): WatchEntry {
 function startListen(machineId: string, handle: string, bound: WatchEntry): void {
   const key = watchKey(machineId, handle);
   const eventName = `remote-worktree-file-change-${machineId}-${handle}`;
+  bound.listenPending = true;
   listen<{ changedPath: string | null }>(eventName, () => {
     // Read the CURRENT entry under the key — a replacement entry (after a
     // release+reacquire cycle) owns the new listeners. If it changed under
@@ -103,25 +108,40 @@ function startListen(machineId: string, handle: string, bound: WatchEntry): void
     live.nonce++;
     tickChangesetsForRepo({ kind: "remote", machineId, handle });
     for (const l of live.listeners) l();
-  })
-    .then((fn) => {
-      // The entry under the key may have been replaced (release-reacquire
-      // raced the listen promise). Only install the unlisten on the SAME
-      // entry we started the listen for; otherwise detach immediately so
-      // the new entry can start its own listener cleanly.
-      const live = watches.get(key);
-      if (live !== bound || (bound.detached && bound.count === 0)) {
+  }).then(
+    (fn) => {
+      bound.listenPending = false;
+      // Install the unlisten only on the SAME entry we started the listen for,
+      // and only while it is held; otherwise detach at once. A replaced entry
+      // starts its own listener, and a released one listens again on its next
+      // acquire.
+      if (watches.get(key) !== bound || bound.count === 0) {
         fn();
         return;
       }
       bound.unlisten = fn;
-    })
-    .catch((err) => {
+    },
+    (err) => {
+      bound.listenPending = false;
       logger.warn(
         "useRemoteWorktreeWatch",
         `remote worktree watch listen failed for ${key} — ${err}`,
       );
-    });
+    },
+  );
+}
+
+/** Detach an entry released to 0 with no attach in flight: stop its token,
+ *  drop its event listener, and remove it unless a `useRemoteWatchNonce` still
+ *  holds a listener on it. A kept entry keeps its nonce and listeners, so a
+ *  late consumer (e.g. a sibling re-mount) reacquires it and they persist. */
+function retire(key: string, entry: WatchEntry): void {
+  if (entry.token !== null) sourceRemoteWatchStop(entry.token).catch(() => {});
+  if (entry.unlisten) entry.unlisten();
+  entry.token = null;
+  entry.unlisten = null;
+  entry.trackedProbed = false; // allow a reacquire to re-probe
+  if (entry.listeners.size === 0 && watches.get(key) === entry) watches.delete(key);
 }
 
 /** DESIGN-remote-phase-2.md B-3 — one-shot probe of the remote tracked-paths
@@ -152,46 +172,53 @@ function acquire(machineId: string, handle: string, pollMs: number): void {
   const existing = watches.get(key);
   if (existing && existing.count > 0) {
     existing.count++;
-    existing.detached = false; // re-acquired before an in-flight attach resolved
     return;
   }
   // A pre-existing entry with count=0 was created by `useRemoteWatchNonce`
-  // before any acquire — upgrade it in place so the nonce listeners it holds
-  // survive the first acquire and start receiving ticks.
+  // before any acquire, or was released while its attach is still in flight —
+  // upgrade it in place so the nonce listeners it holds survive the acquire.
   const entry = existing ?? ensureEntry(key);
   entry.count = 1;
-  entry.detached = false;
-  entry.pollMs = pollMs;
-  // Fire the per-handle listen only on the 0→1 transition — a pre-existing
-  // entry with its own listen may already be live from a prior detach-race.
-  if (!entry.unlisten) {
+  // Fire the per-handle listen only on the 0→1 transition, and only when no
+  // listen from an earlier acquire is installed or still in flight.
+  if (!entry.unlisten && !entry.listenPending) {
     startListen(machineId, handle, entry);
   }
-  // Fire-and-forget — a watch failure must not block the mount. A `catch`
-  // logs and leaves `token: null`; the next release is a no-op (nothing to
-  // detach); the next acquire re-tries.
-  sourceRemoteWatchStart(machineId, handle, pollMs)
-    .then((token) => {
-      // Only publish the token onto the SAME entry we started the attach for.
-      // A release-reacquire cycle may have replaced it; the new entry has its
-      // own in-flight attach, so detach this one.
-      const live = watches.get(key);
-      if (live !== entry || (entry.detached && entry.count === 0)) {
+  // Join an attach still in flight from before the release: one poll task per
+  // entry lifecycle. It keeps the pollMs it was started with.
+  if (entry.startPending) return;
+  entry.pollMs = pollMs;
+  entry.startPending = true;
+  // Fire-and-forget — a watch failure must not block the mount. A failure
+  // logs and leaves `token: null` while the entry is held; the next acquire
+  // after a full release re-tries.
+  sourceRemoteWatchStart(machineId, handle, pollMs).then(
+    (token) => {
+      entry.startPending = false;
+      // A release to 0 and the nonce GC may have dropped this entry while the
+      // attach was in flight; the entry under the key now (if any) has its own
+      // attach, so only stop this token.
+      if (watches.get(key) !== entry) {
         sourceRemoteWatchStop(token).catch(() => {});
         return;
       }
       entry.token = token;
+      if (entry.count === 0) {
+        retire(key, entry);
+        return;
+      }
       // The attach is up — one-shot probe tracked-paths to seed the preset.
       probeTrackedCount(machineId, handle, entry);
-    })
-    .catch((err) => {
+    },
+    (err) => {
+      entry.startPending = false;
       logger.warn(
         "useRemoteWorktreeWatch",
         `remote worktree watch attach failed for ${key} — ${err}`,
       );
-      // Keep the entry so repeated mounts don't spin on a hard-fail; the next
-      // release decrements and clears it when count hits zero.
-    });
+      if (watches.get(key) === entry && entry.count === 0) retire(key, entry);
+    },
+  );
 }
 
 function release(machineId: string, handle: string): void {
@@ -200,24 +227,10 @@ function release(machineId: string, handle: string): void {
   if (!entry) return;
   entry.count--;
   if (entry.count > 0) return;
-  if (entry.token !== null) {
-    sourceRemoteWatchStop(entry.token).catch(() => {});
-    if (entry.unlisten) entry.unlisten();
-    // Keep listeners alive if any `useRemoteWatchNonce` still holds a
-    // listener — a late consumer (e.g. a sibling re-mount) will reacquire
-    // and the entry's nonce + listeners persist. Only drop the entry when
-    // nothing is listening either.
-    if (entry.listeners.size === 0) {
-      watches.delete(key);
-    } else {
-      entry.token = null;
-      entry.unlisten = null;
-      entry.trackedProbed = false; // allow a reacquire to re-probe
-    }
-  } else {
-    // Attach still in flight — its `.then` sees count 0 and detaches + removes.
-    entry.detached = true;
-  }
+  // An attach still in flight retires the entry when it settles at count 0
+  // (unless a re-acquire joins it first).
+  if (entry.startPending) return;
+  retire(key, entry);
 }
 
 /**
