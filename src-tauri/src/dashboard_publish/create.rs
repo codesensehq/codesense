@@ -52,7 +52,7 @@ const FIXED_FILES: usize = 3;
 pub const TOOLKIT: &str = "cs-live.js";
 pub const TOOLKIT_JS: &str = include_str!("toolkit/cs-live.js");
 /// Asset release version in the toolkit header; independent of page API wire `v = 1`.
-pub const TOOLKIT_VERSION: u32 = 5;
+pub const TOOLKIT_VERSION: u32 = 6;
 /// SV-INP-29 embed pipe: the page-side forwarder and message-side SDK for live HTML
 /// messages inside a published dashboard (`live.embeds`). A dashboard copies it next
 /// to `cs-live.js` and lists it in `publish.files`; it makes no network call and holds no token.
