@@ -39,18 +39,27 @@ struct Started {
     wait: Option<Duration>,
 }
 
-/// Records each command and answers from a script (spawned and detached once it runs out).
+/// Records each command and answers from a script (spawned and detached once it runs out). A
+/// capture is recorded with its limit as `wait` and answered from its own script, which a test
+/// that captures must fill.
 #[derive(Default)]
 struct Recorder {
     started: RefCell<Vec<Started>>,
     answers: RefCell<VecDeque<io::Result<Exit>>>,
+    captures: RefCell<VecDeque<io::Result<Captured>>>,
 }
 
 impl Recorder {
     fn answering(answers: Vec<io::Result<Exit>>) -> Self {
         Self {
-            started: RefCell::default(),
             answers: RefCell::new(answers.into()),
+            ..Self::default()
+        }
+    }
+    fn capturing(captures: Vec<io::Result<Captured>>) -> Self {
+        Self {
+            captures: RefCell::new(captures.into()),
+            ..Self::default()
         }
     }
     fn programs(&self) -> Vec<String> {
@@ -62,8 +71,8 @@ impl Recorder {
     }
 }
 
-impl Spawn for Recorder {
-    fn start(&self, command: Command, wait: Option<Duration>) -> io::Result<Exit> {
+impl Recorder {
+    fn record(&self, command: &Command, wait: Option<Duration>) {
         self.started.borrow_mut().push(Started {
             program: command.get_program().to_os_string(),
             args: command.get_args().map(OsStr::to_os_string).collect(),
@@ -75,14 +84,24 @@ impl Spawn for Recorder {
                 .collect(),
             wait,
         });
+    }
+}
+
+impl Spawn for Recorder {
+    fn start(&self, command: Command, wait: Option<Duration>) -> io::Result<Exit> {
+        self.record(&command, wait);
         self.answers
             .borrow_mut()
             .pop_front()
             .unwrap_or(Ok(Exit::Detached))
     }
 
-    fn capture(&self, _command: Command, _limit: Duration) -> io::Result<Captured> {
-        unreachable!("these tests don't capture")
+    fn capture(&self, command: Command, limit: Duration) -> io::Result<Captured> {
+        self.record(&command, Some(limit));
+        self.captures
+            .borrow_mut()
+            .pop_front()
+            .expect("a capture this test didn't script")
     }
 }
 
@@ -767,4 +786,173 @@ fn a_capture_past_its_limit_is_killed() {
     };
     assert!(pid_is_gone(pid), "pid {pid} is still there");
     assert_eq!(captured.stdout, b"early\n");
+}
+
+fn printed(success: bool, describe: &str, stdout: &str) -> io::Result<Captured> {
+    Ok(Captured {
+        exit: Exit::Status {
+            success,
+            describe: describe.into(),
+        },
+        stdout: stdout.as_bytes().to_vec(),
+    })
+}
+
+#[test]
+fn query_text_default_names_each_missing_outcome() {
+    let denied = io::Error::from(io::ErrorKind::PermissionDenied);
+    let denied_text = denied.to_string();
+    for (answer, expected) in [
+        (
+            Err(io::Error::from(io::ErrorKind::NotFound)),
+            Err(TextDefaultMissing::NoXdgMime),
+        ),
+        (
+            Err(denied),
+            Err(TextDefaultMissing::QueryFailed(denied_text)),
+        ),
+        (
+            printed(false, "exit status: 4", "gedit.desktop\n"),
+            Err(TextDefaultMissing::QueryFailed("exit status: 4".into())),
+        ),
+        (
+            Ok(Captured {
+                exit: Exit::TimedOut { pid: 7 },
+                stdout: Vec::new(),
+            }),
+            Err(TextDefaultMissing::QueryFailed(
+                "timed out after 10 s".into(),
+            )),
+        ),
+        (
+            printed(true, "exit status: 0", ""),
+            Err(TextDefaultMissing::Empty),
+        ),
+        (
+            printed(true, "exit status: 0", "  \n\t"),
+            Err(TextDefaultMissing::Empty),
+        ),
+        (
+            printed(true, "exit status: 0", " kate.desktop\n"),
+            Ok("kate.desktop".to_string()),
+        ),
+    ] {
+        let recorder = Recorder::capturing(vec![answer]);
+        assert_eq!(query_text_default(&recorder), expected);
+        let started = recorder.started.borrow();
+        assert_eq!(started.len(), 1);
+        assert_eq!(started[0].program, OsString::from("xdg-mime"));
+        assert_eq!(started[0].args, ["query", "default", "text/plain"]);
+        assert_eq!(started[0].wait, Some(QUERY_LIMIT));
+    }
+}
+
+fn no_env(_: &str) -> Option<OsString> {
+    None
+}
+
+fn no_read(_: &Path) -> Option<String> {
+    None
+}
+
+#[test]
+fn gather_with_queries_the_text_default_only_for_text_on_linux() {
+    let home = Some(Path::new("/home/u"));
+    let file = Open::Text(Path::new(FILE));
+    let dir = Open::Folder(Path::new(DIR));
+
+    for (os, req) in [("macos", file), ("macos", dir), ("linux", dir)] {
+        let recorder = Recorder::default();
+        let gathered = HostFacts::gather_with(os, &req, &no_env, home, &no_read, &recorder);
+        assert_eq!(
+            gathered.text_default,
+            Err(TextDefaultMissing::NotQueried),
+            "{os} {req:?}"
+        );
+        assert!(recorder.started.borrow().is_empty(), "{os} {req:?}");
+    }
+
+    let recorder = Recorder::capturing(vec![printed(true, "exit status: 0", "gedit.desktop\n")]);
+    let gathered = HostFacts::gather_with("linux", &file, &no_env, home, &no_read, &recorder);
+    assert_eq!(gathered.text_default, Ok("gedit.desktop".into()));
+    assert_eq!(recorder.programs(), ["xdg-mime"]);
+}
+
+#[test]
+fn gather_with_detects_wsl_only_for_a_folder_on_linux() {
+    let home = Some(Path::new("/home/u"));
+    let dir = Open::Folder(Path::new(DIR));
+    let release = |path: &Path| {
+        (path == Path::new("/proc/sys/kernel/osrelease"))
+            .then(|| "5.15.153.1-microsoft-standard-WSL2\n".to_string())
+    };
+    let version = |path: &Path| {
+        (path == Path::new("/proc/version")).then(|| {
+            "Linux version 4.4.0-19041-Microsoft (gcc version 5.4.0) #1-Microsoft".to_string()
+        })
+    };
+    let plain = |_: &Path| Some("6.8.0-45-generic\n".to_string());
+    let spawner = Recorder::default();
+    let wsl = |os: &str, req: &Open, read: &dyn Fn(&Path) -> Option<String>| {
+        HostFacts::gather_with(os, req, &no_env, home, read, &spawner).is_wsl
+    };
+
+    assert!(wsl("linux", &dir, &release));
+    assert!(wsl("linux", &dir, &version));
+    assert!(!wsl("linux", &dir, &plain));
+    assert!(!wsl("linux", &dir, &no_read));
+    assert!(!wsl("macos", &dir, &release));
+
+    // Text never asks: WSL only changes the folder launchers.
+    let text = Recorder::capturing(vec![printed(true, "exit status: 0", "gedit.desktop")]);
+    let file = Open::Text(Path::new(FILE));
+    let gathered = HostFacts::gather_with("linux", &file, &no_env, home, &release, &text);
+    assert!(!gathered.is_wsl);
+}
+
+#[test]
+fn gather_with_reads_the_xdg_folders_from_the_injected_env() {
+    let dir = Open::Folder(Path::new(DIR));
+    let spawner = Recorder::default();
+    let set = |key: &str| match key {
+        "XDG_DATA_HOME" => Some(OsString::from("/data")),
+        "XDG_DATA_DIRS" => Some(OsString::from("/opt/share:rel:/usr/share")),
+        _ => None,
+    };
+    let gathered = HostFacts::gather_with(
+        "linux",
+        &dir,
+        &set,
+        Some(Path::new("/home/u")),
+        &no_read,
+        &spawner,
+    );
+    assert_eq!(gathered.xdg_data_home, Some(PathBuf::from("/data")));
+    assert_eq!(
+        gathered.xdg_data_dirs,
+        [PathBuf::from("/opt/share"), PathBuf::from("/usr/share")]
+    );
+
+    let relative = |key: &str| (key == "XDG_DATA_HOME").then(|| OsString::from("rel/share"));
+    let gathered = HostFacts::gather_with(
+        "linux",
+        &dir,
+        &relative,
+        Some(Path::new("/home/u")),
+        &no_read,
+        &spawner,
+    );
+    assert_eq!(
+        gathered.xdg_data_home,
+        Some(PathBuf::from("/home/u/.local/share"))
+    );
+    assert_eq!(
+        gathered.xdg_data_dirs,
+        [
+            PathBuf::from("/usr/local/share"),
+            PathBuf::from("/usr/share")
+        ]
+    );
+    let homeless = HostFacts::gather_with("linux", &dir, &no_env, None, &no_read, &spawner);
+    assert_eq!(homeless.xdg_data_home, None);
 }
