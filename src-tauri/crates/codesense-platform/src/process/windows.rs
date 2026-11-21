@@ -39,6 +39,9 @@ const KILLED: u32 = 1;
 /// its pid been reused since.
 pub(super) const PARENT_MAY_BE_STALE: bool = true;
 
+/// A ConPTY write is left as it was: no check before it.
+pub(super) const PTY_ACCEPTS_WRITES_AFTER_EXIT: bool = false;
+
 /// The access [`is_alive`] and [`inspect`] open a process with: query to read
 /// its times, synchronize so [`running`] can wait on it.
 const QUERY_AND_WAIT: u32 = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE;
@@ -303,4 +306,13 @@ pub(super) fn exited_unreaped(child: &Child) -> io::Result<bool> {
 /// Windows has no process groups to read.
 pub(super) fn group_and_foreground(_pid: u32) -> Option<(i32, i32)> {
     None
+}
+
+/// No reading another process's open files here: never.
+pub(super) fn has_file_open(
+    _pid: u32,
+    _path: &std::path::Path,
+    _canonical: &std::path::Path,
+) -> bool {
+    false
 }

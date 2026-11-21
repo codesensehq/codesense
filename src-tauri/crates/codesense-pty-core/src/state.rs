@@ -1290,8 +1290,7 @@ impl TerminalRegistry for PtyState {
         trace!(target: "pty", "write_pty: session_id={}", session);
         // A Linux pty master accepts bytes after its child exits, where Darwin's
         // write fails below: refuse a write into an exited child first.
-        #[cfg(target_os = "linux")]
-        {
+        if codesense_platform::process::PTY_ACCEPTS_WRITES_AFTER_EXIT {
             let exited = self
                 .sessions
                 .lock()

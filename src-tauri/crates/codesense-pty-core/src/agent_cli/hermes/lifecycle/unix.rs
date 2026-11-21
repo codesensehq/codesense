@@ -4,8 +4,6 @@
 //! holding the home's gateway lock.
 use super::*;
 use std::fs;
-#[cfg(target_os = "macos")]
-use std::process::Command;
 
 fn owns_lock(pid: u32, home: &Path) -> bool {
     let path = home.join("gateway.lock");
@@ -25,48 +23,10 @@ fn owns_lock(pid: u32, home: &Path) -> bool {
     if !matches!(codesense_platform::fs::try_lock_exclusive(&lock), Ok(false)) {
         return false;
     }
-    // The third fact: that process has the lock file open.
-    let Ok(canonical) = fs::canonicalize(&path) else {
-        return false;
-    };
-    has_open(pid, &path, &canonical)
-}
-
-/// Whether process `pid` has the lock file open, as lsof names it.
-#[cfg(target_os = "macos")]
-fn has_open(pid: u32, path: &Path, canonical: &Path) -> bool {
-    // Darwin lsof does not expose flock's owner. Require all three facts: the live
-    // gateway's lock record, a held kernel lock and that process's open file.
-    let Ok(output) = Command::new("/usr/sbin/lsof")
-        .args(["-a", "-p", &pid.to_string(), "-Fpn"])
-        .arg(path)
-        .output()
-    else {
-        return false;
-    };
-    output.status.success()
-        && String::from_utf8_lossy(&output.stdout).lines().any(|line| {
-            line.strip_prefix('n')
-                .is_some_and(|name| Path::new(name) == canonical)
-        })
-}
-
-/// Whether process `pid` has the lock file open: one of its `/proc/<pid>/fd`
-/// links names it. A descriptor table that can't be read is no.
-#[cfg(target_os = "linux")]
-fn has_open(pid: u32, _path: &Path, canonical: &Path) -> bool {
-    let Ok(descriptors) = fs::read_dir(format!("/proc/{pid}/fd")) else {
-        return false;
-    };
-    descriptors
-        .flatten()
-        .any(|fd| fs::read_link(fd.path()).is_ok_and(|target| target == canonical))
-}
-
-/// No way to name another process's open files here: never the owner.
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn has_open(_pid: u32, _path: &Path, _canonical: &Path) -> bool {
-    false
+    // Neither Darwin lsof nor Linux /proc exposes flock's owner. Require all three
+    // facts: the live gateway's lock record, a held kernel lock and that process's
+    // open file.
+    codesense_platform::process::has_file_open(Pid::from_raw(pid), &path)
 }
 
 pub(super) fn verified_gateway(home: &Path) -> Option<peer::PeerProcess> {
@@ -103,7 +63,7 @@ pub(super) fn verified_gateway(home: &Path) -> Option<peer::PeerProcess> {
     Some(identity)
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod owner_tests {
     use super::*;
     use std::io::BufRead;

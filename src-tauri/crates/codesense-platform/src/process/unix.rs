@@ -6,6 +6,7 @@
 use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::process::CommandExt;
+use std::path::Path;
 use std::process::{Child, Command};
 use std::time::Duration;
 
@@ -14,6 +15,9 @@ use super::Identity;
 /// A live process's parent is live or it was re-parented, so the parent it
 /// reads is never a stale record.
 pub(super) const PARENT_MAY_BE_STALE: bool = false;
+
+/// A Linux pty master buffers writes after its child exits; Darwin's fails.
+pub(super) const PTY_ACCEPTS_WRITES_AFTER_EXIT: bool = cfg!(target_os = "linux");
 
 /// Put the child in a fresh process group (pgid == its own pid) so the whole
 /// tree can be signalled, not just the leader.
@@ -274,6 +278,41 @@ pub(super) fn started_after(_: u64, _: Duration) -> bool {
     false
 }
 
+/// Whether process `pid` has `path` (canonically `canonical`) open, as lsof
+/// names it.
+#[cfg(target_os = "macos")]
+pub(super) fn has_file_open(pid: u32, path: &Path, canonical: &Path) -> bool {
+    let Ok(output) = Command::new("/usr/sbin/lsof")
+        .args(["-a", "-p", &pid.to_string(), "-Fpn"])
+        .arg(path)
+        .output()
+    else {
+        return false;
+    };
+    output.status.success()
+        && String::from_utf8_lossy(&output.stdout).lines().any(|line| {
+            line.strip_prefix('n')
+                .is_some_and(|name| Path::new(name) == canonical)
+        })
+}
+
+/// Whether process `pid` has `canonical` open: one of its `/proc/<pid>/fd`
+/// links names it. A descriptor table that can't be read is no.
+#[cfg(target_os = "linux")]
+pub(super) fn has_file_open(pid: u32, _path: &Path, canonical: &Path) -> bool {
+    let Ok(descriptors) = std::fs::read_dir(format!("/proc/{pid}/fd")) else {
+        return false;
+    };
+    descriptors
+        .flatten()
+        .any(|fd| std::fs::read_link(fd.path()).is_ok_and(|target| target == canonical))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub(super) fn has_file_open(_pid: u32, _path: &Path, _canonical: &Path) -> bool {
+    false
+}
+
 #[cfg(target_os = "linux")]
 pub(super) fn peer(stream: &impl AsRawFd) -> Option<Identity> {
     let mut credentials: libc::ucred = unsafe { std::mem::zeroed() };
@@ -333,6 +372,27 @@ mod tests {
 
     use super::super::{is_alive, kill_hard, terminate, Pid, ProcessTree};
     use std::time::Duration;
+
+    /// A process has a file open while it holds a descriptor to it, under any
+    /// spelling of its path, and not a file it never opened.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_process_has_open_only_the_files_it_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        let held = dir.path().join("held");
+        let other = dir.path().join("other");
+        std::fs::write(&other, b"").unwrap();
+        let file = std::fs::File::create(&held).unwrap();
+        let me = Pid::from_raw(std::process::id());
+        assert!(super::super::has_file_open(me, &held));
+        assert!(super::super::has_file_open(
+            me,
+            &dir.path().join(".").join("held")
+        ));
+        assert!(!super::super::has_file_open(me, &other));
+        drop(file);
+        assert!(!super::super::has_file_open(me, &held));
+    }
 
     /// A start counted in whole ticks is placed at the end of its tick, to the
     /// nanosecond, after a boot with a sub-second part: a time inside that tick
