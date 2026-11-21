@@ -4473,8 +4473,8 @@ mod tests {
             "{bridge_entry}"
         );
     }
-    // Fails on Linux (linux-test-defects): the gateway is not stopped before home removal.
-    #[cfg(target_os = "macos")]
+    // macOS and Linux, where the home's gateway is verified and stopped.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     mod managed_gateway {
         use super::*;
 

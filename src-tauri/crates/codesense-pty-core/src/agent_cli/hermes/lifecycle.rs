@@ -2,8 +2,8 @@
 //! One verified gateway teardown for host engine loss and desktop home removal.
 use crate::activity::peer;
 use codesense_platform::process::{Pid, ProcessGroup};
-// For the gateway tests (macOS only), which start their gateway in a process group of its own.
-#[cfg(all(test, target_os = "macos"))]
+// For the gateway tests (macOS and Linux), which start their gateway in a process group of its own.
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 use std::os::unix::process::CommandExt;
 use std::{
     path::Path,
@@ -48,8 +48,8 @@ pub(crate) fn teardown_home(home: &Path, wait_for_replacement: bool) {
     }
 }
 
-// Fails on Linux (linux-test-defects): `verified_gateway` finds no gateway process.
-#[cfg(all(test, target_os = "macos"))]
+// macOS and Linux: the gateway is a python process in a Unix process group of its own.
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod gateway_tests {
     use super::*;
     use std::io::BufRead;
@@ -182,6 +182,6 @@ while True: time.sleep(.05)
     }
 }
 
-// macOS only, as the gateway tests that use it are.
-#[cfg(all(test, target_os = "macos"))]
+// macOS and Linux, as the gateway tests that use it are.
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 use std::process::Stdio;

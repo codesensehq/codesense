@@ -4579,7 +4579,5 @@ mod tests {
 }
 
 #[cfg(test)]
-// Fails on Linux (linux-test-defects): the gateway is never verified, so never swept.
-#[cfg(not(target_os = "linux"))]
 #[path = "owner/engine_loss_tests.rs"]
 mod engine_loss_tests;
