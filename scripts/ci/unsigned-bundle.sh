@@ -27,7 +27,8 @@
 # the codesense:// handler, then tauri.beta-prod.conf.json or tauri.beta-staging.conf.json, which
 # the caller supplies, for the channel's updater key and hosts), CODESENSE_CHANNEL set to it and
 # the dashboard-publish feature, as the macOS release build has. The caller sets
-# CODESENSE_DASH_HOST. The configs keep updater artifacts off and no key is involved: the
+# CODESENSE_DASH_HOST and CODESENSE_RELEASED_AT (unix seconds; build.rs requires it for a channel
+# build). The configs keep updater artifacts off and no key is involved: the
 # repaired AppImage is signed later, so its signature covers the final bytes. Unset, the build
 # is the test build, unchanged.
 set -euo pipefail
@@ -62,6 +63,8 @@ if [[ -n "$CHANNEL" ]]; then
     esac
     [[ -f "$channel_conf" ]] || { echo "Error: $channel_conf is missing; the caller supplies the channel's config" >&2; exit 1; }
     [[ -n "${CODESENSE_DASH_HOST:-}" ]] || { echo "Error: a channel bundle needs CODESENSE_DASH_HOST" >&2; exit 1; }
+    [[ "${CODESENSE_RELEASED_AT:-}" =~ ^[1-9][0-9]{9}$ ]] \
+        || { echo "Error: a channel bundle needs CODESENSE_RELEASED_AT, unix seconds" >&2; exit 1; }
     config_args+=(--config src-tauri/tauri.beta.conf.json --config "$channel_conf")
     build_args+=(--features dashboard-publish)
     export CODESENSE_CHANNEL="$CHANNEL"
