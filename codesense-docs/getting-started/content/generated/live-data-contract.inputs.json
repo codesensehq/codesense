@@ -24,7 +24,7 @@
     "src-tauri/src/verbs/capabilities.rs": "ca4e62d053beef566662fe42095839cd4768b44b716aef8d6e4e9a1a5b054c04",
     "src-tauri/src/verbs/commands.rs": "b335efc518a4f5ebfb50ed755d4dd17b4d184f8b8e961d06e84331bd3b52a3b7",
     "src-tauri/src/verbs/dispatcher.rs": "a7a801a1b6555b91ed69a7894713c2d51619f2dcad2b0d6ab95471a591dca3d8",
-    "src-tauri/src/verbs/foreman_launch.rs": "424bc509af9d45057daa610dea56cc7a1e886b93ceeece8cb98d8843f79c2987",
+    "src-tauri/src/verbs/foreman_launch.rs": "516e63db7f6eeee078329ff2805f168f3bc852fd3c316236ba5c10c63ae86602",
     "src-tauri/src/verbs/grant_tests.rs": "ceb02015e280007d69007dec6fa938c9d2f5fbd7036e21ca578b2fc67ac5ca27",
     "src-tauri/src/verbs/mod.rs": "8b4ae477c13685de85690ac87f252e4be0d1538da9bacd50752477b4d30cea68",
     "src-tauri/src/verbs/policy.rs": "c1fe81f79a639040ae9d7f27bea572b2c14d08a950bbd7b738f66357eebdd24c",
