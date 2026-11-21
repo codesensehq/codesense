@@ -36,7 +36,8 @@ const BASE_SEALED_EXPORT = fs.readFileSync(
 // Tokens whose count in the head's file must match the base's, so a decoy declaration, a second
 // definition or a reassigned Object.freeze can't stand beside the list this parse reads.
 const COUNTED_TOKENS = ["FROZEN_EXPORTS", "GENERATED", "freeze"];
-const tokenCount = (source, token) => (source.match(new RegExp(`\\b${token}\\b`, "g")) ?? []).length;
+const tokenCount = (source, token) =>
+  (source.match(new RegExp(`\\b${token}\\b`, "g")) ?? []).length;
 
 // FROZEN_EXPORTS as the head commit's sealed-export.mjs writes it, read without running it: one
 // `const GENERATED = "<path>";` and one `export const FROZEN_EXPORTS = Object.freeze([...]);` whose
@@ -48,7 +49,8 @@ const tokenCount = (source, token) => (source.match(new RegExp(`\\b${token}\\b`,
 // refresh route's hand path, and the guard self-edit round checks the list's runtime value.
 export function parseFrozenList(source, baseSource = BASE_SEALED_EXPORT) {
   if (typeof source !== "string") return null;
-  if (source.includes("*/") || /^(?:(?!\/\/).)*\/\*/m.test(source) || /^`/m.test(source)) return null;
+  if (source.includes("*/") || /^(?:(?!\/\/).)*\/\*/m.test(source) || /^`/m.test(source))
+    return null;
   if (COUNTED_TOKENS.some((token) => tokenCount(source, token) !== tokenCount(baseSource, token)))
     return null;
   const generated = [...source.matchAll(/^const GENERATED = "([^"\\$`]*)";$/gm)];

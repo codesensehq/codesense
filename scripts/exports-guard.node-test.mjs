@@ -105,7 +105,9 @@ test("the head parse reads a changed list, and refuses anything it cannot read s
 });
 
 test("the head parse fails closed on a decoy declaration", () => {
-  const real = /^export const FROZEN_EXPORTS = Object\.freeze\(\[\n[^\]]*\]\);$/m.exec(sealedSource)[0];
+  const real = /^export const FROZEN_EXPORTS = Object\.freeze\(\[\n[^\]]*\]\);$/m.exec(
+    sealedSource,
+  )[0];
   const decoys = [
     // The real declaration commented out, and the list exported another way.
     [
@@ -137,7 +139,10 @@ test("the head parse fails closed on a decoy declaration", () => {
     // Object.freeze reassigned, so the declaration's runtime value is another list.
     ["reassigned freeze", `Object.freeze = () => [];\n${sealedSource}`],
     ["reassigned freeze by key", `Object["freeze"] = () => [];\n${sealedSource}`],
-    ["defineProperty on freeze", `Object.defineProperty(Object, "freeze", { value: () => [] });\n${sealedSource}`],
+    [
+      "defineProperty on freeze",
+      `Object.defineProperty(Object, "freeze", { value: () => [] });\n${sealedSource}`,
+    ],
     // Another use of a counted token.
     ["extra GENERATED", `${sealedSource}\nexport const OTHER = GENERATED;\n`],
     ["extra FROZEN_EXPORTS", `${sealedSource}\nexport const OTHER = FROZEN_EXPORTS;\n`],
