@@ -29,10 +29,10 @@ export const allowStaleExport = (argv = process.argv, env = process.env) =>
 // so without it a stale export is a notice. The regenerate run and the nightly probe set it.
 export const strictExports = (env = process.env) => env.CS_STRICT_EXPORTS === "1";
 
-// The refresh command shown to the user, with the CI route for a checkout without a Rust build. A
-// template literal stays on the `=` line at any length, so a longer or shorter command keeps the
-// same formatting.
-export const REFRESH_COMMAND = `pnpm docs:refresh-mcp (without a local Rust build: gh workflow run regenerate-exports.yml --ref <branch>)`;
+// What a stale export message tells the reader. PRs never re-export the cargo-written files;
+// maintainers refresh them in a pull request of their own (README.md names the route). A template
+// literal stays on the `=` line at any length, so a longer or shorter text keeps the same formatting.
+export const REFRESH_ROUTE = `leave generated exports out of your PR; maintainers refresh them (README.md, "Regenerating exports")`;
 
 const DEFAULT_MIN_FREE_GIB = 25;
 const HARD_FLOOR_GIB = 20;
@@ -88,7 +88,7 @@ export function exportsUntouchedSinceMain(root, exportFiles) {
 
 // A PR that re-exported is held to the strict check, yet main may since have changed inputs the
 // PR never touched (another PR's tool edit). Then the PR's export matched its own inputs and the
-// drift is main's, refreshed in the next docs wave like any inherited drift. True when the PR left
+// drift is main's, refreshed by the next maintainer refresh like any inherited drift. True when the PR left
 // every drifted input as it was at the merge-base (same rule as the exports, so never fetches).
 export const driftInheritedFromMain = (root, driftedInputs) =>
   driftedInputs.length > 0 && exportsUntouchedSinceMain(root, driftedInputs);

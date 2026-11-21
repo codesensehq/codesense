@@ -23,7 +23,7 @@ import {
   queuedExport,
   schemaFields,
 } from "./generate-model-schemas.mjs";
-import { strictExports } from "./lib/sealed-export.mjs";
+import { REFRESH_ROUTE, strictExports } from "./lib/sealed-export.mjs";
 
 // A scratch checkout holding the fixture, its sources and the Node outputs, with origin/main at
 // its first commit, so the PR gate's "untouched since main" rule runs against real git.
@@ -85,6 +85,12 @@ test("a stale fixture fails the strict check, and write mode and the PR gate ren
       );
     }
     assert.equal(readFileSync(join(root, FIXTURE), "utf8"), before, "never rehash the fixture");
+    assert.throws(
+      () => generate(true, { root }),
+      (error) =>
+        error.message.includes(REFRESH_ROUTE) &&
+        !/--queued-export|regenerate-exports/.test(error.message),
+    );
     // A PR that edits the fixture itself is held to the strict check.
     writeFileSync(join(root, FIXTURE), before.replace(/\n$/, "\n\n"));
     assert.throws(

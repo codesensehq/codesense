@@ -7,6 +7,7 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  REFRESH_ROUTE,
   allowStaleExport as switchedOn,
   diskGate,
   driftInheritedFromMain,
@@ -18,7 +19,7 @@ export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const FIXTURE = "src-tauri/src/docs_schemas.generated.json";
 const CONTENT = "codesense-docs/getting-started/content";
 const staleMessage = (paths) =>
-  `Model schema fixture is stale: ${paths.join(", ")}. Export with node scripts/generate-model-schemas.mjs --queued-export (no local cargo: dispatch regenerate-exports.yml), then pnpm gen:docs. Do not rehash the fixture.`;
+  `Model schema fixture is stale: ${paths.join(", ")}; ${REFRESH_ROUTE}. Do not rehash the fixture.`;
 // The fixture's sources whose bytes no longer match the hashes it was exported from.
 export function staleSources(fixture, readSource = (path) => readFileSync(join(ROOT, path))) {
   return Object.entries(fixture.sources)

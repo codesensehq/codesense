@@ -17,6 +17,7 @@ import {
   contractInputs,
   sealContract,
 } from "./generate-live-data-contract.mjs";
+import { REFRESH_ROUTE } from "./lib/sealed-export.mjs";
 
 const OUTPUT = "codesense-docs/getting-started/content/generated/live-data-contract.json";
 
@@ -73,6 +74,7 @@ describe("live-data contract PR gate", () => {
         checkContract(root, { check: false, warn: (line: string) => written.push(line) }),
       ).not.toThrow();
       expect(written.join("\n")).toMatch(/^NOTICE: Stale generated file: .*payload changed/);
+      expect(written.join("\n")).toContain(REFRESH_ROUTE);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

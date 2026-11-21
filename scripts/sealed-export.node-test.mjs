@@ -2,7 +2,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { CATALOG, referenceInputs } from "./generate-mcp-reference.mjs";
-import { FROZEN_EXPORTS, frozenExport, strictExports } from "./lib/sealed-export.mjs";
+import {
+  FROZEN_EXPORTS,
+  REFRESH_ROUTE,
+  frozenExport,
+  strictExports,
+} from "./lib/sealed-export.mjs";
 
 test("the export pins compare strictly only when CS_STRICT_EXPORTS is 1", () => {
   assert.equal(strictExports({ CS_STRICT_EXPORTS: "1" }), true);
@@ -51,4 +56,9 @@ test("each reader takes its own export's files from the one list", () => {
   );
   assert.deepEqual(readers.flat().sort(), [...FROZEN_EXPORTS].sort());
   assert.deepEqual(frozenExport(`${GENERATED}/mcp`), []);
+});
+
+test("the stale-export route tells a contributor to leave the exports out", () => {
+  assert.match(REFRESH_ROUTE, /^leave generated exports out of your PR; maintainers refresh them/);
+  assert.doesNotMatch(REFRESH_ROUTE, /gh workflow|docs:refresh-mcp|--export/);
 });

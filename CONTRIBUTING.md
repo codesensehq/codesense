@@ -134,11 +134,11 @@ pnpm test:rust         # Rust tests
   another test runner or job queue from inside it.
 - Run `pnpm gen:docs` before any Cargo step, and run the tests you changed
   quickly, without Cargo, before the long run.
-- If you change Rust code that feeds the MCP reference, page verbs or the
-  live-data contract, run the full `pnpm gen:docs:check`, not
-  `pnpm gen:docs:check:pr`, which tolerates a stale export. If it reports the
-  export stale, run `pnpm docs:refresh-mcp` and commit the refreshed files, or
-  regenerate it in CI without a local Rust build (README.md, "Regenerating
+- Leave generated exports out of your PR; maintainers refresh them. If you
+  change Rust code that feeds the MCP reference, page verbs, the live-data
+  contract or the model schemas, `pnpm gen:docs` and `pnpm gen:docs:check:pr`
+  print a notice that the export is stale: that is expected. Commit what
+  `pnpm gen:docs` writes, such as `mcp-tools.json` (README.md, "Regenerating
   exports").
 - Leave at least 35 GB of free disk, stop if it drops under 20 GB, and delete
   `target/` when you are done. Build with the default features only.

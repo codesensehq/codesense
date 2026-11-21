@@ -11,7 +11,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { buildManifest, META, validateInputReferences } from "./generate-mcp-reference.mjs";
-import { REFRESH_COMMAND } from "./lib/sealed-export.mjs";
+import { REFRESH_ROUTE } from "./lib/sealed-export.mjs";
 const GENERATED = "codesense-docs/getting-started/content/generated";
 const SEAL_PATH = `${GENERATED}/mcp-tools.inputs.json`;
 const PAYLOAD_PATHS = ["default", "dashboard-publish"].map(
@@ -174,11 +174,11 @@ describe("Node-only freshness and resolving teaching links", () => {
           warn: (line) => stderr.push(line),
         }),
       ).toBeNull();
-      expect(stdout.join("\n")).toContain("cargo:warning=MCP REFERENCE EXPORT NEEDED");
+      expect(stdout.join("\n")).toContain("cargo:warning=MCP REFERENCE EXPORT STALE");
       expect(stdout.join("\n")).toContain("src-tauri/src/nested.rs");
-      expect(stdout.join("\n")).toContain("node scripts/generate-mcp-reference.mjs --export");
-      expect(() => generateReference(root, { check: true })).toThrow(REFRESH_COMMAND);
-      expect(stdout.join("\n")).toContain("pnpm gen:docs");
+      expect(stdout.join("\n")).toContain(REFRESH_ROUTE);
+      expect(stdout.join("\n")).not.toContain("--export");
+      expect(() => generateReference(root, { check: true })).toThrow(REFRESH_ROUTE);
       expect(stderr).toEqual([]);
       expect(readFileSync(outputPath, "utf8")).toBe(outputBeforeWarning);
       const notices: string[] = [];

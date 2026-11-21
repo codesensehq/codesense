@@ -20,7 +20,7 @@ import { spawnSync } from "node:child_process";
 import { runBuildJob } from "./lib/build-queue.mjs";
 import Ajv2020 from "ajv/dist/2020.js";
 import {
-  REFRESH_COMMAND,
+  REFRESH_ROUTE,
   allowStaleExport as switchedOn,
   diskGate,
   driftInheritedFromMain,
@@ -457,7 +457,7 @@ function staleSealMessage(drift) {
   const reason = drift.missingSeal
     ? "MCP registry has no sealed export"
     : "Stale MCP registry export";
-  return `${reason} (${details.join("; ")}); refresh during the next docs wave with ${REFRESH_COMMAND}`;
+  return `${reason} (${details.join("; ")}); ${REFRESH_ROUTE}`;
 }
 
 export function validateInputReferences(tool) {
@@ -496,8 +496,8 @@ const handlerFn = (root, name) =>
   new RegExp(`\\b(?:async\\s+)?fn\\s+${name}\\s*\\(`).test(
     readFileSync(resolve(root, "src-tauri/src/mcp/handler.rs"), "utf8"),
   );
-// `pending` (PR gate only) is an array collecting catalog tools the sealed export lacks: story PRs
-// never re-export, the wave does. Omitted (strict), such a tool is fatal.
+// `pending` (PR gate and write mode) is an array collecting catalog tools the sealed export lacks:
+// PRs never re-export, the maintainer refresh does. Omitted (strict), such a tool is fatal.
 export function buildManifest(
   root = ROOT,
   metadata = META,
@@ -627,10 +627,8 @@ export function generateReference(
   if (drift) {
     const message = staleSealMessage(drift);
     if (buildScript) {
-      stdout("cargo:warning=MCP REFERENCE EXPORT NEEDED");
-      stdout(
-        `cargo:warning=${message}; node scripts/generate-mcp-reference.mjs --export, then pnpm gen:docs`,
-      );
+      stdout("cargo:warning=MCP REFERENCE EXPORT STALE");
+      stdout(`cargo:warning=${message}`);
       if (!check) return null;
     }
     const inputDriftOnly =
@@ -671,7 +669,8 @@ export function generateReference(
   }
   const pending = allowStaleExport || tolerant ? [] : null;
   const doc = buildManifest(root, META, readCatalog(root), pending);
-  for (const name of pending ?? []) warn(`NOTICE: pending wave export: ${name}`);
+  for (const name of pending ?? [])
+    warn(`NOTICE: ${name} is not in the committed export yet; maintainers refresh it`);
   const fresh = serialize(doc);
   const file = resolve(root, OUTPUT);
   if (check) {

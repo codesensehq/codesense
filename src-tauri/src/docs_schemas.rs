@@ -130,7 +130,7 @@ fn export_model_schemas() {
         assert_eq!(
             std::fs::read_to_string(path).expect("run with UPDATE_DOCS_SCHEMAS=1 to export"),
             rendered,
-            "serde model schemas drifted; export the real Rust fixture, then pnpm gen:docs"
+            "docs_schemas.generated.json is stale; PRs leave it out and maintainers refresh it"
         );
     }
 }

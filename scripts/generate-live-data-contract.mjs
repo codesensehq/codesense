@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { runBuildJob } from "./lib/build-queue.mjs";
 import {
-  REFRESH_COMMAND,
+  REFRESH_ROUTE,
   allowStaleExport as switchedOn,
   diskGate,
   driftInheritedFromMain,
@@ -77,8 +77,7 @@ export function checkContract(
   root = ROOT,
   { check = true, allowStaleExport = false, warn = console.warn } = {},
 ) {
-  const message = (what) =>
-    `Stale generated file: ${output} (${what}); refresh during the next docs wave with ${REFRESH_COMMAND}`;
+  const message = (what) => `Stale generated file: ${output} (${what}); ${REFRESH_ROUTE}`;
   const missing = !existsSync(resolve(root, manifest)) || !existsSync(resolve(root, output));
   const stored = missing ? null : JSON.parse(readFileSync(resolve(root, manifest), "utf8"));
   const payloadDrift = missing || stored.outputSha256 !== hash(readFileSync(resolve(root, output)));

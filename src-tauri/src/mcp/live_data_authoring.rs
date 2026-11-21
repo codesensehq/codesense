@@ -1609,7 +1609,7 @@ mod tests {
         }
         assert_eq!(
             exported, payload,
-            "run node scripts/generate-live-data-contract.mjs --export"
+            "live-data-contract.json is stale; PRs leave it out and maintainers refresh it"
         );
     }
 
