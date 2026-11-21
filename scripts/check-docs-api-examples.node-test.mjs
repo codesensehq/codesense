@@ -20,6 +20,10 @@ import {
   topLevelKeys,
 } from "./check-docs-api-examples.mjs";
 
+// The scratch repos below start with one commit, so a merge group's drift base (HEAD^1) does not exist
+// in them: the fixtures must not inherit a merge-group runner's event. The merge-group test sets it.
+delete process.env.GITHUB_EVENT_NAME;
+
 // A tool's params schema with these fields, each free-form unless given a schema.
 const params = (...fields) => ({
   properties: Object.fromEntries(fields.map((f) => (typeof f === "string" ? [f, {}] : f))),
@@ -616,7 +620,9 @@ test("a stale MCP export makes an unknown tool parameter the drifted Rust names 
   assert.equal(splitStaleParams(alias, () => true).problems.length, 1);
 });
 
-test("CLI: an unknown parameter is a notice only in the PR gate, for a param the drifted Rust names", async () => {
+// A scratch checkout whose MCP seal predates reply.rs's new_param, with origin/main at its first commit,
+// and a run of the CLI over one example page.
+async function staleLintRoot() {
   const { referenceInputs } = await import("./generate-mcp-reference.mjs");
   const root = mkdtempSync(join(tmpdir(), "api-lint-stale-"));
   const content = join(root, "codesense-docs/getting-started/content");
@@ -659,13 +665,18 @@ test("CLI: an unknown parameter is a notice only in the PR gate, for a param the
   git("update-ref", "refs/remotes/origin/main", "HEAD");
   const page = join(content, "page.html");
   const script = fileURLToPath(new URL("./check-docs-api-examples.mjs", import.meta.url));
-  const run = (example, env = "1") => {
+  const run = (example, env = "1", extra = {}) => {
     writeFileSync(page, html(example));
     return spawnSync(process.execPath, [script, "--root", root], {
       encoding: "utf8",
-      env: { ...process.env, DOCS_ALLOW_STALE_EXPORT: env },
+      env: { ...process.env, DOCS_ALLOW_STALE_EXPORT: env, ...extra },
     });
   };
+  return { root, dto, seal, git, run };
+}
+
+test("CLI: an unknown parameter is a notice only in the PR gate, for a param the drifted Rust names", async () => {
+  const { root, dto, seal, run } = await staleLintRoot();
   try {
     // Only the old catalog entry drifts: nothing explained, strict.
     assert.equal(run("reply({ text, new_param: 1 })").status, 1);
@@ -679,6 +690,26 @@ test("CLI: an unknown parameter is a notice only in the PR gate, for a param the
     // A PR that edits the seal is held to the strict check.
     writeFileSync(seal, readFileSync(seal, "utf8") + "\n");
     assert.equal(run("reply({ text, new_param: 1 })").status, 1, "the PR touched the seal");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("CLI: in a merge group the PR gate measures against the group's parent", async () => {
+  const { root, dto, seal, git, run } = await staleLintRoot();
+  try {
+    // An entry queued ahead touched the seal; this entry adds new_param to the Rust DTO. origin/main
+    // still points at the first commit.
+    writeFileSync(seal, readFileSync(seal, "utf8") + "\n");
+    git("-c", "commit.gpgsign=false", "commit", "-qam", "an entry queued ahead");
+    writeFileSync(dto, "pub struct ReplyParams { pub text: String, pub new_param: u32 }\n");
+    git("-c", "commit.gpgsign=false", "commit", "-qam", "this entry");
+    const group = run("reply({ text, new_param: 1 })", "1", { GITHUB_EVENT_NAME: "merge_group" });
+    assert.equal(group.status, 0, group.stderr);
+    assert.match(group.stderr, /NOTICE: .*reply: `new_param` is not a parameter/);
+    // Against origin/main the earlier entry's seal edit would read as this entry's: strict.
+    const pr = run("reply({ text, new_param: 1 })", "1", { GITHUB_EVENT_NAME: "pull_request" });
+    assert.equal(pr.status, 1, pr.stderr);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
