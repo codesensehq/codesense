@@ -766,13 +766,66 @@ test("a merge group runs only rust.yml's required jobs", () => {
   ]);
 });
 
+// rust-macos reports a push run whose macOS jobs were cancelled as superseded only when main's
+// head has really moved on; a timeout or cancel at the head, a re-run, a failed lookup or a
+// real failure stays red.
+test("rust.yml's macOS result tells a replaced main run from a failed one", (t) => {
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  const script = workflow.jobs["rust-macos"].steps.at(-1).run;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rust-macos-result-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, "step.sh"), script);
+  // A fake git whose ls-remote prints main's head, or fails when HEAD_OF_MAIN is unset.
+  fs.writeFileSync(
+    path.join(dir, "git"),
+    '#!/bin/sh\n[ -n "$HEAD_OF_MAIN" ] || exit 2\nprintf "%s\\trefs/heads/main\\n" "$HEAD_OF_MAIN"\n',
+    { mode: 0o755 },
+  );
+  const run = (env) =>
+    spawnSync("bash", ["-e", path.join(dir, "step.sh")], {
+      env: {
+        PATH: `${dir}:${process.env.PATH}`,
+        GITHUB_STEP_SUMMARY: path.join(dir, "summary.md"),
+        EVENT: "push",
+        ATTEMPT: "1",
+        SHA: "aaa",
+        REPO_URL: "https://example.invalid/repo",
+        BUILD: "cancelled",
+        TESTS: "skipped",
+        SUPERSEDED: "",
+        ...env,
+      },
+    }).status;
+  assert.equal(run({ HEAD_OF_MAIN: "bbb" }), 0, "a newer push replaced it");
+  assert.equal(run({ HEAD_OF_MAIN: "bbb", BUILD: "success", TESTS: "cancelled" }), 0);
+  assert.notEqual(run({ HEAD_OF_MAIN: "aaa" }), 0, "cancelled or timed out at main's head");
+  assert.notEqual(run({ HEAD_OF_MAIN: "" }), 0, "main's head unknown");
+  assert.notEqual(run({ HEAD_OF_MAIN: "bbb", ATTEMPT: "2" }), 0, "a re-run");
+  assert.notEqual(run({ HEAD_OF_MAIN: "bbb", EVENT: "schedule" }), 0, "the nightly");
+  assert.notEqual(run({ HEAD_OF_MAIN: "bbb", BUILD: "success", TESTS: "failure" }), 0);
+  assert.equal(run({ HEAD_OF_MAIN: "aaa", BUILD: "success", TESTS: "success" }), 0);
+  assert.equal(run({ HEAD_OF_MAIN: "bbb", BUILD: "success", SUPERSEDED: "true" }), 0);
+});
+
 // A push to main that is no longer main's head when a macOS build part starts gives its runner
 // back: every later step skips, the shards skip, and rust-macos reports it as superseded.
 test("rust.yml's macOS build skips a push that main has moved past", (t) => {
   const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
   const build = workflow.jobs["rust-macos-build"];
-  assert.equal(build.concurrency, undefined);
-  assert.equal(workflow.jobs["rust-macos-test"].concurrency, undefined);
+  // A push to main also shares one group per part or shard with cancel-in-progress, so a newer
+  // push replaces a queued or running main macOS run; every other event gets a group per run.
+  for (const [job, key] of [
+    ["rust-macos-build", "part"],
+    ["rust-macos-test", "shard"],
+  ]) {
+    const kind = job.replace("rust-macos-", "");
+    assert.deepEqual(workflow.jobs[job].concurrency, {
+      group: `\${{ github.event_name == 'push' && github.run_attempt == 1 && format('rust-macos-main-${kind}-{0}', matrix.${key}) || format('rust-macos-${kind}-{0}-{1}', github.run_id, matrix.${key}) }}`,
+      "cancel-in-progress": "${{ github.event_name == 'push' && github.run_attempt == 1 }}",
+    });
+  }
+  // The workflow-level group stays per commit, so the Linux and required jobs are never cancelled.
+  assert.match(workflow.concurrency.group, /github\.event\.pull_request\.number \|\| github\.sha/);
   assert.equal(build.outputs.superseded, "${{ steps.superseded.outputs.superseded }}");
   const check = build.steps.findIndex((step) => step.id === "superseded");
   assert.ok(build.steps[check - 1].uses.startsWith("actions/checkout@"));
