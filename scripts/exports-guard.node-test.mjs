@@ -86,7 +86,9 @@ test("the head parse reads a changed list, and refuses anything it cannot read s
     'const GENERATED = "codesense-docs/getting-started/content/generated";',
     'const GENERATED = "elsewhere";',
   );
-  assert.equal(parseFrozenList(moved)[0], "elsewhere/live-data-contract.json");
+  // GENERATED lives outside the entries block, so moving it is a change of the rest: refused.
+  assert.equal(parseFrozenList(moved), null);
+  assert.equal(parseFrozenList(moved, moved)[0], "elsewhere/live-data-contract.json");
   for (const [name, source] of [
     ["not text", undefined],
     ["empty", ""],
@@ -146,14 +148,34 @@ test("the head parse fails closed on a decoy declaration", () => {
     // Another use of a counted token.
     ["extra GENERATED", `${sealedSource}\nexport const OTHER = GENERATED;\n`],
     ["extra FROZEN_EXPORTS", `${sealedSource}\nexport const OTHER = FROZEN_EXPORTS;\n`],
+    // r2's repros: a computed key, and a template decoy closed by an indented backtick with the real
+    // export renamed in and the token counts rebalanced. Each parsed to six entries while the runtime
+    // list was empty.
+    ["computed freeze key", `Object["fr" + "eeze"] = () => [];\n${sealedSource}`],
+    [
+      "indented template close, export renamed",
+      sealedSource
+        .replace(
+          real,
+          `const decoy = \`\n${real}\n  \`;\nconst y = [];\nexport { y as FROZEN_EXPORTS };`,
+        )
+        .replace("FROZEN_EXPORTS.filter", "[].filter"),
+    ],
+    // Any edit outside the entries block, however harmless it looks.
+    ["a note", `${sealedSource}\n// another note\n`],
+    ["whitespace", sealedSource.replace("\n\n", "\n\n\n")],
+    ["one byte", sealedSource.replace("Shared by", "Shared  by")],
+    // The block itself must stay the one declaration.
+    ["no block", sealedSource.replace(real, "export const FROZEN_EXPORTS = [];")],
+    ["two blocks", `${sealedSource}\n${real}\n`],
   ];
   for (const [name, source] of decoys) assert.equal(parseFrozenList(source), null, name);
-  // A `/*` inside a line comment, as the real file has, and an edit that adds no counted token, still parse.
-  assert.match(sealedSource, /\/\/.*\/\*/);
-  assert.deepEqual(parseFrozenList(`${sealedSource}\n// another note\n`), [...FROZEN_EXPORTS]);
-  // The counts are the base's: a head matching another base reads against that base.
-  const extra = `${sealedSource}\nexport const OTHER = GENERATED;\n`;
-  assert.deepEqual(parseFrozenList(extra, extra), [...FROZEN_EXPORTS]);
+  // The rest is compared with the base's, byte for byte: a head equal to its base outside the block
+  // reads, whatever else that base holds, and a base without one block reads nothing.
+  const note = `${sealedSource}\n// another note\n`;
+  assert.deepEqual(parseFrozenList(note, note), [...FROZEN_EXPORTS]);
+  assert.equal(parseFrozenList(sealedSource, "no block here"), null);
+  assert.equal(parseFrozenList(sealedSource, null), null);
 });
 
 const refreshPr = (overrides = {}) => ({
@@ -309,7 +331,7 @@ test("pull_request: the API's head sha must be the event's, and a null head.repo
   await assert.rejects(guard({ eventName: "push", payload: {} }, scenario()), /unexpected event/);
 });
 
-test("pull_request: a changed FROZEN_EXPORTS counts as a frozen change; other sealed-export edits do not", async () => {
+test("pull_request: a changed FROZEN_EXPORTS, or any edit beside it, counts as a frozen change", async () => {
   const contents = (source) => ({
     [`repos/${REPO}/contents/${SEALED_EXPORT}?ref=${sha("a")}`]: {
       encoding: "base64",
@@ -321,7 +343,12 @@ test("pull_request: a changed FROZEN_EXPORTS counts as a frozen change; other se
   const pr = ordinary();
   const run = (source, list = edit) =>
     guard(pullRequestEvent(pr), { ...scenario({ pr, list }), ...contents(source) });
-  assert.deepEqual((await run(`${sealedSource}\n// another edit\n`)).touched, []);
+  // Outside the entries block nothing may change, so even a harmless edit fails closed.
+  assert.deepEqual((await run(`${sealedSource}\n// another edit\n`)).touched, [
+    `${SEALED_EXPORT} (FROZEN_EXPORTS)`,
+  ]);
+  // Touching the file without changing it (a mode change, say) is no change of the list.
+  assert.deepEqual((await run(sealedSource)).touched, []);
   assert.deepEqual((await run(dropped)).touched, [`${SEALED_EXPORT} (FROZEN_EXPORTS)`]);
   assert.equal((await run("garbage")).ok, false);
   const removed = [{ filename: SEALED_EXPORT, status: "removed" }];

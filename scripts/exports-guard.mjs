@@ -33,36 +33,35 @@ const BASE_SEALED_EXPORT = fs.readFileSync(
   fileURLToPath(new URL("./lib/sealed-export.mjs", import.meta.url)),
   "utf8",
 );
-// Tokens whose count in the head's file must match the base's, so a decoy declaration, a second
-// definition or a reassigned Object.freeze can't stand beside the list this parse reads.
-const COUNTED_TOKENS = ["FROZEN_EXPORTS", "GENERATED", "freeze"];
-const tokenCount = (source, token) =>
-  (source.match(new RegExp(`\\b${token}\\b`, "g")) ?? []).length;
+// The FROZEN_EXPORTS declaration; its group is the entries block, everything between `([` and `]);`.
+const DECLARATION = /^export const FROZEN_EXPORTS = Object\.freeze\(\[\n([^\]]*)\]\);$/gm;
 
-// FROZEN_EXPORTS as the head commit's sealed-export.mjs writes it, read without running it: one
-// `const GENERATED = "<path>";` and one `export const FROZEN_EXPORTS = Object.freeze([...]);` whose
-// entries are each a plain double-quoted string or `${GENERATED}/<path>`. Anything else is null,
-// which the guard counts as a changed list. It fails closed on anything that could hide the real
-// declaration: a block comment (a `*/`, or a `/*` outside a line comment), a line that starts with a
-// backtick (inside a template literal), or a count of FROZEN_EXPORTS, GENERATED or freeze tokens that
-// differs from the base's file. So a PR that adds such a token to sealed-export.mjs takes the
-// refresh route's hand path, and the guard self-edit round checks the list's runtime value.
-export function parseFrozenList(source, baseSource = BASE_SEALED_EXPORT) {
+// A file with its one entries block cut out: {entries, rest}, or null unless there is exactly one.
+function cutEntries(source) {
   if (typeof source !== "string") return null;
-  if (source.includes("*/") || /^(?:(?!\/\/).)*\/\*/m.test(source) || /^`/m.test(source))
-    return null;
-  if (COUNTED_TOKENS.some((token) => tokenCount(source, token) !== tokenCount(baseSource, token)))
-    return null;
-  const generated = [...source.matchAll(/^const GENERATED = "([^"\\$`]*)";$/gm)];
-  const declared = [
-    ...source.matchAll(/^export const FROZEN_EXPORTS = Object\.freeze\(\[\n([^\]]*)\]\);$/gm),
-  ];
-  if (generated.length !== 1 || declared.length !== 1) return null;
-  if ((source.match(/\bGENERATED\s*=/g) ?? []).length !== 1) return null;
-  if ((source.match(/\bFROZEN_EXPORTS\s*=/g) ?? []).length !== 1) return null;
+  const found = [...source.matchAll(DECLARATION)];
+  if (found.length !== 1) return null;
+  const [match, entries] = found[0];
+  const at = found[0].index + match.indexOf("\n") + 1;
+  return { entries, rest: source.slice(0, at) + source.slice(at + entries.length) };
+}
+
+// FROZEN_EXPORTS as the head commit's sealed-export.mjs writes it, read without running it. The head
+// file with its entries block cut out must be byte-identical to the base file with its block cut
+// out, so the only thing a PR can have changed is the block itself: no decoy, comment, template
+// literal, second definition or reassigned Object.freeze can stand beside it. Each entry is then a
+// plain double-quoted string or `${GENERATED}/<path>`, with GENERATED as the (identical) rest
+// declares it. Anything else is null, which the guard counts as a changed list: any edit to
+// sealed-export.mjs outside the entries block takes the refresh route's hand path.
+export function parseFrozenList(source, baseSource = BASE_SEALED_EXPORT) {
+  const head = cutEntries(source);
+  const base = cutEntries(baseSource);
+  if (!head || !base || head.rest !== base.rest) return null;
+  const generated = [...head.rest.matchAll(/^const GENERATED = "([^"\\$`]*)";$/gm)];
+  if (generated.length !== 1) return null;
   const entries = [];
-  for (const line of declared[0][1].split("\n")) {
-    if (!line.trim()) continue;
+  for (const line of head.entries.split("\n")) {
+    if (!line) continue;
     const plain = /^ {2}"([^"\\$`]+)",$/.exec(line);
     const prefixed = /^ {2}`\$\{GENERATED\}\/([^"\\$`]+)`,$/.exec(line);
     if (plain) entries.push(plain[1]);
