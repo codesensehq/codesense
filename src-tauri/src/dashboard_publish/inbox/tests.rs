@@ -567,6 +567,9 @@ pub(crate) fn image(sha: &str, state: &str) -> crate::media::Attachment {
         retryable: false,
         media_provider: None,
         own_sender: false,
+        provider: None,
+        provider_id: None,
+        onload_sent: false,
     }
 }
 
@@ -613,10 +616,49 @@ async fn meta_and_media_fields_are_opt_in_and_hide_the_source() {
     let a = &media_only["attachments"][0];
     assert_eq!(a["sha256"], sha);
     assert_eq!((a["state"].as_str(), a["alt"].as_str()), (Some("cached"), Some("a cat")));
+    assert_eq!(a["attribution"], "giphy", "the attribution provider only");
     let text = media_only.to_string();
-    for leak in ["giphy", "sourceUrl", "sourceHost", "reason", "retryable"] {
+    for leak in PROVIDER_LEAKS.iter().chain(&["reason", "retryable"]) {
         assert!(!text.contains(leak), "{leak} leaked");
     }
+}
+
+/// What the hosted projection never carries about provider media: its URL, host or id, or
+/// its view-ping state.
+const PROVIDER_LEAKS: &[&str] = &[
+    "giphy.com",
+    "klipy.com",
+    "https://",
+    "sourceUrl",
+    "sourceHost",
+    "providerId",
+    "onloadSent",
+];
+
+#[test]
+fn the_projection_carries_the_attribution_provider_in_every_state_and_nothing_else() {
+    use crate::media::MediaProvider;
+    for state in ["cached", "pending", "blocked", "failed"] {
+        let mut tagged = image(&"a".repeat(64), state);
+        tagged.provider = Some(MediaProvider::Giphy);
+        tagged.provider_id = Some("abc123".into());
+        tagged.onload_sent = true;
+        let out = media::projected(&tagged);
+        assert_eq!(out["attribution"], "giphy", "{state}");
+        let text = out.to_string();
+        for leak in PROVIDER_LEAKS.iter().chain(&["abc123"]) {
+            assert!(!text.contains(leak), "{state}: {leak} leaked");
+        }
+    }
+    // A plain URL redirected to KLIPY: the final host decides.
+    let mut redirected = image(&"b".repeat(64), "cached");
+    redirected.source_url = Some("https://example.com/a.gif".into());
+    redirected.source_host = Some("example.com".into());
+    redirected.media_provider = Some(MediaProvider::Klipy);
+    assert_eq!(media::projected(&redirected)["attribution"], "klipy");
+    // Other media carries none.
+    redirected.media_provider = Some(MediaProvider::None);
+    assert!(media::projected(&redirected).get("attribution").is_none());
 }
 
 #[tokio::test]
@@ -795,6 +837,12 @@ async fn hosted_media_refetches_a_memory_only_sha_once_and_only_after_authorizin
     }
     assert!(fetch.calls().is_empty(), "nothing is fetched before the attachment is confirmed");
 
+    // Every chunk, at every offset, is a serve the serve hook hears (the provider view pings).
+    let served = Arc::new(AtomicUsize::new(0));
+    let count = served.clone();
+    state.when_served(Arc::new(move |_: &str| {
+        count.fetch_add(1, Ordering::SeqCst);
+    }));
     // Every chunk of one render within the no-store pin shares one fetch.
     let (mut got, mut asks) = (Vec::new(), 0);
     loop {
@@ -809,6 +857,7 @@ async fn hosted_media_refetches_a_memory_only_sha_once_and_only_after_authorizin
     }
     assert_eq!(got, bytes);
     assert!(asks >= 3);
+    assert_eq!(served.load(Ordering::SeqCst), asks, "chunks at a non-zero offset included");
     assert_eq!(fetch.calls(), vec![url.to_string()]);
     assert!(!host.dir.path().join("media-cache").join(&sha).exists());
 }
@@ -925,7 +974,8 @@ async fn inbox_stream_gates_meta_and_media_and_redacts_their_free_text() {
     let text = media_row.to_string();
     assert!(!text.contains("ghp_abcdefghijklmnopqrstuvwxyz0123"), "{text}");
     assert!(text.contains("[redacted]"), "{text}");
-    for leak in ["giphy", "sourceUrl", "reason"] {
+    assert_eq!(media_row["attachments"][0]["attribution"], "giphy");
+    for leak in PROVIDER_LEAKS.iter().chain(&["reason"]) {
         assert!(!text.contains(leak), "{leak} leaked");
     }
 }

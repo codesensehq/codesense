@@ -142,6 +142,11 @@ function GifSearchCard({ shown }: { shown: ReadonlySet<string> }) {
           Agents can search GIPHY for a GIF to send with a message. Each search goes from this
           computer straight to GIPHY with your key.
         </p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          While GIF search is on, GIPHY gets its required send and view pings for the GIFs agents
+          send, with an install id GIPHY issues. Turning GIF search off or removing the key stops
+          the pings and deletes the id; replacing the key gives the new key a new id.
+        </p>
         {error && (
           <p role="alert" className="mt-2 text-sm text-destructive">
             {error}

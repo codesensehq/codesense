@@ -164,11 +164,12 @@ describe("MessageBody image attachments", () => {
     expect((load as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it("pending with reason off: says media is off", () => {
+  it("pending with reason off: says media is off, with no Load", () => {
     render(<MessageBody m={withMedia(image({ state: "pending", reason: "off" }))} />);
     expect(screen.getByTestId("ibx-media-card").textContent).toContain(
       `GIF · media is off in ${team.team}'s team config`,
     );
+    expect(screen.queryByRole("button", { name: /Load/ })).toBeNull();
   });
 
   it("blocked: says media is off and links its source, with no Load", () => {
@@ -206,6 +207,54 @@ describe("MessageBody image attachments", () => {
     expect(screen.getByTestId("ibx-media-card").textContent).toContain(
       "Couldn't load this GIF. The source now serves a different image.",
     );
+  });
+});
+
+describe("MessageBody provider attribution", () => {
+  const giphy = { sourceUrl: "https://media.giphy.com/a.gif", sourceHost: "media.giphy.com" };
+  const caption = () => screen.queryByText("Powered by GIPHY");
+
+  it("shows Powered by GIPHY under a GIPHY image in every state", async () => {
+    for (const state of ["cached", "pending", "blocked", "failed"] as const) {
+      const { unmount } = render(<MessageBody m={withMedia(image({ ...giphy, state }))} />);
+      expect(caption(), state).toBeTruthy();
+      unmount();
+    }
+  });
+
+  it("follows the claim, then the final host, then the URL's host", () => {
+    const cases: [Partial<InboxMediaAttachment>, boolean][] = [
+      // Redirected to GIPHY from a plain URL: the final host decides.
+      [{ mediaProvider: "giphy" }, true],
+      // A GIPHY URL redirected off GIPHY.
+      [{ ...giphy, mediaProvider: "none" }, false],
+      // An old message, no mediaProvider: the URL's host.
+      [{ ...giphy }, true],
+      // The sender's claim.
+      [{ provider: "giphy", providerId: "abc", mediaProvider: "giphy" }, true],
+      [{ sourceHost: "giphy.com.evil.test" }, false],
+      [{}, false],
+    ];
+    for (const [over, shown] of cases) {
+      const { unmount } = render(<MessageBody m={withMedia(image(over))} />);
+      expect(!!caption(), JSON.stringify(over)).toBe(shown);
+      unmount();
+    }
+  });
+
+  it("names KLIPY in the lightbox source line, with no caption under the image", async () => {
+    render(
+      <MessageBody
+        m={withMedia(
+          image({ sourceUrl: "https://static.klipy.com/a.gif", sourceHost: "static.klipy.com" }),
+        )}
+      />,
+    );
+    expect(caption()).toBeNull();
+    await screen.findByAltText("a cat waving");
+    fireEvent.click(screen.getByRole("button", { name: "Open GIF: a cat waving" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain("GIF · 320 × 180 · via KLIPY");
   });
 });
 

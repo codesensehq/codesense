@@ -194,6 +194,12 @@ mod tests {
         let fetch = std::sync::Arc::new(FakeFetch::default());
         let dir = tempfile::tempdir().unwrap();
         let media = MediaState::for_test(dir.path().join("inbox-media"), fetch.clone());
+        // Every serve the route makes reaches the serve hook (the provider view pings).
+        let served = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = served.clone();
+        media.when_served(std::sync::Arc::new(move |_: &str| {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }));
         let config = Config {
             hosts: vec!["*.giphy.com".into(), "example.com".into()],
             ..Config::default()
@@ -214,6 +220,11 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(cache_control(&response), "no-store");
         assert_eq!(fetch.calls(), vec![giphy.to_string()]);
+        assert_eq!(
+            served.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "a re-fetch is a serve"
+        );
 
         // Reached GIPHY through a redirect: its `mediaProvider` is giphy, so `no-store` too.
         let plain = "https://example.com/b.gif";
@@ -257,5 +268,6 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         assert!(!cache_control(&response).contains("no-store"));
         assert!(cache_control(&response).contains("immutable"));
+        assert_eq!(served.load(std::sync::atomic::Ordering::SeqCst), 3);
     }
 }

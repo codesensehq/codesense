@@ -56,6 +56,9 @@ struct Failed {
 
 type Refetch = Shared<BoxFuture<'static, Result<Bytes, Failure>>>;
 
+/// Told the sha of every image [`MediaState::read`] serves, whichever reader asked.
+pub(crate) type ServeHook = Arc<dyn Fn(&str) + Send + Sync>;
+
 /// The longest any reader waits for the startup index, counted from install: after
 /// that, reads decide without it.
 pub(crate) const READY_WAIT: Duration = Duration::from_secs(10);
@@ -73,6 +76,8 @@ pub(crate) struct MediaState {
     /// Teams being indexed on their first sighting, so concurrent readers share one scan.
     #[allow(clippy::type_complexity)]
     indexing: Mutex<HashMap<(String, String), Arc<tokio::sync::OnceCell<()>>>>,
+    /// Told each serve, once set (the provider view pings).
+    on_served: std::sync::OnceLock<ServeHook>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -92,7 +97,14 @@ impl MediaState {
             ready: tokio::sync::watch::channel(false).0,
             started: tokio::time::Instant::now(),
             indexing: Mutex::default(),
+            on_served: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Tell `hook` the sha of every image a reader is served. Set once; later calls change
+    /// nothing.
+    pub(crate) fn when_served(&self, hook: ServeHook) {
+        let _ = self.on_served.set(hook);
     }
 
     #[cfg(test)]
@@ -259,7 +271,9 @@ impl MediaState {
     }
 
     /// The bytes of a confirmed `attachment` for a reader under `config`: memory, then
-    /// the disk cache (not for a memory-only sha), then an admitted re-fetch.
+    /// the disk cache (not for a memory-only sha), then an admitted re-fetch. Every reader
+    /// comes through here (the media route, hosted chunks at any offset, the app window),
+    /// so a serve is told to the serve hook here and nowhere else.
     pub(crate) async fn read(
         self: &Arc<Self>,
         config: &Config,
@@ -268,7 +282,11 @@ impl MediaState {
         let sha = attachment.sha256.as_deref().ok_or("media unavailable")?;
         self.ready().await;
         let source = Result::ok(self.admission(config, sha));
-        self.fetch_or_cached(sha, Some(attachment), source).await
+        let bytes = self.fetch_or_cached(sha, Some(attachment), source).await?;
+        if let Some(hook) = self.on_served.get() {
+            hook(sha);
+        }
+        Ok(bytes)
     }
 
     /// The bytes of `sha`: from memory, then (only for a sha that is not memory-only)
@@ -382,6 +400,16 @@ impl MediaState {
         a.media_provider = Some(MediaProvider::of_host(
             got.final_url.host_str().unwrap_or(""),
         ));
+        if a.provider.is_some() && a.provider != a.media_provider {
+            // A tagged URL redirected off its provider: no pings, and the final host decides
+            // the attribution.
+            log::warn!(
+                "inbox media: a {:?}-tagged GIF ended on another host; its provider tag is dropped",
+                a.provider
+            );
+            a.provider = None;
+            a.provider_id = None;
+        }
         let state = self.clone();
         crate::commands::await_blocking("media.cache", move || {
             let Downloaded {

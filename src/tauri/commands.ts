@@ -1049,6 +1049,12 @@ export interface InboxMediaAttachment {
   state: "cached" | "pending" | "blocked" | "failed";
   reason?: string;
   retryable?: boolean;
+  /** The provider whose host the bytes finally came from; missing on an old message. */
+  mediaProvider?: "giphy" | "klipy" | "none";
+  /** The provider the sender said the GIF came from, with its id. */
+  provider?: "giphy" | "klipy";
+  providerId?: string;
+  onloadSent?: boolean;
 }
 export const loadInboxMedia = (team: InboxTeam, messageId: number) =>
   invoke<void>("load_inbox_media", { team, messageId });

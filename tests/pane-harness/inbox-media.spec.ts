@@ -531,3 +531,59 @@ test("the lightbox image is painted inside its figure", async ({ mountPane }) =>
   expect(image.bottom).toBeLessThanOrEqual(figure.bottom + 1);
   expect(image.height).toBeGreaterThan(0);
 });
+
+for (const state of ["cached", "pending", "blocked", "failed"] as const) {
+  test(`a ${state} GIPHY image shows Powered by GIPHY under it`, async ({ mountPane }) => {
+    const pane = await mountPane(INBOX_PANE, fixtures(media(state)));
+    await servePixel(pane.page);
+    await pane.frame.locator(".ib-row").first().click();
+    await expect(pane.frame.locator(".ib-msg .bd .ib-media-attr")).toHaveText("Powered by GIPHY");
+  });
+}
+
+test("attribution follows the claim, then the final host, then the URL's host", async ({
+  mountPane,
+}) => {
+  const plain = { sourceUrl: "https://cdn.example/cat.gif", sourceHost: "cdn.example" };
+  const cases: [Partial<InboxMediaAttachment>, number][] = [
+    [{ ...plain, mediaProvider: "giphy" }, 1],
+    [{ mediaProvider: "none" }, 0],
+    [{ provider: "giphy", providerId: "abc", mediaProvider: "giphy" }, 1],
+    [plain, 0],
+  ];
+  for (const [extra, shown] of cases) {
+    const pane = await mountPane(INBOX_PANE, fixtures(media("cached", extra)));
+    await servePixel(pane.page);
+    await pane.frame.locator(".ib-row").first().click();
+    await expect(pane.frame.locator(".ib-media")).toBeVisible();
+    await expect(pane.frame.locator(".ib-media-attr"), JSON.stringify(extra)).toHaveCount(shown);
+  }
+});
+
+test("a KLIPY image names KLIPY in the lightbox source line", async ({ mountPane }) => {
+  const klipy = { sourceUrl: "https://static.klipy.com/cat.gif", sourceHost: "static.klipy.com" };
+  const pane = await mountPane(INBOX_PANE, fixtures(media("cached", klipy)));
+  await servePixel(pane.page);
+  await pane.frame.locator(".ib-row").first().click();
+  await expect(pane.frame.locator(".ib-media-attr")).toHaveCount(0);
+  await pane.frame.getByRole("button", { name: "Open GIF: A cat types very fast" }).click();
+  await expect(pane.frame.locator(".ib-lb-foot .row2")).toContainText(
+    "GIF · 480 × 270 · via KLIPY",
+  );
+});
+
+test("pending with reason off says media is off and offers no Load", async ({ mountPane }) => {
+  const pane = await mountPane(INBOX_PANE, fixtures(media("pending", { reason: "off" })));
+  await pane.frame.locator(".ib-row").first().click();
+  const card = pane.frame.locator(".ib-media-card");
+  await expect(card).toContainText("GIF · media is off in dev's team config");
+  await expect(card.getByRole("button")).toHaveCount(0);
+});
+
+test("a re-fetch that changed names the change", async ({ mountPane }) => {
+  const pane = await mountPane(INBOX_PANE, fixtures(media("failed", { reason: "changed" })));
+  await pane.frame.locator(".ib-row").first().click();
+  await expect(pane.frame.locator(".ib-media-card")).toContainText(
+    "Couldn't load this GIF. The source now serves a different image.",
+  );
+});
