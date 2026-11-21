@@ -541,6 +541,7 @@ fn launch_profile(agent: &Agent, key: &AgentKey) -> ResolvedLaunchProfile {
                 )
             })
             .collect(),
+        production_declared: agent.mcp.production.clone(),
         effective_bridge_tools: if projects_bridge_tool_allowlist {
             let always_on = permissions::always_on_bridge_tools(agent.runtime);
             served_bridge_tools()

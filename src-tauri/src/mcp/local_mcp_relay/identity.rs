@@ -30,6 +30,11 @@ impl Identity {
         })
     }
 
+    /// The session this launch belongs to.
+    pub(super) fn session(&self) -> &str {
+        &self.session
+    }
+
     pub(super) fn ingress(&self, caller: PeerProcess) -> bool {
         crate::commands::mcp_scope::relay_ingress_proven(&self.session, caller)
     }

@@ -11,7 +11,13 @@ pub(crate) fn start(
     mut grant: Grant,
     aliases: std::collections::BTreeMap<String, String>,
     validate: Arc<dyn Fn() -> Result<(), String> + Send + Sync>,
+    production: Option<super::production::ProductionSet>,
 ) -> Result<Descriptor, String> {
+    if let Some(set) = &production {
+        if set.names().iter().any(|name| grant.contains_key(name)) {
+            return Err("a production MCP server name collides with a selected server".into());
+        }
+    }
     use std::os::unix::fs::PermissionsExt;
     validate()?;
     static LAUNCHES: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
@@ -69,6 +75,7 @@ pub(crate) fn start(
         let slots = Arc::new(tokio::sync::Semaphore::new(32));
         let grant = Arc::new(grant);
         let aliases = Arc::new(aliases);
+        let production = Arc::new(production);
         let mut tick = tokio::time::interval(Duration::from_millis(250));
         loop {
             tokio::select! {
@@ -81,9 +88,10 @@ pub(crate) fn start(
                     let aliases = aliases.clone();
                     let validate = validate.clone();
                     let identity = identity.clone();
+                    let production = production.clone();
                     tokio::spawn(async move {
                         let _permit = permit;
-                        let _ = serve_connection(stream, &capability, grant, aliases, validate, identity).await;
+                        let _ = serve_connection(stream, &capability, grant, aliases, validate, identity, production).await;
                     });
                 }
             }
@@ -100,8 +108,9 @@ async fn serve_connection(
     aliases: Arc<std::collections::BTreeMap<String, String>>,
     validate: Arc<dyn Fn() -> Result<(), String> + Send + Sync>,
     identity: Arc<super::identity::Identity>,
+    production: Arc<Option<super::production::ProductionSet>>,
 ) -> Result<(), String> {
-    let (server, canonical, ingress) = tokio::time::timeout(Duration::from_secs(2), async {
+    let (route, canonical) = tokio::time::timeout(Duration::from_secs(2), async {
         let length = stream
             .read_u32()
             .await
@@ -119,6 +128,34 @@ async fn serve_connection(
             return Err("local MCP launch capability rejected");
         }
         validate().map_err(|_| "local MCP launch retired")?;
+        // A production server is reachable only from this session: the kernel
+        // proves the caller descends from the session root before the server is
+        // selected. The proof is carried as its own value, never as a CodeSense
+        // caller identity, so the bridge policy and caller registry stay untouched.
+        if let Some(set) = production
+            .as_ref()
+            .as_ref()
+            .filter(|set| set.entries.contains_key(&hello.server))
+        {
+            let caller = codesense_pty_core::activity::peer::of_socket(&stream)
+                .ok_or("MCP relay ingress has no kernel peer")?;
+            let proof = identity.clone();
+            let verified = tokio::task::spawn_blocking(move || proof.ingress(caller))
+                .await
+                .map_err(|_| "cannot verify MCP relay ingress")?;
+            if !verified {
+                return Err("MCP relay ingress has no verified launch identity");
+            }
+            stream
+                .write_all(&[1])
+                .await
+                .map_err(|_| "relay handshake closed")?;
+            let caller = super::production::ProductionCaller {
+                session: identity.session().to_string(),
+                pid: caller.pid(),
+            };
+            return Ok((Route::Production(set.clone(), caller), hello.server));
+        }
         let server = grant
             .get(&hello.server)
             .cloned()
@@ -141,19 +178,88 @@ async fn serve_connection(
             .write_all(&[1])
             .await
             .map_err(|_| "relay handshake closed")?;
-        Ok((server, hello.server, ingress))
+        Ok((Route::Grant(server, ingress), hello.server))
     })
     .await
     .map_err(|_| "relay handshake timed out")??;
+    let (relay, mut forwarding) = tokio::io::duplex(64 * 1024);
+    let (server, ingress) = match route {
+        Route::Grant(server, ingress) => (server, ingress),
+        Route::Production(set, caller) => {
+            return serve_production(stream, relay, forwarding, set, caller, canonical, validate)
+                .await;
+        }
+    };
     let valid: Validate = Arc::new(move || {
         let result = validate();
         Box::pin(async move { result })
     });
-    let (relay, mut forwarding) = tokio::io::duplex(64 * 1024);
     let note = aliases.get(&canonical).map(|alias| format!(
         "CodeSense selected MCP server '{canonical}' is exposed in namespace '{alias}'. References to mcp__{canonical}__<tool> mean mcp__{alias}__<tool> in this launch. Use the exposed tools; original tool restrictions still apply."
     ));
     let serve = super::transport::serve_with_namespace(server, relay, valid, note, ingress);
+    let copy = tokio::io::copy_bidirectional(&mut stream, &mut forwarding);
+    tokio::select! { _ = serve => {}, _ = copy => {} }
+    Ok(())
+}
+
+/// Where one accepted connection goes.
+enum Route {
+    Grant(
+        super::config::Server,
+        Option<(
+            Arc<super::identity::Identity>,
+            codesense_pty_core::activity::peer::PeerProcess,
+        )>,
+    ),
+    Production(
+        super::production::ProductionSet,
+        super::production::ProductionCaller,
+    ),
+}
+
+/// One production connection: the binding read fresh and checked against what
+/// the launch captured, then served until the launch retires or the ref's
+/// binding generation changes (a remove or re-bind), which closes only this
+/// connection.
+async fn serve_production(
+    mut stream: tokio::net::UnixStream,
+    relay: tokio::io::DuplexStream,
+    mut forwarding: tokio::io::DuplexStream,
+    set: super::production::ProductionSet,
+    caller: super::production::ProductionCaller,
+    server: String,
+    validate: Arc<dyn Fn() -> Result<(), String> + Send + Sync>,
+) -> Result<(), String> {
+    let name = server.clone();
+    let connector = set.clone();
+    let connection = tokio::task::spawn_blocking(move || connector.connect(&name))
+        .await
+        .map_err(|_| "cannot read the production MCP binding")??;
+    let bindings = set.bindings.clone();
+    let reference = connection.reference.clone();
+    let generation = connection.generation;
+    let valid: Validate = Arc::new(move || {
+        let result = validate().and_then(|()| {
+            if bindings.generation(&reference) == generation {
+                Ok(())
+            } else {
+                Err("production MCP binding changed".to_string())
+            }
+        });
+        Box::pin(async move { result })
+    });
+    let Some(dir) = super::call_log::default_dir() else {
+        return Err("production MCP call log has no home".into());
+    };
+    let log = super::call_log::CallContext {
+        agent: set.agent_id.clone(),
+        session: caller.session,
+        server,
+        dir,
+        story: Arc::new(super::call_log::recorded_story),
+    };
+    let serve = super::transport::serve_production(connection, relay, valid, log);
     let copy = tokio::io::copy_bidirectional(&mut stream, &mut forwarding);
     tokio::select! { _ = serve => {}, _ = copy => {} }
     Ok(())
@@ -209,6 +315,7 @@ mod tests {
                     Err("retired".into())
                 }
             }),
+            None,
         )
         .unwrap();
         wire::write_descriptor(&scope.path().join("local-relay.json"), &descriptor).unwrap();
@@ -269,7 +376,7 @@ for line in sys.stdin:
                 }
             })
         };
-        let descriptor = start(root.path(), grant, Default::default(), validate).unwrap();
+        let descriptor = start(root.path(), grant, Default::default(), validate, None).unwrap();
         crate::commands::mcp_scope::bind_fixture_relay_root(
             root.path().file_name().unwrap().to_str().unwrap(),
             codesense_pty_core::activity::peer::inspect(std::process::id()).unwrap(),

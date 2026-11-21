@@ -393,6 +393,10 @@ pub struct ResolvedLaunchProfile {
     /// The agent's declared production MCP servers, each with its pending state.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub production: Vec<super::production::ProductionLaunchEntry>,
+    /// The declaration itself, which only a saved-agent launch hands its relay.
+    /// Never crosses to the webview.
+    #[serde(skip)]
+    pub production_declared: Vec<super::production::ProductionServer>,
     /// Registered bridge tools this launch can call, after the restriction.
     pub effective_bridge_tools: Vec<String>,
     /// The agent's `skill_allowlist`, where the runtime enforces one: every other skill
@@ -444,6 +448,7 @@ impl ResolvedLaunchProfile {
             mcp_allow: Some(mcp_allow),
             bridge_tools: None,
             production: Vec::new(),
+            production_declared: Vec::new(),
             effective_bridge_tools: Vec::new(),
             skill_allowlist: None,
             mode,

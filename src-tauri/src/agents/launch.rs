@@ -1076,7 +1076,19 @@ pub(crate) fn project_and_apply_for_cli(
     if let Some(selected) = &mut selected_cli {
         selected.runtime = Some(launch.runtime);
     }
-    let (mut scope, creation) = mcp_scope::project_scope_for_cli(
+    // Only this saved-agent launch hands its relay production servers: the
+    // canonical agent id and the declaration it resolved, held in memory.
+    let production = if launch.launch.production_declared.is_empty() {
+        None
+    } else {
+        Some(mcp_scope::ProductionLaunch {
+            agent_id: launch.launch.id.clone(),
+            entries: launch.launch.production_declared.clone(),
+            bindings: crate::mcp::local_mcp_relay::production::installed()
+                .ok_or("production MCP credentials are unavailable")?,
+        })
+    };
+    let (mut scope, creation) = mcp_scope::project_scope_for_launch(
         session_id,
         cwd,
         &allow,
@@ -1095,6 +1107,7 @@ pub(crate) fn project_and_apply_for_cli(
         canonical_base.as_ref(),
         selected_cli.as_ref(),
         &quote_path,
+        production.as_ref(),
     )?;
     let mut preparation = || {
         if let Some(seed) = super::adapter::desktop(launch.runtime).seed_home {

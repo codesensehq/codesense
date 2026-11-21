@@ -113,6 +113,199 @@ async fn unknown_outcome<W: tokio::io::AsyncWrite + Unpin>(
     write_message(writer, &rpc_error(id, -32000, UNKNOWN_OUTCOME)).await
 }
 
+/// The methods a production server ever receives from the CLI.
+const PRODUCTION_METHODS: [&str; 6] = [
+    "initialize",
+    "notifications/initialized",
+    "notifications/cancelled",
+    "ping",
+    "tools/list",
+    "tools/call",
+];
+
+/// What the relay enforces on one production connection: tools are callable
+/// only when the server marks them read-only (and not destructive) or they are
+/// in the effective `write`, from a `tools/list` the relay sends itself; only
+/// the allowlisted methods pass; every call and refused method is logged.
+pub(super) struct ProductionPolicy {
+    pub(super) write: std::collections::BTreeSet<String>,
+    pub(super) log: super::call_log::CallContext,
+}
+
+/// The relay's own state for one production connection.
+struct ProductionState {
+    policy: ProductionPolicy,
+    /// The permitted tools; `None` until the relay's own list is complete, and
+    /// again after a reconnect, a `list_changed` or a failed listing.
+    permitted: Option<std::collections::BTreeSet<String>>,
+    /// The relay's listing in flight: its request id and when it started.
+    listing: Option<(String, tokio::time::Instant)>,
+    collected: std::collections::BTreeSet<String>,
+    /// Forwarded `tools/call` ids and their tool names, for the log.
+    calls: BTreeMap<String, String>,
+}
+
+/// What the relay does with one client message to a production server.
+enum Admit {
+    Forward,
+    Answer(Value),
+    Drop,
+}
+
+/// Whether one `tools/list` entry is callable under `write`.
+fn production_callable<'a>(
+    tool: &'a Value,
+    write: &std::collections::BTreeSet<String>,
+) -> Option<&'a str> {
+    let name = tool.get("name").and_then(Value::as_str)?;
+    let hint = |key: &str| tool.pointer(&format!("/annotations/{key}")) == Some(&Value::Bool(true));
+    ((hint("readOnlyHint") && !hint("destructiveHint")) || write.contains(name)).then_some(name)
+}
+
+impl ProductionState {
+    fn new(policy: ProductionPolicy) -> Self {
+        Self {
+            policy,
+            permitted: None,
+            listing: None,
+            collected: Default::default(),
+            calls: BTreeMap::new(),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.permitted = None;
+        self.listing = None;
+        self.collected.clear();
+    }
+
+    fn admit(&mut self, message: &Value) -> Admit {
+        let id = message.get("id").cloned();
+        let Some(method) = message.get("method").and_then(Value::as_str) else {
+            // A reply to a server request: the relay already answered those.
+            return Admit::Drop;
+        };
+        let empty = match method {
+            "resources/list" => Some("resources"),
+            "resources/templates/list" => Some("resourceTemplates"),
+            "prompts/list" => Some("prompts"),
+            _ => None,
+        };
+        if let Some(field) = empty {
+            return match id {
+                Some(id) => {
+                    let mut result = serde_json::Map::new();
+                    result.insert(field.into(), Value::Array(Vec::new()));
+                    Admit::Answer(serde_json::json!({"jsonrpc":"2.0","id":id,"result":result}))
+                }
+                None => Admit::Drop,
+            };
+        }
+        if !PRODUCTION_METHODS.contains(&method) {
+            self.policy
+                .log
+                .record(method, None, super::call_log::Outcome::Refused);
+            return match id {
+                Some(id) => Admit::Answer(rpc_error(
+                    id,
+                    -32601,
+                    &format!("method {method} is not allowed on a production MCP server"),
+                )),
+                None => Admit::Drop,
+            };
+        }
+        if method != "tools/call" {
+            return Admit::Forward;
+        }
+        let name = message
+            .pointer("/params/name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let refusal = match &self.permitted {
+            None => Some((
+                -32002,
+                "production MCP tools are still being listed; retry shortly".to_string(),
+            )),
+            Some(permitted) if !permitted.contains(&name) => Some((
+                -32602,
+                format!("tool {name} is not read-only on this production MCP server and not in its write list"),
+            )),
+            Some(_) => None,
+        };
+        if let Some((code, text)) = refusal {
+            self.policy
+                .log
+                .record(method, Some(&name), super::call_log::Outcome::Refused);
+            return match id {
+                Some(id) => Admit::Answer(rpc_error(id, code, &text)),
+                None => Admit::Drop,
+            };
+        }
+        if let Some(id) = key(message) {
+            self.calls.insert(id, name);
+        }
+        Admit::Forward
+    }
+
+    /// Logs a forwarded call's reply (or the relay's unknown-outcome answer).
+    fn settle(&mut self, reply: &Value) {
+        let Some(tool) = key(reply).and_then(|id| self.calls.remove(&id)) else {
+            return;
+        };
+        let failed = reply.get("error").is_some()
+            || reply.pointer("/result/isError") == Some(&Value::Bool(true));
+        let outcome = if failed {
+            super::call_log::Outcome::Error
+        } else {
+            super::call_log::Outcome::Ok
+        };
+        self.policy.log.record("tools/call", Some(&tool), outcome);
+    }
+
+    /// The relay's own `tools/list` request for the page after `cursor`.
+    fn list_request(&mut self, cursor: Option<&str>) -> Value {
+        let id = Value::String(format!("relay-tools-{}", uuid::Uuid::new_v4()));
+        self.listing = Some((id.to_string(), tokio::time::Instant::now()));
+        let params = match cursor {
+            Some(cursor) => serde_json::json!({ "cursor": cursor }),
+            None => serde_json::json!({}),
+        };
+        serde_json::json!({"jsonrpc":"2.0","id":id,"method":"tools/list","params":params})
+    }
+
+    /// Takes one page of the relay's own listing. Returns the next request, if
+    /// the server has another page.
+    fn listed(&mut self, reply: &Value) -> Option<Value> {
+        if reply.get("error").is_some() {
+            self.reset();
+            return None;
+        }
+        if let Some(tools) = reply.pointer("/result/tools").and_then(Value::as_array) {
+            for tool in tools {
+                if let Some(name) = production_callable(tool, &self.policy.write) {
+                    self.collected.insert(name.to_string());
+                }
+            }
+        }
+        match reply
+            .pointer("/result/nextCursor")
+            .and_then(Value::as_str)
+            .filter(|cursor| !cursor.is_empty())
+        {
+            Some(cursor) => {
+                let cursor = cursor.to_string();
+                Some(self.list_request(Some(cursor.as_str())))
+            }
+            None => {
+                self.listing = None;
+                self.permitted = Some(std::mem::take(&mut self.collected));
+                None
+            }
+        }
+    }
+}
+
 async fn pump<T, F, Fut>(
     server: &Server,
     stream: tokio::io::DuplexStream,
@@ -121,6 +314,7 @@ async fn pump<T, F, Fut>(
     failures: Failures,
     namespace_note: Option<&str>,
     codesense_bridge: bool,
+    production: Option<ProductionPolicy>,
 ) -> Result<(), String>
 where
     T: Transport<RoleClient>,
@@ -145,6 +339,7 @@ where
     let mut initialize: Option<Value> = None;
     let mut handshake: Option<(String, tokio::time::Instant)> = None;
     let mut reconnecting = false;
+    let mut production = production.map(ProductionState::new);
     let work = async {
         // Architecture: create the initial downstream before consuming the client's initialize.
         match tokio::time::timeout(CONNECT_TIMEOUT, connect(cancel.clone())).await {
@@ -173,7 +368,8 @@ where
                     // no new work is admitted until close/drop has canceled all of it.
                     // The upstream session stays open and mutations are never replayed.
                     let retire_http = !expired.is_empty() && matches!(&server.endpoint, Endpoint::Http { .. });
-                    for id in expired { pending.remove(&id); unknown_outcome(&mut writer,serde_json::from_str(&id).map_err(|_|"invalid MCP id")?).await?; }
+                    if let Some(state)=production.as_mut() { if state.listing.as_ref().is_some_and(|(_,at)|at.elapsed()>=CONNECT_TIMEOUT) { state.reset(); } }
+                    for id in expired { pending.remove(&id); let id:Value=serde_json::from_str(&id).map_err(|_|"invalid MCP id")?; if let Some(state)=production.as_mut(){state.settle(&rpc_error(id.clone(),-32000,UNKNOWN_OUTCOME));} unknown_outcome(&mut writer,id).await?; }
                     retire_http || handshake.as_ref().is_some_and(|(_,at)|at.elapsed()>=CONNECT_TIMEOUT)
                 }
                 _=tokio::time::sleep_until(retry_at),if transport.is_none()=>{
@@ -205,6 +401,13 @@ where
                 Some(result)=sends.next(),if !sends.is_empty()=>{result.is_err()}
                 message=rx.recv(),if sends.len()<REQUESTS=>{
                     let Some(message)=message else{return Ok(());};valid().await?;
+                    if let Some(state)=production.as_mut() {
+                        match state.admit(&message) {
+                            Admit::Forward => {}
+                            Admit::Answer(reply) => {write_message(&mut writer,&reply).await?; continue;}
+                            Admit::Drop => continue,
+                        }
+                    }
                     let id=key(&message);let method=message.get("method").and_then(Value::as_str);
                     if method==Some("tools/call") && !message.pointer("/params/name").and_then(Value::as_str).is_some_and(|name|
                         permitted(server,name) && (!codesense_bridge || name != "codesense_call_tool" ||
@@ -214,7 +417,10 @@ where
                     }
                     // Architecture: while disconnected/initializing, refuse new work without replaying it later.
                     if transport.is_none() || reconnecting {
-                        if method.is_some() {if let Some(id)=message.get("id"){unknown_outcome(&mut writer,id.clone()).await?;}}
+                        if method.is_some() {if let Some(id)=message.get("id"){
+                            if let Some(state)=production.as_mut(){state.settle(&rpc_error(id.clone(),-32000,UNKNOWN_OUTCOME));}
+                            unknown_outcome(&mut writer,id.clone()).await?;
+                        }}
                         continue;
                     }
                     if method==Some("initialize") {initialize=Some(message.clone());}
@@ -234,27 +440,71 @@ where
                         if pending.len()>=REQUESTS || pending.contains_key(&id){return Err("MCP request budget exceeded".into());}
                         pending.insert(id,(method.into(),tokio::time::Instant::now()));
                     }
+                    let initialized=method==Some("notifications/initialized");
                     let typed:ClientJsonRpcMessage=serde_json::from_value(message).map_err(|_|"unsupported MCP client message")?;
                     let sending=transport.as_mut().unwrap().send(typed);
                     // A canceled send may leave a partial frame; retire it just like a send error.
                     sends.push(Box::pin(async move {match tokio::time::timeout(DEADLINE,sending).await { Ok(Ok(()))=>Ok(()), _=>Err("MCP request outcome unknown".to_string()) }}));
+                    // After the CLI's initialize completes, the relay lists the tools itself.
+                    if let (true,Some(state))=(initialized,production.as_mut()) {
+                        state.reset();
+                        let request=state.list_request(None);
+                        let sending=transport.as_mut().unwrap().send(serde_json::from_value(request).map_err(|_|"invalid MCP request")?);
+                        sends.push(Box::pin(async move {tokio::time::timeout(CONNECT_TIMEOUT,sending).await.map_err(|_|"MCP tool listing timed out".to_string())?.map_err(|_|"MCP tool listing failed".to_string())}));
+                    }
                     false
                 }
                 message=async {match transport.as_mut(){Some(t)=>t.receive().await,None=>std::future::pending().await}}=>{
                     valid().await?;
                     if let Some(message)=message {
                         let mut value=serde_json::to_value(message).map_err(|_|"invalid MCP response")?;
+                        if let (Some(state),Some(method))=(production.as_mut(),value.get("method").and_then(Value::as_str).map(str::to_owned)) {
+                            if let Some(id)=value.get("id").cloned() {
+                                // A production server makes no requests of the CLI.
+                                let refusal=rpc_error(id,-32601,"a production MCP server cannot make requests");
+                                let sending=transport.as_mut().unwrap().send(serde_json::from_value(refusal).map_err(|_|"invalid MCP response")?);
+                                sends.push(Box::pin(async move {tokio::time::timeout(DEADLINE,sending).await.map_err(|_|"MCP send timed out".to_string())?.map_err(|_|"MCP send failed".to_string())}));
+                                continue;
+                            }
+                            if method!="notifications/tools/list_changed" {continue;}
+                            state.reset();
+                            if !reconnecting {
+                                let request=state.list_request(None);
+                                let sending=transport.as_mut().unwrap().send(serde_json::from_value(request).map_err(|_|"invalid MCP request")?);
+                                sends.push(Box::pin(async move {tokio::time::timeout(CONNECT_TIMEOUT,sending).await.map_err(|_|"MCP tool listing timed out".to_string())?.map_err(|_|"MCP tool listing failed".to_string())}));
+                            }
+                        }
                         if value.get("method").is_none(){
                             if handshake.as_ref().is_some_and(|(id,_)|key(&value).as_ref()==Some(id)) {
                                 if value.get("error").is_some(){return Err("MCP reconnect initialization rejected".into());}
                                 handshake=None; reconnecting=false; backoff=RETRY_MIN;
                                 let sending=transport.as_mut().unwrap().send(serde_json::from_value(serde_json::json!({"jsonrpc":"2.0","method":"notifications/initialized"})).unwrap());
                                 sends.push(Box::pin(async move {sending.await.map_err(|_|"MCP reconnect failed".to_string())}));
+                                // The relay rebuilds the permitted set itself; the CLI never re-lists.
+                                if let Some(state)=production.as_mut() {
+                                    state.reset();
+                                    let request=state.list_request(None);
+                                    let sending=transport.as_mut().unwrap().send(serde_json::from_value(request).map_err(|_|"invalid MCP request")?);
+                                    sends.push(Box::pin(async move {tokio::time::timeout(CONNECT_TIMEOUT,sending).await.map_err(|_|"MCP tool listing timed out".to_string())?.map_err(|_|"MCP tool listing failed".to_string())}));
+                                }
                                 continue;
+                            }
+                            if let Some(state)=production.as_mut() {
+                                if state.listing.as_ref().is_some_and(|(id,_)|key(&value).as_ref()==Some(id)) {
+                                    if let Some(request)=state.listed(&value) {
+                                        let sending=transport.as_mut().unwrap().send(serde_json::from_value(request).map_err(|_|"invalid MCP request")?);
+                                        sends.push(Box::pin(async move {tokio::time::timeout(CONNECT_TIMEOUT,sending).await.map_err(|_|"MCP tool listing timed out".to_string())?.map_err(|_|"MCP tool listing failed".to_string())}));
+                                    }
+                                    continue;
+                                }
                             }
                             let Some((method,_))=key(&value).and_then(|id|pending.remove(&id)) else {continue;};
                             if method=="initialize" {if let Some(note)=namespace_note {prepend_namespace_note(&mut value,note);}}
-                            if method=="tools/list"{if let Some(tools)=value.pointer_mut("/result/tools").and_then(Value::as_array_mut){tools.retain(|tool|tool.get("name").and_then(Value::as_str).is_some_and(|name|permitted(server,name)));}}
+                            if method=="tools/list"{if let Some(tools)=value.pointer_mut("/result/tools").and_then(Value::as_array_mut){
+                                tools.retain(|tool|tool.get("name").and_then(Value::as_str).is_some_and(|name|permitted(server,name)));
+                                if let Some(state)=production.as_ref() {tools.retain(|tool|production_callable(tool,&state.policy.write).is_some());}
+                            }}
+                            if method=="tools/call" {if let Some(state)=production.as_mut(){state.settle(&value);}}
                         }
                         write_message(&mut writer,&value).await?;
                         false
@@ -267,11 +517,14 @@ where
                     return Err("MCP authority or policy failure".into());
                 }
                 for id in std::mem::take(&mut pending).into_keys() {
-                    unknown_outcome(
-                        &mut writer,
-                        serde_json::from_str(&id).map_err(|_| "invalid MCP id")?,
-                    )
-                    .await?;
+                    let id: Value = serde_json::from_str(&id).map_err(|_| "invalid MCP id")?;
+                    if let Some(state) = production.as_mut() {
+                        state.settle(&rpc_error(id.clone(), -32000, UNKNOWN_OUTCOME));
+                    }
+                    unknown_outcome(&mut writer, id).await?;
+                }
+                if let Some(state) = production.as_mut() {
+                    state.reset();
                 }
                 sends.clear();
                 handshake = None;
@@ -506,6 +759,7 @@ pub(super) async fn serve_with_namespace(
                 failures.clone(),
                 namespace_note.as_deref(),
                 codesense_bridge,
+                None,
             )
             .await
         }
@@ -556,10 +810,88 @@ pub(super) async fn serve_with_namespace(
                 failures.clone(),
                 namespace_note.as_deref(),
                 codesense_bridge,
+                None,
             )
             .await
         }
     }
+}
+
+/// Serves one production connection: an HTTPS downstream built from the
+/// person's binding for this connection only, under the production policy. No
+/// process is spawned and no CodeSense caller identity is involved.
+pub(super) async fn serve_production(
+    connection: super::production::Connection,
+    stream: tokio::io::DuplexStream,
+    valid: Validate,
+    log: super::call_log::CallContext,
+) -> Result<(), String> {
+    use rmcp::transport::{
+        streamable_http_client::StreamableHttpClientTransportConfig, StreamableHttpClientTransport,
+    };
+    valid().await?;
+    let failures = Failures::default();
+    let client = reqwest_mcp::Client::builder()
+        .retry(reqwest_mcp::retry::never())
+        .redirect(reqwest_mcp::redirect::Policy::none())
+        .connect_timeout(CONNECT_TIMEOUT)
+        .build()
+        .map_err(|_| "MCP HTTP client unavailable")?;
+    let mut config = StreamableHttpClientTransportConfig::with_uri(connection.url.clone())
+        .reinit_on_expired_session(false);
+    config.channel_buffer_capacity = 4;
+    config.retry_config = Arc::new(rmcp::transport::common::client_side_sse::NeverRetry::default());
+    config.custom_headers = connection
+        .headers
+        .iter()
+        .map(|(name, value)| {
+            Ok((
+                name.parse().map_err(|_| "invalid production MCP header")?,
+                value
+                    .expose()
+                    .parse()
+                    .map_err(|_| "invalid production MCP header")?,
+            ))
+        })
+        .collect::<Result<_, String>>()?;
+    // The pump reads only the endpoint kind and the (empty) static tool policy.
+    let server = Server {
+        endpoint: Endpoint::Http {
+            url: connection.url.clone(),
+            headers: BTreeMap::new(),
+        },
+        enabled_tools: None,
+        disabled_tools: Default::default(),
+    };
+    let connect = |cancel| {
+        let transport = StreamableHttpClientTransport::with_client(
+            super::http::BoundedHttp {
+                client: client.clone(),
+                valid: valid.clone(),
+                cancel,
+                failures: failures.clone(),
+                stream: Default::default(),
+                owns_stream: false,
+            },
+            config.clone(),
+        );
+        std::future::ready(Ok(transport))
+    };
+    let policy = ProductionPolicy {
+        write: connection.write,
+        log,
+    };
+    pump(
+        &server,
+        stream,
+        valid.clone(),
+        connect,
+        failures.clone(),
+        None,
+        false,
+        Some(policy),
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -631,6 +963,7 @@ mod recovery_tests {
                 Failures::default(),
                 None,
                 false,
+                None,
             )
             .await
         });
@@ -723,6 +1056,7 @@ mod recovery_tests {
                 Failures::default(),
                 None,
                 false,
+                None,
             )
             .await
         });
@@ -805,3 +1139,7 @@ mod recovery_tests {
         task.await.unwrap().unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "production_pump_tests.rs"]
+mod production_pump_tests;

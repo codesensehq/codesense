@@ -21,6 +21,7 @@ pub(super) fn project(
     home: Option<&Path>,
     launch: &LaunchCli<'_>,
     quote: &impl Fn(&str) -> String,
+    production: Option<crate::mcp::local_mcp_relay::production::ProductionSet>,
 ) -> Result<(ScopeOutcome, Option<ScopeCreation>), String> {
     let ScopeInjection::EnvDir {
         env_var,
@@ -59,13 +60,32 @@ pub(super) fn project(
     // Check native input stability as well as canonical input. Native profile and
     // -c selectors are carried into BOTH inventories. This is a launch-time guard,
     // not an OS sandbox against concurrent user configuration writers.
-    let aliases = aliases(grant.keys().cloned(), &inherited)?;
+    let production_names = production
+        .as_ref()
+        .map(|set| set.names())
+        .unwrap_or_default();
+    if production_names.iter().any(|name| grant.contains_key(name)) {
+        return Err("a production MCP server name collides with a selected server".into());
+    }
+    let aliases = aliases(
+        grant
+            .keys()
+            .cloned()
+            .chain(production_names.iter().cloned()),
+        &inherited,
+    )?;
     let (path, creation) = write_scope_config_bytes(session, scope, b"", write_0600_exclusive)?;
     let prepared = (|| {
         enable_relay(&creation)?;
+        // Production servers live only in this launch's memory: the saved grant
+        // (what a restart restores) holds neither their entries nor their aliases.
         let saved = SavedGrant {
             grant,
-            aliases: aliases.clone(),
+            aliases: aliases
+                .iter()
+                .filter(|(id, _)| !production_names.contains(*id))
+                .map(|(id, alias)| (id.clone(), alias.clone()))
+                .collect(),
         };
         write_0600_exclusive(
             &path.with_file_name("local-relay-grant.json"),
@@ -77,6 +97,7 @@ pub(super) fn project(
             path.parent().ok_or("scope directory missing")?,
             saved,
             validate,
+            production,
         )?;
         let descriptor_path = path.with_file_name("local-relay.json");
         let entries = override_entries(
@@ -519,6 +540,7 @@ mod projection_tests {
                 Some(&home),
                 &fixture.launch(&[]),
                 &str::to_string,
+                None,
             )
             .unwrap();
             assert_eq!(
@@ -547,6 +569,7 @@ mod projection_tests {
             Some(&home),
             &fixture.launch(&[]),
             &str::to_string,
+            None,
         )
         .unwrap();
         assert!(outcome.server_aliases.contains_key("codesense"));
@@ -632,6 +655,7 @@ mod projection_tests {
             Some(&home),
             &fixture.launch(&[]),
             &str::to_string,
+            None,
         )
         .unwrap();
         assert!(
@@ -681,6 +705,7 @@ mod projection_tests {
             Some(root.path()),
             &launch,
             &str::to_string,
+            None,
         )
         .unwrap_err();
         assert!(
@@ -887,16 +912,23 @@ fn restore_relay(
         }
         Ok(())
     });
-    publish_relay(dir, saved, validate)
+    // A restart restores no production server: it needs a saved-agent relaunch.
+    publish_relay(dir, saved, validate, None)
 }
 
 fn publish_relay(
     dir: &Path,
     saved: SavedGrant,
     validate: std::sync::Arc<dyn Fn() -> Result<(), String> + Send + Sync>,
+    production: Option<crate::mcp::local_mcp_relay::production::ProductionSet>,
 ) -> Result<(), String> {
-    let descriptor =
-        crate::mcp::local_mcp_relay::local_grant::start(dir, saved.grant, saved.aliases, validate)?;
+    let descriptor = crate::mcp::local_mcp_relay::local_grant::start(
+        dir,
+        saved.grant,
+        saved.aliases,
+        validate,
+        production,
+    )?;
     codesense_host_proto::scoped_mcp::write_descriptor(&dir.join("local-relay.json"), &descriptor)
 }
 

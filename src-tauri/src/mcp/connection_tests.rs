@@ -306,6 +306,7 @@ async fn review_r1_relay_spawned_codex_runs_the_bound_receivers() {
                 Err("retired".into())
             }
         }),
+        None,
     )
     .unwrap();
     scoped_mcp::write_descriptor(&scope.path().join("local-relay.json"), &descriptor).unwrap();
@@ -526,6 +527,7 @@ while first:
                     Err("retired".into())
                 }
             }),
+            None,
         )
         .unwrap();
         scoped_mcp::write_descriptor(&scope.path().join("local-relay.json"), &descriptor).unwrap();

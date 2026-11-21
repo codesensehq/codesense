@@ -55,6 +55,12 @@ pub(crate) fn prepare(
                 .into(),
         );
     }
+    if !launch.launch.production_declared.is_empty() {
+        return Err(
+            "mcp.production is not available on remote machines yet; remove it or launch locally"
+                .into(),
+        );
+    }
     if !launch.manifest.errors.is_empty() {
         return Err(format!(
             "saved-Agent startup manifest is invalid: {}",
@@ -286,6 +292,32 @@ mod tests {
                 assert!(captured.mcp_allow.is_empty());
             }
         }
+    }
+
+    #[test]
+    fn remote_preparation_refuses_production_mcp_servers() {
+        let root = tempfile::tempdir().unwrap();
+        team_content(root.path(), &alice());
+        let mut definition = draft("remote-production", AgentCli::Codex);
+        definition.mcp.servers.clear();
+        definition.mcp.production = vec![serde_json::from_value(serde_json::json!({
+            "name": "logs",
+            "url": "https://mcp.example.com/mcp",
+            "credential": {"ref": "logs-read", "headers": ["X-Api-Key"]},
+        }))
+        .unwrap()];
+        let key = save(root.path(), &alice(), definition);
+        let error = prepare(
+            root.path(),
+            &alice(),
+            &key,
+            ORG.into(),
+            TEAM.into(),
+            "prepared".into(),
+        )
+        .expect_err("a remote launch never carries a production MCP server");
+        // Off macOS the local launch preparation refuses it first.
+        assert!(error.contains("mcp.production"), "{error}");
     }
 
     #[test]

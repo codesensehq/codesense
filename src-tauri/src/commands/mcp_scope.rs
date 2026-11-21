@@ -884,13 +884,146 @@ pub(crate) fn project_scope_for_cli(
     cli: Option<&LaunchCli<'_>>,
     quote_path: impl Fn(&str) -> String,
 ) -> Result<(ScopeOutcome, Option<ScopeCreation>), String> {
+    project_scope_for_launch(
+        session_id,
+        cwd,
+        allow,
+        bridge_tools,
+        scope,
+        source_home,
+        canonical_base,
+        cli,
+        quote_path,
+        None,
+    )
+}
+
+/// What a saved-agent launch (and only that launch) passes for its production
+/// MCP servers: the canonical agent id and declaration it resolved, held in
+/// memory for the session's relay, and the read-only bindings view.
+pub(crate) struct ProductionLaunch {
+    pub(crate) agent_id: String,
+    pub(crate) entries: Vec<crate::agents::production::ProductionServer>,
+    pub(crate) bindings:
+        std::sync::Arc<dyn crate::mcp::local_mcp_relay::production::ProductionBindings>,
+}
+
+/// The production servers this launch serves: those the person's binding covers
+/// now. `None` when there are none, so an agent without production servers
+/// projects exactly as before.
+fn production_set(
+    production: Option<&ProductionLaunch>,
+    scope: &McpScope,
+) -> Result<Option<crate::mcp::local_mcp_relay::production::ProductionSet>, String> {
+    let Some(production) = production.filter(|p| !p.entries.is_empty()) else {
+        return Ok(None);
+    };
+    if let Some(reason) = crate::agents::production::platform_refusal(&production.entries) {
+        return Err(reason);
+    }
+    let routed =
+        scope.inventory.is_some() || matches!(scope.injection, ScopeInjection::ConfigFlag { .. });
+    if !routed {
+        return Err("production MCP servers need a Claude or Codex launch".into());
+    }
+    let set = crate::mcp::local_mcp_relay::production::ProductionSet::new(
+        production.agent_id.clone(),
+        &production.entries,
+        production.bindings.clone(),
+    );
+    Ok((!set.entries.is_empty()).then_some(set))
+}
+
+/// A `config_flag` launch's production servers: the relay is enabled for the
+/// session (before its launch root is bound), started with no grant and only
+/// the production set, and the projected config gets one shim per server. No
+/// `local-relay-grant.json` is written, so nothing restores it after a restart.
+fn publish_production_shims(
+    config_path: &Path,
+    creation: &ScopeCreation,
+    set: crate::mcp::local_mcp_relay::production::ProductionSet,
+    scope: &McpScope,
+    bridge: Option<&Path>,
+) -> Result<(), String> {
+    let bridge = bridge
+        .map(Path::to_path_buf)
+        .or_else(super::deps::bridge_symlink_path)
+        .filter(|path| path.is_file())
+        .ok_or("CodeSense MCP bridge is unavailable; repair the CodeSense CLI installation")?;
+    let dir = config_path.parent().ok_or("scope directory missing")?;
+    enable_relay(creation)?;
+    let names = set.names();
+    let bound = creation.clone();
+    let validate = std::sync::Arc::new(move || validate_creation(&bound));
+    let descriptor = crate::mcp::local_mcp_relay::local_grant::start(
+        dir,
+        Default::default(),
+        Default::default(),
+        validate,
+        Some(set),
+    )?;
+    let descriptor_path = dir.join("local-relay.json");
+    codesense_host_proto::scoped_mcp::write_descriptor(&descriptor_path, &descriptor)?;
+    let format = ConfigFormat::from(scope.format);
+    let mut config = format
+        .parse(&std::fs::read(config_path).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    let servers = config
+        .as_object_mut()
+        .ok_or("scoped config must be a table")?
+        .entry(scope.server_map_key.clone())
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or("scoped MCP server map must be a table")?;
+    let bridge = bridge.to_str().ok_or("bridge path is not UTF-8")?;
+    let descriptor_path = descriptor_path
+        .to_str()
+        .ok_or("descriptor path is not UTF-8")?;
+    for name in names {
+        if servers.contains_key(&name) {
+            return Err(format!(
+                "production MCP server {name:?} collides with a projected MCP server"
+            ));
+        }
+        servers.insert(
+            name.clone(),
+            json!({"command": bridge, "args": ["--local-scope", descriptor_path, "--server-id", name]}),
+        );
+    }
+    let staged = dir.join(format!(".{}.tmp", uuid::Uuid::new_v4().simple()));
+    write_0600_exclusive(
+        &staged,
+        &format.serialize(&config).map_err(|e| e.to_string())?,
+    )?;
+    std::fs::rename(&staged, config_path).map_err(|e| e.to_string())
+}
+
+/// [`project_scope_for_cli`] for a saved-agent launch, with its production MCP
+/// servers. Every other launch path passes none.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn project_scope_for_launch(
+    session_id: &str,
+    cwd: &Path,
+    allow: &[String],
+    bridge_tools: Option<&[String]>,
+    scope: Option<&McpScope>,
+    source_home: Option<&Path>,
+    canonical_base: Option<&Value>,
+    cli: Option<&LaunchCli<'_>>,
+    quote_path: impl Fn(&str) -> String,
+    production: Option<&ProductionLaunch>,
+) -> Result<(ScopeOutcome, Option<ScopeCreation>), String> {
     let Some(scope) = scope else {
+        if production.is_some_and(|p| !p.entries.is_empty()) {
+            return Err("production MCP servers need a scoped launch".into());
+        }
         warn!(
             target: "mcp_scope",
             "MCP scoping requested but adapter declares no scope mechanism — launching unfiltered"
         );
         return Ok((ScopeOutcome::default(), None));
     };
+    let production = production_set(production, scope)?;
     if let Some(listed) = &scope.inventory {
         let cli = cli.ok_or("a scoped launch of this runtime requires its exact selected executable; retry through the managed agent launcher")?;
         return inventory::project(
@@ -904,6 +1037,7 @@ pub(crate) fn project_scope_for_cli(
             source_home,
             cli,
             &quote_path,
+            production,
         );
     }
     if let ScopeInjection::EnvContent { env_var } = &scope.injection {
@@ -935,6 +1069,18 @@ pub(crate) fn project_scope_for_cli(
         project_from_worktree_with_creation(session_id, cwd, allow, canonical_base, scope)?;
     let outcome: Result<ScopeOutcome, String> = match &scope.injection {
         ScopeInjection::ConfigFlag { flag_template, .. } => {
+            if let Some(set) = production {
+                if let Err(error) = publish_production_shims(
+                    &config_path,
+                    &creation,
+                    set,
+                    scope,
+                    cli.and_then(|cli| cli.bridge),
+                ) {
+                    remove_scope_config(session_id);
+                    return Err(error);
+                }
+            }
             let path = quote_path(&config_path.to_string_lossy());
             Ok(ScopeOutcome {
                 execution: None,

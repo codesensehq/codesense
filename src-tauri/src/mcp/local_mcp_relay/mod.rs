@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Captured saved-Agent MCP grants. Desktop endpoints stay local; remote stdio uses a typed projection.
+pub(crate) mod call_log;
 pub(crate) mod config;
 mod http;
 pub(crate) mod identity;
