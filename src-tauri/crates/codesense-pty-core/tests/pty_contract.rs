@@ -6,7 +6,7 @@
 //!
 //! The child is pty-core's fixture (`tests/bin/pty_fixture.rs`), so no shell
 //! is needed, except in `default_shell_smoke`, which runs this OS's default
-//! shell. Needs the emulator worker (`pnpm run build:emulator`, or
+//! shell, and the Windows npm shim cases, which run the runner's node. Needs the emulator worker (`pnpm run build:emulator`, or
 //! `CODESENSE_EMULATOR_WORKER`): without one the tests skip, unless `CI=1`,
 //! where a missing worker fails them.
 
@@ -22,7 +22,7 @@ use codesense_pty_core::layout::ServerIdentity;
 use codesense_pty_core::osc::OscEvent;
 use codesense_pty_core::runner::{LocalPtyRunner, PtyRunner, PtySpec};
 use codesense_pty_core::shell::{shell_kind, ShellKind};
-use codesense_pty_core::spawn::{HostEnvironment, SpawnIntent};
+use codesense_pty_core::spawn::{HostEnvironment, SpawnError, SpawnIntent};
 use codesense_pty_core::TerminalHost;
 use portable_pty::{CommandBuilder, PtySize};
 use support::{registration, runtime, RecordingSink};
@@ -379,4 +379,303 @@ fn default_shell_smoke() {
     // Only the output counts: the echoed input line is not exactly `hi`.
     terminal.wait_for_row("hi");
     assert_eq!(terminal.exit_code(), Some(3), "{program:?}");
+}
+
+/// Codex's npm shim, the node form; its target is replaced with the fake package's.
+const CODEX_SHIM: &str =
+    include_str!("../../codesense-platform/tests/fixtures/npm-shims/codex.cmd");
+/// Claude's npm shim, the direct-program form; its target is replaced likewise.
+const CLAUDE_SHIM: &str =
+    include_str!("../../codesense-platform/tests/fixtures/npm-shims/claude.cmd");
+
+/// Arguments a batch layer would act on, each of which must reach the child byte for byte.
+/// The `pwned` ones would create a marker file in the prefix if `cmd.exe` parsed them.
+fn hostile_args(dir: &Path) -> Vec<String> {
+    let dir = dir.display();
+    [
+        "a b",
+        "\"",
+        "&",
+        "|",
+        "<",
+        ">",
+        "^",
+        "%PATH%",
+        "!VAR!",
+        "trailing\\",
+        "",
+        r#"say "hi" & echo"#,
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .chain([
+        format!(r#"" & type nul > {dir}\pwned"#),
+        format!(r"&type nul > {dir}\pwned2"),
+    ])
+    .collect()
+}
+
+/// A directory laid out as a global npm prefix:
+/// - `fake.cmd`, npm's node-form shim (Codex's, retargeted), running
+///   `node_modules\fake\cli.js` under the runner's node;
+/// - `direct.cmd`, npm's direct-program shim (Claude's, retargeted), running
+///   `node_modules\fake\bin\fake.exe`, a copy of pty-fixture (`argv` mode);
+/// - `x.bat`, a hand-written batch file.
+///
+/// Each target writes its arguments and working directory as JSON to `out.json`.
+struct NpmPrefix {
+    dir: tempfile::TempDir,
+}
+
+impl NpmPrefix {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let package = root.join("node_modules").join("fake");
+        std::fs::create_dir_all(package.join("bin")).unwrap();
+        std::fs::write(
+            root.join("fake.cmd"),
+            CODEX_SHIM.replace(
+                r"node_modules\@openai\codex\bin\codex.js",
+                r"node_modules\fake\cli.js",
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("direct.cmd"),
+            CLAUDE_SHIM.replace(
+                r"node_modules\@anthropic-ai\claude-code\bin\claude.exe",
+                r"node_modules\fake\bin\fake.exe",
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            package.join("cli.js"),
+            "require('fs').writeFileSync(process.env.SHIM_OUT, JSON.stringify(\
+             { argv: process.argv.slice(2), cwd: process.cwd(), script: process.argv[1] }));\n",
+        )
+        .unwrap();
+        std::fs::copy(
+            env!("CARGO_BIN_EXE_pty-fixture"),
+            package.join("bin").join("fake.exe"),
+        )
+        .unwrap();
+        std::fs::write(root.join("x.bat"), "@echo off\r\nnode cli.js %*\r\n").unwrap();
+        Self { dir }
+    }
+
+    fn path(&self) -> &Path {
+        self.dir.path()
+    }
+
+    /// The prefix's canonical path, as the spawn hands it to `CreateProcess`.
+    fn canonical(&self) -> std::path::PathBuf {
+        codesense_platform::fs::canonicalize(self.path()).unwrap()
+    }
+
+    /// Spawn `argv` in `cwd` through the host's resolution and the local runner, with
+    /// `extra_path` ahead of this process's `PATH`, and return what the target recorded.
+    fn run(
+        &self,
+        worker: &Path,
+        argv: Vec<String>,
+        cwd: String,
+        extra_path: Option<&Path>,
+    ) -> Result<serde_json::Value, SpawnError> {
+        let out = self.path().join("out.json");
+        let _ = std::fs::remove_file(&out);
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let path = match extra_path {
+            Some(dir) => std::env::join_paths(
+                std::iter::once(dir.to_path_buf()).chain(std::env::split_paths(&path)),
+            )
+            .unwrap(),
+            None => path,
+        };
+        // The process's variables, with `PATH` under the name the host reads.
+        let vars = std::env::vars()
+            .filter(|(name, _)| !name.eq_ignore_ascii_case("PATH"))
+            .chain([("PATH".to_string(), path.to_string_lossy().into_owned())]);
+        let intent = SpawnIntent {
+            remote_launch: None,
+            command: None,
+            argv: Some(argv),
+            shell: None,
+            cwd,
+            cols: COLS,
+            rows: ROWS,
+            shell_integration: false,
+            starship_preset: None,
+            api_port: None,
+            env_remove: Vec::new(),
+            env: vec![("SHIM_OUT".into(), out.to_string_lossy().into_owned())],
+            agent_env: Vec::new(),
+            login_path: None,
+        };
+        let spec = intent.resolve("shim", &HostEnvironment::with_vars(None, None, vars))?;
+        let terminal = Terminal::start(worker, spec, false, tempfile::tempdir().unwrap());
+        assert_eq!(terminal.exit_code(), Some(0), "the shim's target failed");
+        let record = std::fs::read_to_string(&out).expect("the target wrote its record");
+        Ok(serde_json::from_str(&record).unwrap())
+    }
+
+    /// No `pwned` marker exists: no argument was parsed by `cmd.exe`.
+    fn assert_no_markers(&self) {
+        for marker in ["pwned", "pwned2"] {
+            assert!(
+                !self.path().join(marker).exists(),
+                "{marker} was created: an argument reached cmd.exe"
+            );
+        }
+    }
+}
+
+/// The worker and the runner's node, on Windows: `None` (with the reason) elsewhere, or
+/// where either is missing outside CI.
+fn shim_prerequisites() -> Option<std::path::PathBuf> {
+    if std::env::consts::OS != "windows" {
+        eprintln!("skipping: npm .cmd shims are a Windows launch");
+        return None;
+    }
+    let worker = support::worker()?;
+    if !on_path("node.exe") {
+        assert!(!support::in_ci(), "CI needs node.exe on PATH");
+        eprintln!("skipping: node.exe is not on PATH");
+        return None;
+    }
+    Some(worker)
+}
+
+fn strings(value: &serde_json::Value) -> Vec<String> {
+    value
+        .as_array()
+        .expect("an array")
+        .iter()
+        .map(|item| item.as_str().expect("a string").to_string())
+        .collect()
+}
+
+#[test]
+fn an_npm_node_shim_runs_its_script_with_every_argument_intact() {
+    let Some(worker) = shim_prerequisites() else {
+        return;
+    };
+    let prefix = NpmPrefix::new();
+    let args = hostile_args(prefix.path());
+    let shim = prefix
+        .path()
+        .join("fake.cmd")
+        .to_string_lossy()
+        .into_owned();
+    let cwd = prefix.path().to_string_lossy().into_owned();
+    let record = prefix
+        .run(
+            &worker,
+            std::iter::once(shim).chain(args.clone()).collect(),
+            cwd,
+            None,
+        )
+        .expect("the npm shim resolves");
+    assert_eq!(strings(&record["argv"]), args);
+    assert_eq!(
+        record["script"].as_str(),
+        prefix
+            .canonical()
+            .join(r"node_modules\fake\cli.js")
+            .to_str()
+    );
+    assert_eq!(record["cwd"].as_str(), prefix.canonical().to_str());
+    prefix.assert_no_markers();
+}
+
+#[test]
+fn an_npm_shim_named_bare_is_found_on_the_childs_path() {
+    let Some(worker) = shim_prerequisites() else {
+        return;
+    };
+    let prefix = NpmPrefix::new();
+    let args = vec!["a b".to_string(), "%PATH%".to_string()];
+    let record = prefix
+        .run(
+            &worker,
+            std::iter::once("fake".to_string())
+                .chain(args.clone())
+                .collect(),
+            prefix.path().to_string_lossy().into_owned(),
+            Some(prefix.path()),
+        )
+        .expect("the bare name resolves to the npm shim");
+    assert_eq!(strings(&record["argv"]), args);
+}
+
+#[test]
+fn a_verbatim_cwd_and_shim_reach_node_simplified() {
+    let Some(worker) = shim_prerequisites() else {
+        return;
+    };
+    let prefix = NpmPrefix::new();
+    let canonical = prefix.canonical();
+    let verbatim = format!(r"\\?\{}", canonical.display());
+    let record = prefix
+        .run(
+            &worker,
+            vec![format!(r"{verbatim}\fake.cmd"), "x".into()],
+            verbatim.clone(),
+            None,
+        )
+        .expect("the verbatim shim resolves");
+    assert_eq!(record["cwd"].as_str(), canonical.to_str());
+    let script = record["script"].as_str().expect("the script");
+    assert!(!script.starts_with(r"\\?\"), "{script}");
+    assert_eq!(strings(&record["argv"]), ["x"]);
+}
+
+#[test]
+fn an_npm_direct_shim_runs_its_exe_with_every_argument_intact() {
+    let Some(worker) = shim_prerequisites() else {
+        return;
+    };
+    let prefix = NpmPrefix::new();
+    let args = hostile_args(prefix.path());
+    let shim = prefix
+        .path()
+        .join("direct.cmd")
+        .to_string_lossy()
+        .into_owned();
+    let record = prefix
+        .run(
+            &worker,
+            [shim, "argv".into()]
+                .into_iter()
+                .chain(args.clone())
+                .collect(),
+            prefix.path().to_string_lossy().into_owned(),
+            None,
+        )
+        .expect("the direct shim resolves");
+    assert_eq!(strings(&record["argv"]), args);
+    assert_eq!(record["cwd"].as_str(), prefix.canonical().to_str());
+    prefix.assert_no_markers();
+}
+
+#[test]
+fn a_hand_written_batch_file_is_refused() {
+    let Some(worker) = shim_prerequisites() else {
+        return;
+    };
+    let prefix = NpmPrefix::new();
+    let bat = prefix.path().join("x.bat");
+    let refused = prefix.run(
+        &worker,
+        vec![bat.to_string_lossy().into_owned(), "x".into()],
+        prefix.path().to_string_lossy().into_owned(),
+        None,
+    );
+    let named = codesense_platform::fs::canonicalize(&bat).unwrap();
+    assert_eq!(
+        refused.err(),
+        Some(SpawnError::BatchProgram(
+            named.to_string_lossy().into_owned()
+        ))
+    );
 }

@@ -2001,3 +2001,20 @@ fn saved_telemetry_overrides_are_refused_with_an_engine_owned_message() {
         assert!(why.contains(name));
     }
 }
+
+#[test]
+fn saved_windows_dispatch_variables_are_refused_in_any_case() {
+    for name in ["ComSpec", "COMSPEC", "comspec", "PATHEXT", "PathExt"] {
+        let refused = super::model::check_env(&[(name.to_string(), "x".into())].into());
+        assert_eq!(
+            refused,
+            Err(ValidationError::ShellDispatchEnv(name.to_string())),
+            "{name}"
+        );
+        assert!(refused.unwrap_err().to_string().contains(name));
+    }
+    assert_eq!(
+        super::model::check_env(&[("COMSPEC_HOME".to_string(), "x".into())].into()),
+        Ok(())
+    );
+}

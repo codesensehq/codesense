@@ -1506,6 +1506,11 @@ impl AgentCliAdapter for Codex {
         Ok(())
     }
 
+    /// Its npm install runs this script under `node`.
+    fn npm_entry(&self) -> Option<&'static str> {
+        Some("node_modules/@openai/codex/bin/codex.js")
+    }
+
     fn workspace_trust(&self, paths: &[PathBuf]) -> Vec<String> {
         let projects: toml::value::Table = paths
             .iter()

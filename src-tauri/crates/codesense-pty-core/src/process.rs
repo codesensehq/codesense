@@ -184,7 +184,7 @@ fn is_interpreter(stem: &str) -> bool {
 /// Whether `script` is the npm package entry of the agent CLI `stem`
 /// ([`crate::agent_cli::AgentCliAdapter::npm_entry`]), on either separator: Windows runs an npm install as
 /// `node.exe …\node_modules\<package>\cli.js`, with no shim naming the CLI.
-fn is_npm_entry(script: &str, stem: &str) -> bool {
+pub(crate) fn is_npm_entry(script: &str, stem: &str) -> bool {
     let script = script.replace('\\', "/").to_lowercase();
     by_binary(stem)
         .and_then(|cli| adapter(cli).npm_entry())

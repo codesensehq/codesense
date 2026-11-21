@@ -2402,7 +2402,7 @@
     "src-tauri/src/agents/adapter/hermes.rs": "ed95d203f9bd490f79b195e14f179c53b4cee51afc5cbf236985de03356ba70c",
     "src-tauri/src/agents/adapter/opencode.rs": "b9ba44a57607c0539213f6960d9a6f79bb9c35dcd2a0ed51477fc85db11ff685",
     "src-tauri/src/agents/context.rs": "9b2215e069a9c9d859ebbd39f60f12357adb856db393768788ad77fa9fa3d32e",
-    "src-tauri/src/agents/model.rs": "6f0aa719802b51b6fb2d1279c96ea7ed125ef94c6600728094380320afb70efa",
+    "src-tauri/src/agents/model.rs": "e750b783875bd284aca22628c1b3778f0cd0bde3cb12b89350b05023417b95b6",
     "src-tauri/src/context_query/model.rs": "4e81c3eaa7ed4ea0dc93fe5017c7defe77655b124f0d5bc447557b646f42d345",
     "src-tauri/src/docs_schemas.rs": "6abd956406c31a5d20cd2fe57a903f9845ac300c5b923e7e37893bfbffaec487",
     "src-tauri/src/packs/lock.rs": "11d8c045d499420318d3a487b92be97234b63c6172ac1e29b56028b74d04b66c",

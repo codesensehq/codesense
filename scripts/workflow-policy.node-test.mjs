@@ -384,6 +384,8 @@ test("rust.yml runs the Windows check on a pull request only with ci:windows, ne
         "grep -Eq '^test result: ok\\. [1-9][0-9]* passed' \"$RUNNER_TEMP/portable-tests.log\"\n",
       'cargo test --locked -p codesense-pty-core --lib runner::cursor_reply:: 2>&1 | tee "$RUNNER_TEMP/cursor-reply-tests.log"\n' +
         "grep -Eq '^test result: ok\\. [1-9][0-9]* passed' \"$RUNNER_TEMP/cursor-reply-tests.log\"\n",
+      'cargo test --locked -p codesense-pty-core --lib spawn::tests::os_rules:: 2>&1 | tee "$RUNNER_TEMP/spawn-os-rules-tests.log"\n' +
+        "grep -Eq '^test result: ok\\. [1-9][0-9]* passed' \"$RUNNER_TEMP/spawn-os-rules-tests.log\"\n",
       "cargo test --locked --no-fail-fast -p codesense-pty-core --test pty_contract --test process_tree --test headless_session",
     ],
   );
@@ -402,7 +404,11 @@ test("rust.yml runs the Windows check on a pull request only with ci:windows, ne
     "${{ github.workspace }}/src-tauri/binaries/codesense-emulator-x86_64-pc-windows-msvc.exe",
   );
   // A filter that matches no test passes in libtest, so each filtered step fails unless one ran.
-  for (const filter of ["--lib portable", "--lib runner::cursor_reply::"]) {
+  for (const filter of [
+    "--lib portable",
+    "--lib runner::cursor_reply::",
+    "--lib spawn::tests::os_rules::",
+  ]) {
     const { run } = steps.find((s) => s.run?.includes(filter));
     const ran = new RegExp(/^grep -Eq '(.+)' /m.exec(run)[1], "m");
     assert.match("test result: ok. 1 passed; 0 failed; 0 ignored", ran, filter);
@@ -1528,6 +1534,16 @@ test("Rust jobs preserve package coverage for nextest and doctests and always up
   doctests(linux.steps);
   assert.ok(linux.steps.some((step) => step.run?.includes("--tool cargo-nextest")));
   junitUpload(linux.steps);
+  // The agent spawn's OS rules run on Linux too. A filter that matches no test passes in
+  // libtest, so the step fails unless one ran.
+  const spawnRules = linux.steps.find((step) =>
+    step.run?.startsWith(
+      "cargo test --locked -p codesense-pty-core --lib spawn::tests::os_rules:: ",
+    ),
+  );
+  const rulesRan = new RegExp(/^grep -Eq '(.+)' /m.exec(spawnRules.run)[1], "m");
+  assert.match("test result: ok. 4 passed; 0 failed; 0 ignored", rulesRan);
+  assert.doesNotMatch("test result: ok. 0 passed; 0 failed; 0 ignored", rulesRan);
 
   // macOS compiles once, in two parts on two runners, into two nextest archives; the shards run
   // both and compile nothing.

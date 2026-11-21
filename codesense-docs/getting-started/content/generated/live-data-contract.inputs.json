@@ -5,7 +5,7 @@
   ],
   "inputs": {
     "Cargo.lock": "1c617c64f06395ed9760c8905e2b2d004a2b154b29d7e1cf72c4e1444f683ab4",
-    "src-tauri/Cargo.toml": "e0072ee127c41576f3c96a5a276035d1f76aafcfe30aec3e4cd46d42dde6ac82",
+    "src-tauri/Cargo.toml": "6bfcc635d58fa472cfd74030b05dd349f1954ad09d1c201855cd435d26740ab1",
     "src-tauri/src/commands/pipeline_format/fields.rs": "a2216ba2c979a15aa15901593c48bf73dcb5fcc884de6091745f25f0533c732b",
     "src-tauri/src/commands/pipeline_format/mod.rs": "0bdd807d4184d2797f73a5a8a4bf97319e9a94fc8939edfef5af93bcadaace9d",
     "src-tauri/src/context_query/model.rs": "4e81c3eaa7ed4ea0dc93fe5017c7defe77655b124f0d5bc447557b646f42d345",

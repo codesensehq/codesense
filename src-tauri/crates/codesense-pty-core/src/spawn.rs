@@ -10,7 +10,7 @@
 //! identically on either.
 
 use std::collections::HashMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 use log::warn;
@@ -27,10 +27,14 @@ pub enum SpawnError {
     /// The intent runs a command line, the user's shell does not run POSIX
     /// commands, and this OS has no POSIX shell to run it under.
     NoPosixRunner,
-    /// The intent's argv runs this program, which Windows would start through
-    /// `cmd.exe` (a `.cmd` or `.bat` script) or could not run as named (not an
-    /// absolute path to an existing `.exe`).
+    /// The intent's argv runs this program, which is not a runnable `.exe` on Windows:
+    /// Windows would start it through `cmd.exe` (a `.cmd` or `.bat` that is not an npm
+    /// shim [`cli::shim_argv`] can unwrap), or it could not run as named (not an absolute
+    /// path to an existing `.exe`, or an alternate data stream).
     BatchProgram(String),
+    /// The intent's argv runs an npm shim whose target cannot be run: no `node.exe` for
+    /// it, or the shim could not be read.
+    Shim(cli::ShimError),
 }
 
 impl std::fmt::Display for SpawnError {
@@ -39,8 +43,9 @@ impl std::fmt::Display for SpawnError {
             Self::NoPosixRunner => f.write_str("no POSIX shell to run the command on this OS"),
             Self::BatchProgram(program) => write!(
                 f,
-                "{program} is not an absolute path to an existing .exe, so it cannot run directly on this OS"
+                "{program} is not a runnable .exe (an existing .exe, or an npm shim for one), so it cannot run directly on this OS"
             ),
+            Self::Shim(error) => write!(f, "{error}"),
         }
     }
 }
@@ -119,28 +124,91 @@ pub const CODESENSE_LAUNCH_ENV: [&str; 7] = [
     crate::activity::RELEASE_QUALIFIED_ENV,
 ];
 
-/// Whether a saved Agent's `env` may supply `name`: any name but [`CODESENSE_LAUNCH_ENV`].
+/// The variables Windows reads to start a batch file (`ComSpec`) or to pick the extension of a
+/// program named without one (`PATHEXT`). An agent never runs through `cmd.exe`, and a saved
+/// Agent's own `env` never sets them.
+const SHELL_DISPATCH_ENV: [&str; 2] = ["ComSpec", "PATHEXT"];
+
+/// The usage-telemetry switches the engine owns, besides every `OTEL_` name.
+const TELEMETRY_ENV: [&str; 4] = [
+    "CLAUDE_CODE_ENABLE_TELEMETRY",
+    "DISABLE_TELEMETRY",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+    "DO_NOT_TRACK",
+];
+
+/// Whether a saved Agent's `env` may supply `name` on this host: [`agent_may_set_on`] with
+/// [`std::env::consts::OS`].
 pub fn agent_may_set(name: &str) -> bool {
-    !CODESENSE_LAUNCH_ENV.contains(&name) && !telemetry_owned_env(name)
+    agent_may_set_on(std::env::consts::OS, name)
+}
+
+/// Whether a saved Agent's `env` may supply `name` on `os` (a [`std::env::consts::OS`]
+/// value): any name but [`CODESENSE_LAUNCH_ENV`], `ComSpec`, `PATHEXT` and the engine's
+/// telemetry names ([`telemetry_owned_env`]). Windows variable names are case-insensitive, so
+/// there each is compared ignoring ASCII case; elsewhere byte for byte.
+pub fn agent_may_set_on(os: &str, name: &str) -> bool {
+    let windows = os == "windows";
+    !CODESENSE_LAUNCH_ENV
+        .iter()
+        .chain(&SHELL_DISPATCH_ENV)
+        .any(|reserved| same_env_name_on(windows, name, reserved))
+        && !telemetry_owned(windows, name)
+}
+
+/// Whether `name` is `ComSpec` or `PATHEXT` in any case: what a saved Agent is refused at
+/// save, whatever host it later launches on.
+pub fn shell_dispatch_env(name: &str) -> bool {
+    SHELL_DISPATCH_ENV
+        .iter()
+        .any(|reserved| same_env_name_on(true, name, reserved))
+}
+
+/// Whether the variable names `name` and `other` are the same on `os` (a
+/// [`std::env::consts::OS`] value): ignoring ASCII case on Windows, byte for byte elsewhere.
+pub fn same_env_name(os: &str, name: &str, other: &str) -> bool {
+    same_env_name_on(os == "windows", name, other)
+}
+
+/// Whether a headless launch on `os` (a [`std::env::consts::OS`] value) keeps a saved
+/// Agent's variable `name`: one it may set ([`agent_may_set_on`]), other than `PATH`, which
+/// the launch sets itself, and not one of the launch's `env_remove` names, each compared as
+/// [`same_env_name`] compares names on `os`.
+pub fn headless_env_kept(os: &str, name: &str, env_remove: &[String]) -> bool {
+    agent_may_set_on(os, name)
+        && !same_env_name(os, name, "PATH")
+        && !env_remove
+            .iter()
+            .any(|removed| same_env_name(os, name, removed))
+}
+
+fn same_env_name_on(windows: bool, name: &str, other: &str) -> bool {
+    if windows {
+        name.eq_ignore_ascii_case(other)
+    } else {
+        name == other
+    }
 }
 
 /// Export configuration is owned by the engine, including on direct YAML edits.
 pub fn telemetry_owned_env(name: &str) -> bool {
-    name.starts_with("OTEL_")
-        || matches!(
-            name,
-            "CLAUDE_CODE_ENABLE_TELEMETRY"
-                | "DISABLE_TELEMETRY"
-                | "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"
-                | "DO_NOT_TRACK"
-        )
+    telemetry_owned(false, name)
+}
+
+/// [`telemetry_owned_env`], ignoring ASCII case when `windows`.
+fn telemetry_owned(windows: bool, name: &str) -> bool {
+    name.get(.."OTEL_".len())
+        .is_some_and(|head| same_env_name_on(windows, head, "OTEL_"))
+        || TELEMETRY_ENV
+            .iter()
+            .any(|owned| same_env_name_on(windows, name, owned))
 }
 
 /// `program` run with the host's variables and, under everything the spawn sets later, a saved
 /// Agent's own.
 fn agent_command(
     host: &HostEnvironment,
-    program: &str,
+    program: impl AsRef<OsStr>,
     agent_env: &[(String, String)],
 ) -> CommandBuilder {
     let mut cmd = host.command(program);
@@ -233,7 +301,7 @@ impl HostEnvironment {
     }
 
     /// A command running `program` with this host's variables.
-    fn command(&self, program: &str) -> CommandBuilder {
+    fn command(&self, program: impl AsRef<OsStr>) -> CommandBuilder {
         let mut cmd = CommandBuilder::new(program);
         if let Vars::Given(vars) = &self.vars {
             cmd.env_clear();
@@ -537,12 +605,12 @@ fn shell_command(
             } else {
                 host.posix_runner().ok_or(SpawnError::NoPosixRunner)?
             };
-            let mut cmd = agent_command(host, &program.to_string_lossy(), agent_env);
+            let mut cmd = agent_command(host, &*program.to_string_lossy(), agent_env);
             cmd.args(["-l", "-c", command]);
             cmd
         }
         None => {
-            let mut cmd = agent_command(host, &shell.path.to_string_lossy(), agent_env);
+            let mut cmd = agent_command(host, &*shell.path.to_string_lossy(), agent_env);
             match (shell.kind, bash_rcfile) {
                 (ShellKind::Bash, Some(rcfile)) => {
                     cmd.arg("--rcfile");
@@ -565,22 +633,107 @@ fn shell_command(
 }
 
 /// The argv-direct child running `program` with `args` on `os` (a
-/// [`std::env::consts::OS`] value), `exists` telling whether a file is there.
+/// [`std::env::consts::OS`] value), with `child_path` the child's `PATH` and `exists`
+/// telling whether a file is there.
 ///
-/// On Windows only an absolute path to an existing `.exe` runs ([`direct_program`]).
-/// Elsewhere the program runs as given. Its `SHELL` is [`set_direct_shell`]'s.
+/// On Windows the argv is [`windows_argv`]'s, so only an absolute path to an existing
+/// `.exe` runs. Elsewhere the program runs as given. Its `SHELL` is
+/// [`set_direct_shell`]'s.
 fn direct_command(
     host: &HostEnvironment,
-    program: &str,
-    args: &[String],
+    (program, args): (&str, &[String]),
     agent_env: &[(String, String)],
     os: &str,
+    child_path: &str,
     exists: impl Fn(&Path) -> bool,
 ) -> Result<CommandBuilder, SpawnError> {
-    direct_program(program, os, exists)?;
-    let mut cmd = agent_command(host, program, agent_env);
-    cmd.args(args);
+    let argv = windows_argv(os, program, args, child_path, exists)?;
+    let mut cmd = agent_command(host, &argv[0], agent_env);
+    cmd.args(&argv[1..]);
     Ok(cmd)
+}
+
+/// The argv an argv-direct spawn of `program` with `args` runs on `os` (a
+/// [`std::env::consts::OS`] value), with `child_path` the child's `PATH` and `exists`
+/// telling whether a file is there. Never empty: its first entry is the program. Every OS
+/// but Windows runs `program` and `args` as given.
+///
+/// On Windows, in order:
+/// 1. A program with a `:` after its drive or verbatim prefix (an alternate data stream,
+///    `claude.exe:x.cmd`, which `CreateProcess` would dispatch on) is refused, never
+///    stripped, and so is a root- or drive-relative one (`\claude.exe`, `C:claude.exe`).
+/// 2. A bare or relative program is resolved to its first [`cli::candidates`] install on
+///    `child_path`; none fails the spawn.
+/// 3. The program is canonicalized ([`fs::canonicalize`]: links followed, no `\\?\`
+///    prefix where the plain form means the same), so the shim is read and the last
+///    check run on the exact path `CreateProcess` gets; one that cannot be is kept as
+///    given.
+/// 4. An npm `.cmd` shim is replaced by the argv that runs its target
+///    ([`cli::shim_argv`]): its `.exe`, or `node.exe` and the script, which stays the
+///    canonical shim directory joined with the checked relative path (an npm-linked
+///    package keeps its `node_modules` path). The new program is canonicalized too.
+/// 5. The final program passes [`direct_program`], unchanged, after the stream check.
+///
+/// Every refusal of a program, and a batch file that is not an npm shim, is
+/// [`SpawnError::BatchProgram`]; a shim whose target cannot be run is
+/// [`SpawnError::Shim`]. The arguments are never touched.
+fn windows_argv(
+    os: &str,
+    program: &str,
+    args: &[String],
+    child_path: &str,
+    exists: impl Fn(&Path) -> bool,
+) -> Result<Vec<OsString>, SpawnError> {
+    if os != "windows" {
+        return Ok(plain_argv(program, args));
+    }
+    let argv = unwrapped_argv(program, args, child_path)?;
+    let last = argv[0].to_string_lossy();
+    if cli::names_a_stream(&last) {
+        return Err(SpawnError::BatchProgram(last.into_owned()));
+    }
+    direct_program(&last, os, exists)?;
+    Ok(argv)
+}
+
+/// Steps 1 to 4 of [`windows_argv`]: the argv a Windows spawn of `program` with `args`
+/// runs, before the final program is checked.
+fn unwrapped_argv(
+    program: &str,
+    args: &[String],
+    child_path: &str,
+) -> Result<Vec<OsString>, SpawnError> {
+    let refused = |program: &str| SpawnError::BatchProgram(program.to_string());
+    if cli::names_a_stream(program) || cli::root_relative(program) {
+        return Err(refused(program));
+    }
+    let found = if cli::windows_absolute(program) {
+        PathBuf::from(program)
+    } else {
+        cli::candidates(OsStr::new(child_path), program)
+            .into_iter()
+            .next()
+            .ok_or_else(|| refused(program))?
+    };
+    let canonical = |path: &Path| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let program = canonical(&found);
+    let mut argv = match cli::shim_argv(&program, args, OsStr::new(child_path)) {
+        Ok(Some(argv)) => argv,
+        Ok(None) => plain_argv(program, args),
+        Err(cli::ShimError::NotAnNpmShim { path }) => {
+            return Err(refused(&path.to_string_lossy()));
+        }
+        Err(error) => return Err(SpawnError::Shim(error)),
+    };
+    argv[0] = canonical(Path::new(&argv[0])).into_os_string();
+    Ok(argv)
+}
+
+/// `program` and then `args`, as an argv.
+fn plain_argv(program: impl Into<OsString>, args: &[String]) -> Vec<OsString> {
+    std::iter::once(program.into())
+        .chain(args.iter().map(OsString::from))
+        .collect()
 }
 
 /// The `SHELL` an argv-direct child on `os` carries, set last over everything the
@@ -598,16 +751,18 @@ fn set_direct_shell(cmd: &mut CommandBuilder, host: &HostEnvironment, os: &str) 
 
 /// Whether `program` may be spawned argv-direct on `os`: on Windows only an absolute
 /// path to an existing file whose extension, with trailing dots and spaces trimmed as
-/// Windows trims them, is `.exe`. An allowlist, not a `.cmd`/`.bat` denylist: the PTY
-/// layer swaps a `PATHEXT` extension in for a program that does not exist, and Windows
-/// runs a batch script through `cmd.exe`. Every other OS runs the program as given.
+/// Windows trims them ([`cli::windows_extension`]), is `.exe`. An allowlist, not a
+/// `.cmd`/`.bat` denylist: the PTY layer swaps a `PATHEXT` extension in for a program
+/// that does not exist, and Windows runs a batch script through `cmd.exe`. Every other
+/// OS runs the program as given.
 ///
 /// A race remains: this probe runs when the spawn is resolved, and the PTY layer's
 /// Windows `search_path` runs at the spawn itself, so an absolute `.exe` that vanishes
 /// in between, beside a `.cmd` or `.bat` of the same name, can have `PATHEXT` swap the
-/// script in. It takes a write to the CLI's own folder, which could already replace
-/// the `.exe`; closing it (an absolute program that skips `search_path`) is left to the
-/// npm shim work.
+/// script in. That covers the agent's own `.exe`, the `node.exe` an npm shim runs under
+/// and the `.exe` a shim names, so it takes a write to the CLI's, the shim's or node's
+/// folder, which could already replace the `.exe` itself. Closing it needs a PTY layer
+/// that skips `search_path` for an absolute program.
 fn direct_program(
     program: &str,
     os: &str,
@@ -616,14 +771,8 @@ fn direct_program(
     if os != "windows" {
         return Ok(());
     }
-    let named = program.trim_end_matches(['.', ' ']).to_ascii_lowercase();
-    let bytes = program.as_bytes();
-    let absolute = program.starts_with(r"\\")
-        || (bytes.len() > 2
-            && bytes[0].is_ascii_alphabetic()
-            && bytes[1] == b':'
-            && matches!(bytes[2], b'\\' | b'/'));
-    if absolute && named.ends_with(".exe") && exists(Path::new(program)) {
+    let exe = cli::windows_extension(program).as_deref() == Some("exe");
+    if cli::windows_absolute(program) && exe && exists(Path::new(program)) {
         Ok(())
     } else {
         Err(SpawnError::BatchProgram(program.to_string()))
@@ -653,9 +802,14 @@ fn build_spawn_command(
         // no shell wrapper, no RC wrappers, no shell-integration. Used by
         // managed agent launches so the agent CLI owns the PTY from the
         // start and Ctrl+C routes to the agent in-process.
-        Some([program, args @ ..]) => {
-            direct_command(host, program, args, &intent.agent_env, os, exists)?
-        }
+        Some([program, args @ ..]) => direct_command(
+            host,
+            (program, args),
+            &intent.agent_env,
+            os,
+            &resolved.base_path,
+            exists,
+        )?,
         // Empty argv falls through to the interactive shell: a mis-set empty
         // vec cannot leave the spawn with no command.
         _ => shell_command(
@@ -667,6 +821,11 @@ fn build_spawn_command(
         )?,
     };
     match spawn_dir(&intent.cwd) {
+        // A Windows agent starts in the canonical form of its directory, with no `\\?\`
+        // prefix where the plain form means the same.
+        Some(dir) if os == "windows" && matches!(intent.argv.as_deref(), Some([_, ..])) => {
+            cmd.cwd(fs::canonicalize(Path::new(dir)).unwrap_or_else(|_| PathBuf::from(dir)));
+        }
         Some(dir) => {
             cmd.cwd(dir);
         }
@@ -1239,52 +1398,6 @@ mod tests {
         );
     }
 
-    /// A Windows argv-direct launch runs only an absolute path to an existing `.exe`, so no
-    /// implicit `cmd.exe` ever runs a batch script; other OSes run the program as given.
-    #[test]
-    fn a_windows_direct_launch_runs_only_an_existing_absolute_exe() {
-        let present = |path: &Path| !path.to_string_lossy().contains("missing");
-        for (program, accepted) in [
-            (r"C:\npm\claude.exe", true),
-            (r"C:\NPM\CLAUDE.EXE", true),
-            ("C:/npm/claude.exe", true),
-            (r"\\server\share\claude.exe", true),
-            // Windows trims a trailing space or dot, so the name still runs `claude.exe`.
-            (r"C:\npm\claude.exe ", true),
-            (r"C:\npm\claude.cmd", false),
-            (r"C:\npm\claude.bat", false),
-            (r"C:\npm\claude.bat.", false),
-            (r"C:\npm\claude.CMD ", false),
-            ("claude", false),
-            ("claude.exe", false),
-            (r"npm\claude.exe", false),
-            (r"C:\missing\claude.exe", false),
-            (r"C:\npm\claude", false),
-        ] {
-            let checked = direct_program(program, "windows", present);
-            if accepted {
-                assert_eq!(checked, Ok(()), "{program:?}");
-            } else {
-                assert_eq!(
-                    checked,
-                    Err(SpawnError::BatchProgram(program.to_string())),
-                    "{program:?}"
-                );
-            }
-        }
-        for os in ["macos", "linux"] {
-            for program in ["claude", r"C:\npm\claude.cmd", "/missing/claude"] {
-                assert_eq!(
-                    direct_program(program, os, |_| false),
-                    Ok(()),
-                    "{os} {program}"
-                );
-            }
-        }
-        let error = SpawnError::BatchProgram(r"C:\npm\claude.cmd".into()).to_string();
-        assert!(error.contains(r"C:\npm\claude.cmd"), "{error}");
-    }
-
     /// An agent launch on `os`: the program as the PTY's root, with `env` and `agent_env`.
     fn direct(program: &str, env: &[(&str, &str)], agent_env: &[(&str, &str)]) -> SpawnIntent {
         let pairs = |vars: &[(&str, &str)]| -> Vec<(String, String)> {
@@ -1300,35 +1413,457 @@ mod tests {
         }
     }
 
-    /// The refusal reaches the spawn: a Windows intent whose argv runs a batch script
-    /// resolves to no command at all, and an accepted `.exe` resolves to its argv.
-    #[test]
-    fn a_windows_agent_spawn_runs_only_an_existing_exe() {
-        let fx = Fixture::new();
-        let host = fx.host(&[]);
-        let refused =
-            direct(r"C:\npm\claude.cmd", &[], &[]).resolve_on("s", &host, "windows", &|_| true);
-        assert_eq!(
-            refused.err(),
-            Some(SpawnError::BatchProgram(r"C:\npm\claude.cmd".into()))
-        );
-        let missing =
-            direct(r"C:\npm\claude.exe", &[], &[]).resolve_on("s", &host, "windows", &|_| false);
-        assert!(matches!(missing, Err(SpawnError::BatchProgram(_))));
-        let spec = direct(r"C:\npm\claude.exe", &[], &[])
-            .resolve_on("s", &host, "windows", &|_| true)
-            .expect("an existing .exe resolves");
-        let argv: Vec<String> = spec
-            .command
-            .get_argv()
-            .iter()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(argv, [r"C:\npm\claude.exe", "--x"]);
-        // Elsewhere the program runs as given, whatever is on disk.
-        assert!(direct("claude", &[], &[])
-            .resolve_on("s", &host, "macos", &|_| false)
-            .is_ok());
+    /// The OS rules of an agent spawn, chosen by `os`, not the host: the Windows argv and the
+    /// variables a saved Agent may set. Pure or on temp files, so they run on every OS.
+    mod os_rules {
+        use super::*;
+
+        /// What a Windows spawn runs once it unwraps npm's shims is still recognised as the
+        /// agent: the script each node-form fixture names by Codex's npm entry, the `.exe`
+        /// Claude's names by its name.
+        #[test]
+        fn an_unwrapped_npm_shim_is_still_its_agent() {
+            use crate::process::{agent_signature_matches, is_npm_entry};
+            let shim = Path::new("npm").join("codex.cmd");
+            for fixture in [CODEX_SHIM, CODEX_SHIM_V8] {
+                let Ok(Some(cli::NpmShim::Node { script })) = cli::npm_shim_script(&shim, fixture)
+                else {
+                    panic!("the Codex fixture is a node-form shim");
+                };
+                let script = script.to_string_lossy();
+                assert!(is_npm_entry(&script, "codex"), "{script}");
+                assert!(!is_npm_entry(&script, "claude"), "{script}");
+                assert!(agent_signature_matches(
+                    "node.exe",
+                    Some(r"C:\Program Files\nodejs\node.exe"),
+                    &[r"C:\Program Files\nodejs\node.exe", &*script, "--yolo"],
+                    "codex"
+                ));
+            }
+            assert!(!is_npm_entry(
+                r"C:\npm\node_modules\@openai\other\bin\codex.js",
+                "codex"
+            ));
+            let shim = Path::new("npm").join("claude.cmd");
+            let Ok(Some(cli::NpmShim::Exe { program })) = cli::npm_shim_script(&shim, CLAUDE_SHIM)
+            else {
+                panic!("the Claude fixture is a direct-program shim");
+            };
+            let program = program.to_string_lossy();
+            assert!(agent_signature_matches(
+                "claude.exe",
+                Some(&*program),
+                &[&*program, "--resume"],
+                "claude"
+            ));
+        }
+
+        /// A Windows argv-direct launch runs only an absolute path to an existing `.exe`, so no
+        /// implicit `cmd.exe` ever runs a batch script; other OSes run the program as given.
+        #[test]
+        fn a_windows_direct_launch_runs_only_an_existing_absolute_exe() {
+            let present = |path: &Path| !path.to_string_lossy().contains("missing");
+            for (program, accepted) in [
+                (r"C:\npm\claude.exe", true),
+                (r"C:\NPM\CLAUDE.EXE", true),
+                ("C:/npm/claude.exe", true),
+                (r"\\server\share\claude.exe", true),
+                // Windows trims a trailing space or dot, so the name still runs `claude.exe`.
+                (r"C:\npm\claude.exe ", true),
+                (r"C:\npm\claude.cmd", false),
+                (r"C:\npm\claude.bat", false),
+                (r"C:\npm\claude.bat.", false),
+                (r"C:\npm\claude.CMD ", false),
+                ("claude", false),
+                ("claude.exe", false),
+                (r"npm\claude.exe", false),
+                (r"C:\missing\claude.exe", false),
+                (r"C:\npm\claude", false),
+            ] {
+                let checked = direct_program(program, "windows", present);
+                if accepted {
+                    assert_eq!(checked, Ok(()), "{program:?}");
+                } else {
+                    assert_eq!(
+                        checked,
+                        Err(SpawnError::BatchProgram(program.to_string())),
+                        "{program:?}"
+                    );
+                }
+            }
+            for os in ["macos", "linux"] {
+                for program in ["claude", r"C:\npm\claude.cmd", "/missing/claude"] {
+                    assert_eq!(
+                        direct_program(program, os, |_| false),
+                        Ok(()),
+                        "{os} {program}"
+                    );
+                }
+            }
+            let error = SpawnError::BatchProgram(r"C:\npm\claude.cmd".into()).to_string();
+            assert!(error.contains(r"C:\npm\claude.cmd"), "{error}");
+        }
+
+        /// The refusal reaches the spawn: a Windows intent whose argv runs a batch script it
+        /// cannot unwrap resolves to no command at all, and an accepted `.exe` resolves to its
+        /// argv.
+        #[test]
+        fn a_windows_agent_spawn_runs_only_an_existing_exe() {
+            let fx = Fixture::new();
+            let host = fx.host(&[]);
+            let refused =
+                direct(r"C:\npm\claude.cmd", &[], &[]).resolve_on("s", &host, "windows", &|_| true);
+            assert!(
+                matches!(
+                    &refused,
+                    Err(SpawnError::Shim(cli::ShimError::Unreadable { path, .. }))
+                        if path == Path::new(r"C:\npm\claude.cmd")
+                ),
+                "{:?}",
+                refused.err()
+            );
+            let missing =
+                direct(r"C:\npm\claude.exe", &[], &[])
+                    .resolve_on("s", &host, "windows", &|_| false);
+            assert!(matches!(missing, Err(SpawnError::BatchProgram(_))));
+            let spec = direct(r"C:\npm\claude.exe", &[], &[])
+                .resolve_on("s", &host, "windows", &|_| true)
+                .expect("an existing .exe resolves");
+            let argv: Vec<String> = spec
+                .command
+                .get_argv()
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            assert_eq!(argv, [r"C:\npm\claude.exe", "--x"]);
+            // Elsewhere the program runs as given, whatever is on disk.
+            assert!(direct("claude", &[], &[])
+                .resolve_on("s", &host, "macos", &|_| false)
+                .is_ok());
+        }
+
+        const CLAUDE_SHIM: &str =
+            include_str!("../../codesense-platform/tests/fixtures/npm-shims/claude.cmd");
+        const CODEX_SHIM: &str =
+            include_str!("../../codesense-platform/tests/fixtures/npm-shims/codex.cmd");
+        const CODEX_SHIM_V8: &str =
+            include_str!("../../codesense-platform/tests/fixtures/npm-shims/codex-cmd-shim-8.cmd");
+        const CLAUDE_TARGET: &str = r"node_modules\@anthropic-ai\claude-code\bin\claude.exe";
+        const CODEX_TARGET: &str = r"node_modules\@openai\codex\bin\codex.js";
+        /// Arguments a batch layer would act on; the argv carries them unchanged.
+        const ARGS: [&str; 4] = [
+            r#"say "hi" & %PATH% | <x> ^ !VAR!"#,
+            "",
+            "trailing\\",
+            r#"" & type nul > pwned"#,
+        ];
+
+        fn args() -> Vec<String> {
+            ARGS.iter().map(|arg| arg.to_string()).collect()
+        }
+
+        /// `program`, then [`ARGS`].
+        fn with_args(program: impl Into<OsString>) -> Vec<OsString> {
+            std::iter::once(program.into())
+                .chain(ARGS.iter().map(OsString::from))
+                .collect()
+        }
+
+        /// `path` canonicalized, or as it is when it cannot be, as the spawn does.
+        fn canonical(path: &Path) -> PathBuf {
+            fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+        }
+
+        /// An executable file at `path` holding `text`, with its parent dirs.
+        fn write(path: &Path, text: &str) {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+            fs::set_executable(path, fs::Reach::Everyone).unwrap();
+        }
+
+        fn path_of(dirs: &[&Path]) -> String {
+            std::env::join_paths(dirs).unwrap().into_string().unwrap()
+        }
+
+        /// A global npm prefix with Claude's and Codex's shims and their targets, a
+        /// hand-written batch file, and a `PATH` dir holding `node.exe` and `claude.exe`.
+        struct Prefix {
+            _tmp: tempfile::TempDir,
+            root: PathBuf,
+            npm: PathBuf,
+            bin: PathBuf,
+        }
+
+        fn prefix() -> Prefix {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path().to_path_buf();
+            let npm = root.join("npm");
+            let bin = root.join("bin");
+            write(&npm.join("claude.cmd"), CLAUDE_SHIM);
+            write(&npm.join("codex.cmd"), CODEX_SHIM);
+            write(&npm.join("x.bat"), "@echo off\r\nnode cli.js %*\r\n");
+            write(
+                &npm.join("node_modules/@anthropic-ai/claude-code/bin/claude.exe"),
+                "",
+            );
+            write(&npm.join("node_modules/@openai/codex/bin/codex.js"), "");
+            write(&bin.join("node.exe"), "");
+            write(&bin.join("claude.exe"), "");
+            Prefix {
+                _tmp: tmp,
+                root,
+                npm,
+                bin,
+            }
+        }
+
+        /// `program`'s Windows argv on `path` is `expected`: [`unwrapped_argv`] gives it on
+        /// every host, and [`windows_argv`]'s final check accepts it on a Windows host and
+        /// refuses it, by name, where the host's paths are not Windows paths.
+        fn assert_runs(program: &str, path: &str, expected: Vec<OsString>) {
+            assert_eq!(
+                unwrapped_argv(program, &args(), path),
+                Ok(expected.clone()),
+                "{program}"
+            );
+            let checked = windows_argv("windows", program, &args(), path, |file| file.is_file());
+            if std::env::consts::OS == "windows" {
+                assert_eq!(checked, Ok(expected), "{program}");
+            } else {
+                let last = expected[0].to_string_lossy().into_owned();
+                assert_eq!(checked, Err(SpawnError::BatchProgram(last)), "{program}");
+            }
+        }
+
+        #[test]
+        fn a_windows_program_is_checked_as_its_final_exe() {
+            let refused = |program: &str| -> Result<Vec<OsString>, SpawnError> {
+                Err(SpawnError::BatchProgram(program.to_string()))
+            };
+            // An existing absolute .exe runs as given, its arguments untouched.
+            for program in [
+                r"C:\npm\claude.exe",
+                "C:/npm/claude.EXE",
+                r"\\?\C:\npm\claude.exe",
+            ] {
+                assert_eq!(
+                    windows_argv("windows", program, &args(), "", |_| true),
+                    Ok(with_args(program)),
+                    "{program}"
+                );
+            }
+            // Refused before any file is read: a stream, never stripped, and a root- or
+            // drive-relative path.
+            for program in [
+                r"C:\npm\claude.exe:x.cmd",
+                r"C:\npm\claude.cmd::$DATA",
+                r"\\?\C:\npm\claude.exe:x",
+                "claude.exe:x.cmd",
+                r"\claude.exe",
+                "/claude.exe",
+                "C:claude.exe",
+            ] {
+                assert_eq!(
+                    windows_argv("windows", program, &args(), "", |_| true),
+                    refused(program),
+                    "{program}"
+                );
+            }
+            // The allowlist on the final program: a missing .exe beside a .cmd of its name,
+            // an extensionless program beside a .cmd, a name with no install on PATH.
+            let only_cmd = |path: &Path| path.to_string_lossy().ends_with(".cmd");
+            assert_eq!(
+                windows_argv("windows", r"C:\npm\claude.exe", &args(), "", only_cmd),
+                refused(r"C:\npm\claude.exe")
+            );
+            assert_eq!(
+                windows_argv("windows", r"C:\npm\x", &args(), "", |_| true),
+                refused(r"C:\npm\x")
+            );
+            assert_eq!(
+                windows_argv("windows", "missing-agent.exe", &args(), "", |_| true),
+                refused("missing-agent.exe")
+            );
+            // Every other OS runs the argv as given, whatever is on disk.
+            for os in ["macos", "linux"] {
+                for program in ["claude", r"C:\npm\claude.cmd", "claude.exe:x.cmd"] {
+                    assert_eq!(
+                        windows_argv(os, program, &args(), "", |_| false),
+                        Ok(with_args(program)),
+                        "{os} {program}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn a_windows_npm_shim_runs_its_target_without_cmd() {
+            let p = prefix();
+            let npm = canonical(&p.npm);
+            let path = path_of(&[&p.npm, &p.bin]);
+
+            // The node form: node.exe on PATH runs the script under the canonical shim dir.
+            // Only Windows names `node` by its PATHEXT extensions, so the PATH rows need it.
+            if std::env::consts::OS == "windows" {
+                let node = canonical(&p.bin.join("node.exe"));
+                let mut codex = vec![node.into_os_string(), npm.join(CODEX_TARGET).into()];
+                codex.extend(ARGS.iter().map(OsString::from));
+                assert_runs("codex.cmd", &path, codex.clone());
+                // A relative program resolves on PATH too.
+                let relative = format!("npm{}codex.cmd", std::path::MAIN_SEPARATOR);
+                assert_runs(&relative, &path_of(&[&p.root, &p.bin]), codex.clone());
+                // node.cmd and node.bat earlier on PATH never run.
+                let early = p.root.join("early");
+                write(&early.join("node.cmd"), "@echo off\r\n");
+                write(&early.join("node.bat"), "@echo off\r\n");
+                assert_runs("codex.cmd", &path_of(&[&p.npm, &early, &p.bin]), codex);
+            }
+            // node.exe beside the shim wins.
+            let local = p.root.join("local");
+            write(&local.join("codex.cmd"), CODEX_SHIM);
+            write(&local.join("node.exe"), "");
+            let local_dir = canonical(&local);
+            assert_runs(
+                "codex.cmd",
+                &path_of(&[&local, &p.bin]),
+                [
+                    local_dir.join("node.exe").into_os_string(),
+                    local_dir.join(CODEX_TARGET).into(),
+                ]
+                .into_iter()
+                .chain(ARGS.iter().map(OsString::from))
+                .collect(),
+            );
+
+            // A relative program resolves on PATH too.
+            let relative = format!("local{}codex.cmd", std::path::MAIN_SEPARATOR);
+            assert_runs(
+                &relative,
+                &path_of(&[&p.root]),
+                [
+                    local_dir.join("node.exe").into_os_string(),
+                    local_dir.join(CODEX_TARGET).into(),
+                ]
+                .into_iter()
+                .chain(ARGS.iter().map(OsString::from))
+                .collect(),
+            );
+
+            // The direct-program form runs its .exe, with no node.
+            let claude = with_args(canonical(&npm.join(CLAUDE_TARGET)));
+            assert_runs("claude.cmd", &path, claude.clone());
+            if std::env::consts::OS == "windows" {
+                // A bare name finds the shim through PATHEXT, before bin's claude.exe.
+                assert_runs("claude", &path, claude);
+            }
+            // A plain .exe on PATH resolves and runs as itself.
+            assert_runs(
+                "claude.exe",
+                &path,
+                with_args(canonical(&p.bin.join("claude.exe"))),
+            );
+        }
+
+        #[test]
+        fn a_windows_batch_file_that_is_not_an_npm_shim_never_runs() {
+            let p = prefix();
+            let path = path_of(&[&p.npm, &p.bin]);
+            let named = |file: &Path| canonical(file).to_string_lossy().into_owned();
+            assert_eq!(
+                unwrapped_argv("x.bat", &args(), &path),
+                Err(SpawnError::BatchProgram(named(&p.npm.join("x.bat"))))
+            );
+            assert_eq!(
+                windows_argv("windows", "x.bat", &args(), &path, |_| true),
+                Err(SpawnError::BatchProgram(named(&p.npm.join("x.bat"))))
+            );
+            // A node-form shim with no node.exe beside it or on PATH.
+            assert_eq!(
+                unwrapped_argv("codex.cmd", &args(), &path_of(&[&p.npm])),
+                Err(SpawnError::Shim(cli::ShimError::NodeNotFound {
+                    path: canonical(&p.npm.join("codex.cmd"))
+                }))
+            );
+            // An .exe-named link to a batch file is read as the batch file it is.
+            let links = p.root.join("links");
+            std::fs::create_dir_all(&links).unwrap();
+            if codesense_platform::testutil::symlink_or_skip(
+                p.npm.join("x.bat"),
+                links.join("agent.exe"),
+            ) {
+                assert_eq!(
+                    unwrapped_argv("agent.exe", &args(), &path_of(&[&links])),
+                    Err(SpawnError::BatchProgram(named(&p.npm.join("x.bat"))))
+                );
+            }
+            let error = SpawnError::Shim(cli::ShimError::NodeNotFound {
+                path: PathBuf::from(r"C:\npm\codex.cmd"),
+            })
+            .to_string();
+            assert!(error.contains(r"C:\npm\codex.cmd"), "{error}");
+        }
+
+        #[test]
+        fn a_saved_agent_never_sets_codesenses_windows_or_telemetry_names() {
+            // (name, may set on Windows, may set elsewhere)
+            for (name, windows, elsewhere) in [
+                ("CODESENSE_TAB_SESSION_ID", false, false),
+                ("codesense_tab_session_id", false, true),
+                ("ComSpec", false, false),
+                ("COMSPEC", false, true),
+                ("comspec", false, true),
+                ("PATHEXT", false, false),
+                ("PathExt", false, true),
+                ("OTEL_SDK_DISABLED", false, false),
+                ("otel_sdk_disabled", false, true),
+                ("Otel_Logs_Exporter", false, true),
+                ("DO_NOT_TRACK", false, false),
+                ("Do_Not_Track", false, true),
+                ("MY_VAR", true, true),
+                ("PATH", true, true),
+                ("OTEL", true, true),
+                ("COMSPEC_HOME", true, true),
+                ("ÖTEL_X", true, true),
+            ] {
+                assert_eq!(agent_may_set_on("windows", name), windows, "windows {name}");
+                for os in ["macos", "linux"] {
+                    assert_eq!(agent_may_set_on(os, name), elsewhere, "{os} {name}");
+                }
+                assert_eq!(
+                    agent_may_set(name),
+                    agent_may_set_on(std::env::consts::OS, name),
+                    "{name}"
+                );
+                assert_eq!(
+                    shell_dispatch_env(name),
+                    matches!(name.to_ascii_uppercase().as_str(), "COMSPEC" | "PATHEXT"),
+                    "{name}"
+                );
+            }
+            for name in CODESENSE_LAUNCH_ENV {
+                assert!(
+                    !agent_may_set_on("windows", &name.to_ascii_lowercase()),
+                    "{name}"
+                );
+                assert!(!agent_may_set_on("linux", name), "{name}");
+            }
+            // A headless launch drops a variable it strips, in any case on Windows only.
+            let removed = ["ANTHROPIC_API_KEY".to_string()];
+            assert!(!headless_env_kept("windows", "anthropic_api_key", &removed));
+            assert!(!headless_env_kept("windows", "ANTHROPIC_API_KEY", &removed));
+            assert!(headless_env_kept("macos", "anthropic_api_key", &removed));
+            assert!(!headless_env_kept("macos", "ANTHROPIC_API_KEY", &removed));
+            assert!(!headless_env_kept("windows", "Path", &[]));
+            assert!(headless_env_kept("linux", "Path", &[]));
+            assert!(!headless_env_kept("linux", "PATH", &[]));
+            assert!(!headless_env_kept("windows", "comspec", &[]));
+            assert!(headless_env_kept("windows", "MY_VAR", &removed));
+            assert!(same_env_name("windows", "Path", "PATH"));
+            assert!(!same_env_name("linux", "Path", "PATH"));
+            assert!(same_env_name("macos", "PATH", "PATH"));
+            // The engine's own export setup keeps the byte-for-byte rule.
+            assert!(telemetry_owned_env("OTEL_X") && !telemetry_owned_env("otel_x"));
+        }
     }
 
     /// A Windows host whose table has a POSIX runner.

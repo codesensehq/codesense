@@ -1,0 +1,2 @@
+# Byte-exact: the shim parser matches these files verbatim, CRLF included.
+*.cmd -text
