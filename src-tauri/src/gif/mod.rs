@@ -590,6 +590,8 @@ impl GifService {
         };
         match result {
             Ok(found) => {
+                let epoch = register::install_epoch(&self.data_dir);
+                analytics::Analytics::start_epoch(&self.analytics, epoch);
                 self.analytics.record(provider, &found, (self.clock)());
                 Ok((provider, found.into_iter().map(|f| f.candidate).collect()))
             }

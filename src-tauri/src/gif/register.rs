@@ -12,8 +12,8 @@ use crate::commands::credential_store::Secret;
 use crate::media::{index::Owner, MediaProvider};
 use futures_util::future::BoxFuture;
 use std::{
-    collections::{HashMap, VecDeque},
-    path::Path,
+    collections::{BTreeMap, HashMap, VecDeque},
+    path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
     time::Duration,
 };
@@ -27,8 +27,13 @@ const HOUR_MS: i64 = 60 * 60 * 1000;
 pub(crate) const ONLOAD_WINDOW_MS: i64 = HOUR_MS;
 const TIMEOUT: Duration = Duration::from_secs(5);
 const RANDOM_ID_API: &str = "https://api.giphy.com/v1/randomid";
-/// Held while `gif-install.json` is written or deleted.
-static INSTALL_FILE: Mutex<()> = std::sync::Mutex::new(());
+/// After a failed random id call, the next waits this long.
+pub(crate) const RANDOM_ID_RETRY_MS: i64 = 15 * 60 * 1000;
+/// Held while `gif-install.json` is written or deleted, with each data dir's install epoch: it
+/// moves on every delete (search Off, the key removed or replaced), so an id made before one is
+/// never saved after it, and what was held for the old id is let go.
+static INSTALL_FILE: Mutex<BTreeMap<PathBuf, u64>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -148,8 +153,17 @@ fn read_install(dir: &Path, provider: Provider, fp: &str) -> Option<String> {
 
 /// Save `id` as the install's random id for the key `fp`: a temp file readable by this user
 /// only, renamed over the file.
-fn write_install(dir: &Path, provider: Provider, fp: &str, id: &str) -> std::io::Result<()> {
-    let _guard = lock(&INSTALL_FILE);
+fn write_install(
+    dir: &Path,
+    provider: Provider,
+    fp: &str,
+    id: &str,
+    epoch: u64,
+) -> std::io::Result<bool> {
+    let epochs = lock(&INSTALL_FILE);
+    if epochs.get(dir).copied().unwrap_or(0) != epoch {
+        return Ok(false);
+    }
     let mut body = serde_json::Map::new();
     body.insert(
         Provider::as_str(provider).to_string(),
@@ -160,13 +174,20 @@ fn write_install(dir: &Path, provider: Provider, fp: &str, id: &str) -> std::io:
     std::io::Write::write_all(&mut temp, &serde_json::to_vec_pretty(&body)?)?;
     codesense_platform::fs::set_owner_only(tempfile::NamedTempFile::path(&temp))?;
     tempfile::NamedTempFile::persist(temp, dir.join(FILE)).map_err(|e| e.error)?;
-    Ok(())
+    drop(epochs);
+    Ok(true)
+}
+
+/// The install epoch of `dir` (see [`INSTALL_FILE`]).
+pub(crate) fn install_epoch(dir: &Path) -> u64 {
+    lock(&INSTALL_FILE).get(dir).copied().unwrap_or(0)
 }
 
 /// Delete `gif-install.json`, so nothing that identifies the install stays: GIF search was
 /// turned Off or the key removed or replaced. A failure is logged.
 pub(crate) fn forget_install(dir: &Path) {
-    let _guard = lock(&INSTALL_FILE);
+    let mut epochs = lock(&INSTALL_FILE);
+    *epochs.entry(dir.to_path_buf()).or_insert(0) += 1;
     match std::fs::remove_file(dir.join(FILE)) {
         Err(e) if std::io::Error::kind(&e) != std::io::ErrorKind::NotFound => {
             log::warn!(target: "gif", "gif registration: the install id could not be deleted: {e}");
@@ -206,6 +227,10 @@ pub(crate) struct Registration {
     pings: Mutex<HashMap<String, VecDeque<i64>>>,
     /// Held while the random id is read or made, so concurrent sends make one.
     creating: tokio::sync::Mutex<()>,
+    /// No random id call before this (ms): set by a failed one.
+    random_retry_at: Mutex<i64>,
+    /// The install epoch what is held here belongs to.
+    epoch: Mutex<u64>,
 }
 
 impl Registration {
@@ -223,13 +248,39 @@ impl Registration {
             sent: std::sync::Mutex::new(HashMap::new()),
             pings: std::sync::Mutex::new(HashMap::new()),
             creating: tokio::sync::Mutex::new(()),
+            random_retry_at: std::sync::Mutex::new(0),
+            epoch: std::sync::Mutex::new(0),
         }
+    }
+
+    /// Let go of the pending onloads, sent GIFs and search entries held for an earlier install
+    /// epoch, so nothing sent with an old id is sent again with a new one.
+    fn follow_epoch(&self) {
+        let now = install_epoch(self.service.data_dir());
+        let mut seen = lock(&self.epoch);
+        if *seen != now {
+            *seen = now;
+            lock(&self.onloads).clear();
+            lock(&self.sent).clear();
+        }
+        analytics::Analytics::start_epoch(&self.service.analytics, now);
+    }
+
+    /// Whether the provider has no backoff running for `key`.
+    async fn provider_open(&self, key: &str, now: i64) -> bool {
+        let (rate, counted) = (self.service.bucket.clone(), key.to_string());
+        let backoff = tokio::task::spawn_blocking(move || {
+            bucket::Bucket::backoff_until(&rate, &counted, now)
+        })
+        .await;
+        matches!(backoff, Ok(None))
     }
 
     /// The provider's key and its fingerprint, while GIF search is On with that provider and
     /// a key; else `None`, logged.
-    async fn active_key(&self, provider: Provider) -> Option<(Secret, String)> {
+    async fn active_key(&self, provider: Provider) -> Option<(Secret, String, u64)> {
         let dir = self.service.data_dir().to_path_buf();
+        let epoch = install_epoch(&dir);
         let current = match tokio::task::spawn_blocking(move || settings::load(&dir)).await {
             Ok(current) => current,
             Err(_) => return None,
@@ -241,7 +292,7 @@ impl Registration {
         match settings::Keys::read_timed(&self.service.keys, provider).await {
             Ok(key) => {
                 let fp = super::fingerprint(&key);
-                Some((key, fp))
+                Some((key, fp, epoch))
             }
             Err(error) => {
                 log::info!(target: "gif", "gif registration: no usable key ({}); no ping", error.code());
@@ -253,7 +304,13 @@ impl Registration {
     /// The install's random id for this key: the saved one, else one made by GIPHY's random id
     /// call (outside the search bucket) and saved, while search is still On with the same key.
     /// `None`, logged, when it can't be had: pings wait until it exists.
-    async fn install_id(&self, provider: Provider, key: &Secret, fp: &str) -> Option<String> {
+    async fn install_id(
+        &self,
+        provider: Provider,
+        key: &Secret,
+        fp: &str,
+        epoch: u64,
+    ) -> Option<String> {
         let _one = self.creating.lock().await;
         let dir = self.service.data_dir().to_path_buf();
         let (read_dir, read_fp) = (dir.clone(), fp.to_string());
@@ -262,35 +319,51 @@ impl Registration {
         if let Ok(Some(id)) = saved {
             return Some(id);
         }
+        // The call carries the key, so it is bounded like a ping: not during a backoff, within
+        // the hour's pings, and not again within RANDOM_ID_RETRY_MS of a failure.
+        let now = (self.clock)();
+        let bucket_key = super::bucket_key(provider, fp);
+        if now < *lock(&self.random_retry_at) {
+            log::info!(target: "gif", "gif registration: waiting to ask GIPHY for an install id again");
+            return None;
+        }
+        if !self.provider_open(&bucket_key, now).await {
+            log::info!(target: "gif", "gif registration: no install id call during a GIPHY backoff");
+            return None;
+        }
+        if !self.spend_ping(&bucket_key, now) {
+            log::warn!(target: "gif", "gif registration: no install id call; {PINGS_PER_HOUR} calls this hour");
+            return None;
+        }
         let mut url: url::Url = RANDOM_ID_API.parse().expect("the GIPHY random id URL");
         url.query_pairs_mut().append_pair("api_key", key.expose());
         let id = match giphy::Transport::get(self.transport.as_ref(), &url).await {
             Ok(reply) if (200..300).contains(&reply.status) => parse_random_id(&reply.body),
             Ok(reply) => {
                 log::warn!(target: "gif", "gif registration: GIPHY's random id call answered HTTP {}", reply.status);
-                return None;
+                None
             }
             Err(failure) => {
                 log::warn!(target: "gif", "gif registration: GIPHY's random id call failed ({failure:?})");
-                return None;
+                None
             }
         };
         let Some(id) = id else {
-            log::warn!(target: "gif", "gif registration: GIPHY's random id is not an id; refused");
+            *lock(&self.random_retry_at) = now + RANDOM_ID_RETRY_MS;
             return None;
         };
-        // Search may have been turned Off, or the key changed, while the call ran.
-        match self.active_key(provider).await {
-            Some((_, now_fp)) if now_fp == fp => {}
-            _ => return None,
-        }
+        // Saved only if search was not turned Off, nor the key removed or replaced, meanwhile.
         let (write_fp, write_id) = (fp.to_string(), id.clone());
         match tokio::task::spawn_blocking(move || {
-            write_install(&dir, provider, &write_fp, &write_id)
+            write_install(&dir, provider, &write_fp, &write_id, epoch)
         })
         .await
         {
-            Ok(Ok(())) => Some(id),
+            Ok(Ok(true)) => Some(id),
+            Ok(Ok(false)) => {
+                log::info!(target: "gif", "gif registration: search was turned off or the key changed; id not saved");
+                None
+            }
             _ => {
                 log::warn!(target: "gif", "gif registration: the install id could not be saved");
                 None
@@ -325,13 +398,8 @@ impl Registration {
     ) {
         let key = super::bucket_key(provider, fp);
         let now = (self.clock)();
-        let (rate, counted) = (self.service.bucket.clone(), key.clone());
-        let backoff = tokio::task::spawn_blocking(move || {
-            bucket::Bucket::backoff_until(&rate, &counted, now)
-        })
-        .await;
         let event = if onload { "onload" } else { "onsent" };
-        if !matches!(backoff, Ok(None)) {
+        if !self.provider_open(&key, now).await {
             log::info!(target: "gif", "gif registration: {event} dropped during a GIPHY backoff");
             return;
         }
@@ -394,10 +462,9 @@ impl Registration {
             return;
         }
         let provider = Provider::Giphy;
-        let Some((key, fp)) = self.active_key(provider).await else {
-            return;
-        };
+        self.follow_epoch();
         let now = (self.clock)();
+        // The local checks come first, so a send that can't register never reads the keychain.
         let held = &self.service.analytics;
         let Some(entry) = analytics::Analytics::held_entry(held, provider, &sent.provider_id, now)
         else {
@@ -408,6 +475,9 @@ impl Registration {
             log::warn!(target: "gif", "gif registration: the GIF id was sent with another GIF's URL; not registered");
             return;
         }
+        let Some((key, fp, epoch)) = self.active_key(provider).await else {
+            return;
+        };
         if let Some(onload) = entry.pingbacks.onload.clone() {
             let expires = now + ONLOAD_WINDOW_MS;
             self.with_pending(&sent.slot, now, |p| {
@@ -423,7 +493,7 @@ impl Registration {
             log::info!(target: "gif", "gif registration: the search gave no onsent URL; no ping");
             return;
         };
-        let Some(id) = self.install_id(provider, &key, &fp).await else {
+        let Some(id) = self.install_id(provider, &key, &fp, epoch).await else {
             return;
         };
         self.send_ping(provider, &fp, false, onsent, &id).await;
@@ -432,6 +502,7 @@ impl Registration {
     /// A stored message's media fetch finished: a GIPHY-tagged attachment's pending onload gets
     /// its sha; one that lost its tag (redirected away) or has no sha loses its pending onload.
     pub(crate) fn note_fetched(&self, slot: &Slot, sha: Option<&str>, tagged: bool) {
+        self.follow_epoch();
         let now = (self.clock)();
         match sha.filter(|_| tagged) {
             Some(sha) => self.with_pending(slot, now, |p| p.sha = Some(sha.to_string())),
@@ -443,6 +514,7 @@ impl Registration {
 
     /// Take every pending onload armed for `sha`, so only this serve fires them.
     pub(crate) fn take_onloads(&self, sha: &str) -> Vec<(Slot, Pending)> {
+        self.follow_epoch();
         let mut onloads = lock(&self.onloads);
         let slots: Vec<Slot> = onloads
             .iter()
@@ -484,8 +556,10 @@ impl Registration {
             }
         }
         if !Vec::is_empty(&due) {
-            if let Some((key, fp)) = self.active_key(Provider::Giphy).await {
-                if let Some(id) = self.install_id(Provider::Giphy, &key, &fp).await {
+            // Taken under the current epoch only: a pending onload from before Off never fires.
+            let active = self.active_key(Provider::Giphy).await;
+            if let Some((key, fp, epoch)) = active.filter(|(_, _, e)| *e == *lock(&self.epoch)) {
+                if let Some(id) = self.install_id(Provider::Giphy, &key, &fp, epoch).await {
                     for onload in &due {
                         self.send_ping(Provider::Giphy, &fp, true, onload, &id)
                             .await;
