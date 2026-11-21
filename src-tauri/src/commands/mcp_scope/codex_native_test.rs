@@ -80,6 +80,7 @@ for line in sys.stdin:
         Some(&home),
         &launch,
         &str::to_string,
+        None,
     )
     .unwrap();
     let mut args = vec![
