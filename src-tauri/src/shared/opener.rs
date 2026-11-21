@@ -238,6 +238,21 @@ pub(crate) enum OpenError {
         status: String,
         note: Option<&'static str>,
     },
+    /// A waited launcher still ran at its limit and was killed. What it asked for may still
+    /// happen: `gio launch` hands the file to a D-Bus-activated editor that can open it later.
+    TimedOut {
+        program: String,
+        limit: Duration,
+    },
+}
+
+/// `limit` as the errors say it: whole seconds, else milliseconds.
+fn describe_limit(limit: Duration) -> String {
+    if limit.subsec_nanos() == 0 && limit.as_secs() > 0 {
+        format!("{} s", limit.as_secs())
+    } else {
+        format!("{} ms", limit.as_millis())
+    }
 }
 
 impl fmt::Display for OpenError {
@@ -297,6 +312,11 @@ impl fmt::Display for OpenError {
                     None => Ok(()),
                 }
             }
+            Self::TimedOut { program, limit } => write!(
+                f,
+                "{program} didn't finish within {}; it may still open",
+                describe_limit(*limit)
+            ),
         }
     }
 }
@@ -547,17 +567,18 @@ fn wait_bounded(tree: &mut ProcessTree, limit: Duration, rest: Rest) -> Exit {
 }
 
 /// Starts the first launcher that spawns. One that fails to spawn is logged and the next is
-/// tried; one that spawns but exits non-zero (only waited rows see it) is an error, not retried.
+/// tried; one that spawns but exits non-zero or runs past its limit (only waited rows see
+/// either) is an error, not retried.
 pub(crate) fn spawn_first(launches: &[Launch], spawner: &dyn Spawn) -> Result<(), OpenError> {
     let mut tried = Vec::new();
     for launch in launches {
         match spawner.start(launch.command(), launch.wait) {
             Ok(Exit::Detached) | Ok(Exit::Status { success: true, .. }) => return Ok(()),
+            // It started, so the next launcher isn't tried: it may still be opening this.
             Ok(Exit::TimedOut { .. }) => {
-                return Err(OpenError::Failed {
+                return Err(OpenError::TimedOut {
                     program: launch.name(),
-                    status: "timed out".into(),
-                    note: None,
+                    limit: launch.wait.unwrap_or_default(),
                 })
             }
             Ok(Exit::Status { describe, .. }) => {
