@@ -710,6 +710,8 @@ test("CLI: in a merge group the PR gate measures against the group's parent", as
     // Against origin/main the earlier entry's seal edit would read as this entry's: strict.
     const pr = run("reply({ text, new_param: 1 })", "1", { GITHUB_EVENT_NAME: "pull_request" });
     assert.equal(pr.status, 1, pr.stderr);
+    assert.doesNotMatch(pr.stderr, /NOTICE/);
+    assert.match(pr.stderr, /new_param/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
