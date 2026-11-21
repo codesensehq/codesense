@@ -94,7 +94,7 @@ pub(crate) struct ActionVerbDoc {
 pub(crate) const ACTION_VERB_DOCS: &[ActionVerbDoc] = &[
     ActionVerbDoc {
         verb: "files.list", tier: "read", args: "{scope?, team?, storyId?, agentId?, dir?}",
-        purpose: "List own team, private, story hydration or agent context files; returns {rows}. MCP twin: list_context_content.", deny_example: "File not found",
+        purpose: "List own team, private, story hydration or agent context files; returns {rows} (proof: changed without a re-export). MCP twin: list_context_content.", deny_example: "File not found",
     },
     ActionVerbDoc {
         verb: "files.read", tier: "read", args: "{path, maxBytes?}",
