@@ -4,6 +4,5 @@
 # Format: <path> <reason>, the path relative to the app root (src-tauri).
 # A row with no reason fails.
 src/commands/app_nap.rs # holds the NSProcessInfo activity (objc2 Foundation) that keeps App Nap off while a session runs
-src/commands/export_pdf/macos.rs # WKWebView PDF rendering through objc2 WebKit; the module is compiled for macOS only
 src/memory_metrics.rs # attributes the WebKit helper processes to the app with the macOS responsibility API
 src/menu.rs # the macOS menu bar (app, Edit, View and Go menus per the macOS HIG)

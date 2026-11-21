@@ -378,7 +378,7 @@ test("rust.yml runs the Windows check on a pull request only with ci:windows, ne
     steps.filter((s) => /\bcargo\b/.test(s.run ?? "")).map((s) => s.run),
     [
       "cargo check --locked -p codesense-platform -p codesense-host-proto -p codesense-fs-core -p codesense-pty-core -p codesense-session-server --all-targets",
-      "cargo test --locked -p codesense-platform",
+      "cargo test --locked -p codesense-platform --features pdf",
       "cargo test --locked -p codesense-host-proto --lib hook::",
       'cargo test --locked -p codesense-session-server --lib portable 2>&1 | tee "$RUNNER_TEMP/portable-tests.log"\n' +
         "grep -Eq '^test result: ok\\. [1-9][0-9]* passed' \"$RUNNER_TEMP/portable-tests.log\"\n",
@@ -585,7 +585,8 @@ test("rust.yml's Linux app job runs the shared suites and the Secret Service tes
 });
 
 // PDF export's renderer tests are ignored without a display: this job runs them, and only them,
-// on a virtual display with a German locale generated for the translation test.
+// on a virtual display with a German locale generated for the translation test. They live in the
+// platform crate behind its pdf feature, which this step builds itself.
 test("rust.yml's Linux app job runs PDF export's renderer tests under xvfb", () => {
   const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
   const job = workflow.jobs["rust-linux-app"];
@@ -597,11 +598,33 @@ test("rust.yml's Linux app job runs PDF export's renderer tests under xvfb", () 
   assert.equal(
     pdf.run,
     "sudo locale-gen de_DE.UTF-8\n" +
-      "xvfb-run -a cargo nextest run --profile ci --locked -p codesense --lib --retries 0 \\\n" +
-      "  --run-ignored all -E 'test(/^commands::export_pdf::render::tests::/)'\n",
+      'mkdir -p "$RUNNER_TEMP/junit"\n' +
+      "rm -f target/nextest/ci/junit.xml\n" +
+      "status=0\n" +
+      "xvfb-run -a cargo nextest run --profile ci --locked -p codesense-platform --features pdf --lib \\\n" +
+      "  --retries 0 --run-ignored all -E 'test(/^pdf::/)' || status=1\n" +
+      'if [[ -f target/nextest/ci/junit.xml ]]; then mv target/nextest/ci/junit.xml "$RUNNER_TEMP/junit/pdf.xml"; fi\n' +
+      'exit "$status"\n',
   );
-  const names = job.steps.map((step) => step.name);
-  assert.ok(names.indexOf("Compile the tests") < names.indexOf(pdf.name));
+  // A report left by the Secret Service runs is never kept as pdf.xml.
+  assert.ok(pdf.run.indexOf("rm -f target/nextest/ci/junit.xml") < pdf.run.indexOf("xvfb-run"));
+  // The report sits where the uploaded folder holds it, out of reach of the next step's rm -f.
+  const upload = job.steps.find((step) => step.name === "Upload JUnit report");
+  assert.equal(upload.if, "always()");
+  assert.equal(upload.with.path, "${{ runner.temp }}/junit/");
+});
+
+// The Linux compile check also builds the platform crate's PDF renderers and their tests, which
+// only the app enables, so a change to them fails before the merge.
+test("rust.yml's Linux check compiles the platform crate with pdf", () => {
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  const steps = workflow.jobs["rust-check-linux"].steps;
+  const pdf = steps.find((step) => step.name === "Check the platform crate's PDF renderers");
+  assert.ok(pdf, "the PDF renderers' check step");
+  assert.equal(pdf.run, "cargo check --locked -p codesense-platform --features pdf --lib --tests");
+  const libraries = steps.findIndex((step) => step.name === "Install system libraries");
+  assert.ok(libraries >= 0, "the system libraries step");
+  assert.ok(steps.indexOf(pdf) > libraries);
 });
 
 // A push diffs before..after; a new branch tip (before all zeros) tests everything.

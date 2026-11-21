@@ -1,7 +1,7 @@
 [package]
 name = "codesense-platform"
 version = "0.1.0"
-description = "The one place OS-specific mechanisms live: process trees, private and atomic files, locks, links, the codesense home, the current user and host name, the open-file limit, local IPC, the command-line tool lookup, the secret-entry dialog and whether a tray item shows"
+description = "The one place OS-specific mechanisms live: process trees, private and atomic files, locks, links, the codesense home, the current user and host name, the open-file limit, local IPC, the command-line tool lookup, the secret-entry dialog, whether a tray item shows and rendering a page to PDF"
 edition = "2021"
 license = "MIT"
 publish = false
@@ -20,12 +20,31 @@ testutil = []
 # The tray host check's session-bus read on Linux (`tray`). Only the app enables it, so the
 # sidecars, which are also built static for musl, never link libdbus.
 tray-host = ["dep:dbus"]
+# Rendering a page to PDF in a hidden web view (`pdf`): WebKitGTK on Linux, WKWebView on macOS.
+# Only the app enables it, so no sidecar links WebKit or gains `url`.
+pdf = [
+    "dep:log",
+    "dep:url",
+    "tokio/sync",
+    "tokio/fs",
+    "dep:gtk",
+    "dep:webkit2gtk",
+    "dep:tempfile",
+    "dep:objc2",
+    "dep:objc2-foundation",
+    "dep:objc2-web-kit",
+    "dep:block2",
+    "dep:dispatch2",
+]
 
 [dependencies]
 dirs = "5"
 dunce = "1"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["net", "time"] }
+# With `pdf`: the renderers' logging and the source policy's URL parsing.
+log = { version = "0.4", optional = true }
+url = { version = "2", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -34,6 +53,19 @@ libc = "0.2"
 # Asks the session bus whether a tray host is registered (`tray`, with `tray-host`). The crate
 # and version the app's Secret Service store already builds.
 dbus = { version = "0.9", optional = true }
+# With `pdf`: the bare offscreen web view, its print operation and the directory it prints to.
+# The versions and features Tauri's runtime already builds; GLib comes through `gtk::glib`.
+gtk = { version = "0.18", optional = true }
+webkit2gtk = { version = "2.0", features = ["v2_40"], optional = true }
+tempfile = { version = "3", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# With `pdf`: WKWebView `createPDF`, driven on the main queue.
+objc2 = { version = "0.6", optional = true }
+objc2-foundation = { version = "0.3", features = ["NSData", "NSError", "NSGeometry", "NSProcessInfo", "NSString", "NSURL", "NSURLRequest"], optional = true }
+objc2-web-kit = { version = "0.3", default-features = false, features = ["WKWebView", "WKWebViewConfiguration", "WKPDFConfiguration", "WKNavigationDelegate", "WKNavigation", "block2", "objc2-app-kit"], optional = true }
+block2 = { version = "0.6", optional = true }
+dispatch2 = { version = "0.3", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
@@ -56,3 +88,5 @@ windows-sys = { version = "0.59", features = [
 codesense-platform = { path = ".", features = ["testutil", "tray-host"] }
 tempfile = "3"
 tokio = { version = "1", features = ["io-util", "rt", "time"] }
+# The source policy's tests, which run without `pdf`.
+url = "2"
