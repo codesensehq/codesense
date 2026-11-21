@@ -98,6 +98,11 @@ pub async fn reveal_path(path: String) -> Result<(), String> {
 
 /// The launchers that reveal `path` on `os`, each given exactly the canonical path
 /// [`reveal_target`] checked against the managed roots, never the spelled one.
+///
+/// Accepted residual: the launcher (`xdg-open`, often a separate D-Bus file manager, or Finder)
+/// resolves that canonical path again by name. A component of it swapped for a link after the
+/// check would still be followed; this process can't hand an external file manager its own
+/// open handle, so that window stays.
 fn reveal_launches(
     os: &str,
     path: &str,
@@ -365,6 +370,55 @@ mod tests {
             reveal_target(&s(&missing), &home),
             Err(format!("path does not exist: {}", s(&missing)))
         );
+    }
+
+    /// Through a link that stays inside a root, every planned launch is handed the canonical
+    /// target, on each OS with rows.
+    #[cfg(unix)]
+    #[test]
+    fn reveal_launches_argument_is_the_checked_canonical_path() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let team = home.join(crate::context_repo::USERS_DIR).join("u/team");
+        let core = home.join("core/docs");
+        for dir in [&team, &core] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let link = team.join("to-core");
+        std::os::unix::fs::symlink(&core, &link).unwrap();
+        let canonical = std::fs::canonicalize(&core).unwrap();
+        let facts = opener::HostFacts {
+            is_wsl: true,
+            xdg_data_home: None,
+            xdg_data_dirs: Vec::new(),
+            text_default: Err(opener::TextDefaultMissing::NotQueried),
+        };
+
+        for os in ["linux", "macos"] {
+            let launches =
+                reveal_launches(os, link.to_str().unwrap(), &home, &facts, &opener::HostFs)
+                    .unwrap();
+            assert!(!launches.is_empty(), "{os}");
+            for launch in &launches {
+                assert_eq!(
+                    launch.args.last(),
+                    Some(&canonical.clone().into_os_string()),
+                    "{os}: {launch:?}"
+                );
+            }
+        }
+        // A refused path plans nothing.
+        let outside = root.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        let refused = reveal_launches(
+            "linux",
+            outside.to_str().unwrap(),
+            &home,
+            &facts,
+            &opener::HostFs,
+        )
+        .unwrap_err();
+        assert!(refused.starts_with("refusing to reveal"), "{refused}");
     }
 
     #[test]
