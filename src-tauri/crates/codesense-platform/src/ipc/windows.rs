@@ -352,6 +352,8 @@ pub(crate) mod blocking {
     use std::fs::OpenOptions;
     use std::io::{Read, Write};
     use std::os::windows::fs::OpenOptionsExt;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
 
     use windows_sys::Win32::Foundation::{
         ERROR_BROKEN_PIPE, ERROR_IO_PENDING, ERROR_NO_DATA, ERROR_PIPE_CONNECTED, WAIT_TIMEOUT,
@@ -369,6 +371,24 @@ pub(crate) mod blocking {
     // completion, so the stream still blocks; the wait is what bounds a
     // timeout. A timed-out operation is cancelled with `CancelIoEx`, which
     // names that one operation, and waited out before its buffer is let go.
+    // A stream's clones share its pipe, each with its own event, so one clone
+    // reads while another writes; a stream's operations wait in slices of
+    // `SHUT_POLL`, so a shutdown on any clone ends them within one.
+
+    /// How long an operation on a stream waits before it looks again whether
+    /// a clone shut the stream down.
+    const SHUT_POLL: Duration = Duration::from_millis(50);
+
+    /// `duration` as a wait's milliseconds: at least 1, short of `INFINITE`.
+    fn wait_millis(duration: Duration) -> u32 {
+        u32::try_from(duration.as_millis())
+            .map_or(INFINITE - 1, |millis| millis.clamp(1, INFINITE - 1))
+    }
+
+    /// What an operation on a stream that was shut down fails with.
+    fn shut_down() -> io::Error {
+        io::Error::new(io::ErrorKind::NotConnected, "the pipe was shut down")
+    }
 
     /// A manual-reset event an operation's `OVERLAPPED` signals.
     fn new_event() -> io::Result<OwnedHandle> {
@@ -392,12 +412,15 @@ pub(crate) mod blocking {
     /// The outcome of the operation `started` on `handle` with `overlapped`
     /// (whether its call returned true), waiting up to `timeout`, for ever
     /// when `None`: its byte count. One still pending then is cancelled and
-    /// waited out, and is [`io::ErrorKind::TimedOut`].
+    /// waited out, and is [`io::ErrorKind::TimedOut`]. With `shut`, the wait
+    /// also ends within [`SHUT_POLL`] of `shut` being set, the operation
+    /// cancelled the same way, and is [`io::ErrorKind::NotConnected`].
     fn finish(
         handle: HANDLE,
         overlapped: &OVERLAPPED,
         started: bool,
         timeout: Option<Duration>,
+        shut: Option<&AtomicBool>,
     ) -> io::Result<u32> {
         if !started {
             let error = io::Error::last_os_error();
@@ -405,20 +428,36 @@ pub(crate) mod blocking {
                 return Err(error);
             }
         }
-        let millis = timeout.map_or(INFINITE, |timeout| {
-            u32::try_from(timeout.as_millis())
-                .map_or(INFINITE - 1, |millis| millis.clamp(1, INFINITE - 1))
-        });
+        let is_shut = || shut.is_some_and(|shut| shut.load(Ordering::Acquire));
+        let deadline = timeout.map(|timeout| Instant::now() + timeout);
         let mut transferred: u32 = 0;
-        // SAFETY: the operation was started on `handle` with `overlapped`,
-        // which outlives this wait.
-        if unsafe { GetOverlappedResultEx(handle, overlapped, &mut transferred, millis, 0) } != 0 {
-            return Ok(transferred);
-        }
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() != Some(WAIT_TIMEOUT as i32) {
-            return Err(error);
-        }
+        let ended_by_shut = loop {
+            let left = deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+            let slice = match (left, shut) {
+                (Some(left), Some(_)) => Some(left.min(SHUT_POLL)),
+                (left, None) => left,
+                (None, Some(_)) => Some(SHUT_POLL),
+            };
+            let millis = slice.map_or(INFINITE, wait_millis);
+            // SAFETY: the operation was started on `handle` with
+            // `overlapped`, which outlives this wait.
+            if unsafe { GetOverlappedResultEx(handle, overlapped, &mut transferred, millis, 0) }
+                != 0
+            {
+                return Ok(transferred);
+            }
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() != Some(WAIT_TIMEOUT as i32) {
+                // A shutdown's own cancel ends the operation this way.
+                return Err(if is_shut() { shut_down() } else { error });
+            }
+            if is_shut() {
+                break true;
+            }
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                break false;
+            }
+        };
         // SAFETY: cancels this one operation; then wait until it is done, so
         // the caller's buffer and `overlapped` are no longer in use.
         unsafe { CancelIoEx(handle, overlapped) };
@@ -429,10 +468,11 @@ pub(crate) mod blocking {
         if completed || transferred > 0 {
             return Ok(transferred);
         }
-        Err(io::Error::new(
-            io::ErrorKind::TimedOut,
-            "the pipe timed out",
-        ))
+        Err(if ended_by_shut {
+            shut_down()
+        } else {
+            io::Error::new(io::ErrorKind::TimedOut, "the pipe timed out")
+        })
     }
 
     pub(crate) struct Listener {
@@ -455,7 +495,7 @@ pub(crate) mod blocking {
             // SAFETY: the instance is open and overlapped; `connecting` lives
             // until `finish` has seen the operation through.
             let started = unsafe { ConnectNamedPipe(handle, &mut connecting) } != 0;
-            if let Err(error) = finish(handle, &connecting, started, None) {
+            if let Err(error) = finish(handle, &connecting, started, None, None) {
                 // Already connected, or connected and gone again (its bytes
                 // are still read): either way a connection, as tokio counts it.
                 let connected = [ERROR_PIPE_CONNECTED, ERROR_NO_DATA]
@@ -479,9 +519,17 @@ pub(crate) mod blocking {
         }
     }
 
+    /// One connected pipe instance, shared by a stream and its clones.
+    struct Pipe {
+        handle: OwnedHandle,
+        /// Set once any clone shut the stream down.
+        shut: AtomicBool,
+    }
+
     pub(crate) struct Stream {
-        pipe: OwnedHandle,
-        /// Signalled as each operation on `pipe` completes; one at a time.
+        pipe: Arc<Pipe>,
+        /// Signalled as each operation of this clone completes; one at a
+        /// time.
         event: OwnedHandle,
         is_server: bool,
         read_timeout: Option<Duration>,
@@ -491,12 +539,46 @@ pub(crate) mod blocking {
     impl Stream {
         fn new(pipe: OwnedHandle, event: OwnedHandle, is_server: bool) -> Self {
             Self {
-                pipe,
+                pipe: Arc::new(Pipe {
+                    handle: pipe,
+                    shut: AtomicBool::new(false),
+                }),
                 event,
                 is_server,
                 read_timeout: None,
                 write_timeout: None,
             }
+        }
+
+        /// Another stream on the same pipe, with its own event and its own
+        /// timeouts, starting from this one's.
+        pub(crate) fn try_clone(&self) -> io::Result<Self> {
+            Ok(Self {
+                pipe: Arc::clone(&self.pipe),
+                event: new_event()?,
+                is_server: self.is_server,
+                read_timeout: self.read_timeout,
+                write_timeout: self.write_timeout,
+            })
+        }
+
+        /// Shut the stream and every clone down: an operation in flight on
+        /// any of them ends within [`SHUT_POLL`], and every later one fails.
+        /// The pipe itself closes once the last clone is dropped.
+        pub(crate) fn shutdown(&self) -> io::Result<()> {
+            self.pipe.shut.store(true, Ordering::Release);
+            // SAFETY: cancels what this process has in flight on the pipe;
+            // each operation's own wait sees it end. Nothing in flight is
+            // `ERROR_NOT_FOUND`, which is not a failure here.
+            unsafe { CancelIoEx(self.pipe.handle.as_raw_handle(), std::ptr::null()) };
+            Ok(())
+        }
+
+        fn check_open(&self) -> io::Result<()> {
+            if self.pipe.shut.load(Ordering::Acquire) {
+                return Err(shut_down());
+            }
+            Ok(())
         }
 
         pub(crate) fn connect(endpoint: &Endpoint) -> io::Result<Self> {
@@ -530,7 +612,7 @@ pub(crate) mod blocking {
         }
 
         pub(crate) fn peer_pid(&self) -> io::Result<Pid> {
-            peer_pid(self.pipe.as_raw_handle(), self.is_server)
+            peer_pid(self.pipe.handle.as_raw_handle(), self.is_server)
         }
 
         pub(crate) fn set_read_timeout(&mut self, timeout: Option<Duration>) -> io::Result<()> {
@@ -557,9 +639,10 @@ pub(crate) mod blocking {
 
     impl Read for Stream {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.check_open()?;
             let len = u32::try_from(buf.len()).unwrap_or(u32::MAX);
             let mut reading = overlapped(&self.event);
-            let handle = self.pipe.as_raw_handle();
+            let handle = self.pipe.handle.as_raw_handle();
             // SAFETY: `buf` and `reading` outlive the operation: `finish`
             // returns only once it completed or was cancelled.
             let started = unsafe {
@@ -571,7 +654,7 @@ pub(crate) mod blocking {
                     &mut reading,
                 )
             } != 0;
-            match finish(handle, &reading, started, self.read_timeout) {
+            match finish(handle, &reading, started, self.read_timeout, Some(&self.pipe.shut)) {
                 Ok(read) => Ok(read as usize),
                 // The other end closed: the end of the stream.
                 Err(error) if error.raw_os_error() == Some(ERROR_BROKEN_PIPE as i32) => Ok(0),
@@ -582,9 +665,10 @@ pub(crate) mod blocking {
 
     impl Write for Stream {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.check_open()?;
             let len = u32::try_from(buf.len()).unwrap_or(u32::MAX);
             let mut writing = overlapped(&self.event);
-            let handle = self.pipe.as_raw_handle();
+            let handle = self.pipe.handle.as_raw_handle();
             // SAFETY: as for `read`.
             let started = unsafe {
                 WriteFile(
@@ -595,7 +679,14 @@ pub(crate) mod blocking {
                     &mut writing,
                 )
             } != 0;
-            finish(handle, &writing, started, self.write_timeout).map(|written| written as usize)
+            finish(
+                handle,
+                &writing,
+                started,
+                self.write_timeout,
+                Some(&self.pipe.shut),
+            )
+            .map(|written| written as usize)
         }
 
         fn flush(&mut self) -> io::Result<()> {

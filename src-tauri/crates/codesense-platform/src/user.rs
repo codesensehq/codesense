@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! The user this process runs as, their login name and shell, and the host's name.
+//! The user this process runs as, their uid, login name and shell, and the host's name.
 
 use std::io;
 
@@ -44,6 +44,23 @@ pub fn login_shell() -> Option<String> {
 /// it is empty or cannot be read.
 pub fn login_name() -> Option<String> {
     account_name()
+}
+
+/// The real uid this process runs as (`getuid`) on unix; `None` on Windows,
+/// which names users by SID ([`current_user`]), not by number.
+pub fn current_uid() -> Option<u32> {
+    real_uid()
+}
+
+#[cfg(unix)]
+fn real_uid() -> Option<u32> {
+    // SAFETY: getuid has no preconditions and cannot fail.
+    Some(unsafe { libc::getuid() })
+}
+
+#[cfg(windows)]
+fn real_uid() -> Option<u32> {
+    None
 }
 
 #[cfg(unix)]

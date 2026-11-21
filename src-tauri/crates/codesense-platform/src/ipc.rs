@@ -187,8 +187,9 @@ pub mod blocking {
     }
 
     /// One connection, from either end. On Windows a read and a write on
-    /// the same stream run one after the other, never at once: use the
-    /// async [`super::LocalStream`] to read and write concurrently.
+    /// the same stream run one after the other, never at once: read on one
+    /// [`LocalStream::try_clone`] and write on another, or use the async
+    /// [`super::LocalStream`], to read and write concurrently.
     pub struct LocalStream(sys::blocking::Stream);
 
     impl LocalStream {
@@ -216,6 +217,26 @@ pub mod blocking {
         /// [`LocalStream::set_read_timeout`] bounds a read.
         pub fn set_write_timeout(&mut self, timeout: Option<Duration>) -> io::Result<()> {
             self.0.set_write_timeout(timeout)
+        }
+
+        /// Another handle on the same connection, for a reader, a writer and
+        /// an interrupt on separate threads. A clone's read and write
+        /// timeouts are its own on Windows (starting from this stream's) and
+        /// shared with the socket on unix, so set each timeout on the handle
+        /// that uses it.
+        pub fn try_clone(&self) -> io::Result<Self> {
+            self.0.try_clone().map(Self)
+        }
+
+        /// Shut the connection down for this handle and every clone: a read
+        /// blocked on any of them ends, and later writes fail. On unix this is
+        /// the socket's `shutdown(Both)`: a read then returns the end of the
+        /// stream, and the other end sees it too. On Windows a read in flight
+        /// on any clone ends within a bound (about 50 ms), later reads and
+        /// writes fail with [`io::ErrorKind::NotConnected`], and the other end
+        /// sees the pipe close only once every clone is dropped.
+        pub fn shutdown(&self) -> io::Result<()> {
+            self.0.shutdown()
         }
     }
 
