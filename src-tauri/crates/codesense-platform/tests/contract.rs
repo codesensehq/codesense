@@ -25,7 +25,7 @@ use codesense_platform::fs::{
     Open, PlaceLink, Reach,
 };
 use codesense_platform::ipc::{blocking, Endpoint, LocalListener, LocalStream};
-use codesense_platform::limits::is_descriptor_exhaustion;
+use codesense_platform::limits::{is_descriptor_exhaustion, is_open_file_limit};
 use codesense_platform::process::{
     exited_unreaped, group_and_foreground, is_alive, kill_hard, terminate, terminate_pid,
     ExitWaiter, Identity, Pid, ProcessGroup, ProcessTree,
@@ -1713,6 +1713,20 @@ fn expect_group_of_leader(read: Option<(i32, i32)>, leader: Pid) {
 
 /// The OS error for running out of descriptors: `EMFILE` on unix,
 /// `ERROR_TOO_MANY_OPEN_FILES` on Windows.
+#[test]
+fn an_open_file_limit_is_this_processs_or_the_systems() {
+    let error = std::io::Error::from_raw_os_error;
+    assert!(is_open_file_limit(&error(expect_too_many_open_files())));
+    #[cfg(unix)]
+    assert!(is_open_file_limit(&error(libc::ENFILE)));
+    assert!(!is_open_file_limit(&std::io::Error::from(
+        ErrorKind::NotFound
+    )));
+    assert!(!is_open_file_limit(&std::io::Error::other(
+        "Too many open files"
+    )));
+}
+
 fn expect_too_many_open_files() -> i32 {
     #[cfg(unix)]
     return libc::EMFILE;
