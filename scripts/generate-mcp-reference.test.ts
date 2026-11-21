@@ -12,7 +12,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildManifest, META, validateInputReferences } from "./generate-mcp-reference.mjs";
-import { REFRESH_ROUTE } from "./lib/sealed-export.mjs";
+import { REFRESH_ROUTE, strictExports } from "./lib/sealed-export.mjs";
 const GENERATED = "codesense-docs/getting-started/content/generated";
 const SEAL_PATH = `${GENERATED}/mcp-tools.inputs.json`;
 const PAYLOAD_PATHS = ["default", "dashboard-publish"].map(
@@ -78,12 +78,17 @@ const editJson = (path: string, edit: (value: any) => void) => {
 };
 describe("served MCP reference", () => {
   it("has real contracts, long descriptions and explicit absent output schemas", () => {
-    const doc = buildManifest(undefined, META, readCatalog());
+    // Against the committed export: strict only with CS_STRICT_EXPORTS=1, else a stale export is a
+    // notice and each Docs line comes from the catalog, so the descriptions compare without it.
+    const strict = strictExports();
+    const doc = buildManifest(undefined, META, readCatalog(), strict ? null : [], () => {});
+    const body = (text: string) => (strict ? text : text.replace(/\nDocs: [^\n]*$/, ""));
     for (const tool of reference().tools) {
-      const entry = doc.tools.find((t: { name: string }) => t.name === tool.name)!;
-      expect(entry.params, tool.name).toEqual(tool.inputSchema);
-      expect(entry.returns, tool.name).toEqual(tool.outputSchema ?? null);
-      expect(entry.description, tool.name).toEqual(tool.description);
+      const entry = doc.tools.find((t: { name: string }) => t.name === tool.name);
+      if (!entry && !strict) continue;
+      expect(entry!.params, tool.name).toEqual(tool.inputSchema);
+      expect(entry!.returns, tool.name).toEqual(tool.outputSchema ?? null);
+      expect(body(entry!.description), tool.name).toEqual(body(tool.description));
     }
     expect(
       doc.tools.find((t: { name: string }) => t.name === "open_workspace")!.params.properties
@@ -409,6 +414,91 @@ describe("a stale export in write mode and the PR gate", () => {
         mod.generateReference(root, { check: true, allowStaleExport: true, warn: () => {} }),
       ).not.toBeNull();
       expect(() => mod.generateReference(root, { check: true })).toThrow(/Stale MCP registry/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("takes a family's Docs pointer from the catalog, not the stale payload", async () => {
+    const { root, mod } = await staleScratch("mcp-reference-docs-");
+    try {
+      const moved = "arc-f-inboxes-and-triage/index.html";
+      const movePointer = () =>
+        editJson(join(root, mod.CATALOG), (catalog) => {
+          catalog.families.find((f: { id: string }) => f.id === "inbox-messages").docs = moved;
+        });
+      // The catalog is not a seal input, so with a fresh seal the edit alone drifts nothing.
+      mod.sealReference(root);
+      const catalogBefore = readFileSync(join(root, mod.CATALOG), "utf8");
+      movePointer();
+      expect(() => mod.generateReference(root, { warn: () => {} })).not.toThrow();
+      writeFileSync(join(root, mod.CATALOG), catalogBefore);
+      writeFileSync(join(root, "src-tauri/src/nested.rs"), "// JsonSchema nested DTO, main's\n");
+      commitAsMain(root);
+      movePointer();
+      expect(() => mod.generateReference(root, { warn: () => {} })).not.toThrow();
+      const written = JSON.parse(readFileSync(join(root, mod.OUTPUT), "utf8"));
+      const tool = written.tools.find((t: { name: string }) => t.name === "read_messages");
+      expect(tool.docs).toBe(moved);
+      expect(tool.description).toMatch(new RegExp(`\nDocs: ${moved}$`));
+      expect(tool.description.match(/^Docs: /gm)).toHaveLength(1);
+      expect(
+        mod.generateReference(root, { check: true, allowStaleExport: true, warn: () => {} }),
+      ).not.toBeNull();
+      // Strict, the served pointer must already match.
+      expect(() => mod.buildManifest(root, META, mod.readCatalog(root))).toThrow(
+        /: missing final Docs pointer/,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("drops a tool the PR removed from META or the catalog, with a notice", async () => {
+    const { root, mod } = await staleScratch("mcp-reference-removed-");
+    try {
+      const catalog = mod.readCatalog(root);
+      const records = catalog.families.find((f: { id: string }) => f.id === "records");
+      records.tools = records.tools.filter((t: string) => t !== "records_search");
+      records.calls = records.calls.filter((c: { tool: string }) => c.tool !== "records_search");
+      const metadata = { ...META };
+      delete metadata.records_read;
+      const notices: string[] = [];
+      const doc = mod.buildManifest(root, metadata, catalog, [], (line: string) =>
+        notices.push(line),
+      );
+      const names = doc.tools.map((t: { name: string }) => t.name);
+      expect(names).not.toContain("records_search");
+      expect(names).not.toContain("records_read");
+      expect(notices.join("\n")).toMatch(/NOTICE: records_search: .*no family/);
+      expect(notices.join("\n")).toMatch(/NOTICE: records_read: .*no META entry/);
+      expect(() => mod.buildManifest(root, metadata, mod.readCatalog(root))).toThrow(
+        /records_read: missing META entry/,
+      );
+      expect(() => mod.buildManifest(root, META, catalog)).toThrow(
+        /records_search: missing family/,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("notes, not fails, an example that uses a param the stale export lacks", async () => {
+    const { root, mod } = await staleScratch("mcp-reference-param-");
+    try {
+      const catalog = mod.readCatalog(root);
+      const call = catalog.families.find((f: { id: string }) => f.id === "discovery").calls[0];
+      call.arguments = { ...call.arguments, brand_new_param: 1 };
+      const notices: string[] = [];
+      const doc = mod.buildManifest(root, META, catalog, [], (line: string) => notices.push(line));
+      expect(notices.join("\n")).toMatch(
+        /NOTICE: codesense_search_tools: unknown example input brand_new_param/,
+      );
+      const tool = doc.tools.find((t: { name: string }) => t.name === "codesense_search_tools");
+      expect(tool.examples[0].arguments).toHaveProperty("brand_new_param", 1);
+      expect(() => mod.buildManifest(root, META, catalog)).toThrow(
+        /codesense_search_tools: unknown example input brand_new_param/,
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

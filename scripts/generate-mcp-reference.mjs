@@ -495,13 +495,22 @@ const handlerFn = (root, name) =>
     readFileSync(resolve(root, "src-tauri/src/mcp/handler.rs"), "utf8"),
   );
 // `pending` (PR gate and write mode) is an array collecting catalog tools the sealed export lacks:
-// PRs never re-export, the maintainer refresh does. Omitted (strict), such a tool is fatal.
+// PRs never re-export, the maintainer refresh does. Omitted (strict), such a tool is fatal. With it,
+// the export is tolerated as stale, so the catalog and META win over the payload: each description's
+// Docs line comes from the catalog (as served_tool_router does), an example the stale schema rejects
+// is a notice, and a payload tool with no META entry, family or handler fn is dropped with a notice.
 export function buildManifest(
   root = ROOT,
   metadata = META,
   catalog = readCatalog(root),
   pending = null,
+  warn = console.warn,
 ) {
+  // Strict, a problem is fatal; tolerated as stale, it is a notice.
+  const fault = (message) => {
+    if (!pending) throw new Error(message);
+    warn(`NOTICE: ${message}; ${REFRESH_ROUTE}`);
+  };
   const baseline = json(payloadPath("default"), root).tools;
   const full = json(payloadPath("dashboard-publish"), root).tools;
   const baseNames = new Set(baseline.map((t) => t.name));
@@ -548,29 +557,51 @@ export function buildManifest(
       const tool = full.find((t) => t.name === call.tool);
       const validate = ajv.compile(tool.inputSchema);
       if (!validate(call.arguments))
-        throw new Error(`${call.tool}: invalid family example ${ajv.errorsText(validate.errors)}`);
+        fault(`${call.tool}: invalid family example ${ajv.errorsText(validate.errors)}`);
       // serde allows unknown fields on many structs: examples still must name
       // real canonical inputs rather than an ignored typo or accepted alias.
       for (const key of Object.keys(call.arguments))
         if (!Object.hasOwn(tool.inputSchema.properties ?? {}, key))
-          throw new Error(`${call.tool}: unknown example input ${key}`);
+          fault(`${call.tool}: unknown example input ${key}`);
     }
   }
   const handler = readFileSync(resolve(root, "src-tauri/src/mcp/handler.rs"), "utf8");
   const tools = full
-    .map((raw) => {
-      const meta = metadata[raw.name];
+    .map((served) => {
+      const meta = metadata[served.name];
+      const family = families.get(served.name);
+      const match = new RegExp(`\\b(?:async\\s+)?fn\\s+${served.name}\\s*\\(`).exec(handler);
+      if (pending && (!meta || !family || !match)) {
+        const missing = !meta
+          ? "no META entry"
+          : !family
+            ? "no family in examples.yml"
+            : "no handler fn";
+        warn(
+          `NOTICE: ${served.name}: dropped, the committed export still serves it but it has ${missing}; ${REFRESH_ROUTE}`,
+        );
+        return null;
+      }
       if (!meta)
-        throw new Error(`${raw.name}: missing META entry in scripts/generate-mcp-reference.mjs`);
-      const family = families.get(raw.name);
-      if (!family) throw new Error(`${raw.name}: missing family in examples.yml`);
+        throw new Error(`${served.name}: missing META entry in scripts/generate-mcp-reference.mjs`);
+      if (!family) throw new Error(`${served.name}: missing family in examples.yml`);
+      // Tolerated as stale, the catalog's pointer replaces the payload's, as served_tool_router does.
+      const raw = pending
+        ? {
+            ...served,
+            description: `${(served.description ?? "")
+              .split("\n")
+              .filter((line) => !line.startsWith("Docs: "))
+              .join("\n")
+              .trimEnd()}\nDocs: ${family.docs}`,
+          }
+        : served;
       if (
         !raw.description?.endsWith(`Docs: ${family.docs}`) ||
         raw.description.split("\n").filter((line) => line.startsWith("Docs: ")).length !== 1
       )
         throw new Error(`${raw.name}: missing final Docs pointer`);
       validateInputReferences(raw);
-      const match = new RegExp(`\\b(?:async\\s+)?fn\\s+${raw.name}\\s*\\(`).exec(handler);
       if (!match) throw new Error(`${raw.name}: source location missing`);
       return {
         name: raw.name,
@@ -592,6 +623,7 @@ export function buildManifest(
         sourceRef: `handler.rs:${handler.slice(0, match.index).split("\n").length}`,
       };
     })
+    .filter(Boolean)
     .sort((a, b) => a.name.localeCompare(b.name));
   return {
     schema: 1,
@@ -614,6 +646,7 @@ export function generateReference(
     check = false,
     buildScript = false,
     allowStaleExport = false,
+    strict = false,
     warn = console.warn,
     stdout = console.log,
   } = {},
@@ -665,8 +698,10 @@ export function generateReference(
       return null;
     }
   }
-  const pending = allowStaleExport || tolerant ? [] : null;
-  const doc = buildManifest(root, META, readCatalog(root), pending);
+  // Write mode and the PR gate tolerate the export as stale even with a fresh seal: the catalog and
+  // META are not seal inputs. The export run itself (`strict`) and strict check mode do not.
+  const pending = (allowStaleExport || !check || tolerant) && !strict ? [] : null;
+  const doc = buildManifest(root, META, readCatalog(root), pending, warn);
   for (const name of pending ?? [])
     warn(`NOTICE: ${name} is not in the committed export yet; maintainers refresh it`);
   const fresh = serialize(doc);
@@ -741,7 +776,7 @@ export function queuedExport() {
       throw new Error("MCP source inputs changed during export; retry the export before sealing");
     }
     sealReference();
-    generateReference();
+    generateReference(ROOT, { strict: true });
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
