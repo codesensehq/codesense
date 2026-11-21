@@ -423,6 +423,74 @@ fn macos_applescript_rows_refuse_a_backslash_or_control_bytes() {
     }
 }
 
+/// A folder named with non-ASCII text opens with `open -a` when no command runs, and is refused
+/// when the AppleScript would type it. The folder is planned, never created: `is_dir` is injected.
+#[test]
+fn macos_rows_open_a_non_ascii_folder_only_without_a_command() {
+    let cwd = Path::new("/tmp/caf\u{e9}");
+    let is_dir = |_: &Path| true;
+    for (id, label, bundle) in [
+        ("iterm2", "iTerm2", ITERM_APP),
+        ("terminal", "Terminal", TERMINAL_APP),
+    ] {
+        let opened = terminal_launch("macos", id, cwd, "", &finds_all(None), &is_dir).unwrap();
+        assert_eq!(opened.launch.program, OsString::from("/usr/bin/open"));
+        assert_eq!(
+            args(&opened.launch),
+            ["-a", bundle, "/tmp/caf\u{e9}"],
+            "{id}"
+        );
+        assert_eq!(opened.launch.wait, Some(LAUNCH_LIMIT), "{id}");
+
+        let refused =
+            terminal_launch("macos", id, cwd, "pwd", &finds_all(None), &is_dir).unwrap_err();
+        assert_eq!(
+            refused,
+            TerminalError::ShellUnsafe {
+                label: label.into(),
+                cwd: cwd.into(),
+                what: "a non-ASCII character",
+            },
+            "{id}"
+        );
+        assert!(refused.to_string().contains("a non-ASCII character"));
+    }
+}
+
+/// A raw byte of 0x80 or more, which readline in a non-UTF-8 locale can read as a control key
+/// (0x95 as `^U`, 0x9b as ESC), is refused with a command and kept intact without one.
+#[cfg(unix)]
+#[test]
+fn macos_rows_refuse_a_raw_high_byte_with_a_command() {
+    use std::os::unix::ffi::OsStrExt;
+    let is_dir = |_: &Path| true;
+    for byte in [0x80u8, 0x95, 0x9b, 0xff] {
+        let raw = [b"/tmp/x".as_slice(), &[byte][..], b"y".as_slice()].concat();
+        let cwd = Path::new(OsStr::from_bytes(&raw));
+        for id in ["iterm2", "terminal"] {
+            let refused =
+                terminal_launch("macos", id, cwd, "pwd", &finds_all(None), &is_dir).unwrap_err();
+            assert!(
+                matches!(
+                    refused,
+                    TerminalError::ShellUnsafe {
+                        what: "a non-ASCII character",
+                        ..
+                    }
+                ),
+                "{id} {byte:#x}: {refused:?}"
+            );
+            let opened = terminal_launch("macos", id, cwd, "", &finds_all(None), &is_dir).unwrap();
+            assert_eq!(opened.launch.program, OsString::from("/usr/bin/open"));
+            assert_eq!(
+                opened.launch.args.last(),
+                Some(&cwd.as_os_str().to_os_string()),
+                "{id} {byte:#x}"
+            );
+        }
+    }
+}
+
 /// Records the commands it is handed, so a test sees what the spawn would get.
 #[derive(Default)]
 struct Recorder(std::cell::RefCell<Vec<(OsString, Option<PathBuf>)>>);
