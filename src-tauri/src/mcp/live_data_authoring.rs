@@ -1596,9 +1596,22 @@ mod tests {
                 .expect("contract export is an object")
                 .remove("hosted");
         }
+        // PRs leave the cargo-written contract alone, so it lags its inputs until the next
+        // refresh: the pin is strict only with CS_STRICT_EXPORTS=1 (the refresh run and the
+        // nightly probe) or when this run wrote the export.
+        let strict = std::env::var("CS_STRICT_EXPORTS").as_deref() == Ok("1")
+            || std::env::var_os("LIVE_DATA_CONTRACT_OUTPUT").is_some();
+        if !strict {
+            if exported != payload {
+                eprintln!(
+                    "NOTICE: live-data-contract.json is stale; maintainers refresh it (README.md, \"Regenerating exports\")"
+                );
+            }
+            return;
+        }
         assert_eq!(
             exported, payload,
-            "run node scripts/generate-live-data-contract.mjs --export"
+            "live-data-contract.json is stale; PRs leave it out and maintainers refresh it (README.md, \"Regenerating exports\")"
         );
     }
 

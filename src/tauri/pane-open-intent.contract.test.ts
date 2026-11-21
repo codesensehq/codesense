@@ -89,15 +89,31 @@ describe("pane_open intent parity", () => {
     expect(payload.intent).toEqual({ conversation: "Mia", messageId: 7 });
   });
 
-  it("publishes the channel and size limit in the generated MCP and page references", () => {
-    const tools = JSON.parse(
-      read("codesense-docs/getting-started/content/generated/mcp-tools.json"),
-    ).tools;
-    for (const name of ["pane_open", "pane_write"]) {
-      const description = tools.find((t: { name: string }) => t.name === name).description;
-      expect(description).toContain("codesense.onIntent(cb)");
-      expect(description).toContain("4096 UTF-8 bytes");
+  it("publishes the channel and size limit in the served tool descriptions", () => {
+    const handler = read("src-tauri/src/mcp/handler.rs");
+    for (const name of ["Pane open", "Pane write"]) {
+      const description = new RegExp(`description = "${name} — [^\\n]*`).exec(handler)?.[0];
+      expect(description, name).toContain("codesense.onIntent(cb)");
+      expect(description, name).toContain("4096 UTF-8 bytes");
     }
     expect(read("src-tauri/src/mcp/live_data_authoring.rs")).toContain("codesense:intent");
   });
+
+  // The generated reference is rendered from the cargo export, which PRs leave alone: it lags a
+  // description change until the next refresh, so it is pinned only when CS_STRICT_EXPORTS=1.
+  // Restates strictExports() in scripts/lib/sealed-export.mjs, the one definition: that module
+  // has no type declarations for the frontend typecheck.
+  it.runIf(process.env.CS_STRICT_EXPORTS === "1")(
+    "publishes the channel and size limit in the generated MCP reference",
+    () => {
+      const tools = JSON.parse(
+        read("codesense-docs/getting-started/content/generated/mcp-tools.json"),
+      ).tools;
+      for (const name of ["pane_open", "pane_write"]) {
+        const description = tools.find((t: { name: string }) => t.name === name).description;
+        expect(description).toContain("codesense.onIntent(cb)");
+        expect(description).toContain("4096 UTF-8 bytes");
+      }
+    },
+  );
 });

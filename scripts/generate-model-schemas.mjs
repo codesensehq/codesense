@@ -6,18 +6,42 @@ import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { diskGate } from "./lib/sealed-export.mjs";
+import {
+  REFRESH_ROUTE,
+  allowStaleExport as switchedOn,
+  diskGate,
+  driftInheritedFromMain,
+  exportsUntouchedSinceMain,
+  addedSince,
+  frozenExport,
+  namesIn,
+  strictExports,
+} from "./lib/sealed-export.mjs";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+export const FIXTURE = "src-tauri/src/docs_schemas.generated.json";
 const CONTENT = "codesense-docs/getting-started/content";
-export function verifySources(fixture, readSource = (path) => readFileSync(join(ROOT, path))) {
-  for (const [path, expected] of Object.entries(fixture.sources)) {
-    const actual = createHash("sha256").update(readSource(path)).digest("hex");
-    if (actual !== expected)
-      throw new Error(
-        `Model schema fixture is stale: ${path}. Export with node scripts/generate-model-schemas.mjs --queued-export (no local cargo: dispatch regenerate-exports.yml), then pnpm gen:docs. Do not rehash the fixture.`,
-      );
-  }
+const staleMessage = (paths) =>
+  `Model schema fixture is stale: ${paths.join(", ")}; ${REFRESH_ROUTE}. Do not rehash the fixture.`;
+// The fixture's sources whose bytes no longer match the hashes it was exported from. A source the
+// branch deleted or renamed is stale too; any other read error still throws.
+export function staleSources(fixture, readSource = (path) => readFileSync(join(ROOT, path))) {
+  const digest = (path) => {
+    try {
+      return createHash("sha256").update(readSource(path)).digest("hex");
+    } catch (error) {
+      if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return null;
+      throw error;
+    }
+  };
+  return Object.entries(fixture.sources)
+    .filter(([path, expected]) => digest(path) !== expected)
+    .map(([path]) => path);
+}
+// The strict freshness check.
+export function verifySources(fixture, readSource) {
+  const stale = staleSources(fixture, readSource);
+  if (stale.length) throw new Error(staleMessage(stale));
 }
 function deref(schema, root) {
   return schema.$ref ? root.$defs[schema.$ref.split("/").at(-1)] : schema;
@@ -68,11 +92,31 @@ export function schemaFields(root) {
     visit(value, key, (root.required ?? []).includes(key));
   return rows.filter((r, i) => rows.findIndex((other) => other.name === r.name) === i);
 }
-export function modelSchemas(root = ROOT) {
-  const fixture = JSON.parse(
-    readFileSync(join(root, "src-tauri/src/docs_schemas.generated.json"), "utf8"),
+// A stale fixture: write mode (`pnpm gen:docs`, and build.rs through generate-yaml-schemas) renders
+// from the committed fixture with a notice. So does the PR gate (`allowStaleExport`) while this PR
+// leaves the fixture as main has it, or the drift is main's; strict check mode throws. `strict`
+// (CS_STRICT_EXPORTS=1, the refresh run) makes write mode and the PR gate throw too.
+const tolerated = (root, stale, { check, allowStaleExport, strict }) =>
+  !strict &&
+  (!check ||
+    (allowStaleExport &&
+      (exportsUntouchedSinceMain(root, frozenExport(FIXTURE)) ||
+        driftInheritedFromMain(root, stale))));
+const readStale = (root) =>
+  staleSources(JSON.parse(readFileSync(join(root, FIXTURE), "utf8")), (path) =>
+    readFileSync(join(root, path)),
   );
-  verifySources(fixture, (path) => readFileSync(join(root, path)));
+export function modelSchemas(
+  root = ROOT,
+  { check = false, allowStaleExport = false, strict = strictExports(), warn = console.warn } = {},
+) {
+  const fixture = JSON.parse(readFileSync(join(root, FIXTURE), "utf8"));
+  const stale = staleSources(fixture, (path) => readFileSync(join(root, path)));
+  if (stale.length) {
+    if (!tolerated(root, stale, { check, allowStaleExport, strict }))
+      throw new Error(staleMessage(stale));
+    warn(`NOTICE: ${staleMessage(stale)}`);
+  }
   return Object.fromEntries(
     Object.entries(fixture.schemas).map(([slug, schema]) => [
       slug,
@@ -80,6 +124,20 @@ export function modelSchemas(root = ROOT) {
     ]),
   );
 }
+// For a Node output rendered from a stale fixture (pack-yml.schema.json): null unless the fixture is
+// stale and modelSchemas' rule tolerates it, else `explains(name)`, whether a stale source still
+// present names it (a field or variant the PR adds to the Rust model).
+export function staleFixtureExplainer(
+  root = ROOT,
+  { check = false, allowStaleExport = false, strict = strictExports() } = {},
+) {
+  const stale = readStale(root);
+  if (!stale.length || !tolerated(root, stale, { check, allowStaleExport, strict })) return null;
+  return namesIn(() => addedSince(root, FIXTURE, stale));
+}
+// The model pin the tests read: the committed fixture, strict only with CS_STRICT_EXPORTS=1.
+export const pinnedModels = (root = ROOT, env = process.env, warn = console.warn) =>
+  modelSchemas(root, { check: strictExports(env), strict: strictExports(env), warn });
 function output(path, content, check) {
   if (check) {
     if (readFileSync(path, "utf8") !== content)
@@ -89,15 +147,18 @@ function output(path, content, check) {
     writeFileSync(path, content);
   }
 }
-export function generate(check = false) {
-  const models = modelSchemas();
+export function generate(
+  check = false,
+  { root = ROOT, allowStaleExport = false, strict = strictExports(), warn = console.warn } = {},
+) {
+  const models = modelSchemas(root, { check, allowStaleExport, strict, warn });
   for (const [slug, { schema }] of Object.entries(models))
     output(
-      join(ROOT, CONTENT, "generated/schemas", `${slug}.schema.json`),
+      join(root, CONTENT, "generated/schemas", `${slug}.schema.json`),
       JSON.stringify(schema, null, 2) + "\n",
       check,
     );
-  const page = join(ROOT, CONTENT, "arc-g-routines/routine-yml.html");
+  const page = join(root, CONTENT, "arc-g-routines/routine-yml.html");
   const current = readFileSync(page, "utf8");
   const esc = (s) =>
     String(s)
@@ -143,5 +204,5 @@ export function queuedExport({ spawn = spawnSync, gate = diskGate } = {}) {
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   if (process.argv.includes("--queued-export")) queuedExport();
-  else generate(process.argv.includes("--check"));
+  else generate(process.argv.includes("--check"), { allowStaleExport: switchedOn() });
 }

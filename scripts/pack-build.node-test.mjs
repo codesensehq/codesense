@@ -28,6 +28,7 @@ import {
   parseArgs,
   run as runPacks,
   schemaErrors,
+  staleSchemaExplainer,
   skillCopies,
   syncDocs,
 } from "./pack-build.mjs";
@@ -525,4 +526,40 @@ test("the docs bundle ships the Foreman agent, and only the agent", () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("a stale schema fixture makes an unknown pack.yml property the stale sources name a notice", () => {
+  const kit = { ...yaml(join(fixture("good"), "pack.yml")) };
+  const manifest = { ...kit, requires: { kit: { brandNewField: 1, typoField: 2 } } };
+  assert.match(schemaErrors(manifest).join("|"), /must NOT have additional properties/);
+  const explains = (name) => name === "brandNewField";
+  const notices = [];
+  const errors = schemaErrors(manifest, { explains, notices });
+  assert.match(
+    notices.join("|"),
+    /pack\.yml\/requires\/kit has brandNewField, unknown to the stale schema fixture/,
+  );
+  // A name the drifted model sources don't use is a typo: still an error.
+  assert.match(errors.join("|"), /must NOT have additional properties/);
+  assert.doesNotMatch(notices.join("|"), /typoField/);
+  const { typoField: _typo, ...kitOnly } = manifest.requires.kit;
+  assert.deepEqual(
+    schemaErrors({ ...manifest, requires: { kit: kitOnly } }, { explains, notices: [] }),
+    [],
+  );
+  // Other errors stay errors.
+  assert.match(
+    schemaErrors({ ...kit, requires: { kit: { chat: "1" } } }, { explains: () => true }).join("|"),
+    /must be/,
+  );
+  // Strict check mode and the refresh run explain nothing, whatever the fixture's state.
+  assert.equal(staleSchemaExplainer({ check: true, env: {} }), null);
+  assert.equal(staleSchemaExplainer({ check: false, env: { CS_STRICT_EXPORTS: "1" } }), null);
+  assert.equal(
+    staleSchemaExplainer({
+      check: true,
+      env: { DOCS_ALLOW_STALE_EXPORT: "1", CS_STRICT_EXPORTS: "1" },
+    }),
+    null,
+  );
 });

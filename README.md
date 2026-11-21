@@ -129,10 +129,21 @@ no update checks and no dashboard publishing.
 ## Regenerating exports
 
 A few generated docs files are written only by Rust tests: the live-data
-contract, the MCP registry export and the model schemas fixture. When
-`pnpm gen:docs` says one is stale, a maintainer (running a workflow needs write
-access) can regenerate it in CI instead of building Rust locally. Push your
-branch first; it must be based on a `main` that has this workflow:
+contract, the MCP registry export and the model schemas fixture, with their
+seals (`FROZEN_EXPORTS` in `scripts/lib/sealed-export.mjs` lists them). Leave
+generated exports out of your PR; maintainers refresh them. Until then they lag
+the code, and that is expected: `pnpm gen:docs` renders the docs from the
+committed exports and prints a notice, the pull request check
+(`pnpm gen:docs:check:pr`, which sets `DOCS_ALLOW_STALE_EXPORT=1`) passes, and
+the tests that pin an export to its source compare it only when
+`CS_STRICT_EXPORTS=1`. The files Node renders from the exports, such as
+`mcp-tools.json` and `generated/schemas/*.schema.json`, are not exports:
+commit what `pnpm gen:docs` writes to them.
+
+A maintainer (running a workflow needs write access) refreshes the exports in a
+pull request of its own, from a `chore/refresh-exports` branch based on current
+`main`, regenerated in CI instead of building Rust locally. Push that branch
+first, then:
 
 ```bash
 gh workflow run regenerate-exports.yml --repo codesensehq/codesense --ref <branch>
@@ -156,22 +167,33 @@ gh run download <run id> --repo codesensehq/codesense -n generated-exports -D "$
 (cd "$tmp" && find . -type f | sort)
 ```
 
-Every file should be generated output. A generated file whose inputs your
-branch changed is simply stale there: keep it. One whose inputs did not change
-points at a build step that differs between hosts: delete it from `$tmp` and
-open an issue. Then apply the files to your branch, check them, and commit them
-yourself:
+Every file should be generated output whose inputs changed on `main` since the
+last refresh: keep it. One whose inputs did not change points at a build step
+that differs between hosts: delete it from `$tmp` and open an issue. Then apply
+the files to the branch, check them, and commit them yourself:
 
 ```bash
 cp -R "$tmp"/. .
 git status --short
 (cd "$tmp" && find . -type f -print0) | xargs -0 git add --
-git commit -s -m "Regenerate the generated exports"
+git commit -s -m "Refresh the generated exports"
 ```
 
-When `live-data-contract.json` changed, add the `ci:macos` label to the pull
-request: the test that pins the contract runs only on macOS. When nothing
-changed, the summary says so and there is no artifact.
+Before you open the pull request, check that the refresh is complete. The
+strict check fails on any export still stale, and `CS_STRICT_EXPORTS=1` makes
+`pnpm gen:docs` and the tests that pin an export strict too:
+
+```bash
+CS_STRICT_EXPORTS=1 pnpm gen:docs:check
+CS_STRICT_EXPORTS=1 node --test scripts/generate-model-schemas.node-test.mjs
+```
+
+Open the pull request and merge it on its own. When `live-data-contract.json`
+changed, add the `ci:macos` label: the test that pins the contract runs only on
+macOS, and strictly only where `CS_STRICT_EXPORTS=1` is set. When nothing changed, the summary says so and there is no artifact. With
+a local Rust build, `pnpm docs:refresh-mcp` writes the MCP and live-data
+exports and `node scripts/generate-model-schemas.mjs --queued-export` the model
+schemas fixture, instead of the workflow.
 
 ## Building your own release
 
