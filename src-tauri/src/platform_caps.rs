@@ -277,8 +277,8 @@ mod tests {
     #[test]
     fn tray_and_background_are_on_on_windows() {
         for probe in [true, false] {
+            let caps = resolved("windows", "x86_64", probe);
             for key in [TERMINAL_SERVER_TRAY, "background-on-close"] {
-                let caps = resolved("windows", "x86_64", probe);
                 let cap = caps.iter().find(|cap| cap.key == key).unwrap();
                 assert!(cap.on, "{key} {probe}");
                 assert_eq!(cap.reason, None, "{key} {probe}");
