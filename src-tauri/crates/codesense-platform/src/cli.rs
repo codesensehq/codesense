@@ -115,8 +115,8 @@ pub enum ShimError {
     /// The batch file is not one of the npm shim forms [`npm_shim_script`]
     /// accepts.
     NotAnNpmShim { path: PathBuf },
-    /// The shim could not be read: missing, unreadable, larger than 64 KiB or
-    /// not UTF-8.
+    /// The shim could not be read: missing, unreadable, not a regular file,
+    /// larger than 64 KiB or not UTF-8.
     Unreadable { path: PathBuf, reason: String },
     /// A node-form shim with no `node.exe` beside it or on the child's `PATH`.
     NodeNotFound { path: PathBuf },
@@ -313,9 +313,19 @@ fn read_shim(path: &Path) -> Result<String, ShimError> {
         path: path.to_path_buf(),
         reason,
     };
+    let file = std::fs::File::open(path).map_err(|error| unreadable(error.to_string()))?;
+    // A device (`CON.cmd`, `COM1.cmd`), a pipe or a directory is no shim, and a read of
+    // one can block.
+    let regular = file
+        .metadata()
+        .map_err(|error| unreadable(error.to_string()))?
+        .is_file();
+    if !regular {
+        return Err(unreadable("not a regular file".to_string()));
+    }
     let mut bytes = Vec::new();
-    std::fs::File::open(path)
-        .and_then(|file| file.take(MAX_SHIM_BYTES + 1).read_to_end(&mut bytes))
+    file.take(MAX_SHIM_BYTES + 1)
+        .read_to_end(&mut bytes)
         .map_err(|error| unreadable(error.to_string()))?;
     if bytes.len() as u64 > MAX_SHIM_BYTES {
         return Err(unreadable(format!(

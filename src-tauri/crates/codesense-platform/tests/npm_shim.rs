@@ -374,6 +374,23 @@ fn a_shim_without_node_or_that_cannot_be_read_is_a_typed_error() {
             reason: "not UTF-8".into()
         })
     );
+    // A directory named like a shim: refused before any read, where it can be opened.
+    let directory = tmp.path().join("npm").join("dir.cmd");
+    std::fs::create_dir_all(&directory).unwrap();
+    let refused = shim_argv(&directory, &no_args, OsStr::new(""));
+    assert!(
+        matches!(&refused, Err(ShimError::Unreadable { path, .. }) if *path == directory),
+        "{refused:?}"
+    );
+    if std::fs::File::open(&directory).is_ok() {
+        assert_eq!(
+            refused,
+            Err(ShimError::Unreadable {
+                path: directory.clone(),
+                reason: "not a regular file".into()
+            })
+        );
+    }
     let hand_written = tmp.path().join("npm").join("x.bat");
     install(&hand_written, "@echo off\r\nnode cli.js %*\r\n");
     assert_eq!(
