@@ -12,7 +12,8 @@ name: Exports guard
 # request's files, labels and head through the API.
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    # edited: a changed base branch re-runs the guard against the new base.
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
   merge_group:
 
 permissions: {}

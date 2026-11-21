@@ -104,6 +104,53 @@ test("the head parse reads a changed list, and refuses anything it cannot read s
     assert.equal(parseFrozenList(source), null, name);
 });
 
+test("the head parse fails closed on a decoy declaration", () => {
+  const real = /^export const FROZEN_EXPORTS = Object\.freeze\(\[\n[^\]]*\]\);$/m.exec(sealedSource)[0];
+  const decoys = [
+    // The real declaration commented out, and the list exported another way.
+    [
+      "block comment",
+      sealedSource.replace(
+        real,
+        `/*\n${real}\n*/\nexport const { FROZEN_EXPORTS: _x } = { FROZEN_EXPORTS: [] };`,
+      ),
+    ],
+    [
+      "block comment, counts kept",
+      sealedSource.replace(real, `/*\n${real}\n*/`).replace("FROZEN_EXPORTS.filter", "[].filter"),
+    ],
+    ["unclosed block comment", sealedSource.replace(real, `/*\n${real}`)],
+    // The real declaration inside a template literal, the list defined elsewhere.
+    [
+      "template literal",
+      sealedSource.replace(
+        real,
+        `const decoy = \`\n${real}\n\`;\nexport const FROZEN_EXPORTS = Object.freeze([]);`,
+      ),
+    ],
+    [
+      "template literal, counts kept",
+      sealedSource
+        .replace(real, `const decoy = \`\n${real}\n\`;`)
+        .replace("FROZEN_EXPORTS.filter", "[].filter"),
+    ],
+    // Object.freeze reassigned, so the declaration's runtime value is another list.
+    ["reassigned freeze", `Object.freeze = () => [];\n${sealedSource}`],
+    ["reassigned freeze by key", `Object["freeze"] = () => [];\n${sealedSource}`],
+    ["defineProperty on freeze", `Object.defineProperty(Object, "freeze", { value: () => [] });\n${sealedSource}`],
+    // Another use of a counted token.
+    ["extra GENERATED", `${sealedSource}\nexport const OTHER = GENERATED;\n`],
+    ["extra FROZEN_EXPORTS", `${sealedSource}\nexport const OTHER = FROZEN_EXPORTS;\n`],
+  ];
+  for (const [name, source] of decoys) assert.equal(parseFrozenList(source), null, name);
+  // A `/*` inside a line comment, as the real file has, and an edit that adds no counted token, still parse.
+  assert.match(sealedSource, /\/\/.*\/\*/);
+  assert.deepEqual(parseFrozenList(`${sealedSource}\n// another note\n`), [...FROZEN_EXPORTS]);
+  // The counts are the base's: a head matching another base reads against that base.
+  const extra = `${sealedSource}\nexport const OTHER = GENERATED;\n`;
+  assert.deepEqual(parseFrozenList(extra, extra), [...FROZEN_EXPORTS]);
+});
+
 const refreshPr = (overrides = {}) => ({
   number: 7,
   head: { ref: REFRESH_BRANCH, sha: sha("a"), repo: { full_name: REPO } },

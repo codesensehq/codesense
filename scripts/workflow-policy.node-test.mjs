@@ -2405,6 +2405,7 @@ test("exports guard: the guard runs the base's script with the token, strict-pin
     "opened",
     "synchronize",
     "reopened",
+    "edited",
     "labeled",
     "unlabeled",
   ]);
