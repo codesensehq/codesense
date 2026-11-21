@@ -116,6 +116,17 @@ pub(crate) trait InboxHost: Send + Sync {
         _attachments: &[crate::media::Attachment],
     ) {
     }
+    /// A send call stored a message with a provider-tagged GIF: register it with the
+    /// provider, in the background. Called once per send call, never for a replay.
+    fn media_sent(&self, _media: &StoredMedia) {}
+    /// A stored message's media fetch finished: a pending view ping gets the image's sha.
+    fn media_fetched(
+        &self,
+        _team: &LaunchTeam,
+        _message_id: i64,
+        _attachment: &crate::media::Attachment,
+    ) {
+    }
     async fn own_media_sender(&self, _sender: &str) -> bool {
         false
     }
@@ -391,6 +402,14 @@ impl From<InboxTeam> for LaunchTeam {
 
 /// What a sender of an unmarked question to the human is told.
 const QUESTION_HINT: &str = "This reads like a question, but it was sent with no kind, so it defaults to update. Both kinds appear in the human Inbox; kind marks whether it waits on them for agent views and dashboards. If it needs an answer, send it with kind: \"needs-you\" (or ask with ask_user and wait).";
+
+/// The media attachment a send call newly stored, which the send call registers once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StoredMedia {
+    pub team: LaunchTeam,
+    pub message_id: i64,
+    pub attachment: crate::media::Attachment,
+}
 
 /// The outcome of `send_message`, `reply` and the human's reply.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -907,7 +926,7 @@ async fn store_message(
     request_id: Option<&str>,
     request_hash: Option<String>,
     media: Option<&crate::media::MediaInput>,
-) -> Result<SendResult, String> {
+) -> Result<(SendResult, Option<StoredMedia>), String> {
     let request_hash = request_hash.or_else(|| {
         media?;
         request_id.map(|_| {
@@ -928,7 +947,7 @@ async fn store_message(
     });
     if let (Some(id), Some(hash)) = (request_id, request_hash.as_deref()) {
         if let Some(result) = replay_send(&location.path, &from, id, hash, kind, text).await? {
-            return Ok(result);
+            return Ok((result, None));
         }
     }
     let prepared = if let Some(input) = media {
@@ -946,7 +965,7 @@ async fn store_message(
             .await
         {
             Ok(prepared) => Some(prepared),
-            Err(e) => return Ok(SendResult::invalid(e)),
+            Err(e) => return Ok((SendResult::invalid(e), None)),
         }
     } else {
         None
@@ -979,15 +998,21 @@ async fn store_message(
     .await?;
     let (message_id, inserted) = match stored {
         Ok(outcome) => outcome,
-        Err(reason) => return Ok(SendResult::invalid(reason)),
+        Err(reason) => return Ok((SendResult::invalid(reason), None)),
     };
     if recipient == HUMAN {
         host.replies_owed().answered(&sender);
     }
+    let mut newly = None;
     if inserted {
         if let Some((attachment, _)) = &prepared {
             host.note_media(&location.team, message_id, std::slice::from_ref(attachment))
                 .await;
+            newly = Some(StoredMedia {
+                team: location.team.clone(),
+                message_id,
+                attachment: attachment.clone(),
+            });
         }
         if let Some((attachment, true)) = prepared {
             start_media_fetch(host.clone(), fetch_location, message_id, attachment);
@@ -1001,7 +1026,7 @@ async fn store_message(
             host.mail_stored(&recipient);
         }
     }
-    Ok(SendResult::sent(message_id))
+    Ok((SendResult::sent(message_id), newly))
 }
 
 /// CodeSense's own note to the human in a specific team's inbox,
@@ -1075,6 +1100,7 @@ pub(crate) async fn note_to_human_with(
         None,
     )
     .await?
+    .0
     {
         SendResult::Sent { message_id, .. } => Ok(message_id),
         SendResult::Invalid { message } => Err(message),
@@ -1121,6 +1147,7 @@ pub(crate) async fn note_to_session_with(
         None,
     )
     .await?
+    .0
     {
         SendResult::Sent { message_id, .. } => Ok(message_id),
         SendResult::Invalid { message } => Err(message),
@@ -1263,7 +1290,7 @@ pub(crate) async fn send_message_request<'a>(
     request_id: Option<&str>,
     media: Option<&crate::media::MediaInput>,
 ) -> Result<SendResult, String> {
-    send_message_replying(
+    let (result, stored) = send_message_stored(
         host,
         session_id.into(),
         to,
@@ -1278,7 +1305,12 @@ pub(crate) async fn send_message_request<'a>(
         request_id,
         media,
     )
-    .await
+    .await?;
+    // Registered here, once per send call, after the store; a replay stored nothing.
+    if let Some(stored) = &stored {
+        host.media_sent(stored);
+    }
+    Ok(result)
 }
 
 /// [`send_message`], recording the message it answers (`in_reply_to`: its id and the
@@ -1300,8 +1332,45 @@ pub(crate) async fn send_message_replying(
     request_id: Option<&str>,
     media: Option<&crate::media::MediaInput>,
 ) -> Result<SendResult, String> {
+    let (result, _) = send_message_stored(
+        host,
+        session_id,
+        to,
+        text,
+        attach_file,
+        on_click,
+        content_type,
+        in_reply_to,
+        reply_to,
+        summary,
+        kind,
+        request_id,
+        media,
+    )
+    .await?;
+    Ok(result)
+}
+
+/// [`send_message_replying`], with the media attachment it newly stored, if any.
+#[allow(clippy::too_many_arguments)]
+async fn send_message_stored(
+    host: &Arc<dyn InboxHost>,
+    session_id: Caller<'_>,
+    to: &str,
+    text: &str,
+    attach_file: Option<&str>,
+    on_click: Option<MessageOnClick>,
+    content_type: Option<inbox::MessageContentType>,
+    in_reply_to: Option<(i64, InboxReplyTeam)>,
+    reply_to: Option<&str>,
+    summary: Option<&str>,
+    kind: Option<inbox::MessageKind>,
+
+    request_id: Option<&str>,
+    media: Option<&crate::media::MediaInput>,
+) -> Result<(SendResult, Option<StoredMedia>), String> {
     if text.trim().is_empty() && media.is_none() {
-        return Ok(SendResult::invalid("the text is blank"));
+        return Ok((SendResult::invalid("the text is blank"), None));
     }
     let request_hash = request_id.filter(|id| !id.trim().is_empty()).map(|_| {
         let mut payload = serde_json::json!([
@@ -1325,14 +1394,17 @@ pub(crate) async fn send_message_replying(
     });
     let sessions = host.sessions().await?;
     let Some(to) = recipient_address(&**host, &sessions, to) else {
-        return Ok(SendResult::invalid(format_args!(
-            "no session '{}'; pass a handle from list_sessions, or \"human\"",
-            to.trim()
-        )));
+        return Ok((
+            SendResult::invalid(format_args!(
+                "no session '{}'; pass a handle from list_sessions, or \"human\"",
+                to.trim()
+            )),
+            None,
+        ));
     };
     let sender = match caller_handle(&sessions, session_id) {
         Ok(sender) => sender,
-        Err(message) => return Ok(SendResult::invalid(message)),
+        Err(message) => return Ok((SendResult::invalid(message), None)),
     };
     let path = match (to.as_str(), sender.as_deref()) {
         (HUMAN, Some(sender)) => session_store(&**host, sender).await?,
@@ -1342,12 +1414,12 @@ pub(crate) async fn send_message_replying(
     let from = sender.clone().unwrap_or_else(|| HUMAN.to_string());
     if let (Some(id), Some(hash)) = (request_id, request_hash.as_deref()) {
         if let Some(result) = replay_send(&path.path, &from, id, hash, kind, text).await? {
-            return Ok(result);
+            return Ok((result, None));
         }
     }
     let replies_go_to = match reply_to_address(&**host, &sessions, reply_to) {
         Ok(address) => address,
-        Err(message) => return Ok(SendResult::invalid(message)),
+        Err(message) => return Ok((SendResult::invalid(message), None)),
     };
     let to_human = to == HUMAN && sender.is_some();
     // A Reply-To naming the sender's own role (a manager's digest, `role:manager`) asks
@@ -1375,7 +1447,7 @@ pub(crate) async fn send_message_replying(
     let from = sender.unwrap_or_else(|| HUMAN.to_string());
     let effective =
         inbox::MessageKind::effective(stored_kind, replies_go_to.as_deref(), None, &from);
-    let result = store_message(
+    let (result, stored) = store_message(
         host,
         path.clone(),
         from.clone(),
@@ -1396,15 +1468,16 @@ pub(crate) async fn send_message_replying(
     if matches!(result, SendResult::Sent { .. }) {
         if let (Some(id), Some(hash)) = (request_id, request_hash.as_deref()) {
             if let Some(replayed) = replay_send(&path.path, &from, id, hash, kind, text).await? {
-                return Ok(replayed);
+                return Ok((replayed, stored));
             }
         }
     }
-    Ok(if to_human {
+    let result = if to_human {
         result.for_human(kind, effective, text)
     } else {
         result
-    })
+    };
+    Ok((result, stored))
 }
 
 /// Return the original stored lane and hint before any live-session or role checks.
@@ -1463,12 +1536,15 @@ async fn reply_as(
 
     request_id: Option<&str>,
     media: Option<&crate::media::MediaInput>,
-) -> Result<SendResult, String> {
+) -> Result<(SendResult, Option<StoredMedia>), String> {
     if text.trim().is_empty() && media.is_none() {
-        return Ok(SendResult::invalid("the text is blank"));
+        return Ok((SendResult::invalid("the text is blank"), None));
     }
     let Some(target) = stored_reply_recipient(own.path.clone(), message_id).await? else {
-        return Ok(SendResult::invalid(format_args!("no message {message_id}")));
+        return Ok((
+            SendResult::invalid(format_args!("no message {message_id}")),
+            None,
+        ));
     };
     let origin = InboxReplyTeam {
         org: own.team.org.clone(),
@@ -1479,7 +1555,7 @@ async fn reply_as(
             ReplyTo::Role(role) => role.eq_ignore_ascii_case(HUMAN),
             ReplyTo::Address(address) => address == HUMAN,
         };
-    let result = match ReplyTo::parse(&target) {
+    let (result, stored) = match ReplyTo::parse(&target) {
         // A `role:human` stored before replyTo was normalized still means the human.
         ReplyTo::Role(role) if role.eq_ignore_ascii_case(HUMAN) => {
             store_message(
@@ -1572,7 +1648,7 @@ async fn reply_as(
             }
         }
     }
-    Ok(result)
+    Ok((result, stored))
 }
 
 /// Queue a reply to message `message_id` for `role` in the store at `path`: an inbox
@@ -1592,7 +1668,7 @@ async fn queue_role_reply(
 
     request_id: Option<&str>,
     media: Option<&crate::media::MediaInput>,
-) -> Result<SendResult, String> {
+) -> Result<(SendResult, Option<StoredMedia>), String> {
     let queued_role = role.to_string();
     let queued_sender = from.to_string();
     let (from, role, text) = (from.to_string(), role.to_string(), text.to_string());
@@ -1623,8 +1699,8 @@ async fn queue_role_reply(
         })
         .await?;
         match replay {
-            Ok(Some((message_id, _))) => return Ok(SendResult::sent(message_id)),
-            Err(reason) => return Ok(SendResult::invalid(reason)),
+            Ok(Some((message_id, _))) => return Ok((SendResult::sent(message_id), None)),
+            Err(reason) => return Ok((SendResult::invalid(reason), None)),
             Ok(None) => {}
         }
     }
@@ -1673,10 +1749,16 @@ async fn queue_role_reply(
     .await?;
     match stored {
         Ok((message_id, inserted)) => {
+            let mut newly = None;
             if inserted {
                 if let Some((attachment, _)) = &prepared {
                     host.note_media(&own.team, message_id, std::slice::from_ref(attachment))
                         .await;
+                    newly = Some(StoredMedia {
+                        team: own.team.clone(),
+                        message_id,
+                        attachment: attachment.clone(),
+                    });
                 }
                 if let Some((attachment, true)) = prepared {
                     start_media_fetch(host.clone(), own.clone(), message_id, attachment);
@@ -1689,9 +1771,9 @@ async fn queue_role_reply(
                 host.roles_changed();
                 host.role_message_queued(&own.team, &queued_role, message_id, &queued_sender);
             }
-            Ok(SendResult::sent(message_id))
+            Ok((SendResult::sent(message_id), newly))
         }
-        Err(reason) => Ok(SendResult::invalid(reason)),
+        Err(reason) => Ok((SendResult::invalid(reason), None)),
     }
 }
 
@@ -1764,7 +1846,7 @@ pub(crate) async fn reply_request<'a>(
         Ok(caller) => caller,
         Err(message) => return Ok(SendResult::invalid(message)),
     };
-    match caller {
+    let (result, stored) = match caller {
         Some(handle) => {
             let own = session_store(&**host, &handle).await?;
             reply_as(
@@ -1780,7 +1862,7 @@ pub(crate) async fn reply_request<'a>(
                 request_id,
                 media,
             )
-            .await
+            .await?
         }
         None => {
             let own = active_store(&**host).await?;
@@ -1797,9 +1879,14 @@ pub(crate) async fn reply_request<'a>(
                 request_id,
                 media,
             )
-            .await
+            .await?
         }
+    };
+    // Registered here, once per reply call, after the store; a replay stored nothing.
+    if let Some(stored) = &stored {
+        host.media_sent(stored);
     }
+    Ok(result)
 }
 
 /// The human answers message `message_id` of `team`'s inbox from the Agents panel: the
@@ -1816,7 +1903,7 @@ pub(crate) async fn reply_from_human(
     summary: Option<&str>,
 ) -> Result<SendResult, String> {
     let own = team_inbox(&**host, team.clone()).await?;
-    reply_as(
+    let (result, _) = reply_as(
         host,
         HUMAN.to_string(),
         own,
@@ -1829,7 +1916,8 @@ pub(crate) async fn reply_from_human(
         None,
         None,
     )
-    .await
+    .await?;
+    Ok(result)
 }
 
 /// Record that `text` was typed into the terminal of the session under `target` (a
@@ -2888,6 +2976,40 @@ impl InboxHost for AppInboxHost {
     ) {
         crate::media::note(&self.app, team, message_id, attachments.to_vec()).await;
     }
+    fn media_sent(&self, media: &StoredMedia) {
+        let a = &media.attachment;
+        if let (Some(provider), Some(provider_id), Some(url)) =
+            (a.provider, a.provider_id.clone(), a.source_url.clone())
+        {
+            let owner = crate::media::index::Owner {
+                org: media.team.org.clone(),
+                team: media.team.team.clone(),
+                message_id: media.message_id,
+            };
+            crate::gif::register::on_send(
+                &self.app,
+                crate::gif::register::Sent {
+                    slot: (owner, 0),
+                    provider,
+                    provider_id,
+                    url,
+                },
+            );
+        }
+    }
+    fn media_fetched(
+        &self,
+        team: &LaunchTeam,
+        message_id: i64,
+        attachment: &crate::media::Attachment,
+    ) {
+        let owner = crate::media::index::Owner {
+            org: team.org.clone(),
+            team: team.team.clone(),
+            message_id,
+        };
+        crate::gif::register::on_fetched(&self.app, &(owner, 0), attachment);
+    }
     async fn own_media_sender(&self, sender: &str) -> bool {
         let tabs = crate::mcp::terminal_tabs::LiveTabs::read(&self.app).await;
         let session = self.launch().and_then(|l| l.resolve(sender));
@@ -3580,6 +3702,7 @@ async fn finish_media_fetch(
     })
     .await?
     .map_err(|e| e.to_string())?;
+    host.media_fetched(&location.team, message_id, &attachment);
     host.note_media(&location.team, message_id, &[attachment])
         .await;
     host.inbox_event(InboxEvent::new(
@@ -3588,6 +3711,50 @@ async fn finish_media_fetch(
         [message_id],
     ));
     Ok(())
+}
+
+/// Mark these attachments' provider view pings settled (`onloadSent`), each in its own
+/// team's store and the sha index. A message that is gone is skipped; failures are logged.
+pub(crate) async fn mark_onloads_sent(
+    host: &Arc<dyn InboxHost>,
+    slots: Vec<(crate::media::index::Owner, usize)>,
+) {
+    for (owner, slot) in slots {
+        let team = LaunchTeam {
+            org: owner.org,
+            team: owner.team,
+        };
+        let message_id = owner.message_id;
+        let marked = async {
+            let path = host.team_store(&team).await?;
+            let read_path = path.clone();
+            let row = with_store("media.onload", read_path, move |store| {
+                inbox::inbox_get(store, message_id)
+            })
+            .await?
+            .map_err(|e| e.to_string())?;
+            let Some(mut attachments) = row.map(|m| m.attachments) else {
+                return Ok(None);
+            };
+            match attachments.get_mut(slot) {
+                Some(a) if !a.onload_sent => a.onload_sent = true,
+                _ => return Ok(None),
+            }
+            let stored = attachments.clone();
+            with_store("media.onload", path, move |store| {
+                inbox::inbox_set_attachments(store, message_id, &stored)
+            })
+            .await?
+            .map_err(|e| e.to_string())?;
+            Ok::<_, String>(Some(attachments))
+        }
+        .await;
+        match marked {
+            Ok(Some(attachments)) => host.note_media(&team, message_id, &attachments).await,
+            Ok(None) => {}
+            Err(e) => log::warn!("inbox media: a view ping could not be marked: {e}"),
+        }
+    }
 }
 #[tauri::command]
 pub async fn load_inbox_media(

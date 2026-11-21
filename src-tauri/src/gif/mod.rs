@@ -5,6 +5,7 @@
 pub(crate) mod analytics;
 pub(crate) mod bucket;
 pub(crate) mod giphy;
+pub(crate) mod register;
 pub(crate) mod settings;
 
 use crate::commands::credential_store::Secret;
@@ -339,6 +340,11 @@ fn is_format_char(c: char) -> bool {
     )
 }
 
+/// The rate-limit bucket of a provider and key fingerprint, which searches and pingbacks share.
+pub(crate) fn bucket_key(provider: Provider, fingerprint: &str) -> String {
+    format!("{}:{fingerprint}", Provider::as_str(provider))
+}
+
 /// The first 16 hex digits of the key's SHA-256: what the bucket and the production flag are
 /// keyed by, so neither file holds the key.
 pub fn fingerprint(key: &Secret) -> String {
@@ -441,18 +447,7 @@ pub fn pick_preview(renditions: &[Rendition]) -> Option<&Rendition> {
 
 /// Whether `url` is https on one of `provider`'s hosts, with no credentials in it.
 pub fn on_provider_host(provider: Provider, url: &str) -> bool {
-    let Ok(url) = url.parse::<url::Url>() else {
-        return false;
-    };
-    url.scheme() == "https"
-        && url.username() == ""
-        && url.password().is_none()
-        && url.host_str().is_some_and(|host| {
-            provider
-                .hosts()
-                .iter()
-                .any(|pattern| crate::media::host_matches(pattern, host))
-        })
+    crate::media::on_hosts(Provider::hosts(provider), url)
 }
 
 /// A candidate from one provider result, or `None` when it has no qualifying animated rendition
@@ -524,7 +519,7 @@ pub(crate) type Adapters = Arc<dyn Fn(Provider, Secret, i64) -> Box<dyn GifProvi
 pub(crate) struct GifService {
     data_dir: PathBuf,
     pub(crate) keys: settings::Keys,
-    bucket: Arc<bucket::Bucket>,
+    pub(crate) bucket: Arc<bucket::Bucket>,
     pub(crate) analytics: analytics::Analytics,
     adapters: Adapters,
     clock: Clock,
@@ -578,7 +573,7 @@ impl GifService {
         let key = settings::Keys::read_timed(&self.keys, provider).await?;
         let fingerprint = fingerprint(&key);
         let production = current.is_production(provider, &fingerprint);
-        let bucket_key = format!("{}:{fingerprint}", provider.as_str());
+        let bucket_key = self::bucket_key(provider, &fingerprint);
         let rating = Rating::clamp(rating, current.ceiling);
         let (bucket, counted, now) = (self.bucket.clone(), bucket_key.clone(), (self.clock)());
         tokio::task::spawn_blocking(move || bucket.take(&counted, production, now))

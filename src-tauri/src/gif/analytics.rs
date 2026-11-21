@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-//! The pingback URLs each search returned (GIPHY's `analytics`), held in memory for an hour by
-//! provider and GIF id, so a later send of that GIF can register it. At most [`MAX_ENTRIES`] are
-//! held; the oldest go first.
+//! The pingback URLs each search returned (GIPHY's `analytics`), with the GIF's URLs, held in
+//! memory for an hour by provider and GIF id, so a later send of that GIF can register it. At
+//! most [`MAX_ENTRIES`] are held; the oldest go first.
 use super::{Found, Pingbacks, Provider};
 use std::{
     collections::{HashMap, VecDeque},
@@ -15,8 +15,23 @@ pub(crate) const MAX_ENTRIES: usize = 2000;
 
 type Key = (Provider, String);
 
+/// What a search returned for one GIF: the URLs a send of it must use to register, and its
+/// pingbacks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Entry {
+    pub url: String,
+    pub preview_url: String,
+    pub pingbacks: Pingbacks,
+}
+impl Entry {
+    /// `url` is one this search returned for the GIF, so a send of it is this GIF.
+    pub(crate) fn binds(&self, url: &str) -> bool {
+        self.url == url || self.preview_url == url
+    }
+}
+
 struct Held {
-    entries: HashMap<Key, (i64, Pingbacks)>,
+    entries: HashMap<Key, (i64, Entry)>,
     /// Keys in the order they were recorded, oldest first; a key recorded again moves to the end.
     order: VecDeque<Key>,
 }
@@ -43,8 +58,13 @@ impl Analytics {
         for f in found {
             if let Some(pingbacks) = &f.pingbacks {
                 let key = (provider, f.candidate.id.clone());
+                let entry = Entry {
+                    url: f.candidate.url.clone(),
+                    preview_url: f.candidate.preview_url.clone(),
+                    pingbacks: pingbacks.clone(),
+                };
                 if entries
-                    .insert(key.clone(), (now_ms + TTL_MS, pingbacks.clone()))
+                    .insert(key.clone(), (now_ms + TTL_MS, entry))
                     .is_some()
                 {
                     VecDeque::retain(order, |k| *k != key);
@@ -65,20 +85,24 @@ impl Analytics {
         }
     }
 
+    /// What a search within the last hour returned for this GIF.
+    pub(crate) fn held_entry(&self, provider: Provider, id: &str, now_ms: i64) -> Option<Entry> {
+        let held = self.held.lock().unwrap_or_else(|e| e.into_inner());
+        match held.entries.get(&(provider, id.to_string())) {
+            Some((expires, entry)) if *expires > now_ms => Some(entry.clone()),
+            _ => None,
+        }
+    }
+
     /// The pingbacks a search within the last hour returned for this GIF.
-    // Read by the send path that registers a provider GIF; tests read it now.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn pingbacks_for(
         &self,
         provider: Provider,
         id: &str,
         now_ms: i64,
     ) -> Option<Pingbacks> {
-        let held = self.held.lock().unwrap_or_else(|e| e.into_inner());
-        match held.entries.get(&(provider, id.to_string())) {
-            Some((expires, pingbacks)) if *expires > now_ms => Some(pingbacks.clone()),
-            _ => None,
-        }
+        self.held_entry(provider, id, now_ms).map(|e| e.pingbacks)
     }
 
     #[cfg(test)]
