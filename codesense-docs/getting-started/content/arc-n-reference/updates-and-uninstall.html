@@ -18,7 +18,7 @@
         <p>How the app from codesense.ai/download updates itself, what it sends on its own, and how to remove it and the files it keeps.</p>
       </section>
 
-      <section data-search="Updates Settings General Check now Update ready Restart to update installs when you quit release notes" id="updates">
+      <section data-search="Updates Settings General Check now Update ready Restart to update installs when you quit release notes Linux AppImage deb rpm package manager" id="updates">
         <h2>Updates</h2>
         <p>
           You don't need to do anything to stay up to date. The app checks at launch, then about once a
@@ -52,6 +52,16 @@
           If it can't, or downloads keep failing, the Updates section says so, with
           <strong>Download the latest CodeSense</strong>. To install by hand, quit
           CodeSense, open the new <code>.dmg</code> and drag CodeSense into Applications, replacing the old copy.
+        </p>
+        <p>
+          On Linux, the AppImage updates itself the same way: the new AppImage is checked against the
+          release signing key and replaces the old file where it is when you quit, as long as the file and
+          its folder are yours to write and the folder isn't shared, like <code>/tmp</code>. As CodeSense quits, the old AppImage is moved into a temporary
+          folder and the new one is written at its path; if the write fails the old file is put back,
+          and once it succeeds the old copy is deleted. CodeSense installed from a <code>.deb</code> or <code>.rpm</code>
+          package doesn't download updates itself. When a newer build is out, the Updates section says
+          <q>A new build is out. Update CodeSense through your package manager.</q>, with no download link:
+          install the new package the way you installed this one.
         </p>
         <p>
           Update checks are automatic; there is no setting to turn them off. A build you make from

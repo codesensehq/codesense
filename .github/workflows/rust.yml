@@ -882,7 +882,6 @@ jobs:
           status=0
           # Every test that compiles only off the internal channel: the license module's and the
           # three outside it gated not(cs_channel = "internal") or on a beta channel.
-          # updates.rs's and static_channel.rs's tests are macOS-only until the updater's Linux port.
           CODESENSE_RELEASED_AT="$(git log -1 --format=%ct)" \
             cargo nextest run --profile ci --locked -p codesense --lib --features dashboard-publish \
             -E "$BETA_TESTS" || status=1

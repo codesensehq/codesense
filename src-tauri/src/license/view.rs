@@ -25,7 +25,8 @@ pub struct UpdateStatus {
 pub struct View {
     pub channel: &'static str,
     pub update: Option<UpdateStatus>,
-    /// Set when the next build has to be installed by hand (SW-PB-13).
+    /// Set when the next build has to be installed by hand (SW-PB-13), or through the package
+    /// manager on a `.deb` or `.rpm` install.
     pub update_attention: Option<updates::Attention>,
     /// This build gets no updates: it was built without its channel's updater config.
     pub updates_off: bool,
