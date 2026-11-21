@@ -568,6 +568,34 @@ mod tests {
         ));
     }
 
+    /// What a Windows spawn runs once it unwraps npm's shims
+    /// (`codesense-platform/tests/fixtures/npm-shims`) is still recognised as the agent: Codex's
+    /// node script by its npm entry, Claude's `.exe` by its name.
+    #[test]
+    fn an_unwrapped_npm_shim_is_still_its_agent() {
+        let codex = r"C:\Users\u\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js";
+        assert!(is_npm_entry(codex, "codex"));
+        assert!(!is_npm_entry(codex, "claude"));
+        assert!(!is_npm_entry(
+            r"C:\npm\node_modules\@openai\other\bin\codex.js",
+            "codex"
+        ));
+        assert!(agent_signature_matches(
+            "node.exe",
+            Some(r"C:\Program Files\nodejs\node.exe"),
+            &[r"C:\Program Files\nodejs\node.exe", codex, "--yolo"],
+            "codex"
+        ));
+        let claude =
+            r"C:\Users\u\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe";
+        assert!(agent_signature_matches(
+            "claude.exe",
+            Some(claude),
+            &[claude, "--resume"],
+            "claude"
+        ));
+    }
+
     fn proc_info(name: &str, exe: Option<&str>, cmd: &[&str]) -> ProcInfo {
         ProcInfo {
             name: name.to_string(),
