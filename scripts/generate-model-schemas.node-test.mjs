@@ -148,7 +148,7 @@ test("the PR gate still rejects a stale standalone schema without repairing it",
       }) + "\n";
     writeFileSync(path, stale);
     assert.throws(
-      () => generate(true, { root, allowStaleExport: true, warn: () => {} }),
+      () => generate(true, { root, allowStaleExport: true, strict: false, warn: () => {} }),
       /routine-yml\.schema\.json is stale/,
     );
     assert.equal(readFileSync(path, "utf8"), stale, "check mode must preserve the stale bytes");
