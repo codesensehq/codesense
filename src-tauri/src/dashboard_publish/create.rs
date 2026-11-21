@@ -839,6 +839,36 @@ fn starter_app_for(
     (script, next_steps)
 }
 
+/// [`workspaces_html_for`] the OS this build runs on.
+fn workspaces_html(template: Template, work_it: bool, title: &str) -> String {
+    workspaces_html_for(machine_wording::RUNNING_OS, template, work_it, title)
+}
+
+/// The shared `index.html` of the workspaces, mission-control and bug-triage
+/// templates: its view, its title, and the owner's computer named for `os` in
+/// the status line and the `codesense:owner-machine` meta the page's scripts
+/// read.
+fn workspaces_html_for(os: &str, template: Template, work_it: bool, title: &str) -> String {
+    let html = match template {
+        Template::BugTriage => WORKSPACES_HTML.replace(
+            "data-template=\"workspaces\"",
+            if work_it {
+                "data-template=\"bug-triage\" data-work-it=\"true\""
+            } else {
+                "data-template=\"bug-triage\""
+            },
+        ),
+        Template::MissionControl => WORKSPACES_HTML.replace(
+            "data-template=\"workspaces\"",
+            "data-template=\"mission-control\"",
+        ),
+        Template::Workspaces | Template::Starter => WORKSPACES_HTML.to_string(),
+    };
+    // The noun first, so a title that spells a placeholder stays as it was typed.
+    html.replace("{{owner_machine}}", machine_wording::machine_kind(os))
+        .replace("{{title}}", &escape_html(title))
+}
+
 /// Architecture: creation retains baseline writes; unreadable placement outcomes are missing.
 pub(crate) fn create_for(
     request: &CreateRequest,
@@ -888,24 +918,7 @@ pub fn create(req: &CreateRequest, catalog: &[QueryDef]) -> Result<Created, Crea
         }
         Template::Workspaces | Template::MissionControl | Template::BugTriage => {
             // One renderer, stylesheet and writer; mission control changes only its view data.
-            let html = if req.template == Template::BugTriage {
-                WORKSPACES_HTML.replace(
-                    "data-template=\"workspaces\"",
-                    if req.agent.is_some() {
-                        "data-template=\"bug-triage\" data-work-it=\"true\""
-                    } else {
-                        "data-template=\"bug-triage\""
-                    },
-                )
-            } else if req.template == Template::MissionControl {
-                WORKSPACES_HTML.replace(
-                    "data-template=\"workspaces\"",
-                    "data-template=\"mission-control\"",
-                )
-            } else {
-                WORKSPACES_HTML.to_string()
-            }
-            .replace("{{title}}", &escape_html(&plan.title));
+            let html = workspaces_html(req.template, req.agent.is_some(), &plan.title);
             writes.push((ENTRY.to_string(), html.into_bytes()));
             writes.push((STYLE.to_string(), WORKSPACES_CSS.as_bytes().to_vec()));
             writes.push((SCRIPT.to_string(), WORKSPACES_JS.as_bytes().to_vec()));

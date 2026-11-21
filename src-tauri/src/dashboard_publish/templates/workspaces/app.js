@@ -158,7 +158,7 @@
         drafts.delete(draftKey());
         $("message-text").value = ""; $("send-status").textContent = "Message sent.";
       }).catch(function (error) {
-        var errors = {not_allowed: "Only the owner can send. Sign in again to continue.", not_found: "That recipient or message is no longer available in this team.", rate_limited: "You have reached the message limit. Try again later.", invalid_args: "Check the recipient and use 1 to 2,000 characters.", mac_offline: "Your Mac is offline. Reconnect before sending."};
+        var errors = {not_allowed: "Only the owner can send. Sign in again to continue.", not_found: "That recipient or message is no longer available in this team.", rate_limited: "You have reached the message limit. Try again later.", invalid_args: "Check the recipient and use 1 to 2,000 characters.", mac_offline: "Your " + CS.ownerMachine() + " is offline. Reconnect before sending."};
         $("send-status").textContent = errors[error.message] || "Delivery was not confirmed. Check the inbox before sending again.";
       }).finally(function () { sending = false; $("message-text").readOnly = false; $("recipient").readOnly = replyId !== null; inboxPermissions(); });
     });
@@ -234,17 +234,18 @@
 
   function renderStatus() {
     var s = $("status");
+    var machine = CS.ownerMachine();
     s.textContent = "";
     var asks = agents.filter(function (r) { return stateOf(r) === "needs-you"; }).length;
     if (agentsState === "no_shell") { s.textContent = "Not connected"; return; }
     if (listEnd) { s.textContent = CS.passing(listEnd) ? "Reconnecting" : "Not listing agents"; return; }
     if (agentsState === "paused" || agentsState === "ended" || agentsState === "error" || mac === "offline") {
       // The banner above the list says since when.
-      s.textContent = mac === "offline" ? "Owner's Mac is offline" : "Reconnecting";
+      s.textContent = mac === "offline" ? "Owner's " + machine + " is offline" : "Reconnecting";
       return;
     }
-    if (!listsLive) { s.textContent = "Connecting to the owner's Mac"; return; }
-    s.textContent = "Mac online · " + agents.length + (agents.length === 1 ? " agent" : " agents");
+    if (!listsLive) { s.textContent = "Connecting to the owner's " + machine; return; }
+    s.textContent = machine.charAt(0).toUpperCase() + machine.slice(1) + " online · " + agents.length + (agents.length === 1 ? " agent" : " agents");
     if (asks > 0) {
       s.appendChild(document.createTextNode(" · "));
       s.appendChild(el("span", "ask", asks + " need" + (asks === 1 ? "s" : "") + " you"));
@@ -289,6 +290,7 @@
   function renderList() {
     if (triage) return renderTriage();
     var list = $("list");
+    var machine = CS.ownerMachine();
     renderStatus();
     if (agentsState === "no_shell") {
       list.setAttribute("aria-busy", "false");
@@ -299,8 +301,8 @@
     if (listEnd && !(CS.passing(listEnd) && updatedAt)) {
       // The list stream is over: say why instead of a list that never updates.
       var why = LIST_ENDS[listEnd] || (CS.passing(listEnd)
-        ? ["The owner's Mac could not list its agents.", "Trying again shortly."]
-        : ["The agent list stopped.", "The owner's Mac could not list its agents (" + listEnd + "). Reload the page to try again."]);
+        ? ["The owner's " + machine + " could not list its agents.", "Trying again shortly."]
+        : ["The agent list stopped.", "The owner's " + machine + " could not list its agents (" + listEnd + "). Reload the page to try again."]);
       list.setAttribute("aria-busy", "false");
       list.replaceChildren(empty(why[0], why[1]));
       return;
@@ -321,10 +323,10 @@
     var rest = agents.filter(function (r) { return !placed[r.handle]; });
     if (rest.length) out.push(section(mission ? "Agents" : workspaces.length ? "Other sessions" : "Sessions", "", rest, 0));
     if (!out.length) {
-      out.push(empty("No agents are running in this team right now.", "Sessions the owner starts in this team's workspaces on their Mac appear here within a few seconds. Tap one to watch its terminal."));
+      out.push(empty("No agents are running in this team right now.", "Sessions the owner starts in this team's workspaces on their " + machine + " appear here within a few seconds. Tap one to watch its terminal."));
     }
     if (stale && out.length) {
-      var note = mac === "offline" ? "The owner's Mac is offline." : retrying ? "The owner's Mac could not list its agents; trying again shortly." : agentsState === "live" && workspacesStale ? "Workspace headings may be out of date; trying again shortly." : "Reconnecting to the owner's Mac.";
+      var note = mac === "offline" ? "The owner's " + machine + " is offline." : retrying ? "The owner's " + machine + " could not list its agents; trying again shortly." : agentsState === "live" && workspacesStale ? "Workspace headings may be out of date; trying again shortly." : "Reconnecting to the owner's " + machine + ".";
       if (updatedAt) note += " Showing the list from " + clock(updatedAt) + ".";
       out.unshift(el("p", "banner", note));
     }
@@ -349,7 +351,7 @@
     if (bugs === null && !bugError) return;
     var focus = document.activeElement && document.activeElement.dataset && document.activeElement.dataset.actionKey;
     var out = [];
-    if (mac === "offline") out.push(el("p", "banner", "The owner's Mac is offline. Actions are unavailable until it reconnects."));
+    if (mac === "offline") out.push(el("p", "banner", "The owner's " + CS.ownerMachine() + " is offline. Actions are unavailable until it reconnects."));
     if (bugError) out.push(el("p", "banner", bugError === "no_shell" ? "Publish this dashboard to load bugs and run actions." : "Bugs could not be loaded. Waiting for the next update."));
     if (bugs && !bugs.length && !bugError) out.push(empty("No bugs to triage", "Bugs in this team's context appear here when their type is bug."));
     (bugs || []).forEach(function (bug) {
@@ -370,7 +372,7 @@
             actionNotes[bug.id] = pair[1] + " completed.";
             if (result.fields && bug.fields) Object.assign(bug.fields, result.fields);
           }).catch(function (e) {
-            var errors = {rate_limited: "Action limit reached. Try again later.", busy: "The dashboard's agents are busy. Wait for one to finish.", not_allowed: "Only the owner can run actions.", not_found: "This bug or its configured agent is no longer available.", timeout: "Outcome unknown. Check activity before trying again.", mac_offline: "The owner's Mac is offline. Try again when it reconnects."};
+            var errors = {rate_limited: "Action limit reached. Try again later.", busy: "The dashboard's agents are busy. Wait for one to finish.", not_allowed: "Only the owner can run actions.", not_found: "This bug or its configured agent is no longer available.", timeout: "Outcome unknown. Check activity before trying again.", mac_offline: "The owner's " + CS.ownerMachine() + " is offline. Try again when it reconnects."};
             actionNotes[bug.id] = errors[e.message] || "Action refused. Ask the owner to check its declaration.";
           }).finally(function () { delete pendingActions[bug.id]; renderTriage(); });
         });
