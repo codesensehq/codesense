@@ -1,8 +1,9 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # Packaging smoke for the Linux test build: install the deb and the rpm in clean containers and
-# launch each installed app headless there, and launch the extracted AppImage headless. Release builds carry no WebDriver, so the launch checks
-# read the process, the app window and the app's log.
+# launch each installed app headless there, and launch the extracted AppImage headless. Release
+# builds carry no WebDriver, so the launch checks read the process, the app window and the app's
+# log.
 #
 # Usage:
 #   smoke-linux.sh install <deb|rpm> <image> <package-dir> <out-dir>
@@ -11,14 +12,14 @@
 #       every dependency, ldconfig must then find the AppIndicator library the tray icon loads
 #       (the package depends on it), and the package's file list (kept as
 #       <out-dir>/<deb|rpm>.list) must hold the app binary and its three sidecars. The package
-#       must name WebKitGTK 4.1 and GTK 3 among its dependencies (depends). Then the installed
-#       app launches once in the container, as run launches the AppImage (the default launch,
-#       leaving default.log and default.png in <out-dir>/launch), with the session tools
-#       installed only after the package, so they cannot stand in for a dependency it lacks.
-#       A deb image's apt fetches from
-#       SMOKE_APT_MIRROR (apt-mirror), with retries and short timeouts. When SMOKE_APT_CACHE names
-#       a directory, a deb image uses it as its apt archives and keeps what it fetches there
-#       (apt-keep), so a cache of that directory saves the next run the download.
+#       must name WebKitGTK 4.1 and GTK 3 among its dependencies (depends). The session tools
+#       are installed only after the install and the depends check, so neither can lean on
+#       them. Then the installed app launches once in the container, as run launches the
+#       AppImage (the default launch, leaving default.log and default.png in <out-dir>/launch).
+#       A deb image's apt fetches from SMOKE_APT_MIRROR (apt-mirror), with retries and short
+#       timeouts. When SMOKE_APT_CACHE names a directory, a deb image uses it as its apt archives
+#       and keeps what it fetches there (apt-keep), so a cache of that directory saves the next
+#       run the download. An rpm image runs with IPC_LOCK, which Fedora's keyring daemon needs.
 #   smoke-linux.sh cache-key <image> <package-dir> <week>
 #       Print key= and restore= lines for the apt archive cache of the one .deb under
 #       <package-dir> in <image>: the key holds the deb's architecture, the image's pinned
@@ -107,14 +108,15 @@ APP_ID=ai.codesense
 DEB_DEPENDS=(libwebkit2gtk-4.1-0 libgtk-3-0)
 RPM_DEPENDS=(webkit2gtk4.1 gtk3)
 # The tools the launch uses inside an install container, beside what the package brings: the X
-# server and what xvfb-run calls, window and screenshot tools, the session bus and keyring, pgrep, and the Mesa GL and
-# EGL drivers WebKit renders with. An rpm image's dnf installs them by the files the launch runs.
+# server and what xvfb-run calls, window and screenshot tools, the session bus, its machine id
+# and the keyring, pgrep, and the Mesa GL and EGL drivers WebKit renders with. An rpm image's dnf
+# installs them by the files the launch runs.
 DEB_SESSION_TOOLS=(xvfb xauth x11-utils xdotool dbus gnome-keyring imagemagick procps libegl1 libgl1
     libgles2 libgl1-mesa-dri)
 RPM_SESSION_TOOLS=(/usr/bin/xvfb-run /usr/bin/xauth /usr/bin/mcookie /usr/bin/getopt /usr/bin/xdotool
-    /usr/bin/xwininfo
-    /usr/bin/dbus-run-session /usr/bin/dbus-send /usr/bin/gnome-keyring-daemon /usr/bin/import
-    /usr/bin/identify /usr/bin/pgrep mesa-dri-drivers mesa-libEGL mesa-libGL)
+    /usr/bin/xwininfo /usr/bin/dbus-run-session /usr/bin/dbus-send /usr/bin/dbus-uuidgen
+    /usr/bin/gnome-keyring-daemon /usr/bin/import /usr/bin/identify /usr/bin/pgrep mesa-dri-drivers
+    mesa-libEGL mesa-libGL)
 
 usage() {
     sed -n 's/^#   //p' "$0" | grep "^smoke-linux.sh" | sed 's/^/usage: /' >&2
@@ -254,7 +256,7 @@ installed_git_ai() {
 }
 
 install_package() {
-    local type="$1" image="$2" package_dir="$3" out="$4" ref package cache=()
+    local type="$1" image="$2" package_dir="$3" out="$4" ref package cache=() caps=()
     [[ "$type" == deb || "$type" == rpm ]] || usage
     ref=$(image_ref "$image")
     package=$(only_file "$package_dir" "*.$type")
@@ -264,11 +266,13 @@ install_package() {
         cache=(-v "$SMOKE_APT_CACHE:/var/cache/apt/archives" -e SMOKE_KEEP_ARCHIVES=1)
         echo "apt archives: $(find "$SMOKE_APT_CACHE" -name '*.deb' | wc -l) cached in $SMOKE_APT_CACHE"
     fi
+    # As root, Fedora's gnome-keyring-daemon keeps IPC_LOCK to lock its memory and aborts when it
+    # cannot (Docker leaves it out), so the launch's keyring would never start. Ubuntu's does not
+    # ask for it, so a deb image runs without it.
+    if [[ "$type" == rpm ]]; then caps=(--cap-add IPC_LOCK); fi
     echo "Installing $(basename "$package") in $ref"
     # The whole checkout, read-only: the launch reads the git-ai pin through fetch-bundled.sh.
-    # IPC_LOCK: as root, Fedora's gnome-keyring-daemon keeps it to lock its memory and aborts
-    # when it cannot (Docker leaves it out), so the launch's keyring would never start.
-    docker run --rm --cap-add IPC_LOCK -e SMOKE_APT_MIRROR ${cache[@]+"${cache[@]}"} \
+    docker run --rm ${caps[@]+"${caps[@]}"} -e SMOKE_APT_MIRROR ${cache[@]+"${cache[@]}"} \
         -v "$(dirname "$package"):/package:ro" -v "$ROOT:/src:ro" -v "$out:/out" \
         "$ref" bash /src/scripts/ci/smoke-linux.sh in-container "$type" "/package/$(basename "$package")" "/out/$type.list"
     check_listing "$out/$type.list"

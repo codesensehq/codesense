@@ -1,5 +1,5 @@
 ---
-type: fixed
+type: changed
 ---
 
-**The Linux `.rpm` names its WebKitGTK and GTK packages.** It now requires `webkit2gtk4.1` and `gtk3` by name, beside their libraries, so `dnf` resolves them on a clean Fedora install.
+**The Linux `.rpm` names the WebKitGTK and GTK packages it needs.** It now requires `webkit2gtk4.1` and `gtk3` by package name, beside their libraries, as the `.deb` already did.

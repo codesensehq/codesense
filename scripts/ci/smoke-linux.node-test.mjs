@@ -571,12 +571,13 @@ test("install: a deb container mounts SMOKE_APT_CACHE as its apt archives and ke
   assert.ok(argv.some((arg) => arg.startsWith(`ubuntu:22.04@sha256:${jammy}`)));
 });
 
-test("install: the container runs the smoke from the checkout, mounted read-only, with IPC_LOCK", () => {
+test("install: the container runs the smoke from the checkout, mounted read-only, with IPC_LOCK for an rpm", () => {
   const root = path.resolve(path.dirname(script), "../..");
   const argv = install("rpm", "fedora:44", "");
   assert.ok(flagged(argv, "-v").includes(`${root}:/src:ro`));
-  // The keyring daemon the launch starts as root keeps IPC_LOCK, or aborts without it.
+  // Fedora's keyring daemon, started as root, keeps IPC_LOCK or aborts; Ubuntu's does not ask.
   assert.deepEqual(flagged(argv, "--cap-add"), ["IPC_LOCK"]);
+  assert.deepEqual(flagged(install("deb", "ubuntu:24.04", ""), "--cap-add"), []);
   assert.deepEqual(argv.slice(-6), [
     "bash",
     "/src/scripts/ci/smoke-linux.sh",
