@@ -197,7 +197,11 @@ fn spawn_sleeper(stream: &mut UnixStream, id: &str) -> i32 {
             starship_preset: None,
             api_port: None,
             env_remove: Vec::new(),
-            env: vec![("HOME".into(), "/var/empty".into())],
+            // A home that exists on every OS: with no cwd the child starts there.
+            env: vec![(
+                "HOME".into(),
+                std::env::temp_dir().to_string_lossy().into_owned(),
+            )],
             agent_env: Vec::new(),
             login_path: None,
         },

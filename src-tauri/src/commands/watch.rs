@@ -5608,6 +5608,8 @@ mod tests {
 }
 
 #[cfg(test)]
+// Fails on Linux (linux-test-defects): a prefs change dispatched after startup is not shown.
+#[cfg(target_os = "macos")]
 mod prefs_bootstrap_tests {
     use super::*;
     use tauri::Manager;

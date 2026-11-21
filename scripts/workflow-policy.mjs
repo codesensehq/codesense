@@ -72,7 +72,7 @@ const TEST_BUILD = {
 const REGENERATE_EXPORTS = {
   file: "regenerate-exports.yml",
   triggers: ["workflow_dispatch"],
-  exports: ["all", "live-data-contract", "mcp-reference", "model-schemas"],
+  exports: ["all", "model-schemas", "live-data-contract", "mcp-reference"],
 };
 const JOB_PERMISSIONS = new Map([
   [`${COMMIT_EMAILS.file}:${COMMIT_EMAILS.job}`, { contents: "read" }],

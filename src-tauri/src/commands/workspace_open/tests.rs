@@ -10,6 +10,11 @@ use crate::commands::dashboard_launch::{session_row, DashboardLaunchState};
 use crate::domain::Principal;
 use crate::mcp::session_list::{session_list_rows, SessionListRow};
 
+/// How the messages name the computer the tests run on ("This Mac" on macOS).
+fn here() -> &'static str {
+    machine_wording::machine_noun(machine_wording::RUNNING_OS)
+}
+
 const ORG: &str = "acme/widgets-context";
 
 pub(crate) type RegisteredSpawnProbe =
@@ -1391,7 +1396,7 @@ fn a_story_already_living_elsewhere_is_not_opened_on_a_machine() {
     });
     let conflict =
         |story: &str, machine: &str| machine_open_conflict(&viewer, "acme:core", story, machine);
-    assert!(conflict("SW-1", "box").unwrap().contains("This Mac"));
+    assert!(conflict("SW-1", "box").unwrap().contains(here()));
     assert_eq!(conflict("SW-2", "box"), None);
     assert!(conflict("SW-2", "other").unwrap().contains("machine box"));
     assert!(conflict("SW-3", "box").unwrap().contains("machine other"));
@@ -2647,7 +2652,7 @@ fn a_story_launch_runs_where_its_workspace_lives() {
     );
     assert!(story_machine("SW-1", mac.clone(), Some("box"))
         .unwrap_err()
-        .contains("already lives on This Mac"));
+        .contains(&format!("already lives on {}", here())));
     assert!(story_machine("SW-1", boxed.clone(), Some("other"))
         .unwrap_err()
         .contains("already lives on machine box"));
@@ -2727,7 +2732,9 @@ async fn a_machine_that_is_not_where_the_workspace_lives_is_refused() {
         .await
         .unwrap();
     assert_eq!(result.status, OpenStatus::Invalid);
-    assert!(result.message.contains("already lives on This Mac"));
+    assert!(result
+        .message
+        .contains(&format!("already lives on {}", here())));
     assert!(host.launches().is_empty());
     assert!(host.remote_launches().is_empty());
 
@@ -2755,7 +2762,9 @@ async fn a_team_folder_or_background_launch_is_not_offered_on_a_machine() {
     .await
     .unwrap();
     assert_eq!(folder.status, OpenStatus::Invalid);
-    assert!(folder.message.contains("a team folder runs on This Mac"));
+    assert!(folder
+        .message
+        .contains(&format!("a team folder runs on {}", here())));
 
     let headless = open_agent(
         &host,
@@ -2840,7 +2849,7 @@ fn waiting_for_a_workspace_on_a_machine_reads_the_viewer() {
     // Living on This Mac is never launched on the machine.
     assert!(matches!(
         wait(row(serde_json::Value::Null, "ready"), false, false),
-        MachineWorkspaceWait::Failed(why) if why.contains("This Mac")
+        MachineWorkspaceWait::Failed(why) if why.contains(here())
     ));
     // A minimized one is brought back first.
     let minimized = serde_json::json!({ "softClosedWorkspaces": { "acme:core": { "SW-1-fix":

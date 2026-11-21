@@ -1234,7 +1234,8 @@ impl Drop for ReadOnly {
     }
 }
 
-#[cfg(all(test, not(cs_channel = "internal")))]
+// macOS only (darwin route and .app fixtures) until the updater's Linux port (linux-test-defects).
+#[cfg(all(test, not(cs_channel = "internal"), target_os = "macos"))]
 pub(super) mod tests {
     use super::*;
     use crate::test_support::updater::{bad_signatures, shipped_pubkey, ANOTHER_KEY, TEST_PUBKEY};

@@ -586,7 +586,8 @@ fn write_resize_and_idle_reach_the_pty() {
     let mut client = TestClient::hello(&server);
     client.spawn(
         &server,
-        sh("read line; stty size; printf 'GOT=%s\\n' \"$line\"; sleep 60"),
+        // `; :` keeps the shell, so sleep runs under it: bash 5 execs a script's last command.
+        sh("read line; stty size; printf 'GOT=%s\\n' \"$line\"; sleep 60; :"),
         registration("io-1", None, false),
     );
     client
