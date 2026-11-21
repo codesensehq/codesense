@@ -557,6 +557,7 @@ impl GifService {
         requested: Option<Provider>,
         rating: Option<&str>,
     ) -> Result<(Provider, Vec<Candidate>), GifError> {
+        let epoch = register::install_epoch(&self.data_dir);
         let dir = self.data_dir.clone();
         let current = tokio::task::spawn_blocking(move || settings::load(&dir))
             .await
@@ -590,9 +591,12 @@ impl GifService {
         };
         match result {
             Ok(found) => {
-                let epoch = register::install_epoch(&self.data_dir);
-                analytics::Analytics::start_epoch(&self.analytics, epoch);
-                self.analytics.record(provider, &found, (self.clock)());
+                // Held only when search stayed On with the same key the whole time, so a new
+                // install id never registers a GIF found under the old one.
+                if register::install_epoch(&self.data_dir) == epoch {
+                    analytics::Analytics::start_epoch(&self.analytics, epoch);
+                    self.analytics.record(provider, &found, (self.clock)());
+                }
                 Ok((provider, found.into_iter().map(|f| f.candidate).collect()))
             }
             Err(GifError::RateLimited { retry_after }) => {
