@@ -1902,21 +1902,30 @@ fn expect_user_id(id: &str) {
     }
 }
 
-/// Unix: an owner-only directory missing owner bits (0500) is owner-only but
-/// not exactly as `set_owner_only` leaves it. Windows has no mode bits.
+/// An owner-only directory that grants its owner less than `set_owner_only`
+/// does is owner-only but not exactly as `set_owner_only` leaves it. Unix: mode
+/// 0500. Windows: a protected DACL whose one ACE grants the current user read
+/// and execute only (`icacls`).
 fn expect_fewer_owner_bits_not_exact(dir: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o500)).unwrap();
-        let opened = open_nofollow(OpenOptions::new().read(true), dir).unwrap();
-        assert!(is_owner_only(&opened).unwrap());
-        assert!(!is_exactly_owner_only(&opened).unwrap());
     }
     #[cfg(windows)]
     {
-        let _ = dir;
+        let grant = format!("*{}:(OI)(CI)(RX)", current_user().unwrap());
+        let status = Command::new("icacls")
+            .arg(dir)
+            .args(["/inheritance:r", "/grant:r", &grant])
+            .stdout(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "icacls: {status}");
     }
+    let opened = open_nofollow(OpenOptions::new().read(true), dir).unwrap();
+    assert!(is_owner_only(&opened).unwrap());
+    assert!(!is_exactly_owner_only(&opened).unwrap());
 }
 
 /// Unix: the real uid; Windows names users by SID only, so none.
