@@ -12,6 +12,8 @@ use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::{routing::get, Router};
 
+use crate::shared::machine_wording;
+
 /// The kit's tokens: `--cs-*` custom properties on `:root` only. The host's theme push
 /// overrides the colour defaults inline on the root.
 pub(crate) const TOKENS_CSS: &str = include_str!("dashboard_kit/tokens.css");
@@ -139,9 +141,16 @@ fn kit_version() -> &'static str {
 /// doc's own styles win any tie) and its scripts (after the `window.codesense` shim,
 /// which they extend).
 pub(crate) fn kit_tags() -> String {
+    kit_tags_for(machine_wording::RUNNING_OS)
+}
+
+/// [`kit_tags`] with the owner's computer named for `os` in a
+/// `codesense:owner-machine` meta, ahead of `kit.js` so the kit's text reads it.
+pub(crate) fn kit_tags_for(os: &str) -> String {
     let v = kit_version();
+    let machine = machine_wording::machine_kind(os);
     format!(
-        "<link rel=\"stylesheet\" href=\"{TOKENS_CSS_ROUTE}?v={v}\" data-codesense-kit><link rel=\"stylesheet\" href=\"{KIT_CSS_ROUTE}?v={v}\" data-codesense-kit><script src=\"{KIT_JS_ROUTE}?v={v}\" data-codesense-kit></script><script src=\"{VIRTUAL_LIST_ROUTE}?v={v}\" data-codesense-kit></script>"
+        "<link rel=\"stylesheet\" href=\"{TOKENS_CSS_ROUTE}?v={v}\" data-codesense-kit><link rel=\"stylesheet\" href=\"{KIT_CSS_ROUTE}?v={v}\" data-codesense-kit><meta name=\"codesense:owner-machine\" content=\"{machine}\"><script src=\"{KIT_JS_ROUTE}?v={v}\" data-codesense-kit></script><script src=\"{VIRTUAL_LIST_ROUTE}?v={v}\" data-codesense-kit></script>"
     )
 }
 
@@ -476,12 +485,12 @@ mod tests {
             let meta = format!("<meta name=\"codesense:owner-machine\" content=\"{noun}\">");
             let at = tags.find(&meta).unwrap_or_else(|| panic!("{os}: {tags}"));
             assert!(at > tags.find("/kit/v1/kit.css?v=").unwrap(), "{tags}");
-            assert!(at < tags.find("<script src=\"/kit/v1/kit.js?v=").unwrap(), "{tags}");
+            assert!(
+                at < tags.find("<script src=\"/kit/v1/kit.js?v=").unwrap(),
+                "{tags}"
+            );
         }
-        assert_eq!(
-            kit_tags(),
-            kit_tags_for(crate::shared::machine_wording::RUNNING_OS)
-        );
+        assert_eq!(kit_tags(), kit_tags_for(machine_wording::RUNNING_OS));
     }
 
     #[test]
