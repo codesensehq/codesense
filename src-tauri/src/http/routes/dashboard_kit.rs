@@ -470,6 +470,21 @@ mod tests {
     }
 
     #[test]
+    fn the_kit_tags_name_the_owner_computer_before_the_kit_runs() {
+        for (os, noun) in [("macos", "Mac"), ("linux", "computer")] {
+            let tags = kit_tags_for(os);
+            let meta = format!("<meta name=\"codesense:owner-machine\" content=\"{noun}\">");
+            let at = tags.find(&meta).unwrap_or_else(|| panic!("{os}: {tags}"));
+            assert!(at > tags.find("/kit/v1/kit.css?v=").unwrap(), "{tags}");
+            assert!(at < tags.find("<script src=\"/kit/v1/kit.js?v=").unwrap(), "{tags}");
+        }
+        assert_eq!(
+            kit_tags(),
+            kit_tags_for(crate::shared::machine_wording::RUNNING_OS)
+        );
+    }
+
+    #[test]
     fn the_kit_stylesheet_only_adds_tokens_and_cs_classes() {
         // Every selector is :root, a .cs- class (optionally qualified), or an
         // @-rule: a doc that uses no cs- class renders as it did.

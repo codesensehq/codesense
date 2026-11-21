@@ -2453,6 +2453,25 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "dashboard-publish")]
+    #[test]
+    fn contract_hosted_toolkit_documents_owner_machine() {
+        let hosted = hosted_section(crate::dashboard_publish::catalog::CATALOG);
+        let doc = hosted["toolkit"]["api"]["CS.ownerMachine()"]
+            .as_str()
+            .expect("CS.ownerMachine() documented");
+        for needle in [
+            "codesense:owner-machine",
+            "\"Mac\"",
+            "create_dashboard",
+            "workspaces",
+            "mission-control",
+            "bug-triage",
+        ] {
+            assert!(doc.contains(needle), "CS.ownerMachine() teaches `{needle}`");
+        }
+    }
+
     #[test]
     fn contract_sdk_section_lists_every_bridge_verb_and_the_schema_version() {
         let c = local_contract_payload();

@@ -1650,6 +1650,38 @@ mod tests {
     }
 
     #[test]
+    fn the_workspaces_page_names_the_owner_computer_for_the_os() {
+        for (os, noun) in [("macos", "Mac"), ("linux", "computer")] {
+            for (template, agent) in [
+                (Template::Workspaces, false),
+                (Template::MissionControl, false),
+                (Template::BugTriage, false),
+                (Template::BugTriage, true),
+            ] {
+                let html = workspaces_html_for(os, template, agent, "Team");
+                assert!(
+                    html.contains(&format!(
+                        "<meta name=\"codesense:owner-machine\" content=\"{noun}\">"
+                    )),
+                    "{os} {template:?}"
+                );
+                assert!(
+                    html.contains(&format!(
+                        "aria-live=\"polite\">Connecting to the owner's {noun}</p>"
+                    )),
+                    "{os} {template:?}"
+                );
+                assert!(!html.contains("{{owner_machine}}"), "{os} {template:?}");
+                assert!(!html.contains("{{title}}"), "{os} {template:?}");
+            }
+        }
+        // macOS keeps the status line it shipped with, byte for byte.
+        assert!(workspaces_html_for("macos", Template::Workspaces, false, "Team").contains(
+            r#"<p class="status" id="status" role="status" aria-live="polite">Connecting to the owner's Mac</p>"#
+        ));
+    }
+
+    #[test]
     fn writes_live_all_and_presence_only() {
         let (_root, folder) = new_folder();
         let mut req = request(&folder);
@@ -2001,6 +2033,12 @@ mod tests {
         let (_root, folder) = new_folder();
         let created = create(&workspaces_request(&folder), CATALOG).unwrap();
         assert_eq!(created.template, "workspaces");
+        let entry = read(&folder, ENTRY);
+        assert!(entry.contains(&format!(
+            "<meta name=\"codesense:owner-machine\" content=\"{}\">",
+            machine_wording::machine_kind(machine_wording::RUNNING_OS)
+        )));
+        assert!(!entry.contains("{{owner_machine}}"));
         let m = manifest::load(&folder).unwrap();
         assert_eq!(
             m.files,
