@@ -117,6 +117,12 @@ export function diskGate(root, env = process.env) {
 const git = (root, args) =>
   execFileSync("git", args, { cwd: root, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 28 });
 
+// What "since main" means. In a merge group, main has not yet caught up with the entries queued
+// ahead of this one, so the group commit's first parent stands for main: an earlier entry's input
+// change is inherited, not this entry's.
+export const driftBase = (env = process.env) =>
+  env.GITHUB_EVENT_NAME === "merge_group" ? "HEAD^1" : "origin/main";
+
 // The gate may only tolerate drift when this PR left every tracked export file (seal, payloads,
 // manifest) byte-identical to its merge-base with origin/main (absent at both counts as
 // identical). A PR that edits an export must pass the strict check, and drift then present is
@@ -124,9 +130,9 @@ const git = (root, args) =>
 // committed changes since the merge-base (`origin/main...HEAD` errors without one), then the
 // working tree against HEAD. Any git failure, a missing origin/main or a merge-base outside a
 // shallow clone's history ⇒ false (strict). Never fetches.
-export function exportsUntouchedSinceMain(root, exportFiles) {
+export function exportsUntouchedSinceMain(root, exportFiles, env = process.env) {
   try {
-    git(root, ["diff", "--quiet", "origin/main...HEAD", "--", ...exportFiles]);
+    git(root, ["diff", "--quiet", `${driftBase(env)}...HEAD`, "--", ...exportFiles]);
     return git(root, ["status", "--porcelain", "--ignored", "--", ...exportFiles]).length === 0;
   } catch {
     return false;
@@ -137,8 +143,8 @@ export function exportsUntouchedSinceMain(root, exportFiles) {
 // inputs the PR never touched (another PR's tool edit). Then the PR's export matched its own inputs
 // and the drift is main's, for the next refresh like any inherited drift. True when the PR left
 // every drifted input as it was at the merge-base (same rule as the exports, so never fetches).
-export const driftInheritedFromMain = (root, driftedInputs) =>
-  driftedInputs.length > 0 && exportsUntouchedSinceMain(root, driftedInputs);
+export const driftInheritedFromMain = (root, driftedInputs, env = process.env) =>
+  driftedInputs.length > 0 && exportsUntouchedSinceMain(root, driftedInputs, env);
 
 const mergeBase = (root) => {
   try {
