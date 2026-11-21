@@ -12,8 +12,16 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use log::warn;
+
+/// How long `xdg-mime query default text/plain` may take before it is killed.
+pub(crate) const QUERY_LIMIT: Duration = Duration::from_secs(10);
+
+/// How long a waited launcher (`gio launch`, `open -t`, `open -a`) may take before it is killed.
+/// `gio launch` of a D-Bus-activated editor waits on the bus, whose default timeout is 25 s.
+pub(crate) const LAUNCH_LIMIT: Duration = Duration::from_secs(30);
 
 /// What to open.
 #[derive(Debug, Clone, Copy)]
@@ -31,8 +39,9 @@ pub(crate) struct Launch {
     pub program: OsString,
     pub args: Vec<OsString>,
     pub cwd: Option<PathBuf>,
-    /// Wait for it and check its exit status; otherwise it is left running and reaped on a thread.
-    pub wait: bool,
+    /// Wait for it, at most this long, and check its exit status; `None` leaves it running and
+    /// reaps it on a thread.
+    pub wait: Option<Duration>,
     /// Said when this launcher ran and failed.
     pub note: Option<&'static str>,
 }
@@ -48,13 +57,14 @@ impl Launch {
             program: program.into(),
             args: args.into_iter().map(Into::into).collect(),
             cwd: None,
-            wait: false,
+            wait: None,
             note: None,
         }
     }
 
-    fn waited(mut self) -> Self {
-        self.wait = true;
+    /// Wait for it, at most `limit`.
+    pub(crate) fn waited(mut self, limit: Duration) -> Self {
+        self.wait = Some(limit);
         self
     }
 
@@ -357,7 +367,7 @@ pub(crate) fn plans(
                     "/usr/bin/open",
                     [OsStr::new("-t"), file.as_os_str()],
                 )
-                .waited()]),
+                .waited(LAUNCH_LIMIT)]),
                 _ => {
                     let id =
                         facts
@@ -382,7 +392,7 @@ pub(crate) fn plans(
                         "gio",
                         [OsStr::new("launch"), desktop.as_os_str(), file.as_os_str()],
                     )
-                    .waited();
+                    .waited(LAUNCH_LIMIT);
                     launch.note = Some(GIO_LAUNCH_NOTE);
                     Ok(vec![launch])
                 }
@@ -485,7 +495,7 @@ impl Spawn for HostSpawn {
 pub(crate) fn spawn_first(launches: &[Launch], spawner: &dyn Spawn) -> Result<(), OpenError> {
     let mut tried = Vec::new();
     for launch in launches {
-        match spawner.start(launch.command(), launch.wait) {
+        match spawner.start(launch.command(), launch.wait.is_some()) {
             Ok(Exit::Detached) | Ok(Exit::Status { success: true, .. }) => return Ok(()),
             Ok(Exit::Status { describe, .. }) => {
                 return Err(OpenError::Failed {

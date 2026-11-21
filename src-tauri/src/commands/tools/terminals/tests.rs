@@ -109,7 +109,7 @@ fn each_linux_row_puts_the_folder_in_one_argv_element() {
         assert_eq!(launch.program, OsString::from(&program), "{}", row.id);
         assert_eq!(args(&launch), expected[&row.id], "{}", row.id);
         assert_eq!(launch.cwd.as_deref(), Some(cwd.as_path()), "{}", row.id);
-        assert!(!launch.wait, "{}", row.id);
+        assert_eq!(launch.wait, None, "{}", row.id);
     }
 }
 

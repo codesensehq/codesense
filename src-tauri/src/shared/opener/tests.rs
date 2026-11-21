@@ -130,7 +130,7 @@ fn linux_folder_is_the_open_crate_list_in_order() {
     .map(|(p, a)| (p.to_string(), a.into_iter().map(String::from).collect()))
     .collect();
     assert_eq!(programs_and_args(&launches), expected);
-    assert!(launches.iter().all(|l| !l.wait && l.cwd.is_none()));
+    assert!(launches.iter().all(|l| l.wait.is_none() && l.cwd.is_none()));
 
     let wsl = HostFacts {
         is_wsl: true,
@@ -181,7 +181,7 @@ fn macos_plans_are_todays_programs() {
             program: "/usr/bin/open".into(),
             args: vec!["-R".into(), DIR.into()],
             cwd: None,
-            wait: false,
+            wait: None,
             note: None,
         }]
     );
@@ -192,7 +192,7 @@ fn macos_plans_are_todays_programs() {
             program: "/usr/bin/open".into(),
             args: vec!["-t".into(), FILE.into()],
             cwd: None,
-            wait: true,
+            wait: Some(LAUNCH_LIMIT),
             note: None,
         }]
     );
@@ -211,7 +211,7 @@ fn macos_reveals_a_package_folder_without_launching_it() {
         launches[0].args,
         vec![OsString::from("-R"), OsString::from(app)]
     );
-    assert!(!launches[0].wait);
+    assert_eq!(launches[0].wait, None);
 }
 
 #[test]
@@ -288,7 +288,7 @@ fn linux_text_launches_the_text_plain_default_through_gio_waited() {
             program: "gio".into(),
             args: vec!["launch".into(), desktop.into(), FILE.into()],
             cwd: None,
-            wait: true,
+            wait: Some(LAUNCH_LIMIT),
             note: Some(GIO_LAUNCH_NOTE),
         }]
     );
@@ -540,7 +540,11 @@ fn spawn_first_tries_the_next_launcher_only_when_one_cannot_start() {
     assert_eq!(tried, ["xdg-open", "gio", "gnome-open", "kde-open"]);
 
     // A waited launcher that ran and failed is an error; the next isn't tried.
-    let waited: Vec<Launch> = launches.iter().cloned().map(Launch::waited).collect();
+    let waited: Vec<Launch> = launches
+        .iter()
+        .cloned()
+        .map(|l| l.waited(LAUNCH_LIMIT))
+        .collect();
     let recorder = Recorder::answering(vec![Ok(Exit::Status {
         success: false,
         describe: "exit status: 2".into(),
