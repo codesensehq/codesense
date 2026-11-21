@@ -9,14 +9,19 @@ import {
   GUARD_MESSAGE,
   REFRESH_BRANCH,
   REFRESH_LABEL,
+  REGENERATE_WORKFLOW,
   SEALED_EXPORT,
+  artifactProblems,
+  chooseRun,
   frozenChanges,
   githubRequest,
   isRefreshPr,
   listFiles,
   parseFrozenList,
   parseQueueRef,
+  refreshBranchProblems,
   runGuard,
+  trustedRun,
 } from "./exports-guard.mjs";
 import { FROZEN_EXPORTS } from "./lib/sealed-export.mjs";
 
@@ -331,4 +336,265 @@ test("the workflow's request sends the token and fails on anything but OK", asyn
   assert.deepEqual(await request("repos/a/b"), { fine: true });
   await assert.rejects(request("repos/a/missing"), /cannot read repos\/a\/missing: HTTP 404/);
   assert.deepEqual(seen[0], ["https://api.example/repos/a/b", "Bearer t"]);
+});
+
+// The refresh route: which regenerate run a refresh pull request may come from, and what it may take.
+const MAIN = sha("1");
+const trusted = (overrides = {}) => ({
+  id: 100,
+  path: REGENERATE_WORKFLOW,
+  head_branch: "main",
+  head_repository: { full_name: REPO },
+  head_sha: MAIN,
+  event: "schedule",
+  conclusion: "success",
+  display_title: "Regenerate exports (all)",
+  created_at: "2026-11-21T07:17:00Z",
+  ...overrides,
+});
+const onMain = (accepted) => (s) => accepted.includes(s);
+
+test("trustedRun accepts only a successful all run of the regenerate workflow on main", () => {
+  assert.equal(trustedRun(trusted(), onMain([MAIN])), true);
+  assert.equal(trustedRun(trusted({ event: "workflow_dispatch" }), onMain([MAIN])), true);
+  for (const [name, run] of [
+    ["a dispatch on a branch", trusted({ event: "workflow_dispatch", head_branch: "feat/x" })],
+    ["a failed run", trusted({ conclusion: "failure" })],
+    ["a run still going", trusted({ conclusion: null })],
+    ["a pull_request run", trusted({ event: "pull_request" })],
+    ["a push run", trusted({ event: "push" })],
+    ["another workflow", trusted({ path: ".github/workflows/rust.yml" })],
+    ["a fork", trusted({ head_repository: { full_name: "someone/codesense" } })],
+    ["no head repository", trusted({ head_repository: null })],
+    ["a single export", trusted({ display_title: "Regenerate exports (model-schemas)" })],
+    ["no head sha", trusted({ head_sha: undefined })],
+  ])
+    assert.equal(trustedRun(run, onMain([MAIN])), false, name);
+  // A dispatch on a tag named main reports head_branch main; its sha must be on main's history.
+  assert.equal(trustedRun(trusted({ head_sha: sha("2") }), onMain([MAIN])), false);
+  assert.equal(
+    trustedRun(trusted(), () => "yes"),
+    false,
+  );
+});
+
+const artifact = (name, run = 100, expired = false) => ({
+  name,
+  expired,
+  workflow_run: { id: run },
+});
+const FROZEN_PATH = FROZEN_EXPORTS[1];
+const choose = (overrides = {}) =>
+  chooseRun({
+    runs: [trusted()],
+    artifacts: [artifact("exports-manifest"), artifact("generated-exports")],
+    manifest: JSON.stringify([FROZEN_PATH]),
+    mainSha: MAIN,
+    gap: { ahead: 0, age: "2h" },
+    applied: [],
+    ...overrides,
+  });
+
+test("chooseRun takes the newest accepted run and never falls back to an older one", () => {
+  const older = trusted({ id: 90, created_at: "2026-11-20T07:17:00Z" });
+  const newer = trusted({ id: 110, created_at: "2026-11-22T07:17:00Z" });
+  const runs = [older, newer, trusted()];
+  const picked = choose({
+    runs,
+    artifacts: [artifact("exports-manifest", 110), artifact("generated-exports", 110)],
+  });
+  assert.equal(picked.action, "refresh");
+  assert.equal(picked.run.id, 110);
+  // The newest run's artifacts expired: refuse, rather than use run 100's.
+  const expired = choose({
+    runs,
+    artifacts: [artifact("exports-manifest", 110), artifact("generated-exports", 110, true)],
+  });
+  assert.equal(expired.action, "refuse");
+  assert.match(expired.reason, /generated-exports.*expired.*dispatch an all run on main/);
+  assert.equal(choose({ runs: [] }).action, "refuse");
+});
+
+test("chooseRun refuses a missing or expired artifact, or another run's", () => {
+  for (const artifacts of [
+    [artifact("generated-exports")],
+    [artifact("exports-manifest", 100, true), artifact("generated-exports")],
+    [artifact("exports-manifest")],
+    [artifact("exports-manifest"), artifact("generated-exports", 100, true)],
+    [artifact("exports-manifest", 99), artifact("generated-exports")],
+  ]) {
+    const result = choose({ artifacts });
+    assert.equal(result.action, "refuse", JSON.stringify(artifacts));
+    assert.match(result.reason, /dispatch an all run on main/);
+  }
+  // An empty manifest needs no generated-exports artifact.
+  assert.equal(
+    choose({ manifest: "[]", artifacts: [artifact("exports-manifest")] }).action,
+    "fresh",
+  );
+});
+
+test("chooseRun refuses a manifest that is not a sorted JSON array of distinct paths", () => {
+  for (const manifest of [
+    undefined,
+    "",
+    "not json",
+    "{}",
+    '"a"',
+    "[1]",
+    '["a", null]',
+    '["b", "a"]',
+    '["a", "a"]',
+    '[""]',
+  ]) {
+    const result = choose({ manifest });
+    assert.equal(result.action, "refuse", String(manifest));
+    assert.match(result.reason, /manifest/);
+  }
+});
+
+test("chooseRun: fresh only for an empty manifest at main's tip; otherwise the gap is reported", () => {
+  const fresh = choose({ manifest: "[]\n" });
+  assert.equal(fresh.action, "fresh");
+  const behind = { ahead: 3, age: "26h" };
+  const stale = choose({ manifest: "[]", mainSha: sha("3"), gap: behind });
+  assert.equal(stale.action, "stale-run");
+  assert.equal(stale.gap, `run 100 at ${MAIN}, 26h old; main is 3 commits ahead`);
+  assert.match(stale.reason, /dispatch an all run on main/);
+  const refresh = choose({ mainSha: sha("3"), gap: behind });
+  assert.equal(refresh.action, "refresh");
+  assert.deepEqual(refresh.paths, [FROZEN_PATH]);
+  assert.equal(refresh.gap, `run 100 at ${MAIN}, 26h old; main is 3 commits ahead`);
+});
+
+test("chooseRun: a run whose Exports-run trailer is already on main opens nothing", () => {
+  assert.equal(choose({ applied: ["100"] }).action, "already-applied");
+  assert.equal(choose({ applied: [100] }).action, "already-applied");
+  assert.equal(choose({ applied: ["10", "1000"] }).action, "refresh");
+});
+
+const GEN_DOCS_OUTPUT = "codesense-docs/getting-started/content/generated/mcp-tools.json";
+const problems = (overrides = {}) =>
+  artifactProblems({
+    files: [
+      { path: FROZEN_PATH, type: "file" },
+      { path: GEN_DOCS_OUTPUT, type: "file" },
+    ],
+    manifest: [GEN_DOCS_OUTPUT, FROZEN_PATH].sort(),
+    frozen: FROZEN_EXPORTS,
+    genDocsChanged: [GEN_DOCS_OUTPUT],
+    ...overrides,
+  });
+
+test("artifactProblems accepts frozen exports and what the branch's gen:docs also wrote", () => {
+  assert.deepEqual(problems(), []);
+  assert.deepEqual(
+    problems({
+      files: [{ path: FROZEN_PATH, type: "file" }],
+      manifest: [FROZEN_PATH],
+      genDocsChanged: [],
+    }),
+    [],
+  );
+});
+
+test("artifactProblems refuses a mismatch with the manifest or gen:docs, a symlink and an unsafe path", () => {
+  const file = (path, type = "file") => ({ path, type });
+  for (const [name, overrides, pattern] of [
+    [
+      "a manifest path missing",
+      { manifest: [GEN_DOCS_OUTPUT, FROZEN_PATH, "x.json"].sort() },
+      /x\.json.*not in the artifact/,
+    ],
+    [
+      "an artifact path not in the manifest",
+      { manifest: [FROZEN_PATH] },
+      /mcp-tools\.json.*not in the manifest/,
+    ],
+    [
+      "an extra file",
+      {
+        files: [file(FROZEN_PATH), file(GEN_DOCS_OUTPUT), file("src/extra.ts")],
+        manifest: [FROZEN_PATH, GEN_DOCS_OUTPUT, "src/extra.ts"].sort(),
+      },
+      /src\/extra\.ts.*neither a frozen export nor written by gen:docs/,
+    ],
+    [
+      "a local gen:docs change missing",
+      { genDocsChanged: [GEN_DOCS_OUTPUT, "codesense-docs/other.html"] },
+      /codesense-docs\/other\.html.*gen:docs changed it here but the artifact/,
+    ],
+    ["a symlink", { files: [file(FROZEN_PATH, "symlink"), file(GEN_DOCS_OUTPUT)] }, /symlink/],
+    [
+      "an absolute path",
+      {
+        files: [file(FROZEN_PATH), file(GEN_DOCS_OUTPUT), file("/etc/x")],
+        manifest: ["/etc/x", FROZEN_PATH, GEN_DOCS_OUTPUT].sort(),
+      },
+      /\/etc\/x.*unsafe path/,
+    ],
+    [
+      "a .. path",
+      {
+        files: [file(FROZEN_PATH), file(GEN_DOCS_OUTPUT), file("a/../b")],
+        manifest: ["a/../b", FROZEN_PATH, GEN_DOCS_OUTPUT].sort(),
+      },
+      /a\/\.\.\/b.*unsafe path/,
+    ],
+    [
+      "a backslash path",
+      {
+        files: [file(FROZEN_PATH), file(GEN_DOCS_OUTPUT), file("a\\b")],
+        manifest: ["a\\b", FROZEN_PATH, GEN_DOCS_OUTPUT].sort(),
+      },
+      /unsafe path/,
+    ],
+  ]) {
+    const found = problems(overrides);
+    assert.ok(found.length, name);
+    assert.match(found.join("\n"), pattern, name);
+  }
+});
+
+const TRAILER =
+  "chore: refresh the generated exports\n\nSigned-off-by: x <x@example.invalid>\nExports-run: 100\n";
+
+test("refreshBranchProblems allows a missing branch or a command-made one, and refuses the rest", () => {
+  assert.deepEqual(refreshBranchProblems({ branchTip: null, openPr: null, inQueue: false }), []);
+  // The update path: an open, unqueued pull request the command made.
+  const tip = { sha: sha("4"), message: TRAILER };
+  assert.deepEqual(
+    refreshBranchProblems({ branchTip: tip, openPr: { number: 5 }, inQueue: false }),
+    [],
+  );
+  // A command-made branch left behind after its pull request merged or closed.
+  assert.deepEqual(refreshBranchProblems({ branchTip: tip, openPr: null, inQueue: false }), []);
+
+  const hand = {
+    sha: sha("5"),
+    message: "chore: add an export\n\nSigned-off-by: x <x@example.invalid>\n",
+  };
+  assert.match(
+    refreshBranchProblems({ branchTip: hand, openPr: { number: 5 }, inQueue: false }).join("\n"),
+    /#5.*no Exports-run trailer.*finish or close/,
+  );
+  assert.match(
+    refreshBranchProblems({ branchTip: hand, openPr: null, inQueue: false }).join("\n"),
+    /no Exports-run trailer.*finish it or delete the branch/,
+  );
+  // A trailer outside the last paragraph is not a trailer (an Update branch merge commit).
+  const merged = {
+    sha: sha("6"),
+    message: "Merge branch 'main' into chore/refresh-exports\n\nExports-run: 100\n\nmore\n",
+  };
+  assert.ok(
+    refreshBranchProblems({ branchTip: merged, openPr: { number: 5 }, inQueue: false }).length,
+  );
+  assert.match(
+    refreshBranchProblems({ branchTip: tip, openPr: { number: 5 }, inQueue: true }).join("\n"),
+    /merge queue/,
+  );
+  assert.ok(
+    refreshBranchProblems({ branchTip: null, openPr: { number: 5 }, inQueue: false }).length,
+  );
 });
