@@ -399,16 +399,35 @@ mod tests {
 
     #[test]
     fn a_malformed_table_is_refused() {
-        for bad in [
-            r#"{"key": "x"}"#,
-            r#"[{"key": "x", "macos": "on", "linux": "on", "reason": "r"}]"#,
-            r#"[{"key": "x", "macos": "on", "linux": "on", "windows": "maybe", "reason": "r"}]"#,
-            r#"[{"macos": "on", "linux": "on", "windows": "off", "reason": "r"}]"#,
-            r#"[{"key": "x", "macos": "on", "linux": "on", "windows": "off"}]"#,
-            r#"[{"key": "x", "macos": "on", "linux": "on", "windows": "off", "reason": " "}]"#,
-            r#"[{"key": "x", "macos": "on", "linux": "on", "windows": "off", "reason": 1}]"#,
+        for (bad, error) in [
+            (r#"{"key": "x"}"#, "expected a sequence"),
+            (
+                r#"[{"key": "x", "macos": "on", "linux": "on", "reason": "r"}]"#,
+                "`x` has no `windows`",
+            ),
+            (
+                r#"[{"key": "x", "macos": "on", "linux": "on", "windows": "maybe", "reason": "r"}]"#,
+                "`x`.windows: \"maybe\" is not",
+            ),
+            (
+                r#"[{"macos": "on", "linux": "on", "windows": "off", "reason": "r"}]"#,
+                "has no `key`",
+            ),
+            (
+                r#"[{"key": "x", "macos": "on", "linux": "on", "windows": "off"}]"#,
+                "`x` has no `reason`",
+            ),
+            (
+                r#"[{"key": "x", "macos": "on", "linux": "on", "windows": "off", "reason": " "}]"#,
+                "`x` has no `reason`",
+            ),
+            (
+                r#"[{"key": "x", "macos": "on", "linux": "on", "windows": "off", "reason": 1}]"#,
+                "`x` has no `reason`",
+            ),
         ] {
-            assert!(caps_table::parse_caps(bad).is_err(), "{bad}");
+            let refused = caps_table::parse_caps(bad).err().unwrap_or_default();
+            assert!(refused.contains(error), "{bad}: {refused}");
         }
         assert_eq!(
             caps_table::parse_caps(TABLE_JSON).map(|rows| rows.len()),
@@ -430,10 +449,13 @@ mod tests {
     fn the_build_compiles_in_each_value_form() {
         let table = r#"[
             {"key": "always", "macos": "on", "linux": "on", "windows": "on", "reason": "r"},
-            {"key": "never", "macos": "off", "linux": "off", "windows": "off", "reason": "r"},
-            {"key": "probed", "macos": "probe", "linux": "off", "windows": "off", "reason": "r"},
+            {"key": "never", "macos": "off", "linux": "off", "windows": "off", "reason": "r",
+             "tracked": {"macos": "port", "linux": "port", "windows": "port"}},
+            {"key": "probed", "macos": "probe", "linux": "off", "windows": "off", "reason": "r",
+             "tracked": {"linux": "port", "windows": "port"}},
             {"key": "some-arch", "macos": {"on": ["aarch64"]},
-             "linux": {"on": ["x86_64", "aarch64"]}, "windows": "off", "reason": "r"}
+             "linux": {"on": ["x86_64", "aarch64"]}, "windows": "off", "reason": "r",
+             "tracked": {"macos": "port", "windows": "port"}}
         ]"#;
         assert_eq!(
             compiled(table, "macos", "aarch64"),
@@ -462,10 +484,12 @@ mod tests {
     fn the_build_override_only_turns_capabilities_off() {
         let table = r#"[
             {"key": "always", "macos": "on", "linux": "on", "windows": "on", "reason": "r"},
-            {"key": "never", "macos": "off", "linux": "off", "windows": "off", "reason": "r"},
-            {"key": "probed", "macos": "probe", "linux": "off", "windows": "off", "reason": "r"},
+            {"key": "never", "macos": "off", "linux": "off", "windows": "off", "reason": "r",
+             "tracked": {"macos": "port", "linux": "port", "windows": "port"}},
+            {"key": "probed", "macos": "probe", "linux": "off", "windows": "off", "reason": "r",
+             "tracked": {"linux": "port", "windows": "port"}},
             {"key": "some-arch", "macos": {"on": ["aarch64"]}, "linux": "off", "windows": "off",
-             "reason": "r"},
+             "reason": "r", "tracked": {"macos": "port", "linux": "port", "windows": "port"}},
             {"key": "fixture", "macos": "on", "linux": "on", "windows": "off", "reason": "r",
              "scope": "test"}
         ]"#;
@@ -545,19 +569,41 @@ mod tests {
     /// A bad value fails the build for every target, not only the one it names.
     #[test]
     fn the_build_refuses_a_malformed_table() {
-        for bad in [
-            r#"{"key": "x"}"#,
-            r#"[{"macos": "on", "linux": "on", "windows": "off", "reason": "r"}]"#,
-            r#"[{"key": "x", "macos": "on", "linux": "on", "reason": "r"}]"#,
-            r#"[{"key": "x", "macos": "on", "linux": "on", "windows": "maybe", "reason": "r"}]"#,
-            r#"[{"key": "x", "macos": "on", "linux": {"on": "x86_64"}, "windows": "off", "reason": "r"}]"#,
-            r#"[{"key": "x", "macos": "on", "linux": {"on": [1]}, "windows": "off", "reason": "r"}]"#,
-            r#"[{"key": "x", "macos": "on", "linux": {"off": []}, "windows": "off", "reason": "r"}]"#,
+        for (bad, error) in [
+            (r#"{"key": "x"}"#, "expected a sequence"),
+            (
+                r#"[{"macos": "on", "linux": "on", "windows": "off", "reason": "r"}]"#,
+                "has no `key`",
+            ),
+            (
+                r#"[{"key": "x", "macos": "on", "linux": "on", "reason": "r"}]"#,
+                "`x` has no `windows`",
+            ),
+            (
+                r#"[{"key": "x", "macos": "on", "linux": "on", "windows": "maybe", "reason": "r"}]"#,
+                "`x`.windows: \"maybe\" is not",
+            ),
+            (
+                r#"[{"key": "x", "macos": "on", "linux": {"on": "x86_64"}, "windows": "off", "reason": "r"}]"#,
+                "`x`.linux: {\"on\":\"x86_64\"} is not",
+            ),
+            (
+                r#"[{"key": "x", "macos": "on", "linux": {"on": [1]}, "windows": "off", "reason": "r"}]"#,
+                "`x`.linux: {\"on\":[1]} is not",
+            ),
+            (
+                r#"[{"key": "x", "macos": "on", "linux": {"off": []}, "windows": "off", "reason": "r"}]"#,
+                "`x`.linux: {\"off\":[]} is not",
+            ),
+            (
+                r#"[{"key": "x", "macos": "on", "linux": "on", "windows": "off", "reason": "r"}]"#,
+                "`x` is off on windows and names no tracking key",
+            ),
         ] {
-            assert!(
-                caps_table::compiled_caps(bad, "macos", "aarch64", "").is_err(),
-                "{bad}"
-            );
+            let refused = caps_table::compiled_caps(bad, "macos", "aarch64", "")
+                .err()
+                .unwrap_or_default();
+            assert!(refused.contains(error), "{bad}: {refused}");
         }
     }
 
@@ -568,7 +614,7 @@ mod tests {
     fn a_row_scope_is_product_or_test() {
         let scoped = |scope: &str| {
             let table = format!(
-                r#"[{{"key": "x", "macos": "on", "linux": "on", "windows": "off", "reason": "r"{scope}}}]"#
+                r#"[{{"key": "x", "macos": "on", "linux": "on", "windows": "on", "reason": "r"{scope}}}]"#
             );
             caps_table::parse_caps(&table).map(|rows| rows[0].scope)
         };
@@ -580,7 +626,11 @@ mod tests {
             r#", "scope": "Test""#,
             r#", "scope": 1"#,
         ] {
-            assert!(scoped(bad).is_err(), "{bad}");
+            let error = scoped(bad).err().unwrap_or_default();
+            assert!(
+                error.contains(r#"`x`.scope: "#) && error.contains(r#"is not "product" or "test""#),
+                "{bad}: {error}"
+            );
         }
     }
 
@@ -621,18 +671,203 @@ mod tests {
     fn a_key_is_lowercase_and_unique() {
         let row = |key: &str| {
             format!(
-                r#"{{"key": "{key}", "macos": "on", "linux": "on", "windows": "off", "reason": "r"}}"#
+                r#"{{"key": "{key}", "macos": "on", "linux": "on", "windows": "on", "reason": "r"}}"#
             )
         };
         for key in ["", "Git-ai", "git_ai", "git ai", "git.ai", "gît"] {
             let table = format!("[{}]", row(key));
-            assert!(caps_table::parse_caps(&table).is_err(), "{key:?}");
+            let error = caps_table::parse_caps(&table).err().unwrap_or_default();
+            assert!(
+                error.contains("has no `key` of a-z, 0-9 and `-`"),
+                "{key:?}: {error}"
+            );
         }
         let twice = format!("[{}, {}]", row("git-ai"), row("git-ai"));
         let error = caps_table::parse_caps(&twice).err().unwrap_or_default();
         assert!(error.contains("second row"), "{error}");
         let fine = format!("[{}, {}]", row("git-ai"), row("pdf-export2"));
         assert_eq!(caps_table::parse_caps(&fine).map(|rows| rows.len()), Ok(2));
+    }
+
+    /// One row `x` with these OS values and extra fields, parsed as a table.
+    fn tracked_row(fields: &str) -> Result<(), String> {
+        caps_table::parse_caps(&format!(r#"[{{"key": "x", "reason": "r", {fields}}}]"#)).map(|_| ())
+    }
+
+    /// The error `fields` is refused with, or the empty string when they parse.
+    fn tracked_error(fields: &str) -> String {
+        tracked_row(fields).err().unwrap_or_default()
+    }
+
+    /// A product cell that is off names the work that turns it on.
+    #[test]
+    fn an_off_cell_names_a_tracking_key() {
+        let off = r#""macos": "on", "linux": "on", "windows": "off""#;
+        let error = tracked_error(off);
+        assert!(
+            error.contains("`x` is off on windows and names no tracking key"),
+            "{error}"
+        );
+        assert!(error.contains("add `tracked.windows`"), "{error}");
+        assert_eq!(
+            tracked_row(&format!(r#"{off}, "tracked": {{"windows": "port"}}"#)),
+            Ok(())
+        );
+        let error = tracked_error(&format!(r#"{off}, "tracked": {{}}"#));
+        assert!(error.contains("is off on windows"), "{error}");
+        let error = tracked_error(
+            r#""macos": "on", "linux": "off", "windows": "off", "tracked": {"windows": "port"}"#,
+        );
+        assert!(
+            error.contains("`x` is off on linux and names no tracking key"),
+            "{error}"
+        );
+        assert_eq!(
+            tracked_row(
+                r#""macos": "off", "linux": "off", "windows": "off",
+                   "tracked": {"macos": "port", "linux": "port", "windows": "other-port"}"#
+            ),
+            Ok(())
+        );
+    }
+
+    /// An entry for a cell that is on (or probed) is stale: it must go when the cell turns on.
+    #[test]
+    fn a_tracking_key_on_an_on_or_probe_cell_is_refused() {
+        for windows in [r#""on""#, r#""probe""#, r#"{"on": ["x86_64"]}"#] {
+            let error = tracked_error(&format!(
+                r#""macos": "on", "linux": "on", "windows": {windows}, "tracked": {{"windows": "port"}}"#
+            ));
+            assert!(
+                error.contains("`x` is not off on windows: delete the `tracked.windows` entry"),
+                "{windows}: {error}"
+            );
+        }
+        let error = tracked_error(
+            r#""macos": "probe", "linux": "on", "windows": "off",
+               "tracked": {"macos": "port", "windows": "port"}"#,
+        );
+        assert!(
+            error.contains("delete the `tracked.macos` entry"),
+            "{error}"
+        );
+    }
+
+    /// A probe is on wherever its probe answers yes: an intended final state, so it needs no entry.
+    #[test]
+    fn a_probe_cell_needs_no_tracking_key() {
+        assert_eq!(
+            tracked_row(r#""macos": "probe", "linux": "probe", "windows": "probe""#),
+            Ok(())
+        );
+        assert_eq!(
+            tracked_row(
+                r#""macos": "probe", "linux": "on", "windows": "off", "tracked": {"windows": "port"}"#
+            ),
+            Ok(())
+        );
+    }
+
+    /// An arch list is fully on only when it lists every architecture its OS ships.
+    #[test]
+    fn an_arch_list_is_fully_on_only_with_every_shipped_arch() {
+        assert_eq!(
+            caps_table::SHIPPED_ARCHS,
+            [
+                ("macos", &["aarch64", "x86_64"][..]),
+                ("linux", &["x86_64", "aarch64"][..]),
+                ("windows", &["x86_64"][..]),
+            ]
+        );
+        for fully_on in [
+            r#""macos": {"on": ["aarch64", "x86_64"]}, "linux": "on", "windows": "on""#,
+            r#""macos": {"on": ["x86_64", "aarch64", "riscv64"]}, "linux": "on", "windows": "on""#,
+            r#""macos": "on", "linux": {"on": ["aarch64", "x86_64"]}, "windows": "on""#,
+            r#""macos": "on", "linux": "on", "windows": {"on": ["x86_64"]}"#,
+        ] {
+            assert_eq!(tracked_row(fully_on), Ok(()), "{fully_on}");
+        }
+        for (partly_on, error) in [
+            (
+                r#""macos": {"on": ["aarch64"]}, "linux": "on", "windows": "on""#,
+                "`x` is off on macos x86_64 and names no tracking key: add `tracked.macos`",
+            ),
+            (
+                r#""macos": "on", "linux": {"on": ["x86_64"]}, "windows": "on""#,
+                "`x` is off on linux aarch64 and names no tracking key",
+            ),
+            (
+                r#""macos": "on", "linux": "on", "windows": {"on": ["aarch64"]}"#,
+                "`x` is off on windows x86_64 and names no tracking key",
+            ),
+        ] {
+            let refused = tracked_error(partly_on);
+            assert!(refused.contains(error), "{partly_on}: {refused}");
+        }
+        assert_eq!(
+            tracked_row(
+                r#""macos": {"on": ["aarch64"]}, "linux": "on", "windows": "on",
+                   "tracked": {"macos": "macos-intel"}"#
+            ),
+            Ok(())
+        );
+    }
+
+    /// A tracking key is words of a-z and 0-9 joined by single `-`s, and `tracked` maps an OS to one.
+    #[test]
+    fn a_tracking_key_is_well_formed() {
+        for key in [
+            "tray-background",
+            "pdf-export",
+            "macos-intel",
+            "sidecar",
+            "a1",
+            "2fa",
+        ] {
+            assert_eq!(caps_table::validate_tracked_key(key), Ok(()), "{key}");
+        }
+        for key in [
+            "", "-", "port-", "-port", "port--x", "Port", "port_x", "port x", "port.x", "pört",
+        ] {
+            let error = caps_table::validate_tracked_key(key)
+                .err()
+                .unwrap_or_default();
+            assert!(error.contains("is not a tracking key"), "{key:?}: {error}");
+        }
+        let off = r#""macos": "on", "linux": "on", "windows": "off""#;
+        for (tracked, error) in [
+            (r#""port""#, "`x`.tracked: \"port\" is not an object"),
+            (r#"["port"]"#, "`x`.tracked: [\"port\"] is not an object"),
+            (
+                r#"{"windows": 1}"#,
+                "`x`.tracked.windows: 1 is not a string",
+            ),
+            (
+                r#"{"windows": "Port"}"#,
+                "`x`.tracked.windows: `Port` is not a tracking key",
+            ),
+            (
+                r#"{"windows": "port", "freebsd": "port"}"#,
+                "`x`.tracked.freebsd: `freebsd` is not",
+            ),
+        ] {
+            let refused = tracked_error(&format!(r#"{off}, "tracked": {tracked}"#));
+            assert!(refused.contains(error), "{tracked}: {refused}");
+        }
+    }
+
+    /// Test-scope rows gate test code, not a product feature: they track nothing.
+    #[test]
+    fn a_test_scope_row_tracks_nothing() {
+        let test_row = r#""macos": "on", "linux": "on", "windows": "off", "scope": "test""#;
+        assert_eq!(tracked_row(test_row), Ok(()));
+        for tracked in [r#"{"windows": "port"}"#, "{}"] {
+            let error = tracked_error(&format!(r#"{test_row}, "tracked": {tracked}"#));
+            assert!(
+                error.contains("`x`.tracked: a test-scope row tracks nothing"),
+                "{tracked}: {error}"
+            );
+        }
     }
 
     #[test]
