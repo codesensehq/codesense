@@ -888,6 +888,7 @@ mod lifecycle_tests {
             let (socket, _receive) = bound.ok().expect("a unix receiver binds");
             assert_eq!(socket, runtime.join("status-line.sock"));
             assert!(socket.exists());
+            assert!(crate::test_support::owner_only::is_owner_only(&runtime));
         } else {
             assert_eq!(
                 bound.err().as_deref(),

@@ -923,10 +923,10 @@ jobs:
 
   rust-check-windows:
     name: Rust check (Windows)
-    # A compile check of the crates that build on Windows, the session server's among them with its
-    # sidecar gated off, and of the desktop app's library, plus the platform crate's tests, Claude's hooks, the session server's
-    # portable items, the runner's cursor-query answer, and the pty contract against ConPTY with the
-    # Windows emulator worker. Not a required check: like the macOS jobs it never runs on a merge
+    # A compile check of the crates that build on Windows (the session server's with its sidecar
+    # gated off) and of the desktop app's library, plus the platform crate's tests, Claude's hooks,
+    # the session server's portable items, the runner's cursor-query answer, and the pty contract
+    # against ConPTY with the Windows emulator worker. Not a required check: like the macOS jobs it never runs on a merge
     # group, runs after the merge on each push to main that changes something Rust can see, always
     # on the nightly schedule and workflow_dispatch, and on a pull request only with the ci:windows
     # label (never a Dependabot pull request, and not again when another label is added). The crate

@@ -18,11 +18,11 @@ use codesense_platform::dirs::{codesense_home, lock_dir};
 use codesense_platform::fs::{
     atomic_replace, available_space, can_execute, canonicalize, change_stamp,
     create_dir_new_owner_only, create_dir_owner_only, create_new_owner_only, create_owner_only,
-    file_id, file_id_of, is_executable, is_owned_by_current_user, is_owner_only, is_text_busy,
-    is_world_writable, link_count, link_or_copy, lock_exclusive, open_nofollow,
-    open_nofollow_nonblocking, place_link, portable_name, read_exact_at, set_executable,
-    set_owner_only, sync_dir, try_lock_exclusive, try_lock_shared, unlock, Linked, NonPortableName,
-    Open, PlaceLink, Reach,
+    file_id, file_id_of, is_exactly_owner_only, is_executable, is_owned_by_current_user,
+    is_owner_only, is_text_busy, is_world_writable, link_count, link_or_copy, lock_exclusive,
+    open_nofollow, open_nofollow_nonblocking, place_link, portable_name, read_exact_at,
+    set_executable, set_owner_only, sync_dir, try_lock_exclusive, try_lock_shared, unlock, Linked,
+    NonPortableName, Open, PlaceLink, Reach,
 };
 use codesense_platform::ipc::{blocking, Endpoint, LocalListener, LocalStream};
 use codesense_platform::limits::{is_descriptor_exhaustion, is_open_file_limit};
@@ -579,6 +579,26 @@ fn set_owner_only_denies_others() {
         expect_owner_only_mode(path);
     }
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "secret");
+}
+
+#[test]
+fn only_what_set_owner_only_leaves_is_exactly_owner_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let private = dir.path().join("private");
+    create_dir_owner_only(&private).unwrap();
+    let exactly = |path: &Path| {
+        let opened = open_nofollow(OpenOptions::new().read(true), path).unwrap();
+        is_exactly_owner_only(&opened).unwrap()
+    };
+    assert!(exactly(&private));
+    expect_fewer_owner_bits_not_exact(&private);
+    set_owner_only(&private).unwrap();
+    assert!(exactly(&private));
+    make_group_writable(&private);
+    assert!(!exactly(&private), "a shared directory");
+    let file = dir.path().join("secret");
+    drop(create_new_owner_only(&file).unwrap());
+    assert!(exactly(&file));
 }
 
 #[test]
@@ -1263,6 +1283,43 @@ fn a_blocking_read_gets_what_was_written_before_the_other_end_closed() {
     assert_eq!(heard, b"last words");
 }
 
+/// Each end reads on one clone while it writes on another, both at once and
+/// more than the pipe buffers between them hold: if a read and a write on
+/// clones of one stream ran one after the other, neither end would drain.
+#[test]
+fn clones_read_and_write_at_the_same_time() {
+    const LEN: usize = 4 * 1024 * 1024;
+    let dir = tempfile::tempdir().unwrap();
+    let (client, server) = blocking_pair(&ephemeral(dir.path(), "duplex"));
+    let (done, finished) = mpsc::channel();
+    for (end, byte) in [(client, b'c'), (server, b's')] {
+        let mut reader = end.try_clone().unwrap();
+        let mut writer = end;
+        reader.set_read_timeout(Some(CONNECT_LIMIT)).unwrap();
+        let sent = done.clone();
+        std::thread::spawn(move || {
+            // Dropping this clone leaves the stream open: the reader holds it.
+            writer.write_all(&vec![byte; LEN]).unwrap();
+            let _ = sent.send(());
+        });
+        let read = done.clone();
+        std::thread::spawn(move || {
+            let mut heard = vec![0; LEN];
+            reader.read_exact(&mut heard).unwrap();
+            assert!(
+                heard.iter().all(|&b| b != byte),
+                "an end read its own bytes"
+            );
+            let _ = read.send(());
+        });
+    }
+    for _ in 0..4 {
+        finished
+            .recv_timeout(Duration::from_secs(30))
+            .expect("both ends read and wrote at once");
+    }
+}
+
 #[test]
 fn a_shutdown_on_one_clone_ends_a_read_blocked_on_another() {
     let dir = tempfile::tempdir().unwrap();
@@ -1842,6 +1899,23 @@ fn expect_user_id(id: &str) {
     #[cfg(windows)]
     {
         assert!(id.starts_with("S-1-5-"), "{id}");
+    }
+}
+
+/// Unix: an owner-only directory missing owner bits (0500) is owner-only but
+/// not exactly as `set_owner_only` leaves it. Windows has no mode bits.
+fn expect_fewer_owner_bits_not_exact(dir: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let opened = open_nofollow(OpenOptions::new().read(true), dir).unwrap();
+        assert!(is_owner_only(&opened).unwrap());
+        assert!(!is_exactly_owner_only(&opened).unwrap());
+    }
+    #[cfg(windows)]
+    {
+        let _ = dir;
     }
 }
 
