@@ -1,7 +1,13 @@
 // SPDX-License-Identifier: MIT
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CATALOG, referenceInputs } from "./generate-mcp-reference.mjs";
+import {
+  CATALOG,
+  PROFILES,
+  SEAL,
+  payloadPath,
+  referenceInputs,
+} from "./generate-mcp-reference.mjs";
 import {
   FROZEN_EXPORTS,
   REFRESH_ROUTE,
@@ -56,6 +62,11 @@ test("each reader takes its own export's files from the one list", () => {
   );
   assert.deepEqual(readers.flat().sort(), [...FROZEN_EXPORTS].sort());
   assert.deepEqual(frozenExport(`${GENERATED}/mcp`), []);
+  // A profile added to the MCP export must be frozen too, or a PR could edit its payload unseen.
+  assert.deepEqual(
+    [SEAL, ...PROFILES.map(payloadPath)].sort(),
+    [...frozenExport(`${GENERATED}/mcp-tools`)].sort(),
+  );
 });
 
 test("the stale-export route tells a contributor to leave the exports out", () => {
