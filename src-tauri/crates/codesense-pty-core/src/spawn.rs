@@ -170,6 +170,18 @@ pub fn same_env_name(os: &str, name: &str, other: &str) -> bool {
     same_env_name_on(os == "windows", name, other)
 }
 
+/// Whether a headless launch on `os` (a [`std::env::consts::OS`] value) keeps a saved
+/// Agent's variable `name`: one it may set ([`agent_may_set_on`]), other than `PATH`, which
+/// the launch sets itself, and not one of the launch's `env_remove` names, each compared as
+/// [`same_env_name`] compares names on `os`.
+pub fn headless_env_kept(os: &str, name: &str, env_remove: &[String]) -> bool {
+    agent_may_set_on(os, name)
+        && !same_env_name(os, name, "PATH")
+        && !env_remove
+            .iter()
+            .any(|removed| same_env_name(os, name, removed))
+}
+
 fn same_env_name_on(windows: bool, name: &str, other: &str) -> bool {
     if windows {
         name.eq_ignore_ascii_case(other)
@@ -1835,6 +1847,17 @@ mod tests {
                 );
                 assert!(!agent_may_set_on("linux", name), "{name}");
             }
+            // A headless launch drops a variable it strips, in any case on Windows only.
+            let removed = ["ANTHROPIC_API_KEY".to_string()];
+            assert!(!headless_env_kept("windows", "anthropic_api_key", &removed));
+            assert!(!headless_env_kept("windows", "ANTHROPIC_API_KEY", &removed));
+            assert!(headless_env_kept("macos", "anthropic_api_key", &removed));
+            assert!(!headless_env_kept("macos", "ANTHROPIC_API_KEY", &removed));
+            assert!(!headless_env_kept("windows", "Path", &[]));
+            assert!(headless_env_kept("linux", "Path", &[]));
+            assert!(!headless_env_kept("linux", "PATH", &[]));
+            assert!(!headless_env_kept("windows", "comspec", &[]));
+            assert!(headless_env_kept("windows", "MY_VAR", &removed));
             assert!(same_env_name("windows", "Path", "PATH"));
             assert!(!same_env_name("linux", "Path", "PATH"));
             assert!(same_env_name("macos", "PATH", "PATH"));
