@@ -74,8 +74,9 @@ codesense-host-proto = { path = "crates/codesense-host-proto" }
 codesense-session-server = { path = "crates/codesense-session-server" }
 codesense-pty-core = { path = "crates/codesense-pty-core" }
 codesense-fs-core = { path = "crates/codesense-fs-core" }
-# OS mechanisms: the command-line tool lookup, the passphrase dialog and the tray host check.
-codesense-platform = { path = "crates/codesense-platform", features = ["tray-host"] }
+# OS mechanisms: the command-line tool lookup, the passphrase dialog, the tray host check and PDF
+# rendering.
+codesense-platform = { path = "crates/codesense-platform", features = ["tray-host", "pdf"] }
 sysinfo = "0.32"
 dirs = "5"
 uuid = { version = "1", features = ["v4"] }
@@ -165,10 +166,7 @@ rustix = { version = "1", features = ["fs", "process"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSWindow"] }
-objc2-web-kit = { version = "0.3", default-features = false, features = ["WKWebView", "WKWebViewConfiguration", "WKPDFConfiguration", "WKNavigationDelegate", "WKNavigation", "block2", "objc2-app-kit"] }
 objc2-foundation = { version = "0.3", features = ["NSData", "NSError", "NSGeometry", "NSProcessInfo", "NSString", "NSURL", "NSURLRequest"] }
-block2 = "0.6"
-dispatch2 = "0.3"
 keyring = { version = "3", features = ["apple-native"] }
 
 # Linux copy-on-write clone (btrfs/XFS/bcachefs FICLONE detection).
@@ -182,10 +180,6 @@ keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 # Probes the session bus for the default collection without unlocking it. The same
 # crate (and version) keyring's `sync-secret-service` already builds.
 dbus-secret-service = "4.0.0-rc.2"
-# PDF export's bare offscreen web view and its print operation. The versions and features Tauri's
-# runtime already builds; GLib comes through `gtk::glib`.
-gtk = "0.18"
-webkit2gtk = { version = "2.0", features = ["v2_40"] }
 
 # Targets with no keyring backend of their own keep the crate's default: its in-memory store.
 [target.'cfg(not(any(target_os = "macos", target_os = "linux")))'.dependencies]
