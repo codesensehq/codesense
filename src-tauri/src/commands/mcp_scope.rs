@@ -3587,6 +3587,54 @@ mod tests {
         assert!(root.join("live").exists());
     }
 
+    /// A dead session's scope whose relay still answers belongs to another app's
+    /// live grant: the sweep leaves it. One whose relay is gone is reaped.
+    #[test]
+    fn the_startup_sweep_keeps_a_scope_whose_relay_still_answers() {
+        use codesense_host_proto::scoped_mcp::{self as wire, Descriptor};
+        let mut home = crate::routines::test_support::TempHome::new();
+        home.isolate_tmpdir();
+        let root = scope_root().unwrap();
+        // A short directory: macOS socket paths are short.
+        let sockets = tempfile::Builder::new()
+            .prefix("csr-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let mut listeners = Vec::new();
+        for (session, live) in [("relay-live", true), ("relay-gone", false)] {
+            let path = write_scope_config(session, &canonical(), &[], &claude_scope()).unwrap();
+            let endpoint = codesense_platform::ipc::Endpoint::Ephemeral {
+                dir: sockets.path().to_path_buf(),
+                name: session.to_string(),
+            };
+            if live {
+                let _entered = runtime.enter();
+                listeners.push(codesense_platform::ipc::LocalListener::bind(&endpoint).unwrap());
+            }
+            let descriptor = Descriptor {
+                version: wire::VERSION,
+                socket: PathBuf::from(endpoint.to_wire().unwrap()),
+                capability: "a".repeat(64),
+            };
+            wire::write_descriptor(
+                &path.parent().unwrap().join("local-relay.json"),
+                &descriptor,
+            )
+            .unwrap();
+        }
+        let later = SystemTime::now() + Duration::from_secs(2 * 3600);
+        // Neither session is live: only the relay decides.
+        sweep_configs_in(&root, later, STALE_AGE, |_| Some(Default::default()));
+        assert!(
+            root.join("relay-live").exists(),
+            "a live relay's scope is kept"
+        );
+        assert!(!root.join("relay-gone").exists());
+        drop(listeners);
+        remove_scope_config("relay-live");
+    }
+
     #[test]
     fn scope_config_path_is_outside_any_worktree() {
         let _home_env = crate::routines::test_support::TempHome::new();
