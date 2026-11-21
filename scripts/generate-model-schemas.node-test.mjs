@@ -1,55 +1,137 @@
 // SPDX-License-Identifier: MIT
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { spawnSync } from "node:child_process";
-import { join } from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
+import { dirname, join } from "node:path";
 import {
   ROOT,
+  FIXTURE,
+  generate,
   verifySources,
+  staleSources,
   modelSchemas,
   queuedExport,
   schemaFields,
 } from "./generate-model-schemas.mjs";
 
-test("the PR docs check rejects a stale standalone schema without repairing it", () => {
-  const path = join(
-    ROOT,
-    "codesense-docs/getting-started/content/generated/schemas/routine-yml.schema.json",
-  );
-  const original = readFileSync(path, "utf8");
-  const stale = JSON.stringify({ ...JSON.parse(original), title: "Stale schema mutation" }) + "\n";
-  try {
-    writeFileSync(path, stale);
-    const result = spawnSync("pnpm", ["gen:docs:check:pr"], {
-      cwd: ROOT,
-      encoding: "utf8",
+// A scratch checkout holding the fixture, its sources and the Node outputs, with origin/main at
+// its first commit, so the PR gate's "untouched since main" rule runs against real git.
+function scratchRoot() {
+  const root = mkdtempSync(join(tmpdir(), "model-schemas-stale-"));
+  const fixture = JSON.parse(readFileSync(join(ROOT, FIXTURE), "utf8"));
+  const content = "codesense-docs/getting-started/content";
+  for (const path of [
+    FIXTURE,
+    ...Object.keys(fixture.sources),
+    ...Object.keys(fixture.schemas).map(
+      (slug) => `${content}/generated/schemas/${slug}.schema.json`,
+    ),
+    `${content}/arc-g-routines/routine-yml.html`,
+  ]) {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    copyFileSync(join(ROOT, path), join(root, path));
+  }
+  const git = (...args) =>
+    execFileSync("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", ...args], {
+      cwd: root,
+      stdio: "pipe",
     });
-    assert.notEqual(result.status, 0, "stale output must fail the actual package check command");
-    assert.match(result.stdout + result.stderr, /routine-yml\.schema\.json is stale/);
-    assert.equal(readFileSync(path, "utf8"), stale, "check mode must preserve the stale bytes");
+  git("init", "-q", "-b", "main");
+  git("add", "-A");
+  git("commit", "-q", "-m", "base");
+  git("update-ref", "refs/remotes/origin/main", "HEAD");
+  return root;
+}
+const MODEL = "src-tauri/src/routines/model.rs";
+const addField = (root) => {
+  const path = join(root, MODEL);
+  writeFileSync(
+    path,
+    readFileSync(path, "utf8").replace(
+      "pub name: String,",
+      "pub name: String,\n    pub newly_added_field: String,",
+    ),
+  );
+};
+
+test("a stale fixture fails the strict check, and write mode and the PR gate render from it with a notice", () => {
+  const root = scratchRoot();
+  try {
+    addField(root);
+    const before = readFileSync(join(root, FIXTURE), "utf8");
+    assert.throws(
+      () => generate(true, { root }),
+      /fixture is stale: src-tauri\/src\/routines\/model.rs/,
+    );
+    for (const options of [{}, { check: true, allowStaleExport: true }]) {
+      const notices = [];
+      assert.doesNotThrow(() =>
+        generate(options.check ?? false, { ...options, root, warn: (line) => notices.push(line) }),
+      );
+      assert.match(
+        notices.join("\n"),
+        /^NOTICE: Model schema fixture is stale: src-tauri\/src\/routines\/model.rs/,
+      );
+    }
+    assert.equal(readFileSync(join(root, FIXTURE), "utf8"), before, "never rehash the fixture");
+    // A PR that edits the fixture itself is held to the strict check.
+    writeFileSync(join(root, FIXTURE), before.replace(/\n$/, "\n\n"));
+    assert.throws(
+      () => generate(true, { root, allowStaleExport: true, warn: () => {} }),
+      /fixture is stale/,
+    );
   } finally {
-    writeFileSync(path, original);
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("a real model field mutation fails the normal no-Cargo freshness gate", () => {
-  const path = join(ROOT, "src-tauri/src/docs_schemas.generated.json");
+test("the PR gate still rejects a stale standalone schema without repairing it", () => {
+  const root = scratchRoot();
+  try {
+    addField(root);
+    const path = join(
+      root,
+      "codesense-docs/getting-started/content/generated/schemas/routine-yml.schema.json",
+    );
+    const stale =
+      JSON.stringify({
+        ...JSON.parse(readFileSync(path, "utf8")),
+        title: "Stale schema mutation",
+      }) + "\n";
+    writeFileSync(path, stale);
+    assert.throws(
+      () => generate(true, { root, allowStaleExport: true, warn: () => {} }),
+      /routine-yml\.schema\.json is stale/,
+    );
+    assert.equal(readFileSync(path, "utf8"), stale, "check mode must preserve the stale bytes");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("verifySources is the strict freshness check and never rehashes the fixture", () => {
+  const path = join(ROOT, FIXTURE);
   const bytes = readFileSync(path, "utf8");
   const fixture = JSON.parse(bytes);
-  assert.doesNotThrow(() => verifySources(fixture));
+  const mutated = (source) => {
+    const bytes = readFileSync(join(ROOT, source), "utf8");
+    return source === MODEL
+      ? bytes.replace("pub name: String,", "pub name: String,\n    pub newly_added_field: String,")
+      : bytes;
+  };
+  assert.deepEqual(staleSources(fixture, mutated), [MODEL]);
   assert.throws(
-    () =>
-      verifySources(fixture, (source) => {
-        const bytes = readFileSync(join(ROOT, source), "utf8");
-        return source === "src-tauri/src/routines/model.rs"
-          ? bytes.replace(
-              "pub name: String,",
-              "pub name: String,\n    pub newly_added_field: String,",
-            )
-          : bytes;
-      }),
+    () => verifySources(fixture, mutated),
     /fixture is stale: src-tauri\/src\/routines\/model.rs/,
   );
   assert.equal(readFileSync(path, "utf8"), bytes, "freshness checks never rehash the fixture");

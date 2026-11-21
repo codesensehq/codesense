@@ -53,6 +53,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { listInputs } from "./lib/generator-inputs.mjs";
 import { modelSchemas } from "./generate-model-schemas.mjs";
+import { allowStaleExport } from "./lib/sealed-export.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CONTENT = join(ROOT, "codesense-docs", "getting-started", "content");
@@ -613,9 +614,9 @@ function verifySchema(schema) {
 // Build
 // ---------------------------------------------------------------------------
 
-export function buildManifest() {
+export function buildManifest({ check = false } = {}) {
   const warnings = [];
-  const models = modelSchemas();
+  const models = modelSchemas(ROOT, { check, allowStaleExport: allowStaleExport() });
   const schemas = SCHEMAS.map((s) => {
     const w = verifySchema(s);
     warnings.push(...w);
@@ -709,7 +710,7 @@ function main() {
     return;
   }
   updateFactoryTriggerEnum(check);
-  const { doc, warnings } = buildManifest();
+  const { doc, warnings } = buildManifest({ check });
   for (const w of warnings) console.warn(w);
   const fresh = serialize(doc);
   mkdirSync(dirname(OUTPUT), { recursive: true });

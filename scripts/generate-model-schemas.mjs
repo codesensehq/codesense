@@ -6,18 +6,31 @@ import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { diskGate } from "./lib/sealed-export.mjs";
+import {
+  allowStaleExport as switchedOn,
+  diskGate,
+  driftInheritedFromMain,
+  exportsUntouchedSinceMain,
+} from "./lib/sealed-export.mjs";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+export const FIXTURE = "src-tauri/src/docs_schemas.generated.json";
 const CONTENT = "codesense-docs/getting-started/content";
-export function verifySources(fixture, readSource = (path) => readFileSync(join(ROOT, path))) {
-  for (const [path, expected] of Object.entries(fixture.sources)) {
-    const actual = createHash("sha256").update(readSource(path)).digest("hex");
-    if (actual !== expected)
-      throw new Error(
-        `Model schema fixture is stale: ${path}. Export with node scripts/generate-model-schemas.mjs --queued-export (no local cargo: dispatch regenerate-exports.yml), then pnpm gen:docs. Do not rehash the fixture.`,
-      );
-  }
+const staleMessage = (paths) =>
+  `Model schema fixture is stale: ${paths.join(", ")}. Export with node scripts/generate-model-schemas.mjs --queued-export (no local cargo: dispatch regenerate-exports.yml), then pnpm gen:docs. Do not rehash the fixture.`;
+// The fixture's sources whose bytes no longer match the hashes it was exported from.
+export function staleSources(fixture, readSource = (path) => readFileSync(join(ROOT, path))) {
+  return Object.entries(fixture.sources)
+    .filter(
+      ([path, expected]) =>
+        createHash("sha256").update(readSource(path)).digest("hex") !== expected,
+    )
+    .map(([path]) => path);
+}
+// The strict freshness check.
+export function verifySources(fixture, readSource) {
+  const stale = staleSources(fixture, readSource);
+  if (stale.length) throw new Error(staleMessage(stale));
 }
 function deref(schema, root) {
   return schema.$ref ? root.$defs[schema.$ref.split("/").at(-1)] : schema;
@@ -68,11 +81,23 @@ export function schemaFields(root) {
     visit(value, key, (root.required ?? []).includes(key));
   return rows.filter((r, i) => rows.findIndex((other) => other.name === r.name) === i);
 }
-export function modelSchemas(root = ROOT) {
-  const fixture = JSON.parse(
-    readFileSync(join(root, "src-tauri/src/docs_schemas.generated.json"), "utf8"),
-  );
-  verifySources(fixture, (path) => readFileSync(join(root, path)));
+// A stale fixture: write mode (`pnpm gen:docs`, and build.rs through generate-yaml-schemas) renders
+// from the committed fixture with a notice. So does the PR gate (`allowStaleExport`) while this PR
+// leaves the fixture as main has it, or the drift is main's; strict check mode throws.
+export function modelSchemas(
+  root = ROOT,
+  { check = false, allowStaleExport = false, warn = console.warn } = {},
+) {
+  const fixture = JSON.parse(readFileSync(join(root, FIXTURE), "utf8"));
+  const stale = staleSources(fixture, (path) => readFileSync(join(root, path)));
+  if (stale.length) {
+    const tolerated =
+      !check ||
+      (allowStaleExport &&
+        (exportsUntouchedSinceMain(root, [FIXTURE]) || driftInheritedFromMain(root, stale)));
+    if (!tolerated) throw new Error(staleMessage(stale));
+    warn(`NOTICE: ${staleMessage(stale)}`);
+  }
   return Object.fromEntries(
     Object.entries(fixture.schemas).map(([slug, schema]) => [
       slug,
@@ -89,15 +114,18 @@ function output(path, content, check) {
     writeFileSync(path, content);
   }
 }
-export function generate(check = false) {
-  const models = modelSchemas();
+export function generate(
+  check = false,
+  { root = ROOT, allowStaleExport = false, warn = console.warn } = {},
+) {
+  const models = modelSchemas(root, { check, allowStaleExport, warn });
   for (const [slug, { schema }] of Object.entries(models))
     output(
-      join(ROOT, CONTENT, "generated/schemas", `${slug}.schema.json`),
+      join(root, CONTENT, "generated/schemas", `${slug}.schema.json`),
       JSON.stringify(schema, null, 2) + "\n",
       check,
     );
-  const page = join(ROOT, CONTENT, "arc-g-routines/routine-yml.html");
+  const page = join(root, CONTENT, "arc-g-routines/routine-yml.html");
   const current = readFileSync(page, "utf8");
   const esc = (s) =>
     String(s)
@@ -143,5 +171,5 @@ export function queuedExport({ spawn = spawnSync, gate = diskGate } = {}) {
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   if (process.argv.includes("--queued-export")) queuedExport();
-  else generate(process.argv.includes("--check"));
+  else generate(process.argv.includes("--check"), { allowStaleExport: switchedOn() });
 }
