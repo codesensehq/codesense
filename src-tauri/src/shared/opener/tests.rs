@@ -956,3 +956,40 @@ fn gather_with_reads_the_xdg_folders_from_the_injected_env() {
     let homeless = HostFacts::gather_with("linux", &dir, &no_env, None, &no_read, &spawner);
     assert_eq!(homeless.xdg_data_home, None);
 }
+
+/// A descendant that leaves the process group survives the tree's kill and holds stdout open:
+/// the capture gives up on its reader after `READER_LIMIT` with a `TimedOut` error (which the
+/// query reports as `QueryFailed`) instead of hanging. The child marks the file only once it is
+/// in its own group, and the root waits for that, so the kill never races the move.
+#[cfg(unix)]
+#[test]
+fn a_capture_leaves_a_reader_held_by_an_escaped_child_behind() {
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("pid");
+    let script = "perl -e 'setpgrp(0, 0); open(my $f, \">\", $ARGV[0]) or die; close $f; \
+                  sleep 3' \"$1.ready\" & echo $! > \"$1\"; \
+                  while [ ! -e \"$1.ready\" ]; do sleep 0.05; done; echo x";
+    let started = Instant::now();
+    let result = HostSpawn.capture(sh(script, &[pid_file.as_os_str()]), Duration::from_secs(10));
+    let elapsed = started.elapsed();
+    if let Some(pid) = std::fs::read_to_string(&pid_file)
+        .ok()
+        .and_then(|text| text.trim().parse::<libc::pid_t>().ok())
+    {
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+    }
+    let error = result.expect_err("the escaped child holds stdout open");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut, "{error}");
+    assert!(error.to_string().contains("still open"), "{error}");
+    assert!(
+        elapsed >= READER_LIMIT && elapsed < READER_LIMIT + Duration::from_secs(2),
+        "{elapsed:?}"
+    );
+    // The query reports it as a failed lookup.
+    let message = error.to_string();
+    let recorder = Recorder::capturing(vec![Err(error)]);
+    assert_eq!(
+        query_text_default(&recorder),
+        Err(TextDefaultMissing::QueryFailed(message))
+    );
+}
