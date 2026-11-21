@@ -96,8 +96,8 @@ const fn row(
 ///
 /// Accepted residual: `open -a` is handed a folder [`terminal_launch`] checked with `is_dir`, and
 /// opens whatever that path names when it runs. Were the folder swapped for a regular file in
-/// between, the app would open that file, and Terminal runs a `.command` or shell script it is
-/// handed. It is the same window as reveal's: the path is resolved again by name, by a process
+/// between, the app would open that file, and Terminal (or iTerm2, which opens scripts too) runs
+/// a `.command` or shell script it is handed. It is the same window as reveal's: the path is resolved again by name, by a process
 /// that can't be handed our check.
 const fn open_app_row(
     id: &'static str,
