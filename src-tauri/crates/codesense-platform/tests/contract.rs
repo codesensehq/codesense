@@ -808,7 +808,6 @@ fn shared_locks_coexist_and_hold_off_an_exclusive_one() {
     assert!(try_lock_shared(&first).unwrap(), "released");
 }
 
-/// Open the lock file at `path`, creating it.
 #[test]
 fn sync_dir_syncs_an_existing_directory_and_refuses_a_missing_one() {
     let dir = tempfile::tempdir().unwrap();
@@ -828,6 +827,7 @@ fn sync_dir_syncs_an_existing_directory_and_refuses_a_missing_one() {
     );
 }
 
+/// Open the lock file at `path`, creating it.
 fn open_lock_file(path: &Path) -> File {
     OpenOptions::new()
         .read(true)
