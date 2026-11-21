@@ -389,6 +389,12 @@ pub(crate) enum TerminalError {
         cwd: PathBuf,
         what: &'static str,
     },
+    /// The command an AppleScript row would type holds a byte it can't type safely.
+    CommandShellUnsafe {
+        label: String,
+        command: String,
+        what: &'static str,
+    },
 }
 
 impl fmt::Display for TerminalError {
@@ -429,6 +435,14 @@ impl fmt::Display for TerminalError {
                 "{label} can't open {}: the path contains {what}",
                 cwd.display()
             ),
+            Self::CommandShellUnsafe {
+                label,
+                command,
+                what,
+            } => write!(
+                f,
+                "{label} can't run {command:?}: the command contains {what}"
+            ),
         }
     }
 }
@@ -445,7 +459,16 @@ fn shell_unsafe(cwd: &Path) -> Option<&'static str> {
     let bytes = cwd.as_os_str().as_encoded_bytes();
     if bytes.contains(&b'\\') {
         Some("a backslash")
-    } else if bytes.iter().any(|&b| b < 0x20 || b == 0x7f) {
+    } else {
+        untypeable(bytes)
+    }
+}
+
+/// What in `bytes` acts as a key when typed into the shell, before any quoting: a C0 control
+/// byte, DEL, or a byte >= 0x80 (see [`Arg::ShellQuotedCwd`]). The AppleScript rows screen the
+/// command they run with it as well as the folder.
+fn untypeable(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.iter().any(|&b| b < 0x20 || b == 0x7f) {
         Some("a control character")
     } else if bytes.iter().any(|&b| b >= 0x80) {
         Some("a non-ASCII character")
@@ -560,6 +583,14 @@ pub(crate) fn terminal_launch(
     let launch = match command_form {
         Some(form) => {
             let mut launch = plan_argv(chosen.row.label, Path::new(form.program), form.argv, cwd)?;
+            // The script types the command after the folder, so it gets the same screen.
+            if let Some(what) = untypeable(run_command.as_bytes()) {
+                return Err(TerminalError::CommandShellUnsafe {
+                    label: chosen.row.label.into(),
+                    command: run_command.into(),
+                    what,
+                });
+            }
             launch.args.push(run_command.into());
             launch
         }

@@ -459,6 +459,48 @@ fn macos_rows_open_a_non_ascii_folder_only_without_a_command() {
     }
 }
 
+/// The AppleScript rows type the command into the shell after the folder, so it is screened the
+/// same way: a control byte or a non-ASCII byte in it is refused, naming the command.
+#[test]
+fn macos_applescript_rows_refuse_an_untypeable_command() {
+    let cwd = Path::new("/tmp/repo");
+    let is_dir = |_: &Path| true;
+    for (id, label) in [("iterm2", "iTerm2"), ("terminal", "Terminal")] {
+        for (command, what) in [
+            ("make\u{15}dev", "a control character"),
+            ("make\ndev", "a control character"),
+            ("make\u{7f}", "a control character"),
+            ("echo caf\u{e9}", "a non-ASCII character"),
+        ] {
+            let refused =
+                terminal_launch("macos", id, cwd, command, &finds_all(None), &is_dir).unwrap_err();
+            assert_eq!(
+                refused,
+                TerminalError::CommandShellUnsafe {
+                    label: label.into(),
+                    command: command.into(),
+                    what,
+                },
+                "{id} {command:?}"
+            );
+            assert!(refused.to_string().contains(what), "{refused}");
+        }
+        let ok = terminal_launch(
+            "macos",
+            id,
+            cwd,
+            "make dev && echo 'done'",
+            &finds_all(None),
+            &is_dir,
+        )
+        .unwrap();
+        assert_eq!(
+            ok.launch.args.last(),
+            Some(&OsString::from("make dev && echo 'done'"))
+        );
+    }
+}
+
 /// A raw byte of 0x80 or more, which readline in a non-UTF-8 locale can read as a control key
 /// (0x95 as `^U`, 0x9b as ESC), is refused with a command and kept intact without one.
 #[cfg(unix)]
