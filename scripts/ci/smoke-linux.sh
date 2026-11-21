@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Packaging smoke for the Linux test build: install the deb and the rpm in clean containers, and
-# launch the extracted AppImage headless. Release builds carry no WebDriver, so the launch checks
+# Packaging smoke for the Linux test build: install the deb and the rpm in clean containers and
+# launch each installed app headless there, and launch the extracted AppImage headless. Release builds carry no WebDriver, so the launch checks
 # read the process, the app window and the app's log.
 #
 # Usage:
@@ -10,7 +10,12 @@
 #       smoke-images.txt and run by its pinned digest. The distribution's resolver must find
 #       every dependency, ldconfig must then find the AppIndicator library the tray icon loads
 #       (the package depends on it), and the package's file list (kept as
-#       <out-dir>/<deb|rpm>.list) must hold the app binary and its three sidecars. A deb image's apt fetches from
+#       <out-dir>/<deb|rpm>.list) must hold the app binary and its three sidecars. Then the
+#       installed app launches once in the container, as run launches the AppImage (the default
+#       launch, leaving default.log and default.png in <out-dir>/launch), with the session tools
+#       installed only after the package, so they cannot stand in for a dependency it lacks.
+#       Last, the package must name WebKitGTK 4.1 and GTK 3 among its dependencies (depends).
+#       A deb image's apt fetches from
 #       SMOKE_APT_MIRROR (apt-mirror), with retries and short timeouts. When SMOKE_APT_CACHE names
 #       a directory, a deb image uses it as its apt archives and keeps what it fetches there
 #       (apt-keep), so a cache of that directory saves the next run the download.
@@ -19,6 +24,11 @@
 #       <package-dir> in <image>: the key holds the deb's architecture, the image's pinned
 #       digest, a hash of the deb's Depends and <week> (YYYY-Www), so the archives roll weekly;
 #       restore= is the key's prefix up to the digest.
+#   smoke-linux.sh depends <deb|rpm> <package>
+#       The package's dependency field names WebKitGTK 4.1 and GTK 3 by package:
+#       libwebkit2gtk-4.1-0 and libgtk-3-0 in a deb's Depends (dpkg-deb --field), webkit2gtk4.1
+#       and gtk3 in an rpm's Requires (rpm -qpR). A resolver that installs the package does not
+#       prove this: a dependency it pulls in for another could bring them along.
 #   smoke-linux.sh apt-keep <apt.conf.d>
 #       Keep the packages apt downloads: drop the Ubuntu images' docker-clean, which deletes
 #       them after every install, and set APT::Keep-Downloaded-Packages.
@@ -93,6 +103,17 @@ OPTIONAL_RESOURCES=(starship git-ai)
 APPINDICATOR='lib(ayatana-)?appindicator3\.so(\.1)?'
 # The app's identifier (tauri.conf.json), which names its data directory.
 APP_ID=ai.codesense
+# The packages a deb and an rpm must depend on by name: WebKitGTK 4.1 and GTK 3.
+DEB_DEPENDS=(libwebkit2gtk-4.1-0 libgtk-3-0)
+RPM_DEPENDS=(webkit2gtk4.1 gtk3)
+# The tools the launch uses inside an install container, beside what the package brings: the X
+# server, window and screenshot tools, the session bus and keyring, pgrep, and the Mesa GL and
+# EGL drivers WebKit renders with. An rpm image's dnf installs them by the files the launch runs.
+DEB_SESSION_TOOLS=(xvfb xauth x11-utils xdotool dbus gnome-keyring imagemagick procps libegl1 libgl1
+    libgles2 libgl1-mesa-dri)
+RPM_SESSION_TOOLS=(/usr/bin/xvfb-run /usr/bin/xauth /usr/bin/xdotool /usr/bin/xwininfo
+    /usr/bin/dbus-run-session /usr/bin/dbus-send /usr/bin/gnome-keyring-daemon /usr/bin/import
+    /usr/bin/identify /usr/bin/pgrep mesa-dri-drivers mesa-libEGL mesa-libGL)
 
 usage() {
     sed -n 's/^#   //p' "$0" | grep "^smoke-linux.sh" | sed 's/^/usage: /' >&2
@@ -243,9 +264,10 @@ install_package() {
         echo "apt archives: $(find "$SMOKE_APT_CACHE" -name '*.deb' | wc -l) cached in $SMOKE_APT_CACHE"
     fi
     echo "Installing $(basename "$package") in $ref"
+    # The whole checkout, read-only: the launch reads the git-ai pin through fetch-bundled.sh.
     docker run --rm -e SMOKE_APT_MIRROR ${cache[@]+"${cache[@]}"} \
-        -v "$(dirname "$package"):/package:ro" -v "$SCRIPT_DIR:/smoke:ro" -v "$out:/out" \
-        "$ref" bash /smoke/smoke-linux.sh in-container "$type" "/package/$(basename "$package")" "/out/$type.list"
+        -v "$(dirname "$package"):/package:ro" -v "$ROOT:/src:ro" -v "$out:/out" \
+        "$ref" bash /src/scripts/ci/smoke-linux.sh in-container "$type" "/package/$(basename "$package")" "/out/$type.list"
     check_listing "$out/$type.list"
     echo "$(basename "$package") installs in $image"
 }
@@ -281,8 +303,41 @@ apt_mirror() {
     done
 }
 
-# Runs inside the clean container: install with the distribution's resolver, then list the
-# files the package owns.
+# The package names <deb|rpm> <package> depends on, one a line: a deb's Depends with versions,
+# architecture qualifiers and alternatives split off, an rpm's Requires without versions.
+depends_of() {
+    local fields names
+    case "$1" in
+        deb)
+            fields=$(dpkg-deb --field "$2" Depends) || fail "dpkg-deb cannot read $2"
+            names=$(tr ',|' '\n' <<<"$fields" | sed -E 's/\(.*\)//; s/:[[:alnum:]]+//; s/[[:space:]]//g')
+            ;;
+        rpm)
+            fields=$(rpm -qpR "$2") || fail "rpm cannot read $2"
+            names=$(awk '{print $1}' <<<"$fields")
+            ;;
+    esac
+    grep . <<<"$names" | sort -u || true
+}
+
+package_depends() {
+    local type="$1" package="$2" names name wanted
+    case "$type" in
+        deb) wanted=("${DEB_DEPENDS[@]}") ;;
+        rpm) wanted=("${RPM_DEPENDS[@]}") ;;
+        *) usage ;;
+    esac
+    [[ -f "$package" ]] || fail "$package is not a file"
+    names=$(depends_of "$type" "$package")
+    for name in "${wanted[@]}"; do
+        grep -qxF "$name" <<<"$names" ||
+            fail "$(basename "$package") does not depend on $name; it depends on: $(paste -sd ' ' - <<<"$names")"
+    done
+    echo "$(basename "$package") depends on ${wanted[*]}"
+}
+
+# Runs inside the clean container: install with the distribution's resolver, list the files the
+# package owns, launch the installed app, then read the package's dependencies.
 in_container() {
     local type="$1" package="$2" listing="$3"
     case "$type" in
@@ -310,6 +365,25 @@ in_container() {
         *) usage ;;
     esac
     installed_appindicator
+    launch_installed "$type" "$listing"
+    package_depends "$type" "$package"
+}
+
+# Launch the installed app as run launches the AppImage. The session tools are installed only
+# now, so whatever they bring in could not have helped the package's own install. Its file list,
+# with the AppIndicator libraries its dependencies brought in (the tray icon loads them by name),
+# is what the launch's caps: line must agree with.
+launch_installed() {
+    local type="$1" listing="$2" out
+    case "$type" in
+        deb) apt-get install -y --no-install-recommends "${DEB_SESSION_TOOLS[@]}" ;;
+        rpm) dnf install -y "${RPM_SESSION_TOOLS[@]}" ;;
+    esac
+    out="$(dirname "$listing")/launch"
+    rm -rf "$out"
+    mkdir -p "$out"
+    { cat "$listing"; ldconfig_appindicator; } >"$out/listing"
+    SMOKE_APP="/usr/bin/$APP_BINARY" start_session default "$out"
 }
 
 # The AppIndicator libraries ldconfig finds by name, one a line.
@@ -504,16 +578,21 @@ window_drawn() {
     ((colours > 1)) || fail "the app window is one colour (see $2)"
 }
 
-# Inside xvfb-run: launch the app, check it while it runs, stop it, then check its log.
+# Inside xvfb-run: launch the app, check it while it runs, stop it, then check its log. The app is
+# the extracted AppImage under <out-dir>, or SMOKE_APP, an installed app's binary; <out-dir>
+# holds the file list (listing) its caps: line must agree with.
 launch() {
-    local mode="$1" out="$2" log="$1.log" shot="$1.png" pid waited pin store=secret-service
+    local mode="$1" out="$2" log="$1.log" shot="$1.png" pid waited pin store=secret-service app tree
     if [[ "$mode" == no-dbus ]]; then store=unavailable; fi
+    # What the trap kills: the AppImage's tree, or the installed binary and its sidecars beside it.
+    app="${SMOKE_APP:-$out/squashfs-root/AppRun}"
+    tree="${SMOKE_APP:-$out/squashfs-root/}"
     cd "$out"
-    "$out/squashfs-root/AppRun" >"$log" 2>&1 &
+    "$app" >"$log" 2>&1 &
     pid=$!
     # Nothing the launch started outlives it, and a failed launch shows its log.
     # shellcheck disable=SC2064 # expand now: the trap runs after these locals are gone
-    trap "status=\$?; pkill -KILL -f '$out/squashfs-root/' || true; ((status == 0)) || tail -n 200 '$log' >&2" EXIT
+    trap "status=\$?; pkill -KILL -f '$tree' || true; ((status == 0)) || tail -n 200 '$log' >&2" EXIT
     sleep 30
     alive "$pid" || fail "the app exited within 30 s"
     echo "The app is alive at 30 s"
@@ -580,6 +659,10 @@ case "$command" in
     apt-keep)
         [[ $# -eq 1 ]] || usage
         apt_keep "$@"
+        ;;
+    depends)
+        [[ $# -eq 2 ]] || usage
+        package_depends "$@"
         ;;
     same-resources)
         [[ $# -eq 2 ]] || usage

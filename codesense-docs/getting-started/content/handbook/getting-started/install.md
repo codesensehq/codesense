@@ -10,6 +10,26 @@ CodeSense is for Macs with Apple Silicon. Download it from the [download page](h
 
 The first time it opens, CodeSense opens **CodeSense Docs**: a read-only context repo of these docs that ships with every install, open at its README. There's no welcome screen or setup wizard.
 
+### Linux
+
+The Linux downloads (the AppImage, the `.deb` and the `.rpm`) come with a checksum list, `SHA256SUMS`, and its signature, `SHA256SUMS.asc`, made with the CodeSense release key. The release key's public half is [`codesense-release.asc`](https://github.com/codesensehq/codesense/blob/main/codesense-release.asc), in the root of the CodeSense repository. Its fingerprint is:
+
+```text
+FB7C 0E5F 0FAF AB81 2A72  FE13 03DD 39B8 5420 866B
+```
+
+To check a download, put `codesense-release.asc`, `SHA256SUMS`, `SHA256SUMS.asc` and the files you downloaded in one folder, then run:
+
+```sh
+gpg --import codesense-release.asc
+gpg --verify SHA256SUMS.asc SHA256SUMS
+sha256sum --ignore-missing -c SHA256SUMS
+```
+
+`gpg --verify` must report a good signature from the key with the fingerprint above; it may also warn that the key isn't certified, which only means you haven't signed it yourself. `sha256sum` must print `OK` for each file you downloaded. If either fails, don't install the file.
+
+The `.deb` and `.rpm` depend on WebKitGTK 4.1 and GTK 3, so install them with your package manager to pull those in: `sudo apt install ./<file>.deb` or `sudo dnf install ./<file>.rpm`.
+
 ## Your local profile
 
 CodeSense makes a local profile for you. A profile keeps its context repos, files and routines apart from other profiles on this Mac; it is not a service login. If CodeSense finds several profiles from earlier installs, it asks you to choose one. You can switch later in **Settings → Local profile**.
