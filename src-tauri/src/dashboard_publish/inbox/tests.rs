@@ -567,6 +567,9 @@ pub(crate) fn image(sha: &str, state: &str) -> crate::media::Attachment {
         retryable: false,
         media_provider: None,
         own_sender: false,
+        provider: None,
+        provider_id: None,
+        onload_sent: false,
     }
 }
 

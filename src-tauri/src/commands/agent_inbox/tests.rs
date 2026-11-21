@@ -5261,6 +5261,8 @@ async fn media_only_send_and_reply_reach_both_page_read_models_and_retry_receipt
         url: Some("https://i.giphy.com/cat.gif".into()),
         path: None,
         alt: "Typing cat".into(),
+        provider: None,
+        provider_id: None,
     };
     let sent = send_message_request(
         &host,
@@ -5486,6 +5488,8 @@ async fn local_media_send_uses_sender_scope_when_ui_team_is_parent() {
         url: None,
         path: Some(path.to_string_lossy().into_owned()),
         alt: "Local meme".into(),
+        provider: None,
+        provider_id: None,
     };
 
     let parent = send_message_request(
@@ -5634,6 +5638,8 @@ async fn review_reply_after_local_source_removed(role: bool) {
         url: None,
         path: Some(image.path().to_string_lossy().into_owned()),
         alt: "Local meme".into(),
+        provider: None,
+        provider_id: None,
     };
     let answer = || {
         reply_request(
@@ -6091,6 +6097,9 @@ fn gif_attachment(state: &str) -> crate::media::Attachment {
         retryable: false,
         media_provider: None,
         own_sender: false,
+        provider: None,
+        provider_id: None,
+        onload_sent: false,
     }
 }
 
@@ -6336,6 +6345,8 @@ fn provider_media(url: &str) -> crate::media::MediaInput {
         url: Some(url.into()),
         path: None,
         alt: "Typing cat".into(),
+        provider: None,
+        provider_id: None,
     }
 }
 
