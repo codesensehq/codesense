@@ -65,38 +65,16 @@ pub(super) fn verified_gateway(home: &Path) -> Option<peer::PeerProcess> {
 
 #[cfg(test)]
 mod owner_tests {
+    use super::super::Ready;
     use super::*;
-    use std::io::BufRead;
     use std::os::unix::process::CommandExt;
-    use std::process::{Child, Command, Stdio};
+    use std::process::Command;
 
-    struct Running(Child);
-    impl Running {
-        /// Run `code` under python3 with `args` and wait for its `ready` line.
-        fn start(code: &str, args: &[&str], own_group: bool) -> Self {
-            let mut command = Command::new("python3");
-            command
-                .args(["-c", code])
-                .args(args)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null());
-            if own_group {
-                command.process_group(0);
-            }
-            let mut child = command.spawn().unwrap();
-            let mut ready = String::new();
-            std::io::BufReader::new(child.stdout.take().unwrap())
-                .read_line(&mut ready)
-                .unwrap();
-            assert_eq!(ready.trim(), "ready");
-            Self(child)
-        }
-    }
-    impl Drop for Running {
-        fn drop(&mut self) {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
-        }
+    /// `code` under python3 with `args`.
+    fn python(code: &str, args: &[&str]) -> Command {
+        let mut command = Command::new("python3");
+        command.args(["-c", code]).args(args);
+        command
     }
 
     /// A process named in the lock record, born after the home and leading its own
@@ -106,8 +84,9 @@ mod owner_tests {
     fn a_recorded_gateway_without_the_lock_file_open_is_never_signaled() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
-        let mut gateway = Running::start(
-            r#"import json,os,pathlib,signal,sys,time
+        let mut gateway = Ready::start(
+            python(
+                r#"import json,os,pathlib,signal,sys,time
 h=pathlib.Path(sys.argv[1])
 (h/'gateway.pid').write_text(json.dumps({'pid':os.getpid()}))
 def stop(*args):
@@ -116,11 +95,12 @@ signal.signal(signal.SIGTERM,stop)
 print('ready',flush=True)
 while True: time.sleep(.05)
 "#,
-            &[home.to_str().unwrap(), "hermes_cli.main", "gateway", "run"],
-            true,
+                &[home.to_str().unwrap(), "hermes_cli.main", "gateway", "run"],
+            )
+            .process_group(0),
         );
         let pid = gateway.0.id();
-        let _holder = Running::start(
+        let _holder = Ready::start(&mut python(
             r#"import fcntl,json,pathlib,sys,time
 f=open(pathlib.Path(sys.argv[1])/'gateway.lock','w+')
 json.dump({'pid':int(sys.argv[2])},f); f.flush(); fcntl.flock(f,fcntl.LOCK_EX)
@@ -128,8 +108,7 @@ print('ready',flush=True)
 while True: time.sleep(.05)
 "#,
             &[home.to_str().unwrap(), &pid.to_string()],
-            false,
-        );
+        ));
         assert!(
             !owns_lock(pid, home),
             "the recorded pid has no open lock file"

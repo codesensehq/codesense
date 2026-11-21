@@ -48,21 +48,48 @@ pub(crate) fn teardown_home(home: &Path, wait_for_replacement: bool) {
     }
 }
 
+/// A test's python process, once it has printed `ready`; killed and reaped on drop.
+#[cfg(all(test, unix))]
+struct Ready(std::process::Child);
+#[cfg(all(test, unix))]
+impl Ready {
+    fn start(command: &mut std::process::Command) -> Self {
+        use std::io::BufRead;
+        let mut child = command
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut ready = String::new();
+        std::io::BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(ready.trim(), "ready");
+        Self(child)
+    }
+}
+#[cfg(all(test, unix))]
+impl Drop for Ready {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 // macOS and Linux: the gateway is a python process in a Unix process group of its own.
 #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod gateway_tests {
     use super::*;
-    use std::io::BufRead;
     use std::{fs, process::Command};
-    struct Gateway(std::process::Child);
+    struct Gateway;
     impl Gateway {
-        fn spawn(home: &Path, owns_lock: bool) -> Self {
+        fn spawn(home: &Path, owns_lock: bool) -> Ready {
             Self::spawn_with(home, owns_lock, &[])
         }
 
         /// With `stubborn-child` in `extra`, the gateway first starts a child in its
         /// group that ignores SIGTERM and writes the child's pid to `child.pid`.
-        fn spawn_with(home: &Path, owns_lock: bool, extra: &[&str]) -> Self {
+        fn spawn_with(home: &Path, owns_lock: bool, extra: &[&str]) -> Ready {
             let code = r#"import fcntl,json,os,pathlib,signal,subprocess,sys,time
 h=pathlib.Path(sys.argv[1]); f=open(h/'gateway.lock','w+')
 json.dump({'pid':os.getpid()},f); f.flush()
@@ -77,29 +104,15 @@ signal.signal(signal.SIGTERM,stop)
 print('ready',flush=True)
 while True: time.sleep(.05)
 "#;
-            let mut child = Command::new("python3")
-                .args(["-c", code])
-                .arg(home)
-                .arg(if owns_lock { "lock" } else { "open" })
-                .args(["hermes_cli.main", "gateway", "run"])
-                .args(extra)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .process_group(0)
-                .spawn()
-                .unwrap();
-            let mut ready = String::new();
-            std::io::BufReader::new(child.stdout.take().unwrap())
-                .read_line(&mut ready)
-                .unwrap();
-            assert_eq!(ready.trim(), "ready");
-            Self(child)
-        }
-    }
-    impl Drop for Gateway {
-        fn drop(&mut self) {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
+            Ready::start(
+                Command::new("python3")
+                    .args(["-c", code])
+                    .arg(home)
+                    .arg(if owns_lock { "lock" } else { "open" })
+                    .args(["hermes_cli.main", "gateway", "run"])
+                    .args(extra)
+                    .process_group(0),
+            )
         }
     }
     #[test]
@@ -181,7 +194,3 @@ while True: time.sleep(.05)
         assert!(stopped, "replacement was swept after verification");
     }
 }
-
-// macOS and Linux, as the gateway tests that use it are.
-#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
-use std::process::Stdio;
