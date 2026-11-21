@@ -36,7 +36,7 @@ struct Started {
     args: Vec<OsString>,
     cwd: Option<PathBuf>,
     removed: Vec<OsString>,
-    wait: bool,
+    wait: Option<Duration>,
 }
 
 /// Records each command and answers from a script (spawned and detached once it runs out).
@@ -63,7 +63,7 @@ impl Recorder {
 }
 
 impl Spawn for Recorder {
-    fn start(&self, command: Command, wait: bool) -> io::Result<Exit> {
+    fn start(&self, command: Command, wait: Option<Duration>) -> io::Result<Exit> {
         self.started.borrow_mut().push(Started {
             program: command.get_program().to_os_string(),
             args: command.get_args().map(OsStr::to_os_string).collect(),
@@ -558,7 +558,7 @@ fn spawn_first_tries_the_next_launcher_only_when_one_cannot_start() {
         })
     );
     assert_eq!(recorder.programs(), ["xdg-open"]);
-    assert!(recorder.started.borrow()[0].wait);
+    assert_eq!(recorder.started.borrow()[0].wait, Some(LAUNCH_LIMIT));
 
     assert_eq!(
         spawn_first(&[], &Recorder::default()),

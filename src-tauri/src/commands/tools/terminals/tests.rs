@@ -391,7 +391,7 @@ impl crate::shared::opener::Spawn for Recorder {
     fn start(
         &self,
         command: std::process::Command,
-        _wait: bool,
+        _wait: Option<std::time::Duration>,
     ) -> std::io::Result<crate::shared::opener::Exit> {
         self.0.borrow_mut().push((
             command.get_program().to_os_string(),

@@ -12,8 +12,9 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use codesense_platform::process::{kill_hard, ProcessTree};
 use log::warn;
 
 /// How long `xdg-mime query default text/plain` may take before it is killed.
@@ -453,24 +454,25 @@ pub(crate) enum Exit {
     Detached,
     /// Waited for.
     Status { success: bool, describe: String },
+    /// Still running at its limit: its whole tree was killed and the root (`pid`) reaped.
+    TimedOut { pid: u32 },
 }
 
-/// Starts a command, injected so tests record instead of spawning.
+/// Starts a command, injected so tests record instead of spawning. An `Err` means it couldn't be
+/// started; once it has started, every outcome is an [`Exit`].
 pub(crate) trait Spawn {
-    fn start(&self, command: Command, wait: bool) -> io::Result<Exit>;
+    fn start(&self, command: Command, wait: Option<Duration>) -> io::Result<Exit>;
 }
 
-/// Spawns for real. A detached child is reaped on a thread, with a non-zero exit logged.
+/// Spawns for real. A detached child is reaped on a thread, with a non-zero exit logged; a waited
+/// one runs as a [`ProcessTree`], bounded by its limit.
 pub(crate) struct HostSpawn;
 
 impl Spawn for HostSpawn {
-    fn start(&self, mut command: Command, wait: bool) -> io::Result<Exit> {
-        if wait {
-            let status = command.status()?;
-            return Ok(Exit::Status {
-                success: status.success(),
-                describe: status.to_string(),
-            });
+    fn start(&self, mut command: Command, wait: Option<Duration>) -> io::Result<Exit> {
+        if let Some(limit) = wait {
+            let mut tree = ProcessTree::spawn(&mut command)?;
+            return Ok(wait_bounded(&mut tree, limit, Rest::Leave));
         }
         let mut child = command.spawn()?;
         let program = command.get_program().to_string_lossy().into_owned();
@@ -490,13 +492,74 @@ impl Spawn for HostSpawn {
     }
 }
 
+/// What a bounded wait does with what the root left running once the root exits in time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Rest {
+    /// Leave it running: a launcher's job is to start something that outlives it.
+    Leave,
+    /// Kill it, so nothing it started keeps a pipe open.
+    Kill,
+}
+
+/// How often a bounded wait looks at its root.
+const POLL: Duration = Duration::from_millis(20);
+
+/// Waits at most `limit` for `tree`'s root. In time, the root's status, with what it started
+/// left or killed per `rest`. At the limit, the whole tree is killed (`kill_hard`) and the root
+/// reaped: [`Exit::TimedOut`]. The root's exit that can't be read is a failed [`Exit::Status`],
+/// never an `Err`, so the caller never takes a launcher that started for one that couldn't.
+fn wait_bounded(tree: &mut ProcessTree, limit: Duration, rest: Rest) -> Exit {
+    let deadline = Instant::now() + limit;
+    loop {
+        let polled = match rest {
+            Rest::Leave => tree.try_wait_leaving_rest(),
+            Rest::Kill => tree.try_wait(),
+        };
+        match polled {
+            Ok(Some(status)) => {
+                return Exit::Status {
+                    success: status.success(),
+                    describe: status.to_string(),
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                return Exit::Status {
+                    success: false,
+                    describe: format!("its exit couldn't be read: {e}"),
+                }
+            }
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            let pid = tree.pid().as_raw();
+            if let Err(e) = kill_hard(tree) {
+                warn!(target: "opener", "killing process tree {pid}: {e}");
+                let _ = tree.child().kill();
+            }
+            if let Err(e) = tree.wait() {
+                warn!(target: "opener", "reaping process {pid}: {e}");
+            }
+            return Exit::TimedOut { pid };
+        }
+        std::thread::sleep(POLL.min(deadline - now));
+    }
+}
+
 /// Starts the first launcher that spawns. One that fails to spawn is logged and the next is
 /// tried; one that spawns but exits non-zero (only waited rows see it) is an error, not retried.
 pub(crate) fn spawn_first(launches: &[Launch], spawner: &dyn Spawn) -> Result<(), OpenError> {
     let mut tried = Vec::new();
     for launch in launches {
-        match spawner.start(launch.command(), launch.wait.is_some()) {
+        match spawner.start(launch.command(), launch.wait) {
             Ok(Exit::Detached) | Ok(Exit::Status { success: true, .. }) => return Ok(()),
+            Ok(Exit::TimedOut { .. }) => {
+                return Err(OpenError::Failed {
+                    program: launch.name(),
+                    status: "timed out".into(),
+                    note: None,
+                })
+            }
             Ok(Exit::Status { describe, .. }) => {
                 return Err(OpenError::Failed {
                     program: launch.name(),
