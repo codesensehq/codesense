@@ -601,26 +601,28 @@ test("siteInside: by real path, and `..x` is a name, not a parent", async (t) =>
   assert.equal(siteInside(join(base, "alias"), join(root, "site")), true);
 });
 
-test("a stale MCP export makes an unknown tool parameter a notice; other findings stay", () => {
-  const findings = checkFile("a.html", html("reply({ body })\ncodesense.nope()"), truth);
-  const { problems: kept, notices } = splitStaleParams(findings, true);
+test("a stale MCP export makes an unknown tool parameter the drifted Rust names a notice", () => {
+  const findings = checkFile("a.html", html("reply({ body, bodyy })\ncodesense.nope()"), truth);
+  const explains = (name) => name === "body";
+  const { problems: kept, notices } = splitStaleParams(findings, explains);
   assert.deepEqual(
-    kept.map((f) => f.rule),
-    ["R2"],
+    kept.map((f) => `${f.rule} ${f.message.split(" is")[0]}`),
+    ["R3 reply: `bodyy`", "R2 `codesense.nope`"],
   );
   assert.match(notices.map((f) => f.message).join("|"), /reply: `body` is not a parameter/);
-  assert.deepEqual(splitStaleParams(findings, false), { problems: findings, notices: [] });
+  assert.deepEqual(splitStaleParams(findings, null), { problems: findings, notices: [] });
   // An alias is the PR's own mistake, never the export's lag.
   const alias = checkFile("a.html", html("reply({ messageId: 1 })"), truth);
-  assert.equal(splitStaleParams(alias, true).problems.length, 1);
+  assert.equal(splitStaleParams(alias, () => true).problems.length, 1);
 });
 
-test("CLI: an unknown parameter is a notice only in the PR gate with a stale MCP seal", () => {
+test("CLI: an unknown parameter is a notice only in the PR gate, for a param the drifted Rust names", async () => {
+  const { referenceInputs } = await import("./generate-mcp-reference.mjs");
   const root = mkdtempSync(join(tmpdir(), "api-lint-stale-"));
   const content = join(root, "codesense-docs/getting-started/content");
   const gen = join(content, "generated");
   mkdirSync(gen, { recursive: true });
-  mkdirSync(join(root, "src-tauri/src"), { recursive: true });
+  mkdirSync(join(root, "src-tauri/src/mcp"), { recursive: true });
   mkdirSync(join(root, "src-tauri/crates/codesense-pty-core/src/agent_cli"), { recursive: true });
   for (const path of [
     "Cargo.lock",
@@ -630,29 +632,53 @@ test("CLI: an unknown parameter is a notice only in the PR gate with a stale MCP
     "src-tauri/crates/codesense-pty-core/src/agent_cli/claude.rs",
   ])
     writeFileSync(join(root, path), "");
+  const dto = join(root, "src-tauri/src/mcp/reply.rs");
+  writeFileSync(dto, "pub struct ReplyParams { pub text: String }\n");
   writeFileSync(join(gen, "page-sdk.json"), JSON.stringify({ verbs: [], members: [] }));
   writeFileSync(
     join(gen, "mcp-tools.json"),
     JSON.stringify({ tools: [{ name: "reply", description: "Reply.", params: params("text") }] }),
   );
-  writeFileSync(join(content, "page.html"), html("reply({ text, new_param: 1 })"));
+  // Sealed when reply.rs had no new_param. The seal still lists the catalog, which explains nothing.
+  const seal = join(gen, "mcp-tools.inputs.json");
+  const inputs = {
+    ...referenceInputs(root),
+    "codesense-docs/getting-started/content/_shared/examples.yml": "0".repeat(64),
+  };
+  writeFileSync(
+    seal,
+    JSON.stringify({ schema: 1, profiles: ["default", "dashboard-publish"], inputs }),
+  );
+  const git = (...args) =>
+    spawnSync("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", ...args], {
+      cwd: root,
+    });
+  git("init", "-q", "-b", "main");
+  git("add", "-A");
+  git("commit", "-q", "-m", "main");
+  git("update-ref", "refs/remotes/origin/main", "HEAD");
+  const page = join(content, "page.html");
   const script = fileURLToPath(new URL("./check-docs-api-examples.mjs", import.meta.url));
-  const run = (env, seal) => {
-    writeFileSync(
-      join(gen, "mcp-tools.inputs.json"),
-      JSON.stringify({ schema: 1, profiles: ["default", "dashboard-publish"], inputs: seal }),
-    );
+  const run = (example, env = "1") => {
+    writeFileSync(page, html(example));
     return spawnSync(process.execPath, [script, "--root", root], {
       encoding: "utf8",
       env: { ...process.env, DOCS_ALLOW_STALE_EXPORT: env },
     });
   };
   try {
-    // The seal lists none of the inputs it should: stale.
-    const tolerant = run("1", {});
+    // Only the old catalog entry drifts: nothing explained, strict.
+    assert.equal(run("reply({ text, new_param: 1 })").status, 1);
+    // The PR adds new_param to the Rust DTO without re-exporting.
+    writeFileSync(dto, "pub struct ReplyParams { pub text: String, pub new_param: u32 }\n");
+    const tolerant = run("reply({ text, new_param: 1 })");
     assert.equal(tolerant.status, 0, tolerant.stderr);
     assert.match(tolerant.stderr, /NOTICE: .*reply: `new_param` is not a parameter/);
-    assert.equal(run("", {}).status, 1);
+    assert.equal(run("reply({ text, new_param: 1 })", "").status, 1, "strict without the switch");
+    assert.equal(run("reply({ text, new_parm: 1 })").status, 1, "a typo the Rust does not name");
+    // A PR that edits the seal is held to the strict check.
+    writeFileSync(seal, readFileSync(seal, "utf8") + "\n");
+    assert.equal(run("reply({ text, new_param: 1 })").status, 1, "the PR touched the seal");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

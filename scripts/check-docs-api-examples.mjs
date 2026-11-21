@@ -44,8 +44,13 @@ import { fileURLToPath } from "node:url";
 import { parseItems } from "./lib/rust.mjs";
 import { isMain } from "./lib/is-main.mjs";
 import { HANDBOOK_DIR, siteRoot } from "./lib/site-root.mjs";
-import { REFRESH_ROUTE, allowStaleExport } from "./lib/sealed-export.mjs";
-import { exportStale } from "./generate-mcp-reference.mjs";
+import {
+  REFRESH_ROUTE,
+  allowStaleExport,
+  exportsUntouchedSinceMain,
+  frozenExport,
+} from "./lib/sealed-export.mjs";
+import { driftExplainer } from "./generate-mcp-reference.mjs";
 
 const DEFAULT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CONTENT = "codesense-docs/getting-started/content";
@@ -429,7 +434,13 @@ function checkArgs(tool, schema, obj, at, lineOf, aliases, out, path = "", rule 
         ? `${tool}: \`${path}${key}\` is an alias; use \`${path}${canon}\``
         : `${tool}: \`${path}${key}\` is not a parameter (has: ${[...names.keys()].join(", ") || "none"})`;
       // An unknown tool parameter may be one the PR adds before the export is refreshed.
-      out.push({ line: lineOf(at + off), rule, message, unknownParam: !canon && rule === "R3" });
+      out.push({
+        line: lineOf(at + off),
+        rule,
+        message,
+        unknownParam: !canon && rule === "R3",
+        param: key,
+      });
       if (!canon) continue;
       name = canon;
     }
@@ -674,23 +685,28 @@ export function corpus(root = DEFAULT_ROOT, env = process.env) {
 }
 
 // Tool parameters come from mcp-tools.json, which Node renders from the cargo export. PRs never
-// re-export it, so in the PR gate with a stale export an unknown parameter may be one the PR adds:
-// a notice, not a problem. Every other finding stays.
-export function splitStaleParams(findings, tolerate) {
-  if (!tolerate) return { problems: findings, notices: [] };
+// re-export it, so in the PR gate an unknown parameter that the drifted Rust inputs name may be one
+// the PR adds: a notice, not a problem. `explains` is staleParamExplainer's; every other finding,
+// and an unknown parameter the drifted Rust does not name (a typo), stays.
+export function splitStaleParams(findings, explains) {
+  const lag = (f) => Boolean(explains && f.unknownParam && explains(f.param));
   return {
-    problems: findings.filter((f) => !f.unknownParam),
-    notices: findings.filter((f) => f.unknownParam),
+    problems: findings.filter((f) => !lag(f)),
+    notices: findings.filter(lag),
   };
 }
 
-// The PR gate's switch is on and the MCP seal is stale. An unreadable tree counts as fresh (strict).
-export function staleMcpExport(root, argv = process.argv, env = process.env) {
-  if (!allowStaleExport(argv, env)) return false;
+// The PR gate's rule, as for the generators: the switch is on, this PR left the MCP export as main
+// has it, and the seal's changed or added Rust inputs explain the name. Null otherwise (strict),
+// also for an unreadable tree or a drift that is not Rust (a seal that still lists the catalog).
+export function staleParamExplainer(root, argv = process.argv, env = process.env) {
+  if (!allowStaleExport(argv, env)) return null;
   try {
-    return exportStale(root);
+    if (!exportsUntouchedSinceMain(root, frozenExport(`${CONTENT}/generated/mcp-tools`)))
+      return null;
+    return driftExplainer(root)?.explains ?? null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -703,12 +719,12 @@ function main(argv) {
   }
   const root = dir ? resolve(dir) : DEFAULT_ROOT;
   const truth = loadTruth(root);
-  const tolerate = staleMcpExport(root);
+  const explains = staleParamExplainer(root);
   let count = 0;
   // An explicit --root wins over CODESENSE_SITE_ROOT: the checkout it names brings its own site.
   for (const path of corpus(root, dir ? {} : process.env)) {
     const findings = checkFile(path, readFileSync(path, "utf8"), truth);
-    const { problems, notices } = splitStaleParams(findings, tolerate);
+    const { problems, notices } = splitStaleParams(findings, explains);
     for (const f of notices)
       console.warn(
         `NOTICE: ${relative(root, path)}:${f.line}: ${f.rule} ${f.message} (the MCP export is stale; ${REFRESH_ROUTE})`,

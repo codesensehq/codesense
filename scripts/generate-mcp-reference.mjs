@@ -436,9 +436,6 @@ function sealDrift(root) {
   return { addedInputs, changedInputs, removedInputs, changedPayloads, profileDrift };
 }
 
-// Whether the committed MCP export lags its inputs (a stale or missing seal).
-export const exportStale = (root = ROOT) => sealDrift(root) !== null;
-
 const HANDLER = "src-tauri/src/mcp/handler.rs";
 // What a stale seal can explain: null with a fresh seal or no changed or added Rust input (a
 // non-Rust drift such as a seal that still lists the catalog explains nothing). Otherwise the
