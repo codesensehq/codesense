@@ -594,3 +594,177 @@ fn every_launch_drops_the_app_owned_webkit_env() {
         assert_eq!(s.cwd, None);
     }
 }
+
+#[test]
+fn a_timed_out_launcher_is_an_error_and_the_next_is_not_tried() {
+    let fs = FakeFs::with(&[], &[DIR]);
+    let launches: Vec<Launch> = plans("linux", Open::Folder(Path::new(DIR)), &facts(Ok("")), &fs)
+        .unwrap()
+        .into_iter()
+        .map(|l| l.waited(Duration::from_secs(30)))
+        .collect();
+    let recorder = Recorder::answering(vec![Ok(Exit::TimedOut { pid: 4242 })]);
+    let error = spawn_first(&launches, &recorder).unwrap_err();
+    assert_eq!(
+        error,
+        OpenError::TimedOut {
+            program: "xdg-open".into(),
+            limit: Duration::from_secs(30),
+        }
+    );
+    assert_eq!(recorder.programs(), ["xdg-open"]);
+    assert_eq!(
+        error.to_string(),
+        "xdg-open didn't finish within 30 s; it may still open"
+    );
+    let short = OpenError::TimedOut {
+        program: "gio".into(),
+        limit: Duration::from_millis(250),
+    };
+    assert_eq!(
+        short.to_string(),
+        "gio didn't finish within 250 ms; it may still open"
+    );
+}
+
+/// Every launcher the executor waits for reaches it with a limit; the folder launchers aren't
+/// waited.
+#[test]
+fn every_waited_row_carries_a_limit() {
+    let desktop = "/usr/share/applications/gedit.desktop";
+    let fs = FakeFs::with(&[FILE, desktop], &[DIR]);
+    let facts = facts(Ok("gedit.desktop"));
+    for os in ["macos", "linux"] {
+        let text = plans(os, Open::Text(Path::new(FILE)), &facts, &fs).unwrap();
+        let recorder = Recorder::answering(vec![Ok(Exit::Status {
+            success: true,
+            describe: "exit status: 0".into(),
+        })]);
+        assert_eq!(spawn_first(&text, &recorder), Ok(()), "{os}");
+        let waits: Vec<_> = recorder.started.borrow().iter().map(|s| s.wait).collect();
+        assert_eq!(waits, [Some(LAUNCH_LIMIT)], "{os}");
+
+        let folder = plans(os, Open::Folder(Path::new(DIR)), &facts, &fs).unwrap();
+        assert!(folder.iter().all(|l| l.wait.is_none()), "{os}");
+    }
+    assert_eq!(QUERY_LIMIT, Duration::from_secs(10));
+    assert_eq!(LAUNCH_LIMIT, Duration::from_secs(30));
+}
+
+#[cfg(unix)]
+fn sh(script: &str, args: &[&OsStr]) -> Command {
+    let mut command = Command::new("/bin/sh");
+    command.arg("-c").arg(script).arg("sh").args(args);
+    command
+}
+
+/// Whether `kill(pid, 0)` finds nothing (ESRCH).
+#[cfg(unix)]
+fn pid_is_gone(pid: u32) -> bool {
+    let found = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    found == -1 && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+}
+
+/// A real child still running at its limit is killed and reaped well within the test's time,
+/// and its pid is gone afterwards.
+#[cfg(unix)]
+#[test]
+fn a_waited_child_past_its_limit_is_killed_and_reaped() {
+    let started = Instant::now();
+    let exit = HostSpawn
+        .start(sh("sleep 5", &[]), Some(Duration::from_millis(200)))
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(2), "{exit:?}");
+    let Exit::TimedOut { pid } = exit else {
+        panic!("expected TimedOut, got {exit:?}");
+    };
+    assert!(pid_is_gone(pid), "pid {pid} is still there");
+}
+
+/// A launcher that exits in time reports its status and leaves what it started running.
+#[cfg(unix)]
+#[test]
+fn a_waited_launcher_that_exits_in_time_leaves_what_it_started() {
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("pid");
+    let exit = HostSpawn
+        .start(
+            sh(
+                "sleep 5 >/dev/null 2>&1 & echo $! > \"$1\"",
+                &[pid_file.as_os_str()],
+            ),
+            Some(Duration::from_secs(5)),
+        )
+        .unwrap();
+    assert!(
+        matches!(exit, Exit::Status { success: true, .. }),
+        "{exit:?}"
+    );
+    let pid: u32 = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let alive = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
+    unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+    assert!(alive, "the launcher's child {pid} was killed");
+
+    let failed = HostSpawn
+        .start(sh("exit 3", &[]), Some(Duration::from_secs(5)))
+        .unwrap();
+    assert!(
+        matches!(&failed, Exit::Status { success: false, describe } if describe.contains('3')),
+        "{failed:?}"
+    );
+}
+
+/// The reader drains the pipe while the child runs, so more output than a pipe holds still
+/// completes.
+#[cfg(unix)]
+#[test]
+fn a_capture_of_more_than_a_pipe_holds_completes() {
+    let captured = HostSpawn
+        .capture(sh("head -c 100000 /dev/zero", &[]), Duration::from_secs(10))
+        .unwrap();
+    assert!(
+        matches!(captured.exit, Exit::Status { success: true, .. }),
+        "{:?}",
+        captured.exit
+    );
+    assert_eq!(captured.stdout.len(), 100_000);
+}
+
+/// A capture returns at its root's exit even when the root left a child holding stdout: the
+/// rest of the tree is killed then, which closes the pipe.
+#[cfg(unix)]
+#[test]
+fn a_capture_returns_when_its_root_exits_despite_a_child_holding_stdout() {
+    let started = Instant::now();
+    let captured = HostSpawn
+        .capture(sh("sleep 5 & echo $!", &[]), Duration::from_secs(10))
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(2), "{captured:?}");
+    assert!(
+        matches!(captured.exit, Exit::Status { success: true, .. }),
+        "{:?}",
+        captured.exit
+    );
+    let printed = String::from_utf8_lossy(&captured.stdout);
+    assert!(printed.trim().parse::<u32>().is_ok(), "{printed:?}");
+}
+
+/// A capture still running at its limit is killed, and its reader returns.
+#[cfg(unix)]
+#[test]
+fn a_capture_past_its_limit_is_killed() {
+    let started = Instant::now();
+    let captured = HostSpawn
+        .capture(sh("echo early; sleep 5", &[]), Duration::from_millis(200))
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(2), "{captured:?}");
+    let Exit::TimedOut { pid } = captured.exit else {
+        panic!("expected TimedOut, got {:?}", captured.exit);
+    };
+    assert!(pid_is_gone(pid), "pid {pid} is still there");
+    assert_eq!(captured.stdout, b"early\n");
+}
