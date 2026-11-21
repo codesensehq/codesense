@@ -1584,13 +1584,15 @@ pub(super) mod tests {
     }
 
     /// What an exit's install of the staged `NEXT` reported. On macOS the signed `.app` fixture
-    /// installs. On Linux the plugin's AppImage install refuses it (a signed AppImage fixture
-    /// needs the test key), so only the attempt is checked there.
+    /// installs. On Linux the plugin's `install_appimage` replaces its `extract_path`, which for
+    /// these tests' `Install::Bundle` is `Codesense.app/Contents/MacOS/codesense`, a file that
+    /// doesn't exist, so the install fails at its `extract_path.metadata()` before it touches
+    /// anything.
     fn assert_installed(installed: &Option<Result<String, String>>) {
         if cfg!(target_os = "macos") {
             assert_eq!(installed, &Some(Ok(NEXT.to_string())));
         } else {
-            assert!(installed.is_some(), "the install was attempted");
+            assert!(matches!(installed, Some(Err(_))), "{installed:?}");
         }
     }
 
@@ -3086,8 +3088,8 @@ pub(super) mod tests {
     }
 
     /// AC-4, behavioural: the staged build is installed in place of the app at quit, once.
-    // macOS only: needs a test-key-signed AppImage fixture; the Linux install path is proven in
-    // the VM check.
+    // macOS only: it reads the installed bundle back; a Linux install success needs a signed
+    // AppImage fixture, tracked separately, and is checked end to end at release.
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn the_staged_build_installs_in_place_of_the_app_once() {
@@ -3165,8 +3167,8 @@ pub(super) mod tests {
     }
 
     /// A staged build arms the restart; the exit then installs it and relaunches, once.
-    // macOS only: needs a test-key-signed AppImage fixture; the Linux install path is proven in
-    // the VM check.
+    // macOS only: it reads the installed bundle back; a Linux install success needs a signed
+    // AppImage fixture, tracked separately, and is checked end to end at release.
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn restart_to_update_installs_the_staged_build_then_relaunches() {
@@ -3299,8 +3301,8 @@ pub(super) mod tests {
 
     /// A relaunch that comes back on the old build is a failed install, even when the exit
     /// recorded no failure (an install that reported success, or a record that wasn't written).
-    // macOS only: needs a test-key-signed AppImage fixture; the Linux install path is proven in
-    // the VM check.
+    // macOS only: it needs the install to succeed; a Linux install success needs a signed
+    // AppImage fixture, tracked separately, and is checked end to end at release.
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn a_relaunch_still_on_the_old_build_counts_as_a_failed_install() {
