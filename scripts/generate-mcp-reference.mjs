@@ -709,7 +709,7 @@ export function generateReference(
   const pending = allowStaleExport || (!check && !strict) ? [] : null;
   const doc = buildManifest(root, META, readCatalog(root), pending, warn);
   for (const name of pending ?? [])
-    warn(`NOTICE: ${name} is not in the committed export yet; maintainers refresh it`);
+    warn(`NOTICE: ${name} is not in the committed export yet; ${REFRESH_ROUTE}`);
   const fresh = serialize(doc);
   const file = resolve(root, OUTPUT);
   if (check) {

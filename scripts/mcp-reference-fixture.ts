@@ -12,8 +12,8 @@ type Family = {
   calls: Array<{ tool: string; arguments: Record<string, unknown> }>;
 };
 
-// Strict fixtures model the last export wave. A story can add catalog tools before
-// that wave runs; pending-tool behavior has its own PR-mode tests.
+// Strict fixtures model the last refresh. A story can add catalog tools before
+// that refresh; pending-tool behavior has its own PR-mode tests.
 export function exportedCatalog(root = ROOT) {
   const catalog = readCatalog(root) as { schema: number; families: Family[] };
   const exported = new Set<string>(

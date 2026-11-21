@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Shared by the two sealed Cargo exports (MCP reference, live-data contract).
+// Shared by the cargo-written exports (MCP reference, live-data contract, model schemas fixture).
 import { execFileSync, spawnSync } from "node:child_process";
 
 const GENERATED = "codesense-docs/getting-started/content/generated";
@@ -20,13 +20,14 @@ export const frozenExport = (prefix) =>
 
 // `gen:docs:check:pr` sets the env var: the PR gate tolerates input-only and inherited drift,
 // whether a PR left the exports alone or re-exported before main moved inputs it did not touch.
-// Strict `gen:docs:check` (the wave) leaves it unset.
+// Strict `gen:docs:check` (the refresh check) leaves it unset.
 export const allowStaleExport = (argv = process.argv, env = process.env) =>
   argv.includes("--allow-stale-export") || env.DOCS_ALLOW_STALE_EXPORT === "1";
 
 // The export pins (the Rust, Vitest and Node tests that compare a committed export with its
 // source) compare strictly only with CS_STRICT_EXPORTS=1. PRs leave the cargo-written exports alone,
-// so without it a stale export is a notice. The regenerate run and the nightly probe set it.
+// so without it a stale export is a notice. The regenerate run and a nightly probe will set it;
+// nothing in CI sets it yet.
 export const strictExports = (env = process.env) => env.CS_STRICT_EXPORTS === "1";
 
 // What a stale export message tells the reader. PRs never re-export the cargo-written files;
@@ -86,9 +87,9 @@ export function exportsUntouchedSinceMain(root, exportFiles) {
   }
 }
 
-// A PR that re-exported is held to the strict check, yet main may since have changed inputs the
-// PR never touched (another PR's tool edit). Then the PR's export matched its own inputs and the
-// drift is main's, refreshed by the next maintainer refresh like any inherited drift. True when the PR left
+// A PR that re-exported (a refresh) is held to the strict check, yet main may since have changed
+// inputs the PR never touched (another PR's tool edit). Then the PR's export matched its own inputs
+// and the drift is main's, for the next refresh like any inherited drift. True when the PR left
 // every drifted input as it was at the merge-base (same rule as the exports, so never fetches).
 export const driftInheritedFromMain = (root, driftedInputs) =>
   driftedInputs.length > 0 && exportsUntouchedSinceMain(root, driftedInputs);

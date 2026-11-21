@@ -59,7 +59,7 @@ describe("live-data contract PR gate", () => {
         checkContract(root, { allowStaleExport: true, warn: (line: string) => notices.push(line) });
       expect(tolerant).not.toThrow();
       expect(notices.join("\n")).toMatch(/^NOTICE: Stale generated file: .*source inputs changed/);
-      // The strict check (the docs wave) still asks for the refresh.
+      // The strict check (the refresh check) still asks for the refresh.
       expect(() => checkContract(root)).toThrow(/source inputs changed/);
       // Drift in an input the PR changed is the PR's own: strict.
       appendFileSync(join(root, ours), "// changed after the export\n");

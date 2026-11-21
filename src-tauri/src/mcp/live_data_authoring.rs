@@ -1603,13 +1603,15 @@ mod tests {
             || std::env::var_os("LIVE_DATA_CONTRACT_OUTPUT").is_some();
         if !strict {
             if exported != payload {
-                eprintln!("NOTICE: live-data-contract.json is stale; maintainers refresh it");
+                eprintln!(
+                    "NOTICE: live-data-contract.json is stale; maintainers refresh it (README.md, \"Regenerating exports\")"
+                );
             }
             return;
         }
         assert_eq!(
             exported, payload,
-            "live-data-contract.json is stale; PRs leave it out and maintainers refresh it"
+            "live-data-contract.json is stale; PRs leave it out and maintainers refresh it (README.md, \"Regenerating exports\")"
         );
     }
 

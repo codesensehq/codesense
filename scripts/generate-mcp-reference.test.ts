@@ -382,7 +382,7 @@ describe("Node-only freshness and resolving teaching links", () => {
         });
       expect(tolerant()).not.toBeNull();
       expect(notices.join("\n")).toMatch(/NOTICE: Stale MCP registry export.*theirs\.rs/);
-      // The strict check (the docs wave) still asks for the refresh.
+      // The strict check (the refresh check) still asks for the refresh.
       expect(() => generateReference(root, { check: true })).toThrow(/theirs\.rs/);
       // Drift in an input the PR changed is the PR's own: strict.
       writeFileSync(ours, "// JsonSchema the PR's tool, changed after its export\n");
@@ -413,6 +413,7 @@ describe("a stale export in write mode and the PR gate", () => {
         mod.generateReference(root, { strict: false, warn: (line) => notices.push(line) }),
       ).not.toThrow();
       expect(notices.join("\n")).toMatch(/NOTICE: records_read is not in the committed export yet/);
+      expect(notices.find((line) => line.includes("records_read"))).toContain(REFRESH_ROUTE);
       const written = JSON.parse(readFileSync(join(root, mod.OUTPUT), "utf8"));
       expect(written.tools.map((t: { name: string }) => t.name)).not.toContain("records_read");
       commitAsMain(root);
