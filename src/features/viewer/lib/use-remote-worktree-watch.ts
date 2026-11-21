@@ -34,7 +34,8 @@ import { CADENCE_PRESETS, LARGE_REPO_THRESHOLD, setRemoteTrackedCount } from "./
 
 interface WatchEntry {
   count: number;
-  /** The attach token once resolved; `null` while the attach is in flight. */
+  /** The attach token once resolved; `null` while no attach is up (in flight,
+   *  failed, or retired). */
   token: number | null;
   /** An attach is in flight. A re-acquire joins it rather than starting a
    *  second one, and its settle retires the entry if the count is 0 by then. */
@@ -90,9 +91,9 @@ function ensureEntry(key: string): WatchEntry {
 }
 
 /** Spawn the Tauri event-listen for this `(machineId, handle)`'s event stream.
- *  Captures the entry in the closure (not just the key) so a release+reacquire
- *  cycle while `listen()` is pending — which replaces the keyed entry under us
- *  — cannot double-write `unlisten` on the successor. See H-1 in the review. */
+ *  Captures the entry in the closure (not just the key) so that if the nonce GC
+ *  drops the entry while `listen()` is pending and a new acquire keys a
+ *  successor, the settle cannot write `unlisten` onto the successor. */
 function startListen(machineId: string, handle: string, bound: WatchEntry): void {
   const key = watchKey(machineId, handle);
   const eventName = `remote-worktree-file-change-${machineId}-${handle}`;
@@ -131,12 +132,20 @@ function startListen(machineId: string, handle: string, bound: WatchEntry): void
   );
 }
 
+/** Stop a poll task on the host. A failure is logged, never thrown: the
+ *  release path must not break on a dead connection. */
+function stopWatch(key: string, token: number): void {
+  sourceRemoteWatchStop(token).catch((err) => {
+    logger.warn("useRemoteWorktreeWatch", `remote worktree watch stop failed for ${key} — ${err}`);
+  });
+}
+
 /** Detach an entry released to 0 with no attach in flight: stop its token,
  *  drop its event listener, and remove it unless a `useRemoteWatchNonce` still
  *  holds a listener on it. A kept entry keeps its nonce and listeners, so a
  *  late consumer (e.g. a sibling re-mount) reacquires it and they persist. */
 function retire(key: string, entry: WatchEntry): void {
-  if (entry.token !== null) sourceRemoteWatchStop(entry.token).catch(() => {});
+  if (entry.token !== null) stopWatch(key, entry.token);
   if (entry.unlisten) entry.unlisten();
   entry.token = null;
   entry.unlisten = null;
@@ -175,8 +184,9 @@ function acquire(machineId: string, handle: string, pollMs: number): void {
     return;
   }
   // A pre-existing entry with count=0 was created by `useRemoteWatchNonce`
-  // before any acquire, or was released while its attach is still in flight —
-  // upgrade it in place so the nonce listeners it holds survive the acquire.
+  // before any acquire, kept by `retire` for its nonce listeners, or released
+  // while its attach is still in flight — upgrade it in place so the nonce
+  // listeners it holds survive the acquire.
   const entry = existing ?? ensureEntry(key);
   entry.count = 1;
   // Fire the per-handle listen only on the 0→1 transition, and only when no
@@ -199,7 +209,7 @@ function acquire(machineId: string, handle: string, pollMs: number): void {
       // attach was in flight; the entry under the key now (if any) has its own
       // attach, so only stop this token.
       if (watches.get(key) !== entry) {
-        sourceRemoteWatchStop(token).catch(() => {});
+        stopWatch(key, token);
         return;
       }
       entry.token = token;

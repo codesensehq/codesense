@@ -429,6 +429,20 @@ describe("useRemoteWorktreeWatch — re-open while the attach is in flight", () 
     );
   });
 
+  it("a failed stop is logged, not thrown", async () => {
+    startMock.mockResolvedValue(1);
+    stopMock.mockRejectedValue(new Error("connection lost"));
+    const a = mountWatch();
+    await flush();
+    a.unmount();
+    await flush();
+    expect(stopped()).toEqual([1]);
+    expect(warn).toHaveBeenCalledWith(
+      "useRemoteWorktreeWatch",
+      expect.stringContaining("stop failed"),
+    );
+  });
+
   describe("pollMs follows the start it belongs to", () => {
     it("a joined start keeps the first pollMs", () => {
       deferCalls<number>(startMock);
@@ -502,21 +516,32 @@ describe("useRemoteWorktreeWatch — re-open while the attach is in flight", () 
       "a join after the listen %s at count 0 listens again and ticks once",
       async (_name, resolves) => {
         deferCalls<number>(startMock);
-        const listens = deferCalls<Mock>(listenMock);
+        const listens = deferCalls<() => void>(listenMock);
+        // The event bridge: a handler is installed once its listen resolves
+        // and stays installed until its unlisten runs. A tick reaches all.
+        const installed = new Set<() => void>();
+        const install = (i: number) => {
+          const handler = listenMock.mock.calls[i][1] as () => void;
+          installed.add(handler);
+          listens[i].resolve(() => {
+            unlisten();
+            installed.delete(handler);
+          });
+        };
         mountWatch().unmount();
-        if (resolves) listens[0].resolve(unlisten);
+        if (resolves) install(0);
         else listens[0].reject(new Error("no event bridge"));
         await flush();
         expect(unlisten).toHaveBeenCalledTimes(resolves ? 1 : 0);
         mountWatch();
         expect(startMock).toHaveBeenCalledTimes(1);
         expect(listenMock).toHaveBeenCalledTimes(2);
-        listens[1].resolve(vi.fn());
+        install(1);
         await flush();
+        expect(installed.size).toBe(1);
         const nonce = mountNonce();
         const before = nonce.result.current;
-        const handler = listenMock.mock.calls[1][1] as () => void;
-        act(() => handler());
+        act(() => installed.forEach((handler) => handler()));
         expect(nonce.result.current).toBe(before + 1);
       },
     );
