@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-//! This instance's terminal server in the macOS menu bar, or the Linux tray.
+//! This instance's terminal server in the macOS menu bar, the Linux tray or the
+//! Windows notification area.
 //!
 //! An opt-in item (`settings.terminalServerMenuBar`, pushed by the frontend
 //! through [`set_terminal_server_menu_bar`]) that shows whether the terminal
@@ -20,13 +21,17 @@
 //! and otherwise every [`REFRESH`] — no faster than the Settings section.
 //!
 //! It exists where the `terminal-server-tray` capability is on ([`tray_allowed`]):
-//! on Linux only when the AppIndicator library loads ([`tray_library_available`]),
+//! always on macOS and Windows (whose notification area always exists), and on
+//! Linux only when the AppIndicator library loads ([`tray_library_available`]),
 //! since building an item without it panics. An AppIndicator item reports no
 //! clicks and shows no tooltip, so there the status lives in the menu (kept
 //! current by the refresh) and the count shows only where the host draws labels.
-//! An item shows only while a tray host is registered (stock GNOME has none), so
-//! [`tray_visible`] says whether it does, for the window-close handler: a tray OS
-//! backgrounds the window only while the item is there to bring it back.
+//! In the Windows notification area the status is the tooltip, a left click
+//! opens the menu as on macOS, and the count isn't shown (no labels there).
+//! An item shows only while a tray host is registered (stock GNOME has none;
+//! Windows always has one), so [`tray_visible`] says whether it does, for the
+//! window-close handler: a tray OS backgrounds the window only while the item is
+//! there to bring it back.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -410,7 +415,7 @@ fn refresh_now(app: &AppHandle) {
     }
 }
 
-/// The item in the macOS menu bar or a Linux tray.
+/// The item in the macOS menu bar, a Linux tray or the Windows notification area.
 struct AppTray {
     app: AppHandle,
 }
