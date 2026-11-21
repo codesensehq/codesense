@@ -93,6 +93,12 @@ const fn row(
 /// A macOS row that opens the folder with `open -a <bundle> <folder>`, waited, and runs a command
 /// through its AppleScript. With no command nothing is typed into a shell, so any folder name
 /// opens.
+///
+/// Accepted residual: `open -a` is handed a folder [`terminal_launch`] checked with `is_dir`, and
+/// opens whatever that path names when it runs. Were the folder swapped for a regular file in
+/// between, the app would open that file, and Terminal runs a `.command` or shell script it is
+/// handed. It is the same window as reveal's: the path is resolved again by name, by a process
+/// that can't be handed our check.
 const fn open_app_row(
     id: &'static str,
     label: &'static str,
