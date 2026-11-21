@@ -107,8 +107,10 @@ fn open_terminal_impl(
     )?;
     // Ghostty can't be handed a command, so it goes on the clipboard to paste.
     if let Some(clipboard) = &chosen.clipboard {
-        let _ = clipboard
-            .launch
+        // Named so the write guard's resolver sees `Launch` and resolves `.command()`;
+        // removing the annotation raises the guard's unresolved-call count.
+        let pbcopy: &crate::shared::opener::Launch = &clipboard.launch;
+        let _ = pbcopy
             .command()
             .stdin(std::process::Stdio::piped())
             .spawn()

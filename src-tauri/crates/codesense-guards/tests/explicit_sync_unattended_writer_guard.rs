@@ -2579,7 +2579,20 @@ const MAX_UNRESOLVED_PATHS: usize = 279;
 /// the tab id in `reply_check_answer` (http/routes/terminal.rs). They are std string, iterator,
 /// collection and result calls on the in-memory reply record and the tab header; none calls a
 /// write primitive.
-const MAX_UNRESOLVED_METHODS: usize = 6_584;
+/// The per-OS opener and external terminals take it to 6_596: CI measured 6_597, less the
+/// clipboard's `.command()` in `open_terminal_impl` (commands/tools.rs), which now names its
+/// `Launch`. The new calls are `.kind()` on the io error and `.is_empty()` on the desktop ID in
+/// `query_text_default`, `.is_empty()` in `data_dirs`, `.display()` (3) and `.is_empty()` in
+/// `OpenError::fmt`, `.all(..)` in `valid_desktop_id`, `.find(..)` in `resolve_desktop_id`, and
+/// `.status()` on the command and `.name(..)` on the reaper's thread builder in
+/// `HostSpawn::start` (shared/opener.rs); `.is_empty()` in `env_terminal`, `.display()` (3) in
+/// `TerminalError::fmt`, `.is_empty()` (3) and `.find(..)` (2) in `terminal_launch`, and
+/// `.exists()` in `host_find` (commands/tools/terminals.rs). Gone with the code they replace are
+/// `.as_str()` and two `.is_empty()` in `open_terminal_impl`, `.exists()` in `reveal_path`
+/// (commands/git.rs) and `.status()` in `open_unreadable_machine_file` (commands/machines). They
+/// are std string, path, iterator, io-error, command and thread-builder calls; none calls a
+/// write primitive.
+const MAX_UNRESOLVED_METHODS: usize = 6_596;
 
 /// The most lines each census list prints on failure; the env vars print them all.
 const LISTING_CAP: usize = 100;
