@@ -2505,6 +2505,64 @@ test("exports guard: the policy pins the base checkout, the token, the names and
   assert.deepEqual(workflowPolicy(exportsGuard(), exportsGuardFile), []);
 });
 
+test("exports guard: the guard step skips only a merge group whose base lacks the script", () => {
+  const exact =
+    "        if: github.event_name == 'pull_request' || hashFiles('scripts/exports-guard.mjs') != ''\n";
+  assert.ok(exportsGuard().includes(exact));
+  assert.deepEqual(workflowPolicy(exportsGuard(), exportsGuardFile), []);
+  const step = parse(exportsGuard()).jobs.guard.steps.find(
+    (s) => s.name === "Check the changed files",
+  );
+  assert.equal(step.run, "node scripts/exports-guard.mjs");
+  for (const [name, condition] of [
+    ["no pull_request clause", "hashFiles('scripts/exports-guard.mjs') != ''"],
+    ["no hashFiles clause", "github.event_name == 'pull_request'"],
+    [
+      "all merge groups",
+      "github.event_name == 'pull_request' || github.event_name == 'merge_group'",
+    ],
+    [
+      "another condition",
+      "github.event_name == 'pull_request' || hashFiles('scripts/exports-guard.mjs') != '' || always()",
+    ],
+    [
+      "another condition, and-ed",
+      "(github.event_name == 'pull_request' || hashFiles('scripts/exports-guard.mjs') != '') && github.actor != 'x'",
+    ],
+    ["another file", "github.event_name == 'pull_request' || hashFiles('scripts/other.mjs') != ''"],
+    [
+      "wrapped",
+      "${{ github.event_name == 'pull_request' || hashFiles('scripts/exports-guard.mjs') != '' }}",
+    ],
+  ])
+    assert.match(
+      workflowPolicy(
+        exportsGuard().replace(exact, `        if: "${condition}"\n`),
+        exportsGuardFile,
+      ).join("\n"),
+      /guard: step "Check the changed files" must be one step with if:/,
+      name,
+    );
+  // No if at all, or a second step under the name, fails too.
+  for (const [name, fixture] of [
+    ["no if", exportsGuard().replace(exact, "")],
+    [
+      "second step",
+      exportsGuard().replace(
+        "      - name: Check the changed files\n",
+        "      - name: Check the changed files\n        run: true\n      - name: Check the changed files\n",
+      ),
+    ],
+  ])
+    assert.match(
+      workflowPolicy(fixture, exportsGuardFile).join("\n"),
+      /guard: step "Check the changed files" must be one step with if:/,
+      name,
+    );
+  // The job itself stays unconditional.
+  assert.equal(parse(exportsGuard()).jobs.guard.if, undefined);
+});
+
 test("exports guard: CS_STRICT_EXPORTS is set only on the two strict steps, and on both", () => {
   const strictEnv =
     '        env:\n          CS_STRICT_EXPORTS: "1"\n        run: pnpm gen:docs:check\n';

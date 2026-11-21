@@ -88,6 +88,10 @@ const EXPORTS_GUARD = {
   file: "exports-guard.yml",
   job: "guard",
   baseRef: "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}",
+  // The guard step runs on every pull request, and in a merge group whenever the base has the
+  // script: the one skip is the merge group that lands the workflow, before main has the script.
+  step: "Check the changed files",
+  stepIf: "github.event_name == 'pull_request' || hashFiles('scripts/exports-guard.mjs') != ''",
   strictJob: "strict-pins",
   strictSteps: ["Strict gen:docs check", "Strict Rust pins"],
   checks: { guard: "Exports guard", "strict-pins": "Exports strict pins" },
@@ -347,6 +351,13 @@ export function workflowPolicy(text, file = "") {
     );
     if (!checkouts.length || checkouts.some((step) => step.with?.ref !== EXPORTS_GUARD.baseRef))
       errors.push(`${EXPORTS_GUARD.job}: checkout must check out ref ${EXPORTS_GUARD.baseRef}`);
+    const guardSteps = (Array.isArray(steps) ? steps : []).filter(
+      (step) => mapping(step) && step.name === EXPORTS_GUARD.step,
+    );
+    if (guardSteps.length !== 1 || guardSteps[0].if !== EXPORTS_GUARD.stepIf)
+      errors.push(
+        `${EXPORTS_GUARD.job}: step "${EXPORTS_GUARD.step}" must be one step with if: ${EXPORTS_GUARD.stepIf}`,
+      );
     for (const [job, check] of Object.entries(EXPORTS_GUARD.checks))
       if (workflow.jobs?.[job]?.name !== check) errors.push(`${job}: name must be ${check}`);
     const strictSteps = workflow.jobs?.[EXPORTS_GUARD.strictJob]?.steps;

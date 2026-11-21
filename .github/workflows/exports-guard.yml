@@ -46,6 +46,10 @@ jobs:
         with:
           node-version-file: .nvmrc
       - name: Check the changed files
+        # In a merge group whose base has no guard script yet (only the merge group that lands this
+        # workflow), the step is skipped. Once the script is on main, every merge group runs it as
+        # designed. A pull request always runs it, and fails closed without the script.
+        if: github.event_name == 'pull_request' || hashFiles('scripts/exports-guard.mjs') != ''
         id: guard
         env:
           GH_TOKEN: ${{ github.token }}
