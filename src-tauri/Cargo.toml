@@ -65,7 +65,7 @@ tauri-plugin-dialog = "~2.7.0"
 git2 = "0.21"
 # Durable orchestration coordination store. `bundled` compiles SQLite
 # from source (no system dependency).
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 notify = "6"
 portable-pty = "0.9.0"
 codesense-host-proto = { path = "crates/codesense-host-proto" }
@@ -197,7 +197,7 @@ dbus = "0.9"
 
 [dev-dependencies]
 # Count SQLite VM work in spend-cap scaling tests without a wall-clock budget.
-rusqlite = { version = "0.32", features = ["hooks"] }
+rusqlite = { version = "0.41", features = ["hooks"] }
 tokio = { version = "1", features = ["test-util"] }
 # The license client's mock updates host.
 wiremock = "0.6"
