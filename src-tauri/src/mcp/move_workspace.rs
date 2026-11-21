@@ -2788,6 +2788,7 @@ mod tests {
         shared_dir(&shared);
         let intent = sample_intent();
         write_new(&shared, &intent).unwrap();
+        assert!(!is_owner_only(&shared), "an existing root is left as it is");
         let path = MoveIntent::path_in(&shared, &intent.team_key, &intent.workspace_id);
         assert!(is_owner_only(&path));
         shared_file(&path, &[b' '; 8192]);

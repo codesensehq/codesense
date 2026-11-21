@@ -330,6 +330,10 @@ mod in_process_activity_root_tests {
         assert_eq!(std::fs::read(root.join("bridge")).unwrap(), b"kept");
         assert!(is_owner_only(&root));
         assert!(in_process_activity_root(&dir.path().join("missing")).is_err());
+        let existing = dir.path().join("existing");
+        shared_dir(&existing.join("in-process-activity"));
+        let root = in_process_activity_root(&existing).unwrap();
+        assert!(!is_owner_only(&root), "an existing root is left as it is");
     }
 }
 

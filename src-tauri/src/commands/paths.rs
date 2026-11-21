@@ -121,6 +121,11 @@ mod tests {
         let dir = shared.join("private");
         ensure_private_dir(&dir).unwrap();
         assert!(is_owner_only(&dir));
+        ensure_private_dir(&shared).unwrap();
+        assert!(
+            !is_owner_only(&shared),
+            "an existing directory is left as it is"
+        );
         let nested = root.path().join("missing").join("private");
         ensure_private_dir(&nested).unwrap();
         assert!(is_owner_only(&nested));
