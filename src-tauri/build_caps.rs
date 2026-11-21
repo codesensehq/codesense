@@ -80,10 +80,117 @@ pub fn parse_support(value: &serde_json::Value) -> Option<Support> {
     }
 }
 
+/// The architectures each OS ships for. An `{"on": [<arch>…]}` value is fully
+/// on only when it lists every one of its OS's.
+pub const SHIPPED_ARCHS: [(&str, &[&str]); 3] = [
+    ("macos", &["aarch64", "x86_64"]),
+    ("linux", &["x86_64", "aarch64"]),
+    ("windows", &["x86_64"]),
+];
+
+/// The shipped architectures of `os` (see [`SHIPPED_ARCHS`]) that `support`
+/// leaves out: none for `"on"` and `"probe"`, every one for `"off"`.
+pub fn missing_archs(os: &str, support: &Support) -> Vec<&'static str> {
+    let shipped = SHIPPED_ARCHS
+        .iter()
+        .find_map(|(name, archs)| (*name == os).then_some(*archs))
+        .unwrap_or_default();
+    match support {
+        Support::On | Support::Probe => Vec::new(),
+        Support::Off => shipped.to_vec(),
+        Support::OnFor(archs) => shipped
+            .iter()
+            .copied()
+            .filter(|shipped| !archs.iter().any(|arch| arch == shipped))
+            .collect(),
+    }
+}
+
+/// A tracking key names the work that turns a capability on where it is off:
+/// words of a-z and 0-9 joined by single `-`s (`tray-background`).
+pub fn validate_tracked_key(key: &str) -> Result<(), String> {
+    let word = |word: &str| {
+        !word.is_empty()
+            && word
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+    };
+    if key.split('-').all(word) {
+        Ok(())
+    } else {
+        Err(format!(
+            "`{key}` is not a tracking key: words of a-z and 0-9 joined by single `-`s"
+        ))
+    }
+}
+
+/// A row's `tracked` object: a tracking key for each OS where the capability
+/// is not fully on ([`missing_archs`]), and for no other. A test-scope row
+/// has none. Checked here and then dropped; nothing reads it at runtime.
+fn check_tracked(
+    key: &str,
+    tracked: Option<&serde_json::Value>,
+    scope: Scope,
+    columns: [(&str, &Support); 3],
+) -> Result<(), String> {
+    let entries = match (tracked, scope) {
+        (None, Scope::Test) => return Ok(()),
+        (Some(_), Scope::Test) => {
+            return Err(format!(
+                "`{key}`.tracked: a test-scope row tracks nothing; delete `tracked`"
+            ))
+        }
+        (None, Scope::Product) => None,
+        (Some(serde_json::Value::Object(entries)), Scope::Product) => Some(entries),
+        (Some(other), Scope::Product) => {
+            return Err(format!(
+                "`{key}`.tracked: {other} is not an object of an OS to a tracking key"
+            ))
+        }
+    };
+    if let Some(entries) = entries {
+        for (os, entry) in entries {
+            if !columns.iter().any(|(name, _)| *name == os.as_str()) {
+                return Err(format!(
+                    "`{key}`.tracked.{os}: `{os}` is not \"macos\", \"linux\" or \"windows\""
+                ));
+            }
+            entry
+                .as_str()
+                .ok_or_else(|| format!("{entry} is not a string"))
+                .and_then(validate_tracked_key)
+                .map_err(|error| format!("`{key}`.tracked.{os}: {error}"))?;
+        }
+    }
+    for (os, support) in columns {
+        let missing = missing_archs(os, support);
+        let entry = entries.and_then(|entries| entries.get(os));
+        match (missing.is_empty(), entry) {
+            (true, Some(_)) => {
+                return Err(format!(
+                    "`{key}` is not off on {os}: delete the `tracked.{os}` entry"
+                ))
+            }
+            (false, None) => {
+                let archs = match support {
+                    Support::OnFor(_) => format!(" {}", missing.join(", ")),
+                    _ => String::new(),
+                };
+                return Err(format!(
+                    "`{key}` is off on {os}{archs} and names no tracking key: add `tracked.{os}`"
+                ));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// The rows of `table`, in file order. Every row is an object with a key
 /// (`[a-z0-9-]+`, unique, and so a unique `cfg`), a value per OS, a reason
-/// that is not empty and an optional `scope`, `"product"` (the default) or
-/// `"test"`.
+/// that is not empty, an optional `scope`, `"product"` (the default) or
+/// `"test"`, and on a product row a `tracked` key for each OS where it is not
+/// fully on ([`check_tracked`]).
 pub fn parse_caps(table: &str) -> Result<Vec<Row>, String> {
     let rows: Vec<serde_json::Value> =
         serde_json::from_str(table).map_err(|error| error.to_string())?;
@@ -123,11 +230,18 @@ pub fn parse_caps(table: &str) -> Result<Vec<Row>, String> {
                     }
                 },
             };
+            let (macos, linux, windows) = (column("macos")?, column("linux")?, column("windows")?);
+            check_tracked(
+                key,
+                row.get("tracked"),
+                scope,
+                [("macos", &macos), ("linux", &linux), ("windows", &windows)],
+            )?;
             Ok(Row {
                 key: key.to_string(),
-                macos: column("macos")?,
-                linux: column("linux")?,
-                windows: column("windows")?,
+                macos,
+                linux,
+                windows,
                 reason: reason.to_string(),
                 scope,
             })
