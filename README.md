@@ -277,7 +277,8 @@ Please report vulnerabilities privately, as described in
 
 ## Privacy
 
-The app has no analytics or telemetry. [PRIVACY.md](PRIVACY.md) lists every
+The app has no analytics or telemetry of its own. With GIF search on, it sends
+GIPHY's required send and view pings. [PRIVACY.md](PRIVACY.md) lists every
 network call the app makes, and what the website counts.
 
 ## Licence

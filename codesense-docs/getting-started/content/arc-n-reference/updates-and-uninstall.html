@@ -73,7 +73,8 @@
       <section data-search="What leaves your Mac network calls privacy PRIVACY.md no telemetry update manifest GIF search GIPHY" id="what-leaves">
         <h2>What leaves your Mac</h2>
         <p>
-          CodeSense has no analytics, telemetry or crash reporting and makes no AI calls of its own.
+          CodeSense has no analytics, telemetry or crash reporting of its own and makes no AI calls of
+          its own; with GIF search on, it sends GIPHY's required send and view pings.
           <code>PRIVACY.md</code>, at the root of the CodeSense source, lists every network call the app
           makes, with what it sends, how to turn it off and where it is in the code. In short:
         </p>
@@ -96,8 +97,9 @@
             MCP servers you configure; agent accounts you add; dashboards you publish to
             <code>share.codesense.ai</code>, which sends the files those dashboards list; and GIF
             searches an agent makes with <code>gif_search</code>, sent to GIPHY's API with the search
-            words and the GIPHY key you saved in Settings → Messaging (none while GIF search is Off or
-            has no key).
+            words and the GIPHY key you saved in Settings → Messaging, and GIPHY's required send and
+            view pings for the GIFs agents send, with a random id GIPHY issues for this install (none
+            while GIF search is Off or has no key).
           </li>
           <li>
             <strong>Content you open</strong> (§13): dashboards, documents and stories load what they
@@ -142,6 +144,9 @@
   ~/Library/WebKit/ai.codesense \
   ~/Library/Logs/ai.codesense \
   ~/Library/Preferences/ai.codesense.plist</code></pre>
+            <code>~/Library/Application Support/ai.codesense</code> holds the app's own files, including
+            GIF search's <code>gif.json</code>, <code>gif-rate.json</code> and <code>gif-install.json</code>
+            (the random id GIPHY issued for this install; turning GIF search off deletes it too).
             Repos you cloned yourself are not touched. CodeSense makes their worktrees next to each repo by
             default, in a folder named <code>&lt;repo&gt;-wt</code>; push what you want to keep, then remove
             them with <code>git worktree remove</code>. On remote machines, CodeSense keeps its files in

@@ -79,6 +79,12 @@ describe("Messaging → GIF search card", () => {
     expect(radio("Rating ceiling", "PG")).toHaveAttribute("aria-checked", "true");
     expect(screen.queryByRole("radio", { name: "R" })).toBeNull();
     expect(within(card()).getByText("Powered By GIPHY")).toBeInTheDocument();
+    // What goes to GIPHY while search is on, and what stops it.
+    const pings = within(card()).getByText(/required send and view pings/);
+    expect(pings.textContent).toContain(
+      "Turning GIF search off or removing the key stops the pings and deletes the id; replacing " +
+        "the key gives the new key a new id.",
+    );
     fireEvent.click(screen.getByRole("button", { name: "GIPHY API terms" }));
     expect(opened).toHaveBeenCalledWith(GIPHY_TERMS_URL);
   });
