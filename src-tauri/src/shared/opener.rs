@@ -116,40 +116,60 @@ pub(crate) struct HostFacts {
 }
 
 impl HostFacts {
-    /// Reads the host for `req`: whether this is WSL (a folder on Linux), and the XDG data
-    /// directories and the `text/plain` default (text on Linux). Nothing is run off Linux.
+    /// Reads this host for `req`, as [`HostFacts::gather_with`] does.
     pub(crate) fn gather(req: &Open) -> Self {
-        let linux = std::env::consts::OS == "linux";
+        Self::gather_with(
+            std::env::consts::OS,
+            req,
+            &host_env,
+            dirs::home_dir().as_deref(),
+            &|path: &Path| std::fs::read_to_string(path).ok(),
+            &HostSpawn,
+        )
+    }
+
+    /// Reads the host for `req` on `os`: whether this is WSL (a folder on Linux), and the XDG
+    /// data directories and the `text/plain` default (text on Linux). Nothing is run off Linux.
+    /// The environment, the home folder, file reads and the spawner are injected.
+    pub(crate) fn gather_with(
+        os: &str,
+        req: &Open,
+        env: &dyn Fn(&str) -> Option<OsString>,
+        home: Option<&Path>,
+        read: &dyn Fn(&Path) -> Option<String>,
+        spawner: &dyn Spawn,
+    ) -> Self {
+        let linux = os == "linux";
         let text_default = match req {
-            Open::Text(_) if linux => query_text_default(),
+            Open::Text(_) if linux => query_text_default(spawner),
             _ => Err(TextDefaultMissing::NotQueried),
         };
         Self {
-            is_wsl: linux && matches!(req, Open::Folder(_)) && host_is_wsl(),
-            xdg_data_home: data_home(
-                std::env::var_os("XDG_DATA_HOME").as_deref(),
-                dirs::home_dir().as_deref(),
-            ),
-            xdg_data_dirs: data_dirs(std::env::var_os("XDG_DATA_DIRS").as_deref()),
+            is_wsl: linux && matches!(req, Open::Folder(_)) && host_is_wsl(read),
+            xdg_data_home: data_home(env("XDG_DATA_HOME").as_deref(), home),
+            xdg_data_dirs: data_dirs(env("XDG_DATA_DIRS").as_deref()),
             text_default,
         }
     }
 }
 
+fn host_env(key: &str) -> Option<OsString> {
+    std::env::var_os(key)
+}
+
 /// WSL's kernel names Microsoft in its release string, as the `is-wsl` crate checks.
-fn host_is_wsl() -> bool {
+fn host_is_wsl(read: &dyn Fn(&Path) -> Option<String>) -> bool {
     ["/proc/sys/kernel/osrelease", "/proc/version"]
         .iter()
         .any(|file| {
-            std::fs::read_to_string(file)
-                .map(|text| text.to_lowercase().contains("microsoft"))
-                .unwrap_or(false)
+            read(Path::new(file)).is_some_and(|text| text.to_lowercase().contains("microsoft"))
         })
 }
 
-fn query_text_default() -> Result<String, TextDefaultMissing> {
+/// What `xdg-mime query default text/plain` prints, trimmed, run through `spawner`.
+fn query_text_default(spawner: &dyn Spawn) -> Result<String, TextDefaultMissing> {
     let command = Launch::new("xdg-mime", ["query", "default", "text/plain"]).command();
-    let captured = HostSpawn
+    let captured = spawner
         .capture(command, QUERY_LIMIT)
         .map_err(|e| match e.kind() {
             io::ErrorKind::NotFound => TextDefaultMissing::NoXdgMime,
