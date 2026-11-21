@@ -27,8 +27,11 @@ const HOUR_MS: i64 = 60 * 60 * 1000;
 pub(crate) const ONLOAD_WINDOW_MS: i64 = HOUR_MS;
 const TIMEOUT: Duration = Duration::from_secs(5);
 const RANDOM_ID_API: &str = "https://api.giphy.com/v1/randomid";
-/// After a failed random id call, the next waits this long.
+/// After a failed random id call, or a random id that could not be saved, the next waits this
+/// long. Held in memory, so it starts over with each app run.
 pub(crate) const RANDOM_ID_RETRY_MS: i64 = 15 * 60 * 1000;
+/// After a failed keychain read for a serve, the next serve waits this long to read it again.
+pub(crate) const KEY_RETRY_MS: i64 = 15 * 60 * 1000;
 /// Held while `gif-install.json` is written or deleted, with each data dir's install epoch: it
 /// moves on every delete (search Off, the key removed or replaced), so an id made before one is
 /// never saved after it, and what was held for the old id is let go.
@@ -248,6 +251,8 @@ pub(crate) struct Registration {
     creating: tokio::sync::Mutex<()>,
     /// No random id call before this (ms): set by a failed one.
     random_retry_at: Mutex<i64>,
+    /// No keychain read for a serve before this (ms): set by a read that failed.
+    key_retry_at: Mutex<i64>,
     /// The install epoch what is held here belongs to.
     epoch: Mutex<u64>,
 }
@@ -268,21 +273,33 @@ impl Registration {
             pings: std::sync::Mutex::new(HashMap::new()),
             creating: tokio::sync::Mutex::new(()),
             random_retry_at: std::sync::Mutex::new(0),
+            key_retry_at: std::sync::Mutex::new(0),
             epoch: std::sync::Mutex::new(0),
         }
     }
 
     /// Let go of the pending onloads, sent GIFs and search entries held for an earlier install
     /// epoch, so nothing sent with an old id is sent again with a new one.
-    fn follow_epoch(&self) {
+    /// Returns the epoch now followed. A new epoch (a new key, or search back On) also ends
+    /// the waits a failed random id call or keychain read set.
+    fn follow_epoch(&self) -> u64 {
         let now = install_epoch(self.service.data_dir());
         let mut seen = lock(&self.epoch);
         if *seen != now {
             *seen = now;
             lock(&self.onloads).clear();
             lock(&self.sent).clear();
+            *lock(&self.random_retry_at) = 0;
+            *lock(&self.key_retry_at) = 0;
         }
         analytics::Analytics::start_epoch(&self.service.analytics, now);
+        now
+    }
+
+    /// Whether the install epoch is still `epoch`: nothing turned search Off, or removed or
+    /// replaced the key, since work that began under it.
+    fn still_in(&self, epoch: u64) -> bool {
+        install_epoch(self.service.data_dir()) == epoch
     }
 
     /// Whether the provider has no backoff running for `key`.
@@ -385,7 +402,7 @@ impl Registration {
             }
         };
         let Some(id) = id else {
-            *lock(&self.random_retry_at) = now + RANDOM_ID_RETRY_MS;
+            self.wait_for_random_id(now);
             return None;
         };
         // Saved only if search was not turned Off, nor the key removed or replaced, meanwhile.
@@ -402,13 +419,20 @@ impl Registration {
             }
             Ok(Err(e)) => {
                 log::warn!(target: "gif", "gif registration: the install id could not be saved: {e}");
+                self.wait_for_random_id(now);
                 None
             }
             Err(e) => {
                 log::warn!(target: "gif", "gif registration: the install id write stopped: {e}");
+                self.wait_for_random_id(now);
                 None
             }
         }
+    }
+
+    /// No random id call again before [`RANDOM_ID_RETRY_MS`] from `now`.
+    fn wait_for_random_id(&self, now: i64) {
+        *lock(&self.random_retry_at) = now + RANDOM_ID_RETRY_MS;
     }
 
     /// Count one ping against `key`'s hour, or say the hour's pings are spent.
@@ -494,10 +518,21 @@ impl Registration {
     }
 
     /// Put taken pending onloads back, for a later serve.
+    /// An entry made for the slot meanwhile (its send armed it while the serve settled) is
+    /// merged with, never overwritten: what it learned wins, and the put-back fills the gaps.
     fn put_back(&self, pending: Vec<(Slot, Pending)>) {
         let mut onloads = lock(&self.onloads);
         for (slot, p) in pending {
-            onloads.insert(slot, p);
+            let merged = match onloads.remove(&slot) {
+                Some(newer) => Pending {
+                    onload: newer.onload.or(p.onload),
+                    sha: newer.sha.or(p.sha),
+                    expires: newer.expires.max(p.expires),
+                    waiting: newer.waiting,
+                },
+                None => p,
+            };
+            onloads.insert(slot, merged);
         }
     }
 
@@ -516,14 +551,10 @@ impl Registration {
     pub(crate) async fn register_send(&self, sent: Sent) {
         let slot = sent.slot.clone();
         self.register_inner(sent).await;
-        // Registered: a slot whose onload was never armed has no ping to wait for.
-        let mut onloads = lock(&self.onloads);
-        if let Some(p) = onloads.get_mut(&slot) {
-            p.waiting = false;
-            if p.onload.is_none() {
-                onloads.remove(&slot);
-            }
-        }
+        // Registered: a serve now settles the slot, firing an armed onload or marking one never
+        // armed. Kept so a serve settling meanwhile merges with it instead of waiting again.
+        let now = (self.clock)();
+        self.with_pending(&slot, now, |p| p.waiting = false);
     }
 
     async fn register_inner(&self, sent: Sent) {
@@ -532,7 +563,7 @@ impl Registration {
             return;
         }
         let provider = Provider::Giphy;
-        self.follow_epoch();
+        let epoch = self.follow_epoch();
         let now = (self.clock)();
         // The local checks come first, so a send that can't register never reads the keychain.
         let held = &self.service.analytics;
@@ -545,9 +576,15 @@ impl Registration {
             log::warn!(target: "gif", "gif registration: the GIF id was sent with another GIF's URL; not registered");
             return;
         }
-        let Ok((key, fp, epoch)) = self.active_key(provider).await else {
+        let Ok((key, fp, read_in)) = self.active_key(provider).await else {
             return;
         };
+        // Search turned Off and On, or the key replaced, while the key was read: the entry
+        // belongs to the old id.
+        if read_in != epoch || !self.still_in(epoch) {
+            log::info!(target: "gif", "gif registration: the install id changed during the send; not registered");
+            return;
+        }
         if let Some(onload) = entry.pingbacks.onload.clone() {
             let expires = now + ONLOAD_WINDOW_MS;
             self.with_pending(&sent.slot, now, |p| {
@@ -566,7 +603,9 @@ impl Registration {
         let Some(id) = self.install_id(provider, &key, &fp, epoch).await else {
             return;
         };
-        self.send_ping(provider, &fp, false, onsent, &id).await;
+        if self.still_in(epoch) {
+            self.send_ping(provider, &fp, false, onsent, &id).await;
+        }
     }
 
     /// A stored message's media fetch finished: a GIPHY-tagged attachment's pending onload gets
@@ -610,6 +649,8 @@ impl Registration {
         claimed: Vec<Slot>,
         mut taken: Vec<(Slot, Pending)>,
     ) -> Settled {
+        // The epoch the taken entries belong to, read before any work.
+        let started = *lock(&self.epoch);
         let now = (self.clock)();
         let mut settled = Settled {
             marks: Vec::new(),
@@ -640,14 +681,26 @@ impl Registration {
             Vec::append(&mut back, &mut taken);
         }
         if !Vec::is_empty(&due) {
-            match self.active_key(Provider::Giphy).await {
+            // After a failed keychain read, serves wait before reading it again, so a denied
+            // access prompt is not raised by every view; their onloads stay pending meanwhile.
+            let waiting_for_key = now < *lock(&self.key_retry_at);
+            let active = if waiting_for_key {
+                Err(NoKey::Unavailable)
+            } else {
+                self.active_key(Provider::Giphy).await
+            };
+            match active {
                 Err(NoKey::Off) => {
                     settled
                         .marks
                         .extend(Vec::drain(&mut due, ..).map(|(slot, _)| slot));
                 }
-                Err(NoKey::Unavailable) => {}
-                Ok((_, _, epoch)) if epoch != *lock(&self.epoch) => {
+                Err(NoKey::Unavailable) => {
+                    if !waiting_for_key {
+                        *lock(&self.key_retry_at) = now + KEY_RETRY_MS;
+                    }
+                }
+                Ok((_, _, epoch)) if epoch != started => {
                     // Taken under an earlier epoch: search was turned Off meanwhile.
                     settled
                         .marks
@@ -655,10 +708,14 @@ impl Registration {
                 }
                 Ok((key, fp, epoch)) => {
                     if let Some(id) = self.install_id(Provider::Giphy, &key, &fp, epoch).await {
+                        let current = self.still_in(started);
                         for (slot, p) in Vec::drain(&mut due, ..) {
-                            if let Some(onload) = &p.onload {
-                                self.send_ping(Provider::Giphy, &fp, true, onload, &id)
-                                    .await;
+                            match &p.onload {
+                                Some(onload) if current => {
+                                    self.send_ping(Provider::Giphy, &fp, true, onload, &id)
+                                        .await
+                                }
+                                _ => {}
                             }
                             settled.marks.push(slot);
                         }

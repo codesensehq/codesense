@@ -25,6 +25,9 @@ pub(crate) struct Wire {
     ping_status: Mutex<u16>,
     /// Runs while the random id call is in flight.
     during_random: Mutex<Option<Box<dyn Fn() + Send>>>,
+    /// What a search answers, and what runs while it is in flight.
+    search_body: Mutex<String>,
+    during_search: Mutex<Option<Box<dyn Fn() + Send>>>,
 }
 impl Wire {
     fn new() -> Self {
@@ -33,6 +36,8 @@ impl Wire {
             random: Mutex::new(Ok(reply(200, r#"{"data":{"random_id":"rid-123"}}"#))),
             ping_status: Mutex::new(200),
             during_random: Mutex::new(None),
+            search_body: Mutex::new(r#"{"data":[]}"#.to_string()),
+            during_search: Mutex::new(None),
             ping_delay: Mutex::new(None),
         }
     }
@@ -82,7 +87,10 @@ impl Transport for Wire {
         } else if url.host_str() == Some("pingback.giphy.com") {
             Ok(reply(*self.ping_status.lock().unwrap(), ""))
         } else {
-            Ok(reply(200, r#"{"data":[]}"#))
+            if let Some(during) = &*self.during_search.lock().unwrap() {
+                during();
+            }
+            Ok(reply(200, &self.search_body.lock().unwrap()))
         };
         let delay = *self.ping_delay.lock().unwrap();
         Box::pin(async move {
@@ -105,9 +113,14 @@ pub(crate) struct Harness {
 }
 impl Harness {
     pub(crate) fn new() -> Self {
-        let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(FakeStore::default());
         store.set(ACCOUNT, &Secret::new(KEY)).unwrap();
+        Self::over(store)
+    }
+
+    /// The harness over this keychain.
+    fn over(store: Arc<dyn CredentialStore>) -> Self {
+        let dir = tempfile::tempdir().unwrap();
         let keys = Keys::new(store, true, Some(ACCOUNT), Duration::from_secs(3));
         let wire = Arc::new(Wire::new());
         let now = Arc::new(AtomicI64::new(START_MS));
@@ -763,4 +776,127 @@ fn only_a_send_from_this_machine_registers() {
     let mut own = media.clone();
     own.attachment.own_sender = true;
     assert_eq!(sent_of(&own), Some(sent(1, "g1", URL)));
+}
+
+#[tokio::test]
+async fn an_entry_armed_while_a_serve_settles_is_merged_back_not_lost() {
+    let h = Harness::new();
+    h.found_all("g1");
+    h.registration.expect_send(&slot(1));
+    h.registration.note_fetched(&slot(1), Some(SHA), true);
+    // The serve takes the waiting entry; the send arms its onload before the serve puts it back.
+    let taken = h.registration.take_onloads(SHA);
+    h.send(1, "g1", URL).await;
+    let settled = h.registration.settle_serve(vec![slot(1)], taken).await;
+    assert_eq!(settled.retry, vec![slot(1)]);
+    let taken = h.registration.take_onloads(SHA);
+    assert_eq!(taken.len(), 1);
+    assert!(taken[0].1.onload.is_some() && !taken[0].1.waiting);
+    let settled = h.registration.settle_serve(vec![slot(1)], taken).await;
+    assert_eq!(settled.marks, vec![slot(1)]);
+    assert_eq!(h.wire.actions(), vec!["SENT", "SEEN"]);
+}
+
+#[tokio::test]
+async fn a_search_that_spans_turning_search_off_is_not_held() {
+    let h = Harness::new();
+    *h.wire.search_body.lock().unwrap() = include_str!("../fixtures/search.json").to_string();
+    let request = crate::gif::normalize(Some("cat"), None, None).unwrap();
+    let dir = h.dir.path().to_path_buf();
+    *h.wire.during_search.lock().unwrap() = Some(Box::new(move || forget_install(&dir)));
+    assert!(!h
+        .service
+        .run(&request, None, None)
+        .await
+        .unwrap()
+        .1
+        .is_empty());
+    assert_eq!(
+        h.service.analytics.held_count(),
+        0,
+        "found under the old id: not held"
+    );
+    *h.wire.during_search.lock().unwrap() = None;
+    h.service.run(&request, None, None).await.unwrap();
+    assert!(h.service.analytics.held_count() > 0);
+}
+
+#[tokio::test]
+async fn a_new_key_ends_the_wait_after_a_failed_random_id_call() {
+    let h = Harness::new();
+    h.found_all("g1");
+    *h.wire.random.lock().unwrap() = Ok(reply(500, ""));
+    h.send(1, "g1", URL).await;
+    assert_eq!(h.wire.random_calls(), 1);
+    settings::save_with(&h.keys(), h.dir.path(), OTHER_KEY).unwrap();
+    *h.wire.random.lock().unwrap() = Ok(reply(200, r#"{"data":{"random_id":"rid-2"}}"#));
+    h.found_all("g1");
+    h.send(2, "g1", URL).await;
+    assert_eq!(h.wire.random_calls(), 2, "asked again at once");
+    assert_eq!(h.wire.actions(), vec!["SENT"]);
+}
+
+#[tokio::test]
+async fn a_random_id_that_could_not_be_saved_waits_like_a_failed_call() {
+    let h = Harness::new();
+    h.found_all("g1");
+    // A folder where the file goes: the id can't be saved.
+    std::fs::create_dir_all(h.install_file()).unwrap();
+    h.send(1, "g1", URL).await;
+    h.send(2, "g1", URL).await;
+    assert_eq!(h.wire.random_calls(), 1);
+    assert!(h.wire.pings().is_empty());
+    h.advance(RANDOM_ID_RETRY_MS);
+    h.send(3, "g1", URL).await;
+    assert_eq!(h.wire.random_calls(), 2);
+}
+
+/// A keychain whose reads fail, as a locked one or a denied prompt does, and are counted.
+#[derive(Default)]
+struct DeniedStore {
+    gets: std::sync::atomic::AtomicUsize,
+}
+impl CredentialStore for DeniedStore {
+    fn get(
+        &self,
+        _: &str,
+    ) -> Result<Option<Secret>, crate::commands::credential_store::CredentialError> {
+        self.gets.fetch_add(1, Ordering::SeqCst);
+        Err("keychain read failed: denied".into())
+    }
+    fn set(
+        &self,
+        _: &str,
+        _: &Secret,
+    ) -> Result<(), crate::commands::credential_store::CredentialError> {
+        Ok(())
+    }
+    fn delete(&self, _: &str) -> Result<(), crate::commands::credential_store::CredentialError> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn after_a_failed_keychain_read_serves_wait_before_reading_it_again() {
+    let store = Arc::new(DeniedStore::default());
+    let h = Harness::over(store.clone());
+    let armed = || Pending {
+        onload: all_pingbacks().onload,
+        sha: Some(SHA.into()),
+        expires: h.now() + ONLOAD_WINDOW_MS,
+        waiting: false,
+    };
+    h.registration.put_back(vec![(slot(1), armed())]);
+    for _ in 0..3 {
+        let taken = h.registration.take_onloads(SHA);
+        assert_eq!(taken.len(), 1, "the onload stays pending");
+        let settled = h.registration.settle_serve(vec![slot(1)], taken).await;
+        assert_eq!(settled.retry, vec![slot(1)]);
+    }
+    assert_eq!(store.gets.load(Ordering::SeqCst), 1, "one read in the wait");
+    h.advance(KEY_RETRY_MS);
+    let taken = h.registration.take_onloads(SHA);
+    h.registration.settle_serve(vec![slot(1)], taken).await;
+    assert_eq!(store.gets.load(Ordering::SeqCst), 2);
+    assert!(h.wire.urls().is_empty());
 }
