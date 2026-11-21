@@ -53,8 +53,9 @@ open issues first.
 - **Rust (macOS arm64)** doesn't block a merge. It runs after the merge, on
   each push to `main` and nightly; a red run there is fixed forward in a
   later hardening pass. A push that `main` has already moved past when its
-  build starts skips it and reports as superseded: the newer push's run and
-  the nightly cover it. For a macOS-specific change, a maintainer adds the
+  build starts skips it and reports as superseded, and a newer push to `main`
+  cancels an older push's queued or running macOS jobs, which then also report
+  as superseded: the newer push's run and the nightly cover it. For a macOS-specific change, a maintainer adds the
   `ci:macos` label to run it on the pull request too.
 - A change that touches nothing the Rust build reads (see
   `scripts/rust-changes.mjs`) skips the Rust jobs, which then report as
