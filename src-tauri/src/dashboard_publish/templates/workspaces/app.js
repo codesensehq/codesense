@@ -6,6 +6,8 @@
 (function () {
   "use strict";
   function $(id) { return document.getElementById(id); }
+  // The owner's computer as the page names it; "Mac" with a cs-live.js older than CS.ownerMachine.
+  function ownerMachine() { return typeof CS.ownerMachine === "function" ? CS.ownerMachine() : "Mac"; }
   function el(tag, cls, text) {
     var n = document.createElement(tag);
     if (cls) n.className = cls;
@@ -158,7 +160,7 @@
         drafts.delete(draftKey());
         $("message-text").value = ""; $("send-status").textContent = "Message sent.";
       }).catch(function (error) {
-        var errors = {not_allowed: "Only the owner can send. Sign in again to continue.", not_found: "That recipient or message is no longer available in this team.", rate_limited: "You have reached the message limit. Try again later.", invalid_args: "Check the recipient and use 1 to 2,000 characters.", mac_offline: "Your " + CS.ownerMachine() + " is offline. Reconnect before sending."};
+        var errors = {not_allowed: "Only the owner can send. Sign in again to continue.", not_found: "That recipient or message is no longer available in this team.", rate_limited: "You have reached the message limit. Try again later.", invalid_args: "Check the recipient and use 1 to 2,000 characters.", mac_offline: "Your " + ownerMachine() + " is offline. Reconnect before sending."};
         $("send-status").textContent = errors[error.message] || "Delivery was not confirmed. Check the inbox before sending again.";
       }).finally(function () { sending = false; $("message-text").readOnly = false; $("recipient").readOnly = replyId !== null; inboxPermissions(); });
     });
@@ -234,7 +236,7 @@
 
   function renderStatus() {
     var s = $("status");
-    var machine = CS.ownerMachine();
+    var machine = ownerMachine();
     s.textContent = "";
     var asks = agents.filter(function (r) { return stateOf(r) === "needs-you"; }).length;
     if (agentsState === "no_shell") { s.textContent = "Not connected"; return; }
@@ -290,7 +292,7 @@
   function renderList() {
     if (triage) return renderTriage();
     var list = $("list");
-    var machine = CS.ownerMachine();
+    var machine = ownerMachine();
     renderStatus();
     if (agentsState === "no_shell") {
       list.setAttribute("aria-busy", "false");
@@ -351,7 +353,7 @@
     if (bugs === null && !bugError) return;
     var focus = document.activeElement && document.activeElement.dataset && document.activeElement.dataset.actionKey;
     var out = [];
-    if (mac === "offline") out.push(el("p", "banner", "The owner's " + CS.ownerMachine() + " is offline. Actions are unavailable until it reconnects."));
+    if (mac === "offline") out.push(el("p", "banner", "The owner's " + ownerMachine() + " is offline. Actions are unavailable until it reconnects."));
     if (bugError) out.push(el("p", "banner", bugError === "no_shell" ? "Publish this dashboard to load bugs and run actions." : "Bugs could not be loaded. Waiting for the next update."));
     if (bugs && !bugs.length && !bugError) out.push(empty("No bugs to triage", "Bugs in this team's context appear here when their type is bug."));
     (bugs || []).forEach(function (bug) {
@@ -372,7 +374,7 @@
             actionNotes[bug.id] = pair[1] + " completed.";
             if (result.fields && bug.fields) Object.assign(bug.fields, result.fields);
           }).catch(function (e) {
-            var errors = {rate_limited: "Action limit reached. Try again later.", busy: "The dashboard's agents are busy. Wait for one to finish.", not_allowed: "Only the owner can run actions.", not_found: "This bug or its configured agent is no longer available.", timeout: "Outcome unknown. Check activity before trying again.", mac_offline: "The owner's " + CS.ownerMachine() + " is offline. Try again when it reconnects."};
+            var errors = {rate_limited: "Action limit reached. Try again later.", busy: "The dashboard's agents are busy. Wait for one to finish.", not_allowed: "Only the owner can run actions.", not_found: "This bug or its configured agent is no longer available.", timeout: "Outcome unknown. Check activity before trying again.", mac_offline: "The owner's " + ownerMachine() + " is offline. Try again when it reconnects."};
             actionNotes[bug.id] = errors[e.message] || "Action refused. Ask the owner to check its declaration.";
           }).finally(function () { delete pendingActions[bug.id]; renderTriage(); });
         });

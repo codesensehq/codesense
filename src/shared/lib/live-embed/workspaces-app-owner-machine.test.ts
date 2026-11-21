@@ -95,24 +95,37 @@ describe.each([
 });
 
 describe("the shipped page sources", () => {
-  // Every user-visible "Mac" now comes from the reader. What may still say it: the reader's default
-  // (once in each copy of the kit core), CS.ownerMachine's fallback for an older core, and the
-  // toolkit's navigator.platform test, which is not wording.
-  const ALLOWED: [string, number][] = [
-    ["http/routes/dashboard_kit/kit-core.js", 1],
-    ["http/routes/dashboard_kit/kit.js", 1],
-    ["dashboard_publish/toolkit/cs-live.js", 3],
-    ["dashboard_publish/templates/workspaces/app.js", 0],
-    ["dashboard_publish/templates/workspaces/index.html", 0],
+  // Every user-visible "Mac" now comes from the reader. What may still say it, each an exact number of
+  // times: the reader's default (once in each copy of the kit core), the "Mac" fallbacks of
+  // CS.ownerMachine and app.js for an older cs-live.js or core, and the toolkit's navigator.platform
+  // test, which is not wording.
+  const READER = 'noun || "Mac"';
+  const ALLOWED: [string, [string, number][]][] = [
+    ["http/routes/dashboard_kit/kit-core.js", [[READER, 1]]],
+    ["http/routes/dashboard_kit/kit.js", [[READER, 1]]],
+    [
+      "dashboard_publish/toolkit/cs-live.js",
+      [
+        [READER, 1],
+        ['csCore.ownerMachine() : "Mac"', 1],
+        ["/Mac|iPhone|iPad|iPod/", 1],
+      ],
+    ],
+    ["dashboard_publish/templates/workspaces/app.js", [['CS.ownerMachine() : "Mac"', 1]]],
+    ["dashboard_publish/templates/workspaces/index.html", []],
   ];
 
   it.each(ALLOWED)("%s says Mac only where it is allowed", (path, allowed) => {
-    const hits = read(path)
+    let code = read(path)
       .split("\n")
       .filter((line) => !/^\s*(\/\/|\/\*|\*)/.test(line))
-      .filter((line) => /\bMac\b/.test(line));
-    for (const line of hits) expect(line).toMatch(/"Mac"|navigator\.platform/);
-    expect(hits, hits.join("\n")).toHaveLength(allowed);
+      .join("\n");
+    for (const [token, count] of allowed) {
+      expect(code.split(token).length - 1, token).toBe(count);
+      code = code.split(token).join("");
+    }
+    const left = code.split("\n").filter((line) => /\bMac\b/.test(line));
+    expect(left.join("\n").match(/\bMac\b/g) ?? [], left.join("\n")).toEqual([]);
   });
 
   it("the page template carries the host's noun in its head and its status line", () => {
