@@ -9,6 +9,11 @@
     "resources": {
       "resources/starship": null,
       "resources/fetched/starship": "resources/starship"
+    },
+    "linux": {
+      "rpm": {
+        "depends": ["webkit2gtk4.1", "gtk3"]
+      }
     }
   }
 }

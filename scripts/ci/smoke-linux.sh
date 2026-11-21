@@ -265,7 +265,9 @@ install_package() {
     fi
     echo "Installing $(basename "$package") in $ref"
     # The whole checkout, read-only: the launch reads the git-ai pin through fetch-bundled.sh.
-    docker run --rm -e SMOKE_APT_MIRROR ${cache[@]+"${cache[@]}"} \
+    # IPC_LOCK: as root, Fedora's gnome-keyring-daemon keeps it to lock its memory and aborts
+    # when it cannot (Docker leaves it out), so the launch's keyring would never start.
+    docker run --rm --cap-add IPC_LOCK -e SMOKE_APT_MIRROR ${cache[@]+"${cache[@]}"} \
         -v "$(dirname "$package"):/package:ro" -v "$ROOT:/src:ro" -v "$out:/out" \
         "$ref" bash /src/scripts/ci/smoke-linux.sh in-container "$type" "/package/$(basename "$package")" "/out/$type.list"
     check_listing "$out/$type.list"
