@@ -52,7 +52,7 @@ const FIXED_FILES: usize = 3;
 pub const TOOLKIT: &str = "cs-live.js";
 pub const TOOLKIT_JS: &str = include_str!("toolkit/cs-live.js");
 /// Asset release version in the toolkit header; independent of page API wire `v = 1`.
-pub const TOOLKIT_VERSION: u32 = 5;
+pub const TOOLKIT_VERSION: u32 = 6;
 /// SV-INP-29 embed pipe: the page-side forwarder and message-side SDK for live HTML
 /// messages inside a published dashboard (`live.embeds`). A dashboard copies it next
 /// to `cs-live.js` and lists it in `publish.files`; it makes no network call and holds no token.
@@ -839,6 +839,38 @@ fn starter_app_for(
     (script, next_steps)
 }
 
+/// [`workspaces_html_for`] the OS this build runs on.
+fn workspaces_html(template: Template, work_it: bool, title: &str) -> String {
+    workspaces_html_for(machine_wording::RUNNING_OS, template, work_it, title)
+}
+
+/// The shared `index.html` of the workspaces, mission-control and bug-triage
+/// templates: its view, its title, and the owner's computer named for `os` in
+/// the status line and the `codesense:owner-machine` meta the page's scripts
+/// read.
+fn workspaces_html_for(os: &str, template: Template, work_it: bool, title: &str) -> String {
+    let html = match template {
+        Template::BugTriage => WORKSPACES_HTML.replace(
+            "data-template=\"workspaces\"",
+            if work_it {
+                "data-template=\"bug-triage\" data-work-it=\"true\""
+            } else {
+                "data-template=\"bug-triage\""
+            },
+        ),
+        Template::MissionControl => WORKSPACES_HTML.replace(
+            "data-template=\"workspaces\"",
+            "data-template=\"mission-control\"",
+        ),
+        Template::Workspaces => WORKSPACES_HTML.to_string(),
+        // create writes this page only in its workspaces arm; the starter writes its own pages.
+        Template::Starter => unreachable!("the starter template has no workspaces page"),
+    };
+    // The noun first, so a title that spells a placeholder stays as it was typed.
+    html.replace("{{owner_machine}}", machine_wording::machine_kind(os))
+        .replace("{{title}}", &escape_html(title))
+}
+
 /// Architecture: creation retains baseline writes; unreadable placement outcomes are missing.
 pub(crate) fn create_for(
     request: &CreateRequest,
@@ -888,24 +920,7 @@ pub fn create(req: &CreateRequest, catalog: &[QueryDef]) -> Result<Created, Crea
         }
         Template::Workspaces | Template::MissionControl | Template::BugTriage => {
             // One renderer, stylesheet and writer; mission control changes only its view data.
-            let html = if req.template == Template::BugTriage {
-                WORKSPACES_HTML.replace(
-                    "data-template=\"workspaces\"",
-                    if req.agent.is_some() {
-                        "data-template=\"bug-triage\" data-work-it=\"true\""
-                    } else {
-                        "data-template=\"bug-triage\""
-                    },
-                )
-            } else if req.template == Template::MissionControl {
-                WORKSPACES_HTML.replace(
-                    "data-template=\"workspaces\"",
-                    "data-template=\"mission-control\"",
-                )
-            } else {
-                WORKSPACES_HTML.to_string()
-            }
-            .replace("{{title}}", &escape_html(&plan.title));
+            let html = workspaces_html(req.template, req.agent.is_some(), &plan.title);
             writes.push((ENTRY.to_string(), html.into_bytes()));
             writes.push((STYLE.to_string(), WORKSPACES_CSS.as_bytes().to_vec()));
             writes.push((SCRIPT.to_string(), WORKSPACES_JS.as_bytes().to_vec()));
@@ -1650,6 +1665,38 @@ mod tests {
     }
 
     #[test]
+    fn the_workspaces_page_names_the_owner_computer_for_the_os() {
+        for (os, noun) in [("macos", "Mac"), ("linux", "computer")] {
+            for (template, agent) in [
+                (Template::Workspaces, false),
+                (Template::MissionControl, false),
+                (Template::BugTriage, false),
+                (Template::BugTriage, true),
+            ] {
+                let html = workspaces_html_for(os, template, agent, "Team");
+                assert!(
+                    html.contains(&format!(
+                        "<meta name=\"codesense:owner-machine\" content=\"{noun}\">"
+                    )),
+                    "{os} {template:?}"
+                );
+                assert!(
+                    html.contains(&format!(
+                        "aria-live=\"polite\">Connecting to the owner's {noun}</p>"
+                    )),
+                    "{os} {template:?}"
+                );
+                assert!(!html.contains("{{owner_machine}}"), "{os} {template:?}");
+                assert!(!html.contains("{{title}}"), "{os} {template:?}");
+            }
+        }
+        // macOS keeps the status line it shipped with, byte for byte.
+        assert!(workspaces_html_for("macos", Template::Workspaces, false, "Team").contains(
+            r#"<p class="status" id="status" role="status" aria-live="polite">Connecting to the owner's Mac</p>"#
+        ));
+    }
+
+    #[test]
     fn writes_live_all_and_presence_only() {
         let (_root, folder) = new_folder();
         let mut req = request(&folder);
@@ -2001,6 +2048,12 @@ mod tests {
         let (_root, folder) = new_folder();
         let created = create(&workspaces_request(&folder), CATALOG).unwrap();
         assert_eq!(created.template, "workspaces");
+        let entry = read(&folder, ENTRY);
+        assert!(entry.contains(&format!(
+            "<meta name=\"codesense:owner-machine\" content=\"{}\">",
+            machine_wording::machine_kind(machine_wording::RUNNING_OS)
+        )));
+        assert!(!entry.contains("{{owner_machine}}"));
         let m = manifest::load(&folder).unwrap();
         assert_eq!(
             m.files,

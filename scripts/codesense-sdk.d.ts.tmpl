@@ -1090,6 +1090,8 @@ declare namespace CodesenseSdk {
     valueState(v: unknown, options?: ValueOptions): ValueState;
     /** A read's error as a sentence, never a raw code: "The Mac didn't answer in time" (no_answer, timeout, mac_timeout), "The Mac is offline", "The Mac is busy", "This page can't show this" (a refusal), "Access to this dashboard has ended", "The Mac couldn't answer", "Too much to show at once"; anything else is "Could not read this". */
     errorText(err: unknown): string;
+    /** The owner's computer as the page names it: the content of the page's `<meta name="codesense:owner-machine">` ("Mac" on macOS, "computer" elsewhere, written by the host), or "Mac" when there is none. A bare noun, read on each call: capitalise it where it starts a sentence. */
+    ownerMachine(): string;
     /** Renders a list into `container` by key, reusing each item's element while its version (default the JSON of the item) is unchanged. */
     keyed<Item>(
       container: HTMLElement,

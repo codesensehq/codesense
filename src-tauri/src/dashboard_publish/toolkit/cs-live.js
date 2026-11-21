@@ -1,4 +1,4 @@
-// cs-live 5
+// cs-live 6
 // The CodeSense dashboard toolkit. Plain functions over the hosted
 // page API (queries and streams): the page posts each request to its own
 // window and the viewer answers from its parent window. No network calls of its
@@ -1068,7 +1068,7 @@ var CS = (function () {
   var MAX_COLS = 1000;
   var MAX_ROWS = 500;
 
-  // What each end and error reads as in the terminal's note.
+  // What each end and error reads as in the terminal's note (a function when it names the owner's computer).
   var NOTES = {
     exited: "This session has ended. The last screen stays here.",
     not_found: "This session is not available to this dashboard any more.",
@@ -1079,9 +1079,9 @@ var CS = (function () {
     rate_limited: "Too many terminals are open right now; trying again shortly. Closing one helps.",
     no_xterm: "The terminal could not start: vendor/xterm.js is not loaded.",
     no_shell: "Live terminals work in the published dashboard.",
-    failed: "The owner's Mac could not keep this terminal open; trying again shortly.",
+    failed: function () { return "The owner's " + ownerMachine() + " could not keep this terminal open; trying again shortly."; },
     closed: "This terminal closed; trying again shortly.",
-    busy: "The owner's Mac is watching too many terminals right now; trying again shortly.",
+    busy: function () { return "The owner's " + ownerMachine() + " is watching too many terminals right now; trying again shortly."; },
     invalid_args: "This terminal could not be opened (bad arguments).",
     too_large: "This terminal's screen is too large to send.",
   };
@@ -1092,10 +1092,15 @@ var CS = (function () {
     not_controlling: "Take control in the top bar to type.",
   };
   var OTHERS_CONTROL = "The owner is controlling this terminal.";
+  // The owner's computer as this page names it (the kit core's reader). An older core a page adopted has no reader: "Mac", as before.
+  function ownerMachine() { return typeof csCore.ownerMachine === "function" ? csCore.ownerMachine() : "Mac"; }
   function tellControl(event) { controlCbs.slice().forEach(function (cb) { cb(event); }); }
   function noteFor(s, detail) {
-    if (s === "paused") return detail === "mac_offline" ? "The owner's Mac is offline. The terminal goes on when it is back." : detail === "hidden" ? "" : "Reconnecting…";
-    if (s === "ended" || s === "error") return NOTES[detail] || "This terminal stopped (" + detail + ").";
+    if (s === "paused") return detail === "mac_offline" ? "The owner's " + ownerMachine() + " is offline. The terminal goes on when it is back." : detail === "hidden" ? "" : "Reconnecting…";
+    if (s === "ended" || s === "error") {
+      var text = Object.prototype.hasOwnProperty.call(NOTES, detail) ? NOTES[detail] : null;
+      return (typeof text === "function" ? text() : text) || "This terminal stopped (" + detail + ").";
+    }
     return "";
   }
   // The toolkit's own look for its terminal: a scroll box, a note line and a Jump
@@ -2127,27 +2132,38 @@ var CS = (function () {
     function superseded() { return Object.assign(new Error("superseded"), { superseded: true }); }
     function cancelled() { return Object.assign(new Error("cancelled"), { superseded: true, cancelled: true }); }
     core.isSuperseded = function (e) { return !!(e && e.superseded); };
+    // The owner's computer as the page names it: the noun the host wrote in the page's codesense:owner-machine meta ("Mac" on
+    // macOS, "computer" elsewhere), or "Mac" when the page has none. Read each time a sentence is shown, so a meta added after the
+    // kit loads still counts; never cached and never throws.
+    function ownerMachine() {
+      var meta = document.querySelector('meta[name="codesense:owner-machine"]');
+      var noun = meta && (meta.getAttribute("content") || "").trim();
+      return noun || "Mac";
+    }
+    core.ownerMachine = ownerMachine;
+    // A sentence that starts with the owner's computer, worded when it is shown.
+    function theOwner(rest) { return function () { return "The " + ownerMachine() + rest; }; }
     // THE code table: every code a read can throw, tagged refusal (the page may not ask this), transient (the Mac, the relay or the wire may
     // answer next time) or other, with its sentence. The hosted codes are the R23 list (LIVE_ERRORS in live_data_authoring.rs: a test fails
     // when a code is missing here); the in-app forms follow it. A "verb" refusal refuses the whole verb for this page, not some ids.
     // A code is its prefix: the wire answers a bare code, the app bridge "code: detail" or free text.
-    var GENERIC_ERROR = "Could not read this", REFUSED = "This page can't show this", SILENT = "The Mac didn't answer in time", BUSY_TEXT = "The Mac is busy";
+    var GENERIC_ERROR = "Could not read this", REFUSED = "This page can't show this", SILENT = theOwner(" didn't answer in time"), BUSY_TEXT = theOwner(" is busy");
     var CODES = {
       arg_not_allowed: ["refusal", REFUSED], query_not_declared: ["refusal", REFUSED, "verb"], query_invalid: ["refusal", REFUSED],
       access_ended: ["refusal", "Access to this dashboard has ended", "verb"],
       invalid_args: ["refusal", REFUSED], not_approved: ["refusal", REFUSED], not_declared: ["refusal", REFUSED, "verb"],
       undeclared: ["refusal", REFUSED, "verb"], refused: ["refusal", REFUSED],
-      mac_offline: ["transient", "The Mac is offline"], mac_busy: ["transient", BUSY_TEXT], busy: ["transient", BUSY_TEXT],
+      mac_offline: ["transient", theOwner(" is offline")], mac_busy: ["transient", BUSY_TEXT], busy: ["transient", BUSY_TEXT],
       rate_limited: ["transient", BUSY_TEXT], mac_timeout: ["transient", SILENT], no_answer: ["transient", SILENT], timeout: ["transient", SILENT],
-      answer_failed: ["other", "The Mac couldn't answer"], answer_too_large: ["other", "Too much to show at once"],
+      answer_failed: ["other", theOwner(" couldn't answer")], answer_too_large: ["other", "Too much to show at once"],
       stale_cursor: ["other", "The list changed while loading"], bad_request: ["other", GENERIC_ERROR],
       post_to_own_window: ["other", GENERIC_ERROR], not_owner: ["other", GENERIC_ERROR], needs_gesture: ["other", GENERIC_ERROR],
-      failed: ["other", "The Mac couldn't read this"], omitted: ["other", GENERIC_ERROR], no_totals: ["other", GENERIC_ERROR],
+      failed: ["other", theOwner(" couldn't read this")], omitted: ["other", GENERIC_ERROR], no_totals: ["other", GENERIC_ERROR],
     };
     function lookup(e) {
       var code = typeof e === "string" ? e : e instanceof Error ? e.message : "";
       var m = /^([a-z_]+)(?::|$)/.exec(code), hit = m && Object.prototype.hasOwnProperty.call(CODES, m[1]) ? CODES[m[1]] : null;
-      if (hit) return { kind: hit[0], text: hit[1], verb: hit[2] === "verb" };
+      if (hit) return { kind: hit[0], text: typeof hit[1] === "function" ? hit[1]() : hit[1], verb: hit[2] === "verb" };
       if (/is not allowlisted$/.test(code)) return { kind: "refusal", text: REFUSED, verb: true };
       if (/^storyTotals: /.test(code)) return { kind: "refusal", text: REFUSED, verb: false };
       return { kind: "other", text: GENERIC_ERROR, verb: false };
@@ -2469,7 +2485,8 @@ var CS = (function () {
     };
 
     // ── K3 honest states (honest.js, freshness.js) ─────────────────────────
-    var LOADING = "Loading…", PENDING = "Counting…", WAITING = "Waiting for the Mac", UNKNOWN = "Unknown", NOT_LOADED = "Not loaded";
+    var LOADING = "Loading…", PENDING = "Counting…", UNKNOWN = "Unknown", NOT_LOADED = "Not loaded";
+    function waitingText() { return "Waiting for the " + ownerMachine(); }
     function sentence(reason) { return reason ? String(reason)[0].toUpperCase() + String(reason).slice(1) : ""; }
     function unknownLabel(reason) { return reason ? UNKNOWN + " · " + sentence(reason) : UNKNOWN; }
     function reasonAt(reasons, index) { return Array.isArray(reasons) && Number.isInteger(index) && typeof reasons[index] === "string" ? reasons[index] : ""; }
@@ -2479,7 +2496,7 @@ var CS = (function () {
     function dataAge(answeredAt) { return answeredAt == null ? null : Math.max(0, Math.floor((now() - answeredAt) / 60000)); }
     function freshnessNote(o) {
       var age = o.dataAge == null ? "the last saved data" : "data from " + (o.dataAge === 0 ? "less than a minute" : o.dataAge + " minute" + (o.dataAge === 1 ? "" : "s")) + " ago";
-      if (o.offline) return o.hasData ? "The owner's Mac is offline. Showing " + age + ". The page updates when it's back." : "The owner's Mac is offline. The page updates when it's back.";
+      if (o.offline) return "The owner's " + ownerMachine() + " is offline. " + (o.hasData ? "Showing " + age + ". " : "") + "The page updates when it's back.";
       if (o.stale) return o.dataAge == null ? "Showing cached data. The page updates when fresh data is available." : "Showing cached " + age + ". The page updates when fresh data is available.";
       return null;
     }
@@ -2493,7 +2510,7 @@ var CS = (function () {
         var late = o.stale || o.offline;
         return { state: late ? "stale" : "known", text: late && o.ageMs != null ? text + " · " + Math.round(o.ageMs / 60000) + " min ago" : text };
       }
-      if (o.waiting || (o.error && core.isBusy(o.error))) return { state: "waiting", text: WAITING };
+      if (o.waiting || (o.error && core.isBusy(o.error))) return { state: "waiting", text: waitingText() };
       if (o.pending) return { state: "pending", text: PENDING };
       if (o.loading) return { state: "loading", text: LOADING };
       if (o.error) {
@@ -3183,10 +3200,10 @@ var CS = (function () {
       function paintMeta(slot) {
         var loading = !!(slot && slot.pending), err = slot && slot.error, text = "", action = null, elapsed = loading ? now() - slot.startedAt : 0;
         if (slot && slot.cancelled) { text = "Cancelled."; action = retry; }
-        else if (err && core.isBusy(err)) text = WAITING;
+        else if (err && core.isBusy(err)) text = waitingText();
         else if (err) { var why = core.errorText(err); text = why === GENERIC_ERROR ? GENERIC_ERROR + "." : GENERIC_ERROR + ". " + why; action = retry; }
         else if (loading && elapsed >= stillMs) { text = "Still reading (" + (elapsed < 120000 ? Math.floor(elapsed / 1000) + " s" : Math.floor(elapsed / 60000) + " min") + ")"; action = stopReading; }
-        else if (loading && core.busy()) text = WAITING;
+        else if (loading && core.busy()) text = waitingText();
         else if (slot && slot.readAt != null) {
           var age = now() - slot.readAt;
           text = "Read " + minutes(age) + (loading ? " · updating" : "");
@@ -3523,7 +3540,7 @@ var CS = (function () {
     };
 
     core.api = {
-      coreVersion: core.version, dataChanged: core.dataChanged, errorText: core.errorText, errorKind: core.errorKind, errorCodes: core.errorCodes, boot: core.boot, paced: core.paced, budget: core.budget, value: core.value, valueState: core.valueState, stateBanner: core.stateBanner,
+      coreVersion: core.version, dataChanged: core.dataChanged, errorText: core.errorText, ownerMachine: core.ownerMachine, errorKind: core.errorKind, errorCodes: core.errorCodes, boot: core.boot, paced: core.paced, budget: core.budget, value: core.value, valueState: core.valueState, stateBanner: core.stateBanner,
       partial: core.partial, batchTotals: core.batchTotals, visibleTotals: core.visibleTotals, cachedQuery: core.cachedQuery,
       section: core.section, closeScope: core.closeScope, keyedRegion: core.keyedRegion, keyed: core.keyed,
     };
@@ -3575,5 +3592,5 @@ var CS = (function () {
     fontRange: { min: FONT_MIN, max: FONT_MAX, initial: FONT_DEFAULT },
     fitFont: fitFont,
     passing: function (reason) { return PASSING[reason] === true; },
-  }, csCore.api);
+  }, csCore.api, { ownerMachine: ownerMachine });
 })();
