@@ -21,6 +21,16 @@
 #     plus a new squashfs.
 # `pnpm exec tauri` runs the CLI directly: the `tauri` script in package.json is POSIX shell
 # and does not run on a Windows runner.
+#
+# CODESENSE_BUNDLE_CHANNEL=beta|beta-staging (Linux only) builds a release channel's bundle in
+# place of the test build's: the channel's configs over the unsigned one (tauri.beta.conf.json for
+# the codesense:// handler, then tauri.beta-prod.conf.json or tauri.beta-staging.conf.json, which
+# the caller supplies, for the channel's updater key and hosts), CODESENSE_CHANNEL set to it and
+# the dashboard-publish feature, as the macOS release build has. The caller sets
+# CODESENSE_DASH_HOST and CODESENSE_RELEASED_AT (unix seconds; build.rs requires it for a channel
+# build). The configs keep updater artifacts off and no key is involved: the
+# repaired AppImage is signed later, so its signature covers the final bytes. Unset, the build
+# is the test build, unchanged.
 set -euo pipefail
 
 usage() {
@@ -40,7 +50,26 @@ PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$PROJECT_ROOT"
 OUT_DIR="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
 BUNDLE_DIR="target/release/bundle"
-tauri_args=(--config src-tauri/tauri.unsigned.conf.json)
+# The configs both tauri build and the AppImage's tauri bundle take.
+config_args=(--config src-tauri/tauri.unsigned.conf.json)
+build_args=()
+CHANNEL="${CODESENSE_BUNDLE_CHANNEL:-}"
+if [[ -n "$CHANNEL" ]]; then
+    [[ "$PLATFORM" == linux ]] || { echo "Error: CODESENSE_BUNDLE_CHANNEL is for a Linux bundle" >&2; exit 1; }
+    case "$CHANNEL" in
+        beta) channel_conf=src-tauri/tauri.beta-prod.conf.json ;;
+        beta-staging) channel_conf=src-tauri/tauri.beta-staging.conf.json ;;
+        *) echo "Error: CODESENSE_BUNDLE_CHANNEL must be beta or beta-staging, not $CHANNEL" >&2; exit 1 ;;
+    esac
+    [[ -f "$channel_conf" ]] || { echo "Error: $channel_conf is missing; the caller supplies the channel's config" >&2; exit 1; }
+    [[ -n "${CODESENSE_DASH_HOST:-}" ]] || { echo "Error: a channel bundle needs CODESENSE_DASH_HOST" >&2; exit 1; }
+    [[ "${CODESENSE_RELEASED_AT:-}" =~ ^[1-9][0-9]{9}$ ]] \
+        || { echo "Error: a channel bundle needs CODESENSE_RELEASED_AT, unix seconds" >&2; exit 1; }
+    config_args+=(--config src-tauri/tauri.beta.conf.json --config "$channel_conf")
+    build_args+=(--features dashboard-publish)
+    export CODESENSE_CHANNEL="$CHANNEL"
+fi
+tauri_args=("${config_args[@]}" ${build_args[@]+"${build_args[@]}"})
 
 # Platform preparation.
 case "$PLATFORM" in
@@ -104,7 +133,7 @@ case "$PLATFORM" in
             ')
             # Packs the app tauri build compiled; nothing is compiled again.
             pnpm exec tauri bundle --verbose --bundles appimage \
-                --config src-tauri/tauri.unsigned.conf.json --config "$appimage_config"
+                "${config_args[@]}" --config "$appimage_config"
         fi
         # The job uploads each format as it is, so each must be exactly one file.
         for format in ${LINUX_BUNDLES//,/ }; do
