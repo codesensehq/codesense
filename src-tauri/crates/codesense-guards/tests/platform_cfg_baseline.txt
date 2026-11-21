@@ -85,7 +85,7 @@ src/commands/content_engine.rs 3
 src/commands/context_repo_git.rs 6
 src/commands/credential_store.rs 5
 src/commands/dashboard_launch.rs 5
-src/commands/deps.rs 10
+src/commands/deps.rs 9
 src/commands/local_organization.rs 2
 src/commands/mcp_scope.rs 25
 src/commands/sprint_run/run_artifact.rs 9
