@@ -407,8 +407,7 @@ pub fn remove_license_records(
     true
 }
 
-// macOS only (darwin route and .app fixtures, from `updates::tests`) (linux-test-defects).
-#[cfg(all(test, not(cs_channel = "internal"), target_os = "macos"))]
+#[cfg(all(test, not(cs_channel = "internal")))]
 mod tests {
     //! SV-PBF-278 case table: one test per row, against a loopback manifest server.
 

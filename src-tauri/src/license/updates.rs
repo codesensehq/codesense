@@ -1433,8 +1433,7 @@ impl Drop for ReadOnly {
     }
 }
 
-// macOS only (darwin route and .app fixtures) until the updater's Linux port (linux-test-defects).
-#[cfg(all(test, not(cs_channel = "internal"), target_os = "macos"))]
+#[cfg(all(test, not(cs_channel = "internal")))]
 pub(super) mod tests {
     use super::*;
     use crate::test_support::updater::{bad_signatures, shipped_pubkey, ANOTHER_KEY, TEST_PUBKEY};
@@ -1538,10 +1537,11 @@ pub(super) mod tests {
         }))
     }
 
-    /// The channel's static manifest.
+    /// The channel's static manifest, at the path the plugin asks on this machine.
     async fn mount_update(server: &MockServer, reply: ResponseTemplate) {
+        let manifest = super::super::static_channel::manifest_url(&server.uri()).unwrap();
         Mock::given(method("GET"))
-            .and(path("/v1/update/darwin/aarch64/latest.json"))
+            .and(path(manifest.path()))
             .respond_with(reply)
             .mount(server)
             .await;
@@ -1581,6 +1581,17 @@ pub(super) mod tests {
     async fn serve(server: &MockServer, version: &str, f: &Fixture) {
         mount_update(server, reply(server, version, f.sig)).await;
         mount_file(server, f.bytes.to_vec(), None).await;
+    }
+
+    /// What an exit's install of the staged `NEXT` reported. On macOS the signed `.app` fixture
+    /// installs. On Linux the plugin's AppImage install refuses it (a signed AppImage fixture
+    /// needs the test key), so only the attempt is checked there.
+    fn assert_installed(installed: &Option<Result<String, String>>) {
+        if cfg!(target_os = "macos") {
+            assert_eq!(installed, &Some(Ok(NEXT.to_string())));
+        } else {
+            assert!(installed.is_some(), "the install was attempted");
+        }
     }
 
     #[test]
@@ -3075,6 +3086,9 @@ pub(super) mod tests {
     }
 
     /// AC-4, behavioural: the staged build is installed in place of the app at quit, once.
+    // macOS only: needs a test-key-signed AppImage fixture; the Linux install path is proven in
+    // the VM check.
+    #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn the_staged_build_installs_in_place_of_the_app_once() {
         let server = MockServer::start().await;
@@ -3151,6 +3165,9 @@ pub(super) mod tests {
     }
 
     /// A staged build arms the restart; the exit then installs it and relaunches, once.
+    // macOS only: needs a test-key-signed AppImage fixture; the Linux install path is proven in
+    // the VM check.
+    #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn restart_to_update_installs_the_staged_build_then_relaunches() {
         let server = MockServer::start().await;
@@ -3190,7 +3207,7 @@ pub(super) mod tests {
         let updates = updates(&server, &dir);
         updates.run(app.handle(), offer(NEXT)).await;
         let plan = updates.finish_exit();
-        assert_eq!(plan.installed, Some(Ok(NEXT.to_string())));
+        assert_installed(&plan.installed);
         assert!(!plan.relaunch);
     }
 
@@ -3282,6 +3299,9 @@ pub(super) mod tests {
 
     /// A relaunch that comes back on the old build is a failed install, even when the exit
     /// recorded no failure (an install that reported success, or a record that wasn't written).
+    // macOS only: needs a test-key-signed AppImage fixture; the Linux install path is proven in
+    // the VM check.
+    #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn a_relaunch_still_on_the_old_build_counts_as_a_failed_install() {
         let server = MockServer::start().await;
@@ -3412,7 +3432,7 @@ pub(super) mod tests {
         assert!(updates.restart_armed());
         let plan = updates.finish_exit();
         assert!(plan.relaunch);
-        assert_eq!(plan.installed, Some(Ok(NEXT.to_string())));
+        assert_installed(&plan.installed);
     }
 
     /// The attempt is recorded before the install; if it can't be, nothing is installed and
@@ -3465,11 +3485,8 @@ pub(super) mod tests {
         let read_only = ReadOnly::new(&records);
         let plan = updates.finish_exit();
         drop(read_only);
-        assert_eq!(
-            plan.installed,
-            Some(Ok(NEXT.to_string())),
-            "the user's restart installs"
-        );
+        // The user's restart installs.
+        assert_installed(&plan.installed);
         assert!(plan.relaunch);
         // A write that lands sets the records right again.
         assert!(updates.write_marker(PROBE_FILE, ""));
@@ -3494,7 +3511,7 @@ pub(super) mod tests {
         updates.mark_exiting(); // the coordinator's exit after the drain
         let plan = updates.finish_exit();
         assert!(plan.relaunch);
-        assert_eq!(plan.installed, Some(Ok(NEXT.to_string())));
+        assert_installed(&plan.installed);
     }
 
     /// The pending record a forced arm writes is promoted to the attempt just before the
@@ -3520,7 +3537,7 @@ pub(super) mod tests {
         // The exit that does come promotes the record, then installs.
         assert!(relaunched.arm_restart(true).is_ok());
         let plan = relaunched.finish_exit();
-        assert_eq!(plan.installed, Some(Ok(NEXT.to_string())));
+        assert_installed(&plan.installed);
         assert!(!records.join(RESTART_PENDING_FILE).exists());
         assert_eq!(
             std::fs::read_to_string(records.join(RESTART_ATTEMPTED_FILE)).unwrap(),
