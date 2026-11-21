@@ -4,27 +4,27 @@
     "dashboard-publish"
   ],
   "inputs": {
-    "Cargo.lock": "37bfefa00dd1a30c2f6f6b7afdcc908c61db1799d9f5ba6eac179f43167ddf78",
-    "src-tauri/Cargo.toml": "193fe727c1fa3ecfdbdec55eb3f5b0ab5f61028fb2d0f0f90230ea18bcec53bf",
+    "Cargo.lock": "1c617c64f06395ed9760c8905e2b2d004a2b154b29d7e1cf72c4e1444f683ab4",
+    "src-tauri/Cargo.toml": "e0072ee127c41576f3c96a5a276035d1f76aafcfe30aec3e4cd46d42dde6ac82",
     "src-tauri/src/commands/pipeline_format/fields.rs": "a2216ba2c979a15aa15901593c48bf73dcb5fcc884de6091745f25f0533c732b",
     "src-tauri/src/commands/pipeline_format/mod.rs": "0bdd807d4184d2797f73a5a8a4bf97319e9a94fc8939edfef5af93bcadaace9d",
     "src-tauri/src/context_query/model.rs": "4e81c3eaa7ed4ea0dc93fe5017c7defe77655b124f0d5bc447557b646f42d345",
     "src-tauri/src/dashboard_publish/agents.rs": "d23099cc81e529efe61fb42bb86ac70ff6c0040d715fdf3db83c439cc045d65b",
-    "src-tauri/src/dashboard_publish/catalog.rs": "daa270f7a7ec72ef14b728ee43d0cbda7f8b4a64aea5ebc02ec0c40a16b07341",
-    "src-tauri/src/dashboard_publish/create.rs": "aea598d9937d2ca190e652056d3917dc7152114111ed189960c12becad53bad5",
+    "src-tauri/src/dashboard_publish/catalog.rs": "671460795fc5a8f0726c8a2490dd3cd824568b28c5d090346987f274bed92146",
+    "src-tauri/src/dashboard_publish/create.rs": "fc465792d5e7ae3680de18962211b0aac4c0928df44a7d29527436229474ecb7",
     "src-tauri/src/dashboard_publish/inbox.rs": "437956d460910f0d2d71e7e373b915b3aa8acf3aac19eec30c374e1b1efb7bb0",
     "src-tauri/src/dashboard_publish/inbox/faces.rs": "4cebaf60f75f5c3cbabf289596ce6261509cf966c7b091706d84eddb6697528a",
-    "src-tauri/src/dashboard_publish/inbox/media.rs": "d2513f771721480927a47728a96ddfc20f74771b7d3452d730246d4fd6eeff58",
-    "src-tauri/src/dashboard_publish/inbox/tests.rs": "8821478a7e6a1963a55758429975ca9c8a5bd47db38623be30eb63dfdf43332d",
-    "src-tauri/src/dashboard_publish/toolkit/cs-live.js": "3296389ae01beebc31b4e3a67fa09e1b1de9dd505330e5d835c9d737e0340840",
+    "src-tauri/src/dashboard_publish/inbox/media.rs": "b9979a32d5ee9e234e72acd940e26767f9fbecee0abb8ebe2dc52e88b52740e3",
+    "src-tauri/src/dashboard_publish/inbox/tests.rs": "3703fe13f36e1e92e802883d5d263511ccd25501b78d1016ebc8393259d7dc2d",
+    "src-tauri/src/dashboard_publish/toolkit/cs-live.js": "7d609b59fc422542a16b62c9f959b6eae3b9da7bfa665541e9b3fc3294a83af1",
     "src-tauri/src/http/routes/viewer.rs": "7259c32d0948b8fabc61feed2ce222facd5fbfea629ee99f6bb1cb5fd5a57656",
     "src-tauri/src/mcp/live-data-starter.html": "5de6771ae5c84d74caf264f97a3038b3c826375147f1cf66eb12e87e868a8c61",
-    "src-tauri/src/mcp/live_data_authoring.rs": "1d79d386455d233d9732af50d31d04f231a331bc394ac84a0f747905617a9758",
+    "src-tauri/src/mcp/live_data_authoring.rs": "5ca8ef2a981f3547fa0a08b81d227eb441dcf9c9d53a2f225a9007b025aaafdf",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/verbs/capabilities.rs": "ca4e62d053beef566662fe42095839cd4768b44b716aef8d6e4e9a1a5b054c04",
     "src-tauri/src/verbs/commands.rs": "b335efc518a4f5ebfb50ed755d4dd17b4d184f8b8e961d06e84331bd3b52a3b7",
     "src-tauri/src/verbs/dispatcher.rs": "a7a801a1b6555b91ed69a7894713c2d51619f2dcad2b0d6ab95471a591dca3d8",
-    "src-tauri/src/verbs/foreman_launch.rs": "424bc509af9d45057daa610dea56cc7a1e886b93ceeece8cb98d8843f79c2987",
+    "src-tauri/src/verbs/foreman_launch.rs": "7737d124b805b336d538e69e00e249b729b78e6c11f385be222e784d9809ad23",
     "src-tauri/src/verbs/grant_tests.rs": "ceb02015e280007d69007dec6fa938c9d2f5fbd7036e21ca578b2fc67ac5ca27",
     "src-tauri/src/verbs/mod.rs": "8b4ae477c13685de85690ac87f252e4be0d1538da9bacd50752477b4d30cea68",
     "src-tauri/src/verbs/policy.rs": "c1fe81f79a639040ae9d7f27bea572b2c14d08a950bbd7b738f66357eebdd24c",
@@ -33,5 +33,5 @@
     "src-tauri/src/verbs/schema.rs": "8fb09e816a79b228c006f733855fdd9c54cf1b694adf5bc6e1a6b91c13ef9b03",
     "src-tauri/src/verbs/tests.rs": "1c1c38d20d928fd9b4af10651588fe651bf8f727741d5bba8df945d3e385944b"
   },
-  "outputSha256": "ec3537051fc82fbb4c96528d534e37efc2d1a7592b026784067f7ed9f03863ca"
+  "outputSha256": "173aee2ed59d266e0ed85e9fc2edab1b60a2076bb136009cab983208b7702fab"
 }

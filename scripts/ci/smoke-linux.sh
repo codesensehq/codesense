@@ -29,8 +29,9 @@
 #       Both file lists ship the same optional resources (resources/starship, resources/git-ai).
 #   smoke-linux.sh run <package-dir> <out-dir>
 #       Extract the one .AppImage under <package-dir> into <out-dir>, check that it bundles the
-#       AppIndicator library (appindicator-bundled) and that every shared
-#       library its executables link resolves on this machine, and launch it under
+#       AppIndicator library (appindicator-bundled) and GTK's file print backend (print-backend),
+#       and that every shared library its executables and that backend link resolves on this
+#       machine, and launch it under
 #       xvfb-run inside dbus-run-session with an unlocked login keyring as the Secret Service's
 #       default collection: it is alive at 30 s, has drawn a window that is not one colour, logs
 #       webview ready, a caps: line that agrees with the bundle (caps-agree) and secret store:
@@ -72,6 +73,9 @@
 #       ldconfig finds an AppIndicator library, as install checks after the package installs.
 #   smoke-linux.sh no-installed-appindicator
 #       ldconfig finds no AppIndicator library, as the tray launch checks before it starts.
+#   smoke-linux.sh print-backend <listing>
+#       The extracted AppImage's file list holds GTK's file print backend
+#       (gtk-3.0/<version>/printbackends/libprintbackend-file.so), which PDF export prints through.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -348,23 +352,33 @@ run_appimage() {
     (cd "$out" && "$appimage" --appimage-extract >/dev/null)
     find "$out/squashfs-root" >"$out/listing"
     appindicator_bundled "$out/listing"
+    print_backend "$out/listing"
     resolve_libs "$out/squashfs-root"
     start_session default "$out"
 }
 
-# The app and its WebKit helper processes find every shared library they link. An AppImage leaves
-# out what every desktop has (GL and EGL among them), so this names whatever the runner lacks,
-# all at once, before a launch fails on the first. A bare ldd does not see the library paths the
-# AppImage sets up, so a library the extracted tree holds counts as found; the launch shows
-# whether it loads.
+# PDF export prints through GTK's file printer, a module the AppImage's GTK loads from its own
+# tree. resolve_libs then checks what the module links.
+print_backend() {
+    local module
+    module=$(grep -E '/gtk-3\.0/[^/]+/printbackends/libprintbackend-file\.so$' "$1" || true)
+    [[ -n "$module" ]] || fail "the AppImage has no GTK file print backend (libprintbackend-file.so), which PDF export prints through"
+    echo "GTK's file print backend is in the AppImage: ${module##*/squashfs-root/}"
+}
+
+# The app, its WebKit helper processes and GTK's file print backend find every shared library they
+# link. An AppImage leaves out what every desktop has (GL and EGL among them), so this names
+# whatever the runner lacks, all at once, before a launch fails on the first. A bare ldd does not
+# see the library paths the AppImage sets up, so a library the extracted tree holds counts as
+# found; the launch shows whether it loads.
 resolve_libs() {
     local missing
     missing=$(comm -23 \
-        <(find "$1/usr/bin" "$1/usr/lib" -type f \( -path "$1/usr/bin/*" -o -name 'WebKit*Process' \) \
-            -exec ldd {} \; 2>/dev/null | awk '/not found/ {print $1}' | sort -u) \
+        <(find "$1/usr/bin" "$1/usr/lib" -type f \( -path "$1/usr/bin/*" -o -name 'WebKit*Process' \
+            -o -name libprintbackend-file.so \) -exec ldd {} \; 2>/dev/null | awk '/not found/ {print $1}' | sort -u) \
         <(find "$1" -name '*.so*' -printf '%f\n' | sort -u))
     [[ -z "$missing" ]] || fail "the runner lacks these libraries the AppImage expects: $(paste -sd ' ' - <<<"$missing")"
-    echo "Every library the app and its WebKit processes link resolves, or is in the AppImage"
+    echo "Every library the app, its WebKit processes and the print backend link resolves, or is in the AppImage"
 }
 
 # A fresh home and runtime directory for each launch, then the session its mode needs.
@@ -615,6 +629,10 @@ case "$command" in
     no-installed-appindicator)
         [[ $# -eq 0 ]] || usage
         no_installed_appindicator
+        ;;
+    print-backend)
+        [[ $# -eq 1 ]] || usage
+        print_backend "$@"
         ;;
     *) usage ;;
 esac

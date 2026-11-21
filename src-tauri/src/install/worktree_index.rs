@@ -320,6 +320,26 @@ pub struct SeatRecord {
     /// The full sha a `commit` seat is pinned to; `None` for a `branch` seat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pinned_commit: Option<String>,
+    /// Why the last cleanup kept this seat worktree; `None` before any cleanup ran, and
+    /// again after a relaunch of the seat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept: Option<SeatKeep>,
+}
+
+/// Why a seat worktree's cleanup kept it rather than removing it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SeatKeep {
+    /// A session still runs in its folder, or the terminal hosts can't be asked.
+    Live,
+    /// It has uncommitted changes, or its status can't be read.
+    Dirty,
+    /// It has team-file edits that aren't published, or they can't be counted.
+    UnpublishedContext,
+    /// Its commits aren't all in the story branch (or `origin/<story branch>`).
+    Unmerged,
+    /// Removing it failed.
+    RemoveFailed,
 }
 
 /// The records that can be a story's base worktree: every record but its seat
@@ -1555,6 +1575,7 @@ mod tests {
             name: name.into(),
             kind: SeatKind::Commit,
             pinned_commit: Some("0123456789abcdef0123456789abcdef01234567".into()),
+            kept: None,
         });
         rec
     }

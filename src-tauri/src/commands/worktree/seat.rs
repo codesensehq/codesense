@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::install::worktree_index::{SeatKind, SeatRecord};
+use crate::install::worktree_index::{SeatKeep, SeatKind, SeatRecord};
 
 /// What a seat launch asks for: `seatWorktree` on a story `open_workspace`. Read by the
 /// hand-written [`Deserialize`](serde::Deserialize) below, which refuses an unknown key
@@ -127,10 +127,7 @@ pub(crate) fn seat_worktree_inner(
     let worktrees = super::parse_worktree_porcelain(&listed);
     // Checked out in a worktree at another folder (moved by hand, or made under an
     // earlier `worktree_dir`): never moved under it.
-    let branch_elsewhere = worktrees.iter().any(|entry| {
-        entry.branch.as_deref() == Some(branch.as_str())
-            && !super::paths_equal(&entry.path, &path_text)
-    });
+    let branch_elsewhere = checked_out_elsewhere(&worktrees, &branch, Some(&path_text));
     let existing = worktrees
         .into_iter()
         .find(|entry| super::paths_equal(&entry.path, &path_text));
@@ -180,6 +177,7 @@ pub(crate) fn seat_worktree_inner(
                     name: slug.to_string(),
                     kind: SeatKind::Branch,
                     pinned_commit: None,
+                    kept: None,
                 },
                 created: existing.is_none(),
             })
@@ -206,11 +204,25 @@ pub(crate) fn seat_worktree_inner(
                     name: slug.to_string(),
                     kind: SeatKind::Commit,
                     pinned_commit: Some(sha),
+                    kept: None,
                 },
                 created,
             })
         }
     }
+}
+
+/// Whether `branch` is checked out in one of `worktrees` (a `git worktree list`), other
+/// than the one at `except`.
+fn checked_out_elsewhere(
+    worktrees: &[super::WorktreeInfo],
+    branch: &str,
+    except: Option<&str>,
+) -> bool {
+    worktrees.iter().any(|entry| {
+        entry.branch.as_deref() == Some(branch)
+            && !except.is_some_and(|except| super::paths_equal(&entry.path, except))
+    })
 }
 
 /// The full sha `commit` names in `repo`, or `Invalid` when it names no commit there.
@@ -294,6 +306,77 @@ pub(crate) fn seat_needs_setup(
     setup_complete: Option<bool>,
 ) -> bool {
     kind == SeatKind::Branch && (created || setup_complete != Some(true))
+}
+
+/// A seat worktree its cleanup may remove: the clone it is a worktree of and, for a
+/// branch seat, the seat branch with the tip that is merged, deleted after the worktree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SeatRemoval {
+    pub repo: PathBuf,
+    pub branch: Option<SeatBranch>,
+}
+
+/// A seat branch and the tip its cleanup checked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SeatBranch {
+    pub name: String,
+    pub tip: String,
+}
+
+/// Whether the commits of the seat worktree at `path` are kept elsewhere:
+/// [`SeatKeep::Unmerged`] for a branch seat whose tip is in neither the story branch nor
+/// `origin/<story branch>`, a branch seat moved to another branch, or a commit seat moved
+/// off its pinned commit; [`SeatKeep::Dirty`] when its HEAD can't be read. The caller has
+/// checked its status, liveness and unpublished context. Blocking: it runs git.
+pub(crate) fn seat_removal_plan(path: &Path, seat: &SeatRecord) -> Result<SeatRemoval, SeatKeep> {
+    let repo = super::main_repo_of_worktree(path).ok_or(SeatKeep::RemoveFailed)?;
+    let head: String = super::run_git(&["rev-parse", "--verify", "HEAD"], path)
+        .map(|out| out.trim().to_string())
+        .map_err(|_| SeatKeep::Dirty)?;
+    let branch = match seat.kind {
+        SeatKind::Commit if seat.pinned_commit.as_ref() == Some(&head) => None,
+        SeatKind::Commit => return Err(SeatKeep::Unmerged),
+        SeatKind::Branch => {
+            let name = super::current_branch_of_worktree(path).ok_or(SeatKeep::Unmerged)?;
+            let story = match name.strip_suffix(&format!("-seat-{}", seat.name)) {
+                None | Some("") => return Err(SeatKeep::Unmerged),
+                Some(story) => story,
+            };
+            let merged = [
+                format!("refs/heads/{story}"),
+                format!("refs/remotes/origin/{story}"),
+            ]
+            .iter()
+            .any(|story_ref| {
+                super::run_git(&["merge-base", "--is-ancestor", &head, story_ref], path).is_ok()
+            });
+            if !merged {
+                return Err(SeatKeep::Unmerged);
+            }
+            Some(SeatBranch { name, tip: head })
+        }
+    };
+    Ok(SeatRemoval { repo, branch })
+}
+
+/// Delete a removed seat's branch from `repo`, only while it is still at the tip its
+/// cleanup checked and no other worktree has it checked out (`update-ref` doesn't check
+/// that; `git branch -d` compares with the clone's HEAD and refuses a branch merged only
+/// into the story branch).
+pub(crate) fn delete_seat_branch(repo: &Path, branch: &SeatBranch) -> Result<(), String> {
+    let listed = super::run_git(&["worktree", "list", "--porcelain"], repo)?;
+    if checked_out_elsewhere(
+        &super::parse_worktree_porcelain(&listed),
+        &branch.name,
+        None,
+    ) {
+        return Err(format!(
+            "{} is checked out in another worktree, so it was kept",
+            branch.name
+        ));
+    }
+    let reference = format!("refs/heads/{}", branch.name);
+    super::run_git(&["update-ref", "-d", &reference, &branch.tip], repo).map(|_| ())
 }
 
 #[cfg(test)]
@@ -403,6 +486,7 @@ mod tests {
                 name: "worker-2".into(),
                 kind: SeatKind::Branch,
                 pinned_commit: None,
+                kept: None,
             }
         );
         // The clone and the story branch are untouched.
@@ -676,5 +760,201 @@ mod tests {
         ] {
             assert!(read(refused.clone()).is_err(), "{refused}");
         }
+    }
+
+    fn canonical(path: &Path) -> PathBuf {
+        path.canonicalize().unwrap()
+    }
+
+    fn branch_seat(f: &Fixture, slug: &str) -> SeatOutcome {
+        inner(
+            &f.repo,
+            "feat/story",
+            slug,
+            &SeatWorktreeParam::Branch,
+            TEMPLATE,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_clean_branch_seat_merged_into_the_story_branch_may_go_with_its_branch() {
+        let f = fixture();
+        let seat = branch_seat(&f, "dev");
+        let plan = seat_removal_plan(&seat.path, &seat.seat).unwrap();
+        assert_eq!(canonical(&plan.repo), canonical(&f.repo));
+        assert_eq!(
+            plan.branch,
+            Some(SeatBranch {
+                name: "feat/story-seat-dev".into(),
+                tip: f.story_tip.clone(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_seat_merged_only_into_origin_of_the_story_branch_may_go() {
+        let f = fixture();
+        let seat = branch_seat(&f, "dev");
+        let tip = commit_file(&seat.path, "seat.txt", "seat work\n");
+        // Not in the local story branch: kept.
+        assert_eq!(
+            seat_removal_plan(&seat.path, &seat.seat),
+            Err(SeatKeep::Unmerged)
+        );
+        // In `origin/<story branch>` (merged there, the local branch not pulled yet).
+        git(
+            &f.repo,
+            &["update-ref", "refs/remotes/origin/feat/story", &tip],
+        );
+        let plan = seat_removal_plan(&seat.path, &seat.seat).unwrap();
+        assert_eq!(plan.branch.map(|b| b.tip), Some(tip));
+    }
+
+    #[test]
+    fn a_removed_seat_takes_its_ignored_files_and_its_branch_with_it() {
+        let f = fixture();
+        std::fs::write(f.repo.join(".gitignore"), "node_modules/\n").unwrap();
+        git(&f.repo, &["add", ".gitignore"]);
+        git(&f.repo, &["commit", "-qm", "ignore"]);
+        let base = f.repo.parent().unwrap().join("story-wt");
+        git(
+            &f.repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                base.to_str().unwrap(),
+                "feat/story",
+            ],
+        );
+        git(&base, &["merge", "-q", "--no-edit", "main"]);
+        let seat = branch_seat(&f, "dev");
+        std::fs::create_dir_all(seat.path.join("node_modules/pkg")).unwrap();
+        std::fs::write(seat.path.join("node_modules/pkg/index.js"), "x\n").unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let mut record = crate::install::worktree_index::WorktreeStoryRecord::new(
+            &seat.path,
+            "acme",
+            crate::domain::SourceRepoSlug::new("acme", "app").unwrap(),
+            "S-1",
+            seat.path.join("story.md"),
+        );
+        record.seat = Some(seat.seat.clone());
+        crate::install::worktree_index::write_record(
+            home.path(),
+            &crate::domain::Principal::from(42),
+            &record,
+        )
+        .unwrap();
+
+        let plan = seat_removal_plan(&seat.path, &seat.seat).unwrap();
+        let path = seat.path.to_string_lossy().into_owned();
+        super::super::remove_registered_worktree(
+            home.path(),
+            &seat.path,
+            &plan.repo.to_string_lossy(),
+            &path,
+            super::super::SEAT_REMOVAL_CONSENT,
+        )
+        .unwrap();
+        assert!(!seat.path.exists());
+        delete_seat_branch(&plan.repo, plan.branch.as_ref().unwrap()).unwrap();
+        assert!(git(&f.repo, &["branch", "--list", "feat/story-seat-dev"]).is_empty());
+        // The story branch is untouched.
+        assert!(!git(&f.repo, &["branch", "--list", "feat/story"]).is_empty());
+    }
+
+    #[test]
+    fn a_seat_branch_that_moved_since_its_check_is_not_deleted() {
+        let f = fixture();
+        let seat = branch_seat(&f, "dev");
+        let plan = seat_removal_plan(&seat.path, &seat.seat).unwrap();
+        git(
+            &f.repo,
+            &["worktree", "remove", seat.path.to_str().unwrap()],
+        );
+        git(
+            &f.repo,
+            &["update-ref", "refs/heads/feat/story-seat-dev", &f.main],
+        );
+        assert!(delete_seat_branch(&plan.repo, plan.branch.as_ref().unwrap()).is_err());
+        assert!(!git(&f.repo, &["branch", "--list", "feat/story-seat-dev"]).is_empty());
+    }
+
+    /// The status the cleanup keeps a seat `dirty` on: changes, or one it can't read.
+    #[test]
+    fn a_dirty_or_unreadable_seat_reads_as_not_clean() {
+        let f = fixture();
+        let seat = branch_seat(&f, "dev");
+        assert_eq!(
+            super::super::worktree_git_dirty_opt(&seat.path),
+            Some(false)
+        );
+        std::fs::write(seat.path.join("notes.txt"), "uncommitted\n").unwrap();
+        assert_eq!(super::super::worktree_git_dirty_opt(&seat.path), Some(true));
+        let not_a_repo = tempfile::tempdir().unwrap();
+        assert_eq!(
+            super::super::worktree_git_dirty_opt(not_a_repo.path()),
+            None
+        );
+        assert_eq!(
+            seat_removal_plan(not_a_repo.path(), &seat.seat),
+            Err(SeatKeep::RemoveFailed),
+            "no clone to remove it from"
+        );
+    }
+
+    #[test]
+    fn a_seat_branch_checked_out_in_another_worktree_is_kept() {
+        let f = fixture();
+        let seat = branch_seat(&f, "dev");
+        let plan = seat_removal_plan(&seat.path, &seat.seat).unwrap();
+        git(
+            &f.repo,
+            &["worktree", "remove", seat.path.to_str().unwrap()],
+        );
+        // Someone looks at the seat's work in a worktree of their own.
+        let look = f.repo.parent().unwrap().join("look");
+        git(
+            &f.repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                look.to_str().unwrap(),
+                "feat/story-seat-dev",
+            ],
+        );
+        assert!(delete_seat_branch(&plan.repo, plan.branch.as_ref().unwrap()).is_err());
+        assert!(!git(&f.repo, &["branch", "--list", "feat/story-seat-dev"]).is_empty());
+        assert_eq!(git(&look, &["rev-parse", "HEAD"]), f.story_tip);
+    }
+
+    #[test]
+    fn an_unmerged_or_moved_seat_is_kept_unmerged() {
+        let f = fixture();
+        let seat = branch_seat(&f, "dev");
+        commit_file(&seat.path, "seat.txt", "seat work\n");
+        assert_eq!(
+            seat_removal_plan(&seat.path, &seat.seat),
+            Err(SeatKeep::Unmerged)
+        );
+        // A branch seat switched to another branch is not its seat branch any more.
+        let other = branch_seat(&f, "qa");
+        git(&other.path, &["switch", "-q", "-c", "elsewhere"]);
+        assert_eq!(
+            seat_removal_plan(&other.path, &other.seat),
+            Err(SeatKeep::Unmerged)
+        );
+        // A commit seat is removed at its pinned commit, and kept once moved off it.
+        let pinned = inner(&f.repo, "feat/story", "review", &commit(&f.main), TEMPLATE).unwrap();
+        let plan = seat_removal_plan(&pinned.path, &pinned.seat).unwrap();
+        assert_eq!(plan.branch, None);
+        git(&pinned.path, &["checkout", "-q", "--detach", &f.story_tip]);
+        assert_eq!(
+            seat_removal_plan(&pinned.path, &pinned.seat),
+            Err(SeatKeep::Unmerged)
+        );
     }
 }

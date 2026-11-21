@@ -802,6 +802,9 @@ pub fn run() {
             app.manage(commands::local_profile::LocalProfileState::load(&profile_home)?);
             commands::local_profile::LocalProfileState::start_import(handle.clone());
             app.manage(commands::guest_session::GuestSessionState::load(commands::paths::codesense_home_dir().as_deref()));
+            // Inbox media: provider media held in memory only, the sha index over every
+            // synced team and the one-time purge of provider files from the disk cache.
+            media::install(app.handle());
             // Local HTML query/routine capabilities remain independent of service access.
             // Registry observation may immediately schedule auto-connect, so
             // every terminal/session and ambient-profile dependency must already be
@@ -1768,12 +1771,11 @@ pub fn run() {
             commands::paths::resolve_team_content_dir,
             // macOS menu rebuild (C.16)
             menu::rebuild_menu,
-            // PDF export (R.4) — macOS only
-            #[cfg(target_os = "macos")]
+            // PDF export (R.4), where the OS's web view can print
+            #[cfg(cap_pdf_export)]
             commands::export_pdf::export_pdf_from_url,
-            #[cfg(target_os = "macos")]
+            #[cfg(cap_pdf_export)]
             commands::export_pdf::export_pdf_from_html,
-            #[cfg(target_os = "macos")]
             commands::export_pdf::write_binary_file,
             // Content engine boundary surface (SS-13), read by the
             // frontend (merge preview) and the context MCP tools.

@@ -1055,16 +1055,22 @@ impl LayoutModel {
     }
 
     /// Hold `session`'s exited entry for a respawn in place: refused while the
-    /// entry is live, or while another respawn of it is under way.
+    /// entry is live, or while another respawn of it is under way. A tab's own
+    /// folder that went away is dropped now, before the spawn, which starts in the
+    /// workspace's folder: a usage check meanwhile counts the tab where it will run.
     pub(crate) fn reserve_respawn(&self, session: &PtySessionId) -> Result<(), LayoutError> {
         let mut state = self.lock()?;
-        if !state.entry_mut(session)?.1.state.is_exited() {
+        let (key, entry) = state.entry_mut(session)?;
+        if !entry.state.is_exited() {
             return Err(LayoutError::Running(session.clone()));
         }
         if state.respawning.contains_key(session) {
             return Err(LayoutError::Restarting(session.clone()));
         }
         state.respawning.insert(session.clone(), false);
+        let ws = state.workspace_mut(&key)?;
+        let dir = ws.tab_dirs.remove(session);
+        ws.set_tab_dir(session, dir);
         Ok(())
     }
 

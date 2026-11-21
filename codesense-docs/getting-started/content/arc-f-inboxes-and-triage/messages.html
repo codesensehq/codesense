@@ -362,12 +362,16 @@
           play/pause control. Pending images show alt text and <strong>Load from host</strong>.
           Blocked images show a source link. Failures explain why; only temporary failures offer Retry.</p>
         <p>The engine setting <code>inbox.media</code> lives in the team's config directory,
-          in <code>config/inbox.yml</code> as <code>media: {remote: auto, hosts: ["*.giphy.com", "static.klipy.com"]}</code>.
+          in <code>config/inbox.yml</code> as <code>media: {remote: auto, hosts: ["*.giphy.com", "*.klipy.com"]}</code>.
           Those are the defaults. <code>auto</code> fetches only from listed hosts for agents on your
           own admitted machines; every other sender or host requires a tap. <code>ask</code> always
           asks. <code>off</code> prevents remote fetching and hides previously cached remote images.
-          There is no setting control in the pane. The host fetches once, then serves the local cache;
-          the pane never loads an image directly from a remote site.</p>
+          There is no setting control in the pane. The host fetches the image and serves its own copy;
+          the pane never loads an image directly from a remote site. GIPHY and KLIPY images are held
+          in memory only, never on disk, and fetched again when you view them after a restart or once
+          they expire; with <code>ask</code>, or from another person's machine, that takes a tap.
+          Other images stay in the host's local cache. Copies the app's built-in browser cached before
+          this behavior age out of that cache.</p>
         <p>For a document attachment instead, <code>attachFile: "design/ux-brief.md"</code> adds
           the existing file card with Open. It is a logical team-content reference, separate from
           <code>media</code>, and leaves the message's primary file unchanged.</p>

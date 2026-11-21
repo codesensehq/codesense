@@ -6,7 +6,7 @@ import { buildTeamKey } from "@/shared/lib/team-key";
 import { useFieldDraft } from "../lib/use-field-draft";
 import { commitTextEditOnBlur } from "@/shared/lib/text-menu-focus";
 import { dashboardSelected, resolveSlot, servesSurface } from "@/features/shell/slots/reveal-slot";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
@@ -52,7 +52,12 @@ import {
 } from "@/tauri/commands";
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
 import { logger } from "@/shared/lib/logger";
-import { selectCapability, type CapabilityKey } from "@/shared/lib/capabilities";
+import {
+  notYetAvailableSentence,
+  selectCapability,
+  type CapabilityKey,
+} from "@/shared/lib/capabilities";
+import { CapabilityOffNote } from "@/shared/components/capability-off/capability-off";
 import { useConfigStore } from "@/shared/stores/config-store";
 import { rowMatches, type SettingRowSpec } from "@/features/settings/lib/row-matches";
 import {
@@ -428,33 +433,13 @@ const GENERAL_ROW_SPECS = {
 
 export const GENERAL_ROW_SPEC_LIST: SettingRowSpec[] = Object.values(GENERAL_ROW_SPECS);
 
-/** The rows whose feature exists only where a capability is on; elsewhere they are hidden. */
-export const GENERAL_ROW_CAPABILITY: Partial<
-  Record<keyof typeof GENERAL_ROW_SPECS, CapabilityKey>
-> = {
+/** The rows whose feature exists only where a capability is on. Where it is off the row is
+ *  still shown and found by search, disabled with the off sentence (`RadioGroupRow`'s
+ *  `capability`), never hidden. */
+export const GENERAL_ROW_CAPABILITY = {
   quitOnClose: "background-on-close",
   terminalServerMenuBar: "terminal-server-tray",
-};
-const GATED_ROWS = Object.entries(GENERAL_ROW_CAPABILITY) as [string, CapabilityKey][];
-
-/**
- * The General rows this OS has: `GENERAL_ROW_SPEC_LIST` without the rows whose capability is
- * off. The section, the settings sidebar and the search auto-switch all match against it, so a
- * hidden row never counts as a match.
- */
-export function useGeneralRowSpecs(): SettingRowSpec[] {
-  // The hidden row keys, joined so the selector returns a stable string. A capability reads as
-  // on until the startup read lands (or if it failed), through `useCapability`'s selector.
-  const hidden = useConfigStore((s) =>
-    GATED_ROWS.filter(([, cap]) => !selectCapability(s.platformCaps, cap).on)
-      .map(([row]) => row)
-      .join(" "),
-  );
-  return useMemo(() => {
-    const off = new Set(hidden.split(" "));
-    return GENERAL_ROW_SPEC_LIST.filter((spec) => !off.has(spec.key));
-  }, [hidden]);
-}
+} as const satisfies Partial<Record<keyof typeof GENERAL_ROW_SPECS, CapabilityKey>>;
 
 // ---------- General section ----------
 
@@ -463,12 +448,11 @@ export function GeneralSection({ query }: { query: string }) {
   // queries like "theme" false-match unrelated rows (e.g. "Content width"
   // via t-h-e-m-e through "con[t]ent wid[t][h]... [e]... nor[m]al... wid[e]").
   // Each row's label + keywords is curated for predictable substring hits.
-  // A row whose feature doesn't exist on this OS is dropped before counting, so
-  // a search for it shows the empty state and announces the right count.
-  const specs = useGeneralRowSpecs();
+  // A row whose feature isn't on this OS still counts: it is shown disabled with
+  // the off sentence, so a search finds it rather than the empty state.
   const visibleKeys = useMemo(
-    () => specs.filter((spec) => rowMatches(spec, query)).map((spec) => spec.key),
-    [specs, query],
+    () => GENERAL_ROW_SPEC_LIST.filter((spec) => rowMatches(spec, query)).map((spec) => spec.key),
+    [query],
   );
   const visibleCount = visibleKeys.length;
   const visibleSet = new Set(visibleKeys);
@@ -511,8 +495,8 @@ export function GeneralSection({ query }: { query: string }) {
           {visibleSet.has("warmPoolSize") && <WarmPoolSizeRow />}
           {visibleSet.has("worktreeSetupParallelism") && <WorktreeParallelismRow />}
           {visibleSet.has("backgroundAgentLimit") && <BackgroundAgentLimitRow />}
-          {/* Hidden where the capability is off (filtered above), so neither row
-              promises behavior the platform lacks. */}
+          {/* Where the capability is off, each row shows what actually happens,
+              disabled, with the off sentence in place of its footer. */}
           {visibleSet.has("quitOnClose") && <QuitOnCloseRow />}
           {visibleSet.has("terminalServerMenuBar") && <TerminalServerMenuBarRow />}
           {visibleSet.has("openForemanOnStart") && <OpenForemanOnStartRow />}
@@ -558,6 +542,10 @@ interface RadioGroupRowProps<T extends string> {
   gridClassName: string;
   buttonPaddingClassName?: string;
   footer?: React.ReactNode;
+  /** The capability the row's feature needs. While it is off the row shows `offValue` (what
+   *  actually happens on this OS), its radios stay focusable but never write the setting, and
+   *  the off note replaces `footer`. */
+  capability?: { cap: CapabilityKey; offValue: T };
 }
 
 /**
@@ -565,6 +553,10 @@ interface RadioGroupRowProps<T extends string> {
  * button options with WAI-ARIA radiogroup semantics and keyboard navigation
  * (Arrow keys move + select, Home/End jump to first/last). Uses roving
  * tabindex so Tab enters/exits the group once.
+ *
+ * With `capability` off, the group is `aria-disabled` with the off sentence as its tooltip and
+ * is described by one `CapabilityOffNote` in place of the footer. Only the radios dim: the note
+ * sits outside them at full opacity, and a focused radio comes back to full opacity with a ring.
  */
 function RadioGroupRow<T extends string>({
   label,
@@ -576,7 +568,15 @@ function RadioGroupRow<T extends string>({
   gridClassName,
   buttonPaddingClassName = "px-2 py-1",
   footer,
+  capability,
 }: RadioGroupRowProps<T>) {
+  const noteId = useId();
+  const platformCaps = useConfigStore((s) => s.platformCaps);
+  const capState = capability ? selectCapability(platformCaps, capability.cap) : undefined;
+  const offCap = capState && !capState.on ? capability : undefined;
+  const offCapability = offCap ? capState : undefined;
+  const shown = offCap ? offCap.offValue : value;
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     const isNext = e.key === "ArrowRight" || e.key === "ArrowDown";
     const isPrev = e.key === "ArrowLeft" || e.key === "ArrowUp";
@@ -584,6 +584,7 @@ function RadioGroupRow<T extends string>({
     const isEnd = e.key === "End";
     if (!isNext && !isPrev && !isHome && !isEnd) return;
     e.preventDefault();
+    if (offCap) return;
     const currentIdx = options.findIndex((o) => o.value === value);
     const last = options.length - 1;
     let nextIdx = currentIdx;
@@ -609,9 +610,12 @@ function RadioGroupRow<T extends string>({
         data-testid={testId}
         className={`grid gap-1 ${gridClassName}`}
         onKeyDown={onKeyDown}
+        aria-disabled={offCap ? true : undefined}
+        title={offCapability ? notYetAvailableSentence(offCapability) : undefined}
+        aria-describedby={offCap ? noteId : undefined}
       >
         {options.map((opt) => {
-          const isActive = value === opt.value;
+          const isActive = shown === opt.value;
           return (
             <button
               key={opt.value}
@@ -620,12 +624,18 @@ function RadioGroupRow<T extends string>({
               aria-checked={isActive}
               tabIndex={isActive ? 0 : -1}
               data-testid={`${testId}-${opt.value}`}
-              title={opt.title}
-              onClick={() => onChange(opt.value)}
+              title={offCap ? undefined : opt.title}
+              onClick={offCap ? undefined : () => onChange(opt.value)}
               className={`rounded ${buttonPaddingClassName} text-xs transition-colors ${
                 isActive
                   ? "bg-accent text-accent-foreground"
-                  : "bg-muted text-muted-foreground hover:text-foreground"
+                  : offCap
+                    ? "bg-muted text-muted-foreground"
+                    : "bg-muted text-muted-foreground hover:text-foreground"
+              }${
+                offCap
+                  ? " cursor-default opacity-50 outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                  : ""
               }`}
             >
               {opt.label}
@@ -633,7 +643,7 @@ function RadioGroupRow<T extends string>({
           );
         })}
       </div>
-      {footer}
+      {offCap ? <CapabilityOffNote cap={offCap.cap} id={noteId} className="mt-1" /> : footer}
     </SettingRow>
   );
 }
@@ -1391,6 +1401,8 @@ function QuitOnCloseRow() {
       onChange={(v) => updateSettings({ quitOnClose: v === "on" })}
       gridClassName="grid-cols-2"
       buttonPaddingClassName="px-2 py-1.5"
+      // Where the app can't keep running with no window, closing it quits.
+      capability={{ cap: GENERAL_ROW_CAPABILITY.quitOnClose, offValue: "on" }}
       footer={<p className="mt-1 text-[10px] text-muted-foreground">{quitOnCloseFooter()}</p>}
     />
   );
@@ -1417,6 +1429,8 @@ function TerminalServerMenuBarRow() {
       onChange={(v) => updateSettings({ terminalServerMenuBar: v === "on" })}
       gridClassName="grid-cols-2"
       buttonPaddingClassName="px-2 py-1.5"
+      // Where the tray icon can't be shown, there is none.
+      capability={{ cap: GENERAL_ROW_CAPABILITY.terminalServerMenuBar, offValue: "off" }}
       footer={
         <p className="mt-1 text-[10px] text-muted-foreground">
           Shows whether the terminal server is running and how many agents it runs, with Restart,

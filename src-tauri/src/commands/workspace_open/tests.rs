@@ -68,6 +68,8 @@ struct FakeHost {
     prepared: Mutex<Option<fn(&mut AgentLaunch)>>,
     registered_test_launch: Mutex<Option<AgentLaunch>>,
     registered_spawn_probe: Mutex<Option<RegisteredSpawnProbe>>,
+    /// The stories whose seat sweep a launch started, in order.
+    swept: Mutex<Vec<String>>,
 }
 
 impl FakeHost {
@@ -108,7 +110,12 @@ impl FakeHost {
             registered_test_launch: Mutex::new(None),
             registered_spawn_probe: Mutex::new(None),
             show_outcome: Mutex::new(RevealOutcome::Shown(ShownAs::Tab)),
+            swept: Mutex::new(Vec::new()),
         }
+    }
+
+    fn swept(&self) -> Vec<String> {
+        self.swept.lock().unwrap().clone()
     }
 
     fn remote_launches(&self) -> Vec<RemoteLaunch> {
@@ -163,6 +170,10 @@ impl FakeHost {
 
 #[async_trait::async_trait]
 impl OpenHost for FakeHost {
+    fn sweep_seats(&self, story_id: &str) {
+        self.swept.lock().unwrap().push(story_id.to_string());
+    }
+
     async fn story_workspace_place(
         &self,
         _team: &ActiveTeam,
@@ -1921,6 +1932,33 @@ async fn a_seat_worktree_launch_carries_its_seat_to_the_spine() {
     };
     let plan = crate::commands::mcp_workspace::story_launch_plan(Some(&seat));
     assert!(!plan.reconcile && !plan.snapshot);
+}
+
+/// Every launch into a story's workspace, shared or into a seat worktree, starts the
+/// background sweep of the story's seat worktrees once the launch returns, also when the
+/// launch was refused.
+#[tokio::test]
+async fn a_story_launch_starts_the_seat_sweep() {
+    let home = tempfile::tempdir().unwrap();
+    let host = FakeHost::new(home.path(), 8);
+    open_agent(&host, &active(), &named_story(None, None))
+        .await
+        .unwrap();
+    assert_eq!(host.swept(), ["SW-1"]);
+    let dev = open_agent(
+        &host,
+        &active(),
+        &seat_story(Some("dev"), SeatWorktreeParam::Branch),
+    )
+    .await
+    .unwrap();
+    assert_eq!(dev.status, OpenStatus::Opened, "{}", dev.message);
+    *host.launch_error.lock().unwrap() = Some(LaunchError::Invalid("unknown commit".into()));
+    let refused = open_agent(&host, &active(), &seat_story(Some("qa"), pinned("nope")))
+        .await
+        .unwrap();
+    assert_eq!(refused.status, OpenStatus::Invalid);
+    assert_eq!(host.swept(), ["SW-1", "SW-1", "SW-1"]);
 }
 
 #[tokio::test]

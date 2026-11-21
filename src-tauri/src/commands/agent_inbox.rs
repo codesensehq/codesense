@@ -85,6 +85,11 @@ pub(crate) fn emit_inbox_changed<R: tauri::Runtime>(
 /// The registry and store side of the inbox.
 #[async_trait::async_trait]
 pub(crate) trait InboxHost: Send + Sync {
+    /// The person's messages each session took and hasn't answered (the reply reminder's
+    /// record): the app's one record.
+    fn replies_owed(&self) -> &super::reply_owed::RepliesOwed {
+        super::reply_owed::replies_owed()
+    }
     fn media_config(&self, _team: &LaunchTeam) -> crate::media::Config {
         crate::media::Config::default()
     }
@@ -93,9 +98,23 @@ pub(crate) trait InboxHost: Send + Sync {
             self.media_config(team).apply(attachments);
         }
     }
-    /// The bytes of a cached image by sha256 (the content-addressed media cache).
-    fn cached_media(&self, _sha: &str) -> Result<Vec<u8>, String> {
+    /// The bytes of `attachment`, a cached image the reader has confirmed is on a message
+    /// in `team`: memory, then the disk cache, then a re-fetch when `team`'s config
+    /// admits one.
+    async fn cached_media(
+        &self,
+        _team: &LaunchTeam,
+        _attachment: &crate::media::Attachment,
+    ) -> Result<Vec<u8>, String> {
         Err("no media cache".into())
+    }
+    /// A message's attachments changed (sent, fetched): the media sha index records them.
+    async fn note_media(
+        &self,
+        _team: &LaunchTeam,
+        _message_id: i64,
+        _attachments: &[crate::media::Attachment],
+    ) {
     }
     async fn own_media_sender(&self, _sender: &str) -> bool {
         false
@@ -316,6 +335,14 @@ impl KnownSessions {
     /// Every listed session, in the roster's order.
     pub(crate) fn iter(&self) -> impl Iterator<Item = &KnownSession> {
         self.0.iter()
+    }
+
+    /// The tab session of the running session with `handle`.
+    fn running_tab(&self, handle: &str) -> Option<&str> {
+        self.0
+            .iter()
+            .find(|s| s.running && s.handle == handle)
+            .and_then(|s| s.session.as_deref())
     }
 
     /// The session `id` names: by its handle, else by its tab session (a running one
@@ -928,6 +955,7 @@ async fn store_message(
     let fetch_location = location.clone();
     let text = text.to_string();
     let recipient = to.clone();
+    let sender = from.clone();
     let request_id = request_id.map(str::to_string);
     let stored = with_store("send_message", location.path, move |store| {
         inbox::inbox_insert_request_outcome(
@@ -953,7 +981,14 @@ async fn store_message(
         Ok(outcome) => outcome,
         Err(reason) => return Ok(SendResult::invalid(reason)),
     };
+    if recipient == HUMAN {
+        host.replies_owed().answered(&sender);
+    }
     if inserted {
+        if let Some((attachment, _)) = &prepared {
+            host.note_media(&location.team, message_id, std::slice::from_ref(attachment))
+                .await;
+        }
         if let Some((attachment, true)) = prepared {
             start_media_fetch(host.clone(), fetch_location, message_id, attachment);
         }
@@ -1639,6 +1674,10 @@ async fn queue_role_reply(
     match stored {
         Ok((message_id, inserted)) => {
             if inserted {
+                if let Some((attachment, _)) = &prepared {
+                    host.note_media(&own.team, message_id, std::slice::from_ref(attachment))
+                        .await;
+                }
                 if let Some((attachment, true)) = prepared {
                     start_media_fetch(host.clone(), own.clone(), message_id, attachment);
                 }
@@ -1999,10 +2038,19 @@ pub(crate) async fn read_messages<'a>(
         Ok(None) | Err(_) => return Ok(Vec::new()),
     };
     let InboxLocation { team, path } = session_store(host, &me).await?;
+    let reader = me.clone();
     let taken = with_store("read_messages", path, move |store| {
         inbox::inbox_take_unread(store, &me)
     })
     .await??;
+    // The person's messages this session took are owed an answer until it gives one.
+    if let Some(tab) = sessions.running_tab(&reader) {
+        host.replies_owed().took(
+            tab,
+            &reader,
+            taken.iter().map(|m| (m.id, m.from.as_str())),
+        );
+    }
     if !taken.is_empty() {
         host.inbox_event(InboxEvent::new(
             InboxChange::Read,
@@ -2813,11 +2861,32 @@ impl InboxHost for AppInboxHost {
         if attachments.is_empty() {
             return;
         }
-        self.media_config(team).apply(attachments);
-        crate::media::present_cached(&self.app, attachments);
+        let config = self.media_config(team);
+        match crate::media::app_state(&self.app) {
+            Some(media) => media.present(&config, attachments),
+            None => config.apply(attachments),
+        }
     }
-    fn cached_media(&self, sha: &str) -> Result<Vec<u8>, String> {
-        crate::media::cached(&self.app, sha)
+    async fn cached_media(
+        &self,
+        team: &LaunchTeam,
+        attachment: &crate::media::Attachment,
+    ) -> Result<Vec<u8>, String> {
+        let media = crate::media::app_state(&self.app).ok_or("media unavailable")?;
+        // The team is indexed before its media is served.
+        crate::media::index_new_teams(&media, self, std::slice::from_ref(team)).await;
+        media
+            .read(&self.media_config(team), attachment)
+            .await
+            .map(|bytes| bytes.to_vec())
+    }
+    async fn note_media(
+        &self,
+        team: &LaunchTeam,
+        message_id: i64,
+        attachments: &[crate::media::Attachment],
+    ) {
+        crate::media::note(&self.app, team, message_id, attachments.to_vec()).await;
     }
     async fn own_media_sender(&self, sender: &str) -> bool {
         let tabs = crate::mcp::terminal_tabs::LiveTabs::read(&self.app).await;
@@ -3072,7 +3141,7 @@ impl InboxHost for AppInboxHost {
             super::route_to_context::synced_contexts_in(&home, user_id)
         })
         .await?;
-        Ok(contexts
+        let teams: Vec<_> = contexts
             .into_iter()
             .filter_map(|ctx| {
                 ctx.team_name.map(|team| LaunchTeam {
@@ -3080,7 +3149,18 @@ impl InboxHost for AppInboxHost {
                     team,
                 })
             })
-            .collect())
+            .collect();
+        // The media sha index covers every synced team: one attached after startup is
+        // indexed on its first sighting, before any of its media is served.
+        if let Some(media) = crate::media::app_state(&self.app) {
+            crate::media::index_new_teams(&media, self, &teams).await;
+            // The first answer completes the startup index: listings drawn before it
+            // left cached images as they were, so they are drawn again.
+            if media.set_ready() {
+                self.inbox_changed(&[]);
+            }
+        }
+        Ok(teams)
     }
 
     fn note_role_store(&self, path: PathBuf) {
@@ -3494,11 +3574,14 @@ async fn finish_media_fetch(
     let attachment = host
         .fetch_media(&location.team, attachment, automatic)
         .await?;
+    let stored = attachment.clone();
     with_store("media.loaded", location.path, move |store| {
-        inbox::inbox_set_attachments(store, message_id, &[attachment])
+        inbox::inbox_set_attachments(store, message_id, &[stored])
     })
     .await?
     .map_err(|e| e.to_string())?;
+    host.note_media(&location.team, message_id, &[attachment])
+        .await;
     host.inbox_event(InboxEvent::new(
         InboxChange::Stored,
         &location.team,
@@ -3577,10 +3660,12 @@ pub(crate) async fn read_media(
     if !crate::media::valid_sha(&sha256) {
         return Err("invalid media hash".into());
     }
-    let (_, attachments) = message_attachments(&**host, team, message_id).await?;
-    crate::media::cached_attachment(&attachments, &sha256).ok_or("media unavailable")?;
-    let host = host.clone();
-    let bytes = await_blocking("media.read", move || host.cached_media(&sha256)).await?;
+    let (location, attachments) = message_attachments(&**host, team, message_id).await?;
+    let attachment = crate::media::cached_attachment(&attachments, &sha256)
+        .ok_or("media unavailable")?
+        .clone();
+    // Only a confirmed attachment of this message is read, or fetched again.
+    let bytes = host.cached_media(&location.team, &attachment).await?;
     let (mime, _, _) =
         crate::media::inspect(&bytes).map_err(|_| "media unavailable".to_string())?;
     Ok(InboxMediaBytes { mime, bytes })

@@ -945,6 +945,8 @@ struct LaunchEntry {
     story_was_explicit: bool,
     /// The launcher's task identity, captured under the reservation lock before async startup.
     launcher_task: Option<String>,
+    /// The launcher's tab, captured under the same lock: its handle may be reused later.
+    launcher_session: Option<String>,
     local_effect_owner: Option<super::pty_host::LocalEffectClaim>,
     chat_workspace_id: Option<String>,
     remote_shell: Option<super::pty_layout::RemoteShellRecord>,
@@ -1150,6 +1152,7 @@ impl LaunchEntry {
             local_effect_owner: owner,
             session_id: Some(session_id.to_string()),
             launcher_task: None,
+            launcher_session: None,
             story_was_explicit: false,
             _permit: None, // cap-free — the user opened this, not a dashboard.
             kind: KIND_REGISTERED,
@@ -2094,6 +2097,16 @@ impl DashboardLaunchState {
                 _ => None,
             };
         }
+        // The launcher's tab: a local launch's session, or a remote tab's session on its machine
+        // (the one its authority verifies a remote caller as).
+        let launcher_session = launcher_entry.and_then(|launcher| {
+            launcher.session_id.clone().or_else(|| {
+                launcher
+                    .remote_shell
+                    .as_ref()
+                    .map(|remote| codesense_pty_core::domain::PtySessionId::as_str(&remote.target.session).to_owned())
+            })
+        });
         let launcher = launcher_entry.and_then(|launcher| {
             let session = launcher.session_id.as_ref()?;
             let fallback = launcher.provenance.as_ref()
@@ -2134,6 +2147,7 @@ impl DashboardLaunchState {
                 local_effect_owner: None,
                 session_id: None,
                 launcher_task,
+                launcher_session,
                 story_was_explicit,
                 _permit: Some(permit),
                 bound_at_ms: None,
@@ -3196,6 +3210,11 @@ impl DashboardLaunchState {
             .collect()
     }
 
+    /// The tab that launched `handle`'s session, captured when its launch was reserved.
+    pub(crate) fn launcher_session(&self, handle: &str) -> Option<String> {
+        self.lock().by_handle.get(handle).and_then(|entry| entry.launcher_session.clone())
+    }
+
     /// A launcher id normalized the way [`begin_with_provenance`] records `launched_by`,
     /// so a filter by session id and by its handle select the same sessions.
     ///
@@ -3845,7 +3864,8 @@ pub(crate) fn compose_launch_write(
 ) -> Option<LaunchWrite> {
     let snapshot = state.snapshot().into_iter().find(|s| s.handle == handle)?;
     let owner = state.owner_for_session(session_id);
-    let record = record_from_launch(session_id, &snapshot, owner.as_ref(), &facts);
+    let mut record = record_from_launch(session_id, &snapshot, owner.as_ref(), &facts);
+    record.launched_by_session = state.launcher_session(handle);
     // What the task is typed and linked from, beyond the brief: the launch's role, its saved
     // agent's queue role, the task it reviews and the session it continues.
     let mut task = facts.task;
@@ -6512,6 +6532,7 @@ impl DashboardLaunchState {
                 startup_noted: false,
                 session_id: None,
                 launcher_task: None,
+                launcher_session: None,
                 story_was_explicit: false,
                 local_effect_owner: None,
                 _permit: None,
@@ -9851,6 +9872,51 @@ mod tests {
         assert_eq!(dev.goal, "Build the store.");
         let tree: Vec<String> = store.task_subtree("lead-tab").unwrap().into_iter().map(|t| t.task_id).collect();
         assert_eq!(tree, ["lead-tab", "dev-tab"]);
+    }
+
+    /// A launch records its launcher's tab, captured at reservation, so a charge's launch chain
+    /// never depends on a handle that may be reused; a launch with no launcher records none.
+    #[test]
+    fn a_launch_records_the_tab_that_launched_it() {
+        let (_dir, store) = crate::session_usage::tests::store();
+        let state = DashboardLaunchState::new(4);
+        bind_launch(&state, "lead-handle", "lead-tab", None, "DEMO-1", None);
+        capture_bound(&state, &store, "lead-handle", "lead-tab", task_facts(Some("Lead it.")));
+        bind_launch(&state, "DEMO-1#dev", "dev-tab", Some("lead-handle"), "DEMO-1", None);
+        capture_bound(&state, &store, "DEMO-1#dev", "dev-tab", task_facts(Some("Build it.")));
+        let dev = store.read_session_record("dev-tab").unwrap().unwrap();
+        assert_eq!(dev.launched_by_session.as_deref(), Some("lead-tab"));
+        let lead = store.read_session_record("lead-tab").unwrap().unwrap();
+        assert_eq!(lead.launched_by_session, None);
+    }
+
+    /// A seat a remote tab launched records that tab, and the remote caller its authority verifies
+    /// as that tab may charge it; another remote tab may not.
+    #[test]
+    fn a_remote_tab_charges_the_seat_it_launched_through_the_recorded_launch() {
+        use crate::mcp::charge_tools::{charge, Caller, ChargeSessionStoryParams};
+        let (_dir, store) = crate::session_usage::tests::store();
+        let state = DashboardLaunchState::new(4);
+        state
+            .reserve_remote_shell(roster_remote_record("remote-lead", "remote-tab", "1", true))
+            .unwrap();
+        bind_launch(&state, "DEMO-1#dev", "dev-tab", Some("remote-lead"), "DEMO-1", None);
+        capture_bound(&state, &store, "DEMO-1#dev", "dev-tab", task_facts(Some("Build it.")));
+        let dev = store.read_session_record("dev-tab").unwrap().unwrap();
+        assert_eq!(dev.launched_by_session.as_deref(), Some("remote-tab"));
+        let remote = |session: &str| Caller {
+            session: session.into(),
+            handle: Some("remote-lead".into()),
+            team: Some(("acme".into(), "dev".into())),
+        };
+        let params = ChargeSessionStoryParams { story: "DEMO-2".into(), session_id: Some("dev-tab".into()), from_ms: None };
+        let known = |_: &str, _: &str, _: &str| Some(std::path::PathBuf::from("DEMO-2.md"));
+        let as_recorded = |raw: &str| raw.to_owned();
+        let now = chrono::Utc::now().timestamp_millis() + 1_000;
+        charge(&store, &remote("remote-tab"), &params, now, &known, &as_recorded).unwrap();
+        let other = charge(&store, &remote("other-remote-tab"), &params, now + 1, &known, &as_recorded);
+        assert!(other.unwrap_err().contains("launch chain"));
+        assert_eq!(store.charges_for("dev-tab").unwrap().len(), 1);
     }
 
     #[test]

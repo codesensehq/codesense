@@ -42,5 +42,8 @@ Feature code under `src/features/` doesn't check the OS (`isMac()`, `navigator.p
 like) to decide whether a feature exists. [`os-checks.guard.test.ts`](./os-checks.guard.test.ts)
 fails a new OS check, including an aliased import of an OS helper. Today's uses are in its
 allowlist with a reason each, all presentation such as key names, shortcut glyphs and the title-bar
-inset. The list only shrinks. A setting whose feature doesn't exist on this OS is hidden with
-`useCapability(...).on`, not shown disabled.
+inset. The list only shrinks.
+
+Off features, settings included, are explained through `CapabilityOff`, never hidden. A setting
+whose feature isn't on this OS stays in its section and in settings search, disabled, with the
+sentence in place of its footer.

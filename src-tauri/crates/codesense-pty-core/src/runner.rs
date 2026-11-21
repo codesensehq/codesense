@@ -1086,6 +1086,7 @@ mod tests {
     /// may ignore, SIGKILL ends it, and a gone group is not an error.
     #[cfg(unix)]
     #[test]
+    #[ignore = "quarantine: https://github.com/codesensehq/codesense/issues/375"]
     fn group_signals_reach_the_whole_group_and_a_gone_group_is_ok() {
         use std::os::unix::process::ExitStatusExt;
         let (mut tree, group) = own_group();

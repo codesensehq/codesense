@@ -21,6 +21,8 @@ pub(crate) struct FakeInbox {
             std::sync::mpsc::Receiver<()>,
         )>,
     >,
+    /// A real media state, for tests of the memory-only path; none by default.
+    media: std::sync::Mutex<Option<Arc<crate::media::MediaState>>>,
 }
 impl FakeInbox {
     fn new() -> Arc<Self> {
@@ -30,7 +32,17 @@ impl FakeInbox {
             cache: Default::default(),
             names: Default::default(),
             read_gate: std::sync::Mutex::new(None),
+            media: std::sync::Mutex::new(None),
         })
+    }
+    /// Serve media through a real media state over `fetch`, as the app does.
+    pub(crate) fn use_media(
+        &self,
+        fetch: Arc<crate::media::FakeFetch>,
+    ) -> Arc<crate::media::MediaState> {
+        let state = crate::media::MediaState::for_test(self.dir.path().join("media-cache"), fetch);
+        *self.media.lock().unwrap() = Some(state.clone());
+        state
     }
     fn path(&self, team: &str) -> PathBuf {
         self.dir.path().join(team).join("weft.sqlite3")
@@ -116,8 +128,21 @@ impl InboxHost for FakeInbox {
     fn inbox_changed(&self, _changes: &[(LaunchTeam, Vec<i64>)]) {
         self.changed.fetch_add(1, Ordering::SeqCst);
     }
-    fn cached_media(&self, sha: &str) -> Result<Vec<u8>, String> {
-        self.cache.lock().unwrap().get(sha).cloned().ok_or("evicted".into())
+    async fn cached_media(&self, team: &LaunchTeam, attachment: &crate::media::Attachment) -> Result<Vec<u8>, String> {
+        let media = self.media.lock().unwrap().clone();
+        let Some(media) = media else {
+            let sha = attachment.sha256.as_deref().unwrap_or_default();
+            return self.cache.lock().unwrap().get(sha).cloned().ok_or("evicted".into());
+        };
+        media.read(&self.media_config(team), attachment).await.map(|b| b.to_vec())
+    }
+    fn present_media(&self, team: &LaunchTeam, attachments: &mut [crate::media::Attachment]) {
+        let config = self.media_config(team);
+        let media = self.media.lock().unwrap().clone();
+        match media {
+            Some(media) => media.present(&config, attachments),
+            None => config.apply(attachments),
+        }
     }
 }
 
@@ -540,6 +565,8 @@ pub(crate) fn image(sha: &str, state: &str) -> crate::media::Attachment {
         state: state.into(),
         reason: Some("host".into()),
         retryable: false,
+        media_provider: None,
+        own_sender: false,
     }
 }
 
@@ -724,6 +751,66 @@ async fn media_refuses_everything_else_and_never_fetches() {
     a.bytes = Some(10);
     host.attach("emea", m, &[a]);
     assert_eq!(refused(media(&ctx, &call, args(m, &big)).await).as_deref(), Some("too_large"));
+}
+
+/// A provider GIF sent from this Mac, held in memory only: after a restart the hosted
+/// path fetches it again, only for a confirmed attachment, once per render.
+#[tokio::test]
+async fn hosted_media_refetches_a_memory_only_sha_once_and_only_after_authorizing() {
+    use base64::Engine as _;
+    let (host, ctx, call) = fixture();
+    let fetch = Arc::new(crate::media::FakeFetch::default());
+    let state = host.use_media(fetch.clone());
+    let provider = |sha: &str, url: &str| {
+        let mut a = image(sha, "cached");
+        a.source_url = Some(url.into());
+        a.own_sender = true;
+        a.media_provider = Some(crate::media::MediaProvider::Giphy);
+        a
+    };
+    let note = |team: &str, id: i64, a: &crate::media::Attachment| {
+        let owner = crate::media::index::Owner { org: "acme".into(), team: team.into(), message_id: id };
+        state.note(&owner, id, std::slice::from_ref(a));
+    };
+    let bytes = gif(400 * 1024);
+    let sha = format!("{:x}", sha2::Sha256::digest(&bytes));
+    let url = "https://i.giphy.com/x.gif";
+    fetch.serve(url, &bytes, url, Some("no-store"));
+    let id = host.insert("emea", "human", "hi");
+    let mut a = provider(&sha, url);
+    a.bytes = Some(bytes.len() as u64);
+    host.attach("emea", id, &[a.clone()]);
+    note("emea", id, &a);
+    // Another team's provider GIF, re-fetchable there, but not an attachment here.
+    let foreign_bytes = gif(64);
+    let foreign = format!("{:x}", sha2::Sha256::digest(&foreign_bytes));
+    let foreign_url = "https://i.giphy.com/foreign.gif";
+    fetch.serve(foreign_url, &foreign_bytes, foreign_url, None);
+    let other = host.insert("other", "human", "secret");
+    host.attach("other", other, &[provider(&foreign, foreign_url)]);
+    note("other", other, &provider(&foreign, foreign_url));
+    let refused = |v: Result<Value, QueryError>| v.unwrap()["refused"].as_str().map(str::to_string);
+    for args in [json!({"messageId": id, "sha256": foreign}), json!({"messageId": id + 40, "sha256": sha})] {
+        assert_eq!(refused(media(&ctx, &call, args).await).as_deref(), Some("not_found"));
+    }
+    assert!(fetch.calls().is_empty(), "nothing is fetched before the attachment is confirmed");
+
+    // Every chunk of one render within the no-store pin shares one fetch.
+    let (mut got, mut asks) = (Vec::new(), 0);
+    loop {
+        let a = media(&ctx, &call, json!({"messageId": id, "sha256": sha, "offset": got.len()}))
+            .await
+            .unwrap();
+        asks += 1;
+        got.extend(base64::engine::general_purpose::STANDARD.decode(a["data"].as_str().unwrap()).unwrap());
+        if a["done"] == true {
+            break;
+        }
+    }
+    assert_eq!(got, bytes);
+    assert!(asks >= 3);
+    assert_eq!(fetch.calls(), vec![url.to_string()]);
+    assert!(!host.dir.path().join("media-cache").join(&sha).exists());
 }
 
 #[test]

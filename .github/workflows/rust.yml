@@ -139,6 +139,14 @@ jobs:
     runs-on: macos-15
     # Room for a full compile of each half, which a cold workspace cache does not cover.
     timeout-minutes: 150
+    # On a push to main (first attempt), a newer push's run replaces this part (queued or running)
+    # instead of waiting behind it: one main macOS run at a time, on the newest commit. Each part
+    # has its own group so the two parts never cancel each other. A re-run, and every other event,
+    # keeps a group of its own per run, so nothing else is cancelled here; the Linux and required
+    # jobs stay per commit.
+    concurrency:
+      group: ${{ github.event_name == 'push' && github.run_attempt == 1 && format('rust-macos-main-build-{0}', matrix.part) || format('rust-macos-build-{0}-{1}', github.run_id, matrix.part) }}
+      cancel-in-progress: ${{ github.event_name == 'push' && github.run_attempt == 1 }}
     strategy:
       fail-fast: false
       matrix:
@@ -412,6 +420,10 @@ jobs:
     if: needs.rust-macos-build.outputs.superseded != 'true'
     runs-on: macos-15
     timeout-minutes: 30
+    # As rust-macos-build: a newer push to main replaces this shard; one group per shard.
+    concurrency:
+      group: ${{ github.event_name == 'push' && github.run_attempt == 1 && format('rust-macos-main-test-{0}', matrix.shard) || format('rust-macos-test-{0}-{1}', github.run_id, matrix.shard) }}
+      cancel-in-progress: ${{ github.event_name == 'push' && github.run_attempt == 1 }}
     strategy:
       fail-fast: false
       matrix:
@@ -516,9 +528,10 @@ jobs:
   rust-macos:
     name: Rust (macOS arm64)
     # The one macOS result: green only when the build and every test shard are, or when the build
-    # was superseded by a newer push to main. It runs when the build job does (the same if), so a
-    # skipped build reports a skip here, and also when the run is cancelled (always() in place of
-    # !cancelled()), so a cancelled run reports red, not skipped.
+    # was superseded by a newer push to main (it skipped, or a newer push's run cancelled its jobs
+    # and main has really moved on). It runs when the build job does (the same if), so a skipped
+    # build reports a skip here, and also when the run is cancelled (always() in place of
+    # !cancelled()), so any other cancelled run, a timeout included, reports red, not skipped.
     needs: [changes, rust-macos-build, rust-macos-test]
     if: ${{ always() && needs.changes.outputs.rust != 'false' && needs.changes.outputs.macos != 'false' && github.event_name != 'merge_group' && (github.event_name != 'pull_request' || (github.event.pull_request.user.login != 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'ci:macos') && (github.event.action != 'labeled' || github.event.label.name == 'ci:macos'))) }}
     runs-on: ubuntu-24.04
@@ -531,8 +544,21 @@ jobs:
           BUILD: ${{ needs.rust-macos-build.result }}
           TESTS: ${{ needs.rust-macos-test.result }}
           SUPERSEDED: ${{ needs.rust-macos-build.outputs.superseded }}
+          EVENT: ${{ github.event_name }}
+          ATTEMPT: ${{ github.run_attempt }}
+          SHA: ${{ github.sha }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: |
           echo "build: $BUILD, tests: $TESTS, superseded: ${SUPERSEDED:-false}"
+          # On a push to main, a newer push's run cancels this run's macOS jobs (their concurrency
+          # groups). That is superseded only when main really has moved on: a timeout, a cancel by
+          # hand, a re-run, or a failed lookup stays red.
+          if [[ "$EVENT" == push && "$ATTEMPT" == 1 && ( "$BUILD" == cancelled || "$TESTS" == cancelled ) ]] &&
+            head=$(git ls-remote "$REPO_URL" refs/heads/main) && head=${head%%[[:space:]]*} &&
+            [[ -n "$head" && "$head" != "$SHA" ]]; then
+            echo "Replaced by a newer push to main ($head); the nightly covers this commit." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           if [[ "$BUILD" == success && "$SUPERSEDED" == true ]]; then
             echo "Superseded by a newer push to main; the nightly covers this commit." >> "$GITHUB_STEP_SUMMARY"
             exit 0
@@ -738,9 +764,12 @@ jobs:
         with:
           persist-credentials: false
       - name: Install system libraries
-        # The shared app list, plus a session bus, the keyring daemon and its CLI, and zsh for the
-        # spawn tests of a zsh user.
-        run: bash scripts/install-linux-app-libs.sh dbus gnome-keyring libsecret-tools zsh
+        # The shared app list, plus a session bus, the keyring daemon and its CLI, zsh for the spawn
+        # tests of a zsh user, and for PDF export's renderer a virtual display, GTK's German
+        # translations and poppler's readers.
+        run: >-
+          bash scripts/install-linux-app-libs.sh dbus gnome-keyring libsecret-tools zsh
+          xvfb xauth language-pack-gnome-de-base language-pack-de poppler-utils
       - name: Make zsh's completion directories private
         # zsh's compinit stops at a prompt over the runner's group-writable function directories,
         # so a zsh test session never reaches its first prompt.
@@ -803,6 +832,17 @@ jobs:
       - name: Test the credential store against Secret Service
         # A private session bus; the script unlocks the keyring, checks it, and runs the tests.
         run: dbus-run-session -- bash scripts/run-secret-service-tests.sh
+      - name: Test PDF export's renderer on a virtual display
+        # A bare WebKitGTK web view prints HTML, a file URL and an http page to GTK's file printer,
+        # in English and in German, and poppler reads the text back; a failed load is an error, a
+        # page's downloads write no file, and a dropped export destroys its window. The tests are
+        # ignored without a display. The WebKit setting is the app's own default (linux_startup.rs).
+        env:
+          WEBKIT_DISABLE_DMABUF_RENDERER: "1"
+        run: |
+          sudo locale-gen de_DE.UTF-8
+          xvfb-run -a cargo nextest run --profile ci --locked -p codesense --lib --retries 0 \
+            --run-ignored all -E 'test(/^commands::export_pdf::render::tests::/)'
       - name: Test pty-core, session-server and the app
         # A real pty behind a host running the emulator worker (built with the sidecars above).
         # Runs after a failed Secret Service step, not when the test build never ran. Each run's

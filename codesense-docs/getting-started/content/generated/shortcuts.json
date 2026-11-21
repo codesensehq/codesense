@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-20T02:26:17.879Z",
+  "generatedAt": "2026-11-20T21:13:12.449Z",
   "source": "arc-n-reference/shortcuts.manifest.json",
   "totalCount": 72,
   "groups": [
@@ -411,6 +411,7 @@
           "id": "viewer.export-pdf",
           "label": "Export to PDF",
           "mac": "⌘⇧E",
+          "winLinux": "Ctrl+Shift+E",
           "menu": "Document tab, right-click → Export to PDF"
         }
       ]

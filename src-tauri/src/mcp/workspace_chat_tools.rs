@@ -196,6 +196,8 @@ pub async fn workspace_chat_send(
         message.kind,
         &message.from,
     );
+    // An agent's post in its chat answers the person.
+    crate::commands::reply_owed::replies_owed().answered(&message.from);
 
     Ok(WorkspaceChatSendResult {
         status: "sent",

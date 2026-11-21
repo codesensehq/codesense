@@ -232,6 +232,70 @@ mod tests {
     use crate::agents::prepare::step3::tests::{write, Fx};
     use crate::agents::resolve::tests::{ORG, TEAM};
 
+    /// A seat worktree, registered by its seat record: an edited mirrored context file
+    /// is git-ignored, so the seat's status reads clean, and the count still sees it,
+    /// so the seat's cleanup keeps it (`unpublished-context`) instead of removing it.
+    #[test]
+    fn a_git_clean_seat_with_an_edited_context_file_is_kept() {
+        use crate::install::worktree_index::{SeatKeep, SeatKind, SeatRecord, WorktreeStoryRecord};
+        let fx = Fx::new();
+        fx.hydrate(&fx.want(&["CLAUDE.md"], &[".claude/skills"]));
+        let mut record = WorktreeStoryRecord::new(
+            &fx.root,
+            ORG,
+            crate::domain::SourceRepoSlug::new("acme", "api").unwrap(),
+            "S-1",
+            fx.team.join("stories/S-1.md"),
+        );
+        record.seat = Some(SeatRecord {
+            name: "dev".into(),
+            kind: SeatKind::Branch,
+            pinned_commit: None,
+            kept: None,
+        });
+        crate::install::worktree_index::write_record(
+            fx.home.path(),
+            &crate::domain::Principal::from(1),
+            &record,
+        )
+        .unwrap();
+        // Another team is active: the seat's own record names its team.
+        let ctx = crate::content_engine::ResolverContext {
+            context_root: None,
+            codesense_home: fx.home.path().to_path_buf(),
+            user_id: 1,
+            org_slug: ORG.into(),
+            team_name: Some("platform".into()),
+        };
+        write(&fx.root, "CLAUDE.md", b"edited in the seat");
+        assert_eq!(
+            crate::commands::worktree::worktree_git_dirty_opt(&fx.root),
+            Some(false)
+        );
+        let found = worktree_unpublished(&ctx, &fx.root);
+        assert_eq!(
+            found.as_ref().map(|found| found.files.clone()),
+            Ok(vec!["CLAUDE.md".to_string()])
+        );
+        assert_eq!(
+            crate::commands::worktree::seat_keep_for_unpublished(&found),
+            Some(SeatKeep::UnpublishedContext)
+        );
+        // Nothing edited, nothing keeps it; a count that can't be taken does.
+        let none = Ok(WorktreeUnpublished {
+            count: 0,
+            files: Vec::new(),
+        });
+        assert_eq!(
+            crate::commands::worktree::seat_keep_for_unpublished(&none),
+            None
+        );
+        assert_eq!(
+            crate::commands::worktree::seat_keep_for_unpublished(&Err("unknown".into())),
+            Some(SeatKeep::UnpublishedContext)
+        );
+    }
+
     /// The remove confirmation counts the same edits the list shows — and
     /// never CodeSense's own local files.
     #[test]

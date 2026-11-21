@@ -48,7 +48,7 @@ impl HookEnv {
     }
 
     /// The running app's port as it wrote it at its last start.
-    fn port_file(&self) -> Option<String> {
+    pub(super) fn port_file(&self) -> Option<String> {
         let home = self.codesense_home.as_ref()?;
         let port = fs::read_to_string(home.join("http.port")).ok()?;
         Some(port.trim().to_string()).filter(|p| !p.is_empty())
@@ -70,7 +70,7 @@ pub enum Outcome {
 
 /// Why a post got no answer: the field curl's exit code held in the script's log line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PostError {
+pub(super) enum PostError {
     Connect,
     Timeout,
     Io,
@@ -88,9 +88,9 @@ impl PostError {
     }
 }
 
-struct Response {
-    code: u16,
-    body: Vec<u8>,
+pub(super) struct Response {
+    pub(super) code: u16,
+    pub(super) body: Vec<u8>,
 }
 
 /// Post one hook event (`input`, Claude's hook JSON, sent unchanged) as the script does.
@@ -115,14 +115,14 @@ pub fn notify(input: &[u8], env: &HookEnv) -> Outcome {
     let mut url = env
         .status_url
         .clone()
-        .unwrap_or_else(|| local_url(port.as_deref().unwrap_or_default()));
+        .unwrap_or_else(|| local_url(port.as_deref().unwrap_or_default(), STATUS_PATH));
     let mut result = post(&url, session, input);
     // The session outlived the app that spawned it (an app restart or update keeps the
     // terminal sessions): its port is that old instance's. The running app rewrites the port
     // file at every start, so retry there once.
     if matches!(result, Err(PostError::Connect)) && env.status_url.is_none() {
         if let Some(current) = env.port_file().filter(|c| Some(c) != port.as_ref()) {
-            url = local_url(&current);
+            url = local_url(&current, STATUS_PATH);
             result = post(&url, session, input);
         }
     }
@@ -165,8 +165,12 @@ fn one_line(text: &str) -> String {
         .collect()
 }
 
-fn local_url(port: &str) -> String {
-    format!("http://127.0.0.1:{port}/api/v1/terminal/status")
+/// The status route's path; the app's other hook routes sit beside it.
+pub(super) const STATUS_PATH: &str = "/api/v1/terminal/status";
+
+/// The app's route at `path` on this host's `port`.
+pub(super) fn local_url(port: &str, path: &str) -> String {
+    format!("http://127.0.0.1:{port}{path}")
 }
 
 /// `http://host:port/path` as `(host:port, addresses, port, path)`; any other form is
@@ -197,7 +201,7 @@ fn parse_url(url: &str) -> Option<(&str, Vec<IpAddr>, u16, &str)> {
 }
 
 /// POST `body` to `url` within [`TIMEOUT`] and read the whole answer.
-fn post(url: &str, session: &str, body: &[u8]) -> Result<Response, PostError> {
+pub(super) fn post(url: &str, session: &str, body: &[u8]) -> Result<Response, PostError> {
     let (authority, addrs, port, path) = parse_url(url).ok_or(PostError::UnsupportedUrl)?;
     let deadline = Instant::now() + TIMEOUT;
     let left = || {
@@ -326,67 +330,11 @@ fn civil_from_days(days: u64) -> (u64, u64, u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hook::tests::TempDir;
-    use std::net::TcpListener;
-    use std::sync::mpsc;
-    use std::thread;
+    use crate::hook::tests::{closed_port, listener, TempDir};
 
     /// The hook's log under a test's `~/.codesense`.
     fn log(home: &TempDir) -> String {
         fs::read_to_string(home.0.join("logs/notify-hook.log")).unwrap_or_default()
-    }
-
-    /// One request the test listener took: its head and body.
-    struct Request {
-        head: String,
-        body: Vec<u8>,
-    }
-
-    /// A listener that answers one request with `status` and `body`, and hands it back.
-    fn listener(status: &str, body: &str) -> (u16, mpsc::Receiver<Request>) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let answer = format!(
-            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut raw = Vec::new();
-            let mut chunk = [0u8; 4096];
-            let request = loop {
-                let n = stream.read(&mut chunk).unwrap();
-                raw.extend_from_slice(&chunk[..n]);
-                let Some(end) = raw.windows(4).position(|w| w == b"\r\n\r\n") else {
-                    assert!(n > 0, "request ended early");
-                    continue;
-                };
-                let head = String::from_utf8(raw[..end].to_vec()).unwrap();
-                let length: usize = head
-                    .lines()
-                    .find_map(|l| l.strip_prefix("Content-Length: "))
-                    .unwrap()
-                    .parse()
-                    .unwrap();
-                if raw.len() >= end + 4 + length {
-                    break Request {
-                        head,
-                        body: raw[end + 4..end + 4 + length].to_vec(),
-                    };
-                }
-                assert!(n > 0, "request ended early");
-            };
-            stream.write_all(answer.as_bytes()).unwrap();
-            let _ = tx.send(request);
-        });
-        (port, rx)
-    }
-
-    /// A port nothing listens on.
-    fn closed_port() -> u16 {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.local_addr().unwrap().port()
     }
 
     const EVENT: &[u8] = br#"{"hook_event_name":"Stop","session_id":"abc"}"#;
@@ -465,7 +413,11 @@ mod tests {
             notify(EVENT, &env(&home, Some(closed_port()))),
             Outcome::Posted
         );
-        assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap().body, EVENT);
+        let retried = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(retried
+            .head
+            .starts_with("POST /api/v1/terminal/status HTTP/1."));
+        assert_eq!(retried.body, EVENT);
         assert_eq!(log(&home), "");
     }
 

@@ -1041,7 +1041,9 @@ fn a_tab_whose_folder_is_removed_loses_it_when_moved_or_restarted() {
     let (seat_path, moved_path) = (seat.path().to_path_buf(), moved.path().to_path_buf());
     seat.close().unwrap();
     moved.close().unwrap();
-    // A move re-records the tab's folder: a gone one is dropped.
+    // A move re-records the tab's folder: a gone one is dropped. The other workspace's
+    // own folder exists, since a usage check fails closed on a gone workspace folder.
+    std::fs::create_dir(base.path().join("x")).unwrap();
     let elsewhere = WorkspaceDescriptor {
         worktree_path: Some(base.path().join("x")),
         ..descriptor("x")
@@ -1056,9 +1058,15 @@ fn a_tab_whose_folder_is_removed_loses_it_when_moved_or_restarted() {
     .unwrap();
     assert!(layout_of(&m, "x").unwrap().tab_dirs.is_empty());
     assert!(!moved_path.exists());
-    // A restart after its folder went away runs in the workspace's folder.
+    // A restart after its folder went away runs in the workspace's folder, and a usage
+    // check while it starts counts it there already.
     m.on_exit(&sid("seat"), None);
     m.reserve_respawn(&sid("seat")).unwrap();
+    assert!(layout_of(&m, "w").unwrap().tab_dirs.is_empty());
+    assert_eq!(
+        m.worktree_usage(base.path()).unwrap().opening,
+        vec![sid("seat")]
+    );
     m.finish_respawn(&sid("seat")).unwrap();
     let layout = layout_of(&m, "w").unwrap();
     assert!(layout.tab_dirs.is_empty());

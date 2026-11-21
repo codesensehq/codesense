@@ -27,6 +27,7 @@ impl rmcp::schemars::JsonSchema for AnyJson {
 }
 pub(crate) mod feedback_tool;
 pub(crate) mod live_data_authoring;
+pub(crate) mod charge_tools;
 pub(crate) mod local_setup;
 pub(crate) mod machine_tools;
 pub(crate) mod notes_tools;

@@ -103,6 +103,10 @@ test("with Claude installed a send starts the Foreman, and the page never says i
   });
   // The Foreman's docs-team key, the only one the launch grant allows.
   expect(args.agent).toBe("codesense/docs/getting-started/foreman-claude");
+  // The person's text never rides the launch prompt: it goes in as mail the Foreman answers with
+  // reply, once its session joins.
+  expect(args.initialPrompt).not.toContain("hello");
+  expect(args.initialPrompt).toContain("read_messages");
   expect((await calls("getDependencyStatus")).length).toBeGreaterThan(0);
   await expect(page.locator("body")).not.toContainText(NO_CLI_READ);
 });

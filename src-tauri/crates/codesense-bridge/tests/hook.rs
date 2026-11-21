@@ -7,7 +7,7 @@ use std::time::Duration;
 
 mod support;
 
-use support::{listener, TempDir};
+use support::{listener, listener_answering, TempDir};
 
 /// Run `codesense-bridge hook <args>` with `stdin` and a home of its own.
 fn hook(args: &[&str], stdin: &[u8], env: &[(&str, &str)]) -> Output {
@@ -84,6 +84,63 @@ fn notify_posts_the_event_once() {
         rx.recv_timeout(Duration::from_millis(300)).is_err(),
         "one post"
     );
+}
+
+#[test]
+fn reply_check_prints_the_apps_block_once() {
+    let (port, rx) = listener_answering(r#"{"block":"42"}"#);
+    let env = [
+        ("CODESENSE_API_PORT", port.as_str()),
+        ("CODESENSE_TAB_SESSION_ID", "tab-1"),
+    ];
+    let out = hook(
+        &["reply-check"],
+        br#"{"hook_event_name":"Stop","stop_hook_active":false}"#,
+        &env,
+    );
+    assert!(out.status.success());
+    let decision: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(decision["decision"], "block");
+    assert_eq!(
+        decision["reason"],
+        "You haven't answered in the chat: reply to message 42 with your answer."
+    );
+    let request = String::from_utf8(rx.recv_timeout(Duration::from_secs(5)).unwrap()).unwrap();
+    assert!(request.starts_with("POST /api/v1/terminal/reply-check HTTP/1."));
+    assert!(request.contains("\r\nX-Codesense-Tab-Session-Id: tab-1\r\n"));
+
+    // A stop Claude is already continuing asks nothing and prints nothing.
+    let out = hook(
+        &["reply-check"],
+        br#"{"hook_event_name":"Stop","stop_hook_active":true}"#,
+        &env,
+    );
+    assert!(out.status.success());
+    assert!(out.stdout.is_empty());
+    assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
+}
+
+#[test]
+fn reply_check_lets_the_turn_stop_when_nothing_is_owed_or_the_app_is_gone() {
+    let (port, _rx) = listener_answering(r#"{"block":null}"#);
+    let event = br#"{"hook_event_name":"Stop"}"#;
+    let out = hook(
+        &["reply-check"],
+        event,
+        &[
+            ("CODESENSE_API_PORT", port.as_str()),
+            ("CODESENSE_TAB_SESSION_ID", "tab-1"),
+        ],
+    );
+    assert!(out.status.success());
+    assert!(out.stdout.is_empty());
+    let out = hook(
+        &["reply-check"],
+        event,
+        &[("CODESENSE_TAB_SESSION_ID", "tab-1")],
+    );
+    assert!(out.status.success());
+    assert!(out.stdout.is_empty());
 }
 
 #[test]

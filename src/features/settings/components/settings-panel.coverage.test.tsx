@@ -1072,7 +1072,7 @@ describe("C.6d — legacy reference sweep (AC-15)", () => {
   });
 });
 
-describe("SettingsPanel — search with General rows hidden by a capability", () => {
+describe("SettingsPanel — search with General rows whose capability is off", () => {
   afterEach(() => resetPlatformCaps());
 
   async function searchFromAppearance(value: string) {
@@ -1085,11 +1085,12 @@ describe("SettingsPanel — search with General rows hidden by a capability", ()
     });
   }
 
-  it("a hidden row neither lights General nor pulls the search there", async () => {
+  it("an explained row still lights General and pulls the search there", async () => {
     setPlatformCaps({ "background-on-close": "r", "terminal-server-tray": "r" });
     await searchFromAppearance("quit");
-    expect(screen.getByTestId("settings-nav-general")).toHaveAttribute("aria-disabled", "true");
-    expect(screen.getByTestId("settings-nav-appearance")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("settings-nav-general")).not.toHaveAttribute("aria-disabled");
+    expect(screen.getByTestId("settings-nav-general")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("settings-quit-on-close")).toHaveAttribute("aria-disabled", "true");
   });
 
   it("with the capability on, the same search switches to General", async () => {

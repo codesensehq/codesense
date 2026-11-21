@@ -552,3 +552,50 @@ async fn review_trail_first_retained_failure_skips_only_the_dropped_interval() {
         assert_eq!(value["tools"]["used"][0]["errors"], 2);
     }
 }
+
+/// A session charged to another story names the story of its latest segment, by its tab or
+/// native id, and lists its charges oldest first with who charged each.
+#[tokio::test]
+async fn a_charged_session_names_its_latest_segments_story_and_lists_its_charges() {
+    let (dir, mut s) = store();
+    let path = dir.path().join("usage.sqlite");
+    let mut r = SessionRecord::new("tab");
+    r.native_session_id = Some("native".into());
+    r.story_id = Some("DEMO-1".into());
+    r.org = Some("acme".into());
+    s.write_session_record(&r).unwrap();
+    let at = 1_790_000_000_000;
+    let calls: Vec<_> = (0..2)
+        .map(|n| event(&format!("e{n}"), "native", "gpt-6-sol", at + n * 1_000, Tokens { input: 10, ..Default::default() }))
+        .collect();
+    s.ingest(&calls).unwrap();
+    let uncharged = get(&path, "tab").await;
+    assert_eq!(uncharged["story"]["id"], "DEMO-1");
+    assert_eq!(uncharged["charges"], json!([]));
+    for (story, from_ms) in [("DEMO-2", at + 500), ("DEMO-3", at + 5_000)] {
+        let charge = crate::session_usage::charge::Charge {
+            story_id: story.into(),
+            from_ms,
+            org: Some("acme".into()),
+            team: None,
+            charged_by: Some("lead".into()),
+            charged_by_session: "lead-tab".into(),
+            charged_at_ms: from_ms,
+        };
+        s.charge_story("tab", &charge).unwrap();
+    }
+    for id in ["tab", "native"] {
+        let a = get(&path, id).await;
+        // The latest segment (from the last charge) has no usage yet; it is still the story worked now.
+        assert_eq!(a["story"]["id"], "DEMO-3", "{id}");
+        assert_eq!(a["story"]["basis"], "charged");
+        assert_eq!(
+            a["charges"],
+            json!([
+                {"story": "DEMO-2", "fromMs": at + 500, "chargedBy": "lead"},
+                {"story": "DEMO-3", "fromMs": at + 5_000, "chargedBy": "lead"}
+            ])
+        );
+        assert_eq!(a["cost"], uncharged["cost"], "the session's own cost is the whole session's");
+    }
+}

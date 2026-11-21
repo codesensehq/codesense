@@ -1461,6 +1461,17 @@ async fn source_tabs(
     .await
 }
 
+/// Whether a tab on This Mac runs in the folder `path`, or is opening or restarting
+/// into it: the move's own source check. A terminal host that can't answer counts as
+/// in use.
+pub(crate) async fn local_folder_in_use(app: &tauri::AppHandle, path: &Path) -> bool {
+    let path = path.to_string_lossy();
+    match source_tabs(app, &MachineRef(None), Some(&path)).await {
+        Ok(tabs) => !matches!(tabs[..], []),
+        Err(_) => true,
+    }
+}
+
 fn source_runtime_rows(
     app: &tauri::AppHandle,
     machine: &MachineRef,
@@ -4053,6 +4064,7 @@ mod tests {
             name: "dev".into(),
             kind: SeatKind::Branch,
             pinned_commit: None,
+            kept: None,
         });
         for rec in [&base, &seat] {
             worktree_index::write_record(home.path(), &principal, rec).unwrap();

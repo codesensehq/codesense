@@ -571,7 +571,7 @@
   var QUERYALL_LIMIT = 100;
 
   var PAGED_LISTS = {
-    sessionUsage: { rows: "sessions", id: function (r) { return JSON.stringify([r.cli, r.sessionId]); }, cursor: { arg: "cursor", next: "nextCursor" }, total: "total" },
+    sessionUsage: { rows: "sessions", id: function (r) { return JSON.stringify([r.cli, r.sessionId, r.segment && r.segment.fromMs != null ? r.segment.fromMs : null]); }, cursor: { arg: "cursor", next: "nextCursor" }, total: "total" },
     queryContext: { rows: "rows", id: function (r) { return r.id != null ? r.id : r.path; }, cursor: { arg: "cursor", next: "nextCursor" }, total: "total" },
     storyChanges: { rows: "commits", id: "sha", cursor: { arg: "cursor", next: "nextCursor" }, total: "total" }
   };
