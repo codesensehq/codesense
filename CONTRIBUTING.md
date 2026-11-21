@@ -50,12 +50,16 @@ open issues first.
   tests), it also needs a new `changes/<slug>.md`. When users won't notice the
   change, a maintainer adds the `no-changelog` label instead.
 - **Rust guards** runs the `codesense-guards` crate's tests (the source guards
-  and the X1 census) on every change, whether or not the Rust jobs are
-  skipped, because the guards also scan the frontend. It builds no app, starts
-  without waiting for any other job, and is a required check, so it is the
-  quickest failure to see. To run it locally, use
-  `cargo test --locked -p codesense-guards`. Set `X1_DIFF_BASE=<base sha>` to
-  list only the X1 calls in the files your change touches.
+  and the X1 census, a count of the calls the guard can't resolve, held under a
+  ceiling) on every change, whether or not the Rust jobs are skipped, because
+  the guards also scan the frontend. It builds no app, starts without waiting
+  for any other job, and is a required check, and fails within minutes, long
+  before the Rust build jobs finish. To run it locally, use
+  `cargo test --locked -p codesense-guards`. When the census goes over its
+  ceiling, the failure lists the unresolved calls; set `X1_DIFF_BASE` to a
+  commit sha, for example `X1_DIFF_BASE=$(git merge-base origin/main HEAD)`, to
+  narrow that listing to the files your change touches (it lists every call
+  when none is in a changed file).
 - The other jobs lint, build and test the change.
 - **Rust (macOS arm64)** doesn't block a merge. It runs after the merge, on
   each push to `main` and nightly; a red run there is fixed forward in a
