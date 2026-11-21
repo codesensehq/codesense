@@ -407,6 +407,8 @@ pub(crate) fn save_with(keys: &Keys, dir: &Path, key: &str) -> Result<KeyStatus,
             format!("{error} Nothing changed.")
         }
     })?;
+    // The old key's install id goes with it; the new key gets its own on its first ping.
+    super::register::forget_install(dir);
     Ok(status_with(keys, dir))
 }
 
@@ -416,6 +418,7 @@ pub(crate) fn remove_with(keys: &Keys, dir: &Path) -> Result<KeyStatus, String> 
     let provider = load(dir).provider;
     update(dir, |s| s.clear_production(provider))?;
     keys.remove_key(provider)?;
+    super::register::forget_install(dir);
     Ok(status_with(keys, dir))
 }
 
@@ -454,6 +457,10 @@ pub(crate) fn set_with(
             }
         }
     })?;
+    if !settings.enabled {
+        // Off: no pings, and nothing that identifies the install stays.
+        super::register::forget_install(dir);
+    }
     Ok(view(&settings))
 }
 

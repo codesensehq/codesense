@@ -143,6 +143,17 @@ impl Bucket {
         outcome
     }
 
+    /// When `key`'s provider backoff ends (ms), while one is running at `now_ms`. It only reads:
+    /// pingbacks check it, and are never counted or blocked by it otherwise.
+    pub(crate) fn backoff_until(&self, key: &str, now_ms: i64) -> Option<i64> {
+        let _guard = lock(&self.lock);
+        let (state, _) = self.load_state();
+        match state.buckets.get(key) {
+            Some(entry) => entry.backoff_until_ms.filter(|until| *until > now_ms),
+            None => None,
+        }
+    }
+
     /// Block `key`'s searches for `retry_after` seconds after a provider 429, at least 1 s and at
     /// most 24 h, and return the seconds it blocks for.
     pub(crate) fn back_off(&self, key: &str, retry_after: u64, now_ms: i64) -> u64 {

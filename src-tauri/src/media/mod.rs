@@ -848,6 +848,11 @@ pub(crate) fn install(app: &tauri::AppHandle) {
         }
     };
     let state = std::sync::Arc::new(MediaState::new(dir, std::sync::Arc::new(state::Http)));
+    // Every serve settles the provider view pings it owes.
+    let served = app.clone();
+    state.when_served(std::sync::Arc::new(move |sha: &str| {
+        crate::gif::register::on_served(&served, sha)
+    }));
     app.manage(state.clone());
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
