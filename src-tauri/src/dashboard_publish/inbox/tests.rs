@@ -21,6 +21,8 @@ pub(crate) struct FakeInbox {
             std::sync::mpsc::Receiver<()>,
         )>,
     >,
+    /// Each role send's `(team, role, sender)`, as the app's seam hears it.
+    queued: std::sync::Mutex<Vec<(String, String, String)>>,
 }
 impl FakeInbox {
     fn new() -> Arc<Self> {
@@ -30,6 +32,7 @@ impl FakeInbox {
             cache: Default::default(),
             names: Default::default(),
             read_gate: std::sync::Mutex::new(None),
+            queued: Default::default(),
         })
     }
     fn path(&self, team: &str) -> PathBuf {
@@ -118,6 +121,12 @@ impl InboxHost for FakeInbox {
     }
     fn cached_media(&self, sha: &str) -> Result<Vec<u8>, String> {
         self.cache.lock().unwrap().get(sha).cloned().ok_or("evicted".into())
+    }
+    fn role_message_queued(&self, team: &LaunchTeam, role: &str, _: i64, sender: &str) {
+        self.queued
+            .lock()
+            .unwrap()
+            .push((team.team.clone(), role.into(), sender.into()));
     }
 }
 
@@ -335,6 +344,15 @@ async fn owner_sends_and_replies_through_the_inbox_with_fixed_team_and_plain_con
         .unwrap();
     assert_eq!(role["delivery"]["state"], "queued");
     assert!(role.get("text").is_none());
+    // The send reaches the seam where the app offers the role's holders their notice.
+    assert_eq!(
+        *host.queued.lock().unwrap(),
+        vec![(
+            "emea".to_string(),
+            "triage".to_string(),
+            "human".to_string()
+        )]
+    );
 }
 
 #[tokio::test]
