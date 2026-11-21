@@ -3736,6 +3736,109 @@ mod tests {
             .preparing());
     }
 
+    /// The one receipt `root` holds.
+    fn receipt_in(root: &std::path::Path) -> std::path::PathBuf {
+        let receipts: Vec<_> = std::fs::read_dir(root)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+            .collect();
+        assert_eq!(receipts.len(), 1, "{receipts:?}");
+        receipts[0].clone()
+    }
+
+    fn consumed(
+        root: &std::path::Path,
+        record: &RemoteShellRecord,
+    ) -> Result<Option<RemoteShellRecord>, String> {
+        DashboardLaunchState::new(1).consumed_remote_shell(
+            root,
+            record.owner_id,
+            &record.team_key,
+            &record.machine_id,
+            record.request_id,
+        )
+    }
+
+    #[test]
+    fn receipts_and_spawn_markers_are_owner_only_in_a_fresh_or_shared_root() {
+        use crate::test_support::owner_only::{is_owner_only, shared_dir};
+        let dir = tempfile::tempdir().unwrap();
+        let shared = dir.path().join("shared");
+        shared_dir(&shared);
+        for root in [dir.path().join("fresh").join("receipts"), shared] {
+            let mut record = receipt_record();
+            record.phase = RemoteSpawnPhase::Preparing;
+            let state = DashboardLaunchState::new(1);
+            state
+                .reserve_remote_shell_durable(&root, record.clone())
+                .unwrap();
+            let receipt = receipt_in(&root);
+            assert!(is_owner_only(&receipt));
+            assert!(state.begin_remote_spawn(&root, &mut record).unwrap());
+            assert!(is_owner_only(&receipt.with_extension("spawn")));
+        }
+    }
+
+    #[test]
+    fn a_receipt_with_a_second_link_is_refused_and_kept() {
+        let root = tempfile::tempdir().unwrap();
+        let record = receipt_record();
+        DashboardLaunchState::new(1)
+            .reserve_remote_shell_durable(root.path(), record.clone())
+            .unwrap();
+        let receipt = receipt_in(root.path());
+        let bytes = std::fs::read(&receipt).unwrap();
+        let second = root.path().join("second-link");
+        std::fs::hard_link(&receipt, &second).unwrap();
+        assert!(consumed(root.path(), &record).is_err());
+        assert!(DashboardLaunchState::new(1)
+            .reserve_remote_shell_durable(root.path(), record.clone())
+            .is_err());
+        assert_eq!(std::fs::read(&receipt).unwrap(), bytes);
+        std::fs::remove_file(second).unwrap();
+        assert_eq!(
+            consumed(root.path(), &record).unwrap().unwrap().request_id,
+            record.request_id
+        );
+    }
+
+    #[test]
+    fn a_receipt_that_is_a_link_or_a_fifo_is_refused_without_blocking() {
+        use crate::test_support::owner_only::{fifo, file_symlink, without_blocking};
+        let root = tempfile::tempdir().unwrap();
+        let record = receipt_record();
+        DashboardLaunchState::new(1)
+            .reserve_remote_shell_durable(root.path(), record.clone())
+            .unwrap();
+        let receipt = receipt_in(root.path());
+        let elsewhere = tempfile::tempdir().unwrap();
+        let target = elsewhere.path().join("receipt.json");
+        std::fs::rename(&receipt, &target).unwrap();
+        if file_symlink(&target, &receipt) {
+            assert!(consumed(root.path(), &record).is_err());
+            assert!(std::fs::symlink_metadata(&receipt)
+                .unwrap()
+                .file_type()
+                .is_symlink());
+            std::fs::remove_file(&receipt).unwrap();
+        }
+        if fifo(&receipt) {
+            let path = root.path().to_path_buf();
+            let (owner, team, machine, request) = (
+                record.owner_id,
+                record.team_key.clone(),
+                record.machine_id.clone(),
+                record.request_id,
+            );
+            assert!(without_blocking(move || {
+                DashboardLaunchState::new(1)
+                    .consumed_remote_shell(&path, owner, &team, &machine, request)
+                    .is_err()
+            }));
+        }
+    }
+
     #[test]
     fn an_unreadable_receipt_does_not_block_attach_by_another_handle() {
         let root = tempfile::tempdir().unwrap();

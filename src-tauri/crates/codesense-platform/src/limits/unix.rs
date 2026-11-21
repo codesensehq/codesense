@@ -13,6 +13,10 @@ use super::{warning, Alarm, Usage, EXEC_ARG};
 /// The OS error for a process out of descriptors.
 pub(super) const TOO_MANY_OPEN_FILES: i32 = libc::EMFILE;
 
+/// The OS errors for an open that hit a limit on open files: this process's
+/// (`EMFILE`) or the system's (`ENFILE`).
+pub(super) const OPEN_FILE_LIMITS: [i32; 2] = [libc::EMFILE, libc::ENFILE];
+
 /// The soft limit before this process raised it (0: never raised).
 static ORIGINAL: AtomicU64 = AtomicU64::new(0);
 /// This process's own executable, when its entry point serves [`EXEC_ARG`].

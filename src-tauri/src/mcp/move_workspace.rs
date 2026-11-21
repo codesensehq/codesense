@@ -16,7 +16,6 @@ use rmcp::schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::Read;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -265,10 +264,7 @@ pub fn write_new(root: &Path, intent: &MoveIntent) -> Result<(), IntentWriteErro
     let _guard = INTENT_WRITES
         .lock()
         .map_err(|_| IntentWriteError::Io("intent write lock poisoned".into()))?;
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(root)
+    codesense_platform::fs::create_dir_owner_only(root)
         .map_err(|e| IntentWriteError::Io(format!("intent root unavailable: {e}")))?;
     let path = MoveIntent::path_in(root, &intent.team_key, &intent.workspace_id);
     if path.exists() {
@@ -286,13 +282,7 @@ pub fn write_new(root: &Path, intent: &MoveIntent) -> Result<(), IntentWriteErro
         return Err(IntentWriteError::Io("intent too large".into()));
     }
     use std::io::Write;
-    let mut file = match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(&path)
-    {
+    let mut file = match codesense_platform::fs::create_new_owner_only(&path) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             return Err(IntentWriteError::AlreadyExists);
@@ -315,12 +305,7 @@ fn archive_intent_locked(root: &Path, intent: &MoveIntent) -> Result<(), IntentW
         MoveIntent::file_key(&intent.team_key, &intent.workspace_id),
         uuid::Uuid::new_v4()
     ));
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(archive)
+    let mut file = codesense_platform::fs::create_new_owner_only(&archive)
         .map_err(|e| IntentWriteError::Io(e.to_string()))?;
     file.write_all(&serde_json::to_vec(intent).map_err(|e| IntentWriteError::Io(e.to_string()))?)
         .and_then(|()| file.sync_all())
@@ -377,14 +362,10 @@ pub fn rewrite(root: &Path, intent: &MoveIntent) -> Result<(), IntentWriteError>
     let tmp = path.with_extension("tmp");
     {
         use std::io::Write;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&tmp)
-            .map_err(|e| IntentWriteError::Io(format!("open tmp: {e}")))?;
+        let mut file =
+            codesense_platform::fs::create_owner_only(&tmp, codesense_platform::fs::Open::NoFollow)
+                .and_then(|file| file.set_len(0).map(|()| file))
+                .map_err(|e| IntentWriteError::Io(format!("open tmp: {e}")))?;
         file.write_all(&bytes)
             .map_err(|e| IntentWriteError::Io(format!("write: {e}")))?;
         file.sync_all()
@@ -413,11 +394,10 @@ pub fn read(
 }
 
 fn read_path(path: &Path) -> Result<MoveIntent, IntentReadError> {
-    let mut file = match std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-    {
+    let mut file = match codesense_platform::fs::open_nofollow_nonblocking(
+        std::fs::OpenOptions::new().read(true),
+        path,
+    ) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Err(IntentReadError::NotFound);
@@ -506,9 +486,7 @@ pub fn scan(root: &Path) -> Vec<MoveIntent> {
 }
 
 fn sync_dir(root: &Path) {
-    if let Ok(dir) = std::fs::File::open(root) {
-        let _ = dir.sync_all();
-    }
+    let _ = codesense_platform::fs::sync_dir(root);
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -2785,6 +2763,58 @@ mod tests {
         rollback_preparing(dir.path(), &retry).unwrap();
         assert!(scan(dir.path()).is_empty());
         write_new(dir.path(), &retry).unwrap();
+    }
+
+    #[test]
+    fn intent_files_are_owner_only_in_a_fresh_or_shared_root_and_after_a_rewrite() {
+        use crate::test_support::owner_only::{is_owner_only, shared_dir, shared_file};
+        let dir = tempdir().unwrap();
+        let fresh = dir.path().join("fresh").join("intents");
+        let mut failed = sample_intent();
+        write_new(&fresh, &failed).unwrap();
+        assert!(is_owner_only(&fresh));
+        let path = MoveIntent::path_in(&fresh, &failed.team_key, &failed.workspace_id);
+        assert!(is_owner_only(&path));
+        record_failure(&fresh, &mut failed, "prepare failed").unwrap();
+        let mut retry = failed.clone();
+        retry.to.request_id = "retry".into();
+        retry.failure = None;
+        write_new(&fresh, &retry).unwrap();
+        for entry in std::fs::read_dir(&fresh).unwrap() {
+            assert!(is_owner_only(&entry.unwrap().path()));
+        }
+
+        let shared = dir.path().join("shared");
+        shared_dir(&shared);
+        let intent = sample_intent();
+        write_new(&shared, &intent).unwrap();
+        assert!(!is_owner_only(&shared), "an existing root is left as it is");
+        let path = MoveIntent::path_in(&shared, &intent.team_key, &intent.workspace_id);
+        assert!(is_owner_only(&path));
+        shared_file(&path, &[b' '; 8192]);
+        rewrite(&shared, &intent).unwrap();
+        assert!(is_owner_only(&path));
+        assert_eq!(
+            read(&shared, &intent.team_key, &intent.workspace_id).unwrap(),
+            intent
+        );
+    }
+
+    #[test]
+    fn a_rewrite_truncates_a_stale_temp_file() {
+        let dir = tempdir().unwrap();
+        let intent = sample_intent();
+        write_new(dir.path(), &intent).unwrap();
+        let path = MoveIntent::path_in(dir.path(), &intent.team_key, &intent.workspace_id);
+        let tmp = path.with_extension("tmp");
+        codesense_platform::fs::create_new_owner_only(&tmp).unwrap();
+        std::fs::write(&tmp, [b' '; 8192]).unwrap();
+        rewrite(dir.path(), &intent).unwrap();
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            serde_json::to_vec(&intent).unwrap()
+        );
+        assert!(!tmp.exists());
     }
 
     struct FakeMoveHost {

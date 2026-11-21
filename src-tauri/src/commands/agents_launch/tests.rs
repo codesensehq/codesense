@@ -1030,6 +1030,7 @@ fn files_under(dir: &Path) -> serde_json::Map<String, serde_json::Value> {
 /// recipe, the resolved launch, the argv and env each spawn site runs with, and every file
 /// the launch writes. Machine paths and per-launch ids are
 /// replaced by stable tokens. Set `UPDATE_ADAPTER_LAUNCH_GOLDEN=1` to re-record.
+#[cfg(cap_agent_cli_sockets)]
 #[test]
 fn builtin_adapter_launches_match_the_recorded_golden() {
     use crate::agents::model::McpAccess;
@@ -2355,9 +2356,11 @@ pub(crate) mod attribution_entry {
     }
 }
 
+#[cfg(cap_agent_cli_sockets)]
 #[path = "hermes_tests.rs"]
 mod hermes_tests;
 
+#[cfg(cap_agent_cli_sockets)]
 #[path = "spawn_boundary_tests.rs"]
 mod spawn_boundary_tests;
 

@@ -151,12 +151,10 @@ fn canonical_with_bridge(
 
 fn bounded_config(path: &Path) -> Result<Option<Vec<u8>>, String> {
     use std::io::Read;
-    use std::os::unix::fs::OpenOptionsExt;
-    let file = match std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-    {
+    let file = match codesense_platform::fs::open_nofollow_nonblocking(
+        std::fs::OpenOptions::new().read(true),
+        path,
+    ) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => {
@@ -865,14 +863,22 @@ fn restore_relay(
     }
     let identity = scope_identity(dir)?;
     let captured = dir.join("local-relay-grant.json");
-    use std::os::unix::fs::MetadataExt;
-    let metadata = std::fs::symlink_metadata(&captured).map_err(|e| e.to_string())?;
-    if !metadata.is_file() || metadata.mode() & 0o077 != 0 {
+    // One handle, opened without following a link or waiting on a FIFO, is
+    // checked and then read, so the file checked is the file read.
+    let mut file = codesense_platform::fs::open_nofollow_nonblocking(
+        std::fs::OpenOptions::new().read(true),
+        &captured,
+    )
+    .map_err(|e| e.to_string())?;
+    let private = file.metadata().map_err(|e| e.to_string())?.is_file()
+        && codesense_platform::fs::is_owner_only(&file).map_err(|e| e.to_string())?;
+    if !private {
         return Err("captured MCP grant must be private".into());
     }
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut file, &mut bytes).map_err(|e| e.to_string())?;
     let saved: SavedGrant =
-        serde_json::from_slice(&std::fs::read(captured).map_err(|e| e.to_string())?)
-            .map_err(|_| "cannot read captured MCP grant")?;
+        serde_json::from_slice(&bytes).map_err(|_| "cannot read captured MCP grant")?;
     let directory = dir.to_path_buf();
     let validate = std::sync::Arc::new(move || {
         alive()?;
@@ -899,6 +905,42 @@ mod restart_tests {
     use super::*;
     use codesense_host_proto::scoped_mcp::{self as wire, Descriptor, Hello};
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+
+    #[test]
+    fn a_captured_grant_that_is_shared_a_link_or_a_fifo_is_refused_without_blocking() {
+        use crate::test_support::owner_only::{fifo, file_symlink, shared_file, without_blocking};
+        let root = tempfile::tempdir().unwrap();
+        wire::write_descriptor(
+            &root.path().join("local-relay.json"),
+            &Descriptor {
+                version: wire::VERSION,
+                socket: root.path().join("retired"),
+                capability: "a".repeat(64),
+            },
+        )
+        .unwrap();
+        let captured = root.path().join("local-relay-grant.json");
+        let refused = |path: &Path| {
+            let dir = path.to_path_buf();
+            without_blocking(move || {
+                restore_relay(&dir, std::sync::Arc::new(|| Ok::<(), String>(())))
+            })
+            .unwrap_err()
+        };
+        shared_file(&captured, b"{}");
+        assert!(refused(root.path()).contains("must be private"));
+        std::fs::remove_file(&captured).unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let target = elsewhere.path().join("grant.json");
+        write_0600_exclusive(&target, b"{}").unwrap();
+        if file_symlink(&target, &captured) {
+            refused(root.path());
+            std::fs::remove_file(&captured).unwrap();
+        }
+        if fifo(&captured) {
+            assert!(refused(root.path()).contains("must be private"));
+        }
+    }
 
     #[tokio::test]
     async fn a_live_captured_grant_rearms_after_restart_and_survives_unknown_liveness() {

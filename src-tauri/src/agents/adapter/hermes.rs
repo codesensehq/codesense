@@ -169,6 +169,10 @@ fn permission_display(settings: &serde_json::Value, args: &[String]) -> String {
     format!("{approval} approvals · {toolsets} · {denies} tool deny rules")
 }
 
+#[cfg(cap_agent_cli_sockets)]
+pub(super) mod runtime;
+#[cfg(not(cap_agent_cli_sockets))]
+#[path = "hermes/runtime_off.rs"]
 pub(super) mod runtime;
 
 /// Only non-secret startup model selectors are admitted until endpoint credentials land.
@@ -392,6 +396,7 @@ fn model_settings(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(cap_agent_cli_sockets)]
     #[test]
     fn hermes_admin_policy_presence_refuses_system_or_nonempty_ambient() {
         let fixture = super::super::ManagedHomeFixture::new();
@@ -407,6 +412,25 @@ mod tests {
         );
         std::fs::create_dir_all(&system).unwrap();
         assert_eq!(unmanaged_host(&system, None).unwrap_err(), admin_policy());
+    }
+
+    #[test]
+    fn hermes_seeds_its_home_on_every_build_and_fails_closed_without_agent_cli_sockets() {
+        let seed = desktop()
+            .seed_home
+            .expect("Hermes seeds its home on every build");
+        #[cfg(not(cap_agent_cli_sockets))]
+        {
+            let dir = tempfile::tempdir().unwrap();
+            let home = dir.path().join("home");
+            assert_eq!(
+                seed(&home, &dir.path().join("hermes")).unwrap_err(),
+                codesense_pty_core::caps_off("agent-cli-sockets").to_string()
+            );
+            assert!(!home.exists());
+        }
+        #[cfg(cap_agent_cli_sockets)]
+        let _ = seed;
     }
 
     #[test]

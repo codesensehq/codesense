@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Unix: permission modes, uid, (dev, ino), link counts and ctime,
-//! `O_NOFOLLOW`, `rename`, `flock`, `ETXTBSY`, `fstatvfs`, `pread`, and hard
-//! and symbolic links for [`super::place_link`].
+//! `O_NOFOLLOW`, `rename`, directory `fsync`, `flock`, `ETXTBSY`,
+//! `fstatvfs`, `pread`, and hard and symbolic links for
+//! [`super::place_link`].
 
 use std::fs::{File, Metadata, OpenOptions};
 use std::io;
@@ -110,6 +111,10 @@ pub(super) fn canonicalize(path: &Path) -> io::Result<std::path::PathBuf> {
 
 pub(super) fn replace(from: &Path, to: &Path) -> Result<(), ReplaceError> {
     std::fs::rename(from, to).map_err(ReplaceError::Io)
+}
+
+pub(super) fn sync_dir(dir: &Path) -> io::Result<()> {
+    File::open(dir)?.sync_all()
 }
 
 pub(super) fn lock_exclusive(file: &File) -> io::Result<()> {

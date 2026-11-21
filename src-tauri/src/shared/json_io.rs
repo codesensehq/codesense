@@ -36,21 +36,17 @@ pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, JsonIoError> {
 /// old file intact or no file — never a half-written document.
 pub fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), JsonIoError> {
     let json = serde_json::to_string_pretty(value).map_err(JsonIoError::Serialize)?;
-    write_atomic_inner(path, &json, None)
+    write_atomic_inner(path, &json, false)
 }
 
-/// Same as [`write_json_atomic`] for app-owned private records: on unix the
-/// file is created `0600` (an existing looser file is replaced by a `0600`
-/// one) and its parent directory is created or tightened to `0700`. On other
-/// platforms this is identical to [`write_json_atomic`].
+/// Same as [`write_json_atomic`] for app-owned private records: the file is
+/// created owner-only (unix `0600`; on Windows a protected owner-only DACL),
+/// so an existing looser file is replaced by an owner-only one, and its
+/// parent directory is created or tightened to owner-only (unix `0700`).
 pub fn write_json_atomic_private<T: Serialize>(path: &Path, value: &T) -> Result<(), JsonIoError> {
     let json = serde_json::to_string_pretty(value).map_err(JsonIoError::Serialize)?;
-    write_atomic_inner(path, &json, Some(PRIVATE_FILE_MODE))
+    write_atomic_inner(path, &json, true)
 }
-
-/// File mode for [`write_json_atomic_private`]; the parent directory gets
-/// `0o700`.
-const PRIVATE_FILE_MODE: u32 = 0o600;
 
 /// R-7: Compact variant for high-frequency, machine-only consumers (e.g. the
 /// frontmatter cache). Same atomic + temp-cleanup guarantees as the pretty
@@ -58,7 +54,7 @@ const PRIVATE_FILE_MODE: u32 = 0o600;
 /// files (view-overrides.json) MUST keep using the pretty variant.
 pub fn write_json_atomic_compact<T: Serialize>(path: &Path, value: &T) -> Result<(), JsonIoError> {
     let json = serde_json::to_string(value).map_err(JsonIoError::Serialize)?;
-    write_atomic_inner(path, &json, None)
+    write_atomic_inner(path, &json, false)
 }
 
 /// SW-CP-24: how an array at a given document path merges when a structured
@@ -226,27 +222,19 @@ pub fn union_array(
 }
 
 /// Shared temp+rename+cleanup for both pretty and compact atomic writers.
-/// `private_mode = Some(m)` (unix only) creates the temp file with mode `m`
-/// and creates or tightens the parent directory to `0700`.
-fn write_atomic_inner(
-    path: &Path,
-    json: &str,
-    private_mode: Option<u32>,
-) -> Result<(), JsonIoError> {
+/// `private` creates the temp file owner-only and creates or tightens the
+/// parent directory to owner-only.
+fn write_atomic_inner(path: &Path, json: &str, private: bool) -> Result<(), JsonIoError> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(JsonIoError::Io)?;
-        #[cfg(unix)]
-        if private_mode.is_some() && !std::ffi::OsStr::is_empty(parent.as_os_str()) {
-            // Best-effort: a parent we cannot tighten (not ours, or a symlink)
-            // must not block the write; the file itself is still exactly 0600.
-            if let Err(e) = tighten_private_dir(parent) {
-                log::warn!("could not set {} to 0700: {e}", std::path::Path::display(parent));
-            }
+        if private && !std::ffi::OsStr::is_empty(parent.as_os_str()) {
+            create_private_parent(parent).map_err(JsonIoError::Io)?;
+        } else {
+            std::fs::create_dir_all(parent).map_err(JsonIoError::Io)?;
         }
     }
 
     let tmp_path = path.with_extension("json.tmp");
-    if let Err(e) = write_tmp(&tmp_path, json, private_mode) {
+    if let Err(e) = write_tmp(&tmp_path, json, private) {
         // A failed write may have left a partial tmp; clean it up so the next
         // attempt doesn't have to.
         let _ = std::fs::remove_file(&tmp_path);
@@ -260,34 +248,37 @@ fn write_atomic_inner(
     Ok(())
 }
 
-/// Set `dir` to `0700` unless it is a symlink (the target is not ours to chmod).
-#[cfg(unix)]
-fn tighten_private_dir(dir: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    if std::fs::symlink_metadata(dir)?.file_type().is_symlink() {
-        return Err(std::io::Error::other("is a symlink; left unchanged"));
+/// Create the private record's `parent` owner-only (its missing ancestors
+/// plainly, as for any write), then tighten it if it already existed.
+/// Best-effort tightening: a parent we cannot tighten (not ours, or a
+/// symlink, whose target is not ours to change) must not block the write;
+/// the file itself is still owner-only.
+fn create_private_parent(parent: &Path) -> std::io::Result<()> {
+    use crate::shared::private_dir::{create_or_tighten, PrivateDirError};
+    match create_or_tighten(parent) {
+        Ok(()) => Ok(()),
+        Err(PrivateDirError::Create(e)) => Err(e),
+        Err(PrivateDirError::Tighten(e)) => {
+            log::warn!(
+                "could not make {} owner-only: {e}",
+                std::path::Path::display(parent)
+            );
+            Ok(())
+        }
     }
-    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
 }
 
-fn write_tmp(tmp_path: &Path, json: &str, private_mode: Option<u32>) -> std::io::Result<()> {
-    #[cfg(unix)]
-    if let Some(mode) = private_mode {
+fn write_tmp(tmp_path: &Path, json: &str, private: bool) -> std::io::Result<()> {
+    if private {
         use std::io::Write;
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        // A stale temp left by a crash keeps its old mode through `open`, so
-        // drop it first and create fresh with the requested mode.
+        // A stale temp left by a crash keeps its old permissions through
+        // `open`, so drop it first and create it fresh, owner-only.
         let _ = std::fs::remove_file(tmp_path);
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(mode)
-            .open(tmp_path)?;
-        // `mode` is masked by the umask; make the final mode exact.
-        file.set_permissions(std::fs::Permissions::from_mode(mode))?;
+        let mut file = codesense_platform::fs::create_new_owner_only(tmp_path)?;
+        // The unix create mode is masked by the umask; make it exact.
+        codesense_platform::fs::set_owner_only(tmp_path)?;
         return file.write_all(json.as_bytes());
     }
-    let _ = private_mode;
     std::fs::write(tmp_path, json.as_bytes())
 }
 
@@ -331,6 +322,33 @@ mod tests {
         assert_eq!(mode(&plain), 0o755);
     }
 
+    #[test]
+    fn private_writer_is_owner_only_fresh_and_over_a_shared_file_and_parent() {
+        use crate::test_support::owner_only::{is_owner_only, shared_dir, shared_file};
+        let dir = tempdir().unwrap();
+        let val = Sample {
+            name: "x".into(),
+            count: 1,
+        };
+        let fresh = dir.path().join("fresh").join("a.json");
+        write_json_atomic_private(&fresh, &val).unwrap();
+        assert!(is_owner_only(&fresh));
+        assert!(is_owner_only(fresh.parent().unwrap()));
+
+        let shared = dir.path().join("shared");
+        shared_dir(&shared);
+        let path = shared.join("a.json");
+        shared_file(&path, &[b'x'; 4096]);
+        write_json_atomic_private(&path, &val).unwrap();
+        assert!(is_owner_only(&path));
+        assert!(is_owner_only(&shared), "the existing parent is tightened");
+        assert_eq!(
+            read_json::<Sample>(&path).unwrap(),
+            val,
+            "the old bytes are gone"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn private_writer_leaves_a_symlinked_parent_alone() {
@@ -357,7 +375,7 @@ mod tests {
         // `/usr` is root-owned and not a symlink: chmod fails for a normal
         // user, and the writer logs that error and carries on (the file is
         // still created 0600 by `write_tmp`).
-        let err = tighten_private_dir(Path::new("/usr")).err();
+        let err = codesense_platform::fs::set_owner_only(Path::new("/usr")).err();
         let is_root = std::process::Command::new("id")
             .arg("-u")
             .output()

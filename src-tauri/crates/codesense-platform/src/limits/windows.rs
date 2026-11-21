@@ -11,6 +11,10 @@ use super::Usage;
 /// The OS error for a process out of handles.
 pub(super) const TOO_MANY_OPEN_FILES: i32 = ERROR_TOO_MANY_OPEN_FILES as i32;
 
+/// The OS errors for an open that hit a limit on open files: only
+/// [`TOO_MANY_OPEN_FILES`], as Windows has no separate system-wide one.
+pub(super) const OPEN_FILE_LIMITS: [i32; 1] = [TOO_MANY_OPEN_FILES];
+
 /// No soft limit to raise: `None`.
 pub fn raise(_wanted: u64) -> Option<(u64, u64)> {
     None

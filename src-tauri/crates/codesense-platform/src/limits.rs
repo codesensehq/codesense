@@ -21,7 +21,8 @@
 //! error, which no Windows path reaches because nothing passes [`EXEC_ARG`]
 //! there.
 //!
-//! [`is_descriptor_exhaustion`] tells an error that hit the limit, on every OS.
+//! [`is_descriptor_exhaustion`] tells an error that hit the limit, on every OS;
+//! [`is_open_file_limit`] also counts the system's limit.
 
 #[cfg(unix)]
 mod unix;
@@ -138,6 +139,17 @@ pub fn is_descriptor_exhaustion(error: &(dyn std::error::Error + 'static)) -> bo
             // `openpty` reports its errno only in its message (`{:?}` of it).
             || str::contains(&cause.to_string(), &format!("code: {code},"))
     })
+}
+
+/// Whether `error` is an open that hit a limit on open files, this
+/// process's or the whole system's, so it is worth a retry once descriptors
+/// are released: `EMFILE` or `ENFILE` on unix, `ERROR_TOO_MANY_OPEN_FILES` on
+/// Windows. Unlike [`is_descriptor_exhaustion`], only `error` itself is
+/// checked, not its `source()` chain or message.
+pub fn is_open_file_limit(error: &std::io::Error) -> bool {
+    error
+        .raw_os_error()
+        .is_some_and(|code| sys::OPEN_FILE_LIMITS.contains(&code))
 }
 
 #[cfg(test)]

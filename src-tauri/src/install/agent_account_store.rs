@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use codesense_platform::fs::Open;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
@@ -526,11 +527,10 @@ fn persist_active_record(
     let parent = path
         .parent()
         .ok_or_else(|| invalid("active account record has no parent"))?;
-    fs::create_dir_all(parent).map_err(io_error)?;
-    set_mode(parent, 0o700)?;
+    create_or_tighten_dir(parent)?;
     let bytes = serde_json::to_vec_pretty(&record).map_err(io_error)?;
     write_tmp_fsync_rename(path, &bytes).map_err(|error: Error| io_error(error))?;
-    set_mode(path, 0o600)?;
+    set_owner_only(path)?;
     Ok(record)
 }
 
@@ -624,15 +624,16 @@ fn reject_symlink_components(path: &Path) -> Result<(), StoreMutationError> {
     }
 }
 
-#[cfg(unix)]
-fn set_mode(path: &Path, mode: u32) -> Result<(), StoreMutationError> {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(io_error)
+/// Make `path` owner-only: unix 0600 for a file and 0700 for a directory; on
+/// Windows a protected owner-only DACL.
+fn set_owner_only(path: &Path) -> Result<(), StoreMutationError> {
+    codesense_platform::fs::set_owner_only(path).map_err(io_error)
 }
 
-#[cfg(not(unix))]
-fn set_mode(_path: &Path, _mode: u32) -> Result<(), StoreMutationError> {
-    Ok(())
+/// Create the directory `dir` owner-only, or tighten it to owner-only when
+/// it already exists.
+fn create_or_tighten_dir(dir: &Path) -> Result<(), StoreMutationError> {
+    crate::shared::private_dir::create_or_tighten(dir).map_err(io_error)
 }
 
 pub fn ensure_managed_home(
@@ -645,9 +646,8 @@ pub fn ensure_managed_home(
     // follow it. The parent was checked by `managed_home` and every remaining
     // component is a backend-derived opaque token.
     reject_symlink_components(&path)?;
-    fs::create_dir_all(&path).map_err(io_error)?;
-    reject_symlink_components(&path)?;
-    set_mode(&path, 0o700)?;
+    // Tightening refuses a symlink that replaced the home meanwhile.
+    create_or_tighten_dir(&path)?;
     Ok(path)
 }
 
@@ -656,19 +656,14 @@ struct StoreLock(File);
 impl StoreLock {
     fn acquire(codesense_home: &Path, principal: &Principal) -> Result<Self, StoreMutationError> {
         let root = user_root(codesense_home, principal);
-        fs::create_dir_all(&root).map_err(io_error)?;
-        set_mode(&root, 0o700)?;
+        create_or_tighten_dir(&root)?;
         let path = root.join(LOCK_FILE);
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(path)
-            .map_err(io_error)?;
-        set_mode_from_file(&file, 0o600)?;
+        // A link at the lock path is refused before anything is created.
+        let file =
+            codesense_platform::fs::create_owner_only(&path, Open::NoFollow).map_err(io_error)?;
+        set_owner_only(&path)?;
         for _ in 0..LOCK_ATTEMPTS {
-            if try_lock_exclusive(&file)? {
+            if codesense_platform::fs::try_lock_exclusive(&file).map_err(io_error)? {
                 return Ok(Self(file));
             }
             std::thread::sleep(LOCK_DELAY);
@@ -679,61 +674,8 @@ impl StoreLock {
 
 impl Drop for StoreLock {
     fn drop(&mut self) {
-        let _ = unlock(&self.0);
+        let _ = codesense_platform::fs::unlock(&self.0);
     }
-}
-
-#[cfg(unix)]
-fn set_mode_from_file(file: &File, mode: u32) -> Result<(), StoreMutationError> {
-    use std::os::unix::fs::PermissionsExt;
-    file.set_permissions(fs::Permissions::from_mode(mode))
-        .map_err(io_error)
-}
-
-#[cfg(not(unix))]
-fn set_mode_from_file(_file: &File, _mode: u32) -> Result<(), StoreMutationError> {
-    Ok(())
-}
-
-#[cfg(unix)]
-fn try_lock_exclusive(file: &File) -> Result<bool, StoreMutationError> {
-    use std::os::fd::AsRawFd;
-    // SAFETY: `file` owns a live descriptor for the duration of this call;
-    // `flock` neither retains the pointer nor accesses Rust-managed memory.
-    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    if result == 0 {
-        return Ok(true);
-    }
-    let error = std::io::Error::last_os_error();
-    let code = error.raw_os_error();
-    if code == Some(libc::EWOULDBLOCK) || code == Some(libc::EAGAIN) {
-        Ok(false)
-    } else {
-        Err(io_error(error))
-    }
-}
-
-#[cfg(not(unix))]
-fn try_lock_exclusive(_file: &File) -> Result<bool, StoreMutationError> {
-    Ok(true)
-}
-
-#[cfg(unix)]
-fn unlock(file: &File) -> Result<(), StoreMutationError> {
-    use std::os::fd::AsRawFd;
-    // SAFETY: `file` still owns the descriptor locked by `StoreLock`; unlocking
-    // does not retain it or access Rust-managed memory.
-    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(io_error(std::io::Error::last_os_error()))
-    }
-}
-
-#[cfg(not(unix))]
-fn unlock(_file: &File) -> Result<(), StoreMutationError> {
-    Ok(())
 }
 
 fn read_profile(path: &Path) -> Result<Option<AgentAccountProfile>, StoreMutationError> {
@@ -757,7 +699,7 @@ fn write_profile(path: &Path, profile: &AgentAccountProfile) -> Result<(), Store
     canonical.schema_version = SCHEMA_VERSION;
     let bytes = serde_json::to_vec_pretty(&canonical).map_err(io_error)?;
     write_tmp_fsync_rename(path, &bytes).map_err(|error: Error| io_error(error))?;
-    set_mode(path, 0o600)
+    set_owner_only(path)
 }
 
 fn next_lifecycle_order(
@@ -862,8 +804,7 @@ pub fn create_profile(
     let _lock = StoreLock::acquire(codesense_home, principal)?;
     let label = validate_label(label)?;
     let profiles_root = accounts_root(codesense_home, principal);
-    fs::create_dir_all(&profiles_root).map_err(io_error)?;
-    set_mode(&profiles_root, 0o700)?;
+    create_or_tighten_dir(&profiles_root)?;
     // Provision the per-user digest key while the store is still empty. Once
     // profiles exist, `identity_key` deliberately refuses silent rotation.
     let _ = identity_key(codesense_home, principal)?;
@@ -1109,19 +1050,19 @@ fn identity_key(
     principal: &Principal,
 ) -> Result<[u8; 32], StoreMutationError> {
     let path = identity_key_path(codesense_home, principal);
-    match fs::symlink_metadata(&path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            return Err(invalid("identity key must not be a symlink"));
-        }
-        Ok(metadata) if !metadata.is_file() => {
-            return Err(invalid("identity key must be a regular file"));
-        }
-        Ok(metadata) => validate_identity_key_permissions(&metadata)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(io_error(error)),
-    }
-    match File::open(&path) {
+    // One handle, opened without following a link or waiting on a FIFO, is
+    // checked and then read, so the file checked is the file read.
+    match codesense_platform::fs::open_nofollow_nonblocking(
+        fs::OpenOptions::new().read(true),
+        &path,
+    ) {
         Ok(mut file) => {
+            if !file.metadata().map_err(io_error)?.is_file() {
+                return Err(invalid("identity key must be a regular file"));
+            }
+            if !codesense_platform::fs::is_owner_only(&file).map_err(io_error)? {
+                return Err(invalid("identity key permissions must be owner-only"));
+            }
             let mut key = [0u8; 32];
             file.read_exact(&mut key).map_err(io_error)?;
             let mut extra = [0u8; 1];
@@ -1145,13 +1086,11 @@ fn identity_key(
             rand::thread_rng().fill_bytes(&mut key);
             fs::create_dir_all(path.parent().ok_or_else(|| invalid("identity key root"))?)
                 .map_err(io_error)?;
-            let mut options = OpenOptions::new();
-            options.write(true).create_new(true);
-            match options.open(&path) {
+            match codesense_platform::fs::create_new_owner_only(&path) {
                 Ok(mut file) => {
                     file.write_all(&key).map_err(io_error)?;
                     file.sync_all().map_err(io_error)?;
-                    set_mode_from_file(&file, 0o600)?;
+                    set_owner_only(&path)?;
                     Ok(key)
                 }
                 Err(race) if race.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -1160,22 +1099,11 @@ fn identity_key(
                 Err(other) => Err(io_error(other)),
             }
         }
+        Err(_) if fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_symlink()) => {
+            Err(invalid("identity key must not be a symlink"))
+        }
         Err(error) => Err(io_error(error)),
     }
-}
-
-#[cfg(unix)]
-fn validate_identity_key_permissions(metadata: &fs::Metadata) -> Result<(), StoreMutationError> {
-    use std::os::unix::fs::PermissionsExt;
-    if metadata.permissions().mode() & 0o077 != 0 {
-        return Err(invalid("identity key permissions must be owner-only"));
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn validate_identity_key_permissions(_metadata: &fs::Metadata) -> Result<(), StoreMutationError> {
-    Ok(())
 }
 
 pub fn duplicate_key(
@@ -1303,26 +1231,59 @@ mod tests {
         Principal::from(42u64)
     }
 
-    #[cfg(unix)]
     #[test]
-    fn an_exclusive_lock_refuses_a_second_handle_until_the_holder_closes() {
+    fn a_held_store_lock_makes_a_second_acquire_busy_until_it_is_dropped() {
         let temp = TempDir::new().unwrap();
-        let path = temp.path().join("lock");
-        let open = || {
-            OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .open(&path)
-                .unwrap()
-        };
-        let first = open();
-        assert!(try_lock_exclusive(&first).unwrap());
-        let second = open();
-        assert!(!try_lock_exclusive(&second).unwrap());
+        let first = StoreLock::acquire(temp.path(), &principal()).unwrap();
+        assert!(matches!(
+            StoreLock::acquire(temp.path(), &principal()),
+            Err(StoreMutationError::Busy)
+        ));
         drop(first);
-        assert!(try_lock_exclusive(&second).unwrap());
+        drop(StoreLock::acquire(temp.path(), &principal()).unwrap());
+    }
+
+    #[test]
+    fn a_link_at_the_store_lock_is_refused_before_anything_is_created() {
+        use crate::test_support::owner_only::file_symlink;
+        let temp = TempDir::new().unwrap();
+        let root = user_root(temp.path(), &principal());
+        fs::create_dir_all(&root).unwrap();
+        let target = temp.path().join("elsewhere");
+        if file_symlink(&target, &root.join(LOCK_FILE)) {
+            assert!(StoreLock::acquire(temp.path(), &principal()).is_err());
+            assert!(!target.exists());
+        }
+    }
+
+    #[test]
+    fn the_store_lock_and_managed_home_are_owner_only_fresh_and_over_shared_ones() {
+        use crate::test_support::owner_only::{is_owner_only, shared_dir, shared_file};
+        let fresh = TempDir::new().unwrap();
+        drop(StoreLock::acquire(fresh.path(), &principal()).unwrap());
+        let root = user_root(fresh.path(), &principal());
+        assert!(is_owner_only(&root));
+        assert!(is_owner_only(&root.join(LOCK_FILE)));
+        let created =
+            create_profile(fresh.path(), &principal(), AgentProvider::Claude, "Primary").unwrap();
+        let home = managed_home(fresh.path(), &principal(), &created.id).unwrap();
+        assert!(is_owner_only(&home));
+        assert!(is_owner_only(&accounts_root(fresh.path(), &principal())));
+
+        let shared = TempDir::new().unwrap();
+        let root = user_root(shared.path(), &principal());
+        shared_dir(&root);
+        shared_file(&root.join(LOCK_FILE), b"left by an older build");
+        let home = managed_home(shared.path(), &principal(), "existing").unwrap();
+        shared_dir(&home);
+        drop(StoreLock::acquire(shared.path(), &principal()).unwrap());
+        assert!(is_owner_only(&root));
+        assert!(is_owner_only(&root.join(LOCK_FILE)));
+        assert_eq!(
+            ensure_managed_home(shared.path(), &principal(), "existing").unwrap(),
+            home
+        );
+        assert!(is_owner_only(&home));
     }
 
     #[test]
@@ -1577,6 +1538,33 @@ mod tests {
                 duplicate_key(temp.path(), &principal(), AgentProvider::Claude, "two").is_err()
             );
         }
+    }
+
+    #[test]
+    fn identity_key_that_is_shared_or_a_fifo_is_refused_without_blocking() {
+        use crate::test_support::owner_only::{fifo, shared_file, without_blocking};
+        let temp = TempDir::new().unwrap();
+        let root = user_root(temp.path(), &principal());
+        fs::create_dir_all(&root).unwrap();
+        let key_path = identity_key_path(temp.path(), &principal());
+        shared_file(&key_path, &[8u8; 32]);
+        assert!(duplicate_key(temp.path(), &principal(), AgentProvider::Claude, "one").is_err());
+        fs::remove_file(&key_path).unwrap();
+        if fifo(&key_path) {
+            let home = temp.path().to_path_buf();
+            assert!(without_blocking(move || {
+                duplicate_key(&home, &principal(), AgentProvider::Claude, "two").is_err()
+            }));
+        }
+        fs::remove_file(&key_path).ok();
+        assert_eq!(
+            duplicate_key(temp.path(), &principal(), AgentProvider::Claude, "three").unwrap(),
+            duplicate_key(temp.path(), &principal(), AgentProvider::Claude, "three").unwrap()
+        );
+        let opened =
+            codesense_platform::fs::open_nofollow(fs::OpenOptions::new().read(true), &key_path)
+                .unwrap();
+        assert!(codesense_platform::fs::is_owner_only(&opened).unwrap());
     }
 
     #[test]

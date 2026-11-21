@@ -6792,21 +6792,17 @@ fn intent_path(
 fn read_remote_intent(
     path: &std::path::Path,
 ) -> Result<Option<super::pty_layout::RemoteShellRecord>, String> {
+    use codesense_platform::fs::{is_owned_by_current_user, link_count, open_nofollow_nonblocking};
     use std::io::Read;
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-    let file = match std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-    {
+    let file = match open_nofollow_nonblocking(std::fs::OpenOptions::new().read(true), path) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("consumed remote intent unavailable: {e}")),
     };
     let meta = file.metadata().map_err(|e| e.to_string())?;
     if !meta.is_file()
-        || meta.nlink() != 1
-        || meta.uid() != unsafe { libc::geteuid() }
+        || link_count(&file).map_err(|e| e.to_string())? != 1
+        || !is_owned_by_current_user(&file).map_err(|e| e.to_string())?
         || meta.len() > MAX_REMOTE_INTENT_BYTES as u64
     {
         return Err("remote intent is unsafe or exceeds its size bound".into());
@@ -6846,14 +6842,8 @@ impl DashboardLaunchState {
         record: &mut super::pty_layout::RemoteShellRecord,
     ) -> Result<bool, String> {
         use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
         let path = remote_intent_path(root, record)?.with_extension("spawn");
-        let mut marker = match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(path)
-        {
+        let mut marker = match codesense_platform::fs::create_new_owner_only(&path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 record.mark_spawn_attempted();
@@ -6867,8 +6857,7 @@ impl DashboardLaunchState {
             .write_all(record.target.session.as_str().as_bytes())
             .and_then(|()| marker.sync_all())
             .map_err(|e| format!("spawn attempt uncertain: {e}"))?;
-        std::fs::File::open(root)
-            .and_then(|dir| dir.sync_all())
+        codesense_platform::fs::sync_dir(root)
             .map_err(|e| format!("spawn attempt durability uncertain: {e}"))?;
         Ok(true)
     }
@@ -7066,25 +7055,18 @@ impl DashboardLaunchState {
         record: super::pty_layout::RemoteShellRecord,
     ) -> Result<RemoteShellReservation, String> {
         use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
         let path = remote_intent_path(root, &record)?;
         std::fs::create_dir_all(root).map_err(|e| format!("cannot reserve remote intent: {e}"))?;
         let bytes = serde_json::to_vec(&record).map_err(|e| e.to_string())?;
         if bytes.len() > MAX_REMOTE_INTENT_BYTES {
             return Err("saved-Agent intent exceeds durable receipt limit".into());
         }
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&path)
-        {
+        match codesense_platform::fs::create_new_owner_only(&path) {
             Ok(mut file) => {
                 file.write_all(&bytes)
                     .and_then(|()| file.sync_all())
                     .map_err(|e| format!("remote intent consumption is uncertain: {e}"))?;
-                std::fs::File::open(root)
-                    .and_then(|dir| dir.sync_all())
+                codesense_platform::fs::sync_dir(root)
                     .map_err(|e| format!("remote intent durability is uncertain: {e}"))?;
                 match self.reserve_remote_shell(record) {
                     Ok(()) => Ok(RemoteShellReservation::Fresh),

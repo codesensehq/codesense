@@ -74,11 +74,10 @@ impl Tail {
 /// `path` opened for reading without following a link, with its length; `None` for anything but
 /// a regular file.
 fn open_log(path: &Path) -> std::io::Result<Option<(std::fs::File, u64)>> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)?;
+    let file = codesense_platform::fs::open_nofollow_nonblocking(
+        std::fs::OpenOptions::new().read(true),
+        path,
+    )?;
     let meta = std::fs::File::metadata(&file)?;
     Ok(meta.is_file().then(|| (file, meta.len())))
 }

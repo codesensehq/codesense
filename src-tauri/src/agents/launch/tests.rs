@@ -1165,6 +1165,7 @@ fn dropping_the_agents_settings_touches_only_its_pair_and_only_when_merged() {
     assert_eq!(both, ["--model", "opus", "--settings", "/ours.json"]);
 }
 
+#[cfg(cap_agent_cli_sockets)]
 #[test]
 fn identity_saved_agent_launches_project_the_canonical_bridge() {
     for runtime in AgentCli::ALL {
