@@ -1050,19 +1050,19 @@ fn identity_key(
     principal: &Principal,
 ) -> Result<[u8; 32], StoreMutationError> {
     let path = identity_key_path(codesense_home, principal);
-    match fs::symlink_metadata(&path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            return Err(invalid("identity key must not be a symlink"));
-        }
-        Ok(metadata) if !metadata.is_file() => {
-            return Err(invalid("identity key must be a regular file"));
-        }
-        Ok(metadata) => validate_identity_key_permissions(&metadata)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(io_error(error)),
-    }
-    match File::open(&path) {
+    // One handle, opened without following a link or waiting on a FIFO, is
+    // checked and then read, so the file checked is the file read.
+    match codesense_platform::fs::open_nofollow_nonblocking(
+        fs::OpenOptions::new().read(true),
+        &path,
+    ) {
         Ok(mut file) => {
+            if !file.metadata().map_err(io_error)?.is_file() {
+                return Err(invalid("identity key must be a regular file"));
+            }
+            if !codesense_platform::fs::is_owner_only(&file).map_err(io_error)? {
+                return Err(invalid("identity key permissions must be owner-only"));
+            }
             let mut key = [0u8; 32];
             file.read_exact(&mut key).map_err(io_error)?;
             let mut extra = [0u8; 1];
@@ -1099,22 +1099,11 @@ fn identity_key(
                 Err(other) => Err(io_error(other)),
             }
         }
+        Err(_) if fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_symlink()) => {
+            Err(invalid("identity key must not be a symlink"))
+        }
         Err(error) => Err(io_error(error)),
     }
-}
-
-#[cfg(unix)]
-fn validate_identity_key_permissions(metadata: &fs::Metadata) -> Result<(), StoreMutationError> {
-    use std::os::unix::fs::PermissionsExt;
-    if metadata.permissions().mode() & 0o077 != 0 {
-        return Err(invalid("identity key permissions must be owner-only"));
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn validate_identity_key_permissions(_metadata: &fs::Metadata) -> Result<(), StoreMutationError> {
-    Ok(())
 }
 
 pub fn duplicate_key(
@@ -1549,6 +1538,33 @@ mod tests {
                 duplicate_key(temp.path(), &principal(), AgentProvider::Claude, "two").is_err()
             );
         }
+    }
+
+    #[test]
+    fn identity_key_that_is_shared_or_a_fifo_is_refused_without_blocking() {
+        use crate::test_support::owner_only::{fifo, shared_file, without_blocking};
+        let temp = TempDir::new().unwrap();
+        let root = user_root(temp.path(), &principal());
+        fs::create_dir_all(&root).unwrap();
+        let key_path = identity_key_path(temp.path(), &principal());
+        shared_file(&key_path, &[8u8; 32]);
+        assert!(duplicate_key(temp.path(), &principal(), AgentProvider::Claude, "one").is_err());
+        fs::remove_file(&key_path).unwrap();
+        if fifo(&key_path) {
+            let home = temp.path().to_path_buf();
+            assert!(without_blocking(move || {
+                duplicate_key(&home, &principal(), AgentProvider::Claude, "two").is_err()
+            }));
+        }
+        fs::remove_file(&key_path).ok();
+        assert_eq!(
+            duplicate_key(temp.path(), &principal(), AgentProvider::Claude, "three").unwrap(),
+            duplicate_key(temp.path(), &principal(), AgentProvider::Claude, "three").unwrap()
+        );
+        let opened =
+            codesense_platform::fs::open_nofollow(fs::OpenOptions::new().read(true), &key_path)
+                .unwrap();
+        assert!(codesense_platform::fs::is_owner_only(&opened).unwrap());
     }
 
     #[test]

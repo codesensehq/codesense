@@ -101,7 +101,6 @@ src/content_engine/git_exclude.rs 4
 src/context_repo/worktree.rs 3
 src/dashboard_publish/manifest.rs 3
 src/http/registry.rs 6
-src/install/agent_account_store.rs 3
 src/lib.rs 6
 src/license/updates.rs 4
 src/mcp/local_mcp_relay/config.rs 1
