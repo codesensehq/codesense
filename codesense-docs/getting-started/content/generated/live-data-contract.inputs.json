@@ -4,7 +4,7 @@
     "dashboard-publish"
   ],
   "inputs": {
-    "Cargo.lock": "37bfefa00dd1a30c2f6f6b7afdcc908c61db1799d9f5ba6eac179f43167ddf78",
+    "Cargo.lock": "6fa7c234bdbb65a2d8668300c2478609767c244e22c5fcbec5aeae9f943e41c6",
     "src-tauri/Cargo.toml": "170e8670e95fb3d2758f396f787ec92051a61734fef850c0c0ae6e39f77979d7",
     "src-tauri/src/commands/pipeline_format/fields.rs": "a2216ba2c979a15aa15901593c48bf73dcb5fcc884de6091745f25f0533c732b",
     "src-tauri/src/commands/pipeline_format/mod.rs": "0bdd807d4184d2797f73a5a8a4bf97319e9a94fc8939edfef5af93bcadaace9d",
