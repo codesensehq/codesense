@@ -849,12 +849,14 @@ jobs:
         # page's downloads write no file, and a dropped export destroys its window. The tests are
         # ignored without a display. They live in the platform crate behind its pdf feature, with
         # the source policy's tests. The WebKit setting is the app's own default (linux_startup.rs).
-        # The JUnit report goes to the uploaded folder, where the next step's rm -f can't reach it.
+        # A report left by the Secret Service runs is removed first, so only this run's is kept, in
+        # the uploaded folder, where the next step's rm -f can't reach it.
         env:
           WEBKIT_DISABLE_DMABUF_RENDERER: "1"
         run: |
           sudo locale-gen de_DE.UTF-8
           mkdir -p "$RUNNER_TEMP/junit"
+          rm -f target/nextest/ci/junit.xml
           status=0
           xvfb-run -a cargo nextest run --profile ci --locked -p codesense-platform --features pdf --lib \
             --retries 0 --run-ignored all -E 'test(/^pdf::/)' || status=1

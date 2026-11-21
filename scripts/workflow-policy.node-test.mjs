@@ -599,12 +599,15 @@ test("rust.yml's Linux app job runs PDF export's renderer tests under xvfb", () 
     pdf.run,
     "sudo locale-gen de_DE.UTF-8\n" +
       'mkdir -p "$RUNNER_TEMP/junit"\n' +
+      "rm -f target/nextest/ci/junit.xml\n" +
       "status=0\n" +
       "xvfb-run -a cargo nextest run --profile ci --locked -p codesense-platform --features pdf --lib \\\n" +
       "  --retries 0 --run-ignored all -E 'test(/^pdf::/)' || status=1\n" +
       'if [[ -f target/nextest/ci/junit.xml ]]; then mv target/nextest/ci/junit.xml "$RUNNER_TEMP/junit/pdf.xml"; fi\n' +
       'exit "$status"\n',
   );
+  // A report left by the Secret Service runs is never kept as pdf.xml.
+  assert.ok(pdf.run.indexOf("rm -f target/nextest/ci/junit.xml") < pdf.run.indexOf("xvfb-run"));
   // The report sits where the uploaded folder holds it, out of reach of the next step's rm -f.
   const upload = job.steps.find((step) => step.name === "Upload JUnit report");
   assert.equal(upload.if, "always()");
@@ -619,9 +622,9 @@ test("rust.yml's Linux check compiles the platform crate with pdf", () => {
   const pdf = steps.find((step) => step.name === "Check the platform crate's PDF renderers");
   assert.ok(pdf, "the PDF renderers' check step");
   assert.equal(pdf.run, "cargo check --locked -p codesense-platform --features pdf --lib --tests");
-  assert.ok(
-    steps.indexOf(pdf) > steps.findIndex((step) => step.name === "Install system libraries"),
-  );
+  const libraries = steps.findIndex((step) => step.name === "Install system libraries");
+  assert.ok(libraries >= 0, "the system libraries step");
+  assert.ok(steps.indexOf(pdf) > libraries);
 });
 
 // A push diffs before..after; a new branch tip (before all zeros) tests everything.

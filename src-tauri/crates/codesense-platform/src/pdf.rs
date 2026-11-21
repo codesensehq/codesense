@@ -128,6 +128,8 @@ mod tests {
             "javascript:alert(1)",
             "ftp://localhost/",
             "ws://localhost/",
+            // Parses with the scheme `localhost`.
+            "localhost:4310",
         ]);
     }
 
@@ -173,6 +175,6 @@ mod tests {
 
     #[test]
     fn unparsable_urls_are_refused() {
-        assert_refused(&["", "not a url", "http://", "localhost:4310", "//localhost/"]);
+        assert_refused(&["", "not a url", "http://", "//localhost/"]);
     }
 }
