@@ -858,7 +858,7 @@ fn restore_relay(
     let descriptor_path = dir.join("local-relay.json");
     let old = codesense_host_proto::scoped_mcp::read_descriptor(&descriptor_path)?;
     // A second app must not replace a relay that still owns the live grant.
-    if relay_answers(&old.socket) {
+    if crate::shared::local_endpoint::answers(&old.socket) {
         return Ok(());
     }
     let identity = scope_identity(dir)?;
@@ -888,14 +888,6 @@ fn restore_relay(
         Ok(())
     });
     publish_relay(dir, saved, validate)
-}
-
-/// Whether a relay answers at the endpoint a descriptor's `socket` names (its
-/// wire form: a socket path on unix, a pipe name on Windows).
-pub(super) fn relay_answers(socket: &Path) -> bool {
-    codesense_platform::ipc::Endpoint::from_wire(socket.as_os_str())
-        .and_then(|endpoint| codesense_platform::ipc::blocking::LocalStream::connect(&endpoint))
-        .is_ok()
 }
 
 fn publish_relay(
@@ -948,6 +940,36 @@ mod restart_tests {
         if fifo(&captured) {
             assert!(refused(root.path()).contains("must be private"));
         }
+    }
+
+    /// Another app's relay still answers at the descriptor's endpoint: restoring
+    /// leaves its descriptor, and the live grant behind it, alone.
+    #[tokio::test]
+    async fn a_relay_that_still_answers_is_left_alone() {
+        let root = tempfile::tempdir().unwrap();
+        let endpoint = codesense_platform::ipc::Endpoint::Ephemeral {
+            dir: root.path().to_path_buf(),
+            name: root
+                .path()
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_owned(),
+        };
+        let _live = codesense_platform::ipc::LocalListener::bind(&endpoint).unwrap();
+        let path = root.path().join("local-relay.json");
+        let descriptor = Descriptor {
+            version: wire::VERSION,
+            socket: std::path::PathBuf::from(endpoint.to_wire().unwrap()),
+            capability: "a".repeat(64),
+        };
+        wire::write_descriptor(&path, &descriptor).unwrap();
+        restore_relay(root.path(), std::sync::Arc::new(|| Ok::<(), String>(()))).unwrap();
+        assert_eq!(
+            wire::read_descriptor(&path).unwrap().capability,
+            "a".repeat(64)
+        );
     }
 
     #[tokio::test]

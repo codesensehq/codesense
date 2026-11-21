@@ -1930,7 +1930,7 @@ fn sweep_configs_in(
         let relay = path.join("local-relay.json");
         if relay.exists() {
             match codesense_host_proto::scoped_mcp::read_descriptor(&relay) {
-                Ok(descriptor) if !inventory::relay_answers(&descriptor.socket) => {}
+                Ok(descriptor) if !crate::shared::local_endpoint::answers(&descriptor.socket) => {}
                 _ => continue,
             }
         }

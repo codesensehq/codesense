@@ -47,19 +47,15 @@ fn handle_existing_socket(path: &Path) -> std::io::Result<()> {
     if !path.exists() {
         return Ok(());
     }
-    let live = codesense_platform::ipc::Endpoint::from_wire(path.as_os_str())
-        .and_then(|endpoint| codesense_platform::ipc::blocking::LocalStream::connect(&endpoint));
-    match live {
-        Ok(_) => Err(std::io::Error::new(
+    if crate::shared::local_endpoint::answers(path) {
+        return Err(std::io::Error::new(
             std::io::ErrorKind::AddrInUse,
             "Another CodeSense instance is already running (MCP socket is live)",
-        )),
-        Err(_) => {
-            log::info!(target: "mcp", "Removing stale socket file: {:?}", path);
-            std::fs::remove_file(path)?;
-            Ok(())
-        }
+        ));
     }
+    log::info!(target: "mcp", "Removing stale socket file: {:?}", path);
+    std::fs::remove_file(path)?;
+    Ok(())
 }
 
 /// The socket file this process last bound, by its file id. Another instance
