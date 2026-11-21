@@ -149,6 +149,27 @@ fn macos_detection_is_todays_list_and_default() {
     assert_eq!(default_terminal("macos", &bare, "iTerm.app"), "terminal");
     let labels: Vec<_> = all.iter().map(|d| d.tool().label).collect();
     assert_eq!(labels, ["Ghostty", "iTerm2", "Terminal"]);
+    // iTerm2 is still found by its bundle, Terminal always; both run `open`.
+    assert_eq!(
+        terminal_rows("macos")[1].find,
+        Find::MacApp {
+            app: "iTerm",
+            program: "/usr/bin/open"
+        }
+    );
+    assert_eq!(
+        terminal_rows("macos")[2].find,
+        Find::Always("/usr/bin/open")
+    );
+    let programs: Vec<_> = all.iter().map(|d| d.program.clone()).collect();
+    assert_eq!(
+        programs,
+        [
+            PathBuf::from("/Applications/Ghostty.app/Contents/MacOS/ghostty"),
+            PathBuf::from("/usr/bin/open"),
+            PathBuf::from("/usr/bin/open"),
+        ]
+    );
 }
 
 #[test]
@@ -305,23 +326,43 @@ fn macos_ghostty_is_the_binary_plus_the_clipboard() {
     assert_eq!(plain.clipboard, None);
 }
 
-/// The folder reaches AppleScript only as an argv element, and the shell only through
-/// `quoted form of`: it appears in no script or shell text.
+/// With no command, Terminal and iTerm2 open the folder with `open -a <bundle>`, waited, the
+/// folder one argv element. With one, the folder reaches AppleScript only as an argv element, and
+/// the shell only through `quoted form of`: it appears in no script or shell text.
 #[test]
 fn macos_applescript_rows_take_the_folder_as_argv() {
     let root = tempfile::tempdir().unwrap();
     let cwd = root.path().join("it's \"a\"; $(touch pwned) `x` dir");
     std::fs::create_dir(&cwd).unwrap();
     let is_dir = |p: &Path| p.is_dir();
-    for (id, script) in [("iterm2", ITERM2_SCRIPT), ("terminal", TERMINAL_SCRIPT)] {
+    for (id, bundle, script) in [
+        ("iterm2", ITERM_APP, ITERM2_SCRIPT),
+        ("terminal", TERMINAL_APP, TERMINAL_SCRIPT),
+    ] {
         let chosen = terminal_launch("macos", id, &cwd, "", &finds_all(None), &is_dir).unwrap();
         assert_eq!(
             chosen.launch.program,
+            OsString::from("/usr/bin/open"),
+            "{id}"
+        );
+        assert_eq!(
+            args(&chosen.launch),
+            ["-a", bundle, cwd.to_str().unwrap()],
+            "{id}"
+        );
+        assert_eq!(chosen.launch.wait, Some(LAUNCH_LIMIT), "{id}");
+        assert_eq!(chosen.clipboard, None);
+
+        // A command runs through the AppleScript: the folder and the command are argv items.
+        let with_cmd =
+            terminal_launch("macos", id, &cwd, "make dev", &finds_all(None), &is_dir).unwrap();
+        assert_eq!(
+            with_cmd.launch.program,
             OsString::from("/usr/bin/osascript"),
             "{id}"
         );
-        let a = args(&chosen.launch);
-        assert_eq!(a, ["-e", script, cwd.to_str().unwrap()], "{id}");
+        let a = args(&with_cmd.launch);
+        assert_eq!(a, ["-e", script, cwd.to_str().unwrap(), "make dev"], "{id}");
         assert!(
             script.contains("on run argv") && script.contains("quoted form of (item 1 of argv)")
         );
@@ -331,21 +372,14 @@ fn macos_applescript_rows_take_the_folder_as_argv() {
                 "{id}: {text}"
             );
         }
-        assert_eq!(chosen.clipboard, None);
-
-        // A command to run is the second argv item, not script text.
-        let with_cmd =
-            terminal_launch("macos", id, &cwd, "make dev", &finds_all(None), &is_dir).unwrap();
-        assert_eq!(
-            args(&with_cmd.launch)[2..],
-            [cwd.to_str().unwrap(), "make dev"]
-        );
+        assert_eq!(with_cmd.launch.wait, None, "{id}");
         assert_eq!(with_cmd.clipboard, None);
     }
 }
 
 /// Typed into an interactive shell, a backslash reads differently in fish and control bytes act
-/// before any quoting (`^U` kills the line), so the AppleScript rows refuse them.
+/// before any quoting (`^U` kills the line), so the AppleScript rows refuse them when they run a
+/// command. With no command nothing is typed, so `open -a` opens any folder.
 #[test]
 fn macos_applescript_rows_refuse_a_backslash_or_control_bytes() {
     let root = tempfile::tempdir().unwrap();
@@ -363,7 +397,7 @@ fn macos_applescript_rows_refuse_a_backslash_or_control_bytes() {
         std::fs::create_dir(&cwd).unwrap();
         for (id, label) in [("iterm2", "iTerm2"), ("terminal", "Terminal")] {
             let err =
-                terminal_launch("macos", id, &cwd, "", &finds_all(None), &is_dir).unwrap_err();
+                terminal_launch("macos", id, &cwd, "pwd", &finds_all(None), &is_dir).unwrap_err();
             assert_eq!(
                 err,
                 TerminalError::ShellUnsafe {
@@ -374,6 +408,12 @@ fn macos_applescript_rows_refuse_a_backslash_or_control_bytes() {
                 "{name:?}"
             );
             assert!(err.to_string().contains(what));
+            let opened = terminal_launch("macos", id, &cwd, "", &finds_all(None), &is_dir);
+            assert_eq!(
+                opened.map(|chosen| chosen.launch.args.last().cloned()),
+                Ok(Some(cwd.clone().into_os_string())),
+                "{id} {name:?}"
+            );
         }
         // Ghostty takes the folder as its own flag, so it opens there.
         assert!(
@@ -448,8 +488,8 @@ fn host_detection_on_this_host() {
         assert!(ids.contains(&"terminal"), "{ids:?}");
         assert!(!tools.default_terminal.is_empty());
         assert_eq!(
-            host_find(&Find::Always("/usr/bin/osascript")),
-            Some(PathBuf::from("/usr/bin/osascript"))
+            host_find(&Find::Always("/usr/bin/open")),
+            Some(PathBuf::from("/usr/bin/open"))
         );
     } else {
         assert!(!ids.contains(&"terminal"), "{ids:?}");
