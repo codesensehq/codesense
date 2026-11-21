@@ -17,6 +17,7 @@ import {
   githubRequest,
   isRefreshPr,
   listFiles,
+  newestRun,
   parseFrozenList,
   parseQueueRef,
   refreshBranchProblems,
@@ -405,6 +406,9 @@ test("chooseRun takes the newest accepted run and never falls back to an older o
   });
   assert.equal(picked.action, "refresh");
   assert.equal(picked.run.id, 110);
+  assert.equal(newestRun(runs).id, 110);
+  // Same start time: the higher id is newer.
+  assert.equal(newestRun([trusted({ id: 7 }), trusted({ id: 8 }), trusted({ id: 6 })]).id, 8);
   // The newest run's artifacts expired: refuse, rather than use run 100's.
   const expired = choose({
     runs,

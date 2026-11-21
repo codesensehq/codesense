@@ -213,7 +213,8 @@ export function trustedRun(run, onMain) {
   );
 }
 
-const newest = (runs) =>
+// The newest of the runs: the one chooseRun judges, and the one whose artifacts the caller reads.
+export const newestRun = (runs) =>
   [...runs].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id)[0];
 
 // The manifest's paths, or null unless it is a sorted JSON array of distinct non-empty strings.
@@ -237,7 +238,7 @@ function manifestPaths(text) {
 // manifest at main's tip), `stale-run` (an empty manifest behind main: nothing says main is fresh)
 // or `refresh` (with the manifest's paths). Fresh is never inferred from a missing artifact.
 export function chooseRun({ runs, artifacts, manifest, mainSha, gap, applied = [] }) {
-  const run = newest(runs ?? []);
+  const run = newestRun(runs ?? []);
   if (!run) return { action: "refuse", reason: `no trusted regenerate run; ${DISPATCH}` };
   if (applied.map(String).includes(String(run.id))) return { action: "already-applied", run };
   const gapText = `run ${run.id} at ${run.head_sha}, ${gap?.age} old; main is ${gap?.ahead} commits ahead`;
