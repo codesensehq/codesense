@@ -219,21 +219,54 @@ pub(super) fn started_after(start: u64, time: Duration) -> bool {
     start as u128 >= time.as_micros()
 }
 
-/// Compare the kernel process birth time with `time` since the epoch.
+/// Compare the kernel process birth time with `time` since the epoch. `start`
+/// counts clock ticks since boot. Boot is read to the nanosecond, as wall time
+/// minus time since boot: `/proc/stat`'s whole-second `btime` could read up to
+/// a second early. A clock that can't be read refuses.
 #[cfg(target_os = "linux")]
 pub(super) fn started_after(start: u64, time: Duration) -> bool {
-    let boot = std::fs::read_to_string("/proc/stat").ok().and_then(|stat| {
-        stat.lines().find_map(|line| {
-            line.strip_prefix("btime ")
-                .and_then(|v| v.parse::<u64>().ok())
-        })
-    });
     let ticks = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
-    boot.is_some_and(|boot| {
-        ticks > 0
-            && boot as u128 * 1_000_000 + start as u128 * 1_000_000 / ticks as u128
-                >= time.as_micros()
-    })
+    let (Ok(per_second), Some(boot)) = (u64::try_from(ticks), boot_time()) else {
+        return false;
+    };
+    latest_start(boot, start, per_second).is_some_and(|start| start >= time)
+}
+
+/// When the system booted, since the epoch: never zero, none when a clock can't
+/// be read.
+#[cfg(target_os = "linux")]
+fn boot_time() -> Option<Duration> {
+    let since_boot = clock(libc::CLOCK_BOOTTIME)?;
+    let now = clock(libc::CLOCK_REALTIME)?;
+    now.checked_sub(since_boot).filter(|boot| !boot.is_zero())
+}
+
+#[cfg(target_os = "linux")]
+fn clock(id: libc::clockid_t) -> Option<Duration> {
+    let mut now: libc::timespec = unsafe { std::mem::zeroed() };
+    // SAFETY: clock_gettime writes one timespec.
+    if unsafe { libc::clock_gettime(id, &mut now) } != 0 {
+        return None;
+    }
+    Some(Duration::new(
+        u64::try_from(now.tv_sec).ok()?,
+        u32::try_from(now.tv_nsec).ok()?,
+    ))
+}
+
+/// The latest wall time a process started at whose start reads `ticks` clock
+/// ticks after `boot`. The kernel counts whole ticks, so it started less than
+/// a tick after that count: round up by one tick, to the next nanosecond. A
+/// start within a tick after a recorded time then never reads as before it.
+#[cfg(any(target_os = "linux", test))]
+fn latest_start(boot: Duration, ticks: u64, per_second: u64) -> Option<Duration> {
+    if per_second == 0 {
+        return None;
+    }
+    let nanos = (u128::from(ticks) + 1)
+        .checked_mul(1_000_000_000)?
+        .div_ceil(u128::from(per_second));
+    boot.checked_add(Duration::from_nanos(u64::try_from(nanos).ok()?))
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -299,6 +332,34 @@ mod tests {
     use std::process::{Command, Stdio};
 
     use super::super::{is_alive, kill_hard, terminate, Pid, ProcessTree};
+    use std::time::Duration;
+
+    /// A start counted in whole ticks is placed at the end of its tick, to the
+    /// nanosecond, after a boot with a sub-second part: a time inside that tick
+    /// is not after the start, and a time a full tick later is.
+    #[test]
+    fn a_start_rounds_up_to_the_end_of_its_tick() {
+        let boot = Duration::new(1_700_000_000, 250_000_000);
+        // 100 ticks a second: tick 2 ends 30 ms after boot.
+        let end = super::latest_start(boot, 2, 100).unwrap();
+        assert_eq!(end, Duration::new(1_700_000_000, 280_000_000));
+        let recorded = boot + Duration::from_millis(25);
+        assert!(
+            end >= recorded,
+            "a start in the recorded time's tick is after it"
+        );
+        let tick_before = super::latest_start(boot, 1, 100).unwrap();
+        assert!(
+            tick_before < recorded,
+            "a start a full tick earlier is before it"
+        );
+        // 3 ticks a second: two ticks are 666_666_666.67 ns, rounded up.
+        assert_eq!(
+            super::latest_start(boot, 1, 3).unwrap(),
+            boot + Duration::from_nanos(666_666_667)
+        );
+        assert_eq!(super::latest_start(boot, 1, 0), None);
+    }
 
     /// A tree whose root was reaped behind its back cannot read its exit, and
     /// from then on signals nothing, not even on drop: the root's pid and
