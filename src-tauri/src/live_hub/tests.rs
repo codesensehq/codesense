@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::projection::*;
+use crate::commands::dashboard_launch::liveness::tests::StubProbe;
 use serde_json::json;
 
 #[tokio::test]
@@ -473,7 +474,11 @@ fn cached_remote_rows_keep_identity_offline_state_and_closed_tab_behavior() {
         target,
         agent: Some("acme/design/worker".into()),
     });
-    let rows = project_registry(&launch, &live, cached_registry(&launch, &live).unwrap());
+    let rows = project_registry(
+        &launch,
+        &live,
+        cached_registry(&launch, &live, &StubProbe::default(), None).unwrap(),
+    );
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].handle, "remote-agent");
     assert_eq!(rows[0].workspace_handle.as_deref(), Some("ws-1"));
@@ -488,12 +493,18 @@ fn cached_remote_rows_keep_identity_offline_state_and_closed_tab_behavior() {
     live.tabs.clear();
     live.live.clear();
     live.offline.push("droplet".into());
-    let offline = project_registry(&launch, &live, cached_registry(&launch, &live).unwrap());
+    let offline = project_registry(
+        &launch,
+        &live,
+        cached_registry(&launch, &live, &StubProbe::default(), None).unwrap(),
+    );
     assert_eq!(offline[0].state, session_list::SessionState::Offline);
     assert_eq!(offline[0].workspace_handle.as_deref(), Some("ws-1"));
     live.offline.clear();
     live.live.push("droplet".into());
-    assert!(cached_registry(&launch, &live).unwrap().is_empty());
+    assert!(cached_registry(&launch, &live, &StubProbe::default(), None)
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
@@ -561,7 +572,11 @@ fn failed_cached_activity_does_not_invent_a_running_session() {
     );
     let launch = DashboardLaunchState::new(2);
     let live = model.live_tabs();
-    let rows = project_registry(&launch, &live, cached_registry(&launch, &live).unwrap());
+    let rows = project_registry(
+        &launch,
+        &live,
+        cached_registry(&launch, &live, &StubProbe::default(), None).unwrap(),
+    );
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].state, session_list::SessionState::Unknown);
 }
