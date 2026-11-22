@@ -4045,7 +4045,8 @@ pub(crate) mod agent_opens {
         )
         .await
         .unwrap_err();
-        assert_ne!(error, TEAM_PAUSED);
+        // The team check's own refusal, unchanged by the pause.
+        assert_eq!(error, crate::context_repo::caller_scope::MISSING);
         nothing_made(&host);
     }
 
