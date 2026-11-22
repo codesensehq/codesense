@@ -329,6 +329,37 @@ pub(crate) async fn read_session_list_and_unread(
     crate::live_hub::read(app, launched_by)
 }
 
+/// What a session-list read asks when it is called: the launch registry, the session
+/// probe and this Mac's live sessions for membership and liveness, and the live hub's
+/// cached layouts, inbox and activity for decoration.
+pub(crate) trait SessionSource {
+    fn launch(&self) -> &crate::commands::dashboard_launch::DashboardLaunchState;
+    fn hub(&self) -> &crate::live_hub::LiveHub;
+    fn probe(&self) -> &dyn crate::commands::dashboard_launch::liveness::SessionProbe;
+    /// Every live session this Mac's terminal hosts track, read now.
+    fn local_sessions(&self) -> Result<std::collections::HashSet<String>, String>;
+    fn progress(&self) -> Option<&crate::dashboard_stream::DashboardStreamHub>;
+    fn telemetry(&self) -> Option<&crate::commands::launch_telemetry::LaunchTelemetryTracker>;
+}
+
+/// [`read_session_list_and_unread`] over `source`.
+pub(crate) fn read_session_list_from(
+    source: &impl SessionSource,
+    launched_by: Option<&str>,
+) -> Result<
+    (
+        Vec<SessionListRow>,
+        crate::commands::agent_inbox::UnreadByHandle,
+    ),
+    String,
+> {
+    let key = launched_by
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| source.launch().normalize_launched_by(s));
+    Ok(source.hub().rows(key.as_deref()))
+}
+
 /// What a session's terminal tab shows now, read from its host's layout.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TabView {

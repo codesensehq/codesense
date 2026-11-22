@@ -3276,3 +3276,178 @@ fn hub_retention_returns_to_baseline_after_sessions_exit() {
     }
     assert_eq!(gauges(&app), warm);
 }
+
+/// Session-list reads made when a tool is called, over a fake source.
+mod call_time_read {
+    use super::super::*;
+    use super::StubProbe;
+
+    /// A session-list source over a test registry, hub and probe.
+    struct FakeSessions {
+        launch: DashboardLaunchState,
+        hub: LiveHub,
+        probe: StubProbe,
+        local: Result<std::collections::HashSet<String>, String>,
+    }
+
+    impl FakeSessions {
+        fn new(probe: StubProbe) -> Self {
+            Self {
+                launch: DashboardLaunchState::new(4),
+                hub: LiveHub::default(),
+                probe,
+                local: Ok(Default::default()),
+            }
+        }
+
+        fn running(&self, id: &str) -> Result<(), String> {
+            let (rows, _) = session_list::read_session_list_from(self, None)?;
+            crate::mcp::identity_tools::running_in(&rows, id).map(|_| ())
+        }
+
+        /// Store the rows a rebuild made from `live` with `probe` as the hub's cache.
+        fn cache_rows(&self, live: &LiveTabs, probe: &StubProbe) {
+            let rows = project_registry(
+                &self.launch,
+                live,
+                cached_registry(&self.launch, live, probe, None).unwrap(),
+            );
+            self.hub.model.lock().unwrap().rows = rows;
+        }
+    }
+
+    impl session_list::SessionSource for FakeSessions {
+        fn launch(&self) -> &DashboardLaunchState {
+            &self.launch
+        }
+        fn hub(&self) -> &LiveHub {
+            &self.hub
+        }
+        fn probe(&self) -> &dyn crate::commands::dashboard_launch::liveness::SessionProbe {
+            &self.probe
+        }
+        fn local_sessions(&self) -> Result<std::collections::HashSet<String>, String> {
+            self.local.clone()
+        }
+        fn progress(&self) -> Option<&crate::dashboard_stream::DashboardStreamHub> {
+            None
+        }
+        fn telemetry(&self) -> Option<&crate::commands::launch_telemetry::LaunchTelemetryTracker> {
+            None
+        }
+    }
+
+    fn bind(launch: &DashboardLaunchState, handle: &str, session: &str) {
+        assert!(launch.begin(handle).unwrap());
+        launch.bind(handle, session, None).unwrap();
+    }
+
+    /// A local host's live layout holding one tab running `session`.
+    fn local_reply(session: &str) -> crate::commands::machines::RuntimeLayoutReply {
+        use crate::commands::machines::{
+            RuntimeCounter, RuntimeLayoutReply, RuntimeMemberAddress, RuntimeMemberSlot,
+            RuntimeMemberTarget, RuntimeNamespace,
+        };
+        use codesense_pty_core::domain::{PtySessionId, ServerId, WorkspaceKey};
+        use codesense_pty_core::layout::{
+            EntryState, LayoutSnapshot, Placement, TabEntry, Tags, ViewerLayout, WorkspaceLayout,
+        };
+        let mut workspace = WorkspaceLayout::default();
+        workspace.tabs.push(TabEntry {
+            session: PtySessionId::new(session),
+            name: "Worker".into(),
+            role: None,
+            placement: Placement::Tab,
+            state: EntryState::Live,
+            tags: Tags::new(),
+        });
+        RuntimeLayoutReply::Live {
+            private_authority_epoch: None,
+            target: RuntimeMemberTarget {
+                member: RuntimeMemberAddress {
+                    machine_id: crate::commands::machines::LOCAL_MACHINE_ID.into(),
+                    slot: RuntimeMemberSlot::InProcess,
+                },
+                admission_revision: RuntimeCounter::new(1),
+                namespace: RuntimeNamespace {
+                    server_id: "server".into(),
+                    epoch: "epoch".into(),
+                    generation: RuntimeCounter::new(1),
+                },
+            },
+            snapshot: Box::new(LayoutSnapshot {
+                schema: 1,
+                server_id: ServerId::new("server"),
+                server_name: "server".into(),
+                epoch: "epoch".into(),
+                rev: 1,
+                workspaces: BTreeMap::from([(WorkspaceKey::new("acme:design|work"), workspace)]),
+                viewer: ViewerLayout::default(),
+            }),
+        }
+    }
+
+    #[test]
+    fn a_launch_bound_after_the_last_rebuild_is_accepted() {
+        use crate::commands::pty_backend::Liveness;
+        let source = FakeSessions::new(StubProbe::with(&[("sess-new", Liveness::Known(true))]));
+        // The last rebuild ran before the launch bound: the cache holds no row for it.
+        source.cache_rows(&LiveTabs::of(&[], BTreeMap::new()), &StubProbe::default());
+        bind(&source.launch, "w", "sess-new");
+        assert_eq!(source.running("sess-new"), Ok(()));
+    }
+
+    #[test]
+    fn a_bound_launch_absent_from_cached_hosts_is_alive() {
+        use crate::commands::pty_backend::Liveness;
+        let source = FakeSessions::new(StubProbe::with(&[("sess-new", Liveness::Known(true))]));
+        bind(&source.launch, "w", "sess-new");
+        // The cached layouts show no tab yet, and the last rebuild judged it gone.
+        let mut live = LiveTabs::of(&[], BTreeMap::new());
+        live.live
+            .push(crate::commands::machines::LOCAL_MACHINE_ID.into());
+        source.cache_rows(
+            &live,
+            &StubProbe::with(&[("sess-new", Liveness::Known(false))]),
+        );
+        assert_eq!(source.running("sess-new"), Ok(()));
+    }
+
+    #[test]
+    fn a_headless_session_bound_after_the_last_rebuild_is_accepted() {
+        let source = FakeSessions::new(StubProbe::default());
+        source.cache_rows(&LiveTabs::of(&[], BTreeMap::new()), &StubProbe::default());
+        bind(&source.launch, "hl", "headless-1");
+        source.launch.mark_headless(
+            "hl",
+            std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        );
+        assert_eq!(source.running("headless-1"), Ok(()));
+    }
+
+    #[test]
+    fn a_closed_tab_reads_exited_while_its_host_read_is_in_flight() {
+        use crate::commands::pty_backend::Liveness;
+        let source = FakeSessions::new(StubProbe::with(&[("s-closed", Liveness::Known(false))]));
+        {
+            let mut model = source.hub.model.lock().unwrap();
+            model
+                .hosts
+                .insert("local".into(), (local_reply("s-closed"), Ok(Vec::new())));
+            // The host's next layout read never finishes: its cached tab stays open.
+            assert!(model.begin_refresh("local"));
+        }
+        let live = source.hub.model.lock().unwrap().live_tabs();
+        source.cache_rows(&live, &StubProbe::default());
+        assert_eq!(
+            crate::mcp::identity_tools::running_in(&source.hub.rows(None).0, "s-closed")
+                .map(|_| ()),
+            Ok(()),
+            "the cache still lists the closed tab as running"
+        );
+        // The host has closed the session.
+        assert!(source.running("s-closed").is_err());
+    }
+}
