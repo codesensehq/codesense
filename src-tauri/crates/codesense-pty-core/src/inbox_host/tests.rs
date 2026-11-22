@@ -911,6 +911,8 @@ fn a_notice_held_past_one_cycle_reads_held_with_its_gate() {
 }
 
 /// A waiter's held notice is reported with its gate, and no longer once it is handed.
+// Unix only: it serves a waiter over a Unix socket pair (the unix transport's `serve`).
+#[cfg(unix)]
 #[test]
 fn a_held_notice_is_reported_with_its_gate_until_it_is_handed() {
     let (inbox, outlet) = new();
