@@ -7,6 +7,12 @@
 //! running (`alreadyLive`) and the machine's shipped spawn cap (`busy`). The launcher is
 //! whatever the caller reports in `launched_by`, kept for display.
 //!
+//! One exception: while the team an open lands in is paused (its `team-control` records,
+//! [`crate::context_repo::team_pause`]), every [`open_workspace_call_for`] call into it is
+//! refused with [`TEAM_PAUSED`] before anything is made. Those calls come from agents and
+//! published dashboards, never from the person: the launch sheet ([`launch_from_ui`])
+//! opens through [`open_agent`] and isn't gated.
+//!
 //! Every open launches an agent: the one it names, else the preferred built-in
 //! (`builtin/claude`).
 //!
