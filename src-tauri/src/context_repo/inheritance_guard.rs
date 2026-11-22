@@ -185,6 +185,8 @@ const OWN_TEAM_BOUNDARIES: &[(&str, usize)] = &[
     ("src-tauri/src/context_repo/path.rs", 17),
     ("src-tauri/src/context_repo/scaffold.rs", 2),
     ("src-tauri/src/context_repo/scratch_space.rs", 2),
+    // A team's own pause records: a pause stops only the team that wrote it.
+    ("src-tauri/src/context_repo/team_pause.rs", 1),
     ("src-tauri/src/context_repo/team_rename.rs", 5),
     ("src-tauri/src/context_repo/workdir_write.rs", 1),
     ("src-tauri/src/http/routes/viewer.rs", 1),
