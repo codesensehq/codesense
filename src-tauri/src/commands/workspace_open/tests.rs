@@ -219,6 +219,10 @@ impl OpenHost for FakeHost {
             .ok_or_else(|| format!("unknown story {story_id:?}"))
     }
 
+    fn home_and_principal(&self) -> (&Path, &Principal) {
+        (&self.home, &self.principal)
+    }
+
     fn is_live(&self, handle: &str) -> bool {
         self.registry.has_handle(handle)
     }
@@ -1184,10 +1188,23 @@ struct FakePort {
     machine_opens: Mutex<Vec<(String, String, bool)>>,
     // The viewer's refusal of a machine open (SW-FX-131), when it refused one.
     machine_error: Option<String>,
+    /// The pause state a caller-less story open reads.
+    pause: crate::context_repo::team_pause::TeamPause,
+    /// The story of every pause read, in order.
+    pause_reads: Mutex<Vec<String>>,
 }
 
 #[async_trait::async_trait]
 impl OpenWorkspacePort for FakePort {
+    async fn story_pause(
+        &self,
+        story_id: &str,
+        _org: Option<&str>,
+    ) -> Result<crate::context_repo::team_pause::TeamPause, String> {
+        self.pause_reads.lock().unwrap().push(story_id.to_string());
+        Ok(self.pause.clone())
+    }
+
     async fn open_on_machine(
         &self,
         story_id: &str,
@@ -2898,6 +2915,9 @@ pub(crate) mod agent_opens {
         async fn team_content_root(&self, org: &str, team: &str) -> Result<PathBuf, String> {
             self.0.team_content_root(org, team).await
         }
+        fn home_and_principal(&self) -> (&Path, &Principal) {
+            self.0.home_and_principal()
+        }
         fn is_live(&self, handle: &str) -> bool {
             self.0.is_live(handle)
         }
@@ -3300,6 +3320,40 @@ pub(crate) mod agent_opens {
             );
         }
         assert_eq!(host.remote_launches().len(), 0);
+    }
+
+    /// A published dashboard's launch into a paused team reads as `failed`, with nothing
+    /// made, whether or not the story has a worktree.
+    #[cfg(feature = "dashboard-publish")]
+    #[tokio::test]
+    async fn paused_open_maps_to_failed() {
+        use crate::dashboard_publish::{actions, state::Scope};
+        let tmp = tempfile::tempdir().unwrap();
+        let (host, port, _) = setup(tmp.path(), draft("triage", AgentCli::Claude));
+        pause(tmp.path(), AGENT_TEAM, &[GO]);
+        let a = serde_json::from_value(serde_json::json!({"verb":"launchAgent","who":"owner","agent":"triage","prompt":"Fix {id}","mode":"headless"})).unwrap();
+        let scope = Scope {
+            org: AGENT_ORG.into(),
+            team: AGENT_TEAM.into(),
+        };
+        for (id, has_worktree) in [("SW-9", true), ("BUG-1", false)] {
+            let result = actions::launch(
+                &port,
+                &a,
+                id,
+                &scope,
+                "triage",
+                has_worktree,
+                (
+                    tmp.path(),
+                    &alice(),
+                    &crate::context_repo::caller_scope::CallerScope::Human,
+                ),
+            )
+            .await;
+            assert_eq!(result.unwrap_err(), "failed");
+        }
+        nothing_made(&host);
     }
     #[tokio::test]
     async fn max_runtime_call_arms_the_bound_launch_and_reopen_preserves_its_deadline() {
@@ -3825,6 +3879,360 @@ pub(crate) mod agent_opens {
         assert_eq!(launch.agent.revision_label(), stamp);
         assert_eq!(launch.provenance.agent.as_deref(), Some(stamp.as_str()));
     }
+
+    // A paused team (`team-control` records) refuses every `open_workspace_call_for` call
+    // into it before anything is made; the person's launch sheet still launches.
+
+    const GO: (&str, &str) = ("go-1", "id: go-1\npaused: \"true\"\nat: 100");
+    const RESUME: (&str, &str) = (
+        "resume-1",
+        "id: resume-1\npaused: \"false\"\nat: 200\nresumes: go-1",
+    );
+    const PARENT_TEAM: &str = "platform";
+
+    fn pause(home: &Path, team: &str, records: &[(&str, &str)]) {
+        crate::context_repo::team_pause::write_team_control(
+            home,
+            &alice(),
+            AGENT_ORG,
+            team,
+            records,
+        );
+    }
+
+    /// The scope of an agent session in `team`.
+    fn team_caller(home: &Path, team: &str) -> crate::context_repo::caller_scope::CallerScope {
+        let root = crate::context_repo::path_to_org_root(home, &alice(), AGENT_ORG).unwrap();
+        crate::context_repo::caller_scope::CallerScope::Team(
+            crate::context_repo::inheritance::team_view(&root, AGENT_ORG, team),
+        )
+    }
+
+    /// No worktree, staging, launch, machine forward or reveal.
+    fn nothing_made(host: &FakeHost) {
+        assert!(host.launches().is_empty());
+        assert!(host.remote_launches().is_empty());
+        assert_eq!(host.stagings.load(Ordering::SeqCst), 0);
+        assert_eq!(host.worktree_creations.load(Ordering::SeqCst), 0);
+        assert!(host.reveals.lock().unwrap().is_empty());
+    }
+
+    /// Every open shape a caller can send into the agent team.
+    fn open_shapes() -> Vec<serde_json::Value> {
+        vec![
+            serde_json::json!({"target": "story", "storyId": "SW-9", "name": "dev"}),
+            serde_json::json!({"target": "story", "storyId": "SW-9", "name": "dev", "machineId": "box"}),
+            serde_json::json!({"target": "team-workspace", "name": "plain"}),
+            serde_json::json!({"target": "team-workspace", "team": AGENT_TEAM, "name": "plain"}),
+        ]
+    }
+
+    #[tokio::test]
+    async fn paused_team_refuses_a_team_caller_before_anything_is_made() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (host, port, key) = setup(tmp.path(), draft("triage", AgentCli::Claude));
+        pause(tmp.path(), AGENT_TEAM, &[GO]);
+        let scope = team_caller(tmp.path(), AGENT_TEAM);
+        let mut shapes = open_shapes();
+        shapes.push(serde_json::json!({"target": "story", "storyId": "SW-9", "name": "dev", "agent": key.to_string()}));
+        for json in shapes {
+            let error = open_workspace_call_for(
+                &port,
+                params(json.clone()),
+                Some((tmp.path(), &alice(), &scope)),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error, TEAM_PAUSED, "{json}");
+        }
+        nothing_made(&host);
+    }
+
+    #[tokio::test]
+    async fn paused_team_refuses_the_no_target_story_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (host, port, _) = setup(tmp.path(), draft("triage", AgentCli::Claude));
+        pause(tmp.path(), AGENT_TEAM, &[GO]);
+        let scope = team_caller(tmp.path(), AGENT_TEAM);
+        // This port panics on a legacy launch, so a refusal is the only way through.
+        for json in [
+            serde_json::json!({"storyId": "SW-9"}),
+            serde_json::json!({"storyId": "SW-9", "team": AGENT_TEAM}),
+            serde_json::json!({"storyId": "SW-9", "machineId": "box"}),
+        ] {
+            let team = open_workspace_call_for(
+                &port,
+                params(json.clone()),
+                Some((tmp.path(), &alice(), &scope)),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(team, TEAM_PAUSED, "{json}");
+            // The caller-less open reads the story's team through the port's default.
+            let none = open_workspace_call(&port, params(json.clone()))
+                .await
+                .unwrap_err();
+            assert_eq!(none, TEAM_PAUSED, "{json}");
+        }
+        nothing_made(&host);
+    }
+
+    #[tokio::test]
+    async fn paused_team_unknown_scope_still_gets_no_story() {
+        use crate::context_repo::caller_scope::{CallerScope, MISSING};
+        let tmp = tempfile::tempdir().unwrap();
+        let (host, port, _) = setup(tmp.path(), draft("triage", AgentCli::Claude));
+        pause(tmp.path(), AGENT_TEAM, &[GO]);
+        let mut shapes = open_shapes();
+        shapes.push(serde_json::json!({"storyId": "SW-9"}));
+        for json in shapes {
+            let error = open_workspace_call_for(
+                &port,
+                params(json.clone()),
+                Some((tmp.path(), &alice(), &CallerScope::Unknown)),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error, MISSING, "{json}");
+        }
+        nothing_made(&host);
+    }
+
+    #[tokio::test]
+    async fn paused_team_refuses_the_human_scope_mcp_caller() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (host, port, _) = setup(tmp.path(), draft("triage", AgentCli::Claude));
+        pause(tmp.path(), AGENT_TEAM, &[GO]);
+        // `mcp/handler.rs` passes no caller for a `Human`-scope session.
+        let mut shapes = open_shapes();
+        shapes.push(
+            serde_json::json!({"target": "team-workspace", "org": AGENT_ORG, "name": "plain"}),
+        );
+        for json in shapes {
+            let error = open_workspace_call(&port, params(json.clone()))
+                .await
+                .unwrap_err();
+            assert_eq!(error, TEAM_PAUSED, "{json}");
+        }
+        nothing_made(&host);
+    }
+
+    #[tokio::test]
+    async fn refusal_comes_after_authorization() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (host, port, _) = setup(tmp.path(), draft("triage", AgentCli::Claude));
+        // The agent team can't launch into its parent, which is paused.
+        pause(tmp.path(), PARENT_TEAM, &[GO]);
+        let (host, port) = with_story(host, port, "SW-P", PARENT_TEAM);
+        let scope = team_caller(tmp.path(), AGENT_TEAM);
+        for json in [
+            serde_json::json!({"target": "story", "storyId": "SW-P", "name": "dev"}),
+            serde_json::json!({"storyId": "SW-P"}),
+        ] {
+            let error = open_workspace_call_for(
+                &port,
+                params(json.clone()),
+                Some((tmp.path(), &alice(), &scope)),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error, not_openable("SW-P", AGENT_TEAM), "{json}");
+        }
+        let error = open_workspace_call_for(
+            &port,
+            params(serde_json::json!({"target": "team-workspace", "team": PARENT_TEAM, "name": "plain"})),
+            Some((tmp.path(), &alice(), &scope)),
+        )
+        .await
+        .unwrap_err();
+        assert_ne!(error, TEAM_PAUSED);
+        nothing_made(&host);
+    }
+
+    /// `host` with `story_id` in `team` too, and a port over it.
+    fn with_story(
+        host: Arc<FakeHost>,
+        port: HostPort,
+        story_id: &str,
+        team: &str,
+    ) -> (Arc<FakeHost>, HostPort) {
+        drop(port);
+        let mut host = Arc::try_unwrap(host).ok().expect("the only host");
+        let root = content(&host.home, &alice(), team);
+        std::fs::create_dir_all(&root).unwrap();
+        host.content_roots.insert(team.to_string(), root);
+        host.story_teams.insert(
+            story_id.to_string(),
+            ActiveTeam {
+                org: AGENT_ORG.to_string(),
+                team: team.to_string(),
+            },
+        );
+        let host = Arc::new(host);
+        (host.clone(), HostPort(host))
+    }
+
+    #[tokio::test]
+    async fn paused_live_reopen_says_refused_not_already_live() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (host, port, _) = setup(tmp.path(), draft("triage", AgentCli::Claude));
+        let scope = team_caller(tmp.path(), AGENT_TEAM);
+        let lead = serde_json::json!({"target": "story", "storyId": "SW-9", "name": "lead"});
+        let caller = Some((tmp.path(), &alice(), &scope));
+        let opened = open_workspace_call_for(&port, params(lead.clone()), caller)
+            .await
+            .unwrap();
+        assert_eq!(opened["status"], "opened", "{opened}");
+        pause(tmp.path(), AGENT_TEAM, &[GO]);
+        let error = open_workspace_call_for(&port, params(lead.clone()), caller)
+            .await
+            .unwrap_err();
+        assert_eq!(error, TEAM_PAUSED);
+        let error = open_workspace_call(&port, params(lead)).await.unwrap_err();
+        assert_eq!(error, TEAM_PAUSED);
+        assert_eq!(host.launches().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn paused_handoff_successor_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (host, port, _) = setup(tmp.path(), draft("triage", AgentCli::Claude));
+        let scope = team_caller(tmp.path(), AGENT_TEAM);
+        let caller = Some((tmp.path(), &alice(), &scope));
+        let opened = open_workspace_call_for(
+            &port,
+            params(serde_json::json!({"target": "story", "storyId": "SW-9", "name": "lead"})),
+            caller,
+        )
+        .await
+        .unwrap();
+        assert_eq!(opened["status"], "opened", "{opened}");
+        pause(tmp.path(), AGENT_TEAM, &[GO]);
+        // The live lead launches its successor on the same story.
+        let error = open_workspace_call_for(
+            &port,
+            params(serde_json::json!({
+                "target": "story", "storyId": "SW-9", "name": "lead-2", "launchedBy": "SW-9#lead"
+            })),
+            caller,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, TEAM_PAUSED);
+        assert_eq!(host.launches().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn pause_is_read_from_the_target_team() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (host, port, _) = setup(tmp.path(), draft("triage", AgentCli::Claude));
+        let (host, port) = with_story(host, port, "SW-P", PARENT_TEAM);
+        // The agent team's parent is paused; the agent team's own opens launch.
+        pause(tmp.path(), PARENT_TEAM, &[GO]);
+        let scope = team_caller(tmp.path(), AGENT_TEAM);
+        let opened = open_workspace_call_for(
+            &port,
+            params(serde_json::json!({"target": "story", "storyId": "SW-9", "name": "dev"})),
+            Some((tmp.path(), &alice(), &scope)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(opened["status"], "opened", "{opened}");
+        // A caller in the running active team is refused in the paused team.
+        let error = open_workspace_call(
+            &port,
+            params(serde_json::json!({"target": "story", "storyId": "SW-P", "name": "dev"})),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, TEAM_PAUSED);
+        assert_eq!(host.launches().len(), 1);
+        // A caller in the paused active team launches into a running team.
+        let tmp = tempfile::tempdir().unwrap();
+        let (host, port, _) = setup(tmp.path(), draft("triage", AgentCli::Claude));
+        let (host, port) = with_story(host, port, "SW-P", PARENT_TEAM);
+        pause(tmp.path(), AGENT_TEAM, &[GO]);
+        let opened = open_workspace_call(
+            &port,
+            params(serde_json::json!({"target": "story", "storyId": "SW-P", "name": "dev"})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(opened["status"], "opened", "{opened}");
+        assert_eq!(host.launches().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn paused_team_lets_the_launch_sheet_through() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (host, port, _) = setup(tmp.path(), draft("triage", AgentCli::Claude));
+        pause(tmp.path(), AGENT_TEAM, &[GO]);
+        let args = UiLaunchArgs {
+            queue_role: None,
+            target: "story".into(),
+            story_id: Some("SW-9".into()),
+            name: Some("Repro bot".into()),
+            agent: Some("triage".into()),
+            initial_prompt: None,
+            launched_by: None,
+            role: None,
+            avatar: None,
+            machine_id: None,
+            org: None,
+            team: None,
+            worktree: None,
+            create_worktree: None,
+            model: None,
+            mode: None,
+        };
+        let result = launch_from_ui(&port, args).await.unwrap();
+        assert_eq!(result.status, OpenStatus::Opened);
+        assert_eq!(host.launches().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_resume_lets_a_team_caller_launch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (host, port, _) = setup(tmp.path(), draft("triage", AgentCli::Claude));
+        pause(tmp.path(), AGENT_TEAM, &[GO]);
+        let scope = team_caller(tmp.path(), AGENT_TEAM);
+        let caller = Some((tmp.path(), &alice(), &scope));
+        let dev = serde_json::json!({"target": "story", "storyId": "SW-9", "name": "dev"});
+        let error = open_workspace_call_for(&port, params(dev.clone()), caller)
+            .await
+            .unwrap_err();
+        assert_eq!(error, TEAM_PAUSED);
+        pause(tmp.path(), AGENT_TEAM, &[RESUME]);
+        let opened = open_workspace_call_for(&port, params(dev), caller)
+            .await
+            .unwrap();
+        assert_eq!(opened["status"], "opened", "{opened}");
+        assert_eq!(host.launches().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn no_team_control_folder_launches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (host, port, _) = setup(tmp.path(), draft("triage", AgentCli::Claude));
+        let scope = team_caller(tmp.path(), AGENT_TEAM);
+        // The team has never been paused: no records at all.
+        let state = crate::context_repo::team_pause::team_pause(
+            tmp.path(),
+            &alice(),
+            AGENT_ORG,
+            AGENT_TEAM,
+        );
+        assert_eq!(state, Default::default());
+        let opened = open_workspace_call_for(
+            &port,
+            params(serde_json::json!({"target": "story", "storyId": "SW-9", "name": "dev"})),
+            Some((tmp.path(), &alice(), &scope)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(opened["status"], "opened", "{opened}");
+        assert_eq!(host.launches().len(), 1);
+    }
 }
 
 /// "Describe it to an agent" (agents and routines) launches through the real open path with
@@ -3844,6 +4252,9 @@ mod authoring_opens {
             org: Option<&str>,
         ) -> Result<ActiveTeam, String> {
             self.0.story_team(story_id, org).await
+        }
+        fn home_and_principal(&self) -> (&Path, &Principal) {
+            self.0.home_and_principal()
         }
         fn is_live(&self, handle: &str) -> bool {
             self.0.is_live(handle)
@@ -4961,6 +5372,40 @@ async fn a_person_names_the_org_of_a_legacy_story_open() {
     .unwrap_err();
     assert_eq!(error, "invalid: unknown org \"acme/../x\"");
     assert_eq!(port.story_orgs.lock().unwrap().len(), 2);
+}
+
+/// A caller-less story open reads its team's pause before a launch or a machine forward,
+/// and launches as before while the team runs.
+#[tokio::test]
+async fn a_caller_less_story_open_reads_the_pause_first() {
+    let paused = FakePort {
+        pause: crate::context_repo::team_pause::TeamPause {
+            paused: true,
+            ..Default::default()
+        },
+        ..FakePort::default()
+    };
+    for json in [
+        serde_json::json!({"story_id": "SW-1"}),
+        serde_json::json!({"story_id": "SW-1", "machineId": "box"}),
+    ] {
+        let error = open_workspace_call(&paused, params(json))
+            .await
+            .unwrap_err();
+        assert_eq!(error, TEAM_PAUSED);
+    }
+    assert!(paused.story_launches.lock().unwrap().is_empty());
+    assert!(paused.machine_opens.lock().unwrap().is_empty());
+    assert!(paused.reveals.lock().unwrap().is_empty());
+    let running = FakePort::default();
+    open_workspace_call(&running, params(serde_json::json!({"story_id": "SW-1"})))
+        .await
+        .unwrap();
+    assert_eq!(
+        *running.pause_reads.lock().unwrap(),
+        vec!["SW-1".to_string()]
+    );
+    assert_eq!(running.story_launches.lock().unwrap().len(), 1);
 }
 
 /// What a bundled page's `openWorkspace` sends for a team workspace.

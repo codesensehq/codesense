@@ -7,6 +7,12 @@
 //! running (`alreadyLive`) and the machine's shipped spawn cap (`busy`). The launcher is
 //! whatever the caller reports in `launched_by`, kept for display.
 //!
+//! One exception: while the team an open lands in is paused (its `team-control` records,
+//! [`crate::context_repo::team_pause`]), every [`open_workspace_call_for`] call into it is
+//! refused with [`TEAM_PAUSED`] before anything is made. Those calls come from agents and
+//! published dashboards, never from the person: the launch sheet ([`launch_from_ui`])
+//! opens through [`open_agent`] and isn't gated.
+//!
 //! Every open launches an agent: the one it names, else the preferred built-in
 //! (`builtin/claude`).
 //!
@@ -266,6 +272,8 @@ pub(crate) trait OpenHost: Send + Sync {
     async fn team_content_root(&self, org: &str, team: &str) -> Result<PathBuf, String>;
     /// Whether `handle` already has a session in the launch registry.
     fn is_live(&self, handle: &str) -> bool;
+    /// The signed-in home and principal this host launches for.
+    fn home_and_principal(&self) -> (&Path, &crate::domain::Principal);
     /// Hold `handle` from before staging until launch settles, waiting for an
     /// earlier open to finish before this caller checks the actual session.
     async fn claim_open(&self, handle: &str) -> OpenClaim;
@@ -637,6 +645,22 @@ pub(crate) fn story_open_refusal(
         }
         CallerScope::Unknown => MISSING.into(),
     }
+}
+
+/// The refusal of an open into a paused team.
+pub(crate) const TEAM_PAUSED: &str = "refused: team paused";
+
+/// [`TEAM_PAUSED`] when `team` is paused, read fresh from its records. The caller has
+/// already been authorised for `team`, so the refusal tells it nothing new.
+fn refuse_paused_team(
+    home: &Path,
+    principal: &crate::domain::Principal,
+    team: &ActiveTeam,
+) -> Result<(), String> {
+    if crate::context_repo::team_pause::team_pause(home, principal, &team.org, &team.team).paused {
+        return Err(TEAM_PAUSED.into());
+    }
+    Ok(())
 }
 
 /// The MCP handler's check before an agent opens `story_id`: the story is looked up in the
@@ -1201,6 +1225,21 @@ pub(crate) trait OpenWorkspacePort: Send + Sync {
     async fn targeted(&self) -> Result<(ActiveTeam, Box<dyn OpenHost>), String>;
     /// Surface a session in the viewer, stealing focus only when `focus`.
     fn reveal(&self, handle: &str, focus: bool);
+    /// The pause state of the team `story_id` belongs to, for a story open with no caller
+    /// (an MCP session in `Human` scope). The story and the home are resolved as a targeted
+    /// open resolves them; `org` is the caller's hint for the story's org.
+    async fn story_pause(
+        &self,
+        story_id: &str,
+        org: Option<&str>,
+    ) -> Result<crate::context_repo::team_pause::TeamPause, String> {
+        let (_, host) = self.targeted().await?;
+        let team = host.story_team(story_id, org).await?;
+        let (home, principal) = host.home_and_principal();
+        Ok(crate::context_repo::team_pause::team_pause(
+            home, principal, &team.org, &team.team,
+        ))
+    }
     /// Ask the viewer to open a story's workspace on a machine, creating it
     /// there on first open, and wait for its verdict. `Err` is the reason it did
     /// not open (or that no verdict came within the timeout).
@@ -1348,6 +1387,7 @@ pub(crate) async fn open_workspace_call_for(
             scope
                 .require_launch_team(home, principal, &team.org, &team.team)
                 .map_err(&refuse)?;
+            refuse_paused_team(home, principal, &team)?;
             if let Some(reference) = non_blank(request.agent.as_deref()) {
                 let key = crate::agents::launch::find_agent_for(
                     home,
@@ -1357,6 +1397,39 @@ pub(crate) async fn open_workspace_call_for(
                     scope,
                 )?;
                 request.agent = Some(key.to_string());
+            }
+        } else {
+            // A caller-less open (an MCP session in `Human` scope) lands where its plan
+            // resolves it: the story's own team, or the named team. Input the plan refuses
+            // (no story id, an unknown target, a team or org that isn't a plain name)
+            // launches nothing, so it reads no pause.
+            let team = match request.target.trim() {
+                "story" => match non_blank(request.story_id.as_deref()) {
+                    Some(id) => {
+                        match host.story_team(id, non_blank(request.org.as_deref())).await {
+                            Ok(team) => Some(team),
+                            Err(reason) => {
+                                return Ok(serde_json::json!(OpenResult::invalid(&reason)))
+                            }
+                        }
+                    }
+                    None => None,
+                },
+                "team-workspace" => {
+                    let org = non_blank(request.org.as_deref()).unwrap_or(&active.org);
+                    let team = non_blank(request.team.as_deref()).unwrap_or(&active.team);
+                    (is_single_path_segment(team)
+                        && crate::context_repo::org_slug::validate_org_slug(org).is_none())
+                    .then(|| ActiveTeam {
+                        org: org.to_string(),
+                        team: team.to_string(),
+                    })
+                }
+                _ => None,
+            };
+            if let Some(team) = team {
+                let (home, principal) = host.home_and_principal();
+                refuse_paused_team(home, principal, &team)?;
             }
         }
         let result = open_agent_as(
@@ -1407,14 +1480,22 @@ pub(crate) async fn open_workspace_call_for(
         scope
             .require_launch_team(home, principal, &team.org, &team.team)
             .map_err(|error| story_open_refusal(scope, &story_id, error))?;
+        refuse_paused_team(home, principal, &team)?;
         if let Some(reason) = story_team_mismatch(&story_id, &team, params.team.as_deref()) {
             return Err(format!("invalid: {reason}"));
         }
-    } else if non_blank(params.team.as_deref()).is_some() {
-        let (_, host) = port.targeted().await?;
-        let team = host.story_team(&story_id, org.as_deref()).await?;
-        if let Some(reason) = story_team_mismatch(&story_id, &team, params.team.as_deref()) {
-            return Err(format!("invalid: {reason}"));
+    } else {
+        if non_blank(params.team.as_deref()).is_some() {
+            let (_, host) = port.targeted().await?;
+            let team = host.story_team(&story_id, org.as_deref()).await?;
+            if let Some(reason) = story_team_mismatch(&story_id, &team, params.team.as_deref()) {
+                return Err(format!("invalid: {reason}"));
+            }
+        }
+        // A caller-less open (an MCP session in `Human` scope) is gated too. A story the
+        // lookup can't place isn't a pause question: the launch reports it.
+        if matches!(port.story_pause(&story_id, org.as_deref()).await, Ok(p) if p.paused) {
+            return Err(TEAM_PAUSED.into());
         }
     }
     if let Some(machine_id) = machine_id {
@@ -2558,6 +2639,10 @@ impl OpenHost for AppOpenHost {
                     super::pty_backend::alive_session_ids(&self.app, &[session]).known_gone(session)
                 })
             })
+    }
+
+    fn home_and_principal(&self) -> (&Path, &crate::domain::Principal) {
+        (&self.codesense_home, &self.principal)
     }
 
     async fn claim_open(&self, handle: &str) -> OpenClaim {
