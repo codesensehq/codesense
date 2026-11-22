@@ -3452,4 +3452,93 @@ mod call_time_read {
         // The host has closed the session.
         assert!(source.running("s-closed").is_err());
     }
+
+    fn state_of(rows: &[SessionListRow], handle: &str) -> session_list::SessionState {
+        rows.iter()
+            .find(|row| row.handle == handle)
+            .unwrap_or_else(|| panic!("no row for {handle}"))
+            .state
+    }
+
+    #[test]
+    fn a_stale_cache_does_not_decide_a_read() {
+        use crate::commands::pty_backend::Liveness;
+        let source = FakeSessions::new(StubProbe::with(&[("s-w", Liveness::Known(false))]));
+        bind(&source.launch, "w", "s-w");
+        // The last rebuild saw it running; it has exited since.
+        source.cache_rows(
+            &LiveTabs::of(&[], BTreeMap::new()),
+            &StubProbe::with(&[("s-w", Liveness::Known(true))]),
+        );
+        let (rows, _) = session_list::read_session_list_from(&source, None).unwrap();
+        assert_eq!(state_of(&rows, "w"), session_list::SessionState::Exited);
+    }
+
+    #[test]
+    fn a_rebuild_and_a_read_agree_on_one_probe() {
+        use crate::commands::pty_backend::Liveness;
+        let answers = [
+            ("s-up", Liveness::Known(true)),
+            ("s-gone", Liveness::Known(false)),
+        ];
+        let source = FakeSessions::new(StubProbe::with(&answers));
+        for (handle, session) in [("up", "s-up"), ("gone", "s-gone"), ("quiet", "s-quiet")] {
+            bind(&source.launch, handle, session);
+        }
+        assert!(source.launch.begin("reserved").unwrap());
+        source.cache_rows(
+            &LiveTabs::of(&[], BTreeMap::new()),
+            &StubProbe::with(&answers),
+        );
+        let cached = source.hub.rows(None).0;
+        let (read, _) = session_list::read_session_list_from(&source, None).unwrap();
+        for handle in ["up", "gone", "quiet", "reserved"] {
+            assert_eq!(
+                state_of(&cached, handle),
+                state_of(&read, handle),
+                "{handle}"
+            );
+        }
+        assert_eq!(state_of(&read, "gone"), session_list::SessionState::Exited);
+        assert_eq!(
+            state_of(&read, "reserved"),
+            session_list::SessionState::Exited
+        );
+    }
+
+    #[test]
+    fn a_read_carries_the_enriched_fields() {
+        use crate::commands::dashboard_launch::LaunchTeam;
+        let source = FakeSessions::new(StubProbe::default());
+        bind(&source.launch, "w", "s-w");
+        let team = LaunchTeam {
+            org: "acme".into(),
+            team: "design".into(),
+        };
+        source.hub.model.lock().unwrap().active_team = Some(team.clone());
+        let (rows, _) = session_list::read_session_list_from(&source, None).unwrap();
+        let row = rows.iter().find(|row| row.handle == "w").unwrap();
+        assert_eq!(row.team.as_ref(), Some(&team));
+        assert_eq!(row.session.as_deref(), Some("s-w"));
+    }
+
+    #[test]
+    fn a_read_asks_the_probe_once() {
+        let source = FakeSessions::new(StubProbe::default());
+        for (handle, session) in [("a", "s-a"), ("b", "s-b"), ("c", "s-c")] {
+            bind(&source.launch, handle, session);
+        }
+        session_list::read_session_list_from(&source, None).unwrap();
+        assert_eq!(source.probe.calls.get(), 1);
+    }
+
+    #[test]
+    fn an_unanswering_probe_leaves_rows_alive() {
+        // The stub knows no session, as a host that never answers.
+        let source = FakeSessions::new(StubProbe::default());
+        bind(&source.launch, "w", "s-w");
+        let (rows, _) = session_list::read_session_list_from(&source, None).unwrap();
+        assert_ne!(state_of(&rows, "w"), session_list::SessionState::Exited);
+        assert_eq!(source.running("s-w"), Ok(()));
+    }
 }
