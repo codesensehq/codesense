@@ -2168,3 +2168,53 @@ fn child_cancellation_hides_ancestor_runs_before_stopping_and_keeps_own_runs() {
         .read_admitted(&f.path("parent", "content/shared.md"))
         .is_ok());
 }
+
+/// `runs_while_team_paused` is routine.yml only: no tool parameter sets it, a create
+/// ignores it, and an update keeps the stored value.
+#[test]
+fn routine_tools_cannot_set_runs_while_team_paused() {
+    for schema in [
+        serde_json::to_value(rmcp::schemars::schema_for!(RoutineCreateParams)).unwrap(),
+        serde_json::to_value(rmcp::schemars::schema_for!(RoutineUpdateParams)).unwrap(),
+    ] {
+        let properties = schema["properties"].as_object().unwrap();
+        assert!(!properties
+            .keys()
+            .any(|name| name.to_ascii_lowercase().contains("pause")));
+    }
+    let _temp = TempHome::new();
+    let home = _temp.codesense_home();
+    let now = at("2026-10-05T09:01:00Z");
+    let id = create_echo(&home, json!({ "runsWhileTeamPaused": true }), now)["data"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let key = RoutineKey::parse(&id).unwrap();
+    let mut def = service::get(&home, &alice(), &key).unwrap().def;
+    assert!(!def.policy.runs_while_team_paused);
+    def.policy.runs_while_team_paused = true;
+    service::save(
+        &home,
+        &alice(),
+        SaveTarget::Update {
+            key: key.clone(),
+            base_revision: 1,
+        },
+        def,
+        &Author::agent("t"),
+    )
+    .unwrap();
+    ok(update(
+        &home,
+        &alice(),
+        &CallerSession::default().author(),
+        params(
+            json!({ "id": id, "baseRevision": 2, "visible": true, "runsWhileTeamPaused": false }),
+        ),
+        now,
+        &|_| None,
+    ));
+    let def = service::get(&home, &alice(), &key).unwrap().def;
+    assert!(def.policy.visible);
+    assert!(def.policy.runs_while_team_paused);
+}
