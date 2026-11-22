@@ -30,9 +30,6 @@ pub mod sample_source_repo;
 mod scaffold;
 pub mod scoped_key;
 pub mod scratch_space;
-// The gates read `paused`, and the routine gate also `record` and `reason`; `go` is for
-// their tests.
-#[allow(dead_code)]
 pub(crate) mod team_pause;
 mod team_rename;
 mod url;
