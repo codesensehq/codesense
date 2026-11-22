@@ -6,7 +6,12 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { isPublicRemote, scanPush, withoutMaintainerTagIdentity } from "./privacy-ci.mjs";
+import {
+  isPublicRemote,
+  scanPush,
+  withoutMaintainerTagIdentity,
+  LOCATION_FIX,
+} from "./privacy-ci.mjs";
 
 const SCRIPTS = path.dirname(fileURLToPath(import.meta.url));
 const INSTALL = path.join(SCRIPTS, "git-hooks", "install.sh");
@@ -169,6 +174,17 @@ const refused = (result, rule) => {
   assert.match(result.stderr, new RegExp(`privacy-scan: ${rule} x\\d+`));
   assert.ok(!result.stderr.includes(HANDLE), "output is redacted");
 };
+// A commit refused at commit time: one `rule  place  fix` line per finding, the
+// fix a rerun, and no term, handle or staged path printed.
+const commitRefused = (result, rule) => {
+  assert.notEqual(result.status, 0, result.stderr);
+  assert.match(result.stderr, new RegExp(`^privacy-scan: ${rule}  \\S.*  rerun (with|your) `, "m"));
+  for (const output of [result.stderr, result.stdout]) {
+    assert.ok(!output.includes(TERM), "output is redacted");
+    assert.ok(!output.includes(HANDLE), "output is redacted");
+    assert.ok(!/\b[a-z]\.txt\b/.test(output), "output names no staged file");
+  }
+};
 // The hook's own stderr lines, without git's.
 const hookLines = (stderr) => stderr.split("\n").filter((line) => line.startsWith("privacy-scan:"));
 const PUBLIC_NOTICE = /privacy hook: public rules only; no private inventory/;
@@ -268,7 +284,9 @@ test("without an inventory, a clone runs the public rules with a notice", (t) =>
     assert.ok(!r.stderr.includes(FAKE_KEY), "output is redacted");
   };
   s.stage("b.txt", `${FAKE_KEY}\n`);
-  keyBlocked(s.run(["commit", "-q", "-m", `Add ${FAKE_KEY}`]));
+  const keyCommit = s.run(["commit", "-q", "-m", `Add ${FAKE_KEY}`]);
+  commitRefused(keyCommit, "token");
+  assert.ok(!keyCommit.stderr.includes(FAKE_KEY), "output is redacted");
   s.git("commit", "-q", "--no-verify", "-m", "Add key");
   keyBlocked(s.run(["push", "-q", "public", "main"]));
   // A destination that is not public stays silent, required or not.
@@ -362,7 +380,7 @@ test("a clone that requires the private rules blocks without an inventory", (t) 
   fs.mkdirSync(path.join(s.env.HOME, ".config", "codesense"), { recursive: true });
   fs.copyFileSync(s.terms, path.join(s.env.HOME, ".config", "codesense", "privacy-terms.json"));
   s.stage("b.txt", "two\n");
-  blocked(s.run(["commit", "-q", "-m", `Fix ${TERM}`]));
+  commitRefused(s.run(["commit", "-q", "-m", `Fix ${TERM}`]), "fixture-5");
   for (const result of both(s.env)) {
     passed(result);
     assert.doesNotMatch(result.stderr, PUBLIC_NOTICE);
@@ -665,44 +683,94 @@ test("commit-msg blocks a private term only when a remote is public", (t) => {
   const s = sandbox(t);
   passed(s.install());
   s.stage("a.txt", "one\n");
-  blocked(s.run(["commit", "-q", "-m", `Fix ${TERM}`]));
-  // Every message line counts, comments too; only the verbose diff below the scissors does not.
+  commitRefused(s.run(["commit", "-q", "-m", `Fix ${TERM}`]), "fixture-5");
+  // Every message line counts: comments, and text below a scissors line, which
+  // the hook cannot tell from git's own -v diff.
   const file = path.join(s.root, "message.txt");
   fs.writeFileSync(file, `Clean subject\n# ${TERM}\n`);
-  blocked(s.run(["commit", "-q", "--cleanup=strip", "-F", file]));
+  commitRefused(s.run(["commit", "-q", "--cleanup=strip", "-F", file]), "fixture-5");
   fs.writeFileSync(
     file,
     `Clean subject\n# ------------------------ >8 ------------------------\n+${TERM}\n`,
   );
-  passed(s.run(["commit", "-q", "--cleanup=strip", "-F", file]));
+  commitRefused(s.run(["commit", "-q", "--cleanup=strip", "-F", file]), "fixture-5");
+  s.git("config", "commit.cleanup", "scissors");
+  commitRefused(s.run(["commit", "-q", "-F", file]), "fixture-5");
+  s.git("config", "--unset", "commit.cleanup");
   // Without the extra-URL env, the shell prefilter and node still find a public URL.
   const env = { ...s.env, CODESENSE_PRIVACY_PUBLIC_REMOTES: "" };
   s.git("remote", "remove", "public");
   s.git("remote", "set-url", "other", "https://github.com/codesensehq/project.git");
   s.stage("a.txt", "two\n");
-  blocked(s.run(["commit", "-q", "-m", `Fix ${TERM}`], { env }));
+  commitRefused(s.run(["commit", "-q", "-m", `Fix ${TERM}`], { env }), "fixture-5");
   // No public remote: no scan.
   s.git("remote", "set-url", "other", "https://example.com/project.git");
   passed(s.run(["commit", "-q", "-m", `Fix ${TERM}`], { env }));
 });
 
-test("commit-msg drops comment lines only when cleanup strips them", (t) => {
+test("commit-msg scans comment lines whatever the comment character or cleanup", (t) => {
   const s = sandbox(t);
   passed(s.install());
   const file = path.join(s.root, "message.txt");
+  s.stage("a.txt", "one\n");
+  // Config that strips ; lines, overridden on the command line: the hook sees
+  // only the config, so it scans every line either way.
   s.git("config", "commit.cleanup", "strip");
   s.git("config", "core.commentChar", ";");
-  s.stage("a.txt", "one\n");
-  // The configured comment char's lines go; other lines stay.
-  fs.writeFileSync(file, `Clean subject\n; ${TERM}\n`);
-  passed(s.run(["commit", "-q", "-F", file]));
-  s.stage("a.txt", "two\n");
-  fs.writeFileSync(file, `Clean subject\n# ${TERM}\n`);
-  blocked(s.run(["commit", "-q", "-F", file]));
-  // Without a stripping cleanup mode, comment lines are published and scanned.
+  for (const cleanup of [[], ["--cleanup=verbatim"], ["--cleanup=strip"]])
+    for (const char of [";", "#"]) {
+      fs.writeFileSync(file, `Clean subject\n${char} ${TERM}\n`);
+      commitRefused(s.run(["commit", "-q", ...cleanup, "-F", file]), "fixture-5");
+    }
   s.git("config", "commit.cleanup", "whitespace");
   fs.writeFileSync(file, `Clean subject\n; ${TERM}\n`);
-  blocked(s.run(["commit", "-q", "-F", file]));
+  commitRefused(s.run(["commit", "-q", "-F", file]), "fixture-5");
+  // core.commentChar auto: whichever character a line starts with, it is scanned.
+  s.git("config", "core.commentChar", "auto");
+  s.git("config", "commit.cleanup", "strip");
+  for (const char of "#;@!$%^&|:")
+    commitRefused(s.run(["commit", "-q", "-m", `${char}12 ${TERM}`]), "fixture-5");
+});
+
+test("a -v diff is scanned, with its own fix; --no-verbose leaves it out", (t) => {
+  const s = sandbox(t);
+  s.commit("a.txt", `keep\n${TERM}\n`);
+  passed(s.install());
+  s.stage("a.txt", "keep\n");
+  const verbose = s.run(["commit", "-q", "-v"], {
+    env: { ...s.env, ...editor(s, "Clean subject") },
+  });
+  commitRefused(verbose, "fixture-5");
+  const [line] = hookLines(verbose.stderr);
+  const [, at] = /^privacy-scan: fixture-5  message:(\d+)  (.*)$/.exec(line);
+  assert.ok(Number(at) > 3, line);
+  assert.ok(line.endsWith(`  ${LOCATION_FIX.verbose}`), line);
+  passed(
+    s.run(["commit", "-q", "--no-verbose"], { env: { ...s.env, ...editor(s, "Clean subject") } }),
+  );
+});
+
+test("a refused message names no command, and rerunning the same one keeps -a or --amend", (t) => {
+  const s = sandbox(t);
+  passed(s.install());
+  s.commit("a.txt", "one\n");
+  const count = () => s.git("rev-list", "--count", "HEAD").trim();
+  const noCommand = (result) => {
+    commitRefused(result, "fixture-5");
+    assert.ok(!result.stderr.includes("-F"), result.stderr);
+    assert.ok(!result.stderr.includes("GIT_EDITOR="), result.stderr);
+    assert.ok(hookLines(result.stderr).some((l) => l.endsWith(LOCATION_FIX.message)));
+  };
+  fs.writeFileSync(path.join(s.work, "a.txt"), "two\n");
+  noCommand(s.run(["commit", "-q", "-a", "-m", `Subject ${TERM}`]));
+  assert.equal(count(), "1");
+  passed(s.run(["commit", "-q", "-a", "-m", "Subject clean"]));
+  assert.equal(s.git("show", "HEAD:a.txt"), "two\n");
+  assert.equal(count(), "2");
+  noCommand(s.run(["commit", "-q", "--amend", "-m", `Subject ${TERM}`]));
+  passed(s.run(["commit", "-q", "--amend", "-m", "Amended clean"]));
+  assert.equal(count(), "2");
+  assert.equal(s.git("log", "-1", "--format=%s").trim(), "Amended clean");
 });
 
 test("the installer is idempotent and chains a git-ai style hook under its own name", (t) => {
@@ -910,7 +978,7 @@ test("the maintainer's handle anywhere else in a message blocks", (t) => {
   ]) {
     s.stage("a.txt", `${message.length}\n`);
     fs.writeFileSync(file, message);
-    refused(s.run(["commit", "-q", "--cleanup=verbatim", "-F", file]), "fixture-5");
+    commitRefused(s.run(["commit", "-q", "--cleanup=verbatim", "-F", file]), "fixture-5");
   }
 });
 
@@ -932,7 +1000,7 @@ test("the public rules allow only the exact maintainer address in a sign-off", (
     `${HANDLE}@users.noreply.github.com`,
   ].entries()) {
     s.stage("a.txt", `${i}\n`);
-    refused(
+    commitRefused(
       s.run(["commit", "-q", "-m", `Clean subject\n\nSigned-off-by: ${HANDLE} <${address}>`]),
       "email",
     );
@@ -1002,23 +1070,21 @@ test("the maintainer's sign-off is masked only as a whole line in the trailer bl
     fs.writeFileSync(file, message);
     return s.run(["commit", "-q", `--cleanup=${cleanup}`, "-F", file]);
   };
-  // An editor-style message: git's comment block follows the sign-off. Unset,
-  // default or strip cleanup skips it when finding the trailer block; verbatim,
-  // whitespace and scissors publish it, so it is the block.
+  // A typed message with a comment block after the sign-off and no editor: the
+  // hook reads the file as is, so the block ends the trailer block under every
+  // cleanup mode, and the sign-off is scanned.
   const commented = `Clean subject\n\n${SIGNOFF}\n\n# Please enter the commit message.\n# Lines starting with '#' are ignored.\n`;
   for (const mode of [null, "default", "strip", "verbatim", "whitespace", "scissors"]) {
     if (mode) s.git("config", "commit.cleanup", mode);
     s.stage("a.txt", `${mode}\n`);
     fs.writeFileSync(file, commented);
-    const result = s.run(["commit", "-q", "-F", file]);
-    if (["verbatim", "whitespace", "scissors"].includes(mode)) refused(result, "fixture-5");
-    else passed(result);
+    commitRefused(s.run(["commit", "-q", "-F", file]), "fixture-5");
     if (mode) s.git("config", "--unset", "commit.cleanup");
   }
   // A comment block that names the handle is still scanned.
   s.stage("a.txt", "comment\n");
   fs.writeFileSync(file, `Clean subject\n\n${SIGNOFF}\n\n# ${HANDLE}\n`);
-  refused(s.run(["commit", "-q", "-F", file]), "fixture-5");
+  commitRefused(s.run(["commit", "-q", "-F", file]), "fixture-5");
   for (const message of [
     `${SIGNOFF}\n\nBody\n`,
     `Clean subject\n\n${SIGNOFF}\n\nA later paragraph\n`,
@@ -1026,7 +1092,7 @@ test("the maintainer's sign-off is masked only as a whole line in the trailer bl
     `Clean subject\n\n${SIGNOFF}\u2028x\n`,
     `Clean subject\n\nx\u2029${SIGNOFF}\n`,
   ])
-    refused(commit(message), "fixture-5");
+    commitRefused(commit(message), "fixture-5");
 });
 
 test("the maintainer's annotated or signed tag passes; a tag naming the handle elsewhere blocks", (t) => {
@@ -1108,4 +1174,385 @@ test("pre-push asks for a reinstall when the dispatcher predates the signed-comm
   const fresh = s.run(["push", "-q", "public", "main"]);
   passed(fresh);
   assert.doesNotMatch(fresh.stderr, /out of date/);
+});
+
+test("commit-msg refuses a staged private term, and nothing is committed", (t) => {
+  const s = sandbox(t);
+  passed(s.install());
+  s.commit("a.txt", "clean\n");
+  const count = () => s.git("rev-list", "--count", "HEAD").trim();
+  s.stage("a.txt", "clean\n");
+  s.stage("b.txt", `x ${TERM} y\n`);
+  const result = s.run(["commit", "-q", "-m", "Clean subject"]);
+  commitRefused(result, "fixture-5");
+  assert.match(result.stderr, /^privacy-scan: fixture-5  staged file 1 of 1, line 1  /m);
+  assert.equal(count(), "1");
+  s.stage("b.txt", "clean\n");
+  passed(s.run(["commit", "-q", "-m", "Clean subject"]));
+  assert.equal(count(), "2");
+});
+
+test("commit-msg scans the index the commit uses: commit -a and a pathspec", (t) => {
+  const s = sandbox(t);
+  passed(s.install());
+  s.commit("a.txt", "clean\n");
+  s.commit("b.txt", "clean\n");
+  s.commit("c.txt", "clean\n");
+  // commit -a stages a tracked change in a temporary index, and the place counts
+  // the commit's own file list, not the real index's (empty here).
+  fs.writeFileSync(path.join(s.work, "a.txt"), "changed\n");
+  fs.writeFileSync(path.join(s.work, "b.txt"), `${TERM}\n`);
+  const all = s.run(["commit", "-q", "-a", "-m", "Clean subject"]);
+  commitRefused(all, "fixture-5");
+  assert.match(all.stderr, /^privacy-scan: fixture-5  staged file 2 of 2, line 1  /m);
+  s.git("checkout", "--", "a.txt", "b.txt");
+  // So does a pathspec commit.
+  fs.writeFileSync(path.join(s.work, "b.txt"), `${TERM}\n`);
+  commitRefused(s.run(["commit", "-q", "-m", "Clean subject", "--", "b.txt"]), "fixture-5");
+  s.git("checkout", "--", "b.txt");
+  // A term staged in the real index but left out of a pathspec commit is not committed.
+  s.stage("a.txt", `${TERM}\n`);
+  fs.writeFileSync(path.join(s.work, "c.txt"), "changed\n");
+  passed(s.run(["commit", "-q", "-m", "Clean subject", "--", "c.txt"]));
+  assert.equal(s.git("show", "--format=", "--name-only", "HEAD").trim(), "c.txt");
+});
+
+test("commit-msg scans a first commit against the empty tree", (t) => {
+  const s = sandbox(t);
+  passed(s.install());
+  s.stage("a.txt", `${TERM}\n`);
+  commitRefused(s.run(["commit", "-q", "-m", "Clean subject"]), "fixture-5");
+  assert.notEqual(s.run(["rev-parse", "--verify", "-q", "HEAD"]).status, 0);
+  s.stage("a.txt", "clean\n");
+  passed(s.run(["commit", "-q", "-m", "Clean subject"]));
+});
+
+test("commit-msg scans only what an amend adds against HEAD", (t) => {
+  const s = sandbox(t);
+  passed(s.install());
+  s.commit("a.txt", `${TERM}\n`);
+  // The term is already in HEAD: rewording it adds nothing new (pre-push still scans it).
+  passed(s.run(["commit", "-q", "--amend", "-m", "Clean subject"]));
+  s.commit("a.txt", "clean\n");
+  s.stage("b.txt", `${TERM}\n`);
+  commitRefused(s.run(["commit", "-q", "--amend", "--no-edit"]), "fixture-5");
+});
+
+test("commit-msg skips the staged scan during a merge, also in a linked worktree", (t) => {
+  const s = sandbox(t);
+  passed(s.install());
+  s.commit("a.txt", "base\n");
+  // A conflicted merge resolved with a term, committed with commit-msg running.
+  const conflict = (cwd, branch) => {
+    const run = (args) => s.run(args, { cwd });
+    const git = (...args) => {
+      const result = run(args);
+      if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
+    };
+    const edit = (text, message) => {
+      fs.writeFileSync(path.join(cwd, "a.txt"), text);
+      git("commit", "-q", "--no-verify", "-am", message);
+    };
+    git("checkout", "-q", "-b", branch);
+    edit("topic\n", "Topic change");
+    git("checkout", "-q", "-");
+    edit("main\n", "Main change");
+    assert.notEqual(run(["merge", "-q", "--no-ff", branch]).status, 0);
+    fs.writeFileSync(path.join(cwd, "a.txt"), `${TERM}\n`);
+    git("add", "a.txt");
+    const result = run(["commit", "-q", "--no-edit"]);
+    passed(result);
+    assert.match(result.stderr, /privacy hook: skipped the staged scan during a merge/);
+  };
+  conflict(s.work, "topic");
+  // pre-push still blocks the term the merge brought in.
+  blocked(s.run(["push", "-q", "public", "main"]));
+  const linked = path.join(s.root, "linked");
+  s.git("worktree", "add", "-q", "-b", "linked", linked);
+  fs.symlinkSync(SCRIPTS, path.join(linked, "scripts"));
+  conflict(linked, "linked-topic");
+});
+
+// The rule ids of a commit-time refusal, in order.
+const commitRules = (stderr) =>
+  hookLines(stderr)
+    .filter((line) => line.includes("  "))
+    .map((line) => line.slice("privacy-scan: ".length).split("  ")[0]);
+
+// A maintainer clone: the switch, the identity and a signing key.
+function maintainerClone(t) {
+  const s = sandbox(t);
+  passed(s.install());
+  s.commit("a.txt", "base\n");
+  const key = path.join(s.root, "signing-key");
+  execFileSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", key]);
+  for (const [name, value] of [
+    ["codesense.requireSigned", "true"],
+    ["user.name", HANDLE],
+    ["user.email", NOREPLY],
+    ["gpg.format", "ssh"],
+    ["user.signingkey", `${key}.pub`],
+    ["commit.gpgsign", "true"],
+  ])
+    s.git("config", name, value);
+  let n = 0;
+  // A commit of a fresh clean change.
+  const attempt = (args, extra = {}) => {
+    s.stage("a.txt", `${n++}\n`);
+    return s.run(["commit", "-q", ...args], { env: { ...s.env, ...extra } });
+  };
+  // commit-msg alone on a message, with nothing committed (and nothing signed).
+  const message = path.join(s.root, "message.txt");
+  const hook = (text, extra = {}) => {
+    fs.writeFileSync(message, text);
+    return spawnSync("node", [CLI, "--hook", "commit-msg", message], {
+      cwd: s.work,
+      encoding: "utf8",
+      env: { ...s.env, ...extra },
+    });
+  };
+  return { ...s, key, attempt, hook };
+}
+
+test("a requireSigned clone refuses each part of the maintainer form at commit time", (t) => {
+  const s = maintainerClone(t);
+  const signed = `Clean subject\n\n${SIGNOFF}`;
+  const only = (result, rule) => {
+    commitRefused(result, rule);
+    assert.deepEqual(commitRules(result.stderr), [rule]);
+  };
+  const result = s.attempt(["-s", "-m", "Clean subject"]);
+  passed(result);
+  assert.equal(result.stderr, "");
+  assert.match(s.git("cat-file", "commit", "HEAD"), /^gpgsig /m);
+  only(s.attempt(["-m", "Clean subject"]), "missing-signoff");
+  // A sign-off outside the trailer block is no sign-off (and its address is scanned).
+  const body = s.attempt(["-m", `${signed}\n\nA later paragraph`]);
+  commitRefused(body, "missing-signoff");
+  assert.deepEqual(commitRules(body.stderr), ["email", "missing-signoff"]);
+  only(s.attempt(["--author", "Someone <someone@example.com>", "-m", signed]), "author-identity");
+  only(s.attempt(["-m", signed], { GIT_COMMITTER_NAME: "Someone" }), "committer-identity");
+  only(
+    s.attempt([
+      "-m",
+      `Clean subject\n\nCo-authored-by: Claude <noreply@anthropic.com>\n${SIGNOFF}`,
+    ]),
+    "ai-co-author",
+  );
+  // Case-insensitive; this address is also one the public rules refuse.
+  const variant = s.attempt([
+    "-m",
+    `Clean subject\n\nco-authored-BY : A <x${"@mail.anthropic.com"}>\n${SIGNOFF}`,
+  ]);
+  commitRefused(variant, "ai-co-author");
+  assert.deepEqual(commitRules(variant.stderr), ["email", "ai-co-author"]);
+  s.git("config", "--unset", "commit.gpgsign");
+  const unsigned = s.attempt(["-m", signed]);
+  only(unsigned, "signing-config");
+  // It says what it checks, and why commit.gpgsign is needed.
+  assert.match(unsigned.stderr, /checks the config, not the signature/);
+  assert.match(unsigned.stderr, /the hook cannot see -S/);
+  s.git("config", "commit.gpgsign", "false");
+  only(s.attempt(["-S", "-m", signed]), "signing-config");
+  s.git("config", "commit.gpgsign", "true");
+  passed(s.attempt(["-m", signed]));
+});
+
+test("a signing key can come from ssh's default key command, or from gpg by email", (t) => {
+  const s = maintainerClone(t);
+  const signed = `Clean subject\n\n${SIGNOFF}\n`;
+  s.git("config", "--unset", "user.signingkey");
+  commitRefused(s.hook(signed), "signing-config");
+  assert.deepEqual(commitRules(s.hook(signed).stderr), ["signing-config"]);
+  s.git("config", "gpg.ssh.defaultKeyCommand", "ssh-add -L");
+  passed(s.hook(signed));
+  s.git("config", "--unset", "gpg.ssh.defaultKeyCommand");
+  // openpgp picks the key by the committer's email.
+  s.git("config", "gpg.format", "openpgp");
+  passed(s.hook(signed));
+  s.git("config", "--unset", "gpg.format");
+  passed(s.hook(signed));
+});
+
+test("the maintainer form is checked only under codesense.requireSigned", (t) => {
+  const s = maintainerClone(t);
+  s.git("config", "--unset", "codesense.requireSigned");
+  s.git("config", "commit.gpgsign", "false");
+  s.git("config", "user.name", "Someone");
+  s.git("config", "user.email", "someone@example.com");
+  const trailer = "Co-authored-by: Claude <noreply@anthropic.com>";
+  // Neither switch, then only privacyRequired: no sign-off, a stranger, a trailer.
+  passed(s.attempt(["-m", `Clean subject\n\n${trailer}`]));
+  s.git("config", "codesense.privacyRequired", "true");
+  passed(s.attempt(["-m", `Clean subject\n\n${trailer}`]));
+  // An unparseable switch counts as set.
+  s.git("config", "codesense.requireSigned", "maybe");
+  commitRefused(s.attempt(["-m", "Clean subject"]), "missing-signoff");
+});
+
+test("run by hand without node, commit-msg warns only a requireSigned clone that its checks did not run", (t) => {
+  // The installed dispatcher never runs this script without node (it calls
+  // fallback.sh itself); a hook chained to it by hand does.
+  const s = maintainerClone(t);
+  const bin = path.join(s.root, "bin");
+  fs.mkdirSync(bin);
+  const gitPath = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+  fs.symlinkSync(gitPath, path.join(bin, "git"));
+  const noNode = { ...s.env, PATH: `${bin}:/usr/bin:/bin` };
+  const message = path.join(s.root, "message.txt");
+  fs.writeFileSync(message, "Clean subject\n");
+  const run = () =>
+    spawnSync("sh", [path.join(SCRIPTS, "git-hooks", "commit-msg"), message], {
+      cwd: s.work,
+      encoding: "utf8",
+      env: noNode,
+    });
+  const warned = run();
+  passed(warned);
+  assert.match(warned.stderr, /the commit-time checks did not run \(no node\)/);
+  assert.match(warned.stderr, UNSCANNED);
+  for (const off of [["false"], null]) {
+    if (off) s.git("config", "codesense.requireSigned", ...off);
+    else s.git("config", "--unset", "codesense.requireSigned");
+    const quiet = run();
+    passed(quiet);
+    assert.match(quiet.stderr, UNSCANNED);
+    assert.doesNotMatch(quiet.stderr, /commit-time checks/);
+  }
+});
+
+test("commit-msg names a staged file only with CODESENSE_PRIVACY_SHOW=1", (t) => {
+  const s = sandbox(t);
+  passed(s.install());
+  s.commit("a.txt", "clean\n");
+  s.stage("b.txt", `x ${TERM} y\n`);
+  s.stage(`${TERM}.md`, "clean\n");
+  const hidden = s.run(["commit", "-q", "-m", "Clean subject"]);
+  commitRefused(hidden, "fixture-5");
+  assert.deepEqual(
+    hookLines(hidden.stderr)
+      .filter((line) => line.includes("  "))
+      .map((line) => line.split("  ")[1]),
+    // `git diff --cached --name-only` order: b.txt, then the term's file.
+    ["staged file 1 of 2, line 1", "a staged path"],
+  );
+  const shown = s.run(["commit", "-q", "-m", "Clean subject"], {
+    env: { ...s.env, CODESENSE_PRIVACY_SHOW: "1" },
+  });
+  assert.notEqual(shown.status, 0);
+  assert.match(shown.stderr, new RegExp(`^privacy-scan: fixture-5  ${TERM}\\.md `, "m"));
+  assert.match(shown.stderr, new RegExp(`^privacy-scan: fixture-5  b\\.txt:1 ${TERM}  `, "m"));
+});
+
+// An editor that puts `text` above the template git wrote, as a person would.
+function editor(s, text) {
+  const script = path.join(s.root, "editor.sh");
+  fs.writeFileSync(
+    script,
+    '#!/bin/sh\n{ printf "%s\\n" "$EDIT_TEXT"; cat "$1"; } > "$1.new" && mv "$1.new" "$1"\n',
+  );
+  fs.chmodSync(script, 0o755);
+  return { GIT_EDITOR: script, EDIT_TEXT: text };
+}
+
+test("the sign-off passes in an editor commit only when the hook knows git's comment string", (t) => {
+  const s = maintainerClone(t);
+  passed(s.attempt(["-s"], editor(s, "Clean subject")));
+  assert.match(s.git("log", "-1", "--format=%B"), /^Clean subject\n\nSigned-off-by: /);
+  passed(s.attempt(["-s", "-v"], editor(s, "Clean subject")));
+  // core.commentChar auto: git picks the character per message, so the hook
+  // cannot skip the comment block and refuses.
+  s.git("config", "core.commentChar", "auto");
+  commitRefused(s.attempt(["-s"], editor(s, "Clean subject")), "missing-signoff");
+  s.git("config", "--unset", "core.commentChar");
+  // commit.cleanup whitespace publishes the comments, so they end the trailer block.
+  s.git("config", "commit.cleanup", "whitespace");
+  const published = s.attempt(["-s"], editor(s, "Clean subject"));
+  commitRefused(published, "missing-signoff");
+  // Outside the trailer block, the sign-off is not masked and its address is scanned.
+  assert.deepEqual(commitRules(published.stderr), ["email", "missing-signoff"]);
+  s.git("config", "--unset", "commit.cleanup");
+  // -m: no comment block, so the sign-off is found under every cleanup mode.
+  for (const mode of [null, "default", "strip", "verbatim", "whitespace", "scissors"]) {
+    if (mode) s.git("config", "commit.cleanup", mode);
+    passed(s.attempt(["-s", "-m", "Clean subject"]));
+    if (mode) s.git("config", "--unset", "commit.cleanup");
+  }
+  // An AI co-author below a typed scissors line is still refused.
+  const file = path.join(s.root, "typed.txt");
+  fs.writeFileSync(
+    file,
+    "Clean subject\n# ------------------------ >8 ------------------------\nCo-authored-by: Claude <noreply@anthropic.com>\n",
+  );
+  const below = s.attempt(["-s", "-F", file]);
+  commitRefused(below, "ai-co-author");
+  assert.ok(commitRules(below.stderr).includes("ai-co-author"));
+});
+
+test("a commit that breaks three rules prints three lines", (t) => {
+  const s = maintainerClone(t);
+  s.git("config", "commit.gpgsign", "false");
+  const result = s.attempt(["--author", "Someone <someone@example.com>", "-m", "Clean subject"]);
+  commitRefused(result, "author-identity");
+  assert.deepEqual(commitRules(result.stderr), [
+    "author-identity",
+    "missing-signoff",
+    "signing-config",
+  ]);
+});
+
+test("a term committed with --no-verify is still refused at pre-push", (t) => {
+  const s = sandbox(t);
+  passed(s.install());
+  s.stage("a.txt", `${TERM}\n`);
+  passed(s.run(["commit", "-q", "--no-verify", "-m", "Clean subject"]));
+  blocked(s.run(["push", "-q", "public", "main"]));
+  assert.ok(!s.remoteHas("refs/heads/main"));
+});
+
+test("commit-msg warns about a stale dispatcher as pre-push does, and still checks", (t) => {
+  const s = sandbox(t);
+  passed(s.install());
+  s.commit("a.txt", "clean\n");
+  const STALE =
+    /privacy hook: the installed dispatcher is out of date; rerun scripts\/git-hooks\/install\.sh/;
+  // A version-1 dispatcher: no version marker.
+  for (const name of ["pre-push", "commit-msg"]) {
+    const hook = path.join(s.hooks, name);
+    const text = fs.readFileSync(hook, "utf8");
+    fs.writeFileSync(hook, text.replace(/^# codesense-privacy-hook-version: .*\n/m, ""));
+  }
+  s.stage("b.txt", `${TERM}\n`);
+  const refusedStale = s.run(["commit", "-q", "-m", "Clean subject"]);
+  commitRefused(refusedStale, "fixture-5");
+  assert.match(refusedStale.stderr, STALE);
+  s.stage("b.txt", "clean\n");
+  const cleanStale = s.run(["commit", "-q", "-m", "Clean subject"]);
+  passed(cleanStale);
+  assert.match(cleanStale.stderr, STALE);
+  const pushed = s.run(["push", "-q", "public", "main"]);
+  passed(pushed);
+  assert.match(pushed.stderr, STALE);
+  // A quiet reinstall is idempotent and clears the warning.
+  const quiet = spawnSync("sh", [INSTALL, "--quiet"], {
+    cwd: s.work,
+    encoding: "utf8",
+    env: s.env,
+  });
+  passed(quiet);
+  assert.equal(quiet.stdout + quiet.stderr, "");
+  const installed = snapshot(s.hooks);
+  passed(spawnSync("sh", [INSTALL, "--quiet"], { cwd: s.work, encoding: "utf8", env: s.env }));
+  assert.deepEqual(snapshot(s.hooks), installed);
+  s.stage("b.txt", "again\n");
+  const fresh = s.run(["commit", "-q", "-m", "Clean subject"]);
+  passed(fresh);
+  assert.doesNotMatch(fresh.stderr, /out of date/);
+  // Every worktree of the clone shares the hooks, so a linked one refuses a term.
+  const linked = path.join(s.root, "linked");
+  s.git("worktree", "add", "-q", "-b", "linked", linked);
+  fs.symlinkSync(SCRIPTS, path.join(linked, "scripts"));
+  fs.writeFileSync(path.join(linked, "c.txt"), `${TERM}\n`);
+  s.git("-C", linked, "add", "c.txt");
+  commitRefused(s.run(["commit", "-q", "-m", "Clean subject"], { cwd: linked }), "fixture-5");
 });
