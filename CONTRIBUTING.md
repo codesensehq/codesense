@@ -178,6 +178,33 @@ unsigned or has an Anthropic (Claude) co-author trailer. After this check was
 added, a maintainer clone must rerun `scripts/git-hooks/install.sh` once.
 GitHub's Verified badge shows whose key signed a commit.
 
+**Maintainer clone setup.** In each maintainer clone (never globally): set
+`git config user.name` and `git config user.email` to the maintainer's GitHub
+login and noreply address (see [MAINTAINERS.md](MAINTAINERS.md)); set
+`git config gpg.format ssh`, `git config user.signingkey` to the registered
+public key, and `git config commit.gpgsign true`; set
+`git config codesense.requireSigned true`; and run
+`sh scripts/git-hooks/install.sh --quiet`, which is safe to rerun.
+
+**Checks at commit time.** With the hooks installed and a public remote, the
+`commit-msg` hook refuses a commit, and commits nothing, when:
+
+- the message, or a line or path the commit adds, matches the privacy rules
+  (the same rules and allow-list as the push check; a merge is left to the push
+  check), or the staged changes hold a gitlink;
+- in a clone that sets `codesense.requireSigned`: the author or committer is
+  not the maintainer identity, the trailer block has no maintainer
+  `Signed-off-by` (`git commit -s`), the message has an AI `Co-authored-by`
+  trailer, or signing is not configured (`commit.gpgsign` true and a key).
+  The hook cannot see `-S`, so it checks the signing config, not the
+  signature; the push check verifies the signature.
+
+Each refusal prints one line per finding: the rule, where it is (a staged file
+by its position in `git diff --cached --name-only`, never by name, unless
+`CODESENSE_PRIVACY_SHOW=1`) and the command to fix it. Fix it and rerun the
+commit. Skipping the hooks with `--no-verify` is not allowed: the push check
+and CI still refuse the change.
+
 You're welcome to use AI tools for your own contributions. You remain
 responsible for what you submit, and your sign-off certifies the DCO for it as
 for any other change.
