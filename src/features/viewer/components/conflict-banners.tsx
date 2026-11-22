@@ -9,6 +9,8 @@
 // per-surface test hooks are preserved.
 // ---------------------------------------------------------------------------
 
+import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
+
 const AMBER_BAR =
   "flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-[0.7rem] text-amber-700 dark:text-amber-400";
 const PRIMARY_BTN =
@@ -105,8 +107,8 @@ export function ReconcileBar({
       className={AMBER_BAR}
     >
       <span className="min-w-[12rem] flex-1">
-        Left: the file {where} now. Right: your edits — change them as needed, then ⌘S to save the
-        merge.
+        Left: the file {where} now. Right: your edits — change them as needed, then{" "}
+        {formatKeystrokeDisplay("CmdOrCtrl+S")} to save the merge.
         {diskMoved && " The file changed again since — refresh to see the latest."}
       </span>
       {diskMoved && onRefresh && (

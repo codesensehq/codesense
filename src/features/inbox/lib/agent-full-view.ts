@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { teamContentRoot } from "@/features/viewer/lib/team-landing-page";
 import { openFileInTeam } from "@/shared/lib/open-file-in-team";
+import { join } from "@/shared/lib/path";
 import { teamContentPage } from "@/shared/lib/team-content-page";
 import type { Org } from "@/shared/types/domain";
 
@@ -15,7 +16,7 @@ export const agentPageHash = (handle: string) => `#session=${encodeURIComponent(
 export function teamAgentPage(orgs: readonly Org[], org: string, team: string): string | null {
   const declared = teamContentPage(orgs, org, team, "agent_page");
   const orgRoot = orgs.find((o) => o.slug === org)?.org_root;
-  return declared && orgRoot ? `${teamContentRoot(orgRoot, team)}/${declared}` : null;
+  return declared && orgRoot ? join(teamContentRoot(orgRoot, team), declared) : null;
 }
 
 /** Open the agent's page (`page`, its absolute path) for the session `handle`, as a pinned tab. */

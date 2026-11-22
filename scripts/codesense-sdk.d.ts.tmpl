@@ -301,6 +301,25 @@ declare namespace CodesenseSdk {
     onIntent(cb: (intent: unknown) => void): Unsubscribe;
     onVisibility(cb: (visible: boolean) => void): Unsubscribe;
     onSlotContext(cb: (context: SlotContext) => void): Unsubscribe;
+    /**
+     * A keystroke such as `CmdOrCtrl+Alt+Enter` as the person's OS shows it: `⌘⌥⏎` on macOS,
+     * `Ctrl+Alt+⏎` elsewhere. `""` before the first slot context and for a string that is not a
+     * keystroke (`CmdOrCtrl`, `Shift` and `Alt` modifiers, one key).
+     */
+    formatKeys(keystroke: string): string;
+    /**
+     * Fill `[data-keys]` text and the `data-keys-title` / `data-keys-aria-label` templates (one
+     * `{keys}` placeholder, keys in `data-keys-keys`) under `root` (default: the document). The
+     * shim fills the document on each slot context, or at DOMContentLoaded while it loads; call
+     * this after inserting hints. Hide an unfilled hint with `[data-keys]:empty { display: none }`.
+     */
+    fillKeys(root?: ParentNode): void;
+    /** A modifier+click gesture: `⌥-click` on macOS, `Alt+click` elsewhere; `""` before slot context. */
+    formatModifierClick(modifier: "CmdOrCtrl" | "Shift" | "Alt"): string;
+    /** The local machine as a label: "This Mac" or "This computer"; `""` before slot context. */
+    localMachineLabel(): string;
+    /** The local machine mid-sentence: "this Mac" or "this computer"; `""` before slot context. */
+    localMachinePhrase(): string;
     /** Receives each `codesense:command` for a command id this page registered. */
     /** Architecture: page-local Open/Reply/Open queue/New message callbacks, including hosted messages. */
     onMenuAction(
@@ -1071,6 +1090,8 @@ declare namespace CodesenseSdk {
     valueState(v: unknown, options?: ValueOptions): ValueState;
     /** A read's error as a sentence, never a raw code: "The Mac didn't answer in time" (no_answer, timeout, mac_timeout), "The Mac is offline", "The Mac is busy", "This page can't show this" (a refusal), "Access to this dashboard has ended", "The Mac couldn't answer", "Too much to show at once"; anything else is "Could not read this". */
     errorText(err: unknown): string;
+    /** The owner's computer as the page names it: the content of the page's `<meta name="codesense:owner-machine">` ("Mac" on macOS, "computer" elsewhere, written by the host), or "Mac" when there is none. A bare noun, read on each call: capitalise it where it starts a sentence. */
+    ownerMachine(): string;
     /** Renders a list into `container` by key, reusing each item's element while its version (default the JSON of the item) is unchanged. */
     keyed<Item>(
       container: HTMLElement,

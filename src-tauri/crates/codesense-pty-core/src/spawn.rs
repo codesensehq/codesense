@@ -2,13 +2,15 @@
 //! Spawn resolution, run by the host a session is spawned on. The app sends a
 //! [`SpawnIntent`] — what to run, where, at what size, and what it adds to the
 //! environment — and the host resolves it into the exact child command against
-//! its own [`HostEnvironment`]: the user's shell (zsh, bash or fish,
-//! see [`crate::shell`]), the host's CodeSense bin dir, the managed RC wrappers
-//! written on the host's disk, and the shell-integration and starship resources
-//! shipped with the host. The in-process host and the session-server sidecar
-//! run this same code, so a local spawn resolves identically on either.
+//! its own [`HostEnvironment`]: the user's shell (from the host OS's
+//! [`ShellTable`], see [`crate::shell`]), the host's CodeSense bin dir, the
+//! managed RC wrappers written on the host's disk, and the shell-integration
+//! and starship resources shipped with the host. The in-process host and the
+//! session-server sidecar run this same code, so a local spawn resolves
+//! identically on either.
 
 use std::collections::HashMap;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 use log::warn;
@@ -16,9 +18,39 @@ use portable_pty::{CommandBuilder, PtySize};
 use serde::{Deserialize, Serialize};
 
 use crate::runner::PtySpec;
-use crate::shell::{
-    is_executable_file, passwd_login_shell, resolve_shell_from, ShellKind, UserShell,
-};
+use crate::shell::{resolve_shell_from, ShellKind, ShellTable, UserShell};
+use codesense_platform::{cli, fs, user};
+
+/// Why a [`SpawnIntent`] cannot be resolved on this host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SpawnError {
+    /// The intent runs a command line, the user's shell does not run POSIX
+    /// commands, and this OS has no POSIX shell to run it under.
+    NoPosixRunner,
+    /// The intent's argv runs this program, which is not a runnable `.exe` on Windows:
+    /// Windows would start it through `cmd.exe` (a `.cmd` or `.bat` that is not an npm
+    /// shim [`cli::shim_argv`] can unwrap), or it could not run as named (not an absolute
+    /// path to an existing `.exe`, or an alternate data stream).
+    BatchProgram(String),
+    /// The intent's argv runs an npm shim whose target cannot be run: no `node.exe` for
+    /// it, or the shim could not be read.
+    Shim(cli::ShimError),
+}
+
+impl std::fmt::Display for SpawnError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoPosixRunner => f.write_str("no POSIX shell to run the command on this OS"),
+            Self::BatchProgram(program) => write!(
+                f,
+                "{program} is not a runnable .exe (an existing .exe, or an npm shim for one), so it cannot run directly on this OS"
+            ),
+            Self::Shim(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for SpawnError {}
 
 /// What the app asks a host to spawn. Everything here is the app's to decide;
 /// everything that depends on where the child runs is resolved by the host.
@@ -31,8 +63,8 @@ pub struct SpawnIntent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_launch: Option<codesense_host_proto::agent_cli::NativeLaunch>,
     /// `None`: the user's interactive login shell. `Some`: the login shell
-    /// running this command line (`-c`) — zsh for a fish user, as the command
-    /// is POSIX shell.
+    /// running this command line (`-c`) — the host's POSIX runner for a user
+    /// whose shell is not zsh or bash, as the command is POSIX shell.
     pub command: Option<String>,
     /// An argv to spawn directly as PID-1 of the PTY — no login
     /// shell wrapper, no `.zshrc`/`.zprofile`, no shell-integration. When set,
@@ -92,28 +124,91 @@ pub const CODESENSE_LAUNCH_ENV: [&str; 7] = [
     crate::activity::RELEASE_QUALIFIED_ENV,
 ];
 
-/// Whether a saved Agent's `env` may supply `name`: any name but [`CODESENSE_LAUNCH_ENV`].
+/// The variables Windows reads to start a batch file (`ComSpec`) or to pick the extension of a
+/// program named without one (`PATHEXT`). An agent never runs through `cmd.exe`, and a saved
+/// Agent's own `env` never sets them.
+const SHELL_DISPATCH_ENV: [&str; 2] = ["ComSpec", "PATHEXT"];
+
+/// The usage-telemetry switches the engine owns, besides every `OTEL_` name.
+const TELEMETRY_ENV: [&str; 4] = [
+    "CLAUDE_CODE_ENABLE_TELEMETRY",
+    "DISABLE_TELEMETRY",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+    "DO_NOT_TRACK",
+];
+
+/// Whether a saved Agent's `env` may supply `name` on this host: [`agent_may_set_on`] with
+/// [`std::env::consts::OS`].
 pub fn agent_may_set(name: &str) -> bool {
-    !CODESENSE_LAUNCH_ENV.contains(&name) && !telemetry_owned_env(name)
+    agent_may_set_on(std::env::consts::OS, name)
+}
+
+/// Whether a saved Agent's `env` may supply `name` on `os` (a [`std::env::consts::OS`]
+/// value): any name but [`CODESENSE_LAUNCH_ENV`], `ComSpec`, `PATHEXT` and the engine's
+/// telemetry names ([`telemetry_owned_env`]). Windows variable names are case-insensitive, so
+/// there each is compared ignoring ASCII case; elsewhere byte for byte.
+pub fn agent_may_set_on(os: &str, name: &str) -> bool {
+    let windows = os == "windows";
+    !CODESENSE_LAUNCH_ENV
+        .iter()
+        .chain(&SHELL_DISPATCH_ENV)
+        .any(|reserved| same_env_name_on(windows, name, reserved))
+        && !telemetry_owned(windows, name)
+}
+
+/// Whether `name` is `ComSpec` or `PATHEXT` in any case: what a saved Agent is refused at
+/// save, whatever host it later launches on.
+pub fn shell_dispatch_env(name: &str) -> bool {
+    SHELL_DISPATCH_ENV
+        .iter()
+        .any(|reserved| same_env_name_on(true, name, reserved))
+}
+
+/// Whether the variable names `name` and `other` are the same on `os` (a
+/// [`std::env::consts::OS`] value): ignoring ASCII case on Windows, byte for byte elsewhere.
+pub fn same_env_name(os: &str, name: &str, other: &str) -> bool {
+    same_env_name_on(os == "windows", name, other)
+}
+
+/// Whether a headless launch on `os` (a [`std::env::consts::OS`] value) keeps a saved
+/// Agent's variable `name`: one it may set ([`agent_may_set_on`]), other than `PATH`, which
+/// the launch sets itself, and not one of the launch's `env_remove` names, each compared as
+/// [`same_env_name`] compares names on `os`.
+pub fn headless_env_kept(os: &str, name: &str, env_remove: &[String]) -> bool {
+    agent_may_set_on(os, name)
+        && !same_env_name(os, name, "PATH")
+        && !env_remove
+            .iter()
+            .any(|removed| same_env_name(os, name, removed))
+}
+
+fn same_env_name_on(windows: bool, name: &str, other: &str) -> bool {
+    if windows {
+        name.eq_ignore_ascii_case(other)
+    } else {
+        name == other
+    }
 }
 
 /// Export configuration is owned by the engine, including on direct YAML edits.
 pub fn telemetry_owned_env(name: &str) -> bool {
-    name.starts_with("OTEL_")
-        || matches!(
-            name,
-            "CLAUDE_CODE_ENABLE_TELEMETRY"
-                | "DISABLE_TELEMETRY"
-                | "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"
-                | "DO_NOT_TRACK"
-        )
+    telemetry_owned(false, name)
+}
+
+/// [`telemetry_owned_env`], ignoring ASCII case when `windows`.
+fn telemetry_owned(windows: bool, name: &str) -> bool {
+    name.get(.."OTEL_".len())
+        .is_some_and(|head| same_env_name_on(windows, head, "OTEL_"))
+        || TELEMETRY_ENV
+            .iter()
+            .any(|owned| same_env_name_on(windows, name, owned))
 }
 
 /// `program` run with the host's variables and, under everything the spawn sets later, a saved
 /// Agent's own.
 fn agent_command(
     host: &HostEnvironment,
-    program: &str,
+    program: impl AsRef<OsStr>,
     agent_env: &[(String, String)],
 ) -> CommandBuilder {
     let mut cmd = host.command(program);
@@ -135,12 +230,16 @@ enum Vars {
 
 /// What a host resolves a [`SpawnIntent`] against: its CodeSense home (the
 /// bin dir and the managed shell dir live under it), the directory of the
-/// resources it ships, and the environment variables its children inherit.
+/// resources it ships, the environment variables its children inherit and
+/// its OS's [`ShellTable`].
 #[derive(Clone)]
 pub struct HostEnvironment {
     codesense_home: Option<PathBuf>,
     resources: Option<PathBuf>,
     vars: Vars,
+    /// Names its children never inherit, whatever `vars` holds.
+    env_remove: Vec<String>,
+    shell_table: &'static ShellTable,
 }
 
 impl HostEnvironment {
@@ -152,6 +251,8 @@ impl HostEnvironment {
             codesense_home,
             resources,
             vars: Vars::Process,
+            env_remove: Vec::new(),
+            shell_table: ShellTable::host(),
         }
     }
 
@@ -165,7 +266,22 @@ impl HostEnvironment {
             codesense_home,
             resources,
             vars: Vars::Given(vars.into_iter().collect()),
+            env_remove: Vec::new(),
+            shell_table: ShellTable::host(),
         }
+    }
+
+    /// This environment without `names`: its children don't inherit them, though a spawn may
+    /// still set them explicitly.
+    pub fn without_vars(mut self, names: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.env_remove.extend(names.into_iter().map(Into::into));
+        self
+    }
+
+    /// This environment resolving shells with `table` instead of its OS's.
+    pub fn with_shell_table(mut self, table: &'static ShellTable) -> Self {
+        self.shell_table = table;
+        self
     }
 
     /// The directory of the resources this host ships, when it has one.
@@ -174,14 +290,18 @@ impl HostEnvironment {
     }
 
     fn var(&self, name: &str) -> Option<String> {
+        self.var_os(name).and_then(|v| v.into_string().ok())
+    }
+
+    fn var_os(&self, name: &str) -> Option<OsString> {
         match &self.vars {
-            Vars::Process => std::env::var(name).ok(),
-            Vars::Given(vars) => vars.get(name).cloned(),
+            Vars::Process => std::env::var_os(name),
+            Vars::Given(vars) => vars.get(name).map(OsString::from),
         }
     }
 
     /// A command running `program` with this host's variables.
-    fn command(&self, program: &str) -> CommandBuilder {
+    fn command(&self, program: impl AsRef<OsStr>) -> CommandBuilder {
         let mut cmd = CommandBuilder::new(program);
         if let Vars::Given(vars) = &self.vars {
             cmd.env_clear();
@@ -189,18 +309,30 @@ impl HostEnvironment {
                 cmd.env(key, value);
             }
         }
+        for name in &self.env_remove {
+            cmd.env_remove(name);
+        }
         cmd
     }
 
-    /// The shell a session runs: the user's override when usable, else this
-    /// host's `$SHELL`, the account's login shell, then zsh.
+    /// The shell a session runs: the first usable row of this host's
+    /// [`ShellTable`], the user's override first.
     fn shell(&self, override_shell: Option<&str>) -> UserShell {
         resolve_shell_from(
+            self.shell_table,
             override_shell,
             self.var("SHELL").as_deref(),
-            passwd_login_shell,
-            is_executable_file,
+            user::login_shell,
+            |name| self.var_os(name),
+            cli::candidates,
+            fs::is_executable,
         )
+    }
+
+    /// The shell that runs a command line for a user whose own shell does
+    /// not run POSIX commands; `None` when this host's OS has none.
+    fn posix_runner(&self) -> Option<PathBuf> {
+        self.shell_table.posix_runner(fs::is_executable)
     }
 
     /// The shipped resource at `rel`, when it exists.
@@ -311,17 +443,15 @@ fn resolve_spawn_resources(host: &HostEnvironment, intent: &SpawnIntent) -> Reso
                 shell_dir = Some(dir);
             }
             ShellKind::Bash => shell_dir = Some(home.join("shell").join("bash")),
-            ShellKind::Fish => {}
+            ShellKind::Fish | ShellKind::Pwsh | ShellKind::PowerShell | ShellKind::Cmd => {}
         }
     }
 
-    let shell_init = if osc_enabled && !argv_direct {
-        host.resource(&format!(
-            "shell-integration/codesense-shell-init.{}",
-            shell.kind.init_script_ext()
-        ))
-    } else {
-        None
+    let shell_init = match shell.kind.init_script_ext() {
+        Some(ext) if osc_enabled && !argv_direct => {
+            host.resource(&format!("shell-integration/codesense-shell-init.{ext}"))
+        }
+        _ => None,
     };
 
     let mut starship = None;
@@ -454,10 +584,11 @@ set -q __CODESENSE_SHELL_INIT; and source $__CODESENSE_SHELL_INIT";
 ///
 /// - Interactive: zsh `-l` (its RC wrappers come in through `ZDOTDIR`); bash
 ///   `--rcfile <wrapper> -i` when the wrapper was written, else `-l`; fish `-l`
-///   with `--init-command`.
+///   with `--init-command`; PowerShell and cmd with no arguments.
 /// - `-c <command>`: the user's shell as a login shell when it runs POSIX-style
-///   commands (zsh, bash); fish users' commands run under the fallback zsh,
-///   since CodeSense's command strings are POSIX shell.
+///   commands (zsh, bash); other users' commands run under the host table's
+///   POSIX runner, since CodeSense's command strings are POSIX shell, and fail
+///   with [`SpawnError::NoPosixRunner`] where the OS has none.
 ///
 /// A saved Agent's `agent_env` goes under `SHELL`, which is always the shell's.
 fn shell_command(
@@ -466,20 +597,20 @@ fn shell_command(
     command: Option<&str>,
     bash_rcfile: Option<&Path>,
     agent_env: &[(String, String)],
-) -> CommandBuilder {
+) -> Result<CommandBuilder, SpawnError> {
     let mut cmd = match command {
         Some(command) => {
             let program = if shell.kind.runs_posix_commands() {
                 shell.path.clone()
             } else {
-                UserShell::fallback().path
+                host.posix_runner().ok_or(SpawnError::NoPosixRunner)?
             };
-            let mut cmd = agent_command(host, &program.to_string_lossy(), agent_env);
+            let mut cmd = agent_command(host, &*program.to_string_lossy(), agent_env);
             cmd.args(["-l", "-c", command]);
             cmd
         }
         None => {
-            let mut cmd = agent_command(host, &shell.path.to_string_lossy(), agent_env);
+            let mut cmd = agent_command(host, &*shell.path.to_string_lossy(), agent_env);
             match (shell.kind, bash_rcfile) {
                 (ShellKind::Bash, Some(rcfile)) => {
                     cmd.arg("--rcfile");
@@ -489,15 +620,163 @@ fn shell_command(
                 (ShellKind::Fish, _) => {
                     cmd.args(["-l", "--init-command", FISH_INIT_COMMAND]);
                 }
-                _ => {
+                (ShellKind::Zsh | ShellKind::Bash, _) => {
                     cmd.arg("-l");
                 }
+                (ShellKind::Pwsh | ShellKind::PowerShell | ShellKind::Cmd, _) => {}
             }
             cmd
         }
     };
     cmd.env("SHELL", shell.path.to_string_lossy().as_ref());
-    cmd
+    Ok(cmd)
+}
+
+/// The argv-direct child running `program` with `args` on `os` (a
+/// [`std::env::consts::OS`] value), with `child_path` the child's `PATH` and `exists`
+/// telling whether a file is there.
+///
+/// On Windows the argv is [`windows_argv`]'s, so only an absolute path to an existing
+/// `.exe` runs. Elsewhere the program runs as given. Its `SHELL` is
+/// [`set_direct_shell`]'s.
+fn direct_command(
+    host: &HostEnvironment,
+    (program, args): (&str, &[String]),
+    agent_env: &[(String, String)],
+    os: &str,
+    child_path: &str,
+    exists: impl Fn(&Path) -> bool,
+) -> Result<CommandBuilder, SpawnError> {
+    let argv = windows_argv(os, program, args, child_path, exists)?;
+    let mut cmd = agent_command(host, &argv[0], agent_env);
+    cmd.args(&argv[1..]);
+    Ok(cmd)
+}
+
+/// The argv an argv-direct spawn of `program` with `args` runs on `os` (a
+/// [`std::env::consts::OS`] value), with `child_path` the child's `PATH` and `exists`
+/// telling whether a file is there. Never empty: its first entry is the program. Every OS
+/// but Windows runs `program` and `args` as given.
+///
+/// On Windows, in order:
+/// 1. A program with a `:` after its drive or verbatim prefix (an alternate data stream,
+///    `claude.exe:x.cmd`, which `CreateProcess` would dispatch on) is refused, never
+///    stripped, and so is a root- or drive-relative one (`\claude.exe`, `C:claude.exe`).
+/// 2. A bare or relative program is resolved to its first [`cli::candidates`] install on
+///    `child_path`; none fails the spawn.
+/// 3. The program is canonicalized ([`fs::canonicalize`]: links followed, no `\\?\`
+///    prefix where the plain form means the same), so the shim is read and the last
+///    check run on the exact path `CreateProcess` gets; one that cannot be is kept as
+///    given.
+/// 4. An npm `.cmd` shim is replaced by the argv that runs its target
+///    ([`cli::shim_argv`]): its `.exe`, or `node.exe` and the script, which stays the
+///    canonical shim directory joined with the checked relative path (an npm-linked
+///    package keeps its `node_modules` path). The new program is canonicalized too.
+/// 5. The final program passes [`direct_program`], unchanged, after the stream check.
+///
+/// Every refusal of a program, and a batch file that is not an npm shim, is
+/// [`SpawnError::BatchProgram`]; a shim whose target cannot be run is
+/// [`SpawnError::Shim`]. The arguments are never touched.
+fn windows_argv(
+    os: &str,
+    program: &str,
+    args: &[String],
+    child_path: &str,
+    exists: impl Fn(&Path) -> bool,
+) -> Result<Vec<OsString>, SpawnError> {
+    if os != "windows" {
+        return Ok(plain_argv(program, args));
+    }
+    let argv = unwrapped_argv(program, args, child_path)?;
+    let last = argv[0].to_string_lossy();
+    if cli::names_a_stream(&last) {
+        return Err(SpawnError::BatchProgram(last.into_owned()));
+    }
+    direct_program(&last, os, exists)?;
+    Ok(argv)
+}
+
+/// Steps 1 to 4 of [`windows_argv`]: the argv a Windows spawn of `program` with `args`
+/// runs, before the final program is checked.
+fn unwrapped_argv(
+    program: &str,
+    args: &[String],
+    child_path: &str,
+) -> Result<Vec<OsString>, SpawnError> {
+    let refused = |program: &str| SpawnError::BatchProgram(program.to_string());
+    if cli::names_a_stream(program) || cli::root_relative(program) {
+        return Err(refused(program));
+    }
+    let found = if cli::windows_absolute(program) {
+        PathBuf::from(program)
+    } else {
+        cli::candidates(OsStr::new(child_path), program)
+            .into_iter()
+            .next()
+            .ok_or_else(|| refused(program))?
+    };
+    let canonical = |path: &Path| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let program = canonical(&found);
+    let mut argv = match cli::shim_argv(&program, args, OsStr::new(child_path)) {
+        Ok(Some(argv)) => argv,
+        Ok(None) => plain_argv(program, args),
+        Err(cli::ShimError::NotAnNpmShim { path }) => {
+            return Err(refused(&path.to_string_lossy()));
+        }
+        Err(error) => return Err(SpawnError::Shim(error)),
+    };
+    argv[0] = canonical(Path::new(&argv[0])).into_os_string();
+    Ok(argv)
+}
+
+/// `program` and then `args`, as an argv.
+fn plain_argv(program: impl Into<OsString>, args: &[String]) -> Vec<OsString> {
+    std::iter::once(program.into())
+        .chain(args.iter().map(OsString::from))
+        .collect()
+}
+
+/// The `SHELL` an argv-direct child on `os` carries, set last over everything the
+/// spawn inherited or set: on Windows the host's POSIX runner when it has one, else
+/// none, since no shell started the agent. Every other OS keeps what it has.
+fn set_direct_shell(cmd: &mut CommandBuilder, host: &HostEnvironment, os: &str) {
+    if os != "windows" {
+        return;
+    }
+    match host.posix_runner() {
+        Some(runner) => cmd.env("SHELL", runner.to_string_lossy().as_ref()),
+        None => cmd.env_remove("SHELL"),
+    }
+}
+
+/// Whether `program` may be spawned argv-direct on `os`: on Windows only an absolute
+/// path to an existing file whose extension, with trailing dots and spaces trimmed as
+/// Windows trims them ([`cli::windows_extension`]), is `.exe`. An allowlist, not a
+/// `.cmd`/`.bat` denylist: the PTY layer swaps a `PATHEXT` extension in for a program
+/// that does not exist, and Windows runs a batch script through `cmd.exe`. Every other
+/// OS runs the program as given.
+///
+/// A race remains: this probe runs when the spawn is resolved, and the PTY layer's
+/// Windows `search_path` runs at the spawn itself, so an absolute `.exe` that vanishes
+/// in between, beside a `.cmd` or `.bat` of the same name, can have `PATHEXT` swap the
+/// script in. That covers the agent's own `.exe`, the `node.exe` an npm shim runs under
+/// and the `.exe` a shim names, so it takes a write to the CLI's, the shim's or node's
+/// folder, which could already replace the `.exe` itself. Closing it needs a PTY layer
+/// that skips `search_path` for an absolute program.
+fn direct_program(
+    program: &str,
+    os: &str,
+    exists: impl Fn(&Path) -> bool,
+) -> Result<(), SpawnError> {
+    if os != "windows" {
+        return Ok(());
+    }
+    let exe = cli::windows_extension(program).as_deref() == Some("exe");
+    if cli::windows_absolute(program) && exe && exists(Path::new(program)) {
+        Ok(())
+    } else {
+        Err(SpawnError::BatchProgram(program.to_string()))
+    }
 }
 
 /// Assemble the child command — argv, cwd, and the full managed environment
@@ -509,7 +788,8 @@ fn build_spawn_command(
     intent: &SpawnIntent,
     resolved: &ResolvedSpawnResources,
     host: &HostEnvironment,
-) -> CommandBuilder {
+    (os, exists): (&str, &dyn Fn(&Path) -> bool),
+) -> Result<CommandBuilder, SpawnError> {
     let osc_enabled = intent.osc_enabled();
     let preset = intent.starship_preset.as_deref();
 
@@ -522,11 +802,14 @@ fn build_spawn_command(
         // no shell wrapper, no RC wrappers, no shell-integration. Used by
         // managed agent launches so the agent CLI owns the PTY from the
         // start and Ctrl+C routes to the agent in-process.
-        Some([program, args @ ..]) => {
-            let mut cmd = agent_command(host, program, &intent.agent_env);
-            cmd.args(args);
-            cmd
-        }
+        Some([program, args @ ..]) => direct_command(
+            host,
+            (program, args),
+            &intent.agent_env,
+            os,
+            &resolved.base_path,
+            exists,
+        )?,
         // Empty argv falls through to the interactive shell: a mis-set empty
         // vec cannot leave the spawn with no command.
         _ => shell_command(
@@ -535,9 +818,14 @@ fn build_spawn_command(
             intent.command.as_deref(),
             bash_rcfile.as_deref(),
             &intent.agent_env,
-        ),
+        )?,
     };
     match spawn_dir(&intent.cwd) {
+        // A Windows agent starts in the canonical form of its directory, with no `\\?\`
+        // prefix where the plain form means the same.
+        Some(dir) if os == "windows" && matches!(intent.argv.as_deref(), Some([_, ..])) => {
+            cmd.cwd(fs::canonicalize(Path::new(dir)).unwrap_or_else(|_| PathBuf::from(dir)));
+        }
         Some(dir) => {
             cmd.cwd(dir);
         }
@@ -575,9 +863,10 @@ fn build_spawn_command(
             Some(path) => {
                 cmd.env("__CODESENSE_SHELL_INIT", path.to_string_lossy().as_ref());
             }
-            None => {
+            None if resolved.shell.kind.init_script_ext().is_some() => {
                 warn!(target: "pty", "spawn_pty: shell-init script not found");
             }
+            None => {}
         }
         if preset == Some("plain") {
             cmd.env("__CODESENSE_PLAIN", "1");
@@ -609,8 +898,11 @@ fn build_spawn_command(
     for (key, value) in &intent.env {
         cmd.env(key, value);
     }
+    if matches!(intent.argv.as_deref(), Some([_, ..])) {
+        set_direct_shell(&mut cmd, host, os);
+    }
 
-    cmd
+    Ok(cmd)
 }
 
 impl SpawnIntent {
@@ -650,18 +942,33 @@ impl SpawnIntent {
 
     /// Resolve the intent into the exact spawn of session `session_id` on the
     /// host `host`. Writes the managed RC wrappers for an interactive shell,
-    /// so it may block on the host's disk.
-    pub fn resolve(&self, session_id: &str, host: &HostEnvironment) -> PtySpec {
+    /// so it may block on the host's disk. Fails only for a command line that
+    /// this host has no POSIX shell to run.
+    pub fn resolve(&self, session_id: &str, host: &HostEnvironment) -> Result<PtySpec, SpawnError> {
+        self.resolve_on(session_id, host, std::env::consts::OS, &|path| {
+            path.is_file()
+        })
+    }
+
+    /// [`Self::resolve`] as on `os` (a [`std::env::consts::OS`] value), with `exists`
+    /// telling whether a file is there.
+    fn resolve_on(
+        &self,
+        session_id: &str,
+        host: &HostEnvironment,
+        os: &str,
+        exists: &dyn Fn(&Path) -> bool,
+    ) -> Result<PtySpec, SpawnError> {
         let resolved = resolve_spawn_resources(host, self);
-        PtySpec {
-            command: build_spawn_command(session_id, self, &resolved, host),
+        Ok(PtySpec {
+            command: build_spawn_command(session_id, self, &resolved, host, (os, exists))?,
             size: PtySize {
                 rows: self.rows,
                 cols: self.cols,
                 pixel_width: 0,
                 pixel_height: 0,
             },
-        }
+        })
     }
 }
 
@@ -765,6 +1072,26 @@ mod tests {
         }
     }
 
+    /// A removal list keeps a name from children whether the host inherits this process's
+    /// variables or gives exactly its own.
+    #[test]
+    fn without_vars_keeps_names_from_children() {
+        let inherited = HostEnvironment::of_process(None, None).without_vars(["PATH"]);
+        assert!(inherited.command("sh").get_env("PATH").is_none());
+        let given = HostEnvironment::with_vars(
+            None,
+            None,
+            [
+                ("A_VAR".to_string(), "1".to_string()),
+                ("B_VAR".to_string(), "2".to_string()),
+            ],
+        )
+        .without_vars(["A_VAR"]);
+        let cmd = given.command("sh");
+        assert!(cmd.get_env("A_VAR").is_none());
+        assert_eq!(cmd.get_env("B_VAR").and_then(|v| v.to_str()), Some("2"));
+    }
+
     fn argv(spec: &PtySpec) -> Vec<String> {
         spec.command
             .get_argv()
@@ -792,7 +1119,9 @@ mod tests {
             ("HOME", "/Users/me"),
         ]);
         let cwd = fx.resources.to_string_lossy().into_owned();
-        let spec = interactive(&cwd).resolve("tab-1", &host);
+        let spec = interactive(&cwd)
+            .resolve("tab-1", &host)
+            .expect("the spawn resolves");
 
         assert_eq!(argv(&spec), ["/bin/zsh", "-l"]);
         assert_eq!(
@@ -864,7 +1193,8 @@ mod tests {
             shell: Some("/bin/bash".to_string()),
             ..interactive("")
         }
-        .resolve("tab-2", &host);
+        .resolve("tab-2", &host)
+        .expect("the spawn resolves");
         let rcfile = fx.home.join("shell/bash/bashrc");
         assert_eq!(
             argv(&bash),
@@ -892,7 +1222,8 @@ mod tests {
             command: Some("make test".to_string()),
             ..interactive("")
         }
-        .resolve("tab-3", &bare);
+        .resolve("tab-3", &bare)
+        .expect("the spawn resolves");
         assert_eq!(argv(&command), ["/bin/bash", "-l", "-c", "make test"]);
         assert_eq!(
             command.command.get_cwd(),
@@ -926,7 +1257,7 @@ mod tests {
             ],
             ..interactive("")
         };
-        let spec = intent.resolve("tab-4", &host);
+        let spec = intent.resolve("tab-4", &host).expect("the spawn resolves");
         assert_eq!(env(&spec, "__CODESENSE_PLAIN").as_deref(), Some("1"));
         assert_eq!(env(&spec, "STARSHIP_CONFIG"), None);
         assert_eq!(env(&spec, "ANTHROPIC_API_KEY"), None);
@@ -946,7 +1277,7 @@ mod tests {
             ..interactive("")
         };
         assert!(!intent.osc_enabled());
-        let spec = intent.resolve("tab-5", &host);
+        let spec = intent.resolve("tab-5", &host).expect("the spawn resolves");
         assert_eq!(env(&spec, "ZDOTDIR"), None);
         assert_eq!(env(&spec, "__CODESENSE_SHELL_INIT"), None);
         assert!(!fx.home.join("shell").exists());
@@ -962,7 +1293,9 @@ mod tests {
         std::fs::write(&blocked, "").unwrap();
         let host =
             HostEnvironment::with_vars(Some(blocked), None, given(&[("SHELL", "/bin/bash")]));
-        let spec = interactive("").resolve("s", &host);
+        let spec = interactive("")
+            .resolve("s", &host)
+            .expect("the spawn resolves");
         assert_eq!(argv(&spec), ["/bin/bash", "-l"]);
     }
 
@@ -1026,6 +1359,7 @@ mod tests {
                 ..interactive("")
             }
             .resolve("s", &host)
+            .expect("the spawn resolves")
         };
         assert_eq!(argv(&build("/bin/zsh", None)), ["/bin/zsh", "-l"]);
         let bash_c = build("/bin/bash", Some("echo hi"));
@@ -1044,19 +1378,711 @@ mod tests {
                 .map(|a| a.to_string_lossy().into_owned())
                 .collect()
         };
-        let interactive_fish = shell_command(&host, &fish, None, None, &[]);
+        let interactive_fish = shell_command(&host, &fish, None, None, &[]).unwrap();
         assert_eq!(
             words(&interactive_fish)[..3],
             ["/opt/homebrew/bin/fish", "-l", "--init-command"]
         );
-        // Commands run under zsh for fish users: they are POSIX shell.
-        let fish_c = shell_command(&host, &fish, Some("echo hi"), None, &[]);
-        assert_eq!(words(&fish_c)[1..], ["-l", "-c", "echo hi"]);
-        assert!(words(&fish_c)[0].ends_with("zsh"));
+        // On macOS, commands run under zsh for fish users: they are POSIX shell.
+        let macos = host.clone().with_shell_table(&crate::shell::MACOS);
+        let fish_c = shell_command(&macos, &fish, Some("echo hi"), None, &[]).unwrap();
+        let zsh = if codesense_platform::fs::is_executable(Path::new("/bin/zsh")) {
+            "/bin/zsh"
+        } else {
+            "zsh"
+        };
+        assert_eq!(words(&fish_c), [zsh, "-l", "-c", "echo hi"]);
         assert_eq!(
             fish_c.get_env("SHELL").and_then(|v| v.to_str()),
             Some("/opt/homebrew/bin/fish")
         );
+    }
+
+    /// An agent launch on `os`: the program as the PTY's root, with `env` and `agent_env`.
+    fn direct(program: &str, env: &[(&str, &str)], agent_env: &[(&str, &str)]) -> SpawnIntent {
+        let pairs = |vars: &[(&str, &str)]| -> Vec<(String, String)> {
+            vars.iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        SpawnIntent {
+            argv: Some(vec![program.to_string(), "--x".to_string()]),
+            env: pairs(env),
+            agent_env: pairs(agent_env),
+            ..interactive("")
+        }
+    }
+
+    /// The OS rules of an agent spawn, chosen by `os`, not the host: the Windows argv and the
+    /// variables a saved Agent may set. Pure or on temp files, so they run on every OS.
+    mod os_rules {
+        use super::*;
+
+        /// What a Windows spawn runs once it unwraps npm's shims is still recognised as the
+        /// agent: the script each node-form fixture names by Codex's npm entry, the `.exe`
+        /// Claude's names by its name.
+        #[test]
+        fn an_unwrapped_npm_shim_is_still_its_agent() {
+            use crate::process::{agent_signature_matches, is_npm_entry};
+            let shim = Path::new("npm").join("codex.cmd");
+            for fixture in [CODEX_SHIM, CODEX_SHIM_V8] {
+                let Ok(Some(cli::NpmShim::Node { script })) = cli::npm_shim_script(&shim, fixture)
+                else {
+                    panic!("the Codex fixture is a node-form shim");
+                };
+                let script = script.to_string_lossy();
+                assert!(is_npm_entry(&script, "codex"), "{script}");
+                assert!(!is_npm_entry(&script, "claude"), "{script}");
+                assert!(agent_signature_matches(
+                    "node.exe",
+                    Some(r"C:\Program Files\nodejs\node.exe"),
+                    &[r"C:\Program Files\nodejs\node.exe", &*script, "--yolo"],
+                    "codex"
+                ));
+            }
+            assert!(!is_npm_entry(
+                r"C:\npm\node_modules\@openai\other\bin\codex.js",
+                "codex"
+            ));
+            let shim = Path::new("npm").join("claude.cmd");
+            let Ok(Some(cli::NpmShim::Exe { program })) = cli::npm_shim_script(&shim, CLAUDE_SHIM)
+            else {
+                panic!("the Claude fixture is a direct-program shim");
+            };
+            let program = program.to_string_lossy();
+            assert!(agent_signature_matches(
+                "claude.exe",
+                Some(&*program),
+                &[&*program, "--resume"],
+                "claude"
+            ));
+        }
+
+        /// A Windows argv-direct launch runs only an absolute path to an existing `.exe`, so no
+        /// implicit `cmd.exe` ever runs a batch script; other OSes run the program as given.
+        #[test]
+        fn a_windows_direct_launch_runs_only_an_existing_absolute_exe() {
+            let present = |path: &Path| !path.to_string_lossy().contains("missing");
+            for (program, accepted) in [
+                (r"C:\npm\claude.exe", true),
+                (r"C:\NPM\CLAUDE.EXE", true),
+                ("C:/npm/claude.exe", true),
+                (r"\\server\share\claude.exe", true),
+                // Windows trims a trailing space or dot, so the name still runs `claude.exe`.
+                (r"C:\npm\claude.exe ", true),
+                (r"C:\npm\claude.cmd", false),
+                (r"C:\npm\claude.bat", false),
+                (r"C:\npm\claude.bat.", false),
+                (r"C:\npm\claude.CMD ", false),
+                ("claude", false),
+                ("claude.exe", false),
+                (r"npm\claude.exe", false),
+                (r"C:\missing\claude.exe", false),
+                (r"C:\npm\claude", false),
+            ] {
+                let checked = direct_program(program, "windows", present);
+                if accepted {
+                    assert_eq!(checked, Ok(()), "{program:?}");
+                } else {
+                    assert_eq!(
+                        checked,
+                        Err(SpawnError::BatchProgram(program.to_string())),
+                        "{program:?}"
+                    );
+                }
+            }
+            for os in ["macos", "linux"] {
+                for program in ["claude", r"C:\npm\claude.cmd", "/missing/claude"] {
+                    assert_eq!(
+                        direct_program(program, os, |_| false),
+                        Ok(()),
+                        "{os} {program}"
+                    );
+                }
+            }
+            let error = SpawnError::BatchProgram(r"C:\npm\claude.cmd".into()).to_string();
+            assert!(error.contains(r"C:\npm\claude.cmd"), "{error}");
+        }
+
+        /// The refusal reaches the spawn: a Windows intent whose argv runs a batch script it
+        /// cannot unwrap resolves to no command at all, and an accepted `.exe` resolves to its
+        /// argv.
+        #[test]
+        fn a_windows_agent_spawn_runs_only_an_existing_exe() {
+            let fx = Fixture::new();
+            let host = fx.host(&[]);
+            let refused =
+                direct(r"C:\npm\claude.cmd", &[], &[]).resolve_on("s", &host, "windows", &|_| true);
+            assert!(
+                matches!(
+                    &refused,
+                    Err(SpawnError::Shim(cli::ShimError::Unreadable { path, .. }))
+                        if path == Path::new(r"C:\npm\claude.cmd")
+                ),
+                "{:?}",
+                refused.err()
+            );
+            let missing =
+                direct(r"C:\npm\claude.exe", &[], &[])
+                    .resolve_on("s", &host, "windows", &|_| false);
+            assert!(matches!(missing, Err(SpawnError::BatchProgram(_))));
+            let spec = direct(r"C:\npm\claude.exe", &[], &[])
+                .resolve_on("s", &host, "windows", &|_| true)
+                .expect("an existing .exe resolves");
+            let argv: Vec<String> = spec
+                .command
+                .get_argv()
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            assert_eq!(argv, [r"C:\npm\claude.exe", "--x"]);
+            // Elsewhere the program runs as given, whatever is on disk.
+            assert!(direct("claude", &[], &[])
+                .resolve_on("s", &host, "macos", &|_| false)
+                .is_ok());
+        }
+
+        const CLAUDE_SHIM: &str =
+            include_str!("../../codesense-platform/tests/fixtures/npm-shims/claude.cmd");
+        const CODEX_SHIM: &str =
+            include_str!("../../codesense-platform/tests/fixtures/npm-shims/codex.cmd");
+        const CODEX_SHIM_V8: &str =
+            include_str!("../../codesense-platform/tests/fixtures/npm-shims/codex-cmd-shim-8.cmd");
+        const CLAUDE_TARGET: &str = r"node_modules\@anthropic-ai\claude-code\bin\claude.exe";
+        const CODEX_TARGET: &str = r"node_modules\@openai\codex\bin\codex.js";
+        /// Arguments a batch layer would act on; the argv carries them unchanged.
+        const ARGS: [&str; 4] = [
+            r#"say "hi" & %PATH% | <x> ^ !VAR!"#,
+            "",
+            "trailing\\",
+            r#"" & type nul > pwned"#,
+        ];
+
+        fn args() -> Vec<String> {
+            ARGS.iter().map(|arg| arg.to_string()).collect()
+        }
+
+        /// `program`, then [`ARGS`].
+        fn with_args(program: impl Into<OsString>) -> Vec<OsString> {
+            std::iter::once(program.into())
+                .chain(ARGS.iter().map(OsString::from))
+                .collect()
+        }
+
+        /// `path` canonicalized, or as it is when it cannot be, as the spawn does.
+        fn canonical(path: &Path) -> PathBuf {
+            fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+        }
+
+        /// An executable file at `path` holding `text`, with its parent dirs.
+        fn write(path: &Path, text: &str) {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+            fs::set_executable(path, fs::Reach::Everyone).unwrap();
+        }
+
+        fn path_of(dirs: &[&Path]) -> String {
+            std::env::join_paths(dirs).unwrap().into_string().unwrap()
+        }
+
+        /// A global npm prefix with Claude's and Codex's shims and their targets, a
+        /// hand-written batch file, and a `PATH` dir holding `node.exe` and `claude.exe`.
+        struct Prefix {
+            _tmp: tempfile::TempDir,
+            root: PathBuf,
+            npm: PathBuf,
+            bin: PathBuf,
+        }
+
+        fn prefix() -> Prefix {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path().to_path_buf();
+            let npm = root.join("npm");
+            let bin = root.join("bin");
+            write(&npm.join("claude.cmd"), CLAUDE_SHIM);
+            write(&npm.join("codex.cmd"), CODEX_SHIM);
+            write(&npm.join("x.bat"), "@echo off\r\nnode cli.js %*\r\n");
+            write(
+                &npm.join("node_modules/@anthropic-ai/claude-code/bin/claude.exe"),
+                "",
+            );
+            write(&npm.join("node_modules/@openai/codex/bin/codex.js"), "");
+            write(&bin.join("node.exe"), "");
+            write(&bin.join("claude.exe"), "");
+            Prefix {
+                _tmp: tmp,
+                root,
+                npm,
+                bin,
+            }
+        }
+
+        /// `program`'s Windows argv on `path` is `expected`: [`unwrapped_argv`] gives it on
+        /// every host, and [`windows_argv`]'s final check accepts it on a Windows host and
+        /// refuses it, by name, where the host's paths are not Windows paths.
+        fn assert_runs(program: &str, path: &str, expected: Vec<OsString>) {
+            assert_eq!(
+                unwrapped_argv(program, &args(), path),
+                Ok(expected.clone()),
+                "{program}"
+            );
+            let checked = windows_argv("windows", program, &args(), path, |file| file.is_file());
+            if std::env::consts::OS == "windows" {
+                assert_eq!(checked, Ok(expected), "{program}");
+            } else {
+                let last = expected[0].to_string_lossy().into_owned();
+                assert_eq!(checked, Err(SpawnError::BatchProgram(last)), "{program}");
+            }
+        }
+
+        #[test]
+        fn a_windows_program_is_checked_as_its_final_exe() {
+            let refused = |program: &str| -> Result<Vec<OsString>, SpawnError> {
+                Err(SpawnError::BatchProgram(program.to_string()))
+            };
+            // An existing absolute .exe runs as given, its arguments untouched.
+            for program in [
+                r"C:\npm\claude.exe",
+                "C:/npm/claude.EXE",
+                r"\\?\C:\npm\claude.exe",
+            ] {
+                assert_eq!(
+                    windows_argv("windows", program, &args(), "", |_| true),
+                    Ok(with_args(program)),
+                    "{program}"
+                );
+            }
+            // Refused before any file is read: a stream, never stripped, and a root- or
+            // drive-relative path.
+            for program in [
+                r"C:\npm\claude.exe:x.cmd",
+                r"C:\npm\claude.cmd::$DATA",
+                r"\\?\C:\npm\claude.exe:x",
+                "claude.exe:x.cmd",
+                r"\claude.exe",
+                "/claude.exe",
+                "C:claude.exe",
+            ] {
+                assert_eq!(
+                    windows_argv("windows", program, &args(), "", |_| true),
+                    refused(program),
+                    "{program}"
+                );
+            }
+            // The allowlist on the final program: a missing .exe beside a .cmd of its name,
+            // an extensionless program beside a .cmd, a name with no install on PATH.
+            let only_cmd = |path: &Path| path.to_string_lossy().ends_with(".cmd");
+            assert_eq!(
+                windows_argv("windows", r"C:\npm\claude.exe", &args(), "", only_cmd),
+                refused(r"C:\npm\claude.exe")
+            );
+            assert_eq!(
+                windows_argv("windows", r"C:\npm\x", &args(), "", |_| true),
+                refused(r"C:\npm\x")
+            );
+            assert_eq!(
+                windows_argv("windows", "missing-agent.exe", &args(), "", |_| true),
+                refused("missing-agent.exe")
+            );
+            // Every other OS runs the argv as given, whatever is on disk.
+            for os in ["macos", "linux"] {
+                for program in ["claude", r"C:\npm\claude.cmd", "claude.exe:x.cmd"] {
+                    assert_eq!(
+                        windows_argv(os, program, &args(), "", |_| false),
+                        Ok(with_args(program)),
+                        "{os} {program}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn a_windows_npm_shim_runs_its_target_without_cmd() {
+            let p = prefix();
+            let npm = canonical(&p.npm);
+            let path = path_of(&[&p.npm, &p.bin]);
+
+            // The node form: node.exe on PATH runs the script under the canonical shim dir.
+            // Only Windows names `node` by its PATHEXT extensions, so the PATH rows need it.
+            if std::env::consts::OS == "windows" {
+                let node = canonical(&p.bin.join("node.exe"));
+                let mut codex = vec![node.into_os_string(), npm.join(CODEX_TARGET).into()];
+                codex.extend(ARGS.iter().map(OsString::from));
+                assert_runs("codex.cmd", &path, codex.clone());
+                // A relative program resolves on PATH too.
+                let relative = format!("npm{}codex.cmd", std::path::MAIN_SEPARATOR);
+                assert_runs(&relative, &path_of(&[&p.root, &p.bin]), codex.clone());
+                // node.cmd and node.bat earlier on PATH never run.
+                let early = p.root.join("early");
+                write(&early.join("node.cmd"), "@echo off\r\n");
+                write(&early.join("node.bat"), "@echo off\r\n");
+                assert_runs("codex.cmd", &path_of(&[&p.npm, &early, &p.bin]), codex);
+            }
+            // node.exe beside the shim wins.
+            let local = p.root.join("local");
+            write(&local.join("codex.cmd"), CODEX_SHIM);
+            write(&local.join("node.exe"), "");
+            let local_dir = canonical(&local);
+            assert_runs(
+                "codex.cmd",
+                &path_of(&[&local, &p.bin]),
+                [
+                    local_dir.join("node.exe").into_os_string(),
+                    local_dir.join(CODEX_TARGET).into(),
+                ]
+                .into_iter()
+                .chain(ARGS.iter().map(OsString::from))
+                .collect(),
+            );
+
+            // A relative program resolves on PATH too.
+            let relative = format!("local{}codex.cmd", std::path::MAIN_SEPARATOR);
+            assert_runs(
+                &relative,
+                &path_of(&[&p.root]),
+                [
+                    local_dir.join("node.exe").into_os_string(),
+                    local_dir.join(CODEX_TARGET).into(),
+                ]
+                .into_iter()
+                .chain(ARGS.iter().map(OsString::from))
+                .collect(),
+            );
+
+            // The direct-program form runs its .exe, with no node.
+            let claude = with_args(canonical(&npm.join(CLAUDE_TARGET)));
+            assert_runs("claude.cmd", &path, claude.clone());
+            if std::env::consts::OS == "windows" {
+                // A bare name finds the shim through PATHEXT, before bin's claude.exe.
+                assert_runs("claude", &path, claude);
+            }
+            // A plain .exe on PATH resolves and runs as itself.
+            assert_runs(
+                "claude.exe",
+                &path,
+                with_args(canonical(&p.bin.join("claude.exe"))),
+            );
+        }
+
+        #[test]
+        fn a_windows_batch_file_that_is_not_an_npm_shim_never_runs() {
+            let p = prefix();
+            let path = path_of(&[&p.npm, &p.bin]);
+            let named = |file: &Path| canonical(file).to_string_lossy().into_owned();
+            assert_eq!(
+                unwrapped_argv("x.bat", &args(), &path),
+                Err(SpawnError::BatchProgram(named(&p.npm.join("x.bat"))))
+            );
+            assert_eq!(
+                windows_argv("windows", "x.bat", &args(), &path, |_| true),
+                Err(SpawnError::BatchProgram(named(&p.npm.join("x.bat"))))
+            );
+            // A node-form shim with no node.exe beside it or on PATH.
+            assert_eq!(
+                unwrapped_argv("codex.cmd", &args(), &path_of(&[&p.npm])),
+                Err(SpawnError::Shim(cli::ShimError::NodeNotFound {
+                    path: canonical(&p.npm.join("codex.cmd"))
+                }))
+            );
+            // An .exe-named link to a batch file is read as the batch file it is.
+            let links = p.root.join("links");
+            std::fs::create_dir_all(&links).unwrap();
+            if codesense_platform::testutil::symlink_or_skip(
+                p.npm.join("x.bat"),
+                links.join("agent.exe"),
+            ) {
+                assert_eq!(
+                    unwrapped_argv("agent.exe", &args(), &path_of(&[&links])),
+                    Err(SpawnError::BatchProgram(named(&p.npm.join("x.bat"))))
+                );
+            }
+            let error = SpawnError::Shim(cli::ShimError::NodeNotFound {
+                path: PathBuf::from(r"C:\npm\codex.cmd"),
+            })
+            .to_string();
+            assert!(error.contains(r"C:\npm\codex.cmd"), "{error}");
+        }
+
+        #[test]
+        fn a_saved_agent_never_sets_codesenses_windows_or_telemetry_names() {
+            // (name, may set on Windows, may set elsewhere)
+            for (name, windows, elsewhere) in [
+                ("CODESENSE_TAB_SESSION_ID", false, false),
+                ("codesense_tab_session_id", false, true),
+                ("ComSpec", false, false),
+                ("COMSPEC", false, true),
+                ("comspec", false, true),
+                ("PATHEXT", false, false),
+                ("PathExt", false, true),
+                ("OTEL_SDK_DISABLED", false, false),
+                ("otel_sdk_disabled", false, true),
+                ("Otel_Logs_Exporter", false, true),
+                ("DO_NOT_TRACK", false, false),
+                ("Do_Not_Track", false, true),
+                ("MY_VAR", true, true),
+                ("PATH", true, true),
+                ("OTEL", true, true),
+                ("COMSPEC_HOME", true, true),
+                ("ÖTEL_X", true, true),
+            ] {
+                assert_eq!(agent_may_set_on("windows", name), windows, "windows {name}");
+                for os in ["macos", "linux"] {
+                    assert_eq!(agent_may_set_on(os, name), elsewhere, "{os} {name}");
+                }
+                assert_eq!(
+                    agent_may_set(name),
+                    agent_may_set_on(std::env::consts::OS, name),
+                    "{name}"
+                );
+                assert_eq!(
+                    shell_dispatch_env(name),
+                    matches!(name.to_ascii_uppercase().as_str(), "COMSPEC" | "PATHEXT"),
+                    "{name}"
+                );
+            }
+            for name in CODESENSE_LAUNCH_ENV {
+                assert!(
+                    !agent_may_set_on("windows", &name.to_ascii_lowercase()),
+                    "{name}"
+                );
+                assert!(!agent_may_set_on("linux", name), "{name}");
+            }
+            // A headless launch drops a variable it strips, in any case on Windows only.
+            let removed = ["ANTHROPIC_API_KEY".to_string()];
+            assert!(!headless_env_kept("windows", "anthropic_api_key", &removed));
+            assert!(!headless_env_kept("windows", "ANTHROPIC_API_KEY", &removed));
+            assert!(headless_env_kept("macos", "anthropic_api_key", &removed));
+            assert!(!headless_env_kept("macos", "ANTHROPIC_API_KEY", &removed));
+            assert!(!headless_env_kept("windows", "Path", &[]));
+            assert!(headless_env_kept("linux", "Path", &[]));
+            assert!(!headless_env_kept("linux", "PATH", &[]));
+            assert!(!headless_env_kept("windows", "comspec", &[]));
+            assert!(headless_env_kept("windows", "MY_VAR", &removed));
+            assert!(same_env_name("windows", "Path", "PATH"));
+            assert!(!same_env_name("linux", "Path", "PATH"));
+            assert!(same_env_name("macos", "PATH", "PATH"));
+            // The engine's own export setup keeps the byte-for-byte rule.
+            assert!(telemetry_owned_env("OTEL_X") && !telemetry_owned_env("otel_x"));
+        }
+    }
+
+    /// A Windows host whose table has a POSIX runner.
+    static WINDOWS_WITH_BASH: ShellTable = ShellTable {
+        kinds: &[ShellKind::Pwsh, ShellKind::PowerShell, ShellKind::Cmd],
+        rows: &[],
+        last: ("cmd.exe", ShellKind::Cmd),
+        posix_runner: Some(crate::shell::PosixRunner {
+            paths: &["/usr/bin/bash"],
+            last: "/usr/bin/bash",
+        }),
+    };
+
+    /// A Windows agent spawn carries the host's POSIX runner as `SHELL`, or none: never an
+    /// inherited one, an Agent's own, or one the intent sets. macOS keeps what it inherits.
+    #[test]
+    fn a_windows_agent_spawn_sets_shell_only_to_a_posix_runner() {
+        let fx = Fixture::new();
+        let shell_of =
+            |vars: &[(&str, &str)], intent: SpawnIntent, table: &'static ShellTable, os: &str| {
+                let host = fx.host(vars).with_shell_table(table);
+                let spec = intent
+                    .resolve_on("s", &host, os, &|_| true)
+                    .expect("the spawn resolves");
+                env(&spec, "SHELL")
+            };
+        let windows = ShellTable::for_os("windows");
+        let exe = r"C:\npm\claude.exe";
+        let msys = [("SHELL", "/usr/bin/zsh")];
+        // pwsh only: no SHELL, inherited, the Agent's own or the intent's
+        assert_eq!(
+            shell_of(&msys, direct(exe, &[], &[]), windows, "windows"),
+            None
+        );
+        assert_eq!(
+            shell_of(&[], direct(exe, &[], &[]), windows, "windows"),
+            None
+        );
+        assert_eq!(
+            shell_of(
+                &[],
+                direct(exe, &[], &[("SHELL", "/bin/fish")]),
+                windows,
+                "windows"
+            ),
+            None
+        );
+        assert_eq!(
+            shell_of(
+                &[],
+                direct(exe, &[("SHELL", "/bin/sh")], &[]),
+                windows,
+                "windows"
+            ),
+            None
+        );
+        // a POSIX runner: SHELL is it, over the intent's own
+        assert_eq!(
+            shell_of(
+                &msys,
+                direct(exe, &[("SHELL", "/bin/sh")], &[("SHELL", "/bin/fish")]),
+                &WINDOWS_WITH_BASH,
+                "windows"
+            )
+            .as_deref(),
+            Some("/usr/bin/bash")
+        );
+        // macOS is unchanged: the spawn keeps what it inherits
+        assert_eq!(
+            shell_of(
+                &[("SHELL", "/bin/zsh")],
+                direct("/opt/bin/claude", &[], &[]),
+                ShellTable::for_os("macos"),
+                "macos"
+            )
+            .as_deref(),
+            Some("/bin/zsh")
+        );
+    }
+
+    /// PowerShell and cmd start with no arguments: no `-l`, no init.
+    #[test]
+    fn windows_shells_start_with_no_arguments() {
+        let fx = Fixture::new();
+        let host = fx.host(&[]).with_shell_table(&crate::shell::WINDOWS);
+        for kind in [ShellKind::Pwsh, ShellKind::PowerShell, ShellKind::Cmd] {
+            let shell = UserShell {
+                path: fx.home.join("shell.exe"),
+                kind,
+                source: crate::shell::ShellSource::Override,
+            };
+            let cmd = shell_command(&host, &shell, None, None, &[]).unwrap();
+            assert_eq!(cmd.get_argv().len(), 1, "{kind:?}");
+        }
+        // With nothing usable on the host, the interactive shell is cmd.exe on
+        // PATH, with no init script, wrapper dir or arguments.
+        let spec = interactive("")
+            .resolve("s", &host)
+            .expect("the spawn resolves");
+        assert_eq!(argv(&spec), ["cmd.exe"]);
+        assert_eq!(env(&spec, "__CODESENSE_SHELL_INIT"), None);
+        assert_eq!(env(&spec, "ZDOTDIR"), None);
+    }
+
+    /// Windows has no POSIX shell: a command line is a typed error, while an
+    /// argv-direct spawn still resolves.
+    #[test]
+    fn a_command_line_without_a_posix_runner_is_an_error() {
+        let fx = Fixture::new();
+        let host = fx.host(&[]).with_shell_table(&crate::shell::WINDOWS);
+        let command = SpawnIntent {
+            command: Some("echo hi".into()),
+            ..interactive("")
+        };
+        let Err(error) = command.resolve("s", &host) else {
+            panic!("a command line resolved without a POSIX runner");
+        };
+        assert_eq!(error, SpawnError::NoPosixRunner);
+        assert_eq!(
+            error.to_string(),
+            "no POSIX shell to run the command on this OS"
+        );
+        let direct = SpawnIntent {
+            argv: Some(vec!["agent".into(), "--flag".into()]),
+            ..interactive("")
+        };
+        assert_eq!(
+            argv(&direct.resolve("s", &host).expect("the spawn resolves")),
+            ["agent", "--flag"]
+        );
+    }
+
+    /// An executable file at `path`, with its parent dirs.
+    fn install(path: &Path) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "").unwrap();
+        fs::set_executable(path, fs::Reach::Everyone).unwrap();
+    }
+
+    /// The Windows table reads `ProgramFiles`, `SystemRoot` and `ComSpec`
+    /// from the host's own variables, in that order.
+    #[test]
+    fn the_windows_table_resolves_through_the_hosts_variables() {
+        let fx = Fixture::new();
+        let root = fx.home.join("drive");
+        let program_files = root.join("Program Files");
+        let system_root = root.join("Windows");
+        let pwsh = program_files.join("PowerShell").join("7").join("pwsh.exe");
+        let powershell = system_root
+            .join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe");
+        let comspec = system_root.join("System32").join("cmd.exe");
+        for path in [&pwsh, &powershell, &comspec] {
+            install(path);
+        }
+        let host = fx
+            .host(&[
+                ("ProgramFiles", program_files.to_str().unwrap()),
+                ("SystemRoot", system_root.to_str().unwrap()),
+                ("ComSpec", comspec.to_str().unwrap()),
+            ])
+            .with_shell_table(&crate::shell::WINDOWS);
+        for want in [&pwsh, &powershell, &comspec] {
+            let spec = interactive("")
+                .resolve("s", &host)
+                .expect("the spawn resolves");
+            assert_eq!(argv(&spec)[0], want.to_string_lossy());
+            std::fs::remove_file(want).unwrap();
+        }
+    }
+
+    /// The Windows table's `pwsh` row searches the host's own `PATH`, ahead of
+    /// `ProgramFiles`.
+    #[test]
+    fn the_windows_table_finds_pwsh_on_the_hosts_path() {
+        let fx = Fixture::new();
+        let bin = fx.home.join("bin");
+        let pwsh = cli::named_in(std::slice::from_ref(&bin), "pwsh")
+            .into_iter()
+            .find(|path| crate::shell::shell_kind(path).is_some())
+            .expect("a pwsh file name the table classifies");
+        install(&pwsh);
+        let program_files = fx.home.join("Program Files");
+        install(&program_files.join("PowerShell").join("7").join("pwsh.exe"));
+        let host = fx
+            .host(&[
+                ("PATH", bin.to_str().unwrap()),
+                ("ProgramFiles", program_files.to_str().unwrap()),
+            ])
+            .with_shell_table(&crate::shell::WINDOWS);
+        let spec = interactive("")
+            .resolve("s", &host)
+            .expect("the spawn resolves");
+        assert_eq!(argv(&spec)[0], pwsh.to_string_lossy());
+    }
+
+    /// A host built from given variables resolves with its own OS's table: a
+    /// fish user's command line runs under that table's POSIX runner, or is
+    /// an error where it has none.
+    #[test]
+    fn a_given_host_uses_its_own_oss_table() {
+        let fx = Fixture::new();
+        let fish = fx.home.join("fish");
+        install(&fish);
+        let intent = SpawnIntent {
+            shell: Some(fish.to_string_lossy().into_owned()),
+            command: Some("echo hi".into()),
+            ..interactive("")
+        };
+        let resolved = intent.resolve("s", &fx.host(&[]));
+        match ShellTable::host().posix_runner(fs::is_executable) {
+            Some(runner) => {
+                let spec = resolved.expect("the spawn resolves");
+                assert_eq!(argv(&spec)[0], runner.to_string_lossy());
+            }
+            None => assert!(matches!(resolved, Err(SpawnError::NoPosixRunner))),
+        }
     }
 
     /// Drive `spec` in a real PTY: wait for its first prompt mark, type
@@ -1201,6 +2227,7 @@ mod tests {
             ..interactive(tmp.to_str().unwrap())
         }
         .resolve("shell-test", &host)
+        .expect("the spawn resolves")
     }
 
     /// A foreground job the user suspends (Ctrl-Z) has not ended: the shell
@@ -1352,7 +2379,8 @@ mod tests {
             cols: 200,
             ..interactive(worktree.to_str().unwrap())
         }
-        .resolve("shell-test", &host);
+        .resolve("shell-test", &host)
+        .expect("the spawn resolves");
         let want = format!("M={marker}:{}", worktree.display());
         let out = drive(spec, PROBE, &[&want, "\x1b]133;D;0"]);
         assert!(out.contains(&want), "rc marker / cwd missing: {out:?}");
@@ -1409,6 +2437,8 @@ mod tests {
     /// `codex` first on `PATH` (each logs its argv to `<tmp>/argv.log`, one
     /// `<arg>` per argument, a line per run) and the tab's variables `env`; types
     /// `line`, then returns the log lines.
+    // Unix only: the stub CLIs are made executable with a unix mode.
+    #[cfg(unix)]
     fn typed_agents(
         shell: &str,
         tmp: &Path,
@@ -1465,7 +2495,8 @@ mod tests {
             env: given(env),
             ..interactive(tmp.to_str().unwrap())
         }
-        .resolve("shell-test", &host);
+        .resolve("shell-test", &host)
+        .expect("the spawn resolves");
         // Ensure the stubs (not a real CLI) answer, even though login rc files may
         // reorder PATH.
         let line = format!(
@@ -1490,6 +2521,8 @@ mod tests {
     /// In a CodeSense tab, `claude` and `codex` typed by hand start connected to
     /// CodeSense; the user's own flags, a project's own `codesense` server,
     /// subcommands, `--remote` and `command claude` are left as they are.
+    // Unix only: the stub helper is made executable with a unix mode.
+    #[cfg(unix)]
     fn assert_agents_auto_connect(shell: &str) {
         let tmp = tempfile::tempdir().unwrap();
         let tmp = tmp.path().canonicalize().unwrap();
@@ -1607,6 +2640,8 @@ mod tests {
 
     /// Outside a CodeSense tab's variables (or with their files gone), and with
     /// the user's own `claude` function, nothing is added.
+    // Unix only: it types through the unix-only `typed_agents`.
+    #[cfg(unix)]
     fn assert_agents_untouched_without_the_tab(shell: &str, rc: (&str, &str)) {
         let tmp = tempfile::tempdir().unwrap();
         let tmp = tmp.path().canonicalize().unwrap();
@@ -1639,6 +2674,8 @@ mod tests {
         );
     }
 
+    // Unix only: it types through the unix-only `typed_agents`.
+    #[cfg(unix)]
     #[test]
     fn zsh_agents_auto_connect() {
         assert_agents_auto_connect("/bin/zsh");
@@ -1651,6 +2688,8 @@ mod tests {
         );
     }
 
+    // Unix only: it types through the unix-only `typed_agents`.
+    #[cfg(unix)]
     #[test]
     fn bash_agents_auto_connect() {
         assert_agents_auto_connect("/bin/bash");
@@ -1663,6 +2702,8 @@ mod tests {
         );
     }
 
+    // Unix only: it types through the unix-only `typed_agents`.
+    #[cfg(unix)]
     #[test]
     fn fish_agents_auto_connect() {
         let Some(fish) = find_fish() else {
@@ -1776,7 +2817,9 @@ mod tests {
             !intent.osc_enabled(),
             "argv-direct has no shell integration"
         );
-        let spec = intent.resolve("tab-argv", &host);
+        let spec = intent
+            .resolve("tab-argv", &host)
+            .expect("the spawn resolves");
         assert_eq!(argv(&spec), ["/opt/claude", "--one", "two"]);
         // No ZDOTDIR / shell-init / starship for an argv-direct spawn.
         assert_eq!(env(&spec, "ZDOTDIR"), None);
@@ -1823,7 +2866,9 @@ mod tests {
             ]),
             ..interactive(&cwd)
         };
-        let spec = intent.resolve("tab-agent", &host);
+        let spec = intent
+            .resolve("tab-agent", &host)
+            .expect("the spawn resolves");
         assert_eq!(
             env(&spec, "CLAUDE_CODE_DISABLE_AUTO_MEMORY").as_deref(),
             Some("1")
@@ -1856,7 +2901,9 @@ mod tests {
             ]),
             ..interactive(&cwd)
         };
-        let spec = shell_hosted.resolve("tab-shell", &host);
+        let spec = shell_hosted
+            .resolve("tab-shell", &host)
+            .expect("the spawn resolves");
         assert_eq!(env(&spec, "AGENT_ONLY").as_deref(), Some("yes"));
         assert_eq!(env(&spec, "SHELL").as_deref(), Some("/bin/zsh"));
         assert_eq!(
@@ -1891,7 +2938,9 @@ mod tests {
             ..interactive(&cwd)
         }
         .with_agent_startup(Some(&startup));
-        let spec = remote.resolve("tab-remote", &host);
+        let spec = remote
+            .resolve("tab-remote", &host)
+            .expect("the spawn resolves");
         assert_eq!(
             env(&spec, "CLAUDE_CODE_DISABLE_AUTO_MEMORY").as_deref(),
             Some("1")
@@ -1924,7 +2973,9 @@ mod tests {
             login_path: Some("/opt/homebrew/bin:/usr/bin:/bin".to_string()),
             ..interactive(&cwd)
         };
-        let spec = intent.resolve("tab-login", &host);
+        let spec = intent
+            .resolve("tab-login", &host)
+            .expect("the spawn resolves");
         assert_eq!(
             env(&spec, "PATH").unwrap(),
             format!(
@@ -1948,7 +2999,9 @@ mod tests {
                 login_path: login_path.clone(),
                 ..interactive(&cwd)
             };
-            let spec = intent.resolve("tab-host-path", &host);
+            let spec = intent
+                .resolve("tab-host-path", &host)
+                .expect("the spawn resolves");
             assert_eq!(env(&spec, "PATH").unwrap(), expected, "{login_path:?}");
         }
     }
@@ -1964,7 +3017,9 @@ mod tests {
             login_path: Some("/opt/homebrew/bin:/usr/bin:/bin".to_string()),
             ..interactive(&cwd)
         };
-        let spec = intent.resolve("tab-shell-path", &host);
+        let spec = intent
+            .resolve("tab-shell-path", &host)
+            .expect("the spawn resolves");
         let path = env(&spec, "PATH").unwrap();
         assert!(path.ends_with(":/usr/bin:/bin"), "{path}");
         assert!(!path.contains("/opt/homebrew/bin"), "{path}");
@@ -1985,7 +3040,9 @@ mod tests {
             login_path: Some(format!("{}:/usr/bin:/bin", stale.display())),
             ..interactive(&cwd)
         };
-        let spec = intent.resolve("tab-stale", &host);
+        let spec = intent
+            .resolve("tab-stale", &host)
+            .expect("the spawn resolves");
         assert_eq!(argv(&spec), ["/opt/claude", "--one"]);
         assert!(env(&spec, "PATH")
             .unwrap()
@@ -2007,7 +3064,9 @@ mod tests {
             login_path: Some(format!("{}:/usr/bin:/bin", stale.display())),
             ..interactive(&cwd)
         };
-        let spec = intent.resolve("tab-bare", &host);
+        let spec = intent
+            .resolve("tab-bare", &host)
+            .expect("the spawn resolves");
         assert_eq!(argv(&spec), ["claude", "--one"]);
         assert_eq!(
             env(&spec, "PATH").unwrap(),

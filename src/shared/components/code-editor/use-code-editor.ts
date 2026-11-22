@@ -43,6 +43,8 @@ export interface CodeEditorHandle {
   // Scroll
   getScrollPos: () => number;
   scrollTo: (pos: number) => void;
+  /** CodeMirror's scroll element (`.cm-scroller`), or null once the view is gone. */
+  getScrollElement: () => HTMLElement | null;
 
   // RF-perf-12: a LIGHTWEIGHT, serializable view snapshot — scroll + selection
   // as doc offsets. Deliberately NOT the CmEditorState / doc / undo history, so
@@ -1073,6 +1075,7 @@ function buildHandle(
       r.view.dispatch({ selection: { anchor: from, head: to } });
     },
     getScrollPos: () => readView()?.view.scrollDOM.scrollTop ?? 0,
+    getScrollElement: () => readView()?.view.scrollDOM ?? null,
     scrollTo: (pos) => {
       const r = readView();
       if (!r) return;

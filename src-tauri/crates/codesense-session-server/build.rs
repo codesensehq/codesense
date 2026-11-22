@@ -7,11 +7,25 @@
 //!
 //! Overrides: `CODESENSE_BUILD_COMMIT` (a release pipeline that knows its
 //! commit) and `SOURCE_DATE_EPOCH` (seconds; reproducible builds).
+//!
+//! It also sets the app's capability gates, `cfg(cap_<key>)`, from the app's
+//! `platform-caps.json`.
 
 use std::path::Path;
 use std::process::Command;
 
+// The capability table's parser; a build script reads only the gates, not the
+// runtime's fields (reason, scope).
+#[allow(dead_code)]
+mod caps_table {
+    include!("../../build_caps.rs");
+}
+use caps_table::configure_caps;
+
 fn main() {
+    println!("cargo:rerun-if-changed=../../platform-caps.json");
+    configure_caps("../../platform-caps.json");
+
     let app_manifest = Path::new("../../Cargo.toml");
     println!("cargo:rerun-if-changed={}", app_manifest.display());
     println!("cargo:rerun-if-env-changed=CODESENSE_BUILD_COMMIT");

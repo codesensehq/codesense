@@ -1,0 +1,6 @@
+version=1.7.5-cs.5
+asset=git-ai-windows-x86_64.exe
+platform=windows-x86_64
+sha256=926e8adb75c3319e7c8bea2985a2a6a512d8ee7a82f1416f2069d8532074f3c2
+repo=alfypops/git-ai
+tag=v1.7.5-cs.5

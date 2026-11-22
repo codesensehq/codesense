@@ -12,6 +12,7 @@ import type {
 } from "@/tauri/commands";
 
 import { runsOn } from "./routine-display";
+import { localMachineLabel, localMachineNoun } from "@/shared/lib/local-machine";
 
 /**
  * The routine as the editor's sentence: *Every [when] have [agent] do [task] in
@@ -403,7 +404,13 @@ export function revisionDiff(
     ["Max wakes", (d) => d.policy.max_wakes?.toString() ?? ""],
     ["Max wakes a day", (d) => d.policy.max_wakes_per_day?.toString() ?? ""],
     ["Min gap", (d) => d.policy.min_gap ?? ""],
-    ["Runs on", (d) => (runsOn(d) === "each_mac" ? "each teammate's Mac" : "one Mac")],
+    [
+      "Runs on",
+      (d) =>
+        runsOn(d) === "each_mac"
+          ? `each teammate's ${localMachineNoun()}`
+          : `one ${localMachineNoun()}`,
+    ],
     ["Machine", (d) => d.where.machine ?? "local"],
     ["Armed on", (d) => d.armed_host],
     ["Archived", (d) => (d.archived_at ? "yes" : "no")],
@@ -444,7 +451,7 @@ export function machineProblemCopy(
     case "unshared":
       return `Pick a machine. ${machine} isn't shared with this team any more.`;
     case "each_mac_remote":
-      return "each teammate's Mac only works with This Mac for wake.";
+      return `each teammate's ${localMachineNoun()} only works with ${localMachineLabel()} for wake.`;
   }
 }
 

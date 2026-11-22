@@ -13,8 +13,9 @@ import type { SectionKey } from "@/features/settings/lib/types";
 
 import { AccountSection } from "./account-section";
 import { DashboardsSection } from "./dashboards-section";
-import { GeneralSection } from "./general-section";
+import { GeneralSection, GENERAL_ROW_SPEC_LIST } from "./general-section";
 import { IdentitySection } from "./identity-section";
+import { MessagingSection } from "./messaging-section";
 import { PhasesSection } from "./phases-section/phases-section";
 import { ProjectionExcludesSection } from "./projection-excludes-section";
 import { RepoSection } from "./repo-section";
@@ -96,10 +97,12 @@ export function SettingsPanel() {
   useEffect(() => {
     if (!query.trim()) return;
     const current = activeSectionRef.current;
-    if (sectionHasContent(current, query)) {
+    if (sectionHasContent(current, query, GENERAL_ROW_SPEC_LIST)) {
       return; // current section still has matching rows
     }
-    const first = SECTION_NAV_ITEMS.find((n) => sectionHasContent(n.key, query));
+    const first = SECTION_NAV_ITEMS.find((n) =>
+      sectionHasContent(n.key, query, GENERAL_ROW_SPEC_LIST),
+    );
     // Set-state-in-effect is intentional — auto-switch needs to observe
     // query changes (a side-effectful trigger) and reconcile with the
     // ref-tracked activeSection (intentionally NOT in deps to avoid
@@ -161,6 +164,7 @@ export function SettingsPanel() {
             {activeSection === "general" && <GeneralSection query={query} />}
             {activeSection === "appearance" && <AppearanceSection query={query} />}
             {activeSection === "dashboards" && <DashboardsSection query={query} />}
+            {activeSection === "messaging" && <MessagingSection query={query} />}
             {activeSection === "identity" && <IdentitySection query={query} />}
             {activeSection === "shortcuts" && <ShortcutsSection query={query} />}
             {activeSection === "repo" && (

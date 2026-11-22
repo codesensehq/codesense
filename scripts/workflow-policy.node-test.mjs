@@ -5,10 +5,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
-import { workflowPolicy } from "./workflow-policy.mjs";
+import { smokeImagesPolicy, topLevelConjuncts, workflowPolicy } from "./workflow-policy.mjs";
 
 // The workflow set under test: .github/workflows, or CODESENSE_WORKFLOWS_DIR (from the repo root).
 const directory = path.resolve(
@@ -208,8 +208,16 @@ const macosOptIn =
 const pathFilter = "!cancelled() && needs.changes.outputs.rust != 'false'";
 // The macOS result job leads with always() instead, so a cancelled run reports red.
 const resultFilter = "always() && needs.changes.outputs.rust != 'false'";
-const macosFilter = { "rust-macos-build": pathFilter, "rust-macos": resultFilter };
+// The macOS jobs also skip a change only Windows or Linux compiles, right after the path filter.
+const macosOnly = "needs.changes.outputs.macos != 'false'";
+const macosFilter = {
+  "rust-macos-build": `${pathFilter} && ${macosOnly}`,
+  "rust-macos": `${resultFilter} && ${macosOnly}`,
+};
 const offMergeGroups = "github.event_name != 'merge_group'";
+// Each macOS build step after the check of main's head skips when main has moved on.
+const notSuperseded = "steps.superseded.outputs.superseded != 'true'";
+const shardsNotSuperseded = "needs.rust-macos-build.outputs.superseded != 'true'";
 const conditional = (workflow, condition) =>
   workflow.replace(/^ {2}([a-z-]+):\n {4}runs-on/m, `  $1:\n    if: ${condition}\n    runs-on`);
 test("a job is skipped only on pull requests when its workflow runs on merge_group, push or schedule", () => {
@@ -283,10 +291,13 @@ test("rust.yml runs on push to main and nightly, and only the nightly run saves 
       name,
     );
   const nightly = "github.event_name == 'schedule' && github.ref == 'refs/heads/main'";
-  for (const name of ["rust-macos-build", "rust-linux"]) {
+  for (const [name, count] of [
+    ["rust-macos-build", 2],
+    ["rust-linux", 1],
+  ]) {
     const steps = workflow.jobs[name].steps;
     const saves = steps.filter((step) => step.uses?.startsWith("actions/cache/save@"));
-    assert.equal(saves.length, 1, name);
+    assert.equal(saves.length, count, name);
     for (const step of saves) assert.ok(step.if.startsWith(`${nightly} &&`), name);
     const rustCache = steps.filter((step) => step.uses?.startsWith("Swatinem/rust-cache@"));
     assert.equal(rustCache.length, 1, name);
@@ -331,15 +342,90 @@ test("rust.yml runs macOS on a pull request only with ci:macos, and Linux always
       `\${{ ${filter} && ${offMergeGroups} && (${macosOptIn}) }}`,
       name,
     );
-  // The shards follow the build: no if of their own, so they run only when it succeeds.
+  // The shards follow the build: they run only when it succeeds and main had not moved on.
   assert.equal(workflow.jobs["rust-macos-test"].needs, "rust-macos-build");
-  assert.equal(workflow.jobs["rust-macos-test"].if, undefined);
-  // Another label's run has a group of its own, so it cannot cancel the pull request's run.
+  assert.equal(workflow.jobs["rust-macos-test"].if, shardsNotSuperseded);
+  // Another label's run, ci:windows included, has a group of its own, so it cannot cancel the
+  // pull request's run or a ci:macos run.
   assert.equal(
     workflow.concurrency.group,
     "${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci:macos' && format('-{0}', github.run_id) || '' }}",
   );
   assert.equal(workflow.jobs["rust-linux"].if, `\${{ ${pathFilter} }}`);
+});
+
+const windowsOptIn = macosOptIn.replaceAll("ci:macos", "ci:windows");
+test("rust.yml runs the Windows check on a pull request only with ci:windows, never in a merge group", () => {
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  const job = workflow.jobs["rust-check-windows"];
+  assert.equal(job.name, "Rust check (Windows)");
+  assert.equal(job.needs, "changes");
+  assert.equal(job.if, `\${{ ${pathFilter} && ${offMergeGroups} && (${windowsOptIn}) }}`);
+  // The literal runner, not an expression, so the policy's hosted-runner allowlist applies.
+  assert.equal(job["runs-on"], "windows-2025");
+  // Line endings are set before checkout, and the nightly alone saves the Windows cache.
+  const steps = job.steps;
+  const autocrlf = steps.findIndex((s) => s.run === "git config --global core.autocrlf false");
+  const checkout = steps.findIndex((s) => s.uses?.startsWith("actions/checkout@"));
+  assert.ok(autocrlf >= 0 && autocrlf < checkout);
+  const cache = steps.find((s) => s.uses?.startsWith("Swatinem/rust-cache@"));
+  assert.equal(cache.with["shared-key"], "rust-windows");
+  assert.equal(
+    cache.with["save-if"],
+    "${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}",
+  );
+  assert.deepEqual(
+    steps.filter((s) => /\bcargo\b/.test(s.run ?? "")).map((s) => s.run),
+    [
+      "cargo check --locked -p codesense-platform -p codesense-host-proto -p codesense-fs-core -p codesense-pty-core -p codesense-session-server --all-targets",
+      "cargo test --locked -p codesense-platform --features pdf",
+      "cargo test --locked -p codesense-host-proto --lib hook::",
+      'cargo test --locked -p codesense-session-server --lib portable 2>&1 | tee "$RUNNER_TEMP/portable-tests.log"\n' +
+        "grep -Eq '^test result: ok\\. [1-9][0-9]* passed' \"$RUNNER_TEMP/portable-tests.log\"\n",
+      'cargo test --locked -p codesense-pty-core --lib runner::cursor_reply:: 2>&1 | tee "$RUNNER_TEMP/cursor-reply-tests.log"\n' +
+        "grep -Eq '^test result: ok\\. [1-9][0-9]* passed' \"$RUNNER_TEMP/cursor-reply-tests.log\"\n",
+      'cargo test --locked -p codesense-pty-core --lib spawn::tests::os_rules:: 2>&1 | tee "$RUNNER_TEMP/spawn-os-rules-tests.log"\n' +
+        "grep -Eq '^test result: ok\\. [1-9][0-9]* passed' \"$RUNNER_TEMP/spawn-os-rules-tests.log\"\n",
+      "cargo test --locked --no-fail-fast -p codesense-pty-core --test pty_contract --test process_tree --test headless_session",
+    ],
+  );
+  // The pty tests run the Windows worker, built after Rust (the script asks rustc for the triple)
+  // from the installed packages, and named to them.
+  const names = steps.map((s) => s.name);
+  const worker = names.indexOf("Build the emulator worker");
+  const install = names.indexOf("Install dependencies");
+  const rust = names.indexOf("Set up Rust");
+  const pty = steps.findIndex((s) => s.run?.includes("--test pty_contract"));
+  for (const index of [worker, install, rust, pty]) assert.ok(index >= 0);
+  assert.equal(steps[worker].run, "pnpm run build:emulator");
+  assert.ok(install < worker && rust < worker && worker < pty);
+  assert.equal(
+    steps[pty].env.CODESENSE_EMULATOR_WORKER,
+    "${{ github.workspace }}/src-tauri/binaries/codesense-emulator-x86_64-pc-windows-msvc.exe",
+  );
+  // A filter that matches no test passes in libtest, so each filtered step fails unless one ran.
+  for (const filter of [
+    "--lib portable",
+    "--lib runner::cursor_reply::",
+    "--lib spawn::tests::os_rules::",
+  ]) {
+    const { run } = steps.find((s) => s.run?.includes(filter));
+    const ran = new RegExp(/^grep -Eq '(.+)' /m.exec(run)[1], "m");
+    assert.match("test result: ok. 1 passed; 0 failed; 0 ignored", ran, filter);
+    assert.doesNotMatch("test result: ok. 0 passed; 0 failed; 0 ignored", ran, filter);
+  }
+  // The ci:windows label's run gets a group of its own, so it never cancels a ci:macos run.
+  assert.doesNotMatch(workflow.concurrency.group, /ci:windows/);
+  // The platform crate is tested on Linux and macOS too.
+  for (const name of ["rust-linux", "rust-macos-build"])
+    assert.match(workflow.jobs[name].env.RUST_PACKAGES, /-p codesense-platform\b/, name);
+});
+
+test("the policy accepts the Windows check's runner literal and rejects expressions", () => {
+  const windows = (runner) => workflowPolicy(good.replace("ubuntu-24.04", runner)).join("\n");
+  assert.equal(windows("windows-2025"), "");
+  assert.match(windows("${{ matrix.os }}"), /GitHub-hosted/);
+  assert.match(windows("windows-2019"), /GitHub-hosted/);
 });
 
 // A Rust-free change skips the Rust jobs. Scheduled and manual runs always test, and the jobs
@@ -350,10 +436,14 @@ test("rust.yml skips its test jobs only when the changes job finds nothing Rust-
   assert.equal(changes.if, undefined);
   assert.equal(changes.needs, undefined);
   assert.equal(changes.outputs.rust, "${{ steps.filter.outputs.rust }}");
+  assert.equal(changes.outputs.macos, "${{ steps.filter.outputs.macos }}");
   const filter = changes.steps.find((step) => step.id === "filter");
-  assert.match(filter.run, /^\s*\*\) echo "rust=true" >> "\$GITHUB_OUTPUT"; exit 0 ;;$/m);
+  assert.match(
+    filter.run,
+    /^\s*\*\) printf 'rust=true\\nmacos=true\\n' >> "\$GITHUB_OUTPUT"; exit 0 ;;$/m,
+  );
   assert.match(filter.run, /node scripts\/rust-changes\.mjs "\$range" >> "\$GITHUB_OUTPUT"/);
-  for (const name of ["rust-macos-build", "rust-linux", "rust-check-linux"])
+  for (const name of ["rust-macos-build", "rust-linux", "rust-check-linux", "rust-linux-app"])
     assert.equal(workflow.jobs[name].needs, "changes", name);
   assert.deepEqual(workflow.jobs["rust-macos"].needs, [
     "changes",
@@ -361,6 +451,180 @@ test("rust.yml skips its test jobs only when the changes job finds nothing Rust-
     "rust-macos-test",
   ]);
   assert.equal(workflow.jobs["rust-check-linux"].if, `\${{ ${pathFilter} }}`);
+});
+
+// The Linux app job is not a required check: it carries the path filter and nothing else, so it
+// runs on pull requests, merge groups, main and the nightly run, and its tests (ignored
+// everywhere else) run in one place, under a private session bus with the keyring unlocked.
+test("rust.yml's Linux app job runs the shared suites and the Secret Service tests", () => {
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  const job = workflow.jobs["rust-linux-app"];
+  assert.equal(job.name, "Rust (Linux app)");
+  assert.equal(job["runs-on"], "ubuntu-24.04");
+  // Not a required check: it skips merge groups like the other non-required jobs.
+  assert.equal(job.if, `\${{ ${pathFilter} && ${offMergeGroups} }}`);
+  assert.deepEqual(job.permissions, { contents: "read" });
+  const libs = job.steps.find((step) => step.name === "Install system libraries");
+  assert.match(
+    libs.run,
+    /^bash scripts\/install-linux-app-libs\.sh dbus gnome-keyring libsecret-tools zsh xvfb xauth language-pack-gnome-de-base language-pack-de poppler-utils$/,
+  );
+  // The zsh and Codex launch tests need a zsh that reaches its prompt and user namespaces, set up
+  // before any test runs.
+  const compile = job.steps.findIndex((step) => step.name === "Compile the tests");
+  for (const [name, run] of [
+    ["Make zsh's completion directories private", /compaudit.*\n.*xargs sudo chmod g-w,o-w/],
+    [
+      "Allow unprivileged user namespaces",
+      /^sudo sysctl -w kernel\.apparmor_restrict_unprivileged_userns=0$/,
+    ],
+  ]) {
+    const at = job.steps.findIndex((step) => step.name === name);
+    assert.ok(at >= 0 && at < compile, name);
+    assert.match(job.steps[at].run, run, name);
+  }
+  // One apt list for every Linux job that builds the app.
+  assert.equal(
+    workflow.jobs["rust-check-linux"].steps.find((step) => step.name === "Install system libraries")
+      .run,
+    "bash scripts/install-linux-app-libs.sh",
+  );
+  const test = job.steps.find((step) => step.name.startsWith("Test the credential store"));
+  assert.equal(test.run, "dbus-run-session -- bash scripts/run-secret-service-tests.sh");
+  const script = fs.readFileSync(new URL("run-secret-service-tests.sh", import.meta.url), "utf8");
+  assert.match(script, /gnome-keyring-daemon --unlock/);
+  // The keyring is checked before any test runs, so a failed unlock names itself.
+  assert.ok(script.indexOf("secret-tool lookup") < script.indexOf("nextest[@]"));
+  // Two runs, each of which must match a test (nextest fails when none does), so a renamed
+  // module fails here rather than going green with half the tests.
+  const runs = script.replace(/\\\n\s*/g, " ").match(/^"\$\{nextest\[@\]\}".*$/gm);
+  assert.equal(runs.length, 2);
+  assert.match(script, /^nextest=\(cargo nextest run .*-p codesense --lib --retries 0\)$/m);
+  assert.match(runs[0], /--run-ignored only/);
+  assert.match(runs[0], /test\(~credential_store::secret_service_tests::\)/);
+  // The helper tests the others start as child processes pass alone, so they are left out.
+  assert.match(runs[0], /- test\(~::reader_process\) - test\(~::no_bus_child\)/);
+  assert.match(runs[1], /test\(~credential_store::tests::linux_\)/);
+  // The whole of pty-core, session-server and the app's unit tests run here, unfiltered, after
+  // the sidecar build makes the emulator worker the pty tests run, each run's JUnit report kept.
+  const names = job.steps.map((step) => step.name);
+  const sidecars = names.indexOf("Build sidecars");
+  const suites = names.indexOf("Test pty-core, session-server and the app");
+  assert.equal(job.steps[sidecars].run, "bash scripts/build-session-server.sh");
+  assert.ok(sidecars >= 0 && suites >= 0 && sidecars < suites);
+  const sidecarScript = fs.readFileSync(
+    new URL("build-session-server.sh", import.meta.url),
+    "utf8",
+  );
+  assert.match(sidecarScript, /^bash "\$SCRIPT_DIR\/build-emulator\.sh"/m);
+  // The compile builds each suite with the arguments its run takes, from the one list.
+  const compileStep = job.steps.find((step) => step.name === "Compile the tests");
+  const suitesStep = job.steps[suites];
+  assert.equal(
+    compileStep.env.SUITES,
+    "pty-core -p codesense-pty-core\n" +
+      "session-server -p codesense-session-server\n" +
+      "app -p codesense --lib",
+  );
+  // Three suites and no blank line: `<<<` adds a newline, and a blank line would be a fourth
+  // pass over the whole workspace.
+  const suiteLines = compileStep.env.SUITES.split("\n");
+  assert.equal(suiteLines.length, 3);
+  assert.ok(suiteLines.every((line) => line.trim()));
+  assert.equal(suitesStep.env.SUITES, compileStep.env.SUITES);
+  const eachSuite =
+    /while read -r \w+ packages; do\n\s+\[\[ -n \$packages \]\] \|\| continue\n\s+read -r -a args <<< "\$packages"\n/;
+  assert.match(compileStep.run, eachSuite);
+  assert.match(suitesStep.run, eachSuite);
+  assert.ok(
+    compileStep.run.includes('cargo nextest run --profile ci --locked "${args[@]}" --no-run'),
+  );
+  assert.ok(compileStep.run.trimEnd().endsWith('done <<< "$SUITES"'));
+  assert.ok(
+    suitesStep.run.includes('cargo nextest run --profile ci --locked "${args[@]}" || status=1'),
+  );
+  assert.ok(suitesStep.run.includes('done <<< "$SUITES"'));
+  // A report left before the loop is never kept as a suite's.
+  assert.ok(
+    suitesStep.run.indexOf("rm -f target/nextest/ci/junit.xml") <
+      suitesStep.run.indexOf("while read"),
+  );
+  assert.ok(
+    suitesStep.run.includes('mv target/nextest/ci/junit.xml "$RUNNER_TEMP/junit/$part.xml"'),
+  );
+  // The tests that compile only on a beta channel run on a build of their own: the updater's
+  // module and the three outside it, by exact name.
+  const beta = job.steps.find((step) => step.name === "Test the updater on the beta channel");
+  assert.ok(names.indexOf(beta.name) > suites);
+  assert.equal(beta.env.CODESENSE_CHANNEL, "beta");
+  assert.equal(
+    beta.env.BETA_TESTS,
+    "test(/^license::/)" +
+      " | test(=commands::dashboard_launch::tests::license_headless_runs_count_a_starting_run_until_it_is_released)" +
+      " | test(=mcp::feedback_tool::tests::in_the_beta_the_tool_refuses_and_says_why)" +
+      " | test(=dashboard_publish::client::tests::a_beta_channel_uses_only_its_share_host)",
+  );
+  assert.equal(beta.env.CODESENSE_DASH_HOST, "https://share.codesense.ai");
+  assert.match(beta.run, /CODESENSE_RELEASED_AT=/);
+  assert.ok(
+    beta.run.includes(
+      "cargo nextest run --profile ci --locked -p codesense --lib --features dashboard-publish \\\n" +
+        '  -E "$BETA_TESTS"',
+    ),
+  );
+  assert.ok(beta.run.includes('mv target/nextest/ci/junit.xml "$RUNNER_TEMP/junit/license.xml"'));
+  // Only the beta step and PDF export's display-only renderer step filter the app's tests.
+  const pdf = job.steps.find(
+    (step) => step.name === "Test PDF export's renderer on a virtual display",
+  );
+  assert.ok(
+    job.steps.every((step) => !/ -E /.test(step.run ?? "") || step === beta || step === pdf),
+  );
+  assert.equal(job["timeout-minutes"], 60);
+  assert.ok(workflow.jobs["flaky-issues"].needs.includes("rust-linux-app"));
+});
+
+// PDF export's renderer tests are ignored without a display: this job runs them, and only them,
+// on a virtual display with a German locale generated for the translation test. They live in the
+// platform crate behind its pdf feature, which this step builds itself.
+test("rust.yml's Linux app job runs PDF export's renderer tests under xvfb", () => {
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  const job = workflow.jobs["rust-linux-app"];
+  const pdf = job.steps.find(
+    (step) => step.name === "Test PDF export's renderer on a virtual display",
+  );
+  assert.ok(pdf, "the PDF renderer step");
+  assert.deepEqual(pdf.env, { WEBKIT_DISABLE_DMABUF_RENDERER: "1" });
+  assert.equal(
+    pdf.run,
+    "sudo locale-gen de_DE.UTF-8\n" +
+      'mkdir -p "$RUNNER_TEMP/junit"\n' +
+      "rm -f target/nextest/ci/junit.xml\n" +
+      "status=0\n" +
+      "xvfb-run -a cargo nextest run --profile ci --locked -p codesense-platform --features pdf --lib \\\n" +
+      "  --retries 0 --run-ignored all -E 'test(/^pdf::/)' || status=1\n" +
+      'if [[ -f target/nextest/ci/junit.xml ]]; then mv target/nextest/ci/junit.xml "$RUNNER_TEMP/junit/pdf.xml"; fi\n' +
+      'exit "$status"\n',
+  );
+  // A report left by the Secret Service runs is never kept as pdf.xml.
+  assert.ok(pdf.run.indexOf("rm -f target/nextest/ci/junit.xml") < pdf.run.indexOf("xvfb-run"));
+  // The report sits where the uploaded folder holds it, out of reach of the next step's rm -f.
+  const upload = job.steps.find((step) => step.name === "Upload JUnit report");
+  assert.equal(upload.if, "always()");
+  assert.equal(upload.with.path, "${{ runner.temp }}/junit/");
+});
+
+// The Linux compile check also builds the platform crate's PDF renderers and their tests, which
+// only the app enables, so a change to them fails before the merge.
+test("rust.yml's Linux check compiles the platform crate with pdf", () => {
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  const steps = workflow.jobs["rust-check-linux"].steps;
+  const pdf = steps.find((step) => step.name === "Check the platform crate's PDF renderers");
+  assert.ok(pdf, "the PDF renderers' check step");
+  assert.equal(pdf.run, "cargo check --locked -p codesense-platform --features pdf --lib --tests");
+  const libraries = steps.findIndex((step) => step.name === "Install system libraries");
+  assert.ok(libraries >= 0, "the system libraries step");
+  assert.ok(steps.indexOf(pdf) > libraries);
 });
 
 // A push diffs before..after; a new branch tip (before all zeros) tests everything.
@@ -389,7 +653,7 @@ test("rust.yml's changes job tests a push with no before, and diffs one that has
     });
     return { status: result.status, output: fs.readFileSync(output, "utf8") };
   };
-  assert.deepEqual(run("0".repeat(40)), { status: 0, output: "rust=true\n" });
+  assert.deepEqual(run("0".repeat(40)), { status: 0, output: "rust=true\nmacos=true\n" });
   // The failed diff fails the changes job, and the Rust jobs then run.
   assert.notEqual(run("a".repeat(40)).status, 0);
 });
@@ -434,9 +698,9 @@ test("only rust.yml's test jobs may skip a merge group on the changes job's outp
     );
 });
 
-// Only rust.yml's macOS build and result jobs may skip merge groups, with exactly this term after
-// the path filter.
-test("only rust.yml's macOS jobs may skip merge groups, and still run on push and schedule", () => {
+// Only rust.yml's non-required jobs (the macOS build and result, the Windows check and the Linux
+// app job) may skip merge groups, with exactly this term after the path filter.
+test("only rust.yml's non-required jobs may skip merge groups, and still run on push and schedule", () => {
   const filtered = (condition, file = "rust.yml", job = "rust-macos") =>
     workflowPolicy(
       queued().replace(
@@ -446,9 +710,10 @@ test("only rust.yml's macOS jobs may skip merge groups, and still run on push an
       ),
       file,
     ).join("\n");
-  for (const job of ["rust-macos-build", "rust-macos"])
+  for (const job of ["rust-macos-build", "rust-macos", "rust-check-windows", "rust-linux-app"])
     for (const condition of [
       `\${{ ${pathFilter} && ${offMergeGroups} && (${macosOptIn}) }}`,
+      `\${{ ${pathFilter} && ${offMergeGroups} && (${windowsOptIn}) }}`,
       `\${{ ${pathFilter} && ${offMergeGroups} }}`,
     ])
       assert.equal(filtered(condition, "rust.yml", job), "", `${job}: ${condition}`);
@@ -460,6 +725,16 @@ test("only rust.yml's macOS jobs may skip merge groups, and still run on push an
       "rust-macos-test",
     ],
     [`\${{ ${pathFilter} && ${offMergeGroups} && (${macosOptIn}) }}`, "ci.yml", "rust-macos"],
+    [
+      `\${{ ${pathFilter} && ${offMergeGroups} && (${windowsOptIn}) }}`,
+      "ci.yml",
+      "rust-check-windows",
+    ],
+    [
+      `\${{ ${pathFilter} && github.event_name == 'pull_request' && (${windowsOptIn}) }}`,
+      "rust.yml",
+      "rust-check-windows",
+    ],
     [`\${{ ${pathFilter} && ${offMergeGroups} && ${offMergeGroups} }}`, "rust.yml", "rust-macos"],
     [`\${{ ${pathFilter} && (${macosOptIn}) && ${offMergeGroups} }}`, "rust.yml", "rust-macos"],
     [`\${{ ${offMergeGroups} && ${pathFilter} && (${macosOptIn}) }}`, "rust.yml", "rust-macos"],
@@ -516,7 +791,319 @@ test("only rust.yml's macOS result job may run on a cancelled run", () => {
     );
 });
 
-test("pull-requests read is limited to the DCO job", () => {
+// The macOS filter's term may only follow the path filter's, in the macOS build and result jobs.
+test("only rust.yml's macOS jobs may skip a change only Windows or Linux compiles", () => {
+  const filtered = (condition, job = "rust-macos-build", file = "rust.yml") =>
+    workflowPolicy(
+      queued().replace(
+        "  static:\n",
+        "  changes:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 5\n    permissions:\n      contents: read\n" +
+          `    steps:\n      - run: "true"\n  ${job}:\n    needs: changes\n    if: ${condition}\n`,
+      ),
+      file,
+    ).join("\n");
+  for (const [job, filter] of [
+    ["rust-macos-build", pathFilter],
+    ["rust-macos", resultFilter],
+  ])
+    for (const condition of [
+      `\${{ ${filter} && ${macosOnly} && ${offMergeGroups} && (${macosOptIn}) }}`,
+      `\${{ ${filter} && ${macosOnly} }}`,
+    ])
+      assert.equal(filtered(condition, job), "", `${job}: ${condition}`);
+  for (const job of ["rust-linux", "rust-check-linux", "rust-guards", "rust-macos-test"])
+    assert.match(filtered(`\${{ ${pathFilter} && ${macosOnly} }}`, job), /if must begin with/, job);
+  for (const condition of [
+    `\${{ ${pathFilter} && ${offMergeGroups} && ${macosOnly} && (${macosOptIn}) }}`,
+    `\${{ ${pathFilter} && ${offMergeGroups} && (${macosOptIn}) && ${macosOnly} }}`,
+    `\${{ ${macosOnly} && ${pathFilter} && ${offMergeGroups} && (${macosOptIn}) }}`,
+    `\${{ !cancelled() && ${macosOnly} && needs.changes.outputs.rust != 'false' }}`,
+    `\${{ ${pathFilter} && ${macosOnly} && ${macosOnly} }}`,
+    `\${{ ${pathFilter} && needs.changes.outputs.macos == 'true' }}`,
+  ])
+    assert.match(filtered(condition), /if must begin with/, condition);
+  assert.match(
+    filtered(`\${{ ${pathFilter} && ${macosOnly} }}`, "rust-macos-build", "ci.yml"),
+    /if must begin with/,
+  );
+});
+
+// The shards may skip a superseded build, with exactly that condition and nothing else.
+test("only rust.yml's macOS shards may skip a build that main moved past", () => {
+  const filtered = (
+    condition,
+    job = "rust-macos-test",
+    needs = "rust-macos-build",
+    file = "rust.yml",
+  ) =>
+    workflowPolicy(
+      queued().replace(
+        "  static:\n",
+        "  rust-macos-build:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 5\n    permissions:\n      contents: read\n" +
+          `    steps:\n      - run: "true"\n  ${job}:\n    needs: ${needs}\n    if: ${condition}\n`,
+      ),
+      file,
+    ).join("\n");
+  assert.equal(filtered(shardsNotSuperseded), "");
+  assert.equal(filtered(`\${{ ${shardsNotSuperseded} }}`), "");
+  for (const [condition, job, needs, file] of [
+    [shardsNotSuperseded, "rust-macos", "rust-macos-build", "rust.yml"],
+    [shardsNotSuperseded, "rust-linux", "rust-macos-build", "rust.yml"],
+    [shardsNotSuperseded, "rust-macos-test", "[]", "rust.yml"],
+    [shardsNotSuperseded, "rust-macos-test", "rust-macos-build", "ci.yml"],
+    [`${shardsNotSuperseded} && true`, "rust-macos-test", "rust-macos-build", "rust.yml"],
+    [`${shardsNotSuperseded} || true`, "rust-macos-test", "rust-macos-build", "rust.yml"],
+    [
+      "needs.rust-macos-build.outputs.superseded == 'false'",
+      "rust-macos-test",
+      "rust-macos-build",
+      "rust.yml",
+    ],
+  ])
+    assert.match(
+      filtered(condition, job, needs, file),
+      /if must begin with/,
+      `${file} ${job}: ${condition}`,
+    );
+});
+
+// The merge queue runs the required Rust checks and nothing else.
+test("a merge group runs only rust.yml's required jobs", () => {
+  const jobs = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8")).jobs;
+  const runs = (name) => {
+    const terms = topLevelConjuncts(String(jobs[name].if ?? ""));
+    if (
+      terms.some((t) => t === offMergeGroups || /^github\.event_name == '(?!merge_group')/.test(t))
+    )
+      return false;
+    return [jobs[name].needs ?? []].flat().every(runs);
+  };
+  assert.deepEqual(Object.keys(jobs).filter(runs).sort(), [
+    "changes",
+    "rust-check-linux",
+    "rust-guards",
+    "rust-linux",
+  ]);
+});
+
+// rust-macos reports a push run whose macOS jobs were cancelled as superseded only when main's
+// head has really moved on; a timeout or cancel at the head, a re-run, a failed lookup or a
+// real failure stays red.
+test("rust.yml's macOS result tells a replaced main run from a failed one", (t) => {
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  const script = workflow.jobs["rust-macos"].steps.at(-1).run;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rust-macos-result-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, "step.sh"), script);
+  // A fake git whose ls-remote prints main's head, or fails when HEAD_OF_MAIN is unset.
+  fs.writeFileSync(
+    path.join(dir, "git"),
+    '#!/bin/sh\n[ -n "$HEAD_OF_MAIN" ] || exit 2\nprintf "%s\\trefs/heads/main\\n" "$HEAD_OF_MAIN"\n',
+    { mode: 0o755 },
+  );
+  const run = (env) =>
+    spawnSync("bash", ["-e", path.join(dir, "step.sh")], {
+      env: {
+        PATH: `${dir}:${process.env.PATH}`,
+        GITHUB_STEP_SUMMARY: path.join(dir, "summary.md"),
+        EVENT: "push",
+        ATTEMPT: "1",
+        SHA: "aaa",
+        REPO_URL: "https://example.invalid/repo",
+        BUILD: "cancelled",
+        TESTS: "skipped",
+        SUPERSEDED: "",
+        ...env,
+      },
+    }).status;
+  assert.equal(run({ HEAD_OF_MAIN: "bbb" }), 0, "a newer push replaced it");
+  assert.equal(run({ HEAD_OF_MAIN: "bbb", BUILD: "success", TESTS: "cancelled" }), 0);
+  assert.notEqual(run({ HEAD_OF_MAIN: "aaa" }), 0, "cancelled or timed out at main's head");
+  assert.notEqual(run({ HEAD_OF_MAIN: "" }), 0, "main's head unknown");
+  assert.notEqual(run({ HEAD_OF_MAIN: "bbb", ATTEMPT: "2" }), 0, "a re-run");
+  assert.notEqual(run({ HEAD_OF_MAIN: "bbb", EVENT: "schedule" }), 0, "the nightly");
+  assert.notEqual(run({ HEAD_OF_MAIN: "bbb", BUILD: "success", TESTS: "failure" }), 0);
+  assert.equal(run({ HEAD_OF_MAIN: "aaa", BUILD: "success", TESTS: "success" }), 0);
+  assert.equal(run({ HEAD_OF_MAIN: "bbb", BUILD: "success", SUPERSEDED: "true" }), 0);
+});
+
+// A push to main that is no longer main's head when a macOS build part starts gives its runner
+// back: every later step skips, the shards skip, and rust-macos reports it as superseded.
+test("rust.yml's macOS build skips a push that main has moved past", (t) => {
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  const build = workflow.jobs["rust-macos-build"];
+  // A push to main also shares one group per part or shard with cancel-in-progress, so a newer
+  // push replaces a queued or running main macOS run; every other event gets a group per run.
+  for (const [job, key] of [
+    ["rust-macos-build", "part"],
+    ["rust-macos-test", "shard"],
+  ]) {
+    const kind = job.replace("rust-macos-", "");
+    assert.deepEqual(workflow.jobs[job].concurrency, {
+      group: `\${{ github.event_name == 'push' && github.run_attempt == 1 && format('rust-macos-main-${kind}-{0}', matrix.${key}) || format('rust-macos-${kind}-{0}-{1}', github.run_id, matrix.${key}) }}`,
+      "cancel-in-progress": "${{ github.event_name == 'push' && github.run_attempt == 1 }}",
+    });
+  }
+  // The workflow-level group stays per commit, so the Linux and required jobs are never cancelled.
+  assert.match(workflow.concurrency.group, /github\.event\.pull_request\.number \|\| github\.sha/);
+  assert.equal(build.outputs.superseded, "${{ steps.superseded.outputs.superseded }}");
+  const check = build.steps.findIndex((step) => step.id === "superseded");
+  assert.ok(build.steps[check - 1].uses.startsWith("actions/checkout@"));
+  // A re-run, asked for after main moved on, builds rather than report a superseded green.
+  assert.equal(build.steps[check].if, "github.event_name == 'push' && github.run_attempt == 1");
+  for (const step of build.steps.slice(check + 1))
+    assert.ok(topLevelConjuncts(String(step.if ?? "")).includes(notSuperseded), step.name);
+  assert.equal(workflow.jobs["rust-macos-test"].if, shardsNotSuperseded);
+
+  // The check, run against a scratch origin.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rust-superseded-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const git = (cwd, ...args) =>
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "commit.gpgsign=false",
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@example.com",
+        ...args,
+      ],
+      { cwd, encoding: "utf8" },
+    ).trim();
+  const work = path.join(dir, "work");
+  git(dir, "init", "-q", "--bare", "-b", "main", "origin.git");
+  git(dir, "clone", "-q", path.join(dir, "origin.git"), "work");
+  const commit = () => {
+    fs.appendFileSync(path.join(work, "a"), "x\n");
+    git(work, "add", ".");
+    git(work, "commit", "-qm", "a");
+    git(work, "push", "-q", "origin", "HEAD:main");
+    return git(work, "rev-parse", "HEAD");
+  };
+  const output = path.join(dir, "output");
+  const run = (sha) => {
+    fs.writeFileSync(output, "");
+    const result = spawnSync(
+      "bash",
+      ["--noprofile", "--norc", "-eo", "pipefail", "-c", build.steps[check].run],
+      {
+        cwd: work,
+        encoding: "utf8",
+        env: { ...process.env, SHA: sha, GITHUB_OUTPUT: output },
+      },
+    );
+    return { status: result.status, output: fs.readFileSync(output, "utf8") };
+  };
+  const first = commit();
+  assert.deepEqual(run(first), { status: 0, output: "" });
+  commit();
+  assert.deepEqual(run(first), { status: 0, output: "superseded=true\n" });
+  // A failed lookup builds.
+  git(work, "remote", "set-url", "origin", path.join(dir, "missing.git"));
+  assert.deepEqual(run(first), { status: 0, output: "" });
+});
+
+test("rust-macos reports a superseded build as success, and anything else as before", (t) => {
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  const step = workflow.jobs["rust-macos"].steps.find(
+    (s) => s.name === "Check the macOS build and tests",
+  );
+  assert.equal(step.env.SUPERSEDED, "${{ needs.rust-macos-build.outputs.superseded }}");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rust-macos-result-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const summary = path.join(dir, "summary");
+  const run = (BUILD, TESTS, SUPERSEDED) => {
+    fs.writeFileSync(summary, "");
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", step.run], {
+      encoding: "utf8",
+      env: { ...process.env, BUILD, TESTS, SUPERSEDED, GITHUB_STEP_SUMMARY: summary },
+    });
+    return [result.status, fs.readFileSync(summary, "utf8")];
+  };
+  const superseded = "Superseded by a newer push to main; the nightly covers this commit.\n";
+  assert.deepEqual(run("success", "skipped", "true"), [0, superseded]);
+  assert.deepEqual(run("success", "success", ""), [0, ""]);
+  assert.deepEqual(run("success", "failure", ""), [1, ""]);
+  assert.deepEqual(run("failure", "skipped", ""), [1, ""]);
+  assert.deepEqual(run("failure", "skipped", "true"), [1, ""]);
+  assert.deepEqual(run("cancelled", "skipped", "true"), [1, ""]);
+});
+
+// The macOS workspace build is cached: the nightly builds cold and saves target/ with the commit
+// it built; other runs restore it and date the checkout so only what changed since rebuilds.
+test("rust.yml caches the macOS workspace build from the nightly, dated by commit", () => {
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  const steps = workflow.jobs["rust-macos-build"].steps;
+  const index = (predicate, label) => {
+    const i = steps.findIndex(predicate);
+    assert.ok(i >= 0, label);
+    return i;
+  };
+  const named = (name) => index((step) => step.name === name, name);
+  const rustCache = index((step) => step.uses?.startsWith("Swatinem/rust-cache@"), "rust-cache");
+  const key = index((step) => step.id === "build-cache-key", "key");
+  const restore = index((step) => step.id === "build-cache", "restore");
+  const dates = index((step) => step.run === "bash scripts/build-cache-dates.sh restore", "dates");
+  const pin = index((step) => step.run === "bash scripts/build-cache-dates.sh pin", "pin");
+  const record = index((step) => step.run === "bash scripts/build-cache-dates.sh record", "record");
+  const save = index(
+    (step) => step.uses?.startsWith("actions/cache/save@") && step.with.path === "target",
+    "save",
+  );
+  const sidecar = named("Build session-server sidecar");
+  const gitAi = named("Fetch git-ai");
+  const docsData = named("Generate docs data");
+  const compile = index((step) => step.id === "compile", "compile");
+  const tracked = index((step) => step.id === "tracked", "tracked");
+  // Restored before the dependency cache, which runs only on a miss, and dated before any cargo
+  // command; the inputs pinned after every step that writes them; recorded right after the
+  // build, and saved once the tracked files are checked.
+  assert.ok(key < restore && restore < rustCache && rustCache < dates);
+  assert.equal(
+    steps[rustCache].if,
+    `steps.build-cache.outputs.cache-matched-key == '' && ${notSuperseded}`,
+  );
+  assert.ok(dates < gitAi && dates < sidecar && dates < docsData);
+  assert.ok(gitAi < pin && sidecar < pin && docsData < pin && pin < compile);
+  assert.equal(record, compile + 1);
+  assert.ok(tracked < save);
+  assert.ok(
+    steps.slice(0, dates).every((step) => !/(?:^|[\s;&|(])cargo(?=\s|$)/m.test(step.run ?? "")),
+  );
+  // Per part, per toolchain; the newest for this Cargo.lock first, then any.
+  assert.match(steps[key].run, /rust-macos-build-\$PART-/);
+  assert.match(steps[key].run, /rustc -vV/);
+  assert.deepEqual(steps[restore].with, {
+    path: "target",
+    key: "${{ steps.build-cache-key.outputs.manifests }}-${{ github.run_id }}",
+    "restore-keys":
+      "${{ steps.build-cache-key.outputs.manifests }}-\n${{ steps.build-cache-key.outputs.toolchain }}-\n",
+  });
+  // The nightly builds cold; only a restored cache is dated.
+  assert.equal(steps[restore].if, `github.event_name != 'schedule' && ${notSuperseded}`);
+  for (const i of [dates, pin])
+    assert.equal(
+      steps[i].if,
+      `steps.build-cache.outputs.cache-matched-key != '' && ${notSuperseded}`,
+    );
+  // The nightly on main records once its tests compiled, and saves, whatever the tests did, once
+  // the record and the tracked files check succeeded, under a key no other run has.
+  const nightly = "github.event_name == 'schedule' && github.ref == 'refs/heads/main'";
+  assert.equal(steps[record].id, "record");
+  assert.equal(steps[record].if, `${nightly} && ${notSuperseded}`);
+  assert.equal(
+    steps[save].if,
+    `${nightly} && !cancelled() && steps.record.outcome == 'success' && steps.tracked.outcome == 'success' && ${notSuperseded}`,
+  );
+  assert.equal(
+    steps[save].with.key,
+    "${{ steps.build-cache-key.outputs.manifests }}-${{ github.run_id }}-${{ github.run_attempt }}",
+  );
+});
+
+test("pull-requests read is limited to the DCO job and the exports guard job", () => {
   const dco = good
     .replace("  static:\n", "  dco:\n")
     .replace("      contents: read", "      contents: read\n      pull-requests: read");
@@ -531,6 +1118,16 @@ test("pull-requests read is limited to the DCO job", () => {
       "\n",
     ),
     /permissions must grant exactly/,
+  );
+  const guard = dco.replace("  dco:\n", "  guard:\n");
+  assert.deepEqual(
+    workflowPolicy(guard, "exports-guard.yml").filter((e) => e.includes("permissions")),
+    [],
+  );
+  assert.match(workflowPolicy(guard, "ci.yml").join("\n"), /permissions must grant exactly/);
+  assert.match(
+    workflowPolicy(guard.replace("  guard:\n", "  strict-pins:\n"), "exports-guard.yml").join("\n"),
+    /strict-pins: permissions must grant exactly contents: read/,
   );
 });
 
@@ -574,6 +1171,23 @@ for (const [name, fixture, error] of [
     /GitHub-hosted/,
   ],
   ["runner expression", good.replace("ubuntu-24.04", "${{ vars.RUNNER }}"), /GitHub-hosted/],
+  ...[
+    ["a self-hosted matrix entry", "include:\n          - runner: self-hosted"],
+    ["an unknown matrix label", "include:\n          - runner: ubuntu-build"],
+    ["a matrix entry without a runner", "include:\n          - arch: arm64"],
+    ["an empty matrix include", "include: []"],
+    [
+      "a matrix base axis",
+      "runner: [self-hosted]\n        include:\n          - runner: ubuntu-24.04",
+    ],
+  ].map(([name, matrix]) => [
+    name,
+    good.replace(
+      "runs-on: ubuntu-24.04",
+      `runs-on: \${{ matrix.runner }}\n    strategy:\n      matrix:\n        ${matrix}`,
+    ),
+    /GitHub-hosted/,
+  ]),
   ["unpinned container", good + "    container: ubuntu:24.04\n", /container image/],
   [
     "unpinned service",
@@ -923,7 +1537,7 @@ test("Rust jobs preserve package coverage for nextest and doctests and always up
   const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
   const packages = (command) => [...command.matchAll(/-p ([a-z-]+)/g)].map((m) => m[1]).sort();
   // Linux runs only the crates that pass there today; the rest join once fixed.
-  const portable = ["codesense-host-proto", "codesense-fs-core"];
+  const portable = ["codesense-platform", "codesense-host-proto", "codesense-fs-core"];
   // Doctests run after a failed step, but only once the test build ran and succeeded.
   const afterCompile = "(success() || failure()) && steps.compile.outcome == 'success'";
   const doctests = (steps, condition = afterCompile) => {
@@ -940,7 +1554,7 @@ test("Rust jobs preserve package coverage for nextest and doctests and always up
   };
 
   const linux = workflow.jobs["rust-linux"];
-  assert.deepEqual(packages(linux.env.RUST_PACKAGES), [...portable].sort());
+  assert.deepEqual(packages(linux.env.RUST_PACKAGES), [...portable, "codesense-bridge"].sort());
   const runs = linux.steps.filter((step) => step.run?.includes("cargo nextest run"));
   assert.equal(runs.length, 2, "compile and run both use nextest");
   for (const step of runs) {
@@ -953,6 +1567,16 @@ test("Rust jobs preserve package coverage for nextest and doctests and always up
   doctests(linux.steps);
   assert.ok(linux.steps.some((step) => step.run?.includes("--tool cargo-nextest")));
   junitUpload(linux.steps);
+  // The agent spawn's OS rules run on Linux too. A filter that matches no test passes in
+  // libtest, so the step fails unless one ran.
+  const spawnRules = linux.steps.find((step) =>
+    step.run?.startsWith(
+      "cargo test --locked -p codesense-pty-core --lib spawn::tests::os_rules:: ",
+    ),
+  );
+  const rulesRan = new RegExp(/^grep -Eq '(.+)' /m.exec(spawnRules.run)[1], "m");
+  assert.match("test result: ok. 4 passed; 0 failed; 0 ignored", rulesRan);
+  assert.doesNotMatch("test result: ok. 0 passed; 0 failed; 0 ignored", rulesRan);
 
   // macOS compiles once, in two parts on two runners, into two nextest archives; the shards run
   // both and compile nothing.
@@ -993,7 +1617,7 @@ test("Rust jobs preserve package coverage for nextest and doctests and always up
   const docsData = build.steps.findIndex((step) => step.name === "Generate docs data");
   assert.ok(docsData >= 0 && docsData < build.steps.indexOf(compile));
   // The rest part builds the libraries the doctests link.
-  doctests(build.steps, `${afterCompile} && matrix.part == 'rest'`);
+  doctests(build.steps, `${afterCompile} && matrix.part == 'rest' && ${notSuperseded}`);
   assert.ok(build.steps.some((step) => step.run?.includes("--tool cargo-nextest")));
 
   const shards = workflow.jobs["rust-macos-test"];
@@ -1055,6 +1679,99 @@ test("rust.yml generates every docs file build.rs writes before the first cargo 
   });
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(fs.readFileSync(ran, "utf8").trim().split("\n"), calls);
+});
+
+// The nightly deletes its older macOS build caches: only that job may write actions, and only on
+// the nightly on main in the base repository.
+const cachePrune = good
+  .replace("on: [pull_request, workflow_dispatch]", "on: [pull_request, merge_group, schedule]")
+  .replace(
+    "  static:\n",
+    "  rust-macos-cache-prune:\n    if: ${{ !cancelled() && github.event_name == 'schedule' && github.ref == 'refs/heads/main' && !github.event.repository.fork }}\n",
+  )
+  .replace("      contents: read", "      actions: write");
+test("actions write is limited to rust.yml's nightly cache prune", () => {
+  assert.deepEqual(workflowPolicy(cachePrune, "rust.yml"), []);
+  for (const file of ["ci.yml", "test-build.yml", ""])
+    assert.match(workflowPolicy(cachePrune, file).join("\n"), /permissions must grant exactly/);
+  for (const [from, to, error] of [
+    ["  rust-macos-cache-prune:", "  rust-macos-build:", /permissions must grant exactly/],
+    [
+      "      actions: write",
+      "      actions: write\n      contents: read",
+      /permissions must grant exactly/,
+    ],
+    ["github.event_name == 'schedule' && ", "", /if must require/],
+    ["github.ref == 'refs/heads/main' && ", "", /if must require github\.ref/],
+    [" && !github.event.repository.fork", "", /if must require !github\.event\.repository\.fork/],
+  ])
+    assert.match(
+      workflowPolicy(cachePrune.replace(from, to), "rust.yml").join("\n"),
+      error,
+      `${from} -> ${to}`,
+    );
+  // The macOS build itself keeps contents: read.
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  assert.deepEqual(workflow.jobs["rust-macos-build"].permissions, { contents: "read" });
+  const prune = workflow.jobs["rust-macos-cache-prune"];
+  assert.deepEqual(prune.permissions, { actions: "write" });
+  assert.equal(prune.needs, "rust-macos-build");
+  assert.equal(
+    prune.if,
+    "${{ !cancelled() && github.event_name == 'schedule' && github.ref == 'refs/heads/main' && !github.event.repository.fork }}",
+  );
+});
+
+// The prune step, run with a stand-in gh: the newest cache per part stays, every older one goes.
+test("the cache prune deletes all but the newest macOS build cache per part", (t) => {
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  const step = workflow.jobs["rust-macos-cache-prune"].steps[0];
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rust-cache-prune-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const bin = path.join(dir, "bin");
+  fs.mkdirSync(bin);
+  const listing = [
+    [11, "rust-macos-build-lib-macOS-ARM64-aaaa-1111-100-1", "2026-11-17T06:40:00Z"],
+    [12, "rust-macos-build-rest-macOS-ARM64-aaaa-1111-100-1", "2026-11-17T06:50:00Z"],
+    [21, "rust-macos-build-lib-macOS-ARM64-aaaa-2222-200-1", "2026-11-18T06:40:00Z"],
+    [22, "rust-macos-build-rest-macOS-ARM64-aaaa-2222-200-1", "2026-11-18T06:50:00Z"],
+    [31, "rust-macos-build-lib-macOS-ARM64-bbbb-2222-300-1", "2026-11-19T06:40:00Z"],
+  ]
+    .map((row) => row.join("\t"))
+    .join("\n");
+  fs.writeFileSync(path.join(dir, "listing"), `${listing}\n`);
+  // The listing comes back already through --jq; a delete is logged, and the one named by FAIL_ID
+  // fails with FAIL_STATUS.
+  fs.writeFileSync(
+    path.join(bin, "gh"),
+    `#!/bin/bash\nif [[ "$*" == *DELETE* ]]; then echo "\${@: -1}" >> "${dir}/deleted"; if [[ -n "$FAIL_ID" && "$*" == */$FAIL_ID ]]; then echo "gh: HTTP $FAIL_STATUS" >&2; exit 1; fi; else cat "${dir}/listing"; fi\n`,
+    { mode: 0o755 },
+  );
+  const prune = (failure = {}) => {
+    fs.rmSync(path.join(dir, "deleted"), { force: true });
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", step.run], {
+      cwd: dir,
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GH_REPO: "o/r", ...failure },
+    });
+    const deleted = fs.readFileSync(path.join(dir, "deleted"), "utf8").trim().split("\n").sort();
+    return { status: result.status, stdout: result.stdout, deleted };
+  };
+  const stale = ["11", "12", "21"].map((id) => `repos/o/r/actions/caches/${id}`);
+  const clean = prune();
+  assert.equal(clean.status, 0);
+  assert.deepEqual(clean.deleted, stale);
+  // A cache evicted between the listing and its delete is already gone: the prune goes on.
+  const evicted = prune({ FAIL_ID: "12", FAIL_STATUS: "404" });
+  assert.equal(evicted.status, 0);
+  assert.match(evicted.stdout, /::notice::cache 12 already gone/);
+  assert.deepEqual(evicted.deleted, stale);
+  // Any other failure, a lost permission or a server error, fails the step.
+  for (const status of ["403", "500"]) {
+    const failed = prune({ FAIL_ID: "12", FAIL_STATUS: status });
+    assert.notEqual(failed.status, 0, status);
+    assert.doesNotMatch(failed.stdout, /already gone/, status);
+  }
 });
 
 const flakyIssues = good
@@ -1119,11 +1836,16 @@ test("Rust test jobs list flaky tests after nextest and only flaky-issues writes
       "(success() || failure()) && steps.compile.outcome == 'success'",
       "node scripts/flaky-tests.mjs summary target/nextest/ci/junit.xml",
     ],
+    [
+      "rust-linux-app",
+      "(success() || failure()) && steps.compile.outcome == 'success'",
+      'for report in "$RUNNER_TEMP"/junit/*.xml; do node scripts/flaky-tests.mjs summary "$report"; done',
+    ],
   ]) {
     const job = workflow.jobs[name];
     assert.deepEqual(job.permissions, { contents: "read" });
     const steps = job.steps;
-    const test = steps.findIndex(
+    const test = steps.findLastIndex(
       (step) => step.run?.includes("cargo nextest run") && !step.run.includes("--no-run"),
     );
     const flaky = steps[test + 1];
@@ -1132,21 +1854,22 @@ test("Rust test jobs list flaky tests after nextest and only flaky-issues writes
   }
   // A red macOS build or shard on main lists its failed tests and run link in the job summary,
   // read-only.
-  for (const [name, report] of [
-    ["rust-macos-build", "target/nextest/ci/junit.xml"],
-    ["rust-macos-test", '"$RUNNER_TEMP/junit/$part.xml"'],
+  const redOnMain = "(failure() || cancelled()) && github.ref == 'refs/heads/main'";
+  for (const [name, report, condition] of [
+    ["rust-macos-build", "target/nextest/ci/junit.xml", `${redOnMain} && ${notSuperseded}`],
+    ["rust-macos-test", '"$RUNNER_TEMP/junit/$part.xml"', redOnMain],
   ]) {
     const red = workflow.jobs[name].steps.find(
       (step) => step.name === "Summarize a red run on main",
     );
-    assert.equal(red.if, "(failure() || cancelled()) && github.ref == 'refs/heads/main'", name);
+    assert.equal(red.if, condition, name);
     assert.ok(
       red.run.includes(`node scripts/flaky-tests.mjs failed ${report} --run-url "$RUN_URL"`),
       name,
     );
   }
   const issues = workflow.jobs["flaky-issues"];
-  assert.deepEqual([...issues.needs].sort(), ["rust-linux", "rust-macos"]);
+  assert.deepEqual([...issues.needs].sort(), ["rust-linux", "rust-linux-app", "rust-macos"]);
   assert.deepEqual(issues.concurrency, { group: "flaky-issues", "cancel-in-progress": false });
   assert.ok(issues.steps.every((step) => !/\bcargo\b/.test(step.run ?? "")));
   const download = issues.steps.find((step) => step.uses?.startsWith("actions/download-artifact@"));
@@ -1161,6 +1884,7 @@ test("Rust test jobs list flaky tests after nextest and only flaky-issues writes
     ["rust-macos-build", 0],
     ["rust-macos-test", 1],
     ["rust-linux", 1],
+    ["rust-linux-app", 1],
   ]) {
     const uploads = workflow.jobs[name].steps.filter((step) =>
       step.uses?.startsWith("actions/upload-artifact@"),
@@ -1221,4 +1945,742 @@ test("the open-issue check covers every quarantine ledger file", (t) => {
   result = run();
   assert.equal(result.status, 1);
   assert.match(result.stderr, /issues\/2 \(CLOSED, tests\/quarantine\.extra\.json\)/);
+});
+
+// The test build's `platform` input picks the job: `all` runs every job, a platform only its own.
+const testBuildFile = "test-build.yml";
+const testBuild = () => fs.readFileSync(path.join(directory, testBuildFile), "utf8");
+
+test("test build: the platform input and the jobs it gates", () => {
+  const workflow = parse(testBuild());
+  assert.deepEqual(workflow.on.workflow_dispatch.inputs.platform, {
+    description: "Which app to build",
+    type: "choice",
+    options: ["all", "macos", "windows", "linux"],
+    default: "all",
+  });
+  assert.equal(
+    workflow.jobs["macos-app"].if,
+    "inputs.platform == 'all' || inputs.platform == 'macos'",
+  );
+  assert.equal(
+    workflow.jobs["linux-app"].if,
+    "inputs.platform == 'all' || inputs.platform == 'linux'",
+  );
+  const linux = workflow.jobs["linux-app"];
+  assert.equal(linux["runs-on"], "${{ matrix.runner }}");
+  assert.deepEqual(linux.strategy.matrix.include, [
+    { arch: "x86_64", runner: "ubuntu-22.04", bundles: "deb,rpm,appimage" },
+    { arch: "arm64", runner: "ubuntu-24.04-arm", bundles: "deb,rpm,appimage" },
+  ]);
+  assert.equal(linux.strategy["fail-fast"], false);
+});
+
+test("test build: the Linux job uploads the deb, rpm and AppImage, each one file kept 7 days", () => {
+  const uploads = parse(testBuild()).jobs["linux-app"].steps.filter((step) =>
+    step.uses?.startsWith("actions/upload-artifact@"),
+  );
+  assert.deepEqual(
+    uploads.map((step) => step.with.path),
+    [
+      "target/release/bundle/deb/*.deb",
+      "target/release/bundle/rpm/*.rpm",
+      "target/release/bundle/appimage/*.AppImage",
+    ],
+  );
+  // Every leg builds all three formats, so no upload is conditional.
+  assert.deepEqual(
+    uploads.map((step) => step.if),
+    [undefined, undefined, undefined],
+  );
+  for (const { with: inputs } of uploads) {
+    assert.equal(inputs.archive, false);
+    assert.equal(inputs["retention-days"], 7);
+    assert.equal(inputs["if-no-files-found"], "error");
+  }
+});
+
+test("test build: each package installs in its own clean container on its build's runner", () => {
+  const { jobs } = parse(testBuild());
+  const install = jobs["linux-install"];
+  assert.equal(install.if, "inputs.platform == 'all' || inputs.platform == 'linux'");
+  assert.equal(install.needs, "linux-app");
+  assert.equal(install["runs-on"], "${{ matrix.runner }}");
+  assert.equal(install.strategy["fail-fast"], false);
+  assert.deepEqual(install.strategy.matrix.include, [
+    {
+      arch: "x86_64",
+      runner: "ubuntu-22.04",
+      type: "deb",
+      image: "ubuntu:22.04",
+      package: "*_amd64.deb",
+    },
+    {
+      arch: "x86_64",
+      runner: "ubuntu-22.04",
+      type: "deb",
+      image: "ubuntu:24.04",
+      package: "*_amd64.deb",
+    },
+    {
+      arch: "x86_64",
+      runner: "ubuntu-22.04",
+      type: "rpm",
+      image: "fedora:44",
+      package: "*.x86_64.rpm",
+    },
+    {
+      arch: "arm64",
+      runner: "ubuntu-24.04-arm",
+      type: "deb",
+      image: "ubuntu:24.04",
+      package: "*_arm64.deb",
+    },
+    {
+      arch: "arm64",
+      runner: "ubuntu-24.04-arm",
+      type: "rpm",
+      image: "fedora:44",
+      package: "*.aarch64.rpm",
+    },
+  ]);
+  // Each leg runs on its arch's build runner.
+  const builds = Object.fromEntries(
+    jobs["linux-app"].strategy.matrix.include.map(({ arch, runner }) => [arch, runner]),
+  );
+  for (const { arch, runner } of install.strategy.matrix.include)
+    assert.equal(runner, builds[arch]);
+  // linux-app uploads each package as one unzipped file, which download-artifact reads from v8.
+  const download = install.steps.find((step) =>
+    step.uses?.startsWith("actions/download-artifact@"),
+  );
+  assert.equal(download.uses, "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333");
+  assert.equal(download.with.pattern, "${{ matrix.package }}");
+  const step = (name) => install.steps.find((s) => s.name === name);
+  const run = step("Install the package in a clean container");
+  assert.match(run.run, /smoke-linux\.sh install "\$TYPE" "\$IMAGE"/);
+  assert.equal(run.if, undefined);
+  // The step timeout is a backstop inside the job's.
+  assert.equal(run["timeout-minutes"], 30);
+  assert.ok(install["timeout-minutes"] > run["timeout-minutes"]);
+  assert.equal(run["env"]["SMOKE_APT_CACHE"], "${{ runner.temp }}/apt-archives");
+  const upload = step("Upload the listing");
+  assert.equal(upload.with.path, "${{ runner.temp }}/smoke/${{ matrix.type }}.list");
+  assert.equal(upload.with["if-no-files-found"], "error");
+});
+
+test("test build: a deb leg restores its apt archives, and saves them even after a failure", () => {
+  const steps = parse(testBuild()).jobs["linux-install"].steps;
+  const names = steps.map((step) => step.name);
+  const step = (name) => steps.find((s) => s.name === name);
+  const key = step("Key the apt archive cache");
+  const restore = step("Restore the apt archives");
+  const hand = step("Hand the apt archives to the runner");
+  const save = step("Save the apt archives");
+  assert.equal(key.if, "matrix.type == 'deb'");
+  assert.match(
+    key.run,
+    /smoke-linux\.sh cache-key "\$IMAGE" "\$RUNNER_TEMP\/packages" "\$\(date -u \+%G-W%V\)"/,
+  );
+  assert.equal(restore.if, "matrix.type == 'deb'");
+  assert.match(restore.uses, /^actions\/cache\/restore@[0-9a-f]{40}$/);
+  assert.equal(restore.with.path, "${{ runner.temp }}/apt-archives");
+  assert.equal(restore.with.key, "${{ steps.apt-key.outputs.key }}");
+  assert.equal(restore.with["restore-keys"], "${{ steps.apt-key.outputs.restore }}");
+  assert.match(save.uses, /^actions\/cache\/save@[0-9a-f]{40}$/);
+  assert.equal(save.with.path, restore.with.path);
+  // A failed or timed-out install saves under a key of its own, which the week's exact key never
+  // hits, so the next run still restores it by prefix, finishes and saves the full set.
+  assert.equal(
+    save.with.key,
+    "${{ steps.install.outcome == 'success' && steps.apt-key.outputs.key || format('{0}-partial-{1}-{2}', steps.apt-key.outputs.key, github.run_id, github.run_attempt) }}",
+  );
+  assert.equal(step("Install the package in a clean container").id, "install");
+  const onMiss =
+    "always() && matrix.type == 'deb' && steps.apt-key.outcome == 'success' && steps.apt-restore.outputs.cache-hit != 'true'";
+  assert.equal(hand.if, onMiss);
+  assert.equal(save.if, onMiss);
+  // The runner owns the archives, with nothing it cannot read, before the cache saves them.
+  assert.match(hand.run, /sudo chown -R/);
+  assert.match(hand.run, /rm -rf "\$SMOKE_APT_CACHE\/partial" "\$SMOKE_APT_CACHE\/lock"/);
+  const order = [key, restore, step("Install the package in a clean container"), hand, save].map(
+    (s) => names.indexOf(s.name),
+  );
+  assert.deepEqual(
+    order,
+    order.toSorted((a, b) => a - b),
+  );
+});
+
+test("test build: each arch's deb listings are compared with its rpm's after the installs", () => {
+  const job = parse(testBuild()).jobs["linux-resources"];
+  assert.equal(job.if, "inputs.platform == 'all' || inputs.platform == 'linux'");
+  assert.equal(job.needs, "linux-install");
+  const download = job.steps.find((step) => step.uses?.startsWith("actions/download-artifact@"));
+  assert.equal(download.with.pattern, "linux-install-*");
+  // Each listing keeps its own directory: every leg's file is deb.list or rpm.list.
+  assert.equal(download.with["merge-multiple"], undefined);
+  const compare = job.steps.find((step) => /same-resources/.test(step.run ?? ""));
+  // Every install leg's listing, by name, and a count that catches a leg the matrix gains.
+  assert.match(compare.run, /^\s*compare x86_64 ubuntu-22\.04 ubuntu-24\.04$/m);
+  assert.match(compare.run, /^\s*compare arm64 ubuntu-24\.04$/m);
+  assert.match(compare.run, /\[\[ \$found -eq 5 \]\]/);
+  const legs = parse(testBuild()).jobs["linux-install"].strategy.matrix.include;
+  assert.equal(legs.length, 5);
+});
+
+test("test build: the AppImage launches beside the installs, on the x86_64 build's runner", () => {
+  const { jobs } = parse(testBuild());
+  const smoke = jobs["linux-smoke"];
+  assert.equal(smoke.if, "inputs.platform == 'all' || inputs.platform == 'linux'");
+  assert.equal(smoke.needs, "linux-app");
+  assert.equal(smoke["runs-on"], "ubuntu-22.04");
+  const download = smoke.steps.find((step) => step.uses?.startsWith("actions/download-artifact@"));
+  assert.equal(download.with.pattern, "*_amd64.AppImage");
+  const runs = smoke.steps.filter((step) => step.run).map((step) => step.run);
+  assert.ok(!runs.some((run) => /smoke-linux\.sh install/.test(run)));
+  assert.deepEqual(
+    runs
+      .filter((run) => /smoke-linux\.sh (run|variant)/.test(run))
+      .map((run) => run.match(/smoke-linux\.sh (run|variant \S+)/)[1]),
+    ["run", "variant dmabuf", "variant no-dbus", "variant webgl", "variant tray"],
+  );
+  const check = jobs["linux-app"].steps.find((step) => step.name === "Check scripts");
+  assert.match(check.run, /^shellcheck .*scripts\/ci\/smoke-linux\.sh/);
+});
+
+// The AppImage must carry the emulator the build compiled: linuxdeploy's rewrite breaks it.
+test("test build: every Linux leg checks the AppImage emulator after the build", () => {
+  const steps = parse(testBuild()).jobs["linux-app"].steps;
+  const names = steps.map((step) => step.name);
+  const check = steps.find((step) => step.name === "Check the AppImage emulator");
+  assert.ok(check, "the emulator check step is missing");
+  assert.ok(names.indexOf("Build app") >= 0, "the Build app step is missing");
+  assert.ok(names.indexOf(check.name) > names.indexOf("Build app"));
+  assert.ok(names.indexOf(check.name) < names.indexOf("Upload AppImage"));
+  assert.equal(check.if, undefined);
+  assert.match(check.run, /--appimage-extract/);
+  assert.match(check.run, /sha256sum <"\$emulator"\) == \$\(sha256sum <"\$built"\)/);
+  assert.match(check.run, /timeout 10 "\.\/\$emulator" <\/dev\/null/);
+  // The step fails unless all three results and the file list hold.
+  assert.match(
+    check.run,
+    /\[\[ \$files_ok == true && \$same == true && \$rc -eq 0 && \$stdout_bytes -eq 0 \]\]\s*$/,
+  );
+});
+
+test("test build: the policy rejects a missing platform gate, input, runner or need", () => {
+  const cases = [
+    [testBuild().replace("inputs.platform == 'linux'", "true"), /linux-app: if must run/],
+    [testBuild().replace("default: all", "default: linux"), /platform input must be a choice/],
+    [testBuild().replace("          - windows\n", ""), /platform input must be a choice/],
+    [
+      testBuild().replace("runner: ubuntu-22.04", "runner: ubuntu-24.04"),
+      /linux-app: the matrix must run on ubuntu-22.04 and ubuntu-24.04-arm/,
+    ],
+    [
+      testBuild().replace(
+        "          - arch: arm64\n            runner: ubuntu-24.04-arm\n            bundles: deb,rpm,appimage\n",
+        "",
+      ),
+      /matrix must run on/,
+    ],
+    [testBuild().replace("runner: ubuntu-24.04-arm", "runner: self-hosted"), /matrix must run on/],
+    [testBuild().replace("${{ matrix.runner }}", "ubuntu-22.04"), /matrix must run on/],
+    [
+      testBuild().replace(/(linux-install:[\s\S]*?needs: )linux-app/, "$1macos-app"),
+      /linux-install: needs must be linux-app/,
+    ],
+    [
+      testBuild().replace("needs: linux-install", "needs: linux-app"),
+      /linux-resources: needs must be linux-install/,
+    ],
+    [
+      testBuild().replace(/(linux-smoke:[\s\S]*?needs: )linux-app/, "$1linux-install"),
+      /linux-smoke: needs must be linux-app/,
+    ],
+    // An install leg off the build runners, or no install leg on one of them.
+    [
+      testBuild().replace(
+        /runner: ubuntu-24\.04-arm(?![\s\S]*runner: ubuntu-24\.04-arm)/,
+        "runner: ubuntu-24.04",
+      ),
+      /linux-install: the matrix must run on/,
+    ],
+    [
+      testBuild().replace(/linux-install:[\s\S]*/, (install) =>
+        install.replaceAll("runner: ubuntu-24.04-arm", "runner: ubuntu-22.04"),
+      ),
+      /linux-install: the matrix must run on/,
+    ],
+    [
+      testBuild().replace(/(linux-resources:[\s\S]*?if: )inputs\.platform == 'all' \|\| /, "$1"),
+      /linux-resources: if must run/,
+    ],
+    [
+      testBuild().replace(/(linux-smoke:[\s\S]*?if: )inputs\.platform == 'all' \|\| /, "$1"),
+      /linux-smoke: if must run/,
+    ],
+  ];
+  for (const [fixture, error] of cases)
+    assert.match(workflowPolicy(fixture, testBuildFile).join("\n"), error);
+});
+
+// The export regeneration: dispatched by hand, read-only, and each `exports` option names the script
+// whose own --queued-export it runs.
+const regenerateExportsFile = "regenerate-exports.yml";
+const regenerateExports = () =>
+  fs.readFileSync(path.join(directory, regenerateExportsFile), "utf8");
+
+test("export regeneration: each option runs its script's own queued export, read-only", () => {
+  const workflow = parse(regenerateExports());
+  // Nightly and by hand; a scheduled run has no inputs, so it does all, and says so in its name.
+  assert.deepEqual(Object.keys(workflow.on), ["schedule", "workflow_dispatch"]);
+  assert.equal(workflow["run-name"], "Regenerate exports (${{ inputs.exports || 'all' }})");
+  assert.equal(
+    workflow.concurrency.group,
+    "${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.exports || 'all' }}",
+  );
+  const { exports } = workflow.on.workflow_dispatch.inputs;
+  assert.equal(exports.type, "choice");
+  assert.equal(exports.default, "all");
+  const scripts = fileURLToPath(new URL(".", import.meta.url));
+  for (const name of exports.options.filter((option) => option !== "all")) {
+    const script = path.join(scripts, `generate-${name}.mjs`);
+    assert.ok(fs.existsSync(script), `${name}: scripts/generate-${name}.mjs`);
+    assert.ok(fs.readFileSync(script, "utf8").includes('"--queued-export"'), `${name} queued path`);
+  }
+  const { steps, permissions } = workflow.jobs.regenerate;
+  assert.deepEqual(permissions, { contents: "read" });
+  const run = steps.find((step) => step.name === "Run the exports");
+  assert.deepEqual(run.env, { EXPORTS: "${{ inputs.exports || 'all' }}" });
+  assert.ok(run.run.includes(`set -- ${exports.options.slice(1).join(" ")}\n`), "all runs each");
+  assert.ok(run.run.includes('node "scripts/generate-$name.mjs" --queued-export'));
+  assert.ok(run.run.trimEnd().endsWith("pnpm gen:docs"));
+  const upload = steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
+  assert.equal(upload.if, "steps.collect.outputs.changed != '0'");
+  assert.equal(upload.with.name, "generated-exports");
+  assert.equal(upload.with["retention-days"], 7);
+  assert.equal(upload.with["include-hidden-files"], true);
+  // The manifest is uploaded after every collect, an empty list included.
+  const manifest = steps.find((step) => step.with?.name === "exports-manifest");
+  assert.equal(manifest.if, undefined);
+  assert.equal(manifest.with.path, "${{ runner.temp }}/exports-manifest/exports-manifest.json");
+  assert.equal(manifest.with["retention-days"], 7);
+  const collect = steps.find((step) => step.id === "collect").run;
+  assert.ok(collect.includes('"$list" "$manifest/exports-manifest.json"'), "manifest written");
+  // No strict mode anywhere in the refresh run: the build script's write mode would inherit it.
+  assert.ok(!regenerateExports().includes("CS_STRICT_EXPORTS"));
+  // rust-cache keys on the env, so it restores the Linux app job's cache only with the same env.
+  const linuxApp = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8")).jobs[
+    "rust-linux-app"
+  ];
+  assert.deepEqual(workflow.jobs.regenerate.env, linuxApp.env);
+  const cacheKey = (job) =>
+    job.steps.find((step) => step.uses?.startsWith("Swatinem/rust-cache@")).with["shared-key"];
+  assert.equal(cacheKey(workflow.jobs.regenerate), cacheKey(linuxApp));
+});
+
+test("export regeneration: the policy rejects another trigger, a write, a changed input or an expression in run", () => {
+  const cases = [
+    [
+      regenerateExports().replace("on:\n", "on:\n  pull_request:\n"),
+      /export regeneration allows only schedule and workflow_dispatch/,
+    ],
+    [
+      regenerateExports().replace("on:\n", "on:\n  push:\n    branches: [main]\n"),
+      /export regeneration allows only schedule and workflow_dispatch/,
+    ],
+    [
+      regenerateExports().replace("      contents: read", "      contents: write"),
+      /regenerate: permissions must grant exactly contents: read/,
+    ],
+    [
+      regenerateExports().replace(
+        "      contents: read",
+        "      contents: read\n      pull-requests: write",
+      ),
+      /regenerate: permissions must grant exactly contents: read/,
+    ],
+    [
+      regenerateExports().replace("          - model-schemas\n", ""),
+      /the only input must be exports, a choice of/,
+    ],
+    [
+      regenerateExports().replace("        default: all", "        default: model-schemas"),
+      /the only input must be exports/,
+    ],
+    [
+      regenerateExports().replace("        type: choice", "        type: string"),
+      /the only input must be exports/,
+    ],
+    [
+      regenerateExports().replace(
+        "    inputs:\n",
+        "    inputs:\n      ref:\n        type: string\n",
+      ),
+      /the only input must be exports/,
+    ],
+    [
+      regenerateExports().replace(
+        'if [ "$EXPORTS" = all ]',
+        "if [ '${{ inputs.exports }}' = all ]",
+      ),
+      /regenerate: step "Run the exports" expands an expression in run; pass it through env/,
+    ],
+    [
+      regenerateExports().replace(
+        "run-name: Regenerate exports (${{ inputs.exports || 'all' }})",
+        "run-name: Regenerate exports (${{ inputs.exports }})",
+      ),
+      /export regeneration: run-name must be Regenerate exports \(\$\{\{ inputs\.exports \|\| 'all' \}\}\)/,
+    ],
+    [
+      regenerateExports().replace("-${{ github.event_name }}", ""),
+      /export regeneration: the concurrency group must be/,
+    ],
+    [
+      regenerateExports().replace(
+        "EXPORTS: ${{ inputs.exports || 'all' }}",
+        "EXPORTS: ${{ inputs.exports }}",
+      ),
+      /regenerate: step "Run the exports" must read the exports input as \$\{\{ inputs\.exports \|\| 'all' \}\}/,
+    ],
+    // The refresh run sets no strict mode: its build script's write mode would inherit it.
+    [
+      regenerateExports().replace(
+        "      CARGO_INCREMENTAL:",
+        '      CS_STRICT_EXPORTS: "1"\n      CARGO_INCREMENTAL:',
+      ),
+      /CS_STRICT_EXPORTS may be set only in the env of exports-guard\.yml's/,
+    ],
+    [
+      regenerateExports().replace(
+        "          EXPORTS: ${{ inputs.exports || 'all' }}",
+        "          EXPORTS: ${{ inputs.exports || 'all' }}\n          CS_STRICT_EXPORTS: \"1\"",
+      ),
+      /CS_STRICT_EXPORTS may be set only/,
+    ],
+    [
+      regenerateExports().replace(
+        "          pnpm gen:docs\n",
+        "          CS_STRICT_EXPORTS=1 pnpm gen:docs\n",
+      ),
+      /CS_STRICT_EXPORTS may be set only/,
+    ],
+  ];
+  for (const [fixture, error] of cases)
+    assert.match(workflowPolicy(fixture, regenerateExportsFile).join("\n"), error);
+  // The rules are this file's: another dispatch-only workflow keeps the general allowlist.
+  const expanded = regenerateExports()
+    .replace('"$EXPORTS"', "'${{ inputs.exports }}'")
+    .replace(/ {2}schedule:\n {4}- cron: .*\n/, "");
+  assert.deepEqual(workflowPolicy(expanded, "other.yml"), []);
+  assert.match(
+    workflowPolicy(regenerateExports(), "other.yml").join("\n"),
+    /triggers must match the workflow allowlist/,
+  );
+  assert.deepEqual(workflowPolicy(regenerateExports(), regenerateExportsFile), []);
+});
+
+// The packaging smoke's containers come from one list, each pinned by its image index digest.
+const smokeImages = fileURLToPath(new URL("ci/smoke-images.txt", import.meta.url));
+
+test("smoke images: every container is pinned by digest", () => {
+  assert.deepEqual(smokeImagesPolicy(fs.readFileSync(smokeImages, "utf8")), []);
+});
+
+test("smoke images: the policy rejects a bare tag, a short digest, a duplicate or no image", () => {
+  const pin = `@sha256:${"a".repeat(64)}`;
+  const cases = [
+    ["ubuntu:24.04\n", /ubuntu:24\.04: must be <name>:<tag>@sha256:<digest>/],
+    [`ubuntu${pin}\n`, /must be <name>:<tag>@sha256/],
+    ["ubuntu:24.04@sha256:abc\n", /must be <name>:<tag>@sha256/],
+    [`ubuntu:24.04${pin}\nubuntu:24.04${pin}\n`, /ubuntu:24\.04: listed twice/],
+    ["# a comment\n\n", /no images/],
+  ];
+  for (const [fixture, error] of cases) assert.match(smokeImagesPolicy(fixture).join("\n"), error);
+  assert.deepEqual(smokeImagesPolicy(`# a comment\n\nubuntu:24.04${pin}\n`), []);
+});
+
+// Linux compiles the code a platform without git-ai and the agent-CLI sockets builds (the
+// facades' off arms, with the gated parts left out); the Linux app job runs the git-ai facade's
+// tests, with the rest of the app's.
+test("rust.yml checks the app with git-ai and agent-cli-sockets off", () => {
+  const workflow = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8"));
+  const steps = workflow.jobs["rust-check-linux"].steps;
+  const off = steps.filter((step) => step.env?.CODESENSE_CAPS_OFF !== undefined);
+  assert.equal(off.length, 1, "one cap-off check step");
+  assert.equal(off[0].name, "Check the desktop app with git-ai and agent-cli-sockets off");
+  assert.equal(off[0].env.CODESENSE_CAPS_OFF, "git-ai,agent-cli-sockets");
+  assert.equal(
+    off[0].run,
+    "cargo check --locked -p codesense --lib --tests --features dashboard-publish",
+  );
+});
+
+const exportsGuardFile = "exports-guard.yml";
+const exportsGuard = () => fs.readFileSync(path.join(directory, exportsGuardFile), "utf8");
+const GUARD_BASE = "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}";
+
+test("exports guard: the guard runs the base's script with the token, strict-pins runs PR code without one", () => {
+  const workflow = parse(exportsGuard());
+  assert.deepEqual(workflow.on.pull_request.types, [
+    "opened",
+    "synchronize",
+    "reopened",
+    "edited",
+    "labeled",
+    "unlabeled",
+  ]);
+  assert.ok(Object.hasOwn(workflow.on, "merge_group"));
+  assert.deepEqual(workflow.concurrency, {
+    group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}",
+    "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+  });
+  const { guard, "strict-pins": strict } = workflow.jobs;
+  assert.deepEqual(Object.keys(workflow.jobs), ["guard", "strict-pins"]);
+  assert.deepEqual(guard.permissions, { contents: "read", "pull-requests": "read" });
+  assert.equal(guard.steps[0].with.ref, GUARD_BASE);
+  // Plain node from the base checkout: no install, so no pull request code or package runs.
+  assert.deepEqual(
+    guard.steps.filter((step) => step.run).map((step) => step.run),
+    ["node scripts/exports-guard.mjs"],
+  );
+  const check = guard.steps.find((step) => step.run);
+  assert.deepEqual(check.env, { GH_TOKEN: "${{ github.token }}" });
+  assert.equal(guard.outputs.refresh, `\${{ steps.${check.id}.outputs.refresh }}`);
+
+  assert.equal(strict.needs, "guard");
+  assert.equal(
+    strict.if,
+    "github.event_name != 'pull_request' || needs.guard.outputs.refresh == 'true'",
+  );
+  assert.deepEqual(strict.permissions, { contents: "read" });
+  assert.ok(!JSON.stringify(strict).includes("token"), "no token in strict-pins");
+  // Every step is skipped in a merge group, and the checkout is the pull request head.
+  for (const step of strict.steps)
+    assert.equal(step.if, "github.event_name == 'pull_request'", step.name);
+  assert.equal(strict.steps[0].with.ref, "${{ github.event.pull_request.head.sha }}");
+  assert.equal(strict.steps[0].with["persist-credentials"], false);
+  const named = (name) => strict.steps.find((step) => step.name === name);
+  assert.deepEqual(named("Strict gen:docs check").env, { CS_STRICT_EXPORTS: "1" });
+  assert.equal(named("Strict gen:docs check").run, "pnpm gen:docs:check");
+  assert.deepEqual(named("Strict Rust pins").env, { CS_STRICT_EXPORTS: "1" });
+  assert.match(named("Strict Rust pins").run, /^cargo test /);
+  assert.ok(!named("Strict Rust pins").run.includes("--queued-export"));
+  assert.ok(!named("Strict Rust pins").run.includes("UPDATE_DOCS_SCHEMAS"));
+  // The setup restores rust.yml's Linux app cache, as the refresh run does.
+  const linuxApp = parse(fs.readFileSync(path.join(directory, "rust.yml"), "utf8")).jobs[
+    "rust-linux-app"
+  ];
+  assert.deepEqual(strict.env, linuxApp.env);
+});
+
+test("exports guard: the policy pins the base checkout, the token, the names and no expression in run", () => {
+  const cases = [
+    [
+      exportsGuard().replace(
+        `ref: ${GUARD_BASE}`,
+        "ref: ${{ github.event.pull_request.head.sha }}",
+      ),
+      /guard: checkout must check out ref/,
+    ],
+    [
+      exportsGuard().replace(`          ref: ${GUARD_BASE}\n`, ""),
+      /guard: checkout must check out ref/,
+    ],
+    [
+      exportsGuard().replace("      pull-requests: read", "      pull-requests: write"),
+      /guard: permissions must grant exactly contents: read, pull-requests: read/,
+    ],
+    [
+      exportsGuard().replace(
+        "    permissions:\n      contents: read\n    defaults:",
+        "    permissions:\n      contents: read\n      pull-requests: read\n    defaults:",
+      ),
+      /strict-pins: permissions must grant exactly contents: read/,
+    ],
+    [
+      exportsGuard().replace(
+        "run: node scripts/exports-guard.mjs",
+        "run: node scripts/exports-guard.mjs ${{ github.head_ref }}",
+      ),
+      /guard: step "Check the changed files" expands an expression in run/,
+    ],
+    [
+      exportsGuard().replace("    name: Exports guard\n", "    name: Guard\n"),
+      /guard: name must be Exports guard/,
+    ],
+    [
+      exportsGuard().replace("    name: Exports strict pins\n", "    name: Strict pins\n"),
+      /strict-pins: name must be Exports strict pins/,
+    ],
+    [
+      exportsGuard().replace(
+        "    if: github.event_name != 'pull_request' || needs.guard.outputs.refresh == 'true'",
+        "    if: needs.guard.outputs.refresh == 'true'",
+      ),
+      /strict-pins: if must begin with github.event_name != 'pull_request' \|\|/,
+    ],
+  ];
+  for (const [fixture, error] of cases)
+    assert.match(workflowPolicy(fixture, exportsGuardFile).join("\n"), error);
+  assert.deepEqual(workflowPolicy(exportsGuard(), exportsGuardFile), []);
+});
+
+test("exports guard: the guard step skips only a merge group whose base lacks the script", () => {
+  const exact =
+    "        if: github.event_name == 'pull_request' || hashFiles('scripts/exports-guard.mjs') != ''\n";
+  assert.ok(exportsGuard().includes(exact));
+  assert.deepEqual(workflowPolicy(exportsGuard(), exportsGuardFile), []);
+  const step = parse(exportsGuard()).jobs.guard.steps.find(
+    (s) => s.name === "Check the changed files",
+  );
+  assert.equal(step.run, "node scripts/exports-guard.mjs");
+  for (const [name, condition] of [
+    ["no pull_request clause", "hashFiles('scripts/exports-guard.mjs') != ''"],
+    ["no hashFiles clause", "github.event_name == 'pull_request'"],
+    [
+      "all merge groups",
+      "github.event_name == 'pull_request' || github.event_name == 'merge_group'",
+    ],
+    [
+      "another condition",
+      "github.event_name == 'pull_request' || hashFiles('scripts/exports-guard.mjs') != '' || always()",
+    ],
+    [
+      "another condition, and-ed",
+      "(github.event_name == 'pull_request' || hashFiles('scripts/exports-guard.mjs') != '') && github.actor != 'x'",
+    ],
+    ["another file", "github.event_name == 'pull_request' || hashFiles('scripts/other.mjs') != ''"],
+    [
+      "wrapped",
+      "${{ github.event_name == 'pull_request' || hashFiles('scripts/exports-guard.mjs') != '' }}",
+    ],
+  ])
+    assert.match(
+      workflowPolicy(
+        exportsGuard().replace(exact, `        if: "${condition}"\n`),
+        exportsGuardFile,
+      ).join("\n"),
+      /guard: step "Check the changed files" must be one step with if:/,
+      name,
+    );
+  // No if at all, or a second step under the name, fails too.
+  for (const [name, fixture] of [
+    ["no if", exportsGuard().replace(exact, "")],
+    [
+      "second step",
+      exportsGuard().replace(
+        "      - name: Check the changed files\n",
+        "      - name: Check the changed files\n        run: true\n      - name: Check the changed files\n",
+      ),
+    ],
+  ])
+    assert.match(
+      workflowPolicy(fixture, exportsGuardFile).join("\n"),
+      /guard: step "Check the changed files" must be one step with if:/,
+      name,
+    );
+  // The job itself stays unconditional.
+  assert.equal(parse(exportsGuard()).jobs.guard.if, undefined);
+});
+
+test("exports guard: CS_STRICT_EXPORTS is set only on the two strict steps, and on both", () => {
+  const strictEnv =
+    '        env:\n          CS_STRICT_EXPORTS: "1"\n        run: pnpm gen:docs:check\n';
+  const rustEnv = '        env:\n          CS_STRICT_EXPORTS: "1"\n        run: >-\n';
+  assert.ok(exportsGuard().includes(strictEnv) && exportsGuard().includes(rustEnv));
+  const cases = [
+    // Job-wide or workflow-wide.
+    exportsGuard().replace(
+      "      CARGO_TERM_COLOR: always\n    steps:\n      - name: Check out the pull request head",
+      '      CARGO_TERM_COLOR: always\n      CS_STRICT_EXPORTS: "1"\n    steps:\n      - name: Check out the pull request head',
+    ),
+    exportsGuard().replace(
+      "permissions: {}\n",
+      'permissions: {}\nenv:\n  CS_STRICT_EXPORTS: "1"\n',
+    ),
+    // On another step.
+    exportsGuard().replace(
+      "        run: bash scripts/build-session-server.sh\n",
+      '        env:\n          CS_STRICT_EXPORTS: "1"\n        run: bash scripts/build-session-server.sh\n',
+    ),
+    exportsGuard().replace(
+      "        run: pnpm install --frozen-lockfile\n",
+      "        run: CS_STRICT_EXPORTS=1 pnpm install --frozen-lockfile\n",
+    ),
+    // Either strict step without it.
+    exportsGuard().replace(strictEnv, "        run: pnpm gen:docs:check\n"),
+    exportsGuard().replace(rustEnv, "        run: >-\n"),
+    // Either strict step with another value.
+    exportsGuard().replace(strictEnv, strictEnv.replace('"1"', '"0"')),
+    // A second step under a strict step's name.
+    exportsGuard().replace(
+      "      - name: Strict gen:docs check\n",
+      "      - name: Strict gen:docs check\n        if: github.event_name == 'pull_request'\n" +
+        strictEnv +
+        "      - name: Strict gen:docs check\n",
+    ),
+  ];
+  for (const fixture of cases)
+    assert.match(
+      workflowPolicy(fixture, exportsGuardFile).join("\n"),
+      /CS_STRICT_EXPORTS/,
+      fixture,
+    );
+  // Any other workflow, at any level.
+  assert.match(
+    workflowPolicy(
+      good.replace(
+        "    timeout-minutes: 15\n",
+        '    timeout-minutes: 15\n    env:\n      CS_STRICT_EXPORTS: "1"\n',
+      ),
+    ).join("\n"),
+    /CS_STRICT_EXPORTS may be set only/,
+  );
+  assert.match(
+    workflowPolicy(exportsGuard(), "ci.yml").join("\n"),
+    /CS_STRICT_EXPORTS may be set only/,
+  );
+});
+
+test("exports guard: no other job may report a check named Exports guard or Exports strict pins", () => {
+  const named = (name) =>
+    good.replace("    runs-on: ubuntu-24.04\n", `    name: ${name}\n    runs-on: ubuntu-24.04\n`);
+  for (const name of [
+    "Exports guard",
+    "exports STRICT pins",
+    "\"${{ 'Exports guard' }}\"",
+    "Exports ${{ matrix.x }}",
+    '"${{ matrix.x }} strict pins"',
+    "Exports guard${{ matrix.unclosed",
+  ])
+    assert.match(
+      workflowPolicy(named(name), "ci.yml").join("\n"),
+      /static: the job name could report Exports (guard|strict pins), a check only exports-guard\.yml reports/,
+      name,
+    );
+  for (const name of [
+    "Rust (macOS arm64) tests ${{ matrix.shard }}/3",
+    "Exports guard tests",
+    "Static checks",
+  ])
+    assert.deepEqual(workflowPolicy(named(name), "ci.yml"), [], name);
+  // Inside the guard's workflow, only its own job reports each name.
+  const extra = exportsGuard().replace(
+    "jobs:\n",
+    "jobs:\n  shadow:\n    name: Exports ${{ 'strict pins' }}\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n    timeout-minutes: 5\n    steps:\n      - run: true\n",
+  );
+  assert.match(
+    workflowPolicy(extra, exportsGuardFile).join("\n"),
+    /shadow: the job name could report Exports strict pins/,
+  );
+  for (const file of files)
+    if (file !== exportsGuardFile)
+      for (const job of Object.values(
+        parse(fs.readFileSync(path.join(directory, file), "utf8")).jobs,
+      ))
+        assert.ok(!/^Exports (guard|strict pins)$/i.test(job.name ?? ""), file);
 });

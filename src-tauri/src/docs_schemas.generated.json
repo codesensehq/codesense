@@ -2396,19 +2396,19 @@
   },
   "sources": {
     "src-tauri/crates/codesense-host-proto/src/agent_cli.rs": "347a6af97cd7ffa3206fc00c7972bbb89a04e954f679269182674f86a4c54ef5",
-    "src-tauri/src/agents/adapter.rs": "2344a0478bd3f14ee0988ed3fc555658a2f3a3a583bb83cf5a134f746ca458ce",
-    "src-tauri/src/agents/adapter/claude.rs": "550bc505b43e05ebd5f0dbbbb95b2f0900320bc37c7885d0da40bd8d76ed8ade",
+    "src-tauri/src/agents/adapter.rs": "80003db03796f5c1698e79530b23f818e24e44e9ce8f02a138539bc514a7ad04",
+    "src-tauri/src/agents/adapter/claude.rs": "9a8b87f64686f2b5fe20025aa52318cc4491bbec24fbe17d2ec411c7bfaf7f02",
     "src-tauri/src/agents/adapter/codex.rs": "cd69dd05bb20827e1fcddfb0f43770560db24234bf0521d9a95bf6989ed36925",
-    "src-tauri/src/agents/adapter/hermes.rs": "fcb81270aa7bf270d56f8cf20c3fc6297d9a89f2c03fdd6e6d9017ba63c45922",
-    "src-tauri/src/agents/adapter/opencode.rs": "a02d792f572e4a8c0aa7506713b85ae4749bd0258c0c9d4710ba03f239d358a1",
+    "src-tauri/src/agents/adapter/hermes.rs": "ed95d203f9bd490f79b195e14f179c53b4cee51afc5cbf236985de03356ba70c",
+    "src-tauri/src/agents/adapter/opencode.rs": "b9ba44a57607c0539213f6960d9a6f79bb9c35dcd2a0ed51477fc85db11ff685",
     "src-tauri/src/agents/context.rs": "9b2215e069a9c9d859ebbd39f60f12357adb856db393768788ad77fa9fa3d32e",
-    "src-tauri/src/agents/model.rs": "6f0aa719802b51b6fb2d1279c96ea7ed125ef94c6600728094380320afb70efa",
+    "src-tauri/src/agents/model.rs": "e750b783875bd284aca22628c1b3778f0cd0bde3cb12b89350b05023417b95b6",
     "src-tauri/src/context_query/model.rs": "4e81c3eaa7ed4ea0dc93fe5017c7defe77655b124f0d5bc447557b646f42d345",
     "src-tauri/src/docs_schemas.rs": "6abd956406c31a5d20cd2fe57a903f9845ac300c5b923e7e37893bfbffaec487",
     "src-tauri/src/packs/lock.rs": "11d8c045d499420318d3a487b92be97234b63c6172ac1e29b56028b74d04b66c",
     "src-tauri/src/packs/manifest.rs": "cbefe924e32f030e301da71b9162d7d5bff7e98894d1782f7a43bd7a45b35a62",
     "src-tauri/src/queue_roles.rs": "b69b94aa10d5d0fc39d123858ea4cd42fe0d22b5af0c00b5479a3f9e8921b7ff",
-    "src-tauri/src/routines/model.rs": "5bbdf683268ec98f285531eeb0313e051dd165f6ab71aa772127ff6674dd5a24",
+    "src-tauri/src/routines/model.rs": "2286a158c87e3fc4687840fe7a4767b1966cc625db2a383e15f97ba042d42350",
     "src-tauri/src/session_usage/spend_caps.rs": "f0fdcc1b2d50cdd71becea9baff2da595dc24e79ba5670b734259093a359e5db"
   }
 }

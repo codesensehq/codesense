@@ -113,7 +113,6 @@ import {
   resolveAgentFace,
   resolveAgentRole,
   rowMarkers,
-  THIS_MAC,
   type AgentStatusFilter,
   type AgentTreeNode,
   type PinnedEntry,
@@ -161,7 +160,12 @@ import {
   type AgentStatus,
 } from "@/shared/lib/agent-status-config";
 import { type FaceSource } from "@/shared/lib/avatar-packs";
-import { isMac } from "@/shared/lib/shortcuts/keystroke";
+import {
+  hasAnyModifier,
+  hasCommandModifier,
+  hasMod,
+  isMac,
+} from "@/shared/lib/shortcuts/keystroke";
 import {
   countMarks,
   MARK_WORDS,
@@ -183,6 +187,7 @@ import { useManagedSessionStore } from "@/shared/stores/use-managed-session-stor
 import type { SessionProgress } from "@/shared/stores/viewer-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 import { type AgentSessionRow, type RoutineRow } from "@/tauri/commands";
+import { isRemoteMachineId } from "@/features/machines/lib/machine-offline";
 
 /** Left inset of a row. */
 const ROW_INSET_PX = 2;
@@ -892,13 +897,7 @@ export function AgentsTreeView({
     return focusLookAgain();
   }, [focusWant, focusReq.look, paneRows, virtualizer, focusDone, focusLookAgain]);
   const onListKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (
-      (e.key === "ArrowLeft" || e.key === "ArrowRight") &&
-      !e.altKey &&
-      !e.metaKey &&
-      !e.ctrlKey &&
-      !e.shiftKey
-    ) {
+    if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !hasAnyModifier(e)) {
       const focused = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>(
         "[data-row-index]",
       );
@@ -919,7 +918,7 @@ export function AgentsTreeView({
     }
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
     // Alt+Up/Down on a workspace card's name moves the card one place among its team's cards.
-    if (e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
+    if (e.altKey && !hasMod(e) && !e.shiftKey) {
       const name = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>(
         ".ag-ws-name",
       );
@@ -2201,7 +2200,7 @@ function radioGroupKeys<T extends string>(
       : e.key === "ArrowUp" || e.key === "ArrowLeft"
         ? -1
         : 0;
-  if (step === 0 || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (step === 0 || hasCommandModifier(e)) return;
   e.preventDefault();
   const at = options.findIndex((o) => o.id === current);
   // A value none of the options holds steps onto the first (down) or the last (up).
@@ -3045,6 +3044,7 @@ const AgentListRow = memo(function AgentListRow({
   // Line two keeps the role and workspace even when the machine is offline; the Offline tag and
   // the hint say the rest. A Status row names the team first, since its sections span teams.
   const machine = facts.machine;
+  const local = !isRemoteMachineId(facts.machineId);
   const roleWord = role.label.split(" · ")[0] ?? "";
   const teamWord = showTeam ? facts.teamLabel : null;
   const detail = [teamWord, agentDetailLine({ role: roleWord, workspace: place, machine, model })]
@@ -3066,7 +3066,7 @@ const AgentListRow = memo(function AgentListRow({
       managerView || (inWorkspace && node.workspace && place === node.workspace.label)
         ? null
         : place,
-    machine: machine === THIS_MAC ? null : machine,
+    machine: local ? null : machine,
     model,
     elapsed: stoppedWord ? null : elapsed,
     name: label,
@@ -3081,7 +3081,6 @@ const AgentListRow = memo(function AgentListRow({
   const handTyped = liveRow && isTypedByHand(row);
   const release = liveRow ? releaseWarning(row) : null;
   const unread = row.unread ?? 0;
-  const onThisMac = machine === THIS_MAC;
   // A remote agent's machine shows its colour and icon: the server in its colour, or the amber
   // disconnected glyph while it reads offline (by the same rule as the Offline tag).
   const remoteMachine = facts.remoteMachine;
@@ -3147,7 +3146,7 @@ const AgentListRow = memo(function AgentListRow({
     chosenManagerName && `Chosen manager: ${chosenManagerName}`,
     qualifier,
     handTyped && typedByHandHint(rowCli, unread),
-    release && releaseHint(release, onThisMac),
+    release && releaseHint(release, local),
     activity && (status === "stalled" ? activity : `Doing: ${activity}`),
     elapsed && `Running ${elapsed}`,
     holdsText,
@@ -3234,7 +3233,7 @@ const AgentListRow = memo(function AgentListRow({
               onReveal(row);
             }}
             onKeyDown={(e) => {
-              const plainKey = !e.metaKey && !e.ctrlKey && !e.altKey;
+              const plainKey = !hasCommandModifier(e);
               // M opens the inbox chat (offline agents too: their inbox keeps the mail).
               if (inboxEligible && onChat && plainKey && /^m$/i.test(e.key)) {
                 e.preventDefault();
@@ -3469,7 +3468,7 @@ const AgentListRow = memo(function AgentListRow({
             typedByHand={handTyped}
             unread={unread}
             release={release !== null}
-            canCheckVersion={onThisMac}
+            canCheckVersion={local}
             onReveal={() => onReveal(row)}
           />
           {managerView && subagentsShown > 0 && (

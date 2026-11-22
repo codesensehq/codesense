@@ -21,6 +21,7 @@
  */
 
 import type { Phase } from "./roles";
+import { isMac } from "./shortcuts/keystroke";
 import type { TerminalAiStatus, TerminalWireStatus } from "./terminal-ai-status";
 
 // ---------------------------------------------------------------------------
@@ -496,11 +497,6 @@ export function stoppedStatuses(mac: boolean): ReadonlySet<number> {
   return mac ? DARWIN_STOPPED : LINUX_STOPPED;
 }
 
-/** Whether this app runs on macOS (read per call, so tests can stub it). */
-function hostIsMac(): boolean {
-  return typeof navigator !== "undefined" && /Mac/i.test(navigator.platform ?? "");
-}
-
 /**
  * Whether a shell's command-end `code` in this session is the agent's own
  * exit: an agent is established and running in the foreground, or it just
@@ -510,7 +506,7 @@ function hostIsMac(): boolean {
 export function commandEndIsAgentExit(rec: SessionAgentRecord, code: number): boolean {
   // The shells already report no command-end for a suspended job; this is
   // the backstop, for this host's stop signals.
-  if (stoppedStatuses(hostIsMac()).has(code)) return false;
+  if (stoppedStatuses(isMac()).has(code)) return false;
   if (rec.agent !== null) return true;
   const t2 = rec.t2?.signal;
   return endedByExit(rec) && t2?.kind === "exited" && t2.unannounced === true && t2.code === null;

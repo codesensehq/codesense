@@ -4,12 +4,12 @@ import type { RemoteMachineIdentity } from "@/features/machines/components/machi
 import type { RoleHolding } from "@/features/viewer/hooks/use-role-holdings";
 import type { TeamAgentIdentity } from "@/features/viewer/hooks/use-team-agent-identities";
 import type { PillCrew } from "@/features/viewer/hooks/use-workspace-crews";
-import { THIS_MAC } from "@/features/viewer/lib/agent-list-view";
 import { BUILTIN_AVATARS, type AvatarPacks } from "@/shared/hooks/use-avatar-packs";
 import type { AgentIdentityChoice, AgentIdentityPatch } from "@/shared/lib/agent-identity-choice";
 import { BUILTIN_FACE_SOURCE, type FaceSource } from "@/shared/lib/avatar-packs";
 import { parseTeamKey } from "@/shared/lib/team-key";
 import { LOCAL_MACHINE_ID, type AgentSessionRow } from "@/tauri/commands";
+import { localMachineLabel } from "@/shared/lib/local-machine";
 
 /** Per-render identity the rows read: role inputs, machines, the focused tab. */
 export interface IdentityContext {
@@ -101,7 +101,7 @@ export const Identity = createContext<IdentityContext>({
   repoGlyphOf: () => undefined,
   crewOf: () => undefined,
   managerOptions: () => [],
-  machineOf: () => THIS_MAC,
+  machineOf: () => localMachineLabel(),
   machineIdOf: () => LOCAL_MACHINE_ID,
   isPinned: () => false,
   togglePin: () => {},

@@ -14,6 +14,7 @@ import {
   restartMachineTerminalServer,
 } from "@/tauri/commands";
 import { refreshMachine } from "@/features/machines/stores/machines-store";
+import { localMachineLabel } from "@/shared/lib/local-machine";
 
 export interface MachineTerminalServerTarget {
   machineId: string;
@@ -147,7 +148,8 @@ export async function promptMachineTerminalServerUpdate(
     if (!plan) {
       return {
         kind: "failed",
-        repair: unreadable ?? "This Mac's terminal server is already this app's build.",
+        repair:
+          unreadable ?? `${localMachineLabel()}'s terminal server is already this app's build.`,
       };
     }
     const localBusy = running();
@@ -220,7 +222,7 @@ export async function confirmMachineTerminalServerReplacement(): Promise<void> {
           phase: {
             kind: "failed",
             oldStopped: failure.oldStopped ?? false,
-            repair: failure.message ?? "This Mac's terminal server was not updated.",
+            repair: failure.message ?? `${localMachineLabel()}'s terminal server was not updated.`,
           },
         });
         return;

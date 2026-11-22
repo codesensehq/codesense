@@ -10,6 +10,7 @@ import { useAgentStateStore } from "@/shared/stores/agent-state-store";
 import { beginContextNavigation } from "@/shared/lib/context-navigation";
 import { create } from "zustand";
 import { isMac, isReservedForDashboardCommand } from "./keystroke";
+import { terminalChord } from "./terminal-chord";
 import { requestNewWorkspaceTerminal } from "@/features/viewer/lib/new-workspace-terminal";
 import {
   flipAgentView,
@@ -20,6 +21,7 @@ import {
   liveStoryDashboardDeps,
   openStoryDashboard,
 } from "@/features/dashboard/lib/open-story-dashboard";
+import { STORY_DASHBOARD_ACTION_ID } from "@/features/dashboard/lib/story-dashboard-action-id";
 import { openAppSettings } from "@/features/settings/lib/open-settings";
 import { canExportToPdf, exportViewerToPdf } from "@/features/viewer/lib/export-pdf";
 import {
@@ -66,6 +68,8 @@ import {
   stepExpand,
   jumpToWhatNeedsYou,
 } from "@/features/viewer/lib/terminal-tab-keys";
+import { samePath } from "@/shared/lib/path";
+import { capabilityOn, type CapabilityKey } from "@/shared/lib/capabilities";
 
 /**
  * Canonical action registry for every configurable keyboard shortcut +
@@ -189,6 +193,9 @@ export interface ShortcutAction {
   command?: DashboardCommandInfo;
   /** Checked by the dispatch gate: whether the action may fire now. */
   available?: () => boolean;
+  /** The OS capability the action needs. With it off the action never fires, holds no chord and
+   *  has no Settings row. */
+  capability?: CapabilityKey;
   run: () => void;
 }
 
@@ -521,7 +528,7 @@ const shortcutActions: readonly ShortcutAction[] = [
   {
     // View → Dashboard: the focused story's dashboard (its workspace's story, else the active tab when
     // it is a story file). With no story in focus it says why in a toast, so the item is never silent.
-    id: "viewer.open-story-dashboard",
+    id: STORY_DASHBOARD_ACTION_ID,
     label: "Dashboard",
     menuPath: ["View", "Dashboard"],
     defaultKeystroke: "",
@@ -952,6 +959,7 @@ const shortcutActions: readonly ShortcutAction[] = [
     menuPath: ["File", "Export to PDF"],
     defaultKeystroke: "CmdOrCtrl+Shift+E",
     scope: "workspace",
+    capability: "pdf-export",
     run: () => {
       const { teamKey, workspace, sourceRepoSlug, repoPath } = getActiveWorkspaceContext();
       if (!workspace) return;
@@ -967,7 +975,9 @@ const shortcutActions: readonly ShortcutAction[] = [
         toast.error("Couldn't export — workspace has no source repo");
         return;
       }
-      const fromConfig = useConfigStore.getState().repos.find((r) => r.repoPath === lookupKey);
+      const fromConfig = useConfigStore
+        .getState()
+        .repos.find((r) => samePath(r.repoPath, lookupKey));
       const fromWorkspace = useOrgStore.getState().workspaceRepos[lookupKey];
       const resolved = fromConfig ?? fromWorkspace;
       // Surface feedback on empty teamContentPath — the earlier silent
@@ -1345,12 +1355,18 @@ export type UnboundReason =
 export interface ResolvedBinding {
   /** `""` when unbound. */
   keystroke: string;
+  /** The chord the action answers to from a focused terminal; `""` when it has none there. */
+  terminalKeystroke: string;
   unbound?: UnboundReason;
 }
 
 let resolvedCache: {
   shortcuts: Record<string, string>;
   actions: readonly ShortcutAction[];
+  /** The terminal chords depend on the platform, which tests flip. */
+  mac: boolean;
+  /** An action whose capability is off holds no chord. */
+  caps: ReturnType<typeof useConfigStore.getState>["platformCaps"];
   bindings: Map<string, ResolvedBinding>;
 } | null = null;
 
@@ -1358,22 +1374,36 @@ let resolvedCache: {
  * Every action's effective chord under `shortcuts`. An override wins (`""` clears it).
  * A dashboard command without one gets its declared default unless that is reserved,
  * or already held by a built-in, an explicit override or an earlier dashboard command;
- * then it is unbound and Settings lists it under Conflicts.
+ * then it is unbound and Settings lists it under Conflicts. An action whose capability is off is
+ * skipped: it binds nothing, so its chord is free and never reported as a conflict.
  */
 export function resolveBindings(shortcuts: Record<string, string>): Map<string, ResolvedBinding> {
   const actions = allShortcutActions();
-  if (resolvedCache?.shortcuts === shortcuts && resolvedCache.actions === actions)
+  const mac = isMac();
+  const caps = useConfigStore.getState().platformCaps;
+  if (
+    resolvedCache?.shortcuts === shortcuts &&
+    resolvedCache.actions === actions &&
+    resolvedCache.mac === mac &&
+    resolvedCache.caps === caps
+  )
     return resolvedCache.bindings;
-  const bindings = new Map<string, ResolvedBinding>();
+  const drafts = new Map<string, Omit<ResolvedBinding, "terminalKeystroke">>();
   const owners = new Map<string, string>();
   const bind = (id: string, keystroke: string) => {
-    bindings.set(id, { keystroke });
+    drafts.set(id, { keystroke });
     if (!owners.has(keystroke)) owners.set(keystroke, id);
   };
   const defaults: ShortcutAction[] = [];
   for (const action of actions) {
     const override = shortcuts[action.id];
-    if (override === "") bindings.set(action.id, { keystroke: "", unbound: { kind: "cleared" } });
+    if (action.capability && !capabilityOn(action.capability))
+      drafts.set(action.id, { keystroke: "" });
+    else if (override === "")
+      drafts.set(action.id, {
+        keystroke: "",
+        unbound: { kind: "cleared" },
+      });
     else if (override !== undefined) bind(action.id, override);
     else if (!action.command) bind(action.id, action.defaultKeystroke);
     else defaults.push(action);
@@ -1382,17 +1412,40 @@ export function resolveBindings(shortcuts: Record<string, string>): Map<string, 
     const wanted = action.defaultKeystroke;
     const reserved = wanted ? isReservedForDashboardCommand(wanted) : null;
     const winner = owners.get(wanted);
-    if (!wanted) bindings.set(action.id, { keystroke: "", unbound: { kind: "none" } });
+    if (!wanted)
+      drafts.set(action.id, {
+        keystroke: "",
+        unbound: { kind: "none" },
+      });
     else if (reserved)
-      bindings.set(action.id, {
+      drafts.set(action.id, {
         keystroke: "",
         unbound: { kind: "reserved", wanted, message: reserved.message },
       });
     else if (winner)
-      bindings.set(action.id, { keystroke: "", unbound: { kind: "conflict", wanted, winner } });
+      drafts.set(action.id, {
+        keystroke: "",
+        unbound: { kind: "conflict", wanted, winner },
+      });
     else bind(action.id, wanted);
   }
-  resolvedCache = { shortcuts, actions, bindings };
+  const builtIns: string[] = [];
+  const commands: string[] = [];
+  for (const action of actions) {
+    const bound = drafts.get(action.id)?.keystroke;
+    if (bound) (action.command ? commands : builtIns).push(bound);
+  }
+  const bindings = new Map<string, ResolvedBinding>();
+  for (const action of actions) {
+    const draft = drafts.get(action.id)!;
+    const terminalKeystroke = terminalChord(
+      draft.keystroke,
+      { builtIns, commands },
+      !!action.command,
+    );
+    bindings.set(action.id, { ...draft, terminalKeystroke });
+  }
+  resolvedCache = { shortcuts, actions, mac, caps, bindings };
   return bindings;
 }
 

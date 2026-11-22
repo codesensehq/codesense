@@ -25,6 +25,7 @@ import {
   useTerminalFontSize,
   useTerminalFontSizePx,
 } from "@/features/viewer/lib/cli-workspace/store/terminal-selectors";
+import { formatMetaOnlyDisplay } from "@/shared/lib/shortcuts/keystroke";
 
 export interface QuickSendProps {
   /** The agent's name, for the header and the terminal's label. */
@@ -139,6 +140,9 @@ export function QuickSendPopover({
     sessionId === null ? false : manager.holdsVisible(sessionId as TerminalDisplayReference),
   );
   const live = sessionId !== null && !onScreen;
+  // ⌘W only: Ctrl+W belongs to the terminal, so off macOS there is no close chord to name.
+  const closeChord = formatMetaOnlyDisplay("CmdOrCtrl+W");
+  const closeHint = closeChord ? ` · ${closeChord} closes` : "";
   // Set when the terminal leaves the open popup for a tile in the CLI: a screen reader hears it.
   // Not when it leaves because the agent ended or went offline (no tile shows it then).
   const [shownLive, setShownLive] = useState(live);
@@ -285,8 +289,8 @@ export function QuickSendPopover({
         <div className="ag-quick-send-foot">
           <span className="ag-quick-send-hint">
             {terminalFocused
-              ? `Typing to ${name} · Esc goes to ${name} · ⌘W closes`
-              : `Click the terminal to type to ${name} · ⌘W closes`}
+              ? `Typing to ${name} · Esc goes to ${name}${closeHint}`
+              : `Click the terminal to type to ${name}${closeHint}`}
           </span>
         </div>
       )}

@@ -28,6 +28,13 @@ describe("contentPrefix", () => {
     );
   });
 
+  it("slices a Windows content path into a /-joined prefix", () => {
+    expect(contentPrefix("C:\\orgs\\acme\\ctx", "C:\\orgs\\acme\\ctx\\_team\\x\\content")).toBe(
+      "_team/x/content",
+    );
+    expect(contentPrefix("C:\\orgs\\acme\\ctx", "C:\\orgs\\acme\\ctx\\")).toBeNull();
+  });
+
   it("returns null when teamContentPath is empty (unhydrated)", () => {
     expect(contentPrefix("/orgs/acme/ctx", "")).toBeNull();
     expect(contentPrefix("/orgs/acme/ctx", undefined)).toBeNull();

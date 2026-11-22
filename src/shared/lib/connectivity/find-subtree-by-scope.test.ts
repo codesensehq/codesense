@@ -36,3 +36,16 @@ describe("findSubtreeByScope", () => {
     expect(findSubtreeByScope(tree(), "a")).toBeNull();
   });
 });
+
+describe("findSubtreeByScope with rooted and Windows scopes", () => {
+  it("does not suffix-match a rooted scope", () => {
+    const t = makeEpic("/z", "", [], [makeEpic("/z/a", "a", [], [makeEpic("/z/a/b", "b", [])])]);
+    expect(findSubtreeByScope(t, "/a/b")).toBeNull();
+    expect(findSubtreeByScope(t, "a/b")?.absoluteDirPath).toBe("/z/a/b");
+  });
+
+  it("resolves a Windows absolute scope across separators", () => {
+    const t = makeEpic("C:\\ctx", "", [], [makeEpic("C:\\ctx\\epic-a", "epic-a", [])]);
+    expect(findSubtreeByScope(t, "C:/ctx/epic-a")?.dirName).toBe("epic-a");
+  });
+});

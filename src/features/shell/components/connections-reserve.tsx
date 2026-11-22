@@ -59,6 +59,8 @@ export function RowAction({
   disabled = false,
   destructive = false,
   ref,
+  className,
+  ...rest
 }: {
   /** React 19: the button, for a caller that moves focus to it. */
   ref?: React.Ref<HTMLButtonElement>;
@@ -69,6 +71,11 @@ export function RowAction({
   disabled?: boolean;
   /** The verb removes something — read as such, not as a neutral row verb. */
   destructive?: boolean;
+  /** Set by `CapabilityOffControl` while the verb's capability is off on this OS. */
+  className?: string;
+  title?: string;
+  "aria-disabled"?: boolean;
+  "aria-describedby"?: string;
 }) {
   return (
     <button
@@ -77,11 +84,13 @@ export function RowAction({
       data-testid={testid}
       onClick={onClick}
       disabled={disabled}
+      {...rest}
       className={cn(
         "flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-accent disabled:pointer-events-none disabled:opacity-50",
         destructive
           ? "font-medium text-destructive hover:text-destructive"
           : "text-muted-foreground hover:text-foreground",
+        className,
       )}
     >
       {icon}

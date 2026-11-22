@@ -3,6 +3,7 @@ import { Fragment } from "react";
 import { ChevronRight } from "lucide-react";
 
 import { FileGlyph } from "./file-glyph";
+import { split } from "@/shared/lib/path";
 
 /**
  * Where the cursor is: the file's folders, the file, then the enclosing code
@@ -18,7 +19,7 @@ export function EditorBreadcrumbs({
   absPath: string;
   scope: readonly string[] | null;
 }) {
-  const parts = relPath.split("/").filter(Boolean);
+  const parts = split(relPath);
   const file = parts.pop() ?? relPath;
   return (
     <nav

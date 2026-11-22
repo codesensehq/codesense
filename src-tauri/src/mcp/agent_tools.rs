@@ -986,6 +986,7 @@ fn field_of(e: &ValidationError) -> Option<String> {
         | ValidationError::InvalidEnvName(_)
         | ValidationError::InvalidEnvValue(_)
         | ValidationError::EngineTelemetryEnv(_)
+        | ValidationError::ShellDispatchEnv(_)
         | ValidationError::EnvValueNotString(_) => "env".into(),
         ValidationError::InvalidMcpServer(_)
         | ValidationError::DuplicateMcpServer(_)

@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { basename } from "@/shared/lib/path";
 import type {
   ContextConflict,
   ContextConflictResolution,
@@ -33,6 +34,7 @@ import {
   runSyncAction,
   settleConflict,
 } from "../lib/repo-status-source";
+import { localMachinePhrase } from "@/shared/lib/local-machine";
 
 // ---------------------------------------------------------------------------
 // Glyphs: one stroke family, drawn at the button's 10–11px.
@@ -475,8 +477,7 @@ function WorktreeSection({
 }
 
 function fileName(path: string): string {
-  const name = path.split("/").pop() ?? path;
-  return name.replace(/\.(md|html?|excalidraw)$/i, "");
+  return basename(path).replace(/\.(md|html?|excalidraw)$/i, "");
 }
 
 const RESOLUTION_WORD: Record<ContextConflictResolution, string> = {
@@ -813,7 +814,7 @@ export function PrivateCommitButton({ teamKey, orgRoot }: { teamKey: string; org
   if (!agentNames.length)
     return (
       <span className="text-[11px] font-normal text-muted-foreground">
-        No agent on this Mac to ask.
+        No agent on {localMachinePhrase()} to ask.
       </span>
     );
   return (

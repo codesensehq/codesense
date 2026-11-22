@@ -25,8 +25,10 @@ pub mod census;
 pub mod control;
 pub mod frame;
 pub mod hello;
+pub mod hook;
 pub mod inbox_wait;
 pub mod machine_stats;
+pub mod machine_wording;
 pub mod nofile;
 
 pub use census::Census;
@@ -38,11 +40,14 @@ pub use hello::{
     XTERM_VERSION,
 };
 
+// Unix only until the local IPC layer lands: it passes descriptors over a Unix socket.
 #[cfg(unix)]
 pub mod broker;
 pub mod executor;
 pub mod reverse_mcp;
 
+// Unix only until the local IPC layer lands: its launch descriptor names a Unix socket.
+#[cfg(unix)]
 pub mod scoped_mcp;
 
 #[cfg(any(test, feature = "test-support"))]

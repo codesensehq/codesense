@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import { basename, dirname, join } from "@/shared/lib/path";
 import {
   getViewerFileType,
   isDerivedRenderArtifact,
@@ -24,11 +25,6 @@ import {
  *  is `"markdown"` — unsafe for a membership test on folders/non-docs). */
 const CANVAS_HOST_EXTENSIONS = new Set(["md", "html", "htm"]);
 
-function basenameOf(path: string): string {
-  const slash = path.lastIndexOf("/");
-  return slash >= 0 ? path.slice(slash + 1) : path;
-}
-
 function extensionOf(name: string): string {
   const dot = name.lastIndexOf(".");
   return dot >= 0 ? name.slice(dot + 1).toLowerCase() : "";
@@ -43,7 +39,7 @@ function extensionOf(name: string): string {
  * md/html gate; `isDerivedRenderArtifact` is belt-and-suspenders.
  */
 export function canCreateCanvas(path: string): boolean {
-  const name = basenameOf(path);
+  const name = basename(path);
   return CANVAS_HOST_EXTENSIONS.has(extensionOf(name)) && !isDerivedRenderArtifact(name);
 }
 
@@ -57,7 +53,7 @@ export function canCreateCanvas(path: string): boolean {
  * "is this a canvas" across every context-menu affordance.
  */
 export function canExportCanvas(path: string): boolean {
-  return getViewerFileType(path) === "excalidraw" && !isDerivedRenderArtifact(basenameOf(path));
+  return getViewerFileType(path) === "excalidraw" && !isDerivedRenderArtifact(basename(path));
 }
 
 /**
@@ -69,12 +65,11 @@ export function canExportCanvas(path: string): boolean {
  * (Finding A) — do not relocate into a subdir.
  */
 export function canvasCandidatePath(docPath: string, attempt: number): string {
-  const slash = docPath.lastIndexOf("/");
-  const dir = slash >= 0 ? docPath.slice(0, slash) : "";
-  const base = stripViewerExtension(basenameOf(docPath));
+  const dir = dirname(docPath);
+  const base = stripViewerExtension(basename(docPath));
   const suffix = attempt <= 0 ? "" : `-${attempt + 1}`;
   const name = `${base}${suffix}.excalidraw`;
-  return dir ? `${dir}/${name}` : name;
+  return dir ? join(dir, name) : name;
 }
 
 /**

@@ -245,7 +245,7 @@ describe("Reply-to chips", () => {
 
 describe("the chat composer's line", () => {
   it("for an offline agent defers to the chat's own offline note when it shows one", () => {
-    const sessions = [session("offline", { machine: "build-box" })];
+    const sessions = [session("offline", { machine: "build-box", machineId: "box" })];
     renderChat([msg(1)], { sessions, offlineNoted: true });
     expect(screen.getByTestId("ibx-route-hint")).toHaveTextContent(
       `To ${AGENT}'s inbox · you stay on your tab`,
@@ -312,7 +312,7 @@ describe("the chat composer's line", () => {
     };
     expect(await fail(false)).toBe("Not sent: no such session. Your message is still here.");
     expect(await fail(true)).toBe(
-      "Not sent: no such session. Your message is still here; press ↵ to try again.",
+      "Not sent: no such session. Your message is still here; press ⏎ to try again.",
     );
   });
 
@@ -320,7 +320,9 @@ describe("the chat composer's line", () => {
     sendFromInbox.mockClear();
     const send = async (state: string) => {
       document.body.innerHTML = "";
-      renderChat([msg(1)], { sessions: [session(state, { machine: "build-box" })] });
+      renderChat([msg(1)], {
+        sessions: [session(state, { machine: "build-box", machineId: "box" })],
+      });
       const box = screen.getByLabelText("Message");
       fireEvent.change(box, { target: { value: "hello" } });
       await act(async () => {

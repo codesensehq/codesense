@@ -2,6 +2,8 @@
 //! The host over real PTYs: the layout follows each process exit and removal
 //! through the wrapped sink, `open_tab` never leaves a phantom-live entry, and
 //! closes free or background exactly as their mode says.
+//! Unix only: uses the unix-only test fixtures (real PTYs through `sh`).
+#![cfg(unix)]
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -40,6 +42,7 @@ fn ws() -> WorkspaceKey {
 
 fn request(session: &str) -> OpenTab {
     OpenTab {
+        cwd: None,
         viewer: viewer(),
         workspace: ws(),
         session: sid(session),
@@ -537,6 +540,81 @@ fn existing_tabs_keep_their_host_directory() {
         Err(LayoutError::CwdConflict(_))
     ));
     host.kill(&sid("cwd-live")).unwrap();
+}
+
+#[test]
+fn a_tab_with_its_own_folder_opens_beside_the_workspace_folder_tabs() {
+    let (_, host) = host();
+    let (base, seat) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (base_dir, seat_dir) = (base.path().to_str().unwrap(), seat.path().to_str().unwrap());
+    let in_base = |session: &str| {
+        let mut open = request(session);
+        open.descriptor.as_mut().unwrap().worktree_path = Some(base.path().to_path_buf());
+        open
+    };
+    let live = |open: OpenTab| {
+        let session = open.session.as_str().to_string();
+        host.open_tab(
+            open,
+            Box::new(|| spawn(&host.sessions, sh("sleep 30"), registration(&session))),
+        )
+    };
+    // The lead runs in the workspace's folder; a seat opens beside it in its own folder.
+    live(in_base("lead")).unwrap();
+    live(OpenTab {
+        cwd: Some(seat.path().to_path_buf()),
+        ..in_base("seat")
+    })
+    .unwrap();
+    // A later shared tab still opens: the workspace kept its folder.
+    live(in_base("shared")).unwrap();
+    let layout = host
+        .layout_snapshot(&viewer(), &ClientBootId::new("boot"))
+        .unwrap()
+        .workspaces
+        .remove(&ws())
+        .unwrap();
+    assert_eq!(
+        layout.descriptor.worktree_path.as_deref(),
+        Some(base.path())
+    );
+    assert_eq!(
+        layout
+            .tab_dirs
+            .keys()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>(),
+        ["seat"]
+    );
+    assert_eq!(layout.tab_dir(&sid("seat")), Some(seat.path()));
+    // Each tab counts where it runs.
+    let sessions = |dir: &str| {
+        let mut found: Vec<String> = host
+            .worktree_usage(dir)
+            .unwrap()
+            .entries
+            .into_iter()
+            .map(|(_, tab)| tab.session.as_str().to_string())
+            .collect();
+        found.sort();
+        found
+    };
+    assert_eq!(sessions(seat_dir), ["seat"]);
+    assert_eq!(sessions(base_dir), ["lead", "shared"]);
+    // A tab whose own folder is pending is counted there before it is placed.
+    let mut pending = in_base("pending");
+    pending.cwd = Some(seat.path().to_path_buf());
+    host.reserve_tab(&pending).unwrap();
+    assert_eq!(
+        host.worktree_usage(seat_dir).unwrap().opening,
+        vec![sid("pending")]
+    );
+    assert!(host.worktree_usage(base_dir).unwrap().opening.is_empty());
+    host.finish_tab(pending, Err("cancelled".into()))
+        .unwrap_err();
+    for session in ["lead", "seat", "shared"] {
+        host.kill(&sid(session)).unwrap();
+    }
 }
 
 #[test]

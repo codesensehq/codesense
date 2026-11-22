@@ -2,6 +2,8 @@
 //! The PTY lifecycle iteration the resource leak gate measures: explicit
 //! teardown, natural exit, and deadline recovery over real PTYs, each proven to
 //! release its child, process group, reaper, and registry entries.
+//! Unix only: diagnostic code for the unix leak gate, over unix process groups.
+#![cfg(unix)]
 
 #[cfg(target_os = "macos")]
 use std::sync::Arc;

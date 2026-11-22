@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#![cfg(cap_terminal_server_sidecar)]
 //! Packaged helper → daemon with no desktop connection, then snapshot recovery.
 //! Default fixtures use synthetic callbacks. The explicitly ignored installed-
 //! Claude fixture separately qualifies native startup hooks without a model prompt.
@@ -23,6 +24,13 @@ const BINARY: &str = env!("CARGO_BIN_EXE_codesense-session-server");
 fn daemon_command() -> Command {
     static WORKER: std::sync::Once = std::sync::Once::new();
     WORKER.call_once(|| {
+        // Each test is a process of its own and the build replaces its output in place, so one
+        // process builds at a time, and the worker goes in by rename: a running daemon keeps its.
+        let lock = std::fs::File::create(
+            Path::new(BINARY).with_file_name("codesense-emulator-build.lock"),
+        )
+        .unwrap();
+        lock.lock().expect("the emulator build lock");
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
         let built = Command::new("pnpm")
             .args(["run", "build:emulator"])
@@ -43,11 +51,12 @@ fn daemon_command() -> Command {
         let worker = repo
             .join("src-tauri/binaries")
             .join(format!("codesense-emulator-{triple}"));
-        std::fs::copy(
-            worker,
-            codesense_session_server::host::emulator_worker_beside(Path::new(BINARY)),
-        )
-        .expect("install the built codesense-emulator beside the fixture server");
+        let beside = codesense_session_server::host::emulator_worker_beside(Path::new(BINARY));
+        let staged =
+            beside.with_file_name(format!("codesense-emulator-{}.staged", std::process::id()));
+        std::fs::copy(worker, &staged)
+            .and_then(|_| std::fs::rename(&staged, &beside))
+            .expect("install the built codesense-emulator beside the fixture server");
     });
     let mut daemon = Command::new(BINARY);
     // A test run inside a CodeSense terminal inherits its server's wake-hold requirement,

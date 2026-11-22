@@ -10,6 +10,7 @@ import {
   UserCircle,
   Waypoints,
   FileX,
+  MessageSquare,
 } from "lucide-react";
 
 import { InfoTip } from "@/components/ui/tooltip";
@@ -19,6 +20,7 @@ import type { SectionKey } from "@/features/settings/lib/types";
 import { rowMatches, type SettingRowSpec } from "@/features/settings/lib/row-matches";
 import { DASHBOARDS_SECTION_SPEC } from "./dashboards-section";
 import { GENERAL_ROW_SPEC_LIST } from "./general-section";
+import { MESSAGING_ROW_SPECS } from "./messaging-section";
 import { IDENTITY_SECTION_SPECS } from "./identity-section";
 import { REPO_SECTION_SPEC } from "./repo-section";
 import { shortcutRowSpecs } from "./shortcuts-section";
@@ -38,6 +40,7 @@ export const SECTION_NAV_ITEMS: SectionNavItem[] = [
   { key: "general", label: "General", icon: Settings },
   { key: "appearance", label: "Appearance", icon: Settings },
   { key: "dashboards", label: "Dashboards", icon: Settings },
+  { key: "messaging", label: "Messaging", icon: MessageSquare },
   { key: "identity", label: "Identity", icon: UserCircle },
   { key: "shortcuts", label: "Shortcuts", icon: Keyboard },
   { key: "repo", label: "Repo", icon: GitBranch },
@@ -52,11 +55,13 @@ export const SECTION_NAV_ITEMS: SectionNavItem[] = [
 /** Maps each section to the row specs that determine whether it has
  *  visible content for a given query. The sidebar dims sections where
  *  no row spec matches — ensuring the enabled state reflects actual
- *  content, not a static keyword approximation. */
-const SECTION_ROW_SPECS: Record<SectionKey, readonly SettingRowSpec[]> = {
-  general: GENERAL_ROW_SPEC_LIST,
+ *  content, not a static keyword approximation. General isn't here: callers pass
+ *  `GENERAL_ROW_SPEC_LIST` to `sectionHasContent`. */
+const SECTION_ROW_SPECS: Record<Exclude<SectionKey, "general">, readonly SettingRowSpec[]> = {
   appearance: APPEARANCE_ROW_SPECS,
   dashboards: [DASHBOARDS_SECTION_SPEC],
+  // Every row counts, the key row included where the secret store is off: it explains itself.
+  messaging: MESSAGING_ROW_SPECS,
   identity: IDENTITY_SECTION_SPECS,
   // Dashboard commands come and go with the slot dashboards, so read them each time.
   get shortcuts() {
@@ -69,10 +74,17 @@ const SECTION_ROW_SPECS: Record<SectionKey, readonly SettingRowSpec[]> = {
   account: [ACCOUNT_SECTION_SPEC],
 };
 
-/** Returns true if the section has at least one row that matches the query. */
-export function sectionHasContent(key: SectionKey, query: string): boolean {
+/** Returns true if the section has at least one row that matches the query. `generalSpecs` is
+ *  `GENERAL_ROW_SPEC_LIST`, every General row: a row whose capability is off on this OS is
+ *  shown disabled with the off sentence, never hidden, so it matches like any other. */
+export function sectionHasContent(
+  key: SectionKey,
+  query: string,
+  generalSpecs: readonly SettingRowSpec[],
+): boolean {
   if (!query.trim()) return true;
-  return SECTION_ROW_SPECS[key].some((spec) => rowMatches(spec, query));
+  const specs = key === "general" ? generalSpecs : SECTION_ROW_SPECS[key];
+  return specs.some((spec) => rowMatches(spec, query));
 }
 
 // ---------- Component ----------
@@ -92,7 +104,7 @@ export function SettingsSidebar({
 }: SettingsSidebarProps) {
   const enabledItems = SECTION_NAV_ITEMS.map((item) => ({
     ...item,
-    enabled: sectionHasContent(item.key, query),
+    enabled: sectionHasContent(item.key, query, GENERAL_ROW_SPEC_LIST),
   }));
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {

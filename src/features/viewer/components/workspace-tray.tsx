@@ -54,7 +54,7 @@ import {
 } from "@/shared/components/positioned-context-menu";
 import { useWorkspaceCrews, type PillCrew } from "../hooks/use-workspace-crews";
 import { usePillLabel, WorkspacePill } from "./workspace-pill";
-import { formatKeystrokeDisplay, isMac } from "@/shared/lib/shortcuts/keystroke";
+import { formatKeystrokeDisplay, hasMod, isMac } from "@/shared/lib/shortcuts/keystroke";
 import { useEffectiveShortcut } from "@/shared/stores/shortcuts-store";
 import { ScopedStatusMark } from "./session-status-mark";
 import { HiddenTabMenuItems } from "./hidden-tab-menu-items";
@@ -1007,7 +1007,7 @@ export function WorkspaceTray({
   // Alt+Left/Right on a focused pill moves it one place along the strip, as Alt+Up/Down moves a
   // card in the Agents pane. The pill keeps focus and stays in view.
   const onChipAreaKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (!e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return;
+    if (!e.altKey || e.shiftKey || hasMod(e)) return;
     if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
     const area = e.currentTarget;
     // Only from the pill's own selection button: its other controls (the stage, the Hidden-tabs
@@ -1633,8 +1633,8 @@ export function WorkspaceTray({
         className="absolute bottom-full left-1/2 z-10 mb-1 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded border border-border bg-popover px-2 py-1 text-xs text-muted-foreground shadow-md"
       >
         <span>
-          Click to switch · drag along the bar (or {isMac() ? "⌥←/→" : "Alt+←/→"}) to reorder, onto
-          a pane to split
+          Click to switch · drag along the bar (or {formatKeystrokeDisplay("Alt+ArrowLeft")}/→) to
+          reorder, onto a pane to split
         </span>
         <button
           type="button"

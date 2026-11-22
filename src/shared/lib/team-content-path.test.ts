@@ -84,3 +84,13 @@ describe("teamContentPathFromEpicDocPath (SLW-FX-14)", () => {
     expect(teamContentPathFromEpicDocPath(null)).toBeNull();
   });
 });
+
+describe("teamContentPathFromEpicDocPath on Windows", () => {
+  it("recovers a drive-letter org root, team and content path", () => {
+    expect(teamContentPathFromEpicDocPath("C:\\r\\orgs\\o\\team\\content\\epic.md")).toEqual({
+      orgRoot: "C:\\r\\orgs\\o",
+      team: "team",
+      teamContentPath: "C:\\r\\orgs\\o\\team\\content",
+    });
+  });
+});

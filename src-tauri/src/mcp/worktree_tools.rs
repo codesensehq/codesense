@@ -93,6 +93,8 @@ mod tests {
             last_reverse_sync_at: None,
             last_reverse_sync_by: None,
             attribution: None,
+            seat: None,
+            seat_kept: None,
             epic_id: None,
             owner: None,
             repo: None,

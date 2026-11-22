@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::system::contexts_dir;
+use crate::shared::opener;
 
 /// Sanitize a repo path into a safe directory name.
 fn sanitize_repo_name(repo_path: &str) -> Result<String, String> {
@@ -66,18 +67,13 @@ pub async fn reveal_context_repo(app: tauri::AppHandle, repo_path: String) -> Re
             return Err(format!("context repo not found for {}", repo_name));
         }
 
-        // Open in Finder via macOS `open` command
-        std::process::Command::new("open")
-            .arg(&ctx_dir)
-            .spawn()
-            .map_err(|e| format!("failed to open Finder: {}", e))?;
-
-        Ok(())
+        crate::shared::opener::open(crate::shared::opener::Open::Folder(&ctx_dir))
+            .map_err(|e| format!("failed to open the file manager: {e}"))
     })
     .await
 }
 
-/// Open an arbitrary directory in Finder. Used by Settings to reveal
+/// Open a directory in the file manager. Used by Settings to reveal
 /// CodeSense-managed dirs (team content and the like) so users can drop
 /// files in or edit them externally.
 ///
@@ -88,43 +84,70 @@ pub async fn reveal_context_repo(app: tauri::AppHandle, repo_path: String) -> Re
 #[tauri::command]
 pub async fn reveal_path(path: String) -> Result<(), String> {
     crate::commands::await_blocking("reveal_path", move || {
-        let target = std::path::PathBuf::from(&path);
-
-        // Normalize and verify it lives under a codesense-managed root.
-        let mut normalized = std::path::PathBuf::new();
-        for component in target.components() {
-            match component {
-                std::path::Component::ParentDir => {
-                    normalized.pop();
-                }
-                std::path::Component::CurDir => {}
-                other => normalized.push(other),
-            }
-        }
         let home = crate::commands::paths::codesense_home_dir()
             .ok_or_else(|| "codesense home unavailable".to_string())?;
-        let users_root = home.join(crate::context_repo::USERS_DIR);
-        let core_root = home.join("core");
-        let allowed = normalized.starts_with(&users_root) || normalized.starts_with(&core_root);
-        if !allowed {
-            return Err(format!(
-                "refusing to reveal path outside codesense home: {}",
-                path
-            ));
-        }
-
-        if !target.exists() {
-            return Err(format!("path does not exist: {}", path));
-        }
-
-        std::process::Command::new("open")
-            .arg(&target)
-            .spawn()
-            .map_err(|e| format!("failed to open Finder: {}", e))?;
-
-        Ok(())
+        // Only the kind of request matters to the facts: a folder.
+        let facts = opener::HostFacts::gather(&opener::Open::Folder(std::path::Path::new(&path)));
+        let launches =
+            reveal_launches(std::env::consts::OS, &path, &home, &facts, &opener::HostFs)?;
+        opener::spawn_first(&launches, &opener::HostSpawn)
+            .map_err(|e| format!("failed to open the file manager: {e}"))
     })
     .await
+}
+
+/// The launchers that reveal `path` on `os`, each given exactly the canonical path
+/// [`reveal_target`] checked against the managed roots, never the spelled one.
+///
+/// Accepted residual: the launcher (`xdg-open`, often a separate D-Bus file manager, or Finder)
+/// resolves that canonical path again by name. A component of it swapped for a link after the
+/// check would still be followed; this process can't hand an external file manager its own
+/// open handle, so that window stays.
+fn reveal_launches(
+    os: &str,
+    path: &str,
+    home: &std::path::Path,
+    facts: &opener::HostFacts,
+    fs: &dyn opener::Fs,
+) -> Result<Vec<opener::Launch>, String> {
+    let target = reveal_target(path, home)?;
+    opener::plans(os, opener::Open::Folder(&target), facts, fs)
+        .map_err(|e| format!("failed to open the file manager: {e}"))
+}
+
+/// The folder `path` names, canonicalized, if it lives under a
+/// codesense-managed root of `home`. The roots are checked on the spelled
+/// path and again on the canonical one, so a symlink can't step outside them.
+fn reveal_target(path: &str, home: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let refuse = || format!("refusing to reveal path outside codesense home: {}", path);
+    let roots = [home.join(crate::context_repo::USERS_DIR), home.join("core")];
+
+    // Normalize and verify it lives under a codesense-managed root.
+    let mut normalized = std::path::PathBuf::new();
+    for component in std::path::Path::new(path).components() {
+        match component {
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => normalized.push(other),
+        }
+    }
+    if !roots.iter().any(|root| normalized.starts_with(root)) {
+        return Err(refuse());
+    }
+
+    let target =
+        std::fs::canonicalize(path).map_err(|_| format!("path does not exist: {}", path))?;
+    let inside = roots.iter().any(|root| {
+        std::fs::canonicalize(root)
+            .map(|root| target.starts_with(root))
+            .unwrap_or(false)
+    });
+    if !inside {
+        return Err(refuse());
+    }
+    Ok(target)
 }
 
 /// Return the URL of the `origin` remote for a source repo on disk.
@@ -241,6 +264,37 @@ pub struct TabSourceRepo {
     /// resolves the same root but needs the live-tab-cwd follow-up to be
     /// safe for the editor, which keys the tree off `ws.cwd`).
     pub is_root: bool,
+    /// `cwd` relative to `root`, joined with `/` on every OS (`""` at the
+    /// root). Both sides are canonical, so a symlinked cwd or a Windows
+    /// verbatim root still maps. `None` when the cwd is not under the
+    /// working-tree root (e.g. `core.worktree` points elsewhere).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+}
+
+/// `cwd`'s path inside `root`, `/`-joined; `None` when it is not inside.
+fn repo_relative_prefix(root: &std::path::Path, cwd: &std::path::Path) -> Option<String> {
+    let rel = cwd.strip_prefix(root).ok()?;
+    Some(
+        rel.components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/"),
+    )
+}
+
+/// The synchronous body of `resolve_tab_source_repo`.
+fn tab_source_repo_of(path: &std::path::Path) -> Option<TabSourceRepo> {
+    if !path.is_dir() {
+        return None;
+    }
+    let root = working_tree_root_of(path)?;
+    let canonical_cwd = path.canonicalize().ok()?;
+    Some(TabSourceRepo {
+        is_root: canonical_cwd == root,
+        prefix: repo_relative_prefix(&root, &canonical_cwd),
+        root: root.display().to_string(),
+    })
 }
 
 /// Resolve the source repo for a tab's cwd. Returns `None` for a cwd that is
@@ -248,21 +302,10 @@ pub struct TabSourceRepo {
 /// Synchronous git I/O: callers run it on the blocking pool via `spawn_blocking`.
 #[tauri::command]
 pub async fn resolve_tab_source_repo(cwd: String) -> Option<TabSourceRepo> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let path = std::path::Path::new(&cwd);
-        if !path.is_dir() {
-            return None;
-        }
-        let root = working_tree_root_of(path)?;
-        let canonical_cwd = path.canonicalize().ok()?;
-        Some(TabSourceRepo {
-            is_root: canonical_cwd == root,
-            root: root.display().to_string(),
-        })
-    })
-    .await
-    .ok()
-    .flatten()
+    tauri::async_runtime::spawn_blocking(move || tab_source_repo_of(std::path::Path::new(&cwd)))
+        .await
+        .ok()
+        .flatten()
 }
 
 #[cfg(test)]
@@ -289,6 +332,96 @@ mod tests {
     }
 
     #[test]
+    fn reveal_target_keeps_to_the_managed_roots_after_links() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let team = home.join(crate::context_repo::USERS_DIR).join("u/team");
+        let core = home.join("core/docs");
+        let outside = root.path().join("outside");
+        for dir in [&team, &core, &outside] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let s = |p: &std::path::Path| p.to_str().unwrap().to_string();
+
+        let canonical = |p: &std::path::Path| std::fs::canonicalize(p).unwrap();
+        assert_eq!(reveal_target(&s(&team), &home), Ok(canonical(&team)));
+        assert_eq!(reveal_target(&s(&core), &home), Ok(canonical(&core)));
+
+        // A link inside a root that points out of it is refused.
+        let link = team.join("escape");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        let refused = reveal_target(&s(&link), &home).unwrap_err();
+        assert!(refused.starts_with("refusing to reveal"), "{refused}");
+        // A link inside a root that stays inside resolves to its target.
+        let inner = team.join("to-core");
+        std::os::unix::fs::symlink(&core, &inner).unwrap();
+        assert_eq!(reveal_target(&s(&inner), &home), Ok(canonical(&core)));
+
+        // `..` out of a root, a path outside, and a missing path inside.
+        let dotdot = format!("{}/../../../outside", s(&team));
+        assert!(reveal_target(&dotdot, &home)
+            .unwrap_err()
+            .starts_with("refusing to reveal"));
+        assert!(reveal_target(&s(&outside), &home)
+            .unwrap_err()
+            .starts_with("refusing to reveal"));
+        let missing = team.join("gone");
+        assert_eq!(
+            reveal_target(&s(&missing), &home),
+            Err(format!("path does not exist: {}", s(&missing)))
+        );
+    }
+
+    /// Through a link that stays inside a root, every planned launch is handed the canonical
+    /// target, on each OS with rows.
+    #[cfg(unix)]
+    #[test]
+    fn reveal_launches_argument_is_the_checked_canonical_path() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let team = home.join(crate::context_repo::USERS_DIR).join("u/team");
+        let core = home.join("core/docs");
+        for dir in [&team, &core] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let link = team.join("to-core");
+        std::os::unix::fs::symlink(&core, &link).unwrap();
+        let canonical = std::fs::canonicalize(&core).unwrap();
+        let facts = opener::HostFacts {
+            is_wsl: true,
+            xdg_data_home: None,
+            xdg_data_dirs: Vec::new(),
+            text_default: Err(opener::TextDefaultMissing::NotQueried),
+        };
+
+        for os in ["linux", "macos"] {
+            let launches =
+                reveal_launches(os, link.to_str().unwrap(), &home, &facts, &opener::HostFs)
+                    .unwrap();
+            assert!(!launches.is_empty(), "{os}");
+            for launch in &launches {
+                assert_eq!(
+                    launch.args.last(),
+                    Some(&canonical.clone().into_os_string()),
+                    "{os}: {launch:?}"
+                );
+            }
+        }
+        // A refused path plans nothing.
+        let outside = root.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        let refused = reveal_launches(
+            "linux",
+            outside.to_str().unwrap(),
+            &home,
+            &facts,
+            &opener::HostFs,
+        )
+        .unwrap_err();
+        assert!(refused.starts_with("refusing to reveal"), "{refused}");
+    }
+
+    #[test]
     fn test_context_repo_creation_with_git2() {
         let dir = std::env::temp_dir()
             .join("codesense_test")
@@ -304,6 +437,69 @@ mod tests {
         assert!(repo.find_remote("origin").is_err());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- resolve_tab_source_repo ---
+
+    #[test]
+    fn tab_source_repo_at_the_root_has_an_empty_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        git2::Repository::init(tmp.path()).unwrap();
+        let repo = tab_source_repo_of(tmp.path()).unwrap();
+        assert!(repo.is_root);
+        assert_eq!(repo.prefix.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn tab_source_repo_in_a_nested_folder_joins_the_prefix_with_slashes() {
+        let tmp = tempfile::tempdir().unwrap();
+        git2::Repository::init(tmp.path()).unwrap();
+        let nested = tmp.path().join("a").join("b");
+        std::fs::create_dir_all(&nested).unwrap();
+        let repo = tab_source_repo_of(&nested).unwrap();
+        assert!(!repo.is_root);
+        assert_eq!(repo.prefix.as_deref(), Some("a/b"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tab_source_repo_through_a_symlink_maps_the_canonical_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        std::fs::create_dir_all(real.join("sub")).unwrap();
+        git2::Repository::init(&real).unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let repo = tab_source_repo_of(&link.join("sub")).unwrap();
+        assert!(!repo.is_root);
+        assert_eq!(repo.prefix.as_deref(), Some("sub"));
+    }
+
+    #[test]
+    fn repo_relative_prefix_is_none_outside_the_root() {
+        let root = std::path::Path::new("/work/repo");
+        assert_eq!(
+            repo_relative_prefix(root, std::path::Path::new("/work/other")),
+            None
+        );
+        assert_eq!(
+            repo_relative_prefix(root, std::path::Path::new("/work/repo/a/b")).as_deref(),
+            Some("a/b")
+        );
+    }
+
+    #[test]
+    fn tab_source_repo_omits_a_missing_prefix_when_serialized() {
+        let repo = TabSourceRepo {
+            root: "/work/repo".into(),
+            is_root: false,
+            prefix: None,
+        };
+        let json = serde_json::to_value(&repo).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({ "root": "/work/repo", "isRoot": false })
+        );
     }
 
     // --- read_source_repo_origin_url ---

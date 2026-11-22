@@ -1,0 +1,6 @@
+version=1.7.5-cs.5
+asset=git-ai-linux-arm64
+platform=linux-aarch64
+sha256=e111e154d00b0fe29dee4b9967f555888a26211bc2ff25bc8df5997ecf28a5ce
+repo=alfypops/git-ai
+tag=v1.7.5-cs.5

@@ -310,3 +310,25 @@ pub async fn resolve_machine_identity(
     .await?;
     notify_manager_mutation(&app, machine_id, None).await
 }
+
+#[cfg(test)]
+impl IdentityChange {
+    /// One with every field set, for the summary wire-shape test.
+    pub(super) fn sample() -> Self {
+        let identity = |host: &str, server_id: &str| IdentityDto {
+            host: host.into(),
+            port: 22,
+            jump_host: Some("jump.example".into()),
+            host_key_fingerprint: Some("SHA256:abc".into()),
+            server_id: Some(server_id.into()),
+        };
+        Self {
+            accepted: identity("old.example", "server-a"),
+            declared: identity("new.example", "server-b"),
+            revision: "rev-1".into(),
+            author: Some("Ada".into()),
+            date: Some("2026-01-02T03:04:05Z".into()),
+            observed_server_id: Some("server-c".into()),
+        }
+    }
+}

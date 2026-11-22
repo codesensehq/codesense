@@ -28,6 +28,14 @@ import {
   type ReplyRequest,
 } from "./inbox-view-context";
 import type { ConversationMessage } from "../api";
+import { formatKeystrokeDisplay, hasMod } from "@/shared/lib/shortcuts/keystroke";
+
+/** A session's line in the mention list: its state, then where it runs when that is known. */
+export function sessionMentionDetail(p: Participant): string {
+  return [p.state === "exited" ? "ended" : stateLabel(p.state), machineLabel(p)]
+    .filter(Boolean)
+    .join(" · ");
+}
 
 /**
  * The composer every lens shares: a To picker (@sessions with state and machine, #roles with
@@ -394,7 +402,7 @@ export function Composer({
           }}
           onKeyDown={(e) => {
             if (isComposing(e)) return;
-            if (quick && e.key === "Enter" && e.altKey && !e.metaKey && !e.ctrlKey) {
+            if (quick && e.key === "Enter" && e.altKey && !hasMod(e)) {
               // ⌥↵ is a new line in the chat, as ⇧↵ is (the webview would not insert one). Not
               // while the box is read-only, sending; an edit clears a failure or nudge as typing does.
               e.preventDefault();
@@ -402,7 +410,7 @@ export function Composer({
               insertNewline(e.currentTarget, setText);
               clearFailure(draftKey);
               setEmptyNudge(false);
-            } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey || (quick && !e.shiftKey))) {
+            } else if (e.key === "Enter" && (hasMod(e) || (quick && !e.shiftKey))) {
               e.preventDefault();
               void send();
             } else if (e.key === "Escape") {
@@ -420,7 +428,7 @@ export function Composer({
             aria-busy={sending || undefined}
             // Kept enabled on an empty box: a click says to write a message first.
             disabled={!to || !!ended || sending}
-            title={ended?.reason ?? "Send (↵)"}
+            title={ended?.reason ?? `Send (${formatKeystrokeDisplay("Enter")})`}
             onClick={() => void send()}
           >
             <Ico icon={sending ? Loader2 : ArrowUp} sm />
@@ -434,7 +442,7 @@ export function Composer({
             onClick={() => void send()}
           >
             <Ico icon={Send} sm />
-            Send <kbd>⌘↵</kbd>
+            Send <kbd>{formatKeystrokeDisplay("CmdOrCtrl+Enter")}</kbd>
           </button>
         )}
       </div>
@@ -443,7 +451,9 @@ export function Composer({
           {failed !== null && (
             <span className="ibx-comp-err" role="alert" data-testid="ibx-send-failed">
               Not sent: {failed}. Your message is still here
-              {failedNow?.retryable ? "; press ↵ to try again." : "."}
+              {failedNow?.retryable
+                ? `; press ${formatKeystrokeDisplay("Enter")} to try again.`
+                : "."}
             </span>
           )}
           {emptyNudge && failed === null && (
@@ -459,7 +469,8 @@ export function Composer({
           )}
           {!compact && (
             <span className="ibx-comp-keys" aria-hidden>
-              <kbd>↵</kbd> send <kbd>⇧↵</kbd> new line
+              <kbd>{formatKeystrokeDisplay("Enter")}</kbd> send{" "}
+              <kbd>{formatKeystrokeDisplay("Shift+Enter")}</kbd> new line
             </span>
           )}
         </div>
@@ -605,7 +616,7 @@ function RecipientPicker({
     team: undefined,
     label: `@${p.name}`,
     // A session id names one launch: an ended one never reads its mail again.
-    detail: `${p.state === "exited" ? "ended" : stateLabel(p.state)} · ${machineLabel(p)}`,
+    detail: sessionMentionDetail(p),
     group: "Sessions",
     ended: p.state === "exited",
   });

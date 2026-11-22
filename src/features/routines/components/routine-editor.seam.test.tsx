@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { restorePlatform, setPlatform } from "@/test/platform";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -391,6 +392,22 @@ describe("Routine editor over the mock backend", () => {
     await waitFor(() => expect(saved().max_wakes_per_day).toBe(3));
     expect(saved().max_wakes).toBeUndefined();
     expect(saved().min_gap).toBe("4h");
+  });
+
+  it("words the Limits hint without a Mac off macOS", async () => {
+    setPlatform("Win32");
+    try {
+      renderTab();
+      fireEvent.click(await screen.findByRole("button", { name: "New routine" }));
+      fireEvent.click(within(screen.getByTestId("routine-limits")).getByText("Limits"));
+      await pickAgent("Scribe");
+      fireEvent.change(screen.getByLabelText("Mode"), { target: { value: "wake" } });
+      const hint = screen.getByTestId("routine-limits-hint");
+      expect(hint).toHaveTextContent("Each machine keeps its own count.");
+      expect(hint).not.toHaveTextContent(/computer and machine|Mac/);
+    } finally {
+      restorePlatform();
+    }
   });
 
   it("keeps an unsaved edit across a look at Runs and History", async () => {

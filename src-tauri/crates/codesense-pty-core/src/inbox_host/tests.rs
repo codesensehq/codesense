@@ -1,7 +1,15 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::agent_cli::orion::Orion;
+// Unix only: used only by the waiter tests, which run over a Unix socket pair.
+#[cfg(unix)]
+use crate::inbox_waiters::{Owner, WaitArm};
+#[cfg(unix)]
+use codesense_host_proto::inbox_wait as wire;
+#[cfg(unix)]
 use std::io::Read;
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
 
 #[derive(Default)]
 struct Outlet {
@@ -48,11 +56,15 @@ impl Outlet {
     }
 }
 
+// Unix only: used only by the waiter tests, which run over a Unix socket pair.
+#[cfg(unix)]
 fn me() -> Owner {
     crate::activity::peer::inspect(std::process::id()).expect("this process can be inspected")
 }
 
 /// A waiter served on its own thread, and the helper's end of its socket.
+// Unix only: the unix transport's `serve` hands over on a Unix socket pair.
+#[cfg(unix)]
 fn waiter(
     inbox: &Arc<HostInbox>,
     outlet: &Arc<Outlet>,
@@ -71,6 +83,8 @@ fn waiter(
     (served, helper_end)
 }
 
+// Unix only: used only by the waiter tests, which run over a Unix socket pair.
+#[cfg(unix)]
 fn until(mut done: impl FnMut() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(5);
     while !done() {
@@ -80,6 +94,8 @@ fn until(mut done: impl FnMut() -> bool) {
 }
 
 /// The next line the host sent the helper.
+// Unix only: used only by the waiter tests, which run over a Unix socket pair.
+#[cfg(unix)]
 fn next(helper: &UnixStream) -> String {
     let line =
         codesense_host_proto::reverse_mcp::read_message(&mut &*helper, wire::MAX_LINE, |_| Ok(()))
@@ -88,6 +104,8 @@ fn next(helper: &UnixStream) -> String {
 }
 
 /// The helper says it printed the notice reserved under `token`.
+// Unix only: used only by the waiter tests, which run over a Unix socket pair.
+#[cfg(unix)]
 fn printed(helper: &UnixStream, token: &str) {
     wire::send_lines(&mut &*helper, &wire::printed_line(token)).unwrap();
 }
@@ -96,6 +114,8 @@ fn new() -> (Arc<HostInbox>, Arc<Outlet>) {
     (Arc::new(HostInbox::default()), Arc::new(Outlet::default()))
 }
 
+// Unix only: it serves a waiter over a Unix socket pair (the unix transport's `serve`).
+#[cfg(unix)]
 #[test]
 fn a_held_notice_is_handed_to_the_waiter_and_told_once_it_is_printed() {
     let (inbox, outlet) = new();
@@ -122,6 +142,8 @@ fn a_held_notice_is_handed_to_the_waiter_and_told_once_it_is_printed() {
     );
 }
 
+// Unix only: it serves a waiter over a Unix socket pair (the unix transport's `serve`).
+#[cfg(unix)]
 #[test]
 fn mail_pushed_before_the_waiter_arms_is_handed_over_at_once_and_a_repeat_push_is_ignored() {
     let (inbox, outlet) = new();
@@ -138,6 +160,8 @@ fn mail_pushed_before_the_waiter_arms_is_handed_over_at_once_and_a_repeat_push_i
     assert_eq!(outlet.told(), ["t2"]);
 }
 
+// Unix only: it serves a waiter over a Unix socket pair (the unix transport's `serve`).
+#[cfg(unix)]
 #[test]
 fn a_notice_waits_for_the_agent_to_have_its_tools_again() {
     let (inbox, outlet) = new();
@@ -161,6 +185,8 @@ fn a_notice_waits_for_the_agent_to_have_its_tools_again() {
     assert_eq!(outlet.told(), ["t1"]);
 }
 
+// Unix only: it serves a waiter over a Unix socket pair (the unix transport's `serve`).
+#[cfg(unix)]
 #[test]
 fn a_notice_for_an_agent_with_no_codesense_stream_waits_only_a_grace() {
     let (inbox, outlet) = new();
@@ -182,6 +208,8 @@ fn a_notice_for_an_agent_with_no_codesense_stream_waits_only_a_grace() {
     served.join().unwrap();
 }
 
+// Unix only: it serves a waiter over a Unix socket pair (the unix transport's `serve`).
+#[cfg(unix)]
 #[test]
 fn a_notice_the_helper_never_printed_stays_held_for_the_next_waiter() {
     let (inbox, outlet) = new();
@@ -199,6 +227,8 @@ fn a_notice_the_helper_never_printed_stays_held_for_the_next_waiter() {
     assert_eq!(outlet.told(), ["t1"]);
 }
 
+// Unix only: it serves a waiter over a Unix socket pair (the unix transport's `serve`).
+#[cfg(unix)]
 #[test]
 fn a_newer_waiter_replaces_the_one_before_it_and_a_re_arm_defers() {
     let (inbox, outlet) = new();
@@ -215,6 +245,8 @@ fn a_newer_waiter_replaces_the_one_before_it_and_a_re_arm_defers() {
     drop(newer);
 }
 
+// Unix only: it serves a waiter over a Unix socket pair (the unix transport's `serve`).
+#[cfg(unix)]
 #[test]
 fn a_helper_that_goes_away_releases_its_place_and_a_forgotten_session_reads_unarmed() {
     let (inbox, outlet) = new();
@@ -234,6 +266,8 @@ fn a_helper_that_goes_away_releases_its_place_and_a_forgotten_session_reads_unar
     assert_eq!(lock(&outlet.states).last().unwrap().grace_ms, None);
 }
 
+// Unix only: it serves a waiter over a Unix socket pair (the unix transport's `serve`).
+#[cfg(unix)]
 #[test]
 fn a_check_hands_over_what_is_held_and_otherwise_ends_at_once() {
     let (inbox, outlet) = new();
@@ -345,6 +379,8 @@ fn a_host_submit_is_told_only_once_its_cli_accepted_it() {
     assert_eq!(inbox.mail("S1", "n".into(), "t1".into()), Repeat::Told);
 }
 
+// Unix only: it serves a waiter over a Unix socket pair (the unix transport's `serve`).
+#[cfg(unix)]
 #[test]
 fn a_refused_submit_is_released_and_stays_for_a_check_in_the_same_turn() {
     let (inbox, outlet) = new();
@@ -393,6 +429,8 @@ fn an_engine_that_cant_be_reached_takes_nothing() {
     assert!(inbox.holds("S1") && !inbox.awaits_submit("S1"));
 }
 
+// Unix only: it serves a waiter over a Unix socket pair (the unix transport's `serve`).
+#[cfg(unix)]
 #[test]
 fn an_uncertain_submit_is_never_sent_again_until_the_prompt_shows_its_wake_key() {
     let (inbox, outlet) = new();
@@ -423,6 +461,8 @@ fn an_uncertain_submit_is_never_sent_again_until_the_prompt_shows_its_wake_key()
     assert_eq!(inbox.mail("S1", "n".into(), "t1".into()), Repeat::Told);
 }
 
+// Unix only: it serves a waiter over a Unix socket pair (the unix transport's `serve`).
+#[cfg(unix)]
 #[test]
 fn a_notice_a_waiter_is_handing_over_is_not_submitted_too() {
     let (inbox, outlet) = new();
@@ -521,6 +561,8 @@ fn each_fate_is_reported_by_its_own_event() {
     assert_eq!(Fate::of(TerminalDomainEvent::InboxWaiter { state }), None);
 }
 
+// Unix only: it serves a waiter over a Unix socket pair (the unix transport's `serve`).
+#[cfg(unix)]
 #[test]
 fn waiter_logs_start_and_exit_for_delivery_and_a_disconnected_helper() {
     let (inbox, outlet) = new();
@@ -583,6 +625,8 @@ fn versioned_local_hold_fences_queued_new_recovery_and_waiter_notices_until_lift
     assert_eq!(outlet.told(), vec!["queued"]);
 }
 
+// Unix only: it serves a waiter over a Unix socket pair (the unix transport's `serve`).
+#[cfg(unix)]
 #[test]
 fn recovery_can_recheck_the_host_wake_permit_without_deadlocking() {
     struct Recovery(Arc<HostInbox>);
@@ -666,9 +710,12 @@ fn a_queued_receipt_is_pending_until_its_hook_including_when_the_hook_beats_the_
 }
 
 /// An outlet whose guarded terminal recovery is counted and accepted.
+// Unix only: used only by the waiter tests, which run over a Unix socket pair.
+#[cfg(unix)]
 #[derive(Default)]
 struct Recoveries(std::sync::atomic::AtomicUsize);
 
+#[cfg(unix)]
 impl InboxOutlet for Recoveries {
     fn fate(&self, _: &str, _: &str, _: Fate) {}
     fn waiter(&self, _: InboxWaiterState) {}
@@ -685,6 +732,8 @@ impl InboxOutlet for Recoveries {
 }
 
 /// A waiter woke the agent and was never re-armed: it now has only its grace.
+// Unix only: used only by the waiter tests, which run over a Unix socket pair.
+#[cfg(unix)]
 fn woken_and_not_re_armed(inbox: &Arc<HostInbox>, outlet: &Arc<Outlet>) {
     let (served, helper) = waiter(inbox, outlet, WaitArm::Replace, false, None);
     until(|| inbox.state("S1").waiting);
@@ -696,6 +745,8 @@ fn woken_and_not_re_armed(inbox: &Arc<HostInbox>, outlet: &Arc<Outlet>) {
     assert!(!inbox.state("S1").waiting && inbox.state("S1").grace_ms.is_some());
 }
 
+// Unix only: it serves a waiter over a Unix socket pair (the unix transport's `serve`).
+#[cfg(unix)]
 #[test]
 fn an_idle_agent_is_not_covered_by_the_grace_of_a_waiter_that_never_re_armed() {
     let (inbox, outlet) = new();
@@ -710,6 +761,8 @@ fn an_idle_agent_is_not_covered_by_the_grace_of_a_waiter_that_never_re_armed() {
     assert!(inbox.waiter_covers("S1", REARM_SETTLE * 100));
 }
 
+// Unix only: it serves a waiter over a Unix socket pair (the unix transport's `serve`).
+#[cfg(unix)]
 #[test]
 fn mail_recovered_for_an_idle_agent_is_recovered_once_and_never_handed_to_a_later_waiter() {
     let (inbox, outlet) = new();
@@ -731,6 +784,8 @@ fn mail_recovered_for_an_idle_agent_is_recovered_once_and_never_handed_to_a_late
     served.join().unwrap();
 }
 
+// Unix only: it serves a waiter over a Unix socket pair (the unix transport's `serve`).
+#[cfg(unix)]
 #[test]
 fn an_agent_that_only_just_stopped_is_covered_by_its_grace_and_its_mail_stays_held() {
     let (inbox, outlet) = new();

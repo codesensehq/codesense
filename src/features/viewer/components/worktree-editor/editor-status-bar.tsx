@@ -16,6 +16,8 @@ import { InfoTip } from "@/components/ui/tooltip";
 import { indentationLabel, languageLabel, lineEndingLabel } from "@/shared/components/code-editor";
 
 import type { PaneStatus } from "./worktree-file-pane";
+import { formatControlDisplay, formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
+import { localMachineLabel, localMachinePhrase } from "@/shared/lib/local-machine";
 
 /**
  * The bottom status bar: where the file lives and its save state on the left,
@@ -55,7 +57,7 @@ export function EditorStatusBar({
       <Item
         label={
           location !== "remote"
-            ? "On this Mac"
+            ? `On ${localMachinePhrase()}`
             : machineOffline
               ? `Can’t reach ${machineLabel ?? "the machine"} (${machineOffline}) — files can’t be read or saved until it reconnects`
               : `On ${machineLabel ?? "a remote machine"}`
@@ -73,7 +75,7 @@ export function EditorStatusBar({
           <Monitor aria-hidden className="size-3 shrink-0" />
         )}
         <span className="min-w-0 max-w-[12rem] truncate">
-          {location === "remote" ? (machineLabel ?? "Remote") : "This Mac"}
+          {location === "remote" ? (machineLabel ?? "Remote") : localMachineLabel()}
         </span>
         {location === "remote" && machineOffline && (
           <span className="shrink-0">· {machineOffline}</span>
@@ -91,7 +93,11 @@ export function EditorStatusBar({
       <span className="min-w-2 flex-1" />
 
       {status && editable && status.cursor && (
-        <ItemButton label="Go to line (⌃G)" onClick={onGoToLine} testId="worktree-status-cursor">
+        <ItemButton
+          label={`Go to line (${formatControlDisplay("G")})`}
+          onClick={onGoToLine}
+          testId="worktree-status-cursor"
+        >
           <span className="tabular-nums">
             Ln {status.cursor.line}, Col {status.cursor.column}
           </span>
@@ -127,7 +133,7 @@ export function EditorStatusBar({
         </Item>
       )}
       <ItemButton
-        label={wrap ? "Word wrap on (⌥Z)" : "Word wrap off (⌥Z)"}
+        label={`Word wrap ${wrap ? "on" : "off"} (${formatKeystrokeDisplay("Alt+Z")})`}
         onClick={onToggleWrap}
         pressed={wrap}
         testId="worktree-status-wrap"
@@ -167,7 +173,10 @@ function SaveState({ status, remote }: { status: PaneStatus; remote: boolean }) 
   }
   if (status.dirty) {
     return (
-      <Item label="Unsaved changes — ⌘S to save" testId="worktree-status-save">
+      <Item
+        label={`Unsaved changes — ${formatKeystrokeDisplay("CmdOrCtrl+S")} to save`}
+        testId="worktree-status-save"
+      >
         <span aria-hidden className="size-1.5 rounded-full bg-foreground/70" />
         <span>Unsaved</span>
       </Item>

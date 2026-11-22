@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { scan, scanAddedFiles, loadAllow } from "./privacy-engine.mjs";
+import { scan, scanAddedFiles, loadAllow, where } from "./privacy-engine.mjs";
 import { INVENTORY_ERROR, combinedRules, ruleIds } from "./privacy-private-rules.mjs";
 import { DEFAULT_ALLOW, report } from "./privacy-scan.mjs";
 import { resolveRange, revision, gitOptions, git } from "./ci-scan-range.mjs";
@@ -529,26 +529,158 @@ function maintainerFindings(cwd, commits) {
   return findings;
 }
 
-// Commit-msg: the message up to the verbose diff below the scissors. Comment
-// lines are dropped only when the configured cleanup mode drops them; anything
-// else (an unknown or "auto" comment char) keeps every line.
-export function scanMessage({ message, privateRulesFile, cleanup = "", commentChar = "#" }) {
+// The comment string git config fixes for an editor commit, or null when it is
+// not certain: no entry means #, and every core.commentChar/commentString
+// entry having the same value (never auto, which git picks per message) means
+// that value.
+export function certainComment(values) {
+  if (!values.length) return "#";
+  const [first] = values;
+  return first && first !== "auto" && values.every((v) => v === first) ? first : null;
+}
+
+// What commit-msg knows about the message file: its text, whether an editor ran
+// (git sets GIT_EDITOR=: for the hook when none does), the certain comment
+// string and commit.cleanup from config. The command line's --cleanup and -v
+// stay unseen, so only the trailer-block lookup interprets the file.
+function messageForm(file, env, cwd) {
+  const values = tryGit(["config", "--get-regexp", "^core\\.comment(char|string)$"], cwd)
+    .stdout.split("\n")
+    .filter(Boolean)
+    .map((line) => (line.includes(" ") ? line.slice(line.indexOf(" ") + 1) : ""));
+  return {
+    message: fs.readFileSync(file, "utf8"),
+    editor: env.GIT_EDITOR !== ":",
+    comment: certainComment(values),
+    cleanup: tryGit(["config", "--get", "commit.cleanup"], cwd).stdout.trim(),
+  };
+}
+
+// The message as the trailer-block lookup reads it: `head` (where the trailer
+// block is), `tail` (from git's scissors line) and `skip` (git's comment
+// lines), with head + tail === message. Only an editor commit with a certain
+// comment string cuts at the scissors line, and skips comment lines when
+// commit.cleanup is unset, default or strip; anything else reads the file as
+// is, so a sign-off followed by text git might keep is refused, never accepted.
+export function trailerView({ message, editor = false, comment = null, cleanup = "" }) {
+  const raw = { head: message, tail: "", skip: () => false };
+  if (!editor || !comment) return raw;
+  const scissors = `${comment} ------------------------ >8 ------------------------`;
+  const lines = message.split("\n");
+  const at = lines.indexOf(scissors);
+  const cutAt = at < 0 ? message.length : lines.slice(0, at).join("\n").length + (at && 1);
+  const strips = ["", "default", "strip"].includes(cleanup);
+  return {
+    head: message.slice(0, cutAt),
+    tail: message.slice(cutAt),
+    skip: strips ? (line) => line.startsWith(comment) : () => false,
+  };
+}
+
+// The first scissors-shaped line (1-based), whatever its comment string, or
+// Infinity: a finding at or below it may be in a -v diff the hook cannot see.
+const SCISSORS = /^\S+ -+ >8 -+$/;
+function scissorsLine(message) {
+  const at = message.split("\n").findIndex((line) => SCISSORS.test(line));
+  return at < 0 ? Infinity : at + 1;
+}
+
+// Commit-msg: every line of git's message file, comments and any -v diff
+// included, since the hook cannot see which lines git drops. Only the
+// maintainer's sign-off in the trailer block is masked.
+export function scanMessage({ form, privateRulesFile }) {
   const rules = combinedRules(privateRulesFile);
-  const known = commentChar.length === 1 ? escapeRegExp(commentChar) : null;
-  let text = known ? message.split(new RegExp(`^${known} -+ >8 -+$`, "m"))[0] : message;
-  if (known && cleanup === "strip") text = text.replace(new RegExp(`^${known}.*$`, "gm"), "");
+  const { head, tail, skip } = trailerView(form);
+  const below = scissorsLine(form.message);
   return withTemp((tmp) => {
-    // With commit.cleanup strip, comment lines are blank already. Unset or default
-    // strips them from an editor message, so a comment block after the sign-off
-    // does not end the trailer block (the comments are still scanned, and pre-push
-    // scans the final message). Other modes publish them, so they end it.
-    const editorStrips = !!known && (cleanup === "" || cleanup === "default");
-    fs.writeFileSync(
-      path.join(tmp, "message.txt"),
-      withoutMaintainerSignoff(text, (line) => editorStrips && line.startsWith(commentChar)),
+    fs.writeFileSync(path.join(tmp, "message.txt"), withoutMaintainerSignoff(head, skip) + tail);
+    return scan(tmp, new Map(), { strict: true, rules }).map((f) =>
+      f.line >= below ? { ...f, verbose: true } : f,
     );
-    return scan(tmp, new Map(), { strict: true, rules });
   });
+}
+
+// Commit-msg in a maintainer clone (codesense.requireSigned): the commit being
+// made has the maintainer's identity as author and committer (as git var sees
+// them, so --author, --amend and GIT_* overrides count), their sign-off in the
+// trailer block, no AI co-author trailer on any line, and signing on. The hook
+// cannot see -S, so signing is commit.gpgsign plus a key source; this checks
+// the config, not the signature, which pre-push checks. Places name no person.
+export function commitFindings(cwd, form) {
+  const findings = [];
+  const found = (rule, place) =>
+    findings.push({ rule, sev: "error", place, allowed: false, source: "commit" });
+  const identity = (name) => tryGit(["var", name], cwd).stdout.replace(/ \d+ [+-]\d{4}\n?$/, "");
+  if (identity("GIT_AUTHOR_IDENT") !== MAINTAINER_IDENTITY) found("author-identity", "author");
+  if (identity("GIT_COMMITTER_IDENT") !== MAINTAINER_IDENTITY)
+    found("committer-identity", "committer");
+  const { head, skip } = trailerView(form);
+  if (withoutMaintainerSignoff(head, skip) === head) found("missing-signoff", "trailers");
+  for (const [i, line] of form.message.split("\n").entries())
+    if (AI_CO_AUTHOR.test(line)) found("ai-co-author", `message:${i + 1}`);
+  const config = (key) => tryGit(["config", "--get", key], cwd).stdout.trim();
+  // openpgp (the default) and x509 pick a key by the committer's email.
+  const keyed =
+    config("user.signingkey") !== "" ||
+    config("gpg.format").toLowerCase() !== "ssh" ||
+    config("gpg.ssh.defaultKeyCommand") !== "";
+  if (tryGit(["config", "--bool", "--get", "commit.gpgsign"], cwd).stdout.trim() !== "true")
+    found("signing-config", "commit.gpgsign");
+  else if (!keyed) found("signing-config", "user.signingkey");
+  return findings;
+}
+
+// Commit-msg: what the commit being made adds, with the same engine and
+// allow-list as pre-push. The index is the one git uses for this commit (a
+// temporary GIT_INDEX_FILE under commit -a or a pathspec), compared with HEAD,
+// or the empty tree on an unborn branch; under --amend that is the amend's own
+// change. A merge in progress is skipped (null): pre-push scans its
+// resolutions. A gitlink, a malformed allow-list or any other failure is one
+// finding of the hook's own rule (`hook`, with its place). Each finding
+// carries `index` and `count`: the file's position in, and the length of, the
+// commit's file list (`git diff --cached --name-only` under the same index),
+// so a report can place it without naming it.
+export function scanStaged({ cwd, privateRulesFile, allowFile = DEFAULT_ALLOW }) {
+  const rules = combinedRules(privateRulesFile);
+  const refuse = (rule, place = "the staged changes") => [
+    { rule, sev: "error", file: "", line: 0, allowed: false, hook: true, place },
+  ];
+  let files, order;
+  try {
+    const gitPath = (name) =>
+      git(["rev-parse", "--path-format=absolute", "--git-path", name], cwd).trim();
+    if (fs.existsSync(gitPath("MERGE_HEAD"))) return null;
+    // With no commit, --cached compares the index with HEAD, or with the empty
+    // tree on an unborn branch.
+    const changed = sideAdditions(cwd, ["diff", "--cached"]);
+    const blobs = commitBlobs(
+      cwd,
+      [...changed.values()].map(({ oid }) => oid),
+    );
+    files = [...changed].map(([file, { oid, lineNumbers }]) => ({
+      file,
+      data: blobs.get(oid),
+      lineNumbers,
+    }));
+    order = git(["diff", "--cached", "--name-only", "-z", "--"], cwd).split("\0").filter(Boolean);
+  } catch (error) {
+    return refuse(error.message === GITLINK_ERROR ? "gitlink" : "scan-error");
+  }
+  let allow;
+  try {
+    allow = loadAllow(allowFile, ruleIds(rules));
+  } catch {
+    return refuse("allow-file", "the allow-list");
+  }
+  try {
+    return scanAddedFiles(files, allow, { rules }).map((f) => ({
+      ...f,
+      index: order.indexOf(f.file) + 1 || null,
+      count: order.length,
+    }));
+  } catch {
+    return refuse("scan-error");
+  }
 }
 
 // The private inventory never leaves this machine and is never printed. A clone
@@ -585,12 +717,95 @@ function hookReport(findings, show) {
   return errors.length === 0;
 }
 
+// Commit-msg's fixes: one fixed string each, pinned by tests. The commit was
+// never made, so each fix is a rerun, never an amend (except resetting an
+// amended commit's author). The hook cannot see the command that ran it, so a
+// fix names no git commit command of its own: the committer reruns theirs.
+const MAINTAINER_SETUP = "the maintainer clone setup in CONTRIBUTING.md (AI assistance)";
+const IDENTITY = `set to the maintainer's GitHub login and noreply address as in ${MAINTAINER_SETUP}`;
+
+// A content rule (public or private) takes the fix for where it was found.
+export const LOCATION_FIX = Object.freeze({
+  message:
+    "rerun your git commit command with the message reworded, keeping its -a, pathspec or --amend; " +
+    "for a line in git's own comments, rename the branch or file instead; " +
+    "an editor message is kept in the file git rev-parse --git-path COMMIT_EDITMSG names, to copy from",
+  verbose:
+    "rerun your git commit command without -v (--no-verbose if commit.verbose is set), " +
+    "or with the text below the scissors line reworded; the hook can't see -v, so it scans the verbose diff git would cut",
+  content: "rerun with the line edited and the file staged again (git add)",
+  path: "rerun with the file renamed (git mv)",
+});
+
+// Each rule with a fix of its own: the structural rules, and every rule
+// commit-msg itself reports, which must have one.
+export const FIX = Object.freeze({
+  "forbidden-path": "rerun with the file unstaged (git rm --cached)",
+  "key-file": "rerun with the key file unstaged (git rm --cached)",
+  "image-metadata": "rerun with the image's metadata stripped and the file staged again (git add)",
+  gitlink: "rerun with the gitlink unstaged (git rm --cached); submodules are not supported",
+  "scan-error":
+    "rerun with the index checked (git status, git diff --cached --stat); report the hook if it repeats",
+  "allow-file": "rerun with the malformed entry in scripts/privacy-scan.allow fixed",
+  "author-identity": `rerun with user.name and user.email ${IDENTITY}, and no --author or GIT_AUTHOR_* override; for an amended commit, rerun with --amend --reset-author`,
+  "committer-identity": `rerun with user.name and user.email ${IDENTITY}, and no GIT_COMMITTER_* override`,
+  "missing-signoff":
+    "rerun with -s (git commit -s) as the maintainer identity and nothing after its Signed-off-by line; " +
+    "in an editor commit under core.commentChar auto, core.commentString, or a commit.cleanup that keeps comments, " +
+    "commit with -m or -F instead",
+  "ai-co-author": "rerun with the AI Co-authored-by line removed from the message",
+  "signing-config":
+    "rerun with git config commit.gpgsign true and a key (user.signingkey, or gpg.ssh.defaultKeyCommand for ssh); " +
+    "this checks the config, not the signature, and needs commit.gpgsign because the hook cannot see -S",
+});
+
+// A rule commit-msg reports itself (a commit check, or the staged scan's own)
+// has no fallback: a missing fix throws, which the guard test catches.
+export function fixFor(finding) {
+  if (Object.hasOwn(FIX, finding.rule)) return FIX[finding.rule];
+  if (finding.source === "commit" || finding.hook) throw new Error(`no fix for ${finding.rule}`);
+  if (finding.source !== "staged")
+    return finding.verbose ? LOCATION_FIX.verbose : LOCATION_FIX.message;
+  return finding.path ? LOCATION_FIX.path : LOCATION_FIX.content;
+}
+
+// Where a commit-msg finding is. By default a staged file is named only by its
+// position in the commit's file list, since even a filename can carry private
+// data; `show` names it, and adds a show-kind rule's match.
+export function placeOf(finding, show = false) {
+  const shown = show && finding.shown ? ` ${finding.shown}` : "";
+  if (finding.source === "commit") return `${finding.place}${shown}`;
+  if (finding.source !== "staged") return `message:${finding.line}${shown}`;
+  if (finding.hook) return finding.place;
+  if (show) return `${finding.path ? finding.file : where(finding)}${shown}`;
+  if (finding.path) return "a staged path";
+  const of = finding.count ? ` of ${finding.count}` : "";
+  const file = finding.index ? `staged file ${finding.index}${of}` : "a staged file";
+  if (finding.offset !== undefined) return `${file}, byte ${finding.offset}`;
+  return finding.line ? `${file}, line ${finding.line}` : file;
+}
+
+// Commit-msg: one `rule  place  fix` line per unresolved error, then the rule.
+function commitReport(findings, show) {
+  const errors = findings.filter((f) => f.sev === "error" && !f.allowed);
+  for (const f of errors)
+    console.error(`privacy-scan: ${f.rule}  ${placeOf(f, show)}  ${fixFor(f)}`);
+  if (!errors.length) return 0;
+  console.error(
+    "privacy-scan: refused this commit; nothing was committed. Fix each line above and " +
+      "rerun the same git commit command. Never --no-verify.",
+  );
+  return 1;
+}
+
 const HOOK_FIX =
   "Rewrite the text (amend the message, rename the branch, edit the line); never --no-verify.";
 const INVENTORY_FIX =
   "privacy-scan: no private term inventory, and this clone requires one. Set " +
   "CODESENSE_PRIVACY_TERMS or place it at ~/.config/codesense/privacy-terms.json.";
 const PUBLIC_NOTICE = "privacy hook: public rules only; no private inventory";
+const MERGE_NOTICE =
+  "privacy hook: skipped the staged scan during a merge; pre-push scans what it adds";
 
 // A git config boolean: set and not readable as false (unparseable included) is true.
 function gitBoolean(cwd, key, override = []) {
@@ -648,13 +863,13 @@ export function runHook(kind, args, { env = process.env, cwd = process.cwd(), st
     console.error(PUBLIC_NOTICE);
   }
   if (kind === "commit-msg") {
-    const findings = scanMessage({
-      message: fs.readFileSync(args[0], "utf8"),
-      privateRulesFile,
-      cleanup: tryGit(["config", "--get", "commit.cleanup"], cwd).stdout.trim(),
-      commentChar: tryGit(["config", "--get", "core.commentChar"], cwd).stdout.trim() || "#",
-    });
-    return blockedReport(findings, "commit", env);
+    const form = messageForm(args[0], env, cwd);
+    const findings = scanMessage({ form, privateRulesFile });
+    const staged = scanStaged({ cwd, privateRulesFile });
+    if (staged === null) console.error(MERGE_NOTICE);
+    else findings.push(...staged.map((f) => ({ ...f, source: "staged" })));
+    if (gitBoolean(cwd, "codesense.requireSigned")) findings.push(...commitFindings(cwd, form));
+    return commitReport(findings, env.CODESENSE_PRIVACY_SHOW === "1");
   }
   const maxNewObjects = maxNewCommits(env);
   if (maxNewObjects === null) {

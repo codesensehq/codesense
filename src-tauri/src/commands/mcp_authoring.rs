@@ -120,7 +120,8 @@ pub(crate) async fn project_mcp_scope_config_with_backend(
         None
     };
     let descriptor = descriptor(runtime);
-    // Config projection only: an unresolvable CLI projects without one, never refuses.
+    // An unresolvable CLI projects without one, except on Windows, where a launch must
+    // exec the CLI and so refuses without it.
     let binary = super::mcp_workspace::resolve_agent_for_launch(&app, descriptor.binary.as_str())
         .await
         .ok()
@@ -157,39 +158,21 @@ pub(crate) async fn project_mcp_scope_config_with_backend(
             super::mcp_scope::LaunchCli::new(binary, &launch_args)
                 .with_attribution_hook_trust(trust)
         });
-        let quote = |path: &str| path.to_string();
-        if launch.agent {
-            // SW-AN-52: this authoring path previews MCP projection outside the
-            // full agent-launch spine, so there is no resolved content-layer
-            // base to thread. Cwd-only projection — matches today's behavior.
-            let (home, user) = attribution_authority
-                .as_ref()
-                .ok_or("missing launch profile")?;
-            let principal = crate::domain::Principal::from(*user);
-            return launch.project_agent_scope(
-                runtime,
-                &session_id,
-                Path::new(&workdir),
-                &mcp_allow.unwrap_or_default(),
-                descriptor.mcp_scope.as_ref(),
-                account_home.as_deref(),
-                cli.as_ref(),
-                (home, &principal),
-                &launch_args,
-            );
-        }
-        super::mcp_scope::project_profile_launch_for_cli(
+        let authority = attribution_authority
+            .as_ref()
+            .map(|(home, user)| (home.as_path(), crate::domain::Principal::from(*user)));
+        launch.project_launch(
+            runtime,
             &session_id,
             Path::new(&workdir),
             mcp_allow.as_deref(),
-            runtime,
             account_home.as_deref(),
-            super::mcp_scope::ProfileLaunch {
-                headless: false,
-                bridge_override: launch.default_args,
-            },
             cli.as_ref(),
-            quote,
+            authority
+                .as_ref()
+                .map(|(home, principal)| (*home, principal)),
+            &launch_args,
+            std::env::consts::OS,
         )
     })
     .await?;
@@ -252,6 +235,75 @@ pub struct ScopeLaunch {
 }
 
 impl ScopeLaunch {
+    /// The projection of this launch of `runtime` (its CLI `cli`, when it resolved) with
+    /// `launch_args` on `os`:
+    /// a named agent's scope, or a profile launch's, then the exec it runs when the agent
+    /// launches direct. Every renderer launch and relaunch projects through here, so no
+    /// path that sees no exec on Windows can type a launch line instead.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn project_launch(
+        &self,
+        runtime: AgentCli,
+        session_id: &str,
+        workdir: &Path,
+        mcp_allow: Option<&[String]>,
+        account_home: Option<&Path>,
+        cli: Option<&super::mcp_scope::LaunchCli<'_>>,
+        authority: Option<(&Path, &crate::domain::Principal)>,
+        launch_args: &[String],
+        os: &str,
+    ) -> Result<
+        (
+            super::mcp_scope::ScopeOutcome,
+            Option<super::mcp_scope::ScopeCreation>,
+        ),
+        String,
+    > {
+        let (mut outcome, creation) = if self.agent {
+            // This authoring path previews MCP projection outside the
+            // full agent-launch spine, so there is no resolved content-layer
+            // base to thread. Cwd-only projection — matches today's behavior.
+            let authority = authority.ok_or("missing launch profile")?;
+            self.project_agent_scope(
+                runtime,
+                session_id,
+                workdir,
+                mcp_allow.unwrap_or_default(),
+                descriptor(runtime).mcp_scope.as_ref(),
+                account_home,
+                cli,
+                authority,
+                launch_args,
+            )?
+        } else {
+            super::mcp_scope::project_profile_launch_for_cli(
+                session_id,
+                workdir,
+                mcp_allow,
+                runtime,
+                account_home,
+                super::mcp_scope::ProfileLaunch {
+                    headless: false,
+                    bridge_override: self.default_args,
+                },
+                cli,
+                str::to_string,
+            )?
+        };
+        if let Err(error) = super::mcp_scope::finish_launch_execution(
+            &mut outcome,
+            runtime,
+            cli.map(|cli| cli.binary),
+            launch_args,
+            self.default_args,
+            os,
+        ) {
+            super::mcp_scope::remove_scope_config(session_id);
+            return Err(error);
+        }
+        Ok((outcome, creation))
+    }
+
     /// The named-agent projection used by both initial authoring and exited-tab relaunch.
     pub(crate) fn project_agent_scope(
         &self,
@@ -277,30 +329,25 @@ impl ScopeLaunch {
             if launch.runtime != runtime {
                 return Err("cached launch runtime does not match this tab".into());
             }
-            let (mut outcome, creation, applied) =
-                crate::agents::launch::project_and_apply_for_cli(
-                    &launch,
-                    session_id,
-                    workdir,
-                    account_home,
-                    cli,
-                    str::to_string,
-                )?;
+            let (outcome, creation, applied) = crate::agents::launch::project_and_apply_for_cli(
+                &launch,
+                session_id,
+                workdir,
+                account_home,
+                cli,
+                str::to_string,
+            )?;
             debug_assert!(
                 applied.settings.is_none(),
                 "home settings never own a separate file"
             );
             // The managed projection above already refused a launch without its exact
-            // executable; a direct exec needs the same one, never a shell line.
-            let cli = Option::ok_or(
+            // executable; its direct exec (composed by `project_launch`) needs the same
+            // one, never a shell line.
+            Option::ok_or(
                 cli,
                 "managed runtime requires its exact selected executable",
             )?;
-            outcome.execution = super::mcp_scope::scoped_execution(
-                runtime,
-                cli.binary,
-                super::mcp_scope::compose_args(recorded_args.to_vec(), outcome.extra_args.clone()),
-            );
             return Ok((outcome, creation));
         }
         let (mut outcome, creation) = super::mcp_scope::project_scope_for_cli(
@@ -352,9 +399,9 @@ impl ScopeLaunch {
     }
 }
 
-/// The built-in runtime whose CLI is `binary`, by basename.
+/// The built-in runtime whose CLI is `binary`, by its stem.
 fn runtime_of_binary(binary: &str) -> Option<AgentCli> {
-    codesense_pty_core::agent_cli::by_binary(Path::new(binary).file_name()?.to_str()?)
+    codesense_pty_core::agent_cli::by_binary(&codesense_pty_core::agent_cli::binary_stem(binary))
 }
 
 #[cfg(test)]
@@ -391,6 +438,7 @@ pub(crate) mod tests {
         dir
     }
 
+    #[cfg(cap_git_ai)]
     #[test]
     fn r4_respawn_reads_current_capture_preferences_for_both_clis() {
         use crate::agents::launch::{forget_launch_env, project_and_apply_for_cli};
@@ -549,6 +597,7 @@ pub(crate) mod tests {
         }
     }
 
+    #[cfg(cap_git_ai)]
     pub(crate) fn attribution_respawn(
         fixture: &crate::attribution::testing::Launch,
         runtime: AgentCli,
@@ -591,6 +640,7 @@ pub(crate) mod tests {
         crate::agents::launch::forget_launch_env(&session);
     }
 
+    #[cfg(cap_git_ai)]
     #[test]
     fn r3_claude_and_codex_respawns_keep_the_generated_attribution_environment() {
         use crate::agents::launch::{forget_launch_env, project_and_apply_for_cli};
@@ -666,6 +716,7 @@ pub(crate) mod tests {
         }
     }
 
+    #[cfg(cap_git_ai)]
     #[test]
     fn an_opencode_respawn_sets_its_reflog_marker_once_and_fresh() {
         use crate::agents::launch::{forget_launch_env, project_and_apply_for_cli};
@@ -952,6 +1003,11 @@ pub(crate) mod tests {
             runtime_of_binary("/opt/homebrew/bin/claude"),
             Some(AgentCli::Claude)
         );
+        assert_eq!(
+            runtime_of_binary(r"C:\Users\u\AppData\Roaming\npm\claude.cmd"),
+            Some(AgentCli::Claude)
+        );
+        assert_eq!(runtime_of_binary("CODEX.EXE"), Some(AgentCli::Codex));
         assert_eq!(runtime_of_binary("cursor-agent"), None);
         assert_eq!(runtime_of_binary("/x/acme"), None);
     }

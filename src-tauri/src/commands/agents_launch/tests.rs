@@ -151,6 +151,40 @@ fn a_claude_agent_spawns_with_preparations_args_and_its_own_settings_file() {
     mcp_scope::remove_scope_config(&id);
 }
 
+/// The Agents panel's interactive launch execs its prepared argv on Windows; macOS still
+/// types it, and a headless launch is captured, never an exec.
+#[test]
+fn an_agents_panel_launch_execs_its_prepared_argv_on_windows_only() {
+    let _home_env = crate::routines::test_support::TempHome::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    team_content(&home, &alice());
+    save(&home, &alice(), draft("panel", AgentCli::Claude));
+    let cwd = worktree(tmp.path());
+    let launch = prepare_named(&home, &alice(), "panel", interactive(None)).unwrap();
+    let id = session("panel");
+    let (mut prepared, _creation, settings) =
+        apply_for_session(launch, Path::new(CLI), &id, &cwd, None, true).unwrap();
+
+    set_prepared_execution(&mut prepared, "windows");
+    let mut expected = vec![CLI.to_string()];
+    expected.extend(prepared.launch.args.iter().cloned());
+    expected.extend(prepared.scope.extra_args.iter().cloned());
+    let execution = prepared.scope.execution.clone().expect("a Windows exec");
+    assert_eq!(execution.argv, expected);
+    assert_eq!(execution.native_launch, AgentCli::Claude);
+
+    set_prepared_execution(&mut prepared, "macos");
+    assert_eq!(prepared.scope.execution, None);
+
+    prepared.launch.mode = LaunchMode::Headless;
+    set_prepared_execution(&mut prepared, "windows");
+    assert_eq!(prepared.scope.execution, None);
+
+    drop(settings);
+    mcp_scope::remove_scope_config(&id);
+}
+
 #[test]
 fn a_codex_agent_keeps_its_home_and_retains_permission_flags() {
     let _home_env = crate::routines::test_support::TempHome::new();
@@ -752,10 +786,7 @@ fn a_launch_into_a_context_content_folder_leaves_the_repo_clean() {
                 .get(crate::commands::mcp_scope::BRIDGE_SERVER_KEY)
                 .is_some());
             let hooks = read_json(&file)["hooks"].clone();
-            assert!(
-                hooks["Stop"].to_string().contains("codesense-notify"),
-                "{hooks}"
-            );
+            assert!(hooks["Stop"].to_string().contains("hook notify"), "{hooks}");
         }
         drop(settings);
         mcp_scope::remove_scope_config(&id);
@@ -944,9 +975,7 @@ fn every_agent_launch_reaches_its_selected_servers_the_bridge_and_notify() {
                     let settings = read_json(applied.settings.as_ref().unwrap().path());
                     for ev in crate::agent_state::status_hooks().map(|hook| hook.event) {
                         assert!(
-                            settings["hooks"][ev]
-                                .to_string()
-                                .contains("codesense-notify"),
+                            settings["hooks"][ev].to_string().contains("hook notify"),
                             "{label}: {ev} hook"
                         );
                     }
@@ -1001,6 +1030,7 @@ fn files_under(dir: &Path) -> serde_json::Map<String, serde_json::Value> {
 /// recipe, the resolved launch, the argv and env each spawn site runs with, and every file
 /// the launch writes. Machine paths and per-launch ids are
 /// replaced by stable tokens. Set `UPDATE_ADAPTER_LAUNCH_GOLDEN=1` to re-record.
+#[cfg(cap_agent_cli_sockets)]
 #[test]
 fn builtin_adapter_launches_match_the_recorded_golden() {
     use crate::agents::model::McpAccess;
@@ -1809,6 +1839,7 @@ fn a_saved_agents_pty_launch_exports_usage_for_its_session_before_bind() {
     }
 }
 
+#[cfg(cap_git_ai)]
 pub(crate) mod attribution_entry {
     //! SV-CDE-7: the renderer's launch entry (`apply_for_session`) switches git-ai capture
     //! on for a managed worktree, and a git-ai that is missing, the wrong version or broken
@@ -1864,7 +1895,9 @@ pub(crate) mod attribution_entry {
                 ("PATH".into(), "/usr/bin:/bin".into()),
             ],
         );
-        let mut spec = intent.resolve(&id, &environment);
+        let mut spec = intent
+            .resolve(&id, &environment)
+            .expect("the spawn resolves");
         codesense_session_server::host::prepare_direct_launch_for_test(
             &mut spec,
             AgentCli::Codex,
@@ -2323,9 +2356,11 @@ pub(crate) mod attribution_entry {
     }
 }
 
+#[cfg(cap_agent_cli_sockets)]
 #[path = "hermes_tests.rs"]
 mod hermes_tests;
 
+#[cfg(cap_agent_cli_sockets)]
 #[path = "spawn_boundary_tests.rs"]
 mod spawn_boundary_tests;
 
@@ -2424,7 +2459,9 @@ fn a_local_argv_launch_carries_the_login_path_and_a_remote_one_never_does() {
     assert_eq!(intent.login_path.as_deref(), Some(login));
     let environment =
         HostEnvironment::with_vars(None, None, [("PATH".into(), "/usr/bin:/bin".into())]);
-    let spec = intent.resolve(&session("login-path"), &environment);
+    let spec = intent
+        .resolve(&session("login-path"), &environment)
+        .expect("the spawn resolves");
     assert_eq!(
         spec.command.get_env("PATH"),
         Some(std::ffi::OsStr::new(login))
@@ -2743,9 +2780,7 @@ fn page_launch_settings_carry_status_hooks() {
         let settings = read_json(settings.as_ref().unwrap().path());
         for event in crate::agent_state::status_hooks().map(|hook| hook.event) {
             assert!(
-                settings["hooks"][event]
-                    .to_string()
-                    .contains("codesense-notify"),
+                settings["hooks"][event].to_string().contains("hook notify"),
                 "{event} hook (attribution hook trust {hook_trust})"
             );
         }

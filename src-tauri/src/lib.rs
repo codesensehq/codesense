@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+pub(crate) mod gif;
 pub(crate) mod media;
 /// Rust mirror of the canonical agent-state literals (TS home: `agent-state.ts`).
 pub mod agent_state;
@@ -76,6 +77,7 @@ mod http;
 mod install;
 #[cfg(feature = "dhat-heap")]
 pub mod leak_support;
+pub mod linux_startup;
 /// The beta channels' update channel (SV-PBF-278: no license gate; static manifest).
 /// Beta channels only; internal builds have none of it.
 #[cfg(not(cs_channel = "internal"))]
@@ -90,6 +92,7 @@ mod operations;
 /// derived risk facts.
 pub mod packs;
 mod panes;
+mod platform_caps;
 #[cfg(feature = "bench-support")]
 pub mod perf_support;
 mod principal_lifecycle;
@@ -297,6 +300,43 @@ pub(crate) fn on_osc133_command_end<R: tauri::Runtime>(
 /// drive under a paused clock (and SW-XS-12's guard roots on).
 pub(crate) fn spawn_sync_timers<R: tauri::Runtime>(_app: &tauri::AppHandle<R>) {}
 
+/// The in-process activity root under `home`, which holds the bridge
+/// Claude's hooks run: created owner-only (unix 0700; on Windows a protected
+/// owner-only DACL) when missing, and used as it is when it exists.
+fn in_process_activity_root(home: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    let root = home.join("in-process-activity");
+    match codesense_platform::fs::create_dir_new_owner_only(&root) {
+        Ok(()) => Ok(root),
+        Err(error) if std::io::Error::kind(&error) == std::io::ErrorKind::AlreadyExists => Ok(root),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod in_process_activity_root_tests {
+    use super::in_process_activity_root;
+    use crate::test_support::owner_only::{is_owner_only, shared_dir};
+
+    #[test]
+    fn the_activity_root_is_owner_only_in_a_shared_home_and_kept_when_it_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        shared_dir(&home);
+        let root = in_process_activity_root(&home).unwrap();
+        assert_eq!(root, home.join("in-process-activity"));
+        assert!(is_owner_only(&root));
+        std::fs::write(root.join("bridge"), b"kept").unwrap();
+        assert_eq!(in_process_activity_root(&home).unwrap(), root);
+        assert_eq!(std::fs::read(root.join("bridge")).unwrap(), b"kept");
+        assert!(is_owner_only(&root));
+        assert!(in_process_activity_root(&dir.path().join("missing")).is_err());
+        let existing = dir.path().join("existing");
+        shared_dir(&existing.join("in-process-activity"));
+        let root = in_process_activity_root(&existing).unwrap();
+        assert!(!is_owner_only(&root), "an existing root is left as it is");
+    }
+}
+
 /// SW-GT-25: periodic audit-log compaction poll. On a slow fixed cadence, run one
 /// [`should_compact`](commands::sprint_run::compaction::should_compact)-gated pass on
 /// a `spawn_blocking` worker so the fold + rewrite of the run store never touch the
@@ -374,7 +414,14 @@ pub fn run() {
             LevelFilter::Info
         });
 
-    let builder = tauri::Builder::default();
+    let builder = tauri::Builder::default().on_page_load(|webview, payload| {
+        // Once per process: a reload or in-app navigation finishes loading again.
+        static LOGGED: std::sync::Once = std::sync::Once::new();
+        let loaded = payload.event() == tauri::webview::PageLoadEvent::Finished;
+        if loaded && webview.label() == "main" {
+            LOGGED.call_once(|| log::info!(target: "system", "webview ready"));
+        }
+    });
 
     // macOS-only menu bar. Item clicks emit `menu:action` events with
     // the item id as payload — the frontend dispatches via the shared
@@ -394,8 +441,10 @@ pub fn run() {
         // SW-AU-34: close-to-background. Closing the window keeps the process — and
         // thus the MCP host, the sync engine, and `ActiveTeamState` — alive, so a
         // running agent can keep driving codesense with no window on screen.
-        // macOS-only: the model is dock-resident (Windows/Linux keep today's
-        // quit-on-last-close until a real tray ships). Cmd-Q / menu-Quit fire
+        // Where the background-on-close capability is on: macOS backgrounds to the
+        // Dock; Linux and Windows only while the terminal-server tray item shows in
+        // the tray or the notification area (its atomic is read here, never the tray
+        // itself). Cmd-Q / menu-Quit fire
         // `RunEvent::ExitRequested`, NOT this event, so hiding on close can never
         // swallow a real quit — no "quitting" guard is needed. This arm is
         // deliberately thin: one lock-free atomic read plus native calls, with no
@@ -405,16 +454,18 @@ pub fn run() {
         // Only the primary "main" window backgrounds the app; any secondary window
         // (none today) should close normally — this keeps the close arm consistent
         // with the "main"-targeted restore in the `Reopen` handler.
-        #[cfg(target_os = "macos")]
+        #[cfg(cap_background_on_close)]
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
             if window.label() == "main" {
-                use commands::background_mode::{close_action, quit_on_close, CloseAction};
+                use commands::background_mode::{close_action, quit_on_close, CloseAction, Restore};
                 let app = window.app_handle();
-                match close_action(quit_on_close()) {
+                let tray_visible = commands::terminal_server_tray::tray_visible();
+                match close_action(quit_on_close(), tray_visible, Restore::current()) {
                     CloseAction::Background => {
                         let _ = window.hide();
                         // NSApp `hide:` — drop off-screen and become App-Nap-eligible
                         // (the MCP socket stays responsive via I/O wakeups regardless).
+                        #[cfg(target_os = "macos")]
                         let _ = app.hide();
                         api.prevent_close();
                         // One-time explainer: emit; the FE renders it once as a toast.
@@ -562,10 +613,17 @@ pub fn run() {
         .manage(mcp::state::AskUserRegistry::new())
         .manage(commands::team_resolution_cache::TeamResolutionCache::default())
         .setup(move |app| {
+            // First, so the secret store probe has the whole of setup to finish: it runs on a
+            // background thread, because `.setup()` never blocks on the session bus.
+            commands::credential_store::start_secret_store_probe();
             commands::team_resolution_cache::listen(app.handle());
             live_hub::start(app.handle());
             log::info!(target: "system", "CodeSense v{} starting (log_level={:?}, platform={})",
                 env!("CARGO_PKG_VERSION"), log_level, std::env::consts::OS);
+            // The first caps() call, made here so no command or the attribution installer makes it.
+            // It waits for the secret store probe for at most `credential_store::PROBE_WAIT`
+            // (300 ms); a probe still running then leaves the secret-store row off for the run.
+            platform_caps::log_startup();
 
             // SW-PB-22f-3: keep published dashboards in step with their folders.
             #[cfg(feature = "dashboard-publish")]
@@ -619,11 +677,10 @@ pub fn run() {
                 // boots empty; a tail scan reconciles against the log on open.
                 app.state::<commands::workspace_chat::WorkspaceChatStore>()
                     .install(&home);
-                use std::os::unix::fs::DirBuilderExt;
-                let root = home.join("in-process-activity");
-                let created = std::fs::DirBuilder::new().mode(0o700).create(&root);
-                if created.is_ok() || created.as_ref().is_err_and(|error| error.kind() == std::io::ErrorKind::AlreadyExists) {
-                    match codesense_pty_core::activity::ActivityService::start(&root, in_process_host.activity()) {
+                if let Ok(root) = in_process_activity_root(&home) {
+                    // Claude's hooks run the app's bundled bridge, placed in the root.
+                    let bridge = commands::deps::resolve_sidecar_source("codesense-bridge").ok();
+                    match codesense_pty_core::activity::ActivityService::start(&root, in_process_host.activity(), bridge.as_deref()) {
                         Ok(service) => { app.manage(service); }
                         Err(error) => log::warn!("in-process activity reporting unavailable: {error}"),
                     }
@@ -641,8 +698,11 @@ pub fn run() {
             // sidecar so the first terminal does not wait for it and the
             // sessions a previous run left there are reachable. An incompatible
             // sidecar is logged there and reported again by the first terminal
-            // it refuses.
-            let local_sessions = terminal::session_server::SessionServerState::at(
+            // it refuses. Where the platform has no terminal-server sidecar the
+            // state has no root, so nothing launches one and the app hosts its
+            // terminals itself: decided here, once.
+            let local_sessions = commands::pty_backend::local_session_state(
+                &platform_caps::Caps::live(),
                 commands::paths::codesense_home_dir(),
             );
             let identity = commands::pty_backend::in_process_identity(app.handle())
@@ -778,6 +838,9 @@ pub fn run() {
             app.manage(commands::local_profile::LocalProfileState::load(&profile_home)?);
             commands::local_profile::LocalProfileState::start_import(handle.clone());
             app.manage(commands::guest_session::GuestSessionState::load(commands::paths::codesense_home_dir().as_deref()));
+            // Inbox media: provider media held in memory only, the sha index over every
+            // synced team and the one-time purge of provider files from the disk cache.
+            media::install(app.handle());
             // Local HTML query/routine capabilities remain independent of service access.
             // Registry observation may immediately schedule auto-connect, so
             // every terminal/session and ambient-profile dependency must already be
@@ -902,14 +965,12 @@ pub fn run() {
             }
 
             if let Some(home) = commands::paths::codesense_home_dir() {
-                attribution::install::initialize(app.handle(), &home, std::env::var_os("PATH").as_deref());
-                attribution::install::ensure_installed(
-                    &home,
+                attribution::facade::start(
+                    &platform_caps::Caps::live(),
+                    app.handle(),
+                    home,
                     std::env::var_os("PATH").as_deref(),
-                    attribution::install::Trigger::Startup,
                 );
-                attribution::metrics_db::start(&home);
-                attribution::watcher::start(app.handle(), home);
             }
 
             // Start MCP server on Unix domain socket
@@ -1131,6 +1192,11 @@ pub fn run() {
             dashboard_publish::keys::dashboard_publisher_key_save,
             #[cfg(feature = "dashboard-publish")]
             dashboard_publish::keys::dashboard_publisher_key_remove,
+            gif::settings::gif_settings_get,
+            gif::settings::gif_settings_set,
+            gif::settings::gif_key_status,
+            gif::settings::gif_key_save,
+            gif::settings::gif_key_remove,
             #[cfg(not(cs_channel = "internal"))]
             license::commands::license_state,
             #[cfg(not(cs_channel = "internal"))]
@@ -1686,6 +1752,7 @@ pub fn run() {
             // Logging
             commands::system::get_log_file_path,
             commands::system::get_log_debug_enabled,
+            commands::system::get_platform_caps,
             // HTTP API
             commands::system::get_http_api_port,
             commands::frames::mint_frame,
@@ -1745,12 +1812,11 @@ pub fn run() {
             commands::paths::resolve_team_content_dir,
             // macOS menu rebuild (C.16)
             menu::rebuild_menu,
-            // PDF export (R.4) — macOS only
-            #[cfg(target_os = "macos")]
+            // PDF export (R.4), where the OS's web view can print
+            #[cfg(cap_pdf_export)]
             commands::export_pdf::export_pdf_from_url,
-            #[cfg(target_os = "macos")]
+            #[cfg(cap_pdf_export)]
             commands::export_pdf::export_pdf_from_html,
-            #[cfg(target_os = "macos")]
             commands::export_pdf::write_binary_file,
             // Content engine boundary surface (SS-13), read by the
             // frontend (merge preview) and the context MCP tools.
@@ -1926,7 +1992,7 @@ fn relaunch_after_update(app: &tauri::AppHandle) {
 
 /// The cleanup of a graceful exit: at `RunEvent::Exit`, and before the relaunch after an update.
 fn graceful_exit_cleanup() {
-    attribution::watcher::shutdown();
+    attribution::facade::shutdown(&platform_caps::Caps::live());
     // SS-FU-17 AC-3: exit cleans ONLY codesense's own runtime artifacts — never materialized
     // files, exclude blocks, or lockfiles. See [`app_exit_cleanup`].
     let mcp_socket = mcp::mcp_socket_path();

@@ -20,6 +20,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { QuickOpenDialog } from "@/features/viewer/components/quick-open-dialog";
 import { logger } from "@/shared/lib/logger";
+import { relative } from "@/shared/lib/path";
 import { buildTeamKey, parseTeamKey, useActiveTeamKey } from "@/shared/lib/team-key";
 import { pathToTeamContentDirSync } from "@/shared/lib/team-content-path";
 import { useActiveOrg } from "@/shared/stores/use-active-org";
@@ -43,6 +44,7 @@ import {
   useDynamicShortcutActions,
 } from "@/shared/lib/shortcuts/registry";
 import { useShortcutsStore } from "@/shared/stores/shortcuts-store";
+import { useConfigStore } from "@/shared/stores/config-store";
 import { panePanelTitle } from "@/features/shell/right-pane/panes/use-register-pane-panels";
 import { openAppSettings } from "@/features/settings/lib/open-settings";
 import { openSourceRepos } from "@/features/dashboard/source-repos-virtual-tab";
@@ -53,6 +55,7 @@ import { openAgents } from "@/features/agents/agents-virtual-tab";
 import { openCodesenseSetup } from "@/features/org/lib/codesense-docs-landing";
 import { openScratchSpace } from "@/features/scratch-space/scratch-space-virtual-tab";
 import { openForeman } from "@/features/foreman/open-foreman";
+import { STORY_DASHBOARD_ACTION_ID } from "@/features/dashboard/lib/story-dashboard-action-id";
 import { useForemanMailWaiting } from "@/features/foreman/use-foreman-mail";
 import { useRoutinesStore } from "@/features/routines/stores/routines-store";
 import { useTeamMachines } from "@/features/machines/stores/machines-store";
@@ -114,6 +117,8 @@ export function CommandPaletteMount() {
   // Active slot-dashboard commands, each with its current chord.
   const dashboardActions = useDynamicShortcutActions((s) => s.actions);
   const shortcuts = useShortcutsStore((s) => s.shortcuts);
+  // The capabilities load can free a chord (an action whose capability is off holds none).
+  const platformCaps = useConfigStore((s) => s.platformCaps);
   const commands = useMemo<PaletteCommand[]>(() => {
     const bindings = resolveBindings(shortcuts);
     return dashboardActions
@@ -125,7 +130,18 @@ export function CommandPaletteMount() {
         icon: paneIcon(a.command!.icon),
         chord: formatKeystrokeDisplay(bindings.get(a.id)?.keystroke ?? ""),
       }));
-  }, [dashboardActions, shortcuts]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the capabilities change the bindings
+  }, [dashboardActions, shortcuts, platformCaps]);
+  // The Story dashboard row's chord. `resolveBindings` reads the full action list, so this is
+  // keyed like `commands` above, not on `shortcuts` alone.
+  const storyDashboardChord = useMemo(
+    () =>
+      formatKeystrokeDisplay(
+        resolveBindings(shortcuts).get(STORY_DASHBOARD_ACTION_ID)?.keystroke ?? "",
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- a new action list can take the chord
+    [dashboardActions, shortcuts, platformCaps],
+  );
 
   // The Routines row carries the needs-you count the title-bar entry keeps live.
   const routinesNeedingYou = useRoutinesStore((s) => s.needsYouCount);
@@ -157,12 +173,12 @@ export function CommandPaletteMount() {
     for (const [teamKey, paths] of Object.entries(openedViewerPaths ?? {})) {
       const { orgSlug, teamName } = parseTeamKey(teamKey);
       if (orgSlug !== activeOrg.slug || teamName === null) continue;
-      const prefix = `${pathToTeamContentDirSync(activeOrg.org_root, teamName)}/`;
+      const contentDir = pathToTeamContentDirSync(activeOrg.org_root, teamName);
       for (const fullPath of paths) {
         out.push({
           teamName,
           fullPath,
-          relativePath: fullPath.startsWith(prefix) ? fullPath.slice(prefix.length) : fullPath,
+          relativePath: relative(contentDir, fullPath) || fullPath,
         });
       }
     }
@@ -181,6 +197,7 @@ export function CommandPaletteMount() {
         foremanMailWaiting,
         panes,
         commands,
+        storyDashboardChord,
       }),
     [
       teams,
@@ -191,6 +208,7 @@ export function CommandPaletteMount() {
       foremanMailWaiting,
       panes,
       commands,
+      storyDashboardChord,
     ],
   );
 

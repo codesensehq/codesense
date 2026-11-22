@@ -1634,6 +1634,7 @@ async fn setup_in_app_published_and_describe_setup_agree() {
 
 /// The dashboard `setup` reads (in-app and published) leave a pending replacement notice alone;
 /// `describe_setup` still announces it exactly once.
+#[cfg(cap_git_ai)]
 #[cfg(feature = "dashboard-publish")]
 #[tokio::test]
 async fn setup_queries_do_not_consume_the_replacement_notice() {

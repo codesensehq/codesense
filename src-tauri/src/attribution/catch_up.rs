@@ -14,19 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
 /// `describe_setup.attribution.capture`; see the module rule.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Capture {
-    pub last_sweep_at: Option<u64>,
-    pub trigger: Option<&'static str>,
-    pub clones_swept: usize,
-    pub logs_seen: usize,
-    pub logs_new: usize,
-    pub trace_rows_stored: usize,
-    pub session_mapping_rows_stored: usize,
-    pub last_error: Option<String>,
-    pub watch_errors: usize,
-}
+pub use super::facade::Capture;
 
 #[derive(Clone, PartialEq, Eq)]
 enum Source {

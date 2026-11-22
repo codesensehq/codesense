@@ -25,6 +25,7 @@ import { isLiveInboxMessage } from "@/features/weft/lib/live-inbox-message";
 import { InboxMessageContent } from "@/features/weft/components/inbox-message-content";
 import type { InboxLens } from "@/features/viewer/stores/agent-inbox-rail-store";
 import { openFileInTeam } from "@/shared/lib/open-file-in-team";
+import { join } from "@/shared/lib/path";
 import { resolveOpenPath } from "@/shared/lib/resolve-open-path";
 import { pathToTeamContentDirSync } from "@/shared/lib/team-content-path";
 import { usePrefersReducedMotion } from "@/shared/lib/use-prefers-reduced-motion";
@@ -377,11 +378,31 @@ const FAILURE_REASONS: Record<string, string> = {
   type: "It isn't a GIF, WebP, PNG or JPEG.",
   redirect: "It redirected to a site that isn't on the list.",
   https: "The source must use HTTPS.",
+  changed: "The source now serves a different image.",
 };
+
+/** Whether `host` is `domain` or one of its subdomains. */
+const onDomain = (host: string, domain: string) => host === domain || host.endsWith("." + domain);
+
+/** Whose attribution an image carries, in every state: the sender's provider claim, else the
+ *  provider whose host the bytes came from (which covers redirects), else (an old message, or
+ *  one never fetched) the provider whose host the URL names. The app's own rule. */
+export function attributionOf(a: InboxMediaAttachment): "giphy" | "klipy" | null {
+  const host = (a.sourceHost || "").toLowerCase().replace(/\.$/, "");
+  const byHost = onDomain(host, "giphy.com")
+    ? "giphy"
+    : onDomain(host, "klipy.com")
+      ? "klipy"
+      : null;
+  const provider = a.provider ?? a.mediaProvider ?? byHost;
+  return provider === "giphy" || provider === "klipy" ? provider : null;
+}
 
 /** Why an image isn't shown, in the pane's words. */
 function mediaReason(a: InboxMediaAttachment, team: string): string {
-  if (a.state === "blocked") return `GIF · media is off in ${team}'s team config`;
+  if (a.state === "blocked" || a.reason === "off") {
+    return `GIF · media is off in ${team}'s team config`;
+  }
   if (a.state === "failed") {
     return (
       (a.reason && FAILURE_REASONS[a.reason]) || `${a.sourceHost || "The source"} didn't answer.`
@@ -395,10 +416,19 @@ function mediaReason(a: InboxMediaAttachment, team: string): string {
 /** A message's image: inline when cached, else a card saying why, with Load or Retry. */
 function MessageMedia({ m, a }: { m: ConversationMessage; a: InboxMediaAttachment }) {
   const sha256 = a.sha256 ?? "";
-  if (a.state === "cached" && /^[a-f0-9]{64}$/.test(sha256)) {
-    return <MediaImage key={sha256} m={m} a={a} sha256={sha256} />;
-  }
-  return <MediaCard key={a.state} m={m} a={a} />;
+  const media =
+    a.state === "cached" && /^[a-f0-9]{64}$/.test(sha256) ? (
+      <MediaImage key={sha256} m={m} a={a} sha256={sha256} />
+    ) : (
+      <MediaCard key={a.state} m={m} a={a} />
+    );
+  // GIPHY's terms ask for a conspicuous "Powered by GIPHY", in every state.
+  return (
+    <>
+      {media}
+      {attributionOf(a) === "giphy" && <div className="ibx-media-attr">Powered by GIPHY</div>}
+    </>
+  );
 }
 
 /** A cached image as an object URL, read through the app (the window can't reach
@@ -607,6 +637,8 @@ function MediaImage({
             <div className="row2">
               <span>
                 {mediaKind(a)} · {a.width} × {a.height}
+                {attributionOf(a) === "klipy" && " · via KLIPY"}
+                {attributionOf(a) === "giphy" && " · Powered by GIPHY"}
               </span>
               <MediaSource a={a}>Open source page · {a.sourceHost} ↗</MediaSource>
             </div>
@@ -623,7 +655,9 @@ function MediaCard({ m, a }: { m: ConversationMessage; a: InboxMediaAttachment }
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const icon = a.state === "failed" ? CircleAlert : a.state === "blocked" ? ImageOff : ImageIcon;
-  const canLoad = a.state === "pending" || (a.state === "failed" && a.retryable);
+  // Media that is off in the team's config can't be loaded from here.
+  const canLoad =
+    (a.state === "pending" && a.reason !== "off") || (a.state === "failed" && a.retryable);
   const load = () => {
     setLoading(true);
     setError(null);
@@ -696,7 +730,7 @@ export function OpenFileChip({ m }: { m: ConversationMessage }) {
       setError("unavailable: unknown synced team");
       return;
     }
-    const page = `${pathToTeamContentDirSync(known.org_root, team)}/inbox.html`;
+    const page = join(pathToTeamContentDirSync(known.org_root, team), "inbox.html");
     resolveOpenPath(file, (path) => bridgeResolveOpenTarget(page, path, team))
       .then(({ target, hash }) => openFileInTeam(target, hash ? { hash } : {}))
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));

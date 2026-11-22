@@ -9,7 +9,6 @@
 
 use std::collections::BTreeMap;
 use std::io::BufRead;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use codesense_pty_core::agent_cli::AgentCli;
@@ -143,11 +142,10 @@ fn subagent_logs(dir: &Path) -> Vec<PathBuf> {
 /// Each non-empty line of the regular file at `path`, in order; none when it is a symlink or not
 /// a file.
 fn for_each_line(path: &Path, mut each: impl FnMut(&[u8])) {
-    let Ok(file) = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-    else {
+    let Ok(file) = codesense_platform::fs::open_nofollow_nonblocking(
+        std::fs::OpenOptions::new().read(true),
+        path,
+    ) else {
         return;
     };
     if !file.metadata().is_ok_and(|m| m.is_file()) {

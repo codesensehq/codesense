@@ -12,6 +12,7 @@ import type { AgentRow, RoutineAgentDisplay } from "@/tauri/commands";
 
 import { agentRefFor, findAgent, offeredTo, type RoutineSpace } from "../lib/routine-agent-ref";
 import { useRoutinesStore } from "../stores/routines-store";
+import { localMachineNoun } from "@/shared/lib/local-machine";
 
 /** The value of the option standing for a saved reference no listed agent answers to. */
 const UNLISTED = "unlisted:";
@@ -169,7 +170,8 @@ export function RoutineAgentSummary({ value, routine }: { value: string; routine
       </button>
       {elsewhere && (
         <span data-testid="routine-agent-elsewhere">
-          This agent lives in team {row.team} · {row.org}; its runs need a Mac that syncs that team.
+          This agent lives in team {row.team} · {row.org}; its runs need a {localMachineNoun()} that
+          syncs that team.
         </span>
       )}
       {offer}
@@ -182,7 +184,7 @@ export function RoutineAgentSummary({ value, routine }: { value: string; routine
 function OfferHint({ routine, teamInView }: { routine: RoutineSpace; teamInView: string | null }) {
   const text =
     routine.scope === "team"
-      ? "A team routine runs only its own team's agents or a built-in one, since any teammate's Mac may run it."
+      ? `A team routine runs only its own team's agents or a built-in one, since any teammate's ${localMachineNoun()} may run it.`
       : teamInView
         ? `Offers your agents and team ${teamInView.slice(teamInView.lastIndexOf("/") + 1)}'s; to pick another team's agent, switch to that team.`
         : "Offers your agents; open a team to pick one of its agents.";

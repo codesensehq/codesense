@@ -9,7 +9,7 @@
 </head>
 <body>
 <script>
-// vendored story-view build kit-rev:2 sha256:1eb6f4555f2662864941398e9971e5e822d632d039bf94dbf51a77c0d2fe89fd
+// vendored story-view build kit-rev:2 sha256:7ff46a3c415799aea6430da8befa3a72e0f729b4f3f73f85c6c78d1892ba5bd3
 (function(){
 'use strict';
 const SCRIPT_SRC=document.currentScript&&document.currentScript.src||'';
@@ -223,6 +223,7 @@ const FOREMAN_COPY=mergeCopy({
   showTerminal:'Show terminal',restart:'Restart',
  },
  prompt:'You are the Foreman. From the Foreman page:',
+ mail:'A person wrote to you in the chat. Call read_messages and answer each message with reply.',
  handoffNote:'Foreman handoff:',
 });
 
@@ -431,12 +432,13 @@ function spendFromTotals(answer,id){
  }
  return {text:`${Number.isFinite(entry.openSessions)&&entry.openSessions>0?'≥ ':''}${money(totals.costUsd)}`,known:true};
 }
+function distinctSessions(rows){return new Set(rows.map(row=>`${row&&row.cli}|${row&&row.sessionId}`)).size;}
 function spendFromUsage(usage,{open=false}={}){
  const sessions=usage&&Array.isArray(usage.sessions)?usage.sessions:null;
  if(!sessions||!sessions.length)return null;
  const priced=sessions.filter(row=>row&&Number.isFinite(row.costUsd));
  if(!priced.length)return null;
- const unpriced=sessions.length-priced.length,notes=[usage.nextCursor?COPY.spend.partial:'',unpriced?COPY.spend.unpricedSome(unpriced):''].filter(Boolean);
+ const unpriced=distinctSessions(sessions.filter(row=>!(row&&Number.isFinite(row.costUsd)))),notes=[usage.nextCursor?COPY.spend.partial:'',unpriced?COPY.spend.unpricedSome(unpriced):''].filter(Boolean);
  return {text:`${open?'≥ ':''}${money(priced.reduce((sum,row)=>sum+row.costUsd,0))}${notes.length?` · ${notes.join(' · ')}`:''}`,known:true};
 }
 function stageModel(status,config){
@@ -871,7 +873,7 @@ function createTransport(cs,{config,storyId,rows=()=>[],on=()=>()=>{}}){
  const fresh={thread:sessionId=>cs.inbox({sessionId}).then(rowsOf),role:()=>cs.inbox({role:`${config.lead.queue}:${storyId}`}).then(rowsOf)};
  const take=(key,again)=>{const pending=early&&early[key];if(!pending)return again();early[key]=null;return stale?again():pending.catch(again);};
  return {
-  launch:prompt=>invoke('openWorkspace',{target:{kind:'story',storyId,agent:config.lead.agent,session:'lead'},initialPrompt:prompt}),
+  launch:prompt=>invoke('openWorkspace',{target:{kind:'story',storyId,agent:config.lead.agent,session:'lead'},initialPrompt:prompt}).then(result=>({...result,promptDelivered:false})),
   send:(handle,text)=>invoke('sendAsHuman',{to:handle,text}),
   reply:(messageId,text)=>invoke('replyAsHuman',{messageId,text}),
   stop:handle=>cs.act('stopSession',{handle}),
@@ -887,8 +889,8 @@ function createTransport(cs,{config,storyId,rows=()=>[],on=()=>()=>{}}){
   roleThread:()=>{const role=take('role',fresh.role);if(early)early.thread=null;offInbox();offInbox=()=>{};return role;},
  };
 }
-const storyCard=(meta,text)=>`Story ${meta['cs:story-id']||''}: ${meta['cs:title']||''}\nStatus: ${meta['cs:status']||'unknown'}\nYou are its story lead.${text?`\nFrom the story page:\n\n${text}`:''}`;
-const storyChatOptions=({storyId,config,meta,copy})=>({storyId,leadRole:config.lead.role,timers:config.timers,card:text=>storyCard(meta,text),layout:{source:copy.transcript,empty:copy.empty}});
+const storyCard=meta=>`Story ${meta['cs:story-id']||''}: ${meta['cs:title']||''}\nStatus: ${meta['cs:status']||'unknown'}\nYou are its story lead.\nA person wrote to you in the story page's chat. Call read_messages and answer each message with reply.`;
+const storyChatOptions=({storyId,config,meta,copy})=>({storyId,leadRole:config.lead.role,timers:config.timers,card:()=>storyCard(meta),layout:{source:copy.transcript,empty:copy.empty}});
 
 const LIVE_ROW=new Set(['running','idle','needs-you']);
 const sessionRows=answer=>Array.isArray(answer)?answer:Array.isArray(answer&&answer.sessions)?answer.sessions:[];
@@ -3854,8 +3856,9 @@ const costReader=({usage,unknown,dead,settled,wait=Promise.resolve()})=>{
   if(known&&known.state==='loading')return;
   costs.set(pill.sessionId,known||{state:'loading'});
   wait.then(()=>usage({sessionId:pill.sessionId})).then(answer=>{
-   const first=answer&&Array.isArray(answer.sessions)?answer.sessions[0]:null;
-   costs.set(pill.sessionId,Number.isFinite(first&&first.costUsd)?{state:'known',usd:first.costUsd}:{state:'unknown'});
+   const rows=answer&&Array.isArray(answer.sessions)?answer.sessions:[];
+   const usd=rows.length&&rows.every(row=>Number.isFinite(row&&row.costUsd))?rows.reduce((sum,row)=>sum+row.costUsd,0):null;
+   costs.set(pill.sessionId,usd===null?{state:'unknown'}:{state:'known',usd});
   },()=>costs.set(pill.sessionId,{state:'unknown'})).then(()=>{if(!dead())settled(pill);});
  };
  return {text,read,has:pill=>costs.has(pill.sessionId)};
@@ -3873,7 +3876,7 @@ const sumKnown=values=>{const known=values.filter(Number.isFinite);return known.
 function groups(rows,keyOf){
  const by=new Map();
  for(const row of rows){const key=keyOf(row);if(!by.has(key))by.set(key,[]);by.get(key).push(row);}
- const list=[...by].map(([label,members])=>({label,usd:sumKnown(members.map(row=>row.costUsd)),sessions:members.length,unpriced:members.filter(row=>!Number.isFinite(row.costUsd)).length}));
+ const list=[...by].map(([label,members])=>({label,usd:sumKnown(members.map(row=>row.costUsd)),sessions:distinctSessions(members),unpriced:distinctSessions(members.filter(row=>!Number.isFinite(row.costUsd)))}));
  const top=Math.max(...list.map(group=>group.usd===null?-Infinity:group.usd));
  return list.sort((a,b)=>(b.usd===null?-1:b.usd)-(a.usd===null?-1:a.usd)||a.label.localeCompare(b.label)).map(group=>({...group,share:group.usd!==null&&top>0?group.usd/top:null}));
 }
@@ -3881,10 +3884,10 @@ function usageModel(usage,points,sessions){
  const rows=Array.isArray(usage&&usage.sessions)?usage.sessions:null;
  if(!rows)return {kind:'error'};
  if(!rows.length)return {kind:'empty'};
- const handles=handlesOf(sessions),usd=sumKnown(rows.map(row=>row.costUsd)),unpriced=rows.filter(row=>!Number.isFinite(row.costUsd)).length;
+ const handles=handlesOf(sessions),usd=sumKnown(rows.map(row=>row.costUsd)),unpriced=distinctSessions(rows.filter(row=>!Number.isFinite(row.costUsd)));
  const tokens=sumKnown(rows.map(row=>row.tokens&&typeof row.tokens==='object'?sumKnown(TOKEN_KEYS.map(key=>row.tokens[key])):null));
  const perPoint=usd!==null&&Number.isFinite(points)&&points>0?usd/points:null;
- return {kind:'ok',sessions:rows.length,usd,unpriced,partial:Boolean(usage.nextCursor),tokens,perPoint,
+ return {kind:'ok',sessions:distinctSessions(rows),usd,unpriced,partial:Boolean(usage.nextCursor),tokens,perPoint,
   roles:groups(rows,row=>launchRole({role:row.role,handle:handles.get(String(row.sessionId)),agent:row.agent},'unattributed')),models:groups(rows,row=>(Array.isArray(row.models)&&row.models.length?row.models.map(modelName).join(' + '):'unknown model'))};
 }
 const tokensText=count=>count>=1e6?`${(count/1e6).toFixed(1)} M`:count>=1e3?`${(count/1e3).toFixed(1)} k`:String(count);
@@ -6574,7 +6577,7 @@ function createForemanSession({cs,reads,config,win=globalThis,launches=false}){
  };
  let sendersRead=null,pushed=false;
  const openSenders=()=>sendersRead||(pushed=false,sendersRead=bridge.readSenders((list,state)=>{pushed=true;setSenders(list);takeExtras(state);},(state,first)=>{if(!(first&&pushed))head.state(state);}));
- const card=text=>promptFor(text,handoffOf({thread:chat?chat.thread():[],rows:reads.latestSessions(),senders:S.senders,copy}),copy);
+ const card=()=>promptFor(copy.mail,handoffOf({thread:chat?chat.thread():[],rows:reads.latestSessions(),senders:S.senders,copy}),copy);
  let chatState=null;
  const clock={now:()=>win.Date.now(),setTimeout:(fn,ms)=>win.setTimeout(fn,ms),clearTimeout:id=>win.clearTimeout(id)};
  const life=config.foreman.lifecycle;
@@ -6624,11 +6627,12 @@ function createForemanSession({cs,reads,config,win=globalThis,launches=false}){
  const launchFor=prompt=>{
   if(relaunch.pending())return relaunch.pending();
   retiring=null;
-  const carried=waiting;if(!carried.length)return launch(prompt);
+  const asMail=result=>result&&{...result,promptDelivered:false};
+  const carried=waiting;if(!carried.length)return launch(prompt).then(asMail);
   return launch(mailPrompt(prompt,carried)).then(result=>{
    if(result&&result.promptDelivered!==false)markHandled(carried);
    const sent=new Set(carried.map(row=>String(row.messageId)));waiting=waiting.filter(row=>!sent.has(String(row.messageId)));
-   return result;
+   return asMail(result);
   });
  };
  const homed=new Set();

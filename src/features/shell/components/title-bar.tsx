@@ -2,6 +2,7 @@
 import { CliBottomChrome } from "@/features/viewer/components/cli-bottom-chrome";
 import { ViewerTabs } from "@/features/viewer/components/viewer-tabs";
 import { startDragging } from "@/shared/lib/titlebar";
+import { isMac } from "@/shared/lib/shortcuts/keystroke";
 import { NO_TEAM_SENTINEL, useActiveTeamKey } from "@/shared/lib/team-key";
 import { useUiStore } from "@/shared/stores/ui-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
@@ -12,13 +13,19 @@ import { IdentityMenu } from "@/features/shell/components/identity-menu";
 import { TerminalServersTitleBarNotice } from "@/features/machines/components/terminal-servers-notice";
 
 /** Width (CSS px) of the macOS traffic-light zone (close/minimize/zoom). */
-const TRAFFIC_LIGHT_WIDTH = 78;
+export const TRAFFIC_LIGHT_WIDTH = 78;
 
 /**
  * App-wide title bar. Single 40px chrome row for the whole app.
  *
  * Layout (left → right):
- *   - 78px drag-only spacer reserved for macOS Overlay traffic lights.
+ *   - On macOS, a 78px drag-only spacer reserved for the Overlay traffic lights; elsewhere the
+ *     window keeps its native title bar, so the row starts at a 12px gutter (`pl-3`) that
+ *     mirrors the right one.
+ *
+ *     Guard: on Windows and Linux the OS draws the title bar and its minimise, maximise and close
+ *     controls, and this row sits below it. Don't draw window controls here. Custom controls
+ *     come only with `decorations: false` for those platforms and a design for them, together.
  *   - SW-OC-28: the identity menu (`context repo / team ▾`) — the one place to
  *     switch context repo or team and to reach Private, agent
  *     definitions, routines, Machines and Settings (agent accounts have no menu row yet,
@@ -79,6 +86,8 @@ export function TitleBar() {
   const isConsole = useIsConsole();
   // Callback-ref into ui-store so the terminal view can portal the tray here.
   const setConsoleSwitcherSlot = useUiStore((s) => s.setConsoleSwitcherSlot);
+  // The traffic lights overlay the row only on macOS.
+  const trafficLights = isMac();
 
   return (
     <div
@@ -91,17 +100,20 @@ export function TitleBar() {
         onMouseDown={(e) => {
           // Skip the macOS traffic-light zone (close/minimize/zoom) so
           // startDragging doesn't steal the mousedown from native controls.
-          if (e.clientX < TRAFFIC_LIGHT_WIDTH) return;
+          if (trafficLights && e.clientX < TRAFFIC_LIGHT_WIDTH) return;
           startDragging(e);
         }}
-        className="@container/titlebar min-h-10 flex items-start"
+        className={`@container/titlebar min-h-10 flex items-start${trafficLights ? "" : " pl-3"}`}
       >
         {/* macOS traffic-light clearance. */}
-        <div
-          style={{ width: TRAFFIC_LIGHT_WIDTH }}
-          className="flex-shrink-0 h-10"
-          aria-hidden="true"
-        />
+        {trafficLights && (
+          <div
+            data-testid="title-bar-traffic-lights"
+            style={{ width: TRAFFIC_LIGHT_WIDTH }}
+            className="flex-shrink-0 h-10"
+            aria-hidden="true"
+          />
+        )}
 
         {/* SW-OC-28: whose space you're in, anchored where macOS users look for it;
             tabs or pills flow from it to the right. Capped so a long name can't

@@ -18,37 +18,32 @@
 //! never parks a runtime worker on the fork.
 
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use codesense_platform::process::{ExitWaiter, Pid, ProcessGroup};
 use log::{error, warn};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
-#[cfg(unix)]
-fn signal_group(pgid: libc::pid_t, signal: i32) -> Result<(), String> {
-    #[cfg(test)]
-    if pgid == TEST_GROUP_SIGNAL_FAILURE_PGID {
-        return Err("injected process-group signal failure".into());
-    }
-    if unsafe { libc::kill(-pgid, signal) } == 0 {
-        return Ok(());
-    }
-    let error = std::io::Error::last_os_error();
-    if error.raw_os_error() == Some(libc::ESRCH) {
-        Ok(())
-    } else {
-        Err(format!("signal process group {pgid}: {error}"))
-    }
-}
-
-#[cfg(all(unix, test))]
-const TEST_GROUP_SIGNAL_FAILURE_PGID: libc::pid_t = libc::pid_t::MAX - 1;
+mod cursor_reply;
 
 /// How long the exit seam waits, after the reader reaches end-of-stream, for the
 /// child to become reapable so `pty-exit` can carry its real status. A shell's
 /// slave fds close as it exits, so the status is normally ready at once.
 const EXIT_STATUS_GRACE: Duration = Duration::from_millis(100);
+
+/// How long a pseudo console's watcher waits on its child's process at a
+/// time, checking between waits that the session is still there.
+const CONSOLE_EXIT_SLICE: Duration = Duration::from_secs(1);
+
+/// How often a pseudo console's watcher checks whether its child exited when
+/// it cannot wait on the child's process.
+const CONSOLE_EXIT_POLL: Duration = Duration::from_millis(50);
+
+/// How long a pseudo console stays open after its child exits, so the output
+/// the child wrote last still reaches the reader before the console closes.
+const CONSOLE_CLOSE_GRACE: Duration = Duration::from_millis(250);
 
 /// Runner error surface: a driver returns [`PtyRunnerError::Unsupported`] for a
 /// capability it lacks so the surface can **hide** the affordance rather than
@@ -118,33 +113,62 @@ impl From<portable_pty::ExitStatus> for ExitInfo {
     }
 }
 
+/// How the recorded process group is signalled.
+#[derive(Clone, Copy)]
+enum GroupSignal {
+    /// SIGTERM: a request the group may ignore.
+    Terminate,
+    /// SIGKILL.
+    Kill,
+}
+
 /// The spawned child plus the process group captured while its PID is
 /// known-current. Never resolve a group from the PID after a wait probe may have
 /// reaped the leader: the numeric PID can then belong to an unrelated process.
+/// Dropping it signals nothing.
 pub(crate) struct SessionChild {
     child: Box<dyn Child + Send>,
-    #[cfg(unix)]
-    process_group: Option<libc::pid_t>,
+    process_group: Option<ProcessGroup>,
     /// `None` until the group SIGKILL is sent; then whether it reached the group
     /// (or found it gone), so the leader needs no separate kill.
-    #[cfg(unix)]
     process_group_kill: Option<bool>,
+    /// Makes every group signal fail, for the teardown paths' tests.
+    #[cfg(test)]
+    fail_group_signals: bool,
 }
 
 impl SessionChild {
     fn new(child: Box<dyn Child + Send>) -> Self {
-        #[cfg(unix)]
-        let process_group = child
-            .process_id()
-            .map(|pid| unsafe { libc::getpgid(pid as libc::pid_t) })
-            .filter(|pgid| *pgid > 0 && *pgid != unsafe { libc::getpgrp() });
+        let process_group = child.process_id().and_then(|pid| {
+            ProcessGroup::adopt(Pid::from_raw(pid))
+                .inspect_err(|error| warn!(target: "pty", "process group not adopted: {error}"))
+                .ok()
+                .flatten()
+        });
         Self {
             child,
-            #[cfg(unix)]
             process_group,
-            #[cfg(unix)]
             process_group_kill: None,
+            #[cfg(test)]
+            fail_group_signals: false,
         }
+    }
+
+    /// Signal the recorded group, if there is one; a group that is gone is not
+    /// an error.
+    fn signal_group(&self, signal: GroupSignal) -> Result<(), String> {
+        let Some(group) = &self.process_group else {
+            return Ok(());
+        };
+        #[cfg(test)]
+        if self.fail_group_signals {
+            return Err("injected process-group signal failure".into());
+        }
+        match signal {
+            GroupSignal::Terminate => group.terminate(),
+            GroupSignal::Kill => group.kill(),
+        }
+        .map_err(|error| format!("signal process group: {error}"))
     }
 
     /// Nonblocking liveness probe that also closes the process-group lifecycle
@@ -198,11 +222,8 @@ impl SessionChild {
     /// spawn, wait a bounded grace period, then KILL that same group and reap
     /// the owning child synchronously. Numeric identity is never rediscovered.
     fn drain_for_replacement(&mut self, deadline: Instant) -> Result<(), String> {
-        #[cfg(unix)]
         if self.process_group_kill.is_none() {
-            if let Some(pgid) = self.process_group {
-                signal_group(pgid, libc::SIGTERM)?;
-            }
+            self.signal_group(GroupSignal::Terminate)?;
         }
         // Do not call try_wait here: on Unix that reaps an exited group leader,
         // allowing its numeric PGID to be reused before descendant cleanup.
@@ -235,40 +256,30 @@ impl SessionChild {
     /// SIGKILL the recorded process group once. Returns whether the group kill
     /// covered the leader: a group is recorded and its kill succeeded or found
     /// it already gone, now or on an earlier call.
-    #[cfg(unix)]
     fn terminate_process_group(&mut self) -> bool {
-        let Some(pgid) = self.process_group else {
+        if self.process_group.is_none() {
             return false;
-        };
-        *self.process_group_kill.get_or_insert_with(|| {
-            signal_group(pgid, libc::SIGKILL)
-                .inspect_err(|error| warn!(target: "pty", "process-group kill failed: {error}"))
-                .is_ok()
-        })
-    }
-
-    #[cfg(not(unix))]
-    fn terminate_process_group(&mut self) -> bool {
-        false
+        }
+        if let Some(covered) = self.process_group_kill {
+            return covered;
+        }
+        let covered = self
+            .signal_group(GroupSignal::Kill)
+            .inspect_err(|error| warn!(target: "pty", "process-group kill failed: {error}"))
+            .is_ok();
+        self.process_group_kill = Some(covered);
+        covered
     }
 
     /// Replacement's checked process-group close. Unlike ordinary interactive
     /// teardown, every unexpected signal failure is part of the result and
     /// therefore prevents the caller from publishing a retirement receipt.
-    #[cfg(unix)]
     fn terminate_process_group_for_replacement(&mut self) -> Result<(), String> {
         if self.process_group_kill.is_some() {
             return Ok(());
         }
-        if let Some(pgid) = self.process_group {
-            signal_group(pgid, libc::SIGKILL)?;
-        }
+        self.signal_group(GroupSignal::Kill)?;
         self.process_group_kill = Some(true);
-        Ok(())
-    }
-
-    #[cfg(not(unix))]
-    fn terminate_process_group_for_replacement(&mut self) -> Result<(), String> {
         Ok(())
     }
 }
@@ -342,9 +353,9 @@ impl ChildHandle {
             .map_err(|error| error.to_string())
     }
 
-    #[cfg(all(unix, test))]
-    pub(crate) fn process_group(&self) -> Option<libc::pid_t> {
-        self.lock().process_group
+    #[cfg(test)]
+    pub(crate) fn has_process_group(&self) -> bool {
+        self.lock().process_group.is_some()
     }
 }
 
@@ -352,8 +363,12 @@ impl ChildHandle {
 /// kill, expressed in neutral terms over `portable-pty` handles.
 pub struct PtySession {
     /// Master side — drives resize; a `LocalPtyRunner` owns a real local master
-    /// fd, a remote driver owns a wire proxy.
-    master: Box<dyn MasterPty + Send>,
+    /// fd, a remote driver owns a wire proxy. `None` once a Windows pseudo
+    /// console was closed after its child exited (see [`close_after_exit`]).
+    master: Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
+    /// The size last asked for, as `(cols, rows)`: what [`Self::size`]
+    /// answers once the master is closed.
+    size: Mutex<(u16, u16)>,
     child: ChildHandle,
     /// PID of the spawned shell, captured once at spawn (stable for the
     /// session's life). Source for the idle / agent-liveness process-tree checks.
@@ -377,8 +392,12 @@ impl PtySession {
         writer: Box<dyn Write + Send>,
     ) -> Self {
         let pid = child.process_id();
+        let size = master
+            .get_size()
+            .map_or((80, 24), |size| (size.cols, size.rows));
         Self {
-            master,
+            master: Arc::new(Mutex::new(Some(master))),
+            size: Mutex::new(size),
             child: ChildHandle(Arc::new(Mutex::new(SessionChild::new(child)))),
             pid,
             reader: Some(reader),
@@ -394,28 +413,57 @@ impl PtySession {
     /// The PTY's foreground process group (`tcgetpgrp` on the master), when
     /// the driver can tell.
     #[cfg(feature = "e2e-dump")]
+    #[allow(unreachable_code)]
     pub fn foreground_pgid(&self) -> Option<i32> {
-        self.master.process_group_leader()
+        // portable-pty declares `process_group_leader` on unix only; this
+        // e2e-dump read is the one OS gate the runner keeps.
+        #[cfg(unix)]
+        return self.master().as_ref()?.process_group_leader();
+        None
     }
 
-    /// The PTY's size as `(cols, rows)`; 80×24 when the driver cannot say.
-    pub fn size(&self) -> (u16, u16) {
+    fn master(&self) -> MutexGuard<'_, Option<Box<dyn MasterPty + Send>>> {
         self.master
-            .get_size()
-            .map_or((80, 24), |size| (size.cols, size.rows))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn last_size(&self) -> MutexGuard<'_, (u16, u16)> {
+        self.size
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// The PTY's size as `(cols, rows)`; 80×24 when the driver cannot say. Once
+    /// the master is closed, the size last asked for.
+    pub fn size(&self) -> (u16, u16) {
+        match self.master().as_ref() {
+            Some(master) => master
+                .get_size()
+                .map_or((80, 24), |size| (size.cols, size.rows)),
+            None => *self.last_size(),
+        }
     }
 
     /// Resize the underlying PTY. Delegates to the master handle — the local
-    /// driver's real resize, a remote driver's wire resize.
+    /// driver's real resize, a remote driver's wire resize. Once the master is
+    /// closed (a Windows session whose child exited) there is no PTY left to
+    /// size: the size is only recorded, as an ended unix session's resize
+    /// succeeds with no child to see it.
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), PtyRunnerError> {
-        self.master
-            .resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|error| PtyRunnerError::Message(error.to_string()))
+        let master = self.master();
+        if let Some(master) = master.as_ref() {
+            master
+                .resize(PtySize {
+                    rows,
+                    cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+                .map_err(|error| PtyRunnerError::Message(error.to_string()))?;
+        }
+        *self.last_size() = (cols, rows);
+        Ok(())
     }
 
     /// Kill the session's child: a still-running child has its process group
@@ -532,7 +580,112 @@ fn open_local_session(spec: PtySpec) -> Result<PtySession, PtyRunnerError> {
             error!(target: "pty", "spawn_pty: failed to spawn command: {}", error);
             PtyRunnerError::Message(format!("Failed to spawn: {}", plainly(&*error)))
         })?;
-    Ok(PtySession::new(pair.master, child, reader, writer))
+    let mut session = PtySession::new(pair.master, child, reader, writer);
+    // Two things a Windows pseudo console needs that a unix pty does not:
+    // - It asks where the cursor is as it starts, and serves its child only
+    //   once answered: answer it here, so no session waits on a viewer (see
+    //   `cursor_reply`). A unix pty asks nothing.
+    // - It keeps its output pipe open after its child exits, until the
+    //   console is closed, so the reader would never reach end-of-stream and
+    //   the exit would never be reported. Close it once the child is gone. A
+    //   unix pty's reader reaches end-of-stream by itself, and closing its
+    //   master early would drop output still unread.
+    if std::env::consts::OS == "windows" {
+        let writer = session.writer();
+        session.reader = session.reader.take().map(|reader| {
+            Box::new(cursor_reply::CursorReply::new(reader, writer)) as Box<dyn Read + Send>
+        });
+        let child = session.child();
+        let master = Arc::downgrade(&session.master);
+        let wait = console_exit_wait(session.pid());
+        let watcher = std::thread::Builder::new()
+            .name("pty-console-close".into())
+            .spawn(move || {
+                let timing = WatchTiming {
+                    slice: CONSOLE_EXIT_SLICE,
+                    poll: CONSOLE_EXIT_POLL,
+                    grace: CONSOLE_CLOSE_GRACE,
+                };
+                close_after_exit(&child, &master, wait, timing)
+            });
+        if let Err(error) = watcher {
+            warn!(target: "pty", "spawn_pty: pseudo console watcher not started: {error}");
+        }
+    }
+    Ok(session)
+}
+
+/// How the console watcher learns its child exited: `wait(slice)` is
+/// `Ok(true)` once it has, `Ok(false)` while it still runs after `slice`, and
+/// `Err` when the wait itself failed.
+type ExitWait = Box<dyn FnMut(Duration) -> std::io::Result<bool> + Send>;
+
+/// A wait on the process `pid`, or `None` (with a warning) when there is no
+/// pid or its process cannot be waited on: the watcher then polls.
+fn console_exit_wait(pid: Option<u32>) -> Option<ExitWait> {
+    let Some(pid) = pid else {
+        warn!(target: "pty", "pseudo console watcher: no child pid, polling for its exit");
+        return None;
+    };
+    match ExitWaiter::open(Pid::from_raw(pid)) {
+        Ok(waiter) => Some(Box::new(move |slice| waiter.wait(slice))),
+        Err(error) => {
+            warn!(target: "pty", "pseudo console watcher: polling, child {pid} can't be waited on: {error}");
+            None
+        }
+    }
+}
+
+/// The console watcher's times: each wait on the child's process, the poll
+/// when there is none, and the grace before the close.
+#[derive(Clone, Copy)]
+struct WatchTiming {
+    slice: Duration,
+    poll: Duration,
+    grace: Duration,
+}
+
+/// Wait for `child` to exit, then after the grace drop what `slot` holds (a
+/// session's master: dropping a Windows one closes its pseudo console, which
+/// ends the reader's stream). With a `wait`, wait on the child's process a
+/// slice at a time; then read the child's status once, which closes its
+/// process group (a Job Object) as a poll would, and close whatever that read
+/// said (an exit code of 259 reads as still running). Without one, or once a
+/// wait fails, poll the child. Returns early, closing nothing, once the
+/// session itself is gone.
+fn close_after_exit<T>(
+    child: &ChildHandle,
+    slot: &Weak<Mutex<Option<T>>>,
+    mut wait: Option<ExitWait>,
+    timing: WatchTiming,
+) {
+    let WatchTiming { slice, poll, grace } = timing;
+    loop {
+        if slot.strong_count() == 0 {
+            return;
+        }
+        match wait.as_mut().map(|wait| wait(slice)) {
+            Some(Ok(true)) => {
+                let _ = child.is_alive();
+                break;
+            }
+            Some(Ok(false)) => {}
+            Some(Err(error)) => {
+                warn!(target: "pty", "pseudo console watcher: polling, the wait failed: {error}");
+                wait = None;
+            }
+            None if child.is_alive() => std::thread::sleep(poll),
+            None => break,
+        }
+    }
+    std::thread::sleep(grace);
+    if let Some(slot) = slot.upgrade() {
+        let closed = slot
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        drop(closed);
+    }
 }
 
 /// `command` run through this host's child-limit shim
@@ -563,13 +716,8 @@ fn with_original_limit(command: CommandBuilder) -> CommandBuilder {
 fn resolve_program(command: &CommandBuilder) -> Option<std::path::PathBuf> {
     use std::path::{Component, Path};
     let program = Path::new(command.get_argv().first()?);
-    let executable = |path: std::path::PathBuf| {
-        let bytes = std::os::unix::ffi::OsStrExt::as_bytes(path.as_os_str());
-        let c_path = std::ffi::CString::new(bytes).ok()?;
-        // SAFETY: a NUL-terminated path; `access` only reads it.
-        let runnable = unsafe { libc::access(c_path.as_ptr(), libc::X_OK) } == 0;
-        (runnable && Path::is_file(&path)).then_some(path)
-    };
+    let executable =
+        |path: std::path::PathBuf| codesense_platform::fs::can_execute(&path).then_some(path);
     if program.is_absolute() {
         return executable(program.to_path_buf());
     }
@@ -591,20 +739,15 @@ fn resolve_program(command: &CommandBuilder) -> Option<std::path::PathBuf> {
 /// A spawn error that was EMFILE says so plainly, naming this
 /// process and its counts; any other error reads exactly as before.
 fn plainly(error: &(dyn std::error::Error + 'static)) -> String {
-    let emfile = std::iter::successors(Some(error), |cause| cause.source()).any(|cause| {
-        cause
-            .downcast_ref::<std::io::Error>()
-            .and_then(std::io::Error::raw_os_error)
-            == Some(libc::EMFILE)
-            // `openpty` reports its errno only in its message (`{:?}` of it).
-            || str::contains(&cause.to_string(), &format!("code: {},", libc::EMFILE))
-    });
-    if !emfile {
+    if !codesense_platform::limits::is_descriptor_exhaustion(error) {
         return error.to_string();
     }
     let process = std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.file_name().map(|name| name.to_string_lossy().into_owned()))
+        .and_then(|exe| {
+            exe.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
         .unwrap_or_else(|| "this process".into());
     format!("{} ({error})", crate::nofile::limit_reached(&process))
 }
@@ -613,9 +756,256 @@ fn plainly(error: &(dyn std::error::Error + 'static)) -> String {
 mod tests {
     use super::*;
 
+    /// A child that runs until `exited` is set, counting its status probes.
+    #[derive(Clone, Debug, Default)]
+    struct ExitsOnCue {
+        exited: Arc<std::sync::atomic::AtomicBool>,
+        probes: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl ExitsOnCue {
+        fn has_exited(&self) -> bool {
+            self.exited.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        fn probes(&self) -> usize {
+            self.probes.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        /// A wait on this child's process, as the watcher's waiter would
+        /// give: it sees the cue itself, never probing the child's status.
+        fn wait(&self) -> ExitWait {
+            let cue = self.clone();
+            Box::new(move |slice| {
+                let deadline = Instant::now() + slice;
+                while !cue.has_exited() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Ok(cue.has_exited())
+            })
+        }
+    }
+
+    /// Short times for the watcher's tests.
+    const TEST_TIMING: WatchTiming = WatchTiming {
+        slice: Duration::from_millis(20),
+        poll: Duration::from_millis(1),
+        grace: Duration::ZERO,
+    };
+
+    impl portable_pty::ChildKiller for ExitsOnCue {
+        fn kill(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
+            Box::new(self.clone())
+        }
+    }
+
+    impl Child for ExitsOnCue {
+        fn try_wait(&mut self) -> std::io::Result<Option<portable_pty::ExitStatus>> {
+            self.probes
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(self
+                .has_exited()
+                .then(|| portable_pty::ExitStatus::with_exit_code(3)))
+        }
+        fn wait(&mut self) -> std::io::Result<portable_pty::ExitStatus> {
+            Ok(portable_pty::ExitStatus::with_exit_code(3))
+        }
+        fn process_id(&self) -> Option<u32> {
+            None
+        }
+        #[cfg(windows)]
+        fn as_raw_handle(&self) -> Option<std::os::windows::io::RawHandle> {
+            None
+        }
+    }
+
+    /// Records that it was dropped.
+    struct Closes(Arc<std::sync::atomic::AtomicBool>);
+
+    impl Drop for Closes {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    fn cued_child() -> (ChildHandle, ExitsOnCue) {
+        let cue = ExitsOnCue::default();
+        let child = ChildHandle(Arc::new(Mutex::new(SessionChild {
+            child: Box::new(cue.clone()),
+            process_group: None,
+            process_group_kill: None,
+            fail_group_signals: false,
+        })));
+        (child, cue)
+    }
+
+    /// Watch `child` on a thread of its own with `wait`, closing a slot whose
+    /// close the returned flag records.
+    fn watch(
+        child: &ChildHandle,
+        wait: Option<ExitWait>,
+    ) -> (
+        std::thread::JoinHandle<()>,
+        Arc<Mutex<Option<Closes>>>,
+        Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let slot = Arc::new(Mutex::new(Some(Closes(closed.clone()))));
+        let watcher = {
+            let (child, slot) = (child.clone(), Arc::downgrade(&slot));
+            std::thread::spawn(move || close_after_exit(&child, &slot, wait, TEST_TIMING))
+        };
+        (watcher, slot, closed)
+    }
+
+    #[test]
+    fn the_console_closes_once_its_child_exits_and_its_exit_still_reads() {
+        let (child, cue) = cued_child();
+        let (watcher, slot, closed) = watch(&child, Some(cue.wait()));
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(
+            !closed.load(std::sync::atomic::Ordering::SeqCst),
+            "closed while running"
+        );
+        assert_eq!(cue.probes(), 0, "a waiting watcher probes nothing");
+        cue.exited.store(true, std::sync::atomic::Ordering::SeqCst);
+        watcher.join().unwrap();
+        assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(slot.lock().unwrap().is_none());
+        // One probe after the wait reads the exit (and closes the group);
+        // a watcher that still polled would have probed many times.
+        assert_eq!(cue.probes(), 1);
+        // The reader's end-of-stream then reports the real status.
+        assert_eq!(
+            child.exit_info_after_eof(),
+            Some(ExitInfo {
+                exit_code: Some(3),
+                signal: None
+            })
+        );
+    }
+
+    #[test]
+    fn a_failed_wait_falls_back_to_polling() {
+        let (child, cue) = cued_child();
+        let failing: ExitWait = Box::new(|_| Err(std::io::Error::other("wait failed")));
+        let (watcher, slot, closed) = watch(&child, Some(failing));
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(!closed.load(std::sync::atomic::Ordering::SeqCst));
+        cue.exited.store(true, std::sync::atomic::Ordering::SeqCst);
+        watcher.join().unwrap();
+        assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(slot.lock().unwrap().is_none());
+    }
+
+    /// A master of a fixed size that cannot be read from or written to.
+    struct SizedMaster(Mutex<PtySize>);
+
+    impl MasterPty for SizedMaster {
+        fn resize(&self, size: PtySize) -> Result<(), anyhow::Error> {
+            *self.0.lock().unwrap() = size;
+            Ok(())
+        }
+        fn get_size(&self) -> Result<PtySize, anyhow::Error> {
+            Ok(*self.0.lock().unwrap())
+        }
+        fn try_clone_reader(&self) -> Result<Box<dyn Read + Send>, anyhow::Error> {
+            anyhow::bail!("no reader")
+        }
+        fn take_writer(&self) -> Result<Box<dyn Write + Send>, anyhow::Error> {
+            anyhow::bail!("no writer")
+        }
+        #[cfg(unix)]
+        fn process_group_leader(&self) -> Option<libc::pid_t> {
+            None
+        }
+        #[cfg(unix)]
+        fn as_raw_fd(&self) -> Option<std::os::unix::io::RawFd> {
+            None
+        }
+        #[cfg(unix)]
+        fn tty_name(&self) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+
+    #[test]
+    fn a_closed_master_resizes_ok_and_keeps_the_last_size() {
+        let master = SizedMaster(Mutex::new(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        }));
+        let session = PtySession::new(
+            Box::new(master),
+            Box::new(ExitsOnCue::default()),
+            Box::new(std::io::empty()),
+            Box::new(std::io::sink()),
+        );
+        session.resize(100, 30).unwrap();
+        assert_eq!(session.size(), (100, 30));
+        // As the console watcher closes it.
+        drop(session.master.lock().unwrap().take());
+        assert_eq!(session.size(), (100, 30));
+        assert_eq!(session.resize(120, 40), Ok(()));
+        assert_eq!(session.size(), (120, 40));
+    }
+
+    /// A wait that always times out, counting its calls.
+    fn timing_out(waits: &Arc<std::sync::atomic::AtomicUsize>) -> ExitWait {
+        let waits = waits.clone();
+        Box::new(move |slice| {
+            waits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            std::thread::sleep(slice);
+            Ok(false)
+        })
+    }
+
+    #[test]
+    fn a_gone_session_stops_the_console_watcher() {
+        let (child, running) = cued_child();
+        let waits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (watcher, slot, _closed) = watch(&child, Some(timing_out(&waits)));
+        while waits.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // The session goes while the watcher waits on its child. Read after
+        // the drop: no wait starts once the watcher sees it, so at most the
+        // one it may have begun just before can follow.
+        drop(slot);
+        let at_drop = waits.load(std::sync::atomic::Ordering::SeqCst);
+        // Returns although the child never exits, after the slice in hand.
+        watcher.join().unwrap();
+        assert!(waits.load(std::sync::atomic::Ordering::SeqCst) <= at_drop + 1);
+        assert_eq!(running.probes(), 0);
+    }
+
+    /// The exit closes the console whatever the status read after it says:
+    /// an exit code of 259 reads as still running.
+    #[test]
+    fn a_reported_exit_closes_the_console_even_if_the_child_reads_as_running() {
+        let (child, running) = cued_child();
+        let exited: ExitWait = Box::new(|_| Ok(true));
+        let (watcher, slot, closed) = watch(&child, Some(exited));
+        watcher.join().unwrap();
+        assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(slot.lock().unwrap().is_none());
+        assert_eq!(running.probes(), 1, "one status read after the wait");
+    }
+    // Unix only, as the group tests that use it are.
+    #[cfg(unix)]
+    use codesense_platform::process::ProcessTree;
+
+    // Unix only, as the group tests that use it are.
+    #[cfg(unix)]
     #[derive(Clone, Debug)]
     struct ExitedChild(Arc<Mutex<Vec<&'static str>>>);
 
+    #[cfg(unix)]
     impl portable_pty::ChildKiller for ExitedChild {
         fn kill(&mut self) -> std::io::Result<()> {
             self.0.lock().unwrap().push("kill-child");
@@ -626,6 +1016,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     impl Child for ExitedChild {
         fn try_wait(&mut self) -> std::io::Result<Option<portable_pty::ExitStatus>> {
             self.0.lock().unwrap().push("try-wait");
@@ -640,26 +1031,49 @@ mod tests {
         }
     }
 
+    /// A leader the test starts as a tree of its own, ready once it ignores
+    /// SIGTERM, and its adopted group: a real, live group for the teardown
+    /// paths to signal. It outlives a SIGTERM, so a later SIGKILL meets a live
+    /// group (on macOS a group holding only a zombie answers EPERM).
+    #[cfg(unix)]
+    fn own_group() -> (ProcessTree, ProcessGroup) {
+        use std::io::BufRead;
+        let mut leader = std::process::Command::new("/bin/sh");
+        leader
+            .args(["-c", "trap '' TERM; echo ready; while :; do sleep 1; done"])
+            .stdout(std::process::Stdio::piped());
+        let mut tree = ProcessTree::spawn(&mut leader).unwrap();
+        let mut ready = String::new();
+        std::io::BufReader::new(tree.child().stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(ready.trim(), "ready");
+        let group = ProcessGroup::adopt(tree.pid())
+            .unwrap()
+            .expect("a group of its own");
+        (tree, group)
+    }
+
     #[cfg(unix)]
     #[test]
     fn rm4d_natural_exit_checks_recorded_group_cleanup() {
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let mut child = test_session_child(ExitedChild(calls.clone()), Some(libc::pid_t::MAX));
+        let (mut tree, group) = own_group();
+        let mut child = test_session_child(ExitedChild(calls.clone()), Some(group), false);
         child
             .drain_for_replacement(Instant::now() + Duration::from_millis(10))
             .unwrap();
         assert_eq!(child.process_group_kill, Some(true));
         assert_eq!(*calls.lock().unwrap(), ["kill-child", "owning-wait"]);
+        assert!(!tree.child().wait().unwrap().success(), "the group ended");
     }
 
     #[cfg(unix)]
     #[test]
     fn rm4d_natural_exit_propagates_group_signal_failure() {
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let mut child = test_session_child(
-            ExitedChild(calls.clone()),
-            Some(TEST_GROUP_SIGNAL_FAILURE_PGID),
-        );
+        let (_tree, group) = own_group();
+        let mut child = test_session_child(ExitedChild(calls.clone()), Some(group), true);
         assert_eq!(
             child.drain_for_replacement(Instant::now() + Duration::from_millis(10)),
             Err("injected process-group signal failure".into())
@@ -668,15 +1082,96 @@ mod tests {
         assert!(calls.lock().unwrap().is_empty());
     }
 
+    /// The group signals reach the whole group: SIGTERM is a request the group
+    /// may ignore, SIGKILL ends it, and a gone group is not an error.
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "quarantine: https://github.com/codesensehq/codesense/issues/375"]
+    fn group_signals_reach_the_whole_group_and_a_gone_group_is_ok() {
+        use std::os::unix::process::ExitStatusExt;
+        let (mut tree, group) = own_group();
+        let child = test_session_child(ExitedChild(Default::default()), Some(group), false);
+
+        child.signal_group(GroupSignal::Terminate).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            tree.child().try_wait().unwrap().is_none(),
+            "SIGTERM was ignored"
+        );
+        child.signal_group(GroupSignal::Kill).unwrap();
+        assert_eq!(tree.child().wait().unwrap().signal(), Some(libc::SIGKILL));
+
+        let pgid = tree.pid().as_raw() as libc::pid_t;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while unsafe { libc::kill(-pgid, 0) } == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(child.signal_group(GroupSignal::Kill), Ok(()));
+    }
+
+    /// A child in this process's own group is never signalled through it: on
+    /// unix it gets no group (signalling it would reach the test's own); on
+    /// Windows it is adopted into a job of its own.
+    #[test]
+    fn a_child_in_this_process_group_is_never_signalled_through_it() {
+        let shared = expect_long_running().spawn().unwrap();
+        let shared = SessionChild::new(Box::new(shared));
+        assert_eq!(shared.process_group.is_some(), expect_own_group_adopted());
+        let shared = ChildHandle(Arc::new(Mutex::new(shared)));
+        shared.terminate();
+        shared.wait();
+    }
+
+    /// Unix: a plain child shares this process's group, which is never
+    /// adopted. Windows: any process is adopted into a job of its own.
+    fn expect_own_group_adopted() -> bool {
+        cfg!(windows)
+    }
+
+    /// A command that runs until it is killed, started in this process's own
+    /// group: `sleep` on unix, `ping` on Windows (which has no `sleep`).
+    fn expect_long_running() -> std::process::Command {
+        if cfg!(windows) {
+            let mut ping = std::process::Command::new("ping");
+            ping.args(["-n", "60", "127.0.0.1"])
+                .stdout(std::process::Stdio::null());
+            ping
+        } else {
+            let mut sleep = std::process::Command::new("sleep");
+            sleep.arg("30");
+            sleep
+        }
+    }
+
+    /// Dropping a session child signals nothing; only its teardown paths do.
+    #[cfg(unix)]
+    #[test]
+    fn dropping_a_session_child_signals_nothing() {
+        let (mut tree, group) = own_group();
+        drop(test_session_child(
+            ExitedChild(Default::default()),
+            Some(group),
+            false,
+        ));
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            tree.child().try_wait().unwrap().is_none(),
+            "the group was signalled"
+        );
+    }
+
+    // Unix only, as the group tests that use it are.
     #[cfg(unix)]
     fn test_session_child(
         child: impl Child + Send + 'static,
-        process_group: Option<libc::pid_t>,
+        process_group: Option<ProcessGroup>,
+        fail_group_signals: bool,
     ) -> SessionChild {
         SessionChild {
             child: Box::new(child),
             process_group,
             process_group_kill: None,
+            fail_group_signals,
         }
     }
 
@@ -720,7 +1215,8 @@ mod tests {
 
     #[cfg(unix)]
     fn dying_child(
-        process_group: Option<libc::pid_t>,
+        process_group: Option<ProcessGroup>,
+        fail_group_signals: bool,
         kill_delay: Duration,
     ) -> (ChildHandle, Arc<Mutex<Vec<&'static str>>>) {
         let calls = Arc::new(Mutex::new(Vec::new()));
@@ -731,6 +1227,7 @@ mod tests {
         let child = ChildHandle(Arc::new(Mutex::new(test_session_child(
             child,
             process_group,
+            fail_group_signals,
         ))));
         (child, calls)
     }
@@ -741,7 +1238,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_group_kill_skips_the_driver_kill_and_keeps_the_exit_status() {
-        let (child, calls) = dying_child(Some(libc::pid_t::MAX), EXIT_STATUS_GRACE * 3);
+        let (_tree, group) = own_group();
+        let (child, calls) = dying_child(Some(group), false, EXIT_STATUS_GRACE * 3);
         let teardown = std::thread::spawn({
             let child = child.clone();
             move || child.terminate()
@@ -768,12 +1266,31 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn teardown_without_a_group_kill_still_kills_the_child() {
-        for process_group in [None, Some(TEST_GROUP_SIGNAL_FAILURE_PGID)] {
-            let (child, calls) = dying_child(process_group, Duration::ZERO);
+        for failing in [false, true] {
+            let (_tree, group) = own_group();
+            let (child, calls) = dying_child(failing.then_some(group), failing, Duration::ZERO);
             child.terminate();
             assert_eq!(*calls.lock().unwrap(), ["try-wait", "kill-child"]);
-            assert!(!child.lock().terminate_process_group(), "{process_group:?}");
+            assert!(!child.lock().terminate_process_group(), "{failing}");
         }
+    }
+
+    /// portable-pty starts the child in a session of its own, so its group is
+    /// recorded.
+    #[tokio::test]
+    async fn a_pty_child_has_its_group_recorded() {
+        let mut command = CommandBuilder::new("sh");
+        command.arg("-c");
+        command.arg("sleep 30");
+        let session = LocalPtyRunner
+            .spawn(PtySpec {
+                command,
+                size: PtySize::default(),
+            })
+            .await
+            .expect("local spawn succeeds");
+        assert!(session.child().has_process_group());
+        session.discard();
     }
 
     /// The built-in local driver really opens a PTY, forks the child, and
@@ -892,11 +1409,14 @@ mod tests {
         assert!(killed.signal.is_some(), "a signal death names its signal");
     }
 
+    // Unix only, as the test that uses it is (it uses the unix-only test fixtures).
+    #[cfg(unix)]
     #[derive(Debug, Clone)]
     struct BlockingWaitChild {
         release: Arc<(Mutex<bool>, std::sync::Condvar)>,
     }
 
+    #[cfg(unix)]
     impl portable_pty::ChildKiller for BlockingWaitChild {
         fn kill(&mut self) -> std::io::Result<()> {
             Ok(())
@@ -907,6 +1427,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     impl Child for BlockingWaitChild {
         fn try_wait(&mut self) -> std::io::Result<Option<portable_pty::ExitStatus>> {
             Ok(None)
@@ -926,6 +1447,8 @@ mod tests {
         }
     }
 
+    // Unix only: uses the unix-only test fixtures.
+    #[cfg(unix)]
     #[test]
     fn child_reaper_enqueue_returns_before_wait_completes() {
         let release = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
@@ -993,7 +1516,10 @@ mod tests {
             Some(std::path::PathBuf::clone(&relative_tool)),
             "a relative PATH entry is taken against the working directory"
         );
-        assert_eq!(resolve("./tool"), Some(std::path::Path::join(cwd.path(), "./tool")));
+        assert_eq!(
+            resolve("./tool"),
+            Some(std::path::Path::join(cwd.path(), "./tool"))
+        );
         assert_eq!(resolve("/bin/sh"), Some("/bin/sh".into()));
         assert_eq!(resolve("tool"), None, "a bare name never searches the cwd");
         assert_eq!(resolve("definitely-not-installed-sv-pbf-290"), None);
@@ -1005,11 +1531,16 @@ mod tests {
 
     /// EMFILE names the process and its counts; any other
     /// error reads exactly as before.
+    // Unix only: EMFILE is the unix errno for descriptor exhaustion.
+    #[cfg(unix)]
     #[test]
     fn an_emfile_spawn_error_says_the_open_file_limit_was_reached() {
         let emfile = std::io::Error::from_raw_os_error(libc::EMFILE);
         let text = plainly(&emfile);
-        assert!(str::starts_with(&text, "open-file limit reached in "), "{text}");
+        assert!(
+            str::starts_with(&text, "open-file limit reached in "),
+            "{text}"
+        );
         let pid = format!("(pid {})", std::process::id());
         assert!(str::contains(&text, &pid), "{text}");
         assert!(str::contains(&text, " open of soft limit "), "{text}");
@@ -1019,7 +1550,10 @@ mod tests {
             "failed to openpty: Os {{ code: {}, kind: Uncategorized, message: \"Too many open files\" }}",
             libc::EMFILE
         ));
-        assert!(str::starts_with(&plainly(&openpty), "open-file limit reached in "));
+        assert!(str::starts_with(
+            &plainly(&openpty),
+            "open-file limit reached in "
+        ));
         // A wrapped EMFILE (the reader/writer `Dup { source }` shape) is found
         // through `source()`.
         #[derive(Debug)]
@@ -1035,7 +1569,10 @@ mod tests {
             }
         }
         let wrapped = Wrapped(std::io::Error::from_raw_os_error(libc::EMFILE));
-        assert!(str::starts_with(&plainly(&wrapped), "open-file limit reached in "));
+        assert!(str::starts_with(
+            &plainly(&wrapped),
+            "open-file limit reached in "
+        ));
         let wrapped_other = Wrapped(std::io::Error::from_raw_os_error(libc::ENOENT));
         assert_eq!(plainly(&wrapped_other), "failed to dup the pty");
         let other = std::io::Error::from_raw_os_error(libc::ENOENT);

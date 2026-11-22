@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, it, expect, vi } from "vitest";
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
 import {
+  withoutRemovedArgs,
   buildAgentLaunchCommand,
   agentLaunchLine,
   connectAgentSession,
@@ -456,6 +459,52 @@ describe("connectAgentSession orchestration (AC-1/2/3/5/7)", () => {
     const relaunched = useAgentStateStore.getState().launchBySession[opened.sessionId].spec;
     expect(relaunched.agentPath).toBe("/fresh/hermes");
     expect(relaunched.args).toEqual(execution.argv.slice(1));
+    expect(useAgentStateStore.getState().launchBySession[opened.sessionId].exec).toBe(true);
+  });
+
+  it("the default tab opens with its projection's exec and types no line", async () => {
+    const execution = {
+      argv: ["C:\\npm\\claude.exe", "--dangerously-skip-permissions", "--settings", "s.json"],
+      nativeLaunch: "claude" as const,
+    };
+    const { deps, spawnOpts } = makeDeps({
+      projectScopeConfig: vi.fn(async () => ({
+        extraArgs: ["--settings", "s.json"],
+        environmentBinding: null,
+        execution,
+      })),
+    });
+    const opened = await connectAgentSession(params, deps);
+    expect(spawnOpts[0]).toEqual(expect.objectContaining({ execution }));
+    expect(deps.launchAgentLine).not.toHaveBeenCalled();
+    const recorded = useAgentStateStore.getState().launchBySession[opened.sessionId];
+    expect(recorded.exec).toBe(true);
+    expect(recorded.line).toBe(buildAgentLaunchCommand(execution.argv[0], execution.argv.slice(1)));
+    // The launch's own spec is kept: only the program comes from the exec.
+    expect(recorded.spec.agentPath).toBe(execution.argv[0]);
+    expect(recorded.spec.args).toBeUndefined();
+
+    // A relaunch projects the default launch afresh: no old scope flags replayed.
+    const respawn = vi.fn(async (_request: RespawnRequest) => ({ extraArgs: [], execution }));
+    const inject = { launchAgentLine: vi.fn(async () => ({ ok: true as const })) };
+    await relaunchAgentSession(opened.sessionId, recorded.spec, respawn, inject);
+    await relaunchAgentSession(
+      opened.sessionId,
+      useAgentStateStore.getState().launchBySession[opened.sessionId].spec,
+      respawn,
+      inject,
+    );
+    for (const [request] of respawn.mock.calls) {
+      expect(request.scope).toMatchObject({ defaultArgs: true, launchArgs: [] });
+    }
+    expect(inject.launchAgentLine).not.toHaveBeenCalled();
+  });
+
+  it("a typed launch is recorded without the exec flag", async () => {
+    const { deps } = makeDeps();
+    const opened = await connectAgentSession(params, deps);
+    expect(deps.launchAgentLine).toHaveBeenCalledTimes(1);
+    expect(useAgentStateStore.getState().launchBySession[opened.sessionId].exec).toBeUndefined();
   });
 
   it("a prepared launch spawns with exactly the backend's env strip, account and binding", async () => {
@@ -675,10 +724,30 @@ describe("reconnectAgentSession (AC-1/AC-2)", () => {
   });
 });
 
+describe("withoutRemovedArgs", () => {
+  // The backend's `mcp_scope::without_removed_args` asserts the same table.
+  const { rows } = JSON.parse(
+    readFileSync(
+      resolve(__dirname, "../../../src-tauri/src/commands/mcp_scope/fixtures/remove-args.json"),
+      "utf-8",
+    ),
+  ) as { rows: [string[], string[], string[]][] };
+
+  it.each(rows)("%j without %j keeps %j", (args, remove, kept) => {
+    expect(withoutRemovedArgs(args, remove)).toEqual(kept);
+  });
+});
+
 describe("agentBasename (AC-12 liveness needle)", () => {
   it("derives the process basename from a resolved agent path", () => {
     expect(agentBasename("/opt/homebrew/bin/claude")).toBe("claude");
     expect(agentBasename("claude")).toBe("claude");
+  });
+
+  it("names a Windows CLI by its stem, so the liveness probe finds it", () => {
+    expect(agentBasename("C:\\Users\\u\\AppData\\Roaming\\npm\\claude.exe")).toBe("claude");
+    expect(agentBasename("C:\\npm\\claude.cmd")).toBe("claude");
+    expect(agentBasename("CODEX.BAT")).toBe("codex");
   });
 });
 

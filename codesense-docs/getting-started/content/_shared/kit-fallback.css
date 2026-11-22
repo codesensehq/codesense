@@ -17,7 +17,7 @@
   --cs-text-lg: 15px;
   --cs-text-xl: 18px;
   --cs-leading: 1.5;
-  --cs-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --cs-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace;
   --cs-hover: color-mix(in srgb, var(--cs-fg, CanvasText) 6%, transparent);
   --cs-inset: color-mix(in srgb, var(--cs-fg, CanvasText) 4%, var(--cs-bg, Canvas));
   --cs-shadow-lg: 0 0 0 1px rgb(0 0 0 / 0.04), 0 12px 32px rgb(0 0 0 / 0.28), 0 2px 8px rgb(0 0 0 / 0.16);
@@ -107,7 +107,7 @@
   --cs-text-lg: 15px;
   --cs-text-xl: 18px;
   --cs-leading: 1.5;
-  --cs-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --cs-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace;
   --cs-hover: color-mix(in srgb, var(--cs-fg, CanvasText) 6%, transparent);
   --cs-inset: color-mix(in srgb, var(--cs-fg, CanvasText) 4%, var(--cs-bg, Canvas));
   --cs-shadow-lg: 0 0 0 1px rgb(0 0 0 / 0.04), 0 12px 32px rgb(0 0 0 / 0.28), 0 2px 8px rgb(0 0 0 / 0.16);
@@ -197,7 +197,7 @@
   --cs-text-lg: 15px;
   --cs-text-xl: 18px;
   --cs-leading: 1.5;
-  --cs-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --cs-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace;
   --cs-hover: color-mix(in srgb, var(--cs-fg, CanvasText) 6%, transparent);
   --cs-inset: color-mix(in srgb, var(--cs-fg, CanvasText) 4%, var(--cs-bg, Canvas));
   --cs-shadow-lg: 0 0 0 1px rgb(0 0 0 / 0.04), 0 12px 32px rgb(0 0 0 / 0.28), 0 2px 8px rgb(0 0 0 / 0.16);
@@ -286,7 +286,7 @@
   --cs-text-lg: 15px;
   --cs-text-xl: 18px;
   --cs-leading: 1.5;
-  --cs-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --cs-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace;
   --cs-hover: color-mix(in srgb, var(--cs-fg, CanvasText) 6%, transparent);
   --cs-inset: color-mix(in srgb, var(--cs-fg, CanvasText) 4%, var(--cs-bg, Canvas));
   --cs-shadow-lg: 0 0 0 1px rgb(0 0 0 / 0.04), 0 12px 32px rgb(0 0 0 / 0.28), 0 2px 8px rgb(0 0 0 / 0.16);

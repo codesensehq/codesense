@@ -20,7 +20,13 @@ import { useAgentIdentityChoices } from "@/features/viewer/hooks/use-listed-agen
 import { CHROME_NEW_TAB_W } from "../lib/tile-chrome-fit";
 import { TERMINAL_TAB_ID_ATTR } from "../lib/terminal-tab-keys";
 import { useEffectiveShortcut } from "@/shared/stores/shortcuts-store";
-import { formatKeystrokeDisplay, isMac } from "@/shared/lib/shortcuts/keystroke";
+import {
+  formatKeystrokeDisplay,
+  formatModifierClick,
+  hasAnyModifier,
+  hasCommandModifier,
+  isMac,
+} from "@/shared/lib/shortcuts/keystroke";
 import { useMachine } from "@/features/machines/stores/machines-store";
 import { UNKNOWN_MACHINE_LABEL } from "@/features/machines/lib/machine-offline";
 import { useShallow } from "zustand/react/shallow";
@@ -232,8 +238,7 @@ export function TerminalTabBar({
     // anchored under the pill. Only here, on a focused pill: inside the
     // terminal these keys belong to the program running there.
     const isMenuKey =
-      e.key === "ContextMenu" ||
-      (e.key === "F10" && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey);
+      e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey && !hasCommandModifier(e));
     if (isMenuKey && onContextMenu) {
       e.preventDefault();
       e.stopPropagation();
@@ -242,7 +247,7 @@ export function TerminalTabBar({
       return;
     }
     // Any chord (⌘⌥← Focus Pane, ⌘⌫…) belongs to the global shortcuts.
-    if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+    if (hasAnyModifier(e)) return;
     if (e.key === "Delete" || (e.key === "Backspace" && isMac())) {
       e.preventDefault();
       e.stopPropagation();
@@ -562,7 +567,7 @@ export function TerminalTabBar({
       <InfoTip
         label={
           onNewShellOn
-            ? `New terminal · ${newTabKeystroke} — ⌥-click for another machine${newShellOnKeystroke ? ` (${newShellOnKeystroke})` : ""}`
+            ? `New terminal · ${newTabKeystroke} — ${formatModifierClick("Alt")} for another machine${newShellOnKeystroke ? ` (${newShellOnKeystroke})` : ""}`
             : `New terminal · ${newTabKeystroke}`
         }
         side="top"

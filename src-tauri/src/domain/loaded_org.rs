@@ -144,8 +144,10 @@ impl FileLoadError {
     }
 }
 
+/// Whether `error` hit a limit on open files, this process's or the
+/// system's (`EMFILE` or `ENFILE`; `ERROR_TOO_MANY_OPEN_FILES` on Windows).
 pub(crate) fn descriptor_exhausted(error: &std::io::Error) -> bool {
-    matches!(error.raw_os_error(), Some(libc::EMFILE | libc::ENFILE))
+    codesense_platform::limits::is_open_file_limit(error)
 }
 
 /// A startup/fork burst can temporarily consume the descriptor budget.

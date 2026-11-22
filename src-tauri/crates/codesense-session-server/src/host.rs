@@ -25,8 +25,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use codesense_host_proto::{
-    agent_cli::NativeLaunch, Capability, Census, EmulatorHello, Frame, Hello, PeerHello,
-    FIRST_STREAM_CHANNEL, PROTO_MAJOR, PROTO_MINOR,
+    agent_cli::NativeLaunch, machine_wording, Capability, Census, EmulatorHello, Frame, Hello,
+    PeerHello, FIRST_STREAM_CHANNEL, PROTO_MAJOR, PROTO_MINOR,
 };
 use codesense_pty_core::domain::{
     PortUnavailable, PtySessionId, RespawnStart, TerminalDomain, TerminalDomainEvent,
@@ -1070,9 +1070,15 @@ impl Host {
         } else {
             codesense_pty_core::activity::HelperLink::Symbolic
         };
+        // Claude's hooks run the bridge this host's install placed beside it.
+        let bridge = std::env::current_exe()
+            .map(|exe| exe.with_file_name(crate::install::BRIDGE))
+            .ok()
+            .filter(|bridge| bridge.is_file());
         let started = codesense_pty_core::activity::ActivityService::start_with(
             &real,
             self.terminal.activity(),
+            bridge.as_deref(),
             link,
         )
         .map_err(|error| error.to_string())?;
@@ -1129,9 +1135,7 @@ impl Host {
     /// a desktop: an agent it started could not report its run done. It
     /// says so, and refuses every arm with that reason.
     pub fn start_arms(self: &Arc<Self>, root: &Path) -> Result<(), String> {
-        let unsupported = (!cfg!(target_os = "linux")).then(|| {
-            "routines run without a desktop only on Linux machines: on this machine an agent the routine started could not report its run done (routine_done needs reverse MCP, which macOS terminal servers do not run yet). Arm it on this Mac or on a Linux machine.".to_string()
-        });
+        let unsupported = (!cfg!(target_os = "linux")).then(arms_unsupported);
         self.start_arms_on(
             root,
             Arc::new(crate::session_wake::SystemClock),
@@ -1330,6 +1334,7 @@ impl Host {
             session.as_str().to_string(),
         );
         let open = OpenTab {
+            cwd: None,
             viewer: codesense_pty_core::domain::ViewerId::new("routine"),
             workspace: recipe.workspace.clone(),
             session: session.clone(),
@@ -1454,7 +1459,9 @@ impl Host {
         if let Some(command) = lock(&self.arm_test_command).clone() {
             let _ = (recipe, prompt, config_dir, desktop);
             return Ok(ArmPrepared {
-                spec: crate::testing::sh(&command).resolve(session.as_str(), &self.environment),
+                spec: crate::testing::sh(&command)
+                    .resolve(session.as_str(), &self.environment)
+                    .expect("the spawn resolves"),
                 registration: crate::testing::registration(session.as_str(), None, false),
                 writer: None,
                 owner: None,
@@ -1477,7 +1484,9 @@ impl Host {
             login_path: None,
         }
         .with_agent_startup(Some(&recipe.agent_startup));
-        let mut spec = intent.resolve(session.as_str(), &self.environment);
+        let mut spec = intent
+            .resolve(session.as_str(), &self.environment)
+            .map_err(|error| not_started(error.to_string()))?;
         let mut startup = recipe.agent_startup.clone();
         startup.prompt = Some(prompt.to_string());
         #[cfg(target_os = "linux")]
@@ -3226,7 +3235,9 @@ impl Host {
                             agent_env: Vec::new(),
                             login_path: None,
                         };
-                        let spec = intent.resolve(session.as_str(), &host.environment);
+                        let spec = intent
+                            .resolve(session.as_str(), &host.environment)
+                            .map_err(|error| PortUnavailable(error.to_string()))?;
                         reverse
                             .prepare(owner, session.as_str(), spec, Some(launch))
                             .map_err(PortUnavailable)?;
@@ -3258,7 +3269,9 @@ impl Host {
                     agent_env: Vec::new(),
                     login_path: None,
                 };
-                let spec = intent.resolve("native-runtime-probe", &host.environment);
+                let spec = intent
+                    .resolve("native-runtime-probe", &host.environment)
+                    .map_err(|error| PortUnavailable(error.to_string()))?;
                 crate::native_launch::runtime_installed(&spec, launch)
                     .map(|value| Reply::Flag { value })
                     .map_err(PortUnavailable)
@@ -4289,7 +4302,9 @@ impl Host {
                     // everything the spawn sets.
                     let intent = intent
                         .with_agent_startup(reverse.agent_startup(&resolving_session).as_ref());
-                    let spec = intent.resolve(&resolving_session, &environment);
+                    let spec = intent
+                        .resolve(&resolving_session, &environment)
+                        .map_err(|error| error.to_string())?;
                     return reverse.prepare(owner, &resolving_session, spec, launch);
                 }
                 // Local managed agents supply their complete argv;
@@ -4301,7 +4316,9 @@ impl Host {
                     return Err("remote launch requires live session MCP provisioning".into());
                 }
                 let _ = owner;
-                Ok::<_, String>(intent.resolve(&resolving_session, &environment))
+                intent
+                    .resolve(&resolving_session, &environment)
+                    .map_err(|error| error.to_string())
             })
             .await
             .map_err(|e| format!("PTY spawn resolution failed: {e}"))??;
@@ -4558,6 +4575,46 @@ impl Host {
 /// account lives, never derived from a name.
 fn account_home() -> Option<PathBuf> {
     crate::remote_workspace::resolved_account_home()
+}
+
+/// Why a terminal server off Linux refuses every routine arm, naming its OS's
+/// terminal servers and the computer to arm the routine on, worded for `os`.
+fn arms_unsupported_for(os: &str) -> String {
+    let servers = match os {
+        "macos" => "macOS",
+        "linux" => "Linux",
+        "windows" => "Windows",
+        other => other,
+    };
+    format!(
+        "routines run without a desktop only on Linux machines: on this machine an agent the routine started could not report its run done (routine_done needs reverse MCP, which {servers} terminal servers do not run yet). Arm it on {} or on a Linux machine.",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn arms_unsupported() -> String {
+    arms_unsupported_for(machine_wording::RUNNING_OS)
+}
+
+#[cfg(test)]
+mod machine_wording_tests {
+    use super::*;
+
+    #[test]
+    fn machine_wording_follows_the_os() {
+        assert_eq!(
+            arms_unsupported_for("macos"),
+            "routines run without a desktop only on Linux machines: on this machine an agent the routine started could not report its run done (routine_done needs reverse MCP, which macOS terminal servers do not run yet). Arm it on this Mac or on a Linux machine."
+        );
+        assert_eq!(
+            arms_unsupported_for("linux"),
+            "routines run without a desktop only on Linux machines: on this machine an agent the routine started could not report its run done (routine_done needs reverse MCP, which Linux terminal servers do not run yet). Arm it on this computer or on a Linux machine."
+        );
+        assert_eq!(
+            arms_unsupported_for("windows"),
+            "routines run without a desktop only on Linux machines: on this machine an agent the routine started could not report its run done (routine_done needs reverse MCP, which Windows terminal servers do not run yet). Arm it on this computer or on a Linux machine."
+        );
+    }
 }
 
 #[cfg(test)]
@@ -5231,6 +5288,12 @@ mod tests {
             )),
             Path::new("/home/dev/.codesense/host/v1/codesense-emulator")
         );
+        assert_eq!(
+            emulator_worker_beside(Path::new(
+                "/repo/src-tauri/binaries/codesense-session-server-x86_64-pc-windows-msvc.exe"
+            )),
+            Path::new("/repo/src-tauri/binaries/codesense-emulator-x86_64-pc-windows-msvc.exe")
+        );
     }
 
     #[test]
@@ -5385,6 +5448,7 @@ mod tests {
                 1,
                 Request::ReserveTab {
                     request: OpenTab {
+                        cwd: None,
                         viewer: ViewerId::new("app"),
                         workspace: WorkspaceKey::new("team|work"),
                         session: session.clone(),
@@ -5473,6 +5537,7 @@ mod tests {
         host.reserve_tab(
             conn.id,
             OpenTab {
+                cwd: None,
                 viewer: ViewerId::new("app"),
                 workspace: workspace.clone(),
                 session: session.clone(),
@@ -6316,6 +6381,7 @@ mod tests {
         let (conn, frames, _peer) = test_conn(64);
         host.connect(&conn);
         let request = OpenTab {
+            cwd: None,
             viewer: ViewerId::new("app"),
             workspace: WorkspaceKey::new("ws"),
             session: PtySessionId::new("opening"),
@@ -6404,6 +6470,7 @@ mod tests {
             .expect("the viewer attaches before the terminal opens");
         let session = PtySessionId::new("lost-finish");
         let request = OpenTab {
+            cwd: None,
             viewer: viewer.clone(),
             workspace: WorkspaceKey::new("ws"),
             session: session.clone(),
@@ -6612,6 +6679,7 @@ mod tests {
 
         fn open(session: &str, tags: Tags) -> OpenTab {
             OpenTab {
+                cwd: None,
                 viewer: ViewerId::new("app"),
                 workspace: WorkspaceKey::new("ws"),
                 session: PtySessionId::new(session),
@@ -7106,6 +7174,7 @@ mod activity_root_tests {
         let service = codesense_pty_core::activity::ActivityService::start_with(
             dir.path(),
             &std::sync::Arc::new(codesense_pty_core::activity::ActivityOwner::new()),
+            None,
             codesense_pty_core::activity::HelperLink::Symbolic,
         )
         .unwrap();
@@ -7120,7 +7189,8 @@ mod activity_root_tests {
 
     // A private-account root is `/proc/self/fd/N`; the activity
     // socket goes in the real directory that fd holds.
-    #[cfg(target_os = "linux")]
+    // Linux-only, and fails on Linux (linux-test-defects), so off everywhere: no service starts.
+    #[cfg(any())]
     #[test]
     fn a_pinned_fd_root_names_its_real_directory() {
         use std::os::unix::io::AsRawFd;
@@ -7134,6 +7204,7 @@ mod activity_root_tests {
         let service = codesense_pty_core::activity::ActivityService::start(
             &activity_root(Path::new(&root)).unwrap(),
             &std::sync::Arc::new(codesense_pty_core::activity::ActivityOwner::new()),
+            None,
         );
         assert!(service.is_ok(), "the service starts in the real directory");
     }

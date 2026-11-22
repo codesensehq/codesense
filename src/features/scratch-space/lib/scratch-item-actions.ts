@@ -9,6 +9,7 @@ import {
   type Context,
 } from "@/shared/lib/context-model";
 import type { ScratchInertKind } from "@/tauri/commands";
+import { localMachinePhrase } from "@/shared/lib/local-machine";
 
 /**
  * What can be done with one item of the scratch space, and where each verb sends
@@ -70,7 +71,8 @@ export function scratchVerbs(item: ScratchItem, facts: ScratchVerbFacts): Scratc
     {
       verb: "copyToOrg",
       label: "Copy to another org…",
-      disabledReason: facts.otherOrgCount === 0 ? "No other org on this Mac" : undefined,
+      disabledReason:
+        facts.otherOrgCount === 0 ? `No other org on ${localMachinePhrase()}` : undefined,
     },
     {
       verb: "useInAllOrgs",

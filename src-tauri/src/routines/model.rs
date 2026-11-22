@@ -25,6 +25,7 @@ use super::template;
 
 use crate::agents::AgentKey;
 use crate::context_repo::scoped_key::ScopedKey;
+use crate::shared::machine_wording;
 pub use crate::context_repo::scoped_key::PERSONAL_OWNER;
 
 /// The `<org>/<team>/<id>` identity of one routine; see [`ScopedKey`]. The
@@ -798,20 +799,12 @@ impl fmt::Display for ValidationError {
                 f,
                 "agent {raw:?} is not an agent id or key; see agent_list"
             ),
-            Self::TeamRoutineNeedsTeamAgent(raw) => write!(
-                f,
-                "agent {raw:?} is a personal agent, which only its owner's Mac has: \
-                 a team routine needs a team agent; any teammate may run it"
-            ),
+            Self::TeamRoutineNeedsTeamAgent(raw) => f.write_str(&personal_agent_in_team(raw)),
             Self::AgentOutsideTeam(raw) => {
                 let team = AgentKey::parse(raw)
                     .map(|key| format!("{}/{}", key.org, key.team))
                     .unwrap_or_else(|| raw.clone());
-                write!(
-                    f,
-                    "agent {raw:?} lives in team {team}, which the Mac of a teammate running \
-                     this team routine may not have: a team routine runs one of its own team's agents"
-                )
+                f.write_str(&agent_outside_team(raw, &team))
             }
             Self::AgentOutsideOrg(raw) => write!(
                 f,
@@ -868,13 +861,8 @@ impl fmt::Display for ValidationError {
             Self::DeliverUnsupported => f.write_str(
                 "routines do not deliver results: remove `deliver` and have the task tell the agent where to post or file its output",
             ),
-            Self::UnknownRunsOn(value) => write!(
-                f,
-                "runs_on {value:?} must be one_mac (runs once for the team) or each_mac (runs on each Mac that turns it on)"
-            ),
-            Self::EachMacNeedsTeam => f.write_str(
-                "runs_on each_mac is for team routines: an Only me routine runs on its own Mac",
-            ),
+            Self::UnknownRunsOn(value) => f.write_str(&unknown_runs_on(value)),
+            Self::EachMacNeedsTeam => f.write_str(&each_mac_needs_team()),
             Self::UnknownMode(value) => write!(
                 f,
                 "mode {value:?} must be wake (deliver into the agent's live session) or fresh (start a new one)"
@@ -882,9 +870,7 @@ impl fmt::Display for ValidationError {
             Self::WakeNotAvailable => f.write_str(
                 "mode wake is not available yet: routines start a fresh session on every run until wake delivery ships",
             ),
-            Self::EachMacWakeNeedsLocal => f.write_str(
-                "runs_on each_mac only works with machine local: each teammate's Mac wakes or starts its own agent, never all of them the same one on another machine",
-            ),
+            Self::EachMacWakeNeedsLocal => f.write_str(&each_mac_wake_needs_local()),
             Self::MachineArm(why) => write!(f, "a routine armed on a machine {why}"),
             Self::InvalidMachine(raw) => write!(
                 f,
@@ -899,6 +885,94 @@ impl fmt::Display for ValidationError {
 }
 
 impl std::error::Error for ValidationError {}
+
+/// That personal agent `raw` cannot run a team routine, worded for `os`.
+fn personal_agent_in_team_for(os: &str, raw: &str) -> String {
+    format!(
+        "agent {raw:?} is a personal agent, which only its owner's {} has: \
+         a team routine needs a team agent; any teammate may run it",
+        machine_wording::machine_kind(os)
+    )
+}
+
+fn personal_agent_in_team(raw: &str) -> String {
+    personal_agent_in_team_for(machine_wording::RUNNING_OS, raw)
+}
+
+/// That agent `raw` of team `team` may be missing for a teammate, worded
+/// for `os`.
+fn agent_outside_team_for(os: &str, raw: &str, team: &str) -> String {
+    format!(
+        "agent {raw:?} lives in team {team}, which the {} of a teammate running \
+         this team routine may not have: a team routine runs one of its own team's agents",
+        machine_wording::machine_kind(os)
+    )
+}
+
+fn agent_outside_team(raw: &str, team: &str) -> String {
+    agent_outside_team_for(machine_wording::RUNNING_OS, raw, team)
+}
+
+/// That `runs_on` `value` is unknown, worded for `os`.
+fn unknown_runs_on_for(os: &str, value: &str) -> String {
+    format!(
+        "runs_on {value:?} must be one_mac (runs once for the team) or each_mac (runs on each {} that turns it on)",
+        machine_wording::machine_kind(os)
+    )
+}
+
+fn unknown_runs_on(value: &str) -> String {
+    unknown_runs_on_for(machine_wording::RUNNING_OS, value)
+}
+
+/// That `each_mac` needs a team routine, worded for `os`.
+fn each_mac_needs_team_for(os: &str) -> String {
+    format!(
+        "runs_on each_mac is for team routines: an Only me routine runs on its own {}",
+        machine_wording::machine_kind(os)
+    )
+}
+
+fn each_mac_needs_team() -> String {
+    each_mac_needs_team_for(machine_wording::RUNNING_OS)
+}
+
+/// That `each_mac` wakes need machine local, worded for `os`.
+fn each_mac_wake_needs_local_for(os: &str) -> String {
+    format!(
+        "runs_on each_mac only works with machine local: each teammate's {} wakes or starts its own agent, never all of them the same one on another machine",
+        machine_wording::machine_kind(os)
+    )
+}
+
+fn each_mac_wake_needs_local() -> String {
+    each_mac_wake_needs_local_for(machine_wording::RUNNING_OS)
+}
+
+/// That command routines cannot be armed on a machine, worded for `os`.
+fn command_not_armable_for(os: &str) -> String {
+    format!(
+        "Command routines can't be armed on a machine yet; use {}.",
+        machine_wording::machine_noun(os)
+    )
+}
+
+fn command_not_armable() -> String {
+    command_not_armable_for(machine_wording::RUNNING_OS)
+}
+
+/// That a routine with `after` supports schedules only where it runs, worded
+/// for `os`.
+fn chain_schedules_only_for(os: &str) -> String {
+    format!(
+        "After a routine runs once for the team or personally; each {} and armed machines support schedules only.",
+        machine_wording::machine_kind(os)
+    )
+}
+
+fn chain_schedules_only() -> String {
+    chain_schedules_only_for(machine_wording::RUNNING_OS)
+}
 
 /// Routine ids name a directory, so they are restricted to a path-safe slug.
 pub(crate) fn is_valid_id(id: &str) -> bool {
@@ -1022,9 +1096,7 @@ impl RoutineDef {
             if self.armed_machine().is_some()
                 || self.target.machine.as_deref().is_some_and(|m| m != "local")
             {
-                return Err(ValidationError::Command(
-                    "Command routines can't be armed on a machine yet; use This Mac.".into(),
-                ));
+                return Err(ValidationError::Command(command_not_armable()));
             }
         } else {
             self.agent.validate()?;
@@ -1041,7 +1113,7 @@ impl RoutineDef {
                 ));
             }
             if self.runs_on()? == RunsOn::EachMac || self.armed_machine().is_some() {
-                return Err(ValidationError::Chain("After a routine runs once for the team or personally; each Mac and armed machines support schedules only.".into()));
+                return Err(ValidationError::Chain(chain_schedules_only()));
             }
         }
         if self.revision == 0 {
@@ -1283,6 +1355,66 @@ pub(crate) fn validate_trigger(trigger: &RoutineTrigger) -> Result<(), Validatio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn machine_wording_follows_the_os() {
+        assert_eq!(
+            personal_agent_in_team_for("macos", "alice/helper"),
+            "agent \"alice/helper\" is a personal agent, which only its owner's Mac has: a team routine needs a team agent; any teammate may run it"
+        );
+        assert_eq!(
+            personal_agent_in_team_for("linux", "alice/helper"),
+            "agent \"alice/helper\" is a personal agent, which only its owner's computer has: a team routine needs a team agent; any teammate may run it"
+        );
+        assert_eq!(
+            agent_outside_team_for("macos", "acme/web/helper", "acme/web"),
+            "agent \"acme/web/helper\" lives in team acme/web, which the Mac of a teammate running this team routine may not have: a team routine runs one of its own team's agents"
+        );
+        assert_eq!(
+            agent_outside_team_for("linux", "acme/web/helper", "acme/web"),
+            "agent \"acme/web/helper\" lives in team acme/web, which the computer of a teammate running this team routine may not have: a team routine runs one of its own team's agents"
+        );
+        assert_eq!(
+            unknown_runs_on_for("macos", "all"),
+            "runs_on \"all\" must be one_mac (runs once for the team) or each_mac (runs on each Mac that turns it on)"
+        );
+        assert_eq!(
+            unknown_runs_on_for("linux", "all"),
+            "runs_on \"all\" must be one_mac (runs once for the team) or each_mac (runs on each computer that turns it on)"
+        );
+        assert_eq!(
+            each_mac_needs_team_for("macos"),
+            "runs_on each_mac is for team routines: an Only me routine runs on its own Mac"
+        );
+        assert_eq!(
+            each_mac_needs_team_for("linux"),
+            "runs_on each_mac is for team routines: an Only me routine runs on its own computer"
+        );
+        assert_eq!(
+            each_mac_wake_needs_local_for("macos"),
+            "runs_on each_mac only works with machine local: each teammate's Mac wakes or starts its own agent, never all of them the same one on another machine"
+        );
+        assert_eq!(
+            each_mac_wake_needs_local_for("linux"),
+            "runs_on each_mac only works with machine local: each teammate's computer wakes or starts its own agent, never all of them the same one on another machine"
+        );
+        assert_eq!(
+            command_not_armable_for("macos"),
+            "Command routines can't be armed on a machine yet; use This Mac."
+        );
+        assert_eq!(
+            command_not_armable_for("linux"),
+            "Command routines can't be armed on a machine yet; use This computer."
+        );
+        assert_eq!(
+            chain_schedules_only_for("macos"),
+            "After a routine runs once for the team or personally; each Mac and armed machines support schedules only."
+        );
+        assert_eq!(
+            chain_schedules_only_for("linux"),
+            "After a routine runs once for the team or personally; each computer and armed machines support schedules only."
+        );
+    }
 
     #[test]
     fn command_definition_needs_no_agent_task_or_mode() {
@@ -1626,7 +1758,10 @@ future_top_key: kept
             .key_for(&team)
             .unwrap_err()
             .to_string()
-            .contains("lives in team acme/api/frontend, which the Mac of a teammate running this team routine may not have"));
+            .contains(&format!(
+                "lives in team acme/api/frontend, which the {} of a teammate running this team routine may not have",
+                machine_wording::machine_kind(machine_wording::RUNNING_OS)
+            )));
         assert_eq!(
             AgentRef::from("acme/api/frontend/triage").key_for(&mine),
             Ok(other_team.clone())

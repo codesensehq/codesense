@@ -122,6 +122,7 @@ describe("useCodeEditor — handle behavior (L-2)", () => {
         "setSelection",
         "getScrollPos",
         "scrollTo",
+        "getScrollElement",
         "getViewSnapshot",
         "applyViewSnapshot",
         "checkConflict",
@@ -129,6 +130,7 @@ describe("useCodeEditor — handle behavior (L-2)", () => {
       for (const m of methods) {
         expect(typeof h[m]).toBe("function");
       }
+      expect(h.getScrollElement()).toBe(container.querySelector(".cm-scroller"));
     } finally {
       document.body.removeChild(container);
     }
@@ -329,6 +331,7 @@ describe("useCodeEditor — handle is null-safe after unmount (M-2, A-1)", () =>
     // RF-perf-12: same null-safety for the lightweight snapshot surface.
     expect(() => h.applyViewSnapshot({ scrollTop: 5 })).not.toThrow();
     expect(h.getViewSnapshot()).toBeNull();
+    expect(h.getScrollElement()).toBeNull();
   });
 });
 

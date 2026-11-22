@@ -181,12 +181,14 @@ function toTab(
   entry: TerminalTabEntry,
   prev: TerminalTab | undefined,
   host: MemberLayout,
+  dir: string | undefined,
 ): TerminalTab {
   const exit =
     entry.state.kind === "exited"
       ? { code: entry.state.exitCode, signal: entry.state.signal }
       : undefined;
   const role = entry.role ?? undefined;
+  const cwd = dir;
   const origin: TerminalTabOrigin | undefined =
     host.target.member.slot === "remote"
       ? {
@@ -201,6 +203,7 @@ function toTab(
     prev &&
     prev.name === entry.name &&
     prev.role === role &&
+    prev.cwd === cwd &&
     prev.exit?.code === exit?.code &&
     prev.exit?.signal === exit?.signal &&
     (prev.exit === undefined) === (exit === undefined) &&
@@ -215,6 +218,7 @@ function toTab(
     ...(role !== undefined ? { role } : {}),
     ...(exit ? { exit } : {}),
     ...(origin ? { origin } : {}),
+    ...(cwd !== undefined ? { cwd } : {}),
   };
 }
 
@@ -279,7 +283,7 @@ function projectWorkspace(
     [...(prev?.tabs ?? []), ...(prev?.hiddenTabs ?? [])].map((t) => [t.id, t]),
   );
   const shown = (placement: TerminalTabEntry["placement"]) =>
-    held.flatMap(({ host, entries }) =>
+    held.flatMap(({ host, layout, entries }) =>
       entries
         .filter(
           (entry) =>
@@ -289,7 +293,9 @@ function projectWorkspace(
             // crashed, until the user restores, restarts or dismisses it.
             (placement === "tab" || USER_HIDDEN_TAG in entry.tags),
         )
-        .map((entry) => toTab(entry, prevById.get(entry.session), host)),
+        .map((entry) =>
+          toTab(entry, prevById.get(entry.session), host, layout.tabDirs?.[entry.session]),
+        ),
     );
   const nextTabs = shown("tab");
   const tabs = prev && sameTabs(prev.tabs, nextTabs) ? prev.tabs : nextTabs;

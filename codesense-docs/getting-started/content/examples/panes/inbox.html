@@ -100,6 +100,10 @@
         stroke-linecap: round;
         stroke-linejoin: round;
       }
+      /* A shortcut hint the app has not filled (an older app) never shows as an empty pill. */
+      [data-keys]:empty {
+        display: none;
+      }
       .ib kbd {
         font: 500 10.5px var(--cs-font-mono);
         color: var(--cs-muted-fg);
@@ -2210,6 +2214,14 @@
       .ib-msg:not(.mine, .cont) .bd > .ib-media-card:first-child {
         border-top-left-radius: 2px;
       }
+      /* A provider's attribution under the image or its card: conspicuous, as GIPHY asks. */
+      .ib-media-attr {
+        margin-top: 4px;
+        font-size: var(--cs-text-xs);
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        color: var(--cs-muted-fg);
+      }
       .ib-media-card > svg.i {
         width: 16px;
         height: 16px;
@@ -2687,7 +2699,7 @@
               <div class="row">
                 <span>Enter to send · Shift+Enter for a new line</span><span class="sp"></span
                 ><button type="submit" class="ib-btn primary" id="send" disabled>
-                  Send <kbd>⌘↵</kbd>
+                  Send <kbd data-keys="CmdOrCtrl+Enter"></kbd>
                 </button>
               </div>
             </div>
@@ -3582,7 +3594,9 @@
         // Host-forwarded file drops (WKWebView frames never see OS paths): a drop inserts the
         // paths at the composer cursor, like the CLI. Dormant until the host sends them.
         function quotePath(path) {
-          return /\s/.test(path) ? '"' + path.replace(/"/g, '\\"') + '"' : path;
+          // A space, quote or backslash needs quotes; inside them both quote and backslash are
+          // escaped, so a trailing backslash cannot escape the closing quote.
+          return /[\s"\\]/.test(path) ? '"' + path.replace(/["\\]/g, "\\$&") + '"' : path;
         }
         window.addEventListener("message", (event) => {
           const d = event.data;
@@ -3647,6 +3661,19 @@
           link.target = "_blank";
           link.rel = "noreferrer noopener";
           return link;
+        }
+        // Whose attribution an image carries, in every state: the sender's provider claim, else
+        // the provider whose host the bytes came from, else (an old message, or one never
+        // fetched) the provider whose host the URL names.
+        function mediaAttribution(a) {
+          const host = (a.sourceHost || "").toLowerCase().replace(/\.$/, "");
+          const on = (domain) =>
+            host === domain || host.endsWith("." + domain);
+          const provider =
+            a.provider ||
+            a.mediaProvider ||
+            (on("giphy.com") ? "giphy" : on("klipy.com") ? "klipy" : null);
+          return provider === "giphy" || provider === "klipy" ? provider : null;
         }
         function mediaImage(a, m, lightbox = false) {
           const wrap = h("figure", "ib-media loading");
@@ -3746,9 +3773,14 @@
             renderMarkdown(caption, m.text);
             bd.append(caption);
           }
+          // GIPHY's terms ask for a conspicuous "Powered by GIPHY", in every state.
+          const attribution = () => {
+            if (mediaAttribution(a) === "giphy") bd.append(h("div", "ib-media-attr", "Powered by GIPHY"));
+            return bd;
+          };
           if (a.state === "cached" && /^[a-f0-9]{64}$/.test(a.sha256 || "")) {
             bd.append(mediaImage(a, m));
-            return bd;
+            return attribution();
           }
           const card = h("div", "ib-media-card " + a.state);
           card.setAttribute("aria-live", "polite");
@@ -3761,7 +3793,7 @@
           const meta = h("div", "meta");
           const team = (m.team || activeTeam)?.team || "this team";
           const reason =
-            a.state === "blocked"
+            a.state === "blocked" || a.reason === "off"
               ? "GIF · media is off in " + team + "'s team config"
               : a.state === "failed"
                 ? {
@@ -3772,6 +3804,7 @@
                     type: "It isn't a GIF, WebP, PNG or JPEG.",
                     redirect: "It redirected to a site that isn't on the list.",
                     https: "The source must use HTTPS.",
+                    changed: "The source now serves a different image.",
                   }[a.reason] || (a.sourceHost || "The source") + " didn't answer."
                 : a.reason === "sender"
                   ? "GIF · from another person's machine"
@@ -3786,7 +3819,8 @@
             );
           explanation.append(reason);
           meta.append(explanation);
-          if (a.state === "pending" || (a.state === "failed" && a.retryable)) {
+          // Media that is off in the team's config can't be loaded from here.
+          if ((a.state === "pending" && a.reason !== "off") || (a.state === "failed" && a.retryable)) {
             const load = button(
               a.state === "failed" ? "Retry" : "Load GIF from " + a.sourceHost + ": " + a.alt,
               "ib-chip primary",
@@ -3822,7 +3856,7 @@
           }
           card.append(meta);
           bd.append(card);
-          return bd;
+          return attribution();
         }
         function openMedia(a, m, opener) {
           const dialog = h("dialog", "ib-lightbox");
@@ -3844,8 +3878,9 @@
           const foot = h("div", "ib-lb-foot");
           foot.append(h("figcaption", "", a.alt));
           const details = h("div", "row2");
+          const provider = { giphy: " · Powered by GIPHY", klipy: " · via KLIPY" }[mediaAttribution(a)];
           details.append(
-            h("span", "", mediaKind(a) + " · " + a.width + " × " + a.height),
+            h("span", "", mediaKind(a) + " · " + a.width + " × " + a.height + (provider || "")),
             h("span", "sp"),
           );
           const source = mediaSource(a, "Open source page · " + a.sourceHost + " ↗");
@@ -5677,9 +5712,11 @@
           const s = state(recipient, parentMessage());
           $("recipient-state").textContent = s.text;
           $("recipient-state").className = "ib-rstate " + (s.cls || "");
+          const keys = h("kbd", "", cs.formatKeys?.("CmdOrCtrl+Enter") ?? "");
+          keys.dataset.keys = "CmdOrCtrl+Enter";
           $("send").replaceChildren(
             document.createTextNode(sending ? "Sending…" : s.queue ? "Queue " : "Send "),
-            h("kbd", "", "⌘↵"),
+            keys,
           );
           $("send").disabled = sending || !prefsReady || !!s.disabled || !$("draft").value.trim();
           $("fallback").replaceChildren();
@@ -7347,7 +7384,7 @@
           });
         });
         document.addEventListener("keydown", (e) => {
-          // Enter and ⌘/Ctrl+Enter send, Shift+Enter adds a line; nothing sends while an IME composes.
+          // Enter and Cmd/Ctrl+Enter send, Shift+Enter adds a line; nothing sends while an IME composes.
           if (e.key === "Enter" && e.target === $("draft") && !e.isComposing && e.keyCode !== 229 && !e.altKey && (!e.shiftKey || e.metaKey || e.ctrlKey)) {
             e.preventDefault();
             $("composer").requestSubmit();

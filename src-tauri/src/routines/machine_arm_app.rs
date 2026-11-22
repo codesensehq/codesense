@@ -19,11 +19,13 @@ use crate::commands::host_connection_manager::{
     ConnectedBackendError, HostConnectionManager, HostConnectionState,
 };
 use crate::domain::Principal;
+use crate::shared::machine_wording;
+use crate::terminal::session_server::routine_arm::update_for_routines;
 
 use super::discover::DiscoveredRoutine;
 use super::machine_arm::{
-    machines_to_sync, prepare_refresh, publish_refresh, sync_machine, AgentFacts, ArmEnv,
-    ArmLookup, ArmPlace, ArmPrepare, SyncInput,
+    machines_to_sync, no_visible_agent, prepare_refresh, publish_refresh, sync_machine, AgentFacts,
+    ArmEnv, ArmLookup, ArmPlace, ArmPrepare, SyncInput,
 };
 use super::state::RoutineStateStore;
 
@@ -216,9 +218,21 @@ pub(crate) fn refresh_explicit(
     principal: &Principal,
     key: &str,
 ) -> Result<String, String> {
-    let machine = managed_machine(home, principal, key)
-        .ok_or_else(|| format!("routine {key} is not armed on a machine this Mac manages"))?;
+    let machine = managed_machine(home, principal, key).ok_or_else(|| not_managed_here(key))?;
     refresh_bounded(app, home, principal, key, &machine)
+}
+
+/// That routine `key` is not armed on a machine this one manages, worded
+/// for `os`.
+fn not_managed_here_for(os: &str, key: &str) -> String {
+    format!(
+        "routine {key} is not armed on a machine {} manages",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn not_managed_here(key: &str) -> String {
+    not_managed_here_for(machine_wording::RUNNING_OS, key)
 }
 
 /// SW-XS-25: after an explicit arm, edit, resume, restore or handover
@@ -413,9 +427,7 @@ impl ArmEnv for AppArmEnv {
                 if client.supports_routine_arm() {
                     ArmLookup::Ready(client)
                 } else {
-                    ArmLookup::Unsupported(format!(
-                        "Update the terminal server on {machine} to run routines there without this Mac."
-                    ))
+                    ArmLookup::Unsupported(update_for_routines(machine))
                 }
             }
             Err(ConnectedBackendError::UnknownMachine) => ArmLookup::Unknown,
@@ -468,6 +480,18 @@ impl ArmPrepare for AppArmEnv {
     }
 }
 
+/// That team `org`/`team` is not available here, worded for `os`.
+fn team_unavailable_for(os: &str, org: &str, team: &str) -> String {
+    format!(
+        "{org}/{team} is not available on {}",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+pub(super) fn team_unavailable(org: &str, team: &str) -> String {
+    team_unavailable_for(machine_wording::RUNNING_OS, org, team)
+}
+
 /// Prepare `routine`'s agent into `place` on `machine`: one manifest, one
 /// diff, at most one batch, under the destination lock (SW-XS-7).
 async fn prepare_on(
@@ -477,16 +501,13 @@ async fn prepare_on(
     place: &ArmPlace,
 ) -> Result<codesense_pty_core::routine_arm::ArmLaunch, String> {
     let app = &env.app;
-    let agent_key = routine
-        .agent_key
-        .clone()
-        .ok_or("the routine has no agent this Mac can see")?;
+    let agent_key = routine.agent_key.clone().ok_or_else(no_visible_agent)?;
     let org = routine.key.org.clone();
     let team = routine.key.team.clone();
     let team_key = crate::commands::pty_layout::team_key(&org, Some(&team));
     let ctx = match crate::commands::route_to_context::derive_context_for(app, &org, &team).await? {
         crate::commands::route_to_context::ContextResolution::Ok(ctx) => ctx,
-        _ => return Err(format!("{org}/{team} is not available on this Mac")),
+        _ => return Err(team_unavailable(&org, &team)),
     };
     let resolved = crate::mcp::remote_workspace_target::resolve_durable(
         app.clone(),
@@ -596,9 +617,7 @@ fn arm_client(
             if client.supports_routine_arm() {
                 Ok(client)
             } else {
-                Err(format!(
-                    "Update the terminal server on {machine} to run routines there without this Mac."
-                ))
+                Err(update_for_routines(machine))
             }
         }
         Err(ConnectedBackendError::UnknownMachine) => Err(format!(
@@ -629,6 +648,18 @@ pub(crate) fn wake_limits_unenforced(machine: &str) -> String {
     )
 }
 
+/// That `machine`'s terminal server is too old for routines, worded for `os`.
+fn server_outdated_for(os: &str, machine: &str) -> String {
+    format!(
+        "terminal_server_outdated: update the terminal server on {machine} to run routines there without {}",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn server_outdated(machine: &str) -> String {
+    server_outdated_for(machine_wording::RUNNING_OS, machine)
+}
+
 /// Whether `machine` can take an arm. `limited`: the routine is a wake
 /// with wake limits, which a server before proto minor 13 would drop; it is
 /// armed with a warning that it fires nowhere until that server is updated.
@@ -644,9 +675,7 @@ pub(crate) fn check_arm_target(
         Ok(snapshot) => {
             let client = snapshot.client();
             if !client.supports_routine_arm() {
-                return Err(format!(
-                    "terminal_server_outdated: update the terminal server on {machine} to run routines there without this Mac"
-                ));
+                return Err(server_outdated(machine));
             }
             let list = client.routine_arms()?;
             match list.unsupported {
@@ -758,6 +787,23 @@ pub(crate) fn complete_on_machine(
     }
 }
 
+/// That the routines `armed` on a machine must move off it first, worded
+/// for `os`.
+fn move_armed_first_for(os: &str, armed: &[String]) -> String {
+    format!(
+        "{} {} armed on it ({}): move {} to {} or another machine first (routine_arm_on), so it stops firing them",
+        armed.len(),
+        if armed.len() == 1 { "routine is" } else { "routines are" },
+        armed.join(", "),
+        if armed.len() == 1 { "it" } else { "them" },
+        machine_wording::machine_noun_lower(os),
+    )
+}
+
+fn move_armed_first(armed: &[String]) -> String {
+    move_armed_first_for(machine_wording::RUNNING_OS, armed)
+}
+
 /// SW-AGR-8 (MUST 4): what removing or unsharing `machine` would strand:
 /// the routines armed on it, and the ones still waiting for it to confirm
 /// it stopped them. `Err` names them and what to do first.
@@ -798,13 +844,7 @@ pub(crate) fn check_machine_removal(
     }
     let mut why = Vec::new();
     if !armed.is_empty() {
-        why.push(format!(
-            "{} {} armed on it ({}): move {} to this Mac or another machine first (routine_arm_on), so it stops firing them",
-            armed.len(),
-            if armed.len() == 1 { "routine is" } else { "routines are" },
-            armed.join(", "),
-            if armed.len() == 1 { "it" } else { "them" },
-        ));
+        why.push(move_armed_first(&armed));
     }
     if !waiting.is_empty() {
         why.push(format!(
@@ -1203,5 +1243,49 @@ mod reattach_tests {
             desktop_identity("3f2a-77", 42)
         );
         assert_eq!(desktop_identity("a b\n", 1), "ab.1");
+    }
+}
+
+#[cfg(test)]
+mod machine_wording_tests {
+    use super::*;
+
+    #[test]
+    fn machine_wording_follows_the_os() {
+        let routine = "acme/api/nightly";
+        assert_eq!(
+            not_managed_here_for("macos", routine),
+            "routine acme/api/nightly is not armed on a machine this Mac manages"
+        );
+        assert_eq!(
+            not_managed_here_for("linux", routine),
+            "routine acme/api/nightly is not armed on a machine this computer manages"
+        );
+        assert_eq!(
+            team_unavailable_for("macos", "acme", "api"),
+            "acme/api is not available on this Mac"
+        );
+        assert_eq!(
+            team_unavailable_for("linux", "acme", "api"),
+            "acme/api is not available on this computer"
+        );
+        assert_eq!(
+            server_outdated_for("macos", "m-1"),
+            "terminal_server_outdated: update the terminal server on m-1 to run routines there without this Mac"
+        );
+        assert_eq!(
+            server_outdated_for("linux", "m-1"),
+            "terminal_server_outdated: update the terminal server on m-1 to run routines there without this computer"
+        );
+        let one = ["nightly".to_string()];
+        let two = ["nightly".to_string(), "weekly".to_string()];
+        assert_eq!(
+            move_armed_first_for("macos", &one),
+            "1 routine is armed on it (nightly): move it to this Mac or another machine first (routine_arm_on), so it stops firing them"
+        );
+        assert_eq!(
+            move_armed_first_for("linux", &two),
+            "2 routines are armed on it (nightly, weekly): move them to this computer or another machine first (routine_arm_on), so it stops firing them"
+        );
     }
 }

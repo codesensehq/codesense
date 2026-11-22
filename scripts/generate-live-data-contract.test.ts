@@ -17,6 +17,11 @@ import {
   contractInputs,
   sealContract,
 } from "./generate-live-data-contract.mjs";
+import { REFRESH_ROUTE } from "./lib/sealed-export.mjs";
+
+// The scratch repos below model a pull_request run (origin/main as the drift base), so they must not
+// inherit a merge-group runner's event: there the drift base is HEAD^1, which these fixtures don't model.
+delete process.env.GITHUB_EVENT_NAME;
 
 const OUTPUT = "codesense-docs/getting-started/content/generated/live-data-contract.json";
 
@@ -58,7 +63,7 @@ describe("live-data contract PR gate", () => {
         checkContract(root, { allowStaleExport: true, warn: (line: string) => notices.push(line) });
       expect(tolerant).not.toThrow();
       expect(notices.join("\n")).toMatch(/^NOTICE: Stale generated file: .*source inputs changed/);
-      // The strict check (the docs wave) still asks for the refresh.
+      // The strict check (the refresh check) still asks for the refresh.
       expect(() => checkContract(root)).toThrow(/source inputs changed/);
       // Drift in an input the PR changed is the PR's own: strict.
       appendFileSync(join(root, ours), "// changed after the export\n");
@@ -67,6 +72,19 @@ describe("live-data contract PR gate", () => {
       // So is a payload that no longer matches its seal.
       appendFileSync(join(root, OUTPUT), "\n");
       expect(tolerant).toThrow(/payload changed/);
+      // Write mode (`pnpm gen:docs`) warns on any stale seal and never throws.
+      const written: string[] = [];
+      expect(() =>
+        checkContract(root, {
+          check: false,
+          strict: false,
+          warn: (line: string) => written.push(line),
+        }),
+      ).not.toThrow();
+      // Under CS_STRICT_EXPORTS=1 (the refresh run) write mode is strict.
+      expect(() => checkContract(root, { check: false, strict: true })).toThrow(/payload changed/);
+      expect(written.join("\n")).toMatch(/^NOTICE: Stale generated file: .*payload changed/);
+      expect(written.join("\n")).toContain(REFRESH_ROUTE);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

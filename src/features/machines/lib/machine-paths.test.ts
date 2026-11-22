@@ -77,5 +77,6 @@ describe("machine file paths", () => {
     expect(tildePath("/home/bob/x", "dev")).toBe("/home/bob/x");
     expect(tildePath("/home/dev/x", null)).toBe("/home/dev/x");
     expect(tildePath("/home/devx/x", "dev")).toBe("/home/devx/x");
+    expect(tildePath("C:\\Users\\dev\\x", "dev")).toBe("C:\\Users\\dev\\x");
   });
 });

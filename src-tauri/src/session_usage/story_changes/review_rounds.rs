@@ -10,6 +10,7 @@
 
 use crate::context_repo::caller_scope::CallerScope;
 use crate::records::{Record, Scope, Store};
+use crate::shared::machine_wording;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -240,13 +241,36 @@ pub(super) fn team_of_story_file(
         })
 }
 
-pub(super) const NO_TEAM: &str = "the story's team is not known on this Mac, so its review-rounds markers cannot be read";
-pub(super) const NO_COLLECTION: &str = "the story's team declares no review-rounds collection on this Mac";
+/// That the story's team is not known here, worded for `os`.
+fn no_team_for(os: &str) -> &'static str {
+    if machine_wording::is_mac(os) {
+        "the story's team is not known on this Mac, so its review-rounds markers cannot be read"
+    } else {
+        "the story's team is not known on this computer, so its review-rounds markers cannot be read"
+    }
+}
+
+pub(super) fn no_team() -> &'static str {
+    no_team_for(machine_wording::RUNNING_OS)
+}
+
+/// That the story's team declares no review-rounds collection here, worded for `os`.
+fn no_collection_for(os: &str) -> &'static str {
+    if machine_wording::is_mac(os) {
+        "the story's team declares no review-rounds collection on this Mac"
+    } else {
+        "the story's team declares no review-rounds collection on this computer"
+    }
+}
+
+pub(super) fn no_collection() -> &'static str {
+    no_collection_for(machine_wording::RUNNING_OS)
+}
 
 /// Whether `reason` says there is nothing to read (no known team, or none declares the
 /// collection), as opposed to markers that exist and could not be read.
 pub(super) fn is_absent(reason: &str) -> bool {
-    reason == NO_TEAM || reason == NO_COLLECTION
+    reason == no_team() || reason == no_collection()
 }
 
 /// The story's complete markers across its own teams, with the rows a page shows (oldest report
@@ -272,7 +296,7 @@ pub(super) fn story_markers_from(
     read: &mut dyn FnMut(&Path) -> Result<Option<std::sync::Arc<Vec<Record>>>, String>,
 ) -> Result<(Vec<Marker>, Vec<Value>), &'static str> {
     if BTreeSet::is_empty(teams) {
-        return Err(NO_TEAM);
+        return Err(no_team());
     }
     let mut declared = false;
     let mut markers = BTreeMap::new();
@@ -299,7 +323,7 @@ pub(super) fn story_markers_from(
         }
     }
     if !declared {
-        return Err(NO_COLLECTION);
+        return Err(no_collection());
     }
     let mut rows: Vec<Value> = Iterator::collect(BTreeMap::into_values(rows));
     // Oldest report first; a round with no report time last.

@@ -45,6 +45,12 @@ import {
 import { newTerminalTab } from "../lib/terminal-tab-keys";
 import { openRemoteTab } from "../lib/remote-tab-open";
 import { useRemoteWorkspaceLocation } from "@/features/machines/components/machine-location-badge";
+import { localMachineLabel } from "@/shared/lib/local-machine";
+import { notYetAvailable, useCapability } from "@/shared/lib/capabilities";
+import {
+  CapabilityOffControl,
+  CapabilityOffNote,
+} from "@/shared/components/capability-off/capability-off";
 
 const WHERE_KEY = "codesense.new-terminal-where";
 const LOCAL = "local";
@@ -167,6 +173,10 @@ function ChooserDialog({
   );
   const [launch, setLaunch] = useState<RemoteShellLaunch>(() => launchChoice(initialLaunch));
   const previewNoteId = useId();
+  // Without remote machines on this OS, the machines still list but can't be opened on; one
+  // note under Where says why.
+  const remoteMachines = useCapability("remote-machines");
+  const remoteOffNoteId = useId();
   /** The preselected folder applies on its own machine only. */
   const cwdOn = (where: string) =>
     initialCwd && where === initialWhere ? { cwd: initialCwd } : {};
@@ -432,7 +442,7 @@ function ChooserDialog({
               className={ROW}
             >
               <Monitor className="size-4 text-[#8b949e]" aria-hidden />
-              This Mac
+              {localMachineLabel()}
             </button>
           </li>
           {machines.map((machine) => {
@@ -440,19 +450,21 @@ function ChooserDialog({
               return (
                 <li key={machine.machineId} className="px-2 py-1 text-xs text-[#8b949e]">
                   {machine.label}: {PRIVATE_ACCOUNT_FOR_TABS}.{" "}
-                  <button
-                    type="button"
-                    className="underline"
-                    onClick={() =>
-                      openMachinesPanel({
-                        mode: "setUp",
-                        machineId: machine.machineId,
-                        privateAccount: true,
-                      })
-                    }
-                  >
-                    Set up
-                  </button>
+                  <CapabilityOffControl cap="remote-machines" noteId={remoteOffNoteId}>
+                    <button
+                      type="button"
+                      className="underline"
+                      onClick={() =>
+                        openMachinesPanel({
+                          mode: "setUp",
+                          machineId: machine.machineId,
+                          privateAccount: true,
+                        })
+                      }
+                    >
+                      Set up
+                    </button>
+                  </CapabilityOffControl>
                 </li>
               );
             const view = describeMachineStatus(machine, openedAt);
@@ -460,49 +472,56 @@ function ChooserDialog({
             const canConnect = view.actions.some((a) => a.id === "connect" || a.id === "retry");
             return (
               <li key={machine.machineId}>
-                <button
-                  ref={initialWhere === machine.machineId ? initialRef : undefined}
-                  type="button"
-                  data-testid={`new-terminal-where-${machine.machineId}`}
-                  aria-pressed={!!agentKey && machineId === machine.machineId}
-                  disabled={
-                    connecting !== null ||
-                    (!connected && !canConnect) ||
-                    (!(REMOTE_LAUNCH_CLIS as readonly string[]).includes(
-                      selectedAgent?.runtime ?? launch,
-                    ) &&
-                      launch !== "shell")
-                  }
-                  title={
-                    !(REMOTE_LAUNCH_CLIS as readonly string[]).includes(
-                      selectedAgent?.runtime ?? launch,
-                    ) && launch !== "shell"
-                      ? `${agentCliLabel(selectedAgent?.runtime ?? launch)} launches locally only`
-                      : (view.blockedReason ?? undefined)
-                  }
-                  onClick={() => (connected ? openOn(machine) : connectThenOpen(machine))}
-                  className={ROW}
-                >
-                  {connecting === machine.machineId ? (
-                    <Loader2 className="size-4 animate-spin text-[#8b949e]" aria-hidden />
-                  ) : (
-                    <Server className="size-4 text-[#8b949e]" aria-hidden />
-                  )}
-                  <span className="flex-1 truncate text-left">{machine.label}</span>
-                  {!connected && (
-                    <span className="text-xs text-[#8b949e]">
-                      {connecting === machine.machineId
-                        ? "Connecting…"
-                        : canConnect
-                          ? "Connect and open"
-                          : view.word}
-                    </span>
-                  )}
-                </button>
+                <CapabilityOffControl cap="remote-machines" noteId={remoteOffNoteId}>
+                  <button
+                    ref={initialWhere === machine.machineId ? initialRef : undefined}
+                    type="button"
+                    data-testid={`new-terminal-where-${machine.machineId}`}
+                    aria-pressed={!!agentKey && machineId === machine.machineId}
+                    disabled={
+                      connecting !== null ||
+                      (!connected && !canConnect) ||
+                      (!(REMOTE_LAUNCH_CLIS as readonly string[]).includes(
+                        selectedAgent?.runtime ?? launch,
+                      ) &&
+                        launch !== "shell")
+                    }
+                    title={
+                      !(REMOTE_LAUNCH_CLIS as readonly string[]).includes(
+                        selectedAgent?.runtime ?? launch,
+                      ) && launch !== "shell"
+                        ? `${agentCliLabel(selectedAgent?.runtime ?? launch)} launches locally only`
+                        : (view.blockedReason ?? undefined)
+                    }
+                    onClick={() => (connected ? openOn(machine) : connectThenOpen(machine))}
+                    className={ROW}
+                  >
+                    {connecting === machine.machineId ? (
+                      <Loader2 className="size-4 animate-spin text-[#8b949e]" aria-hidden />
+                    ) : (
+                      <Server className="size-4 text-[#8b949e]" aria-hidden />
+                    )}
+                    <span className="flex-1 truncate text-left">{machine.label}</span>
+                    {(!connected || !remoteMachines.on) && (
+                      <span className="text-xs text-[#8b949e]">
+                        {!remoteMachines.on
+                          ? notYetAvailable()
+                          : connecting === machine.machineId
+                            ? "Connecting…"
+                            : canConnect
+                              ? "Connect and open"
+                              : view.word}
+                      </span>
+                    )}
+                  </button>
+                </CapabilityOffControl>
               </li>
             );
           })}
         </ul>
+        {machines.length > 0 && (
+          <CapabilityOffNote cap="remote-machines" id={remoteOffNoteId} className="mt-1.5" />
+        )}
         {agentKey && machineId && (
           <div className="mt-3">
             <label className="block text-xs">

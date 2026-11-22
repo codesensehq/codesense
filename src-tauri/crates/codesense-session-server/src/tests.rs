@@ -586,7 +586,8 @@ fn write_resize_and_idle_reach_the_pty() {
     let mut client = TestClient::hello(&server);
     client.spawn(
         &server,
-        sh("read line; stty size; printf 'GOT=%s\\n' \"$line\"; sleep 60"),
+        // `; :` keeps the shell, so sleep runs under it: bash 5 execs a script's last command.
+        sh("read line; stty size; printf 'GOT=%s\\n' \"$line\"; sleep 60; :"),
         registration("io-1", None, false),
     );
     client
@@ -1061,6 +1062,7 @@ fn open_entry_in(
 ) {
     use codesense_pty_core::layout::{OpenTab, WorkspaceDescriptor};
     let request = OpenTab {
+        cwd: None,
         viewer: ViewerId::new("app"),
         workspace: codesense_pty_core::domain::WorkspaceKey::new("root:acme/app"),
         session: PtySessionId::new(session),
@@ -1675,6 +1677,40 @@ fn no_broker_direct_native_argv_launches_and_binds_activity_without_shell_fallba
     client
         .call(Request::Kill {
             session: PtySessionId::new("ordinary-shell"),
+        })
+        .unwrap();
+}
+
+/// With no activity service (its start failed, or none runs on this OS) a native launch
+/// takes the start-failure path: it still runs, its environment names no activity ingress
+/// (no host root, socket or writer token), and the host reports no activity for it.
+#[test]
+fn with_no_activity_service_a_native_launch_runs_with_no_ingress_and_reports_no_activity() {
+    use codesense_host_proto::agent_cli::{AgentCli, NativeLaunch};
+    use codesense_pty_core::activity::{HOST_ENV, SOCKET_ENV, TOKEN_ENV};
+    let server = TestServer::start();
+    // No `start_activity`: the host runs with the service absent.
+    let mut client = TestClient::hello(&server);
+    let mut intent = sh("sleep 60");
+    intent.remote_launch = Some(NativeLaunch::Cli(AgentCli::Claude));
+    intent.argv = Some(vec![
+        "/bin/sh".into(),
+        "-c".into(),
+        format!(
+            "test -z \"${{{HOST_ENV}}}${{{SOCKET_ENV}}}${{{TOKEN_ENV}}}\" && printf NO_INGRESS; sleep 60"
+        ),
+    ]);
+    let pid = client.spawn(&server, intent, registration("unobserved", None, false));
+    assert!(alive(pid));
+    assert!(client
+        .output_until("unobserved", "NO_INGRESS")
+        .contains("NO_INGRESS"));
+    let activity = server.host().terminal().activity();
+    assert!(activity.snapshot("unobserved").is_none());
+    assert!(activity.snapshots().is_empty());
+    client
+        .call(Request::Kill {
+            session: PtySessionId::new("unobserved"),
         })
         .unwrap();
 }

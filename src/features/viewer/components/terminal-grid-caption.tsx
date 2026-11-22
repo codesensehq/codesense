@@ -4,7 +4,7 @@ import { useCallback, useEffect, useId, useRef, type KeyboardEvent, type MouseEv
 import { AlarmClock, Code, GitCompareArrows, PanelTopOpen, X } from "lucide-react";
 import type { TerminalTab } from "@/features/viewer/lib/cli-workspace/store/viewer-access";
 import { InfoTip } from "@/components/ui/tooltip";
-import { isMac } from "@/shared/lib/shortcuts/keystroke";
+import { hasAnyModifier, isMac } from "@/shared/lib/shortcuts/keystroke";
 import { tabCloseTooltip, useCloseVerb } from "../lib/terminal-close";
 import { ScopedStatusMark } from "./session-status-mark";
 import { MiddleTruncate } from "./middle-truncate";
@@ -138,7 +138,7 @@ export function TerminalGridCaption({
   // inside their own git parent (the context repo), but a diff of the
   // enclosing repo in those tabs is misleading. The gate is NOT
   // resolver-based (`!!repo?.isRoot`) anymore: the Diff icon lights on
-  // kind alone and the overlay's "No git repo at this path." body state
+  // kind alone and the overlay's no-repo body state
   // handles cwds that happen not to be a working tree.
   const caps = getKindCapabilities(ws.kind);
   const canDiff = caps.diffCapable;
@@ -235,7 +235,7 @@ export function TerminalGridCaption({
     focusCellTerminal(e.currentTarget);
   };
   const onKeyDown = (e: KeyboardEvent<HTMLButtonElement>) => {
-    if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+    if (hasAnyModifier(e)) return;
     if (e.key === "Delete" || (e.key === "Backspace" && isMac())) {
       e.preventDefault();
       e.stopPropagation();

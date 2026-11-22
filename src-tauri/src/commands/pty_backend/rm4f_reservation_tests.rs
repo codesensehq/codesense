@@ -250,6 +250,7 @@ fn write_measurement(path: &str, document: &serde_json::Value) {
 
 fn request(session: &str) -> OpenTab {
     OpenTab {
+        cwd: None,
         viewer: crate::commands::pty_layout::app_viewer(),
         workspace: codesense_pty_core::domain::WorkspaceKey::new("root:rm4f/reservation"),
         session: PtySessionId::new(session),

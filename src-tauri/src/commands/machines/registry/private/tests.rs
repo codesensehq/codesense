@@ -451,7 +451,7 @@ async fn private_lock_survives_a_fork_inheriting_its_close_on_exec_descriptor() 
     drop(wait);
     drop(held);
 
-    let contender = OpenOptions::new()
+    let contender = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .open(legacy.user_file("machine-private-v1.lock"))
@@ -644,4 +644,24 @@ async fn an_interrupted_conversion_finishes_when_asked_again() {
         original.pinned_host_key
     );
     assert!(legacy.find("shared-host").unwrap().is_none());
+}
+
+#[test]
+fn machine_wording_follows_the_os() {
+    assert_eq!(
+        private_declaration_changed_for("macos"),
+        "This private machine's configuration changed outside this Mac. Remove it and set it up again, or restore the previous configuration."
+    );
+    assert_eq!(
+        private_declaration_changed_for("linux"),
+        "This private machine's configuration changed outside this computer. Remove it and set it up again, or restore the previous configuration."
+    );
+    assert_eq!(
+        team_label_refusal_for("macos", "gpu"),
+        "A team machine's name is shared with every teammate's setup, so it can't be changed from this Mac. Keep the name “gpu”."
+    );
+    assert_eq!(
+        team_label_refusal_for("linux", "gpu"),
+        "A team machine's name is shared with every teammate's setup, so it can't be changed from this computer. Keep the name “gpu”."
+    );
 }

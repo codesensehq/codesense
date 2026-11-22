@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Decides whether a change can affect rust.yml's test jobs, so a merge group or pull request
-// without one skips them. Usage: node scripts/rust-changes.mjs <git diff range>; prints rust=true
-// or rust=false for $GITHUB_OUTPUT. Any error exits non-zero, and rust.yml then runs the jobs.
+// without one skips them, and whether it can affect the macOS build, so a change only Windows or
+// Linux compiles skips the macOS jobs. Usage: node scripts/rust-changes.mjs <git diff range>;
+// prints rust= and macos=, each true or false, for $GITHUB_OUTPUT. Any error exits non-zero, and
+// rust.yml then runs the jobs.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -26,16 +28,32 @@ export const RUST_PATHS = [
   "patches/",
   "release/scanners.lock",
   "scripts/build-",
+  "scripts/fetch-bundled.sh",
   "scripts/fetch-git-ai.sh",
+  "scripts/fetch-pinned.sh",
   "scripts/flaky-tests.mjs",
   "scripts/generate-",
-  "scripts/install-scanners.sh",
+  "scripts/install-",
   "scripts/lib/",
+  "scripts/run-secret-service-tests.sh",
   "scripts/rust-changes.mjs",
   "src-emulator/",
   "codesense-docs/",
   "site/package.json",
   ".claude/settings.json",
+];
+
+// Rust-relevant files that the macOS build never compiles or reads: each is a module declared only
+// under a Windows or Linux cfg, and nothing includes it (rust-changes.node-test.mjs checks both).
+// Exact paths, never prefixes, so a new file next to one of them still runs the macOS jobs.
+export const OS_ONLY_PATHS = [
+  "src-tauri/crates/codesense-platform/src/fs/windows.rs",
+  "src-tauri/crates/codesense-platform/src/ipc/windows.rs",
+  "src-tauri/crates/codesense-platform/src/limits/windows.rs",
+  "src-tauri/crates/codesense-platform/src/process/windows.rs",
+  "src-tauri/crates/codesense-platform/src/win.rs",
+  "src-tauri/vendor/tauri-plugin-wdio-webdriver/src/platform/linux.rs",
+  "src-tauri/vendor/tauri-plugin-wdio-webdriver/src/platform/windows.rs",
 ];
 
 // include_str!/include_bytes! paths are relative to the including file; CARGO_MANIFEST_DIR paths
@@ -87,6 +105,17 @@ export function touchesRust(changed, prefixes) {
   return !changed.length || changed.some((file) => prefixes.some((p) => file.startsWith(p)));
 }
 
+// True unless every Rust-relevant changed path is on the OS-only list. Paths the Rust jobs ignore
+// don't count, and no changes at all counts as macOS, as in touchesRust.
+export function touchesMacos(changed, prefixes) {
+  return (
+    !changed.length ||
+    changed.some(
+      (file) => prefixes.some((p) => file.startsWith(p)) && !OS_ONLY_PATHS.includes(file),
+    )
+  );
+}
+
 if (
   process.argv[1] &&
   fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))
@@ -105,4 +134,5 @@ if (
   const matched = changed.filter((file) => prefixes.some((p) => file.startsWith(p)));
   console.error(`${changed.length} changed files; Rust-relevant: ${matched.join(", ") || "none"}`);
   console.log(`rust=${touchesRust(changed, prefixes)}`);
+  console.log(`macos=${touchesMacos(changed, prefixes)}`);
 }

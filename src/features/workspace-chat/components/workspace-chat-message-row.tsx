@@ -72,11 +72,7 @@ export function WorkspaceChatMessageRow({
           {identity ? (
             <>
               {identity.tag && <span className="wc-msg__tag">{identity.tag}</span>}
-              {identity.machine &&
-                identity.machine !== "This Mac" &&
-                identity.machine !== "local" && (
-                  <span className="ibx-mtag">{identity.machine}</span>
-                )}
+              {identity.machine && <span className="ibx-mtag">{identity.machine}</span>}
             </>
           ) : (
             <span className="wc-msg__role">{isHuman ? "you" : "crew"}</span>

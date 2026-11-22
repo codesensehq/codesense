@@ -715,18 +715,29 @@ export const reconfigureWarmPool = (
     shellIntegration,
   });
 
+/** A shell a terminal can run. */
+export type ShellKind = "zsh" | "bash" | "fish" | "pwsh" | "powershell" | "cmd";
+
 /** SW-LN-35: the shell new terminals spawn, and where it came from. */
 export interface TerminalShellInfo {
   path: string;
-  kind: "zsh" | "bash" | "fish";
+  kind: ShellKind;
   source: "override" | "env" | "passwd" | "fallback";
-  /** The shell detected without the override (`$SHELL` → passwd → `/bin/zsh`). */
+  /**
+   * The shell detected without the override (the OS's table, e.g. `$SHELL` → passwd → `/bin/zsh`
+   * on macOS).
+   */
   detectedPath: string;
   overridePath: string | null;
-  /** The override is set but isn't an executable zsh/bash/fish, so it is ignored. */
+  /** The override is set but isn't an executable shell of an accepted kind, so it is ignored. */
   overrideRejected: boolean;
-  /** A login shell CodeSense can't integrate with, which is why zsh is used. */
+  /** A login shell of a kind this OS doesn't accept, which is why the fallback is used. */
   unsupportedShell: string | null;
+  /**
+   * The shell kinds this OS accepts from the override or a login shell (zsh, bash and fish on
+   * macOS and Linux).
+   */
+  acceptedKinds: ShellKind[];
 }
 
 export const terminalShellInfo = () => invoke<TerminalShellInfo>("terminal_shell_info");
@@ -1038,6 +1049,12 @@ export interface InboxMediaAttachment {
   state: "cached" | "pending" | "blocked" | "failed";
   reason?: string;
   retryable?: boolean;
+  /** The provider whose host the bytes finally came from; missing on an old message. */
+  mediaProvider?: "giphy" | "klipy" | "none";
+  /** The provider the sender said the GIF came from, with its id. */
+  provider?: "giphy" | "klipy";
+  providerId?: string;
+  onloadSent?: boolean;
 }
 export const loadInboxMedia = (team: InboxTeam, messageId: number) =>
   invoke<void>("load_inbox_media", { team, messageId });
@@ -1433,7 +1450,10 @@ export interface SessionListRow {
   workspace?: string;
   role?: string;
   avatar?: string;
+  /** The machine's name: the app's "This Mac" for a local tab; absent with no tab. */
   machine?: string;
+  /** The remote machine's id; absent for a session on this machine. */
+  machineId?: string;
   /** The saved Agent it runs (an agent id). */
   agent?: string;
   /** Its latest `signal_progress`, once it reported one. */
@@ -2375,6 +2395,9 @@ export interface TerminalWorkspaceLayout {
   lastActive: string | null;
   grid: TerminalGridState;
   nextOrdinal: number;
+  /** The working folder of each tab (by session) that runs outside the workspace's
+   *  `worktreePath`, such as a story seat worktree. Absent from an older host. */
+  tabDirs?: Record<string, string>;
 }
 
 export interface TerminalViewHint {
@@ -2430,6 +2453,9 @@ export interface TerminalOpenTabRequest {
   index?: number;
   activate: boolean;
   spawn: TerminalTabSpawn;
+  /** The tab's own folder when it runs outside the workspace's (a story seat
+   *  worktree): the host records it for the tab, never for the workspace. */
+  cwd?: string;
 }
 
 export type TerminalCloseMode = "keepIfBusy" | "kill";
@@ -2760,8 +2786,9 @@ export const replaceTerminalServer = (expected: LocalActivityUpgrade) =>
 export const endUnownedTerminalSession = (session: string) =>
   invoke<void>("end_unowned_terminal_session", { session });
 
-/** SV-8: show (or remove at once) this instance's terminal server in the macOS
- *  menu bar. Pushed from `useTerminalServerMenuBarSetting`; a no-op off macOS. */
+/** Show (or remove at once) this instance's terminal server in the macOS menu bar or
+ *  Linux tray. Pushed from `useTerminalServerMenuBarSetting`; a no-op where the
+ *  terminal-server-tray capability is off. */
 export const setTerminalServerMenuBar = (enabled: boolean) =>
   invoke<void>("set_terminal_server_menu_bar", { enabled });
 
@@ -3604,6 +3631,10 @@ export interface ManagedWorktreeInfo extends WorktreeRowBase {
   /** SV-CDE-7: whether git-ai line-attribution capture was working at the last agent
    *  launch here; `null` (or absent) before any launch. */
   attribution?: AttributionState | null;
+  /** The seat name, on one of its story's seat worktrees only. */
+  seat?: string;
+  /** Why the seat's last cleanup kept it; absent before one ran. */
+  seatKept?: "live" | "dirty" | "unpublished-context" | "unmerged" | "remove-failed";
 }
 
 /** Why line-attribution capture is off for a worktree. `notes_would_push`: the git-ai in
@@ -4039,16 +4070,28 @@ export interface SessionUsageStory {
   title: string | null;
   status: string | null;
   epic: string | null;
-  /** `associated` when only a context worktree's name ties the session to the story. */
-  basis?: "associated";
+  /** `associated` when only a context worktree's name ties the session to the story; `charged`
+   *  when a charge to the story does, which counts as exact. Absent: exact. */
+  basis?: "associated" | "charged";
+}
+
+/** The span of a charged session's row, epoch ms: `fromMs` null for its usage before its first
+ *  charge, `toMs` null for the open last segment. */
+export interface SessionUsageSegment {
+  fromMs: number | null;
+  toMs: number | null;
 }
 
 /** One agent session's token use and spend, from its agent CLI's own reports (`session_read_usage`).
- *  `costUsd` is null when any of its models has no rate in the price list. */
+ *  A session charged to more than one story is one row per segment, keyed by
+ *  `[cli, sessionId, segment?.fromMs ?? null]`. `costUsd` is null when any of its models has no
+ *  rate in the price list. */
 export interface SessionUsageRow {
   /** The agent CLI the session ran in. The same session id in two CLIs is two rows. */
   cli: "claude" | "codex" | "opencode" | "hermes";
   sessionId: string;
+  /** The CodeSense session id (tab) of the launch it ran under; null with no launch record. */
+  tabSessionId: string | null;
   /** Who ran the session, recorded at launch. Null for sessions CodeSense did not launch. */
   org: string | null;
   team: string | null;
@@ -4069,6 +4112,8 @@ export interface SessionUsageRow {
   tokens: SessionTokens;
   costUsd: number | null;
   unpricedModels: string[];
+  /** Present only on a charged session's rows. */
+  segment?: SessionUsageSegment;
 }
 
 /** One local day's usage across every session and model. */
@@ -4089,10 +4134,12 @@ export interface SessionUsageReport {
   totals: {
     tokens: SessionTokens;
     costUsd: number;
+    /** Rows, so a session charged to more than one story counts once per segment. */
     pricedSessions: number;
     unpricedSessions: number;
   };
-  /** Current full count of matching sessions before any page cut. */
+  /** Current full count of matching rows (sessions, or segments of a charged session) before
+   *  any page cut. */
   total: number;
   /** Present only when more sessions follow; pass it back as `cursor` for the next page. */
   nextCursor?: string;
@@ -4434,8 +4481,10 @@ export const connectContextRemote = (repoPath: string, remoteUrl: string) =>
 export const revealContextRepo = (repoPath: string) =>
   invoke<void>("reveal_context_repo", { repoPath });
 
-/** Open an arbitrary path in Finder. Rust side rejects paths outside
- *  the codesense-managed roots (`~/.codesense/users`, `~/.codesense/core`). */
+/** Reveal a folder: on macOS it is selected in its parent in Finder, on
+ *  Linux the file manager opens at it. Rust side rejects paths outside the
+ *  codesense-managed roots (`~/.codesense/users`, `~/.codesense/core`),
+ *  checked after resolving links, and anything that isn't a folder. */
 export const revealPath = (path: string) => invoke<void>("reveal_path", { path });
 
 export interface GitHubUser {
@@ -5117,6 +5166,9 @@ export interface TabSourceRepo {
   root: string;
   /** `true` iff the cwd itself is the working-tree root (not a subdir of it). */
   isRoot: boolean;
+  /** The cwd relative to `root`, `/`-joined (`""` at the root). Absent when the
+   *  cwd is not under the root, and from the remote resolver. */
+  prefix?: string;
 }
 
 /** A tab's resolved source folder — the per-tab primitives toolbar's Source
@@ -5835,8 +5887,26 @@ export interface ShadowedAgentInstall {
   onPath: boolean;
 }
 
+/** One step of git install guidance: a label, then the commands to run in order. */
+export interface HintLine {
+  label: string;
+  commands: string[];
+}
+
+/** How to install or upgrade git on the running OS (`git_install_hint` in deps.rs). */
+export interface GitInstallHint {
+  /** Offer Apple's Command Line Tools installer button. */
+  installer: boolean;
+  /** Lines shown when git is missing. */
+  install: HintLine[];
+  /** Lines shown when git is below the version floor. */
+  upgrade: HintLine[];
+}
+
 export interface DependencyStatus {
   git: GitStatus;
+  /** The running OS's row. Absent on the front end's own fallback statuses. */
+  gitInstall?: GitInstallHint;
   gh: GhStatus;
   /**
    * Per-agent binary-detection status keyed by CLI basename (`claude`, `codex`).
@@ -5920,6 +5990,14 @@ export const installCommandLineTools = () => invoke<CltInstallResult>("install_c
 // Logging
 export const getLogFilePath = () => invoke<string>("get_log_file_path");
 export const getLogDebugEnabled = () => invoke<boolean>("get_log_debug_enabled");
+
+// Platform capabilities
+export interface PlatformCap {
+  key: string;
+  on: boolean;
+  reason: string | null;
+}
+export const getPlatformCaps = () => invoke<PlatformCap[]>("get_platform_caps");
 
 // HTTP API
 export const getHttpApiPort = () => invoke<number | null>("get_http_api_port");
@@ -10147,6 +10225,29 @@ export const dashboardPublisherKeySave = (key: string) =>
   invoke<DashboardPublisherKeyStatus>("dashboard_publisher_key_save", { key });
 export const dashboardPublisherKeyRemove = () =>
   invoke<DashboardPublisherKeyStatus>("dashboard_publisher_key_remove");
+
+export type GifRating = "g" | "pg" | "pg-13";
+export interface GifSettings {
+  enabled: boolean;
+  provider: "giphy";
+  ceiling: GifRating;
+}
+export interface GifSettingsUpdate {
+  enabled?: boolean;
+  ceiling?: GifRating;
+  production?: boolean;
+}
+export interface GifKeyStatus {
+  status: "missing" | "saved" | "unavailable";
+  hint: string | null;
+  production: boolean;
+}
+export const gifSettingsGet = () => invoke<GifSettings>("gif_settings_get");
+export const gifSettingsSet = (update: GifSettingsUpdate) =>
+  invoke<GifSettings>("gif_settings_set", { update });
+export const gifKeyStatus = () => invoke<GifKeyStatus>("gif_key_status");
+export const gifKeySave = (key: string) => invoke<GifKeyStatus>("gif_key_save", { key });
+export const gifKeyRemove = () => invoke<GifKeyStatus>("gif_key_remove");
 
 export const dashboardInventory = (folder?: string, localOnly = false) =>
   invoke<import("@/features/dashboard-publishing/types").DashboardInventory>(

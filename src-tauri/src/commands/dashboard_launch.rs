@@ -945,6 +945,8 @@ struct LaunchEntry {
     story_was_explicit: bool,
     /// The launcher's task identity, captured under the reservation lock before async startup.
     launcher_task: Option<String>,
+    /// The launcher's tab, captured under the same lock: its handle may be reused later.
+    launcher_session: Option<String>,
     local_effect_owner: Option<super::pty_host::LocalEffectClaim>,
     chat_workspace_id: Option<String>,
     remote_shell: Option<super::pty_layout::RemoteShellRecord>,
@@ -1150,6 +1152,7 @@ impl LaunchEntry {
             local_effect_owner: owner,
             session_id: Some(session_id.to_string()),
             launcher_task: None,
+            launcher_session: None,
             story_was_explicit: false,
             _permit: None, // cap-free — the user opened this, not a dashboard.
             kind: KIND_REGISTERED,
@@ -2094,6 +2097,16 @@ impl DashboardLaunchState {
                 _ => None,
             };
         }
+        // The launcher's tab: a local launch's session, or a remote tab's session on its machine
+        // (the one its authority verifies a remote caller as).
+        let launcher_session = launcher_entry.and_then(|launcher| {
+            launcher.session_id.clone().or_else(|| {
+                launcher
+                    .remote_shell
+                    .as_ref()
+                    .map(|remote| codesense_pty_core::domain::PtySessionId::as_str(&remote.target.session).to_owned())
+            })
+        });
         let launcher = launcher_entry.and_then(|launcher| {
             let session = launcher.session_id.as_ref()?;
             let fallback = launcher.provenance.as_ref()
@@ -2134,6 +2147,7 @@ impl DashboardLaunchState {
                 local_effect_owner: None,
                 session_id: None,
                 launcher_task,
+                launcher_session,
                 story_was_explicit,
                 _permit: Some(permit),
                 bound_at_ms: None,
@@ -3196,6 +3210,11 @@ impl DashboardLaunchState {
             .collect()
     }
 
+    /// The tab that launched `handle`'s session, captured when its launch was reserved.
+    pub(crate) fn launcher_session(&self, handle: &str) -> Option<String> {
+        self.lock().by_handle.get(handle).and_then(|entry| entry.launcher_session.clone())
+    }
+
     /// A launcher id normalized the way [`begin_with_provenance`] records `launched_by`,
     /// so a filter by session id and by its handle select the same sessions.
     ///
@@ -3816,7 +3835,10 @@ pub(crate) fn record_from_launch(
     // Managed Claude settings send this session's usage elsewhere, so none will be recorded.
     let runtime = record.cli.as_deref().and_then(|cli| cli.parse::<codesense_pty_core::agent_cli::AgentCli>().ok());
     if runtime.is_some_and(crate::session_usage::managed_telemetry::unrecorded) {
-        record.unavailable("usage", crate::session_usage::managed_telemetry::USAGE_REDIRECTED);
+        record.unavailable(
+            "usage",
+            crate::session_usage::managed_telemetry::usage_redirected(),
+        );
     }
     record.missing_as("the launch did not report it");
     record
@@ -3842,7 +3864,8 @@ pub(crate) fn compose_launch_write(
 ) -> Option<LaunchWrite> {
     let snapshot = state.snapshot().into_iter().find(|s| s.handle == handle)?;
     let owner = state.owner_for_session(session_id);
-    let record = record_from_launch(session_id, &snapshot, owner.as_ref(), &facts);
+    let mut record = record_from_launch(session_id, &snapshot, owner.as_ref(), &facts);
+    record.launched_by_session = state.launcher_session(handle);
     // What the task is typed and linked from, beyond the brief: the launch's role, its saved
     // agent's queue role, the task it reviews and the session it continues.
     let mut task = facts.task;
@@ -5018,13 +5041,12 @@ pub(crate) fn headless_capture_request(
         .collect();
     // The agent's own variables go first, so CodeSense's above win on a clash. `spawn_capture`
     // strips before it sets, so a variable the launch strips is left out here, as are the ones
-    // that are always CodeSense's and `PATH`, which a terminal spawn sets itself.
+    // that are always CodeSense's and `PATH`, which a terminal spawn sets itself. Names compare
+    // as the host compares them: on Windows `Path` is `PATH`.
     let mut env: Vec<(String, String)> = agent_env
         .into_iter()
         .filter(|(name, _)| {
-            codesense_pty_core::spawn::agent_may_set(name)
-                && name != "PATH"
-                && !env_remove.contains(name)
+            codesense_pty_core::spawn::headless_env_kept(std::env::consts::OS, name, &env_remove)
         })
         .chain(env)
         .collect();
@@ -6509,6 +6531,7 @@ impl DashboardLaunchState {
                 startup_noted: false,
                 session_id: None,
                 launcher_task: None,
+                launcher_session: None,
                 story_was_explicit: false,
                 local_effect_owner: None,
                 _permit: None,
@@ -6769,21 +6792,17 @@ fn intent_path(
 fn read_remote_intent(
     path: &std::path::Path,
 ) -> Result<Option<super::pty_layout::RemoteShellRecord>, String> {
+    use codesense_platform::fs::{is_owned_by_current_user, link_count, open_nofollow_nonblocking};
     use std::io::Read;
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-    let file = match std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-    {
+    let file = match open_nofollow_nonblocking(std::fs::OpenOptions::new().read(true), path) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("consumed remote intent unavailable: {e}")),
     };
     let meta = file.metadata().map_err(|e| e.to_string())?;
     if !meta.is_file()
-        || meta.nlink() != 1
-        || meta.uid() != unsafe { libc::geteuid() }
+        || link_count(&file).map_err(|e| e.to_string())? != 1
+        || !is_owned_by_current_user(&file).map_err(|e| e.to_string())?
         || meta.len() > MAX_REMOTE_INTENT_BYTES as u64
     {
         return Err("remote intent is unsafe or exceeds its size bound".into());
@@ -6823,14 +6842,8 @@ impl DashboardLaunchState {
         record: &mut super::pty_layout::RemoteShellRecord,
     ) -> Result<bool, String> {
         use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
         let path = remote_intent_path(root, record)?.with_extension("spawn");
-        let mut marker = match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(path)
-        {
+        let mut marker = match codesense_platform::fs::create_new_owner_only(&path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 record.mark_spawn_attempted();
@@ -6844,8 +6857,7 @@ impl DashboardLaunchState {
             .write_all(record.target.session.as_str().as_bytes())
             .and_then(|()| marker.sync_all())
             .map_err(|e| format!("spawn attempt uncertain: {e}"))?;
-        std::fs::File::open(root)
-            .and_then(|dir| dir.sync_all())
+        codesense_platform::fs::sync_dir(root)
             .map_err(|e| format!("spawn attempt durability uncertain: {e}"))?;
         Ok(true)
     }
@@ -7043,25 +7055,18 @@ impl DashboardLaunchState {
         record: super::pty_layout::RemoteShellRecord,
     ) -> Result<RemoteShellReservation, String> {
         use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
         let path = remote_intent_path(root, &record)?;
         std::fs::create_dir_all(root).map_err(|e| format!("cannot reserve remote intent: {e}"))?;
         let bytes = serde_json::to_vec(&record).map_err(|e| e.to_string())?;
         if bytes.len() > MAX_REMOTE_INTENT_BYTES {
             return Err("saved-Agent intent exceeds durable receipt limit".into());
         }
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&path)
-        {
+        match codesense_platform::fs::create_new_owner_only(&path) {
             Ok(mut file) => {
                 file.write_all(&bytes)
                     .and_then(|()| file.sync_all())
                     .map_err(|e| format!("remote intent consumption is uncertain: {e}"))?;
-                std::fs::File::open(root)
-                    .and_then(|dir| dir.sync_all())
+                codesense_platform::fs::sync_dir(root)
                     .map_err(|e| format!("remote intent durability is uncertain: {e}"))?;
                 match self.reserve_remote_shell(record) {
                     Ok(()) => Ok(RemoteShellReservation::Fresh),
@@ -9330,7 +9335,7 @@ mod tests {
         let _managed = crate::session_usage::managed_telemetry::Fixture::redirecting_unread();
         assert_eq!(
             usage(&launch_facts(&[])).as_deref(),
-            Some(crate::session_usage::managed_telemetry::USAGE_REDIRECTED)
+            Some(crate::session_usage::managed_telemetry::usage_redirected())
         );
         assert_eq!(usage(&codex), None);
     }
@@ -9848,6 +9853,51 @@ mod tests {
         assert_eq!(dev.goal, "Build the store.");
         let tree: Vec<String> = store.task_subtree("lead-tab").unwrap().into_iter().map(|t| t.task_id).collect();
         assert_eq!(tree, ["lead-tab", "dev-tab"]);
+    }
+
+    /// A launch records its launcher's tab, captured at reservation, so a charge's launch chain
+    /// never depends on a handle that may be reused; a launch with no launcher records none.
+    #[test]
+    fn a_launch_records_the_tab_that_launched_it() {
+        let (_dir, store) = crate::session_usage::tests::store();
+        let state = DashboardLaunchState::new(4);
+        bind_launch(&state, "lead-handle", "lead-tab", None, "DEMO-1", None);
+        capture_bound(&state, &store, "lead-handle", "lead-tab", task_facts(Some("Lead it.")));
+        bind_launch(&state, "DEMO-1#dev", "dev-tab", Some("lead-handle"), "DEMO-1", None);
+        capture_bound(&state, &store, "DEMO-1#dev", "dev-tab", task_facts(Some("Build it.")));
+        let dev = store.read_session_record("dev-tab").unwrap().unwrap();
+        assert_eq!(dev.launched_by_session.as_deref(), Some("lead-tab"));
+        let lead = store.read_session_record("lead-tab").unwrap().unwrap();
+        assert_eq!(lead.launched_by_session, None);
+    }
+
+    /// A seat a remote tab launched records that tab, and the remote caller its authority verifies
+    /// as that tab may charge it; another remote tab may not.
+    #[test]
+    fn a_remote_tab_charges_the_seat_it_launched_through_the_recorded_launch() {
+        use crate::mcp::charge_tools::{charge, Caller, ChargeSessionStoryParams};
+        let (_dir, store) = crate::session_usage::tests::store();
+        let state = DashboardLaunchState::new(4);
+        state
+            .reserve_remote_shell(roster_remote_record("remote-lead", "remote-tab", "1", true))
+            .unwrap();
+        bind_launch(&state, "DEMO-1#dev", "dev-tab", Some("remote-lead"), "DEMO-1", None);
+        capture_bound(&state, &store, "DEMO-1#dev", "dev-tab", task_facts(Some("Build it.")));
+        let dev = store.read_session_record("dev-tab").unwrap().unwrap();
+        assert_eq!(dev.launched_by_session.as_deref(), Some("remote-tab"));
+        let remote = |session: &str| Caller {
+            session: session.into(),
+            handle: Some("remote-lead".into()),
+            team: Some(("acme".into(), "dev".into())),
+        };
+        let params = ChargeSessionStoryParams { story: "DEMO-2".into(), session_id: Some("dev-tab".into()), from_ms: None };
+        let known = |_: &str, _: &str, _: &str| Some(std::path::PathBuf::from("DEMO-2.md"));
+        let as_recorded = |raw: &str| raw.to_owned();
+        let now = chrono::Utc::now().timestamp_millis() + 1_000;
+        charge(&store, &remote("remote-tab"), &params, now, &known, &as_recorded).unwrap();
+        let other = charge(&store, &remote("other-remote-tab"), &params, now + 1, &known, &as_recorded);
+        assert!(other.unwrap_err().contains("launch chain"));
+        assert_eq!(store.charges_for("dev-tab").unwrap().len(), 1);
     }
 
     #[test]
@@ -11988,7 +12038,7 @@ mod tests {
             assert_eq!(settings["permissions"], expected);
             assert!(settings["hooks"]["Stop"]
                 .to_string()
-                .contains("codesense-notify"));
+                .contains("hook notify"));
             let denies: Vec<&str> = ["Bash(git push --force:*)"]
                 .into_iter()
                 .chain(codesense_pty_core::notify_hook::deny_rules().iter().map(String::as_str))
@@ -12181,7 +12231,7 @@ mod tests {
                     assert_eq!(
                         groups
                             .iter()
-                            .filter(|g| g.to_string().contains("codesense-notify"))
+                            .filter(|g| g.to_string().contains("hook notify"))
                             .count(),
                         1,
                         "{label}: {ev} wired once"
@@ -12805,6 +12855,7 @@ mod context_launcher_tests {
     }
 }
 
+#[cfg(cap_git_ai)]
 #[cfg(test)]
 pub(crate) mod attribution_entry_tests {
     //! SV-CDE-7: the headless (routine) launch's provisioning switches git-ai capture on for

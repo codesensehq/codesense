@@ -667,7 +667,10 @@ pub(crate) fn consume_emitted_spawn_for_test<R: tauri::Runtime>(
     )?;
     let values = launch.values.clone();
     apply_bindings(&mut intent, Vec::new(), Vec::new(), launch);
-    Ok((intent.resolve(session, environment), values))
+    let spec = intent
+        .resolve(session, environment)
+        .map_err(|error| error.to_string())?;
+    Ok((spec, values))
 }
 
 /// A local shell tab with CodeSense's shell integration exports what a `claude` or
@@ -2285,6 +2288,7 @@ mod tests {
 #[cfg(test)]
 mod shell_tests {
     use super::*;
+    use crate::test_support::bundle_config::merge_patch;
     use codesense_pty_core::shell::ShellKind;
     use std::path::Path;
 
@@ -2394,7 +2398,9 @@ mod shell_tests {
             .contains(&"CLAUDE_CODE_OAUTH_TOKEN".to_string()));
         assert!(intent.env_remove.contains(&"ANTHROPIC_API_KEY".to_string()));
         let host = HostEnvironment::with_vars(None, None, [("PATH".into(), "/usr/bin".into())]);
-        let spec = intent.resolve("tab-isolated", &host);
+        let spec = intent
+            .resolve("tab-isolated", &host)
+            .expect("the spawn resolves");
         let env = |name: &str| {
             spec.command
                 .get_env(name)
@@ -2445,6 +2451,7 @@ mod shell_tests {
             let host = HostEnvironment::with_vars(None, None, [("PATH".into(), "/usr/bin".into())]);
             intent
                 .resolve("tab-scrub", &host)
+                .expect("the spawn resolves")
                 .command
                 .get_env("CLAUDE_CODE_OAUTH_TOKEN")
                 .map(|value| value.to_string_lossy().into_owned())
@@ -2619,11 +2626,11 @@ mod shell_tests {
             serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
         // Source path → bundled path.
         let resources = conf["bundle"]["resources"].as_object().unwrap();
-        for kind in [ShellKind::Zsh, ShellKind::Bash, ShellKind::Fish] {
-            let script = format!(
-                "resources/shell-integration/codesense-shell-init.{}",
-                kind.init_script_ext()
-            );
+        for ext in ShellKind::ALL
+            .into_iter()
+            .filter_map(ShellKind::init_script_ext)
+        {
+            let script = format!("resources/shell-integration/codesense-shell-init.{ext}");
             assert_eq!(
                 resources.get(&script).and_then(|v| v.as_str()),
                 Some(script.as_str()),
@@ -2645,23 +2652,6 @@ mod shell_tests {
     /// map in both files.
     #[test]
     fn the_release_overlay_adds_the_host_agents_and_keeps_every_resource() {
-        fn merge_patch(target: &mut serde_json::Value, patch: &serde_json::Value) {
-            match (target, patch) {
-                (serde_json::Value::Object(target), serde_json::Value::Object(patch)) => {
-                    for (key, value) in patch {
-                        if value.is_null() {
-                            target.remove(key);
-                        } else {
-                            merge_patch(
-                                target.entry(key.clone()).or_insert(serde_json::Value::Null),
-                                value,
-                            );
-                        }
-                    }
-                }
-                (target, patch) => *target = patch.clone(),
-            }
-        }
         let base: serde_json::Value =
             serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
         let overlay: serde_json::Value =
@@ -2693,6 +2683,66 @@ mod shell_tests {
             }
         }
         bundled(codesense_session_server::install::EMULATOR_NOTICES);
+    }
+
+    /// Tauri merges `tauri.linux.conf.json` over the base config on Linux only.
+    /// It drops the committed macOS starship and ships the one
+    /// scripts/fetch-bundled.sh fetches for this target in its place as
+    /// `resources/starship`, keeps the base mapping of `resources/git-ai` (which
+    /// the same script fetches for this target), keeps the four starship prompt
+    /// presets and ships the emulator worker as a third sidecar.
+    #[test]
+    fn the_linux_overlay_ships_the_fetched_binaries_and_the_emulator() {
+        let base: serde_json::Value =
+            serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
+        let overlay: serde_json::Value =
+            serde_json::from_str(include_str!("../../tauri.linux.conf.json")).unwrap();
+        let mut merged = base.clone();
+        merge_patch(&mut merged, &overlay);
+
+        let resources = merged["bundle"]["resources"].as_object().unwrap();
+        assert!(
+            !resources.contains_key("resources/starship"),
+            "the committed macOS starship must not ship on Linux"
+        );
+        assert_eq!(
+            resources.get("resources/git-ai").and_then(|v| v.as_str()),
+            Some("resources/git-ai"),
+            "the fetched git-ai ships as resources/git-ai"
+        );
+        assert_eq!(
+            resources
+                .get("resources/fetched/starship")
+                .and_then(|v| v.as_str()),
+            Some("resources/starship"),
+            "the fetched starship ships as resources/starship"
+        );
+        for preset in ["compact", "minimal", "full", "twoline"] {
+            let key = format!("resources/starship-{preset}.toml");
+            assert_eq!(
+                resources.get(&key).and_then(|v| v.as_str()),
+                Some(key.as_str()),
+                "{key} kept"
+            );
+        }
+        let other_resources = |config: &serde_json::Value| {
+            let mut map = config["bundle"]["resources"].as_object().unwrap().clone();
+            map.remove("resources/starship");
+            map.remove("resources/fetched/starship");
+            map
+        };
+        assert_eq!(
+            &other_resources(&merged),
+            &other_resources(&base),
+            "every other resource is untouched"
+        );
+        let mut external_bin = base["bundle"]["externalBin"].as_array().unwrap().clone();
+        external_bin.push(serde_json::json!("binaries/codesense-emulator"));
+        assert_eq!(
+            merged["bundle"]["externalBin"],
+            serde_json::Value::Array(external_bin),
+            "the base sidecars plus the emulator worker"
+        );
     }
 }
 
@@ -2888,10 +2938,12 @@ mod spend_telemetry_seams {
                     ..Default::default()
                 },
             );
-            let spec = intent.resolve(
-                "usage-cap",
-                &HostEnvironment::with_vars(None, None, [("PATH".into(), "/usr/bin".into())]),
-            );
+            let spec = intent
+                .resolve(
+                    "usage-cap",
+                    &HostEnvironment::with_vars(None, None, [("PATH".into(), "/usr/bin".into())]),
+                )
+                .expect("the spawn resolves");
             let get = |name| {
                 spec.command
                     .get_env(name)

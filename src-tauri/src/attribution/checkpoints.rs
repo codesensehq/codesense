@@ -16,17 +16,7 @@ pub(crate) struct Log {
     /// stored as a seen base with no records, so a miss under it is not "log not available".
     pub present: bool,
 }
-#[derive(Debug, Default)]
-pub(crate) struct Stats {
-    pub records: usize,
-    pub malformed: usize,
-    pub partial: usize,
-    pub bytes_read: usize,
-    pub logs_seen: usize,
-    pub logs_new: usize,
-    pub rows_stored: usize,
-    pub session_mapping_rows_stored: usize,
-}
+pub(crate) use super::facade::Stats;
 /// Per-file commits survive a later failure; keep their counts with the error.
 #[derive(Debug)]
 pub(crate) struct HarvestError {

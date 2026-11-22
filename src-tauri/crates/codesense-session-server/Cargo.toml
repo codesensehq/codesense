@@ -37,6 +37,8 @@ ruzstd = "0.9"
 uuid = { version = "1", features = ["v4"] }
 codesense-host-proto = { path = "../codesense-host-proto" }
 codesense-pty-core = { path = "../codesense-pty-core" }
+# OS mechanisms: executable files and the CLI `PATH` lookup.
+codesense-platform = { path = "../codesense-platform" }
 dirs = "5"
 libc = "0.2"
 log = "0.4"
@@ -46,6 +48,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = { version = "3", optional = true }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }
+
+[build-dependencies]
+# Reads the app's capability table for the `cfg(cap_…)` gates.
+serde_json = "1"
 
 [dev-dependencies]
 codesense-pty-core = { path = "../codesense-pty-core", features = ["test-support"] }

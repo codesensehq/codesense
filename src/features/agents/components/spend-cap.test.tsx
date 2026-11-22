@@ -21,7 +21,7 @@ vi.mock("@/features/dashboard/lib/live-hub", () => ({
     },
   },
 }));
-import { RoutineSpendCap, SpendCapBlock, SpendCapChip, USAGE_NOT_RECORDED } from "./spend-cap";
+import { RoutineSpendCap, SpendCapBlock, SpendCapChip, usageNotRecorded } from "./spend-cap";
 import {
   useAgentListProjectionStore,
   watchAgentList,
@@ -80,7 +80,7 @@ it.each([
     expect(chip.className).toContain("text-warning-ink");
     expect(chip.className).not.toContain("amber");
   }
-  if (state === "unrecorded") expect(chip.getAttribute("title")).toBe(USAGE_NOT_RECORDED);
+  if (state === "unrecorded") expect(chip.getAttribute("title")).toBe(usageNotRecorded());
 });
 it("saves a person's new cap through the native set command", async () => {
   seed();
@@ -155,7 +155,7 @@ it.each([
     spend: { [`${scopeKind}:${key}`]: { ...base, today: 0, state: "unrecorded" } },
   });
   render(ui);
-  expect(screen.getByText("Usage not recorded").getAttribute("title")).toBe(USAGE_NOT_RECORDED);
+  expect(screen.getByText("Usage not recorded").getAttribute("title")).toBe(usageNotRecorded());
 });
 it("keeps a native error visible without losing typed values", async () => {
   seed();

@@ -10,14 +10,15 @@ test.beforeAll(async () => {
   const shim = viewerScript("LINK_INTERCEPTOR_JS");
   const dir = resolve("src-tauri/src/http/routes/dashboard_kit");
   const assets = new Map<string, { body: Buffer; type: string }>();
-  for (const [name, type] of [
-    ["editor.js", "text/javascript"],
+  // The route name, its content type and, when it differs, the committed file it serves.
+  for (const [name, type, file = name] of [
+    ["editor.js", "text/javascript", "editor.min.js"],
     ["editor.css", "text/css"],
     ["tokens.css", "text/css"],
     ["kit.css", "text/css"],
     ["fonts/geist.woff2", "font/woff2"],
   ])
-    assets.set("/kit/v1/" + name, { body: await readFile(resolve(dir, name)), type });
+    assets.set("/kit/v1/" + name, { body: await readFile(resolve(dir, file)), type });
   server = createServer((req, res) => {
     const asset = assets.get(req.url!.split("?")[0]);
     if (asset) {

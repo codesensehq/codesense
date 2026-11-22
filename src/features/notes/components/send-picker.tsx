@@ -9,6 +9,7 @@ import { StatusMark } from "@/shared/components/status-mark";
 
 import { agentStatusLook, useNoteAgents } from "../lib/note-agents";
 import { NtPopover, NtPopoverAnchor, NtPopoverContent } from "./nt-popover";
+import { formatMetaOnlyDisplay, hasCmd } from "@/shared/lib/shortcuts/keystroke";
 
 export interface AnchorRect {
   top: number;
@@ -76,6 +77,7 @@ export function SendPicker({
   const [query, setQuery] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const pasteChord = formatMetaOnlyDisplay("CmdOrCtrl+Alt+Enter");
 
   const sendable = useMemo(() => agents.filter((a) => a.row.alive && a.row.sessionId), [agents]);
   const shown = useMemo(() => {
@@ -154,7 +156,7 @@ export function SendPicker({
                 setSelectedId(pickRowId(rows[(activeIndex - 1 + rows.length) % rows.length]));
               } else if (e.key === "Enter") {
                 e.preventDefault();
-                if (e.metaKey && e.altKey) onPasteTerminal();
+                if (hasCmd(e) && e.altKey) onPasteTerminal();
                 else run(rows[activeIndex]);
               }
             }}
@@ -212,9 +214,9 @@ export function SendPicker({
               <span className="nt-row-label">
                 {row.kind === "new" ? "Start a new agent with this" : "Paste into focused terminal"}
               </span>
-              {row.kind === "paste" && (
+              {row.kind === "paste" && pasteChord && (
                 <span className="nt-row-sub">
-                  <kbd className="nt-kbd">⌥⌘↵</kbd>
+                  <kbd className="nt-kbd">{pasteChord}</kbd>
                 </span>
               )}
             </button>

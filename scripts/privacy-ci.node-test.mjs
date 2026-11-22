@@ -5,8 +5,22 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
-import { scanChange, addedLines, pairCommitSections, addedLineSelection } from "./privacy-ci.mjs";
+import {
+  scanChange,
+  scanStaged,
+  commitFindings,
+  FIX,
+  LOCATION_FIX,
+  certainComment,
+  trailerView,
+  fixFor,
+  placeOf,
+  addedLines,
+  pairCommitSections,
+  addedLineSelection,
+} from "./privacy-ci.mjs";
 import { scan, allowLines } from "./privacy-engine.mjs";
+import { GENERIC_RULES } from "./privacy-rules.mjs";
 
 const token = () => "gh" + "p_" + "aB3".repeat(12);
 const bad = (findings) => findings.some((f) => f.sev === "error" && !f.allowed);
@@ -435,4 +449,332 @@ test("diff sections whose header path is absent from the raw records fail closed
   assert.throws(() =>
     pairCommitSections([{ file: "expected.txt" }], "diff --git a/other.txt b/other.txt\n"),
   );
+});
+
+// The staged scan: what the next commit adds, against HEAD or the empty tree.
+const staged = (f, options = {}) => scanStaged({ cwd: f.dir, allowFile: f.allowFile, ...options });
+const errors = (findings) => findings.filter((x) => x.sev === "error" && !x.allowed);
+
+test("the staged scan finds only added lines, with their real line numbers", (t) => {
+  const f = fixture(t, `keep\n${token()}\nclean\n`);
+  assert.deepEqual(errors(staged(f)), []);
+  // A removed line and an unchanged context line add nothing.
+  f.put("a.txt", "keep\nclean\nmore\n");
+  f.git("add", "a.txt");
+  assert.deepEqual(errors(staged(f)), []);
+  f.put("a.txt", `keep\nclean\n${token()}\n`);
+  f.git("add", "a.txt");
+  const [finding, ...rest] = errors(staged(f));
+  assert.deepEqual(rest, []);
+  assert.equal(finding.file, "a.txt");
+  assert.equal(finding.line, 3);
+  assert.equal(finding.path, undefined);
+});
+
+test("the staged scan judges paths and honours the allow-list", (t) => {
+  const f = fixture(t);
+  const inventory = path.join(f.inputs, "terms.json");
+  const rules = [5, 6, 7, 8, 9, 24].map((order) => ({
+    id: `fixture-${order}`,
+    sev: order === 24 ? "text" : "error",
+    kind: "show",
+    source: `qqstaged${order}qq`,
+    flags: [6, 7, 8].includes(order) ? "gi" : "g",
+    order,
+    classification: "private-only",
+  }));
+  fs.writeFileSync(inventory, JSON.stringify({ version: 1, rules }));
+  f.put("qqstaged5qq.txt", "clean\n");
+  f.git("add", "qqstaged5qq.txt");
+  const [finding] = errors(staged(f, { privateRulesFile: inventory }));
+  assert.equal(finding.rule, "fixture-5");
+  assert.equal(finding.path, true);
+  f.git("rm", "-q", "--cached", "qqstaged5qq.txt");
+  // An allow entry for the staged finding lets it pass; the scan never stales one.
+  f.put("src/fixture.ts", `const value = "${token()}";\n`);
+  f.git("add", "src/fixture.ts");
+  const candidates = scan(f.dir, new Map(), { skipRoot: [".git"] }).filter((x) => x.fp);
+  fs.writeFileSync(f.allowFile, allowLines(candidates, () => "Reviewed fixture").join("\n"));
+  const findings = staged(f);
+  assert.deepEqual(errors(findings), []);
+  assert.ok(findings.some((x) => x.file === "src/fixture.ts" && x.allowed));
+  assert.ok(!findings.some((x) => x.rule === "allow-stale"));
+});
+
+test("binary files and mode-only changes pass the staged scan", (t) => {
+  const f = fixture(t);
+  f.put("image.bin", Buffer.from([0, 1, 2, 3, 0, 255, 254, 0]));
+  f.git("add", "image.bin");
+  assert.deepEqual(errors(staged(f)), []);
+  f.git("update-index", "--chmod=+x", "a.txt");
+  assert.deepEqual(errors(staged(f)), []);
+});
+
+test("a staged gitlink, a malformed allow-list and any other scan failure refuse with their own rules", (t) => {
+  const f = fixture(t);
+  const refusal = (findings) => findings.map((x) => [x.rule, x.sev, x.allowed, x.place]);
+  f.git("update-index", "--add", "--cacheinfo", "160000", f.base, "vendor/component");
+  assert.deepEqual(refusal(staged(f)), [["gitlink", "error", false, "the staged changes"]]);
+  f.git("rm", "-q", "--cached", "vendor/component");
+  // A malformed allow entry says so, not that the index is wrong.
+  fs.writeFileSync(f.allowFile, "not an entry\n");
+  assert.deepEqual(refusal(staged(f)), [["allow-file", "error", false, "the allow-list"]]);
+  fs.writeFileSync(f.allowFile, "");
+  // A staged blob that cannot be read: the diff parse fails.
+  f.put("b.txt", "clean\n");
+  f.git("add", "b.txt");
+  const oid = f.git("rev-parse", ":b.txt").trim();
+  fs.rmSync(path.join(f.dir, ".git", "objects", oid.slice(0, 2), oid.slice(2)));
+  assert.deepEqual(refusal(staged(f)), [["scan-error", "error", false, "the staged changes"]]);
+  // A directory outside any repository: git fails, and the scan says so.
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "privacy-ci-outside-"));
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+  assert.deepEqual(refusal(scanStaged({ cwd: outside })), [
+    ["scan-error", "error", false, "the staged changes"],
+  ]);
+});
+
+test("the staged scan on an unborn branch uses the empty tree", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "privacy-ci-unborn-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const git = (...args) =>
+    execFileSync("git", args, {
+      cwd: dir,
+      encoding: "utf8",
+      env: { ...process.env, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: "1" },
+    });
+  git("init", "-q", "--initial-branch=main");
+  fs.writeFileSync(path.join(dir, "a.txt"), "clean\n");
+  git("add", "a.txt");
+  assert.deepEqual(errors(scanStaged({ cwd: dir })), []);
+  fs.writeFileSync(path.join(dir, "b.txt"), `${token()}\n`);
+  git("add", "b.txt");
+  assert.deepEqual(
+    errors(scanStaged({ cwd: dir })).map((x) => [x.file, x.line]),
+    [["b.txt", 1]],
+  );
+});
+
+test("the staged scan skips a merge in progress", (t) => {
+  const f = fixture(t);
+  f.put("a.txt", `${token()}\n`);
+  f.git("add", "a.txt");
+  fs.writeFileSync(path.join(f.dir, ".git", "MERGE_HEAD"), `${f.base}\n`);
+  assert.equal(staged(f), null);
+});
+
+// Each commit-time fix, pinned: one string per rule or place, a rerun and never an amend.
+const SETUP = "the maintainer clone setup in CONTRIBUTING.md (AI assistance)";
+const IDENTITY = `set to the maintainer's GitHub login and noreply address as in ${SETUP}`;
+const PINNED_LOCATION = {
+  message:
+    "rerun your git commit command with the message reworded, keeping its -a, pathspec or --amend; " +
+    "for a line in git's own comments, rename the branch or file instead; " +
+    "an editor message is kept in the file git rev-parse --git-path COMMIT_EDITMSG names, to copy from",
+  verbose:
+    "rerun your git commit command without -v (--no-verbose if commit.verbose is set), " +
+    "or with the text below the scissors line reworded; the hook can't see -v, so it scans the verbose diff git would cut",
+  content: "rerun with the line edited and the file staged again (git add)",
+  path: "rerun with the file renamed (git mv)",
+};
+const PINNED = {
+  "forbidden-path": "rerun with the file unstaged (git rm --cached)",
+  "key-file": "rerun with the key file unstaged (git rm --cached)",
+  "image-metadata": "rerun with the image's metadata stripped and the file staged again (git add)",
+  gitlink: "rerun with the gitlink unstaged (git rm --cached); submodules are not supported",
+  "scan-error":
+    "rerun with the index checked (git status, git diff --cached --stat); report the hook if it repeats",
+  "allow-file": "rerun with the malformed entry in scripts/privacy-scan.allow fixed",
+  "author-identity": `rerun with user.name and user.email ${IDENTITY}, and no --author or GIT_AUTHOR_* override; for an amended commit, rerun with --amend --reset-author`,
+  "committer-identity": `rerun with user.name and user.email ${IDENTITY}, and no GIT_COMMITTER_* override`,
+  "missing-signoff":
+    "rerun with -s (git commit -s) as the maintainer identity and nothing after its Signed-off-by line; " +
+    "in an editor commit under core.commentChar auto, core.commentString, or a commit.cleanup that keeps comments, " +
+    "commit with -m or -F instead",
+  "ai-co-author": "rerun with the AI Co-authored-by line removed from the message",
+  "signing-config":
+    "rerun with git config commit.gpgsign true and a key (user.signingkey, or gpg.ssh.defaultKeyCommand for ssh); " +
+    "this checks the config, not the signature, and needs commit.gpgsign because the hook cannot see -S",
+};
+
+test("each commit-time rule and place has its one pinned fix", () => {
+  assert.deepEqual({ ...FIX }, PINNED);
+  assert.deepEqual({ ...LOCATION_FIX }, PINNED_LOCATION);
+  // A message finding below a scissors line takes the -v fix.
+  assert.equal(fixFor({ rule: "email", source: "message" }), PINNED_LOCATION.message);
+  assert.equal(
+    fixFor({ rule: "email", source: "message", verbose: true }),
+    PINNED_LOCATION.verbose,
+  );
+});
+
+test("the comment string is certain only when config fixes one", () => {
+  const cases = [
+    [[], "#"],
+    [[";"], ";"],
+    [["//"], "//"],
+    [[";", ";"], ";"],
+    [["auto"], null],
+    [[";", "auto"], null],
+    [["auto", ";"], null],
+    [[";", "%"], null],
+    [[""], null],
+  ];
+  for (const [values, want] of cases)
+    assert.equal(certainComment(values), want, JSON.stringify(values));
+});
+
+test("only an editor commit with a certain comment string reads git's comments and scissors", () => {
+  const signoff = "Signed-off-by: M <m@example.com>";
+  for (const comment of ["#", ";"]) {
+    const scissors = `${comment} ------------------------ >8 ------------------------`;
+    const message = `Subject\n\n${signoff}\n${comment} note\n${scissors}\ndiff\n`;
+    const top = `Subject\n\n${signoff}\n${comment} note\n`;
+    for (const editor of [false, true])
+      for (const known of [comment, null])
+        for (const cleanup of ["", "strip", "whitespace", "scissors"]) {
+          const name = JSON.stringify({ comment, editor, known, cleanup });
+          const view = trailerView({ message, editor, comment: known, cleanup });
+          assert.equal(view.head + view.tail, message, name);
+          if (!editor || !known) {
+            // The file as is: no cut, no comment skipped.
+            assert.equal(view.head, message, name);
+            assert.equal(view.skip(`${comment} note`), false, name);
+            continue;
+          }
+          assert.equal(view.head, top, name);
+          assert.equal(view.tail, `${scissors}\ndiff\n`, name);
+          assert.equal(view.skip(`${comment} note`), cleanup === "strip" || cleanup === "", name);
+          assert.equal(view.skip("Subject"), false, name);
+        }
+  }
+  // A scissors line of another comment string, or on the first line, cuts only its own.
+  const other = "Subject\n; ------------------------ >8 ------------------------\nx\n";
+  assert.equal(trailerView({ message: other, editor: true, comment: "#" }).head, other);
+  const first = "# ------------------------ >8 ------------------------\nx\n";
+  assert.equal(trailerView({ message: first, editor: true, comment: "#" }).head, "");
+});
+
+// The rule ids a function passes as the first argument of `call`, read from its
+// source: every argument must name its rule as a string literal.
+function ruleLiterals(fn, call) {
+  const src = fn.toString();
+  const ids = [];
+  for (const m of src.matchAll(new RegExp(`\\b${call}\\(`, "g"))) {
+    let depth = 0;
+    let arg = "";
+    for (const c of src.slice(m.index + m[0].length)) {
+      if (!depth && (c === "," || c === ")")) break;
+      if (c === "(") depth++;
+      if (c === ")") depth--;
+      arg += c;
+    }
+    const literals = [...arg.matchAll(/"([^"]*)"/g)].map((x) => x[1]);
+    assert.ok(literals.length, `${call}(${arg}) names no rule literal`);
+    ids.push(...literals);
+  }
+  return ids;
+}
+
+test("every rule commit-msg reports itself has its own fix; only content rules fall back", (t) => {
+  // The rules are what the checks emit, not a list kept by hand.
+  const f = fixture(t);
+  f.git("config", "user.name", "Someone");
+  f.git("config", "user.email", "someone@example.com");
+  const message = "Subject\n\nCo-authored-by: Claude <noreply@anthropic.com>\n";
+  const emitted = commitFindings(f.dir, { message, editor: false, comment: "#", cleanup: "" });
+  const fromStaged = () => emitted.push(...staged(f).map((x) => ({ ...x, source: "staged" })));
+  f.git("update-index", "--add", "--cacheinfo", "160000", f.base, "vendor/component");
+  fromStaged();
+  f.git("rm", "-q", "--cached", "vendor/component");
+  fs.writeFileSync(f.allowFile, "not an entry\n");
+  fromStaged();
+  fs.writeFileSync(f.allowFile, "");
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "privacy-ci-outside-"));
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+  emitted.push(...scanStaged({ cwd: outside }).map((x) => ({ ...x, source: "staged" })));
+  for (const finding of emitted)
+    assert.equal(fixFor(finding), FIX[finding.rule], `${finding.rule} has no fix of its own`);
+  // Every rule the code can report, read from its source, so a rule that no
+  // scenario above triggers still needs a fix. The scenarios reach them all.
+  const declared = new Set([
+    ...ruleLiterals(commitFindings, "found"),
+    ...ruleLiterals(scanStaged, "refuse"),
+  ]);
+  assert.deepEqual([...declared].sort(), [...new Set(emitted.map((x) => x.rule))].sort());
+  for (const rule of declared) assert.ok(Object.hasOwn(FIX, rule), `${rule} has no fix`);
+  // The source read sees a new rule, so the check above can fail.
+  const added = function () {
+    found("new-check", "place");
+  };
+  assert.deepEqual(ruleLiterals(added, "found"), ["new-check"]);
+  // FIX holds exactly the declared rules and the scanner's structural ones.
+  const structural = ["forbidden-path", "key-file", "image-metadata"];
+  const rules = new Set([...declared, ...structural]);
+  assert.deepEqual(Object.keys(FIX).sort(), [...rules].sort());
+  // A rule of the hook's own with no entry has no fallback.
+  assert.throws(() => fixFor({ rule: "new-check", source: "commit" }), /no fix for new-check/);
+  assert.throws(() => fixFor({ rule: "new-check", source: "staged", hook: true }), /new-check/);
+  // Every scanner rule takes the fix for where it was found.
+  for (const { id } of GENERIC_RULES) {
+    if (Object.hasOwn(FIX, id)) continue;
+    assert.equal(fixFor({ rule: id, source: "message" }), LOCATION_FIX.message);
+    assert.equal(fixFor({ rule: id, source: "staged" }), LOCATION_FIX.content);
+    assert.equal(fixFor({ rule: id, source: "staged", path: true }), LOCATION_FIX.path);
+  }
+  for (const [rule, fix] of Object.entries({ ...FIX, ...LOCATION_FIX })) {
+    assert.match(fix, /^rerun (with |your git commit command )/, rule);
+    // No fix prints a git commit command line to run: the committer reruns theirs.
+    assert.ok(!/GIT_EDITOR|-F ["$<]|\$\(/.test(fix), `${rule} prints a command`);
+    const amends = fix
+      .replace("--amend --reset-author", "")
+      .replace("keeping its -a, pathspec or --amend", "");
+    assert.ok(!amends.includes("--amend"), `${rule} amends`);
+    if (rule !== "author-identity" && rule !== "message")
+      assert.ok(!fix.includes("--amend"), `${rule} amends`);
+  }
+  // The identity fixes point to the setup and never print the handle.
+  const handle = ["alfy", "pops"].join("");
+  assert.ok(!Object.values(FIX).join("\n").includes(handle));
+  for (const rule of ["author-identity", "committer-identity"])
+    assert.ok(
+      FIX[rule].includes("noreply address as in the maintainer clone setup in CONTRIBUTING.md"),
+    );
+  assert.match(FIX["author-identity"], /no --author or GIT_AUTHOR_\* override/);
+});
+
+test("a commit-time place names no staged file unless shown", () => {
+  const content = { rule: "token", source: "staged", file: "a.txt", line: 4, index: 2, count: 3 };
+  const pathFinding = { rule: "fixture", source: "staged", file: "a.txt", line: 0, path: true };
+  const binary = {
+    rule: "token",
+    source: "staged",
+    file: "b.bin",
+    line: 0,
+    offset: 9,
+    index: 1,
+    count: 1,
+  };
+  const shown = { ...content, shown: "match" };
+  assert.equal(placeOf(content), "staged file 2 of 3, line 4");
+  assert.equal(placeOf(pathFinding), "a staged path");
+  assert.equal(placeOf(binary), "staged file 1 of 1, byte 9");
+  assert.equal(placeOf({ ...content, line: 0 }), "staged file 2 of 3");
+  assert.equal(placeOf({ ...content, count: undefined }), "staged file 2, line 4");
+  assert.equal(placeOf({ ...content, index: null }), "a staged file, line 4");
+  assert.equal(placeOf(shown), "staged file 2 of 3, line 4");
+  const own = { source: "staged", hook: true };
+  assert.equal(
+    placeOf({ ...own, rule: "gitlink", place: "the staged changes" }),
+    "the staged changes",
+  );
+  assert.equal(placeOf({ ...own, rule: "allow-file", place: "the allow-list" }), "the allow-list");
+  assert.equal(placeOf({ rule: "token", file: "message.txt", line: 3 }), "message:3");
+  assert.equal(placeOf({ rule: "author-identity", source: "commit", place: "author" }), "author");
+  // CODESENSE_PRIVACY_SHOW=1: the path, and a show-kind rule's match.
+  assert.equal(placeOf(content, true), "a.txt:4");
+  assert.equal(placeOf(pathFinding, true), "a.txt");
+  assert.equal(placeOf(binary, true), "b.bin@9");
+  assert.equal(placeOf(shown, true), "a.txt:4 match");
+  assert.equal(placeOf({ rule: "token", line: 3, shown: "m" }, true), "message:3 m");
 });

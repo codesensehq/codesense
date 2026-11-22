@@ -265,7 +265,7 @@ pub const CATALOG: &[QueryDef] = &[
     QueryDef {
         name: "inbox",
         describe: "The dashboard team's human inbox, session inboxes and role queues",
-        shares: "{messages: [{messageId, from, fromName, summary, kind, createdAt, unread, inReplyTo, delivery?: {state}}], humanUnread}. No bodies unless fields: text is declared. fields: meta adds to, toName, replyTo?, replyToName? and contentType (plain, markdown, html or null). fields: media adds attachments [{kind: image, alt, state (cached, pending, blocked or failed), mime?, sha256?, width?, height?, bytes?}], never a source URL, host or failure reason. fields: reactions adds reactions [{emoji, count, mine}] (mine: the human reacted), never who reacted. fields: faces adds sender: {face} to the rows whose sender wears one: {sha256, mime: image/png, width, height} for a picture (its bytes come from the media query), {emoji} or {colour} (#rrggbb); only for senders of the rows returned, no roster. Team fixed by the dashboard; args scope (to-human, to-agents, all, or human: only messages to or from the human, filtered on the Mac so no agent-to-agent mail leaves it), agentId, sessionId, role and limit only narrow; any other scope is query_invalid. At most 500 rows, newest first; a list cut by that limit or by size carries truncated, returned and total. Reads mark nothing read. Redacted",
+        shares: "{messages: [{messageId, from, fromName, summary, kind, createdAt, unread, inReplyTo, delivery?: {state}}], humanUnread}. No bodies unless fields: text is declared. fields: meta adds to, toName, replyTo?, replyToName? and contentType (plain, markdown, html or null). fields: media adds attachments [{kind: image, alt, state (cached, pending, blocked or failed), mime?, sha256?, width?, height?, bytes?, attribution?}], never a source URL, host or failure reason; attribution (giphy or klipy) names provider media, which shows Powered by GIPHY or via KLIPY. fields: reactions adds reactions [{emoji, count, mine}] (mine: the human reacted), never who reacted. fields: faces adds sender: {face} to the rows whose sender wears one: {sha256, mime: image/png, width, height} for a picture (its bytes come from the media query), {emoji} or {colour} (#rrggbb); only for senders of the rows returned, no roster. Team fixed by the dashboard; args scope (to-human, to-agents, all, or human: only messages to or from the human, filtered on the Mac so no agent-to-agent mail leaves it), agentId, sessionId, role and limit only narrow; any other scope is query_invalid. At most 500 rows, newest first; a list cut by that limit or by size carries truncated, returned and total. Reads mark nothing read. Redacted",
         fields: Fields::Named(&["text", "meta", "media", "reactions", "faces"]),
         args: &["scope", "agentId", "sessionId", "role", "limit"],
         run: super::inbox::query,
@@ -281,7 +281,7 @@ pub const CATALOG: &[QueryDef] = &[
     QueryDef {
         name: "storyChanges",
         describe: "A story's linked sessions, tasks and complete cost/time totals",
-        shares: "args {storyId,limit?,cursor?,only?}; only (tasks, sessions, commits, prs, branches, worktrees, actual, reviews) answers just those arrays with totals, leaves the others out, and reads no git unless a git array is asked (without one totals.commits, files and lines are null with unavailable.commits, files and lines saying why, and a cursor is stale); reviews is the story's complete review rounds as {round,phase,scope,skill,subjectRev,high,medium,low,dismissed,converged,reportedAt} (no id, subject, reviewer, session or finding ids); paged commits projected to sha,authoredAt,repo-relative tracked files,sessionIds,basis (no subjects); branches to PR numbers, ref availability, merged SHA and basis only; worktrees to state and basis only; prs lists all observed merge/squash PR facts with source and basis (no branch names); planned/actual repo-relative file facts and decision numbers; all linked sessions projected to sessionId,basis,models,cost,timing; tasks projected to taskId,parentId,reviews. Complete totals, including totals.lines (counts of AI lines by runtime, human and unattributed lines over every commit, or null with an unavailable.lines reason), prs[].mergedAt (epoch ms), unavailable reasons and historyAsOf (fetchedAt, originHead). No account, record, absolute host paths, worktree paths, branch names, commit subjects, task goals, progress notes or idle gaps. No default row cap; an oversized answer fails rather than labelling partial rows complete",
+        shares: "args {storyId,limit?,cursor?,only?}; only (tasks, sessions, commits, prs, branches, worktrees, actual, reviews) answers just those arrays with totals, leaves the others out, and reads no git unless a git array is asked (without one totals.commits, files and lines are null with unavailable.commits, files and lines saying why, and a cursor is stale); reviews is the story's complete review rounds as {round,phase,scope,skill,subjectRev,high,medium,low,dismissed,converged,reportedAt} (no id, subject, reviewer, session or finding ids); paged commits projected to sha,authoredAt,repo-relative tracked files,sessionIds,basis (no subjects); branches to PR numbers, ref availability, merged SHA and basis only; worktrees to state and basis only; prs lists all observed merge/squash PR facts with source and basis (no branch names); planned/actual repo-relative file facts and decision numbers; all linked sessions projected to sessionId,basis,models,cost,timing (and a charged session's segments of the story as fromMs,toMs, with their cost); tasks projected to taskId,parentId,reviews. Complete totals, including totals.lines (counts of AI lines by runtime, human and unattributed lines over every commit, or null with an unavailable.lines reason), prs[].mergedAt (epoch ms), unavailable reasons and historyAsOf (fetchedAt, originHead). No account, record, absolute host paths, worktree paths, branch names, commit subjects, task goals, progress notes or idle gaps. No default row cap; an oversized answer fails rather than labelling partial rows complete",
         fields: Fields::Named(&[]),
         args: &["storyId", "limit", "cursor", "only"],
         run: story_changes,
@@ -313,7 +313,7 @@ pub const CATALOG: &[QueryDef] = &[
     QueryDef {
         name: "sessionUsage",
         describe: "Token use and spend per agent session on this Mac",
-        shares: "per session: id, CLI, org, team, agent, models, first and last activity, message and token counts, cost; per day and in total: tokens and cost. Not the story each session was spent on (fields: story, its id, title, status and epic) or the working folder (fields: cwd). Newest activity first, at most 500 sessions, 50 by default. A cut list carries truncated, returned and total; days and totals still cover every session",
+        shares: "per session: id, CLI, org, team, agent, models, first and last activity, message and token counts, cost, and for a session charged to more than one story one row per segment with its span (segment fromMs, toMs); per day and in total: tokens and cost. Not the story each session was spent on (fields: story, its id, title, status and epic) or the working folder (fields: cwd). Newest activity first, at most 500 sessions, 50 by default. A cut list carries truncated, returned and total; days and totals still cover every session",
         fields: Fields::Named(&["cwd", "story"]),
         args: &["sinceMs", "untilMs", "sessionId", "cwd", "story", "limit", "cursor"],
         run: session_usage,
@@ -870,6 +870,8 @@ const USAGE_SESSION_KEYS: &[&str] = &[
     "tokens",
     "costUsd",
     "unpricedModels",
+    // A charged session's row span ({fromMs, toMs}); its tab id and who charged it stay here.
+    "segment",
 ];
 
 /// Publish only the declared facts; private records, paths and free text stay on the Mac.
@@ -881,10 +883,15 @@ fn project_session(s: &Value) -> Value {
                     .into_iter().filter_map(|key| timing.get(key).map(|v| (key.to_owned(), v.clone())))
                     .collect::<Map<String, Value>>()
             }).map(Value::Object).unwrap_or(Value::Null);
-            json!({
+            let mut session = json!({
                 "sessionId":s["session"]["sessionId"].as_str().or_else(||s["nativeSessionIds"][0].as_str()),
                 "basis":s["basis"],"models":s["models"],"cost":s["cost"],"timing":timing
-            })
+            });
+            // A charged session's segments of the story: their spans only.
+            if let Some(segments) = s["segments"].as_array() {
+                session["segments"] = segments.iter().map(|g| json!({"fromMs":g["fromMs"],"toMs":g["toMs"]})).collect();
+            }
+            session
 
 }
 
@@ -2075,6 +2082,8 @@ pub(crate) mod tests {
             cost_usd: Some(0.5),
             unpriced_models: vec![],
             run_id: None,
+            tab_session_id: None,
+            segment: None,
         };
         UsageReport {
             sessions: vec![
@@ -2128,6 +2137,8 @@ pub(crate) mod tests {
                 "claude-sonnet-5-5-2026-10-02".into(),
             ],
             run_id: None,
+            tab_session_id: None,
+            segment: None,
         }
     }
 
@@ -2334,7 +2345,7 @@ pub(crate) mod tests {
         let last = &report.sessions[kept - 1];
         assert_eq!(
             cursor,
-            format!("u:7:{}:{}", last.last_at_ms, last.session_id)
+            format!("v:7:{}:-:{}", last.last_at_ms, last.session_id)
         );
         report.sessions.truncate(3);
         let answer = usage_answer(&report, &[]);
@@ -2561,6 +2572,32 @@ pub(crate) mod tests {
         }
         // ...and a manifest cannot name it.
         assert!(field_refusal(find(CATALOG, "sessionUsage").unwrap(), "machineId").is_some());
+    }
+
+    /// A charged session's row publishes its segment's span; its tab id stays on the Mac, and a
+    /// manifest cannot name it.
+    #[test]
+    fn a_usage_answer_publishes_a_segment_but_never_the_tab_id() {
+        let mut report = usage_report();
+        report.sessions[0].tab_session_id = Some("private-tab".into());
+        report.sessions[0].segment = Some(crate::session_usage::Segment { from_ms: Some(5), to_ms: None });
+        let answer = usage_answer(&report, &fields(&["story", "cwd"]));
+        let rows = answer["sessions"].as_array().unwrap();
+        assert_eq!(rows[0]["segment"], json!({"fromMs": 5, "toMs": null}));
+        assert!(rows[1].get("segment").is_none(), "an uncharged row has no segment");
+        assert!(rows.iter().all(|r| r.get("tabSessionId").is_none()), "{answer}");
+        assert!(!answer.to_string().contains("private-tab"), "{answer}");
+        assert!(field_refusal(find(CATALOG, "sessionUsage").unwrap(), "tabSessionId").is_some());
+    }
+
+    /// A story's charged session publishes the spans of its segments of that story, nothing more.
+    #[test]
+    fn a_story_session_publishes_its_segment_spans_only() {
+        let charged = json!({"session": {"sessionId": "tab"}, "basis": "exact", "models": [], "cost": {},
+            "segments": [{"fromMs": null, "toMs": 9, "private": "x"}]});
+        assert_eq!(project_session(&charged)["segments"], json!([{"fromMs": null, "toMs": 9}]));
+        let plain = json!({"session": {"sessionId": "tab"}, "basis": "exact", "models": [], "cost": {}});
+        assert!(project_session(&plain).get("segments").is_none());
     }
 
     /// SW-DP-18: a viewer cannot filter by story unless the dashboard shares it, and an

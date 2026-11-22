@@ -33,7 +33,7 @@ import {
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import { basename } from "@/shared/lib/basename";
+import { basename } from "@/shared/lib/path";
 import { useTrailingDebounce } from "@/shared/lib/use-trailing-debounce";
 import { useRecentActivity } from "@/shared/lib/use-recent-activity";
 import type { SourceDiffMode, Workspace } from "@/shared/stores/viewer-store";
@@ -68,7 +68,7 @@ import { STATUS_LABEL, StatusChip } from "@/features/git-sync/components/file-st
 import type { PublishFile } from "@/features/git-sync/lib/types";
 import { routeFileToContext, unrouteFileFromContext } from "@/tauri/commands";
 import { useEffectiveShortcut } from "@/shared/stores/shortcuts-store";
-import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
+import { formatKeystrokeDisplay, hasCommandModifier } from "@/shared/lib/shortcuts/keystroke";
 import { useMachine } from "@/features/machines/stores/machines-store";
 
 import {
@@ -84,6 +84,7 @@ import { useRepoWorktreeWatch } from "../lib/use-repo-worktree-watch";
 import { useRemoteWatchNonce } from "../lib/use-remote-worktree-watch";
 import { workspaceSourceRepo, isRemoteWorkspace } from "@/shared/lib/workspace-location";
 import { useFocusWhenShown, useScopeActive } from "@/shared/lib/warm-scopes";
+import { rootWatchKey } from "@/shared/lib/worktree-watch-key";
 import { isRoutable, routeStateFromOutcome, type RouteState } from "../lib/route-to-context";
 import {
   buildFileTree,
@@ -216,14 +217,6 @@ export function SourceDiffOverlay({
   // and `liveCwd` is the single source of truth for the local-tab fetch
   // keys below. Remote tabs ignore the reading — the local probe can't
   // address a machine shell.
-  //
-  // TODO (deferred from SW-VE-12 R3-M5): the editor's and overlay's
-  // worktree watchers both key `worktreeChangedPath[ws.id]`. Now that
-  // liveCwd mutates mid-session the two can observe different dirs under
-  // one key → crossed events. A follow-up may need a composite id
-  // `${ws.id}|${effectiveCwd}` for the watcher-key join. Not surfaced in
-  // practice yet (overlay + editor share the same effectiveCwd per tab);
-  // revisit if a seam test or real-app observation flags a cross.
   const cwdRevision = useSessionCwdRevision(activeTabSessionId);
   const liveCwd = useSessionCwd(activeTabSessionId, cwdRevision);
   const shown = useViewerStore((s) =>
@@ -282,9 +275,9 @@ export function SourceDiffOverlay({
   // History reads local git only: a remembered History choice never applies to
   // a machine's workspace (it has no way back to Working there).
   const inHistory = historyMode === true && !remoteWorkspace;
-  // SW-VE-14: local-tab fetch keys read from `effectiveCwd`, which tracks
-  // `liveCwd` on every OSC 7 bump — the change-set + file redline retarget
-  // automatically on a `cd`. Remote tabs stay anchored to their machine-
+  // `effectiveCwd` tracks `liveCwd` on every OSC 7 bump, and the local fetch
+  // keys read the repo root resolved from it (`repoRoot` below), so the
+  // change-set + file redline retarget on a `cd`. Remote tabs stay anchored to their machine-
   // side handle (the local cwd probe can't speak to a remote shell).
   const effectiveCwd = remoteWorkspace ? ws.cwd : (liveCwd ?? ws.cwd);
   const repo = remoteWorkspace
@@ -294,12 +287,13 @@ export function SourceDiffOverlay({
   // meanwhile, so the rail never names nothing.
   const machine = useMachine(remoteWorkspace ? ws.location.machineId : "");
   const machineLabel = remoteWorkspace ? machine?.label || ws.location.machineId : null;
-  // Live refresh: a local worktree bumps the store's per-workspace nonce from
-  // the OS watcher; a remote one ticks through the machine's polling watcher.
-  // Either drives the open redline's re-fetch (the change list also refreshes
-  // through the seam's own tick).
-  const localNonce = useViewerStore((s) => s.worktreeChangedPath[ws.id]?.nonce ?? 0);
-  const resumeNonce = useViewerStore((s) => s.worktreeChangedPath[ws.id]?.resumed ?? 0);
+  // Live refresh: a local worktree bumps the store's nonce from the OS watcher
+  // of the repo root (under its own key, below); a remote one ticks through the
+  // machine's polling watcher. Either drives the open redline's re-fetch (the
+  // change list also refreshes through the seam's own tick).
+  const watchKey = rootWatchKey(ws.id);
+  const localNonce = useViewerStore((s) => s.worktreeChangedPath[watchKey]?.nonce ?? 0);
+  const resumeNonce = useViewerStore((s) => s.worktreeChangedPath[watchKey]?.resumed ?? 0);
   const remoteNonce = useRemoteWatchNonce(
     repo?.kind === "remote" ? repo.machineId : null,
     repo?.kind === "remote" ? repo.handle : null,
@@ -391,13 +385,40 @@ export function SourceDiffOverlay({
   // null=non-git, {root,isRoot}=working tree). Fetching needs BOTH: a known
   // working tree AND a repo descriptor.
   const effectiveActive = active && repo !== null && tabRepo != null;
-  useRepoWorktreeWatch(ws.id, repo, effectiveActive, teamKey);
-  // A local repo passes its plain cwd (the hooks' back-compat path); a remote
-  // one passes the SourceRepo so the seam routes to the machine. The local
-  // branch uses `effectiveCwd` so `liveCwd` is the single source of truth —
-  // the OSC 7 event that bumps liveCwd mid-session flows through here for
-  // free.
-  const changesetKey = repo?.kind === "remote" ? repo : effectiveCwd;
+  // A local tab watches the whole repo root, not the folder it sits in, so an
+  // edit anywhere in the repo refreshes the diff. The last root is held while
+  // the resolver answers a `cd` in the same tab, so a move inside the repo
+  // keeps the watch attached; a non-git folder or another tab releases it.
+  // While the editor is open it watches its own folder under `ws.id` too, and
+  // the two overlap harmlessly. A local story's seeded answer (its own folder,
+  // no prefix) counts as still resolving here: the resolver's canonical root
+  // can be spelled differently (a symlink, a Windows verbatim path), and
+  // watching the seed first would attach twice.
+  const seeded = !remoteWorkspace && tabRepo?.isRoot === true && tabRepo.prefix === undefined;
+  const watchTabRepo = seeded ? undefined : tabRepo;
+  const [heldRoot, setHeldRoot] = useState<{ scope: string; root: string } | null>(null);
+  const watchRoot =
+    watchTabRepo != null
+      ? watchTabRepo.root
+      : watchTabRepo === undefined && heldRoot?.scope === viewScope
+        ? heldRoot.root
+        : null;
+  const nextHeld = watchRoot === null ? null : { scope: viewScope, root: watchRoot };
+  if (nextHeld?.root !== heldRoot?.root || nextHeld?.scope !== heldRoot?.scope) {
+    setHeldRoot(nextHeld);
+  }
+  const watchRepo =
+    repo?.kind === "local" ? (watchRoot !== null ? { ...repo, cwd: watchRoot } : null) : repo;
+  const watchActive = repo?.kind === "local" ? active && watchRepo !== null : effectiveActive;
+  useRepoWorktreeWatch(watchKey, watchRepo, watchActive, teamKey);
+  // A local repo passes the working-tree root the resolver found for the live
+  // cwd (the hooks' back-compat path); a remote one passes the SourceRepo so
+  // the seam routes to the machine. The diff commands open the repo without
+  // searching upward, so a cwd inside the tree (a context worktree launches in
+  // `<team>/content`) must not reach them. Empty until the resolver answers:
+  // the hooks fetch nothing for an empty key.
+  const repoRoot = tabRepo?.root ?? "";
+  const changesetKey = repo?.kind === "remote" ? repo : repoRoot;
   const { files, loading, error, reload } = useSourceChangeset(
     changesetKey,
     baseRef,
@@ -763,12 +784,30 @@ export function SourceDiffOverlay({
         onDismiss: (f) => setRouteState(f.path, null),
       };
 
+  // The diff's paths are relative to the repo root, but the tile's editor is
+  // rooted at the live cwd (`effectiveCwd`, as the editor surface reads it),
+  // which can be a folder inside it: a context worktree's `<team>/content`, or
+  // wherever a `cd` landed. The resolver reports that folder's place in the
+  // repo from canonical paths, so a symlinked cwd or a Windows verbatim root
+  // still maps. `editorPath` maps a diff path into the editor, or gives null
+  // for a file outside the editor's folder, or for every file when the
+  // folder's place is unknown: the editor then opens with no file, never a
+  // wrong one.
+  const editorPrefix = remoteWorkspace ? "" : tabRepo?.isRoot ? "" : (tabRepo?.prefix ?? null);
+  const editorPath = (path: string): string | null => {
+    if (editorPrefix === null) return null;
+    if (editorPrefix === "") return path;
+    return path.startsWith(`${editorPrefix}/`) ? path.slice(editorPrefix.length + 1) : null;
+  };
+
+  /** `path` is relative to the editor's root (see `editorPath`). */
   const openEditor = (path: string | null) => {
     if (!activeTabSessionId) return;
     // With no file to open, the editor resumes where the user was.
     if (path != null) setEditorFile(ws.id, path);
     // Land on the change being read, when the open file is the one in the pane.
-    const line = path != null && path === paneFile ? (navRef.current?.currentLine() ?? null) : null;
+    const inPane = path != null && paneFile != null && path === editorPath(paneFile);
+    const line = inPane ? (navRef.current?.currentLine() ?? null) : null;
     setEditorRevealLine(ws.id, path != null && line != null ? { path, line } : null);
     toggleEditorOpen({ sessionId: activeTabSessionId, workspaceId: ws.id, teamKey, open: true });
   };
@@ -851,7 +890,7 @@ export function SourceDiffOverlay({
             {hideButton}
           </div>
           <CommitGraphRail
-            ws={ws}
+            ws={{ id: ws.id, cwd: repoRoot }}
             worktreeNonce={liveNonce}
             activeTabSessionId={activeTabSessionId}
           />
@@ -859,7 +898,7 @@ export function SourceDiffOverlay({
         <section className="flex min-w-0 flex-1 flex-col">
           <CommitDetailPane
             ws={ws}
-            effectiveCwd={effectiveCwd}
+            repoRoot={repoRoot}
             sha={selectedSha}
             baseRef={baseRef}
             worktreeNonce={liveNonce}
@@ -881,14 +920,17 @@ export function SourceDiffOverlay({
   }
 
   // The code editor opens on a file that exists in the worktree: never a
-  // deleted one, nor a selection that has left the change set.
+  // deleted one, a selection that has left the change set, or a file outside
+  // the editor's folder. Relative to the editor's root.
   const editableFile =
-    paneFile != null && selected != null && selected.status !== "deleted" ? paneFile : null;
+    paneFile != null && selected != null && selected.status !== "deleted"
+      ? editorPath(paneFile)
+      : null;
 
   const structuralAvailable = paneFile != null && isStructuralLanguage(detectLanguageId(paneFile));
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (hasCommandModifier(e)) return;
     const target = e.target as HTMLElement | null;
     if (
       target &&
@@ -1021,7 +1063,7 @@ export function SourceDiffOverlay({
   // KNOWN AMBIGUITY (reviewer §Deferred): `useTabSourceRepo`'s resolver
   // `.catch` collapses a transient error to `setRepo(null)` (see
   // `use-tab-source-repo.ts:122-126`), so a flaky probe reads here as
-  // "no git repo" instead of surfacing a load failure. Low priority, but
+  // "no repository" instead of surfacing a load failure. Low priority, but
   // a probe-level error channel + a separate body state would un-mask it.
   if (tabRepo === null) {
     // SW-VE-12 R3-M4: the no-repo body renders no filter input, no rail
@@ -1070,7 +1112,7 @@ export function SourceDiffOverlay({
             }
           />
           <OverlayCenteredState role="status" testId="source-diff-no-repo">
-            No git repo at this path.
+            No repository for this workspace yet.
           </OverlayCenteredState>
         </section>
       </OverlayShell>
@@ -1646,7 +1688,7 @@ export function SourceDiffPane({
  */
 function CommitDetailPane({
   ws,
-  effectiveCwd,
+  repoRoot,
   sha,
   baseRef,
   worktreeNonce,
@@ -1663,12 +1705,10 @@ function CommitDetailPane({
   workingError,
 }: {
   ws: Workspace;
-  /** SW-VE-12 R3-B2: the local-tab fetch cwd (`liveCwd ?? ws.cwd`). Threaded
-   *  from the parent so `effectiveCwd` is the ONE local-cwd read, and the
-   *  History-mode fetches pick up SW-VE-14's revision-bumped liveCwd when
-   *  that story lands. Remote tabs ignore this (`workspaceSourceRepo(ws)`
-   *  stays source of truth for the remote branch upstream). */
-  effectiveCwd: string;
+  /** The working-tree root the parent resolved for the live cwd, so the
+   *  History fetches read the same repo as the Working list. Remote tabs never
+   *  reach History. */
+  repoRoot: string;
   sha: string | null;
   baseRef: string | undefined;
   worktreeNonce: number;
@@ -1684,7 +1724,7 @@ function CommitDetailPane({
   workingLoading: boolean;
   workingError: string | null;
 }) {
-  const commit = useSourceCommitChangeset(effectiveCwd, sha);
+  const commit = useSourceCommitChangeset(repoRoot, sha);
   const { modes: fileDiffModes, setMode: setFileDiffMode } = useFileDiffModes();
   const markdownMode = fileDiffModes.markdown;
   const files = sha === null ? workingFiles : commit.files;
@@ -1704,21 +1744,21 @@ function CommitDetailPane({
 
   const selected = selectedFile ? (files?.find((f) => f.path === selectedFile) ?? null) : null;
   const workingRedline = useSourceFileRedline(
-    effectiveCwd,
+    repoRoot,
     sha === null ? selectedFile : null,
     selected?.renamedFrom,
     baseRef,
     worktreeNonce,
   );
   const commitRedline = useSourceCommitRedline(
-    effectiveCwd,
+    repoRoot,
     sha,
     sha !== null ? selectedFile : null,
     selected?.renamedFrom,
   );
   const redline = sha === null ? workingRedline.redline : commitRedline.redline;
   const imageSides = useSourceImageSides(
-    effectiveCwd,
+    repoRoot,
     sha,
     selectedFile,
     selected?.renamedFrom,

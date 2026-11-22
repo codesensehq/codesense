@@ -3,6 +3,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    // Must stay first: it sets an environment variable, which is only sound before any thread starts.
+    codesense_lib::linux_startup::apply_webkit_env_defaults();
     if codesense_pty_core::activity::run_helper() {
         return;
     }

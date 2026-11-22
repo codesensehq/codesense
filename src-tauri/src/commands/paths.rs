@@ -9,22 +9,14 @@ use crate::context_repo::path_to_team_content_dir;
 /// NOT for `~/Library/Application Support/ai.codesense/` (Tauri's app data dir)
 /// and NOT for `~/.claude/` (Claude CLI's own directory).
 pub fn codesense_home_dir() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".codesense"))
+    codesense_platform::dirs::codesense_home()
 }
 
-/// Create `dir` (0700) if missing, refusing a symlink in its place.
+/// Create `dir` owner-only (unix 0700; on Windows a protected owner-only
+/// DACL) if missing, refusing a symlink in its place.
 pub(crate) fn ensure_private_dir(dir: &Path) -> Result<(), String> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)
-            .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
-    }
-    #[cfg(not(unix))]
-    std::fs::create_dir_all(dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+    codesense_platform::fs::create_dir_owner_only(dir)
+        .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
     let meta = std::fs::symlink_metadata(dir)
         .map_err(|e| format!("could not inspect {}: {e}", dir.display()))?;
     if meta.file_type().is_symlink() || !meta.is_dir() {
@@ -103,6 +95,44 @@ mod tests {
     fn test_codesense_home_dir_returns_dotcodesense() {
         let dir = codesense_home_dir().expect("home dir should exist");
         assert!(dir.ends_with(".codesense"));
+        assert_eq!(dir, dirs::home_dir().unwrap().join(".codesense"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_private_dir_creates_0700_and_refuses_a_symlink() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("private");
+        ensure_private_dir(&dir).unwrap();
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
+        let link = root.path().join("link");
+        std::os::unix::fs::symlink(&dir, &link).unwrap();
+        assert!(ensure_private_dir(&link).is_err());
+    }
+
+    #[test]
+    fn ensure_private_dir_is_owner_only_in_a_shared_directory_and_refuses_a_file() {
+        use crate::test_support::owner_only::{is_owner_only, shared_dir, shared_file};
+        let root = tempfile::tempdir().unwrap();
+        let shared = root.path().join("shared");
+        shared_dir(&shared);
+        let dir = shared.join("private");
+        ensure_private_dir(&dir).unwrap();
+        assert!(is_owner_only(&dir));
+        ensure_private_dir(&shared).unwrap();
+        assert!(
+            !is_owner_only(&shared),
+            "an existing directory is left as it is"
+        );
+        let nested = root.path().join("missing").join("private");
+        ensure_private_dir(&nested).unwrap();
+        assert!(is_owner_only(&nested));
+        let file = shared.join("file");
+        shared_file(&file, b"kept");
+        assert!(ensure_private_dir(&file).is_err());
+        assert_eq!(std::fs::read(&file).unwrap(), b"kept");
     }
 
     #[test]

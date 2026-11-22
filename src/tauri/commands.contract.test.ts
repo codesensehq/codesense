@@ -66,8 +66,9 @@ function extractRustHandlers(): string[] {
   // `weft` is a top-level module (like `menu`) that hosts `#[tauri::command]`s
   // registered as `weft::<sub>::<cmd>` (SW-WV-F2 `weft::preflight::preflight_wv_dispatch`).
   // `license::commands` hosts the SW-PB-9 beta license commands (registered under the beta cfg).
+  // `gif::settings` hosts the GIF search settings and key commands.
   const handlerPattern =
-    /(?:commands|license::commands|dashboard_publish|verbs::commands|records::commands|mcp|mcp_registration|menu|renderer_watchdog|live_hub|weft)(?:::\w+)*::(\w+)/g;
+    /(?:commands|license::commands|dashboard_publish|verbs::commands|records::commands|mcp|mcp_registration|menu|renderer_watchdog|live_hub|weft|gif)(?:::\w+)*::(\w+)/g;
   const commands: string[] = [];
   let match;
   while ((match = handlerPattern.exec(handlerBlock[1])) !== null) {
@@ -1332,8 +1333,13 @@ describe("Tauri IPC Contract", () => {
     // +2 on both sides for liveHubRelease/live_hub_release and
     // liveHubReleaseOwner/live_hub_release_owner (the host stops sending deltas for views the
     // webview no longer caches), so 538/557.
-    const EXPECTED_TS_COMMAND_COUNT = 538;
-    const EXPECTED_RUST_COMMAND_COUNT = 557;
+    // +1 on both sides for getPlatformCaps/get_platform_caps (which optional features this
+    // OS supports), so 539/558.
+    // +5 on both sides for gifSettingsGet/gif_settings_get, gifSettingsSet/gif_settings_set,
+    // gifKeyStatus/gif_key_status, gifKeySave/gif_key_save and gifKeyRemove/gif_key_remove
+    // (Settings → Messaging's GIF search card), so 544/563.
+    const EXPECTED_TS_COMMAND_COUNT = 544;
+    const EXPECTED_RUST_COMMAND_COUNT = 563;
     // The Rust count runs ahead of the TS count by the RUST_ONLY_COMMANDS that have no
     // renderer IPC wrapper (the access revocation and two session watchers plus the WV-B5/C6
     // scope-layer and harvest-norm Tauri commands whose FE wrappers land in later WV stories):

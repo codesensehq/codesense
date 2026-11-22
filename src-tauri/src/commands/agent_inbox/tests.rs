@@ -56,6 +56,18 @@ pub(crate) struct FakeHost {
     threads: Mutex<HashMap<String, (String, Option<String>)>>,
     /// Every `pins_changed` call: `(team, thread)`.
     pin_events: Mutex<Vec<(String, crate::weft::pins::ThreadKey)>>,
+    /// The reply reminder's record, this fake's own.
+    owed: crate::commands::reply_owed::RepliesOwed,
+    /// The app's media state, for tests of the memory-only media path; none by default.
+    media: Mutex<Option<Arc<crate::media::MediaState>>>,
+    /// Senders whose sessions run on this machine.
+    own_media: Mutex<HashSet<String>>,
+    /// Every `media_sent` call, and whether its message was stored by then.
+    media_sent: Mutex<Vec<(StoredMedia, bool)>>,
+    /// Every `media_fetched` call: the message and the fetched attachment.
+    media_fetched: Mutex<Vec<(i64, crate::media::Attachment)>>,
+    /// The provider registration `media_sent` and `media_fetched` reach, as the app's do.
+    registration: Mutex<Option<Arc<crate::gif::register::Registration>>>,
 }
 
 impl FakeHost {
@@ -99,7 +111,27 @@ impl FakeHost {
             queued: Mutex::default(),
             threads: Mutex::default(),
             pin_events: Mutex::default(),
+            owed: Default::default(),
+            media: Mutex::default(),
+            own_media: Mutex::default(),
+            media_sent: Mutex::default(),
+            media_fetched: Mutex::default(),
+            registration: Mutex::default(),
         })
+    }
+
+    /// Serve media through a real media state over `fetch`, as the app does; returns it.
+    pub(crate) fn use_media(
+        &self,
+        fetch: Arc<crate::media::FakeFetch>,
+    ) -> Arc<crate::media::MediaState> {
+        let state = crate::media::MediaState::for_test(self.dir.path().join("media-cache"), fetch);
+        *self.media.lock().unwrap() = Some(state.clone());
+        state
+    }
+
+    fn media_state(&self) -> Option<Arc<crate::media::MediaState>> {
+        self.media.lock().unwrap().clone()
     }
 
     /// `handle` was launched from saved agent `agent` on `story`.
@@ -206,8 +238,89 @@ impl FakeHost {
 
 #[async_trait::async_trait]
 impl InboxHost for FakeHost {
-    fn cached_media(&self, sha: &str) -> Result<Vec<u8>, String> {
-        crate::media::read_cached(&self.dir.path().join("media-cache"), sha)
+    async fn cached_media(
+        &self,
+        team: &LaunchTeam,
+        attachment: &crate::media::Attachment,
+    ) -> Result<Vec<u8>, String> {
+        let Some(media) = self.media_state() else {
+            let sha = attachment.sha256.as_deref().unwrap_or_default();
+            return crate::media::read_cached(&self.dir.path().join("media-cache"), sha);
+        };
+        crate::media::index_new_teams(&media, self, std::slice::from_ref(team)).await;
+        media
+            .read(&self.media_config(team), attachment)
+            .await
+            .map(|b| b.to_vec())
+    }
+
+    fn present_media(&self, team: &LaunchTeam, attachments: &mut [crate::media::Attachment]) {
+        let config = self.media_config(team);
+        match self.media_state() {
+            Some(media) => media.present(&config, attachments),
+            None => config.apply(attachments),
+        }
+    }
+
+    async fn own_media_sender(&self, sender: &str) -> bool {
+        self.own_media.lock().unwrap().contains(sender)
+    }
+
+    fn media_sent(&self, media: &StoredMedia) {
+        let stored = self
+            .rows_in(&media.team.team)
+            .iter()
+            .any(|m| m.id == media.message_id);
+        self.media_sent
+            .lock()
+            .unwrap()
+            .push((media.clone(), stored));
+        if let Some(registration) = self.registration.lock().unwrap().clone() {
+            crate::gif::register::send_in_background(&registration, media);
+        }
+    }
+
+    fn media_fetched(
+        &self,
+        team: &LaunchTeam,
+        message_id: i64,
+        attachment: &crate::media::Attachment,
+    ) {
+        self.media_fetched
+            .lock()
+            .unwrap()
+            .push((message_id, attachment.clone()));
+        if let Some(registration) = self.registration.lock().unwrap().clone() {
+            crate::gif::register::fetched(&registration, team, message_id, MEDIA_SLOT, attachment);
+        }
+    }
+
+    async fn fetch_media(
+        &self,
+        team: &LaunchTeam,
+        attachment: crate::media::Attachment,
+        automatic: bool,
+    ) -> Result<crate::media::Attachment, String> {
+        let media = self.media_state().ok_or("media fetch unavailable")?;
+        media
+            .fetch(&self.media_config(team), attachment, automatic)
+            .await
+    }
+
+    async fn note_media(
+        &self,
+        team: &LaunchTeam,
+        message_id: i64,
+        attachments: &[crate::media::Attachment],
+    ) {
+        if let Some(media) = self.media_state() {
+            let owner = crate::media::index::Owner {
+                org: team.org.clone(),
+                team: team.team.clone(),
+                message_id,
+            };
+            media.note(&owner, inbox::now_ms(), attachments);
+        }
     }
 
     async fn caller_scope(&self, sender: &str) -> crate::context_repo::caller_scope::CallerScope {
@@ -235,35 +348,47 @@ impl InboxHost for FakeHost {
         if let Some(path) = &input.path {
             let cache = self.dir.path().join("media-cache");
             std::fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
+            let media = self.media_state().unwrap_or_else(|| {
+                crate::media::MediaState::for_test(
+                    cache,
+                    Arc::new(crate::media::FakeFetch::default()),
+                )
+            });
             let attachment = crate::media::prepare_local_for_scope_or_workspace(
                 scope,
                 std::path::Path::new(path),
                 workspace_root,
                 &input.alt,
-                &cache,
+                &media,
             )?;
             return Ok((attachment, false));
         }
-        Ok((
-            crate::media::Attachment::remote(
-                input.url.as_deref().unwrap(),
-                &input.alt,
-                &crate::media::Config::default(),
-                own,
-            )
-            .map_err(|e| e.reason.to_string())?,
-            false,
-        ))
+        let attachment = crate::media::Attachment::remote(
+            input.url.as_deref().unwrap(),
+            &input.alt,
+            &crate::media::Config::default(),
+            own,
+        )
+        .map_err(|e| e.reason.to_string())?;
+        // With a media state, an own-machine sender's allowed host is fetched at once.
+        let auto = self.media_state().is_some()
+            && crate::media::Config::default()
+                .should_auto_fetch(attachment.source_host.as_deref().unwrap_or(""), own);
+        Ok((crate::media::Attachment::claimed(attachment, input), auto))
     }
 
     async fn synced_teams(&self) -> Result<Vec<LaunchTeam>, String> {
-        Ok(self
+        let teams: Vec<_> = self
             .known_teams
             .lock()
             .unwrap()
             .iter()
             .map(|team| launch_team(team))
-            .collect())
+            .collect();
+        if let Some(media) = self.media_state() {
+            crate::media::index_new_teams(&media, self, &teams).await;
+        }
+        Ok(teams)
     }
 
     async fn admit_automatic_input(&self, _: &str) -> Result<(), String> {
@@ -378,6 +503,9 @@ impl InboxHost for FakeHost {
             .lock()
             .unwrap()
             .push((team.team.clone(), thread.clone()));
+    }
+    fn replies_owed(&self) -> &crate::commands::reply_owed::RepliesOwed {
+        &self.owed
     }
     async fn owning_story_for_path(&self, team: &LaunchTeam, logical_path: &str) -> Option<String> {
         self.story_owners
@@ -630,6 +758,107 @@ async fn read_messages_returns_oldest_first_then_empty() {
     assert!(read_messages(&*host, Some("S2")).await.unwrap().is_empty());
     // H1's message is still waiting for H1.
     assert_eq!(read_messages(&*host, Some("S1")).await.unwrap().len(), 1);
+}
+
+/// The person's message a session reads is owed an answer until the session replies to it or
+/// sends the person anything; mail from an agent never is.
+#[tokio::test]
+async fn reading_the_persons_mail_owes_it_until_an_answer() {
+    let fake = FakeHost::new();
+    let host = port(&fake);
+    send_message(
+        &host,
+        Some("S1"),
+        "H2",
+        "agent mail",
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    read_messages(&*host, Some("S2")).await.unwrap();
+    assert!(!fake.owed.owes("S2"), "mail from an agent is not owed");
+
+    let asked = sent_id(
+        send_message(
+            &host,
+            None,
+            "H2",
+            "a question",
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap(),
+    );
+    assert!(!fake.owed.owes("S2"), "unread mail is not owed yet");
+    read_messages(&*host, Some("S2")).await.unwrap();
+    assert!(fake.owed.owes("S2"));
+    assert!(!fake.owed.owes("S1"), "only the reader owes it");
+    reply(&host, Some("S2"), asked, "the answer", None)
+        .await
+        .unwrap();
+    assert!(!fake.owed.owes("S2"), "a reply answers it");
+
+    send_message(&host, None, "H2", "another", None, None, None, None, None)
+        .await
+        .unwrap();
+    read_messages(&*host, Some("S2")).await.unwrap();
+    assert!(fake.owed.owes("S2"));
+    send_message(
+        &host,
+        Some("S1"),
+        "H2",
+        "to an agent",
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(fake.owed.owes("S2"), "another session's mail answers nothing");
+    send_message(
+        &host,
+        Some("S2"),
+        "H1",
+        "to an agent",
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        fake.owed.owes("S2"),
+        "the reader's own mail to an agent answers nothing"
+    );
+    send_message(
+        &host,
+        Some("S2"),
+        HUMAN,
+        "done",
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        !fake.owed.owes("S2"),
+        "a send_message to the person answers it"
+    );
 }
 
 #[tokio::test]
@@ -2235,6 +2464,72 @@ async fn mail_waiting_when_an_agent_arms_is_announced_once() {
     assert_eq!(read_messages(&*host, Some("S2")).await.unwrap().len(), 2);
 }
 
+/// What the app's `role_message_queued` does with each role send: its holders are offered.
+async fn offer_queued(fake: &FakeHost) {
+    let queued = std::mem::take(&mut *fake.queued.lock().unwrap());
+    assert!(!queued.is_empty(), "the send reached role_message_queued");
+    for (team, role, _, _) in queued {
+        offer_queued_role(fake, &launch_team(&team), &role).await;
+    }
+}
+
+/// Role mail offers each live holder of the role its notice, as a direct message does,
+/// and the notice names the role to claim from; once the holder releases the role, role
+/// mail offers it nothing.
+#[tokio::test]
+async fn role_mail_to_a_role_held_by_a_live_session_offers_it_a_notice() {
+    use crate::weft::role_inbox::{register_role, release_role};
+    let fake = FakeHost::new();
+    let host = port(&fake);
+    let store = WeftStore::open(fake.team_store("default")).unwrap();
+    let reg = register_role(&store, "triage", "S2", chrono::Utc::now().timestamp()).unwrap();
+    let ask = |reply_to: &'static str| {
+        let host = host.clone();
+        async move {
+            sent_id(
+                send_message(
+                    &host,
+                    None,
+                    "H1",
+                    "status?",
+                    None,
+                    None,
+                    None,
+                    Some(reply_to),
+                    None,
+                )
+                .await
+                .unwrap(),
+            )
+        }
+    };
+    let asked = ask("role:triage").await;
+    fake.stored_for.lock().unwrap().clear();
+    sent_id(
+        reply(&host, Some("S1"), asked, "green", None)
+            .await
+            .unwrap(),
+    );
+    offer_queued(&fake).await;
+    assert_eq!(*fake.stored_for.lock().unwrap(), vec!["H2".to_string()]);
+    let notice = hook_notice(&*host, "S2").await.expect("the holder is told");
+    assert!(
+        notice.contains(
+            "1 pending message for role triage. Call claim_role_messages with role triage."
+        ),
+        "{notice}"
+    );
+    assert_eq!(hook_notice(&*host, "S2").await, None, "told once");
+
+    release_role(&store, "triage", "S2", reg.generation).unwrap();
+    let asked = ask("role:triage").await;
+    fake.stored_for.lock().unwrap().clear();
+    sent_id(reply(&host, Some("S1"), asked, "red", None).await.unwrap());
+    offer_queued(&fake).await;
+    assert_eq!(*fake.stored_for.lock().unwrap(), Vec::<String>::new());
+    assert_eq!(hook_notice(&*host, "S2").await, None);
+}
+
 #[tokio::test]
 async fn mail_stored_for_a_session_is_offered_on_but_mail_to_the_human_is_not() {
     let host = FakeHost::new();
@@ -2349,7 +2644,8 @@ async fn unread_by_handle_counts_each_sessions_own_mail_in_its_team_and_marks_no
             None,
         )
         .await
-        .unwrap(),
+        .unwrap()
+        .0,
     );
 
     let handles = ["H1", "H2", "H3"].map(String::from);
@@ -5070,6 +5366,8 @@ async fn media_only_send_and_reply_reach_both_page_read_models_and_retry_receipt
         url: Some("https://i.giphy.com/cat.gif".into()),
         path: None,
         alt: "Typing cat".into(),
+        provider: None,
+        provider_id: None,
     };
     let sent = send_message_request(
         &host,
@@ -5295,6 +5593,8 @@ async fn local_media_send_uses_sender_scope_when_ui_team_is_parent() {
         url: None,
         path: Some(path.to_string_lossy().into_owned()),
         alt: "Local meme".into(),
+        provider: None,
+        provider_id: None,
     };
 
     let parent = send_message_request(
@@ -5443,6 +5743,8 @@ async fn review_reply_after_local_source_removed(role: bool) {
         url: None,
         path: Some(image.path().to_string_lossy().into_owned()),
         alt: "Local meme".into(),
+        provider: None,
+        provider_id: None,
     };
     let answer = || {
         reply_request(
@@ -5898,6 +6200,11 @@ fn gif_attachment(state: &str) -> crate::media::Attachment {
         state: state.into(),
         reason: None,
         retryable: false,
+        media_provider: None,
+        own_sender: false,
+        provider: None,
+        provider_id: None,
+        onload_sent: false,
     }
 }
 
@@ -6131,6 +6438,462 @@ fn event_and_source_shapes_name_their_teams() {
     };
     // `set_human_status` takes a real app handle, so its shape is pinned in the source.
     assert!(source("src/commands/agent_inbox.rs").contains("host.inbox_changed(&[]);"));
-    assert!(source("src/routines/wake_app.rs")
-        .contains("emit_inbox_changed(&app,&[(team,vec![id])])"));
+    assert!(
+        source("src/routines/wake_app.rs").contains("emit_inbox_changed(&app,&[(team,vec![id])])")
+    );
+}
+
+// Provider media is held in memory only.
+
+fn provider_media(url: &str) -> crate::media::MediaInput {
+    crate::media::MediaInput {
+        url: Some(url.into()),
+        path: None,
+        alt: "Typing cat".into(),
+        provider: None,
+        provider_id: None,
+    }
+}
+
+async fn send_media(host: &Arc<dyn InboxHost>, media: &crate::media::MediaInput) -> i64 {
+    sent_id(
+        send_message_request(
+            host,
+            Some("S1"),
+            "H2",
+            "",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(media),
+        )
+        .await
+        .unwrap(),
+    )
+}
+
+/// The stored attachment of message `id`, once the background fetch has stored it.
+async fn settled(fake: &FakeHost, id: i64) -> crate::media::Attachment {
+    for _ in 0..200 {
+        let row = fake.rows().into_iter().find(|m| m.id == id).unwrap();
+        if row.attachments[0].state != "pending" {
+            return row.attachments[0].clone();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("the media fetch never finished");
+}
+
+fn cache_files(fake: &FakeHost) -> usize {
+    std::fs::read_dir(fake.dir.path().join("media-cache"))
+        .map(|d| d.count())
+        .unwrap_or(0)
+}
+
+#[tokio::test]
+async fn a_provider_gif_sent_from_this_machine_is_served_from_memory_and_never_on_disk() {
+    let fake = FakeHost::new();
+    let fetch = Arc::new(crate::media::FakeFetch::default());
+    let url = "https://i.giphy.com/cat.gif";
+    fetch.serve(url, GIF, url, Some("max-age=600"));
+    let media = fake.use_media(fetch.clone());
+    fake.own_media
+        .lock()
+        .unwrap()
+        .extend(["H1".to_string(), "S1".to_string()]);
+    let host = port(&fake);
+    let id = send_media(&host, &provider_media(url)).await;
+    let stored = settled(&fake, id).await;
+    assert_eq!(stored.state, "cached");
+    assert!(
+        stored.own_sender,
+        "the own-machine admission is saved at send"
+    );
+    assert_eq!(
+        stored.media_provider,
+        Some(crate::media::MediaProvider::Giphy)
+    );
+    assert_eq!(cache_files(&fake), 0, "nothing under the cache dir");
+    assert!(media.is_memory_only(&gif_sha(), None), "indexed on fetch");
+    let read = read_media(&host, launch_team("default"), id, gif_sha())
+        .await
+        .unwrap();
+    assert_eq!(read.bytes, GIF);
+    assert_eq!(fetch.calls().len(), 1, "served from memory");
+
+    // A restart: memory and index cleared, the sender's tab gone. A synced team is indexed
+    // on its first sighting, and `read_media` fetches the sha again from the saved URL.
+    let media = fake.use_media(fetch.clone());
+    fake.own_media.lock().unwrap().clear();
+    host.synced_teams().await.unwrap();
+    assert!(media.is_memory_only(&gif_sha(), None));
+    let mut listed = fake
+        .rows()
+        .into_iter()
+        .find(|m| m.id == id)
+        .unwrap()
+        .attachments;
+    host.present_media(&launch_team("default"), &mut listed);
+    assert_eq!(
+        listed[0].state, "cached",
+        "an own-machine provider GIF stays cached"
+    );
+    let read = read_media(&host, launch_team("default"), id, gif_sha())
+        .await
+        .unwrap();
+    assert_eq!(read.bytes, GIF);
+    assert_eq!(fetch.calls().len(), 2);
+    assert_eq!(cache_files(&fake), 0);
+}
+
+#[tokio::test]
+async fn tap_to_load_of_a_remote_senders_gif_holds_it_in_memory_and_indexes_it() {
+    let fake = FakeHost::new();
+    let fetch = Arc::new(crate::media::FakeFetch::default());
+    let url = "https://media.giphy.com/theirs.gif";
+    fetch.serve(url, GIF, url, Some("no-store"));
+    let media = fake.use_media(fetch.clone());
+    let host = port(&fake);
+    let id = send_media(&host, &provider_media(url)).await;
+    let pending = fake
+        .rows()
+        .into_iter()
+        .find(|m| m.id == id)
+        .unwrap()
+        .attachments;
+    assert_eq!(
+        pending[0].state, "pending",
+        "a remote sender's GIF waits for a tap"
+    );
+    assert!(!pending[0].own_sender);
+    assert!(fetch.calls().is_empty());
+    // `loadMedia` and the app's tap go through `finish_media_fetch`.
+    let location = team_inbox(&*host, launch_team("default")).await.unwrap();
+    finish_media_fetch(&host, location, id, pending[0].clone(), false)
+        .await
+        .unwrap();
+    assert_eq!(settled(&fake, id).await.state, "cached");
+    assert_eq!(cache_files(&fake), 0);
+    assert!(
+        media.is_memory_only(&gif_sha(), None),
+        "in the index, so served no-store"
+    );
+}
+
+#[tokio::test]
+async fn a_team_attached_after_startup_is_indexed_on_its_first_sighting() {
+    let fake = FakeHost::new();
+    let media = fake.use_media(Arc::new(crate::media::FakeFetch::default()));
+    let host = port(&fake);
+    host.synced_teams().await.unwrap();
+    assert!(!media.index.is_team_indexed(ORG, "late"));
+    fake.known_teams.lock().unwrap().insert("late".into());
+    let mut a = gif_attachment("cached");
+    a.source_url = Some("https://i.giphy.com/late.gif".into());
+    a.source_host = Some("i.giphy.com".into());
+    a.media_provider = Some(crate::media::MediaProvider::Giphy);
+    media_message(&fake, "late", a);
+    assert!(!media.is_memory_only(&gif_sha(), None));
+    host.synced_teams().await.unwrap();
+    assert!(media.index.is_team_indexed(ORG, "late"));
+    assert!(media.is_memory_only(&gif_sha(), None));
+    assert!(
+        !fake.dir.path().join("media-cache").join(gif_sha()).exists(),
+        "its provider copy leaves the disk when it is indexed"
+    );
+}
+
+// Provider sends register once per send call.
+
+const TAGGED_URL: &str = "https://media.giphy.com/media/g1/giphy.gif";
+
+fn tagged_media() -> crate::media::MediaInput {
+    crate::media::MediaInput {
+        provider: Some(crate::media::MediaProvider::Giphy),
+        provider_id: Some("g1".into()),
+        ..provider_media(TAGGED_URL)
+    }
+}
+
+async fn send_tagged(host: &Arc<dyn InboxHost>, request_id: Option<&str>) -> SendResult {
+    send_message_request(
+        host,
+        Some("S1"),
+        "H2",
+        "",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        request_id,
+        Some(&tagged_media()),
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_send_call_registers_once_after_the_store_and_a_replay_never() {
+    let fake = FakeHost::new();
+    let host = port(&fake);
+    let id = sent_id(send_tagged(&host, Some("gif-1")).await);
+    {
+        let sent = fake.media_sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        let (media, stored_first) = &sent[0];
+        assert!(stored_first, "registration runs after the store");
+        assert_eq!(media.message_id, id);
+        assert_eq!(media.team, launch_team("default"));
+        assert_eq!(
+            media.attachment.provider,
+            Some(crate::media::MediaProvider::Giphy)
+        );
+        assert_eq!(media.attachment.provider_id.as_deref(), Some("g1"));
+    }
+    // A replay of the request id stores nothing and registers nothing.
+    assert_eq!(sent_id(send_tagged(&host, Some("gif-1")).await), id);
+    assert_eq!(fake.media_sent.lock().unwrap().len(), 1);
+    // A retry with no request id is a new send.
+    let again = sent_id(send_tagged(&host, None).await);
+    assert_ne!(again, id);
+    assert_eq!(fake.media_sent.lock().unwrap().len(), 2);
+    // A reply with the GIF registers once too, and its replay not at all.
+    let reply = |request: &'static str| {
+        let host = host.clone();
+        async move {
+            reply_request(
+                &host,
+                Some("S2"),
+                id,
+                "",
+                None,
+                None,
+                None,
+                Some(request),
+                Some(&tagged_media()),
+            )
+            .await
+            .unwrap()
+        }
+    };
+    let answered = sent_id(reply("gif-reply").await);
+    assert_eq!(sent_id(reply("gif-reply").await), answered);
+    assert_eq!(fake.media_sent.lock().unwrap().len(), 3);
+    // Text alone registers nothing.
+    send_message_request(
+        &host,
+        Some("S1"),
+        "H2",
+        "hi",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(fake.media_sent.lock().unwrap().len(), 3);
+    // A pairing the claim check refuses is not sent at all.
+    let wrong = crate::media::MediaInput {
+        provider: Some(crate::media::MediaProvider::Klipy),
+        ..tagged_media()
+    };
+    let refused = send_message_request(
+        &host,
+        Some("S1"),
+        "H2",
+        "",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(&wrong),
+    )
+    .await
+    .unwrap();
+    assert!(is_invalid(&refused), "{refused:?}");
+    assert_eq!(fake.media_sent.lock().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn a_slow_registration_never_delays_the_send() {
+    let fake = FakeHost::new();
+    let gif = crate::gif::register::tests::Harness::new();
+    gif.found_all("g1");
+    *gif.wire.ping_delay.lock().unwrap() = Some(std::time::Duration::from_secs(5));
+    *fake.registration.lock().unwrap() = Some(gif.registration.clone());
+    fake.own_media.lock().unwrap().insert("H1".to_string());
+    let host = port(&fake);
+    let started = std::time::Instant::now();
+    sent_id(send_tagged(&host, None).await);
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    assert_eq!(fake.media_sent.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_finished_fetch_tells_the_host_and_every_read_is_a_serve() {
+    let fake = FakeHost::new();
+    let fetch = Arc::new(crate::media::FakeFetch::default());
+    fetch.serve(TAGGED_URL, GIF, TAGGED_URL, None);
+    let media = fake.use_media(fetch);
+    fake.own_media.lock().unwrap().insert("H1".to_string());
+    let served = Arc::new(Mutex::new(Vec::<String>::new()));
+    let seen = served.clone();
+    media.when_served(Arc::new(move |sha: &str| {
+        seen.lock().unwrap().push(sha.to_string())
+    }));
+    let host = port(&fake);
+    let id = sent_id(send_tagged(&host, None).await);
+    let stored = settled(&fake, id).await;
+    assert_eq!(stored.provider, Some(crate::media::MediaProvider::Giphy));
+    {
+        let fetched = fake.media_fetched.lock().unwrap();
+        assert_eq!(fetched.len(), 1);
+        assert_eq!(fetched[0].0, id);
+        assert_eq!(fetched[0].1.sha256.as_deref(), Some(gif_sha().as_str()));
+    }
+    read_media(&host, launch_team("default"), id, gif_sha())
+        .await
+        .unwrap();
+    assert_eq!(*served.lock().unwrap(), vec![gif_sha()]);
+}
+
+#[tokio::test]
+async fn a_settled_view_ping_is_marked_on_the_message_and_in_the_index() {
+    let fake = FakeHost::new();
+    let fetch = Arc::new(crate::media::FakeFetch::default());
+    fetch.serve(TAGGED_URL, GIF, TAGGED_URL, None);
+    let media = fake.use_media(fetch);
+    fake.own_media.lock().unwrap().insert("H1".to_string());
+    let host = port(&fake);
+    let id = sent_id(send_tagged(&host, None).await);
+    assert!(!settled(&fake, id).await.onload_sent);
+    let claimed = media.index.claim_onloads(&gif_sha());
+    assert_eq!(claimed.len(), 1);
+    mark_onloads_sent(&host, claimed).await;
+    let row = fake.rows().into_iter().find(|m| m.id == id).unwrap();
+    assert!(row.attachments[0].onload_sent);
+    // The index holds the mark too, so a later serve (or a restart) claims nothing.
+    assert!(media.index.claim_onloads(&gif_sha()).is_empty());
+    let mut restarted = row.attachments.clone();
+    restarted[0].onload_sent = true;
+    host.note_media(&launch_team("default"), id, &restarted)
+        .await;
+    assert!(media.index.claim_onloads(&gif_sha()).is_empty());
+}
+
+/// Wait until `check` holds, for at most 2 s.
+async fn eventually(check: impl Fn() -> bool) {
+    for _ in 0..200 {
+        if check() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("never happened");
+}
+
+#[tokio::test]
+async fn a_sent_gif_registers_and_its_first_view_pings_and_marks_through_the_real_wiring() {
+    let fake = FakeHost::new();
+    let gif = crate::gif::register::tests::Harness::new();
+    gif.found_all("g1");
+    *fake.registration.lock().unwrap() = Some(gif.registration.clone());
+    let fetch = Arc::new(crate::media::FakeFetch::default());
+    fetch.serve(TAGGED_URL, GIF, TAGGED_URL, None);
+    let media = fake.use_media(fetch);
+    fake.own_media.lock().unwrap().insert("H1".to_string());
+    let host = port(&fake);
+    let (registration, persist) = (gif.registration.clone(), host.clone());
+    media.when_served(crate::gif::register::serve_hook(
+        move || Some(registration.clone()),
+        Arc::downgrade(&media),
+        move || persist.clone(),
+    ));
+    let id = sent_id(send_tagged(&host, None).await);
+    settled(&fake, id).await;
+    // The fetch has told registration its sha and the index its reference.
+    eventually(|| {
+        fake.media_fetched.lock().unwrap().len() == 1
+            && media
+                .index
+                .references(&gif_sha())
+                .iter()
+                .any(|r| r.provider.is_some())
+    })
+    .await;
+    eventually(|| gif.wire.actions() == ["SENT"]).await;
+    read_media(&host, launch_team("default"), id, gif_sha())
+        .await
+        .unwrap();
+    eventually(|| gif.wire.actions() == ["SENT", "SEEN"]).await;
+    eventually(|| {
+        fake.rows()
+            .into_iter()
+            .any(|m| m.id == id && m.attachments[0].onload_sent)
+    })
+    .await;
+    // Later views, by any reader, never ping again.
+    read_media(&host, launch_team("default"), id, gif_sha())
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert_eq!(gif.wire.actions(), ["SENT", "SEEN"]);
+}
+
+#[tokio::test]
+async fn a_reply_queued_for_a_role_registers_once_and_its_replay_never() {
+    let fake = FakeHost::new();
+    let host = port(&fake);
+    let asked = sent_id(
+        send_message_request(
+            &host,
+            Some("S1"),
+            "H2",
+            "who can take this?",
+            None,
+            None,
+            None,
+            Some("role:manager"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap(),
+    );
+    let media = tagged_media();
+    let reply = || {
+        reply_request(
+            &host,
+            Some("S2"),
+            asked,
+            "",
+            None,
+            None,
+            None,
+            Some("role-gif"),
+            Some(&media),
+        )
+    };
+    let first = sent_id(reply().await.unwrap());
+    assert_eq!(sent_id(reply().await.unwrap()), first);
+    let sent = fake.media_sent.lock().unwrap();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].0.message_id, first);
+    assert_eq!(fake.queued.lock().unwrap().len(), 1, "queued for the role");
 }

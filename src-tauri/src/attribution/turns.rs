@@ -100,7 +100,8 @@ where
             } else {
                 if !coverage.contains_key(&commit) {
                     let covered = if let Some(repo) = &context {
-                        super::checkpoints::covered(
+                        super::facade::covered(
+                            &crate::platform_caps::Caps::live(),
                             Path::new(repo.local_path.as_deref().unwrap()),
                             &repo.remote_key,
                             &commit,
@@ -188,6 +189,21 @@ fn committer_ms(repo: &Path, commit: &str) -> Option<i64> {
     let found = Result::ok(repository.find_commit(oid))?;
     let seconds = found.committer().when().seconds();
     Some(seconds * 1000 + 999)
+}
+/// [`committer_ms`] of each of `commits` that `repo` has, opening it once.
+pub(super) fn committer_times<'a>(repo: &Path, commits: impl IntoIterator<Item = &'a str>) -> HashMap<String, i64> {
+    let Ok(repository) = git2::Repository::open(repo) else {
+        return HashMap::new();
+    };
+    commits
+        .into_iter()
+        .filter_map(|commit| {
+            let oid = Result::ok(git2::Oid::from_str(commit))?;
+            let found = Result::ok(repository.find_commit(oid))?;
+            let at = found.committer().when().seconds() * 1000 + 999;
+            Some((commit.to_owned(), at))
+        })
+        .collect()
 }
 /// The turn `commit` was made in, for a line whose edit turn is unknown: the last indexed
 /// shell-type call of the linked session at or before the committer time, and only when that time
@@ -948,6 +964,7 @@ pub(crate) mod tests {
         assert!(answer["ranges"][1]["turn"]["turn"].is_number());
         assert!(answer["ranges"][1]["turn"].get("reason").is_none());
     }
+    #[cfg(cap_git_ai)]
     #[test]
     fn many_traces_for_one_tool_use_one_real_index_lookup() {
         let home = tempfile::tempdir().unwrap();
@@ -1003,6 +1020,7 @@ pub(crate) mod tests {
         assert_eq!(calls, 1);
         assert_eq!(value["ranges"][0]["turn"], value["ranges"][1]["turn"]);
     }
+    #[cfg(cap_git_ai)]
     #[tokio::test]
     async fn scoped_queries_read_zero_unchanged_bytes_and_resume_partial_appends() {
         async fn observed(home: &Path) -> crate::attribution::checkpoints::Stats {

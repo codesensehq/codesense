@@ -15,18 +15,20 @@ import {
   PositionedMenuItem,
 } from "@/shared/components/positioned-context-menu";
 import { canExportToPdf, exportViewerToPdf } from "../lib/export-pdf";
+import { ExportPdfMenuItem } from "./export-pdf-menu-item";
 import { StarterPageMenuItems } from "./starter-page-menu-items";
 import { useSummaryHeadings } from "@/shared/hooks/use-summary-headings";
 import { isPipelineFileName } from "@/shared/lib/pipeline-graph/pipeline-file-filter";
 import { formatStoryDisplayTitle } from "@/shared/lib/pipeline-graph/story-display-title";
 import { useStoryDetails } from "@/shared/lib/pipeline-graph/use-story-details";
+import { basename } from "@/shared/lib/path";
 
 /**
  * A tab's label: a story file with a frontmatter `title:` reads "<id> — <title>" like its
  * card, nav row and HUD tile; anything else keeps its file name.
  */
 function TabTitle({ path, name }: { path: string; name: string }) {
-  const fileName = path.split("/").pop() ?? name;
+  const fileName = basename(path) || name;
   const isStory = isPipelineFileName(fileName);
   const headings = useSummaryHeadings();
   const { data } = useStoryDetails(isStory ? path : undefined, headings);
@@ -278,7 +280,7 @@ export function ViewerTabs({ repoPath }: ViewerTabsProps) {
           {canExportToPdf(tabContextMenu.path) && (
             <>
               <div role="separator" className="my-1 h-px bg-border" />
-              <PositionedMenuItem
+              <ExportPdfMenuItem
                 className="flex items-center justify-between"
                 onClick={() => {
                   // Match `repo-viewer-view.tsx` handleExportPdf guard:
@@ -296,7 +298,7 @@ export function ViewerTabs({ repoPath }: ViewerTabsProps) {
               >
                 <span>Export to PDF</span>
                 <span className="ml-4 text-xs text-muted-foreground">{exportHint}</span>
-              </PositionedMenuItem>
+              </ExportPdfMenuItem>
             </>
           )}
         </PositionedContextMenu>

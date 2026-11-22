@@ -30,6 +30,8 @@ use log::warn;
 use serde_json::{json, Value};
 
 pub(crate) mod inventory;
+#[cfg(test)]
+mod launch_exec_tests;
 
 const CREDENTIAL_JOURNAL: &str = ".credential-copyback.json";
 
@@ -622,21 +624,108 @@ pub struct ScopedExecution {
     pub native_launch: codesense_pty_core::agent_cli::AgentCli,
 }
 
+/// Whether a launch of `runtime` on `os` (`std::env::consts::OS`) runs the agent as the
+/// root of its PTY from an argv rather than as a line typed into a shell. A CLI that must
+/// own its PTY always does; on Windows every agent does, since no POSIX shell types it.
+pub(crate) fn launches_direct(runtime: AgentCli, os: &str) -> bool {
+    codesense_pty_core::agent_cli::adapter(runtime).end_on_engine_loss() || os == "windows"
+}
+
 /// The exec of `program` with `args` for a CLI that must own its PTY directly, entered as
 /// an interactive launch is (the same normalization the other managed entries plan).
 pub(crate) fn scoped_execution(
-    runtime: codesense_pty_core::agent_cli::AgentCli,
+    runtime: AgentCli,
     program: &Path,
     args: Vec<String>,
 ) -> Option<ScopedExecution> {
-    codesense_pty_core::agent_cli::adapter(runtime)
-        .end_on_engine_loss()
-        .then(|| ScopedExecution {
-            argv: std::iter::once(program.to_string_lossy().into_owned())
-                .chain(super::mcp_workspace::interactive_arguments(runtime, args))
-                .collect(),
-            native_launch: runtime,
-        })
+    scoped_execution_on(runtime, program, args, std::env::consts::OS)
+}
+
+/// [`scoped_execution`] on `os`.
+pub(crate) fn scoped_execution_on(
+    runtime: AgentCli,
+    program: &Path,
+    args: Vec<String>,
+    os: &str,
+) -> Option<ScopedExecution> {
+    launches_direct(runtime, os).then(|| ScopedExecution {
+        argv: std::iter::once(program.to_string_lossy().into_owned())
+            .chain(super::mcp_workspace::interactive_arguments(runtime, args))
+            .collect(),
+        native_launch: runtime,
+    })
+}
+
+/// The flag the launcher's typed default line runs the agent permissively with
+/// (`PERMISSIVE_LAUNCH_FLAG` in `agent-session-launcher.ts`). Only the runtime whose own
+/// bypass flag it is gets it on a default-args exec, so an exec is never more permissive
+/// than the line it replaces.
+const PERMISSIVE_LAUNCH_FLAG: &str = "--dangerously-skip-permissions";
+
+/// The refusal of a Windows agent launch whose CLI did not resolve: with no program to
+/// exec there is no launch, since no shell may type one.
+pub(crate) const AGENT_CLI_NOT_FOUND: &str = "agent CLI not found";
+
+/// `args` without the overrides in `remove`, matched whole and in order (a `-c` or
+/// `--config` entry with its value), the rule a typed relaunch applies: a shared flag
+/// token alone never removes an unrelated override.
+pub(crate) fn without_removed_args(args: &[String], remove: &[String]) -> Vec<String> {
+    let mut kept = Vec::with_capacity(args.len());
+    let (mut at, mut removed) = (0, 0);
+    while at < args.len() {
+        let width = match remove.get(removed).map(String::as_str) {
+            Some("-c" | "--config") => 2,
+            _ => 1,
+        };
+        let entry = remove.get(removed..removed + width);
+        if entry.is_some_and(|entry| args.get(at..at + width) == Some(entry)) {
+            removed += width;
+            at += width;
+        } else {
+            kept.push(args[at].clone());
+            at += 1;
+        }
+    }
+    kept
+}
+
+/// Give `outcome` the exec of `program` when a launch of `runtime` on `os` runs direct and
+/// no projection set one. The argv is `program`, the launch args (led by the permissive
+/// flag for a default-args launch of the runtime it belongs to, and without the
+/// projection's `remove_args`), then the scope's `extra_args`. On Windows a launch with no
+/// resolved `program` is refused; elsewhere it projects with no exec, as a shell launch.
+pub(crate) fn finish_launch_execution(
+    outcome: &mut ScopeOutcome,
+    runtime: AgentCli,
+    program: Option<&Path>,
+    launch_args: &[String],
+    default_args: bool,
+    os: &str,
+) -> Result<(), String> {
+    if outcome.execution.is_some() || !launches_direct(runtime, os) {
+        return Ok(());
+    }
+    let Some(program) = program else {
+        return match os {
+            "windows" => Err(AGENT_CLI_NOT_FOUND.into()),
+            _ => Ok(()),
+        };
+    };
+    let mut args = Vec::new();
+    if default_args && descriptor(runtime).bypass_flag == PERMISSIVE_LAUNCH_FLAG {
+        args.push(PERMISSIVE_LAUNCH_FLAG.to_string());
+    }
+    args.extend(without_removed_args(
+        launch_args,
+        outcome.remove_args.as_deref().unwrap_or_default(),
+    ));
+    outcome.execution = scoped_execution_on(
+        runtime,
+        program,
+        compose_args(args, outcome.extra_args.clone()),
+        os,
+    );
+    Ok(())
 }
 
 /// SW-AN-45: what a scoped launch contributes to the child — extra argv (a `config_flag`
@@ -1166,7 +1255,12 @@ pub(crate) fn profile_launch_settings(cwd: &Path, headless: bool, runtime: Agent
             settings = rules(&settings);
         }
     }
-    crate::commands::content_engine::merge_launch_notify_hooks(&mut settings, cwd, runtime);
+    crate::commands::content_engine::merge_launch_notify_hooks(
+        &mut settings,
+        cwd,
+        runtime,
+        codesense_host_proto::hook::HookTarget::local(),
+    );
     settings
 }
 
@@ -2980,7 +3074,7 @@ mod tests {
             .filter(|hook| {
                 hook["command"]
                     .as_str()
-                    .is_some_and(|c| c.contains("codesense-notify"))
+                    .is_some_and(|c| c.contains("hook notify"))
             })
             .count()
     }
@@ -4379,39 +4473,44 @@ mod tests {
             "{bridge_entry}"
         );
     }
-    fn managed_gateway_capture_in_orders(orders: &[&str]) {
-        use std::io::BufRead;
-        use std::os::unix::{fs::symlink, process::CommandExt};
-        use std::process::{Command, Stdio};
-        struct Reap(std::process::Child);
-        impl Drop for Reap {
-            fn drop(&mut self) {
-                let _ = self.0.kill();
-                let _ = self.0.wait();
+    // macOS and Linux, where the home's gateway is verified and stopped.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    mod managed_gateway {
+        use super::*;
+
+        fn managed_gateway_capture_in_orders(orders: &[&str]) {
+            use std::io::BufRead;
+            use std::os::unix::{fs::symlink, process::CommandExt};
+            use std::process::{Command, Stdio};
+            struct Reap(std::process::Child);
+            impl Drop for Reap {
+                fn drop(&mut self) {
+                    let _ = self.0.kill();
+                    let _ = self.0.wait();
+                }
             }
-        }
-        let _home = crate::routines::test_support::TempHome::new();
-        for &order in orders {
-            let session = format!("managed-stop-{order}-{}", uuid::Uuid::new_v4());
-            let scope = descriptor(AgentCli::Hermes).mcp_scope.as_ref().unwrap();
-            let (config, creation) =
-                write_scope_config_with_creation(&session, &canonical(), &[], scope).unwrap();
-            let home = config.parent().unwrap();
-            let runtime = _home.root().join(format!("runtime-{order}"));
-            std::fs::create_dir_all(&runtime).unwrap();
-            symlink(
-                &runtime,
-                home.join(codesense_pty_core::agent_cli::version_cache::RUNTIME_LINK),
-            )
-            .unwrap();
-            let checkpoint = runtime.join("checkpoint");
-            std::fs::create_dir_all(home.join("sessions")).unwrap();
-            // Reuse the existing final-capture fixture; Hermes DB parsing is SV-ENG-109.
-            let record = codex_cleanup_source(&session, home);
-            if order != "exit-first" {
-                persist_cleanup_record(&record);
-            }
-            let code = r#"import fcntl,json,os,pathlib,signal,sys,time
+            let _home = crate::routines::test_support::TempHome::new();
+            for &order in orders {
+                let session = format!("managed-stop-{order}-{}", uuid::Uuid::new_v4());
+                let scope = descriptor(AgentCli::Hermes).mcp_scope.as_ref().unwrap();
+                let (config, creation) =
+                    write_scope_config_with_creation(&session, &canonical(), &[], scope).unwrap();
+                let home = config.parent().unwrap();
+                let runtime = _home.root().join(format!("runtime-{order}"));
+                std::fs::create_dir_all(&runtime).unwrap();
+                symlink(
+                    &runtime,
+                    home.join(codesense_pty_core::agent_cli::version_cache::RUNTIME_LINK),
+                )
+                .unwrap();
+                let checkpoint = runtime.join("checkpoint");
+                std::fs::create_dir_all(home.join("sessions")).unwrap();
+                // Reuse the existing final-capture fixture; Hermes DB parsing is tracked separately.
+                let record = codex_cleanup_source(&session, home);
+                if order != "exit-first" {
+                    persist_cleanup_record(&record);
+                }
+                let code = r#"import fcntl,json,os,pathlib,signal,sys,time
 h=pathlib.Path(sys.argv[1]); checkpoint=pathlib.Path(sys.argv[2])
 f=open(h/'gateway.lock','w+'); json.dump({'pid':os.getpid()},f); f.flush(); fcntl.flock(f,fcntl.LOCK_EX)
 (h/'gateway.pid').write_text(json.dumps({'pid':os.getpid()}))
@@ -4424,80 +4523,81 @@ signal.signal(signal.SIGTERM,stop)
 print('ready',flush=True)
 while True: time.sleep(.05)
 "#;
-            let child = Command::new("python3")
-                .args(["-c", code])
-                .arg(home)
-                .arg(&checkpoint)
-                .args(["hermes_cli.main", "gateway", "run"])
-                .process_group(0)
-                .stdout(Stdio::piped())
-                .spawn()
-                .unwrap();
-            let mut gateway = Reap(child);
-            let mut ready = String::new();
-            std::io::BufReader::new(gateway.0.stdout.take().unwrap())
-                .read_line(&mut ready)
-                .unwrap();
-            assert_eq!(ready.trim(), "ready");
-            let owner = exact_cleanup_claim(&session);
-            if order == "record-first" {
-                bind_scope_creation(&creation, &owner).unwrap();
-            }
-            match order {
-                "record-first" => assert_eq!(settle_owned_scope(&owner), Ok(true)),
-                "exit-first" => {
-                    remove_scope_config(&session);
-                    assert!(
-                        home.exists(),
-                        "late session record retains the capture source"
-                    );
-                    assert!(
-                        checkpoint.exists(),
-                        "gateway is already stopped while waiting for the record"
-                    );
-                    persist_cleanup_record(&record);
-                    remove_scope_config(&session);
+                let child = Command::new("python3")
+                    .args(["-c", code])
+                    .arg(home)
+                    .arg(&checkpoint)
+                    .args(["hermes_cli.main", "gateway", "run"])
+                    .process_group(0)
+                    .stdout(Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                let mut gateway = Reap(child);
+                let mut ready = String::new();
+                std::io::BufReader::new(gateway.0.stdout.take().unwrap())
+                    .read_line(&mut ready)
+                    .unwrap();
+                assert_eq!(ready.trim(), "ready");
+                let owner = exact_cleanup_claim(&session);
+                if order == "record-first" {
+                    bind_scope_creation(&creation, &owner).unwrap();
                 }
-                _ => {
-                    drop(
-                        crate::session_usage::UsageStore::open(
-                            &crate::session_usage::store_path().unwrap(),
-                        )
-                        .unwrap(),
-                    );
-                    sweep_configs_in(
-                        &scope_root().unwrap(),
-                        SystemTime::now() + STALE_AGE + Duration::from_secs(60),
-                        STALE_AGE,
-                        |_| Some(Default::default()),
-                    );
+                match order {
+                    "record-first" => assert_eq!(settle_owned_scope(&owner), Ok(true)),
+                    "exit-first" => {
+                        remove_scope_config(&session);
+                        assert!(
+                            home.exists(),
+                            "late session record retains the capture source"
+                        );
+                        assert!(
+                            checkpoint.exists(),
+                            "gateway is already stopped while waiting for the record"
+                        );
+                        persist_cleanup_record(&record);
+                        remove_scope_config(&session);
+                    }
+                    _ => {
+                        drop(
+                            crate::session_usage::UsageStore::open(
+                                &crate::session_usage::store_path().unwrap(),
+                            )
+                            .unwrap(),
+                        );
+                        sweep_configs_in(
+                            &scope_root().unwrap(),
+                            SystemTime::now() + STALE_AGE + Duration::from_secs(60),
+                            STALE_AGE,
+                            |_| Some(Default::default()),
+                        );
+                    }
                 }
+                assert!(
+                    checkpoint.exists(),
+                    "{order}: stop runs before home removal"
+                );
+                assert!(gateway.0.wait().unwrap().success());
+                assert!(!home.exists(), "{order}: capture finishes before removal");
+                assert_cleanup_conversation(&session);
+                let stored = crate::session_conversation::read_stored(
+                    &crate::session_conversation::conversations_dir().unwrap(),
+                    &session,
+                )
+                .unwrap();
+                assert!(stored.transcript.turns.iter().any(|turn| turn.role == "assistant"
+                    && turn.text.as_deref() == Some("gateway final checkpoint written by TERM")),
+                    "{order}: capture must retain the record appended during TERM, not merely pre-existing turns");
             }
-            assert!(
-                checkpoint.exists(),
-                "{order}: stop runs before home removal"
-            );
-            assert!(gateway.0.wait().unwrap().success());
-            assert!(!home.exists(), "{order}: capture finishes before removal");
-            assert_cleanup_conversation(&session);
-            let stored = crate::session_conversation::read_stored(
-                &crate::session_conversation::conversations_dir().unwrap(),
-                &session,
-            )
-            .unwrap();
-            assert!(stored.transcript.turns.iter().any(|turn| turn.role == "assistant"
-                && turn.text.as_deref() == Some("gateway final checkpoint written by TERM")),
-                "{order}: capture must retain the record appended during TERM, not merely pre-existing turns");
         }
-    }
-    #[test]
-    fn managed_gateway_final_capture_survives_normal_cleanup_in_both_record_orders() {
-        managed_gateway_capture_in_orders(&["record-first", "exit-first"]);
-    }
+        #[test]
+        fn managed_gateway_final_capture_survives_normal_cleanup_in_both_record_orders() {
+            managed_gateway_capture_in_orders(&["record-first", "exit-first"]);
+        }
 
-    #[test]
-    fn managed_gateway_final_capture_survives_restart_cleanup() {
-        managed_gateway_capture_in_orders(&["restart"]);
+        #[test]
+        fn managed_gateway_final_capture_survives_restart_cleanup() {
+            managed_gateway_capture_in_orders(&["restart"]);
+        }
     }
 
     #[test]

@@ -4,6 +4,7 @@ import { messagePreview } from "@/shared/lib/message-preview";
 import type { InboxTeam, SessionListRow, SessionProgress } from "@/tauri/commands";
 
 import type { ConversationMessage, RoleSummary } from "./api";
+import { localMachineLabel } from "@/shared/lib/local-machine";
 
 // Pure view model for the inbox lenses and the rollup. Keys are a session handle, the literal
 // "human", or "#role" for a role queue — the same strings the composer's To picker uses.
@@ -17,8 +18,10 @@ export interface Participant {
   name: string;
   kind: "human" | "session";
   state: SessionState;
-  /** Null for a session on this Mac. */
-  machine: string | null;
+  /** Where it runs, from the roster row's shape: unknown for a session no tab shows. */
+  where: "local" | "remote" | "unknown";
+  /** The remote machine's name; absent unless `where` is remote. */
+  machine?: string;
   launchedBy: string | null;
   roles: string[];
   agent: string | null;
@@ -129,10 +132,14 @@ const nameOr = (name: string | null | undefined, key: string): string => {
   return n && n !== key ? n : shortHandle(key);
 };
 
-/** What the session list calls This Mac: its id (`local`) or its label (`This Mac`). */
-const LOCAL_MACHINES = new Set(["", "local", "this-mac", "this mac", "localhost"]);
-const normalizeMachine = (m: string | null | undefined): string | null =>
-  m && !LOCAL_MACHINES.has(m.toLowerCase()) ? m : null;
+/**
+ * Where a roster row's session runs. The wire omits both fields when they are none: a
+ * `machineId` means another machine, a `machine` alone means this one, neither means no tab.
+ */
+const whereOf = (s: SessionListRow): Pick<Participant, "where" | "machine"> =>
+  s.machineId
+    ? { where: "remote", machine: s.machine || s.machineId }
+    : { where: s.machine ? "local" : "unknown" };
 
 /**
  * Everyone the inbox can name: the roster first, then anyone a message mentions that the
@@ -156,7 +163,7 @@ export function buildDirectory(
     name: opts.humanName?.trim() || "you",
     kind: "human",
     state: "running",
-    machine: null,
+    where: "local",
     launchedBy: null,
     roles: [],
     agent: null,
@@ -169,7 +176,7 @@ export function buildDirectory(
       name: nameOr(s.displayName, s.handle),
       kind: "session",
       state: s.state,
-      machine: normalizeMachine(s.machine),
+      ...whereOf(s),
       launchedBy: s.launchedBy,
       roles: [],
       agent: s.agent ?? null,
@@ -184,7 +191,7 @@ export function buildDirectory(
       name: nameOr(name, key),
       kind: "session",
       state: "unknown",
-      machine: null,
+      where: "unknown",
       launchedBy: null,
       roles: [],
       agent: null,
@@ -228,7 +235,7 @@ export function participant(dir: Directory, key: string): Participant {
       name: shortHandle(key),
       kind: "session",
       state: "unknown",
-      machine: null,
+      where: "unknown",
       launchedBy: null,
       roles: [],
       agent: null,
@@ -268,7 +275,9 @@ export function dotClass(state: SessionState): "running" | "idle" | "needs" | "e
   return "exited";
 }
 
-export const machineLabel = (p: Participant): string => p.machine ?? "This Mac";
+/** Where a participant runs, in words: `""` when no roster row says. */
+export const machineLabel = (p: Participant): string =>
+  p.where === "local" ? localMachineLabel() : p.where === "remote" ? (p.machine ?? "") : "";
 
 /** The roles a participant holds (the ones its queue chips show). No role is special. */
 export const heldRoles = (p: Participant): string[] => p.roles;
@@ -685,7 +694,7 @@ export function sendCheck(
   if (p.state === "offline")
     return {
       kind: "offline",
-      hint: `Delivered when ${machineLabel(p)} reconnects`,
+      hint: `Delivered when ${machineLabel(p) || "its machine"} reconnects`,
     };
   if (p.state !== "exited") return { kind: "ok" };
   return {

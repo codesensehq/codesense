@@ -94,6 +94,7 @@ pub(crate) fn list_dir(dir: &Path) -> Result<Vec<FileEntry>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codesense_platform::testutil::symlink_or_skip;
     use tempfile::tempdir;
 
     fn names(entries: &[FileEntry]) -> Vec<&str> {
@@ -138,12 +139,13 @@ mod tests {
     // A symlink pointing at a directory must resolve as
     // a navigable directory (is_dir=true, no size) — not an un-openable "file" —
     // because the tree re-lists through the link.
-    #[cfg(unix)]
     #[test]
     fn test_list_directory_follows_symlink_to_dir() {
         let dir = tempdir().unwrap();
         fs::create_dir_all(dir.path().join("realdir")).unwrap();
-        std::os::unix::fs::symlink(dir.path().join("realdir"), dir.path().join("linkdir")).unwrap();
+        if !symlink_or_skip(dir.path().join("realdir"), dir.path().join("linkdir")) {
+            return;
+        }
 
         let entries = list_dir(dir.path()).unwrap();
         let resolve = |name: &str| {
@@ -217,11 +219,12 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_broken_symlink_lists_as_an_unsized_file() {
         let dir = tempdir().unwrap();
-        std::os::unix::fs::symlink(dir.path().join("gone"), dir.path().join("dangling")).unwrap();
+        if !symlink_or_skip(dir.path().join("gone"), dir.path().join("dangling")) {
+            return;
+        }
 
         let entries = list_dir(dir.path()).unwrap();
 

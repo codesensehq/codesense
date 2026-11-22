@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useEffect, useRef, useState } from "react";
-import { Loader2, Server } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { getErrorMessage } from "@/shared/lib/error-message";
 
@@ -36,7 +36,10 @@ import type { CredentialRef } from "@/shared/types/domain";
 
 import { formatMachineAddress, parseMachineAddress } from "../lib/machine-address";
 import { retireLeftoverLegacyServer } from "../lib/machine-actions";
+import { machinePanelHead } from "./machine-panel-head";
 import { MB } from "../lib/machine-file-path";
+import { passphraseSaveError } from "../lib/passphrase-error";
+import { passphraseDialogHint } from "../lib/passphrase-hint";
 import { TONE_CLASS, type MachineTone } from "../lib/machine-status";
 import { refreshMachine, reloadMachines } from "../stores/machines-store";
 
@@ -317,7 +320,7 @@ export function AddMachinePanel({
         dirty();
       }
     } catch (e) {
-      toast.error(`Couldn't keep the passphrase: ${getErrorMessage(e)}`);
+      toast.error(passphraseSaveError(e));
     } finally {
       setCapturing(false);
     }
@@ -413,15 +416,12 @@ export function AddMachinePanel({
 
   return (
     <ReservePanel
-      testId="add-machine-panel"
-      icon={<Server size={16} aria-hidden="true" />}
-      title={machine.binding ? `Edit ${machine.label}` : `Set up ${machine.label}`}
+      {...machinePanelHead(machine)}
       subtitle={
         machine?.binding
           ? `Change how CodeSense reaches ${machine.label}, then test and reconnect.`
           : "Connect a machine over SSH and run CodeSense's terminal server on it."
       }
-      closeLabel="Close add-machine panel"
       onClose={closeOnce}
       footer={
         <>
@@ -657,8 +657,8 @@ export function AddMachinePanel({
                 )}
               </div>
               <p className="text-[11px] text-muted-foreground">
-                macOS asks for it in its own dialog. CodeSense keeps it in your keychain and never
-                shows or sends it.
+                {passphraseDialogHint()} CodeSense keeps it in your keychain and never shows or
+                sends it.
               </p>
             </div>
           )}

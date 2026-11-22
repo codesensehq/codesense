@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useEffectiveRefreshKey } from "@/shared/hooks/use-effective-refresh-key";
 import { useWindowVisible } from "@/shared/hooks/use-window-focused";
 import { useFileRefreshStore } from "@/shared/stores/file-refresh-store";
+import { relative } from "@/shared/lib/path";
 import { privateFile } from "@/shared/lib/private-file";
 import { createListenerGroup } from "@/shared/lib/tauri-listeners";
 import { CONTEXT_GIT_MOVED_EVENT, type ContextGitMovedPayload } from "@/tauri/events";
@@ -58,7 +59,7 @@ export function useFileRedline({
   active = true,
 }: FileRedlineArgs): { relPath: string | null; read: RedlineRead | null } {
   const contextWorktree = useWorktreeRosterStore((s) =>
-    s.rows?.find((row) => row.kind === "context" && absPath.startsWith(`${row.path}/`)),
+    s.rows?.find((row) => row.kind === "context" && !!relative(row.path, absPath)),
   );
   const fixed = prNumber != null || commitSha != null;
   const worktree = !fixed && contextWorktree?.kind === "context" ? contextWorktree.id : undefined;

@@ -1,6 +1,6 @@
 # Privacy and network calls
 
-The app has no analytics, telemetry or crash reporting. It makes no AI calls
+No analytics or telemetry of our own, and no crash reporting. The app makes no AI calls
 of its own: the agent CLIs you run (Claude Code, Codex and others) talk to their
 providers under their own terms.
 
@@ -81,7 +81,7 @@ Install & Restart.
 
 - **What:** by default, when an agent running in one of this app's terminal
   tabs posts an inbox message with a picture link on `*.giphy.com` or
-  `static.klipy.com`, the app downloads the picture straight away. Other
+  `*.klipy.com`, the app downloads the picture straight away. Other
   pictures, including those from other hosts or other senders, are downloaded
   only when you click to load them. A picture written into a message's text is
   never loaded: it shows as a link, which opens in your browser.
@@ -90,12 +90,29 @@ Install & Restart.
   chosen.
 - **Limits:** public addresses only (no local or private network), `https://`
   only, at most 3 redirects and only to allowed hosts, 8 MiB at most.
+- **What is kept:** a picture from GIPHY or KLIPY (`giphy.com`, `klipy.com` and
+  their subdomains, judged by the host it finally came from after redirects) is
+  held in memory only and never written to disk, as those providers' terms
+  require. It is downloaded again when you view it after the app restarts or
+  after it expires (as the provider's `Cache-Control` says, at most 24 hours).
+  It is downloaded again by itself only when an agent in one of this app's tabs
+  sent it, `remote` is `auto` and its host is on the list; otherwise it waits
+  for your click. Other pictures are kept in the app's cache folder
+  (`inbox-media`, 256 MiB at most, oldest removed first). On the first start
+  after this update, the app deletes GIPHY and KLIPY pictures that earlier
+  versions saved in that folder.
+- **Known limits:** the app's built-in browser keeps its own cache, and two
+  kinds of copy can stay there until they age out. GIPHY and KLIPY pictures it
+  cached before this update stay; GIPHY and KLIPY pictures served since then
+  tell it not to store them. And a picture first shown as ordinary media keeps
+  its browser copy if a GIPHY or KLIPY message later shares the same image.
 - **Turning it off:** each team has its own inbox settings file,
   `config/inbox.yml` inside that team's folder in your context repository
   (`<team>/config/inbox.yml`). Set `remote: off` under `media:` to never
   download pictures, or `remote: ask` to download them only when you click.
   The same file can change the list of hosts.
 - **Code:** `src-tauri/src/media/mod.rs` (`fetch`),
+  `src-tauri/src/media/state.rs` (`fetch`, `fetch_or_cached`),
   `src-tauri/src/commands/agent_inbox.rs` (`fetch_media`),
   `src/features/weft/components/inbox-message-content.tsx` (`sanitizeInboxHtml`,
   `MARKDOWN_COMPONENTS`).
@@ -163,7 +180,7 @@ Install & Restart.
 - **Code:** `src-tauri/src/attribution/managed.rs` (`CONFIG`,
   `LOCAL_NOTES_CONFIG`), `src-tauri/src/attribution/prefs.rs`
   (`push_destinations`). The fetch after a pull or clone is in the git-ai build
-  CodeSense bundles (tag `v1.7.5-cs.4`): `src/daemon.rs`
+  CodeSense bundles (tag `v1.7.5-cs.7`): `src/daemon.rs`
   (`apply_pull_notes_sync_side_effect`, `apply_clone_notes_sync_side_effect`).
 
 ### 9. MCP servers you configure
@@ -237,9 +254,54 @@ a key, none of them is made.
 - **Code:** `src-tauri/src/dashboard_publish/` (`client.rs`, `watch.rs`,
   `live.rs`, `approval.rs`, `confirm.rs`, `keys.rs`).
 
+### 12. GIF search for agents (GIPHY)
+
+- **What:** when an agent calls the `gif_search` tool, the app asks GIPHY's API
+  for matching GIFs, straight from this computer with the GIPHY API key you
+  saved in Settings → Messaging. Nothing is sent without a key or while GIF
+  search is Off.
+- **What it sends:** a `GET` to `api.giphy.com` (`/v1/gifs/search` with the
+  agent's search words, how many results and the rating ceiling, or `/v1/gifs`
+  with the ids of GIFs found earlier), with your key,
+  `User-Agent: CodeSense-GifSearch/1.0` and no referrer. GIPHY sees your IP
+  address, your key and the search words.
+- **Send and view pings:** if you turn on GIF search with your GIPHY key,
+  CodeSense sends GIPHY's required send and view pings with a random id GIPHY
+  issues for this install. Turning GIF search off or removing the key stops them
+  and deletes the id; replacing the key deletes it too. A send ping goes when an
+  agent on this computer sends a GIF a search found in the last hour. A view ping
+  goes the first time that GIF is shown from this computer: in CodeSense, in a
+  published or phone view of your inbox, or in another message that carries the
+  same image. Each is a `GET` to the
+  link GIPHY returned with the result (on `giphy.com`), with the random id and
+  the time added and never your key. The id comes from a `GET` to
+  `api.giphy.com/v1/randomid` with your key, made when a ping first needs it and,
+  after a failed attempt, tried again no sooner than 15 minutes later. Pings and
+  that call together stay within 300 an hour per key, and none are sent while
+  GIPHY has paused searches. The 300-an-hour count and the 15-minute wait are kept
+  in memory, so each run of the app starts them afresh.
+- **Limits:** public addresses only, `https://` only, no redirects, 2 MiB of
+  response at most. At most 90 searches in any hour per key unless you mark it a
+  production key, and none for as long as GIPHY asks after it refuses one (a
+  `429`).
+- **What is kept:** the key stays in your OS keychain, in the
+  `ai.codesense.giphy-api-key` item under your login name. In the app's data
+  folder, `gif.json` keeps On or Off, the rating ceiling and which key is a
+  production key, `gif-rate.json` keeps the last hour's search times and
+  `gif-install.json` keeps the random id, readable by you only; all three name a
+  key only by a fingerprint. The pingback links GIPHY returns with each
+  result are held in memory for an hour. A GIF is downloaded only when an agent sends it,
+  as in [Pictures in the inbox](#4-pictures-in-the-inbox).
+- **Turning it off:** set GIF search to Off in Settings → Messaging, or remove
+  the key there. Either one deletes `gif-install.json`, as replacing the key
+  does.
+- **Code:** `src-tauri/src/gif/` (`giphy.rs`, `bucket.rs`, `settings.rs`,
+  `register.rs`),
+  `src-tauri/src/mcp/gif_tools.rs`.
+
 ## Content you open
 
-### 12. Dashboards, documents and stories in the viewer
+### 13. Dashboards, documents and stories in the viewer
 
 What you or your agents write can load what it references when you open it:
 

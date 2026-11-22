@@ -215,6 +215,7 @@ pub fn install(app: &AppHandle) -> Result<(), String> {
     let records_dir = app_dir.join("updates");
     let updater = Arc::new(
         updates::Updates::new(&host.base, running.clone(), max_age)?
+            .with_install(updates::Install::running(Some(&tauri::Manager::env(app))))
             .with_marker_dir(records_dir.clone()),
     );
     let updater_config = app.config().plugins.0.get("updater").cloned();

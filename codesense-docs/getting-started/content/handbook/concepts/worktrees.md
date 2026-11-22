@@ -4,7 +4,9 @@ _From a story to its worktree and branch: setup scripts, hydration, discovery an
 
 A **worktree** is a second (or third, or tenth) checkout of a repo, each on
 its own branch, sharing one `.git`. CodeSense gives every story its own, so
-agents working on different stories never step on each other's files.
+agents working on different stories never step on each other's files. By
+default every session of a story shares the story's worktree; a named session
+can have one of its own (see [Seat worktrees](#seat-worktrees)).
 
 ## From a story to a worktree
 
@@ -105,11 +107,58 @@ in newer context with `hydrate_worktree`, and sends edits back with reverse
 sync (see [Reverse sync](agent-context.md#reverse-sync), in
 Beta).
 
+## Seat worktrees
+
+By default a story's own session and its named sessions (`<story>#<name>`) all
+work in the story's worktree. An agent that launches a named session with
+`open_workspace` can give it a worktree of its own with `seatWorktree`:
+
+```json
+{"target": "story", "story_id": "LL-214", "name": "dev", "seatWorktree": {"kind": "branch"}}
+{"target": "story", "story_id": "LL-214", "name": "review", "seatWorktree": {"kind": "commit", "commit": "3f2c1a9"}}
+```
+
+| Kind | What the session gets |
+|---|---|
+| `branch` | A writable worktree on its own branch, `<story branch>-seat-<name>` (`feat/LL-214-seat-dev`), cut from the tip of the story's branch. The repo's setup commands run there. An earlier seat branch of that name is moved up to the story branch's tip when it has no commits of its own; one with commits of its own is reused as it stands. |
+| `commit` | A detached checkout pinned to that commit (a sha or a ref). No setup runs, so nothing is installed: it suits a reviewer that only reads the code. |
+
+The folder is the one `worktree_dir` gives a branch named
+`<story branch>-seat-<name>`, beside the story's own: `../api-wt/feat-LL-214-seat-dev`
+for the example. The tab opens in the story's workspace with the other sessions,
+under the same `<story>#<name>` handle, and runs in its seat folder; a restart of
+the tab runs it there again. The seat worktree is linked to the story like the
+story's own worktree: context arrives when its agent launches, `hydrate_story`
+and reverse sync work there, and its sessions count toward the story. For now
+**Source diff** and the **Code editor** on a seat tab show the story's own
+worktree, not the seat's.
+
+- Launching the same name again reuses its seat worktree. A `commit` seat
+  launched with another commit moves to it when it has no uncommitted changes;
+  with changes the launch is refused and the worktree is left as it was.
+- A seat launch never changes the story's `branch` field.
+- When the name is already running, nothing is created: the running session
+  keeps its folder, and the result says so in a warning.
+- A seat worktree needs a `name`, runs on This Mac only, and can't be asked for
+  from a dashboard page yet. Without `seatWorktree` a named session shares the
+  story's worktree, as always.
+- A seat worktree cleans itself up. When its tab is closed (`close_terminal_tab`,
+  `close_workspace`), and in a background sweep after each launch into the story,
+  it is removed when no session runs in it, it has no uncommitted changes, its
+  context edits are published and, for a `branch` seat, its commits are in the
+  story branch or `origin/<story branch>`. Its seat branch is deleted with it, and
+  so are its git-ignored files: installed dependencies, build output and any local
+  ignored files, such as notes in an ignored folder. Otherwise it is kept, and its
+  `list_worktrees` row says why in `seatKept`: `live`, `dirty`,
+  `unpublished-context`, `unmerged` or `remove-failed`. A seat being launched is
+  never removed, and the story's own worktree never is.
+
 ## Clean-up
 
 A worktree is removed only when you remove it, for example with
 `git worktree remove` in the repo. Closing its tabs or ending its workspace
-keeps it. CodeSense never limits how many worktrees you have, and never
+keeps it; the one exception is a seat worktree, which cleans itself up once it
+holds nothing unsaved (see above). CodeSense never limits how many worktrees you have, and never
 removes one because it is idle or because its pull request merged.
 
 Removal never publishes context. Normal removal preserves dirty files and refuses ignored

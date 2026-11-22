@@ -14,6 +14,8 @@ import {
   createContextRepo,
   loadWorkspaceConfig,
   saveWorkspaceConfig,
+  getPlatformCaps,
+  type PlatformCap,
 } from "@/tauri/commands";
 import type { ContextRepoInfo } from "@/shared/types";
 import { normalizeMainDoc } from "@/shared/lib/pipeline-graph/normalize";
@@ -22,6 +24,7 @@ import { getCodesenseHome } from "@/shared/lib/codesense-home";
 import { type WorkspaceRepoOverrides } from "@/shared/lib/workspace-config";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { logger } from "@/shared/lib/logger";
+import { basename } from "@/shared/lib/path";
 
 /** SW-WT-9: a remembered one-time approval to run a team-synced worktree
  *  setup. Keyed by repo + config-content-hash so a config change re-prompts. */
@@ -97,6 +100,18 @@ interface ConfigState {
   /** SW-WT-9: remember an approval (RMW to app-state, preserves other keys). */
   recordSetupApproval: (repoPath: string, configHash: string) => Promise<void>;
   loadState: () => Promise<void>;
+  /** Which optional features this OS supports, by key, read once at startup (`loadPlatformCaps`);
+   *  null until that read lands. Fixed for the app's run. Read it through `useCapability`. */
+  platformCaps: Record<string, PlatformCap> | null;
+  /** Reads the capabilities from the backend: the first call asks, every later one shares it. */
+  loadPlatformCaps: () => Promise<void>;
+}
+
+let platformCapsLoad: Promise<void> | null = null;
+/** Tests only: forget the read, so the next `loadPlatformCaps` asks again. */
+export function resetPlatformCapsForTest(): void {
+  platformCapsLoad = null;
+  useConfigStore.setState({ platformCaps: null });
 }
 
 export const useConfigStore = create<ConfigState>((set, get) => {
@@ -319,6 +334,19 @@ export const useConfigStore = create<ConfigState>((set, get) => {
       await updateRepo(repoPath, { mainDoc: normalized });
     },
 
+    platformCaps: null,
+    loadPlatformCaps: () => {
+      // A failed read leaves `platformCaps` null, so every capability reads as on: today's UI,
+      // and the backend still refuses what this OS can't do.
+      platformCapsLoad ??= Promise.resolve()
+        .then(() => getPlatformCaps())
+        .then(
+          (caps) => set({ platformCaps: Object.fromEntries(caps.map((cap) => [cap.key, cap])) }),
+          (e) => logger.warn("config-store", `get_platform_caps failed: ${e}`),
+        );
+      return platformCapsLoad;
+    },
+
     loadState: async () => {
       try {
         const raw = await loadAppState();
@@ -423,7 +451,7 @@ function migrateRepos(rawRepos: unknown[]): RepoState[] {
     .map((r: unknown): RepoState | null => {
       if (typeof r === "string") {
         // Old format: plain string path
-        const name = r.split("/").pop() ?? r;
+        const name = basename(r) || r;
         return {
           repoPath: r,
           repoName: name.toLowerCase().replace(/[_ ]/g, "-"),
@@ -441,7 +469,7 @@ function migrateRepos(rawRepos: unknown[]): RepoState[] {
       const repoPath = coerceString(obj.repoPath, coerceString(obj.repo_path, ""));
       if (!repoPath) return null;
 
-      const fallbackName = repoPath.split("/").pop()?.toLowerCase().replace(/[_ ]/g, "-") ?? "";
+      const fallbackName = basename(repoPath).toLowerCase().replace(/[_ ]/g, "-");
       return {
         repoPath,
         repoName: coerceString(obj.repoName, fallbackName),

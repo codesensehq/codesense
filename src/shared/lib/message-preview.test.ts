@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { htmlToPlain, markdownToPlain, messagePreview } from "./message-preview";
 
@@ -71,5 +71,29 @@ describe("messagePreview", () => {
     expect(p).toBe(`${"a".repeat(8)}😀…`);
     // No lone surrogate before the ellipsis.
     expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(p)).toBe(false);
+  });
+});
+
+describe("htmlToPlain without a DOM parser", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("decodes each entity once, so an escaped entity stays as written", () => {
+    vi.stubGlobal("DOMParser", undefined);
+    expect(
+      htmlToPlain(
+        "<p>Use &amp;lt;b&amp;gt; for bold, &amp;amp; for &amp;, &amp;quot;q&amp;quot; " +
+          "&amp;#39;s&amp;#39; and &amp;nbsp;</p>",
+      ),
+    ).toBe("Use &lt;b&gt; for bold, &amp; for &, &quot;q&quot; &#39;s&#39; and &nbsp;");
+  });
+
+  it("decodes entities in the title the same way as in the body, as the DOM path does", () => {
+    const html = "<title>Q&amp;A: &amp;lt;tags&amp;gt;</title><p>Fish &amp; chips</p>";
+    const withDom = htmlToPlain(html);
+    vi.stubGlobal("DOMParser", undefined);
+    expect(htmlToPlain(html)).toBe("Q&A: &lt;tags&gt; — Fish & chips");
+    expect(htmlToPlain(html)).toBe(withDom);
   });
 });

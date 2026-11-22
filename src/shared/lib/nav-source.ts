@@ -3,6 +3,7 @@ import { contentPrefix } from "@/features/git-sync/lib/scope-publish-set";
 import type { PrivateNavSource } from "@/tauri/commands";
 import type { ContentSource } from "./team-content-context";
 import type { NavSource } from "./nav-lens";
+import { trimTrailingSeparators } from "@/shared/lib/path";
 
 export function resolveNavSource(
   source: NavSource,
@@ -25,7 +26,8 @@ export function resolveNavSource(
       prefix: privateSource?.prefix ?? null,
     };
   }
-  const root = (cloneRoot ?? clone?.contextRepoPath)?.replace(/\/+$/, "") ?? null;
+  const rootPath = cloneRoot ?? clone?.contextRepoPath;
+  const root = rootPath ? trimTrailingSeparators(rootPath) : null;
   return {
     content: clone,
     orgRoot: root,

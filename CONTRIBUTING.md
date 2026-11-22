@@ -49,14 +49,30 @@ open issues first.
   request changes the app (`src/`, `src-tauri/` or `src-emulator/`, apart from
   tests), it also needs a new `changes/<slug>.md`. When users won't notice the
   change, a maintainer adds the `no-changelog` label instead.
+- **Rust guards** runs the `codesense-guards` crate's tests (the source guards
+  and the X1 census, a count of the calls the guard can't resolve, held under a
+  ceiling) on every change, whether or not the Rust jobs are skipped, because
+  the guards also scan the frontend. It builds no app and starts without
+  waiting for any other job, so it fails within minutes, long before the Rust
+  build jobs finish. It is a required check. To run it locally, use
+  `cargo test --locked -p codesense-guards`. When the census goes over its
+  ceiling, the failure lists the unresolved calls; set `X1_DIFF_BASE` to a
+  commit sha, for example `X1_DIFF_BASE=$(git merge-base origin/main HEAD)`, to
+  narrow that listing to the calls in, or to functions defined in, the files
+  your change touches (it lists every call when none is in a changed file).
 - The other jobs lint, build and test the change.
 - **Rust (macOS arm64)** doesn't block a merge. It runs after the merge, on
   each push to `main` and nightly; a red run there is fixed forward in a
-  later hardening pass. For a macOS-specific change, a maintainer adds the
+  later hardening pass. A push that `main` has already moved past when its
+  build starts skips it and reports as superseded, and a newer push to `main`
+  cancels an older push's queued or running macOS jobs, which then also report
+  as superseded: the newer push's run and the nightly cover it. For a macOS-specific change, a maintainer adds the
   `ci:macos` label to run it on the pull request too.
 - A change that touches nothing the Rust build reads (see
   `scripts/rust-changes.mjs`) skips the Rust jobs, which then report as
-  passed. The nightly run on `main` still tests everything.
+  passed, and one that changes only files Windows or Linux compiles (listed
+  there too) skips the macOS jobs. The nightly run on `main` still tests
+  everything.
 
 ### Sign-off (DCO)
 
@@ -118,10 +134,13 @@ pnpm test:rust         # Rust tests
   another test runner or job queue from inside it.
 - Run `pnpm gen:docs` before any Cargo step, and run the tests you changed
   quickly, without Cargo, before the long run.
-- If you change Rust code that feeds the MCP reference, page verbs or the
-  live-data contract, run the full `pnpm gen:docs:check`, not
-  `pnpm gen:docs:check:pr`, which tolerates a stale export. If it reports the
-  export stale, run `pnpm docs:refresh-mcp` and commit the refreshed files.
+- Leave the cargo-written exports README.md lists ("Regenerating exports",
+  `FROZEN_EXPORTS`) out of your PR; maintainers refresh them. If you change
+  Rust code that feeds the MCP reference, the live-data contract or the model
+  schemas, `pnpm gen:docs` and `pnpm gen:docs:check:pr` print a notice that the
+  export is stale: that is expected. Commit what `pnpm gen:docs` writes, such
+  as `mcp-tools.json`. The page verb registry is not on that list: a verb
+  change still regenerates it in the same PR (`pnpm gen:verbs`).
 - Leave at least 35 GB of free disk, stop if it drops under 20 GB, and delete
   `target/` when you are done. Build with the default features only.
 - If a GitHub release download times out, retry it with `gh release download`
@@ -158,6 +177,41 @@ then a push to the public repository is refused if any commit it publishes is
 unsigned or has an Anthropic (Claude) co-author trailer. After this check was
 added, a maintainer clone must rerun `scripts/git-hooks/install.sh` once.
 GitHub's Verified badge shows whose key signed a commit.
+
+**Maintainer clone setup.** In each maintainer clone (never globally): set
+`git config user.name` to the maintainer's GitHub login and
+`git config user.email` to its noreply address,
+`<id>+<login>@users.noreply.github.com` (GitHub shows it under Settings, Emails;
+[MAINTAINERS.md](MAINTAINERS.md) says who the maintainer is); set
+`git config gpg.format ssh`, `git config user.signingkey` to the registered
+public key, and `git config commit.gpgsign true`; set
+`git config codesense.requireSigned true`; and run
+`sh scripts/git-hooks/install.sh --quiet`, which is safe to rerun.
+
+**Checks at commit time.** With the hooks installed and a public remote, the
+`commit-msg` hook refuses a commit, and commits nothing, when:
+
+- the message, or a line or path the commit adds, matches the privacy rules
+  (the same rules and allow-list as the push check; a merge is left to the push
+  check), or the staged changes hold a gitlink;
+- in a clone that sets `codesense.requireSigned`: the author or committer is
+  not the maintainer identity, the trailer block has no maintainer
+  `Signed-off-by` (`git commit -s`), the message has an AI `Co-authored-by`
+  trailer, or signing is not configured (`commit.gpgsign` true and a key).
+  The hook cannot see `-S`, so it checks the signing config, not the
+  signature. The push check only checks that each commit carries a signature
+  (GitHub's Verified badge shows whose key made it), and nothing after this
+  hook checks the author or committer identity before a merge.
+
+The hook scans every line of git's message file, comment lines and the `-v` diff
+included, because it can't see which lines git drops. Each refusal prints one
+line per finding: the rule, where it is and how to fix it. A staged file is
+named only by its position in the commit's file list
+(`git diff --cached --name-only`; for `commit -a` or a pathspec commit, the list
+once those files are staged), never by name. `CODESENSE_PRIVACY_SHOW=1` prints
+the file name and, for some rules, the matched text, so never paste that output
+anywhere public. Fix each finding and rerun the commit. Skipping the hooks with
+`--no-verify` is not allowed: the push check and CI still refuse the change.
 
 You're welcome to use AI tools for your own contributions. You remain
 responsible for what you submit, and your sign-off certifies the DCO for it as

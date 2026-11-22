@@ -27,6 +27,7 @@ describe("source diff mock handlers", () => {
     expect(h.resolve_tab_source_repo({ cwd: "/Users/dev/worktrees/demo" })).toEqual({
       root: "/Users/dev/worktrees/demo",
       isRoot: true,
+      prefix: "",
     });
     expect(h.resolve_tab_source_repo({ cwd: "" })).toBeNull();
   });

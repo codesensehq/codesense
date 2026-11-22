@@ -54,15 +54,23 @@
       "version": "1.24.2",
       "licence": "ISC",
       "source": "https://github.com/starship/starship",
-      "shippedAs": "resources/starship",
+      "shippedAs": "resources/starship (fetched per target on Linux by scripts/fetch-bundled.sh)",
       "licenceFile": "release/third-party/starship.LICENSE"
     },
     {
       "name": "git-ai",
-      "version": "1.7.5-cs.4",
+      "version": "1.7.5-cs.7",
       "licence": "Apache-2.0",
-      "source": "https://github.com/alfypops/git-ai/tree/v1.7.5-cs.4",
-      "shippedAs": "resources/git-ai (fetched by scripts/fetch-git-ai.sh)",
+      "source": "https://github.com/alfypops/git-ai/tree/v1.7.5-cs.7",
+      "shippedAs": "resources/git-ai (fetched on macOS by scripts/fetch-bundled.sh)",
+      "licenceFile": "release/third-party/git-ai.LICENSE"
+    },
+    {
+      "name": "git-ai",
+      "version": "1.7.5-cs.5",
+      "licence": "Apache-2.0",
+      "source": "https://github.com/alfypops/git-ai/tree/v1.7.5-cs.5",
+      "shippedAs": "resources/git-ai (fetched per target on Linux by scripts/fetch-bundled.sh)",
       "licenceFile": "release/third-party/git-ai.LICENSE"
     },
     {

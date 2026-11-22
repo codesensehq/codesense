@@ -147,6 +147,10 @@
         padding: 0 4px;
         line-height: 15px;
       }
+      /* A shortcut hint the app has not filled (an older app) never shows as an empty pill. */
+      [data-keys]:empty {
+        display: none;
+      }
       .nt-chrome {
         height: 40px;
         flex: none;
@@ -832,13 +836,15 @@
           data-icon="panel"
         ></button>
         <button class="nt-btn nt-find" id="find-note">
-          <span data-icon="search"></span><span>Find a note</span><kbd class="nt-kbd">⌘O</kbd>
+          <span data-icon="search"></span><span>Find a note</span><kbd class="nt-kbd" data-keys="CmdOrCtrl+O"></kbd>
         </button>
         <span class="nt-gap"></span>
         <button
           class="nt-btn icon"
           id="new-note"
-          aria-label="New note (⌘N)"
+          aria-label="New note"
+          data-keys-keys="CmdOrCtrl+N"
+          data-keys-aria-label="New note ({keys})"
           data-icon="plus"
         ></button>
         <button
@@ -920,8 +926,11 @@
             <button
               class="nt-line-send nt-btn"
               id="line-send"
-              title="Send to… (⌘↵)"
-              aria-label="Send to… (⌘↵)"
+              title="Send to…"
+              aria-label="Send to…"
+              data-keys-keys="CmdOrCtrl+Enter"
+              data-keys-title="Send to… ({keys})"
+              data-keys-aria-label="Send to… ({keys})"
               hidden
             >
               <span data-icon="send"></span>
@@ -931,16 +940,16 @@
           <div class="nt-empty" id="empty-state">
             <h3 id="empty-title">Notes</h3>
             <p>
-              Private to you and kept on this Mac, with history. Jot plans, prompts and todos, then
+              Private to you and kept on <span id="local-machine">this computer</span>, with history. Jot plans, prompts and todos, then
               hand any line to an agent.
             </p>
             <button class="nt-btn primary" id="empty-new">
-              <span data-icon="plus"></span>New note <kbd class="nt-kbd">⌘N</kbd>
+              <span data-icon="plus"></span>New note <kbd class="nt-kbd" data-keys="CmdOrCtrl+N"></kbd>
             </button>
             <div class="nt-empty-keys">
               <kbd class="nt-kbd">- [ ]</kbd><span>starts a task</span><kbd class="nt-kbd">/</kbd
               ><span>inserts a heading, code, checklist…</span><kbd class="nt-kbd">[[</kbd
-              ><span>links a note or a story</span><kbd class="nt-kbd">⌘↵</kbd
+              ><span>links a note or a story</span><kbd class="nt-kbd" data-keys="CmdOrCtrl+Enter"></kbd
               ><span>Send the caret’s line or the selection to an agent</span>
             </div>
             <div class="nt-empty-routine" id="empty-routine" hidden>
@@ -2433,7 +2442,9 @@
         );
         paste.id = "send-paste";
         const shortcut = element("span", "nt-row-sub");
-        shortcut.append(element("kbd", "nt-kbd", "⌥⌘↵"));
+        const keys = element("kbd", "nt-kbd", cs.formatKeys?.("CmdOrCtrl+Alt+Enter") ?? "");
+        keys.dataset.keys = "CmdOrCtrl+Alt+Enter";
+        shortcut.append(keys);
         paste.append(element("span", "nt-row-label", "Paste into focused terminal"), shortcut);
         const reason = element("p", "nt-row-reason", PASTE_UNAVAILABLE);
         reason.id = "send-paste-reason";
@@ -2444,7 +2455,9 @@
         input.onkeydown = (e) => {
           if (e.key === "Enter") {
             e.preventDefault();
-            if (e.metaKey && e.altKey) run(pasteRequest);
+            // Ctrl+Alt off macOS, where AltGr reports Ctrl and Alt too and is not the chord.
+            const ctrlAlt = e.ctrlKey && !e.getModifierState?.("AltGraph");
+            if (e.altKey && (e.metaKey || ctrlAlt)) run(pasteRequest);
             else list.querySelector("button")?.click();
           }
         };
@@ -2979,6 +2992,7 @@
         if (!clock) clock = setInterval(tick, 30000);
       });
       cs.onSlotContext?.((slot) => {
+        $("local-machine").textContent = cs.localMachinePhrase?.() || "this computer";
         presentation = slot.presentation;
         layout(slot.width);
       });

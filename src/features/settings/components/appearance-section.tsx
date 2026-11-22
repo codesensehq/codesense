@@ -14,6 +14,7 @@ import { rowMatches, type SettingRowSpec } from "../lib/row-matches";
 import { SectionHeader } from "./section-header";
 import { SettingRow } from "./setting-row";
 import "./appearance-section.css";
+import { hasMod } from "@/shared/lib/shortcuts/keystroke";
 
 export const APPEARANCE_ROW_SPECS: SettingRowSpec[] = [
   { key: "mode", label: "Mode", keywords: ["light", "dark", "system", "appearance"] },
@@ -133,7 +134,7 @@ export function AppearanceSection({ query }: { query: string }) {
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (
-        !(e.metaKey || e.ctrlKey) ||
+        !hasMod(e) ||
         e.shiftKey ||
         e.altKey ||
         e.key.toLowerCase() !== "z" ||

@@ -1,88 +1,21 @@
 // SPDX-License-Identifier: MIT
 //! One verified gateway teardown for host engine loss and desktop home removal.
 use crate::activity::peer;
-use std::os::fd::AsRawFd;
-#[cfg(test)]
+use codesense_platform::process::{Pid, ProcessGroup};
+// For the gateway tests (macOS and Linux), which start their gateway in a process group of its own.
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 use std::os::unix::process::CommandExt;
 use std::{
-    fs, io,
     path::Path,
-    process::Command,
     time::{Duration, Instant},
 };
 
-fn owns_lock(pid: u32, home: &Path) -> bool {
-    let path = home.join("gateway.lock");
-    let Ok(bytes) = fs::read(&path) else {
-        return false;
-    };
-    let Ok(record) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-        return false;
-    };
-    if record.get("pid").unwrap_or(&record).as_u64() != Some(pid as u64) {
-        return false;
-    }
-    let Ok(lock) = fs::OpenOptions::new().read(true).write(true).open(&path) else {
-        return false;
-    };
-    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-        return false;
-    }
-    if io::Error::last_os_error().raw_os_error() != Some(libc::EWOULDBLOCK) {
-        return false;
-    }
-    // Darwin lsof does not expose flock's owner. Require all three facts: the live
-    // gateway's lock record, a held kernel lock and that process's open file.
-    let Ok(output) = Command::new("/usr/sbin/lsof")
-        .args(["-a", "-p", &pid.to_string(), "-Fpn"])
-        .arg(&path)
-        .output()
-    else {
-        return false;
-    };
-    let Ok(canonical) = fs::canonicalize(path) else {
-        return false;
-    };
-    output.status.success()
-        && String::from_utf8_lossy(&output.stdout).lines().any(|line| {
-            line.strip_prefix('n')
-                .is_some_and(|name| Path::new(name) == canonical)
-        })
-}
-
-fn verified_gateway(home: &Path) -> Option<peer::PeerProcess> {
-    let bytes = Result::ok(fs::read(home.join("gateway.pid")))?;
-    let record: serde_json::Value = Result::ok(serde_json::from_slice(&bytes))?;
-    let pid = record
-        .get("pid")
-        .unwrap_or(&record)
-        .as_u64()
-        .and_then(|n| Result::ok(u32::try_from(n)))?;
-    let identity = peer::inspect(pid)?;
-    let created = Result::ok(Result::ok(fs::metadata(home))?.created())?;
-    if !identity.started_after(created) {
-        return None;
-    }
-    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
-    let id = Pid::from_u32(pid);
-    let mut system = System::new();
-    system.refresh_processes_specifics(
-        ProcessesToUpdate::Some(&[id]),
-        true,
-        ProcessRefreshKind::new().with_cmd(UpdateKind::Always),
-    );
-    let process = system.process(id)?;
-    let args: Vec<_> = process.cmd().iter().map(|s| s.to_string_lossy()).collect();
-    if !args.iter().any(|arg| arg == "hermes_cli.main")
-        || !args.windows(2).any(|args| args == ["gateway", "run"])
-        || unsafe { libc::getpgid(pid as i32) } != pid as i32
-        || !owns_lock(pid, home)
-        || !peer::runs(identity)
-    {
-        return None;
-    }
-    Some(identity)
-}
+/// Which gateway is the home's own: read from its Unix process group and lock, or
+/// none where those are not available yet.
+#[cfg_attr(unix, path = "lifecycle/unix.rs")]
+#[cfg_attr(not(unix), path = "lifecycle/off.rs")]
+mod transport;
+use transport::verified_gateway;
 
 pub(crate) fn teardown_home(home: &Path, wait_for_replacement: bool) {
     // A detached recovery may still be importing/bootstraping when the CLI tree ends.
@@ -99,30 +32,71 @@ pub(crate) fn teardown_home(home: &Path, wait_for_replacement: bool) {
         std::thread::sleep(Duration::from_millis(20));
     };
     // The gateway owns this process group; never signal the caller's group or a recycled PID.
-    unsafe {
-        libc::killpg(process.pid() as i32, libc::SIGTERM);
+    let Ok(Some(group)) = ProcessGroup::adopt(Pid::from_raw(process.pid())) else {
+        return;
+    };
+    // Gone since it was verified: its group id may already name someone else's.
+    if !peer::runs(process) {
+        return;
     }
+    let _ = group.terminate();
     while peer::runs(process) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
     }
     if peer::runs(process) {
-        unsafe {
-            libc::killpg(process.pid() as i32, libc::SIGKILL);
-        }
+        let _ = group.kill();
     }
 }
 
-#[cfg(test)]
+/// A test's python process, once it has printed `ready`; killed and reaped on drop.
+#[cfg(all(test, unix))]
+struct Ready(std::process::Child);
+#[cfg(all(test, unix))]
+impl Ready {
+    fn start(command: &mut std::process::Command) -> Self {
+        use std::io::BufRead;
+        let mut child = command
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut ready = String::new();
+        std::io::BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(ready.trim(), "ready");
+        Self(child)
+    }
+}
+#[cfg(all(test, unix))]
+impl Drop for Ready {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+// macOS and Linux: the gateway is a python process in a Unix process group of its own.
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod gateway_tests {
     use super::*;
-    use std::io::BufRead;
-    struct Gateway(std::process::Child);
+    use std::{fs, process::Command};
+    struct Gateway;
     impl Gateway {
-        fn spawn(home: &Path, owns_lock: bool) -> Self {
-            let code = r#"import fcntl,json,os,pathlib,signal,sys,time
+        fn spawn(home: &Path, owns_lock: bool) -> Ready {
+            Self::spawn_with(home, owns_lock, &[])
+        }
+
+        /// With `stubborn-child` in `extra`, the gateway first starts a child in its
+        /// group that ignores SIGTERM and writes the child's pid to `child.pid`.
+        fn spawn_with(home: &Path, owns_lock: bool, extra: &[&str]) -> Ready {
+            let code = r#"import fcntl,json,os,pathlib,signal,subprocess,sys,time
 h=pathlib.Path(sys.argv[1]); f=open(h/'gateway.lock','w+')
 json.dump({'pid':os.getpid()},f); f.flush()
 if sys.argv[2]=='lock': fcntl.flock(f,fcntl.LOCK_EX)
+if 'stubborn-child' in sys.argv[3:]:
+ c=subprocess.Popen([sys.executable,'-c','import signal,time\nsignal.signal(signal.SIGTERM,signal.SIG_IGN)\nprint(1,flush=True)\ntime.sleep(60)'],stdout=subprocess.PIPE)
+ c.stdout.readline(); (h/'child.pid').write_text(str(c.pid))
 (h/'gateway.pid').write_text(json.dumps({'pid':os.getpid()}))
 def stop(*args):
  (h/'stopped').write_text('checkpointed'); sys.exit(0)
@@ -130,28 +104,15 @@ signal.signal(signal.SIGTERM,stop)
 print('ready',flush=True)
 while True: time.sleep(.05)
 "#;
-            let mut child = Command::new("python3")
-                .args(["-c", code])
-                .arg(home)
-                .arg(if owns_lock { "lock" } else { "open" })
-                .args(["hermes_cli.main", "gateway", "run"])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .process_group(0)
-                .spawn()
-                .unwrap();
-            let mut ready = String::new();
-            std::io::BufReader::new(child.stdout.take().unwrap())
-                .read_line(&mut ready)
-                .unwrap();
-            assert_eq!(ready.trim(), "ready");
-            Self(child)
-        }
-    }
-    impl Drop for Gateway {
-        fn drop(&mut self) {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
+            Ready::start(
+                Command::new("python3")
+                    .args(["-c", code])
+                    .arg(home)
+                    .arg(if owns_lock { "lock" } else { "open" })
+                    .args(["hermes_cli.main", "gateway", "run"])
+                    .args(extra)
+                    .process_group(0),
+            )
         }
     }
     #[test]
@@ -180,6 +141,36 @@ while True: time.sleep(.05)
     }
 
     #[test]
+    fn a_gateway_that_stops_on_terminate_gets_no_kill() {
+        use codesense_platform::process::is_alive;
+        let tmp = tempfile::tempdir().unwrap();
+        let mut gateway = Gateway::spawn_with(tmp.path(), true, &["stubborn-child"]);
+        assert!(
+            verified_gateway(tmp.path()).is_some(),
+            "the teardown has a gateway to stop"
+        );
+        let child: u32 = fs::read_to_string(tmp.path().join("child.pid"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        // Waited for here, so it is reaped as it exits and the teardown sees it gone
+        // rather than a zombie.
+        let home = tmp.path().to_owned();
+        let teardown = std::thread::spawn(move || teardown_home(&home, false));
+        assert!(gateway.0.wait().unwrap().success(), "stopped on SIGTERM");
+        teardown.join().unwrap();
+        assert!(tmp.path().join("stopped").exists());
+        std::thread::sleep(Duration::from_millis(200));
+        let survived = is_alive(Pid::from_raw(child));
+        // SAFETY: kill only sends a signal, to the test's own grandchild.
+        unsafe { libc::kill(child as i32, libc::SIGKILL) };
+        assert!(
+            survived,
+            "a group whose gateway stopped on SIGTERM gets no SIGKILL"
+        );
+    }
+
+    #[test]
     fn engine_loss_teardown_waits_for_verified_replacement_publication() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().to_owned();
@@ -203,6 +194,3 @@ while True: time.sleep(.05)
         assert!(stopped, "replacement was swept after verification");
     }
 }
-
-#[cfg(test)]
-use std::process::Stdio;

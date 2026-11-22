@@ -651,6 +651,7 @@ pub fn apply_generated(
         runtime: launch.runtime,
     };
     let mut attribution = crate::attribution::launch::prepare_for_host(
+        &crate::platform_caps::Caps::live(),
         &attribution_request,
         std::env::var_os("PATH").as_deref(),
         attribution_hook_trust,
@@ -681,12 +682,14 @@ pub fn apply_generated(
                             &mut content,
                             cwd,
                             launch.runtime,
+                            codesense_host_proto::hook::HookTarget::local(),
                         )?;
                     } else {
                         crate::commands::content_engine::merge_launch_notify_hooks(
                             &mut content,
                             cwd,
                             launch.runtime,
+                            codesense_host_proto::hook::HookTarget::local(),
                         );
                     }
                     if let Some(listed) = &launch.launch.skill_allowlist {
@@ -806,6 +809,7 @@ pub(crate) fn refresh_attribution(
     String,
 > {
     let mut plan = crate::attribution::launch::prepare_for_host(
+        &crate::platform_caps::Caps::live(),
         request,
         std::env::var_os("PATH").as_deref(),
         attribution_hook_trust,

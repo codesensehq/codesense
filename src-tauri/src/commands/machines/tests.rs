@@ -6,6 +6,14 @@ use std::process::Command;
 use super::registry::{Binding, Declaration, Registry, Scope};
 use super::*;
 
+/// The refusal of a team machine's rename, naming the computer the tests run on.
+fn cant_change_here() -> String {
+    format!(
+        "can't be changed from {}",
+        machine_wording::machine_noun_lower(machine_wording::RUNNING_OS)
+    )
+}
+
 #[tokio::test]
 async fn a_stalled_open_names_the_step_it_is_in() {
     let (release, wait) = std::sync::mpsc::channel::<()>();
@@ -151,6 +159,176 @@ fn rm4d_machine_status_serializes_phase_contract_in_camel_case() {
         })
         .unwrap(),
         serde_json::json!({"state":"replacementFailed","oldStopped":true,"count":2,"repair":"repair"})
+    );
+}
+
+/// The JSON `MachineSummary` sends over IPC: This Mac's row, and a row with
+/// every field set.
+#[test]
+fn machine_summary_wire_shape_is_pinned() {
+    assert_eq!(
+        serde_json::to_value(this_mac(3)).unwrap(),
+        serde_json::json!({
+            "machineId": "local",
+            "kind": "local",
+            "label": "This Mac",
+            "scope": null,
+            "declaration": null,
+            "binding": null,
+            "canPublish": false,
+            "remoteMcpControl": false,
+            "status": {"state": "connected", "workspaces": 3},
+            "attention": 0,
+            "capabilities": {"agentCallbacks": true},
+        })
+    );
+
+    let full = MachineSummary {
+        machine_stats: Some(codesense_host_proto::machine_stats::MachineStats {
+            load1: 1.5,
+            cpu_count: 8,
+            mem_used_bytes: 12,
+            mem_total_bytes: 16,
+            disk_free_bytes: 84,
+            disk_total_bytes: 460,
+            disk_path: "/workspaces".into(),
+            sampled_at: 1000,
+        }),
+        machine_stats_supported: Some(true),
+        machine_id: "m-1".into(),
+        kind: "remote",
+        label: "Build box".into(),
+        scope: Some(Scope::Team {
+            org_slug: "acme".into(),
+            team: "core".into(),
+        }),
+        declaration: Some(MachineDeclarationDto {
+            mode: MachineMode::PrivateAccount,
+            host: "build.example".into(),
+            port: 2222,
+            jump_host: Some("jump.example".into()),
+            default_base_dir: Some("~/work".into()),
+            pinned_host_key_fp: Some("SHA256:abc".into()),
+            pinned_server_id: Some("server-a".into()),
+            revision: "rev-1".into(),
+            identity_change: Some(identity::IdentityChange::sample()),
+            configuration_refused: true,
+        }),
+        binding: Some(MachineBindingDto {
+            username: Some("dev".into()),
+            key_path: Some("~/keys/build".into()),
+            credential_ref: Some(CredentialRef {
+                provider: "machine-passphrase".into(),
+                account: "m-1".into(),
+            }),
+            auto_connect: true,
+            hidden: true,
+            reconnect_at_launch: true,
+        }),
+        can_publish: true,
+        remote_mcp_control: true,
+        status: MachineStatus::Connected {
+            workspaces: Some(2),
+            terminal_server_update: true,
+            terminal_server_sessions: Some(4),
+        },
+        attention: 5,
+        capabilities: MachineCapabilities {
+            agent_callbacks: true,
+        },
+        terminal_server: Some(terminal_server_info::TerminalServerInfo {
+            server_version: Some("1.2.0".into()),
+            app_version: "1.3.0".into(),
+            up_to_date: false,
+            relation: terminal_server_info::ServerRelation::Older,
+            announced_version: "0.1.0+d1".into(),
+            build_commit: Some("c0ffee".into()),
+            built_at_ms: Some(7),
+            build_digest: Some("d1".into()),
+            server_path: Some("/opt/server".into()),
+            app_server_path: Some("/opt/app-server".into()),
+            started_at_ms: Some(9),
+            pid: Some(42),
+            dev_build: true,
+        }),
+    };
+    let identity_json = |host: &str, server_id: &str| {
+        serde_json::json!({
+            "host": host,
+            "port": 22,
+            "jumpHost": "jump.example",
+            "hostKeyFingerprint": "SHA256:abc",
+            "serverId": server_id,
+        })
+    };
+    assert_eq!(
+        serde_json::to_value(full).unwrap(),
+        serde_json::json!({
+            "load1": 1.5,
+            "cpuCount": 8,
+            "memUsedBytes": 12,
+            "memTotalBytes": 16,
+            "diskFreeBytes": 84,
+            "diskTotalBytes": 460,
+            "diskPath": "/workspaces",
+            "sampledAt": 1000,
+            "machineStatsSupported": true,
+            "machineId": "m-1",
+            "kind": "remote",
+            "label": "Build box",
+            "scope": {"kind": "team", "orgSlug": "acme", "team": "core"},
+            "declaration": {
+                "mode": "private-account",
+                "host": "build.example",
+                "port": 2222,
+                "jumpHost": "jump.example",
+                "defaultBaseDir": "~/work",
+                "pinnedHostKeyFp": "SHA256:abc",
+                "pinnedServerId": "server-a",
+                "revision": "rev-1",
+                "identityChange": {
+                    "accepted": identity_json("old.example", "server-a"),
+                    "declared": identity_json("new.example", "server-b"),
+                    "revision": "rev-1",
+                    "author": "Ada",
+                    "date": "2026-01-02T03:04:05Z",
+                    "observedServerId": "server-c",
+                },
+            },
+            "binding": {
+                "username": "dev",
+                "keyPath": "~/keys/build",
+                "credentialRef": {"provider": "machine-passphrase", "account": "m-1"},
+                "autoConnect": true,
+                "hidden": true,
+                "reconnectAtLaunch": true,
+            },
+            "canPublish": true,
+            "remoteMcpControl": true,
+            "status": {
+                "state": "connected",
+                "workspaces": 2,
+                "terminalServerUpdate": true,
+                "terminalServerSessions": 4,
+            },
+            "attention": 5,
+            "capabilities": {"agentCallbacks": true},
+            "terminalServer": {
+                "serverVersion": "1.2.0",
+                "appVersion": "1.3.0",
+                "upToDate": false,
+                "relation": "older",
+                "announcedVersion": "0.1.0+d1",
+                "buildCommit": "c0ffee",
+                "builtAtMs": 7,
+                "buildDigest": "d1",
+                "serverPath": "/opt/server",
+                "appServerPath": "/opt/app-server",
+                "startedAtMs": 9,
+                "pid": 42,
+                "devBuild": true,
+            },
+        })
     );
 }
 
@@ -1061,7 +1239,7 @@ fn auto_connect_refuses_local_missing_and_needs_setup_bindings() {
     let store = FakeStore::default();
     assert!(set_auto_connect(&env, LOCAL_MACHINE_ID, true)
         .unwrap_err()
-        .contains("This Mac"));
+        .contains(machine_wording::machine_noun(machine_wording::RUNNING_OS)));
     env.registry
         .write(&Scope::Personal, &declaration("gpu-box-1a2b3c"))
         .unwrap();
@@ -1100,7 +1278,7 @@ fn pinned_transport_is_raw_duplex_and_explicit_close_reaps_its_process_group() {
         descendant_file.as_os_str().to_owned(),
     )]);
     let (reader, mut writer, child_guard) = spawn_pinned(ssh, "1.0.0", None).unwrap();
-    let child_pid = child_guard.child.as_ref().unwrap().id() as libc::pid_t;
+    let child_pid = child_guard.tree.as_ref().unwrap().pid().as_raw() as libc::pid_t;
     writeln!(writer, "protocol-frame").unwrap();
     writer.flush().unwrap();
     let mut line = String::new();
@@ -1168,7 +1346,7 @@ fn pinned_transport_handles_natural_exit_and_drop_cancellation() {
     std::fs::set_permissions(&sleeping, std::fs::Permissions::from_mode(0o700)).unwrap();
     let (reader, writer, guard) =
         spawn_pinned(install::Ssh::new(&sleeping, Vec::new()), "1.0.0", None).unwrap();
-    let pid = guard.child.as_ref().unwrap().id() as libc::pid_t;
+    let pid = guard.tree.as_ref().unwrap().pid().as_raw() as libc::pid_t;
     drop(reader);
     drop(writer);
     drop(guard);
@@ -1191,7 +1369,7 @@ fn bounded_drop_fallback_eventually_reaps_after_returning() {
     std::fs::set_permissions(&sleeping, std::fs::Permissions::from_mode(0o700)).unwrap();
     let (_, _, guard) =
         spawn_pinned(install::Ssh::new(&sleeping, Vec::new()), "1.0.0", None).unwrap();
-    let pid = guard.child.as_ref().unwrap().id() as libc::pid_t;
+    let pid = guard.tree.as_ref().unwrap().pid().as_raw() as libc::pid_t;
     DEFER_DROP_REAP.with(|defer| defer.set(true));
     drop(guard);
     DEFER_DROP_REAP.with(|defer| defer.set(false));
@@ -1465,7 +1643,7 @@ fn stale_transport_generation_is_closed_before_publication() {
     std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
     let (reader, writer, guard) =
         spawn_pinned(install::Ssh::new(&program, Vec::new()), "1.0.0", None).unwrap();
-    let child_pid = guard.child.as_ref().unwrap().id() as libc::pid_t;
+    let child_pid = guard.tree.as_ref().unwrap().pid().as_raw() as libc::pid_t;
     let env = std::sync::Arc::new(env);
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
@@ -1816,6 +1994,22 @@ fn a_replaced_passphrase_leaves_the_keychain() {
     .unwrap();
     assert!(store.get("old").unwrap().is_none());
     assert_eq!(store.get("new").unwrap().unwrap().expose(), "b");
+}
+
+/// With no secret store the person is told so before any dialog opens.
+#[test]
+fn no_secret_store_stops_a_capture_before_the_prompt() {
+    let root = tempfile::tempdir().unwrap();
+    let env = env_for(root.path(), 1);
+    let error = capture_passphrase(
+        &env,
+        &crate::commands::credential_store::UnavailableStore,
+        "~/k",
+        |_| panic!("the prompt must not open"),
+        |_, _| Ok(()),
+    )
+    .unwrap_err();
+    assert_eq!(error, passphrase::UNAVAILABLE_MESSAGE);
 }
 
 /// The dialog's answer goes to the keychain only once it unlocks the key;
@@ -2502,7 +2696,7 @@ fn stale_label_save_keeps_the_newer_declaration() {
             false,
         )
         .expect_err(case);
-        assert!(error.contains(refusal), "{case}: {error}");
+        assert!(error.contains(&refusal), "{case}: {error}");
         assert_eq!(
             std::fs::read(&file).unwrap(),
             before,
@@ -3630,7 +3824,7 @@ pub(super) mod container {
         runtime.block_on(async {
             let transport = open_pinned_saved(&env, store.as_ref(), &machine_id).unwrap();
             let generation = transport.generation.clone();
-            let ssh_pid = transport.child_guard.child.as_ref().unwrap().id() as libc::pid_t;
+            let ssh_pid = transport.child_guard.tree.as_ref().unwrap().pid().as_raw() as libc::pid_t;
             revalidate_transport_generation(&env, &machine_id, &generation).unwrap();
             let pending = RemoteTransportOwner::from_pinned(transport).into_pending();
             let admitted = pending
@@ -4160,6 +4354,12 @@ fn remote_mcp_control_is_personal_ready_only_and_revokes_binding_generation() {
     assert!(private_setup::authorize_remote_mcp_control(&env, id).is_err());
     assert!(private_setup::set_remote_mcp_control(&env, id, true).is_err());
     assert!(!this_mac(0).remote_mcp_control);
+}
+
+/// list_machines labels the local machine "This Mac", a value an agent reads, on every OS.
+#[test]
+fn the_local_machine_is_labelled_this_mac_on_every_os() {
+    assert_eq!(this_mac(0).label, "This Mac");
 }
 
 fn heard_machines_changed(
@@ -5039,7 +5239,7 @@ async fn refused_private_switch_never_disconnects() {
     ] {
         let (result, disconnects) = run(env, input, rewrites).await;
         let error = result.expect_err(case);
-        assert!(error.contains(refusal), "{case}: {error}");
+        assert!(error.contains(&refusal), "{case}: {error}");
         assert_eq!(disconnects, 0, "{case} ended the working connection");
     }
     assert!(!private_setup::claims(&env, id).unwrap());
@@ -5108,7 +5308,7 @@ fn private_declaration_edit_reads_the_clear_message() {
     .unwrap()
     .machine_id;
     edit_private_declaration(&env, &Scope::Personal, &id);
-    let message = registry::private::PRIVATE_DECLARATION_CHANGED;
+    let message = registry::private::private_declaration_changed();
 
     let saving = save(
         &env,
@@ -5180,7 +5380,7 @@ fn one_edited_private_machine_does_not_break_the_list() {
     assert_eq!(
         status(edited.as_str()),
         MachineStatus::ConnectionFailed {
-            last_error: registry::private::PRIVATE_DECLARATION_CHANGED.into()
+            last_error: registry::private::private_declaration_changed()
         }
     );
     assert_eq!(status(healthy.as_str()), MachineStatus::NeedsCredential);
@@ -5230,7 +5430,7 @@ async fn an_edited_private_machine_stays_refused_through_the_list_overlay() {
     assert_eq!(
         edited.status,
         MachineStatus::ConnectionFailed {
-            last_error: registry::private::PRIVATE_DECLARATION_CHANGED.into()
+            last_error: registry::private::private_declaration_changed()
         }
     );
 }
@@ -5270,7 +5470,7 @@ async fn a_team_switch_that_relabels_is_refused_before_disconnect_or_conversion(
         .await
         .map(drop)
         .unwrap_err();
-    assert!(error.contains("can't be changed from this Mac"), "{error}");
+    assert!(error.contains(&cant_change_here()), "{error}");
     assert_eq!(disconnects.load(std::sync::atomic::Ordering::SeqCst), 0);
 
     // The panel enrolls before it saves: the enroll's preflight and its
@@ -5284,13 +5484,13 @@ async fn a_team_switch_that_relabels_is_refused_before_disconnect_or_conversion(
         .await
         .map(drop)
         .unwrap_err();
-    assert!(error.contains("can't be changed from this Mac"), "{error}");
+    assert!(error.contains(&cant_change_here()), "{error}");
     assert_eq!(disconnects.load(std::sync::atomic::Ordering::SeqCst), 0);
     let error = based_setup(&env, Some(id), &renamed, || {
         private_setup::convert_if_legacy(&env, Some(id), &renamed)
     })
     .unwrap_err();
-    assert!(error.contains("can't be changed from this Mac"), "{error}");
+    assert!(error.contains(&cant_change_here()), "{error}");
     assert_eq!(std::fs::read(&file).unwrap(), before);
     assert!(!private_setup::claims(&env, id).unwrap());
 
@@ -5304,7 +5504,7 @@ async fn a_team_switch_that_relabels_is_refused_before_disconnect_or_conversion(
         false,
     )
     .unwrap_err();
-    assert!(error.contains("can't be changed from this Mac"), "{error}");
+    assert!(error.contains(&cant_change_here()), "{error}");
     assert_eq!(std::fs::read(&file).unwrap(), before);
     assert!(!private_setup::claims(&env, id).unwrap());
 
@@ -5459,7 +5659,7 @@ fn a_private_label_edit_is_written_or_refused_never_dropped() {
             }
             "team private" => {
                 let error = result.unwrap_err();
-                assert!(error.contains("can't be changed from this Mac"), "{error}");
+                assert!(error.contains(&cant_change_here()), "{error}");
                 assert_eq!(listed.label, "Dev Box");
             }
             "stale private" => {
@@ -5511,24 +5711,24 @@ fn a_refused_private_edit_writes_nothing_first() {
         let refusal = match case {
             "label" => {
                 edit.label = "Renamed".into();
-                "can't be changed from this Mac"
+                cant_change_here()
             }
             "host" => {
                 edit.host = "elsewhere.int".into();
-                "address changed"
+                "address changed".into()
             }
             "port" => {
                 edit.port = 2223;
-                "address changed"
+                "address changed".into()
             }
             "jump host" => {
                 edit.jump_host = Some("bastion.int".into());
-                "address changed"
+                "address changed".into()
             }
             _ => unreachable!(),
         };
         let error = save(&env, &store, Some(&id), &edit, &scope, false).unwrap_err();
-        assert!(error.contains(refusal), "{case}: {error}");
+        assert!(error.contains(&refusal), "{case}: {error}");
         assert_eq!(std::fs::read(&file).unwrap(), bytes, "{case}");
         assert_eq!(
             serde_json::to_value(private.binding(&id).unwrap()).unwrap(),
@@ -6757,4 +6957,24 @@ fn first_agent_setup_accepts_only_the_validated_snapshot_when_git_changes_the_pi
     .expect("initial setup must use validated A despite a later git pin update");
     assert!(saved.declaration.unwrap().identity_change.is_some());
     assert_git_pin_change_remains_unaccepted(&env, id, &changed_key);
+}
+
+#[test]
+fn machine_wording_follows_the_os() {
+    assert_eq!(
+        cant_publish_for("macos"),
+        "You can't publish to that team's context from this Mac"
+    );
+    assert_eq!(
+        cant_publish_for("linux"),
+        "You can't publish to that team's context from this computer"
+    );
+    assert_eq!(
+        no_local_auto_connect_for("macos"),
+        "This Mac has no remote-machine auto-connect binding"
+    );
+    assert_eq!(
+        no_local_auto_connect_for("linux"),
+        "This computer has no remote-machine auto-connect binding"
+    );
 }

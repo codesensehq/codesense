@@ -15,23 +15,31 @@ pub use types::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Unix only: uses the unix-only test fixtures.
+    #[cfg(unix)]
     use crate::fixtures::RecordingSink;
 
     // ---- Fixtures: the ports are implementable with zero Tauri ----------
 
+    // Unix only, as the tests that use it are (they use the unix-only test fixtures).
+    #[cfg(unix)]
     struct FakeClock {
         millis: u64,
     }
+    #[cfg(unix)]
     impl ClockPort for FakeClock {
         fn now_millis(&self) -> u64 {
             self.millis
         }
     }
 
+    // Unix only, as the tests that use it are (they use the unix-only test fixtures).
+    #[cfg(unix)]
     #[derive(Default)]
     struct MemPersistence {
         blobs: std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,
     }
+    #[cfg(unix)]
     impl SessionPersistencePort for MemPersistence {
         fn persist(&self, session: &PtySessionId, snapshot: &[u8]) -> Result<(), PortUnavailable> {
             self.blobs
@@ -45,13 +53,18 @@ mod tests {
         }
     }
 
+    // Unix only, as the tests that use it are (they use the unix-only test fixtures).
+    #[cfg(unix)]
     struct AllAlive;
+    #[cfg(unix)]
     impl ProcessInspector for AllAlive {
         fn is_alive(&self, _pid: u32) -> bool {
             true
         }
     }
 
+    // Unix only: uses the unix-only test fixtures.
+    #[cfg(unix)]
     #[test]
     fn ports_and_domain_are_implementable_without_tauri() {
         let clock = FakeClock { millis: 42 };
@@ -102,6 +115,8 @@ mod tests {
         assert!(snapshot.workspaces.is_empty());
     }
 
+    // Unix only: uses the unix-only test fixtures.
+    #[cfg(unix)]
     #[test]
     fn every_runtime_port_is_composable_and_tauri_free() {
         // Exercises the ports the domain-trait test does not — persistence, process

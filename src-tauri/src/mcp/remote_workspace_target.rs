@@ -9,7 +9,6 @@ use crate::terminal::session_server::SessionServerClient;
 use codesense_pty_core::remote_files as wire;
 use sha2::{Digest, Sha256};
 use std::io::Read;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::sync::Arc;
 
 pub(crate) struct ResolvedWorkspace {
@@ -61,17 +60,20 @@ fn read_receipt_files(
         {
             continue;
         }
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(entry.path())
-            .map_err(|_| "workspace intent unavailable")?;
+        let file = codesense_platform::fs::open_nofollow_nonblocking(
+            std::fs::OpenOptions::new().read(true),
+            &entry.path(),
+        )
+        .map_err(|_| "workspace intent unavailable")?;
         let meta = file
             .metadata()
             .map_err(|_| "workspace intent unavailable")?;
         if !meta.is_file()
-            || meta.nlink() != 1
-            || meta.uid() != unsafe { libc::geteuid() }
+            || codesense_platform::fs::link_count(&file)
+                .map_err(|_| "workspace intent unavailable")?
+                != 1
+            || !codesense_platform::fs::is_owned_by_current_user(&file)
+                .map_err(|_| "workspace intent unavailable")?
             || meta.len() > 1024 * 1024
         {
             return Err("workspace intent is unsafe".into());

@@ -18,7 +18,7 @@
         <p>How the app from codesense.ai/download updates itself, what it sends on its own, and how to remove it and the files it keeps.</p>
       </section>
 
-      <section data-search="Updates Settings General Check now Update ready Restart to update installs when you quit release notes" id="updates">
+      <section data-search="Updates Settings General Check now Update ready Restart to update installs when you quit release notes Linux AppImage deb rpm package manager" id="updates">
         <h2>Updates</h2>
         <p>
           You don't need to do anything to stay up to date. The app checks at launch, then about once a
@@ -54,16 +54,27 @@
           CodeSense, open the new <code>.dmg</code> and drag CodeSense into Applications, replacing the old copy.
         </p>
         <p>
+          On Linux, the AppImage updates itself the same way: the new AppImage is checked against the
+          release signing key and replaces the old file where it is when you quit, as long as the file and
+          its folder are yours to write and the folder isn't shared, like <code>/tmp</code>. As CodeSense quits, the old AppImage is moved into a temporary
+          folder and the new one is written at its path; if the write fails the old file is put back,
+          and once it succeeds the old copy is deleted. CodeSense installed from a <code>.deb</code> or <code>.rpm</code>
+          package doesn't download updates itself. When a newer build is out, the Updates section says
+          <q>A new build is out. Update CodeSense through your package manager.</q>, with no download link:
+          install the new package the way you installed this one.
+        </p>
+        <p>
           Update checks are automatic; there is no setting to turn them off. A build you make from
           source has no update source by default: Settings → General shows <strong>Check for Updates</strong>
           in About instead of the Updates section.
         </p>
       </section>
 
-      <section data-search="What leaves your Mac network calls privacy PRIVACY.md no telemetry update manifest" id="what-leaves">
+      <section data-search="What leaves your Mac network calls privacy PRIVACY.md no telemetry update manifest GIF search GIPHY" id="what-leaves">
         <h2>What leaves your Mac</h2>
         <p>
-          CodeSense has no analytics, telemetry or crash reporting and makes no AI calls of its own.
+          CodeSense has no analytics, telemetry or crash reporting of its own and makes no AI calls of
+          its own; with GIF search on, it sends GIPHY's required send and view pings.
           <code>PRIVACY.md</code>, at the root of the CodeSense source, lists every network call the app
           makes, with what it sends, how to turn it off and where it is in the code. In short:
         </p>
@@ -72,21 +83,26 @@
             <strong>On its own</strong> (PRIVACY.md §1–§5): the update check, a <code>GET</code> of one
             static file on <code>dl.codesense.ai</code> that sends no account, key, install id or clock;
             the update download when there is a newer build; inbox pictures on <code>*.giphy.com</code>
-            or <code>static.klipy.com</code> that an agent in one of this app's tabs posts (other pictures
+            or <code>*.klipy.com</code> that an agent in one of this app's tabs posts, fetched again
+            when you view them and never kept on disk (other pictures
             wait for your click, and <code>media: {remote: off}</code> or <code>remote: ask</code> in a
             team's <code>config/inbox.yml</code> stops or holds them); and
             <code>git fetch</code> from a repository's <code>origin</code> for change history, with your
             own git credentials.
           </li>
           <li>
-            <strong>Because you set something up</strong> (§6–§11): your remote machines over SSH, which
+            <strong>Because you set something up</strong> (§6–§12): your remote machines over SSH, which
             receive your terminal sessions, the files you open there and a git bundle of the branch you
             prepare a workspace from; <code>git fetch</code> when a workspace is checked; git-ai notes;
-            MCP servers you configure; agent accounts you add; and dashboards you publish to
-            <code>share.codesense.ai</code>, which sends the files those dashboards list.
+            MCP servers you configure; agent accounts you add; dashboards you publish to
+            <code>share.codesense.ai</code>, which sends the files those dashboards list; and GIF
+            searches an agent makes with <code>gif_search</code>, sent to GIPHY's API with the search
+            words and the GIPHY key you saved in Settings → Messaging, and GIPHY's required send and
+            view pings for the GIFs agents send, with a random id GIPHY issues for this install (none
+            while GIF search is Off or has no key).
           </li>
           <li>
-            <strong>Content you open</strong> (§12): dashboards, documents and stories load what they
+            <strong>Content you open</strong> (§13): dashboards, documents and stories load what they
             reference when you open them in the viewer.
           </li>
         </ul>
@@ -128,6 +144,9 @@
   ~/Library/WebKit/ai.codesense \
   ~/Library/Logs/ai.codesense \
   ~/Library/Preferences/ai.codesense.plist</code></pre>
+            <code>~/Library/Application Support/ai.codesense</code> holds the app's own files, including
+            GIF search's <code>gif.json</code>, <code>gif-rate.json</code> and <code>gif-install.json</code>
+            (the random id GIPHY issued for this install; turning GIF search off deletes it too).
             Repos you cloned yourself are not touched. CodeSense makes their worktrees next to each repo by
             default, in a folder named <code>&lt;repo&gt;-wt</code>; push what you want to keep, then remove
             them with <code>git worktree remove</code>. On remote machines, CodeSense keeps its files in
@@ -140,6 +159,7 @@
             <ul>
               <li><code>codesense-ssh</code>: passphrases you saved for remote machines.</li>
               <li><code>ai.codesense.dashboards</code>: your dashboard publisher key.</li>
+              <li><code>ai.codesense.giphy-api-key</code>: your GIPHY key for GIF search.</li>
               <li><code>codesense-auth</code>: a sign-in record from older versions of CodeSense.</li>
             </ul>
           </li>

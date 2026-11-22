@@ -38,6 +38,7 @@ import { RoutineCreateForm, RoutineOverview } from "./routine-editor";
 import { RoutineActions } from "./routine-actions";
 import { showRoutine } from "@/features/agents/components/agents-tab-nav";
 import { RoutineHistory } from "./routine-history";
+import { localMachinePhrase } from "@/shared/lib/local-machine";
 
 const VIEWS: { id: RoutineView; label: string }[] = [
   { id: "overview", label: "Overview" },
@@ -149,7 +150,7 @@ export function RoutineDetailPane({ now }: { now: number }) {
 function sentence(row: RoutineRow): string {
   const runner = agentName(row.agent_display);
   const where = whereLabel(row.def.where.kind);
-  const off = runsOn(row.def) === "each_mac" ? " Off on this Mac." : " Paused on this Mac.";
+  const off = ` ${runsOn(row.def) === "each_mac" ? "Off" : "Paused"} on ${localMachinePhrase()}.`;
   const state = row.armed_here && !row.enabled ? off : "";
   return `${scheduleLabel(row)}, ${runner} runs in ${where}.${state}`;
 }

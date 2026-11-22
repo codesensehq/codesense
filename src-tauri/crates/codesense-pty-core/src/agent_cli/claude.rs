@@ -106,7 +106,8 @@ static DESCRIPTOR: LazyLock<Descriptor> = LazyLock::new(|| Descriptor {
     project_hooks: Some(ProjectHooks {
         committed: ".claude/settings.json".into(),
         local: ".claude/settings.local.json".into(),
-        status_command: crate::notify_hook::status_command(),
+        status_verb: codesense_host_proto::hook::Verb::Notify,
+        reply_verb: Some(codesense_host_proto::hook::Verb::ReplyCheck),
     }),
     // The oldest release remote tasks were qualified on, with every flag the task
     // harness passes.
@@ -118,6 +119,9 @@ static DESCRIPTOR: LazyLock<Descriptor> = LazyLock::new(|| Descriptor {
         before: None,
         first_line: false,
         supported: "Claude Code 2.1.141 or newer",
+        // Windows hooks set `onFailure`, which Claude reads from this release on.
+        windows_min: Some((2, 1, 295)),
+        windows_supported: Some("Claude Code 2.1.295 or newer"),
     },
 });
 
@@ -331,6 +335,11 @@ impl AgentCliAdapter for Claude {
         self.inbox_hooks(launch)
     }
 
+    /// Its npm install runs this script under `node`.
+    fn npm_entry(&self) -> Option<&'static str> {
+        Some("node_modules/@anthropic-ai/claude-code/cli.js")
+    }
+
     /// It is reached through its terminal and its waiter.
     fn channel(&self, _: &[String]) -> Option<NativeChannel> {
         None
@@ -495,6 +504,8 @@ mod tests {
         );
     }
 
+    // Unix only: the link half makes a symlink.
+    #[cfg(unix)]
     #[test]
     fn a_session_log_found_twice_or_through_a_link_is_refused() {
         let home = tempfile::tempdir().unwrap();

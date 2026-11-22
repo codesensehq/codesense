@@ -122,6 +122,11 @@ pub struct RestoreTab {
     /// does not resume.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume: Option<String>,
+    /// The tab's own folder when it ran outside its workspace's (a story seat
+    /// worktree): a This Mac tab reopens there, still in its workspace. `None`
+    /// for a tab in the workspace's folder, and in an older record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab_dir: Option<String>,
 }
 
 /// What came back, and what did not, for the person.
@@ -284,22 +289,23 @@ pub fn manifest_from(
         } else {
             workspace.descriptor.display_name.clone()
         };
-        let workspace_folder = workspace
-            .descriptor
-            .worktree_path
-            .as_ref()
-            .map(|path| path.to_string_lossy().into_owned());
+        let lossy = |path: &Path| path.to_string_lossy().into_owned();
         for tab in &workspace.tabs {
             if tab.state != EntryState::Live {
                 continue;
             }
+            // A tab with a folder of its own (a seat worktree) falls back to that one.
             let (cwd, cwd_source) = match cwd_of(&tab.session) {
                 Some(cwd) => (Some(cwd), CwdSource::Session),
-                None => match &workspace_folder {
-                    Some(folder) => (Some(folder.clone()), CwdSource::Workspace),
+                None => match workspace.tab_dir(&tab.session) {
+                    Some(folder) => (Some(lossy(folder)), CwdSource::Workspace),
                     None => (None, CwdSource::Home),
                 },
             };
+            let tab_dir = workspace
+                .tab_dirs
+                .get(&tab.session)
+                .map(|dir| lossy(dir.as_path()));
             tabs.push(RestoreTab {
                 team_key: team_key.to_string(),
                 workspace_id: tab
@@ -319,6 +325,7 @@ pub fn manifest_from(
                 descriptor: Some(workspace.descriptor.clone()),
                 session: tab.session.as_str().to_string(),
                 resume: None,
+                tab_dir,
             });
         }
     }
@@ -890,9 +897,11 @@ fn by_workspace(
 }
 
 /// The layout tab and warm spawn that reopen `tab` on This Mac: a shell in
-/// its workspace and folder (the home folder when that folder is gone),
-/// under its name and role, without taking focus. `folder_exists` is asked
-/// of the recorded folder.
+/// its workspace and folder (when that folder is gone, its own folder, else its
+/// workspace's folder, else the home folder: the first that exists), under its
+/// name and role, without taking focus. `folder_exists` is asked of each folder
+/// the spawn may start in. The tab keeps its own folder in the layout either way;
+/// one that is gone is settled by `open_layout_tab`, as for every tab it opens.
 pub(crate) fn reopen_local_request(
     tab: &RestoreTab,
     home: &str,
@@ -912,6 +921,8 @@ pub(crate) fn reopen_local_request(
         .map(|(_, form)| form.to_string())
         .unwrap_or_else(|| tab.workspace_id.clone());
     let open = OpenTab {
+        // A tab with a folder of its own (a seat worktree) keeps it in its workspace.
+        cwd: tab.tab_dir.as_deref().map(PathBuf::from),
         viewer: app_viewer(),
         workspace: crate::commands::pty_layout::workspace_key(&tab.team_key, &form),
         session: PtySessionId::new(crate::commands::mcp_workspace::mint_session_id()),
@@ -927,10 +938,15 @@ pub(crate) fn reopen_local_request(
         index: None,
         activate: false,
     };
-    let cwd = tab
-        .cwd
-        .clone()
-        .filter(|cwd| folder_exists(cwd))
+    let workspace_dir = tab
+        .descriptor
+        .as_ref()
+        .and_then(|d| d.worktree_path.as_ref())
+        .map(|dir| dir.to_string_lossy().into_owned());
+    let existing = |dir: Option<String>| dir.filter(|dir| folder_exists(dir));
+    let cwd = existing(tab.cwd.clone())
+        .or_else(|| existing(tab.tab_dir.clone()))
+        .or_else(|| existing(workspace_dir))
         .unwrap_or_else(|| home.to_string());
     let spawn = TabSpawn::Warm(AttachWarmArgs {
         target_cwd: cwd,
@@ -1551,6 +1567,63 @@ mod tests {
         legacy.workspace_id = "SW-9".into();
         let (open, _) = reopen_local_request(&legacy, "/home/me", |_| true);
         assert_eq!(open.workspace.as_str(), "acme:default|SW-9");
+    }
+
+    #[test]
+    fn a_tab_with_a_folder_of_its_own_reopens_there_in_its_workspace() {
+        let mut layout = snapshot(Some("/srv/SW-1"));
+        layout
+            .workspaces
+            .get_mut(&WorkspaceKey::new("acme:default|SW-1"))
+            .unwrap()
+            .tab_dirs
+            .insert(PtySessionId::new("c"), "/srv/SW-1-seat-dev".into());
+        // The old server can't say where a session runs: each tab falls back to its own
+        // folder, else the workspace's.
+        let manifest = manifest_from("local", &layout, 7, |_| None);
+        let by_session = |session: &str| {
+            manifest
+                .tabs
+                .iter()
+                .find(|tab| tab.session == session)
+                .unwrap()
+                .clone()
+        };
+        let (seat, shell) = (by_session("c"), by_session("a"));
+        assert_eq!(seat.cwd.as_deref(), Some("/srv/SW-1-seat-dev"));
+        assert_eq!(seat.tab_dir.as_deref(), Some("/srv/SW-1-seat-dev"));
+        assert_eq!(shell.cwd.as_deref(), Some("/srv/SW-1"));
+        assert_eq!(shell.tab_dir, None);
+        // Reopened in the story's workspace (its descriptor), running in its own folder.
+        let (open, _) = reopen_local_request(&seat, "/home/me", |_| true);
+        assert_eq!(open.cwd.as_deref(), Some(Path::new("/srv/SW-1-seat-dev")));
+        assert_eq!(
+            open.descriptor.and_then(|d| d.worktree_path),
+            Some(PathBuf::from("/srv/SW-1"))
+        );
+        assert_eq!(
+            reopen_local_request(&shell, "/home/me", |_| true).0.cwd,
+            None
+        );
+        // Its folder gone, it starts in its workspace's folder; the layout still gets
+        // its own folder, which `open_layout_tab` settles for every start path.
+        let start = |exists: &dyn Fn(&str) -> bool| {
+            let (open, spawn) = reopen_local_request(&seat, "/home/me", exists);
+            assert_eq!(open.cwd.as_deref(), Some(Path::new("/srv/SW-1-seat-dev")));
+            let crate::commands::pty_layout::TabSpawn::Warm(warm) = spawn else {
+                panic!("a warm shell")
+            };
+            warm.target_cwd
+        };
+        assert_eq!(start(&|dir| dir == "/srv/SW-1"), "/srv/SW-1");
+        // Its workspace's folder gone too: the home folder, never a folder that is gone.
+        assert_eq!(start(&|_| false), "/home/me");
+        // A record from before tab folders were kept reads without one.
+        let mut older = serde_json::to_value(&seat).unwrap();
+        older.as_object_mut().unwrap().remove("tabDir");
+        older.as_object_mut().unwrap().remove("tab_dir");
+        let older: RestoreTab = serde_json::from_value(older).unwrap();
+        assert_eq!(older.tab_dir, None);
     }
 
     #[test]

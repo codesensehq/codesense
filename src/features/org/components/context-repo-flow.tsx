@@ -6,6 +6,7 @@ import { FolderOpen, Plus } from "lucide-react";
 import { AppButton } from "@/shared/components/app-button";
 import { MENU_ITEM, MenuLeadIcon } from "@/shared/components/menu-section";
 import { Input } from "@/components/ui/input";
+import { join } from "@/shared/lib/path";
 import {
   NOT_A_CONTEXT_REPO,
   contextRepoFolderName,
@@ -244,7 +245,7 @@ export function CreateContextRepoForm({
       const parent = await chooseFolder("Choose where to create the context repo");
       onPickerSettled?.();
       if (parent && live.current) {
-        setLocation(`${parent.replace(/[/\\]+$/, "")}/${contextRepoFolderName(name)}`);
+        setLocation(join(parent, contextRepoFolderName(name)));
       }
     } catch (e) {
       if (live.current) setError(String(e));

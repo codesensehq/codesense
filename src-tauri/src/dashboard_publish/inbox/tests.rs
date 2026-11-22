@@ -21,6 +21,10 @@ pub(crate) struct FakeInbox {
             std::sync::mpsc::Receiver<()>,
         )>,
     >,
+    /// A real media state, for tests of the memory-only path; none by default.
+    media: std::sync::Mutex<Option<Arc<crate::media::MediaState>>>,
+    /// Each role send's `(team, role, sender)`, as the app's seam hears it.
+    queued: std::sync::Mutex<Vec<(String, String, String)>>,
 }
 impl FakeInbox {
     fn new() -> Arc<Self> {
@@ -30,7 +34,18 @@ impl FakeInbox {
             cache: Default::default(),
             names: Default::default(),
             read_gate: std::sync::Mutex::new(None),
+            media: std::sync::Mutex::new(None),
+            queued: Default::default(),
         })
+    }
+    /// Serve media through a real media state over `fetch`, as the app does.
+    pub(crate) fn use_media(
+        &self,
+        fetch: Arc<crate::media::FakeFetch>,
+    ) -> Arc<crate::media::MediaState> {
+        let state = crate::media::MediaState::for_test(self.dir.path().join("media-cache"), fetch);
+        *self.media.lock().unwrap() = Some(state.clone());
+        state
     }
     fn path(&self, team: &str) -> PathBuf {
         self.dir.path().join(team).join("weft.sqlite3")
@@ -116,8 +131,27 @@ impl InboxHost for FakeInbox {
     fn inbox_changed(&self, _changes: &[(LaunchTeam, Vec<i64>)]) {
         self.changed.fetch_add(1, Ordering::SeqCst);
     }
-    fn cached_media(&self, sha: &str) -> Result<Vec<u8>, String> {
-        self.cache.lock().unwrap().get(sha).cloned().ok_or("evicted".into())
+    async fn cached_media(&self, team: &LaunchTeam, attachment: &crate::media::Attachment) -> Result<Vec<u8>, String> {
+        let media = self.media.lock().unwrap().clone();
+        let Some(media) = media else {
+            let sha = attachment.sha256.as_deref().unwrap_or_default();
+            return self.cache.lock().unwrap().get(sha).cloned().ok_or("evicted".into());
+        };
+        media.read(&self.media_config(team), attachment).await.map(|b| b.to_vec())
+    }
+    fn present_media(&self, team: &LaunchTeam, attachments: &mut [crate::media::Attachment]) {
+        let config = self.media_config(team);
+        let media = self.media.lock().unwrap().clone();
+        match media {
+            Some(media) => media.present(&config, attachments),
+            None => config.apply(attachments),
+        }
+    }
+    fn role_message_queued(&self, team: &LaunchTeam, role: &str, _: i64, sender: &str) {
+        self.queued
+            .lock()
+            .unwrap()
+            .push((team.team.clone(), role.into(), sender.into()));
     }
 }
 
@@ -335,6 +369,15 @@ async fn owner_sends_and_replies_through_the_inbox_with_fixed_team_and_plain_con
         .unwrap();
     assert_eq!(role["delivery"]["state"], "queued");
     assert!(role.get("text").is_none());
+    // The send reaches the seam where the app offers the role's holders their notice.
+    assert_eq!(
+        *host.queued.lock().unwrap(),
+        vec![(
+            "emea".to_string(),
+            "triage".to_string(),
+            "human".to_string()
+        )]
+    );
 }
 
 #[tokio::test]
@@ -540,6 +583,11 @@ pub(crate) fn image(sha: &str, state: &str) -> crate::media::Attachment {
         state: state.into(),
         reason: Some("host".into()),
         retryable: false,
+        media_provider: None,
+        own_sender: false,
+        provider: None,
+        provider_id: None,
+        onload_sent: false,
     }
 }
 
@@ -586,10 +634,49 @@ async fn meta_and_media_fields_are_opt_in_and_hide_the_source() {
     let a = &media_only["attachments"][0];
     assert_eq!(a["sha256"], sha);
     assert_eq!((a["state"].as_str(), a["alt"].as_str()), (Some("cached"), Some("a cat")));
+    assert_eq!(a["attribution"], "giphy", "the attribution provider only");
     let text = media_only.to_string();
-    for leak in ["giphy", "sourceUrl", "sourceHost", "reason", "retryable"] {
+    for leak in PROVIDER_LEAKS.iter().chain(&["reason", "retryable"]) {
         assert!(!text.contains(leak), "{leak} leaked");
     }
+}
+
+/// What the hosted projection never carries about provider media: its URL, host or id, or
+/// its view-ping state.
+const PROVIDER_LEAKS: &[&str] = &[
+    "giphy.com",
+    "klipy.com",
+    "https://",
+    "sourceUrl",
+    "sourceHost",
+    "providerId",
+    "onloadSent",
+];
+
+#[test]
+fn the_projection_carries_the_attribution_provider_in_every_state_and_nothing_else() {
+    use crate::media::MediaProvider;
+    for state in ["cached", "pending", "blocked", "failed"] {
+        let mut tagged = image(&"a".repeat(64), state);
+        tagged.provider = Some(MediaProvider::Giphy);
+        tagged.provider_id = Some("abc123".into());
+        tagged.onload_sent = true;
+        let out = media::projected(&tagged);
+        assert_eq!(out["attribution"], "giphy", "{state}");
+        let text = out.to_string();
+        for leak in PROVIDER_LEAKS.iter().chain(&["abc123"]) {
+            assert!(!text.contains(leak), "{state}: {leak} leaked");
+        }
+    }
+    // A plain URL redirected to KLIPY: the final host decides.
+    let mut redirected = image(&"b".repeat(64), "cached");
+    redirected.source_url = Some("https://example.com/a.gif".into());
+    redirected.source_host = Some("example.com".into());
+    redirected.media_provider = Some(MediaProvider::Klipy);
+    assert_eq!(media::projected(&redirected)["attribution"], "klipy");
+    // Other media carries none.
+    redirected.media_provider = Some(MediaProvider::None);
+    assert!(media::projected(&redirected).get("attribution").is_none());
 }
 
 #[tokio::test]
@@ -726,6 +813,73 @@ async fn media_refuses_everything_else_and_never_fetches() {
     assert_eq!(refused(media(&ctx, &call, args(m, &big)).await).as_deref(), Some("too_large"));
 }
 
+/// A provider GIF sent from this Mac, held in memory only: after a restart the hosted
+/// path fetches it again, only for a confirmed attachment, once per render.
+#[tokio::test]
+async fn hosted_media_refetches_a_memory_only_sha_once_and_only_after_authorizing() {
+    use base64::Engine as _;
+    let (host, ctx, call) = fixture();
+    let fetch = Arc::new(crate::media::FakeFetch::default());
+    let state = host.use_media(fetch.clone());
+    let provider = |sha: &str, url: &str| {
+        let mut a = image(sha, "cached");
+        a.source_url = Some(url.into());
+        a.own_sender = true;
+        a.media_provider = Some(crate::media::MediaProvider::Giphy);
+        a
+    };
+    let note = |team: &str, id: i64, a: &crate::media::Attachment| {
+        let owner = crate::media::index::Owner { org: "acme".into(), team: team.into(), message_id: id };
+        state.note(&owner, id, std::slice::from_ref(a));
+    };
+    let bytes = gif(400 * 1024);
+    let sha = format!("{:x}", sha2::Sha256::digest(&bytes));
+    let url = "https://i.giphy.com/x.gif";
+    fetch.serve(url, &bytes, url, Some("no-store"));
+    let id = host.insert("emea", "human", "hi");
+    let mut a = provider(&sha, url);
+    a.bytes = Some(bytes.len() as u64);
+    host.attach("emea", id, &[a.clone()]);
+    note("emea", id, &a);
+    // Another team's provider GIF, re-fetchable there, but not an attachment here.
+    let foreign_bytes = gif(64);
+    let foreign = format!("{:x}", sha2::Sha256::digest(&foreign_bytes));
+    let foreign_url = "https://i.giphy.com/foreign.gif";
+    fetch.serve(foreign_url, &foreign_bytes, foreign_url, None);
+    let other = host.insert("other", "human", "secret");
+    host.attach("other", other, &[provider(&foreign, foreign_url)]);
+    note("other", other, &provider(&foreign, foreign_url));
+    let refused = |v: Result<Value, QueryError>| v.unwrap()["refused"].as_str().map(str::to_string);
+    for args in [json!({"messageId": id, "sha256": foreign}), json!({"messageId": id + 40, "sha256": sha})] {
+        assert_eq!(refused(media(&ctx, &call, args).await).as_deref(), Some("not_found"));
+    }
+    assert!(fetch.calls().is_empty(), "nothing is fetched before the attachment is confirmed");
+
+    // Every chunk, at every offset, is a serve the serve hook hears (the provider view pings).
+    let served = Arc::new(AtomicUsize::new(0));
+    let count = served.clone();
+    state.when_served(Arc::new(move |_: &str| {
+        count.fetch_add(1, Ordering::SeqCst);
+    }));
+    // Every chunk of one render within the no-store pin shares one fetch.
+    let (mut got, mut asks) = (Vec::new(), 0);
+    loop {
+        let a = media(&ctx, &call, json!({"messageId": id, "sha256": sha, "offset": got.len()}))
+            .await
+            .unwrap();
+        asks += 1;
+        got.extend(base64::engine::general_purpose::STANDARD.decode(a["data"].as_str().unwrap()).unwrap());
+        if a["done"] == true {
+            break;
+        }
+    }
+    assert_eq!(got, bytes);
+    assert!(asks >= 3);
+    assert_eq!(served.load(Ordering::SeqCst), asks, "chunks at a non-zero offset included");
+    assert_eq!(fetch.calls(), vec![url.to_string()]);
+    assert!(!host.dir.path().join("media-cache").join(&sha).exists());
+}
+
 #[test]
 fn media_answers_keep_base64_whole_but_redact_the_rest() {
     use base64::Engine as _;
@@ -838,7 +992,8 @@ async fn inbox_stream_gates_meta_and_media_and_redacts_their_free_text() {
     let text = media_row.to_string();
     assert!(!text.contains("ghp_abcdefghijklmnopqrstuvwxyz0123"), "{text}");
     assert!(text.contains("[redacted]"), "{text}");
-    for leak in ["giphy", "sourceUrl", "reason"] {
+    assert_eq!(media_row["attachments"][0]["attribution"], "giphy");
+    for leak in PROVIDER_LEAKS.iter().chain(&["reason"]) {
         assert!(!text.contains(leak), "{leak} leaked");
     }
 }

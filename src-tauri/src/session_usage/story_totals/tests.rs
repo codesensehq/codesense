@@ -1649,7 +1649,7 @@ fn a_counting_result_persists_through_store_result() {
 /// again; other reasons are as stored.
 #[test]
 fn a_managed_settings_change_shows_on_the_next_index_read_without_a_fold() {
-    use crate::session_usage::managed_telemetry::{Fixture, USAGE_REDIRECTED};
+    use crate::session_usage::managed_telemetry::{usage_redirected, Fixture};
     const NONE: &str = "no sessions with priced usage for this story";
     let (dir, s) = store();
     let all = ids("SV-MANAGED", 1);
@@ -1677,9 +1677,13 @@ fn a_managed_settings_change_shows_on_the_next_index_read_without_a_fold() {
     assert_eq!(read(), NONE, "Claude's session log is read");
     drop(read_from_its_log);
     let managed = Fixture::redirecting_unread();
-    assert_eq!(read(), USAGE_REDIRECTED, "an install shows on the next read");
-    stored(USAGE_REDIRECTED);
-    assert_eq!(read(), USAGE_REDIRECTED);
+    assert_eq!(
+        read(),
+        usage_redirected(),
+        "an install shows on the next read"
+    );
+    stored(usage_redirected());
+    assert_eq!(read(), usage_redirected());
     drop(managed);
     assert_eq!(read(), NONE, "a removal shows on the next read");
 }
@@ -2259,6 +2263,165 @@ mod b1 {
         assert_eq!((new_cost["totals"]["sessions"].clone(), new_cost["totals"]["costUsd"].clone()), (json!(2), json!(4.0)));
     }
 
+    /// A charge moves a session's later usage to another story: the story it resolved to falls by
+    /// exactly what the charged story gains, the two add up to the session's cost, both stories are
+    /// marked and recomputed, and a story the charge does not touch keeps its totals.
+    #[tokio::test]
+    async fn a_charge_moves_the_charged_usage_between_stories() {
+        let (dir, mut s) = store();
+        let home = dir.path();
+        let (from, to, calm) = ("DEMO-10", "DEMO-11", "DEMO-12");
+        seed_session(&mut s, home, from, "mover", true);
+        let mut later = event("mover-e2", "mover", "gpt-6-sol", 1_790_000_001_000, Tokens { input: 5, ..Default::default() });
+        later.reported_cost_usd = Some(3.0);
+        s.ingest(&[later]).unwrap();
+        seed_session(&mut s, home, to, "stay", true);
+        seed_session(&mut s, home, calm, "calm", true);
+        let all = [from.to_owned(), to.to_owned(), calm.to_owned()];
+        human_read(home, &all);
+        index_all(home).await;
+        s.conn.execute("DELETE FROM source_event", []).unwrap();
+        let cost = |answer: &Value| answer["totals"]["costUsd"].as_f64();
+        let (from_before, to_before, calm_before) = (compute(home, from).await, compute(home, to).await, compute(home, calm).await);
+        assert_eq!((cost(&from_before), cost(&to_before)), (Some(5.0), Some(2.0)));
+        let charge = crate::session_usage::charge::Charge {
+            story_id: to.into(),
+            from_ms: 1_790_000_000_500,
+            org: Some("acme".into()),
+            team: Some("dev".into()),
+            charged_by: Some("lead".into()),
+            charged_by_session: "lead".into(),
+            charged_at_ms: 1_790_000_002_000,
+        };
+        s.charge_story("mover", &charge).unwrap();
+        assert!(dirty(&s, to), "the charged story is marked by the charge");
+        assert!(!dirty(&s, calm));
+        sweep_sources(&s, home, now_ms()).unwrap();
+        assert!(dirty(&s, from), "the story the session resolved to is marked through its changed row");
+        assert_eq!(rows(&s, from).len(), 1);
+        assert_eq!(rows(&s, to).len(), 2);
+        let (from_after, to_after) = (compute(home, from).await, compute(home, to).await);
+        assert_eq!(cost(&from_after), Some(2.0));
+        assert_eq!(cost(&to_after), Some(5.0));
+        assert_eq!(cost(&from_before).unwrap() - cost(&from_after).unwrap(), cost(&to_after).unwrap() - cost(&to_before).unwrap());
+        let session = crate::session_usage::cost_rollup::CostRollup::total(&s.session_cost("mover").unwrap());
+        assert_eq!(Some(cost(&from_after).unwrap() + 3.0), session, "the two parts are the whole session");
+        assert_eq!(compute(home, calm).await["totals"], calm_before["totals"]);
+        // The charged story lists the session once, with its segment of the story and that cost.
+        let read = full(home, to).await;
+        let mover = read["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|session| session["session"]["sessionId"] == "mover")
+            .unwrap();
+        assert_eq!(mover["segments"], json!([{"fromMs": 1_790_000_000_500_i64, "toMs": null}]));
+        assert_eq!(mover["cost"]["totalUsd"], 3.0);
+        assert_eq!((mover["cost"]["state"].clone(), mover["cost"]["scope"].clone()), (json!("present"), json!("segments")));
+        assert_eq!(mover["modelsScope"], "session");
+        assert_eq!(mover["basis"], "exact", "a charge is an exact link");
+    }
+
+    /// A charge names the tab while its usage arrives under the CLI's native id: the story totals
+    /// split that usage all the same.
+    #[tokio::test]
+    async fn a_tab_charge_moves_the_usage_its_native_session_reported() {
+        let (dir, mut s) = store();
+        let home = dir.path();
+        let (from, to) = ("DEMO-30", "DEMO-31");
+        let source = home.join(format!("{from}.md"));
+        std::fs::write(&source, "---\nstatus: in-progress\n---\n").unwrap();
+        let mut record = SessionRecord::new("tab-n");
+        record.native_session_id = Some("native-n".into());
+        record.story_id = Some(from.into());
+        s.write_session_record(&record).unwrap();
+        s.link_story("tab-n", &StoryLink { story_id: from.into(), source, org: "acme".into() }).unwrap();
+        let base = 1_790_000_000_000_i64;
+        let calls: Vec<_> = [(0, 2.0), (1_000, 3.0)]
+            .into_iter()
+            .map(|(at, cost)| {
+                let mut e = event(&format!("n-{at}"), "native-n", "gpt-6-sol", base + at, Tokens { input: 5, ..Default::default() });
+                e.reported_cost_usd = Some(cost);
+                e
+            })
+            .collect();
+        s.ingest(&calls).unwrap();
+        human_read(home, &[from.to_owned(), to.to_owned()]);
+        index_all(home).await;
+        assert_eq!(compute(home, from).await["totals"]["costUsd"], 5.0);
+        let charge = crate::session_usage::charge::Charge {
+            story_id: to.into(),
+            from_ms: base + 500,
+            org: Some("acme".into()),
+            team: Some("dev".into()),
+            charged_by: None,
+            charged_by_session: "lead".into(),
+            charged_at_ms: base + 2_000,
+        };
+        s.charge_story("tab-n", &charge).unwrap();
+        sweep_sources(&s, home, now_ms()).unwrap();
+        assert_eq!(compute(home, from).await["totals"]["costUsd"], 2.0);
+        assert_eq!(compute(home, to).await["totals"]["costUsd"], 3.0);
+    }
+
+    /// A charge splits a session's observed time too: each story gets the wall and active time
+    /// inside its segments, the two add up to the session's, only the story holding the open
+    /// segment carries the session's end, and a segment past the observed span adds no time.
+    #[tokio::test]
+    async fn a_charge_splits_the_sessions_time_at_its_moment() {
+        use codesense_pty_core::activity::Event;
+        let (dir, mut s) = store();
+        let home = dir.path();
+        let (from, to, late) = ("DEMO-20", "DEMO-21", "DEMO-22");
+        let base = 1_790_000_000_000_i64;
+        seed_session(&mut s, home, from, "mover", true);
+        let mut later = event("mover-e2", "mover", "gpt-6-sol", base + 350, Tokens { input: 5, ..Default::default() });
+        later.reported_cost_usd = Some(3.0);
+        let mut last = event("mover-e3", "mover", "gpt-6-sol", base + 700, Tokens { input: 5, ..Default::default() });
+        last.reported_cost_usd = Some(1.0);
+        s.ingest(&[later, last]).unwrap();
+        // Turns 0-100 and 300-400 (from base); the session ends at 500.
+        let mut timing = crate::session_usage::timing::TimingState::default();
+        for (at, signal) in [(0, Event::Submitted), (100, Event::Stopped), (300, Event::Submitted), (400, Event::Stopped), (500, Event::Ended)] {
+            let stamped = crate::session_usage::timing::Stamped {
+                session_id: "mover".into(),
+                at_ms: base + at,
+                signal: crate::session_usage::timing::Signal::Activity(signal, "fixture"),
+            };
+            timing.apply(&s, &stamped).unwrap();
+        }
+        let whole = s.read_session_record("mover").unwrap().unwrap().timing.unwrap();
+        let all = [from.to_owned(), to.to_owned(), late.to_owned()];
+        human_read(home, &all);
+        index_all(home).await;
+        let charge = |story: &str, from_ms: i64| crate::session_usage::charge::Charge {
+            story_id: story.into(),
+            from_ms,
+            org: Some("acme".into()),
+            team: Some("dev".into()),
+            charged_by: None,
+            charged_by_session: "lead".into(),
+            charged_at_ms: from_ms,
+        };
+        s.charge_story("mover", &charge(to, base + 250)).unwrap();
+        sweep_sources(&s, home, now_ms()).unwrap();
+        let time = |answer: &Value| (answer["totals"]["wallMs"].as_i64(), answer["totals"]["activeMs"].as_i64());
+        let (a, b) = (compute(home, from).await, compute(home, to).await);
+        assert_eq!(time(&a), (Some(250), Some(100)));
+        assert_eq!(time(&b), (Some(250), Some(100)));
+        assert_eq!((250 + 250, 100 + 100), (whole.wall_ms, whole.active_ms), "the stories' time is the session's");
+        let ended = |story: &str| rows(&s, story)[0].contribution.nums.get("ended").copied();
+        assert_eq!(ended(from), None, "an earlier segment never carries the session's end");
+        assert_eq!(ended(to), Some(Some(1.0)));
+        // A charge past the observed end: its segment adds no time and stores no span.
+        s.charge_story("mover", &charge(late, base + 600)).unwrap();
+        sweep_sources(&s, home, now_ms()).unwrap();
+        let late_row = &rows(&s, late)[0].contribution.nums;
+        assert!(late_row.get("start").is_none() && late_row.get("end").is_none(), "{late_row:?}");
+        assert_eq!(late_row.get("untimed"), Some(&Some(1.0)));
+        assert_eq!(time(&compute(home, to).await), (Some(250), Some(100)), "the span up to the end is unchanged");
+    }
+
     /// The upgrade copies the old session queue into `source_event` and drops the old table, in the
     /// transaction `open` runs it in.
     #[test]
@@ -2588,7 +2751,7 @@ mod b1 {
                 "empty" => (json!([0, null, 0, 0, 0]), Some("no sessions with priced usage for this story"), None),
                 "redirected-empty" => (
                     json!([0, null, 0, 0, 0]),
-                    Some(crate::session_usage::managed_telemetry::USAGE_REDIRECTED),
+                    Some(crate::session_usage::managed_telemetry::usage_redirected()),
                     None,
                 ),
                 "timed" | "redirected-timed" => (json!([2, 4.0, 250, 200, 200]), None, None),

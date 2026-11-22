@@ -203,6 +203,78 @@ async fn terminal_status(
     }
 }
 
+/// What the reply reminder reads at a Claude `Stop`.
+#[derive(Serialize, ToSchema)]
+pub struct ReplyCheckResponse {
+    /// The id of the oldest message from the person this session took, hasn't answered and
+    /// hasn't been reminded of, now marked reminded; `null` when there is none. Only an id,
+    /// never the message's text.
+    pub block: Option<String>,
+}
+
+/// Whether a Claude agent owes the person an answer, at its turn's end.
+///
+/// The `codesense-bridge hook reply-check` `Stop` hook asks this. The tab is identified as for
+/// `/api/v1/terminal/status`, by the `X-Codesense-Tab-Session-Id` header, and only a live
+/// session is answered. The body is ignored: the hook sends nothing of the turn. Each message
+/// is named once, so a turn the reminder kept going ends at its next `Stop`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/terminal/reply-check",
+    tag = "terminal",
+    params(
+        ("X-Codesense-Tab-Session-Id" = String, Header, description = "Terminal tab session ID (from CODESENSE_TAB_SESSION_ID env var)")
+    ),
+    responses(
+        (status = 200, description = "The message to remind the agent of, or none", body = ReplyCheckResponse),
+        (status = 400, description = "Missing X-Codesense-Tab-Session-Id header")
+    )
+)]
+async fn reply_check(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<ReplyCheckResponse>, StatusCode> {
+    let tab_session_id = headers
+        .get(HEADER_TAB_SESSION_ID)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let app = state.app_handle.clone();
+    reply_check_answer(
+        crate::commands::reply_owed::replies_owed(),
+        tab_session_id,
+        move |tab| async move {
+            crate::commands::dashboard_launch::session_liveness(&app, &tab)
+                .await
+                .may_be_true()
+        },
+    )
+    .await
+    .map(Json)
+}
+
+/// The route's answer for the tab `tab_session_id` names, from `owed`. `live` probes the tab
+/// only when it owes something; a session known gone is never answered.
+async fn reply_check_answer<F, Fut>(
+    owed: &crate::commands::reply_owed::RepliesOwed,
+    tab_session_id: &str,
+    live: F,
+) -> Result<ReplyCheckResponse, StatusCode>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let tab = tab_session_id.trim();
+    if tab.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let block = if owed.owes(tab) && live(tab.to_string()).await {
+        owed.remind(tab).map(|id| id.to_string())
+    } else {
+        None
+    };
+    Ok(ReplyCheckResponse { block })
+}
+
 /// A CLI started by hand in a CodeSense tab has no launch to record. Its first hook writes a
 /// minimal record: the tab, the CLI's own id from the payload, and org and team only when the
 /// tab's session has an owner. Every other fact says why it is unknown.
@@ -259,12 +331,70 @@ fn terminal_status_event(tab_session_id: &str, hook: ResolvedHook) -> TerminalSt
 }
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/api/v1/terminal/status", post(terminal_status))
+    Router::new()
+        .route("/api/v1/terminal/status", post(terminal_status))
+        .route(
+            codesense_host_proto::hook::REPLY_CHECK_PATH,
+            post(reply_check),
+        )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::commands::reply_owed::RepliesOwed;
+    use crate::weft::inbox::HUMAN;
+
+    async fn answer(
+        owed: &RepliesOwed,
+        tab: &str,
+        live: bool,
+    ) -> Result<Option<String>, StatusCode> {
+        reply_check_answer(owed, tab, |_| async move { live })
+            .await
+            .map(|answer| answer.block)
+    }
+
+    #[tokio::test]
+    async fn reply_check_needs_the_tab_header() {
+        let owed = RepliesOwed::default();
+        assert_eq!(answer(&owed, "", true).await, Err(StatusCode::BAD_REQUEST));
+        assert_eq!(
+            answer(&owed, "  ", true).await,
+            Err(StatusCode::BAD_REQUEST)
+        );
+    }
+
+    #[tokio::test]
+    async fn reply_check_names_a_live_tabs_message_once() {
+        let owed = RepliesOwed::default();
+        owed.took("tab-1", "lead", [(7, HUMAN)]);
+        assert_eq!(
+            answer(&owed, "tab-1", true).await,
+            Ok(Some("7".to_string()))
+        );
+        assert_eq!(answer(&owed, "tab-1", true).await, Ok(None), "never twice");
+        assert_eq!(
+            answer(&owed, "tab-2", true).await,
+            Ok(None),
+            "another tab owes nothing"
+        );
+        let body = serde_json::to_value(ReplyCheckResponse { block: None }).unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({ "block": null }),
+            "the wire field the hook reads"
+        );
+    }
+
+    #[tokio::test]
+    async fn reply_check_never_answers_a_tab_that_is_gone() {
+        let owed = RepliesOwed::default();
+        owed.took("tab-1", "lead", [(7, HUMAN)]);
+        assert_eq!(answer(&owed, "tab-1", false).await, Ok(None));
+        assert!(owed.owes("tab-1"), "a gone tab's probe names nothing");
+    }
 
     fn update(event: &'static str, status: &'static str) -> TerminalStatusAction {
         TerminalStatusAction::Update(ResolvedHook { event, status })
@@ -471,8 +601,8 @@ mod tests {
     }
 
     // ---- Payloads captured from a real `claude` run (Claude Code 2.1.x). The
-    // same files feed `scripts/codesense-notify-hook.test.sh`, which proves the
-    // hook script forwards them to this route unmodified. ----
+    // same files feed `codesense-bridge/tests/hook_commands.rs`, which proves the
+    // written hook commands forward them to this route unmodified. ----
 
     const REAL_HOOK_PAYLOADS: &[(&str, &str)] = &[
         (

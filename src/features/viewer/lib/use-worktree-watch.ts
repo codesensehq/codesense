@@ -18,39 +18,161 @@ import { logger } from "@/shared/lib/logger";
  * any future consumer) share exactly one OS watch with no strand.
  */
 
+/**
+ * How long one attach or detach may hold its key's queue. The backend runs attaches on the
+ * blocking pool with no timeout, so a hung mount can leave one unsettled; after this the next
+ * operation proceeds, and a late attach token is reconciled when it lands.
+ */
+export const WATCH_OP_SETTLE_BOUND_MS = 5_000;
+
 interface WatchEntry {
   count: number;
   cwd: string;
-  /** The attach token once resolved; `null` while the attach is in flight. */
+  /** The token of the last attach that resolved for this entry; `null` until one does. */
   token: number | null;
+  /**
+   * An attach for this entry is queued or in flight. An entry has at most one at a time: a
+   * re-attach is queued only once the previous attach has settled. While a re-attach is pending,
+   * `token` is stale: a late attach replaced that watch, and the late token's detach is queued
+   * ahead of the re-attach or sits in `held`.
+   */
+  pending: boolean;
+  /** Late tokens of superseded attaches, compared with the pending attach's token once it settles. */
+  held: number[];
 }
 
+/** Live entries only: an entry leaves the map when its count drops to 0. */
 const watches = new Map<string, WatchEntry>();
+
+/**
+ * Per-key queue of attach and detach calls. The backend keeps one watch per key and mints its
+ * token when an attach lands, so attaches racing on the blocking pool could land out of order
+ * and the older one would replace the newer watch. Issuing them one at a time per key keeps the
+ * backend seeing them in issue order, so the last attach wins. An operation on an idle key is
+ * issued synchronously.
+ */
+const queues = new Map<string, Op[]>();
+
+/** An operation calls `finish` once it has settled; `late` turns true if the bound got there first. */
+interface Link {
+  late: boolean;
+  finish: () => void;
+}
+type Op = (link: Link) => void;
+
+function enqueue(wsId: string, op: Op): void {
+  const queue = queues.get(wsId);
+  if (queue) {
+    queue.push(op);
+    return;
+  }
+  queues.set(wsId, []);
+  run(wsId, op);
+}
+
+function run(wsId: string, op: Op): void {
+  const queue = queues.get(wsId);
+  let done = false;
+  const link: Link = {
+    late: false,
+    finish: () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      if (!queue || queues.get(wsId) !== queue) return;
+      const next = queue.shift();
+      if (next) run(wsId, next);
+      else queues.delete(wsId);
+    },
+  };
+  const timer = setTimeout(() => {
+    link.late = true;
+    link.finish();
+  }, WATCH_OP_SETTLE_BOUND_MS);
+  op(link);
+}
+
+function detach(wsId: string, token: number): void {
+  enqueue(wsId, (link) => {
+    detachWorktreeWatch(wsId, token)
+      .catch(() => {})
+      .finally(link.finish);
+  });
+}
+
+/**
+ * Queue an attach for a live entry. `resume` marks a re-attach after a late attach replaced the
+ * entry's watch: once it lands, the change nonce is bumped so the gap is caught up.
+ */
+function attach(wsId: string, entry: WatchEntry, resume: boolean): void {
+  entry.pending = true;
+  enqueue(wsId, (link) => {
+    // Released before its turn: skip the attach. Release already detached the held tokens, and
+    // no token was minted.
+    if (entry.count === 0) {
+      entry.pending = false;
+      link.finish();
+      return;
+    }
+    lazyAttachWorktreeWatch(wsId, entry.cwd).then(
+      (token) => {
+        entry.pending = false;
+        if (entry.count > 0) {
+          entry.token = token;
+          settleHeld(wsId, entry, token);
+          if (resume) useViewerStore.getState().bumpWorktreeChangedPath(wsId, "", true);
+          link.finish();
+        } else if (!link.late) {
+          // Everyone released before the attach resolved: detach before the next operation runs.
+          detachWorktreeWatch(wsId, token)
+            .catch(() => {})
+            .finally(link.finish);
+        } else {
+          // Past the bound, the next attach may already have landed.
+          reconcileLate(wsId, token);
+        }
+      },
+      (err) => {
+        logger.warn("useWorktreeWatch", `worktree watch attach failed for ${wsId} — ${err}`);
+        entry.pending = false;
+        settleHeld(wsId, entry, null);
+        link.finish();
+      },
+    );
+  });
+}
+
+/**
+ * A superseded attach resolved after the queue moved on. Tokens follow the order attaches landed
+ * in, so a token above the live entry's means this attach replaced the live watch.
+ */
+function reconcileLate(wsId: string, token: number): void {
+  const live = watches.get(wsId);
+  if (live?.pending) {
+    live.held.push(token);
+    return;
+  }
+  detach(wsId, token);
+  if (live && live.token !== null && token > live.token) attach(wsId, live, true);
+}
+
+/** The entry's attach settled with `token` (`null` if it failed): reconcile the held tokens. */
+function settleHeld(wsId: string, entry: WatchEntry, token: number | null): void {
+  const held = entry.held.splice(0);
+  for (const late of held) detach(wsId, late);
+  if (token !== null && held.some((late) => late > token)) attach(wsId, entry, true);
+}
 
 function acquire(wsId: string, cwd: string): void {
   const existing = watches.get(wsId);
-  // An entry released to 0 while its attach is in flight is dead: its `.then` detaches it, and a
-  // new consumer (possibly another team's worktree under the same id) attaches its own.
-  if (existing && existing.count > 0) {
+  if (existing) {
     existing.count++;
     return;
   }
-  const entry: WatchEntry = { count: 1, cwd, token: null };
+  const entry: WatchEntry = { count: 1, cwd, token: null, pending: false, held: [] };
   watches.set(wsId, entry);
   // Fire-and-forget so a watch failure never blocks the mount.
-  lazyAttachWorktreeWatch(wsId, cwd)
-    .then((token) => {
-      if (entry.count === 0) {
-        // Everyone released before the attach resolved → detach immediately.
-        detachWorktreeWatch(wsId, token).catch(() => {});
-        if (watches.get(wsId) === entry) watches.delete(wsId);
-        return;
-      }
-      entry.token = token;
-    })
-    .catch((err) => {
-      logger.warn("useWorktreeWatch", `worktree watch attach failed for ${wsId} — ${err}`);
-    });
+  attach(wsId, entry, false);
 }
 
 function release(wsId: string): void {
@@ -58,10 +180,12 @@ function release(wsId: string): void {
   if (!entry) return;
   entry.count--;
   if (entry.count > 0) return;
-  // Attach still in flight — its `.then` sees count 0 and detaches + removes.
-  if (entry.token === null) return;
-  detachWorktreeWatch(wsId, entry.token).catch(() => {});
   watches.delete(wsId);
+  for (const late of entry.held.splice(0)) detach(wsId, late);
+  // A pending attach that is still queued is skipped; one in flight sees count 0 when it
+  // resolves and detaches its own token. `token` needs no detach then: with a re-attach pending it
+  // is stale, since the later token that replaced it is already queued for detach or in `held`.
+  if (!entry.pending && entry.token !== null) detach(wsId, entry.token);
 }
 
 /**
@@ -98,7 +222,8 @@ export function useWorktreeWatch(
   }, [enabled, ownsWatch, wsId, cwd]);
 }
 
-/** Test-only: reset the shared refcount map between cases. */
+/** Test-only: reset the shared refcount map and per-key queues between cases. */
 export function __resetWorktreeWatch(): void {
   watches.clear();
+  queues.clear();
 }

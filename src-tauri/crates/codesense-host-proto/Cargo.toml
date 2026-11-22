@@ -19,6 +19,10 @@ name = "nextest_timeout"
 required-features = ["planted-hang"]
 
 [dependencies]
+codesense-platform = { path = "../codesense-platform" }
 libc = "0.2"
+# The secret guard's patterns, with Perl's Unicode `\s` and `\d`; the app crate already uses it.
+regex = "1"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# Nesting as deep as JSON::PP reads it, for the secret guard.
+serde_json = { version = "1", features = ["unbounded_depth"] }

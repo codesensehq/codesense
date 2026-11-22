@@ -44,6 +44,7 @@ pub mod version_cache;
 pub use codesense_host_proto::agent_cli::{AgentCli, NativeLaunch};
 use codesense_host_proto::reverse_mcp::AgentStartup;
 pub use descriptor::*;
+#[cfg(test)]
 pub(crate) use hooks::read_check;
 pub use hooks::CheckInput;
 
@@ -104,6 +105,13 @@ pub trait AgentCliAdapter: Send + Sync {
         false
     }
 
+    /// The entry script of its npm package, from `node_modules/` on (`/` separated), which
+    /// a process runs under `node` with no shim naming the CLI (the Windows npm install).
+    /// `None` for a CLI not installed through npm that way.
+    fn npm_entry(&self) -> Option<&'static str> {
+        None
+    }
+
     /// How new mail reaches a session of this CLI.
     fn inbox(&self) -> InboxDelivery;
 
@@ -149,7 +157,7 @@ pub trait AgentCliAdapter: Send + Sync {
     fn session_policy(&self) -> SessionPolicy;
 
     /// The hook events at which the CLI's own settings run CodeSense's status hook
-    /// (`codesense-notify`): none for a CLI that raises its status otherwise.
+    /// (`codesense-bridge hook notify`): none for a CLI that raises its status otherwise.
     fn status_hooks(&self) -> &'static [StatusHook];
 
     /// How a host drives a running CLI.
@@ -241,7 +249,7 @@ pub fn with_releases(text: &str) -> Option<String> {
         let slot = format!("{{{binary}_release}}");
         let current = filled.as_deref().unwrap_or(text);
         if current.contains(&slot) {
-            filled = Some(current.replace(&slot, release.supported));
+            filled = Some(current.replace(&slot, release.supported_for(std::env::consts::OS)));
         }
     }
     filled
@@ -260,7 +268,27 @@ pub fn validate_startup(startup: &AgentStartup, launch: NativeLaunch) -> Result<
     startup.validate(&descriptor(cli).startup)
 }
 
-/// The CLI whose binary is `basename`.
+/// The runtime name of the program at `path`: its last non-empty component (split on
+/// `/` or `\`), lowercased, with a trailing `.exe`, `.cmd` or `.bat` dropped, so
+/// `C:\npm\claude.cmd`, `CLAUDE.EXE` and `/usr/local/bin/claude/` all name `claude`.
+/// The one place an agent path becomes the name [`by_binary`] and the process matcher
+/// compare.
+pub fn binary_stem(path: &str) -> String {
+    let base = path
+        .rsplit(['/', '\\'])
+        .find(|segment| !segment.is_empty())
+        .unwrap_or_default()
+        .to_lowercase();
+    match [".exe", ".cmd", ".bat"]
+        .iter()
+        .find_map(|ext| base.strip_suffix(ext))
+    {
+        Some(stem) => stem.to_string(),
+        None => base,
+    }
+}
+
+/// The CLI whose binary is `basename` (a [`binary_stem`]).
 pub fn by_binary(basename: &str) -> Option<AgentCli> {
     AgentCli::ALL
         .into_iter()
@@ -497,6 +525,11 @@ pub(crate) const WAITER_REPLACE_EVENTS: &[&str] = &["SessionStart", "Stop", "Sto
 
 /// The helper option an inbox hook runs (see [`inbox_hook_command`]).
 pub const INBOX_WAIT_ARG: &str = "--inbox-wait";
+
+/// The agent an inbox hook names when it runs the helper through a shell that does not
+/// `exec` it: the shell's parent, checked by start time
+/// ([`agent_of_shell`](codesense_platform::process::agent_of_shell)).
+pub const INBOX_AGENT_OF_SHELL: &str = "parent-of-shell";
 
 /// What a waiter prints, with exit status 2, to renew itself before its hook times out. It
 /// is not mail: a host that runs the helper itself (a plugin) re-spawns it and hands over

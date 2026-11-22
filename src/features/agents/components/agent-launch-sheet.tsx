@@ -69,7 +69,6 @@ import {
 import {
   resolveAgentFace,
   resolveAgentRole,
-  THIS_MAC,
   type AgentFace,
 } from "@/features/viewer/lib/agent-list-view";
 import { useWorktreeRosterStore } from "@/features/viewer/stores/worktree-roster-store";
@@ -139,6 +138,17 @@ import { useAgentsStore, watchAgentList } from "../stores/agents-store";
 import { draftFromDefinition, emptyDraft, formFromDraft } from "../lib/agent-form";
 import { useAgentPreview } from "../lib/use-agent-preview";
 import { FacePicker } from "./face-picker";
+import {
+  formatKeystrokeDisplay,
+  formatModifiersDisplay,
+  hasMod,
+} from "@/shared/lib/shortcuts/keystroke";
+import { localMachineLabel } from "@/shared/lib/local-machine";
+import { notYetAvailableSentence, useCapability } from "@/shared/lib/capabilities";
+import {
+  CapabilityOffNote,
+  CapabilityOffNotice,
+} from "@/shared/components/capability-off/capability-off";
 
 const LOCAL_MACHINE = LOCAL_MACHINE_ID;
 
@@ -516,7 +526,7 @@ export function AgentLaunchSheet({
       : LOCAL_MACHINE;
   const labelOf = (id: string) =>
     id === LOCAL_MACHINE
-      ? THIS_MAC
+      ? localMachineLabel()
       : ((machines ?? []).find((m) => m.machineId === id)?.label ?? id);
   const lock = launchMachineLock(effective.where, storyId, place, labelOf);
   const launchMachine = lock?.machineId ?? machineId;
@@ -534,6 +544,19 @@ export function AgentLaunchSheet({
         machineId: launchMachine,
         cwd: effective.where === "story" ? storyWorkspace?.cwd : selectedWorktree?.launchCwd,
       };
+  // Without the MCP bridge on this OS the agent still launches, without CodeSense tools: the
+  // sheet says so first in its warnings (in branch mode, the run warnings).
+  const bridgeOff = !useCapability("mcp-bridge").on;
+  // A story workspace held on another machine can't be reached without remote machines on this
+  // OS: Runs on says why, and Launch refuses rather than target it.
+  const remoteMachines = useCapability("remote-machines");
+  const unreachableMachine = !remoteMachines.on && !branchMode && launchMachine !== LOCAL_MACHINE;
+  const bridgeNotice = (className?: string) => (
+    <CapabilityOffNotice cap="mcp-bridge" as="li" className={className}>
+      <b>{agent?.name ?? "This agent"} starts without CodeSense tools</b>: no inbox, messages or
+      team content.
+    </CapabilityOffNotice>
+  );
   const { warnings, admission: launchAdmission } = useLaunchPreview(
     agentKey,
     request.teamKey,
@@ -626,6 +649,10 @@ export function AgentLaunchSheet({
   const launch = () => {
     if (launchAdmission?.allowed === false) {
       setFailure(launchAdmission.reason);
+      return;
+    }
+    if (unreachableMachine) {
+      setFailure(notYetAvailableSentence(remoteMachines));
       return;
     }
     if (busy || phase === "hydrating" || phase === "starting") return;
@@ -755,7 +782,7 @@ export function AgentLaunchSheet({
           taskRef.current?.focus();
         }}
         onKeyDown={(e) => {
-          if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && !e.nativeEvent.isComposing) {
+          if (hasMod(e) && e.key === "Enter" && !e.nativeEvent.isComposing) {
             e.preventDefault();
             launch();
           }
@@ -921,12 +948,13 @@ export function AgentLaunchSheet({
               </div>
             )}
 
-            {warnings.length > 0 && (
+            {(warnings.length > 0 || (bridgeOff && !branchMode)) && (
               <ul
                 className="ls-warnings"
                 data-testid="launch-warnings"
                 aria-label="Launch warnings"
               >
+                {!branchMode && bridgeNotice("ls-warning")}
                 {warnings.map((w) => (
                   <li key={w.code} className="ls-warning" data-code={w.code}>
                     <TriangleAlert className="mt-px size-3.5 shrink-0" aria-hidden />
@@ -1162,8 +1190,9 @@ export function AgentLaunchSheet({
                 </p>
               </>
             )}
-            {branchMode && branchWarnings.length > 0 && (
+            {branchMode && (branchWarnings.length > 0 || bridgeOff) && (
               <ul data-testid="launch-run-warnings" className="space-y-1">
+                {bridgeNotice()}
                 {branchWarnings.map((w) => (
                   <li
                     key={`${w.code}:${w.message}`}
@@ -1211,8 +1240,13 @@ export function AgentLaunchSheet({
               </p>
             ) : (
               <span className="text-[12px] text-muted-foreground">
-                <kbd className="ls-kbd">⌘</kbd>
-                <kbd className="ls-kbd">↵</kbd> to launch
+                <kbd className="ls-kbd">
+                  {formatModifiersDisplay({ cmdOrCtrl: true, shift: false, alt: false }).replace(
+                    /\+$/,
+                    "",
+                  )}
+                </kbd>
+                <kbd className="ls-kbd">{formatKeystrokeDisplay("Enter")}</kbd> to launch
               </span>
             )}
           </div>
@@ -1506,6 +1540,22 @@ function MachinePicker({
   const local = visible.find((m) => m.kind === "local");
   const now = useNow(true, 30_000);
   const remote = workspaceMachineChoices(machines, now);
+  const remoteMachines = useCapability("remote-machines");
+  // Without remote machines on this OS there is nothing to pick: it runs here.
+  if (!remoteMachines.on) {
+    return (
+      <div>
+        <span data-testid="launch-machine" className="flex h-[34px] items-center text-[13px]">
+          {value === LOCAL_MACHINE
+            ? (picked?.label ?? localMachineLabel())
+            : (machines?.find((m) => m.machineId === value)?.label ?? value)}
+        </span>
+        {value !== LOCAL_MACHINE && (
+          <CapabilityOffNote cap="remote-machines" className="max-w-48" />
+        )}
+      </div>
+    );
+  }
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild disabled={lock !== null}>
@@ -1518,7 +1568,7 @@ function MachinePicker({
         >
           {picked ? <MachineIcon machine={picked} /> : null}
           <span className="min-w-0 flex-1 truncate text-left">
-            {picked?.label ?? (value === LOCAL_MACHINE ? THIS_MAC : value)}
+            {picked?.label ?? (value === LOCAL_MACHINE ? localMachineLabel() : value)}
           </span>
           <ChevronDown className="size-3.5 shrink-0 opacity-60" aria-hidden />
         </button>
@@ -1530,7 +1580,7 @@ function MachinePicker({
           onSelect={() => onChange(LOCAL_MACHINE)}
         >
           {local ? <MachineIcon machine={local} /> : null}
-          <span className="flex-1">{local?.label ?? THIS_MAC}</span>
+          <span className="flex-1">{local?.label ?? localMachineLabel()}</span>
           <Check className={cn("size-3.5", value !== LOCAL_MACHINE && "invisible")} aria-hidden />
         </DropdownMenuItem>
         {remote.length > 0 && (
@@ -1636,8 +1686,7 @@ export function StoryInput({
                   setSelectedId(matches[Math.min(matches.length - 1, active + 1)].storyId);
                 else if (e.key === "ArrowUp")
                   setSelectedId(matches[Math.max(0, active - 1)].storyId);
-                else if (e.key === "Enter" && !e.metaKey && !e.ctrlKey)
-                  pick(matches[active].storyId);
+                else if (e.key === "Enter" && !hasMod(e)) pick(matches[active].storyId);
                 else return;
                 e.preventDefault();
               }}

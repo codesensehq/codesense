@@ -38,9 +38,7 @@ const MAX_BACKOFF: Duration = Duration::from_secs(1);
 /// How long a launched host may take to answer on its socket.
 const CONNECT_DEADLINE: Duration = Duration::from_secs(10);
 
-/// The name of the directory, next to the binary, holding the resources an
-/// installed host ships (see [`crate::install`]).
-pub const RESOURCES_DIR: &str = "resources";
+pub use crate::install::RESOURCES_DIR;
 
 /// Where the relay reaches its host: the instance root and the resources a
 /// host it launches ships.

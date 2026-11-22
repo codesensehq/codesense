@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 
 import { useWindowVisible } from "@/shared/hooks/use-window-focused";
+import { trimTrailingSeparators } from "@/shared/lib/path";
 import { createListenerGroup } from "@/shared/lib/tauri-listeners";
 import { useFileRefreshStore } from "@/shared/stores/file-refresh-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
@@ -308,7 +309,7 @@ function commitsKey(s: ContextRepoStatus): string {
 }
 
 function samePath(a: string, b: string): boolean {
-  return a.replace(/\/+$/, "") === b.replace(/\/+$/, "");
+  return trimTrailingSeparators(a) === trimTrailingSeparators(b);
 }
 
 function sameStatus(a: ContextRepoStatus, b: ContextRepoStatus): boolean {

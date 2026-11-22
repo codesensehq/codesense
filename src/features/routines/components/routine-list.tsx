@@ -25,6 +25,7 @@ import {
 import { useRoutinesStore } from "../stores/routines-store";
 
 import { needsUpstream, upstreamRunReason } from "../lib/routine-sentence";
+import { localMachinePhrase } from "@/shared/lib/local-machine";
 
 const TONE_DOT: Record<ReturnType<typeof phaseTone>, string> = {
   ok: "bg-[var(--cs-status-done)]",
@@ -71,7 +72,7 @@ export function RoutineList({ now }: { now: number }) {
       {unassigned.length > 0 && (
         <RoutineGroup
           title="Unassigned"
-          note="These never run: their agent is gone from this Mac (open one and pick an agent), or another routine already has their id."
+          note={`These never run: their agent is gone from ${localMachinePhrase()} (open one and pick an agent), or another routine already has their id.`}
           rows={unassigned}
           now={now}
         />
@@ -250,7 +251,9 @@ function RoutineListRow({ row, now }: { row: RoutineRow; now: number }) {
             disabled={running || needsUpstream(row.def)}
             title={
               upstreamRunReason(row, useRoutinesStore.getState().rows) ??
-              (recipe && !row.enabled ? "Turn on for this Mac to run here" : undefined)
+              (recipe && !row.enabled
+                ? `Turn on for ${localMachinePhrase()} to run here`
+                : undefined)
             }
             onClick={() => void runNow(row.key)}
           >
@@ -264,7 +267,7 @@ function RoutineListRow({ row, now }: { row: RoutineRow; now: number }) {
               disabled={arming}
               onClick={() => void armHere(row.key)}
             >
-              Run on this Mac
+              Run on {localMachinePhrase()}
             </Button>
           )}
           {!row.mine && row.def.action !== "command" && (

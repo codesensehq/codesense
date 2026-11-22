@@ -72,6 +72,7 @@ use crate::commands::pty_host::{
     StreamIds, StreamItem,
 };
 use crate::commands::pty_layout::app_viewer;
+use crate::platform_caps::{Caps, TERMINAL_SERVER_SIDECAR};
 use crate::terminal::session_server::{
     launch_detached, terminate_sidecar, ConnectError, Continuity, Presence, RemoteSessionLedger,
     SessionServerClient, SessionServerState, SpawnDisposition, SpawnFailure, SIDECAR_BIN,
@@ -668,6 +669,20 @@ pub(crate) fn reserve_spawn_effect_claim<R: Runtime>(
     Ok(claim)
 }
 
+/// The root of this instance's terminal server: the instance `home`, where the
+/// platform has the terminal-server sidecar. With it off there is none, so no
+/// path launches a sidecar and the app hosts its terminals itself. The app
+/// decides it once, at startup, with `Caps::live()`.
+pub fn local_sidecar_root(caps: &Caps<'_>, home: Option<PathBuf>) -> Option<PathBuf> {
+    home.filter(|_| caps.enabled(TERMINAL_SERVER_SIDECAR))
+}
+
+/// The app's connection to its own terminal server, rooted where
+/// [`local_sidecar_root`] says: with no root, nothing launches one.
+pub fn local_session_state(caps: &Caps<'_>, home: Option<PathBuf>) -> SessionServerState {
+    SessionServerState::at(local_sidecar_root(caps, home))
+}
+
 pub fn resolve_terminal_backend<R: Runtime>(
     app: &AppHandle<R>,
     machine_id: &str,
@@ -860,12 +875,13 @@ fn emulator_worker() -> Result<std::path::PathBuf, String> {
 }
 
 /// The in-process host's environment: this process's, with the resources
-/// the app ships.
+/// the app ships, less the WebKit default the app set for its own webview.
 pub fn in_process_environment(app: &tauri::AppHandle) -> HostEnvironment {
     HostEnvironment::of_process(
         crate::commands::paths::codesense_home_dir(),
         crate::commands::paths::resolve_bundled_resource(app, "resources"),
     )
+    .without_vars(crate::linux_startup::app_owned_env().iter().copied())
 }
 
 /// Start the in-process host's emulator worker on a thread of its own, so app
@@ -914,7 +930,9 @@ pub async fn resolve_in_process(
 ) -> Result<PtySpec, String> {
     let session = session.to_string();
     await_blocking("spawn_pty.resolve", move || {
-        Ok(intent.resolve(&session, &environment))
+        intent
+            .resolve(&session, &environment)
+            .map_err(|error| error.to_string())
     })
     .await
 }
@@ -3336,6 +3354,7 @@ pub(crate) fn open_tab_pinned(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(cap_git_ai)]
     #[path = "hook_trust_respawn_tests.rs"]
     mod hook_trust_respawn_tests;
     use super::*;
@@ -3825,6 +3844,49 @@ mod tests {
             terminal_server_overview(app.handle()).state,
             TerminalServerRun::Running
         );
+    }
+
+    /// The terminal server has a root only where its capability is on.
+    #[test]
+    fn the_sidecar_root_follows_the_terminal_server_capability() {
+        let home = PathBuf::from("/instance");
+        let on = crate::platform_caps::caps_with_off(&[]);
+        let off = crate::platform_caps::caps_with_off(&[TERMINAL_SERVER_SIDECAR]);
+        assert_eq!(
+            local_sidecar_root(&Caps(&on), Some(home.clone())),
+            Some(home.clone())
+        );
+        assert_eq!(local_sidecar_root(&Caps(&off), Some(home)), None);
+        assert_eq!(local_sidecar_root(&Caps(&on), None), None);
+    }
+
+    /// With the terminal server's capability off the state has no root, so
+    /// Start launches nothing and the app hosts its terminals itself.
+    #[test]
+    fn start_launches_nothing_without_a_sidecar_root() {
+        let root = codesense_session_server::testing::short_root();
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock app");
+        app.manage(StreamIds::default());
+        let off = crate::platform_caps::caps_with_off(&[TERMINAL_SERVER_SIDECAR]);
+        app.manage(SessionServerState::at(local_sidecar_root(
+            &Caps(&off),
+            Some(root.path().to_path_buf()),
+        )));
+
+        let launched = std::cell::Cell::new(false);
+        let started =
+            start_terminal_server_with(app.handle(), Arc::new(RecordingSink::default()), |_| {
+                launched.set(true);
+                Ok(())
+            });
+        assert_eq!(
+            started.err().as_deref(),
+            Some("this app hosts its terminals itself")
+        );
+        assert!(!launched.get(), "nothing was launched");
+        assert!(!codesense_pty_core::protocol::socket_path(root.path()).exists());
     }
 
     /// SV-7: a real Stop of a running terminal server: it ends — its session
@@ -5246,6 +5308,7 @@ mod tests {
 
     fn tab_request(session: &str) -> OpenTab {
         OpenTab {
+            cwd: None,
             viewer: app_viewer(),
             workspace: codesense_pty_core::domain::WorkspaceKey::new("root:acme/app"),
             session: sid(session),

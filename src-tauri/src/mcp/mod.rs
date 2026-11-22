@@ -27,6 +27,7 @@ impl rmcp::schemars::JsonSchema for AnyJson {
 }
 pub(crate) mod feedback_tool;
 pub(crate) mod live_data_authoring;
+pub(crate) mod charge_tools;
 pub(crate) mod local_setup;
 pub(crate) mod machine_tools;
 pub(crate) mod notes_tools;
@@ -47,6 +48,7 @@ mod tool_envelope;
 mod dispatch;
 // Crate-visible so the signal-done bridge Tauri command
 // (`handler::wv_signal_done_bridge`) can be named in lib.rs `generate_handler!`.
+pub(crate) mod gif_tools;
 pub(crate) mod handler;
 pub(crate) mod identity_tools;
 pub(crate) mod session_list;

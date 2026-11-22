@@ -28,6 +28,7 @@ import {
   rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { restorePlatform, setPlatform } from "@/test/platform";
 import { resolve, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -1521,6 +1522,24 @@ describe("human inbox pane through the real bridge", () => {
     fireEvent.keyDown(el(p, "draft"), { key: "Enter", metaKey: true, shiftKey: true });
     await waitFor(() => expect(calls("reply_as_human")).toHaveLength(3));
     expect(p.doc.body.textContent).toContain("Enter to send");
+  });
+
+  it.each([
+    ["MacIntel", "⌘⏎"],
+    ["Win32", "Ctrl+⏎"],
+  ])("on %s the composer's Send hint reads %s each time it redraws", async (platform, keys) => {
+    setPlatform(platform);
+    try {
+      const p = await openInbox();
+      await openThread(p);
+      await waitFor(() => expect(el(p, "send").querySelector("kbd")?.textContent).toBe(keys));
+      type(p, "Redraw");
+      fireEvent.click(el(p, "send"));
+      await waitFor(() => expect(calls("reply_as_human")).toHaveLength(1));
+      await waitFor(() => expect(el(p, "send").textContent).toBe(`Send ${keys}`));
+    } finally {
+      restorePlatform();
+    }
   });
 
   it("updates presence using the existing status action", async () => {

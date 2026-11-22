@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use super::model::{RoutineDef, RoutineKey};
 use crate::domain::Principal;
+use crate::shared::machine_wording;
 use serde::{Deserialize, Serialize};
 
 pub const OUTPUT_BYTES: usize = 4096;
@@ -326,13 +327,24 @@ pub fn preview(
             std::env::split_paths(&paths).any(|dir| dir.join(program).is_file())
         })
     {
-        warnings.push(format!(
-            "{program} isn't on This Mac's PATH. Another Mac may have it."
-        ));
+        warnings.push(not_on_path(program));
     }
     Preview {
         argv,
         error,
         warnings,
     }
+}
+
+/// That `program` is not on this machine's PATH, worded for `os`.
+pub(super) fn not_on_path_for(os: &str, program: &str) -> String {
+    format!(
+        "{program} isn't on {}'s PATH. Another {} may have it.",
+        machine_wording::machine_noun(os),
+        machine_wording::machine_kind(os)
+    )
+}
+
+fn not_on_path(program: &str) -> String {
+    not_on_path_for(machine_wording::RUNNING_OS, program)
 }

@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { InlineAlert } from "@/components/ui/inline-alert";
 import { AppButton as Button } from "@/shared/components/app-button";
-import { basename } from "@/shared/lib/basename";
+import { basename } from "@/shared/lib/path";
 import type { CommonViewerProps } from "@/shared/lib/viewer-file-type";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
@@ -37,6 +37,7 @@ import { openRoutines } from "@/features/routines/routines-virtual-tab";
 import { openManagementTab } from "@/shared/lib/open-management-tab";
 import { useScratchSpace } from "../lib/use-scratch-space";
 import { ScratchItemMenu } from "./scratch-item-actions";
+import { localMachinePhrase } from "@/shared/lib/local-machine";
 
 const KIND_LABEL: Record<ScratchInertKind, string> = {
   skill: "Skill",
@@ -78,8 +79,8 @@ export function ScratchSpaceTab(_props: CommonViewerProps & { filePath: string }
               Private
             </h1>
             <p data-testid="scratch-space-about" className="mt-1 text-sm text-muted-foreground">
-              Only you see it. One git repo on this Mac, with a folder for each org. CodeSense never
-              copies it anywhere; you back it up.
+              Only you see it. One git repo on {localMachinePhrase()}, with a folder for each org.
+              CodeSense never copies it anywhere; you back it up.
             </p>
           </div>
           <div className="flex items-center gap-2">

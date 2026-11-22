@@ -430,12 +430,10 @@ fn parse_log(
     format: agent_cli::TranscriptFormat,
 ) -> Result<Option<SessionTranscript>, String> {
     use std::io::BufRead;
-    use std::os::unix::fs::OpenOptionsExt;
-    let file = match std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-    {
+    let file = match codesense_platform::fs::open_nofollow_nonblocking(
+        std::fs::OpenOptions::new().read(true),
+        path,
+    ) {
         Ok(file) => file,
         Err(_) => return Ok(None),
     };

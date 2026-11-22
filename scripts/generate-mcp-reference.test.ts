@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { exportedCatalog as readCatalog } from "./mcp-reference-fixture";
+import { exportedCatalog, exportedCatalog as readCatalog } from "./mcp-reference-fixture";
 import { describe, expect, it, vi } from "vitest";
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -9,9 +9,15 @@ vi.mock("node:child_process", async (importOriginal) => {
   return { ...actual, spawnSync, default: { ...actual, spawnSync } };
 });
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { buildManifest, META, validateInputReferences } from "./generate-mcp-reference.mjs";
-import { REFRESH_COMMAND } from "./lib/sealed-export.mjs";
+import { REFRESH_ROUTE, strictExports } from "./lib/sealed-export.mjs";
+
+// The scratch repos below model a pull_request run (origin/main as the drift base), so they must not
+// inherit a merge-group runner's event: there the drift base is HEAD^1, which these fixtures don't model.
+delete process.env.GITHUB_EVENT_NAME;
+
 const GENERATED = "codesense-docs/getting-started/content/generated";
 const SEAL_PATH = `${GENERATED}/mcp-tools.inputs.json`;
 const PAYLOAD_PATHS = ["default", "dashboard-publish"].map(
@@ -24,14 +30,70 @@ const reference = () =>
       "utf8",
     ),
   );
+// A scratch checkout with the MCP export's inputs, sealed, then given input-only drift (a nested
+// schema source changed), committed as origin/main: the stale export a PR inherits. `before` runs
+// on the tree ahead of the seal, so it can model main's catalog and payload state.
+async function staleScratch(prefix: string, before: (root: string) => void = () => {}) {
+  const { mkdtempSync, mkdirSync, copyFileSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { dirname } = await import("node:path");
+  const mod = await import("./generate-mcp-reference.mjs");
+  const { ROOT, CONTENT, CATALOG } = mod;
+  const root = mkdtempSync(join(tmpdir(), prefix));
+  const copy = (path: string) => {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    copyFileSync(join(ROOT, path), join(root, path));
+  };
+  mkdirSync(join(root, "src-tauri/crates"), { recursive: true });
+  for (const path of [
+    "Cargo.lock",
+    "src-tauri/Cargo.toml",
+    "src-tauri/build.rs",
+    "src-tauri/crates/codesense-pty-core/src/agent_cli/codex.rs",
+    "src-tauri/crates/codesense-pty-core/src/agent_cli/claude.rs",
+    "src-tauri/src/mcp/handler.rs",
+    CATALOG,
+    ...PAYLOAD_PATHS,
+  ])
+    copy(path);
+  for (const f of readCatalog().families) copy(`${CONTENT}/${f.docs.split("#")[0]}`);
+  writeFileSync(join(root, CATALOG), JSON.stringify(readCatalog(), null, 2) + "\n");
+  const nested = join(root, "src-tauri/src/nested.rs");
+  writeFileSync(nested, "// JsonSchema nested DTO source\n");
+  before(root);
+  mod.sealReference(root);
+  writeFileSync(nested, "// JsonSchema nested DTO changed\n");
+  return { root, mod };
+}
+const commitAsMain = (root: string) => {
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", ...args], {
+      cwd: root,
+      stdio: "pipe",
+    });
+  git("init", "-q", "-b", "main");
+  git("add", "-A");
+  git("commit", "-q", "-m", "main");
+  git("update-ref", "refs/remotes/origin/main", "HEAD");
+};
+const editJson = (path: string, edit: (value: any) => void) => {
+  const value = JSON.parse(readFileSync(path, "utf8"));
+  edit(value);
+  writeFileSync(path, JSON.stringify(value, null, 2) + "\n");
+};
 describe("served MCP reference", () => {
   it("has real contracts, long descriptions and explicit absent output schemas", () => {
-    const doc = buildManifest(undefined, META, readCatalog());
+    // Against the committed export: strict only with CS_STRICT_EXPORTS=1, else a stale export is a
+    // notice and each Docs line comes from the catalog, so the descriptions compare without it.
+    const strict = strictExports();
+    const doc = buildManifest(undefined, META, readCatalog(), strict ? null : [], () => {});
+    const body = (text: string) => (strict ? text : text.replace(/\nDocs: [^\n]*$/, ""));
     for (const tool of reference().tools) {
-      const entry = doc.tools.find((t: { name: string }) => t.name === tool.name)!;
-      expect(entry.params, tool.name).toEqual(tool.inputSchema);
-      expect(entry.returns, tool.name).toEqual(tool.outputSchema ?? null);
-      expect(entry.description, tool.name).toEqual(tool.description);
+      const entry = doc.tools.find((t: { name: string }) => t.name === tool.name);
+      if (!entry && !strict) continue;
+      expect(entry!.params, tool.name).toEqual(tool.inputSchema);
+      expect(entry!.returns, tool.name).toEqual(tool.outputSchema ?? null);
+      expect(body(entry!.description), tool.name).toEqual(body(tool.description));
     }
     expect(
       doc.tools.find((t: { name: string }) => t.name === "open_workspace")!.params.properties
@@ -165,11 +227,11 @@ describe("Node-only freshness and resolving teaching links", () => {
           warn: (line) => stderr.push(line),
         }),
       ).toBeNull();
-      expect(stdout.join("\n")).toContain("cargo:warning=MCP REFERENCE EXPORT NEEDED");
+      expect(stdout.join("\n")).toContain("cargo:warning=MCP REFERENCE EXPORT STALE");
       expect(stdout.join("\n")).toContain("src-tauri/src/nested.rs");
-      expect(stdout.join("\n")).toContain("node scripts/generate-mcp-reference.mjs --export");
-      expect(() => generateReference(root, { check: true })).toThrow(REFRESH_COMMAND);
-      expect(stdout.join("\n")).toContain("pnpm gen:docs");
+      expect(stdout.join("\n")).toContain(REFRESH_ROUTE);
+      expect(stdout.join("\n")).not.toContain("--export");
+      expect(() => generateReference(root, { check: true })).toThrow(REFRESH_ROUTE);
       expect(stderr).toEqual([]);
       expect(readFileSync(outputPath, "utf8")).toBe(outputBeforeWarning);
       const notices: string[] = [];
@@ -186,12 +248,22 @@ describe("Node-only freshness and resolving teaching links", () => {
       expect(() =>
         generateReference(root, { check: true, buildScript: true, warn: () => {} }),
       ).toThrow(/src-tauri\/src\/nested\.rs/);
-      expect(() => generateReference(root)).toThrow(/src-tauri\/src\/nested\.rs/);
+      // Write mode renders mcp-tools.json from the committed exports and warns.
+      const written: string[] = [];
+      expect(
+        generateReference(root, { strict: false, warn: (line) => written.push(line) }),
+      ).not.toBeNull();
+      // Under CS_STRICT_EXPORTS=1 (the refresh run) write mode is strict.
+      expect(() => generateReference(root, { strict: true, warn: () => {} })).toThrow(
+        /Stale MCP registry export.*nested\.rs/,
+      );
+      expect(written.join("\n")).toMatch(/^NOTICE: Stale MCP registry export.*nested\.rs/);
       expect(readFileSync(outputPath, "utf8")).toBe(outputBeforeWarning);
+      // mcp-tools.json is Node-rendered: the PR gate compares it with the committed exports.
       writeFileSync(outputPath, `${outputBeforeWarning}\n`);
       expect(() =>
         generateReference(root, { check: true, allowStaleExport: true, warn: () => {} }),
-      ).toThrow(/Stale MCP registry export/);
+      ).toThrow(/stale .*mcp-tools\.json/);
       writeFileSync(outputPath, outputBeforeWarning);
       writeFileSync(nested, "// JsonSchema nested DTO source\n");
       const source = join(root, "src-tauri/src/mcp/handler.rs");
@@ -219,9 +291,22 @@ describe("Node-only freshness and resolving teaching links", () => {
         else tool.params = { ...tool.params, title: "edited" };
         writeFileSync(outputPath, JSON.stringify(edited, null, 2) + "\n");
         writeFileSync(source, `// prepended comment\n${before}`);
-        // The edited manifest differs from main's, so the tolerant gate is strict.
-        expect(tolerate, edit).toThrow(/Stale MCP registry export/);
+        // The edited manifest no longer matches the committed exports.
+        expect(tolerate, edit).toThrow(/accept_role_message: stale .*mcp-tools\.json/);
       }
+      writeFileSync(outputPath, manifest);
+      writeFileSync(source, before);
+      // A catalog edit re-renders mcp-tools.json from the committed exports; the gate accepts it.
+      const catalogPath = join(root, CATALOG);
+      const catalogBefore = readFileSync(catalogPath, "utf8");
+      const catalog = JSON.parse(catalogBefore);
+      catalog.families[0].searchTerms.push("an added search term");
+      writeFileSync(catalogPath, JSON.stringify(catalog, null, 2) + "\n");
+      writeFileSync(source, `// prepended comment\n${before}`);
+      expect(() => generateReference(root, { strict: false, warn: () => {} })).not.toThrow();
+      expect(readFileSync(outputPath, "utf8")).toContain("an added search term");
+      expect(tolerate()).not.toBeNull();
+      writeFileSync(catalogPath, catalogBefore);
       writeFileSync(outputPath, manifest);
       writeFileSync(source, before);
       const payload = join(root, `${CONTENT}/generated/mcp-tools.default.json`);
@@ -302,7 +387,7 @@ describe("Node-only freshness and resolving teaching links", () => {
         });
       expect(tolerant()).not.toBeNull();
       expect(notices.join("\n")).toMatch(/NOTICE: Stale MCP registry export.*theirs\.rs/);
-      // The strict check (the docs wave) still asks for the refresh.
+      // The strict check (the refresh check) still asks for the refresh.
       expect(() => generateReference(root, { check: true })).toThrow(/theirs\.rs/);
       // Drift in an input the PR changed is the PR's own: strict.
       writeFileSync(ours, "// JsonSchema the PR's tool, changed after its export\n");
@@ -312,6 +397,245 @@ describe("Node-only freshness and resolving teaching links", () => {
       const output = join(root, `${CONTENT}/generated/mcp-tools.json`);
       writeFileSync(output, readFileSync(output, "utf8").replace("pane_write", "pane_edit"));
       expect(tolerant).toThrow(/stale .*mcp-tools\.json/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("a stale export in write mode and the PR gate", () => {
+  it("leaves a catalog tool the export lacks out, with a notice, and the gate accepts it", async () => {
+    // Main added records_read to handler.rs, META and the catalog without re-exporting.
+    const { root, mod } = await staleScratch("mcp-reference-pending-", (root) => {
+      for (const path of PAYLOAD_PATHS)
+        editJson(join(root, path), (payload) => {
+          payload.tools = payload.tools.filter((t: { name: string }) => t.name !== "records_read");
+        });
+    });
+    try {
+      // Main changed handler.rs to add the tool, so the seal names it as drifted.
+      const handler = join(root, "src-tauri/src/mcp/handler.rs");
+      writeFileSync(handler, readFileSync(handler, "utf8") + "\n// records_read added\n");
+      const notices: string[] = [];
+      expect(() =>
+        mod.generateReference(root, { strict: false, warn: (line) => notices.push(line) }),
+      ).not.toThrow();
+      expect(notices.join("\n")).toMatch(/NOTICE: records_read is not in the committed export yet/);
+      expect(notices.find((line) => line.includes("records_read"))).toContain(REFRESH_ROUTE);
+      const written = JSON.parse(readFileSync(join(root, mod.OUTPUT), "utf8"));
+      expect(written.tools.map((t: { name: string }) => t.name)).not.toContain("records_read");
+      commitAsMain(root);
+      expect(
+        mod.generateReference(root, { check: true, allowStaleExport: true, warn: () => {} }),
+      ).not.toBeNull();
+      expect(() => mod.generateReference(root, { check: true })).toThrow(/Stale MCP registry/);
+      // With a fresh seal the tool is not pending but missing from the export: fatal.
+      mod.sealReference(root);
+      expect(() => mod.generateReference(root, { strict: false, warn: () => {} })).toThrow(
+        /records_read: catalog tool not exported/,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("takes a family's Docs pointer from the catalog, not the stale payload", async () => {
+    const { root, mod } = await staleScratch("mcp-reference-docs-");
+    try {
+      const moved = "arc-f-inboxes-and-triage/index.html";
+      const movePointer = () =>
+        editJson(join(root, mod.CATALOG), (catalog) => {
+          catalog.families.find((f: { id: string }) => f.id === "inbox-messages").docs = moved;
+        });
+      // The catalog is not a seal input, so with a fresh seal the edit alone drifts nothing.
+      mod.sealReference(root);
+      const catalogBefore = readFileSync(join(root, mod.CATALOG), "utf8");
+      movePointer();
+      expect(() => mod.generateReference(root, { strict: false, warn: () => {} })).not.toThrow();
+      writeFileSync(join(root, mod.CATALOG), catalogBefore);
+      writeFileSync(join(root, "src-tauri/src/nested.rs"), "// JsonSchema nested DTO, main's\n");
+      commitAsMain(root);
+      movePointer();
+      expect(() => mod.generateReference(root, { strict: false, warn: () => {} })).not.toThrow();
+      const written = JSON.parse(readFileSync(join(root, mod.OUTPUT), "utf8"));
+      const tool = written.tools.find((t: { name: string }) => t.name === "read_messages");
+      expect(tool.docs).toBe(moved);
+      expect(tool.description).toMatch(new RegExp(`\nDocs: ${moved}$`));
+      expect(tool.description.match(/^Docs: /gm)).toHaveLength(1);
+      expect(
+        mod.generateReference(root, { check: true, allowStaleExport: true, warn: () => {} }),
+      ).not.toBeNull();
+      // Strict, the served pointer must already match.
+      expect(() => mod.buildManifest(root, META, mod.readCatalog(root))).toThrow(
+        /: missing final Docs pointer/,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("drops a tool only when a stale seal explains it; with a fresh seal META and family gaps fail", async () => {
+    const { root, mod } = await staleScratch("mcp-reference-removed-");
+    try {
+      const withoutSearch = () => {
+        const catalog = mod.readCatalog(root);
+        const records = catalog.families.find((f: { id: string }) => f.id === "records");
+        records.tools = records.tools.filter((t: string) => t !== "records_search");
+        records.calls = records.calls.filter((c: { tool: string }) => c.tool !== "records_search");
+        return catalog;
+      };
+      const metadata = { ...META };
+      delete metadata.records_search;
+      // A fresh seal: the payload is current, so a missing META entry or family is a real error.
+      mod.sealReference(root);
+      expect(mod.driftExplainer(root)).toBeNull();
+      expect(() => mod.buildManifest(root, metadata, mod.readCatalog(root), [], () => {})).toThrow(
+        /records_search: missing META entry/,
+      );
+      const catalogPath = join(root, mod.CATALOG);
+      const catalogBefore = readFileSync(catalogPath, "utf8");
+      writeFileSync(catalogPath, JSON.stringify(withoutSearch(), null, 2) + "\n");
+      expect(() => mod.generateReference(root, { strict: false, warn: () => {} })).toThrow(
+        /records_search: missing family/,
+      );
+      commitAsMain(root);
+      expect(() =>
+        mod.generateReference(root, { check: true, allowStaleExport: true, warn: () => {} }),
+      ).toThrow(/records_search: missing family/);
+      writeFileSync(catalogPath, catalogBefore);
+      // The PR removes the tool from handler.rs, META and the catalog: the seal is stale.
+      const handler = join(root, "src-tauri/src/mcp/handler.rs");
+      writeFileSync(
+        handler,
+        readFileSync(handler, "utf8").replace(/fn records_search\s*\(/, "fn records_search_gone("),
+      );
+      const drift = mod.driftExplainer(root);
+      expect(drift).not.toBeNull();
+      const notices: string[] = [];
+      const doc = mod.buildManifest(
+        root,
+        metadata,
+        withoutSearch(),
+        [],
+        (line: string) => notices.push(line),
+        drift,
+      );
+      expect(doc.tools.map((t: { name: string }) => t.name)).not.toContain("records_search");
+      expect(notices.join("\n")).toMatch(/NOTICE: records_search: dropped/);
+      // A META gap for a tool still in handler.rs is a typo, stale seal or not.
+      const typo = { ...META };
+      delete typo.records_read;
+      expect(() =>
+        mod.buildManifest(root, typo, mod.readCatalog(root), [], () => {}, drift),
+      ).toThrow(/records_read: missing META entry/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves out an example whose new param a stale seal explains; a typo still fails", async () => {
+    const { root, mod } = await staleScratch("mcp-reference-param-");
+    try {
+      writeFileSync(
+        join(root, "src-tauri/src/nested.rs"),
+        "// JsonSchema nested DTO changed\npub brand_new_param: u32,\n",
+      );
+      const drift = mod.driftExplainer(root);
+      const withArg = (arg: string) => {
+        const catalog = mod.readCatalog(root);
+        const call = catalog.families.find((f: { id: string }) => f.id === "discovery").calls[0];
+        call.arguments = { ...call.arguments, [arg]: 1 };
+        return catalog;
+      };
+      const notices: string[] = [];
+      const doc = mod.buildManifest(
+        root,
+        META,
+        withArg("brand_new_param"),
+        [],
+        (line: string) => notices.push(line),
+        drift,
+      );
+      expect(notices.join("\n")).toMatch(
+        /NOTICE: codesense_search_tools: unknown example input brand_new_param/,
+      );
+      const tool = doc.tools.find((t: { name: string }) => t.name === "codesense_search_tools");
+      const published = JSON.stringify([tool.examples, doc.families]);
+      expect(published).not.toContain("brand_new_param");
+      // Not named in the drifted Rust: a typo, fatal.
+      expect(() =>
+        mod.buildManifest(root, META, withArg("brand_new_parm"), [], () => {}, drift),
+      ).toThrow(/codesense_search_tools: unknown example input brand_new_parm/);
+      // A fresh seal explains nothing.
+      expect(() => mod.buildManifest(root, META, withArg("brand_new_param"), [], () => {})).toThrow(
+        /unknown example input brand_new_param/,
+      );
+      // A wrong type on a known param is never the export's lag.
+      const wrongType = mod.readCatalog(root);
+      wrongType.families.find((f: { id: string }) => f.id === "discovery").calls[0].arguments = {
+        query: 5,
+      };
+      expect(() => mod.buildManifest(root, META, wrongType, [], () => {}, drift)).toThrow(
+        /invalid family example/,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("explains only names on the Rust lines changed since the seal was committed", async () => {
+    const { root, mod } = await staleScratch("mcp-reference-narrow-");
+    try {
+      const handler = join(root, "src-tauri/src/mcp/handler.rs");
+      // Without history every word of a drifted file counts.
+      expect(mod.driftExplainer(root)!.paths).not.toContain("src-tauri/src/mcp/handler.rs");
+      writeFileSync(handler, readFileSync(handler, "utf8") + "\n// stale\n");
+      expect(mod.driftExplainer(root)!.explains("query")).toBe(true);
+      writeFileSync(handler, readFileSync(handler, "utf8").replace("\n// stale\n", ""));
+      writeFileSync(join(root, "src-tauri/src/nested.rs"), "// JsonSchema nested DTO source\n");
+      mod.sealReference(root);
+      commitAsMain(root);
+      writeFileSync(
+        handler,
+        readFileSync(handler, "utf8") + "\npub struct Added { pub brand_new_param: u32 }\n",
+      );
+      const added = join(root, "src-tauri/src/mcp/added.rs");
+      writeFileSync(added, "pub struct Fresh { pub fresh_param: u32 }\n");
+      const drift = mod.driftExplainer(root)!;
+      expect(drift.paths).toEqual(
+        expect.arrayContaining(["src-tauri/src/mcp/handler.rs", "src-tauri/src/mcp/added.rs"]),
+      );
+      expect(drift.explains("brand_new_param")).toBe(true);
+      expect(drift.explains("brandNewParam")).toBe(true);
+      // A file new since the seal counts whole.
+      expect(drift.explains("fresh_param")).toBe(true);
+      // handler.rs names `query` on lines the drift did not touch.
+      expect(readFileSync(handler, "utf8")).toMatch(/\bquery\b/);
+      expect(drift.explains("query")).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("models the last refresh: the test catalog drops an example input the export lacks", async () => {
+    const { root, mod } = await staleScratch("mcp-reference-fixture-");
+    try {
+      // A PR adds a param in Rust and an example using it, without re-exporting.
+      editJson(join(root, mod.CATALOG), (catalog) => {
+        const discovery = catalog.families.find((f: { id: string }) => f.id === "discovery");
+        discovery.calls.push({
+          tool: "codesense_search_tools",
+          arguments: { query: "inbox", proofOnly: true },
+        });
+      });
+      const calls = exportedCatalog(root)
+        .families.flatMap((f) => f.calls)
+        .filter((c) => c.tool === "codesense_search_tools");
+      expect(calls.length).toBeGreaterThan(0);
+      for (const call of calls) expect(call.arguments).not.toHaveProperty("proofOnly");
+      expect(() =>
+        mod.buildManifest(root, META, exportedCatalog(root), [], () => {}),
+      ).not.toThrow();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

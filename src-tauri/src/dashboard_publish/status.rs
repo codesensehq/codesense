@@ -4,6 +4,8 @@ use super::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::shared::machine_wording;
+
 /// One active viewer of a dashboard, as R8 and R9 list it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Share {
@@ -132,6 +134,20 @@ pub struct Capability {
     pub available: bool,
     pub detail: String,
 }
+
+/// When a published dashboard's live data is available, worded for `os`.
+fn live_data_available_for(os: &str) -> &'static str {
+    if machine_wording::is_mac(os) {
+        "Available while this Mac is online"
+    } else {
+        "Available while this computer is online"
+    }
+}
+
+fn live_data_available() -> &'static str {
+    live_data_available_for(machine_wording::RUNNING_OS)
+}
+
 impl DashboardView {
     pub fn capabilities(&self) -> Vec<Capability> {
         let published = self.state == "published";
@@ -155,7 +171,7 @@ impl DashboardView {
                 label: "See live data".into(),
                 available: published,
                 detail: if published {
-                    "Available while this Mac is online"
+                    live_data_available()
                 } else {
                     "This dashboard isn't published"
                 }
@@ -208,6 +224,18 @@ mod tests {
         let mut status = PublicationStatus::default();
         status.unpublished(Err(super::super::push::DriveError::Refused));
         assert_eq!(status.hosted_copy.as_deref(), Some("still_live"));
+    }
+
+    #[test]
+    fn machine_wording_follows_the_os() {
+        assert_eq!(
+            live_data_available_for("macos"),
+            "Available while this Mac is online"
+        );
+        assert_eq!(
+            live_data_available_for("linux"),
+            "Available while this computer is online"
+        );
     }
 }
 

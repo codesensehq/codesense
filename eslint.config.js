@@ -19,6 +19,26 @@ const ERROR_NAME = "/^(e|err|error|cause)$/";
 // contract; the remaining retired terms still fail lint.
 const RETIRED_WORDS =
   "/\\b[Ww]orkspaces?\\b|Codesense|[Ss]ample epic|Invite a teammate|[Ss]ample pipeline/";
+// Hand-rolled file-system path splitting. `src/shared/lib/path.ts` is the one path helper;
+// all of src/ uses it instead of splitting on a forward slash.
+// The receiver must look like a path (`relPath`, `file.path`, `cwd`, `rootDir`), so keys,
+// slugs and URLs that split on `/` stay quiet.
+const PATH_HELPER_FOLDERS = ["src/**"];
+const PATH_SPLIT_CALL =
+  "CallExpression[callee.property.name=/^(split|lastIndexOf|indexOf)$/][arguments.0.value='/']";
+const PATH_RECEIVER = "/path|cwd|dir|root/i";
+const PATH_SPLIT_MESSAGE =
+  "Split, slice and join file-system paths with the helpers in @/shared/lib/path (they also handle C:\\ and UNC paths). A logical content path, key or URL that really is `/`-delimited takes an eslint-disable-next-line with the reason.";
+const PATH_SPLIT_SELECTORS = [
+  {
+    selector: `${PATH_SPLIT_CALL}[callee.object.name=${PATH_RECEIVER}]`,
+    message: PATH_SPLIT_MESSAGE,
+  },
+  {
+    selector: `${PATH_SPLIT_CALL}[callee.object.property.name=${PATH_RECEIVER}]`,
+    message: PATH_SPLIT_MESSAGE,
+  },
+];
 const VISIBLE_PROP = "/^(title|label|aria-label|placeholder|detail|body|why|message|description)$/";
 
 export default tseslint.config(
@@ -105,6 +125,25 @@ export default tseslint.config(
       "no-empty": ["error", { allowEmptyCatch: true }],
       "@typescript-eslint/no-this-alias": "off",
       "@typescript-eslint/no-unused-expressions": "off",
+    },
+  },
+
+  // File-system paths anywhere in src/ go through the shared path helper. Before the
+  // first-use block, which appends PATH_SPLIT_SELECTORS to its own list: the last block
+  // that sets `no-restricted-syntax` for a file wins whole. The helper itself splits on
+  // both separators.
+  {
+    files: PATH_HELPER_FOLDERS,
+    ignores: [
+      "**/*.test.*",
+      "**/__fixtures__/**",
+      "**/test-fixtures/**",
+      "src/shared/lib/path.ts",
+      // The browser mock backend serves a POSIX fixture tree, never a real disk.
+      "src/app/mock/**",
+    ],
+    rules: {
+      "no-restricted-syntax": ["error", ...PATH_SPLIT_SELECTORS],
     },
   },
 
@@ -199,6 +238,26 @@ export default tseslint.config(
         {
           selector: "JSXAttribute > Literal[value=/\\.\\.\\./]",
           message: "Write an ellipsis (…), never three dots.",
+        },
+        // A first-use surface inside a path-helper folder keeps the path rule too.
+        ...PATH_SPLIT_SELECTORS,
+      ],
+    },
+  },
+
+  // The Mod key is read through the helpers in `src/shared/lib/shortcuts/keystroke.ts`
+  // (`hasMod`, `hasCmd`, `hasPlatformMod`, ...), so no file reads `.metaKey` on its own and
+  // Cmd-versus-Ctrl stays one decision.
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    ignores: ["src/shared/lib/shortcuts/**"],
+    rules: {
+      "no-restricted-properties": [
+        "error",
+        {
+          property: "metaKey",
+          message:
+            "Read modifiers through hasMod / hasCmd / hasPlatformMod / hasAnyModifier / hasCommandModifier (@/shared/lib/shortcuts/keystroke).",
         },
       ],
     },

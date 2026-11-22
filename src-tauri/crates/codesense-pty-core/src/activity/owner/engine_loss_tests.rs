@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+//! Unix only: the real keeper loss over its Unix sockets, unix modes and signals.
+#![cfg(unix)]
 use super::*;
 use std::time::Duration;
 
@@ -101,7 +103,7 @@ import json,os,pathlib,socket,struct,subprocess,sys,time,uuid
 h=pathlib.Path(sys.argv[1]); exe,raw,endpoint,activity,token,lock=sys.argv[2:]
 (h/'cli.pid').write_text(str(os.getpid()))
 env=dict(os.environ,CODESENSE_TEST_KEEPER_LAUNCH=raw,CODESENSE_TEST_KEEPER_ENDPOINT=endpoint,ORION_HOME=str(h),CODESENSE_ACTIVITY_SOCKET=activity,CODESENSE_ACTIVITY_TOKEN=token)
-subprocess.Popen([exe,'--exact','activity::engine::tests::keeper_process_fixture','--nocapture'],env=env,stdout=subprocess.DEVNULL)
+subprocess.Popen([exe,'--exact','activity::engine::transport::tests::keeper_process_fixture','--nocapture'],env=env,stdout=subprocess.DEVNULL)
 while not (h/'engine.pid').exists(): time.sleep(.005)
 pid=int((h/'engine.pid').read_text())
 def send(**operation):
@@ -144,7 +146,7 @@ while True: time.sleep(.05)
         let mut owner = ActivityOwner::with_adapters(orion::adapters);
         owner.sink = Some(sink);
         let owner = Arc::new(owner);
-        let _service = crate::activity::ActivityService::start(home.path(), &owner).unwrap();
+        let _service = crate::activity::ActivityService::start(home.path(), &owner, None).unwrap();
         let socket = home.path().join("activity.sock");
         let writer = owner
             .prepare_native("loss", orion::ORION, socket.to_str().unwrap())

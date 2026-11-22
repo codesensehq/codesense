@@ -5,6 +5,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use codesense_platform::fs::{self as platform_fs, ChangeStamp, Open};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -12,8 +13,7 @@ struct Fingerprint {
     canonical: PathBuf,
     modified: SystemTime,
     len: u64,
-    inode: u64,
-    changed: (i64, i64),
+    changed: ChangeStamp,
     #[serde(default)]
     interpreter: Option<Box<Fingerprint>>,
 }
@@ -22,18 +22,11 @@ impl Fingerprint {
     fn at(program: &Path) -> io::Result<Self> {
         let canonical = std::fs::canonicalize(program)?;
         let metadata = std::fs::metadata(&canonical)?;
-        #[cfg(unix)]
-        let (inode, changed) = {
-            use std::os::unix::fs::MetadataExt;
-            (metadata.ino(), (metadata.ctime(), metadata.ctime_nsec()))
-        };
-        #[cfg(not(unix))]
-        let (inode, changed) = (0, (0, 0));
+        let changed = platform_fs::change_stamp(&canonical)?;
         Ok(Self {
             canonical,
             modified: metadata.modified()?,
             len: metadata.len(),
-            inode,
             changed,
             interpreter: None,
         })
@@ -118,23 +111,13 @@ pub const RUNTIME_LINK: &str = ".codesense-runtime";
 
 impl LockedRuntime {
     pub fn acquire(root: &Path, identity: RuntimeIdentity) -> io::Result<Self> {
-        use std::os::fd::AsRawFd;
-        use std::os::unix::fs::OpenOptionsExt;
         if root.file_name().and_then(|v| v.to_str()) != Some(identity.key().as_str()) {
             return Err(io::Error::other(
                 "runtime directory does not match identity",
             ));
         }
-        let lock = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .open(root.with_extension("lock"))?;
-        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
-            return Err(io::Error::last_os_error());
-        }
+        let lock = platform_fs::create_owner_only(&root.with_extension("lock"), Open::Follow)?;
+        platform_fs::lock_exclusive(&lock)?;
         Ok(Self {
             _lock: lock,
             root: root.to_owned(),
@@ -176,24 +159,14 @@ impl LockedRuntime {
             }
             return Err(io::Error::other("home already belongs to another runtime"));
         }
-        std::os::unix::fs::symlink(&self.root, link)
+        platform_fs::link_or_copy(&self.root, &link).map(|_| ())
     }
 
     pub fn for_home(home: &Path) -> Option<Self> {
-        use std::os::fd::AsRawFd;
-        use std::os::unix::fs::OpenOptionsExt;
         let root = std::fs::canonicalize(home.join(RUNTIME_LINK)).ok()?;
-        let lock = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .open(root.with_extension("lock"))
-            .ok()?;
-        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
-            return None;
-        }
+        let lock =
+            platform_fs::create_owner_only(&root.with_extension("lock"), Open::Follow).ok()?;
+        platform_fs::lock_exclusive(&lock).ok()?;
         // Reconstruct from app-owned metadata only after acquiring the prepare lock.
         let stored: StoredIdentity =
             serde_json::from_slice(&std::fs::read(root.join("identity.json")).ok()?).ok()?;
@@ -241,16 +214,8 @@ fn eligible(
     {
         return None;
     }
-    let metadata = std::fs::metadata(&binary.canonical).ok()?;
-    if !metadata.is_file() {
+    if !platform_fs::is_executable(&binary.canonical) {
         return None;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if metadata.permissions().mode() & 0o111 == 0 {
-            return None;
-        }
     }
     use std::io::Read;
     let mut magic = [0; 4];
@@ -298,9 +263,7 @@ fn eligible(
         if interpreter.file_name().is_some_and(|name| name == "env") {
             return None;
         }
-        let metadata = std::fs::metadata(&interpreter).ok()?;
-        use std::os::unix::fs::PermissionsExt;
-        if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
+        if !platform_fs::is_executable(&interpreter) {
             return None;
         }
         binary.interpreter = Some(Box::new(Fingerprint::at(&interpreter).ok()?));
@@ -317,10 +280,8 @@ fn default_root() -> PathBuf {
     {
         return root.join("codesense/agent-versions");
     }
-    #[cfg(unix)]
-    let owner = unsafe { libc::geteuid() }.to_string();
-    #[cfg(not(unix))]
-    let owner = std::env::var("USERNAME").unwrap_or_else(|_| "local".into());
+    let owner = codesense_platform::user::current_user()
+        .map_or_else(|_| "local".into(), |user| user.as_str().to_owned());
     std::env::temp_dir().join(format!("codesense-{owner}/agent-versions"))
 }
 
@@ -409,16 +370,9 @@ fn write_data(
     })?;
     std::fs::create_dir_all(root)?;
     let temporary = root.join(format!(".{}.tmp", uuid::Uuid::new_v4()));
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
     let result = (|| {
         use std::io::Write;
-        let mut file = options.open(&temporary)?;
+        let mut file = platform_fs::create_new_owner_only(&temporary)?;
         file.write_all(&bytes)?;
         std::fs::rename(&temporary, &destination)
     })();
@@ -653,6 +607,85 @@ mod tests {
         native(&file);
         assert!(RuntimeIdentity::from_prepared_install((0, 22, 5), "0123456789ab", &file).is_err());
     }
+    /// A prepared runtime directory for `identity`: named by its key and marked ready.
+    fn prepared_root(parent: &Path, identity: &RuntimeIdentity) -> PathBuf {
+        let root = parent.join(identity.key());
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("READY"), b"").unwrap();
+        root
+    }
+
+    #[test]
+    fn a_runtime_lock_is_owner_only_and_held_until_the_runtime_is_dropped() {
+        use codesense_platform::fs::{is_owner_only, try_lock_exclusive, unlock};
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = identity(dir.path());
+        let root = prepared_root(dir.path(), &runtime);
+        let held = LockedRuntime::acquire(&root, runtime.clone()).unwrap();
+        let other = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(root.with_extension("lock"))
+            .unwrap();
+        assert!(is_owner_only(&other).unwrap(), "the lock file is private");
+        assert!(
+            !try_lock_exclusive(&other).unwrap(),
+            "held while the runtime lives"
+        );
+        drop(held);
+        assert!(try_lock_exclusive(&other).unwrap(), "released with it");
+        unlock(&other).unwrap();
+        assert!(
+            LockedRuntime::acquire(&dir.path().join("elsewhere"), runtime).is_err(),
+            "a root its identity does not name"
+        );
+    }
+
+    #[test]
+    fn a_bound_home_links_to_its_runtime_and_finds_it_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = identity(dir.path());
+        let root = prepared_root(dir.path(), &runtime);
+        let home = dir.path().join("home");
+        std::fs::create_dir(&home).unwrap();
+        let held = LockedRuntime::acquire(&root, runtime.clone()).unwrap();
+        held.bind_home(&home).unwrap();
+        held.bind_home(&home).unwrap();
+        assert_eq!(std::fs::read_link(home.join(RUNTIME_LINK)).unwrap(), root);
+        drop(held);
+
+        let found = LockedRuntime::for_home(&home).expect("the bound runtime");
+        assert_eq!(found.root(), std::fs::canonicalize(&root).unwrap());
+        assert_eq!(found.identity(), &runtime);
+        let other = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(root.with_extension("lock"))
+            .unwrap();
+        assert!(
+            !codesense_platform::fs::try_lock_exclusive(&other).unwrap(),
+            "held while the found runtime lives"
+        );
+        drop(found);
+        assert!(codesense_platform::fs::try_lock_exclusive(&other).unwrap());
+        codesense_platform::fs::unlock(&other).unwrap();
+
+        let install = dir.path().join("other");
+        std::fs::create_dir(&install).unwrap();
+        let other = identity(&install);
+        let other_root = prepared_root(dir.path(), &other);
+        let held = LockedRuntime::acquire(&other_root, other).unwrap();
+        assert!(
+            held.bind_home(&home).is_err(),
+            "a home belongs to one runtime"
+        );
+        std::fs::remove_file(other_root.join("READY")).unwrap();
+        let fresh = dir.path().join("fresh");
+        std::fs::create_dir(&fresh).unwrap();
+        assert!(held.bind_home(&fresh).is_err(), "only a ready runtime");
+        assert!(LockedRuntime::for_home(&fresh).is_none());
+    }
+
     #[test]
     fn probe_environment_skips_unresolved_runtime() {
         let values = [

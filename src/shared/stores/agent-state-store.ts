@@ -77,6 +77,9 @@ export interface AgentLaunch {
   agent: string;
   /** Everything needed to launch it again the same way. */
   spec: AgentLaunchSpec;
+  /** The agent was its tab's process (an exec), not a line typed into a shell, so no
+   *  shell outlives it to launch it in again. */
+  exec?: boolean;
 }
 
 interface AgentStateStore {

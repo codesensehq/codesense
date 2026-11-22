@@ -64,12 +64,13 @@ import {
 import { attachTerminal } from "@/features/viewer/lib/terminal-attach";
 import { acquireInstance } from "@/shared/lib/fe-instance-registry";
 import { terminalFrameScheduler } from "@/shared/lib/frame-budget-scheduler";
-import { logger } from "@/shared/lib/logger";
+import { initLogging, logger } from "@/shared/lib/logger";
 import { beginOpenSpan } from "@/shared/lib/open-path-timing";
 import {
   createTerminalKeyHandler,
   type TerminalKeyHandler,
 } from "@/shared/lib/terminal-key-handler";
+import { copySelectionToClipboard, pasteFromClipboard } from "./terminal-clipboard";
 import { rememberTerminalSize } from "@/shared/lib/terminal-open";
 import { referenceBuffer, type ReferenceBuffer } from "./buffer-dump";
 import { onPrivateAuthorityRetired } from "@/shared/lib/private-terminal-authority";
@@ -94,6 +95,14 @@ import {
   type LeaseRenderer,
   type WebglLeaseReading,
 } from "./webgl-lease-pool";
+import {
+  createTerminalRendererGate,
+  isLinuxPlatform,
+  parseRendererOverride,
+  type TerminalRendererChoice,
+  type TerminalRendererGate,
+} from "./terminal-renderer";
+import { probeWebglRender } from "./terminal-render-probe";
 
 import {
   currentTerminalDisplay,
@@ -365,6 +374,9 @@ export interface TerminalManager {
   /** The last parsed stream offset of the session's display. */
   appliedSeq(sessionId: TerminalDisplayReference): number | null;
   focus(sessionId: TerminalDisplayReference, policy?: FocusPolicy): void;
+  /** Decide this webview's renderer now if it is not decided (and log it).
+   *  The decision, or `null` when no gate is set. */
+  chooseRenderer(): TerminalRendererChoice | null;
   /** The display's WebGL lease and the pool's fill, or `null` (no display). */
   webglLease(sessionId: TerminalDisplayReference): WebglLeaseReading | null;
   setAppearance(
@@ -517,6 +529,8 @@ export interface TerminalManagerDeps {
   /** Apply one output item to xterm and call `parsed` once xterm parsed it. */
   applyOutput?: (term: Terminal, data: string, parsed: () => void) => void;
   createWebgl?: () => WebglAddon;
+  /** Whether this webview may use WebGL at all. Default: always. */
+  rendererGate?: TerminalRendererGate;
   maxDisplays?: number;
   maxBytes?: number;
   /** Leak faults the collectability test must catch: keep each evicted
@@ -631,8 +645,10 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
   let budgetPending = false;
   let lastOutputBudgetCheck = 0;
   const sessions = new Map<string, SessionEntry>();
+  const rendererGate = deps.rendererGate;
   const leases = createWebglLeasePool({
     schedule: (task) => terminalFrameScheduler.schedule(task),
+    enabled: rendererGate && (() => rendererGate.allowsWebgl()),
   });
   let globalsInstalled = false;
   const shownListeners = new Map<string, Set<() => void>>();
@@ -1136,6 +1152,8 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
         scrollToBottom: () => term.scrollToBottom(),
         scrollLines: (n) => term.scrollLines(n),
         scrollPages: (n) => term.scrollPages(n),
+        copySelection: () => void copySelectionToClipboard(term),
+        paste: () => void pasteFromClipboard(term),
       },
     );
     term.attachCustomKeyEventHandler(keys.handler);
@@ -1900,6 +1918,11 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
       }
     },
 
+    chooseRenderer() {
+      rendererGate?.allowsWebgl();
+      return rendererGate?.choice ?? null;
+    },
+
     webglLease(reference) {
       const sessionId = terminalDisplayKey(reference);
       const d = sessions.get(sessionId)?.display;
@@ -1968,8 +1991,42 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
   return manager;
 }
 
+export interface AppRendererEnv {
+  /** `navigator.platform`. */
+  platform: string | undefined;
+  /** The injected `CODESENSE_TERMINAL_RENDERER`, read when the gate decides. */
+  override: () => unknown;
+  log: (line: string) => void;
+}
+
+/** The app manager's renderer deps: its WebGL addon and its renderer gate. */
+export function appRendererDeps(
+  env: AppRendererEnv,
+): Required<Pick<TerminalManagerDeps, "createWebgl" | "rendererGate">> {
+  const linux = isLinuxPlatform(env.platform);
+  // WebKitGTK shows a WebGL canvas one draw behind unless the drawing buffer is
+  // preserved, so on Linux it is. Elsewhere the addon's default, as before.
+  const createWebgl = () => (linux ? new WebglAddon(true) : new WebglAddon());
+  return {
+    createWebgl,
+    rendererGate: createTerminalRendererGate({
+      override: () => parseRendererOverride(env.override()),
+      linux: () => linux,
+      probe: () => probeWebglRender(createWebgl),
+      log: env.log,
+    }),
+  };
+}
+
 /** The app's one terminal manager. */
-export const terminalManager = createTerminalManager();
+export const terminalManager = createTerminalManager(
+  appRendererDeps({
+    platform: typeof navigator === "undefined" ? undefined : navigator.platform,
+    override: () => window.__CODESENSE_TERMINAL_RENDERER__,
+    // After the log plugin loads, so the line reaches the log file, not just the console.
+    log: (line) => void initLogging().finally(() => logger.info("terminal", line)),
+  }),
+);
 
 export interface HarnessTerminalEntry {
   readonly instanceId: string | null;

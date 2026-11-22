@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Columns2, Save, TriangleAlert } from "lucide-react";
 
-import { basename } from "@/shared/lib/basename";
+import { basename } from "@/shared/lib/path";
 import { cn } from "@/lib/utils";
 import { CodeEditor, CodeMergeView, useEditorAffordances } from "@/shared/components/code-editor";
 import type { CodeEditorHandle, CodeMergeViewHandle } from "@/shared/components/code-editor";
@@ -24,6 +24,7 @@ import { useFileEditor, useScopedChangeNonce } from "../lib/use-file-editor";
 import { FileWarningPlaceholder } from "./file-warning-placeholder";
 import { ReconcileBar, ReconcileErrorBanner, StaleConflictBanner } from "./conflict-banners";
 import { ChromeIconButton } from "./overlay-shell";
+import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
 
 // ---------------------------------------------------------------------------
 // SW-VE-3/4 — deliberate, concurrent-safe edit mode for a context file. Consumes
@@ -326,7 +327,7 @@ export function ContextEditorInset({
           <ChromeIconButton
             testId="context-editor-save"
             ariaLabel="Save"
-            tooltip="Save · ⌘S"
+            tooltip={`Save · ${formatKeystrokeDisplay("CmdOrCtrl+S")}`}
             onClick={() => void save(buffer)}
           >
             <Save size={13} className={cn(!dirty && "opacity-40")} />

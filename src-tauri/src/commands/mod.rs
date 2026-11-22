@@ -40,7 +40,6 @@ pub mod credential_store;
 // provider registry + the declared connector store (reconciles the two mechanisms).
 pub mod context_repo_git;
 pub mod deps;
-#[cfg(target_os = "macos")]
 pub mod export_pdf;
 pub mod file_index;
 pub mod file_surface;
@@ -155,6 +154,8 @@ pub mod spawn_cap;
 // dashboard execution loop (openWorkspace / runPrompt).
 // The inbox agent sessions and the human message each other through.
 pub mod agent_inbox;
+// The person's messages each agent session took and hasn't answered (the reply reminder).
+pub(crate) mod reply_owed;
 // One read model of agents and their inboxes for dashboards and agents (sessions, an
 // agent's instances, the inbox, role queues, updates, the human's status).
 pub mod agent_read_model;
@@ -167,7 +168,8 @@ pub mod role_inbox;
 pub(crate) mod role_startup;
 pub mod roles;
 pub mod system;
-// SV-8: this instance's terminal server in the macOS menu bar.
+// This instance's terminal server in the macOS menu bar, the Linux tray or the
+// Windows notification area.
 pub mod terminal_server_tray;
 pub mod tools;
 pub mod update;
@@ -215,10 +217,10 @@ pub use async_helpers::await_blocking;
 ///
 /// **Platform note** — the count is over the **declared** handler set
 /// (lexical source-text count), not the runtime-registered set. The
-/// three `commands::export_pdf::*` handlers are
-/// `#[cfg(target_os = "macos")]`-gated; on Linux/Windows they don't get
-/// registered, but they're still declared in `lib.rs`, so the lexical
-/// counter — and this constant — match across platforms.
+/// two PDF handlers in `commands::export_pdf` are `#[cfg(cap_pdf_export)]`-
+/// gated; where the capability is off they don't get registered, but
+/// they're still declared in `lib.rs`, so the lexical counter — and this
+/// constant — match across platforms.
 ///
 /// `allow(dead_code)`: only the `#[cfg(test)]` block below references
 /// this; clippy in `--lib` mode (what CI runs) does not see the test
@@ -1096,7 +1098,8 @@ pub use async_helpers::await_blocking;
 // diff). → 515.
 // +1 `agent_read_model::list_thread_inbox` (a saved agent + story thread's conversation, ended
 // sessions included). → 516.
-pub const EXPECTED_COMMAND_COUNT: usize = 516;
+// +1 `system::get_platform_caps` (which optional features this OS supports). → 517.
+pub const EXPECTED_COMMAND_COUNT: usize = 517;
 
 #[cfg(test)]
 mod tests {

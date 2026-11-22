@@ -22,6 +22,7 @@ import {
 
 import { tabLabels, tabsOutOfView } from "../../lib/editor-tabs";
 import { FileGlyph } from "./file-glyph";
+import { relative } from "@/shared/lib/path";
 
 export interface TabState {
   dirty: boolean;
@@ -144,7 +145,7 @@ export function EditorTabStrip({
           const label = labels.get(path) ?? { name: path, hint: null };
           const state = states.get(path);
           const dirty = state?.dirty ?? false;
-          const rel = path.startsWith(`${rootPath}/`) ? path.slice(rootPath.length + 1) : path;
+          const rel = relative(rootPath, path) || path;
           return (
             <div
               key={path}

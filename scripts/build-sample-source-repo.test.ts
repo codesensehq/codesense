@@ -11,17 +11,18 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gunzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 
 // @ts-expect-error -- plain Node ESM helper without type declarations.
-import { newestMtime, writeBuildOutput } from "./lib/build-output.mjs";
+import { newestMtime, tarGz, writeBuildOutput } from "./lib/build-output.mjs";
 
 // @ts-expect-error -- plain Node ESM build script without type declarations.
 import {
+  buildArchive,
   buildCommitTrees,
   buildInputs,
   buildRepository,
-  tarGz,
 } from "./build-sample-source-repo.mjs";
 
 /** Minimal commit list fixture used by the arity / order tests. */
@@ -70,6 +71,20 @@ describe("sample-source-repo build (SW-ODC-11)", () => {
     const a = tarGz(entries, 1_790_812_800) as Buffer;
     const b = tarGz(entries, 1_790_812_800) as Buffer;
     expect(Buffer.compare(a, b)).toBe(0);
+  });
+
+  it("tarGz writes the same bytes on every host: the gzip OS byte is pinned to unknown", () => {
+    const archive = tarGz([["a.txt", Buffer.from("a")]], 1_790_812_800) as Buffer;
+    // zlib writes the host's OS code at byte 9 (3 on Linux, 19 on macOS); 255 is "unknown".
+    expect(archive[9]).toBe(255);
+    expect(gunzipSync(archive).subarray(0, 5).toString()).toBe("a.txt");
+  });
+
+  it("the committed archive is exactly what the template builds on this host", () => {
+    const committed = readFileSync(
+      join(process.cwd(), "src-tauri/resources/sample-source-repo.tar.gz"),
+    );
+    expect(Buffer.compare(committed, buildArchive().archive as Buffer)).toBe(0);
   });
 
   it("declares exactly its inputs for cargo:rerun-if-changed", () => {

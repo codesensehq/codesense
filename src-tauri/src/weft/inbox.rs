@@ -1058,9 +1058,14 @@ pub(crate) fn this_run() -> &'static str {
 /// What one inbox check found for a session's agent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reservation {
-    /// Tell the agent about `count` unread messages, then confirm `token` once it was
-    /// told. The same token comes back when an unconfirmed notice is offered again.
-    Offer { token: String, count: u32 },
+    /// Tell the agent about `count` unread messages and the pending mail of the roles it
+    /// holds (`roles`), then confirm `token` once it was told. The same token comes back
+    /// when an unconfirmed notice is offered again.
+    Offer {
+        token: String,
+        count: u32,
+        roles: Vec<RoleMail>,
+    },
     /// Nothing it was not told (or offered) about.
     Nothing,
     /// A notice offered at most [`RESERVE_TTL_MS`] ago awaits its confirm; it is offered
@@ -1070,6 +1075,14 @@ pub enum Reservation {
     /// ([`inbox_hold_announcement`]): it is never offered again, only confirmed (or
     /// replaced by newer mail).
     Held,
+}
+
+/// Mail queued for a role the session holds live that no instance has claimed yet: the
+/// notice names the role, so the agent claims it with `claim_role_messages`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoleMail {
+    pub role: String,
+    pub pending: u32,
 }
 
 /// What a reservation's `reserved_by` holds while its delivery is uncertain.
@@ -1150,8 +1163,16 @@ fn inbox_reserve_with_chat_at(
         params![recipient],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
-    let newest = newest.unwrap_or(0);
-    if count == 0 && chat.is_none() {
+    // Role mail counts toward the notice of each session holding the role live; its
+    // message ids join the watermark, so each one is announced once.
+    let held = super::role_inbox::pending_role_mail(&tx, session, recipient, now / 1000)?;
+    let newest_role = held.iter().map(|(_, _, id)| *id).max();
+    let newest = newest_role.max(newest).unwrap_or(0);
+    let roles: Vec<RoleMail> = held
+        .into_iter()
+        .map(|(role, pending, _)| RoleMail { role, pending })
+        .collect();
+    if count == 0 && newest_role.is_none() && chat.is_none() {
         return Ok(Reservation::Nothing);
     }
     // This session's marks; another session's under the handle tell it nothing.
@@ -1209,7 +1230,11 @@ fn inbox_reserve_with_chat_at(
             )?;
             write_audit_public(&tx, ANNOUNCED, "mutate", row)?;
             tx.commit()?;
-            return Ok(Reservation::Offer { token, count });
+            return Ok(Reservation::Offer {
+                token,
+                count,
+                roles,
+            });
         }
     }
     let token = uuid::Uuid::new_v4().to_string();
@@ -1231,7 +1256,11 @@ fn inbox_reserve_with_chat_at(
     )?;
     write_audit_public(&tx, ANNOUNCED, "mutate", row)?;
     tx.commit()?;
-    Ok(Reservation::Offer { token, count })
+    Ok(Reservation::Offer {
+        token,
+        count,
+        roles,
+    })
 }
 
 /// The notice reserved under `token` for `session` was handed to its agent's hook: what
@@ -1537,7 +1566,7 @@ mod tests {
     /// Reserves for `session` at `now`, and confirms an offer at once (its agent was told).
     fn tell(store: &WeftStore, recipient: &str, session: &str, now: i64) -> Option<u32> {
         match inbox_reserve_announcement_at(store, recipient, session, now, RUN, false).unwrap() {
-            Reservation::Offer { token, count } => {
+            Reservation::Offer { token, count, .. } => {
                 assert_ne!(inbox_confirm_told(store, session, &token).unwrap(), None);
                 Some(count)
             }
@@ -1548,7 +1577,7 @@ mod tests {
 
     fn offer(store: &WeftStore, recipient: &str, session: &str, now: i64) -> (String, u32) {
         match inbox_reserve_announcement_at(store, recipient, session, now, RUN, false).unwrap() {
-            Reservation::Offer { token, count } => (token, count),
+            Reservation::Offer { token, count, .. } => (token, count),
             other => panic!("no offer: {other:?}"),
         }
     }
@@ -1579,7 +1608,8 @@ mod tests {
             .unwrap(),
             Reservation::Offer {
                 token: token.clone(),
-                count: 1
+                count: 1,
+                roles: vec![]
             }
         );
         // A clock set back before the offer does not hold it for longer than its TTL.
@@ -1589,6 +1619,91 @@ mod tests {
         ));
     }
 
+    /// Role mail reaches a live holder's notice once, naming its role: a session that
+    /// does not hold the role, the role mail's own sender and a lapsed holder are not
+    /// told, and a claimed delivery is no longer counted.
+    #[test]
+    fn role_mail_is_announced_once_to_its_holder() {
+        use crate::weft::role_inbox::{
+            claim_role_messages, register_role_as, send_role_message_commit, RegisterOptions,
+        };
+        const ROLE: &str = "reviewer";
+        let (_dir, store) = open_temp();
+        let secs = T0 / 1000;
+        let held = RegisterOptions {
+            session_id: Some("S2".into()),
+            ..RegisterOptions::default()
+        };
+        let reg = register_role_as(&store, ROLE, "S2", &held, secs).unwrap();
+        let send = |from: &str| {
+            send_role_message_commit(
+                &store, from, ROLE, "merge", None, None, None, "", secs, None, None, None,
+            )
+            .unwrap()
+        };
+        send("H1");
+        let reserve = |handle: &str, session: &str, now: i64| {
+            inbox_reserve_announcement_at(&store, handle, session, now, RUN, false).unwrap()
+        };
+        let Reservation::Offer {
+            token,
+            count,
+            roles,
+        } = reserve("H2", "S2", T0)
+        else {
+            panic!("the holder was not offered its role mail")
+        };
+        assert_eq!(
+            (count, roles),
+            (
+                0,
+                vec![RoleMail {
+                    role: ROLE.into(),
+                    pending: 1
+                }]
+            )
+        );
+        assert_ne!(inbox_confirm_told(&store, "S2", &token).unwrap(), None);
+        assert_eq!(
+            reserve("H2", "S2", T0 + 1),
+            Reservation::Nothing,
+            "told once"
+        );
+        assert_eq!(
+            reserve("H3", "S3", T0 + 1),
+            Reservation::Nothing,
+            "not a holder"
+        );
+        send("H2");
+        assert_eq!(
+            reserve("H2", "S2", T0 + 2),
+            Reservation::Nothing,
+            "its own send"
+        );
+        send("H1");
+        let (token, _) = offer(&store, "H2", "S2", T0 + 3);
+        assert_eq!(
+            inbox_reserve_announcement_at(&store, "H2", "S2", T0 + 4, RUN, true).unwrap(),
+            Reservation::Offer {
+                token,
+                count: 0,
+                roles: vec![RoleMail {
+                    role: ROLE.into(),
+                    pending: 2
+                }]
+            }
+        );
+        claim_role_messages(&store, ROLE, "S2", reg.generation, 10, secs).unwrap();
+        send("H1");
+        let Reservation::Offer { roles, .. } = reserve("H2", "S2", T0 + 5) else {
+            panic!("new role mail was not offered")
+        };
+        assert_eq!(roles[0].pending, 1, "claimed deliveries are not counted");
+        send("H1");
+        let lapsed = T0 + (held.ttl_secs + 1) * 1000;
+        assert_eq!(reserve("H2", "S2", lapsed), Reservation::Nothing, "lapsed");
+    }
+
     #[test]
     fn an_unconfirmed_offer_is_offered_again_at_once_when_asked_to_reoffer() {
         let (_dir, store) = open_temp();
@@ -1596,7 +1711,11 @@ mod tests {
         let (token, _) = offer(&store, "H2", "S2", T0);
         assert_eq!(
             inbox_reserve_announcement_at(&store, "H2", "S2", T0 + 1, RUN, true).unwrap(),
-            Reservation::Offer { token, count: 1 }
+            Reservation::Offer {
+                token,
+                count: 1,
+                roles: vec![]
+            }
         );
     }
 
@@ -2537,4 +2656,40 @@ pub(crate) fn inbox_set_attachments(
     write_audit_public(&tx, INBOX, "mutate", id)?;
     tx.commit()?;
     Ok(())
+}
+
+/// Every message that carries attachments: its id, creation time (ms) and the stored
+/// attachments JSON, untouched.
+pub(crate) fn inbox_attachments_raw(store: &WeftStore) -> WvWriteResult<Vec<(i64, i64, String)>> {
+    let conn = store.conn()?;
+    let mut stmt = rusqlite::Connection::prepare(
+        &conn,
+        "SELECT id, created_at, attachments FROM wv_inbox \
+         WHERE attachments IS NOT NULL AND attachments NOT IN ('', '[]') ORDER BY id",
+    )?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// Replace a message's attachments JSON with `json`, only while it still reads `was`.
+/// Returns whether it changed.
+pub(crate) fn inbox_replace_attachments_raw(
+    store: &WeftStore,
+    id: i64,
+    was: &str,
+    json: &str,
+) -> WvWriteResult<bool> {
+    let mut conn = store.conn()?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let changed = tx.execute(
+        "UPDATE wv_inbox SET attachments=?3 WHERE id=?1 AND attachments=?2",
+        params![id, was, json],
+    )?;
+    if changed > 0 {
+        write_audit_public(&tx, INBOX, "mutate", id)?;
+    }
+    rusqlite::Transaction::commit(tx)?;
+    Ok(changed > 0)
 }

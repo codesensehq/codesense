@@ -60,6 +60,7 @@ describe("row display helpers", () => {
     );
     expect(formatSessionHandle("SW-A")).toBe("SW-A");
     expect(formatSessionHandle("/ctx/epic/README.md")).toBe("README.md");
+    expect(formatSessionHandle("C:\\ctx\\epic\\README.md")).toBe("README.md");
   });
 
   it("formatSessionHandle leaves branch/team, path and multi-# handles opaque (no mis-split)", () => {
@@ -68,6 +69,7 @@ describe("row display helpers", () => {
     expect(formatSessionHandle("SW-A#b#c")).toBe("SW-A#b#c");
     expect(formatSessionHandle("SW-A#")).toBe("SW-A#");
     expect(formatSessionHandle("/Users/x/my#proj")).toBe("my#proj");
+    expect(formatSessionHandle("C:\\x\\my#proj")).toBe("my#proj");
     expect(formatSessionHandle("/ctx/epics/e#1/README.md")).toBe("README.md");
   });
 

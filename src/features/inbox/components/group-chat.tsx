@@ -4,7 +4,10 @@ import { ChevronLeft, MessagesSquare } from "lucide-react";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 import { useCurrentUser } from "@/shared/lib/get-current-user";
 import type { SessionListRow } from "@/tauri/commands";
-import { WorkspaceChatBody } from "@/features/workspace-chat/components/workspace-chat-body";
+import {
+  WorkspaceChatBody,
+  type ChatIdentity,
+} from "@/features/workspace-chat/components/workspace-chat-body";
 import { WorkspaceChatCompose } from "@/features/workspace-chat/components/workspace-chat-compose";
 import { WorkspaceChatArchiveBanner } from "@/features/workspace-chat/components/workspace-chat-archive-banner";
 import { chatIdForWorkspace } from "@/features/workspace-chat/lib/workspace-chat-id";
@@ -13,8 +16,9 @@ import { useWorkspaceChatActions } from "@/features/workspace-chat/hooks/use-wor
 import { useWorkspaceChat } from "@/features/workspace-chat/hooks/use-workspace-chat";
 import { useChatHumanView } from "@/features/workspace-chat/hooks/use-chat-human-view";
 import { useInboxSessions } from "../hooks/use-inbox-sessions";
+import { roomName } from "../lib/room-label";
 import { initials, middleTruncate, participant } from "../model";
-import { inboxDrafts, useInboxView } from "./inbox-view-context";
+import { inboxDrafts, useInboxView, type InboxView } from "./inbox-view-context";
 import { Ico, navRow } from "./primitives";
 import "@/features/workspace-chat/workspace-chat.css";
 
@@ -25,6 +29,23 @@ export interface GroupRoom {
 }
 export const groupUnread = (room: GroupRoom) => Math.max(0, ...room.sessions.map((s) => s.unread));
 export const countLabel = (n: number) => (n > 99 ? "99+" : n);
+
+/** How the group chat names a message's sender; only a remote session carries a machine tag. */
+export function chatIdentity(
+  view: Pick<InboxView, "dir" | "me">,
+  from: string,
+  fromName: string,
+): ChatIdentity {
+  const p = participant(view.dir, from);
+  const name = view.dir.has(from) ? p.name : fromName || p.name;
+  return {
+    name,
+    color: p.color,
+    initials: initials(name),
+    tag: view.me === from ? "this session" : undefined,
+    machine: p.machine,
+  };
+}
 
 export function roomsForSessions(rows: readonly SessionListRow[]): GroupRoom[] {
   const rooms = new Map<string, GroupRoom>();
@@ -57,13 +78,7 @@ export function useRoomLabel(workspaceId: string) {
           chatIdForWorkspace(w) === workspaceId ||
           (storyId && w.storyId === storyId),
       );
-    const name =
-      ws?.storyTitle ||
-      ws?.storyId ||
-      ws?.epicDocPath ||
-      ws?.cwd?.split("/").filter(Boolean).at(-1) ||
-      storyId ||
-      workspaceId.replace(/^generic:/, "");
+    const name = roomName(ws, storyId, workspaceId);
     return { name, short: ws?.storyId || storyId || middleTruncate(name, 24) };
   }, [workspaces, workspaceId]);
 }
@@ -286,17 +301,7 @@ export function GroupChatPane({
                   ? `${unread} unread by ${reader?.name ?? names}`
                   : undefined
             }
-            identify={(from, fromName) => {
-              const p = participant(view.dir, from);
-              const name = view.dir.has(from) ? p.name : fromName || p.name;
-              return {
-                name,
-                color: p.color,
-                initials: initials(name),
-                tag: view.me === from ? "this session" : undefined,
-                machine: p.machine ?? undefined,
-              };
-            }}
+            identify={(from, fromName) => chatIdentity(view, from, fromName)}
           />
         </div>
         {chat.archived ? (

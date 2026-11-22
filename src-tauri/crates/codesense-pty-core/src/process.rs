@@ -3,6 +3,9 @@
 //! copy, consumed by the session registry (`is_idle`), the host's batched
 //! agent-liveness commands, and the host's memory sampler.
 
+use crate::agent_cli::{adapter, binary_stem, by_binary};
+use codesense_platform::process::{group_and_foreground, Pid};
+
 /// Returns `true` if `pid` has at least one live descendant process — i.e. the
 /// shell is running a foreground or background command rather than sitting at a
 /// bare prompt. This is the single source of truth for the idle/running
@@ -53,42 +56,6 @@ pub struct RunningJobs {
     pub background: Vec<String>,
 }
 
-/// A process's `(process group, terminal foreground process group)`, read from
-/// the OS process table — pid-based, so it answers for a session hosted by any
-/// terminal host (in-process or the session-server sidecar). `None` when the
-/// process is gone or the platform can't say.
-#[cfg(target_os = "macos")]
-fn pgid_and_tpgid(pid: u32) -> Option<(i32, i32)> {
-    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-    // SAFETY: `info` is a correctly sized, writable `proc_bsdinfo`.
-    let n = unsafe {
-        libc::proc_pidinfo(
-            pid as libc::c_int,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            (&mut info as *mut libc::proc_bsdinfo).cast(),
-            size,
-        )
-    };
-    (n == size).then_some((info.pbi_pgid as i32, info.e_tpgid as i32))
-}
-
-#[cfg(target_os = "linux")]
-fn pgid_and_tpgid(pid: u32) -> Option<(i32, i32)> {
-    // `/proc/<pid>/stat`: `pid (comm) state ppid pgrp session tty_nr tpgid …`;
-    // `comm` may hold spaces/parens, so split after the LAST `)`.
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let rest = &stat[stat.rfind(')')? + 1..];
-    let f: Vec<&str> = rest.split_whitespace().collect();
-    Some((f.get(2)?.parse().ok()?, f.get(5)?.parse().ok()?))
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn pgid_and_tpgid(_pid: u32) -> Option<(i32, i32)> {
-    None
-}
-
 /// One process under a shell: `(pid, parent pid, name, process group)`.
 type Proc = (u32, u32, String, Option<i32>);
 
@@ -131,9 +98,20 @@ pub fn running_jobs_known(shell_pids: &[Option<u32>]) -> Vec<Option<RunningJobs>
             let shell = (*shell).filter(|pid| listed.contains(pid))?;
             let subtree: Vec<Proc> = descendants(&table, shell)
                 .into_iter()
-                .map(|(pid, ppid, name)| (pid, ppid, name, pgid_and_tpgid(pid).map(|(g, _)| g)))
+                .map(|(pid, ppid, name)| {
+                    (
+                        pid,
+                        ppid,
+                        name,
+                        group_and_foreground(Pid::from_raw(pid)).map(|(g, _)| g),
+                    )
+                })
                 .collect();
-            Some(classify_jobs(shell, pgid_and_tpgid(shell), &subtree))
+            Some(classify_jobs(
+                shell,
+                group_and_foreground(Pid::from_raw(shell)),
+                &subtree,
+            ))
         })
         .collect()
 }
@@ -196,52 +174,55 @@ fn classify_jobs(shell: u32, groups: Option<(i32, i32)>, subtree: &[Proc]) -> Ru
 
 /// Interpreters an agent CLI may run under as a script (`#!/usr/bin/env node`,
 /// a Python entry point): for these the script — argv's first non-flag entry
-/// after the interpreter — names the program. Matched on the lowercased basename,
-/// `python` as a prefix (`python3`, `python3.12`, macOS's `Python`).
-fn is_interpreter(basename: &str) -> bool {
-    matches!(basename, "node" | "nodejs" | "bun") || basename.starts_with("python")
+/// after the interpreter — names the program. Matched on the [`binary_stem`]
+/// (`node.exe` is `node`), `python` as a prefix (`python3`, `python3.12`,
+/// macOS's `Python`).
+fn is_interpreter(stem: &str) -> bool {
+    matches!(stem, "node" | "nodejs" | "bun") || stem.starts_with("python")
 }
 
-/// A path's last component, lowercased.
-fn basename_lower(path: &str) -> String {
-    path.rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(path)
-        .to_lowercase()
+/// Whether `script` is the npm package entry of the agent CLI `stem`
+/// ([`crate::agent_cli::AgentCliAdapter::npm_entry`]), on either separator: Windows runs an npm install as
+/// `node.exe …\node_modules\<package>\cli.js`, with no shim naming the CLI.
+pub(crate) fn is_npm_entry(script: &str, stem: &str) -> bool {
+    let script = script.replace('\\', "/").to_lowercase();
+    by_binary(stem)
+        .and_then(|cli| adapter(cli).npm_entry())
+        .is_some_and(|entry| script.ends_with(&format!("/{entry}")))
 }
 
-/// Does a process run the agent CLI `needle_lower` (already lowercased) as its
-/// EXECUTABLE? Pure so it unit-tests the shim shapes without a live process tree.
+/// Does a process run the agent CLI `needle` (its name or path, compared by
+/// [`binary_stem`]) as its EXECUTABLE? Pure so it unit-tests the shim shapes
+/// without a live process tree.
 ///
 /// Matches only what names the program, never an arbitrary path segment or
 /// argument (`node /x/claude/server.js`, `cat CLAUDE.md`, a cwd under
 /// `~/claude/` are not the agent):
-/// - the process name, the resolved exe's basename, or argv[0]'s basename;
-/// - under a script interpreter (argv[0] `node`, `bun`, `python3`, …), the
-///   basename of the script it runs — an npm shim `node /usr/local/bin/claude` —
-///   with a `.js`/`.mjs`/`.cjs`/`.py` extension ignored.
-pub fn agent_signature_matches(
-    name: &str,
-    exe: Option<&str>,
-    cmd: &[&str],
-    needle_lower: &str,
-) -> bool {
-    if needle_lower.is_empty() {
+/// - the [`binary_stem`] of the process name, the resolved exe, or argv[0]
+///   (`claude.exe` is `claude`);
+/// - under a script interpreter (argv[0] `node`, `node.exe`, `bun`, `python3`, …),
+///   the basename of the script it runs — an npm shim `node /usr/local/bin/claude` —
+///   with a `.js`/`.mjs`/`.cjs`/`.py` extension ignored, or the CLI's npm package
+///   entry (`…\node_modules\@anthropic-ai\claude-code\cli.js` is Claude).
+pub fn agent_signature_matches(name: &str, exe: Option<&str>, cmd: &[&str], needle: &str) -> bool {
+    let needle = binary_stem(needle);
+    if needle.is_empty() {
         return false;
     }
-    if name.to_lowercase() == needle_lower || exe.is_some_and(|e| basename_lower(e) == needle_lower)
-    {
+    let name = binary_stem(name);
+    let exe = exe.map(binary_stem);
+    if name == needle || exe.as_deref() == Some(needle.as_str()) {
         return true;
     }
-    let Some(argv0) = cmd.first().map(|a| basename_lower(a)) else {
+    let Some(argv0) = cmd.first().map(|a| binary_stem(a)) else {
         return false;
     };
-    if argv0 == needle_lower {
+    if argv0 == needle {
         return true;
     }
     let interpreted = is_interpreter(&argv0)
-        || is_interpreter(&name.to_lowercase())
-        || exe.is_some_and(|e| is_interpreter(&basename_lower(e)));
+        || is_interpreter(&name)
+        || exe.as_deref().is_some_and(is_interpreter);
     if !interpreted {
         return false;
     }
@@ -249,12 +230,12 @@ pub fn agent_signature_matches(
         .skip(1)
         .find(|a| !a.starts_with('-'))
         .is_some_and(|script| {
-            let base = basename_lower(script);
+            let base = binary_stem(script);
             let stem = [".js", ".mjs", ".cjs", ".py"]
                 .iter()
                 .find_map(|ext| base.strip_suffix(ext))
                 .unwrap_or(&base);
-            stem == needle_lower
+            stem == needle || is_npm_entry(script, &needle)
         })
 }
 
@@ -362,7 +343,9 @@ impl ProcessIndex {
     /// terminal's foreground process group — a `claude &` in the background of
     /// an interactive shell is the shell's job, not an agent tab.
     pub fn has_named_process(&self, root_pid: u32, agent_name: &str) -> bool {
-        self.has_foreground_named_process(root_pid, agent_name, pgid_and_tpgid)
+        self.has_foreground_named_process(root_pid, agent_name, |pid| {
+            group_and_foreground(Pid::from_raw(pid))
+        })
     }
 
     /// [`Self::has_named_process`] with the `(pgid, tpgid)` reader injected, so the
@@ -522,6 +505,67 @@ mod tests {
         ));
         // empty needle never matches
         assert!(!agent_signature_matches("claude", None, &["claude"], ""));
+
+        // Windows: the npm install runs `node.exe …\node_modules\@anthropic-ai\claude-code\cli.js`
+        assert!(agent_signature_matches(
+            "node.exe",
+            Some(r"C:\Program Files\nodejs\node.exe"),
+            &[
+                r"C:\Program Files\nodejs\node.exe",
+                r"C:\Users\u\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\cli.js",
+            ],
+            "claude"
+        ));
+        // the same entry with `/` separators
+        assert!(agent_signature_matches(
+            "node",
+            Some("/usr/local/bin/node"),
+            &[
+                "node",
+                "/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js"
+            ],
+            "claude"
+        ));
+        // the native Windows binary, in any case
+        assert!(agent_signature_matches(
+            "claude.exe",
+            Some(r"C:\Users\u\.local\bin\claude.exe"),
+            &[r"C:\Users\u\.local\bin\claude.exe"],
+            "claude"
+        ));
+        assert!(agent_signature_matches(
+            "CLAUDE.EXE",
+            None,
+            &[r"C:\TOOLS\CLAUDE.EXE"],
+            "claude"
+        ));
+        // a node server under a `claude\` directory is still not the agent
+        assert!(!agent_signature_matches(
+            "node.exe",
+            Some(r"C:\Program Files\nodejs\node.exe"),
+            &[
+                r"C:\Program Files\nodejs\node.exe",
+                r"C:\x\claude\server.js"
+            ],
+            "claude"
+        ));
+        // an editor opening a file named for the CLI is not the agent
+        assert!(!agent_signature_matches(
+            "notepad.exe",
+            Some(r"C:\Windows\System32\notepad.exe"),
+            &["notepad.exe", "CLAUDE.md"],
+            "claude"
+        ));
+        // another package's entry under the same layout is not Claude
+        assert!(!agent_signature_matches(
+            "node.exe",
+            None,
+            &[
+                "node.exe",
+                r"C:\npm\node_modules\@anthropic-ai\other-tool\cli.js"
+            ],
+            "claude"
+        ));
     }
 
     fn proc_info(name: &str, exe: Option<&str>, cmd: &[&str]) -> ProcInfo {
@@ -688,6 +732,8 @@ mod tests {
     }
 
     /// An interactive shell in a real PTY, driven by typing into it.
+    // macOS and Linux only, as the tests that use it are.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     struct PtyShell {
         pid: u32,
         writer: Box<dyn std::io::Write + Send>,
@@ -696,6 +742,7 @@ mod tests {
         _reader: std::thread::JoinHandle<()>,
     }
 
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     impl PtyShell {
         fn spawn() -> Self {
             use portable_pty::{native_pty_system, CommandBuilder, PtySize};
@@ -741,6 +788,7 @@ mod tests {
         }
     }
 
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     impl Drop for PtyShell {
         fn drop(&mut self) {
             let _ = self.child.kill();
@@ -825,6 +873,33 @@ mod tests {
         assert!(!jobs.background.is_empty(), "the background job started");
         std::thread::sleep(std::time::Duration::from_millis(200));
         assert!(!ProcessIndex::build().has_named_process(sh.pid, "claude"));
+    }
+
+    /// A process's group is read from the process table: this process's own,
+    /// a child's that leads its own group, and nothing once a pid is gone.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_process_group_is_read_from_the_process_table() {
+        use std::os::unix::process::CommandExt;
+        let (own, _) =
+            group_and_foreground(Pid::from_raw(std::process::id())).expect("this process");
+        // SAFETY: getpgrp has no preconditions.
+        assert_eq!(own, unsafe { libc::getpgrp() });
+        let mut led = std::process::Command::new("sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .expect("spawn sleep");
+        let pid = led.id();
+        let (group, _) = group_and_foreground(Pid::from_raw(pid)).expect("a running child");
+        assert_eq!(group, pid as i32, "it leads its own group");
+        led.kill().unwrap();
+        led.wait().unwrap();
+        assert_eq!(
+            group_and_foreground(Pid::from_raw(pid)),
+            None,
+            "a reaped child"
+        );
     }
 
     /// A bare leaf process (no children) is idle.

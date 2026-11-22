@@ -12,7 +12,7 @@ import {
 } from "react";
 
 import { cn } from "@/lib/utils";
-import { basename } from "@/shared/lib/basename";
+import { basename } from "@/shared/lib/path";
 import { renderViewer } from "@/shared/lib/render-viewer";
 import { writeBinaryWorktreeFile } from "@/tauri/commands";
 import type { CanvasWriter } from "@/features/dashboard/components/excalidraw-canvas";
@@ -56,6 +56,7 @@ import {
   renderableType,
   type WorktreeViewMode,
 } from "./worktree-view-mode";
+import { ariaKeyshortcuts, formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
 
 /** What the workbench chrome (tab strip, status bar, breadcrumbs) shows for a
  *  pane. Reported upward whenever any of it changes. */
@@ -632,7 +633,7 @@ export const WorktreeFilePane = memo(function WorktreeFilePane({
             showRendered && dirty
               ? type === "excalidraw"
                 ? "Unsaved edits in Source · save or undo them there before drawing"
-                : "Showing the saved version · ⌘S to update"
+                : `Showing the saved version · ${formatKeystrokeDisplay("CmdOrCtrl+S")} to update`
               : null
           }
           onChange={setViewMode}
@@ -719,8 +720,12 @@ function ViewModeToggle({
         role="radiogroup"
         aria-label="File view"
         aria-disabled={disabled || undefined}
-        aria-keyshortcuts="Meta+Shift+V"
-        title={disabled ? "Resolve the conflict first" : "Switch Rendered / Source (⇧⌘V)"}
+        aria-keyshortcuts={ariaKeyshortcuts("CmdOrCtrl+Shift+V")}
+        title={
+          disabled
+            ? "Resolve the conflict first"
+            : `Switch Rendered / Source (${formatKeystrokeDisplay("CmdOrCtrl+Shift+V")})`
+        }
         onKeyDown={onKeyDown}
         className="flex shrink-0 items-center rounded-md border border-[var(--border)] p-px"
       >

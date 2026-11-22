@@ -6,16 +6,27 @@ pub mod target;
 use super::*;
 use crate::commands::auth::private_authority::{PrivateAuthorityLease, PrivateAuthoritySnapshot};
 use sha2::{Digest, Sha256};
-use std::fs::{File, OpenOptions, TryLockError};
+use std::fs::{File, TryLockError};
 use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
 use std::time::{Duration, Instant};
+
+use crate::shared::machine_wording;
 
 const PRIVATE_DIR: &str = "machines-private-v1.d";
 const PRIVATE_FILE: &str = "machine-private-bindings-v1.json";
 const SCHEMA: &str = "codesense.machine.private-account/v1";
-/// A private declaration whose bytes no longer match what this Mac recorded.
-pub(crate) const PRIVATE_DECLARATION_CHANGED: &str = "This private machine's configuration changed outside this Mac. Remove it and set it up again, or restore the previous configuration.";
+/// A private declaration whose bytes no longer match what this Mac recorded,
+/// worded for `os`.
+fn private_declaration_changed_for(os: &str) -> String {
+    format!(
+        "This private machine's configuration changed outside {}. Remove it and set it up again, or restore the previous configuration.",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+pub(crate) fn private_declaration_changed() -> String {
+    private_declaration_changed_for(machine_wording::RUNNING_OS)
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -344,14 +355,9 @@ impl PrivateRegistry {
         let path = self.legacy.user_file("machine-private-v1.lock");
         let parent = path.parent().ok_or("missing principal directory")?;
         create_directory_durable(parent)?;
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .open(path)
-            .map_err(|e| e.to_string())?;
+        let file =
+            codesense_platform::fs::create_owner_only(&path, codesense_platform::fs::Open::Follow)
+                .map_err(|e| e.to_string())?;
         // A concurrent SSH fork can retain this close-on-exec descriptor until
         // exec, briefly keeping the prior owner's lock alive after its close.
         let deadline = Instant::now() + Duration::from_secs(1);
@@ -627,7 +633,7 @@ impl PrivateRegistry {
             .get_mut(id)
             .ok_or("private reservation missing")?;
         if refusal.declaration_revision != revision {
-            return Err(PRIVATE_DECLARATION_CHANGED.into());
+            return Err(private_declaration_changed());
         }
         refusal.declaration_revision = next.clone();
         refusal.published = false;
@@ -674,7 +680,7 @@ impl PrivateRegistry {
             .get_mut(id)
             .ok_or("private reservation missing")?;
         if refusal.declaration_revision != revision {
-            return Err(PRIVATE_DECLARATION_CHANGED.into());
+            return Err(private_declaration_changed());
         }
         refusal.declaration_revision = next.clone();
         refusal.published = false;
@@ -730,7 +736,7 @@ impl PrivateRegistry {
         let old = self.dir(&scope)?.join(format!("{id}.yaml"));
         let bytes = std::fs::read(&old).map_err(|e| e.to_string())?;
         if digest(&bytes) != revision {
-            return Err(PRIVATE_DECLARATION_CHANGED.into());
+            return Err(private_declaration_changed());
         }
         self.write(
             &self.dir(&Scope::Personal)?.join(format!("{id}.yaml")),
@@ -1007,8 +1013,14 @@ impl PrivateRegistry {
 
 /// Why a team private machine's label can't change from one Mac.
 pub(crate) fn team_label_refusal(label: &str) -> String {
+    team_label_refusal_for(machine_wording::RUNNING_OS, label)
+}
+
+/// [`team_label_refusal`], worded for `os`.
+fn team_label_refusal_for(os: &str, label: &str) -> String {
     format!(
-        "A team machine's name is shared with every teammate's setup, so it can't be changed from this Mac. Keep the name “{label}”."
+        "A team machine's name is shared with every teammate's setup, so it can't be changed from {}. Keep the name “{label}”.",
+        machine_wording::machine_noun_lower(os)
     )
 }
 
@@ -1103,7 +1115,7 @@ fn validate_private_binding_declaration(
     validate_binding_declaration(
         revision,
         binding.declaration_revision.as_str(),
-        PRIVATE_DECLARATION_CHANGED,
+        &private_declaration_changed(),
     )?;
     validate_binding_declaration(
         &binding.host_key,

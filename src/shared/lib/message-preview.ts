@@ -113,16 +113,25 @@ function parseInert(html: string): Document | null {
 /** No DOM (a worker, a test without one): the same reading, by pattern. */
 function regexHtmlToPlain(html: string): string {
   const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? "";
+  // The title leads, so it is not read again as body text (as the DOM path removes it).
   const body = html
-    .replace(/<(script|style|noscript|template|head)\b[\s\S]*?<\/\1>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
-  const lead = collapse(title);
-  const text = collapse(body);
+    .replace(/<(script|style|noscript|template|head|title)\b[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<[^>]+>/g, " ");
+  const lead = collapse(decodeEntities(title));
+  const text = collapse(decodeEntities(body));
   return lead && text ? `${lead} — ${text}` : lead || text;
+}
+
+/** The entities the fallback reads, each decoded once. */
+function decodeEntities(text: string): string {
+  return (
+    text
+      .replace(/&nbsp;/g, " ")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      // Last, so "&amp;lt;" reads "&lt;", as a browser shows it.
+      .replace(/&amp;/g, "&")
+  );
 }

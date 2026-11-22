@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: MIT
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
 
 import {
-  BACKGROUND_MODE_EXPLAINER,
+  backgroundModeExplainer,
   shouldShowBackgroundExplainer,
 } from "./use-background-mode-notification";
+import { restorePlatform, setPlatform } from "@/test/platform";
+
+afterEach(restorePlatform);
 
 describe("shouldShowBackgroundExplainer (SW-AU-34 AC-5 one-shot gate)", () => {
   it("shows on a fresh profile (undefined → true)", () => {
@@ -19,8 +22,18 @@ describe("shouldShowBackgroundExplainer (SW-AU-34 AC-5 one-shot gate)", () => {
     expect(shouldShowBackgroundExplainer(true)).toBe(false);
   });
 
-  it("explains that the app is still running and how to reopen it", () => {
-    expect(BACKGROUND_MODE_EXPLAINER).toMatch(/still running/i);
-    expect(BACKGROUND_MODE_EXPLAINER).toMatch(/dock/i);
+  it("explains that the app is still running and how to reopen it from the Dock on macOS", () => {
+    setPlatform("MacIntel");
+    expect(backgroundModeExplainer()).toMatch(/still running/i);
+    expect(backgroundModeExplainer()).toMatch(/Click the dock icon to reopen it, or turn on/);
+  });
+
+  it("points to the tray icon's menu on Linux", () => {
+    setPlatform("Linux x86_64");
+    expect(backgroundModeExplainer()).toMatch(/still running/i);
+    expect(backgroundModeExplainer()).toMatch(
+      /Open it again from the tray icon's menu, or turn on/,
+    );
+    expect(backgroundModeExplainer()).not.toMatch(/dock/i);
   });
 });

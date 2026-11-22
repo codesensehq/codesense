@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildManifest as buildSchemas } from "../../../../scripts/generate-yaml-schemas.mjs";
 import { NAV_MENU_ITEMS, SHORTCUT_ACTIONS } from "./registry";
 
-type Entry = { id: string; label: string; mac: string; winLinux: string; menu: string };
+type Entry = { id: string; label: string; mac: string; winLinux?: string; menu: string };
 type Groups = { groups: { shortcuts: Entry[] }[] };
 
 const ROOT = join(__dirname, "../../../..");
@@ -20,6 +20,14 @@ const readJson = <T>(path: string) => JSON.parse(readFileSync(path, "utf8")) as 
 
 const manifest = readJson<Groups>(join(CONTENT, "arc-n-reference/shortcuts.manifest.json"));
 const entries = manifest.groups.flatMap((g) => g.shortcuts);
+
+// An action whose capability is off on both Windows and Linux has no chord there.
+type CapRow = { key: string; windows: string; linux: string };
+const OFF_ON_WIN_LINUX = new Set(
+  readJson<CapRow[]>(join(ROOT, "src-tauri/platform-caps.json"))
+    .filter((row) => row.windows === "off" && row.linux === "off")
+    .map((row) => row.key),
+);
 
 // The hardcoded native items, read from src-tauri/src/menu.rs: each MENU_ITEMS label in
 // the submenu whose builder adds it. Settings… is built just before its CodeSense menu.
@@ -84,7 +92,10 @@ describe("shortcuts manifest", () => {
     const other = await defaultsOn("Win32");
     for (const e of entries) {
       expect(sortedGlyphs(e.mac), e.id).toBe(sortedGlyphs(mac.get(e.id)?.shown ?? ""));
-      expect(e.winLinux, e.id).toBe(otherChord(other.get(e.id)?.raw ?? ""));
+      const cap = SHORTCUT_ACTIONS.find((a) => a.id === e.id)?.capability;
+      expect(e.winLinux, e.id).toBe(
+        cap && OFF_ON_WIN_LINUX.has(cap) ? undefined : otherChord(other.get(e.id)?.raw ?? ""),
+      );
     }
   });
 

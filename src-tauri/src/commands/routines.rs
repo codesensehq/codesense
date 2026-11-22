@@ -30,6 +30,7 @@ use crate::routines::service::{
     SchedulePreview, SchedulerStatus,
 };
 use crate::routines::{schedule, Author, PersonalOwner, Placement, RoutineError, RoutineKey};
+use crate::shared::machine_wording;
 
 /// Who a command acts for.
 #[derive(Debug, Clone)]
@@ -503,6 +504,18 @@ pub(crate) fn release_and_refresh(
     Ok(refresh(key))
 }
 
+/// The team is not synced here, worded for `os`.
+fn team_not_synced_for(os: &str) -> String {
+    format!(
+        "that team is not synced on {}",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn team_not_synced() -> String {
+    team_not_synced_for(machine_wording::RUNNING_OS)
+}
+
 fn save_reply(envelope: ToolEnvelope<RoutineSaved>) -> Result<SaveReply, String> {
     match envelope {
         ToolEnvelope::Ok(saved) => Ok(SaveReply::Saved {
@@ -519,7 +532,7 @@ fn save_reply(envelope: ToolEnvelope<RoutineSaved>) -> Result<SaveReply, String>
         ToolEnvelope::Conflict { message, .. } | ToolEnvelope::Validation { message } => {
             Err(message)
         }
-        ToolEnvelope::NotSyncedLocally => Err("that team is not synced on this Mac".into()),
+        ToolEnvelope::NotSyncedLocally => Err(team_not_synced()),
         ToolEnvelope::UnauthorizedTeam => Err("you are not a member of that team".into()),
     }
 }

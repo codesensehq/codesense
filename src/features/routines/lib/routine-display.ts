@@ -9,6 +9,7 @@ import type {
   RoutineRunPhase,
   RoutineRunsOn,
 } from "@/tauri/commands";
+import { localMachineNoun, localMachinePhrase } from "@/shared/lib/local-machine";
 
 /** The list's groups, in the order they render: Unassigned (its agent is nowhere on this
  *  Mac, or another routine of its space has its id, so it never fires until fixed) first,
@@ -93,9 +94,9 @@ export function runsOn(def: Pick<RoutineDef, "runs_on">): RoutineRunsOn {
 /** Where a shared job runs, as the end of its mode line. A Mac is only a host
  *  id, so another one is "another Mac", never a person's. */
 function placeLabel(row: RoutineRow): string {
-  if (row.armed_here) return "on this Mac";
+  if (row.armed_here) return `on ${localMachinePhrase()}`;
   if (row.def.armed_host.trim() === "") return "not running anywhere";
-  return "on another Mac";
+  return `on another ${localMachineNoun()}`;
 }
 
 /** Where a routine runs. A team routine always says its mode: "Runs once for
@@ -106,18 +107,22 @@ function placeLabel(row: RoutineRow): string {
 export function machineLabel(row: RoutineRow): string | null {
   if (row.scope === "team") {
     if (runsOn(row.def) === "each_mac") {
-      return `Each teammate's Mac · ${row.enabled ? "on here" : "off here"}`;
+      return `Each teammate's ${localMachineNoun()} · ${row.enabled ? "on here" : "off here"}`;
     }
     return `Runs once for the team · ${placeLabel(row)}`;
   }
   if (row.armed_here) return null;
-  return row.def.armed_host.trim() === "" ? "Not running anywhere" : "Runs on another Mac";
+  return row.def.armed_host.trim() === ""
+    ? "Not running anywhere"
+    : `Runs on another ${localMachineNoun()}`;
 }
 
 /** What this Mac's switch on a row is called: "Run on my Mac" for a recipe
  *  each Mac runs, else the routine's enabled state. */
 export function switchLabel(row: RoutineRow): string {
-  return runsOn(row.def) === "each_mac" ? "Run on my Mac" : `${row.def.name} enabled`;
+  return runsOn(row.def) === "each_mac"
+    ? `Run on my ${localMachineNoun()}`
+    : `${row.def.name} enabled`;
 }
 
 const MINUTE = 60_000;
@@ -202,7 +207,9 @@ const REASON_COPY: Record<string, string> = {
   target_unavailable: "Skipped — workspace unavailable",
   loop_guard: "Skipped — loop guard",
   paused: "Skipped — paused",
-  off_here: "Skipped — off on this Mac. Turn on for this Mac to run here",
+  get off_here() {
+    return `Skipped — off on ${localMachinePhrase()}. Turn on for ${localMachinePhrase()} to run here`;
+  },
   queue_full: "Skipped — queue full",
   held: "Waiting — behind the run still going",
   interrupted: "Interrupted — CodeSense quit mid-run",

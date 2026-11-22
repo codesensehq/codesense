@@ -986,6 +986,17 @@ describe("draft action verb", () => {
     expect(content).toContain("e.md"); // backlink to `from`
   });
 
+  it("drafts beside a Windows `from` in its own directory", async () => {
+    mockCreateFile.mockResolvedValue(undefined);
+    const res = (await runBridgeCommand("draft", {
+      level: "story",
+      from: "C:\\ctx\\epics\\e.md",
+    })) as { path: string };
+    expect(res.path).toMatch(/^C:\\ctx\\epics\\story-draft-[a-z0-9]+\.md$/);
+    const [, content] = mockCreateFile.mock.calls.at(-1)!;
+    expect(content).toContain("  - e.md\n");
+  });
+
   it("surfaces the Rust context-path rejection verbatim (unmanaged from)", async () => {
     mockCreateFile.mockRejectedValue(new Error("path is not within the context repo"));
     await expect(runBridgeCommand("draft", { level: "story", from: "/etc/x.md" })).rejects.toThrow(
@@ -1380,6 +1391,20 @@ describe("spawn-class verbs (SW-DX-7)", () => {
     expect(openWorkspace).toHaveBeenCalledWith(
       expect.objectContaining({ target: { kind: "story", storyId: "SW-9", machineId: "m1" } }),
     );
+  });
+
+  it("refuses seatWorktree from a page instead of dropping it", async () => {
+    const openWorkspace = vi.fn(async () => ({}));
+    stubController(openWorkspace);
+    for (const target of [
+      { kind: "story", storyId: "SW-9", session: "dev", seatWorktree: { kind: "branch" } },
+      { kind: "team-workspace", name: "Sprint 1", seatWorktree: { kind: "branch" } },
+    ]) {
+      await expect(runBridgeCommand("openWorkspace", { target })).rejects.toThrow(
+        /seatWorktree is not supported from a page yet/,
+      );
+    }
+    expect(openWorkspace).not.toHaveBeenCalled();
   });
 
   it("rejects machineId on a non-story target and a blank machineId", async () => {

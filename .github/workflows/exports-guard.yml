@@ -1,0 +1,135 @@
+# SPDX-License-Identifier: MIT
+name: Exports guard
+
+# Pull requests leave the cargo-written exports (FROZEN_EXPORTS in scripts/lib/sealed-export.mjs)
+# alone; maintainers refresh them in a pull request of their own. The guard job fails a pull
+# request that changes one, unless it is the refresh pull request: the `chore/refresh-exports`
+# branch of this repository with the `exports-refresh` label. It runs on label events too, in its
+# own workflow, so adding or removing a label never re-runs or cancels the CI suite.
+#
+# The guard job holds the only API token, so it runs no pull request code: it checks out the base
+# commit and runs the base's scripts/exports-guard.mjs with plain node, which reads the pull
+# request's files, labels and head through the API.
+on:
+  pull_request:
+    # edited: a changed base branch re-runs the guard against the new base.
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
+  merge_group:
+
+permissions: {}
+
+concurrency:
+  # A label event supersedes this workflow's earlier run for the same pull request.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  guard:
+    name: Exports guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      refresh: ${{ steps.guard.outputs.refresh }}
+    steps:
+      - name: Check out the base
+        # In a merge group the base holds the entries queued ahead, each of which passed this
+        # guard against main first.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: Check the changed files
+        # In a merge group whose base has no guard script yet (only the merge group that lands this
+        # workflow), the step is skipped. Once the script is on main, every merge group runs it as
+        # designed. A pull request always runs it, and fails closed without the script.
+        if: github.event_name == 'pull_request' || hashFiles('scripts/exports-guard.mjs') != ''
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/exports-guard.mjs
+
+  # The refresh pull request's payloads must be what cargo writes for the inputs they were built
+  # from: the strict generated-docs check and the strict Rust pins run at its head. This job runs
+  # pull request code (pnpm install, cargo, build.rs), so it holds no token, and only the two strict
+  # steps set CS_STRICT_EXPORTS: the build script's write mode inherits it. An ordinary pull request
+  # skips the job, which counts as passing. A merge group runs the job with every step skipped: the
+  # pull request run already proved the pins.
+  strict-pins:
+    name: Exports strict pins
+    needs: guard
+    if: github.event_name != 'pull_request' || needs.guard.outputs.refresh == 'true'
+    # The exports are platform-neutral data; Linux builds them as rust.yml's Linux app job does.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    # The same env as rust.yml's Linux app job: rust-cache keys on these variables.
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUST_BACKTRACE: "1"
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Check out the pull request head
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Free disk space
+        if: github.event_name == 'pull_request'
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          df -h .
+      - name: Install system libraries
+        if: github.event_name == 'pull_request'
+        run: bash scripts/install-linux-app-libs.sh
+      - name: Set up pnpm
+        if: github.event_name == 'pull_request'
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - name: Set up Node
+        if: github.event_name == 'pull_request'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: Install dependencies
+        if: github.event_name == 'pull_request'
+        run: pnpm install --frozen-lockfile
+      - name: Set up Rust
+        if: github.event_name == 'pull_request'
+        run: rustup toolchain install stable --profile minimal
+      - name: Restore Rust dependencies
+        # The Linux app job's cache, restored only: this job never runs on a schedule.
+        if: github.event_name == 'pull_request'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: rust-linux-app
+          save-if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}
+      - name: Fetch bundled binaries
+        if: github.event_name == 'pull_request'
+        run: bash scripts/fetch-bundled.sh
+      - name: Build sidecars
+        if: github.event_name == 'pull_request'
+        run: bash scripts/build-session-server.sh
+      - name: Strict gen:docs check
+        if: github.event_name == 'pull_request'
+        env:
+          CS_STRICT_EXPORTS: "1"
+        run: pnpm gen:docs:check
+      - name: Strict Rust pins
+        # The model schemas fixture and the live-data contract, built as their exports build them.
+        if: github.event_name == 'pull_request'
+        env:
+          CS_STRICT_EXPORTS: "1"
+        run: >-
+          cargo test --manifest-path src-tauri/Cargo.toml --lib --features dashboard-publish -j 4
+          -- docs_schemas::export_model_schemas mcp::live_data_authoring::tests

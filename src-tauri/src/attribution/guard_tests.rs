@@ -71,8 +71,8 @@ fn r4_every_managed_projector_uses_the_fresh_capture_owner() {
             })
             .map(|entry| entry.into_path())
             .collect();
-        assert_eq!(owners, [src.join("attribution/launch.rs")]);
-        assert!(body("attribution/launch.rs", "plan_for").contains(&assignment));
+        assert_eq!(owners, [src.join("attribution/launch/wired.rs")]);
+        assert!(body("attribution/launch/wired.rs", "plan").contains(&assignment));
     }
 }
 

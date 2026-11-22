@@ -18,9 +18,7 @@ use std::time::Duration;
 /// reads `notes_ref` once per process, restarts on it.
 const CONFIG_REVISION: u32 = 2;
 
-/// The notes ref CodeSense's git-ai writes (`refs/notes/sense`), apart from the `ai` ref a
-/// user's own git-ai writes and pushes. Readers try it first.
-pub(crate) const NOTES_REF: &str = "sense";
+pub(crate) use super::git_ai::NOTES_REF;
 
 /// The managed git-ai config, applied with `git-ai config set` under the managed `HOME`.
 /// Telemetry and update checks are off (git-ai's defaults send usage and logs to

@@ -4,7 +4,7 @@ _What leaves your Mac, and how each safety claim works._
 
 ## What leaves your Mac
 
-The app has no account and no telemetry: CodeSense sends no usage data or crash reports. Sharing a dashboard is the exception to the account part: owners and viewers sign in on share.codesense.ai. Code and context stay on your machines and your git host.
+The app has no account and no telemetry of its own: CodeSense sends no usage data or crash reports. With GIF search on, it sends GIPHY's required send and view pings (below). Sharing a dashboard is the exception to the account part: owners and viewers sign in on share.codesense.ai. Code and context stay on your machines and your git host.
 
 | What | Where it goes | When |
 |---|---|---|
@@ -12,6 +12,9 @@ The app has no account and no telemetry: CodeSense sends no usage data or crash 
 | Agent traffic | Each CLI talks to its own vendor on your login | When an agent runs; CodeSense isn’t in the path |
 | A published dashboard | share.codesense.ai, to the viewers you invite. Each invitee's email address goes there too, and the CodeSense operator reviews it before the invite is sent | Only when you publish or invite |
 | The daily update check | dl.codesense.ai | About once a day: it reads a static file that names the latest version, and sends no key, install ID, app version or anything from your repos. [What leaves your Mac](https://codesense.ai/open-source#what-leaves) has the summary |
+| Inbox pictures | The picture's host, such as GIPHY or KLIPY, with no referrer or cookies. GIPHY and KLIPY pictures are held in memory only, never on disk, and fetched again when you view them | When an agent in one of your tabs posts one, or when you click to load it |
+| GIF searches | GIPHY's API, from your Mac with your own GIPHY key: the search words, or the ids of GIFs found earlier. The key stays in your OS keychain and never passes through an agent | When an agent calls `gif_search`, unless GIF search is Off or has no key in Settings → Messaging |
+| GIF send and view pings | GIPHY, with a random id GIPHY issued for this install and never your key. The id is deleted when you turn GIF search off or remove or replace the key | When an agent sends a GIF it found, and the first time that GIF is shown, while GIF search is on with a key |
 | Attribution notes | Nowhere | Unless you choose to share them |
 
 ## No model calls, no tokens

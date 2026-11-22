@@ -8,6 +8,7 @@ import {
   type RenderedDocumentCapture,
 } from "@/tauri/commands";
 import { logger } from "@/shared/lib/logger";
+import { canonicalPath, normalize } from "@/shared/lib/path";
 
 export type RenderedDocumentFormat = "text" | "html";
 type Capture = (format: RenderedDocumentFormat) => Promise<RenderedDocumentCapture>;
@@ -15,13 +16,10 @@ type Viewer = { capture: Capture; frameId?: string };
 const viewers = new Map<string, Map<symbol, Viewer>>();
 
 // Match the backend's lexical context-path validation (without resolving symlinks).
+// The key is canonical so a viewer registered with `C:\…` is found by an agent's
+// `C:/…` request, which Rust forwards unchanged.
 export function renderedDocumentPath(path: string): string {
-  const parts: string[] = [];
-  for (const part of path.split("/")) {
-    if (part === "..") parts.pop();
-    else if (part && part !== ".") parts.push(part);
-  }
-  return `/${parts.join("/")}`;
+  return canonicalPath(normalize(path));
 }
 
 export function registerRenderedDocument(

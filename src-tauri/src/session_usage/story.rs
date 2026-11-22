@@ -38,7 +38,8 @@ pub struct UsageStory {
     /// The parent epic (`parent_epic` or `epic` frontmatter).
     pub epic: Option<String>,
     /// `associated` when only a context worktree's `<team>/<epic>-<n>` name ties the session
-    /// to the story; absent when the link is exact.
+    /// to the story; `charged` when a charge to the story (`charge_session_story`) does, which is
+    /// an exact link; absent when the link is otherwise exact.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub basis: Option<&'static str>,
 }

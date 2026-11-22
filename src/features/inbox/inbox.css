@@ -2385,6 +2385,14 @@ button.ibx-media-open {
     }
   }
 }
+/* A provider's attribution under the image or its card: conspicuous, as GIPHY asks. */
+.ibx-media-attr {
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ibx-mfg);
+}
 /* No image yet: one card for ask, off and failed. */
 .ibx-media-card {
   display: grid;

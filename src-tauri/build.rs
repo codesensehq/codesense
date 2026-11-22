@@ -1,5 +1,15 @@
 // SPDX-License-Identifier: MIT
+// The capability table's parser; a build script reads only the gates, not the
+// runtime's fields (reason, scope).
+#[allow(dead_code)]
+mod caps_table {
+    include!("build_caps.rs");
+}
+use caps_table::configure_caps;
+
 fn main() {
+    println!("cargo:rerun-if-changed=platform-caps.json");
+    configure_caps("platform-caps.json");
     configure_beta_channel();
     configure_site_contract_tests();
     println!("cargo:rerun-if-env-changed=GITHUB_CLIENT_ID");

@@ -10,11 +10,17 @@ import { chunked, paneSteps } from "./__test-utils__/pane-feed";
 import {
   buildTerminalOptions,
   createTerminalManager,
+  appRendererDeps,
   loadWebglRenderer,
   type DisplayDump,
   type TerminalManager,
   type TerminalManagerDeps,
 } from "./terminal-manager";
+import { createTerminalRendererGate } from "./terminal-renderer";
+import {
+  installFakeCanvasContexts,
+  restoreCanvasContexts,
+} from "@/shared/lib/__test-utils__/webgl-addon-harness";
 import {
   DEFAULT_MAC_OPTION_IS_META,
   DEFAULT_SCROLLBACK,
@@ -27,7 +33,7 @@ import {
 import { TERMINAL_THEME } from "@/features/viewer/components/terminal-constants";
 import { SCROLLBACK_OPTIONS } from "@/shared/constants/settings-options";
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
-import type { WebglAddon } from "@xterm/addon-webgl";
+import { WebglAddon } from "@xterm/addon-webgl";
 
 const fake = vi.hoisted(() => ({
   bus: null as unknown as import("./__test-utils__/fake-terminal-server").FakeEventBus,
@@ -62,6 +68,28 @@ vi.mock(
     ...transport,
   }),
 );
+
+const clipboard = vi.hoisted(() => ({
+  copySelectionToClipboard: vi.fn(async () => {}),
+  pasteFromClipboard: vi.fn(async () => {}),
+}));
+vi.mock("./terminal-clipboard", () => clipboard);
+
+const keyHandlers = vi.hoisted(() => ({
+  options: [] as Array<
+    import("@/shared/lib/terminal-key-handler").TerminalKeyHandlerOptions | undefined
+  >,
+}));
+vi.mock("@/shared/lib/terminal-key-handler", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/shared/lib/terminal-key-handler")>();
+  return {
+    ...original,
+    createTerminalKeyHandler: (...args: Parameters<typeof original.createTerminalKeyHandler>) => {
+      keyHandlers.options.push(args[1]);
+      return original.createTerminalKeyHandler(...args);
+    },
+  };
+});
 
 const FAKE_TIMERS: Parameters<typeof vi.useFakeTimers>[0] = {
   toFake: [
@@ -169,6 +197,20 @@ afterEach(() => {
   managers = [];
   document.body.innerHTML = "";
   vi.useRealTimers();
+});
+
+describe("terminal clipboard keys", () => {
+  it("wires the shared clipboard helpers into the key handler", async () => {
+    keyHandlers.options.length = 0;
+    const m = newManager();
+    await open(m);
+    const term = m.terminal("s1")!;
+    const options = keyHandlers.options.at(-1);
+    options?.copySelection?.();
+    expect(clipboard.copySelectionToClipboard).toHaveBeenCalledWith(term);
+    options?.paste?.();
+    expect(clipboard.pasteFromClipboard).toHaveBeenCalledWith(term);
+  });
 });
 
 describe("one display per session (I2)", () => {
@@ -1274,6 +1316,103 @@ describe("WebGL lease (I7)", () => {
         await until(m.ensure("s1", { ...OPTS, life: 1 }));
         const after = await dumped(m, "s1");
         expect(after.created).not.toBe(before.created);
+      });
+    });
+  });
+
+  describe("the webview's renderer gate", () => {
+    function gate(linux: boolean, override: "dom" | "webgl" | null = null) {
+      return createTerminalRendererGate({
+        override: () => override,
+        linux: () => linux,
+        probe: async () => "ok",
+        log: () => {},
+      });
+    }
+
+    it("macOS: shown displays take WebGL as before", async () => {
+      const gl = stubWebgl();
+      const m = newManager({ createWebgl: gl.create, rendererGate: gate(false) });
+      await open(m);
+      m.attach("s1", slot(), { focus: false });
+      await frames();
+      expect(gl.live()).toHaveLength(1);
+      expect(m.webglLease("s1")?.leased).toBe(true);
+      expect(m.chooseRenderer()).toEqual({ renderer: "webgl", probe: "skipped" });
+    });
+
+    it("Linux: no display ever creates a WebGL addon", async () => {
+      const gl = stubWebgl();
+      const m = newManager({ createWebgl: gl.create, rendererGate: gate(true) });
+      for (let i = 0; i < 3; i++) {
+        await open(m, `s${i}`);
+        m.attach(`s${i}`, slot(), { focus: true });
+      }
+      await frames();
+      expect(gl.addons).toHaveLength(0);
+      expect(m.webglLease("s0")).toMatchObject({ leased: false, pinned: false, held: 0 });
+      expect(m.chooseRenderer()?.renderer).toBe("dom");
+    });
+
+    it("Linux with CODESENSE_TERMINAL_RENDERER=webgl: displays take WebGL", async () => {
+      const gl = stubWebgl();
+      const m = newManager({ createWebgl: gl.create, rendererGate: gate(true, "webgl") });
+      await open(m);
+      m.attach("s1", slot(), { focus: false });
+      await frames();
+      expect(m.webglLease("s1")?.leased).toBe(true);
+    });
+
+    it("Linux: the written text is in the pane's DOM rows, and no WebGL addon replaces them", async () => {
+      installFakeCanvasContexts();
+      try {
+        const created = vi.fn(() => new WebglAddon());
+        const m = newManager({ createWebgl: created, rendererGate: gate(true) });
+        await open(m);
+        const target = slot();
+        m.attach("s1", target, { focus: false });
+        fake.server.produce("s1", "visible on linux\r\n");
+        await dumped(m, "s1");
+        await frames();
+        expect(created).not.toHaveBeenCalled();
+        expect(target.querySelector(".xterm-rows")?.textContent).toContain("visible on linux");
+      } finally {
+        restoreCanvasContexts();
+      }
+    });
+
+    describe("the app's renderer deps", () => {
+      function deps(platform: string, override: unknown = null) {
+        const log = vi.fn();
+        return { log, ...appRendererDeps({ platform, override: () => override, log }) };
+      }
+      /** The addon's own record of whether it preserves its drawing buffer. */
+      const preserves = (addon: WebglAddon) =>
+        (addon as unknown as { _preserveDrawingBuffer?: boolean })._preserveDrawingBuffer;
+
+      it("Linux: the addon preserves its drawing buffer, and DOM is the renderer", () => {
+        const d = deps("Linux aarch64");
+        expect(preserves(d.createWebgl())).toBe(true);
+        expect(d.rendererGate.allowsWebgl()).toBe(false);
+        expect(d.rendererGate.choice).toMatchObject({ renderer: "dom" });
+      });
+
+      it("macOS: the addon's default buffer, WebGL, no probe", () => {
+        const d = deps("MacIntel");
+        expect(preserves(d.createWebgl())).toBeFalsy();
+        expect(d.rendererGate.allowsWebgl()).toBe(true);
+        expect(d.log.mock.calls).toEqual([["terminal renderer: webgl (probe: skipped)"]]);
+      });
+
+      it.each([
+        ["Linux aarch64", "webgl", true],
+        ["MacIntel", "dom", false],
+        ["Linux aarch64", "canvas", false],
+      ] as const)("%s reads the override %s", (platform, override, webgl) => {
+        const d = deps(platform, override);
+        expect(d.rendererGate.allowsWebgl()).toBe(webgl);
+        if (override !== "canvas")
+          expect(d.rendererGate.choice).toEqual({ renderer: override, probe: "skipped", override });
       });
     });
   });

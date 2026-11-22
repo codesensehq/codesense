@@ -1,0 +1,52 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`shortcut labels on macOS > editor status bar matches the formatter's macOS output 1`] = `
+"This MacUnsavedLn 1, Col 1Spaces: 2UTF-8LFMarkdownWrap
+On this Mac
+Unsaved changes — ⌘S to save
+Go to line (⌃G)
+Indentation (detected from the file)
+Encoding
+Line endings (kept as the file has them)
+Language
+Word wrap off (⌥Z)"
+`;
+
+exports[`shortcut labels on macOS > inbox chat composer matches the formatter's macOS output 1`] = `
+"Choose who gets this⏎ send ⇧⏎ new line
+Message
+Send (⏎)
+Send
+Choose who gets this"
+`;
+
+exports[`shortcut labels on macOS > inbox composer matches the formatter's macOS output 1`] = `
+"Topick…Choose who gets thisSend ⌘⏎
+Pick a recipient
+Message"
+`;
+
+exports[`shortcut labels on macOS > notes chrome matches the formatter's macOS output 1`] = `
+"Find a note⌘O
+Notes list (⌘B)
+Notes list
+Find a note"
+`;
+
+exports[`shortcut labels on macOS > notes empty state matches the formatter's macOS output 1`] = `"Notes for acmePrivate to you and kept on this Mac, with history. Jot plans, prompts and todos, then hand any line to an agent.New note⌘N- [ ]starts a task/inserts a heading, code, checklist…[[links a note or a story⌘⏎sends the line to an agentWant an agent to keep these tidy every evening?Set up a routine"`;
+
+exports[`shortcut labels on macOS > send picker matches the formatter's macOS output 1`] = `
+"Agents in TeamNo agents are running. Start one with this line.Start a new agent with thisPaste into focused terminal⌘⌥⏎Include the note as context
+Send to
+Send to
+Agents"
+`;
+
+exports[`shortcut labels on macOS > settings shortcuts names the note switcher and heading jump as macOS chords 1`] = `
+[
+  "⌘O",
+  "⌘⇧O",
+]
+`;
+
+exports[`shortcut labels on macOS > source editor help matches the formatter's macOS output 1`] = `"No file openPick a file from the list, or search the whole worktree.Quick open⌘PGo to line⌃GFind and replace⌘F⌘⌥FNext tab⌃⇥"`;

@@ -13,16 +13,18 @@ mod passphrase;
 pub(crate) mod registry;
 #[cfg(test)]
 pub(crate) mod rm4f_support;
+mod runtime;
 pub(crate) mod terminal_server_info;
 #[cfg(test)]
 mod tests;
 
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Stdio};
+use std::process::{ChildStdin, ChildStdout, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use codesense_platform::process::ProcessTree;
 use codesense_session_server::askpass::{self, Askpass};
 use codesense_session_server::check::{self, Bundled, NextStep, Status, StepId, Trust};
 use codesense_session_server::install;
@@ -33,314 +35,36 @@ use tauri::Manager;
 
 use crate::commands::credential_store::{default_store, CredentialStore, Secret};
 use crate::domain::{CredentialRef, Principal};
+use crate::shared::machine_wording;
 use registry::{Binding, Declaration, Registry, Scope};
-
-/// This Mac's id: local is a machine like any other, always first.
-pub const LOCAL_MACHINE_ID: &str = "local";
-
-/// Lossless IPC representation of an owner-issued counter. Numeric ordering is
-/// retained in Rust; JavaScript receives canonical decimal strings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct RuntimeCounter(u64);
-
-impl RuntimeCounter {
-    pub(crate) fn new(value: u64) -> Self {
-        Self(value)
-    }
-}
-
-impl Serialize for RuntimeCounter {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&self.0.to_string())
-    }
-}
-
-impl<'de> Deserialize<'de> for RuntimeCounter {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = String::deserialize(deserializer)?;
-        let number = value.parse::<u64>().map_err(serde::de::Error::custom)?;
-        if number.to_string() != value {
-            return Err(serde::de::Error::custom("expected canonical decimal u64"));
-        }
-        Ok(Self(number))
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum RuntimeMemberSlot {
-    InProcess,
-    Sidecar,
-    Remote,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", try_from = "RuntimeMemberAddressWire")]
-pub struct RuntimeMemberAddress {
-    pub machine_id: String,
-    pub slot: RuntimeMemberSlot,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RuntimeMemberAddressWire {
-    machine_id: String,
-    slot: RuntimeMemberSlot,
-}
-
-impl TryFrom<RuntimeMemberAddressWire> for RuntimeMemberAddress {
-    type Error = &'static str;
-    fn try_from(value: RuntimeMemberAddressWire) -> Result<Self, Self::Error> {
-        if value.machine_id.is_empty()
-            || (value.machine_id == LOCAL_MACHINE_ID) == (value.slot == RuntimeMemberSlot::Remote)
-        {
-            return Err("runtime slot does not belong to this machine");
-        }
-        Ok(Self {
-            machine_id: value.machine_id,
-            slot: value.slot,
-        })
-    }
-}
-
-impl RuntimeMemberAddress {
-    pub(crate) fn local(slot: RuntimeMemberSlot) -> Self {
-        assert!(
-            slot != RuntimeMemberSlot::Remote,
-            "local owner cannot issue a remote member"
-        );
-        Self {
-            machine_id: LOCAL_MACHINE_ID.into(),
-            slot,
-        }
-    }
-    pub(crate) fn remote(machine_id: &str) -> Self {
-        Self {
-            machine_id: machine_id.into(),
-            slot: RuntimeMemberSlot::Remote,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RuntimeNamespace {
-    pub server_id: String,
-    pub epoch: String,
-    pub generation: RuntimeCounter,
-}
-
-impl From<&crate::terminal::session_server::EventNamespace> for RuntimeNamespace {
-    fn from(value: &crate::terminal::session_server::EventNamespace) -> Self {
-        Self {
-            server_id: value.server_id.clone(),
-            epoch: value.epoch.clone(),
-            generation: RuntimeCounter::new(value.generation()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FrozenRuntimeLayout {
-    pub last_namespace: Option<RuntimeNamespace>,
-    pub server_id: String,
-    pub epoch: String,
-    pub snapshot: codesense_pty_core::layout::LayoutSnapshot,
-    pub reason: RuntimeHistoryReason,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum RuntimeHistoryReason {
-    Incompatible,
-    Unreachable,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RuntimeAdmissionState {
-    Live {
-        namespace: RuntimeNamespace,
-    },
-    Historical {
-        historical: Box<FrozenRuntimeLayout>,
-    },
-    Unavailable,
-    Removed,
-}
-
-impl Serialize for RuntimeAdmissionState {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::SerializeMap;
-        let (state, namespace, historical) = match self {
-            Self::Live { namespace } => ("live", Some(namespace), None),
-            Self::Historical { historical } => ("historical", None, Some(historical)),
-            Self::Unavailable => ("unavailable", None, None),
-            Self::Removed => ("removed", None, None),
-        };
-        let mut map = serializer.serialize_map(Some(3))?;
-        map.serialize_entry("state", state)?;
-        map.serialize_entry("namespace", &namespace)?;
-        map.serialize_entry("historical", &historical)?;
-        map.end()
-    }
-}
-
-impl<'de> Deserialize<'de> for RuntimeAdmissionState {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        struct Wire {
-            state: String,
-            namespace: Option<RuntimeNamespace>,
-            historical: Option<Box<FrozenRuntimeLayout>>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        match (wire.state.as_str(), wire.namespace, wire.historical) {
-            ("live", Some(namespace), None) => Ok(Self::Live { namespace }),
-            ("historical", None, Some(historical)) => Ok(Self::Historical { historical }),
-            ("unavailable", None, None) => Ok(Self::Unavailable),
-            ("removed", None, None) => Ok(Self::Removed),
-            _ => Err(serde::de::Error::custom("invalid runtime admission state")),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RuntimeAdmissionRow {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub private_authority_epoch: Option<String>,
-    pub member: RuntimeMemberAddress,
-    pub revision: RuntimeCounter,
-    #[serde(flatten)]
-    pub state: RuntimeAdmissionState,
-}
-
-impl RuntimeAdmissionRow {
-    #[cfg(test)]
-    pub(crate) fn live(
-        member: RuntimeMemberAddress,
-        revision: u64,
-        namespace: &crate::terminal::session_server::EventNamespace,
-    ) -> Self {
-        Self {
-            member,
-            revision: RuntimeCounter::new(revision),
-            private_authority_epoch: None,
-            state: RuntimeAdmissionState::Live {
-                namespace: namespace.into(),
-            },
-        }
-    }
-
-    pub(crate) fn matches(&self, target: &RuntimeMemberTarget) -> bool {
-        self.member == target.member
-            && self.revision == target.admission_revision
-            && matches!(&self.state, RuntimeAdmissionState::Live { namespace } if namespace == &target.namespace)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RuntimeMemberTarget {
-    pub member: RuntimeMemberAddress,
-    pub admission_revision: RuntimeCounter,
-    pub namespace: RuntimeNamespace,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RuntimeAdmissionBaseline {
-    pub rows: Vec<RuntimeAdmissionRow>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "mode", rename_all = "camelCase")]
-pub enum RuntimeLayoutReply {
-    Live {
-        #[serde(
-            default,
-            rename = "privateAuthorityEpoch",
-            skip_serializing_if = "Option::is_none"
-        )]
-        private_authority_epoch: Option<String>,
-        #[serde(flatten)]
-        target: RuntimeMemberTarget,
-        snapshot: Box<codesense_pty_core::layout::LayoutSnapshot>,
-    },
-    Historical {
-        #[serde(
-            default,
-            rename = "privateAuthorityEpoch",
-            skip_serializing_if = "Option::is_none"
-        )]
-        private_authority_epoch: Option<String>,
-        member: RuntimeMemberAddress,
-        #[serde(rename = "admissionRevision")]
-        admission_revision: RuntimeCounter,
-        frozen: Box<FrozenRuntimeLayout>,
-    },
-    Unavailable {
-        member: RuntimeMemberAddress,
-        #[serde(rename = "admissionRevision")]
-        admission_revision: RuntimeCounter,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RuntimeSessionTarget {
-    #[serde(flatten)]
-    pub runtime: RuntimeMemberTarget,
-    pub session: codesense_pty_core::domain::PtySessionId,
-}
-
-/// The legacy branch is local-only and requires a unique live owner. An object
-/// must decode as a complete admitted target; it can never fall back to an id.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum RuntimeSessionReference {
-    Admitted(Box<RuntimeSessionTarget>),
-    Legacy(String),
-}
-
-impl RuntimeSessionReference {
-    pub(crate) fn session(&self) -> &str {
-        match self {
-            Self::Admitted(target) => target.session.as_str(),
-            Self::Legacy(session) => session,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RuntimeWorkspaceTarget {
-    #[serde(flatten)]
-    pub runtime: RuntimeMemberTarget,
-    pub workspace: codesense_pty_core::domain::WorkspaceKey,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum RuntimeWorkspaceReference {
-    Admitted(Box<RuntimeWorkspaceTarget>),
-    Legacy(codesense_pty_core::domain::WorkspaceKey),
-}
-
-impl RuntimeWorkspaceReference {
-    pub(crate) fn workspace(&self) -> &codesense_pty_core::domain::WorkspaceKey {
-        match self {
-            Self::Admitted(target) => &target.workspace,
-            Self::Legacy(key) => key,
-        }
-    }
-}
+pub use runtime::*;
 
 /// The id a machine being added connects as, until it is saved.
 const DRAFT_ID: &str = "draft";
 
-const CANT_PUBLISH: &str = "You can't publish to that team's context from this Mac";
+/// Publishing to that team's context is refused here, worded for `os`.
+fn cant_publish_for(os: &str) -> String {
+    format!(
+        "You can't publish to that team's context from {}",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn cant_publish() -> String {
+    cant_publish_for(machine_wording::RUNNING_OS)
+}
+
+/// The local machine has no auto-connect binding, worded for `os`.
+fn no_local_auto_connect_for(os: &str) -> String {
+    format!(
+        "{} has no remote-machine auto-connect binding",
+        machine_wording::machine_noun(os)
+    )
+}
+
+fn no_local_auto_connect() -> String {
+    no_local_auto_connect_for(machine_wording::RUNNING_OS)
+}
 
 /// Whether `input` reaches a machine at the address it was saved at:
 /// `host:port`, via `jump`. Both sides compare trimmed, with an empty jump host
@@ -721,11 +445,10 @@ impl Env {
 
     /// The connector's own directories, owner-only.
     fn prepare_dirs(&self) -> Result<(), String> {
-        use std::os::unix::fs::PermissionsExt;
         let paths = self.paths();
         for dir in [self.ssh_dir(), paths.known_hosts_dir, paths.control_dir] {
             std::fs::create_dir_all(&dir).map_err(|e| format!("create {dir:?}: {e}"))?;
-            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+            codesense_platform::fs::set_owner_only(&dir)
                 .map_err(|e| format!("protect {dir:?}: {e}"))?;
         }
         Ok(())
@@ -973,26 +696,23 @@ impl std::fmt::Display for PinnedTransportGenerationError {
 
 impl std::error::Error for PinnedTransportGenerationError {}
 
-/// Owns one attached SSH process group and the askpass server (when the saved
+/// Owns one attached SSH process tree and the askpass server (when the saved
 /// binding uses one). Normal disconnect/shutdown must call
 /// [`SshProcessGuard::close_and_reap`] on the blocking executor. Drop is a
 /// bounded fail-safe: it kills synchronously and guarantees an eventual
 /// detached reap without blocking an async worker indefinitely.
 pub struct SshProcessGuard {
     private_bootstrap: Option<codesense_session_server::private_account::Bootstrap>,
-    child: Option<Child>,
+    tree: Option<ProcessTree>,
     _askpass: Option<Askpass>,
 }
 
 impl SshProcessGuard {
-    fn signal_group(child: &mut Child) {
-        let pid = child.id();
-        // SAFETY: spawn_pinned creates a fresh process group led by this exact
-        // child. A negative pid addresses only that owned group.
-        unsafe {
-            libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
-        }
-        let _ = child.kill();
+    /// Kill the whole tree spawn_pinned started (on unix SIGKILL to the
+    /// process group its root leads), then the root itself.
+    fn signal_group(tree: &mut ProcessTree) {
+        let _ = codesense_platform::process::kill_hard(tree);
+        let _ = tree.child().kill();
     }
 
     /// Terminate and synchronously reap the SSH process group. RM-4 calls this
@@ -1000,11 +720,11 @@ impl SshProcessGuard {
     /// safe after natural child exit. It consumes the guard, making double
     /// close impossible for the owning connection manager.
     pub fn close_and_reap(mut self) -> Result<(), String> {
-        let Some(mut child) = self.child.take() else {
+        let Some(mut tree) = self.tree.take() else {
             return Ok(());
         };
-        Self::signal_group(&mut child);
-        let result = child
+        Self::signal_group(&mut tree);
+        let result = tree
             .wait()
             .map(|_| ())
             .map_err(|e| format!("reap SSH attach: {e}"));
@@ -1014,8 +734,11 @@ impl SshProcessGuard {
         result
     }
 
-    fn child_mut(&mut self) -> &mut Child {
-        self.child.as_mut().expect("SSH process guard has a child")
+    fn child_mut(&mut self) -> &mut std::process::Child {
+        self.tree
+            .as_mut()
+            .expect("SSH process guard has a child")
+            .child()
     }
 }
 
@@ -1028,20 +751,20 @@ impl Drop for SshProcessGuard {
                 drop(askpass);
             });
         }
-        let Some(mut child) = self.child.take() else {
+        let Some(mut tree) = self.tree.take() else {
             return;
         };
-        Self::signal_group(&mut child);
+        Self::signal_group(&mut tree);
         // Drop may run on an async worker: bound its synchronous fallback.
         // The group is already dead; if reaping is momentarily delayed, a
-        // dedicated owner finishes it rather than leaking the Child handle.
+        // dedicated owner finishes it rather than leaking the tree.
         #[cfg(test)]
         let defer = DEFER_DROP_REAP.with(std::cell::Cell::get);
         #[cfg(not(test))]
         let defer = false;
         let polls = if defer { 0 } else { 100 };
         for _ in 0..polls {
-            match child.try_wait() {
+            match tree.try_wait() {
                 Ok(Some(_)) | Err(_) => return,
                 Ok(None) => std::thread::sleep(std::time::Duration::from_millis(1)),
             }
@@ -1051,7 +774,7 @@ impl Drop for SshProcessGuard {
             if defer {
                 std::thread::sleep(std::time::Duration::from_millis(25));
             }
-            let _ = child.wait();
+            let _ = tree.wait();
         });
     }
 }
@@ -1074,7 +797,6 @@ fn spawn_pinned_script(
     script: &str,
     askpass: Option<Askpass>,
 ) -> Result<(ChildStdout, ChildStdin, SshProcessGuard), String> {
-    use std::os::unix::process::CommandExt;
     let mut command = ssh.command(script);
     command
         .stdin(Stdio::piped())
@@ -1082,24 +804,15 @@ fn spawn_pinned_script(
         // Protocol bytes are stdout-only. Inherited/null stderr also avoids a
         // hidden pipe filling and deadlocking a long-lived transport.
         .stderr(Stdio::null());
-    // SAFETY: pre_exec invokes only the async-signal-safe setpgid syscall.
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setpgid(0, 0) == 0 {
-                Ok(())
-            } else {
-                Err(std::io::Error::last_os_error())
-            }
-        });
-    }
-    let child = command
-        .spawn()
-        .map_err(|e| format!("start SSH attach: {e}"))?;
+    // The root of its own tree (on unix the leader of a fresh process group),
+    // so the guard ends everything ssh starts; no console window on Windows.
+    let tree =
+        ProcessTree::spawn_hidden(&mut command).map_err(|e| format!("start SSH attach: {e}"))?;
     // Establish ownership immediately: every later early return runs Drop and
     // kills/reaps the whole group.
     let mut guard = SshProcessGuard {
         private_bootstrap: None,
-        child: Some(child),
+        tree: Some(tree),
         _askpass: askpass,
     };
     let reader = guard
@@ -1122,10 +835,11 @@ pub(crate) fn test_pinned_transport(
     let (reader, writer, child_guard) =
         spawn_pinned(install::Ssh::new(program, Vec::new()), "1.0.0", None)?;
     let pid = child_guard
-        .child
+        .tree
         .as_ref()
         .expect("test guard owns child")
-        .id() as libc::pid_t;
+        .pid()
+        .as_raw() as libc::pid_t;
     Ok((
         PinnedSshTransport {
             reader,
@@ -1980,7 +1694,7 @@ fn save_as(
         _ => share.clone(),
     };
     if !env.registry.can_publish(&target) && publisher {
-        return Err(CANT_PUBLISH.into());
+        return Err(cant_publish());
     }
     // What was set up stays set up only while nothing about reaching the
     // machine changed: its address, its jump host, and how this person signs in.
@@ -2213,7 +1927,7 @@ pub(crate) fn set_auto_connect(
     auto_connect: bool,
 ) -> Result<(), String> {
     if machine_id == LOCAL_MACHINE_ID {
-        return Err("This Mac has no remote-machine auto-connect binding".into());
+        return Err(no_local_auto_connect());
     }
     if private_setup::claims(env, machine_id)? {
         return private_setup::preferences(env, machine_id, None, Some(auto_connect));
@@ -2312,6 +2026,7 @@ pub(crate) fn capture_passphrase(
     unlocks: impl FnOnce(&Path, &Secret) -> Result<(), String>,
 ) -> Result<Option<CredentialRef>, String> {
     env.prepare_dirs()?;
+    passphrase::ensure_available(store)?;
     let key = env.expand(key_path.trim());
     let Some(secret) = prompt(&key)? else {
         return Ok(None);
@@ -2442,10 +2157,9 @@ fn agent_identity_file(home: &Path, public_key: &str) -> Option<String> {
             }
         }
     }
-    use std::os::unix::fs::PermissionsExt;
     let dir = home.join(".codesense").join("agent-keys");
     std::fs::create_dir_all(&dir).ok()?;
-    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).ok()?;
+    codesense_platform::fs::set_owner_only(&dir).ok()?;
     let digest: String = Sha256::digest(wanted.1.as_bytes())
         .iter()
         .take(12)
@@ -2458,7 +2172,7 @@ fn agent_identity_file(home: &Path, public_key: &str) -> Option<String> {
         != Some(wanted)
     {
         std::fs::write(&path, format!("{}\n", public_key.trim())).ok()?;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).ok()?;
+        codesense_platform::fs::set_owner_only(&path).ok()?;
     }
     Some(path.to_string_lossy().into_owned())
 }
@@ -3812,12 +3526,8 @@ fn replace_pinned_saved(
     let authorization = authorization_dir.join("authorization");
     std::fs::write(&authorization, proof.authorization_record(nonce, epoch))
         .map_err(|e| fail(format!("write replacement authorization: {e}")))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&authorization, std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| fail(format!("protect replacement authorization: {e}")))?;
-    }
+    codesense_platform::fs::set_owner_only(&authorization)
+        .map_err(|e| fail(format!("protect replacement authorization: {e}")))?;
     let step = install::Step {
         script: install::replace_script(&installed.version).map_err(fail)?,
         upload: Some(authorization),
@@ -3977,7 +3687,8 @@ fn plain_file(path: &Path) -> Result<&Path, String> {
 
 /// Open an unreadable machine file as text, to repair it. Only a plain file
 /// the team's list reports as unreadable is opened, and only in the text
-/// editor: never with the file's own handler, which could run it.
+/// editor (on Linux the user's `text/plain` default): never with the file's
+/// own handler, which could run it.
 #[tauri::command]
 pub async fn open_unreadable_machine_file(
     app: tauri::AppHandle,
@@ -3989,19 +3700,8 @@ pub async fn open_unreadable_machine_file(
     crate::commands::await_blocking("open_unreadable_machine_file", move || {
         let file = unreadable_machine_file(&env, &org_slug, team.as_deref(), &machine_id)?;
         let path = plain_file(Path::new(&file.path))?;
-        let status = std::process::Command::new("/usr/bin/open")
-            .arg("-t")
-            .arg(path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map_err(|e| format!("Couldn't open {}: {e}", file.path))?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(format!("Couldn't open {} as text", file.path))
-        }
+        crate::shared::opener::open(crate::shared::opener::Open::Text(path))
+            .map_err(|e| format!("Couldn't open {} as text: {e}", file.path))
     })
     .await
 }

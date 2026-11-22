@@ -1,0 +1,8 @@
+# macOS UI code (objc2 WebKit/AppKit and the macOS-only app surfaces) that the
+# platform cfg ratchet exempts as a whole (platform_cfg_ratchet_guard.rs).
+#
+# Format: <path> <reason>, the path relative to the app root (src-tauri).
+# A row with no reason fails.
+src/commands/app_nap.rs # holds the NSProcessInfo activity (objc2 Foundation) that keeps App Nap off while a session runs
+src/memory_metrics.rs # attributes the WebKit helper processes to the app with the macOS responsibility API
+src/menu.rs # the macOS menu bar (app, Edit, View and Go menus per the macOS HIG)

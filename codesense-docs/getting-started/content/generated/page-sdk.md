@@ -4,7 +4,7 @@ Generated from the Rust registry and TypeScript declarations. All 123 verbs and 
 
 [Exact TypeScript declarations](codesense.d.ts) · [Machine reference](page-sdk.json) · [Capabilities](capabilities.md) · [LiveHub](live-hub.md)
 
-SDK version: 4. Features reported to has(): `window`, `firstPaint`, `lifecycle`, `slotContext`, `theme`, `kitTokens`, `virtualList`, `inboxThread`. A null feature means no separate member-named feature flag is declared. Named types in signatures are defined in the linked .d.ts; unknown stays unknown.
+SDK version: 4. Features reported to has(): `window`, `firstPaint`, `lifecycle`, `slotContext`, `theme`, `kitTokens`, `virtualList`, `inboxThread`, `formatKeys`, `fillKeys`, `formatModifierClick`, `localMachineLabel`, `localMachinePhrase`. A null feature means no separate member-named feature flag is declared. Named types in signatures are defined in the linked .d.ts; unknown stays unknown.
 
 ## Surface: version
 
@@ -147,6 +147,51 @@ onSlotContext(cb: (context: SlotContext) => void): Unsubscribe;
 ```
 
 
+
+## Surface: formatKeys
+
+```ts
+formatKeys(keystroke: string): string;
+```
+
+A keystroke such as `CmdOrCtrl+Alt+Enter` as the person's OS shows it: `⌘⌥⏎` on macOS,
+`Ctrl+Alt+⏎` elsewhere. `""` before the first slot context and for a string that is not a
+keystroke (`CmdOrCtrl`, `Shift` and `Alt` modifiers, one key).
+
+## Surface: fillKeys
+
+```ts
+fillKeys(root?: ParentNode): void;
+```
+
+Fill `[data-keys]` text and the `data-keys-title` / `data-keys-aria-label` templates (one
+`{keys}` placeholder, keys in `data-keys-keys`) under `root` (default: the document). The
+shim fills the document on each slot context, or at DOMContentLoaded while it loads; call
+this after inserting hints. Hide an unfilled hint with `[data-keys]:empty { display: none }`.
+
+## Surface: formatModifierClick
+
+```ts
+formatModifierClick(modifier: "CmdOrCtrl" | "Shift" | "Alt"): string;
+```
+
+A modifier+click gesture: `⌥-click` on macOS, `Alt+click` elsewhere; `""` before slot context.
+
+## Surface: localMachineLabel
+
+```ts
+localMachineLabel(): string;
+```
+
+The local machine as a label: "This Mac" or "This computer"; `""` before slot context.
+
+## Surface: localMachinePhrase
+
+```ts
+localMachinePhrase(): string;
+```
+
+The local machine mid-sentence: "this Mac" or "this computer"; `""` before slot context.
 
 ## Surface: onMenuAction
 
@@ -1600,6 +1645,11 @@ openWorkspace(args?: {
         name?: string;
         org?: string;
         path?: string;
+        seatWorktree?: {
+          commit?: string;
+          kind?: "branch" | "commit";
+          [key: string]: unknown;
+        };
         storyId?: string;
         team?: string;
         worktree?: string;

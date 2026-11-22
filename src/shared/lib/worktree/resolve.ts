@@ -5,7 +5,17 @@ import {
   PIPELINE_EXTENSIONS,
 } from "@/shared/lib/pipeline-graph/pipeline-file-filter";
 import { stripPipelineExtension } from "@/shared/lib/pipeline-graph/pipeline-utils";
-import { basename } from "@/shared/lib/basename";
+import {
+  basename,
+  canonicalPath,
+  dirname,
+  isAbsolute,
+  join,
+  normalize,
+  relative,
+  resolveRelative,
+  samePath,
+} from "@/shared/lib/path";
 import type { WorktreeConfig } from "@/shared/types/worktree-config";
 
 const DEFAULT_BRANCH_PREFIX = "feat/";
@@ -53,25 +63,22 @@ function extractHtmlMetaField(content: string, field: string): string | null {
  * `30-10`-style display label via `storyDisplayLabel`.
  */
 export function storyIdFromPath(storyFilePath: string): string {
-  const base = storyFilePath.split("/").pop() ?? storyFilePath;
-  return stripPipelineExtension(base);
+  return stripPipelineExtension(basename(storyFilePath) || storyFilePath);
 }
 
 /**
  * R-18 Phase B (AC #28): defence-in-depth path canonicaliser. All
  * `byAbsPath` keys and `Workspace.storyFilePath` values flow through
  * this — two paths are considered equal iff their normalised forms are
- * byte-identical. Pure string transform: NFC + `//` collapse + trailing
- * slash drop. No filesystem I/O (no `realpath`) — keeps the helper
+ * byte-identical. Pure string transform: NFC + {@link canonicalPath} (one
+ * separator per path kind, repeated and trailing separators dropped, the
+ * drive letter upper-cased). No filesystem I/O (no `realpath`) — keeps the helper
  * synchronous and safe to call inside React render paths.
  *
  * Idempotent: `normalize(normalize(x)) === normalize(x)`.
  */
 export function normalizeStoryFilePath(path: string): string {
-  let p = path.normalize("NFC");
-  p = p.replace(/\/+/g, "/");
-  if (p.length > 1 && p.endsWith("/")) p = p.slice(0, -1);
-  return p;
+  return canonicalPath(path.normalize("NFC"));
 }
 
 /**
@@ -242,7 +249,7 @@ export async function resolveWorktreeParams(
   // TS-side string guard. The `_depth < 3` cap is the cycle bound, unchanged.
   const depId = parseDependsOnFromFrontmatter(content);
   if (depId && _depth < 3) {
-    const dir = storyFilePath.substring(0, storyFilePath.lastIndexOf("/"));
+    const dir = dirname(storyFilePath);
     // Strip any pipeline extension from depId (handles "W-5-foo.html" refs).
     const depStem = stripPipelineExtension(depId);
     // Self-reference skip (SW-FX-3 AC-5): a path-qualified self-ref
@@ -250,20 +257,23 @@ export async function resolveWorktreeParams(
     // the `..`-resolved, extension-stripped path — matching codesense's
     // stem-as-story-id convention — so a self-ref is caught regardless of
     // which extension the probe loop would try (a `.md` story can't sneak
-    // back in via a same-stem `.html` twin). Compare the normalized forms:
-    // depStem still carries a literal `..`, the parent path is canonical.
+    // back in via a same-stem `.html` twin). Compare the resolved forms with
+    // `samePath`: depStem still carries a literal `..`, and either side may
+    // mix separators.
     // Without this skip the unwound recursion resolves the story's start
     // point to its own (not-yet-created) branch and the F-29 guard blocks
     // the story on itself.
-    const selfRef =
-      normalizePath(`${dir}/${depStem}`) === stripPipelineExtension(normalizePath(storyFilePath));
+    const selfRef = samePath(
+      resolveRelative(dir, depStem),
+      stripPipelineExtension(normalize(storyFilePath)),
+    );
     if (!selfRef) {
       // Probe each extension via readFile — if the file doesn't exist, readFile
       // throws and we try the next. Pre-read content avoids the recursive call's
       // internal catch masking file-not-found.
       for (const ext of PIPELINE_EXTENSIONS) {
         try {
-          const depPath = `${dir}/${depStem}.${ext}`;
+          const depPath = join(dir, `${depStem}.${ext}`);
           const depContent = await readFile(depPath);
           const { branchName: depBranch } = await resolveWorktreeParams(
             depPath,
@@ -480,7 +490,7 @@ export function resolveWorktreePath(
   branchName: string,
 ): string {
   const template = config?.worktree_dir ?? "../{repo}-wt/{slug}";
-  const repoBasename = repoPath.split("/").filter(Boolean).pop() ?? "repo";
+  const repoBasename = basename(repoPath) || "repo";
   const slug = branchName.replace(/\//g, "-");
   const rendered = template.replace(/\{repo\}/g, repoBasename).replace(/\{slug\}/g, slug);
 
@@ -488,32 +498,7 @@ export function resolveWorktreePath(
   // resolved against the repo path itself — so the default
   // `../{repo}-wt/{slug}` produces a sibling of the repo directory,
   // matching the Rust runner's semantics.
-  if (rendered.startsWith("/")) return normalizePath(rendered);
-  return normalizePath(`${repoPath}/${rendered}`);
-}
-
-/**
- * Minimal path normalizer — collapses `a/b/../c` to `a/c` and strips
- * `./` segments. Pure string manipulation; no filesystem resolution.
- *
- * Used by the SW-FX-3 self-reference identity check in
- * `resolveWorktreeParams`: a path-qualified self-ref dep carries a literal
- * `..` that must be resolved before it can be compared to the parent's
- * already-canonical path. Kept module-private — no external consumer.
- */
-function normalizePath(path: string): string {
-  const isAbs = path.startsWith("/");
-  const parts = path.split("/").filter((p) => p && p !== ".");
-  const out: string[] = [];
-  for (const p of parts) {
-    if (p === "..") {
-      if (out.length > 0 && out[out.length - 1] !== "..") out.pop();
-      else if (!isAbs) out.push("..");
-    } else {
-      out.push(p);
-    }
-  }
-  return (isAbs ? "/" : "") + out.join("/");
+  return isAbsolute(rendered) ? normalize(rendered) : resolveRelative(repoPath, rendered);
 }
 
 /**
@@ -535,7 +520,6 @@ function normalizePath(path: string): string {
  */
 export function isStoryFile(filePath: string, contentRootAbsolute: string): boolean {
   if (!filePath || !contentRootAbsolute) return false;
-  if (!filePath.startsWith(`${contentRootAbsolute}/`)) return false;
-  const fileName = filePath.split("/").pop() ?? "";
-  return isPipelineFileName(fileName);
+  if (!relative(contentRootAbsolute, filePath)) return false;
+  return isPipelineFileName(basename(filePath));
 }

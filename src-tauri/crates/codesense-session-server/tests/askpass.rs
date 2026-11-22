@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#![cfg(cap_terminal_server_sidecar)]
 //! The askpass as `ssh-keygen` runs it: this binary, answering from the
 //! socket, is how a kept passphrase unlocks a key — and it answers nothing
 //! but a key's passphrase prompt.
@@ -6,10 +7,11 @@
 use std::path::Path;
 use std::process::Command;
 
-use codesense_session_server::askpass::{check_passphrase, Askpass};
+use codesense_session_server::askpass::Askpass;
 
 const PROGRAM: &str = env!("CARGO_BIN_EXE_codesense-session-server");
 
+/// A new ed25519 key at `dir/name`, locked with `passphrase` (none when empty).
 fn key(dir: &Path, name: &str, passphrase: &str) -> std::path::PathBuf {
     let path = dir.join(name);
     let made = Command::new("ssh-keygen")
@@ -21,27 +23,96 @@ fn key(dir: &Path, name: &str, passphrase: &str) -> std::path::PathBuf {
     path
 }
 
+/// Prints the exact prompt this system's `ssh-keygen -y -f <locked key>` sends
+/// the askpass, escaped, from an endpoint that records it and answers nothing.
+/// Off by default: set `CODESENSE_CAPTURE_ASKPASS_PROMPT=1` and run it with
+/// output shown.
 #[test]
-fn a_kept_passphrase_unlocks_its_key_through_the_askpass() {
+fn capture_the_ssh_keygen_prompt() {
+    use codesense_platform::ipc::blocking::LocalListener;
+    use codesense_platform::ipc::Endpoint;
+    use std::io::Read;
+    use std::process::Stdio;
+    if std::env::var_os("CODESENSE_CAPTURE_ASKPASS_PROMPT").is_none() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let locked = key(dir.path(), "locked", "correct horse");
-    let plain = key(dir.path(), "plain", "");
-    let sockets = dir.path().join("askpass");
-    let program = Path::new(PROGRAM);
-
-    check_passphrase(&locked, "correct horse", program, &sockets)
-        .unwrap_or_else(|e| panic!("the right passphrase: {e}"));
-    let wrong = check_passphrase(&locked, "battery staple", program, &sockets).unwrap_err();
-    assert!(wrong.contains("doesn't unlock"), "{wrong}");
-    let none = check_passphrase(&plain, "anything", program, &sockets).unwrap_err();
-    assert!(none.contains("no passphrase"), "{none}");
-    let missing = check_passphrase(&dir.path().join("nope"), "x", program, &sockets).unwrap_err();
-    assert!(missing.contains("no key file"), "{missing}");
-    assert_eq!(
-        std::fs::read_dir(&sockets).unwrap().count(),
-        0,
-        "every served socket is gone"
+    let endpoint = Endpoint::Ephemeral {
+        dir: dir.path().to_path_buf(),
+        name: "record".into(),
+    };
+    let wire = endpoint.to_wire().unwrap();
+    let mut listener = LocalListener::bind(&endpoint).unwrap();
+    let (sender, prompts) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        while let Ok(mut stream) = listener.accept() {
+            let mut length = [0; 4];
+            let mut prompt = Vec::new();
+            if stream.read_exact(&mut length).is_ok() {
+                prompt = vec![0; u32::from_be_bytes(length) as usize];
+                let _ = stream.read_exact(&mut prompt);
+            }
+            // Dropping the stream unanswered fails the prompt.
+            if sender.send(prompt).is_err() {
+                break;
+            }
+        }
+    });
+    let version = Command::new("ssh").arg("-V").output().unwrap();
+    let run = Command::new("ssh-keygen")
+        .args(["-y", "-f"])
+        .arg(&locked)
+        .env("SSH_ASKPASS", PROGRAM)
+        .env("SSH_ASKPASS_REQUIRE", "force")
+        .env(codesense_session_server::askpass::SOCKET_ENV, &wire)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    println!(
+        "openssh: {}",
+        String::from_utf8_lossy(&version.stderr).trim()
     );
+    println!("ssh-keygen exit: {:?}", run.status.code());
+    println!(
+        "ssh-keygen stderr: {:?}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let mut asked = 0;
+    while let Ok(prompt) = prompts.recv_timeout(std::time::Duration::from_secs(1)) {
+        asked += 1;
+        println!("askpass prompt {asked}: b\"{}\"", prompt.escape_ascii());
+    }
+    println!("askpass prompts recorded: {asked}");
+}
+
+mod key_unlock {
+    use super::*;
+    use codesense_session_server::askpass::check_passphrase;
+
+    #[test]
+    fn a_kept_passphrase_unlocks_its_key_through_the_askpass() {
+        let dir = tempfile::tempdir().unwrap();
+        let locked = key(dir.path(), "locked", "correct horse");
+        let plain = key(dir.path(), "plain", "");
+        let sockets = dir.path().join("askpass");
+        let program = Path::new(PROGRAM);
+
+        check_passphrase(&locked, "correct horse", program, &sockets)
+            .unwrap_or_else(|e| panic!("the right passphrase: {e}"));
+        let wrong = check_passphrase(&locked, "battery staple", program, &sockets).unwrap_err();
+        assert!(wrong.contains("doesn't unlock"), "{wrong}");
+        let none = check_passphrase(&plain, "anything", program, &sockets).unwrap_err();
+        assert!(none.contains("no passphrase"), "{none}");
+        let missing =
+            check_passphrase(&dir.path().join("nope"), "x", program, &sockets).unwrap_err();
+        assert!(missing.contains("no key file"), "{missing}");
+        assert_eq!(
+            std::fs::read_dir(&sockets).unwrap().count(),
+            0,
+            "every served socket is gone"
+        );
+    }
 }
 
 /// Run as `ssh` would: the prompt is the argument, the socket the

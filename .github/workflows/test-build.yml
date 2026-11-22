@@ -2,20 +2,33 @@
 name: Test build
 
 # Run by hand from the Actions tab (or `gh workflow run test-build.yml --ref main`) to get an
-# unsigned macOS app to install for testing. The build uses no secrets: it is ad-hoc signed, not
-# notarized and has no updater artifacts. README.md#test-builds says how to install it.
+# unsigned app to install for testing: pick a platform, or leave it on all. The builds use no
+# secrets: they are not notarized and have no updater artifacts (macOS is signed ad hoc).
+# README.md#test-builds says how to install each one.
 on:
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Which app to build
+        type: choice
+        options:
+          - all
+          - macos
+          - windows
+          - linux
+        default: all
 
 permissions: {}
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # One group per platform, so dispatching two platforms from one ref does not cancel the first.
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.platform }}
   cancel-in-progress: true
 
 jobs:
   macos-app:
     name: Unsigned macOS app
+    if: inputs.platform == 'all' || inputs.platform == 'macos'
     runs-on: macos-15
     # A cold release build of the app and both sidecars, with no dependency cache.
     timeout-minutes: 150
@@ -32,6 +45,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The build's docs check compares the export files with origin/main, which a
+          # shallow checkout of a branch lacks.
+          fetch-depth: 0
       - name: Set up pnpm
         uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - name: Set up Node
@@ -43,31 +59,11 @@ jobs:
       - name: Set up Rust
         # Matches ci.yml; rustup's proxies read the channel in rust-toolchain.toml.
         run: rustup toolchain install stable --profile minimal
-      - name: Fetch git-ai
-        # The bundle ships resources/git-ai; the script verifies it against src-tauri/git-ai.pin.
-        run: bash scripts/fetch-git-ai.sh
-      - name: Build bridge sidecar
-        run: bash scripts/build-bridge.sh --release
-      - name: Build session-server sidecar
-        # Also builds the terminal emulator worker beside it.
-        run: bash scripts/build-session-server.sh --release
       - name: Build app
-        # beforeBuildCommand runs both sidecar scripts again; with their release builds in place
-        # cargo has nothing left to compile. signingIdentity "-" signs ad hoc, which Apple
-        # silicon needs to launch the app; no Apple identity or updater key is involved.
-        env:
-          # tsc in beforeBuildCommand needs more than the ~2 GB default heap Node picks on this
-          # runner's 7 GB (it peaks near 2.8 GB); ubuntu-latest's larger default is why CI's
-          # typecheck never hits it. A ceiling with room to grow: tsc and vite run one at a time.
-          NODE_OPTIONS: --max-old-space-size=6144
-        run: >-
-          pnpm tauri build
-          --config '{"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-"}}}'
-      - name: Zip app
-        # ditto keeps the bundle's symlinks, modes and signature, which a plain zip may not.
-        run: |
-          bundle=target/release/bundle
-          ditto -c -k --keepParent "$bundle/macos/CodeSense.app" "$RUNNER_TEMP/CodeSense.app.zip"
+        # Sidecars, git-ai, the ad-hoc signed bundle and its zip: see the script.
+        run: bash scripts/ci/unsigned-bundle.sh macos
+      - name: Write manifest
+        run: bash scripts/ci/bundle-manifest.sh target/release/bundle/macos/CodeSense.app > "$RUNNER_TEMP/bundle-manifest.txt"
       - name: Upload app
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -83,3 +79,406 @@ jobs:
           archive: false
           retention-days: 7
           if-no-files-found: error
+      - name: Upload manifest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: ${{ runner.temp }}/bundle-manifest.txt
+          archive: false
+          retention-days: 7
+          if-no-files-found: error
+
+  linux-app:
+    name: Unsigned Linux app (${{ matrix.arch }})
+    if: inputs.platform == 'all' || inputs.platform == 'linux'
+    # One definition for both architectures; each leg builds natively. x86_64 runs on the
+    # oldest hosted Ubuntu so the bundle links an older glibc; the arm64 leg runs on
+    # 24.04, so that build needs Ubuntu 24.04 or newer.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+            bundles: deb,rpm,appimage
+          # Both legs bundle the AppImage without the emulator and insert it untouched afterwards
+          # (scripts/ci/unsigned-bundle.sh): linuxdeploy's rpath rewrite breaks the Bun-compiled
+          # emulator, and on aarch64 aborts the bundle.
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            bundles: deb,rpm,appimage
+    runs-on: ${{ matrix.runner }}
+    # A cold release build of the app and both sidecars, with no dependency cache.
+    timeout-minutes: 150
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The build's docs check compares the export files with origin/main, which a
+          # shallow checkout of a branch lacks.
+          fetch-depth: 0
+      - name: Install system libraries
+        # What rust.yml's Linux check installs, plus file (linuxdeploy), rpm (the rpm bundle) and
+        # libarchive-tools and squashfs-tools (bsdtar and unsquashfs, to check the rpm's and the
+        # AppImage's contents, and for the AppImage rebuild in unsigned-bundle.sh).
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev libxdo-dev libssl-dev \
+            file rpm libarchive-tools squashfs-tools
+      - name: Set up pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Set up Rust
+        # Matches ci.yml; rustup's proxies read the channel in rust-toolchain.toml.
+        run: rustup toolchain install stable --profile minimal
+      - name: Check scripts
+        # All of them, here: macOS runners ship no shellcheck.
+        run: shellcheck -x scripts/ci/unsigned-bundle.sh scripts/ci/bundle-manifest.sh scripts/ci/smoke-linux.sh scripts/fetch-pinned.sh scripts/fetch-bundled.sh scripts/ci/appimage-offset.sh scripts/ci/repair-appimage.sh
+      - name: Build app
+        env:
+          BUNDLES: ${{ matrix.bundles }}
+        run: bash scripts/ci/unsigned-bundle.sh linux "$BUNDLES"
+      - name: Check the sidecars sit beside the app
+        # The app binary's name comes from the product, so it is the one other file in /usr/bin.
+        run: |
+          listing=$(dpkg -c target/release/bundle/deb/*.deb)
+          echo "$listing"
+          bin_files=$(awk '$NF ~ /(^|\/)usr\/bin\/[^/]+$/ {print $NF}' <<<"$listing")
+          for name in codesense-bridge codesense-session-server codesense-emulator; do
+            grep -E "(^|/)usr/bin/$name\$" <<<"$bin_files" || { echo "Error: $name is not in /usr/bin of the deb" >&2; exit 1; }
+          done
+          [[ $(wc -l <<<"$bin_files") -eq 4 ]] || { echo "Error: expected the app binary and three sidecars in /usr/bin" >&2; exit 1; }
+      - name: Check the bundled git-ai and starship run
+        # Each format ships the pinned git-ai and starship as resources/git-ai and
+        # resources/starship; extract them from each and run each under its own name (under
+        # another name git-ai acts as git). git-ai prints its bare version, starship its name and
+        # version.
+        env:
+          BUNDLES: ${{ matrix.bundles }}
+        run: |
+          # Plain assignments, so a failed --print-pin stops the step here.
+          declare -A expected
+          for name in git-ai starship; do
+            pin=$(bash scripts/fetch-bundled.sh --print-pin "$name")
+            version=$(sed -n 's/^version=//p' "$pin")
+            [[ -n "$version" ]] || { echo "Error: $pin has no version" >&2; exit 1; }
+            expected[$name]=$version
+          done
+          expected[starship]="starship ${expected[starship]}"
+          for format in ${BUNDLES//,/ }; do
+            dir="$RUNNER_TEMP/extract-$format"
+            mkdir -p "$dir"
+            case "$format" in
+              deb) dpkg-deb -x target/release/bundle/deb/*.deb "$dir" ;;
+              # libarchive reads the rpm payload itself; rpm2cpio fails on this rpm without a message.
+              rpm) bsdtar -xf target/release/bundle/rpm/*.rpm -C "$dir" ;;
+              # The squashfs image after the AppImage's runtime, read the way repair-appimage.sh
+              # reads it, so the check sees the image the repair wrote.
+              appimage)
+                appimage=$(echo target/release/bundle/appimage/*.AppImage)
+                offset=$(bash scripts/ci/appimage-offset.sh "$appimage")
+                unsquashfs -q -n -d "$dir/squashfs-root" -o "$offset" "$appimage"
+                ;;
+            esac || { echo "Error: could not extract the $format" >&2; exit 1; }
+            for name in git-ai starship; do
+              found=$(find "$dir" -path "*/resources/$name" -type f)
+              [[ $(grep -c . <<<"$found") -eq 1 ]] || { echo "Error: expected one resources/$name in the $format, found: $found" >&2; exit 1; }
+              [[ -x "$found" ]] || { echo "Error: $found in the $format is not executable" >&2; exit 1; }
+              echo "$format: $(sha256sum "$found")"
+              file "$found"
+              version=$("$found" --version) || { echo "Error: $found from the $format failed to run (exit $?)" >&2; exit 1; }
+              version=${version%%$'\n'*}
+              echo "$format: $found: $version"
+              [[ "$version" == "${expected[$name]}" ]] || { echo "Error: expected ${expected[$name]} from $name in the $format" >&2; exit 1; }
+            done
+          done
+      - name: Check the AppImage emulator
+        # A Bun-compiled executable keeps its payload after the ELF image, so the emulator must
+        # reach the AppImage's usr/bin byte for byte. The step prints every result before it
+        # fails on any, and extracts without FUSE in a temp dir of its own.
+        run: |
+          built="$PWD/src-tauri/binaries/codesense-emulator-$(rustc -vV | sed -n 's/^host: //p')"
+          appimage=$(ls "$PWD"/target/release/bundle/appimage/*.AppImage)
+          # The sidecar names come from the Linux config the bundle is built from.
+          sidecars=$(node -p 'require("./src-tauri/tauri.linux.conf.json").bundle.externalBin.map((p) => p.split("/").pop()).join("\n")')
+          cd "$(mktemp -d)"
+          "$appimage" --appimage-extract >/dev/null
+          bin_files=$(find squashfs-root/usr/bin -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
+          echo "usr/bin: ${bin_files//$'\n'/ }"
+          files_ok=true
+          for name in $sidecars; do
+            grep -qx "$name" <<<"$bin_files" || { echo "Error: $name is not in usr/bin of the AppImage" >&2; files_ok=false; }
+          done
+          [[ $(wc -l <<<"$bin_files") -eq $(($(wc -l <<<"$sidecars") + 1)) ]] || { echo "Error: expected the app binary and the sidecars in usr/bin" >&2; files_ok=false; }
+          emulator=squashfs-root/usr/bin/codesense-emulator
+          same=false
+          [[ -f "$emulator" && $(sha256sum <"$emulator") == $(sha256sum <"$built") ]] && same=true
+          rc=0
+          timeout 10 "./$emulator" </dev/null >stdout.txt || rc=$?
+          stdout_bytes=$(wc -c <stdout.txt)
+          echo "files: $files_ok"
+          echo "sha256 matches the built emulator: $same ($(sha256sum <"$emulator" | cut -c1-64) vs $(sha256sum <"$built" | cut -c1-64))"
+          echo "exit code with no input: $rc"
+          echo "stdout bytes with no input: $stdout_bytes"
+          head -c 400 stdout.txt
+          [[ $files_ok == true && $same == true && $rc -eq 0 && $stdout_bytes -eq 0 ]]
+      - name: Upload deb
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: target/release/bundle/deb/*.deb
+          archive: false
+          retention-days: 7
+          if-no-files-found: error
+      - name: Upload rpm
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: target/release/bundle/rpm/*.rpm
+          archive: false
+          retention-days: 7
+          if-no-files-found: error
+      - name: Upload AppImage
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: target/release/bundle/appimage/*.AppImage
+          archive: false
+          retention-days: 7
+          if-no-files-found: error
+
+  linux-install:
+    name: Linux package install (${{ matrix.arch }}, ${{ matrix.type }} on ${{ matrix.image }})
+    if: inputs.platform == 'all' || inputs.platform == 'linux'
+    # A matrix job is needed whole, so every leg waits for both builds.
+    needs: linux-app
+    # One leg per package and clean container, in parallel, each on its build's runner, so a slow
+    # mirror holds up only its own leg. The arm64 build runs on 24.04, so 24.04 is the oldest
+    # Ubuntu it installs on. scripts/ci/smoke-linux.sh says what an install checks.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+            type: deb
+            image: ubuntu:22.04
+            package: "*_amd64.deb"
+          - arch: x86_64
+            runner: ubuntu-22.04
+            type: deb
+            image: ubuntu:24.04
+            package: "*_amd64.deb"
+          - arch: x86_64
+            runner: ubuntu-22.04
+            type: rpm
+            image: fedora:44
+            package: "*.x86_64.rpm"
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            type: deb
+            image: ubuntu:24.04
+            package: "*_arm64.deb"
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            type: rpm
+            image: fedora:44
+            package: "*.aarch64.rpm"
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download the package
+        # v8 is the first to read the unzipped files linux-app uploads.
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: ${{ matrix.package }}
+          path: ${{ runner.temp }}/packages
+          merge-multiple: true
+      - name: Key the apt archive cache
+        id: apt-key
+        # The ISO week rolls the key, so the packages the archive updates are saved again weekly.
+        if: matrix.type == 'deb'
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: bash scripts/ci/smoke-linux.sh cache-key "$IMAGE" "$RUNNER_TEMP/packages" "$(date -u +%G-W%V)" | tee -a "$GITHUB_OUTPUT"
+      - name: Restore the apt archives
+        id: apt-restore
+        if: matrix.type == 'deb'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/apt-archives
+          key: ${{ steps.apt-key.outputs.key }}
+          restore-keys: ${{ steps.apt-key.outputs.restore }}
+      - name: Install the package in a clean container
+        id: install
+        # A healthy install takes about 2 minutes, less with the archives cached, and the launch
+        # of the installed app about 2 more. The timeout is a backstop: a crawling mirror fails
+        # here, by name, before the job's timeout.
+        timeout-minutes: 30
+        env:
+          TYPE: ${{ matrix.type }}
+          IMAGE: ${{ matrix.image }}
+          # A deb leg's container uses this as its /var/cache/apt/archives, which the cache keeps.
+          SMOKE_APT_CACHE: ${{ runner.temp }}/apt-archives
+        run: bash scripts/ci/smoke-linux.sh install "$TYPE" "$IMAGE" "$RUNNER_TEMP/packages" "$RUNNER_TEMP/smoke"
+      - name: Hand the apt archives to the runner
+        # The container's apt wrote them as root, with a lock and a partial directory the cache
+        # cannot read. A timed-out install can leave its container running, so stop it first.
+        if: always() && matrix.type == 'deb' && steps.apt-key.outcome == 'success' && steps.apt-restore.outputs.cache-hit != 'true'
+        env:
+          SMOKE_APT_CACHE: ${{ runner.temp }}/apt-archives
+        run: |
+          docker ps -q | xargs -r docker kill
+          sudo chown -R "$(id -u):$(id -g)" "$SMOKE_APT_CACHE"
+          rm -rf "$SMOKE_APT_CACHE/partial" "$SMOKE_APT_CACHE/lock"
+          echo "apt archives: $(find "$SMOKE_APT_CACHE" -name '*.deb' | wc -l) packages, $(du -sh "$SMOKE_APT_CACHE" | cut -f1)"
+      - name: Save the apt archives
+        # Even after a failed or timed-out install, so a slow first run still warms the next. Its
+        # archives may be partial, so they go under a key of their own that only the restore
+        # prefix finds: the week's key waits for an install that finishes.
+        if: always() && matrix.type == 'deb' && steps.apt-key.outcome == 'success' && steps.apt-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/apt-archives
+          key: ${{ steps.install.outcome == 'success' && steps.apt-key.outputs.key || format('{0}-partial-{1}-{2}', steps.apt-key.outputs.key, github.run_id, github.run_attempt) }}
+      - name: Name the listing
+        id: listing
+        # Also after a failed install, so its launch log is uploaded by name.
+        if: always()
+        env:
+          LEG: ${{ matrix.arch }}-${{ matrix.type }}-${{ matrix.image }}
+        run: |
+          echo "name=linux-install-${LEG//:/-}" >>"$GITHUB_OUTPUT"
+          echo "launch=linux-launch-${LEG//:/-}" >>"$GITHUB_OUTPUT"
+      - name: Upload the listing
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.listing.outputs.name }}
+          path: ${{ runner.temp }}/smoke/${{ matrix.type }}.list
+          retention-days: 7
+          if-no-files-found: error
+      - name: Upload the launch log and screenshot
+        if: always() && steps.listing.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.listing.outputs.launch }}
+          path: |
+            ${{ runner.temp }}/smoke/launch/*.log
+            ${{ runner.temp }}/smoke/launch/*.png
+          retention-days: 7
+          if-no-files-found: warn
+
+  linux-resources:
+    name: Linux deb and rpm ship the same resources
+    if: inputs.platform == 'all' || inputs.platform == 'linux'
+    needs: linux-install
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download the listings
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: linux-install-*
+          path: ${{ runner.temp }}/listings
+      - name: Compare each deb's listing with its architecture's rpm
+        # Each listing by name, and no others, so a leg the matrix gains or loses fails here.
+        run: |
+          listings="$RUNNER_TEMP/listings"
+          compare() {
+            local arch="$1" rpm="$listings/linux-install-$1-rpm-fedora-44/rpm.list" image deb
+            shift
+            [[ -f "$rpm" ]] || { echo "Error: no $arch rpm listing" >&2; exit 1; }
+            for image in "$@"; do
+              deb="$listings/linux-install-$arch-deb-$image/deb.list"
+              [[ -f "$deb" ]] || { echo "Error: no $arch deb listing from $image" >&2; exit 1; }
+              bash scripts/ci/smoke-linux.sh same-resources "$deb" "$rpm"
+            done
+          }
+          compare x86_64 ubuntu-22.04 ubuntu-24.04
+          compare arm64 ubuntu-24.04
+          found=$(find "$listings" -name '*.list' | wc -l)
+          [[ $found -eq 5 ]] || { echo "Error: expected 5 listings, found $found" >&2; exit 1; }
+
+  linux-smoke:
+    name: Linux AppImage smoke (x86_64)
+    if: inputs.platform == 'all' || inputs.platform == 'linux'
+    # Only the build, so the launches run beside the container installs. Only the x86_64
+    # AppImage launches. scripts/ci/smoke-linux.sh says what each step checks.
+    needs: linux-app
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download the AppImage
+        # v8 is the first to read the unzipped files linux-app uploads.
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: "*_amd64.AppImage"
+          path: ${{ runner.temp }}/packages
+          merge-multiple: true
+      - name: Install the desktop session tools
+        # An AppImage leaves out the GL, EGL and Mesa libraries every desktop has.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb xauth x11-utils xdotool dbus \
+            gnome-keyring imagemagick libegl1 libgl1 libgles2 libgl1-mesa-dri
+      - name: Launch the AppImage
+        run: bash scripts/ci/smoke-linux.sh run "$RUNNER_TEMP/packages" "$RUNNER_TEMP/smoke/appimage"
+      - name: Launch the AppImage with DMABUF kept
+        run: bash scripts/ci/smoke-linux.sh variant dmabuf "$RUNNER_TEMP/smoke/appimage"
+      - name: Launch the AppImage with no session bus
+        run: bash scripts/ci/smoke-linux.sh variant no-dbus "$RUNNER_TEMP/smoke/appimage"
+      - name: Launch the AppImage with the WebGL terminal renderer forced
+        run: bash scripts/ci/smoke-linux.sh variant webgl "$RUNNER_TEMP/smoke/appimage"
+      - name: Launch the AppImage with the tray icon turned on
+        # The tray icon loads only the AppIndicator library the AppImage bundles: the launch fails
+        # first if the runner has one of its own, so a bundle without it fails.
+        run: bash scripts/ci/smoke-linux.sh variant tray "$RUNNER_TEMP/smoke/appimage"
+      - name: Upload logs and screenshots
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-smoke-x86_64
+          path: |
+            ${{ runner.temp }}/smoke/appimage/listing
+            ${{ runner.temp }}/smoke/appimage/*.log
+            ${{ runner.temp }}/smoke/appimage/*.png
+          retention-days: 7
+          if-no-files-found: warn

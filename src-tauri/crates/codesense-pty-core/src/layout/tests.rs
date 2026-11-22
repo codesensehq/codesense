@@ -4,6 +4,7 @@
 //! sessions.
 
 use super::*;
+use crate::test_support::expect_mode;
 
 /// A model with viewer `v` attached under boot `boot` (as a client attaches by
 /// taking its first snapshot before it opens anything).
@@ -44,6 +45,7 @@ fn descriptor(name: &str) -> WorkspaceDescriptor {
 
 fn request(v: &str, workspace: &str, session: &str) -> OpenTab {
     OpenTab {
+        cwd: None,
         viewer: viewer(v),
         workspace: ws(workspace),
         session: sid(session),
@@ -63,6 +65,7 @@ fn open(m: &LayoutModel, v: &str, workspace: &str, session: &str) -> Effects {
         &sid(session),
         &ws(workspace),
         Some(&WorkspaceDescriptor::default()),
+        None,
     )
     .unwrap();
     m.place_opened(request(v, workspace, session)).unwrap().1
@@ -104,8 +107,13 @@ fn revs(effects: &Effects) -> Vec<u64> {
 #[test]
 fn an_exit_during_the_spawn_places_the_entry_exited_with_its_status() {
     let m = model();
-    m.reserve(&sid("a"), &ws("w"), Some(&WorkspaceDescriptor::default()))
-        .unwrap();
+    m.reserve(
+        &sid("a"),
+        &ws("w"),
+        Some(&WorkspaceDescriptor::default()),
+        None,
+    )
+    .unwrap();
     m.on_exit(
         &sid("a"),
         Some(ExitInfo {
@@ -126,8 +134,13 @@ fn an_exit_during_the_spawn_places_the_entry_exited_with_its_status() {
 #[test]
 fn a_session_removed_during_the_spawn_is_never_placed() {
     let m = model();
-    m.reserve(&sid("a"), &ws("w"), Some(&WorkspaceDescriptor::default()))
-        .unwrap();
+    m.reserve(
+        &sid("a"),
+        &ws("w"),
+        Some(&WorkspaceDescriptor::default()),
+        None,
+    )
+    .unwrap();
     m.on_removed(&sid("a"));
     assert_eq!(
         m.place_opened(request("v", "w", "a")).unwrap_err(),
@@ -141,8 +154,13 @@ fn a_session_removed_during_the_spawn_is_never_placed() {
 #[test]
 fn an_exit_after_the_removal_during_the_spawn_does_not_place_it() {
     let m = model();
-    m.reserve(&sid("a"), &ws("w"), Some(&WorkspaceDescriptor::default()))
-        .unwrap();
+    m.reserve(
+        &sid("a"),
+        &ws("w"),
+        Some(&WorkspaceDescriptor::default()),
+        None,
+    )
+    .unwrap();
     m.on_removed(&sid("a"));
     m.on_exit(&sid("a"), None);
     assert_eq!(
@@ -206,17 +224,32 @@ fn respawn_quick_exit_keeps_the_exit_and_a_held_entry_refuses_a_second_hold() {
 #[test]
 fn a_session_cannot_be_opened_twice_or_while_opening() {
     let m = model();
-    m.reserve(&sid("a"), &ws("w"), Some(&WorkspaceDescriptor::default()))
-        .unwrap();
+    m.reserve(
+        &sid("a"),
+        &ws("w"),
+        Some(&WorkspaceDescriptor::default()),
+        None,
+    )
+    .unwrap();
     assert_eq!(
-        m.reserve(&sid("a"), &ws("w1"), Some(&WorkspaceDescriptor::default()))
-            .unwrap_err(),
+        m.reserve(
+            &sid("a"),
+            &ws("w1"),
+            Some(&WorkspaceDescriptor::default()),
+            None
+        )
+        .unwrap_err(),
         LayoutError::AlreadyPlaced(sid("a"))
     );
     m.place_opened(request("v", "w1", "a")).unwrap();
     assert_eq!(
-        m.reserve(&sid("a"), &ws("w1"), Some(&WorkspaceDescriptor::default()))
-            .unwrap_err(),
+        m.reserve(
+            &sid("a"),
+            &ws("w1"),
+            Some(&WorkspaceDescriptor::default()),
+            None
+        )
+        .unwrap_err(),
         LayoutError::AlreadyPlaced(sid("a"))
     );
 }
@@ -401,8 +434,13 @@ fn names_default_to_a_memorable_label_and_index_places_in_the_strip() {
 
     let m = model();
     open(&m, "v", "w", "a");
-    m.reserve(&sid("b"), &ws("w"), Some(&WorkspaceDescriptor::default()))
-        .unwrap();
+    m.reserve(
+        &sid("b"),
+        &ws("w"),
+        Some(&WorkspaceDescriptor::default()),
+        None,
+    )
+    .unwrap();
     m.place_opened(OpenTab {
         index: Some(0),
         name: Some("agent".to_string()),
@@ -545,6 +583,19 @@ fn the_server_id_is_persisted_and_survives_a_restart() {
         a.server_id,
         "another instance root is another server"
     );
+}
+
+#[test]
+fn the_server_id_file_is_private_and_each_write_replaces_it_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    ServerIdentity::load_or_create(dir.path(), "host").unwrap();
+    expect_mode(&dir.path().join(SERVER_ID_FILE), 0o600);
+
+    let path = dir.path().join("staged");
+    write_owner_only(&path, "a longer first id").unwrap();
+    write_owner_only(&path, "short").unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "short");
+    expect_mode(&path, 0o600);
 }
 
 #[test]
@@ -695,6 +746,7 @@ fn only_tabs_and_opening_sessions_hold_their_scrollback() {
         &sid("opening"),
         &ws("w"),
         Some(&WorkspaceDescriptor::default()),
+        None,
     )
     .unwrap();
     assert!(m.is_held("opening"));
@@ -720,12 +772,12 @@ fn only_tabs_and_opening_sessions_hold_their_scrollback() {
 fn an_open_into_an_unknown_workspace_needs_a_descriptor_before_it_spawns() {
     let m = model();
     assert_eq!(
-        m.reserve(&sid("a"), &ws("absent"), None).unwrap_err(),
+        m.reserve(&sid("a"), &ws("absent"), None, None).unwrap_err(),
         LayoutError::UnknownWorkspace(ws("absent"))
     );
     open(&m, "v", "w", "a");
     // An existing workspace keeps its descriptor when none is sent.
-    m.reserve(&sid("b"), &ws("w"), None).unwrap();
+    m.reserve(&sid("b"), &ws("w"), None, None).unwrap();
     m.place_opened(OpenTab {
         descriptor: None,
         ..request("v", "w", "b")
@@ -740,8 +792,13 @@ fn cleanup_reservations_are_visible_until_placement_or_release() {
     let source = tempfile::tempdir().unwrap();
     let mut open = request("v", "generic:source", "opening");
     open.descriptor.as_mut().unwrap().worktree_path = Some(source.path().to_path_buf());
-    m.reserve(&open.session, &open.workspace, open.descriptor.as_ref())
-        .unwrap();
+    m.reserve(
+        &open.session,
+        &open.workspace,
+        open.descriptor.as_ref(),
+        None,
+    )
+    .unwrap();
     assert_eq!(
         m.worktree_usage(source.path()).unwrap().opening,
         vec![sid("opening")]
@@ -750,6 +807,8 @@ fn cleanup_reservations_are_visible_until_placement_or_release() {
     assert!(m.worktree_usage(source.path()).unwrap().opening.is_empty());
 }
 
+// Unix only: the alias is a unix symlink.
+#[cfg(unix)]
 #[test]
 fn canonical_source_usage_matches_generic_paths_and_openings_without_labels() {
     let m = model();
@@ -764,6 +823,7 @@ fn canonical_source_usage_matches_generic_paths_and_openings_without_labels() {
         &generic.session,
         &generic.workspace,
         generic.descriptor.as_ref(),
+        None,
     )
     .unwrap();
     assert_eq!(
@@ -780,4 +840,257 @@ fn canonical_source_usage_matches_generic_paths_and_openings_without_labels() {
         .unwrap()
         .entries
         .is_empty());
+}
+
+/// Reserve then place `session` in `workspace` (folder `folder`), running in `cwd` when
+/// the tab has a folder of its own.
+fn open_in(m: &LayoutModel, workspace: &str, folder: &Path, session: &str, cwd: Option<&Path>) {
+    let mut open = request("v", workspace, session);
+    open.descriptor.as_mut().unwrap().worktree_path = Some(folder.to_path_buf());
+    open.cwd = cwd.map(Path::to_path_buf);
+    m.reserve(
+        &open.session,
+        &open.workspace,
+        open.descriptor.as_ref(),
+        cwd,
+    )
+    .unwrap();
+    m.place_opened(open).unwrap();
+}
+
+#[test]
+fn a_tab_dir_is_kept_beside_the_workspace_folder_and_leaves_with_its_tab() {
+    let m = model();
+    let seat_dir = tempfile::tempdir().unwrap();
+    let (base, seat) = (Path::new("/work/app"), seat_dir.path());
+    open_in(&m, "w", base, "lead", None);
+    open_in(&m, "w", base, "seat", Some(seat));
+    // A tab whose own folder is the workspace's stores nothing.
+    open_in(&m, "w", base, "same", Some(base));
+    let layout = layout_of(&m, "w").unwrap();
+    assert_eq!(layout.descriptor.worktree_path.as_deref(), Some(base));
+    assert_eq!(
+        layout.tab_dirs,
+        BTreeMap::from([(sid("seat"), seat.to_path_buf())])
+    );
+    assert_eq!(layout.tab_dir(&sid("seat")), Some(seat));
+    assert_eq!(layout.tab_dir(&sid("lead")), Some(base));
+    assert_eq!(layout.tab_dir(&sid("same")), Some(base));
+    // Its entry removed (closed and freed), the tab's folder goes with it.
+    m.on_exit(&sid("seat"), None);
+    m.on_removed(&sid("seat"));
+    let layout = layout_of(&m, "w").unwrap();
+    assert!(layout.tab_dirs.is_empty());
+    assert_eq!(sessions_of(&layout), ["lead", "same"]);
+}
+
+#[test]
+fn a_moved_tab_carries_its_folder_unless_its_new_workspace_runs_there() {
+    let m = model();
+    let seat_dir = tempfile::tempdir().unwrap();
+    let (base, seat) = (Path::new("/work/app"), seat_dir.path());
+    open_in(&m, "w", base, "lead", None);
+    open_in(&m, "w", base, "seat", Some(seat));
+    let elsewhere = WorkspaceDescriptor {
+        worktree_path: Some(PathBuf::from("/work/other")),
+        ..descriptor("x")
+    };
+    m.place(
+        &sid("seat"),
+        &ws("x"),
+        Placement::Tab,
+        None,
+        Some(elsewhere),
+    )
+    .unwrap();
+    assert!(layout_of(&m, "w").unwrap().tab_dirs.is_empty());
+    let x = layout_of(&m, "x").unwrap();
+    assert_eq!(
+        x.tab_dirs,
+        BTreeMap::from([(sid("seat"), seat.to_path_buf())])
+    );
+    assert_eq!(x.tab_dir(&sid("seat")), Some(seat));
+    // Into a workspace that runs in the tab's folder: nothing to record.
+    let at_seat = WorkspaceDescriptor {
+        worktree_path: Some(seat.to_path_buf()),
+        ..descriptor("y")
+    };
+    m.place(&sid("seat"), &ws("y"), Placement::Tab, None, Some(at_seat))
+        .unwrap();
+    let y = layout_of(&m, "y").unwrap();
+    assert!(y.tab_dirs.is_empty());
+    assert_eq!(y.tab_dir(&sid("seat")), Some(seat));
+    // A tab without a folder of its own moves as it always has.
+    m.place(&sid("lead"), &ws("y"), Placement::Tab, None, None)
+        .unwrap();
+    assert!(layout_of(&m, "y").unwrap().tab_dirs.is_empty());
+}
+
+#[test]
+fn a_tab_counts_and_respawns_in_its_own_folder() {
+    let m = model();
+    let (base, seat) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    open_in(&m, "w", base.path(), "lead", None);
+    open_in(&m, "w", base.path(), "seat", Some(seat.path()));
+    let entries = |dir: &Path| -> Vec<String> {
+        let mut found: Vec<String> = m
+            .worktree_usage(dir)
+            .unwrap()
+            .entries
+            .into_iter()
+            .map(|(_, tab)| tab.session.as_str().to_string())
+            .collect();
+        found.sort();
+        found
+    };
+    assert_eq!(entries(seat.path()), ["seat"]);
+    assert_eq!(entries(base.path()), ["lead"]);
+    // While it restarts, it is counted as starting in its own folder.
+    m.on_exit(&sid("seat"), None);
+    m.reserve_respawn(&sid("seat")).unwrap();
+    assert_eq!(
+        m.worktree_usage(seat.path()).unwrap().opening,
+        vec![sid("seat")]
+    );
+    assert!(m.worktree_usage(base.path()).unwrap().opening.is_empty());
+    m.finish_respawn(&sid("seat")).unwrap();
+    assert_eq!(
+        layout_of(&m, "w").unwrap().tab_dir(&sid("seat")),
+        Some(seat.path())
+    );
+}
+
+#[test]
+fn tab_dirs_round_trip_and_an_older_snapshot_without_them_loads() {
+    let m = model();
+    let seat = tempfile::tempdir().unwrap();
+    open_in(&m, "w", Path::new("/work/app"), "seat", Some(seat.path()));
+    let layout = layout_of(&m, "w").unwrap();
+    let json = serde_json::to_value(&layout).unwrap();
+    assert_eq!(
+        json["tabDirs"],
+        serde_json::json!({"seat": seat.path().to_str().unwrap()})
+    );
+    assert_eq!(
+        serde_json::from_value::<WorkspaceLayout>(json.clone()).unwrap(),
+        layout
+    );
+    // An older host or snapshot has no `tabDirs`; an empty map isn't written.
+    let mut older = json;
+    older.as_object_mut().unwrap().remove("tabDirs");
+    let loaded: WorkspaceLayout = serde_json::from_value(older).unwrap();
+    assert!(loaded.tab_dirs.is_empty());
+    assert!(serde_json::to_value(&loaded)
+        .unwrap()
+        .get("tabDirs")
+        .is_none());
+}
+
+/// The sessions `worktree_usage(dir)` counts as running there, sorted.
+fn counted(m: &LayoutModel, dir: &Path) -> Vec<String> {
+    let mut found: Vec<String> = m
+        .worktree_usage(dir)
+        .unwrap()
+        .entries
+        .into_iter()
+        .map(|(_, tab)| tab.session.as_str().to_string())
+        .collect();
+    found.sort();
+    found
+}
+
+#[test]
+fn a_tab_folder_that_is_gone_is_never_recorded() {
+    let m = model();
+    let base = tempfile::tempdir().unwrap();
+    let gone = base.path().join("gone-seat");
+    let mut open = request("v", "w", "seat");
+    open.descriptor.as_mut().unwrap().worktree_path = Some(base.path().to_path_buf());
+    open.cwd = Some(gone.clone());
+    m.reserve(
+        &open.session,
+        &open.workspace,
+        open.descriptor.as_ref(),
+        Some(gone.as_path()),
+    )
+    .unwrap();
+    // While it spawns, it counts in the workspace's folder, and other checks answer.
+    assert_eq!(
+        m.worktree_usage(base.path()).unwrap().opening,
+        vec![sid("seat")]
+    );
+    let other = tempfile::tempdir().unwrap();
+    assert!(m.worktree_usage(other.path()).unwrap().opening.is_empty());
+    // The folder appearing between the reservation and the placement isn't recorded:
+    // the placement keeps what the reservation kept.
+    std::fs::create_dir(&gone).unwrap();
+    m.place_opened(open).unwrap();
+    let layout = layout_of(&m, "w").unwrap();
+    assert!(layout.tab_dirs.is_empty());
+    assert_eq!(layout.tab_dir(&sid("seat")), Some(base.path()));
+    assert_eq!(counted(&m, base.path()), ["seat"]);
+}
+
+#[test]
+fn a_tab_whose_folder_is_removed_loses_it_when_moved_or_restarted() {
+    let m = model();
+    let base = tempfile::tempdir().unwrap();
+    let (seat, moved) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    open_in(&m, "w", base.path(), "seat", Some(seat.path()));
+    open_in(&m, "w", base.path(), "moved", Some(moved.path()));
+    let (seat_path, moved_path) = (seat.path().to_path_buf(), moved.path().to_path_buf());
+    seat.close().unwrap();
+    moved.close().unwrap();
+    // A move re-records the tab's folder: a gone one is dropped. The other workspace's
+    // own folder exists, since a usage check fails closed on a gone workspace folder.
+    std::fs::create_dir(base.path().join("x")).unwrap();
+    let elsewhere = WorkspaceDescriptor {
+        worktree_path: Some(base.path().join("x")),
+        ..descriptor("x")
+    };
+    m.place(
+        &sid("moved"),
+        &ws("x"),
+        Placement::Tab,
+        None,
+        Some(elsewhere),
+    )
+    .unwrap();
+    assert!(layout_of(&m, "x").unwrap().tab_dirs.is_empty());
+    assert!(!moved_path.exists());
+    // A restart after its folder went away runs in the workspace's folder, and a usage
+    // check while it starts counts it there already.
+    m.on_exit(&sid("seat"), None);
+    m.reserve_respawn(&sid("seat")).unwrap();
+    assert!(layout_of(&m, "w").unwrap().tab_dirs.is_empty());
+    assert_eq!(
+        m.worktree_usage(base.path()).unwrap().opening,
+        vec![sid("seat")]
+    );
+    m.finish_respawn(&sid("seat")).unwrap();
+    let layout = layout_of(&m, "w").unwrap();
+    assert!(layout.tab_dirs.is_empty());
+    assert_eq!(layout.tab_dir(&sid("seat")), Some(base.path()));
+    assert!(!seat_path.exists());
+}
+
+#[test]
+fn a_live_tab_whose_folder_is_removed_never_fails_a_usage_check() {
+    let m = model();
+    let base = tempfile::tempdir().unwrap();
+    let seat = tempfile::tempdir().unwrap();
+    open_in(&m, "w", base.path(), "lead", None);
+    open_in(&m, "w", base.path(), "seat", Some(seat.path()));
+    let seat_path = seat.path().to_path_buf();
+    seat.close().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    assert!(counted(&m, other.path()).is_empty());
+    assert_eq!(counted(&m, base.path()), ["lead"]);
+    // Its folder's parent still holds it, compared by path.
+    assert!(counted(&m, seat_path.parent().unwrap()).contains(&"seat".to_string()));
+    // A workspace's own folder that is gone still fails the check.
+    let gone_base = tempfile::tempdir().unwrap();
+    open_in(&m, "y", gone_base.path(), "stale", None);
+    gone_base.close().unwrap();
+    assert!(m.worktree_usage(other.path()).is_err());
 }

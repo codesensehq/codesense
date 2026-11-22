@@ -4,7 +4,7 @@
 //! plus the polling helpers those tests need on loaded machines.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use codesense_pty_core::domain::{
@@ -109,9 +109,24 @@ pub fn host_environment() -> HostEnvironment {
     )
 }
 
+/// An empty directory for a spawn's `HOME`, so no profile of the machine's
+/// user runs there: this process's own, private and made once. It must exist:
+/// with no `cwd` the child starts in `HOME` (`/var/empty` exists only on macOS).
+pub fn empty_home() -> String {
+    static HOME: OnceLock<tempfile::TempDir> = OnceLock::new();
+    HOME.get_or_init(|| {
+        tempfile::Builder::new()
+            .prefix("codesense-test-home-")
+            .tempdir()
+            .expect("the empty home")
+    })
+    .path()
+    .to_string_lossy()
+    .into_owned()
+}
+
 /// `script`, run by the user's shell of whichever host resolves it — `/bin/bash`
-/// on a test host — with an empty home, so no profile of the machine's user
-/// runs there.
+/// on a test host — with an [`empty_home`].
 pub fn sh(script: &str) -> SpawnIntent {
     SpawnIntent {
         remote_launch: Default::default(),
@@ -125,7 +140,7 @@ pub fn sh(script: &str) -> SpawnIntent {
         starship_preset: None,
         api_port: None,
         env_remove: Vec::new(),
-        env: vec![("HOME".to_string(), "/var/empty".to_string())],
+        env: vec![("HOME".to_string(), empty_home())],
         agent_env: Vec::new(),
         login_path: None,
     }
@@ -134,7 +149,9 @@ pub fn sh(script: &str) -> SpawnIntent {
 /// [`sh`] resolved for session `id` on a test host, for a host that spawns
 /// it itself.
 pub fn sh_spec(id: &str, script: &str) -> PtySpec {
-    sh(script).resolve(id, &host_environment())
+    sh(script)
+        .resolve(id, &host_environment())
+        .expect("the spawn resolves")
 }
 
 /// A registration for `id`, optionally a story session (persisting) or an

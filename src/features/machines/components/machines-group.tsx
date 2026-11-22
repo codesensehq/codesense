@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { listen } from "@tauri-apps/api/event";
 import { Plus } from "lucide-react";
@@ -58,13 +58,21 @@ import { outOfDateServers } from "../lib/out-of-date-servers";
 import { UnreadableMachineFiles } from "./unreadable-machine-files";
 import { StrayTerminalServers } from "./stray-terminal-servers";
 import { MachineStatsLine } from "./machine-stats-line";
+import { localMachineLabel } from "@/shared/lib/local-machine";
+import { notYetAvailable, useCapability } from "@/shared/lib/capabilities";
+import {
+  CapabilityOffControl,
+  CapabilityOffNote,
+} from "@/shared/components/capability-off/capability-off";
 
 /** Actions that change what this window does with a machine, not the machine
  *  itself — never offered as Connections row verbs. */
 const LENS_ONLY = new Set(["keepReadOnly"]);
 
-function scopeLine(machine: MachineSummary): string {
-  if (machine.kind === "local") return "This Mac · Terminal server";
+/** `sidecar`: whether this OS runs terminals in the terminal server; off, they run in the app. */
+function scopeLine(machine: MachineSummary, sidecar: boolean): string {
+  if (machine.kind === "local")
+    return sidecar ? `${localMachineLabel()} · Terminal server` : localMachineLabel();
   const where = machine.scope?.kind === "team" ? `Shared with ${machine.scope.team}` : "Only me";
   return machine.declaration ? `${where} · ${machine.declaration.host}` : where;
 }
@@ -101,6 +109,9 @@ export function MachinesGroup({
   const ids = useMemo(() => machines?.map((m) => m.machineId) ?? null, [machines]);
   useSettleAppearanceRequest(ids);
   const [updateAll, setUpdateAll] = useState(false);
+  // Without remote machines on this OS, one note says why; Add machine and every
+  // row's connect verbs point at it.
+  const remoteOffNoteId = useId();
   // SW-AGR-19 PR-8: a terminal server update run (from any window, or an
   // agent) is followed here, so single machine updates wait for it.
   useEffect(() => {
@@ -144,17 +155,20 @@ export function MachinesGroup({
               Update all…
             </button>
           )}
-          <button
-            type="button"
-            data-testid="connections-add-machine"
-            onClick={() => openMachinesPanel({ mode: "add" })}
-            className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-          >
-            <Plus size={12} aria-hidden="true" />
-            Add machine
-          </button>
+          <CapabilityOffControl cap="remote-machines" noteId={remoteOffNoteId}>
+            <button
+              type="button"
+              data-testid="connections-add-machine"
+              onClick={() => openMachinesPanel({ mode: "add" })}
+              className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+            >
+              <Plus size={12} aria-hidden="true" />
+              Add machine
+            </button>
+          </CapabilityOffControl>
         </div>
       </div>
+      <CapabilityOffNote cap="remote-machines" id={remoteOffNoteId} />
       <UpdateAllDialog
         machines={machines}
         teamKey={teamKey}
@@ -169,6 +183,7 @@ export function MachinesGroup({
             stats={stats[m.machineId]}
             teamKey={teamKey}
             now={now}
+            remoteOffNoteId={remoteOffNoteId}
           />
         ))}
         {local.length > 0 && <StrayTerminalServers machines={machines} />}
@@ -179,6 +194,7 @@ export function MachinesGroup({
             stats={stats[m.machineId]}
             teamKey={teamKey}
             now={now}
+            remoteOffNoteId={remoteOffNoteId}
           />
         ))}
         <UnreadableMachineFiles teamKey={teamKey} machines={machines} />
@@ -214,13 +230,38 @@ function MachineRow({
   stats,
   teamKey,
   now,
+  remoteOffNoteId,
 }: {
   machine: MachineSummary;
   stats?: MachineStats;
   teamKey: string;
   now: number;
+  /** The group's note on why remote machines are off here, for the connect verbs. */
+  remoteOffNoteId: string;
 }) {
-  const view = describeMachineStatus(machine, now);
+  const remoteMachines = useCapability("remote-machines");
+  const sidecar = useCapability("terminal-server-sidecar");
+  // A remote row still lists without remote machines on this OS (it comes from team config),
+  // but it can't be reached: its status says so and its connect verbs are off.
+  const unreachable = machine.kind === "ssh" && !remoteMachines.on;
+  const described = describeMachineStatus(machine, now);
+  const view = unreachable
+    ? { ...described, glyph: "○", word: notYetAvailable(), detail: null, tone: "muted" as const }
+    : described;
+  /** A verb that connects to a remote machine: off, with the group's note, while remote machines
+   *  are. This computer's verbs (its terminal server's update) never depend on them. */
+  const connectVerb = (verb: React.ReactElement<React.ComponentProps<typeof RowAction>>) =>
+    machine.kind === "ssh" ? (
+      <CapabilityOffControl
+        key={verb.key ?? undefined}
+        cap="remote-machines"
+        noteId={remoteOffNoteId}
+      >
+        {verb}
+      </CapabilityOffControl>
+    ) : (
+      verb
+    );
   const note = agentCallbacksNote(machine);
   const hidden = machine.binding?.hidden === true;
   const shared = machine.scope?.kind === "team";
@@ -404,7 +445,7 @@ function MachineRow({
         <TerminalServerStatus machine={machine} />
         <MachineStatsLine machine={{ label: machine.label, status: machine.status, ...stats }} />
         <p className="truncate text-xs text-muted-foreground">
-          {scopeLine(machine)}
+          {scopeLine(machine, sidecar.on)}
           {hidden ? " · Hidden" : ""}
         </p>
         {note && (
@@ -534,33 +575,38 @@ function MachineRow({
               onClick={reopenPending}
             />
           )}
-          {statusVerbs.map((a) => (
-            <RowAction
-              key={a.id}
-              testid={`machine-action-${a.id}-${id}`}
-              label={a.label}
-              disabled={busy}
-              onClick={() => void runMachineAction(a.id, machine, teamKey)}
-            />
-          ))}
+          {statusVerbs.map((a) =>
+            connectVerb(
+              <RowAction
+                key={a.id}
+                testid={`machine-action-${a.id}-${id}`}
+                label={a.label}
+                disabled={busy}
+                onClick={() => void runMachineAction(a.id, machine, teamKey)}
+              />,
+            ),
+          )}
           {machine.kind === "ssh" &&
             machine.status.state === "connected" &&
-            !needsPrivateAccount(machine) && (
+            !needsPrivateAccount(machine) &&
+            connectVerb(
               <RowAction
                 testid={`machine-action-openShell-${id}`}
                 label="Open shell"
                 disabled={busy}
                 onClick={() => openShellOn(machine, teamKey)}
-              />
+              />,
             )}
-          {machine.kind === "ssh" && machine.status.state === "connected" && (
-            <RowAction
-              testid={`machine-action-disconnect-${id}`}
-              label="Disconnect"
-              disabled={busy}
-              onClick={() => void act("disconnect", () => disconnectMachine(id))}
-            />
-          )}
+          {machine.kind === "ssh" &&
+            machine.status.state === "connected" &&
+            connectVerb(
+              <RowAction
+                testid={`machine-action-disconnect-${id}`}
+                label="Disconnect"
+                disabled={busy}
+                onClick={() => void act("disconnect", () => disconnectMachine(id))}
+              />,
+            )}
           {machine.kind === "ssh" && (
             <RowAction
               testid={`machine-action-appearance-${id}`}
@@ -568,24 +614,29 @@ function MachineRow({
               onClick={() => setAppearanceOpen(true)}
             />
           )}
-          {!identityChange && needsPrivateAccount(machine) && machine.canPublish && (
-            <RowAction
-              testid={`machine-action-switchPrivate-${id}`}
-              label="Switch to private account"
-              disabled={busy}
-              onClick={() =>
-                openMachinesPanel({ mode: "setUp", machineId: id, privateAccount: true })
-              }
-            />
-          )}
+          {!identityChange &&
+            needsPrivateAccount(machine) &&
+            machine.canPublish &&
+            connectVerb(
+              <RowAction
+                testid={`machine-action-switchPrivate-${id}`}
+                label="Switch to private account"
+                disabled={busy}
+                onClick={() =>
+                  openMachinesPanel({ mode: "setUp", machineId: id, privateAccount: true })
+                }
+              />,
+            )}
           {machine.kind === "ssh" && machine.canPublish && (
             <>
-              <RowAction
-                testid={`machine-action-edit-${id}`}
-                label="Edit"
-                disabled={busy}
-                onClick={() => openMachinesPanel({ mode: "setUp", machineId: id })}
-              />
+              {connectVerb(
+                <RowAction
+                  testid={`machine-action-edit-${id}`}
+                  label="Edit"
+                  disabled={busy}
+                  onClick={() => openMachinesPanel({ mode: "setUp", machineId: id })}
+                />,
+              )}
               {shared && (
                 <RowAction
                   testid={`machine-action-unshare-${id}`}

@@ -189,3 +189,23 @@ fn mismatches_are_warnings() {
         "1 complete marker(s) name a task that is not a review task"
     );
 }
+
+#[test]
+fn machine_wording_follows_the_os() {
+    assert_eq!(
+        no_team_for("macos"),
+        "the story's team is not known on this Mac, so its review-rounds markers cannot be read"
+    );
+    assert_eq!(
+        no_team_for("linux"),
+        "the story's team is not known on this computer, so its review-rounds markers cannot be read"
+    );
+    assert_eq!(
+        no_collection_for("macos"),
+        "the story's team declares no review-rounds collection on this Mac"
+    );
+    assert_eq!(
+        no_collection_for("linux"),
+        "the story's team declares no review-rounds collection on this computer"
+    );
+}

@@ -124,5 +124,8 @@ and use the add-endpoint skill.
   [Run your own tools and scripts in a worktree](../guides/your-own-tools.md).
 - A worktree stays until you remove it, even after the story is merged. See
   [Worktrees](../concepts/worktrees.md).
+- Every session of a story shares its worktree by default. A named session an
+  agent launches can have its own: see
+  [Seat worktrees](../concepts/worktrees.md#seat-worktrees).
 
 The full guide ships in the app's docs: **Agents**.

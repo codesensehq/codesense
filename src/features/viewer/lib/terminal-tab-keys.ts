@@ -606,12 +606,15 @@ async function reopen(entry: ClosedTabEntry): Promise<void> {
     return;
   }
   // Ended: the process is gone, so a fresh shell in the same workspace (whose cwd
-  // every new tab there starts in), under the same name — unless an agent ran
-  // there: the name was the agent's, and this is a plain shell.
+  // every new tab there starts in, or the tab's own folder when it had one), under
+  // the same name — unless an agent ran there: the name was the agent's, and this
+  // is a plain shell.
   if (!(await bringOnScreen(teamKey, workspaceId))) return;
   const name = entry.wasAgent ? undefined : tab.name;
   const tabs = selectWorkspaceTabs(getViewerState(), teamKey, workspaceId);
-  const replacement = entry.wasLastTab && tabs.length === 1 ? tabs[0] : undefined;
+  // A tab with a folder of its own never reuses that shell, which runs in the
+  // workspace's folder.
+  const replacement = entry.wasLastTab && !tab.cwd && tabs.length === 1 ? tabs[0] : undefined;
   if (replacement) {
     // Ending a tile's last tab already opened a fresh shell in its place: that is
     // the reopened shell, not a second one beside it.
@@ -619,7 +622,12 @@ async function reopen(entry: ClosedTabEntry): Promise<void> {
     getViewerState().setActiveTerminalTab(teamKey, replacement.id, workspaceId);
   } else {
     await getViewerState()
-      .addTerminalTab(teamKey, createTerminalTab(name), workspaceId)
+      .addTerminalTab(
+        teamKey,
+        createTerminalTab(name),
+        workspaceId,
+        tab.cwd ? { tabCwd: tab.cwd } : undefined,
+      )
       .catch(() => {});
   }
   if (stillHere()) land(teamKey, workspaceId, "terminal");

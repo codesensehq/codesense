@@ -135,6 +135,9 @@ pub enum LaunchWarningCode {
     /// that is already live. The existing deadline (or lack of one) is left
     /// alone; a running session's budget never changes mid-flight.
     MaxRuntimeIgnored,
+    /// `open_workspace` was called with `seatWorktree` on a session that is already
+    /// live: nothing is created or moved, and the session keeps its working folder.
+    SeatWorktreeIgnored,
     RoleNotJoined,
     StartupDeliveryUnconfirmed,
     /// The agent's CLI is installed at a version outside the range CodeSense is
@@ -165,7 +168,7 @@ pub fn cli_version_warning(runtime: AgentCli, version: Option<&str>) -> Option<L
         code: LaunchWarningCode::CliVersionUnqualified,
         message: format!(
             "This CLI version ({version}) isn't supported yet (supported: {}). Status, inbox wake and usage may not work.",
-            release.supported
+            release.supported_for(std::env::consts::OS)
         ),
     })
 }

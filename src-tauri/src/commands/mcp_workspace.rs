@@ -60,10 +60,12 @@ use super::route_to_context::{
 };
 use crate::agents::adapter;
 use crate::agents::launch_check::{LaunchWarning, LaunchWarningCode};
+use crate::commands::worktree::seat::SeatLaunch;
 use crate::domain::Principal;
 use crate::domain::SourceRepoSlug;
 use crate::install::worktree_index::{
-    is_codesense_managed_target, iter_story_records, read_record, write_record, WorktreeStoryRecord,
+    base_story_records, is_codesense_managed_target, iter_story_records, read_record, write_record,
+    SeatRecord, WorktreeStoryRecord,
 };
 use codesense_pty_core::agent_cli::AgentCli;
 use codesense_pty_core::domain::{PtySessionId, SubmitOutcome, WorkspaceKey};
@@ -150,6 +152,84 @@ async fn ensure_story_worktree(
     ctx: &ActiveContext,
     story_id: &str,
 ) -> Result<PreparedStoryWorktree, String> {
+    use crate::commands::worktree;
+
+    let StoryCheckout {
+        slug,
+        story_source_path,
+        clone_path,
+        org_root,
+        authority,
+        config,
+        branch,
+    } = resolve_story_checkout(app, ctx, story_id)?;
+    let worktree_path = worktree::render_worktree_dir(&config.worktree_dir, &clone_path, &branch)
+        .map_err(|e| format!("denied: {e}"))?;
+    // 4. Create the worktree from local refs (mirrors the FE `fetchAndCreateWorktree`;
+    //    nothing is fetched): adopt an existing local or cached `origin/` branch, or mint
+    //    a new one at the configured `default_start_point` (its cached `origin/` ref when
+    //    one exists), else at the repo's default branch (resolved only for a new branch;
+    //    refused when none resolves) — never at the clone's arbitrary HEAD. The FE also bases a STACKED story on its
+    //    `depends_on` dependency's branch; a cold orchestrator open doesn't, which is
+    //    correct for the common (non-stacked) case. Idempotent (adopts our managed
+    //    worktree). Use the RETURNED path as authoritative.
+    let created = worktree::open_story_worktree(
+        clone_path.to_string_lossy().to_string(),
+        branch.clone(),
+        worktree_path.to_string_lossy().to_string(),
+        config.default_start_point.clone(),
+    )
+    .await
+    .map_err(|e| format!("denied: worktree creation failed for story '{story_id}': {e}"))?;
+    // Materialize-safety (review r2): `fetch_and_create_worktree` in story mode
+    // ADOPTS any worktree already holding the branch WITHOUT a derived-path guard
+    // (unlike review mode). So if the branch is checked out in the user's PRIMARY
+    // clone (e.g. `branch_name: main`), it would return THAT path — and we'd then
+    // run setup + `write_record` + spawn into the primary checkout, defeating the
+    // SLW-FX-13 invariant (registration would even make the post-resolve
+    // `is_codesense_managed_target` guard pass). Refuse anything that isn't the
+    // path we confined-by-construction (mirrors review mode's `paths_equal` guard).
+    if !worktree::paths_equal(&created.worktree_path, &worktree_path.to_string_lossy()) {
+        return Err(format!(
+            "denied: branch '{branch}' for story '{story_id}' is already checked out at '{}' (not the derived worktree) — refusing to materialize into a non-derived checkout",
+            created.worktree_path
+        ));
+    }
+    let created_path = PathBuf::from(created.worktree_path);
+
+    // 5. Preserve durable ownership and receipts while marking setup pending.
+    mark_story_setup_pending(ctx, &created_path, slug, story_id, story_source_path)?;
+
+    Ok(PreparedStoryWorktree {
+        dir: created_path,
+        clone_path,
+        org_root,
+        authority,
+        config,
+    })
+}
+
+/// Where a story's worktrees come from: its source clone, the repo's worktree config and
+/// the story's branch. Shared by the story's base worktree and its seat worktrees.
+struct StoryCheckout {
+    slug: SourceRepoSlug,
+    story_source_path: PathBuf,
+    clone_path: PathBuf,
+    org_root: PathBuf,
+    authority: crate::commands::worktree::WorktreeConfigAuthority,
+    config: crate::commands::worktree::WorktreeConfig,
+    /// The story branch: its `branch` frontmatter, else the `{branch_prefix}{id}` fallback.
+    branch: String,
+}
+
+/// Resolve [`StoryCheckout`] for `story_id` (steps 1–3 of [`ensure_story_worktree`]):
+/// its frontmatter, the team's attached clone of its source repo, that repo's worktree
+/// config and the story branch.
+fn resolve_story_checkout(
+    app: &AppHandle,
+    ctx: &ActiveContext,
+    story_id: &str,
+) -> Result<StoryCheckout, String> {
     use crate::commands::worktree;
 
     // 1. Resolve the story's frontmatter (source_repo, canonical branch, source
@@ -242,49 +322,14 @@ async fn ensure_story_worktree(
         &config.branch_prefix,
         &fallback_id,
     );
-    let worktree_path = worktree::render_worktree_dir(&config.worktree_dir, &clone_path, &branch)
-        .map_err(|e| format!("denied: {e}"))?;
-    // 4. Create the worktree from local refs (mirrors the FE `fetchAndCreateWorktree`;
-    //    nothing is fetched): adopt an existing local or cached `origin/` branch, or mint
-    //    a new one at the configured `default_start_point` (its cached `origin/` ref when
-    //    one exists), else at the repo's default branch (resolved only for a new branch;
-    //    refused when none resolves) — never at the clone's arbitrary HEAD. The FE also bases a STACKED story on its
-    //    `depends_on` dependency's branch; a cold orchestrator open doesn't, which is
-    //    correct for the common (non-stacked) case. Idempotent (adopts our managed
-    //    worktree). Use the RETURNED path as authoritative.
-    let created = worktree::open_story_worktree(
-        clone_path.to_string_lossy().to_string(),
-        branch.clone(),
-        worktree_path.to_string_lossy().to_string(),
-        config.default_start_point.clone(),
-    )
-    .await
-    .map_err(|e| format!("denied: worktree creation failed for story '{story_id}': {e}"))?;
-    // Materialize-safety (review r2): `fetch_and_create_worktree` in story mode
-    // ADOPTS any worktree already holding the branch WITHOUT a derived-path guard
-    // (unlike review mode). So if the branch is checked out in the user's PRIMARY
-    // clone (e.g. `branch_name: main`), it would return THAT path — and we'd then
-    // run setup + `write_record` + spawn into the primary checkout, defeating the
-    // SLW-FX-13 invariant (registration would even make the post-resolve
-    // `is_codesense_managed_target` guard pass). Refuse anything that isn't the
-    // path we confined-by-construction (mirrors review mode's `paths_equal` guard).
-    if !worktree::paths_equal(&created.worktree_path, &worktree_path.to_string_lossy()) {
-        return Err(format!(
-            "denied: branch '{branch}' for story '{story_id}' is already checked out at '{}' (not the derived worktree) — refusing to materialize into a non-derived checkout",
-            created.worktree_path
-        ));
-    }
-    let created_path = PathBuf::from(created.worktree_path);
-
-    // 5. Preserve durable ownership and receipts while marking setup pending.
-    mark_story_setup_pending(ctx, &created_path, slug, story_id, story_source_path)?;
-
-    Ok(PreparedStoryWorktree {
-        dir: created_path,
+    Ok(StoryCheckout {
+        slug,
+        story_source_path,
         clone_path,
         org_root,
         authority,
         config,
+        branch,
     })
 }
 
@@ -561,6 +606,9 @@ pub(crate) struct LaunchHome {
     pub workspace: WorkspaceKey,
     pub descriptor: WorkspaceDescriptor,
     pub view: SessionView,
+    /// The tab's own working folder when it differs from the workspace's (a story seat
+    /// worktree); `None` runs it in the descriptor's `worktree_path`.
+    pub tab_cwd: Option<PathBuf>,
 }
 
 impl LaunchHome {
@@ -586,6 +634,7 @@ impl LaunchHome {
                 ..WorkspaceDescriptor::default()
             },
             view,
+            tab_cwd: None,
         }
     }
 }
@@ -607,6 +656,9 @@ pub(crate) struct LaunchOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum LaunchError {
     Busy,
+    /// The launch can't use its input (a seat worktree's unknown commit, a dirty re-pin);
+    /// nothing was created or changed. A targeted open answers it `invalid`.
+    Invalid(String),
     Other(String),
 }
 
@@ -629,6 +681,7 @@ impl From<LaunchError> for String {
     fn from(err: LaunchError) -> Self {
         match err {
             LaunchError::Busy => super::spawn_cap::SpawnCapError::Busy.to_string(),
+            LaunchError::Invalid(message) => format!("invalid: {message}"),
             LaunchError::Other(message) => message,
         }
     }
@@ -807,6 +860,7 @@ pub async fn launch_story_session_by(
         initial_prompt,
         StoryLaunchOptions {
             handle: None,
+            seat: None,
             org: org.map(str::to_string),
             provenance,
             view,
@@ -830,6 +884,181 @@ pub(crate) fn story_launch_record(story_id: &str, launched_by: Option<String>) -
     }
 }
 
+/// What a story launch does around its spawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StoryLaunchPlan {
+    /// Converge the story's `branch` frontmatter to the cwd's branch.
+    pub reconcile: bool,
+    /// Snapshot the story branch's work product into the launch provenance.
+    pub snapshot: bool,
+}
+
+/// The one decision between a shared-worktree launch and a seat launch. Without a seat
+/// a launch runs exactly as it always has, with the branch reconcile and the
+/// work-product snapshot. A seat launch does neither, so it never re-points the story's
+/// branch.
+pub(crate) fn story_launch_plan(seat: Option<&SeatLaunch>) -> StoryLaunchPlan {
+    let shared = seat.is_none();
+    StoryLaunchPlan {
+        reconcile: shared,
+        snapshot: shared,
+    }
+}
+
+/// Where a story session lives and runs. The workspace is always the story's, and its
+/// descriptor names the story's base worktree `story_dir`, so every tab of the story
+/// shares one workspace. A seat session's own folder `seat_dir` is its tab's cwd only:
+/// the host runs and counts the tab there and never moves the workspace to it. Returns
+/// the home and the spawn's cwd.
+pub(crate) fn story_launch_home(
+    org_slug: &str,
+    team_name: Option<&str>,
+    story_id: &str,
+    story_dir: &Path,
+    seat_dir: Option<PathBuf>,
+    view: SessionView,
+) -> (LaunchHome, PathBuf) {
+    let mut home = LaunchHome::new(org_slug, team_name, story_id, "story", story_dir, view);
+    let cwd = seat_dir.clone().unwrap_or_else(|| story_dir.to_path_buf());
+    home.tab_cwd = seat_dir;
+    (home, cwd)
+}
+
+/// Create or reuse the seat worktree `seat` of `story_id` and register it as a seat
+/// record of the story before its session spawns, so the managed-launch gate and every
+/// per-root feature (launch-time prepare, `hydrate_story`, `reverse_sync_worktree`,
+/// usage attribution) accept its folder. The caller holds the story's prepare lock and
+/// has already resolved the story's base worktree. A branch seat runs the repo's
+/// worktree.yaml setup when it is new or its setup never completed; a commit seat never
+/// does. Input the seat can't use (an unknown commit, a dirty re-pin, a seat of the other
+/// kind) is [`LaunchError::Invalid`], with nothing created or changed.
+async fn ensure_seat_worktree(
+    app: &AppHandle,
+    ctx: &ActiveContext,
+    story_id: &str,
+    seat: &SeatLaunch,
+) -> Result<PathBuf, LaunchError> {
+    use crate::commands::worktree::seat::{
+        seat_needs_setup, seat_worktree_inner, seat_worktree_path, SeatError,
+    };
+
+    let checkout = resolve_story_checkout(app, ctx, story_id)?;
+    // A folder registered to anything but this seat of this story is refused before git
+    // creates a worktree or a branch there.
+    let path = seat_worktree_path(
+        &checkout.clone_path,
+        &checkout.branch,
+        &seat.name,
+        &checkout.config.worktree_dir,
+    )
+    .map_err(|e| format!("denied: {e}"))?;
+    let existing =
+        read_record(&ctx.codesense_home, &ctx.principal(), &path).map_err(|e| e.to_string())?;
+    seat_record_fits(ctx, story_id, &path, existing.as_ref()).map_err(LaunchError::Invalid)?;
+    let outcome = {
+        let repo = checkout.clone_path.clone();
+        let branch = checkout.branch.clone();
+        // The folder whose record was just checked: rendered once, created there.
+        let path = path.clone();
+        let seat = seat.clone();
+        crate::commands::await_blocking("ensure_seat_worktree", move || {
+            Ok(seat_worktree_inner(
+                &repo,
+                &branch,
+                &seat.name,
+                &seat.worktree,
+                &path,
+            ))
+        })
+        .await?
+    }
+    .map_err(|error| match error {
+        SeatError::Invalid(reason) => LaunchError::Invalid(reason),
+        SeatError::Failed(reason) => LaunchError::Other(format!(
+            "denied: seat worktree for story '{story_id}' failed: {reason}"
+        )),
+    })?;
+    let setup = seat_needs_setup(
+        outcome.seat.kind,
+        outcome.created,
+        existing.as_ref().map(|record| record.setup_complete),
+    );
+    register_seat_record(
+        ctx,
+        &outcome.path,
+        existing,
+        outcome.seat,
+        checkout.slug,
+        story_id,
+        checkout.story_source_path,
+        !setup,
+    )?;
+    establish_story_worktree(app, ctx, &outcome.path).await?;
+    if setup {
+        let prepared = PreparedStoryWorktree {
+            dir: outcome.path.clone(),
+            clone_path: checkout.clone_path,
+            org_root: checkout.org_root,
+            authority: checkout.authority,
+            config: checkout.config,
+        };
+        run_managed_story_setup(app, ctx, &prepared, story_id).await?;
+    }
+    Ok(outcome.path)
+}
+
+/// Whether the record already at a seat folder, if any, is a seat of `story_id` (a
+/// relaunch). A base worktree or another story's folder is never taken over.
+fn seat_record_fits(
+    ctx: &ActiveContext,
+    story_id: &str,
+    path: &Path,
+    existing: Option<&WorktreeStoryRecord>,
+) -> Result<(), String> {
+    match existing {
+        Some(record)
+            if record.story_id != story_id
+                || record.org_slug != ctx.org_slug
+                || !record.is_seat() =>
+        {
+            Err(format!(
+                "{} is already registered as another worktree; remove it, or launch the seat under another name",
+                path.display()
+            ))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Write the seat record of `story_id` for the seat worktree at `path`. `existing` is the
+/// record already there, which [`seat_record_fits`] has accepted.
+#[allow(clippy::too_many_arguments)]
+fn register_seat_record(
+    ctx: &ActiveContext,
+    path: &Path,
+    existing: Option<WorktreeStoryRecord>,
+    seat: SeatRecord,
+    source_repo: SourceRepoSlug,
+    story_id: &str,
+    story_source_path: PathBuf,
+    setup_complete: bool,
+) -> Result<(), String> {
+    let mut record = match existing {
+        Some(record) => record,
+        None => WorktreeStoryRecord::new(
+            path.to_path_buf(),
+            ctx.org_slug.clone(),
+            source_repo,
+            story_id.to_string(),
+            story_source_path,
+        ),
+    };
+    record.seat = Some(seat);
+    record.setup_complete = setup_complete;
+    write_record(&ctx.codesense_home, &ctx.principal(), &record)
+        .map_err(|e| format!("denied: failed to link seat worktree for story '{story_id}': {e}"))
+}
+
 /// [`launch_story_session`] with the spawn cap's `busy` kept typed.
 pub(crate) async fn launch_story_session_typed(
     app: &AppHandle,
@@ -837,32 +1066,47 @@ pub(crate) async fn launch_story_session_typed(
     initial_prompt: Option<&str>,
     mut options: StoryLaunchOptions,
 ) -> Result<LaunchOutcome, LaunchError> {
-    // Sessions of one story (its own and its named ones) share its worktree: preparing it
-    // and converging its branch run one launch at a time per story, while the spawns run
-    // under their own handles.
+    // Sessions of one story (its own and its named ones) share its worktree unless a named
+    // one asks for its own seat worktree: preparing them and converging the story's branch
+    // run one launch at a time per story, while the spawns run under their own handles.
+    // Counted before the prepare lock is waited for, until the session has spawned: a
+    // seat cleanup holding the lock now leaves this seat alone.
+    let _seat_launch = SeatLaunchClaim::new(story_id, options.seat.as_ref());
+    let plan = story_launch_plan(options.seat.as_ref());
     let prepare = with_story_prepare_lock(story_id, async {
-        let (ctx, worktree_dir, source_repo, owning_team) =
+        let (ctx, story_dir, source_repo, owning_team) =
             resolve_hydrated_story_worktree_unlocked(app, story_id, options.org.as_deref()).await?;
+        let seat_dir = match options.seat.as_ref() {
+            Some(seat) => Some(ensure_seat_worktree(app, &ctx, story_id, seat).await?),
+            None => None,
+        };
         // SW-OR-1b: converge the story's `branch` frontmatter to the worktree's actual
         // HEAD before binding the session, so a board opening the story can trust the
         // linked doc reflects reality. Runs on every launch path (open_workspace +
-        // sprint-run) — idempotent, so a no-drift reopen is a true no-op.
-        let (reconciled, canonical_branch) = reconcile_branch_on_open(app, story_id, &worktree_dir);
-        fill_launch_work_product(&mut options.provenance, canonical_branch, |branch| {
-            snapshot_story_work_product(app, source_repo, branch, &worktree_dir)
-        })
-        .await;
-        Ok::<_, String>((ctx, worktree_dir, reconciled, owning_team))
+        // sprint-run) — idempotent, so a no-drift reopen is a true no-op. A seat launch
+        // skips it: its worktree is on the seat's branch, or detached.
+        let (reconciled, canonical_branch) = if plan.reconcile {
+            reconcile_branch_on_open(app, story_id, &story_dir)
+        } else {
+            (None, None)
+        };
+        if plan.snapshot {
+            fill_launch_work_product(&mut options.provenance, canonical_branch, |branch| {
+                snapshot_story_work_product(app, source_repo, branch, &story_dir)
+            })
+            .await;
+        }
+        Ok::<_, LaunchError>((ctx, story_dir, seat_dir, reconciled, owning_team))
     });
-    let (ctx, worktree_dir, reconciled, owning_team) = prepare.await?;
+    let (ctx, story_dir, seat_dir, reconciled, owning_team) = prepare.await?;
     // The session lives in the story's workspace — keyed by team + `story_id`,
-    // the key the frontend's story workspace has.
-    let home = LaunchHome::new(
+    // the key the frontend's story workspace has — and runs in its seat folder, if any.
+    let (home, worktree_dir) = story_launch_home(
         &ctx.org_slug,
         ctx.team_name.as_deref(),
         story_id,
-        "story",
-        &worktree_dir,
+        &story_dir,
+        seat_dir,
         options.view,
     );
     // The story's own team, where the session's inbox lives; a caller that already
@@ -927,13 +1171,185 @@ pub(crate) async fn with_story_prepare_lock<T>(
     story_id: &str,
     work: impl std::future::Future<Output = T>,
 ) -> T {
+    let _claim = story_prepare_claim(story_id).await;
+    work.await
+}
+
+/// Hold `story_id`'s prepare lock (see [`with_story_prepare_lock`]) while the claim lives.
+async fn story_prepare_claim(story_id: &str) -> super::workspace_open::OpenClaim {
     static PREPARING: std::sync::OnceLock<super::workspace_open::OpenClaims> =
         std::sync::OnceLock::new();
-    let _claim = PREPARING
+    PREPARING
         .get_or_init(Default::default)
         .claim(story_id)
-        .await;
-    work.await
+        .await
+}
+
+type SeatLaunchCounts = std::sync::Mutex<std::collections::BTreeMap<(String, String), usize>>;
+
+/// Seat launches under way, counted by story id and seat name, from the start of
+/// [`launch_story_session_typed`] until its session has spawned or the launch failed.
+fn seat_launches() -> &'static SeatLaunchCounts {
+    static LAUNCHES: std::sync::OnceLock<SeatLaunchCounts> = std::sync::OnceLock::new();
+    LAUNCHES.get_or_init(Default::default)
+}
+
+/// A seat launch's count in [`seat_launches`], given back when it is dropped. A launch
+/// without a seat counts nothing.
+pub(crate) struct SeatLaunchClaim(Option<(String, String)>);
+
+impl SeatLaunchClaim {
+    pub(crate) fn new(story_id: &str, seat: Option<&SeatLaunch>) -> Self {
+        let key = seat.map(|seat| (story_id.to_string(), seat.name.clone()));
+        if let Some(key) = &key {
+            let mut launches = seat_launches().lock().unwrap_or_else(|e| e.into_inner());
+            *launches.entry(key.clone()).or_default() += 1;
+        }
+        Self(key)
+    }
+}
+
+impl Drop for SeatLaunchClaim {
+    fn drop(&mut self) {
+        let Some(key) = self.0.take() else {
+            return;
+        };
+        let mut launches = seat_launches().lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = launches.get_mut(&key) {
+            *count -= 1;
+            if *count == 0 {
+                launches.remove(&key);
+            }
+        }
+    }
+}
+
+/// Whether a launch of the seat `name` of `story_id` is under way.
+pub(crate) fn seat_launch_in_flight(story_id: &str, name: &str) -> bool {
+    seat_launches()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains_key(&(story_id.to_string(), name.to_string()))
+}
+
+/// The records of `story_id` a seat cleanup looks at: its seat worktrees (only the seat
+/// `only`, when given), without one whose launch `in_flight` says is under way. A base
+/// worktree is never one of them.
+pub(crate) fn seats_to_reap(
+    records: Vec<WorktreeStoryRecord>,
+    story_id: &str,
+    only: Option<&str>,
+    in_flight: impl Fn(&str) -> bool,
+) -> Vec<WorktreeStoryRecord> {
+    records
+        .into_iter()
+        .filter(|record| record.story_id == story_id)
+        .filter(|record| {
+            record.seat.as_ref().is_some_and(|seat: &SeatRecord| {
+                only.is_none_or(|name| name == seat.name) && !in_flight(&seat.name)
+            })
+        })
+        .collect()
+}
+
+/// How long a seat cleanup waits: for the sessions a close ended to exit before it keeps
+/// their seat worktree as `live`, and for the story's prepare lock (`None`: as long as it
+/// takes). A seat whose lock isn't free in time is left to the next sweep.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SeatWaits {
+    pub exit: Duration,
+    pub lock: Option<Duration>,
+}
+
+/// A close's waits: a launch can hold the story's lock through its setup, and a close
+/// doesn't wait for that.
+pub(crate) const SEAT_CLOSE_WAITS: SeatWaits = SeatWaits {
+    exit: Duration::from_secs(5),
+    lock: Some(Duration::from_secs(2)),
+};
+
+/// Clean up the seat worktrees of `story_id` (only the seat `only`, when given) with
+/// [`reap_seat_worktree`](crate::commands::worktree::reap_seat_worktree). Every cleanup
+/// trigger comes here: a seat tab's close, a workspace close and the sweep after a story
+/// launch. Returns the seat worktrees removed.
+pub(crate) async fn reap_story_seats(
+    app: &AppHandle,
+    story_id: &str,
+    only: Option<&str>,
+    waits: SeatWaits,
+) -> Vec<PathBuf> {
+    let ctx: Option<crate::content_engine::ResolverContext> = app
+        .try_state::<std::sync::Arc<crate::content_engine::sync::WaveCoordinator>>()
+        .and_then(|coord| coord.active_ctx());
+    let Some(ctx) = ctx else {
+        return Vec::new();
+    };
+    let probe = crate::commands::worktree::AppSeatProbe(app);
+    reap_seats_of(
+        &probe,
+        &ctx.codesense_home,
+        &ctx.principal(),
+        story_id,
+        only,
+        waits,
+    )
+    .await
+}
+
+/// [`reap_story_seats`] over the records at `home`. A story with no seat to clean up (no
+/// seat record by that name) returns at once, without the prepare lock. Otherwise the
+/// seats run under the story's prepare lock, so no launch prepares the story meanwhile,
+/// read again once it is held; a seat whose launch is under way is skipped.
+pub(crate) async fn reap_seats_of(
+    probe: &impl crate::commands::worktree::SeatProbe,
+    home: &Path,
+    principal: &Principal,
+    story_id: &str,
+    only: Option<&str>,
+    waits: SeatWaits,
+) -> Vec<PathBuf> {
+    use crate::commands::worktree::{reap_seat_worktree, SeatReap};
+    let seats = || {
+        let records = crate::install::worktree_index::find_by_story_id(home, principal, story_id)
+            .unwrap_or_default();
+        seats_to_reap(records, story_id, only, |name| {
+            seat_launch_in_flight(story_id, name)
+        })
+    };
+    if matches!(seats()[..], []) {
+        return Vec::new();
+    }
+    let claim = story_prepare_claim(story_id);
+    let _claim = match waits.lock {
+        None => claim.await,
+        Some(wait) => match tokio::time::timeout(wait, claim).await {
+            Ok(claim) => claim,
+            Err(_) => return Vec::new(),
+        },
+    };
+    let mut removed = Vec::new();
+    for record in seats() {
+        let reap = reap_seat_worktree(probe, home, principal, &record, waits.exit).await;
+        if reap == Some(SeatReap::Reaped) {
+            removed.push(record.code_repo_path);
+        }
+    }
+    removed
+}
+
+/// Start the sweep of `story_id`'s seat worktrees ([`reap_story_seats`]) in the
+/// background, after a story launch: it covers seats whose sessions crashed or exited
+/// without a close. Never awaited by the launch.
+pub(crate) fn spawn_seat_sweep(app: &AppHandle, story_id: &str) {
+    let (app, story_id) = (app.clone(), story_id.to_string());
+    tauri::async_runtime::spawn(async move {
+        let waits = SeatWaits {
+            exit: Duration::ZERO,
+            lock: None,
+        };
+        let removed = reap_story_seats(&app, &story_id, None, waits).await;
+        log::debug!("seat sweep for {story_id} removed {removed:?}");
+    });
 }
 
 /// [`resolve_hydrated_story_worktree`] without the per-story lock; the caller holds it.
@@ -973,9 +1389,7 @@ async fn resolve_hydrated_story_worktree_unlocked(
 
     // A durable setup-complete registration is ready regardless of historical
     // sync status. Incomplete setup is retried without hydrating context.
-    let existing = records
-        .iter()
-        .find(|r| r.story_id == story_id && r.org_slug == ctx.org_slug);
+    let existing = story_base_record(&records, story_id, &ctx.org_slug);
     let worktree_dir = match existing {
         Some(rec) if rec.setup_complete => {
             let dir = rec.code_repo_path.clone();
@@ -1215,6 +1629,17 @@ fn holds_story(found: &Result<StoryPathResolution, String>, story_id: &str) -> b
     }
 }
 
+/// The record of `story_id`'s base worktree in `org_slug`: never one of its seat
+/// worktrees, so the story's own session and its shared named ones always land in the
+/// base worktree.
+fn story_base_record<'a>(
+    records: &'a [WorktreeStoryRecord],
+    story_id: &str,
+    org_slug: &str,
+) -> Option<&'a WorktreeStoryRecord> {
+    base_story_records(records).find(|r| r.story_id == story_id && r.org_slug == org_slug)
+}
+
 fn story_worktree_source_repo(
     records: &[WorktreeStoryRecord],
     story_id: &str,
@@ -1248,6 +1673,8 @@ pub(crate) struct StoryLaunchOptions {
     /// The session's handle: `None` is the story id; a named session beside it in the
     /// same workspace passes `<storyId>#<name>`.
     pub handle: Option<String>,
+    /// The seat worktree a named session runs in; `None` is the story's shared worktree.
+    pub seat: Option<SeatLaunch>,
     /// The caller's hint for the story's org; see [`resolve_story_owner`].
     pub org: Option<String>,
     pub provenance: Option<RunProvenance>,
@@ -2147,6 +2574,7 @@ fn agent_open_tab(
         workspace: home.workspace,
         session: PtySessionId::new(session_id.to_string()),
         descriptor: Some(home.descriptor),
+        cwd: home.tab_cwd,
         name,
         role: None,
         tags: Tags::from([
@@ -2296,6 +2724,252 @@ mod tests {
             "the story open assumes a `main` branch"
         );
         assert!(body.contains("config.default_start_point.clone(),"));
+    }
+
+    /// A seat cleanup looks at the story's seat worktrees only (the named seat only, when
+    /// one is given) and never at a seat whose launch is under way: a sweep racing a
+    /// launch of the same seat leaves the new seat alone, and finds it once the launch
+    /// is done.
+    #[test]
+    fn a_seat_cleanup_skips_the_base_worktree_and_a_seat_being_launched() {
+        use crate::commands::worktree::seat::SeatWorktreeParam;
+        use crate::install::worktree_index::SeatKind;
+        let story = "SEAT-REAP-1";
+        let record = |path: &str, story_id: &str, seat: Option<&str>| {
+            let mut record = WorktreeStoryRecord::new(
+                path,
+                "acme",
+                SourceRepoSlug::new("acme", "app").unwrap(),
+                story_id,
+                "/ctx/team/content/stories/story.md",
+            );
+            record.seat = seat.map(|name| SeatRecord {
+                name: name.into(),
+                kind: SeatKind::Branch,
+                pinned_commit: None,
+                kept: None,
+            });
+            record
+        };
+        let records = || {
+            vec![
+                record("/wt/app", story, None),
+                record("/wt/app-seat-dev", story, Some("dev")),
+                record("/wt/app-seat-qa", story, Some("qa")),
+                record("/wt/other-seat-dev", "SEAT-REAP-2", Some("dev")),
+            ]
+        };
+        let reaped = |only: Option<&str>| -> Vec<PathBuf> {
+            seats_to_reap(records(), story, only, |name| {
+                seat_launch_in_flight(story, name)
+            })
+            .into_iter()
+            .map(|record| record.code_repo_path)
+            .collect()
+        };
+        let (dev, qa) = (
+            PathBuf::from("/wt/app-seat-dev"),
+            PathBuf::from("/wt/app-seat-qa"),
+        );
+        assert_eq!(reaped(None), [dev.clone(), qa.clone()]);
+        assert_eq!(reaped(Some("qa")), [qa.clone()]);
+        let seat = SeatLaunch {
+            name: "dev".into(),
+            worktree: SeatWorktreeParam::Branch,
+        };
+        let launch = SeatLaunchClaim::new(story, Some(&seat));
+        let again = SeatLaunchClaim::new(story, Some(&seat));
+        assert_eq!(reaped(None), [qa.clone()]);
+        assert!(reaped(Some("dev")).is_empty());
+        assert!(!seat_launch_in_flight("SEAT-REAP-2", "dev"));
+        drop(launch);
+        assert!(
+            seat_launch_in_flight(story, "dev"),
+            "the second launch still runs"
+        );
+        drop(again);
+        assert_eq!(reaped(None), [dev, qa]);
+        // A launch without a seat counts nothing.
+        let _shared = SeatLaunchClaim::new(story, None);
+        assert!(!seat_launch_in_flight(story, ""));
+    }
+
+    /// A close of a tab with no seat worktree never waits for the story's prepare lock
+    /// (a launch can hold it through a long setup); a real seat waits for it only so
+    /// long, then is left to the next sweep; with the lock free, the seat is cleaned up.
+    #[tokio::test]
+    async fn a_seat_cleanup_waits_for_the_prepare_lock_only_for_a_seat_and_only_so_long() {
+        use crate::commands::worktree::fake_probe::FakeProbe;
+        use crate::install::worktree_index::SeatKind;
+        let home = tempfile::tempdir().unwrap();
+        let principal = Principal::from(42);
+        let story = "SEAT-LOCK-1";
+        let path = home.path().join("app-seat-dev");
+        let mut record = WorktreeStoryRecord::new(
+            &path,
+            "acme",
+            SourceRepoSlug::new("acme", "app").unwrap(),
+            story,
+            home.path().join("team/content/stories/story.md"),
+        );
+        record.seat = Some(SeatRecord {
+            name: "dev".into(),
+            kind: SeatKind::Branch,
+            pinned_commit: None,
+            kept: None,
+        });
+        write_record(home.path(), &principal, &record).unwrap();
+        let waits = |lock: Option<Duration>| SeatWaits {
+            exit: Duration::ZERO,
+            lock,
+        };
+        let launch = story_prepare_claim(story).await;
+        // No seat by that name: back at once, though the lock is held and never given up.
+        let probe = FakeProbe::passing();
+        let shared = tokio::time::timeout(
+            Duration::from_secs(5),
+            reap_seats_of(
+                &probe,
+                home.path(),
+                &principal,
+                story,
+                Some("reviewer"),
+                waits(None),
+            ),
+        )
+        .await
+        .expect("a close of a tab without a seat worktree never waits for the lock");
+        assert!(shared.is_empty());
+        // The seat: its lock isn't free in time, so it's left alone.
+        let later = reap_seats_of(
+            &probe,
+            home.path(),
+            &principal,
+            story,
+            Some("dev"),
+            waits(Some(Duration::from_millis(50))),
+        )
+        .await;
+        assert!(later.is_empty());
+        assert!(probe.asked().is_empty(), "{:?}", probe.asked());
+        // Once the launch is done, it is cleaned up.
+        drop(launch);
+        let removed = reap_seats_of(
+            &probe,
+            home.path(),
+            &principal,
+            story,
+            Some("dev"),
+            waits(Some(Duration::from_millis(50))),
+        )
+        .await;
+        assert_eq!(removed, [path]);
+    }
+
+    /// A seat launch is counted before it waits for the story's prepare lock, which a
+    /// cleanup holds while it looks at the story's seats, and stays counted until the
+    /// spawn returns.
+    #[test]
+    fn a_seat_launch_is_counted_before_it_waits_for_the_prepare_lock() {
+        let source = include_str!("mcp_workspace.rs");
+        let start = source
+            .find("pub(crate) async fn launch_story_session_typed(")
+            .unwrap();
+        let body = &source[start..start + source[start..].find("\n}\n").unwrap()];
+        let claim = body
+            .find("let _seat_launch = SeatLaunchClaim::new(")
+            .unwrap();
+        assert!(claim < body.find("with_story_prepare_lock(").unwrap());
+        assert!(claim < body.find("launch_managed_dir_session_typed(").unwrap());
+    }
+
+    #[test]
+    fn a_seat_record_never_takes_over_another_worktree() {
+        let home = tempfile::tempdir().unwrap();
+        let ctx = ActiveContext::for_team(home.path().into(), 42, "acme".into(), "team".into());
+        let root = home.path().join("seat-worktree");
+        std::fs::create_dir_all(&root).unwrap();
+        let slug = SourceRepoSlug::new("acme", "code").unwrap();
+        let story_path = home.path().join("team/content/X-1.md");
+        let seat = |pinned: &str| SeatRecord {
+            name: "review".into(),
+            kind: crate::install::worktree_index::SeatKind::Commit,
+            pinned_commit: Some(pinned.into()),
+            kept: None,
+        };
+        let read = || read_record(home.path(), &ctx.principal(), &root).unwrap();
+
+        // A new seat is registered complete (a commit seat runs no setup).
+        register_seat_record(
+            &ctx,
+            &root,
+            None,
+            seat("a1"),
+            slug.clone(),
+            "X-1",
+            story_path.clone(),
+            true,
+        )
+        .unwrap();
+        let first = read().unwrap();
+        assert_eq!(first.seat, Some(seat("a1")));
+        assert!(first.setup_complete);
+        // A relaunch of the same seat updates it in place.
+        register_seat_record(
+            &ctx,
+            &root,
+            Some(first),
+            seat("b2"),
+            slug.clone(),
+            "X-1",
+            story_path.clone(),
+            true,
+        )
+        .unwrap();
+        assert_eq!(read().unwrap().seat, Some(seat("b2")));
+
+        // A relaunch of the same seat fits; another story's record, or a base worktree, at
+        // that folder doesn't (checked before git creates anything there).
+        let seat_rec = read().unwrap();
+        assert!(seat_record_fits(&ctx, "X-1", &root, Some(&seat_rec)).is_ok());
+        assert!(seat_record_fits(&ctx, "X-1", &root, None).is_ok());
+        let other = WorktreeStoryRecord::new(&root, "acme", slug.clone(), "X-2", &story_path);
+        let base = WorktreeStoryRecord::new(&root, "acme", slug.clone(), "X-1", &story_path);
+        let mut elsewhere = seat_rec.clone();
+        elsewhere.org_slug = "other".into();
+        for existing in [other, base, elsewhere] {
+            assert!(seat_record_fits(&ctx, "X-1", &root, Some(&existing)).is_err());
+        }
+    }
+
+    #[test]
+    fn a_seat_session_runs_in_its_folder_inside_the_story_workspace() {
+        let (base, seat) = (PathBuf::from("/wt/app"), PathBuf::from("/wt/app-seat-dev"));
+        let view = SessionView::Tab { focus: false };
+        let (shared, shared_cwd) =
+            story_launch_home("acme", Some("team"), "X-1", &base, None, view);
+        let (seated, seated_cwd) =
+            story_launch_home("acme", Some("team"), "X-1", &base, Some(seat.clone()), view);
+        // One workspace, its descriptor on the base worktree, for both sessions.
+        assert_eq!(seated.workspace, shared.workspace);
+        assert_eq!(seated.descriptor, shared.descriptor);
+        assert_eq!(
+            seated.descriptor.worktree_path.as_deref(),
+            Some(base.as_path())
+        );
+        // Only the seat tab carries its own folder, and spawns there.
+        assert_eq!((shared.tab_cwd.as_ref(), shared_cwd), (None, base.clone()));
+        assert_eq!(
+            (seated.tab_cwd.as_ref(), seated_cwd.clone()),
+            (Some(&seat), seat.clone())
+        );
+        let tab = agent_open_tab("X-1#dev", "sess-1", seated, None);
+        assert_eq!(tab.cwd, Some(seat));
+        assert_eq!(
+            tab.descriptor.and_then(|d| d.worktree_path),
+            Some(base.clone())
+        );
+        assert_eq!(agent_open_tab("X-1", "sess-2", shared, None).cwd, None);
     }
 
     #[test]
@@ -3369,6 +4043,25 @@ mod tests {
     }
 
     #[test]
+    fn a_story_launch_resolves_its_base_worktree_never_a_seat() {
+        let mut seat = record("SW-1", "org", "/wt-seat-dev");
+        seat.seat = Some(SeatRecord {
+            name: "dev".into(),
+            kind: crate::install::worktree_index::SeatKind::Branch,
+            pinned_commit: None,
+            kept: None,
+        });
+        let base = record("SW-1", "org", "/wt");
+        // The seat is listed first: a plain find-first would launch the lead into it.
+        let records = vec![seat.clone(), base.clone()];
+        assert_eq!(story_base_record(&records, "SW-1", "org"), Some(&base));
+        // A story with only a seat record has no base worktree yet: it is created, not
+        // borrowed from the seat.
+        assert_eq!(story_base_record(&[seat], "SW-1", "org"), None);
+        assert_eq!(story_base_record(&records, "SW-1", "other"), None);
+    }
+
+    #[test]
     fn launch_repository_identity_preserves_provider_and_host() {
         let mut gitlab = record("SW-OR-17", "org", "/wt");
         gitlab.source_repo =
@@ -3850,6 +4543,7 @@ mod managed_launch_dir_tests {
     }
 }
 
+#[cfg(cap_git_ai)]
 #[cfg(test)]
 pub(crate) mod attribution_entry_tests {
     //! SV-CDE-7: the MCP / `open_workspace` launch's scope step switches git-ai capture on

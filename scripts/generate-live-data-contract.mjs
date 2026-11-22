@@ -6,12 +6,14 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { runBuildJob } from "./lib/build-queue.mjs";
 import {
-  REFRESH_COMMAND,
+  REFRESH_ROUTE,
   allowStaleExport as switchedOn,
   diskGate,
   driftInheritedFromMain,
   exportsUntouchedSinceMain,
+  frozenExport,
   inheritedNotice,
+  strictExports,
 } from "./lib/sealed-export.mjs";
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const output = "codesense-docs/getting-started/content/generated/live-data-contract.json";
@@ -70,9 +72,14 @@ export function sealContract(root = ROOT) {
     ) + "\n",
   );
 }
-export function checkContract(root = ROOT, { allowStaleExport = false, warn = console.warn } = {}) {
-  const message = (what) =>
-    `Stale generated file: ${output} (${what}); refresh during the next docs wave with ${REFRESH_COMMAND}`;
+// Write mode (`check: false`, `pnpm gen:docs`) warns on a stale seal: the contract is cargo-written
+// and PRs leave it alone. It throws only when `strict` (CS_STRICT_EXPORTS=1, the refresh run). Check
+// mode throws unless the PR gate tolerates the drift.
+export function checkContract(
+  root = ROOT,
+  { check = true, allowStaleExport = false, strict = strictExports(), warn = console.warn } = {},
+) {
+  const message = (what) => `Stale generated file: ${output} (${what}); ${REFRESH_ROUTE}`;
   const missing = !existsSync(resolve(root, manifest)) || !existsSync(resolve(root, output));
   const stored = missing ? null : JSON.parse(readFileSync(resolve(root, manifest), "utf8"));
   const payloadDrift = missing || stored.outputSha256 !== hash(readFileSync(resolve(root, output)));
@@ -89,9 +96,12 @@ export function checkContract(root = ROOT, { allowStaleExport = false, warn = co
     : [...new Set([...Object.keys(stored.inputs), ...Object.keys(inputs)])].filter(
         (path) => stored.inputs[path] !== inputs[path],
       );
+  if (!check && strict) throw new Error(message(what));
+  if (!check) return warn(`NOTICE: ${message(what)}`);
   const untouched =
     allowStaleExport &&
-    (exportsUntouchedSinceMain(root, [manifest, output]) || driftInheritedFromMain(root, drifted));
+    (exportsUntouchedSinceMain(root, frozenExport(output.slice(0, -".json".length))) ||
+      driftInheritedFromMain(root, drifted));
   if (untouched)
     return warn(payloadDrift ? inheritedNotice(root, message(what)) : `NOTICE: ${message(what)}`);
   throw new Error(message(what));
@@ -131,5 +141,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     if (result.status !== 0) process.exitCode = result.status ?? 1;
     else sealContract();
   } else if (process.argv.includes("--export")) exportContract();
-  else checkContract(ROOT, { allowStaleExport: switchedOn() });
+  else
+    checkContract(ROOT, {
+      check: process.argv.includes("--check"),
+      allowStaleExport: switchedOn(),
+    });
 }

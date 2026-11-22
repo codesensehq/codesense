@@ -107,6 +107,85 @@ export function isMac(): boolean {
   );
 }
 
+/** The four modifier flags of a keyboard or mouse event; a flag left out counts as not held. */
+export type ModifierState = Partial<
+  Pick<KeyboardEvent | MouseEvent, "metaKey" | "ctrlKey" | "altKey" | "shiftKey">
+>;
+
+/** Meta or Ctrl: the `CmdOrCtrl` modifier of a keyboard shortcut. */
+export function hasMod(e: ModifierState): boolean {
+  return !!(e.metaKey || e.ctrlKey);
+}
+
+/** The Meta key itself: a macOS Cmd feature that stays Cmd-only. */
+export function hasCmd(e: ModifierState): boolean {
+  return !!e.metaKey;
+}
+
+/** Meta on macOS, Ctrl elsewhere: the platform modifier for mouse gestures such as Cmd+click. */
+export function hasPlatformMod(e: ModifierState): boolean {
+  return !!(isMac() ? e.metaKey : e.ctrlKey);
+}
+
+/** Any of Meta, Ctrl, Alt or Shift is held. */
+export function hasAnyModifier(e: ModifierState): boolean {
+  return !!(e.metaKey || e.ctrlKey || e.altKey || e.shiftKey);
+}
+
+/** Any of Meta, Ctrl or Alt is held (Shift alone does not make a command chord). */
+export function hasCommandModifier(e: ModifierState): boolean {
+  return !!(e.metaKey || e.ctrlKey || e.altKey);
+}
+
+/**
+ * The four modifier flags out of a posted message (a frame's key data), or `null` when
+ * any of them is not a boolean.
+ */
+export function modifiersFrom(
+  data: Record<string, unknown>,
+): Pick<KeyboardEvent, "metaKey" | "ctrlKey" | "altKey" | "shiftKey"> | null {
+  const { metaKey, ctrlKey, altKey, shiftKey } = data;
+  if (
+    typeof metaKey !== "boolean" ||
+    typeof ctrlKey !== "boolean" ||
+    typeof altKey !== "boolean" ||
+    typeof shiftKey !== "boolean"
+  )
+    return null;
+  return { metaKey, ctrlKey, altKey, shiftKey };
+}
+
+/**
+ * A keydown built from `init` whose `getModifierState("AltGraph")` answers `init.modifierAltGraph`;
+ * every other name answers as the event itself does. happy-dom ignores `modifierAltGraph` and
+ * answers AltGraph with the Alt key's state, so without this a rebuilt Ctrl+Alt key would look
+ * like AltGr in tests and not in a webview.
+ */
+export function keydownEvent(init: KeyboardEventInit): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", init);
+  const native = event.getModifierState.bind(event);
+  const altGraph = init.modifierAltGraph === true;
+  Object.defineProperty(event, "getModifierState", {
+    value: (name: string) => (name === "AltGraph" ? altGraph : native(name)),
+  });
+  return event;
+}
+
+/** Whether `key` is a Latin letter; a sign or a letter of another script is not. */
+export function isLatinLetter(key: string): boolean {
+  return /^\p{Script=Latin}$/u.test(key);
+}
+
+/**
+ * Whether `e` types a letter that is not Latin on the physical key `code` (a Cyrillic or Greek
+ * layout's letter on W's place). A Latin letter or a sign there is that layout's own key, never
+ * the key `code` names on a QWERTY board.
+ */
+export function isNonLatinLetterOn(e: { key?: string; code?: string }, code: string): boolean {
+  const key = typeof e.key === "string" ? e.key.toLowerCase() : "";
+  return e.code === code && /^\p{L}$/u.test(key) && !isLatinLetter(key);
+}
+
 /** Parse a canonical keystroke string into its parts. Throws on invalid input. */
 export function parseKeystroke(str: string): KeystrokeParts {
   const segments = str.split("+").map((s) => s.trim());
@@ -154,20 +233,50 @@ export function formatKeystroke(parts: KeystrokeParts): string {
 export function formatKeystrokeDisplay(str: string): string {
   if (!str) return "";
   const parts = parseKeystroke(str);
-  const key = displayKey(parts.key);
+  return formatModifiersDisplay(parts) + displayKey(parts.key);
+}
 
-  if (isMac()) {
-    const mods = [parts.cmdOrCtrl ? "⌘" : "", parts.shift ? "⇧" : "", parts.alt ? "⌥" : ""].join(
-      "",
-    );
-    return mods + key;
-  }
+/**
+ * The modifiers of a chord, ready to prefix its key: `⌘⇧` on macOS,
+ * `Ctrl+Shift+` elsewhere; `""` when none is held.
+ */
+export function formatModifiersDisplay(mods: Omit<KeystrokeParts, "key">): string {
+  if (isMac()) return `${mods.cmdOrCtrl ? "⌘" : ""}${mods.shift ? "⇧" : ""}${mods.alt ? "⌥" : ""}`;
+  const names: string[] = [];
+  if (mods.cmdOrCtrl) names.push("Ctrl");
+  if (mods.shift) names.push("Shift");
+  if (mods.alt) names.push("Alt");
+  return names.map((n) => `${n}+`).join("");
+}
 
-  const mods: string[] = [];
-  if (parts.cmdOrCtrl) mods.push("Ctrl");
-  if (parts.shift) mods.push("Shift");
-  if (parts.alt) mods.push("Alt");
-  return [...mods, key].join("+");
+/**
+ * Render a chord held with the Control key itself, for a handler that reads
+ * `e.ctrlKey` on every platform (`⌃G` on macOS, `Ctrl+G` elsewhere). Display
+ * only: `str` is a canonical keystroke without `CmdOrCtrl` (`"G"`,
+ * `"Shift+Tab"`), and no binding takes a Control modifier.
+ */
+export function formatControlDisplay(str: string): string {
+  if (!str) return "";
+  const parts = parseKeystroke(str);
+  const control = isMac() ? "⌃" : "Ctrl+";
+  return control + formatModifiersDisplay({ ...parts, cmdOrCtrl: false }) + displayKey(parts.key);
+}
+
+/**
+ * A hint for a key only the Meta key serves (`hasCmd`, `isCmdW`): the chord on
+ * macOS, and `""` elsewhere, where Ctrl would do nothing and no hint shows.
+ */
+export function formatMetaOnlyDisplay(str: string): string {
+  return isMac() ? formatKeystrokeDisplay(str) : "";
+}
+
+/** A modifier a click hint names. */
+export type ClickModifier = "CmdOrCtrl" | "Shift" | "Alt";
+
+/** A modifier+click gesture for a hint: `⌥-click` on macOS, `Alt+click` elsewhere. */
+export function formatModifierClick(mod: ClickModifier): string {
+  if (isMac()) return `${{ CmdOrCtrl: "⌘", Shift: "⇧", Alt: "⌥" }[mod]}-click`;
+  return `${mod === "CmdOrCtrl" ? "Ctrl" : mod}+click`;
 }
 
 /**
@@ -240,12 +349,14 @@ export function matchesKeystroke(
   } catch {
     return false;
   }
+  // Off macOS, AltGr reports as Ctrl+Alt while it types a character: never a shortcut.
+  if (!isMac() && event.getModifierState?.("AltGraph")) return false;
   // `CmdOrCtrl` matches either Meta or Ctrl — Tauri / Electron's
   // `CommandOrControl` accelerator convention. A strict per-platform
   // check via `isMac()` breaks under Playwright (Desktop Chrome's UA
   // reports `Win32` regardless of host OS) and is also user-hostile
   // for users on remapped keyboards.
-  const actualCmdOrCtrl = event.metaKey || event.ctrlKey;
+  const actualCmdOrCtrl = hasMod(event);
   if (actualCmdOrCtrl !== expected.cmdOrCtrl) return false;
   if (options.macCmdOnly && expected.cmdOrCtrl && isMac() && (!event.metaKey || event.ctrlKey))
     return false;

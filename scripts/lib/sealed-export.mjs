@@ -1,16 +1,85 @@
 // SPDX-License-Identifier: MIT
-// Shared by the two sealed Cargo exports (MCP reference, live-data contract).
+// Shared by the cargo-written exports (MCP reference, live-data contract, model schemas fixture).
 import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+const GENERATED = "codesense-docs/getting-started/content/generated";
+// The one list of cargo-written exports, for every reader. PRs leave these alone and maintainers
+// refresh them; the files Node renders from them (mcp-tools.json, generated/schemas/*.schema.json,
+// the routine-yml.html field rows, the html pages) stay editable in a PR.
+export const FROZEN_EXPORTS = Object.freeze([
+  `${GENERATED}/live-data-contract.json`,
+  `${GENERATED}/live-data-contract.inputs.json`,
+  `${GENERATED}/mcp-tools.default.json`,
+  `${GENERATED}/mcp-tools.dashboard-publish.json`,
+  `${GENERATED}/mcp-tools.inputs.json`,
+  "src-tauri/src/docs_schemas.generated.json",
+]);
+// One export's frozen files: those named `<prefix>.*` or `<prefix>` itself.
+export const frozenExport = (prefix) =>
+  FROZEN_EXPORTS.filter((path) => path === prefix || path.startsWith(`${prefix}.`));
 
 // `gen:docs:check:pr` sets the env var: the PR gate tolerates input-only and inherited drift,
 // whether a PR left the exports alone or re-exported before main moved inputs it did not touch.
-// Strict `gen:docs:check` (the wave) leaves it unset.
+// Strict `gen:docs:check` (the refresh check) leaves it unset.
 export const allowStaleExport = (argv = process.argv, env = process.env) =>
   argv.includes("--allow-stale-export") || env.DOCS_ALLOW_STALE_EXPORT === "1";
 
-// The refresh command shown to the user. A template literal stays on the `=` line at any
-// length, so a longer or shorter command keeps the same formatting.
-export const REFRESH_COMMAND = `pnpm docs:refresh-mcp`;
+// The export pins (the Rust, Vitest and Node tests that compare a committed export with its
+// source) compare strictly only with CS_STRICT_EXPORTS=1. PRs leave the cargo-written exports alone,
+// so without it a stale export is a notice. The regenerate run and a nightly probe will set it;
+// nothing in CI sets it yet.
+export const strictExports = (env = process.env) => env.CS_STRICT_EXPORTS === "1";
+
+// The text a drift added to `paths`: the lines added since the commit that last wrote `exportFile`
+// (the working tree included), and the whole of a path new since then. Without that history (no
+// git, a shallow clone, the export never committed) each whole file counts.
+export function addedSince(root, exportFile, paths) {
+  const read = (path) =>
+    existsSync(resolve(root, path)) ? [readFileSync(resolve(root, path), "utf8")] : [];
+  try {
+    const commit = git(root, ["log", "-1", "--format=%H", "--", exportFile]).toString().trim();
+    if (!commit) return paths.flatMap(read);
+    const tracked = new Set(
+      git(root, ["ls-tree", "-r", "--name-only", commit, "--", ...paths])
+        .toString()
+        .split("\n")
+        .filter(Boolean),
+    );
+    const diff = tracked.size
+      ? git(root, ["diff", "-U0", "--no-color", "--no-ext-diff", commit, "--", ...tracked])
+      : "";
+    const added = diff
+      .toString()
+      .split("\n")
+      .filter((line) => line.startsWith("+") && !line.startsWith("+++"))
+      .map((line) => line.slice(1));
+    return [added.join("\n"), ...paths.filter((path) => !tracked.has(path)).flatMap(read)];
+  } catch {
+    return paths.flatMap(read);
+  }
+}
+
+// What drifted sources can explain: `explains(value)` is whether any of the texts (read once, on the
+// first call) names `value`, or its snake_case form (a serde field), as a whole word.
+export function namesIn(readTexts) {
+  let text;
+  const snake = (name) => name.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+  const escape = (name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return (value) => {
+    if (typeof value !== "string" || !value) return false;
+    text ??= readTexts().join("\n");
+    return [value, snake(value)].some((name) =>
+      new RegExp(`(?<![\\w])${escape(name)}(?![\\w])`).test(text),
+    );
+  };
+}
+
+// What a stale export message tells the reader. PRs never re-export the cargo-written files;
+// maintainers refresh them in a pull request of their own (README.md names the route). A template
+// literal stays on the `=` line at any length, so a longer or shorter text keeps the same formatting.
+export const REFRESH_ROUTE = `leave generated exports out of your PR; maintainers refresh them (README.md, "Regenerating exports")`;
 
 const DEFAULT_MIN_FREE_GIB = 25;
 const HARD_FLOOR_GIB = 20;
@@ -48,6 +117,12 @@ export function diskGate(root, env = process.env) {
 const git = (root, args) =>
   execFileSync("git", args, { cwd: root, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 28 });
 
+// What "since main" means. In a merge group, main has not yet caught up with the entries queued
+// ahead of this one, so the group commit's first parent stands for main: an earlier entry's input
+// change is inherited, not this entry's.
+export const driftBase = (env = process.env) =>
+  env.GITHUB_EVENT_NAME === "merge_group" ? "HEAD^1" : "origin/main";
+
 // The gate may only tolerate drift when this PR left every tracked export file (seal, payloads,
 // manifest) byte-identical to its merge-base with origin/main (absent at both counts as
 // identical). A PR that edits an export must pass the strict check, and drift then present is
@@ -55,21 +130,21 @@ const git = (root, args) =>
 // committed changes since the merge-base (`origin/main...HEAD` errors without one), then the
 // working tree against HEAD. Any git failure, a missing origin/main or a merge-base outside a
 // shallow clone's history ⇒ false (strict). Never fetches.
-export function exportsUntouchedSinceMain(root, exportFiles) {
+export function exportsUntouchedSinceMain(root, exportFiles, env = process.env) {
   try {
-    git(root, ["diff", "--quiet", "origin/main...HEAD", "--", ...exportFiles]);
+    git(root, ["diff", "--quiet", `${driftBase(env)}...HEAD`, "--", ...exportFiles]);
     return git(root, ["status", "--porcelain", "--ignored", "--", ...exportFiles]).length === 0;
   } catch {
     return false;
   }
 }
 
-// A PR that re-exported is held to the strict check, yet main may since have changed inputs the
-// PR never touched (another PR's tool edit). Then the PR's export matched its own inputs and the
-// drift is main's, refreshed in the next docs wave like any inherited drift. True when the PR left
+// A PR that re-exported (a refresh) is held to the strict check, yet main may since have changed
+// inputs the PR never touched (another PR's tool edit). Then the PR's export matched its own inputs
+// and the drift is main's, for the next refresh like any inherited drift. True when the PR left
 // every drifted input as it was at the merge-base (same rule as the exports, so never fetches).
-export const driftInheritedFromMain = (root, driftedInputs) =>
-  driftedInputs.length > 0 && exportsUntouchedSinceMain(root, driftedInputs);
+export const driftInheritedFromMain = (root, driftedInputs, env = process.env) =>
+  driftedInputs.length > 0 && exportsUntouchedSinceMain(root, driftedInputs, env);
 
 const mergeBase = (root) => {
   try {

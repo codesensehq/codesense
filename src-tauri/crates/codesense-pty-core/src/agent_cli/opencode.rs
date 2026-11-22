@@ -76,6 +76,8 @@ static DESCRIPTOR: LazyLock<Descriptor> = LazyLock::new(|| Descriptor {
         before: None,
         first_line: false,
         supported: "OpenCode 2.1.4 or a newer 2.x release",
+        windows_min: None,
+        windows_supported: None,
     },
     // The plugin posts one record per finished assistant message to this endpoint.
     telemetry: Some(TelemetryExport {

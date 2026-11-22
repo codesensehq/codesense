@@ -18,6 +18,7 @@ use super::state::{
 };
 use super::watch::{Action, Outcome, TickError, Watcher};
 use crate::commands::credential_store::{default_store, CredentialStore, Secret};
+use crate::shared::machine_wording;
 
 /// What a successful request leaves in the record. Times are the server's.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,10 +90,22 @@ impl DriveError {
             DriveError::Update(CallError::Status { status, code }) => {
                 format!("share.codesense.ai refused the dashboard update ({status} {code})")
             }
-            DriveError::NotOwner => "share.codesense.ai has no dashboard under this name for the token on this Mac; it may still be live under the token that published it".into(),
+            DriveError::NotOwner => not_owner(),
             DriveError::Tick(_) | DriveError::Transition(_) => "the push could not run".into(),
         }
     }
+}
+
+/// That the local publisher token owns no dashboard under this name, worded for `os`.
+fn not_owner_for(os: &str) -> String {
+    format!(
+        "share.codesense.ai has no dashboard under this name for the token on {}; it may still be live under the token that published it",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn not_owner() -> String {
+    not_owner_for(machine_wording::RUNNING_OS)
 }
 
 impl From<TickError> for DriveError {
@@ -878,7 +891,7 @@ pub(crate) mod tests {
     use super::super::verbs;
     use super::*;
     use super::super::client::TOKEN_ACCOUNT;
-    use crate::commands::credential_store::FakeStore;
+    use crate::commands::credential_store::{CredentialError, FakeStore};
     use std::fs;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::time::Duration;
@@ -1901,14 +1914,14 @@ pub(crate) mod tests {
     }
 
     impl CredentialStore for FlakyStore {
-        fn get(&self, account: &str) -> Result<Option<Secret>, String> {
+        fn get(&self, account: &str) -> Result<Option<Secret>, CredentialError> {
             if self.failing.load(Ordering::SeqCst) {
                 Err("keychain locked".into())
             } else {
                 self.inner.get(account)
             }
         }
-        fn set(&self, account: &str, value: &Secret) -> Result<(), String> {
+        fn set(&self, account: &str, value: &Secret) -> Result<(), CredentialError> {
             self.inner.set(account, value)
         }
     }
@@ -2806,6 +2819,18 @@ pub(crate) mod tests {
         p.resend_live().await.unwrap();
         assert_eq!(fake.calls()[0].json()["visibility"], "private");
         assert_eq!(manifest::load(folder.path()).unwrap().visibility, manifest::Visibility::Team);
+    }
+
+    #[test]
+    fn machine_wording_follows_the_os() {
+        assert_eq!(
+            not_owner_for("macos"),
+            "share.codesense.ai has no dashboard under this name for the token on this Mac; it may still be live under the token that published it"
+        );
+        assert_eq!(
+            not_owner_for("linux"),
+            "share.codesense.ai has no dashboard under this name for the token on this computer; it may still be live under the token that published it"
+        );
     }
 }
 

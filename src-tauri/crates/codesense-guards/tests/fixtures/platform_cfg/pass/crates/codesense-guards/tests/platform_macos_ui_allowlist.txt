@@ -1,0 +1,2 @@
+# <path> <reason>
+src/mac_ui.rs # the fixture's AppKit menu

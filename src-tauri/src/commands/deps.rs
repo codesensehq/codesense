@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use std::collections::{BTreeMap, HashSet};
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
@@ -11,7 +12,9 @@ use serde::Serialize;
 use tauri::{Emitter, Manager};
 
 use crate::agents::launch_check::{cli_version_warning, LaunchWarning};
-use codesense_pty_core::agent_cli::{by_binary, descriptor, AgentCli};
+use codesense_platform::cli;
+use codesense_platform::fs::{change_stamp, is_executable, ChangeStamp};
+use codesense_pty_core::agent_cli::{binary_stem, by_binary, descriptor, AgentCli};
 
 /// Minimum required git version for Code Sense sync operations.
 const MIN_GIT_VERSION: (u32, u32) = (2, 44);
@@ -79,17 +82,40 @@ pub struct PendingShadowed {
 }
 
 /// The identity a resolved binary is checked against at launch: its canonical
-/// target plus that target's mtime, length and (on unix) inode. The length and
-/// inode catch an in-place upgrade that keeps the path and resets the mtime, as
-/// npm does (it writes package files with a fixed mtime).
+/// target plus that target's mtime, length and change stamp. The length and stamp
+/// catch an in-place upgrade that keeps the path and resets the mtime, as npm does
+/// (it writes package files with a fixed mtime). On Windows a rename-over is caught
+/// by the file id and a size change by the length; a same-size rewrite in place with
+/// its last-write time restored is missed until the next Re-check or lost-binary
+/// re-probe, which resolve from scratch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BinaryFingerprint {
     canonical: PathBuf,
     mtime: SystemTime,
     len: u64,
-    inode: u64,
-    /// Unlike mtime, Unix change time cannot be restored by an installer.
-    change_time: (i64, i64),
+    /// The inode and change time on unix, which an installer cannot restore; the file
+    /// id (new on a rename-over) and last-write time on Windows, whose time it can.
+    stamp: Option<ChangeStamp>,
+}
+
+/// What one known install location held when a launch found its binary gone: the
+/// change stamp of the file it resolves to and its link target, each `None` when
+/// there was none. A location that differs later was reinstalled or repointed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LocationMark {
+    path: PathBuf,
+    stamp: Option<ChangeStamp>,
+    link: Option<PathBuf>,
+}
+
+impl LocationMark {
+    fn of(path: &Path) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            stamp: Result::ok(change_stamp(path)),
+            link: Result::ok(std::fs::read_link(path)),
+        }
+    }
 }
 
 /// How long after a launch found an agent CLI gone (no usable install anywhere)
@@ -121,6 +147,9 @@ struct AgentEntry {
     /// vanished). Lets a later launch retry after [`LOST_RETRY_AFTER`]; `None` for
     /// every other resolution.
     lost_at: Option<Instant>,
+    /// What each known install location held at that miss
+    /// ([`DependencyManager::lost_binary_is_back`]).
+    lost_locations: Vec<LocationMark>,
 }
 
 /// Inner state for DependencyManager, protected by RwLock for re-resolution after install.
@@ -149,7 +178,8 @@ pub struct DependencyManager {
     /// of launches right after an uninstall runs one probe.
     stale_resolve: Mutex<()>,
     /// The fixed install locations a lost binary is checked at during its retry cooldown
-    /// ([`DependencyManager::lost_binary_is_back`]). Production uses [`known_agent_locations`];
+    /// ([`DependencyManager::lost_binary_is_back`]). Production names the basename in the package
+    /// directories ([`cli::named_in`] over [`cli::package_dirs`]);
     /// tests inject their own so a CLI installed on the machine cannot change the outcome.
     known_locations: Box<dyn Fn(&str) -> Vec<PathBuf> + Send + Sync>,
 }
@@ -207,10 +237,83 @@ pub struct AgentBinaryStatus {
     pub supported: Option<String>,
 }
 
+/// One step of git install guidance: a label, then the commands to run in order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HintLine {
+    pub label: String,
+    pub commands: Vec<String>,
+}
+
+/// How to install or upgrade git on one OS, rendered by the "Git is required" view.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitInstallHint {
+    /// Offer Apple's Command Line Tools installer button.
+    pub installer: bool,
+    /// Lines shown when git is missing.
+    pub install: Vec<HintLine>,
+    /// Lines shown when git is below [`MIN_GIT_VERSION`].
+    pub upgrade: Vec<HintLine>,
+}
+
+fn hint_line(label: impl Into<String>, commands: &[&str]) -> HintLine {
+    HintLine {
+        label: label.into(),
+        commands: commands.iter().map(|c| c.to_string()).collect(),
+    }
+}
+
+/// The git install hint for `os` (a `std::env::consts::OS` value). Pure, so every OS's
+/// row is tested on every runner.
+pub fn git_install_hint(os: &str) -> GitInstallHint {
+    let (installer, install, upgrade) = match os {
+        "macos" => {
+            let lines = vec![hint_line("Prefer a newer git?", &["brew install git"])];
+            (true, lines.clone(), lines)
+        }
+        "windows" => (
+            false,
+            vec![hint_line(
+                "Run",
+                &["winget install --id Git.Git -e --source winget"],
+            )],
+            vec![hint_line(
+                "Run",
+                &["winget upgrade --id Git.Git -e --source winget"],
+            )],
+        ),
+        "linux" => {
+            let (major, minor) = MIN_GIT_VERSION;
+            let ubuntu =
+                format!("Ubuntu (Git {major}.{minor} or newer comes from the git-core PPA):");
+            let lines = vec![
+                hint_line(
+                    ubuntu,
+                    &[
+                        "sudo add-apt-repository ppa:git-core/ppa",
+                        "sudo apt install git",
+                    ],
+                ),
+                hint_line("Fedora:", &["sudo dnf install git"]),
+            ];
+            (false, lines.clone(), lines)
+        }
+        _ => (false, Vec::new(), Vec::new()),
+    };
+    GitInstallHint {
+        installer,
+        install,
+        upgrade,
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DependencyStatus {
     pub git: GitStatus,
+    /// How to install or upgrade git on the running OS.
+    pub git_install: GitInstallHint,
     pub gh: GhStatus,
     /// SW-AN-44: per-agent status keyed by descriptor basename (was a single claude-named
     /// `claude` field). With only the built-in Claude descriptor installed, `agents["claude"]`
@@ -277,7 +380,9 @@ impl DependencyManager {
                 agents,
             }),
             stale_resolve: Mutex::new(()),
-            known_locations: Box::new(known_agent_locations),
+            known_locations: Box::new(|basename: &str| {
+                cli::named_in(&cli::package_dirs(), basename)
+            }),
         }
     }
 
@@ -304,7 +409,7 @@ impl DependencyManager {
         if !basenames.contains(&default_basename) {
             basenames.push(default_basename);
         }
-        let login_path = probe_login_path();
+        let login_path = cli::search_path(probe_login_path);
         self.resolve_gh_with_login_path(login_path.as_deref());
         for basename in &basenames {
             self.resolve_agent_with_login_path(basename, login_path.as_deref(), || {});
@@ -334,7 +439,7 @@ impl DependencyManager {
     /// ([`cached_login_shell_path`]: probed once, then a stat per PATH entry and
     /// `gh --version`). Blocking: call it off the main thread.
     pub fn re_resolve_gh(&self) {
-        let login_path = cached_login_shell_path();
+        let login_path = cli::search_path(cached_login_shell_path);
         self.resolve_gh_with_login_path(login_path.as_deref());
     }
 
@@ -380,7 +485,7 @@ impl DependencyManager {
         self.resolve_agent_with_login_path_with(
             basename,
             login_path,
-            known_agent_locations(basename),
+            cli::named_in(&cli::package_dirs(), basename),
             parse_agent_version,
             after_winner,
         )
@@ -445,11 +550,12 @@ impl DependencyManager {
         &self,
         basename: &str,
         resolution: AgentResolution,
-        lost_at: Option<Instant>,
+        lost: Option<(Instant, Vec<LocationMark>)>,
     ) -> PendingShadowed {
-        let lost_at = match (&resolution.path, lost_at) {
-            (None, None) => Some(Instant::now()),
-            (_, lost_at) => lost_at,
+        let (lost_at, lost_locations) = match (&resolution.path, lost) {
+            (None, None) => (Some(Instant::now()), self.known_marks(basename)),
+            (_, Some((at, locations))) => (Some(at), locations),
+            (Some(_), None) => (None, Vec::new()),
         };
         info!(
             target: "deps",
@@ -469,6 +575,7 @@ impl DependencyManager {
                 fingerprint: resolution.fingerprint,
                 shadowed: Vec::new(),
                 lost_at,
+                lost_locations,
             },
         );
         PendingShadowed {
@@ -541,17 +648,26 @@ impl DependencyManager {
         entry.shadowed = shadowed;
     }
 
-    /// Whether a binary a launch found gone at `lost` (the miss's `Instant`) is executable
-    /// at one of its known install locations, changed since that miss. Ctime, not mtime: a
-    /// reinstall can keep an older mtime, but its inode change always moves ctime. A file
-    /// unchanged since the miss is still unusable, so it does not re-probe every launch.
-    fn lost_binary_is_back(&self, basename: &str, lost: Instant) -> bool {
-        let Some(missed_at) = SystemTime::now().checked_sub(lost.elapsed()) else {
-            return false;
-        };
+    /// What each known install location of `basename` holds now.
+    fn known_marks(&self, basename: &str) -> Vec<LocationMark> {
         (self.known_locations)(basename)
             .iter()
-            .any(|path| is_executable_file(path) && changed_since(path, missed_at))
+            .map(|path| LocationMark::of(path))
+            .collect()
+    }
+
+    /// Whether a binary a launch found gone is executable at one of its known install
+    /// locations, changed since that miss (`at_miss`): the file it resolves to has another
+    /// change stamp (an in-place reinstall, which an older mtime cannot hide), its link
+    /// points elsewhere (a repoint to an older install), or it was not there at all. A
+    /// file unchanged since the miss is still unusable, so it does not re-probe every
+    /// launch.
+    fn lost_binary_is_back(&self, basename: &str, at_miss: &[LocationMark]) -> bool {
+        // A mark holds its path, so one missing from the miss's marks is a location that
+        // was absent then or holds something else now.
+        (self.known_locations)(basename)
+            .iter()
+            .any(|path| is_executable(path) && !at_miss.contains(&LocationMark::of(path)))
     }
 
     /// The binary a launch of `basename` should spawn, checked against what was
@@ -571,7 +687,7 @@ impl DependencyManager {
             return match entry.lost_at {
                 Some(lost)
                     if lost.elapsed() >= LOST_RETRY_AFTER
-                        || self.lost_binary_is_back(basename, lost) =>
+                        || self.lost_binary_is_back(basename, &entry.lost_locations) =>
                 {
                     LaunchBinaryLookup::Stale
                 }
@@ -580,7 +696,7 @@ impl DependencyManager {
         };
         // A fingerprintable file with none recorded is re-resolved once (which
         // records one); a file that can never be fingerprinted matches its `None`.
-        let unchanged = is_executable_file(&path) && binary_fingerprint(&path) == entry.fingerprint;
+        let unchanged = is_executable(&path) && binary_fingerprint(&path) == entry.fingerprint;
         if unchanged {
             LaunchBinaryLookup::Ready(ResolvedAgentBinary {
                 path,
@@ -606,11 +722,11 @@ impl DependencyManager {
         basename: &str,
     ) -> (LaunchBinaryLookup, Option<PendingShadowed>) {
         self.re_resolve_stale_with(basename, || {
-            let login_path = probe_login_path();
+            let login_path = cli::search_path(probe_login_path);
             Self::agent_resolution(
                 basename,
                 login_path.as_deref(),
-                known_agent_locations(basename),
+                cli::named_in(&cli::package_dirs(), basename),
                 parse_agent_version,
             )
         })
@@ -629,14 +745,14 @@ impl DependencyManager {
         info!(target: "deps", "{basename}: cached binary changed or is gone — re-resolving for launch");
         // Stamped before the probe, so a reinstall that lands while the probe runs still
         // counts as changed after this miss on the next launch.
-        let missed_at = Instant::now();
+        let at_miss = (Instant::now(), self.known_marks(basename));
         let resolution = resolve();
         if resolution.path.is_none() {
             info!(
                 target: "deps",
                 "{basename}: no usable install found for launch — retrying after {LOST_RETRY_AFTER:?}"
             );
-            let pending = self.store_resolution(basename, resolution, Some(missed_at));
+            let pending = self.store_resolution(basename, resolution, Some(at_miss));
             return (LaunchBinaryLookup::Unresolved, Some(pending));
         }
         let pending = self.store_winner(basename, resolution);
@@ -731,6 +847,7 @@ impl DependencyManager {
                 path: inner.git_path.as_ref().map(|p| p.display().to_string()),
                 version: inner.git_version.clone(),
             },
+            git_install: git_install_hint(std::env::consts::OS),
             gh: GhStatus {
                 available: inner.gh.path.is_some(),
                 path: inner.gh.path.as_ref().map(|p| p.display().to_string()),
@@ -751,8 +868,12 @@ impl DependencyManager {
                             source: entry.source,
                             shadowed: entry.shadowed.clone(),
                             qualified: Self::version_qualified(basename, entry.version.as_deref()),
-                            supported: by_binary(basename)
-                                .map(|cli| descriptor(cli).release.supported.to_string()),
+                            supported: by_binary(&binary_stem(basename)).map(|cli| {
+                                descriptor(cli)
+                                    .release
+                                    .supported_for(std::env::consts::OS)
+                                    .to_string()
+                            }),
                         },
                     )
                 })
@@ -762,7 +883,7 @@ impl DependencyManager {
 
     /// Whether the CLI `basename` at `version` is inside its qualified range.
     fn version_qualified(basename: &str, version: Option<&str>) -> Option<bool> {
-        let cli = by_binary(basename)?;
+        let cli = by_binary(&binary_stem(basename))?;
         Some(descriptor(cli).release.version_qualified(version?))
     }
 
@@ -781,17 +902,27 @@ impl DependencyManager {
     /// Resolve the user's system `git` — detection, not management. codesense no
     /// longer downloads or pins its own git; it uses whatever git the user has
     /// (macOS/Linux ship one; the onboarding gate guides a user who has none).
-    /// Delegates to [`resolve_versioned_binary`]:
-    /// known-locations fast-path then a login-shell probe, version-gated to
-    /// [`MIN_GIT_VERSION`]. The version is returned even below the floor, so the
-    /// gate can show "found vX, need Y" guidance.
+    /// Delegates to [`resolve_versioned_binary`] with this OS's
+    /// [`git_search_plan`]: known-locations fast-path then (not on Windows) a
+    /// login-shell probe, version-gated to [`MIN_GIT_VERSION`]. The version is
+    /// returned even below the floor, so the gate can show "found vX, need Y"
+    /// guidance. No cache: every Re-check searches again.
     fn resolve_git() -> (Option<PathBuf>, Option<String>) {
+        // `|| None`: never start a login shell for the PATH here. Unix gets no
+        // PATH entries and keeps its own login-shell step below; Windows gets
+        // the process PATH.
+        let search = git_search_plan(
+            std::env::consts::OS,
+            cli::search_path(|| None).as_deref().map(OsStr::new),
+            &|k| std::env::var_os(k),
+        );
         resolve_versioned_binary(
             "git",
-            known_git_locations(),
+            search.known,
             GIT_PROBE_TIMEOUT,
             parse_git_version,
             check_git_version_minimum,
+            search.probe_login_shell,
         )
     }
 
@@ -800,8 +931,7 @@ impl DependencyManager {
     /// any parseable version (the `(0, 0)` sentinel — never a bypass; a 2-part
     /// parse is still required upstream in [`check_version_minimum`]).
     fn floor_for_basename(basename: &str) -> (u32, u32) {
-        codesense_pty_core::agent_cli::by_binary(basename)
-            .map_or((0, 0), |cli| descriptor(cli).min_version)
+        by_binary(&binary_stem(basename)).map_or((0, 0), |cli| descriptor(cli).min_version)
     }
 }
 
@@ -813,7 +943,7 @@ pub(crate) fn note_cli_version<R: tauri::Runtime>(
 ) {
     let (Some(deps), Some(cli)) = (
         app.try_state::<DependencyManager>(),
-        by_binary(&resolved.launch.binary),
+        by_binary(&binary_stem(&resolved.launch.binary)),
     ) else {
         return;
     };
@@ -908,54 +1038,10 @@ const AGENT_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 /// Timeout for the login-shell `git` probe. Same budget as the claude probe.
 const GIT_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Known filesystem locations a user's agent binary may live, in fallback order.
-/// Consulted only when the login-shell `$PATH` probe fails or yields no install
-/// meeting the floor; their hits off the PATH are also reported as shadowed
-/// installs. SW-AN-2: the install *directories* are generic package-manager bin
-/// dirs (not per-agent knowledge); only the `basename` is descriptor data.
-fn known_agent_locations(basename: &str) -> Vec<PathBuf> {
-    let mut locs = vec![
-        PathBuf::from("/opt/homebrew/bin").join(basename), // Homebrew (Apple silicon)
-        PathBuf::from("/usr/local/bin").join(basename),    // Homebrew (Intel) / manual
-    ];
-    if let Some(home) = dirs::home_dir() {
-        locs.push(home.join(".local/bin").join(basename)); // pipx / user-local
-        locs.push(home.join(".npm-global/bin").join(basename)); // npm -g custom prefix
-        locs.push(home.join(".bun/bin").join(basename)); // bun global
-        locs.push(home.join("Library/pnpm").join(basename)); // pnpm global (macOS)
-        locs.push(home.join(".local/share/pnpm").join(basename)); // pnpm global (xdg)
-    }
-    // SW-OB-12: codesense never places its own agent binary — no ~/.codesense/bin fallback.
-    locs
-}
-
 /// Test default: no fixed install location, so a lost binary retries only after its cooldown.
 #[cfg(test)]
 fn no_known_locations(_basename: &str) -> Vec<PathBuf> {
     Vec::new()
-}
-
-/// Whether `path`'s link or the file it resolves to changed at or after `since` (ctime,
-/// which a reinstall or a repoint always moves). Both are checked: a symlink repointed
-/// to an older install moves only the link's ctime, while an in-place reinstall behind
-/// an unchanged link moves only the target's. Off unix there is no ctime, so the retry
-/// cooldown stands.
-#[cfg(unix)]
-fn changed_since(path: &Path, since: SystemTime) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    let changed_at = |meta: std::fs::Metadata| {
-        let secs = meta.ctime().max(0) as u64;
-        std::time::UNIX_EPOCH + Duration::new(secs, meta.ctime_nsec() as u32)
-    };
-    [std::fs::symlink_metadata(path), std::fs::metadata(path)]
-        .into_iter()
-        .filter_map(Result::ok)
-        .any(|meta| changed_at(meta) > since)
-}
-
-#[cfg(not(unix))]
-fn changed_since(_path: &Path, _since: SystemTime) -> bool {
-    false
 }
 
 /// Probe the login shell's `$PATH` once (bounded by [`AGENT_PROBE_TIMEOUT`]). A
@@ -969,73 +1055,23 @@ fn probe_login_path() -> Option<String> {
     path
 }
 
-/// Whether `path` is a regular file (following symlinks) with an executable bit.
-fn is_executable_file(path: &Path) -> bool {
-    let Ok(meta) = std::fs::metadata(path) else {
-        return false;
-    };
-    if !meta.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        meta.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
-}
-
 /// The canonical target of `path`, or `path` itself when it can't be canonicalized.
 fn canonical_key(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    codesense_platform::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-/// The canonical target with its mtime, length and inode — what a launch compares
-/// the cached binary against. `None` when the file is gone.
+/// The canonical target with its mtime, length and change stamp — what a launch
+/// compares the cached binary against. `None` when the file is gone.
 fn binary_fingerprint(path: &Path) -> Option<BinaryFingerprint> {
     let canonical = std::fs::canonicalize(path).ok()?;
     let meta = std::fs::metadata(&canonical).ok()?;
     let mtime = meta.modified().ok()?;
-    #[cfg(unix)]
-    let (inode, change_time) = {
-        use std::os::unix::fs::MetadataExt;
-        (meta.ino(), (meta.ctime(), meta.ctime_nsec()))
-    };
-    #[cfg(not(unix))]
-    let (inode, change_time) = (0, (0, 0));
     Some(BinaryFingerprint {
+        stamp: Result::ok(change_stamp(&canonical)),
         canonical,
         mtime,
         len: meta.len(),
-        inode,
-        change_time,
     })
-}
-
-/// Every install of `basename` on `path_env` (a `$PATH` value), in PATH order —
-/// `which -a` without a shell. Empty and relative entries are skipped, only
-/// executable regular files count, and installs are de-duplicated by canonical
-/// path (a symlink and its target are one install; the first spelling is kept).
-fn login_path_candidates(path_env: &str, basename: &str) -> Vec<PathBuf> {
-    let mut seen = HashSet::new();
-    let mut candidates = Vec::new();
-    for dir in path_env.split(':') {
-        let dir = Path::new(dir);
-        if dir.as_os_str().is_empty() || !dir.is_absolute() {
-            continue;
-        }
-        let candidate = dir.join(basename);
-        if !is_executable_file(&candidate) {
-            continue;
-        }
-        if seen.insert(canonical_key(&candidate)) {
-            candidates.push(candidate);
-        }
-    }
-    candidates
 }
 
 /// The outcome of resolving one agent basename.
@@ -1066,7 +1102,7 @@ fn resolve_agent_binary(
     meets_floor: impl Fn(&str) -> bool,
 ) -> AgentResolution {
     let path_candidates = login_path
-        .map(|path| login_path_candidates(path, basename))
+        .map(|path| cli::candidates(OsStr::new(path), basename))
         .unwrap_or_default();
     let mut below_floor_version: Option<String> = None;
     let mut pick = |candidates: &mut dyn Iterator<Item = &PathBuf>| {
@@ -1098,7 +1134,7 @@ fn resolve_agent_binary(
         .map(|(path, version, fingerprint)| (path, version, fingerprint, AgentSource::LoginPath))
         .or_else(|| {
             pick(&mut known.iter().filter(|path| {
-                is_executable_file(path) && !checked_on_path.contains(&canonical_key(path))
+                is_executable(path) && !checked_on_path.contains(&canonical_key(path))
             }))
             .map(|(path, version, fingerprint)| {
                 (path, version, fingerprint, AgentSource::KnownLocation)
@@ -1115,7 +1151,7 @@ fn resolve_agent_binary(
             shadowed_candidates.push((path.clone(), true));
         }
     }
-    for path in known.iter().filter(|path| is_executable_file(path)) {
+    for path in known.iter().filter(|path| is_executable(path)) {
         if seen.insert(canonical_key(path)) {
             shadowed_candidates.push((path.clone(), false));
         }
@@ -1140,8 +1176,8 @@ fn resolve_agent_binary(
 }
 
 /// Known filesystem locations a user's `git` may live, in priority order. The
-/// cheap fast-path stats these before spawning a login shell — mirrors
-/// [`known_agent_locations`] but for git: the standard package-manager and
+/// cheap fast-path stats these before spawning a login shell — mirrors the
+/// agents' [`cli::package_dirs`] but for git: the standard package-manager and
 /// system bin dirs (Homebrew, `/usr/bin` for Apple CLT / Xcode git, user-local).
 fn known_git_locations() -> Vec<PathBuf> {
     let mut locs = vec![
@@ -1153,6 +1189,63 @@ fn known_git_locations() -> Vec<PathBuf> {
         locs.push(home.join(".local/bin/git")); // user-local
     }
     locs
+}
+
+/// Where to look for git, per [`git_search_plan`].
+#[derive(Debug, PartialEq)]
+struct GitSearch {
+    /// The paths the fast path stats, in order.
+    known: Vec<PathBuf>,
+    /// Whether a fast-path miss falls back to the login-shell `PATH` probe.
+    probe_login_shell: bool,
+}
+
+/// Where to look for git on `os` (a [`std::env::consts::OS`] value), given the
+/// `PATH` to search (`path_env`) and the environment (`env`). Pure, so every
+/// OS's plan is testable on any host.
+///
+/// `"windows"`: the installs on `PATH`, then in the Git for Windows `Git\cmd`
+/// directories (`%ProgramFiles%`, `%ProgramW6432%`, user-scope
+/// `%LOCALAPPDATA%\Programs`), each only when its variable is set. These catch
+/// a fresh install the running app's `PATH` predates. No login-shell probe:
+/// `$SHELL -lic` means nothing on Windows. Any other `os`: the unix
+/// [`known_git_locations`], then the login-shell probe.
+fn git_search_plan(
+    os: &str,
+    path_env: Option<&OsStr>,
+    env: &dyn Fn(&str) -> Option<OsString>,
+) -> GitSearch {
+    if os != "windows" {
+        return GitSearch {
+            known: known_git_locations(),
+            probe_login_shell: true,
+        };
+    }
+    let var = |name: &str| {
+        env(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    let install_dirs = [
+        var("ProgramFiles").map(|dir| dir.join("Git").join("cmd")),
+        var("ProgramW6432").map(|dir| dir.join("Git").join("cmd")),
+        var("LOCALAPPDATA").map(|dir| dir.join("Programs").join("Git").join("cmd")),
+    ];
+    let dirs = path_env
+        .map(std::env::split_paths)
+        .into_iter()
+        .flatten()
+        .chain(install_dirs.into_iter().flatten())
+        // An entry a `PATH` cannot hold (a separator or quote in it) is dropped,
+        // so the join below cannot fail.
+        .filter(|dir| std::env::join_paths([dir]).is_ok());
+    let joined = std::env::join_paths(dirs).unwrap_or_default();
+    GitSearch {
+        // One lookup: `PATHEXT` naming and de-duplication (`%ProgramFiles%` is
+        // `%ProgramW6432%` on 64-bit Windows) are the CLI lookup's.
+        known: cli::candidates(&joined, "git"),
+        probe_login_shell: false,
+    }
 }
 
 /// Where `gh` is usually installed: Homebrew (both architectures) and the official
@@ -1178,7 +1271,7 @@ fn user_local_gh_locations() -> Vec<PathBuf> {
 fn stat_known_gh(known: &[PathBuf]) -> Option<PathBuf> {
     known
         .iter()
-        .find_map(|path| is_executable_file(path).then(|| path.clone()))
+        .find_map(|path| is_executable(path).then(|| path.clone()))
 }
 
 /// Pick the user's `gh`: the installs on the login-shell `$PATH` (`login_path`) in PATH
@@ -1201,6 +1294,8 @@ fn resolve_gh_with(
 /// list of known install locations, spawning `<bin> --version` to gate each hit
 /// against `meets_floor`; then (b) a login-shell PATH probe for the miss (picks
 /// up Homebrew/asdf/npm-global that a Finder-launched `.app` doesn't inherit).
+/// Step (b) runs only when `probe_login_shell` is set (never on Windows, which
+/// has no login shell).
 /// Returns the resolved path (first candidate meeting the floor) plus the parsed
 /// version of the resolving — or last-probed — binary; the version is surfaced
 /// even when it fails the floor, so callers can show "found vX, need Y" guidance.
@@ -1215,6 +1310,7 @@ fn resolve_versioned_binary(
     probe_timeout: Duration,
     parse_version: impl Fn(&Path) -> Option<String>,
     meets_floor: impl Fn(&str) -> bool,
+    probe_login_shell: bool,
 ) -> (Option<PathBuf>, Option<String>) {
     // Retain the first (highest-priority) below-floor version seen on the fast
     // path, so that if nothing meets the floor we can still report "found vX, too
@@ -1242,6 +1338,11 @@ fn resolve_versioned_binary(
                 debug!(target: "deps", "could not determine {name} version at {}", path.display());
             }
         }
+    }
+
+    if !probe_login_shell {
+        debug!(target: "deps", "{name} not found in its known locations");
+        return (None, below_floor_version);
     }
 
     // Miss: resolve via the user's login-shell PATH.
@@ -1646,7 +1747,7 @@ fn parse_agent_version(agent_path: &Path) -> Option<String> {
     let probe = agent_path
         .file_name()
         .and_then(|name| name.to_str())
-        .and_then(codesense_pty_core::agent_cli::by_binary)
+        .and_then(|name| by_binary(&binary_stem(name)))
         .map(|cli| {
             codesense_pty_core::agent_cli::AgentCliAdapter::probe(
                 codesense_pty_core::agent_cli::adapter(cli),
@@ -1826,7 +1927,7 @@ pub fn spawn_agent_background_resolve(app: tauri::AppHandle) {
     tauri::async_runtime::spawn_blocking(move || {
         // One login-shell `$PATH` probe for the agent and gh; the agent goes first so
         // the splash clears before gh's version check.
-        let login_path = probe_login_path();
+        let login_path = cli::search_path(probe_login_path);
         let dm = app.state::<DependencyManager>();
         if agent_resolving {
             dm.resolve_agent_with_login_path(&basename, login_path.as_deref(), || {
@@ -1862,7 +1963,8 @@ pub fn spawn_builtin_agents_warm<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
             .map(|cli| descriptor(cli).binary.as_str())
             .filter(|basename| *basename != default_basename)
             .collect();
-        let warmed = dm.warm_builtins_with(&basenames, probe_login_path, |basename, login_path| {
+        let search_path = || cli::search_path(probe_login_path);
+        let warmed = dm.warm_builtins_with(&basenames, search_path, |basename, login_path| {
             // Each winner reaches the frontend before its shadowed installs are checked.
             dm.resolve_agent_with_login_path(basename, login_path, || {
                 let _ = app.emit("dep-status-changed", ());
@@ -2206,6 +2308,67 @@ mod tests {
     use crate::agents::launch_check::LaunchWarningCode;
 
     #[test]
+    fn git_install_hint_per_os() {
+        let line = |label: &str, commands: &[&str]| HintLine {
+            label: label.to_string(),
+            commands: commands.iter().map(|c| c.to_string()).collect(),
+        };
+
+        let brew = vec![line("Prefer a newer git?", &["brew install git"])];
+        assert_eq!(
+            git_install_hint("macos"),
+            GitInstallHint {
+                installer: true,
+                install: brew.clone(),
+                upgrade: brew,
+            }
+        );
+
+        assert_eq!(
+            git_install_hint("windows"),
+            GitInstallHint {
+                installer: false,
+                install: vec![line(
+                    "Run",
+                    &["winget install --id Git.Git -e --source winget"]
+                )],
+                upgrade: vec![line(
+                    "Run",
+                    &["winget upgrade --id Git.Git -e --source winget"]
+                )],
+            }
+        );
+
+        let linux = vec![
+            line(
+                "Ubuntu (Git 2.44 or newer comes from the git-core PPA):",
+                &[
+                    "sudo add-apt-repository ppa:git-core/ppa",
+                    "sudo apt install git",
+                ],
+            ),
+            line("Fedora:", &["sudo dnf install git"]),
+        ];
+        assert_eq!(
+            git_install_hint("linux"),
+            GitInstallHint {
+                installer: false,
+                install: linux.clone(),
+                upgrade: linux,
+            }
+        );
+
+        assert_eq!(
+            git_install_hint("freebsd"),
+            GitInstallHint {
+                installer: false,
+                install: Vec::new(),
+                upgrade: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
     fn listed_dependency_probes_and_launches_ignore_previously_warmed_versions() {
         let _home = crate::routines::test_support::TempHome::new();
         use std::os::unix::fs::PermissionsExt;
@@ -2372,7 +2535,10 @@ mod tests {
     // SW-AN-2: the fallback locations are templated from the descriptor's basename.
     #[test]
     fn test_known_agent_locations_includes_expected_for_claude() {
-        let locs = known_agent_locations(crate::agents::builtin::preferred_binary());
+        let locs = cli::named_in(
+            &cli::package_dirs(),
+            crate::agents::builtin::preferred_binary(),
+        );
         assert!(locs.contains(&PathBuf::from("/opt/homebrew/bin/claude")));
         assert!(locs.contains(&PathBuf::from("/usr/local/bin/claude")));
         // A home-relative candidate is present when HOME is set (it is in tests).
@@ -2386,7 +2552,7 @@ mod tests {
     // descriptor DATA — the same location-templating serves any basename, no core edit.
     #[test]
     fn test_known_agent_locations_templates_any_basename() {
-        let locs = known_agent_locations("zzagent");
+        let locs = cli::named_in(&cli::package_dirs(), "zzagent");
         assert!(locs.contains(&PathBuf::from("/opt/homebrew/bin/zzagent")));
         assert!(locs.contains(&PathBuf::from("/usr/local/bin/zzagent")));
         assert!(
@@ -3407,6 +3573,7 @@ mod tests {
             Duration::from_secs(1),
             |_p| Some("2.50.0".to_string()),
             |_v| true,
+            true,
         );
         assert_eq!(path.as_deref(), Some(bin.as_path()));
         assert_eq!(ver.as_deref(), Some("2.50.0"));
@@ -3419,9 +3586,137 @@ mod tests {
             Duration::from_secs(1),
             |_p| Some("2.39.3".to_string()),
             |_v| false,
+            true,
         );
         assert!(path.is_none());
         assert_eq!(ver.as_deref(), Some("2.39.3"));
+    }
+
+    /// With `probe_login_shell` off, a fast-path miss returns nothing, though the
+    /// login shell would find the binary; the probe-on control proves it would.
+    #[test]
+    fn test_resolve_versioned_binary_skips_login_shell_when_off() {
+        let resolve = |probe_login_shell| {
+            resolve_versioned_binary(
+                "sh",
+                vec![],
+                Duration::from_secs(10),
+                |_p| Some("9.9.9".to_string()),
+                |_v| true,
+                probe_login_shell,
+            )
+        };
+        assert_eq!(resolve(false), (None, None));
+        let (path, ver) = resolve(true);
+        assert!(path.is_some(), "the login shell finds sh");
+        assert_eq!(ver.as_deref(), Some("9.9.9"));
+    }
+
+    /// An executable `git` in `dir`, named the way the host's CLI lookup names it.
+    fn git_fixture(dir: &Path) -> PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        let git = cli::named_in(&[dir.to_path_buf()], "git")[0].clone();
+        std::fs::write(&git, b"").unwrap();
+        codesense_platform::fs::set_executable(&git, codesense_platform::fs::Reach::Everyone)
+            .unwrap();
+        git
+    }
+
+    /// git_search_plan on Windows: the installs on `PATH`, then the Git for
+    /// Windows install directories, with no login-shell probe. `os` picks the
+    /// plan; the fixtures use the host's naming, so this runs on any host.
+    #[test]
+    fn test_git_search_plan_windows() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let on_path = tmp.path().join("bin");
+        let path_git = git_fixture(&on_path);
+        let empty_path = tmp.path().join("empty");
+        std::fs::create_dir_all(&empty_path).unwrap();
+        let program_files = tmp.path().join("Program Files");
+        let program_files_git = git_fixture(&program_files.join("Git").join("cmd"));
+        let local_app_data = tmp.path().join("AppData").join("Local");
+        let local_git = git_fixture(&local_app_data.join("Programs").join("Git").join("cmd"));
+
+        let plan = |path_env: Option<&Path>, vars: &[(&str, &Path)]| {
+            let vars: Vec<(String, OsString)> = vars
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.as_os_str().to_owned()))
+                .collect();
+            git_search_plan("windows", path_env.map(Path::as_os_str), &|key| {
+                vars.iter()
+                    .find(|(name, _)| name == key)
+                    .map(|(_, value)| value.clone())
+            })
+        };
+        let windows = |known: Vec<PathBuf>| GitSearch {
+            known,
+            probe_login_shell: false,
+        };
+
+        // git on PATH.
+        assert_eq!(
+            plan(Some(on_path.as_path()), &[]),
+            windows(vec![path_git.clone()])
+        );
+        // Only in %ProgramFiles%\Git\cmd, as after a fresh install the app's
+        // PATH predates (%ProgramW6432% is the same directory on 64-bit Windows).
+        assert_eq!(
+            plan(
+                Some(empty_path.as_path()),
+                &[
+                    ("ProgramFiles", program_files.as_path()),
+                    ("ProgramW6432", program_files.as_path()),
+                ],
+            ),
+            windows(vec![program_files_git.clone()])
+        );
+        // Both: the PATH copy first.
+        assert_eq!(
+            plan(
+                Some(on_path.as_path()),
+                &[("ProgramFiles", program_files.as_path())]
+            ),
+            windows(vec![path_git, program_files_git])
+        );
+        // A user-scope install under %LOCALAPPDATA%\Programs.
+        assert_eq!(
+            plan(
+                Some(empty_path.as_path()),
+                &[("LOCALAPPDATA", local_app_data.as_path())]
+            ),
+            windows(vec![local_git])
+        );
+        // No PATH and no variables set.
+        assert_eq!(plan(None, &[]), windows(vec![]));
+    }
+
+    /// git_search_plan on any OS but Windows: the unix locations in order, then
+    /// the login-shell probe; the Windows PATH and variables are not read.
+    #[test]
+    fn test_git_search_plan_unix_golden() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let on_path = tmp.path().join("bin");
+        git_fixture(&on_path);
+        let program_files = tmp.path().as_os_str().to_owned();
+        let home = dirs::home_dir().expect("a home directory");
+        for os in ["macos", "linux", "freebsd"] {
+            let plan = git_search_plan(os, Some(on_path.as_os_str()), &|key| {
+                (key == "ProgramFiles").then(|| program_files.clone())
+            });
+            assert_eq!(
+                plan,
+                GitSearch {
+                    known: vec![
+                        PathBuf::from("/opt/homebrew/bin/git"),
+                        PathBuf::from("/usr/local/bin/git"),
+                        PathBuf::from("/usr/bin/git"),
+                        home.join(".local/bin/git"),
+                    ],
+                    probe_login_shell: true,
+                },
+                "{os}"
+            );
+        }
     }
 
     /// classify_xcode_select maps `xcode-select --install`'s exit+stderr to the
@@ -3515,9 +3810,12 @@ mod tests {
             d.display(),
             a.display()
         );
-        assert_eq!(login_path_candidates(&path, "claude"), vec![in_b, in_a]);
-        assert!(login_path_candidates("", "claude").is_empty());
-        assert!(login_path_candidates(&path, "codex").is_empty());
+        assert_eq!(
+            cli::candidates(OsStr::new(&path), "claude"),
+            vec![in_b, in_a]
+        );
+        assert!(cli::candidates(OsStr::new(""), "claude").is_empty());
+        assert!(cli::candidates(OsStr::new(&path), "codex").is_empty());
     }
 
     #[test]
@@ -3531,13 +3829,88 @@ mod tests {
         // The first spelling on PATH is kept.
         let path = path_of(&[&links, &tmp.path().join("real")]);
         assert_eq!(
-            login_path_candidates(&path, "claude"),
+            cli::candidates(OsStr::new(&path), "claude"),
             vec![links.join("claude")]
         );
         // The same directory listed twice is one install.
         let real_dir = tmp.path().join("real");
         let twice = path_of(&[&real_dir, &real_dir]);
-        assert_eq!(login_path_candidates(&twice, "claude"), vec![real]);
+        assert_eq!(cli::candidates(OsStr::new(&twice), "claude"), vec![real]);
+    }
+
+    /// The fixed locations of `basename` in the package directories `dirs`, as
+    /// production names them.
+    fn known_in(dirs: &[PathBuf], basename: &str) -> Vec<PathBuf> {
+        cli::named_in(dirs, basename)
+    }
+
+    /// Golden output of the agent lookup over a temp PATH and fixture package
+    /// directories: the winner, its source and the shadowed installs must not
+    /// change when the lookup moves.
+    #[test]
+    fn resolve_agent_binary_golden_over_path_and_package_dirs() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = |name: &str| tmp.path().join(name);
+        let old_on_path = exec_stub(&dir("p1"), "claude");
+        let new_on_path = exec_stub(&dir("p2"), "claude");
+        // A non-executable decoy and a directory named like the binary.
+        std::fs::create_dir_all(dir("decoy")).unwrap();
+        std::fs::write(dir("decoy").join("claude"), b"x").unwrap();
+        std::fs::create_dir_all(dir("named").join("claude")).unwrap();
+        // A link on PATH to an install already on it.
+        std::fs::create_dir_all(dir("links")).unwrap();
+        std::os::unix::fs::symlink(&new_on_path, dir("links").join("claude")).unwrap();
+        let package_only = exec_stub(&dir("k1"), "claude");
+        // A package directory linking to an install on PATH, and one without it.
+        std::fs::create_dir_all(dir("k2")).unwrap();
+        std::os::unix::fs::symlink(&old_on_path, dir("k2").join("claude")).unwrap();
+        std::fs::create_dir_all(dir("k3")).unwrap();
+        let path = path_of(&[
+            &dir("decoy"),
+            &dir("p1"),
+            &dir("named"),
+            &dir("links"),
+            &dir("p2"),
+        ]);
+        let known = known_in(&[dir("k3"), dir("k2"), dir("k1")], "claude");
+        let meets = |v: &str| check_version_minimum(v, (2, 0));
+        let version = versions(&[
+            ("p1", "1.9.0"),
+            ("links", "2.1.296"),
+            ("p2", "2.1.296"),
+            ("k1", "2.1.300"),
+        ]);
+
+        // The first PATH install meeting the floor wins; the rest are shadowed.
+        let r = resolve_agent_binary("claude", Some(&path), known.clone(), &version, meets);
+        assert_eq!(
+            r.path.as_deref(),
+            Some(dir("links").join("claude").as_path())
+        );
+        assert_eq!(r.version.as_deref(), Some("2.1.296"));
+        assert_eq!(r.source, Some(AgentSource::LoginPath));
+        assert_eq!(
+            r.shadowed_candidates,
+            vec![(old_on_path.clone(), true), (package_only.clone(), false)]
+        );
+
+        // The probe failed: the package directories, in order.
+        let r = resolve_agent_binary("claude", None, known.clone(), &version, meets);
+        assert_eq!(r.path.as_deref(), Some(package_only.as_path()));
+        assert_eq!(r.version.as_deref(), Some("2.1.300"));
+        assert_eq!(r.source, Some(AgentSource::KnownLocation));
+        assert_eq!(
+            r.shadowed_candidates,
+            vec![(dir("k2").join("claude"), false)]
+        );
+
+        // Nothing on PATH meets the floor: a package directory naming a PATH
+        // install is skipped, the next one wins.
+        let low_path = path_of(&[&dir("p1")]);
+        let r = resolve_agent_binary("claude", Some(&low_path), known, &version, meets);
+        assert_eq!(r.path.as_deref(), Some(package_only.as_path()));
+        assert_eq!(r.source, Some(AgentSource::KnownLocation));
+        assert_eq!(r.shadowed_candidates, vec![(old_on_path, true)]);
     }
 
     /// PATH order beats the fixed list, and other installs are shadowed, for one
@@ -3917,8 +4290,59 @@ mod tests {
         std::thread::sleep(Duration::from_millis(20));
         dm.known_locations = Box::new(move |_: &str| vec![unusable.clone()]);
         // The re-resolve found nothing usable: the miss is stamped now, after the file.
-        let _ = dm.store_resolution("claude", AgentResolution::default(), Some(Instant::now()));
+        let at_miss = (Instant::now(), dm.known_marks("claude"));
+        let _ = dm.store_resolution("claude", AgentResolution::default(), Some(at_miss));
         assert_eq!(dm.launch_binary("claude"), LaunchBinaryLookup::Unresolved);
+    }
+
+    /// A known-location binary reinstalled in place after the miss (same path, same
+    /// mtime, same size) re-resolves: its change stamp moved.
+    #[test]
+    fn a_known_location_binary_rewritten_in_place_after_the_miss_re_resolves() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let a = tmp.path().join("a");
+        let mut dm = manager_with(BTreeMap::new());
+        let installed = exec_stub(&a, "claude");
+        let mtime = std::fs::metadata(&installed).unwrap().modified().unwrap();
+        let known = installed.clone();
+        dm.known_locations = Box::new(move |_: &str| vec![known.clone()]);
+        let at_miss = (Instant::now(), dm.known_marks("claude"));
+        let _ = dm.store_resolution("claude", AgentResolution::default(), Some(at_miss));
+        assert_eq!(dm.launch_binary("claude"), LaunchBinaryLookup::Unresolved);
+
+        // An npm-style reinstall: replaced by rename, the old mtime put back.
+        let staged = a.join("claude.new");
+        std::fs::copy(&installed, &staged).unwrap();
+        std::fs::rename(&staged, &installed).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&installed)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+        assert_eq!(dm.launch_binary("claude"), LaunchBinaryLookup::Stale);
+    }
+
+    /// A known-location link repointed to another install after the miss re-resolves, even
+    /// when the install it now names is older than the miss.
+    #[cfg(unix)]
+    #[test]
+    fn a_known_location_link_repointed_after_the_miss_re_resolves() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let old = exec_stub(&tmp.path().join("old"), "claude");
+        let new = exec_stub(&tmp.path().join("new"), "claude");
+        let link = tmp.path().join("claude");
+        std::os::unix::fs::symlink(&new, &link).unwrap();
+        let mut dm = manager_with(BTreeMap::new());
+        let known = link.clone();
+        dm.known_locations = Box::new(move |_: &str| vec![known.clone()]);
+        let at_miss = (Instant::now(), dm.known_marks("claude"));
+        let _ = dm.store_resolution("claude", AgentResolution::default(), Some(at_miss));
+        assert_eq!(dm.launch_binary("claude"), LaunchBinaryLookup::Unresolved);
+
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(&old, &link).unwrap();
+        assert_eq!(dm.launch_binary("claude"), LaunchBinaryLookup::Stale);
     }
 
     /// Back-date `basename`'s `lost_at` past the retry cooldown. `false` when the

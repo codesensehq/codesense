@@ -1,0 +1,6 @@
+version=1.7.5-cs.7
+asset=git-ai-macos-arm64
+platform=macos-arm64
+sha256=7cb440e634d17f47a41ba762de8c39d0f263b9c903153678af865b22a367be5e
+repo=alfypops/git-ai
+tag=v1.7.5-cs.7

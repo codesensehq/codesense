@@ -16,8 +16,13 @@ import {
   extractSnippets,
   loadTruth,
   parseAliases,
+  splitStaleParams,
   topLevelKeys,
 } from "./check-docs-api-examples.mjs";
+
+// The scratch repos below start with one commit, so a merge group's drift base (HEAD^1) does not exist
+// in them: the fixtures must not inherit a merge-group runner's event. The merge-group test sets it.
+delete process.env.GITHUB_EVENT_NAME;
 
 // A tool's params schema with these fields, each free-form unless given a schema.
 const params = (...fields) => ({
@@ -598,4 +603,116 @@ test("siteInside: by real path, and `..x` is a name, not a parent", async (t) =>
   assert.equal(siteInside(root, join(base, "elsewhere")), false);
   symlinkSync(root, join(base, "alias"));
   assert.equal(siteInside(join(base, "alias"), join(root, "site")), true);
+});
+
+test("a stale MCP export makes an unknown tool parameter the drifted Rust names a notice", () => {
+  const findings = checkFile("a.html", html("reply({ body, bodyy })\ncodesense.nope()"), truth);
+  const explains = (name) => name === "body";
+  const { problems: kept, notices } = splitStaleParams(findings, explains);
+  assert.deepEqual(
+    kept.map((f) => `${f.rule} ${f.message.split(" is")[0]}`),
+    ["R3 reply: `bodyy`", "R2 `codesense.nope`"],
+  );
+  assert.match(notices.map((f) => f.message).join("|"), /reply: `body` is not a parameter/);
+  assert.deepEqual(splitStaleParams(findings, null), { problems: findings, notices: [] });
+  // An alias is the PR's own mistake, never the export's lag.
+  const alias = checkFile("a.html", html("reply({ messageId: 1 })"), truth);
+  assert.equal(splitStaleParams(alias, () => true).problems.length, 1);
+});
+
+// A scratch checkout whose MCP seal predates reply.rs's new_param, with origin/main at its first commit,
+// and a run of the CLI over one example page.
+async function staleLintRoot() {
+  const { referenceInputs } = await import("./generate-mcp-reference.mjs");
+  const root = mkdtempSync(join(tmpdir(), "api-lint-stale-"));
+  const content = join(root, "codesense-docs/getting-started/content");
+  const gen = join(content, "generated");
+  mkdirSync(gen, { recursive: true });
+  mkdirSync(join(root, "src-tauri/src/mcp"), { recursive: true });
+  mkdirSync(join(root, "src-tauri/crates/codesense-pty-core/src/agent_cli"), { recursive: true });
+  for (const path of [
+    "Cargo.lock",
+    "src-tauri/Cargo.toml",
+    "src-tauri/build.rs",
+    "src-tauri/crates/codesense-pty-core/src/agent_cli/codex.rs",
+    "src-tauri/crates/codesense-pty-core/src/agent_cli/claude.rs",
+  ])
+    writeFileSync(join(root, path), "");
+  const dto = join(root, "src-tauri/src/mcp/reply.rs");
+  writeFileSync(dto, "pub struct ReplyParams { pub text: String }\n");
+  writeFileSync(join(gen, "page-sdk.json"), JSON.stringify({ verbs: [], members: [] }));
+  writeFileSync(
+    join(gen, "mcp-tools.json"),
+    JSON.stringify({ tools: [{ name: "reply", description: "Reply.", params: params("text") }] }),
+  );
+  // Sealed when reply.rs had no new_param. The seal still lists the catalog, which explains nothing.
+  const seal = join(gen, "mcp-tools.inputs.json");
+  const inputs = {
+    ...referenceInputs(root),
+    "codesense-docs/getting-started/content/_shared/examples.yml": "0".repeat(64),
+  };
+  writeFileSync(
+    seal,
+    JSON.stringify({ schema: 1, profiles: ["default", "dashboard-publish"], inputs }),
+  );
+  const git = (...args) =>
+    spawnSync("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", ...args], {
+      cwd: root,
+    });
+  git("init", "-q", "-b", "main");
+  git("add", "-A");
+  git("commit", "-q", "-m", "main");
+  git("update-ref", "refs/remotes/origin/main", "HEAD");
+  const page = join(content, "page.html");
+  const script = fileURLToPath(new URL("./check-docs-api-examples.mjs", import.meta.url));
+  const run = (example, env = "1", extra = {}) => {
+    writeFileSync(page, html(example));
+    return spawnSync(process.execPath, [script, "--root", root], {
+      encoding: "utf8",
+      env: { ...process.env, DOCS_ALLOW_STALE_EXPORT: env, ...extra },
+    });
+  };
+  return { root, dto, seal, git, run };
+}
+
+test("CLI: an unknown parameter is a notice only in the PR gate, for a param the drifted Rust names", async () => {
+  const { root, dto, seal, run } = await staleLintRoot();
+  try {
+    // Only the old catalog entry drifts: nothing explained, strict.
+    assert.equal(run("reply({ text, new_param: 1 })").status, 1);
+    // The PR adds new_param to the Rust DTO without re-exporting.
+    writeFileSync(dto, "pub struct ReplyParams { pub text: String, pub new_param: u32 }\n");
+    const tolerant = run("reply({ text, new_param: 1 })");
+    assert.equal(tolerant.status, 0, tolerant.stderr);
+    assert.match(tolerant.stderr, /NOTICE: .*reply: `new_param` is not a parameter/);
+    assert.equal(run("reply({ text, new_param: 1 })", "").status, 1, "strict without the switch");
+    assert.equal(run("reply({ text, new_parm: 1 })").status, 1, "a typo the Rust does not name");
+    // A PR that edits the seal is held to the strict check.
+    writeFileSync(seal, readFileSync(seal, "utf8") + "\n");
+    assert.equal(run("reply({ text, new_param: 1 })").status, 1, "the PR touched the seal");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("CLI: in a merge group the PR gate measures against the group's parent", async () => {
+  const { root, dto, seal, git, run } = await staleLintRoot();
+  try {
+    // An entry queued ahead touched the seal; this entry adds new_param to the Rust DTO. origin/main
+    // still points at the first commit.
+    writeFileSync(seal, readFileSync(seal, "utf8") + "\n");
+    git("-c", "commit.gpgsign=false", "commit", "-qam", "an entry queued ahead");
+    writeFileSync(dto, "pub struct ReplyParams { pub text: String, pub new_param: u32 }\n");
+    git("-c", "commit.gpgsign=false", "commit", "-qam", "this entry");
+    const group = run("reply({ text, new_param: 1 })", "1", { GITHUB_EVENT_NAME: "merge_group" });
+    assert.equal(group.status, 0, group.stderr);
+    assert.match(group.stderr, /NOTICE: .*reply: `new_param` is not a parameter/);
+    // Against origin/main the earlier entry's seal edit would read as this entry's: strict.
+    const pr = run("reply({ text, new_param: 1 })", "1", { GITHUB_EVENT_NAME: "pull_request" });
+    assert.equal(pr.status, 1, pr.stderr);
+    assert.doesNotMatch(pr.stderr, /NOTICE/);
+    assert.match(pr.stderr, /new_param/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

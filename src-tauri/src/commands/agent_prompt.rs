@@ -338,45 +338,54 @@ mod tests {
         );
     }
 
-    #[test]
-    fn local_input_rejects_unknown_and_ended_session_handles() {
-        use codesense_pty_core::domain::{PtySessionId, TerminalDomain};
-        use codesense_pty_core::layout::ServerIdentity;
-        use codesense_pty_core::runner::{LocalPtyRunner, PtyRunner};
-        use codesense_pty_core::TerminalHost;
-        use codesense_session_server::testing::{registration, sh_spec, wait_until, RecordingSink};
-        use std::sync::Arc;
+    // macOS and Linux, where input to an exited session is refused.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    mod ended_session_input {
+        use super::*;
 
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        let host = TerminalHost::new(
-            ServerIdentity::ephemeral("test"),
-            Arc::new(RecordingSink::default()),
-            runtime.handle().clone(),
-        );
-        let pty = runtime
-            .block_on(LocalPtyRunner.spawn(sh_spec("ended", "exit 0")))
-            .unwrap();
-        host.register(pty, registration("ended", None, false))
-            .unwrap();
-        assert!(wait_until(|| host
-            .live_child_pids(&[PtySessionId::new("ended")])
-            .unwrap()
-            == vec![None]));
-        for handle in ["unknown", "ended"] {
-            let PromptRoute::Local { session_id } = route_in(None, handle, None).unwrap() else {
-                panic!("local route")
+        #[test]
+        fn local_input_rejects_unknown_and_ended_session_handles() {
+            use codesense_pty_core::domain::{PtySessionId, TerminalDomain};
+            use codesense_pty_core::layout::ServerIdentity;
+            use codesense_pty_core::runner::{LocalPtyRunner, PtyRunner};
+            use codesense_pty_core::TerminalHost;
+            use codesense_session_server::testing::{
+                registration, sh_spec, wait_until, RecordingSink,
             };
-            let session = PtySessionId::new(session_id);
-            for submit in [true, false] {
-                let result = if submit {
-                    host.submit_line(&session, "hello", 0, 0, 0, 0).map(|_| ())
-                } else {
-                    host.write(
-                        &session,
-                        crate::commands::pty::bracketed_paste("hello").as_bytes(),
-                    )
+            use std::sync::Arc;
+
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            let host = TerminalHost::new(
+                ServerIdentity::ephemeral("test"),
+                Arc::new(RecordingSink::default()),
+                runtime.handle().clone(),
+            );
+            let pty = runtime
+                .block_on(LocalPtyRunner.spawn(sh_spec("ended", "exit 0")))
+                .unwrap();
+            host.register(pty, registration("ended", None, false))
+                .unwrap();
+            assert!(wait_until(|| host
+                .live_child_pids(&[PtySessionId::new("ended")])
+                .unwrap()
+                == vec![None]));
+            for handle in ["unknown", "ended"] {
+                let PromptRoute::Local { session_id } = route_in(None, handle, None).unwrap()
+                else {
+                    panic!("local route")
                 };
-                assert!(result.is_err(), "{handle}, submit={submit}: {result:?}");
+                let session = PtySessionId::new(session_id);
+                for submit in [true, false] {
+                    let result = if submit {
+                        host.submit_line(&session, "hello", 0, 0, 0, 0).map(|_| ())
+                    } else {
+                        host.write(
+                            &session,
+                            crate::commands::pty::bracketed_paste("hello").as_bytes(),
+                        )
+                    };
+                    assert!(result.is_err(), "{handle}, submit={submit}: {result:?}");
+                }
             }
         }
     }

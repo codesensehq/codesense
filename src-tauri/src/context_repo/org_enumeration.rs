@@ -12,9 +12,10 @@ use crate::domain::RegistryFile;
 
 use super::path::{ORGS_DIR, USERS_DIR};
 
-/// Every local principal with stored data, including profiles without a numeric identity.
+/// Every local principal with stored data, including profiles without a numeric identity,
+/// sorted: the directory's own order differs by filesystem.
 pub(crate) fn principals(home: &Path) -> Vec<crate::domain::Principal> {
-    std::result::Result::ok(std::fs::read_dir(home.join("users")))
+    let mut principals: Vec<_> = std::result::Result::ok(std::fs::read_dir(home.join("users")))
         .into_iter()
         .flatten()
         .flatten()
@@ -23,7 +24,9 @@ pub(crate) fn principals(home: &Path) -> Vec<crate::domain::Principal> {
                 &std::fs::DirEntry::file_name(&entry).to_string_lossy(),
             ))
         })
-        .collect()
+        .collect();
+    principals.sort();
+    principals
 }
 
 /// Enumerate every org-root directory under `{codesense_home}/users/*/orgs/`.

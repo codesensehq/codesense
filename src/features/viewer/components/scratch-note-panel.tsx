@@ -89,6 +89,10 @@ import { NoteOutline } from "./note-outline";
 import { StickyNoteHeaders } from "./sticky-note-headers";
 import { useNoteHeadings } from "./use-note-headings";
 import { scrollToHeadingBySlug } from "../lib/note-headings";
+import { formatKeystrokeDisplay, hasMod } from "@/shared/lib/shortcuts/keystroke";
+import { join } from "@/shared/lib/path";
+import { ActionKbd } from "@/features/notes/components/action-kbd";
+import { localMachinePhrase } from "@/shared/lib/local-machine";
 
 const lowlight = createLowlight(all);
 
@@ -184,7 +188,9 @@ function NotesPane() {
   const activeOrgSlug = useOrgStore((s) => s.activeOrgSlug);
   const orgName = useOrgStore(
     (s) =>
-      s.orgs.find((o) => o.slug === s.activeOrgSlug)?.display_name ?? s.activeOrgSlug ?? "this Mac",
+      s.orgs.find((o) => o.slug === s.activeOrgSlug)?.display_name ??
+      s.activeOrgSlug ??
+      localMachinePhrase(),
   );
   const flushNotes = useViewerStore((s) => s.flushNotes);
   const scratchNoteLoadStatus = useViewerStore((s) => s.scratchNoteLoadStatus);
@@ -425,7 +431,7 @@ function NotesPane() {
     () => ({
       id: activeNoteId,
       org: notesOrg,
-      path: notesDir && activeNoteId ? `${notesDir}/${activeNoteId}.md` : null,
+      path: notesDir && activeNoteId ? join(notesDir, `${activeNoteId}.md`) : null,
     }),
     [activeNoteId, notesOrg, notesDir],
   );
@@ -858,7 +864,7 @@ function NotesPane() {
   // ⌘B toggles the list (narrow), ⌘N makes a note — while focus is in the pane.
   const handlePaneKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      const mod = (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey;
+      const mod = hasMod(e) && !e.shiftKey && !e.altKey;
       if (!mod) return;
       const key = e.key.toLowerCase();
       if (key === "b") {
@@ -930,7 +936,7 @@ function NotesPane() {
             </span>
             Go to heading
             <span className="nt-row-sub">
-              <kbd className="nt-kbd">⌘⇧O</kbd>
+              <ActionKbd action="nav.goto-heading" />
             </span>
           </button>
         </NtPopoverContent>
@@ -1089,8 +1095,8 @@ function NotesPane() {
                 <button
                   type="button"
                   className="nt-line-send"
-                  aria-label="Send to… (⌘↵)"
-                  title="Send to… ⌘↵"
+                  aria-label={`Send to… (${formatKeystrokeDisplay("CmdOrCtrl+Enter")})`}
+                  title={`Send to… ${formatKeystrokeDisplay("CmdOrCtrl+Enter")}`}
                   style={{ top: hoverLine.top, left: hoverLine.left }}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={(e) => {

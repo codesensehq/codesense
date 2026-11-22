@@ -34,6 +34,7 @@ import {
   type UpdateAllReview,
 } from "../lib/update-all";
 import { reloadMachines } from "../stores/machines-store";
+import { localMachineLabel } from "@/shared/lib/local-machine";
 
 /** The live workspaces a machine's members hold, by layout key. */
 function useWorkspacesOf(): (machineId: string) => [string, TerminalWorkspaceLayout][] {
@@ -136,9 +137,9 @@ export function UpdateAllDialog({
               ? "Every connected terminal server is this app's build."
               : activeRun.running
                 ? `${activeRun.outcomes.length} of ${entries.length} done. It keeps going if you close this.`
-                : `Each one restarts with this app's terminal server, one after another, This Mac last. Their terminals and agents end; tabs reopen afterwards as shells.${
+                : `Each one restarts with this app's terminal server, one after another, ${localMachineLabel()} last. Their terminals and agents end; tabs reopen afterwards as shells.${
                     entries.some((entry) => entry.machine.kind === "local")
-                      ? " Updating This Mac closes every terminal in this app, including agents connected to CodeSense and the agent you may be talking to."
+                      ? ` Updating ${localMachineLabel()} closes every terminal in this app, including agents connected to CodeSense and the agent you may be talking to.`
                       : ""
                   }`}
           </AlertDialogDescription>

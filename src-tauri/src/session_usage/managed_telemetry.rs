@@ -13,8 +13,22 @@ use std::time::SystemTime;
 use codesense_pty_core::agent_cli::AgentCli;
 use serde_json::Value;
 
-/// Why a Claude session's usage is missing when its logs go elsewhere.
-pub(crate) const USAGE_REDIRECTED: &str = "usage not recorded: this Mac's managed Claude settings send session telemetry to your organization's collector";
+use crate::shared::machine_wording;
+
+/// Why a Claude session's usage is missing when its logs go elsewhere, worded for `os`. Two
+/// literals rather than a format, so the reason stays `&'static str`.
+pub(crate) fn usage_redirected_for(os: &str) -> &'static str {
+    if machine_wording::is_mac(os) {
+        "usage not recorded: this Mac's managed Claude settings send session telemetry to your organization's collector"
+    } else {
+        "usage not recorded: this computer's managed Claude settings send session telemetry to your organization's collector"
+    }
+}
+
+/// [`usage_redirected_for`] the OS this build runs on.
+pub(crate) fn usage_redirected() -> &'static str {
+    usage_redirected_for(machine_wording::RUNNING_OS)
+}
 
 /// The keys that decide where Claude's logs go, in what format, or whether they are sent, each
 /// with the one value that keeps them reaching CodeSense (`None`: any value redirects them).
@@ -91,9 +105,9 @@ pub(crate) fn unrecorded(runtime: AgentCli) -> bool {
     redirectable(runtime) && redirect().is_some()
 }
 
-/// [`USAGE_REDIRECTED`] while a managed-settings file sends some CLI's usage past CodeSense.
+/// [`usage_redirected`] while a managed-settings file sends some CLI's usage past CodeSense.
 pub(crate) fn usage_reason() -> Option<&'static str> {
-    (AgentCli::ALL.into_iter().any(redirectable) && redirect().is_some()).then_some(USAGE_REDIRECTED)
+    (AgentCli::ALL.into_iter().any(redirectable) && redirect().is_some()).then(usage_redirected)
 }
 
 /// How to read a `runtime` session's usage from its own session log, while a managed-settings file
@@ -134,7 +148,7 @@ fn redirect_at(path: PathBuf) -> Option<Redirect> {
     seen().insert(path.clone(), Seen { modified, len, keys: keys.clone() });
     let redirect = (!keys.is_empty()).then_some(Redirect { path, keys })?;
     // Key names only: their values can hold credentials.
-    log::info!(target: "session_usage", "{} sets {}: Claude session usage is not recorded on this Mac", redirect.path.display(), redirect.keys.join(", "));
+    log::info!(target: "session_usage", "{} sets {}: Claude session usage is not recorded on {}", redirect.path.display(), redirect.keys.join(", "), machine_wording::machine_noun_lower(machine_wording::RUNNING_OS));
     Some(redirect)
 }
 
@@ -291,7 +305,7 @@ mod tests {
         let _fixture = Fixture::redirecting_unread();
         assert!(unrecorded(AgentCli::Claude));
         assert!(!unrecorded(AgentCli::Codex));
-        assert_eq!(usage_reason(), Some(USAGE_REDIRECTED));
+        assert_eq!(usage_reason(), Some(usage_redirected()));
     }
 
     #[test]
@@ -300,10 +314,7 @@ mod tests {
         assert!(redirectable(AgentCli::Claude));
         assert_eq!(
             crate::agents::adapter::desktop(AgentCli::Claude).managed_settings,
-            [
-                "/Library/Application Support/ClaudeCode/managed-settings.json",
-                "/etc/claude-code/managed-settings.json",
-            ]
+            crate::agents::adapter::claude_managed(std::env::consts::OS).settings
         );
         for cli in AgentCli::ALL.into_iter().filter(|cli| *cli != AgentCli::Claude) {
             assert!(crate::agents::adapter::desktop(cli).managed_settings.is_empty(), "{cli:?}");
@@ -327,5 +338,17 @@ mod tests {
         let _unread = Fixture::redirecting_unread();
         assert!(session_log_reader(AgentCli::Claude).is_none());
         assert!(unrecorded(AgentCli::Claude));
+    }
+
+    #[test]
+    fn the_redirect_reason_names_the_computer_for_its_os() {
+        assert_eq!(
+            usage_redirected_for("macos"),
+            "usage not recorded: this Mac's managed Claude settings send session telemetry to your organization's collector"
+        );
+        assert_eq!(
+            usage_redirected_for("linux"),
+            "usage not recorded: this computer's managed Claude settings send session telemetry to your organization's collector"
+        );
     }
 }

@@ -13,7 +13,7 @@ use rmcp::schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 pub(crate) const NOTES_CHANGED: &str = "notes changed during read";
@@ -146,7 +146,7 @@ pub(crate) async fn resolve_at_observed(
     params: &Params,
     scope: &CallerScope,
     stories: HashMap<String, String>,
-    observer: impl FnOnce(super::checkpoints::Stats) + Send + 'static,
+    observer: impl FnOnce(super::facade::Stats) + Send + 'static,
 ) -> Result<WhyLine, String> {
     resolve_at_holding(
         home,
@@ -172,7 +172,7 @@ async fn resolve_at_holding(
     scope: &CallerScope,
     launch_stories: HashMap<String, String>,
     hold: ReadHold,
-    observer: Option<Box<dyn FnOnce(super::checkpoints::Stats) + Send>>,
+    observer: Option<Box<dyn FnOnce(super::facade::Stats) + Send>>,
     drain: bool,
 ) -> Result<WhyLine, String> {
     let (read_home, read_principal, read_store, read_params, read_scope) = (
@@ -184,7 +184,7 @@ async fn resolve_at_holding(
     );
     let blocking_hold = hold.clone();
     let _hold = hold;
-    let (mut result, stats) = read_held(blocking_hold, move || {
+    let (mut result, stats, checkout) = read_held(blocking_hold, move || {
         let mut result = local_result(resolve_with_read(
             &read_home,
             &read_principal,
@@ -193,8 +193,8 @@ async fn resolve_at_holding(
             &read_store,
             launch_stories,
             |repo, rev, path| {
-                let source =
-                    if drain { GitAiSource::for_home(&read_home) } else { GitAiSource::default() };
+                let caps = crate::platform_caps::Caps::live();
+                let source = super::facade::notes_source(&caps, &read_home, drain);
                 AttributionSource::ranges(&source, repo, rev, path)
             },
         ))?;
@@ -205,6 +205,8 @@ async fn resolve_at_holding(
             .filter(|range| super::turns::exact_agent_range(range))
             .filter_map(|range| Value::as_str(&range["commit"]).map(str::to_owned))
             .collect::<BTreeSet<_>>();
+        // The attached checkout, where a charged session's commits are dated.
+        let mut checkout = None;
         let stats = if BTreeSet::is_empty(&commits) {
             std::default::Default::default()
         } else if let Some(repo) = configured_repo(&read_home, &read_principal, &read_params.repo)?
@@ -214,7 +216,8 @@ async fn resolve_at_holding(
             })
         {
             let mut usage = crate::session_usage::UsageStore::open(&read_store)?;
-            let stats = super::checkpoints::harvest(
+            let stats = super::facade::harvest(
+                &crate::platform_caps::Caps::live(),
                 Path::new(repo.local_path.as_deref().unwrap()),
                 &repo.remote_key,
                 &mut usage,
@@ -239,11 +242,12 @@ async fn resolve_at_holding(
                     }
                 }
             }
+            checkout = repo.local_path.clone().map(PathBuf::from);
             stats
         } else {
             std::default::Default::default()
         };
-        Ok((result, stats))
+        Ok((result, stats, checkout))
     })
     .await?;
     let natives: BTreeSet<String> = result["ranges"]
@@ -279,6 +283,50 @@ async fn resolve_at_holding(
             sessions.entry(id).or_insert(facts);
         }
     }
+    // A session charged to more than one story worked the story in force at its commit's time.
+    // Only charged sessions' commits are dated, in one read of the checkout, and each session's
+    // stories are read once.
+    let mut charged: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for range in result["ranges"].as_array().into_iter().flatten() {
+        if range["basis"] != "exact" || range["tool"] == HUMAN_TOOL {
+            continue;
+        }
+        let id = Value::as_str(&range["nativeSessionId"]).and_then(|native| native_to_session.get(native));
+        if let (Some(id), Some(commit)) = (id, Value::as_str(&range["commit"])) {
+            if sessions[id.as_str()]["charges"].as_array().is_some_and(|c| !std::vec::Vec::is_empty(c)) {
+                charged.entry(id.clone()).or_default().insert(commit.to_owned());
+            }
+        }
+    }
+    let stories_at: HashMap<(String, String), Option<String>> = match checkout {
+        Some(checkout) if !BTreeMap::is_empty(&charged) => {
+            let (at_store, at_home, at_scope) = (store.to_owned(), home.to_owned(), scope.clone());
+            crate::commands::await_blocking("why_line.story_at", move || {
+                let times = super::turns::committer_times(
+                    &checkout,
+                    charged.values().flatten().map(String::as_str),
+                );
+                let usage = crate::session_usage::UsageStore::open(&at_store)?;
+                let mut stories = crate::session_usage::StoryResolver::for_home(&at_home, HashMap::new())
+                    .with_scope(at_scope);
+                let mut found = HashMap::new();
+                for (id, commits) in charged {
+                    let dated: Vec<(String, i64)> = commits
+                        .into_iter()
+                        .filter_map(|commit| times.get(&commit).map(|at| (commit.clone(), *at)))
+                        .collect();
+                    let at: Vec<i64> = dated.iter().map(|(_, at)| *at).collect();
+                    let story = usage.story_ids_at(&id, &at, &mut stories)?;
+                    for ((commit, _), story) in dated.into_iter().zip(story) {
+                        found.insert((id.clone(), commit), story);
+                    }
+                }
+                Ok(found)
+            })
+            .await?
+        }
+        _ => HashMap::new(),
+    };
     if let Some(ranges) = result.get_mut("ranges").and_then(Value::as_array_mut) {
         for range in ranges {
             if range["basis"] != "exact" || range["tool"] == HUMAN_TOOL {
@@ -290,7 +338,11 @@ async fn resolve_at_holding(
             {
                 range["sessionId"] = json!(id);
                 range["link"] = json!("linked");
-                range["story"] = sessions[id.as_str()]["story"]["id"].clone();
+                let commit = Value::as_str(&range["commit"]).unwrap_or_default().to_owned();
+                range["story"] = match stories_at.get(&(id.clone(), commit)) {
+                    Some(story) => json!(story),
+                    None => sessions[id.as_str()]["story"]["id"].clone(),
+                };
                 range
                     .as_object_mut()
                     .expect("range object")
@@ -878,6 +930,19 @@ fn associated_story(subject: &str) -> Option<String> {
     story_id_from_branch(id).filter(|parsed| parsed == id)
 }
 
+/// The most candidate sessions an associated range names.
+const MAX_CANDIDATES: usize = 20;
+
+/// The distinct session ids of a story's usage rows, newest first: a session charged to the story
+/// more than once has a row per segment, and is a candidate once.
+fn candidate_ids(rows: Vec<crate::session_usage::SessionUsage>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    rows.into_iter()
+        .map(|row| row.session_id)
+        .filter(|id| seen.insert(id.clone()))
+        .collect()
+}
+
 fn associate(
     store: &Path,
     stories: &mut crate::session_usage::StoryResolver,
@@ -902,17 +967,15 @@ fn associate(
     let candidates = match candidate_cache.entry(story.clone()) {
         std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
         std::collections::hash_map::Entry::Vacant(entry) => {
+            // Every row, newest first: a session charged to the story more than once has several,
+            // and the limit counts distinct sessions.
             let filter = Filter {
                 story: Some(story.clone()),
-                limit: Some(20),
                 ..Filter::default()
             };
-            let ids = UsageStore::open(store)?
-                .report_with(&filter, stories)?
-                .sessions
-                .into_iter()
-                .map(|session| session.session_id)
-                .collect();
+            let report = UsageStore::open(store)?.report_with(&filter, stories)?;
+            let mut ids = candidate_ids(report.sessions);
+            ids.truncate(MAX_CANDIDATES);
             entry.insert(ids)
         }
     };
@@ -1568,6 +1631,88 @@ pub(crate) mod tests {
                 assert_eq!(result, joined(home.path(), &store_path, &p).await);
             }
         }
+    }
+
+    /// A seat charged to another story keeps each range's story at its commit's time: the charge
+    /// in force then, else the story it had before its first charge. The session itself names
+    /// the story of its latest segment.
+    #[tokio::test]
+    async fn a_charged_session_s_range_takes_the_story_in_force_at_its_commit() {
+        use crate::session_usage::{charge::Charge, record::SessionRecord, UsageStore};
+        let home = tempfile::tempdir().unwrap();
+        let repo = rebuild();
+        attach(home.path(), repo.path());
+        let c1 = git(repo.path(), &["rev-parse", "HEAD~1"]);
+        let committed: i64 = git(repo.path(), &["log", "-1", "--format=%ct", c1.trim()]).trim().parse().unwrap();
+        let store_path = home.path().join("injected-usage.sqlite");
+        let store = UsageStore::open(&store_path).unwrap();
+        // The Claude seat was charged to DEMO-2 before the commit, the Codex seat only after it.
+        for (native, id, cli, from_ms) in [
+            (CLAUDE, "tab-claude", "claude", committed * 1000 - 1),
+            (CODEX, "tab-codex", "codex", committed * 1000 + 5_000),
+        ] {
+            let mut record = SessionRecord::new(id);
+            record.native_session_id = Some(native.into());
+            record.cli = Some(cli.into());
+            record.story_id = Some("DEMO-1".into());
+            record.org = Some("acme".into());
+            store.write_session_record(&record).unwrap();
+            let charge = Charge {
+                story_id: "DEMO-2".into(),
+                from_ms,
+                org: Some("acme".into()),
+                team: None,
+                charged_by: Some("lead".into()),
+                charged_by_session: "tab-lead".into(),
+                charged_at_ms: from_ms,
+            };
+            store.charge_story(id, &charge).unwrap();
+        }
+        drop(store);
+        for (path, id, story) in [("a.txt", "tab-claude", "DEMO-2"), ("b.txt", "tab-codex", "DEMO-1")] {
+            let p = Params {
+                path: path.into(),
+                start: 1,
+                end: 3,
+                ..params()
+            };
+            let result = joined(home.path(), &store_path, &p).await;
+            assert!(!result["ranges"].as_array().unwrap().is_empty());
+            for range in result["ranges"].as_array().unwrap() {
+                assert_eq!(range["sessionId"], id);
+                assert_eq!(range["story"], story, "{path}");
+            }
+            assert_eq!(result["sessions"][id]["story"]["id"], "DEMO-2", "the latest segment's story");
+            assert_eq!(result["sessions"][id]["charges"][0]["story"], "DEMO-2");
+        }
+    }
+
+    /// A session charged to a story twice has two rows of it, and is one candidate.
+    #[test]
+    fn a_session_with_two_segments_of_a_story_is_one_candidate() {
+        use crate::session_usage::{charge::Charge, event::Tokens, tests, Filter, StoryResolver};
+        let (_dir, mut store) = tests::store();
+        let at = 1_790_000_000_000;
+        let calls: Vec<_> = (0..3)
+            .map(|n| tests::event(&format!("e{n}"), "seat", "gpt-6-sol", at + n * 1_000, Tokens { input: 1, ..Default::default() }))
+            .collect();
+        store.ingest(&calls).unwrap();
+        for from_ms in [at, at + 1_500] {
+            let charge = Charge {
+                story_id: "DEMO-3".into(),
+                from_ms,
+                org: None,
+                team: None,
+                charged_by: None,
+                charged_by_session: "seat".into(),
+                charged_at_ms: from_ms,
+            };
+            store.charge_story("seat", &charge).unwrap();
+        }
+        let filter = Filter { story: Some("DEMO-3".into()), ..Filter::default() };
+        let report = store.report_with(&filter, &mut StoryResolver::default()).unwrap();
+        assert_eq!(report.sessions.len(), 2, "two segments of the story");
+        assert_eq!(candidate_ids(report.sessions), ["seat"]);
     }
 
     #[tokio::test]

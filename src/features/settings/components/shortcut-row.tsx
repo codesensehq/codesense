@@ -1,15 +1,28 @@
 // SPDX-License-Identifier: MIT
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ComponentProps } from "react";
 import { toast } from "sonner";
 
 import { AppButton } from "@/shared/components/app-button";
-import { formatKeystrokeDisplay, keystrokeFromEvent } from "@/shared/lib/shortcuts/keystroke";
+import {
+  CapabilityOffControl,
+  CapabilityOffNote,
+} from "@/shared/components/capability-off/capability-off";
+import { selectCapability } from "@/shared/lib/capabilities";
+import {
+  formatKeystrokeDisplay,
+  formatModifiersDisplay,
+  hasAnyModifier,
+  hasCommandModifier,
+  hasMod,
+  keystrokeFromEvent,
+} from "@/shared/lib/shortcuts/keystroke";
 import {
   findConflict,
   shortcutLabelById,
   type ResolvedBinding,
   type ShortcutAction,
 } from "@/shared/lib/shortcuts/registry";
+import { useConfigStore } from "@/shared/stores/config-store";
 import { useResolvedBinding, useShortcutsStore } from "@/shared/stores/shortcuts-store";
 
 import { Switch } from "@/components/ui/switch";
@@ -80,12 +93,25 @@ function unboundNote(action: ShortcutAction, binding: ResolvedBinding): string |
  * inline beneath the row until the user retries or Escapes.
  */
 export function ShortcutRow({ action, humanOnly }: ShortcutRowProps) {
-  const binding = useResolvedBinding(action.id) ?? { keystroke: "" };
+  const binding = useResolvedBinding(action.id) ?? { keystroke: "", terminalKeystroke: "" };
   const current = binding.keystroke;
   const hasOverride = useShortcutsStore((s) => action.id in s.shortcuts);
   const setShortcut = useShortcutsStore((s) => s.setShortcut);
   const clearShortcut = useShortcutsStore((s) => s.clearShortcut);
   const resetShortcut = useShortcutsStore((s) => s.resetShortcut);
+  // An action whose capability is off on this OS holds no chord: the row says why instead, and
+  // Edit does nothing.
+  const cap = action.capability;
+  const capOff = useConfigStore((s) => !!cap && !selectCapability(s.platformCaps, cap).on);
+  const offNoteId = useId();
+  const offControl = (control: ComponentProps<typeof CapabilityOffControl>["children"]) =>
+    cap ? (
+      <CapabilityOffControl cap={cap} noteId={offNoteId}>
+        {control}
+      </CapabilityOffControl>
+    ) : (
+      control
+    );
 
   const [editing, setEditing] = useState(false);
   const [error, setError] = useState<{ detail: string; takeable?: string } | null>(null);
@@ -113,11 +139,9 @@ export function ShortcutRow({ action, humanOnly }: ShortcutRowProps) {
     // Bare modifier presses: update the "waiting for key" hint so the
     // user gets feedback that their modifier is registered.
     if (e.key === "Meta" || e.key === "Control" || e.key === "Shift" || e.key === "Alt") {
-      const parts: string[] = [];
-      if (e.metaKey || e.ctrlKey) parts.push("⌘");
-      if (e.shiftKey) parts.push("⇧");
-      if (e.altKey) parts.push("⌥");
-      setPendingModifiers(parts.join(""));
+      setPendingModifiers(
+        formatModifiersDisplay({ cmdOrCtrl: hasMod(e), shift: e.shiftKey, alt: e.altKey }),
+      );
       return;
     }
     // Block propagation so the global shortcut handler doesn't also
@@ -131,13 +155,7 @@ export function ShortcutRow({ action, humanOnly }: ShortcutRowProps) {
     }
 
     // ⌫ or Delete alone removes the chord: "explicitly no shortcut".
-    if (
-      (e.key === "Backspace" || e.key === "Delete") &&
-      !e.metaKey &&
-      !e.ctrlKey &&
-      !e.altKey &&
-      !e.shiftKey
-    ) {
+    if ((e.key === "Backspace" || e.key === "Delete") && !hasAnyModifier(e)) {
       clearShortcut(action.id);
       closeEditor();
       return;
@@ -146,7 +164,7 @@ export function ShortcutRow({ action, humanOnly }: ShortcutRowProps) {
     // Bare Tab (no modifier) traps keyboard users — a shortcut bound
     // to Tab would break tab navigation app-wide. Require a modifier
     // to bind Tab.
-    if (e.key === "Tab" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    if (e.key === "Tab" && !hasCommandModifier(e)) {
       setError({ detail: "Tab alone would break keyboard navigation — add a modifier" });
       return;
     }
@@ -179,7 +197,9 @@ export function ShortcutRow({ action, humanOnly }: ShortcutRowProps) {
       <div className="flex items-center justify-between gap-3">
         <span className="text-sm">{action.label}</span>
         <div className="flex items-center gap-2">
-          {editing ? (
+          {capOff && cap ? (
+            <CapabilityOffNote cap={cap} id={offNoteId} />
+          ) : editing ? (
             <button
               ref={captureRef}
               type="button"
@@ -201,14 +221,16 @@ export function ShortcutRow({ action, humanOnly }: ShortcutRowProps) {
               )}
             </kbd>
           )}
-          <AppButton
-            size="sm"
-            variant="ghost"
-            data-testid={`shortcut-row-${action.id}-edit`}
-            onClick={() => setEditing((e) => !e)}
-          >
-            {editing ? "Cancel" : "Edit"}
-          </AppButton>
+          {offControl(
+            <AppButton
+              size="sm"
+              variant="ghost"
+              data-testid={`shortcut-row-${action.id}-edit`}
+              onClick={() => setEditing((e) => !e)}
+            >
+              {editing ? "Cancel" : "Edit"}
+            </AppButton>,
+          )}
           <AppButton
             size="sm"
             variant="ghost"

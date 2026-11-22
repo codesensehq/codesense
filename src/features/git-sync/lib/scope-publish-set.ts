@@ -7,6 +7,7 @@
 import { useMemo } from "react";
 
 import { useContentSource } from "@/shared/hooks/use-content-source";
+import { relative } from "@/shared/lib/path";
 
 import type { PublishFile, PublishSet } from "./types";
 import { useOrgRoot } from "./use-org-root";
@@ -23,10 +24,7 @@ export function contentPrefix(
   teamContentPath: string | null | undefined,
 ): string | null {
   if (!orgRoot || !teamContentPath) return null;
-  const root = orgRoot.replace(/\/+$/, "");
-  const content = teamContentPath.replace(/\/+$/, "");
-  if (content === root || !content.startsWith(`${root}/`)) return null;
-  return content.slice(root.length + 1);
+  return relative(orgRoot, teamContentPath) || null;
 }
 
 /** True when an org-root-relative path lives under the content prefix. */

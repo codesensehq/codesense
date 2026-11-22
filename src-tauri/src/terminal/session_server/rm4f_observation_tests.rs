@@ -61,6 +61,7 @@ fn client(server: &TestServer) -> Arc<SessionServerClient> {
 
 fn request() -> OpenTab {
     OpenTab {
+        cwd: None,
         viewer: ViewerId::new("rm4f-observer"),
         workspace: WorkspaceKey::new("rm4f"),
         session: PtySessionId::new("controlled"),

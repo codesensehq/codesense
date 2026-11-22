@@ -1218,37 +1218,28 @@ pub async fn start_agent_account_login(
     Ok("started")
 }
 
-#[cfg(unix)]
+/// An exclusive lock on a managed Claude home's settings, so a second
+/// writer is refused rather than racing this one. Released when dropped.
 struct ClaudeSettingsLock(std::fs::File);
 
-#[cfg(unix)]
 impl ClaudeSettingsLock {
     fn acquire(home: &std::path::Path) -> Result<Self, String> {
-        use std::os::fd::AsRawFd;
-        use std::os::unix::fs::OpenOptionsExt;
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .mode(0o600)
-            .open(home.join(".codesense-settings.lock"))
-            .map_err(|error| error.to_string())?;
-        // SAFETY: the file descriptor remains owned by this guard, and flock
-        // neither retains pointers nor accesses Rust-managed memory.
-        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-            return Err(std::io::Error::last_os_error().to_string());
+        let file = codesense_platform::fs::create_owner_only(
+            &home.join(".codesense-settings.lock"),
+            codesense_platform::fs::Open::NoFollow,
+        )
+        .map_err(|error| error.to_string())?;
+        match codesense_platform::fs::try_lock_exclusive(&file) {
+            Ok(true) => Ok(Self(file)),
+            Ok(false) => Err("Claude settings are locked by another writer".into()),
+            Err(error) => Err(error.to_string()),
         }
-        Ok(Self(file))
     }
 }
 
-#[cfg(unix)]
 impl Drop for ClaudeSettingsLock {
     fn drop(&mut self) {
-        use std::os::fd::AsRawFd;
-        // SAFETY: this is the same live descriptor locked by the guard.
-        let _ = unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
+        let _ = codesense_platform::fs::unlock(&self.0);
     }
 }
 
@@ -1260,7 +1251,7 @@ pub(crate) fn install_claude_status_line(
     capability: &str,
 ) -> Result<AgentAccountProfile, String> {
     use crate::content_engine::write_tmp_fsync_rename;
-    use std::os::unix::fs::PermissionsExt;
+    use codesense_platform::fs::{set_executable, set_owner_only, Reach};
 
     let home =
         agent_account_store::managed_home(root, principal, &profile.id).map_err(mutation_error)?;
@@ -1295,12 +1286,12 @@ pub(crate) fn install_claude_status_line(
             codesense_pty_core::shell_quote(original),
         );
         write_tmp_fsync_rename(&wrapper_path, wrapper.as_bytes()).map_err(|e| e.to_string())?;
-        std::fs::set_permissions(&wrapper_path, std::fs::Permissions::from_mode(0o700))
+        set_owner_only(&wrapper_path)
+            .and_then(|()| set_executable(&wrapper_path, Reach::Owner))
             .map_err(|e| e.to_string())?;
         if !backup_path.exists() {
             write_tmp_fsync_rename(&backup_path, &observed).map_err(|e| e.to_string())?;
-            std::fs::set_permissions(&backup_path, std::fs::Permissions::from_mode(0o600))
-                .map_err(|e| e.to_string())?;
+            set_owner_only(&backup_path).map_err(|e| e.to_string())?;
         }
         object.insert(
             "statusLine".into(),
@@ -1312,8 +1303,7 @@ pub(crate) fn install_claude_status_line(
         }
         let bytes = serde_json::to_vec_pretty(&settings).map_err(|e| e.to_string())?;
         write_tmp_fsync_rename(&settings_path, &bytes).map_err(|e| e.to_string())?;
-        std::fs::set_permissions(&settings_path, std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| e.to_string())?;
+        set_owner_only(&settings_path).map_err(|e| e.to_string())?;
         return agent_account_store::set_status_line(
             root,
             principal,
@@ -2534,6 +2524,100 @@ mod tests {
             .lock()
             .unwrap()
             .contains_key(&(7, "account".into())));
+    }
+
+    #[test]
+    fn a_link_at_the_claude_settings_lock_is_refused_before_anything_is_created() {
+        use crate::test_support::owner_only::file_symlink;
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("elsewhere");
+        if file_symlink(&target, &temp.path().join(".codesense-settings.lock")) {
+            assert!(ClaudeSettingsLock::acquire(temp.path()).is_err());
+            assert!(!target.exists());
+        }
+    }
+
+    #[test]
+    fn claude_status_line_files_are_owner_only_over_shared_ones_and_a_held_lock_refuses() {
+        use crate::test_support::owner_only::{is_owner_only, shared_file};
+        let temp = TempDir::new().unwrap();
+        let principal = Principal::from(42u64);
+        let created = agent_account_store::create_profile(
+            temp.path(),
+            &principal,
+            AgentProvider::Claude,
+            "Primary",
+        )
+        .unwrap();
+        let ready = agent_account_store::commit_identity(
+            temp.path(),
+            &principal,
+            &created.id,
+            created.generation,
+            agent_account_store::StoredProviderIdentity {
+                duplicate_key: None,
+                display_hint: None,
+                verification: IdentityVerification::Unverified,
+                verified_at: 1,
+            },
+        )
+        .unwrap();
+        let home = agent_account_store::managed_home(temp.path(), &principal, &ready.id).unwrap();
+        let settings = home.join("settings.json");
+        let wrapper = home.join("codesense-status-line.sh");
+        let lock = home.join(".codesense-settings.lock");
+        shared_file(&settings, br#"{"theme":"dark"}"#);
+        shared_file(&wrapper, &[b'#'; 4096]);
+        shared_file(&lock, b"");
+
+        let held = ClaudeSettingsLock::acquire(&home).unwrap();
+        assert!(
+            ClaudeSettingsLock::acquire(&home).is_err(),
+            "a second writer"
+        );
+        assert!(install_claude_status_line(
+            temp.path(),
+            &principal,
+            &ready,
+            std::path::Path::new("/tmp/codesense-test.sock"),
+            "route-capability",
+        )
+        .is_err());
+        drop(held);
+
+        install_claude_status_line(
+            temp.path(),
+            &principal,
+            &ready,
+            std::path::Path::new("/tmp/codesense-test.sock"),
+            "route-capability",
+        )
+        .unwrap();
+        for path in [
+            &settings,
+            &wrapper,
+            &home.join(".codesense-status-line-backup.json"),
+        ] {
+            assert!(is_owner_only(path), "{}", path.display());
+        }
+        assert!(std::fs::read_to_string(&wrapper)
+            .unwrap()
+            .starts_with("#!/bin/zsh\n"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&wrapper).unwrap().permissions().mode();
+            assert_eq!(
+                mode & 0o777,
+                0o700,
+                "the wrapper stays runnable by its owner"
+            );
+        }
+        drop(ClaudeSettingsLock::acquire(&home).unwrap());
+        let fresh = temp.path().join("fresh");
+        std::fs::create_dir(&fresh).unwrap();
+        drop(ClaudeSettingsLock::acquire(&fresh).unwrap());
+        assert!(is_owner_only(&fresh.join(".codesense-settings.lock")));
     }
 
     #[test]

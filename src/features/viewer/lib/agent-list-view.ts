@@ -22,6 +22,7 @@ import {
 } from "@/shared/lib/status-mark";
 import { parseTeamKey } from "@/shared/lib/team-key";
 import type { AgentSessionRow } from "@/tauri/commands";
+import { localMachineLabel } from "@/shared/lib/local-machine";
 
 /** One agent in the launch tree: the agents it launched nest under it, wherever they work. */
 export interface AgentTreeNode {
@@ -365,19 +366,16 @@ export function rowMarkers(
   return narrow ? all.slice(0, 1) : all;
 }
 
-/** The machine an agent runs on, as a row says it when its tab runs here. */
-export const THIS_MAC = "This Mac";
-
 /**
  * The machine an agent runs on, by name: the listed machine its tab runs on (`machineId`, from
- * the tab's origin), else This Mac. A machine no list knows reads {@link UNKNOWN_MACHINE_LABEL},
+ * the tab's origin), else the local machine's label. A machine no list knows reads {@link UNKNOWN_MACHINE_LABEL},
  * never its raw id.
  */
 export function agentMachineLabel(
   machineId: string | null | undefined,
   machines: readonly { machineId: string; label: string }[] | null | undefined,
 ): string {
-  if (!isRemoteMachineId(machineId)) return THIS_MAC;
+  if (!isRemoteMachineId(machineId)) return localMachineLabel();
   return machines?.find((m) => m.machineId === machineId)?.label ?? UNKNOWN_MACHINE_LABEL;
 }
 

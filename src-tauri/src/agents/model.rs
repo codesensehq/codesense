@@ -257,6 +257,9 @@ pub enum ValidationError {
     /// The value of the named `env` variable is too long or holds a NUL.
     InvalidEnvValue(String),
     EngineTelemetryEnv(String),
+    /// A variable Windows reads to start a batch file or pick a program's extension
+    /// ([`codesense_pty_core::spawn::shell_dispatch_env`]).
+    ShellDispatchEnv(String),
     /// The value of the named `env` variable was written as something other than a string.
     EnvValueNotString(String),
     InvalidMcpServer(String),
@@ -314,6 +317,10 @@ impl fmt::Display for ValidationError {
                 "env name {name:?} is not valid: letters, digits and '_', not starting with a digit, at most {MAX_AGENT_ENV_NAME} bytes"
             ),
             Self::EngineTelemetryEnv(name) => write!(f, "env.{name} is engine-owned usage telemetry; remove this variable so CodeSense can measure spend"),
+            Self::ShellDispatchEnv(name) => write!(
+                f,
+                "env.{name} changes how Windows starts programs, which an agent may not set; remove this variable"
+            ),
             Self::InvalidEnvValue(name) => write!(
                 f,
                 "the value of env {name:?} is not valid: at most {MAX_AGENT_ENV_VALUE} bytes, with no NUL"
@@ -515,7 +522,8 @@ impl<'de> Deserialize<'de> for AgentEnv {
 }
 
 /// Refuses an `env` map a launch cannot carry: too many variables, a name
-/// that is not a portable variable name, or a value too long or holding a NUL.
+/// the engine or Windows owns, a name that is not a portable variable name,
+/// or a value too long or holding a NUL.
 pub(crate) fn check_env(env: &BTreeMap<String, String>) -> Result<(), ValidationError> {
     if env.len() > MAX_AGENT_ENV_VARS {
         return Err(ValidationError::TooManyEnvVars(env.len()));
@@ -523,6 +531,9 @@ pub(crate) fn check_env(env: &BTreeMap<String, String>) -> Result<(), Validation
     for (name, value) in env {
         if codesense_pty_core::spawn::telemetry_owned_env(name) {
             return Err(ValidationError::EngineTelemetryEnv(name.clone()));
+        }
+        if codesense_pty_core::spawn::shell_dispatch_env(name) {
+            return Err(ValidationError::ShellDispatchEnv(name.clone()));
         }
         if !is_env_name(name) {
             return Err(ValidationError::InvalidEnvName(name.clone()));

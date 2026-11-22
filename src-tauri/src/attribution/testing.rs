@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Test fixtures shared by the attribution tests.
 
+#[cfg(cap_git_ai)]
 use super::managed::Managed;
 use std::path::{Path, PathBuf};
 
@@ -75,11 +76,13 @@ pub(crate) fn logged_calls(log: &Path) -> Vec<String> {
 }
 
 /// A managed home under a temp dir, with a short socket dir of its own.
+#[cfg(cap_git_ai)]
 pub(crate) struct Sandbox {
     pub dir: tempfile::TempDir,
     pub managed: Managed,
 }
 
+#[cfg(cap_git_ai)]
 impl Sandbox {
     pub(crate) fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
@@ -117,6 +120,7 @@ impl Sandbox {
     }
 }
 
+#[cfg(cap_git_ai)]
 impl Drop for Sandbox {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(self.managed.socket_dir());
@@ -124,8 +128,10 @@ impl Drop for Sandbox {
 }
 
 /// Removes the real socket dir a CodeSense home under test would have used.
+#[cfg(cap_git_ai)]
 pub(crate) struct SocketDirGuard(pub PathBuf);
 
+#[cfg(cap_git_ai)]
 impl SocketDirGuard {
     pub(crate) fn for_home(codesense_home: &Path) -> Self {
         Self(
@@ -136,6 +142,7 @@ impl SocketDirGuard {
     }
 }
 
+#[cfg(cap_git_ai)]
 impl Drop for SocketDirGuard {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
@@ -144,6 +151,7 @@ impl Drop for SocketDirGuard {
 
 /// A managed worktree, a prepared saved-Agent launch into it, and a fake git-ai under the
 /// CodeSense home: everything a launch entry path needs, for real.
+#[cfg(cap_git_ai)]
 pub(crate) struct Launch {
     pub tmp: tempfile::TempDir,
     pub cwd: PathBuf,
@@ -154,6 +162,7 @@ pub(crate) struct Launch {
 
 pub(crate) const REMOTE: &str = "https://github.com/acme/api.git";
 
+#[cfg(cap_git_ai)]
 impl Launch {
     /// A launch of `runtime`, with attribution switched `on` for the repo and a git-ai 1.7.5
     /// that starts its daemon.

@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="codesense:owner-machine" content="{{owner_machine}}">
   <title>{{title}}</title>
   <link rel="stylesheet" href="vendor/xterm.css">
   <link rel="stylesheet" href="style.css">
@@ -10,7 +11,7 @@
 <body data-template="workspaces">
   <header class="top">
     <h1>{{title}}</h1>
-    <p class="status" id="status" role="status" aria-live="polite">Connecting to the owner's Mac</p>
+    <p class="status" id="status" role="status" aria-live="polite">Connecting to the owner's {{owner_machine}}</p>
     <p class="role" id="role" role="status" hidden></p>
   </header>
   <nav id="views" class="views" aria-label="Dashboard views" hidden>

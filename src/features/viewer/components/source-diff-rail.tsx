@@ -29,6 +29,7 @@ import type { RouteState } from "../lib/route-to-context";
 import { needsServerUpdate } from "../lib/source-diff-errors";
 import { openMachinesPanel } from "@/features/machines/lib/machine-actions";
 import { ChromeIconButton } from "./overlay-shell";
+import { localMachineLabel } from "@/shared/lib/local-machine";
 
 /** Per-file "→ context" routing, offered only where the backend can route
  *  (a local worktree with a source repo). */
@@ -244,7 +245,13 @@ export function SourceDiffRail(props: SourceDiffRailProps) {
             <span className="font-medium">
               {machineLabel ? "Couldn’t load diff from remote." : "Couldn’t load the source diff."}
             </span>
-            <span className="line-clamp-4 break-words text-muted-foreground">{error}</span>
+            {/* Never clamped: the cause is usually a path, and its tail is what says which. */}
+            <span
+              className="whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]"
+              data-testid={`source-diff-error-${wsId}`}
+            >
+              {error}
+            </span>
             <span className="mt-1">
               <RetryButton onRetry={onRetry} />
             </span>
@@ -293,7 +300,7 @@ export function SourceDiffRail(props: SourceDiffRailProps) {
             <span className="truncate">{machineLabel}</span>
           </span>
         ) : (
-          <span>This Mac</span>
+          <span>{localMachineLabel()}</span>
         )}
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
           <span className="flex items-center gap-1.5 @max-[18rem]:hidden" aria-hidden>

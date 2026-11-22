@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#![cfg(cap_terminal_server_sidecar)]
 //! Process census against the real built sidecar binary: the PTY child's parent
 //! is the sidecar, the sidecar runs detached in its own session (not as its
 //! leader) and is parented by launchd, the child keeps running after the
@@ -196,7 +197,11 @@ fn spawn_sleeper(stream: &mut UnixStream, id: &str) -> i32 {
             starship_preset: None,
             api_port: None,
             env_remove: Vec::new(),
-            env: vec![("HOME".into(), "/var/empty".into())],
+            // A home that exists on every OS: with no cwd the child starts there.
+            env: vec![(
+                "HOME".into(),
+                std::env::temp_dir().to_string_lossy().into_owned(),
+            )],
             agent_env: Vec::new(),
             login_path: None,
         },

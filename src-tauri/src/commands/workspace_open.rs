@@ -29,9 +29,11 @@ use tokio::sync::oneshot::error::TryRecvError;
 use super::dashboard_launch::{launch_label, LaunchMeta, LaunchRecord, LaunchTeam, RunProvenance};
 use super::interactive_gate::{GateRefusal, WorkspaceMode};
 pub(crate) use super::mcp_workspace::{LaunchError, LaunchOutcome};
+pub(crate) use super::worktree::seat::{SeatLaunch, SeatWorktreeParam};
 use crate::agents::adapter;
 use crate::agents::launch::AgentLaunch;
 use crate::agents::launch_check::{LaunchWarning, LaunchWarningCode};
+use crate::shared::machine_wording;
 
 /// What an open with a `target` asks for, as the caller sent it.
 #[derive(Debug, Clone, Default)]
@@ -76,6 +78,9 @@ pub(crate) struct OpenRequest {
     /// resolved from the caller's `maxRuntime` string by [`parse_max_runtime`].
     /// `None` means no limit — the sweep never touches the entry.
     pub max_runtime_ms: Option<u64>,
+    /// The seat worktree a named story session launches into (story targets on This Mac
+    /// only). `None` launches it into the story's shared worktree, as always.
+    pub seat_worktree: Option<SeatWorktreeParam>,
 }
 
 /// The org and team the open runs in when the request names no team.
@@ -166,10 +171,13 @@ pub(crate) enum LaunchTarget {
     /// The story's managed worktree, in the story's own workspace. The handle is the story
     /// id, or `<storyId>#<name>` for a named session beside it. `team` is the story's
     /// own org and team, resolved once so the launch uses the org the open checked.
+    /// `seat` names the seat worktree a named session runs in instead of the story's
+    /// shared one; `None` is the shared worktree.
     Story {
         story_id: String,
         handle: String,
         team: ActiveTeam,
+        seat: Option<SeatLaunch>,
     },
     /// A managed dir under its own handle.
     Dir {
@@ -234,6 +242,9 @@ pub(crate) trait OpenHost: Send + Sync {
     fn role_join_error(&self, _handle: &str) -> Option<String> {
         None
     }
+    /// After a launch into `story_id`'s workspace, start the background cleanup of its
+    /// seat worktrees ([`spawn_seat_sweep`](super::mcp_workspace::spawn_seat_sweep)).
+    fn sweep_seats(&self, _story_id: &str) {}
     /// Where `story_id`'s workspace lives (open or minimized), or `None` when it has none.
     async fn story_workspace_place(
         &self,
@@ -546,6 +557,15 @@ fn already_live_result(handle: String, name: String, req: &OpenRequest) -> OpenR
             message: "maxRuntime ignored: session already live".to_string(),
         });
     }
+    // Nothing is created or moved under a running session: it keeps its working folder,
+    // whether that is a seat worktree or the story's shared one.
+    if req.seat_worktree.is_some() {
+        warnings.push(LaunchWarning {
+            code: LaunchWarningCode::SeatWorktreeIgnored,
+            message: "seatWorktree ignored: session already live; it keeps its working folder"
+                .to_string(),
+        });
+    }
     OpenResult {
         status: OpenStatus::AlreadyLive,
         message,
@@ -658,6 +678,31 @@ struct Planned {
     team: Option<LaunchTeam>,
 }
 
+/// The seat name of a `seatWorktree` launch with story handle `handle`: the handle's
+/// normalized `<name>`. Refused for the story's own session (it runs in the base
+/// worktree) and for a launch on another machine.
+fn seat_name(handle: &str, req: &OpenRequest) -> Result<String, OpenResult> {
+    let Some((_, name)) = handle.split_once('#') else {
+        return Err(OpenResult::invalid(
+            "seatWorktree needs a name: the story's own session runs in the story's worktree",
+        ));
+    };
+    if let Some(machine) = non_blank(req.machine_id.as_deref()) {
+        if machine != super::machines::LOCAL_MACHINE_ID {
+            return Err(OpenResult::invalid(&seat_worktree_runs_here()));
+        }
+    }
+    Ok(name.to_string())
+}
+
+/// Why a `seatWorktree` launch on a machine is refused.
+fn seat_worktree_runs_here() -> String {
+    format!(
+        "seatWorktree runs on {} only; drop machineId or set it to \"local\"",
+        machine_wording::machine_noun(machine_wording::RUNNING_OS)
+    )
+}
+
 /// Resolve `req` into a launch plan, or the `invalid` result for input it cannot use.
 async fn plan_open(
     host: &dyn OpenHost,
@@ -695,12 +740,20 @@ async fn plan_open(
                 session_name.unwrap_or_default()
             )));
         };
+        let seat = match &req.seat_worktree {
+            None => None,
+            Some(worktree) => Some(SeatLaunch {
+                name: seat_name(&handle, req)?,
+                worktree: worktree.clone(),
+            }),
+        };
         let name = session_name.unwrap_or(story_id);
         return Ok(Planned {
             target: LaunchTarget::Story {
                 story_id: story_id.to_string(),
                 handle: handle.clone(),
                 team: story_team,
+                seat,
             },
             handle,
             name: name.to_string(),
@@ -812,8 +865,11 @@ async fn open_agent_as(
     }
     let requested_machine = non_blank(req.machine_id.as_deref());
     if requested_machine.is_some() && !story_target {
+        return Ok(OpenResult::invalid(&team_folder_runs_here()));
+    }
+    if req.seat_worktree.is_some() && !story_target {
         return Ok(OpenResult::invalid(
-            "machine_id launches into a story's workspace on that machine; a team folder runs on This Mac",
+            "seatWorktree needs target: story (a team workspace has no seat worktrees)",
         ));
     }
     let planned = match plan_open(host, active, story_target, req, scope).await {
@@ -829,6 +885,12 @@ async fn open_agent_as(
                     return Ok(OpenResult::invalid(
                         "maxRuntime is enforced on This Mac only; this story's workspace lives on a machine",
                     ));
+                }
+                if req.seat_worktree.is_some() {
+                    return Ok(OpenResult::invalid(&format!(
+                        "{}; this story's workspace lives on a machine",
+                        seat_worktree_runs_here()
+                    )));
                 }
                 return open_on_machine(host, mode, planned, team, machine_id, req).await;
             }
@@ -907,6 +969,10 @@ async fn open_agent_as(
         },
         (_, target) => target,
     };
+    let swept_story = match &target {
+        LaunchTarget::Story { story_id, .. } => Some(story_id.clone()),
+        LaunchTarget::Dir { .. } => None,
+    };
 
     // With no prompt of its own, an agent starts with its default one.
     let initial_prompt = non_blank(req.initial_prompt.as_deref())
@@ -947,6 +1013,9 @@ async fn open_agent_as(
         provenance,
     };
     let outcome = host.launch(launch).await;
+    if let Some(story_id) = &swept_story {
+        host.sweep_seats(story_id);
+    }
     if let (Err(_), Some(destination)) = (&outcome, &destination) {
         host.rollback_context_worktree(destination).await;
     }
@@ -968,6 +1037,7 @@ async fn open_agent_as(
                 "{name} was not opened: too many agent sessions are running. Try again when one finishes."
             ),
         ),
+        Err(LaunchError::Invalid(reason)) => return Ok(OpenResult::invalid(&reason)),
         Err(LaunchError::Other(error)) => return Err(error),
     };
     if let Some(error) = host.role_join_error(&handle) {
@@ -994,6 +1064,31 @@ async fn open_agent_as(
     })
 }
 
+/// A `machine_id` for a team folder is refused, worded for `os`.
+fn team_folder_runs_here_for(os: &str) -> String {
+    format!(
+        "machine_id launches into a story's workspace on that machine; a team folder runs on {}",
+        machine_wording::machine_noun(os)
+    )
+}
+
+fn team_folder_runs_here() -> String {
+    team_folder_runs_here_for(machine_wording::RUNNING_OS)
+}
+
+/// `story_id`'s workspace already lives at `at`, worded for `os`.
+fn already_lives_on_for(os: &str, story_id: &str, at: &WorkspacePlace) -> String {
+    let at = match at {
+        WorkspacePlace::ThisMac => machine_wording::machine_noun(os).to_string(),
+        WorkspacePlace::Machine(id) => format!("machine {id}"),
+    };
+    format!("{story_id}'s workspace already lives on {at}; a workspace stays where it was created")
+}
+
+fn already_lives_on(story_id: &str, at: &WorkspacePlace) -> String {
+    already_lives_on_for(machine_wording::RUNNING_OS, story_id, at)
+}
+
 /// The machine a story launch runs on, or `None` for This Mac. A workspace stays where it
 /// was created: with no machine asked for, the launch goes where the workspace lives; a
 /// machine asked for must be where it lives, or where a new one is created. `Err` is why
@@ -1004,15 +1099,7 @@ pub(crate) fn story_machine(
     requested: Option<&str>,
 ) -> Result<Option<String>, String> {
     let requested = requested.map(str::trim).filter(|m| !m.is_empty());
-    let lives = |at: &WorkspacePlace| {
-        let at = match at {
-            WorkspacePlace::ThisMac => "This Mac".to_string(),
-            WorkspacePlace::Machine(id) => format!("machine {id}"),
-        };
-        format!(
-            "{story_id}'s workspace already lives on {at}; a workspace stays where it was created"
-        )
-    };
+    let lives = |at: &WorkspacePlace| already_lives_on(story_id, at);
     match (requested, place) {
         (None, Some(WorkspacePlace::Machine(at))) => Ok(Some(at)),
         (None, _) => Ok(None),
@@ -1233,6 +1320,7 @@ pub(crate) async fn open_workspace_call_for(
             headed: params.headed,
             machine_id,
             max_runtime_ms,
+            seat_worktree: params.seat_worktree,
         };
         if non_blank(request.reviews.as_deref()).is_some() && request.target.trim() != "story" {
             return Ok(serde_json::json!(OpenResult::invalid(
@@ -1288,6 +1376,11 @@ pub(crate) async fn open_workspace_call_for(
     if non_blank(params.reviews.as_deref()).is_some() {
         return Ok(serde_json::json!(OpenResult::invalid(
             "reviews needs target: story (it names the story task a reviewer reviews)"
+        )));
+    }
+    if params.seat_worktree.is_some() {
+        return Ok(serde_json::json!(OpenResult::invalid(
+            "seatWorktree needs target: story and a name (it launches a named session in its own worktree)"
         )));
     }
     // SW-WA-F5 (AC-1/AC-5): resolve the requested visibility mode (default headed;
@@ -1448,6 +1541,8 @@ impl From<UiLaunchArgs> for OpenRequest {
             // The UI launch sheet does not expose a budget today; the
             // caller is MCP (`open_workspace`) only.
             max_runtime_ms: None,
+            // Nor a seat worktree: a sheet launch runs in the story's shared worktree.
+            seat_worktree: None,
         }
     }
 }
@@ -1509,7 +1604,7 @@ impl OpenWorkspacePort for AppOpenWorkspacePort {
             )
         })
         .await?;
-        super::mcp_workspace::launch_story_session(
+        let outcome = super::mcp_workspace::launch_story_session(
             &self.app,
             story_id,
             Some(&story_org),
@@ -1518,7 +1613,9 @@ impl OpenWorkspacePort for AppOpenWorkspacePort {
             None,
             view,
         )
-        .await
+        .await;
+        super::mcp_workspace::spawn_seat_sweep(&self.app, story_id);
+        outcome
     }
 
     async fn targeted(&self) -> Result<(ActiveTeam, Box<dyn OpenHost>), String> {
@@ -1595,9 +1692,7 @@ pub(crate) fn machine_open_conflict(
         Some(at) => Some(format!(
             "{story_id}'s workspace already lives on machine {at}; a workspace stays where it was created"
         )),
-        None => Some(format!(
-            "{story_id}'s workspace already lives on This Mac; a workspace stays where it was created"
-        )),
+        None => Some(already_lives_on(story_id, &WorkspacePlace::ThisMac)),
     }
 }
 
@@ -2329,6 +2424,10 @@ impl AppOpenHost {
 
 #[async_trait::async_trait]
 impl OpenHost for AppOpenHost {
+    fn sweep_seats(&self, story_id: &str) {
+        super::mcp_workspace::spawn_seat_sweep(&self.app, story_id);
+    }
+
     fn role_join_error(&self, handle: &str) -> Option<String> {
         use tauri::Manager;
         crate::commands::dashboard_launch::DashboardLaunchState::snapshot(
@@ -2678,6 +2777,7 @@ impl OpenHost for AppOpenHost {
                 story_id,
                 handle,
                 team,
+                seat,
             } => {
                 launch_story_session_typed(
                     &self.app,
@@ -2685,6 +2785,7 @@ impl OpenHost for AppOpenHost {
                     launch.initial_prompt.as_deref(),
                     super::mcp_workspace::StoryLaunchOptions {
                         handle: Some(handle),
+                        seat,
                         org: Some(team.org),
                         provenance: Some(launch.provenance),
                         record: launch.record,

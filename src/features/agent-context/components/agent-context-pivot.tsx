@@ -26,6 +26,7 @@ import {
   repoRequestLabel,
   TEAM_EVERYTHING_LABEL,
 } from "../lib/agent-context-model";
+import { hasCommandModifier } from "@/shared/lib/shortcuts/keystroke";
 
 // The nav dropdowns (org · team · this pivot) share one row shape.
 const ROW =
@@ -67,7 +68,7 @@ function useListboxKeys(): {
         focus(list.length - 1);
         return;
     }
-    if (e.key.length !== 1 || e.metaKey || e.ctrlKey || e.altKey || e.key === " ") return;
+    if (e.key.length !== 1 || hasCommandModifier(e) || e.key === " ") return;
     e.preventDefault();
     const now = Date.now();
     const text =

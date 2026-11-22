@@ -20,21 +20,25 @@ import { spawnSync } from "node:child_process";
 import { runBuildJob } from "./lib/build-queue.mjs";
 import Ajv2020 from "ajv/dist/2020.js";
 import {
-  REFRESH_COMMAND,
+  REFRESH_ROUTE,
   allowStaleExport as switchedOn,
   diskGate,
   driftInheritedFromMain,
   exportsUntouchedSinceMain,
+  frozenExport,
+  addedSince,
   inheritedNotice,
+  namesIn,
+  strictExports,
 } from "./lib/sealed-export.mjs";
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const CONTENT = "codesense-docs/getting-started/content";
 export const OUTPUT = `${CONTENT}/generated/mcp-tools.json`;
 export const CATALOG = `${CONTENT}/_shared/examples.yml`;
-const SEAL = `${CONTENT}/generated/mcp-tools.inputs.json`;
+export const SEAL = `${CONTENT}/generated/mcp-tools.inputs.json`;
 const FULL_PROFILE = "dashboard-publish";
-const PROFILES = ["default", FULL_PROFILE];
-const payloadPath = (profile) => `${CONTENT}/generated/mcp-tools.${profile}.json`;
+export const PROFILES = ["default", FULL_PROFILE];
+export const payloadPath = (profile) => `${CONTENT}/generated/mcp-tools.${profile}.json`;
 const hash = (data) => createHash("sha256").update(data).digest("hex");
 const json = (path, root = ROOT) => JSON.parse(readFileSync(resolve(root, path), "utf8"));
 const SOURCE_REF = /("sourceRef":\s*"handler\.rs:)\d+"/g;
@@ -156,6 +160,7 @@ export const META = {
   role_state: { arc: "F", write: false },
   send_message: { arc: "F", write: true, core: true },
   send_role_message: { arc: "F", write: true },
+  gif_search: { arc: "F", write: false },
   // SW-WC-2: workspace chat engine's agent-facing pair.
   workspace_chat_send: { arc: "F", write: true, core: true },
   workspace_chat_read: { arc: "F", write: false, core: true },
@@ -328,6 +333,7 @@ export const META = {
   task_update: { arc: "E", write: true },
   task_list: { arc: "E", write: false },
   task_read: { arc: "E", write: false },
+  charge_session_story: { arc: "E", write: true },
   roles_list: { arc: "F", write: false },
   role_save: { arc: "F", write: true },
   close_terminal_tab: { arc: "C", write: true },
@@ -368,7 +374,6 @@ export function referenceInputs(root = ROOT) {
     "Cargo.lock",
     "src-tauri/Cargo.toml",
     "src-tauri/build.rs",
-    CATALOG,
     "src-tauri/crates/codesense-pty-core/src/agent_cli/codex.rs",
     "src-tauri/crates/codesense-pty-core/src/agent_cli/claude.rs",
     ...candidates,
@@ -435,6 +440,23 @@ function sealDrift(root) {
   return { addedInputs, changedInputs, removedInputs, changedPayloads, profileDrift };
 }
 
+const HANDLER = "src-tauri/src/mcp/handler.rs";
+// What a stale seal can explain: null with a fresh seal or no changed or added Rust input (a
+// non-Rust drift such as a seal that still lists the catalog explains nothing). Otherwise the
+// drifted Rust paths, and `explains(name)`: whether a drifted Rust file names `name` as an
+// identifier or string, or its snake_case form (a serde field the PR added).
+export function driftExplainer(root = ROOT) {
+  const drift = sealDrift(root);
+  const paths = drift
+    ? [...drift.changedInputs, ...drift.addedInputs].filter((path) => path.endsWith(".rs"))
+    : [];
+  if (!paths.length) return null;
+  return {
+    paths,
+    explains: namesIn(() => addedSince(root, SEAL, paths)),
+  };
+}
+
 function staleSealMessage(drift) {
   const details = [];
   const changes = [
@@ -455,7 +477,7 @@ function staleSealMessage(drift) {
   const reason = drift.missingSeal
     ? "MCP registry has no sealed export"
     : "Stale MCP registry export";
-  return `${reason} (${details.join("; ")}); refresh during the next docs wave with ${REFRESH_COMMAND}`;
+  return `${reason} (${details.join("; ")}); ${REFRESH_ROUTE}`;
 }
 
 export function validateInputReferences(tool) {
@@ -482,26 +504,38 @@ export function validateInputReferences(tool) {
 }
 // The manifest the export knows: pending tools and their examples dropped, so it still equals the
 // committed one unless the PR changed something else.
-const withoutPending = (families, pending) =>
-  families
-    .map((f) => ({
-      ...f,
-      tools: f.tools.filter((t) => !pending.includes(t)),
-      calls: f.calls.filter((c) => !pending.includes(c.tool)),
-    }))
-    .filter((f) => f.tools.length);
+const withoutPending = (families, pending, leftOut = new Set()) =>
+  pending.length || leftOut.size
+    ? families
+        .map((f) => ({
+          ...f,
+          tools: f.tools.filter((t) => !pending.includes(t)),
+          calls: f.calls.filter((c) => !pending.includes(c.tool) && !leftOut.has(c)),
+        }))
+        .filter((f) => f.tools.length)
+    : families;
 const handlerFn = (root, name) =>
   new RegExp(`\\b(?:async\\s+)?fn\\s+${name}\\s*\\(`).test(
     readFileSync(resolve(root, "src-tauri/src/mcp/handler.rs"), "utf8"),
   );
-// `pending` (PR gate only) is an array collecting catalog tools the sealed export lacks: story PRs
-// never re-export, the wave does. Omitted (strict), such a tool is fatal.
+// `pending` (PR gate and write mode, omitted when strict) is an array: each description's Docs line
+// then comes from the catalog, as served_tool_router builds it, since the catalog is not a seal input.
+// `drift` (driftExplainer, only with a stale seal) tolerates what the drifted Rust inputs explain,
+// each with a notice: a catalog tool the export lacks is pending while handler.rs drifted; a payload
+// tool whose handler fn is gone from a drifted handler.rs is dropped; and an example naming a param
+// or value the drifted Rust names is left out. Everything else stays fatal: a META entry or family
+// missing for a tool still in handler.rs, a wrong type, an unexplained name.
 export function buildManifest(
   root = ROOT,
   metadata = META,
   catalog = readCatalog(root),
   pending = null,
+  warn = console.warn,
+  drift = null,
 ) {
+  const handlerDrifted = Boolean(pending && drift?.paths.includes(HANDLER));
+  const explained = (value) => Boolean(pending && drift?.explains(value));
+  const leftOut = new Set();
   const baseline = json(payloadPath("default"), root).tools;
   const full = json(payloadPath("dashboard-publish"), root).tools;
   const baseNames = new Set(baseline.map((t) => t.name));
@@ -533,7 +567,7 @@ export function buildManifest(
       if (catalogNames.has(name)) throw new Error(`${name}: duplicate family`);
       catalogNames.add(name);
       if (!fullNames.has(name)) {
-        if (!pending) throw new Error(`${name}: catalog tool not exported`);
+        if (!handlerDrifted) throw new Error(`${name}: catalog tool not exported`);
         // Pending means implemented (META entry and handler fn) but not yet exported.
         if (!metadata[name] || !handlerFn(root, name))
           throw new Error(`${name}: unknown catalog tool (no META entry or handler fn)`);
@@ -546,31 +580,62 @@ export function buildManifest(
       if (!f.tools.includes(call.tool)) throw new Error(`${f.id}: example tool outside family`);
       if (pending?.includes(call.tool)) continue;
       const tool = full.find((t) => t.name === call.tool);
+      const problems = [];
       const validate = ajv.compile(tool.inputSchema);
-      if (!validate(call.arguments))
-        throw new Error(`${call.tool}: invalid family example ${ajv.errorsText(validate.errors)}`);
+      if (!validate(call.arguments)) {
+        // Only a value the stale schema does not list (a new enum variant) can be lag.
+        const lag = validate.errors.every(
+          (e) => (e.keyword === "enum" || e.keyword === "const") && explained(e.data),
+        );
+        problems.push([
+          `${call.tool}: invalid family example ${ajv.errorsText(validate.errors)}`,
+          lag,
+        ]);
+      }
       // serde allows unknown fields on many structs: examples still must name
       // real canonical inputs rather than an ignored typo or accepted alias.
       for (const key of Object.keys(call.arguments))
         if (!Object.hasOwn(tool.inputSchema.properties ?? {}, key))
-          throw new Error(`${call.tool}: unknown example input ${key}`);
+          problems.push([`${call.tool}: unknown example input ${key}`, explained(key)]);
+      const fatal = problems.find(([, lag]) => !lag);
+      if (fatal) throw new Error(fatal[0]);
+      for (const [message] of problems)
+        warn(`NOTICE: ${message}, left out of the reference; ${REFRESH_ROUTE}`);
+      if (problems.length) leftOut.add(call);
     }
   }
   const handler = readFileSync(resolve(root, "src-tauri/src/mcp/handler.rs"), "utf8");
   const tools = full
-    .map((raw) => {
-      const meta = metadata[raw.name];
+    .map((served) => {
+      const meta = metadata[served.name];
+      const family = families.get(served.name);
+      const match = new RegExp(`\\b(?:async\\s+)?fn\\s+${served.name}\\s*\\(`).exec(handler);
+      if (handlerDrifted && !match) {
+        warn(
+          `NOTICE: ${served.name}: dropped, the committed export still serves it but handler.rs no longer has it; ${REFRESH_ROUTE}`,
+        );
+        return null;
+      }
       if (!meta)
-        throw new Error(`${raw.name}: missing META entry in scripts/generate-mcp-reference.mjs`);
-      const family = families.get(raw.name);
-      if (!family) throw new Error(`${raw.name}: missing family in examples.yml`);
+        throw new Error(`${served.name}: missing META entry in scripts/generate-mcp-reference.mjs`);
+      if (!family) throw new Error(`${served.name}: missing family in examples.yml`);
+      // Tolerated as stale, the catalog's pointer replaces the payload's, as served_tool_router does.
+      const raw = pending
+        ? {
+            ...served,
+            description: `${(served.description ?? "")
+              .split("\n")
+              .filter((line) => !line.startsWith("Docs: "))
+              .join("\n")
+              .trimEnd()}\nDocs: ${family.docs}`,
+          }
+        : served;
       if (
         !raw.description?.endsWith(`Docs: ${family.docs}`) ||
         raw.description.split("\n").filter((line) => line.startsWith("Docs: ")).length !== 1
       )
         throw new Error(`${raw.name}: missing final Docs pointer`);
       validateInputReferences(raw);
-      const match = new RegExp(`\\b(?:async\\s+)?fn\\s+${raw.name}\\s*\\(`).exec(handler);
       if (!match) throw new Error(`${raw.name}: source location missing`);
       return {
         name: raw.name,
@@ -588,16 +653,19 @@ export function buildManifest(
         params: raw.inputSchema,
         returns: raw.outputSchema ?? null,
         outputSchemaAvailable: raw.outputSchema != null,
-        examples: family.calls.filter((call) => !pending?.includes(call.tool)),
+        examples: family.calls.filter(
+          (call) => !pending?.includes(call.tool) && !leftOut.has(call),
+        ),
         sourceRef: `handler.rs:${handler.slice(0, match.index).split("\n").length}`,
       };
     })
+    .filter(Boolean)
     .sort((a, b) => a.name.localeCompare(b.name));
   return {
     schema: 1,
     generatedAt: "deterministic",
     commit: "deterministic",
-    families: pending?.length ? withoutPending(catalog.families, pending) : catalog.families,
+    families: withoutPending(catalog.families, pending ?? [], leftOut),
     coverage: {
       familyCovered: tools.length,
       namedOnPage: tools.filter((tool) => tool.namedOnPage).length,
@@ -614,6 +682,7 @@ export function generateReference(
     check = false,
     buildScript = false,
     allowStaleExport = false,
+    strict = strictExports(),
     warn = console.warn,
     stdout = console.log,
   } = {},
@@ -625,10 +694,8 @@ export function generateReference(
   if (drift) {
     const message = staleSealMessage(drift);
     if (buildScript) {
-      stdout("cargo:warning=MCP REFERENCE EXPORT NEEDED");
-      stdout(
-        `cargo:warning=${message}; node scripts/generate-mcp-reference.mjs --export, then pnpm gen:docs`,
-      );
+      stdout("cargo:warning=MCP REFERENCE EXPORT STALE");
+      stdout(`cargo:warning=${message}`);
       if (!check) return null;
     }
     const inputDriftOnly =
@@ -640,14 +707,17 @@ export function generateReference(
     // manifest input untouched: the manifest is f(payloads, catalog/docs/META, sourceRefs), the
     // payloads are main's, the sourceRef lines are normalised, so the PR cannot have changed it.
     // (Rust inputs, handler.rs included, may differ.) Anything else runs the strict check.
-    let untouched = false;
+    // mcp-tools.json is Node-rendered, so input-only drift leaves it out of the exports and compares
+    // it with the manifest built from the committed exports below. Write mode renders, unless
+    // `strict` (CS_STRICT_EXPORTS=1, the refresh run).
+    let untouched = !check && !strict;
     if (check && allowStaleExport) {
       try {
-        const exports = [SEAL, OUTPUT, ...PROFILES.map(payloadPath)];
+        const exports = frozenExport(`${CONTENT}/generated/mcp-tools`);
         untouched =
           exportsUntouchedSinceMain(
             root,
-            inputDriftOnly ? exports : [...exports, ...nonRustManifestInputs(root)],
+            inputDriftOnly ? exports : [...exports, OUTPUT, ...nonRustManifestInputs(root)],
           ) ||
           (inputDriftOnly &&
             driftInheritedFromMain(root, [
@@ -659,15 +729,26 @@ export function generateReference(
     }
     if (!untouched) throw new Error(message);
     tolerant = true;
-    if (inputDriftOnly) warn(`NOTICE: ${message}`);
+    if (inputDriftOnly || !check) warn(`NOTICE: ${message}`);
     else {
       warn(inheritedNotice(root, message));
       return null;
     }
   }
-  const pending = allowStaleExport ? [] : null;
-  const doc = buildManifest(root, META, readCatalog(root), pending);
-  for (const name of pending ?? []) warn(`NOTICE: pending wave export: ${name}`);
+  // The PR gate and write mode tolerate the export as stale even with a fresh seal: the catalog and
+  // META are not seal inputs. Strict check mode and `strict` write mode (the export and refresh
+  // runs) do not.
+  const pending = allowStaleExport || (!check && !strict) ? [] : null;
+  const doc = buildManifest(
+    root,
+    META,
+    readCatalog(root),
+    pending,
+    warn,
+    pending && drift ? driftExplainer(root) : null,
+  );
+  for (const name of pending ?? [])
+    warn(`NOTICE: ${name} is not in the committed export yet; ${REFRESH_ROUTE}`);
   const fresh = serialize(doc);
   const file = resolve(root, OUTPUT);
   if (check) {
@@ -740,7 +821,7 @@ export function queuedExport() {
       throw new Error("MCP source inputs changed during export; retry the export before sealing");
     }
     sealReference();
-    generateReference();
+    generateReference(ROOT, { strict: true });
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }

@@ -612,6 +612,36 @@ pub(crate) fn restore_record(
     }
 }
 
+/// Where a resumed Agent's session lives: back in the workspace it ran in, as the
+/// layout keyed it, running in its launch folder `cwd`. When that isn't the
+/// workspace's folder (a story seat worktree), the tab keeps it as its own folder
+/// and the workspace keeps its folder.
+fn resumed_launch_home(
+    tab: &RestoreTab,
+    org: &str,
+    team: &str,
+    form: &str,
+    cwd: &Path,
+) -> crate::commands::mcp_workspace::LaunchHome {
+    use crate::commands::mcp_workspace::{LaunchHome, SessionView};
+    let view = if tab.background {
+        SessionView::Background
+    } else {
+        SessionView::Tab { focus: false }
+    };
+    let mut launch_home = LaunchHome::new(org, Some(team), form, "agent", cwd, view);
+    if !tab.workspace_key.is_empty() {
+        launch_home.workspace = crate::commands::pty_layout::workspace_key(&tab.team_key, form);
+    }
+    if let Some(descriptor) = tab.descriptor.clone() {
+        launch_home.descriptor = descriptor;
+    }
+    if launch_home.descriptor.worktree_path.as_deref() != Some(cwd) {
+        launch_home.tab_cwd = Some(cwd.to_path_buf());
+    }
+    launch_home
+}
+
 /// The local relaunch itself (prepare, then launch), on its own task.
 async fn relaunch_local_now(
     app: &tauri::AppHandle,
@@ -619,9 +649,7 @@ async fn relaunch_local_now(
     brief: &str,
     relaunch: LocalRelaunch,
 ) -> Result<Reopened, String> {
-    use crate::commands::mcp_workspace::{
-        launch_managed_dir_session, LaunchHome, ManagedLaunchOptions, SessionView,
-    };
+    use crate::commands::mcp_workspace::{launch_managed_dir_session, ManagedLaunchOptions};
     let context = crate::commands::route_to_context::derive_active_context(app).await?;
     let home = context.codesense_home.clone();
     let principal = context.principal();
@@ -666,25 +694,7 @@ async fn relaunch_local_now(
         .split_once('|')
         .map(|(_, form)| form.to_string())
         .unwrap_or_else(|| relaunch.handle.clone());
-    let mut launch_home = LaunchHome::new(
-        &relaunch.org,
-        Some(&relaunch.team),
-        &form,
-        "agent",
-        &cwd,
-        if tab.background {
-            SessionView::Background
-        } else {
-            SessionView::Tab { focus: false }
-        },
-    );
-    // Back in the workspace it ran in, as the layout keyed it.
-    if !tab.workspace_key.is_empty() {
-        launch_home.workspace = crate::commands::pty_layout::workspace_key(&tab.team_key, &form);
-    }
-    if let Some(descriptor) = tab.descriptor.clone() {
-        launch_home.descriptor = descriptor;
-    }
+    let launch_home = resumed_launch_home(tab, &relaunch.org, &relaunch.team, &form, &cwd);
     let launched = launch_managed_dir_session(
         app,
         &relaunch.handle,
@@ -734,7 +744,27 @@ mod tests {
             }),
             session: "s-1".into(),
             resume: None,
+            tab_dir: None,
         }
+    }
+
+    #[test]
+    fn a_resumed_seat_agent_runs_in_its_folder_inside_the_story_workspace() {
+        let base = Path::new("/srv/SW-1-worktree");
+        let seat = Path::new("/srv/SW-1-worktree-seat-dev");
+        let home = resumed_launch_home(&tab(&[]), "acme", "default", "SW-1", seat);
+        assert_eq!(home.workspace.as_str(), "acme:default|SW-1");
+        assert_eq!(home.descriptor.worktree_path.as_deref(), Some(base));
+        assert_eq!(home.tab_cwd.as_deref(), Some(seat));
+        // An Agent that ran in its workspace's folder has no folder of its own.
+        let shared = resumed_launch_home(&tab(&[]), "acme", "default", "SW-1", base);
+        assert_eq!(shared.tab_cwd, None);
+        // A record without a descriptor runs in the folder it names.
+        let mut bare = tab(&[]);
+        bare.descriptor = None;
+        let alone = resumed_launch_home(&bare, "acme", "default", "SW-1", seat);
+        assert_eq!(alone.descriptor.worktree_path.as_deref(), Some(seat));
+        assert_eq!(alone.tab_cwd, None);
     }
 
     #[test]

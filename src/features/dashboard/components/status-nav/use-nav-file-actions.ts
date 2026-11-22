@@ -23,7 +23,7 @@ import {
   moveContentTo,
   renameContent,
 } from "@/features/dashboard/lib/structural-ops";
-import { dirname } from "@/shared/lib/basename";
+import { dirname } from "@/shared/lib/path";
 import { ONLY_ME, resolveAudience, type AudienceTeam } from "@/shared/components/who-can-use-it";
 import { openManagementTab } from "@/shared/lib/open-management-tab";
 import { parseTeamKey } from "@/shared/lib/team-key";

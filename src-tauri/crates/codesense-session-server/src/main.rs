@@ -21,18 +21,29 @@
 //! so a client reaches a remote host over `ssh <host> … attach --stdio`.
 //!
 //! With `CODESENSE_ASKPASS_SOCK` set it is `ssh`'s askpass program instead,
-//! answering a key's passphrase prompt from that socket (see `askpass`).
+//! answering a key's passphrase prompt from the endpoint it names (see
+//! `askpass`).
+//!
+//! Where the app's `terminal-server-sidecar` capability is off, it is a stub
+//! that says so and exits 1.
 
+#[cfg(cap_terminal_server_sidecar)]
 use codesense_pty_core::layout::ServerIdentity;
+#[cfg(cap_terminal_server_sidecar)]
 use codesense_pty_core::spawn::HostEnvironment;
+#[cfg(cap_terminal_server_sidecar)]
 use codesense_session_server::host::{emulator_worker_beside, Host};
+#[cfg(cap_terminal_server_sidecar)]
 #[cfg(target_os = "linux")]
 use codesense_session_server::replace;
+#[cfg(cap_terminal_server_sidecar)]
 use codesense_session_server::{askpass, attach, detach, exit_with, server};
 
 /// Writes `log` records (the runtime's and ours) to stderr.
+#[cfg(cap_terminal_server_sidecar)]
 struct StderrLog;
 
+#[cfg(cap_terminal_server_sidecar)]
 impl log::Log for StderrLog {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
         metadata.level() <= log::Level::Info
@@ -52,8 +63,16 @@ impl log::Log for StderrLog {
     fn flush(&self) {}
 }
 
+#[cfg(cap_terminal_server_sidecar)]
 static LOGGER: StderrLog = StderrLog;
 
+#[cfg(not(cap_terminal_server_sidecar))]
+fn main() {
+    eprintln!("codesense-session-server: the terminal server is not built for this platform yet");
+    std::process::exit(1);
+}
+
+#[cfg(cap_terminal_server_sidecar)]
 fn main() {
     if codesense_pty_core::activity::run_helper() {
         return;
@@ -81,11 +100,18 @@ fn main() {
         return;
     }
     // `ssh` runs this binary as its SSH_ASKPASS, with the prompt as the only
-    // argument (not always valid text) and the passphrase's socket in the
-    // environment.
-    if let Some(socket) = std::env::var_os(askpass::SOCKET_ENV) {
+    // argument (not always valid text) and the wire form of the passphrase's
+    // endpoint in the environment.
+    if let Some(wire) = std::env::var_os(askpass::SOCKET_ENV) {
         let prompt: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
-        std::process::exit(askpass::run_client(&prompt, std::path::Path::new(&socket)));
+        let code = match codesense_platform::ipc::Endpoint::from_wire(&wire) {
+            Ok(endpoint) => askpass::run_client(&prompt, &endpoint),
+            Err(err) => {
+                eprintln!("codesense-session-server askpass: {err}");
+                1
+            }
+        };
+        std::process::exit(code);
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
     #[cfg(target_os = "linux")]
@@ -284,6 +310,7 @@ fn main() {
 /// `attach`: relay stdio to this machine's host, launching this binary as that
 /// host when none serves the instance. Every failure exits 1 — an install's
 /// check that the binary runs on its machine relies on that.
+#[cfg(cap_terminal_server_sidecar)]
 fn relay(args: &[String]) -> Result<(), String> {
     let binary = std::env::current_exe().map_err(|e| format!("own binary: {e}"))?;
     let home = dirs::home_dir();

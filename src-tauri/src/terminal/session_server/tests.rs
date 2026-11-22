@@ -193,6 +193,7 @@ fn remote_unknown_spawn_keeps_live_process_and_commits_reserved_correlation() {
     let workspace = WorkspaceKey::new("org:team|work");
     let session = sid("uncertain");
     let request = OpenTab {
+        cwd: None,
         viewer: ViewerId::new("app"),
         workspace: workspace.clone(),
         session: session.clone(),
@@ -1621,7 +1622,8 @@ fn session_verbs_reach_the_hosted_runtime() {
     spawn(
         &sidecar,
         &client,
-        "read line; stty size; printf 'GOT=%s\\n' \"$line\"; sleep 60",
+        // `; :` keeps the shell, so sleep runs under it: bash 5 execs a script's last command.
+        "read line; stty size; printf 'GOT=%s\\n' \"$line\"; sleep 60; :",
         registration("io-1", None, false),
     );
     client
@@ -1712,6 +1714,7 @@ pub(crate) fn remote_tab_runs(
     client
         .open_remote_tab(
             OpenTab {
+                cwd: None,
                 viewer,
                 workspace: WorkspaceKey::new(format!("runs-{id}")),
                 session: session.clone(),
@@ -1773,6 +1776,7 @@ fn connector_contract(
     let cwd = intent.cwd.clone();
     let before = client.live_session_ids().unwrap();
     let request = OpenTab {
+        cwd: None,
         viewer: viewer.clone(),
         workspace: workspace.clone(),
         session: session.clone(),
@@ -2370,8 +2374,9 @@ fn the_host_socket_path_frames_only_through_host_proto() {
     // reads command output line by line, a test cuts an upload short over
     // `ssh` stdin, and the `attach` relay writes raw bytes by design (its
     // transparency tests pin that it never frames). The SSH connector and the
-    // Add-machine checklist read `ssh` output line by line too, and the
-    // askpass answers on its own one-shot socket, never the host's.
+    // Add-machine checklist read `ssh` output line by line too, the connector
+    // writes its host-key pin file whole, and the askpass answers on its own
+    // one-shot socket, never the host's.
     let write_all = ["write", "_all("].concat();
     let lines = [".lines", "()"].concat();
     let json = ["serde", "_json"].concat();
@@ -2382,6 +2387,7 @@ fn the_host_socket_path_frames_only_through_host_proto() {
         ("src/install.rs", &lines),
         ("src/survival.rs", &lines),
         ("src/ssh.rs", &lines),
+        ("src/ssh.rs", &write_all),
         ("src/check.rs", &lines),
         ("tests/clean_direction.rs", &lines),
         ("tests/remote_host.rs", &write_all),
@@ -4565,6 +4571,7 @@ fn layout_transcript(
     let open = |session: &str,
                 workspace: &WorkspaceKey,
                 descriptor: Option<WorkspaceDescriptor>| OpenTab {
+        cwd: None,
         viewer: viewer.clone(),
         workspace: workspace.clone(),
         session: sid(session),
@@ -4762,6 +4769,7 @@ fn respawn_tab_refuses_a_running_tab_and_respawns_an_exited_one_in_place() {
         ] {
             host.open_tab(
                 OpenTab {
+                    cwd: None,
                     viewer: viewer.clone(),
                     workspace: workspace.clone(),
                     session: sid(id),
@@ -6159,4 +6167,38 @@ fn a_current_terminal_server_positively_confirms_an_empty_worktree() {
         .unwrap();
     assert!(usage.entries.is_empty());
     assert!(usage.opening.is_empty());
+}
+
+/// The sidecar's environment, as `(name, value)` with `None` for a removal.
+fn sidecar_envs(env: &[(&str, String)]) -> Vec<(String, Option<String>)> {
+    let command = sidecar_command(Path::new("pty-server"), Path::new("root"), None, None, env);
+    command
+        .get_envs()
+        .map(|(name, value)| {
+            (
+                name.to_string_lossy().into_owned(),
+                value.map(|v| v.to_string_lossy().into_owned()),
+            )
+        })
+        .collect()
+}
+
+/// When the app set the WebKit default, the sidecar (and so every PTY it starts) doesn't
+/// inherit it or its marker.
+#[test]
+fn sidecar_command_drops_app_owned_webkit_env() {
+    let _owned = crate::linux_startup::force_app_owned_for_test(true);
+    let envs = sidecar_envs(&[]);
+    for name in ["WEBKIT_DISABLE_DMABUF_RENDERER", "CODESENSE_WEBKIT_DMABUF_DEFAULT"] {
+        assert!(envs.contains(&(name.to_string(), None)), "{name} in {envs:?}");
+    }
+}
+
+/// An explicit value the launch passes wins over the strip.
+#[test]
+fn sidecar_command_extra_env_wins_over_webkit_strip() {
+    let _owned = crate::linux_startup::force_app_owned_for_test(true);
+    let envs = sidecar_envs(&[("WEBKIT_DISABLE_DMABUF_RENDERER", "7".to_string())]);
+    let expected = ("WEBKIT_DISABLE_DMABUF_RENDERER".to_string(), Some("7".to_string()));
+    assert!(envs.contains(&expected), "{envs:?}");
 }

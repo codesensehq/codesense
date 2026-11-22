@@ -49,18 +49,29 @@ git clone https://github.com/codesensehq/codesense.git
 cd codesense
 corepack enable
 pnpm install --frozen-lockfile
-bash scripts/fetch-git-ai.sh     # the pinned, checksummed git-ai binary
+bash scripts/fetch-bundled.sh    # the pinned, checksummed binaries this OS bundles
 pnpm build:emulator              # the terminal emulator worker
 pnpm run tauri dev               # run it
 pnpm tauri:build:unsigned        # or build a debug app, no signing or updater keys
 ```
 
+On Linux, use the deb or rpm from a Tauri build, or build an AppImage with
+`bash scripts/ci/unsigned-bundle.sh linux appimage`: the AppImage packer rewrites every
+executable it bundles, which breaks the bundled starship and the terminal emulator, and that
+script bundles it without the emulator and then repairs it with `scripts/ci/repair-appimage.sh`.
+The repair needs `python3` and squashfs-tools (`unsquashfs` and `mksquashfs`) on top of the
+Tauri prerequisites, and linuxdeploy, which packs the AppImage, needs `file`; on Debian or Ubuntu,
+`sudo apt install python3 squashfs-tools file`. The script checks for all of these AppImage tools
+before it starts the build.
+
 A signed release build (`pnpm run tauri build`) needs your own Apple signing
 identity and your own updater signing key; none are included here.
 
-`scripts/fetch-git-ai.sh` downloads the pinned git-ai release over HTTPS, with
-no GitHub login, and refuses it unless its SHA-256 matches `src-tauri/git-ai.pin`.
-`bash scripts/fetch-git-ai.sh --dry-run` prints the URL it would fetch. If a step
+`scripts/fetch-bundled.sh` downloads the third-party binaries the app bundles on
+this OS (git-ai on macOS and Linux; starship on Linux), each from its pin in
+`src-tauri/pins/`, over HTTPS, with no GitHub login, and refuses each unless its
+SHA-256 matches its pin. `bash scripts/fetch-bundled.sh --dry-run` prints the URLs
+it would fetch. If a step
 fails on a clean checkout, please open an issue.
 
 A build from source uses the `internal` update channel by default and leaves out
@@ -71,22 +82,118 @@ build, see [Building your own release](#building-your-own-release).
 ## Test builds
 
 A maintainer can build a test app from `main` without a local build: run the
-**Test build** workflow from the Actions tab, or
-`gh workflow run test-build.yml --repo codesensehq/codesense --ref main`. It
-takes about an hour. When it finishes, the run page has two artifacts, kept for
-7 days: `CodeSense.app.zip` (the app) and the DMG.
+**Test build** workflow from the Actions tab and pick a platform, or
+`gh workflow run test-build.yml --repo codesensehq/codesense --ref main -f platform=macos`
+(`platform=linux` for the Linux build; the default, `all`, builds every platform
+the workflow has). A build takes about an hour. When it finishes, the run page
+has its artifacts, kept for 7 days. There is no Windows build yet: `platform=windows`
+runs nothing.
 
-The test build is not signed with an Apple Developer ID (it is signed ad hoc)
-and not notarized, so macOS blocks it until you clear its quarantine flag.
-Unzip `CodeSense.app.zip` (or open the DMG), move `CodeSense.app` to
-Applications, then run:
+### macOS
+
+The artifacts are `CodeSense.app.zip` (the app), the DMG and a manifest of the
+bundle's files. The test build is not signed with an Apple Developer ID (it is
+signed ad hoc) and not notarized, so macOS blocks it until you clear its
+quarantine flag. Unzip `CodeSense.app.zip` (or open the DMG), move
+`CodeSense.app` to Applications, then run:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/CodeSense.app
 ```
 
-It is a source build like the one above: the `internal` channel, no update
-checks and no dashboard publishing.
+### Linux
+
+The artifacts are not signed, for two architectures. The x86_64 files (`..._amd64.deb`,
+`...x86_64.rpm`, `...amd64.AppImage`) are built on Ubuntu 22.04 and run on Ubuntu 22.04 or
+newer. The arm64 files (`..._arm64.deb`, `...aarch64.rpm`, `..._aarch64.AppImage`) are for
+64-bit ARM machines, such as a Linux VM on an Apple silicon Mac; they are built on Ubuntu 24.04
+and need Ubuntu 24.04 or newer. Install the one for your distribution and architecture:
+
+```bash
+sudo apt install ./CodeSense_*.deb        # Debian, Ubuntu
+sudo dnf install ./CodeSense-*.rpm        # Fedora
+chmod +x CodeSense_*.AppImage && ./CodeSense_*.AppImage
+```
+
+If the AppImage will not start for want of FUSE, install it (`sudo apt install libfuse2`,
+or `libfuse2t64` on Ubuntu 24.04) or run it with `--appimage-extract-and-run`.
+
+Remembering an SSH key passphrase is off on Linux for now (it needs a passphrase
+prompt Linux doesn't have yet). Other saved secrets
+are kept in Secret Service (GNOME Keyring or KWallet) when one is running, and
+CodeSense says so when none is.
+
+Every test build is a source build like the one above: the `internal` channel,
+no update checks and no dashboard publishing.
+
+## Regenerating exports
+
+A few generated docs files are written only by Rust tests: the live-data
+contract, the MCP registry export and the model schemas fixture, with their
+seals (`FROZEN_EXPORTS` in `scripts/lib/sealed-export.mjs` lists them). Leave
+generated exports out of your PR; maintainers refresh them. Until then they lag
+the code, and that is expected: `pnpm gen:docs` renders the docs from the
+committed exports and prints a notice, the pull request check
+(`pnpm gen:docs:check:pr`, which sets `DOCS_ALLOW_STALE_EXPORT=1`) passes, and
+the tests that pin an export to its source compare it only when
+`CS_STRICT_EXPORTS=1`. The files Node renders from the exports, such as
+`mcp-tools.json` and `generated/schemas/*.schema.json`, are not exports:
+commit what `pnpm gen:docs` writes to them.
+
+A maintainer (running a workflow needs write access) refreshes the exports in a
+pull request of its own, from a `chore/refresh-exports` branch based on current
+`main`, regenerated in CI instead of building Rust locally. Push that branch
+first, then:
+
+```bash
+gh workflow run regenerate-exports.yml --repo codesensehq/codesense --ref <branch>
+gh run list --repo codesensehq/codesense --workflow regenerate-exports.yml --branch <branch> --event workflow_dispatch --limit 1
+gh run watch <run id> --repo codesensehq/codesense --exit-status
+```
+
+The second command prints the newest run's id. A new run takes a few seconds
+to appear, so check that its start time is the one you just dispatched before
+you use it; the third waits for it to finish. The default, `all`, runs every export,
+then `pnpm gen:docs`. `-f exports=live-data-contract` (or `mcp-reference`,
+`model-schemas`) runs one, but its `pnpm gen:docs` still fails if another export
+is stale, so use `all` unless you know the others are fresh. The run's summary
+lists the files it changed, and its `generated-exports` artifact holds them at
+their repository paths, kept for 7 days. From the repository root, download it
+and list its files:
+
+```bash
+tmp=$(mktemp -d)
+gh run download <run id> --repo codesensehq/codesense -n generated-exports -D "$tmp"
+(cd "$tmp" && find . -type f | sort)
+```
+
+Every file should be generated output whose inputs changed on `main` since the
+last refresh: keep it. One whose inputs did not change points at a build step
+that differs between hosts: delete it from `$tmp` and open an issue. Then apply
+the files to the branch, check them, and commit them yourself:
+
+```bash
+cp -R "$tmp"/. .
+git status --short
+(cd "$tmp" && find . -type f -print0) | xargs -0 git add --
+git commit -s -m "Refresh the generated exports"
+```
+
+Before you open the pull request, check that the refresh is complete. The
+strict check fails on any export still stale, and `CS_STRICT_EXPORTS=1` makes
+`pnpm gen:docs` and the tests that pin an export strict too:
+
+```bash
+CS_STRICT_EXPORTS=1 pnpm gen:docs:check
+CS_STRICT_EXPORTS=1 node --test scripts/generate-model-schemas.node-test.mjs
+```
+
+Open the pull request and merge it on its own. When `live-data-contract.json`
+changed, add the `ci:macos` label: the test that pins the contract runs only on
+macOS, and strictly only where `CS_STRICT_EXPORTS=1` is set. When nothing changed, the summary says so and there is no artifact. With
+a local Rust build, `pnpm docs:refresh-mcp` writes the MCP and live-data
+exports and `node scripts/generate-model-schemas.mjs --queued-export` the model
+schemas fixture, instead of the workflow.
 
 ## Building your own release
 
@@ -170,7 +277,8 @@ Please report vulnerabilities privately, as described in
 
 ## Privacy
 
-The app has no analytics or telemetry. [PRIVACY.md](PRIVACY.md) lists every
+The app has no analytics or telemetry of its own. With GIF search on, it sends
+GIPHY's required send and view pings. [PRIVACY.md](PRIVACY.md) lists every
 network call the app makes, and what the website counts.
 
 ## Licence

@@ -305,7 +305,7 @@ pub(crate) fn upsert_attachment_record(
     }
 
     write_attachments_atomic(&path, &data).map_err(|e| e.to_string())?;
-    crate::attribution::watcher::refresh(home);
+    crate::attribution::facade::refresh_watcher(&crate::platform_caps::Caps::live(), home);
     Ok(UpsertedAttachment {
         is_insert,
         repo_path,
@@ -424,7 +424,7 @@ pub(crate) fn forget_attachment_record(
         .ok_or_else(|| format!("not_found: no attachment with repo_path '{repo_path}'"))?;
     let removed = data.attachments.remove(idx);
     write_attachments_atomic(&path, &data).map_err(|e| e.to_string())?;
-    crate::attribution::watcher::refresh(home);
+    crate::attribution::facade::refresh_watcher(&crate::platform_caps::Caps::live(), home);
     Ok(removed)
 }
 

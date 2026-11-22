@@ -11,6 +11,7 @@ import {
 import { useWorkspaceWhere } from "@/features/machines/lib/remote-story-workspace";
 import { useMachine } from "@/features/machines/stores/machines-store";
 import type { MachineSummary } from "@/tauri/commands";
+import { localMachineLabel } from "@/shared/lib/local-machine";
 
 /**
  * Where a new story workspace lives: This Mac, or one of the team's machines.
@@ -71,7 +72,7 @@ export function WorkspaceWhereDialog() {
               className={ROW}
             >
               <Monitor className="size-4 text-[#8b949e]" aria-hidden />
-              <span className="flex-1 text-left">This Mac</span>
+              <span className="flex-1 text-left">{localMachineLabel()}</span>
             </button>
           </li>
           {request.machines.map((machine) => (

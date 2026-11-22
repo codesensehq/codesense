@@ -15,6 +15,8 @@ vi.mock("sonner", () => ({ toast: { warning: vi.fn() } }));
 
 const fake = vi.hoisted(() => ({
   epoch: "1" as string | null,
+  /** The actions `describeMachineStatus` offers for every machine. */
+  actions: [] as { id: string }[],
   list: vi.fn(),
   open: vi.fn(),
   local: vi.fn().mockResolvedValue({ sessionId: "hermes-local" }),
@@ -38,7 +40,7 @@ vi.mock("@/features/machines/lib/machine-actions", () => ({
 }));
 vi.mock("@/features/machines/lib/machine-status", () => ({
   needsPrivateAccount: () => false,
-  describeMachineStatus: () => ({ actions: [] }),
+  describeMachineStatus: () => ({ actions: fake.actions }),
   PRIVATE_ACCOUNT_FOR_TABS: "private",
 }));
 vi.mock("@/features/agents/lib/agent-names", () => ({
@@ -70,6 +72,9 @@ import {
   requestNewWorkspaceTerminal,
 } from "../lib/new-workspace-terminal";
 import { NewTerminalChooser } from "./new-terminal-chooser";
+import { connectMachineFor } from "@/features/machines/lib/machine-actions";
+import { restorePlatform, setPlatform } from "@/test/platform";
+import { resetPlatformCaps, setPlatformCaps } from "@/shared/lib/__test-utils__/platform-caps";
 
 const choice = { handle: "prepared-1", cwd: "/remote/tree", branch: "main", sourceRepo: "source" };
 function openChooser() {
@@ -406,5 +411,68 @@ describe("a second request into a chooser that is already open", () => {
     expect(screen.getByRole("button", { name: /^Claude/ })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: /^Codex/ })).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByTestId("new-terminal-chooser")).toHaveTextContent("Opens in /work/b");
+  });
+});
+
+describe("Where without remote machines on this OS", () => {
+  const machines = fake.machines;
+  beforeEach(() => {
+    setPlatform("Win32");
+    setPlatformCaps({ "remote-machines": "CodeSense can't connect to other machines" });
+  });
+  afterEach(() => {
+    fake.machines = machines;
+    fake.actions = [];
+    vi.mocked(connectMachineFor).mockClear();
+    resetPlatformCaps();
+    restorePlatform();
+  });
+
+  function openShellChooser() {
+    render(<NewTerminalChooser teamKey="acme/default" workspaceId="ws" />);
+    act(() =>
+      window.dispatchEvent(
+        new CustomEvent(NEW_WORKSPACE_TERMINAL_EVENT, {
+          detail: { teamKey: "acme/default", workspaceId: "ws" },
+        }),
+      ),
+    );
+  }
+
+  it("lists the machines but neither connects to nor opens on them, and says why once", () => {
+    fake.machines = [
+      { machineId: "box", kind: "ssh", label: "Box", status: { state: "connected" } },
+      { machineId: "other", kind: "ssh", label: "Other", status: { state: "notConnected" } },
+    ];
+    fake.actions = [{ id: "connect" }];
+    openShellChooser();
+    const note = screen.getByRole("note");
+    expect(note).toHaveTextContent(
+      "Not yet available on Windows: CodeSense can't connect to other machines.",
+    );
+    for (const id of ["box", "other"]) {
+      const row = screen.getByTestId(`new-terminal-where-${id}`);
+      expect(row).toHaveAttribute("aria-disabled", "true");
+      expect(row).toHaveAttribute("aria-describedby", note.id);
+      expect(row).toHaveTextContent("Not yet available on Windows");
+      expect(row).not.toHaveTextContent("Connect and open");
+      fireEvent.click(row);
+    }
+    expect(connectMachineFor).not.toHaveBeenCalled();
+    expect(fake.open).not.toHaveBeenCalled();
+    expect(screen.getByTestId("new-terminal-where-local")).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("with remote machines on, a machine that isn't connected offers Connect and open", () => {
+    setPlatformCaps();
+    fake.machines = [
+      { machineId: "other", kind: "ssh", label: "Other", status: { state: "notConnected" } },
+    ];
+    fake.actions = [{ id: "connect" }];
+    openShellChooser();
+    const row = screen.getByTestId("new-terminal-where-other");
+    expect(row).toHaveTextContent("Connect and open");
+    expect(row).not.toHaveAttribute("aria-disabled");
+    expect(screen.queryByRole("note")).toBeNull();
   });
 });

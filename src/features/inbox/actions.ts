@@ -107,7 +107,7 @@ export async function sendFromInbox(opts: {
       p.state === "idle"
         ? `Delivered. ${p.name} was idle and has been woken.`
         : p.state === "offline"
-          ? `Queued for ${p.name}. It's delivered once ${machineLabel(p)} reconnects.`
+          ? `Queued for ${p.name}. It's delivered once ${machineLabel(p) || "its machine"} reconnects.`
           : `Sent to ${p.name}.`,
     );
   }

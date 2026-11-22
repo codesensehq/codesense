@@ -182,12 +182,11 @@ impl PackReport {
 /// blocking on a FIFO or device. `Err` says why not, without the file's content.
 pub(super) fn read_regular(path: &Path, cap: u64) -> Result<Vec<u8>, &'static str> {
     use std::io::Read;
-    use std::os::unix::fs::OpenOptionsExt;
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-        .map_err(|_| "cannot be opened (missing, a symlink, or unreadable)")?;
+    let file = codesense_platform::fs::open_nofollow_nonblocking(
+        std::fs::OpenOptions::new().read(true),
+        path,
+    )
+    .map_err(|_| "cannot be opened (missing, a symlink, or unreadable)")?;
     let meta = file.metadata().map_err(|_| "cannot be read")?;
     if !meta.is_file() {
         return Err("is not a regular file");

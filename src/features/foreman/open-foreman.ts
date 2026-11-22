@@ -16,6 +16,7 @@ import {
 } from "@/shared/lib/codesense-docs";
 import { logger } from "@/shared/lib/logger";
 import { openFileInTeam } from "@/shared/lib/open-file-in-team";
+import { join } from "@/shared/lib/path";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 
@@ -35,7 +36,7 @@ export function isForemanAgent(agent: string | null | undefined): boolean {
 
 function foremanPagePath(): string | null {
   const docs = useOrgStore.getState().orgs.find((o) => o.slug === CODESENSE_DOCS_SLUG);
-  return docs ? `${docs.org_root.replace(/\/+$/, "")}/${CODESENSE_DOCS_FOREMAN_PAGE}` : null;
+  return docs ? join(docs.org_root, CODESENSE_DOCS_FOREMAN_PAGE) : null;
 }
 
 /** Open the Foreman tab, or focus it when it is open. A no-op until the docs repo is connected. */

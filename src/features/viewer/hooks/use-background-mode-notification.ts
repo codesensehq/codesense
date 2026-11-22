@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 
+import { backgroundRestoreHint } from "@/shared/lib/local-machine";
 import { logger } from "@/shared/lib/logger";
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
 import { openAppSettings } from "@/features/settings/lib/open-settings";
@@ -10,10 +11,11 @@ import { useViewerStore } from "@/shared/stores/viewer-store";
 import { BACKGROUND_MODE_ENTERED_EVENT } from "@/tauri/events";
 
 /** SW-AU-34 (AC-5): the one-time explainer copy — the app is still running and driving
- *  automations after a window close, and how to get it back / turn it off. Exported for
- *  the unit test. */
-export const BACKGROUND_MODE_EXPLAINER =
-  "codesense is still running in the background — your automations keep going. Click the dock icon to reopen it, or turn on Settings › Quit on window close.";
+ *  automations after a window close, and how to get it back on this OS / turn it off.
+ *  Exported for the unit test. */
+export function backgroundModeExplainer(): string {
+  return `codesense is still running in the background — your automations keep going. ${backgroundRestoreHint()}, or turn on Settings › Quit on window close.`;
+}
 
 /** SW-AU-34 (AC-5): show the explainer only if the user hasn't seen it yet. Pure so the
  *  one-shot gate is unit-testable without a live event. `undefined` (fresh profile) ⇒
@@ -44,7 +46,7 @@ export function useBackgroundModeNotification(): void {
       // Persist the one-shot flag before showing so a rapid second close can't race
       // a duplicate toast in (the listener reads the just-written state).
       store.updateSettings({ hasSeenBackgroundExplainer: true });
-      toast.info(BACKGROUND_MODE_EXPLAINER, {
+      toast.info(backgroundModeExplainer(), {
         action: {
           label: "Open settings",
           onClick: () => openAppSettings("general"),

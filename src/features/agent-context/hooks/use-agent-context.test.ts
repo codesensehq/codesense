@@ -251,6 +251,23 @@ describe("useAgentContext (SW-XS-15)", () => {
     );
     await waitFor(() => expect(result.current.view?.revision).toBe(7));
   });
+  it("re-resolves on a file change under a Windows tier root", async () => {
+    const winRoot = "C:\\ctx\\default\\content";
+    agentContextPreview.mockResolvedValue(
+      view(4, {
+        roots: [{ tier: { kind: "team", org: "alderco", team: "default" }, path: winRoot }],
+      }),
+    );
+    const { result } = renderHook(() => useAgentContext(TEAM_KEY));
+    await waitFor(() => expect(result.current.view).not.toBeNull());
+    await waitFor(() => expect(agentsListeners.length).toBeGreaterThan(0));
+    act(() => emit("context-file-change", { file_path: `${winRoot}\\_bmad-output\\x.md` }));
+    await new Promise((r) => setTimeout(r, 400));
+    expect(agentContextPreview).toHaveBeenCalledTimes(1);
+    agentContextPreview.mockResolvedValue(view(7));
+    act(() => emit("context-file-change", { file_path: `${winRoot}\\.claude\\skills\\a\\new.md` }));
+    await waitFor(() => expect(result.current.view?.revision).toBe(7));
+  });
   it("re-resolves admitted ancestor files without exposing their directory as a root", async () => {
     const inherited = view(4, {
       files: [

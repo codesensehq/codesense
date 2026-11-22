@@ -6,17 +6,20 @@ import {
   CodeEditor,
   detectLanguageId,
   useEditorAffordances,
+  type CodeEditorHandle,
 } from "@/shared/components/code-editor";
 import { fileContentCache } from "@/shared/lib/file-content-cache";
 import { FileDeletedPlaceholder } from "@/shared/components/file-deleted-placeholder";
 import { closeActiveFileTab } from "@/shared/lib/close-active-file-tab";
 import { isFileMissingError } from "@/shared/lib/file-missing-error";
 import { logger } from "@/shared/lib/logger";
+import { useScrollSnapshot } from "@/shared/hooks/use-scroll-snapshot";
 import type { CommonViewerProps } from "@/shared/lib/viewer-file-type";
 import { readFile } from "@/tauri/commands";
 
 import { isTooLargeToView, looksBinary, utf8ByteLength } from "../lib/worktree-file-view";
 import { FileWarningPlaceholder } from "./file-warning-placeholder";
+import { basename } from "@/shared/lib/path";
 
 /**
  * SW-VE-2: the `code` render case in {@link renderViewer} — a read-only,
@@ -37,6 +40,8 @@ type CodeFileViewerProps = CommonViewerProps & {
   /** SW-FX-5 parity: the watcher's changed-file set — skip the re-read when a
    *  sibling-file tick bumped `refreshKey` but this file didn't change. */
   changedPaths?: Set<string> | null;
+  /** Session key the scroll offset is tracked under; omitted, the viewer tracks nothing. */
+  viewStateKey?: string;
 };
 
 type LoadState = "loading" | "ready" | "binary" | "too-large" | "error" | "removed";
@@ -47,6 +52,7 @@ export function CodeFileViewer({
   filePath,
   refreshKey,
   changedPaths,
+  viewStateKey,
 }: CodeFileViewerProps): React.ReactElement {
   const [content, setContent] = useState("");
   const [state, setState] = useState<LoadState>("loading");
@@ -59,6 +65,16 @@ export function CodeFileViewer({
   // loading flip so a same-file refresh re-read doesn't flash a skeleton over
   // already-rendered content.
   const lastLoadedPath = useRef<string | null>(null);
+  // In state, not a ref: the handle arriving (CM loaded) must re-render so the scroll hook attaches.
+  const [handle, setHandle] = useState<CodeEditorHandle | null>(null);
+  // An inactive tab is hidden and the engine drops its scroll offset: put it back when shown again.
+  // `restore:false` — a remount restore would run before the content lands in CM (it would clamp to 0).
+  useScrollSnapshot({
+    viewKey: viewStateKey ?? null,
+    getEl: () => handle?.getScrollElement() ?? null,
+    ready: state === "ready" && handle !== null,
+    restore: false,
+  });
 
   useEffect(() => {
     let stale = false;
@@ -128,7 +144,7 @@ export function CodeFileViewer({
     };
   }, [filePath, refreshKey, changedPaths]);
 
-  const filename = filePath.split("/").pop() ?? filePath;
+  const filename = basename(filePath) || filePath;
 
   if (state === "binary") {
     return (
@@ -176,6 +192,7 @@ export function CodeFileViewer({
   // plain → shell once the read lands, re-highlighting it (AC-3).
   return (
     <CodeEditor
+      ref={setHandle}
       value={content}
       onChange={noop}
       readOnly

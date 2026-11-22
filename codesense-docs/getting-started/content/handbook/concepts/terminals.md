@@ -2,7 +2,7 @@
 
 _A terminal per worktree with your login shell and dotfiles: tabs, tiles, the overlays over them, and sessions that outlive the app._
 
-Every workspace in CodeSense has real terminals: a full PTY with xterm.js, clickable links and WebGL rendering. It isn't a simulated console. Anything you run in Terminal.app or iTerm runs here, including `make`, your scripts and any agent CLI.
+Every workspace in CodeSense has real terminals: a full PTY with xterm.js, clickable links and WebGL rendering. It isn't a simulated console. Anything you run in Terminal.app or iTerm runs here, including `make`, your scripts and any agent CLI. On Linux, terminals draw with xterm.js's DOM renderer instead of WebGL; start CodeSense with `CODESENSE_TERMINAL_RENDERER=webgl` to try WebGL there, or `CODESENSE_TERMINAL_RENDERER=dom` to use the DOM renderer anywhere.
 
 ## Your shell, your config
 
@@ -77,6 +77,10 @@ New tabs open instantly because CodeSense keeps a few shells warm in the backgro
 ## Closing the window vs quitting
 
 By default, closing the window keeps CodeSense running in the background. The MCP host, sync and any running agents keep going, and clicking the dock icon brings the window back. To make closing quit instead, turn on **Quit on window close** in **Settings → General**.
+
+On Linux there is no dock icon, so the window comes back from the terminal server's tray icon instead: turn on **Show terminal server in the tray** in **Settings → General**, then choose **Open CodeSense** from the icon's menu. Closing the window keeps CodeSense running only while that icon shows; otherwise closing quits, so the window is never left hidden with no way back. The icon needs the AppIndicator library (the deb and rpm packages install it, and the AppImage bundles it), and stock GNOME needs the AppIndicator extension to show tray icons at all. Opening CodeSense again from the launcher while it runs in the background starts a second copy rather than showing the first.
+
+Windows works the same way, with the icon in the notification area by the clock: turn on **Show terminal server in the tray** in **Settings → General**, then choose **Open CodeSense** from the icon's menu (a left click opens it, and hovering shows the terminal server's status). Closing the window keeps CodeSense running only while that setting is on; otherwise closing quits. If you don't see it, it may be under the Show hidden icons arrow (^) by the clock. Opening CodeSense again from the Start menu while it runs in the background starts a second copy rather than showing the first.
 
 Quitting CodeSense (<kbd>⌘Q</kbd>) closes the app but not your terminals. They run in a separate process, the terminal server (`codesense-session-server`), which keeps running after you quit, so agents carry on working. The next time you open CodeSense it reconnects, and your tabs come back with everything that ran while it was closed. Restarting your Mac ends them. On a remote machine the terminal server runs in your account there, so its sessions keep going while your Mac sleeps or restarts.
 

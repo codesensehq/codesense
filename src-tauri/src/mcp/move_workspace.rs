@@ -16,9 +16,10 @@ use rmcp::schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::Read;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::shared::machine_wording;
 
 /// Serializer / lock around `move-workspace-intents-v1/*.json` writes so a
 /// racing boot reaper and a user-driven `move_workspace` call never shred
@@ -263,10 +264,7 @@ pub fn write_new(root: &Path, intent: &MoveIntent) -> Result<(), IntentWriteErro
     let _guard = INTENT_WRITES
         .lock()
         .map_err(|_| IntentWriteError::Io("intent write lock poisoned".into()))?;
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(root)
+    codesense_platform::fs::create_dir_owner_only(root)
         .map_err(|e| IntentWriteError::Io(format!("intent root unavailable: {e}")))?;
     let path = MoveIntent::path_in(root, &intent.team_key, &intent.workspace_id);
     if path.exists() {
@@ -284,13 +282,7 @@ pub fn write_new(root: &Path, intent: &MoveIntent) -> Result<(), IntentWriteErro
         return Err(IntentWriteError::Io("intent too large".into()));
     }
     use std::io::Write;
-    let mut file = match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(&path)
-    {
+    let mut file = match codesense_platform::fs::create_new_owner_only(&path) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             return Err(IntentWriteError::AlreadyExists);
@@ -313,12 +305,7 @@ fn archive_intent_locked(root: &Path, intent: &MoveIntent) -> Result<(), IntentW
         MoveIntent::file_key(&intent.team_key, &intent.workspace_id),
         uuid::Uuid::new_v4()
     ));
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(archive)
+    let mut file = codesense_platform::fs::create_new_owner_only(&archive)
         .map_err(|e| IntentWriteError::Io(e.to_string()))?;
     file.write_all(&serde_json::to_vec(intent).map_err(|e| IntentWriteError::Io(e.to_string()))?)
         .and_then(|()| file.sync_all())
@@ -375,14 +362,10 @@ pub fn rewrite(root: &Path, intent: &MoveIntent) -> Result<(), IntentWriteError>
     let tmp = path.with_extension("tmp");
     {
         use std::io::Write;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&tmp)
-            .map_err(|e| IntentWriteError::Io(format!("open tmp: {e}")))?;
+        let mut file =
+            codesense_platform::fs::create_owner_only(&tmp, codesense_platform::fs::Open::NoFollow)
+                .and_then(|file| file.set_len(0).map(|()| file))
+                .map_err(|e| IntentWriteError::Io(format!("open tmp: {e}")))?;
         file.write_all(&bytes)
             .map_err(|e| IntentWriteError::Io(format!("write: {e}")))?;
         file.sync_all()
@@ -411,11 +394,10 @@ pub fn read(
 }
 
 fn read_path(path: &Path) -> Result<MoveIntent, IntentReadError> {
-    let mut file = match std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-    {
+    let mut file = match codesense_platform::fs::open_nofollow_nonblocking(
+        std::fs::OpenOptions::new().read(true),
+        path,
+    ) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Err(IntentReadError::NotFound);
@@ -504,9 +486,7 @@ pub fn scan(root: &Path) -> Vec<MoveIntent> {
 }
 
 fn sync_dir(root: &Path) {
-    if let Ok(dir) = std::fs::File::open(root) {
-        let _ = dir.sync_all();
-    }
+    let _ = codesense_platform::fs::sync_dir(root);
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -629,6 +609,18 @@ fn with_report(reason: impl std::fmt::Display, report: &MoveSourceReport) -> Str
     )
 }
 
+/// That unpushed commits can't be carried between two other machines, worded for `os`.
+fn carry_between_machines_for(os: &str) -> String {
+    format!(
+        "carryUnpushed between machines is not supported; bring the workspace to {} first",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn carry_between_machines() -> String {
+    carry_between_machines_for(machine_wording::RUNNING_OS)
+}
+
 // Architecture: all refusals precede stopping agents or preparing a target.
 fn check_choices(
     params: &MoveWorkspaceParams,
@@ -652,7 +644,7 @@ fn check_choices(
     } else if report.unpushed_count > 0 && !params.carry_unpushed && !params.discard_unpushed {
         Some("unpushedCommits: choose carryUnpushed or discardUnpushed".into())
     } else if remote_to_remote && params.carry_unpushed {
-        Some("carryUnpushed between machines is not supported; bring the workspace to this Mac first".into())
+        Some(carry_between_machines())
     } else {
         None
     };
@@ -787,12 +779,15 @@ pub(crate) fn snapshot_from_worktree_index(
     };
     let records = crate::install::worktree_index::iter_story_records(home, principal)
         .map_err(|e| format!("reading the worktree index failed: {e}"))?;
-    let found = records.into_iter().find(|r| {
-        r.story_id == story_id
-            && r.org_slug == org_slug
-            && crate::install::worktree_index::resolve_team(r).as_deref() == Some(team)
-            && r.code_repo_path.is_dir()
-    });
+    // A story's workspace moves with its base worktree; its seat worktrees never stand in.
+    let found = crate::install::worktree_index::base_story_records(&records)
+        .find(|r| {
+            r.story_id == story_id
+                && r.org_slug == org_slug
+                && crate::install::worktree_index::resolve_team(r).as_deref() == Some(team)
+                && r.code_repo_path.is_dir()
+        })
+        .cloned();
     Ok(found.map(|r| {
         let path = r.code_repo_path.to_string_lossy().into_owned();
         WorkspaceSnapshot {
@@ -1028,13 +1023,22 @@ pub enum PreflightRefusal {
     Internal(String),
 }
 
+/// That the story has no workspace in the active team, worded for `os`.
+fn no_such_workspace_for(os: &str, story_id: &str) -> String {
+    format!(
+        "no such workspace in the active team: story \"{story_id}\" is not open in the viewer and has no managed worktree in this team's workspace store ({}'s worktree index). Run open_workspace with storyId \"{story_id}\" (it creates and registers the worktree), then retry move_workspace. For a workspace on another machine, open it there with open_workspace and its machineId first",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn no_such_workspace(story_id: &str) -> String {
+    no_such_workspace_for(machine_wording::RUNNING_OS, story_id)
+}
+
 impl std::fmt::Display for PreflightRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NoSuchWorkspace { story_id } => write!(
-                f,
-                "no such workspace in the active team: story \"{story_id}\" is not open in the viewer and has no managed worktree in this team's workspace store (this Mac's worktree index). Run open_workspace with storyId \"{story_id}\" (it creates and registers the worktree), then retry move_workspace. For a workspace on another machine, open it there with open_workspace and its machineId first"
-            ),
+            Self::NoSuchWorkspace { story_id } => write!(f, "{}", no_such_workspace(story_id)),
             Self::SameMachine => write!(f, "workspace already lives on the target machine"),
             Self::TargetUnreachable(why) => write!(f, "target machine unreachable: {why}"),
             Self::DirtyWorktree { paths } => {
@@ -1433,6 +1437,17 @@ async fn source_tabs(
         current_rows,
     )
     .await
+}
+
+/// Whether a tab on This Mac runs in the folder `path`, or is opening or restarting
+/// into it: the move's own source check. A terminal host that can't answer counts as
+/// in use.
+pub(crate) async fn local_folder_in_use(app: &tauri::AppHandle, path: &Path) -> bool {
+    let path = path.to_string_lossy();
+    match source_tabs(app, &MachineRef(None), Some(&path)).await {
+        Ok(tabs) => !matches!(tabs[..], []),
+        Err(_) => true,
+    }
 }
 
 fn source_runtime_rows(
@@ -2750,6 +2765,58 @@ mod tests {
         write_new(dir.path(), &retry).unwrap();
     }
 
+    #[test]
+    fn intent_files_are_owner_only_in_a_fresh_or_shared_root_and_after_a_rewrite() {
+        use crate::test_support::owner_only::{is_owner_only, shared_dir, shared_file};
+        let dir = tempdir().unwrap();
+        let fresh = dir.path().join("fresh").join("intents");
+        let mut failed = sample_intent();
+        write_new(&fresh, &failed).unwrap();
+        assert!(is_owner_only(&fresh));
+        let path = MoveIntent::path_in(&fresh, &failed.team_key, &failed.workspace_id);
+        assert!(is_owner_only(&path));
+        record_failure(&fresh, &mut failed, "prepare failed").unwrap();
+        let mut retry = failed.clone();
+        retry.to.request_id = "retry".into();
+        retry.failure = None;
+        write_new(&fresh, &retry).unwrap();
+        for entry in std::fs::read_dir(&fresh).unwrap() {
+            assert!(is_owner_only(&entry.unwrap().path()));
+        }
+
+        let shared = dir.path().join("shared");
+        shared_dir(&shared);
+        let intent = sample_intent();
+        write_new(&shared, &intent).unwrap();
+        assert!(!is_owner_only(&shared), "an existing root is left as it is");
+        let path = MoveIntent::path_in(&shared, &intent.team_key, &intent.workspace_id);
+        assert!(is_owner_only(&path));
+        shared_file(&path, &[b' '; 8192]);
+        rewrite(&shared, &intent).unwrap();
+        assert!(is_owner_only(&path));
+        assert_eq!(
+            read(&shared, &intent.team_key, &intent.workspace_id).unwrap(),
+            intent
+        );
+    }
+
+    #[test]
+    fn a_rewrite_truncates_a_stale_temp_file() {
+        let dir = tempdir().unwrap();
+        let intent = sample_intent();
+        write_new(dir.path(), &intent).unwrap();
+        let path = MoveIntent::path_in(dir.path(), &intent.team_key, &intent.workspace_id);
+        let tmp = path.with_extension("tmp");
+        codesense_platform::fs::create_new_owner_only(&tmp).unwrap();
+        std::fs::write(&tmp, [b' '; 8192]).unwrap();
+        rewrite(dir.path(), &intent).unwrap();
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            serde_json::to_vec(&intent).unwrap()
+        );
+        assert!(!tmp.exists());
+    }
+
     struct FakeMoveHost {
         target: PathBuf,
         fail_after_prepare: bool,
@@ -4000,6 +4067,52 @@ mod tests {
     }
 
     #[test]
+    fn a_seat_worktree_is_never_the_story_workspace_that_moves() {
+        use crate::install::worktree_index::{self, SeatKind, SeatRecord, WorktreeStoryRecord};
+        let home = tempdir().unwrap();
+        let principal = crate::domain::Principal::from(42u64);
+        let story = home
+            .path()
+            .join("users/42/orgs/acme/ctx/alpha/content/impl/SW-4.md");
+        let record = |dir: &std::path::Path| {
+            std::fs::create_dir(dir).unwrap();
+            WorktreeStoryRecord::new(
+                dir.to_path_buf(),
+                "acme",
+                SourceRepoSlug::new("acme", "codesense").unwrap(),
+                "SW-4",
+                story.clone(),
+            )
+        };
+        let (base_wt, seat_wt) = (
+            home.path().join("wt-sw-4"),
+            home.path().join("wt-sw-4-seat"),
+        );
+        let base = record(base_wt.as_path());
+        let mut seat = record(seat_wt.as_path());
+        seat.seat = Some(SeatRecord {
+            name: "dev".into(),
+            kind: SeatKind::Branch,
+            pinned_commit: None,
+            kept: None,
+        });
+        for rec in [&base, &seat] {
+            worktree_index::write_record(home.path(), &principal, rec).unwrap();
+        }
+        let found = snapshot_from_worktree_index(home.path(), &principal, "acme:alpha", "SW-4")
+            .unwrap()
+            .expect("the base worktree moves");
+        assert_eq!(found.worktree_path, base_wt.to_string_lossy());
+        // With the base worktree gone, the seat does not take its place.
+        std::fs::remove_dir(&base_wt).unwrap();
+        assert!(
+            snapshot_from_worktree_index(home.path(), &principal, "acme:alpha", "SW-4")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
     fn no_such_workspace_refusal_names_the_step_that_adds_it() {
         let msg = PreflightRefusal::NoSuchWorkspace {
             story_id: "SW-9".into(),
@@ -4008,5 +4121,25 @@ mod tests {
         assert!(msg.starts_with("no such workspace in the active team"));
         assert!(msg.contains("open_workspace"));
         assert!(msg.contains("\"SW-9\""));
+    }
+
+    #[test]
+    fn machine_wording_follows_the_os() {
+        assert_eq!(
+            carry_between_machines_for("macos"),
+            "carryUnpushed between machines is not supported; bring the workspace to this Mac first"
+        );
+        assert_eq!(
+            carry_between_machines_for("linux"),
+            "carryUnpushed between machines is not supported; bring the workspace to this computer first"
+        );
+        assert_eq!(
+            no_such_workspace_for("macos", "demo"),
+            "no such workspace in the active team: story \"demo\" is not open in the viewer and has no managed worktree in this team's workspace store (this Mac's worktree index). Run open_workspace with storyId \"demo\" (it creates and registers the worktree), then retry move_workspace. For a workspace on another machine, open it there with open_workspace and its machineId first"
+        );
+        assert_eq!(
+            no_such_workspace_for("linux", "demo"),
+            "no such workspace in the active team: story \"demo\" is not open in the viewer and has no managed worktree in this team's workspace store (this computer's worktree index). Run open_workspace with storyId \"demo\" (it creates and registers the worktree), then retry move_workspace. For a workspace on another machine, open it there with open_workspace and its machineId first"
+        );
     }
 }

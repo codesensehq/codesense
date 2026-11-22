@@ -4,6 +4,7 @@
  * install ships, that the very first launch lands in (on its setup page). Mirrors `codesense-docs/bundle.json`
  * (a test keeps them equal); the backend places and connects it (`ensureCodesenseDocs`).
  */
+import { basename, join, trimTrailingSeparators } from "@/shared/lib/path";
 import type { Org } from "@/shared/types/domain";
 
 export const CODESENSE_DOCS_SLUG = "codesense/docs";
@@ -83,8 +84,7 @@ export function orderContextRepos<T extends Pick<Org, "slug" | "display_name">>(
 
 /** The folder's own name, for "Connect {name}?". */
 export function folderName(path: string): string {
-  const trimmed = path.replace(/[/\\]+$/, "");
-  return trimmed.split(/[/\\]/).pop() || trimmed;
+  return basename(path) || trimTrailingSeparators(path);
 }
 
 /** A folder name for a new context repo called `name`. */
@@ -100,7 +100,7 @@ export function contextRepoFolderName(name: string): string {
 
 /** The default location of a new context repo: `~/CodeSense/<name>`. */
 export function defaultContextRepoLocation(home: string, name: string): string {
-  return `${home.replace(/[/\\]+$/, "")}/CodeSense/${contextRepoFolderName(name)}`;
+  return join(home, "CodeSense", contextRepoFolderName(name));
 }
 
 /** Why a connect or create failed. `message` is always the backend's own reason. */

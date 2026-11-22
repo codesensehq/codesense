@@ -20,6 +20,8 @@ import {
 } from "../lib/session-timers";
 import { useSessionTimersStore } from "../stores/session-timers-store";
 import { SessionTimersPopover, type SessionTimersPopoverProps } from "./session-timers-popover";
+import { hasMod } from "@/shared/lib/shortcuts/keystroke";
+import { localMachineLabel } from "@/shared/lib/local-machine";
 
 /** The message's cap is 8 KiB; its counter shows only past 7 KiB (§4.13). */
 const MESSAGE_CAP = 8 * 1024;
@@ -110,7 +112,7 @@ export function RemindForm({
   target,
   agentName,
   offline = false,
-  machineLabel = "This Mac",
+  machineLabel = localMachineLabel(),
   onBack,
   onDone,
 }: {
@@ -345,7 +347,7 @@ export function RemindForm({
             aria-invalid={!!errors.message || tooLong || undefined}
             onChange={(e) => setMessage(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              if (e.key === "Enter" && hasMod(e)) {
                 e.preventDefault();
                 void submit();
               }

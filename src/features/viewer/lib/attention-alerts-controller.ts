@@ -38,6 +38,8 @@ import {
 } from "@/shared/stores/agent-state-store";
 import { useManagedSessionStore } from "@/shared/stores/use-managed-session-store";
 import { useOrgStore } from "@/shared/stores/org-store";
+import { getToastShortcut } from "@/shared/stores/shortcuts-store";
+import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
 import {
   selectActiveTerminalTab,
   selectHiddenTabLocation,
@@ -122,9 +124,10 @@ export interface JumpPill {
 /** Keeps the pill clear of the tile controls along the top edge. */
 const sonnerPill: JumpPill = {
   show(text, onJump, onClose) {
+    const chord = getToastShortcut("viewer.focus-tile-question");
     toast(text, {
       id: PILL_ID,
-      description: "Jump there (⌘⇧J)",
+      description: chord ? `Jump there (${formatKeystrokeDisplay(chord)})` : undefined,
       duration: PILL_DURATION_MS,
       position: "bottom-center",
       closeButton: true,

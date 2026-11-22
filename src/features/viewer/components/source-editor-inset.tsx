@@ -4,7 +4,7 @@ import { LocateFixed, PanelLeft, PanelLeftClose, RefreshCw, Save, Search, X } fr
 import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
-import { basename } from "@/shared/lib/basename";
+import { basename, join, relative, trimTrailingSeparators } from "@/shared/lib/path";
 import { toastFailure } from "@/shared/lib/with-error-toast";
 import type { Workspace, WorktreeEditorDraft } from "@/shared/stores/viewer-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
@@ -21,7 +21,7 @@ import { useRemoteWatchNonce, useRemoteWorktreeWatch } from "../lib/use-remote-w
 import { useRemoteCadence } from "../lib/use-remote-cadence";
 import { useSessionCwd } from "../hooks/use-session-cwd";
 import { useSessionCwdRevision } from "../hooks/use-session-cwd-revision";
-import { relativeToRoot, useScratchOverlayFiles } from "../lib/use-scratch-overlay-files";
+import { useScratchOverlayFiles } from "../lib/use-scratch-overlay-files";
 import { closeTab, cycleTab, openTab } from "../lib/editor-tabs";
 import { useWorktreeEditorRevealStore } from "../lib/open-in-worktree-editor";
 import { describeFileError, type FileDraft, type SelectedFile } from "../lib/use-file-editor";
@@ -45,6 +45,12 @@ import { EditorBreadcrumbs } from "./worktree-editor/editor-breadcrumbs";
 import { EditorQuickOpen } from "./worktree-editor/editor-quick-open";
 import { EditorStateMessage, Kbd } from "./worktree-editor/editor-states";
 import { isViewToggleChord } from "./worktree-editor/worktree-view-mode";
+import {
+  formatControlDisplay,
+  formatKeystrokeDisplay,
+  hasCmd,
+  hasMod,
+} from "@/shared/lib/shortcuts/keystroke";
 
 /** A pending discard confirmation: closing a dirty tab, or the whole editor
  *  while any tab is dirty. Held until confirmed or cancelled — unsaved edits
@@ -108,11 +114,9 @@ export function SourceEditorInset({
   // The effective root: a remote tab keeps `ws.cwd` empty so nothing local
   // treats the remote directory as a path on this Mac.
   const reportedRoot = remote ? (ws.location.cwd ?? "") : ws.cwd;
-  const rootPath = reportedRoot.replace(/\/+$/, "");
-  // A worktree AT "/" trims to "" (so paths still join as "/" + rel) but is a
-  // real root, unlike a root not reported yet.
+  const rootPath = trimTrailingSeparators(reportedRoot);
   const rootReady = reportedRoot.trim() !== "";
-  const rootLabel = rootReady && rootPath === "" ? "/" : basename(rootPath) || rootPath;
+  const rootLabel = basename(rootPath) || rootPath;
   const machine = useMachine(remote ? ws.location.machineId : "");
   // The machine's display name once the machines list has loaded; its id
   // meanwhile, so the status bar never says just "Remote".
@@ -120,7 +124,7 @@ export function SourceEditorInset({
   // Only once the machines list has loaded: an unknown machine isn't "offline".
   const machineOffline = remote && machine ? machineOfflineWord(machine) : null;
 
-  const toAbs = useCallback((rel: string) => `${rootPath}/${rel}`, [rootPath]);
+  const toAbs = useCallback((rel: string) => join(rootPath, rel), [rootPath]);
   // One stable object per (path, size), so memoized panes skip unrelated renders.
   const filesRef = useRef(new Map<string, SelectedFile>());
   const fileFor = (rel: string): SelectedFile => {
@@ -133,10 +137,7 @@ export function SourceEditorInset({
     filesRef.current.set(rel, next);
     return next;
   };
-  const toRel = useCallback(
-    (abs: string) => (abs.startsWith(`${rootPath}/`) ? abs.slice(rootPath.length + 1) : abs),
-    [rootPath],
-  );
+  const toRel = useCallback((abs: string) => relative(rootPath, abs) || abs, [rootPath]);
 
   // ── Tabs ────────────────────────────────────────────────────────────────
   // Identity follows file-buffer-model: tabs, panes, statuses, drafts, sizes and
@@ -556,7 +557,7 @@ export function SourceEditorInset({
 
   // ── Scratch overlay (local only) ────────────────────────────────────────
   const { files: scratchFiles, refresh: refreshScratch } = useScratchOverlayFiles(ws.cwd);
-  const activeRel = active ? relativeToRoot(rootPath, toAbs(active)) : null;
+  const activeRel = active ? relative(rootPath, toAbs(active)) : null;
   const activeScratch = activeRel === null ? undefined : scratchFiles.get(activeRel);
   const [scratchBusy, setScratchBusy] = useState(false);
   const chooseScratchFile = useCallback(
@@ -589,7 +590,7 @@ export function SourceEditorInset({
   const toggleWrap = () => setWrapOverride(!effectiveWrap);
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    const mod = e.metaKey || e.ctrlKey;
+    const mod = hasMod(e);
     const target = e.target as HTMLElement | null;
     const inCode = !!target?.closest?.(".cm-editor");
     const claim = () => {
@@ -630,7 +631,7 @@ export function SourceEditorInset({
       openPalette("");
       return;
     }
-    if (e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === "g") {
+    if (e.ctrlKey && !hasCmd(e) && !e.altKey && e.key.toLowerCase() === "g") {
       claim();
       openPalette(":");
       return;
@@ -742,7 +743,7 @@ export function SourceEditorInset({
                 <span className="text-xs font-semibold text-foreground">Files</span>
                 <span
                   className="min-w-0 flex-1 truncate text-[0.7rem] text-muted-foreground"
-                  title={rootReady && rootPath === "" ? "/" : rootPath}
+                  title={rootPath}
                 >
                   {rootLabel}
                 </span>
@@ -842,7 +843,7 @@ export function SourceEditorInset({
                     ariaLabel="Quick open"
                     tooltip={
                       <span className="flex items-center gap-1.5">
-                        Quick open <Kbd>⌘P</Kbd>
+                        Quick open <Kbd>{formatKeystrokeDisplay("CmdOrCtrl+P")}</Kbd>
                       </span>
                     }
                     tooltipSide="bottom"
@@ -856,7 +857,7 @@ export function SourceEditorInset({
                       ariaLabel="Save"
                       tooltip={
                         <span className="flex items-center gap-1.5">
-                          Save <Kbd>⌘S</Kbd>
+                          Save <Kbd>{formatKeystrokeDisplay("CmdOrCtrl+S")}</Kbd>
                         </span>
                       }
                       tooltipSide="bottom"
@@ -1056,7 +1057,7 @@ function shallowEqualStatus(a: PaneStatus, b: PaneStatus): boolean {
 
 /** No file open: say what the editor does and how to start, rather than an
  *  empty pane. */
-function EmptyWorkbench({ onQuickOpen }: { onQuickOpen: () => void }) {
+export function EmptyWorkbench({ onQuickOpen }: { onQuickOpen: () => void }) {
   return (
     <EditorStateMessage title="No file open" testId="worktree-empty">
       <p className="max-w-[36ch] text-xs text-muted-foreground">
@@ -1070,16 +1071,16 @@ function EmptyWorkbench({ onQuickOpen }: { onQuickOpen: () => void }) {
         >
           Quick open
         </button>
-        <Kbd>⌘P</Kbd>
+        <Kbd>{formatKeystrokeDisplay("CmdOrCtrl+P")}</Kbd>
         <span className="justify-self-end">Go to line</span>
-        <Kbd>⌃G</Kbd>
+        <Kbd>{formatControlDisplay("G")}</Kbd>
         <span className="justify-self-end">Find and replace</span>
         <span className="flex gap-1">
-          <Kbd>⌘F</Kbd>
-          <Kbd>⌥⌘F</Kbd>
+          <Kbd>{formatKeystrokeDisplay("CmdOrCtrl+F")}</Kbd>
+          <Kbd>{formatKeystrokeDisplay("CmdOrCtrl+Alt+F")}</Kbd>
         </span>
         <span className="justify-self-end">Next tab</span>
-        <Kbd>⌃Tab</Kbd>
+        <Kbd>{formatControlDisplay("Tab")}</Kbd>
       </div>
     </EditorStateMessage>
   );
@@ -1145,14 +1146,6 @@ export function WorktreeEditorSurface({
   // For local tabs the non-null reading overrides `ws.cwd`; remote tabs
   // keep `location.cwd` since the local resolver can't address a remote
   // shell (SW-VE-15 wires the remote path).
-  //
-  // TODO (deferred from SW-VE-12 R3-M5): `localChangedNonce` above still
-  // keys `worktreeChangedPath[ws.id]` on raw ws.id. Now that liveCwd
-  // mutates mid-session the editor + overlay watchers can observe
-  // different dirs under one key → crossed events. Revisit with a
-  // composite id `${ws.id}|${effectiveWs.cwd}` if a seam test or
-  // real-app observation flags a cross (overlay + editor share the
-  // same effectiveCwd per tab today, so not surfaced in practice).
   const cwdRevision = useSessionCwdRevision(activeTabSessionId);
   const liveCwd = useSessionCwd(activeTabSessionId, cwdRevision);
   const effectiveWs = useMemo<Workspace>(() => {

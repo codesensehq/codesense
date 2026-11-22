@@ -2,7 +2,7 @@
 import { useState } from "react";
 
 import { cn } from "@/lib/utils";
-import { basename } from "@/shared/lib/basename";
+import { basename, relative } from "@/shared/lib/path";
 import { canMergeMark } from "@/features/dashboard/lib/merge-mark";
 import { useMergeMarks } from "@/features/dashboard/lib/use-merge-marks";
 import { useReadyResolverContext } from "@/shared/hooks/use-resolver-context";
@@ -42,9 +42,7 @@ type MergeMarkedViewerProps = {
  *  file is NOT under the content root (so a stray absolute path can never be
  *  used as a marks key), which the caller treats as "not applicable". */
 function toContentRelative(absPath: string, contentRoot: string): string {
-  const root = contentRoot.endsWith("/") ? contentRoot : `${contentRoot}/`;
-  if (!absPath.startsWith(root)) return "";
-  return absPath.slice(root.length).replace(/\\/g, "/");
+  return relative(contentRoot, absPath) ?? "";
 }
 
 export function MergeMarkedViewer({

@@ -12,6 +12,8 @@ import { agentStatusLook, useNoteAgents } from "../lib/note-agents";
 import type { NoteSummary } from "../lib/note-summary";
 import { ActorFace } from "./note-changes";
 import { NtPopover, NtPopoverContent, NtPopoverTrigger } from "./nt-popover";
+import { ActionKbd } from "./action-kbd";
+import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
 
 /** How long ago a note was opened, as the list's right edge shows it: "now", "4m",
  *  "1h", a weekday within the week, else a date. */
@@ -149,13 +151,13 @@ export const NotesList = memo(function NotesList({
               }
             }}
           />
-          {variant === "column" && <kbd className="nt-kbd">⌘O</kbd>}
+          {variant === "column" && <ActionKbd action="nav.open-note-switcher" />}
         </label>
         <button
           type="button"
           className="nt-ib"
           aria-label="New note"
-          title="New note (⌘N)"
+          title={`New note (${formatKeystrokeDisplay("CmdOrCtrl+N")})`}
           onClick={() => onCreate()}
         >
           <Plus size={16} />

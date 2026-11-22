@@ -290,7 +290,7 @@ pub fn cli_of_provider(provider: AgentProvider) -> AgentCli {
 }
 
 mod claude;
-pub(crate) use claude::MANAGED_SETTINGS_PATHS as CLAUDE_MANAGED_SETTINGS_PATHS;
+pub(crate) use claude::claude_managed;
 mod codex;
 pub(crate) mod hermes;
 mod opencode;
@@ -554,5 +554,5 @@ pub(crate) fn sweep_managed_runtimes(scopes: &Path) {
     hermes::runtime::sweep(scopes);
 }
 
-#[cfg(test)]
+#[cfg(all(test, cap_agent_cli_sockets))]
 pub(crate) use hermes::runtime::tests::Fixture as ManagedHomeFixture;

@@ -6,7 +6,7 @@ import { buildTeamKey } from "@/shared/lib/team-key";
 import { useFieldDraft } from "../lib/use-field-draft";
 import { commitTextEditOnBlur } from "@/shared/lib/text-menu-focus";
 import { dashboardSelected, resolveSlot, servesSurface } from "@/features/shell/slots/reveal-slot";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
@@ -52,7 +52,13 @@ import {
 } from "@/tauri/commands";
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
 import { logger } from "@/shared/lib/logger";
-import { isMac } from "@/shared/lib/shortcuts/keystroke";
+import {
+  notYetAvailableSentence,
+  selectCapability,
+  type CapabilityKey,
+} from "@/shared/lib/capabilities";
+import { CapabilityOffNote } from "@/shared/components/capability-off/capability-off";
+import { useConfigStore } from "@/shared/stores/config-store";
 import { rowMatches, type SettingRowSpec } from "@/features/settings/lib/row-matches";
 import {
   useDashboardProfileStore,
@@ -82,10 +88,11 @@ import { UpdatesSection } from "@/features/license/UpdatesSection";
 import { SectionHeader } from "./section-header";
 import { SettingRow } from "./setting-row";
 import { TerminalServerSection } from "./terminal-server-section";
+import { localMachineNoun, quitOnCloseFooter, trayPlaceName } from "@/shared/lib/local-machine";
 
 // ---------- Row specs ----------
 
-const GENERAL_ROW_SPECS: Record<string, SettingRowSpec> = {
+const GENERAL_ROW_SPECS = {
   editor: {
     key: "editor",
     label: "Editor",
@@ -100,7 +107,18 @@ const GENERAL_ROW_SPECS: Record<string, SettingRowSpec> = {
   terminalShell: {
     key: "terminalShell",
     label: "Terminal shell",
-    keywords: ["terminal", "shell", "zsh", "bash", "fish", "login", "$SHELL"],
+    keywords: [
+      "terminal",
+      "shell",
+      "zsh",
+      "bash",
+      "fish",
+      "pwsh",
+      "powershell",
+      "cmd",
+      "login",
+      "$SHELL",
+    ],
   },
   terminalServer: {
     key: "terminalServer",
@@ -276,7 +294,10 @@ const GENERAL_ROW_SPECS: Record<string, SettingRowSpec> = {
   },
   terminalServerMenuBar: {
     key: "terminalServerMenuBar",
-    label: "Show terminal server in the menu bar",
+    // Read when shown or matched, so it names this OS's place for the item.
+    get label() {
+      return `Show terminal server in the ${trayPlaceName()}`;
+    },
     keywords: ["menu bar", "tray", "status", "terminal server", "agents", "stop", "restart"],
   },
   quitOnClose: {
@@ -408,9 +429,17 @@ const GENERAL_ROW_SPECS: Record<string, SettingRowSpec> = {
     label: "About",
     keywords: ["about", "version", "update", "updates", "check", "release", "codesense"],
   },
-};
+} satisfies Record<string, SettingRowSpec>;
 
 export const GENERAL_ROW_SPEC_LIST: SettingRowSpec[] = Object.values(GENERAL_ROW_SPECS);
+
+/** The rows whose feature exists only where a capability is on. Where it is off the row is
+ *  still shown and found by search, disabled with the off sentence (`RadioGroupRow`'s
+ *  `capability`), never hidden. */
+export const GENERAL_ROW_CAPABILITY = {
+  quitOnClose: "background-on-close",
+  terminalServerMenuBar: "terminal-server-tray",
+} as const satisfies Partial<Record<keyof typeof GENERAL_ROW_SPECS, CapabilityKey>>;
 
 // ---------- General section ----------
 
@@ -419,6 +448,8 @@ export function GeneralSection({ query }: { query: string }) {
   // queries like "theme" false-match unrelated rows (e.g. "Content width"
   // via t-h-e-m-e through "con[t]ent wid[t][h]... [e]... nor[m]al... wid[e]").
   // Each row's label + keywords is curated for predictable substring hits.
+  // A row whose feature isn't on this OS still counts: it is shown disabled with
+  // the off sentence, so a search finds it rather than the empty state.
   const visibleKeys = useMemo(
     () => GENERAL_ROW_SPEC_LIST.filter((spec) => rowMatches(spec, query)).map((spec) => spec.key),
     [query],
@@ -464,11 +495,10 @@ export function GeneralSection({ query }: { query: string }) {
           {visibleSet.has("warmPoolSize") && <WarmPoolSizeRow />}
           {visibleSet.has("worktreeSetupParallelism") && <WorktreeParallelismRow />}
           {visibleSet.has("backgroundAgentLimit") && <BackgroundAgentLimitRow />}
-          {/* SW-AU-34: background-on-close is macOS-only (dock-resident model); hide
-              the toggle off-macOS so it never promises behavior the platform lacks. */}
-          {visibleSet.has("quitOnClose") && isMac() && <QuitOnCloseRow />}
-          {/* SV-8: the menu-bar item is macOS-only. */}
-          {visibleSet.has("terminalServerMenuBar") && isMac() && <TerminalServerMenuBarRow />}
+          {/* Where the capability is off, each row shows what actually happens,
+              disabled, with the off sentence in place of its footer. */}
+          {visibleSet.has("quitOnClose") && <QuitOnCloseRow />}
+          {visibleSet.has("terminalServerMenuBar") && <TerminalServerMenuBarRow />}
           {visibleSet.has("openForemanOnStart") && <OpenForemanOnStartRow />}
           {visibleSet.has("osNotifications") && <OsNotificationsRow />}
           {visibleSet.has("notifyOnFinish") && <NotifyOnFinishRow />}
@@ -512,6 +542,10 @@ interface RadioGroupRowProps<T extends string> {
   gridClassName: string;
   buttonPaddingClassName?: string;
   footer?: React.ReactNode;
+  /** The capability the row's feature needs. While it is off the row shows `offValue` (what
+   *  actually happens on this OS), its radios stay focusable but never write the setting, and
+   *  the off note replaces `footer`. */
+  capability?: { cap: CapabilityKey; offValue: T };
 }
 
 /**
@@ -519,6 +553,10 @@ interface RadioGroupRowProps<T extends string> {
  * button options with WAI-ARIA radiogroup semantics and keyboard navigation
  * (Arrow keys move + select, Home/End jump to first/last). Uses roving
  * tabindex so Tab enters/exits the group once.
+ *
+ * With `capability` off, the group is `aria-disabled` with the off sentence as its tooltip and
+ * is described by one `CapabilityOffNote` in place of the footer. Only the radios dim: the note
+ * sits outside them at full opacity, and a focused radio comes back to full opacity with a ring.
  */
 function RadioGroupRow<T extends string>({
   label,
@@ -530,7 +568,15 @@ function RadioGroupRow<T extends string>({
   gridClassName,
   buttonPaddingClassName = "px-2 py-1",
   footer,
+  capability,
 }: RadioGroupRowProps<T>) {
+  const noteId = useId();
+  const platformCaps = useConfigStore((s) => s.platformCaps);
+  const capState = capability ? selectCapability(platformCaps, capability.cap) : undefined;
+  const offCap = capState && !capState.on ? capability : undefined;
+  const offCapability = offCap ? capState : undefined;
+  const shown = offCap ? offCap.offValue : value;
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     const isNext = e.key === "ArrowRight" || e.key === "ArrowDown";
     const isPrev = e.key === "ArrowLeft" || e.key === "ArrowUp";
@@ -538,6 +584,7 @@ function RadioGroupRow<T extends string>({
     const isEnd = e.key === "End";
     if (!isNext && !isPrev && !isHome && !isEnd) return;
     e.preventDefault();
+    if (offCap) return;
     const currentIdx = options.findIndex((o) => o.value === value);
     const last = options.length - 1;
     let nextIdx = currentIdx;
@@ -563,9 +610,12 @@ function RadioGroupRow<T extends string>({
         data-testid={testId}
         className={`grid gap-1 ${gridClassName}`}
         onKeyDown={onKeyDown}
+        aria-disabled={offCap ? true : undefined}
+        title={offCapability ? notYetAvailableSentence(offCapability) : undefined}
+        aria-describedby={offCap ? noteId : undefined}
       >
         {options.map((opt) => {
-          const isActive = value === opt.value;
+          const isActive = shown === opt.value;
           return (
             <button
               key={opt.value}
@@ -574,12 +624,18 @@ function RadioGroupRow<T extends string>({
               aria-checked={isActive}
               tabIndex={isActive ? 0 : -1}
               data-testid={`${testId}-${opt.value}`}
-              title={opt.title}
-              onClick={() => onChange(opt.value)}
+              title={offCap ? undefined : opt.title}
+              onClick={offCap ? undefined : () => onChange(opt.value)}
               className={`rounded ${buttonPaddingClassName} text-xs transition-colors ${
                 isActive
                   ? "bg-accent text-accent-foreground"
-                  : "bg-muted text-muted-foreground hover:text-foreground"
+                  : offCap
+                    ? "bg-muted text-muted-foreground"
+                    : "bg-muted text-muted-foreground hover:text-foreground"
+              }${
+                offCap
+                  ? " cursor-default opacity-50 outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                  : ""
               }`}
             >
               {opt.label}
@@ -587,7 +643,7 @@ function RadioGroupRow<T extends string>({
           );
         })}
       </div>
-      {footer}
+      {offCap ? <CapabilityOffNote cap={offCap.cap} id={noteId} className="mt-1" /> : footer}
     </SettingRow>
   );
 }
@@ -732,9 +788,10 @@ function TerminalPromptRow() {
 }
 
 // SW-LN-35: the shell terminals run. Shows the detected login shell and takes
-// an optional override (an absolute path to zsh, bash, or fish), committed on
-// blur. The Rust calls go through `Promise.resolve().then` so a missing backend
-// (tests, mock mode) just leaves the detected line blank.
+// an optional override (an absolute path to a shell of a kind the OS accepts,
+// `acceptedKinds`), committed on blur. The Rust calls go through
+// `Promise.resolve().then` so a missing backend (tests, mock mode) just leaves
+// the detected line blank.
 function TerminalShellRow() {
   const terminalShell = useViewerStore((s) => s.settings.terminalShell);
   const updateSettings = useViewerStore((s) => s.updateSettings);
@@ -794,16 +851,20 @@ function TerminalShellRow() {
   );
 }
 
+/** Joins the kinds as prose: "zsh, bash, or fish". */
+const shellKindList = new Intl.ListFormat("en", { type: "disjunction" });
+
 function terminalShellStatus(info: TerminalShellInfo | null): string {
   if (!info) return "New terminals run your login shell. Leave blank to keep it.";
+  const kinds = shellKindList.format(info.acceptedKinds);
   if (info.overrideRejected) {
-    return `${info.overridePath} isn't an executable zsh, bash, or fish. New terminals use ${info.path}.`;
+    return `${info.overridePath} isn't an executable ${kinds}. New terminals use ${info.path}.`;
   }
   if (info.source === "override") return `New terminals use ${info.path}.`;
   if (info.unsupportedShell) {
     return `Your login shell (${info.unsupportedShell}) isn't supported yet. New terminals use ${info.path}.`;
   }
-  return `Detected ${info.detectedPath}. Leave blank to keep it, or enter a path to zsh, bash, or fish.`;
+  return `Detected ${info.detectedPath}. Leave blank to keep it, or enter a path to ${kinds}.`;
 }
 
 // ---------- Agent CLIs ----------
@@ -1320,8 +1381,8 @@ function ShellIntegrationRow() {
 // ---------- Publish mode (SW-GS-17) ----------
 
 function QuitOnCloseRow() {
-  // SW-AU-34 (AC-5): default OFF → closing the window hides the app (macOS
-  // dock-resident) and keeps the MCP host + engine alive so an agent can
+  // Default OFF → closing the window hides the app (macOS dock-resident; on
+  // Linux only while the tray icon shows) and keeps the MCP host + engine alive so an agent can
   // keep driving codesense with no window on screen. On → a window close quits.
   // undefined means "use default (off / background-on-close)".
   const raw = useViewerStore((s) => s.settings.quitOnClose);
@@ -1340,17 +1401,14 @@ function QuitOnCloseRow() {
       onChange={(v) => updateSettings({ quitOnClose: v === "on" })}
       gridClassName="grid-cols-2"
       buttonPaddingClassName="px-2 py-1.5"
-      footer={
-        <p className="mt-1 text-[10px] text-muted-foreground">
-          Off keeps codesense running in the background on close (dock icon reopens it) so routines
-          keep firing. On makes closing the window quit.
-        </p>
-      }
+      // Where the app can't keep running with no window, closing it quits.
+      capability={{ cap: GENERAL_ROW_CAPABILITY.quitOnClose, offValue: "on" }}
+      footer={<p className="mt-1 text-[10px] text-muted-foreground">{quitOnCloseFooter()}</p>}
     />
   );
 }
 
-// ---------- Terminal server in the menu bar (SV-8) ----------
+// ---------- Terminal server in the menu bar (the tray off macOS) ----------
 
 function TerminalServerMenuBarRow() {
   // Off by default; undefined reads as off. The push to Rust lives in
@@ -1361,7 +1419,7 @@ function TerminalServerMenuBarRow() {
   return (
     <RadioGroupRow
       label={GENERAL_ROW_SPECS.terminalServerMenuBar.label}
-      ariaLabel="Show terminal server in the menu bar"
+      ariaLabel={GENERAL_ROW_SPECS.terminalServerMenuBar.label}
       testId="settings-terminal-server-menu-bar"
       value={active ? "on" : "off"}
       options={[
@@ -1371,6 +1429,8 @@ function TerminalServerMenuBarRow() {
       onChange={(v) => updateSettings({ terminalServerMenuBar: v === "on" })}
       gridClassName="grid-cols-2"
       buttonPaddingClassName="px-2 py-1.5"
+      // Where the tray icon can't be shown, there is none.
+      capability={{ cap: GENERAL_ROW_CAPABILITY.terminalServerMenuBar, offValue: "off" }}
       footer={
         <p className="mt-1 text-[10px] text-muted-foreground">
           Shows whether the terminal server is running and how many agents it runs, with Restart,
@@ -1663,7 +1723,7 @@ function WorktreeParallelismRow() {
 
   const footerCopy =
     active === "off"
-      ? "Off — no limit. Every queued worktree sets up immediately. Your Mac's own scheduler is the only backstop, so on a slower machine expect a brief burst of disk activity."
+      ? `Off — no limit. Every queued worktree sets up immediately. Your ${localMachineNoun()}'s own scheduler is the only backstop, so on a slower machine expect a brief burst of disk activity.`
       : active === "custom"
         ? "Blank or invalid keeps your last value; 0 or less becomes 1 (use Off for no limit)."
         : `How many worktrees set up at once in the background. Setup is now a light copy — not a full reinstall — so higher values are cheap. Auto sizes to your CPU (${autoResolved} on this machine). Off = no limit — all set up at once.`;

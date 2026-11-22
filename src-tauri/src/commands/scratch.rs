@@ -23,6 +23,7 @@ use super::notes_history::{
     self as history, emit_notes_changed, ChangeKind, NoteActor, NotesLocation,
 };
 use super::paths::codesense_home_dir;
+use crate::shared::machine_wording;
 
 /// Returns the exe-hash-namespaced scratch directory:
 /// `{codesense_home}/scratch-notes/{exe_hash[..8]}`. The exe-hash is
@@ -307,6 +308,18 @@ async fn resolve_notes_location(
     }
 }
 
+/// Org `org` is not synced here, worded for `os`.
+fn org_not_synced_for(os: &str, org: &str) -> String {
+    format!(
+        "org {org:?} is not synced on {}",
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+fn org_not_synced(org: &str) -> String {
+    org_not_synced_for(machine_wording::RUNNING_OS, org)
+}
+
 /// Org `org`'s notes for profile `user_id`, refused when the org is not synced on
 /// this Mac. Blocking.
 pub(crate) fn org_notes_location(
@@ -318,7 +331,7 @@ pub(crate) fn org_notes_location(
         .iter()
         .any(|c| c.org_slug == org);
     if !synced {
-        return Err(format!("org {org:?} is not synced on this Mac"));
+        return Err(org_not_synced(org));
     }
     org_notes_location_unchecked(home, &crate::domain::Principal::from(user_id), org)
 }
@@ -1381,5 +1394,17 @@ mod tests {
             "acme/ctx"
         )
         .is_err());
+    }
+
+    #[test]
+    fn machine_wording_follows_the_os() {
+        assert_eq!(
+            org_not_synced_for("macos", "acme"),
+            "org \"acme\" is not synced on this Mac"
+        );
+        assert_eq!(
+            org_not_synced_for("linux", "acme"),
+            "org \"acme\" is not synced on this computer"
+        );
     }
 }

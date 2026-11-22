@@ -17,11 +17,12 @@ own hooks and any hooks your team adds.
 > to a private copy of the CLI's settings. Your own `--settings` are kept,
 > and nothing in the worktree changes.
 
-Claude Code also runs an older status hook, `codesense-notify.sh`, which
-CodeSense installs with itself beside its activity helper and runs as
-`$CODESENSE_ACTIVITY_HOST/codesense-notify.sh`. Nothing is written into your
-worktree or your team's content, and your team ships no hook file. The
-settings that run it go **only** into files CodeSense owns:
+Claude Code also runs an older status hook and a secret-file guard,
+`codesense-bridge hook notify` and `codesense-bridge hook secret-guard`.
+CodeSense places its bridge beside its activity helper, and the hooks run it
+from `$CODESENSE_ACTIVITY_HOST`. Nothing is written into your worktree or your
+team's content, and your team ships no hook file. The settings that run them
+go **only** into files CodeSense owns:
 
 - A launched agent gets them in a private settings file for that session.
 - A hand-typed `claude` in a worktree CodeSense made gets them in
@@ -29,9 +30,12 @@ settings that run it go **only** into files CodeSense owns:
   and the file is kept out of git.
 - If your `settings.local.json` is tracked by git, is a symlink, or isn't
   valid JSON, CodeSense leaves it alone.
-- If your committed `settings.json` already runs
-  `$CODESENSE_ACTIVITY_HOST/codesense-notify.sh` for an event, CodeSense
-  doesn't add it again.
+- If your committed `settings.json` already runs CodeSense's status hook
+  (`codesense-bridge hook notify` from `$CODESENSE_ACTIVITY_HOST`) for an
+  event, CodeSense doesn't add it again.
+- Settings an earlier CodeSense wrote, which ran `codesense-notify.sh`, are
+  rewritten in place. A hook of your own that runs a file of that name is
+  left alone.
 
 Claude Code runs hooks from every settings file, so yours and CodeSense's
 all fire. Your repo's `.claude/settings.json` is never written.

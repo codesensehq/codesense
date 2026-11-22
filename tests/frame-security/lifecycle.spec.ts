@@ -14,7 +14,8 @@ test.beforeAll(async ({ browser }) => {
     const kitAsset = req.url?.match(/^\/kit\/v1\/(editor\.(js|css))$/);
     if (kitAsset) {
       res.setHeader("content-type", kitAsset[2] === "js" ? "text/javascript" : "text/css");
-      res.end(readFileSync(`src-tauri/src/http/routes/dashboard_kit/${kitAsset[1]}`));
+      const file = kitAsset[2] === "js" ? "editor.min.js" : kitAsset[1];
+      res.end(readFileSync(`src-tauri/src/http/routes/dashboard_kit/${file}`));
       return;
     }
     const id = req.url?.split("/").pop()?.split("?")[0];

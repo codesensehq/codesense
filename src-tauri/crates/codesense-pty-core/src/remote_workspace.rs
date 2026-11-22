@@ -472,45 +472,72 @@ pub struct ForgetMissingWorkspace {
 /// Architecture: one cross-process admission fence covers app and sidecar launches.
 /// Pending launches hold shared locks until registration completes. Removal takes
 /// the worktree's exclusive lock before reading sessions; neither can pass the other.
-#[cfg(unix)]
 pub mod removal {
-    use std::fs::{File, OpenOptions};
-    use std::os::fd::AsRawFd;
-    use std::os::unix::{ffi::OsStrExt, fs::OpenOptionsExt};
-    use std::path::Path;
+    use std::fs::File;
+    use std::path::{Path, PathBuf};
+
+    use codesense_platform::fs::{
+        create_owner_only, try_lock_exclusive, try_lock_shared, unlock, Open,
+    };
+    use codesense_platform::user::{current_user, User};
+
+    /// Removal's refusal while a launch holds the fence.
+    const LAUNCH_PENDING: &str =
+        "runningAgents: a launch is pending or removal is active; source retained";
+    /// A launch's refusal while removal holds the fence.
+    const REMOVING: &str = "spawn refused: workspace is removing";
 
     pub struct Admission(Vec<File>);
 
-    fn lock(path: &Path, exclusive: bool) -> Result<File, String> {
-        let path = path
-            .canonicalize()
-            .map_err(|e| format!("workspace admission: {e}"))?;
-        let key = blake3::hash(path.as_os_str().as_bytes());
-        // Architecture: a stable host-local inode shares the fence across the Mac
-        // app and its sidecar. Never unlink these files while another host may use them.
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .mode(0o600)
-            .open(format!("/tmp/codesense-worktree-{}-{key}.lock", unsafe {
-                libc::geteuid()
-            }))
-            .map_err(|e| format!("workspace admission: {e}"))?;
-        let mode = if exclusive {
-            libc::LOCK_EX
-        } else {
-            libc::LOCK_SH
-        };
-        if unsafe { libc::flock(file.as_raw_fd(), mode | libc::LOCK_NB) } != 0 {
-            return Err(if exclusive {
-                "runningAgents: a launch is pending or removal is active; source retained"
-            } else {
-                "spawn refused: workspace is removing"
-            }
-            .into());
+    fn admission(e: std::io::Error) -> String {
+        format!("workspace admission: {e}")
+    }
+
+    /// Where this user's fence files live and whose they are, read once per
+    /// admission: the same for the app and its sidecar whatever their
+    /// environments.
+    struct Fence {
+        dir: PathBuf,
+        user: User,
+    }
+
+    impl Fence {
+        fn new() -> Result<Self, String> {
+            Ok(Self {
+                dir: codesense_platform::dirs::lock_dir().map_err(admission)?,
+                user: current_user().map_err(admission)?,
+            })
         }
-        Ok(file)
+
+        fn lock(&self, path: &Path, exclusive: bool) -> Result<File, String> {
+            let path = path.canonicalize().map_err(admission)?;
+            let key = blake3::hash(path.as_os_str().as_encoded_bytes());
+            // Architecture: a stable host-local inode shares the fence across the Mac
+            // app and its sidecar. Never unlink these files while another host may use them.
+            let file = create_owner_only(
+                &self
+                    .dir
+                    .join(format!("codesense-worktree-{}-{key}.lock", self.user)),
+                Open::Follow,
+            )
+            .map_err(admission)?;
+            let attempt = if exclusive {
+                try_lock_exclusive(&file)
+            } else {
+                try_lock_shared(&file)
+            };
+            taken(attempt, exclusive).map(|()| file)
+        }
+    }
+
+    /// A lock the other side holds and a lock that could not be tried at all
+    /// both refuse, with this side's message.
+    fn taken(attempt: std::io::Result<bool>, exclusive: bool) -> Result<(), String> {
+        match attempt {
+            Ok(true) => Ok(()),
+            Ok(false) | Err(_) if exclusive => Err(LAUNCH_PENDING.into()),
+            Ok(false) | Err(_) => Err(REMOVING.into()),
+        }
     }
 
     pub fn admit_spawn(cwd: &str) -> Result<Admission, String> {
@@ -520,8 +547,9 @@ pub mod removal {
             return Ok(Admission(Vec::new()));
         }
         let path = path.canonicalize().map_err(|e| e.to_string())?;
+        let fence = Fence::new()?;
         path.ancestors()
-            .map(|p| lock(p, false))
+            .map(|p| fence.lock(p, false))
             .collect::<Result<Vec<_>, _>>()
             .map(Admission)
     }
@@ -532,15 +560,15 @@ pub mod removal {
         if !Path::new(path).exists() {
             return Ok(Admission(Vec::new()));
         }
-        lock(Path::new(path), true).map(|file| Admission(vec![file]))
+        Fence::new()?
+            .lock(Path::new(path), true)
+            .map(|file| Admission(vec![file]))
     }
 
     impl Drop for Admission {
         fn drop(&mut self) {
             for file in &self.0 {
-                unsafe {
-                    libc::flock(file.as_raw_fd(), libc::LOCK_UN);
-                }
+                let _ = unlock(file);
             }
         }
     }
@@ -562,6 +590,92 @@ pub mod removal {
             assert!(admit_spawn(cwd).is_err());
             drop(removing);
             assert!(admit_spawn(cwd).is_ok());
+        }
+
+        const LAUNCH_PENDING: &str =
+            "runningAgents: a launch is pending or removal is active; source retained";
+        const REMOVING: &str = "spawn refused: workspace is removing";
+
+        #[test]
+        fn each_side_is_refused_with_its_own_message() {
+            let dir = tempfile::tempdir().unwrap();
+            let worktree = dir.path().to_str().unwrap();
+            let pending = admit_spawn(worktree).unwrap();
+            assert_eq!(
+                begin_removal(worktree).err().as_deref(),
+                Some(LAUNCH_PENDING)
+            );
+            drop(pending);
+            let removing = begin_removal(worktree).unwrap();
+            assert_eq!(admit_spawn(worktree).err().as_deref(), Some(REMOVING));
+            drop(removing);
+        }
+
+        #[test]
+        fn a_held_exclusive_lock_refuses_a_launch_below_it() {
+            let dir = tempfile::tempdir().unwrap();
+            let nested = dir.path().join("a").join("b");
+            std::fs::create_dir_all(&nested).unwrap();
+            let removing = begin_removal(dir.path().to_str().unwrap()).unwrap();
+            for cwd in [dir.path(), nested.as_path()] {
+                assert_eq!(
+                    admit_spawn(cwd.to_str().unwrap()).err().as_deref(),
+                    Some(REMOVING),
+                    "{}",
+                    cwd.display()
+                );
+            }
+            drop(removing);
+            assert!(admit_spawn(nested.to_str().unwrap()).is_ok());
+        }
+
+        #[test]
+        fn concurrent_launches_in_one_workspace_both_proceed() {
+            let dir = tempfile::tempdir().unwrap();
+            let cwd = dir.path().to_str().unwrap();
+            let (first, second) = std::thread::scope(|scope| {
+                let first = scope.spawn(|| admit_spawn(cwd));
+                let second = scope.spawn(|| admit_spawn(cwd));
+                (first.join().unwrap(), second.join().unwrap())
+            });
+            let (first, second) = (first.unwrap(), second.unwrap());
+            assert!(begin_removal(cwd).is_err(), "both are pending");
+            drop(first);
+            assert!(begin_removal(cwd).is_err(), "one is still pending");
+            drop(second);
+            assert!(begin_removal(cwd).is_ok());
+        }
+
+        #[test]
+        fn a_lock_that_cannot_be_tried_refuses_like_a_held_one() {
+            let failed = || Err(std::io::Error::other("lock failed"));
+            for (attempt, exclusive, refusal) in [
+                (Ok(false), true, LAUNCH_PENDING),
+                (failed(), true, LAUNCH_PENDING),
+                (Ok(false), false, REMOVING),
+                (failed(), false, REMOVING),
+            ] {
+                assert_eq!(taken(attempt, exclusive), Err(refusal.to_owned()));
+            }
+            assert_eq!(taken(Ok(true), true), Ok(()));
+            assert_eq!(taken(Ok(true), false), Ok(()));
+        }
+
+        /// The fence's file is keyed by the user and the canonical path, so
+        /// the app and its sidecar, any spelling of the path, meet on it.
+        #[cfg(unix)]
+        #[test]
+        fn the_fence_is_a_private_file_per_user_and_canonical_path() {
+            let dir = tempfile::tempdir().unwrap();
+            let admission = admit_spawn(dir.path().to_str().unwrap()).unwrap();
+            let canonical = dir.path().canonicalize().unwrap();
+            let key = blake3::hash(canonical.as_os_str().as_encoded_bytes());
+            // SAFETY: geteuid has no preconditions.
+            let uid = unsafe { libc::geteuid() };
+            let fence = format!("/tmp/codesense-worktree-{uid}-{key}.lock");
+            crate::test_support::expect_mode(Path::new(&fence), 0o600);
+            drop(admission);
+            let _ = std::fs::remove_file(&fence);
         }
     }
 }

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import { capabilityOn } from "@/shared/lib/capabilities";
 import type { ShortcutAction } from "./registry";
 
 /**
@@ -108,9 +109,11 @@ export const ROW_POPUP_ALLOWED: ReadonlySet<string> = new Set([
  * - `global` dispatches whatever the state;
  * - a dashboard command also needs its own `available()`: active, and its scope
  *   (`global`, `slot-visible`, `slot-focused`) matching where its dashboard is;
- * - with focus in a row popup (`state.rowPopupFocused`) only `ROW_POPUP_ALLOWED` does.
+ * - with focus in a row popup (`state.rowPopupFocused`) only `ROW_POPUP_ALLOWED` does;
+ * - an action whose `capability` is off on this OS never does.
  */
 export function isDispatchable(action: ShortcutAction, state: DispatchGateState): boolean {
+  if (action.capability && !capabilityOn(action.capability)) return false;
   // A dashboard command's own gate: it is active and its scope matches.
   if (action.available && !action.available()) return false;
   if (!ROW_POPUP_ALLOWED.has(action.id) && state.rowPopupFocused) return false;

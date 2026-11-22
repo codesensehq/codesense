@@ -75,6 +75,7 @@ import {
   type SubjectLifecycle,
 } from "@/tauri/commands";
 import { logger } from "@/shared/lib/logger";
+import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
 import {
   NO_WORKSPACE_ID,
   parseWorkspaceKey,
@@ -140,6 +141,8 @@ import { DEFAULT_NOTE_TITLE, UNTITLED_NOTE_TITLE, isBlankNote } from "@/shared/l
 import { summarize } from "@/features/notes/lib/note-summary";
 import type { Phase } from "@/shared/lib/roles";
 import { startOpenTimer } from "@/shared/lib/open-path-timing";
+import { basename, isWithin, samePath, trimTrailingSeparators } from "@/shared/lib/path";
+import { planReveal } from "@/shared/lib/reveal-plan";
 import { createDebouncedAction } from "@/shared/lib/debounced-action";
 import { fireWorkspaceOpened, fireWorkspaceClosed } from "@/shared/lib/workspace-watch-hooks";
 import { VIEWER_PERF } from "@/shared/lib/viewer-perf-config";
@@ -288,6 +291,7 @@ import {
 } from "@/shared/lib/worktree/background-setup-fanout";
 import { findWorkspaceRepoBySlug } from "@/shared/lib/build-synthetic-repo";
 import { trackWorktreeEstablish } from "@/shared/lib/worktree/pending-establish";
+import { rootWatchKey } from "@/shared/lib/worktree-watch-key";
 import {
   checkBranchExists,
   checkWorktreeDirty,
@@ -330,6 +334,7 @@ import {
   type WorkspaceLocation,
   type WorkspaceLocationChoice,
 } from "@/shared/lib/workspace-location";
+import { localMachineLabel } from "@/shared/lib/local-machine";
 
 export interface TabState {
   path: string;
@@ -389,6 +394,9 @@ export interface TerminalTab {
   /** Set on a tab whose session runs on a remote Machine: which one, and the
    *  handle its pane attaches with. */
   origin?: TerminalTabOrigin;
+  /** The tab's own working folder when it isn't its workspace's (a story seat
+   *  worktree): a restart runs it there again. */
+  cwd?: string;
 }
 
 /** Where a remote tab's session runs. `offlineSince` is set while the Machine
@@ -746,6 +754,18 @@ export function workspaceTabGridPreset(
   return projectedWorkspace(s, teamKey, workspaceId)?.grid.preset ?? "columns";
 }
 
+/** A tab {@link ViewerState.openTabInWorkspace} opens: `role` tags it (a generic-agent
+ *  tab), `name` titles it; `sessionId` is an id minted earlier (a launch projected for
+ *  it), whose one-use `environmentBinding` the spawn consumes and whose `execution`
+ *  starts its agent as the tab's process instead of a shell. */
+export interface WorkspaceTabOptions {
+  role?: string;
+  name?: string;
+  sessionId?: string;
+  environmentBinding?: string;
+  execution?: ScopedExecution;
+}
+
 /** How to open a terminal tab beyond its session, name and role. */
 export interface OpenTerminalTabOptions {
   commandArgv?: ScopedExecution["argv"];
@@ -765,6 +785,9 @@ export interface OpenTerminalTabOptions {
   account?: ResolveAgentAccountInput;
   /** Opaque one-use backend binding for an MCP-scoped environment. */
   environmentBinding?: string;
+  /** The tab's own folder when it isn't the workspace's (a story seat worktree):
+   *  the shell starts there, and the workspace keeps its folder. */
+  tabCwd?: string;
 }
 
 /** How a respawn's new process is started: the shell rules of the launch that
@@ -1118,7 +1141,8 @@ function openLayoutTab(
       role: tab.role,
       placement: opts.placement ?? "tab",
       activate: opts.activate ?? true,
-      spawn: tabSpawn(s, ws, size, opts),
+      spawn: tabSpawn(s, opts.tabCwd ? { ...ws, cwd: opts.tabCwd } : ws, size, opts),
+      ...(opts.tabCwd ? { cwd: opts.tabCwd } : {}),
     });
   return open()
     .catch((e: unknown) => {
@@ -1260,12 +1284,12 @@ export function isShowingDiff(diff: TabDiff | undefined | null): boolean {
 /** SW-GW-1: id prefix for a generic (open-any-dir) workspace. */
 export const GENERIC_WORKSPACE_ID_PREFIX = "generic:";
 
-/** SW-GW-1: strip trailing slash(es) (keep root `/`) so the same directory always
- *  normalizes to one id/cwd — `/foo/bar/` and `/foo/bar` dedupe (AC-5). The native
- *  folder picker returns a clean absolute path, so only trailing slashes are
- *  normalized here (interior `//` isn't produced by the picker). */
+/** Strip trailing separators (keep a root: `/`, `C:\`) so the same directory always
+ *  normalizes to one id/cwd — `/foo/bar/` and `/foo/bar` dedupe. The native
+ *  folder picker returns a clean absolute path, so only trailing separators are
+ *  normalized here (interior `//` isn't produced by the picker). An empty dir stays `/`. */
 export function normalizeWorkspaceDir(dirPath: string): string {
-  return dirPath.replace(/\/+$/, "") || "/";
+  return trimTrailingSeparators(dirPath) || "/";
 }
 
 /** SW-GW-1: mint a stable, per-directory id for a generic workspace. An absolute
@@ -1587,8 +1611,9 @@ export interface ViewerSettings {
   // → `setQuitOnClose`, read on the window-close path. Optional — undefined reads as
   // `false` (background-on-close, the shipped default).
   quitOnClose?: boolean;
-  // SV-8: show this instance's terminal server in the macOS menu bar (status,
-  // Open, Restart, Stop/Start, Quit). Pushed to Rust via
+  // Show this instance's terminal server in the macOS menu bar or Linux tray (status,
+  // Open, Restart, Stop/Start, Quit; a no-op where the terminal-server-tray
+  // capability is off). Pushed to Rust via
   // `useTerminalServerMenuBarSetting` → `setTerminalServerMenuBar`. Optional —
   // undefined reads as `false` (off, the shipped default).
   terminalServerMenuBar?: boolean;
@@ -2469,7 +2494,8 @@ export interface ViewerState {
    *  RELATIVE to `ws.cwd` — retained for diagnostics only; the reconcile does not
    *  read it. `resumed` counts the bumps that mean "a hidden team is shown again" rather than
    *  a file changed, so a consumer behind a debounce can catch up at once. Keyed by workspace
-   *  id. Runtime-only — NOT persisted. */
+   *  id; the source diff's watch of the repo root has its own entry under `rootWatchKey(id)`,
+   *  whose paths are relative to the repo root. Runtime-only — NOT persisted. */
   worktreeChangedPath: Record<string, { path: string; nonce: number; resumed?: number }>;
   /**
    * F-6 AC-8: when non-null, the no-local-clone-attached modal is open
@@ -3073,11 +3099,15 @@ export interface ViewerState {
    *  `sessionId` right away (the addressable handle); `role` optionally tags the
    *  tab (e.g. a generic-agent tab). Returns `""` when no such workspace is open
    *  (so no orphan tab is opened). */
-  openTabInWorkspace: (
+  openTabInWorkspace: (teamKey: string, workspaceId: string, opts?: WorkspaceTabOptions) => string;
+  /** {@link openTabInWorkspace}, also handing back its spawn, which settles once the
+   *  host placed the tab or refused it (`sessionId` `""`: nothing was opened, and the
+   *  spawn has settled). */
+  startTabInWorkspace: (
     teamKey: string,
     workspaceId: string,
-    opts?: { role?: string; name?: string },
-  ) => string;
+    opts?: WorkspaceTabOptions,
+  ) => { sessionId: string; spawned: Promise<void> };
   /** Close a terminal tab through its host: an idle shell (or an exited tab)
    *  goes, a busy one keeps running out of sight (`kill` ends it regardless).
    *  Closing the last ordinary tab opens a fresh one unless `replace: false`.
@@ -3197,7 +3227,8 @@ export interface ViewerState {
    *  (when its overlay first opens). Never overwrites the session's own mode. */
   seedSourceDiffMode: (sessionId: string) => void;
   /** SLW-WDE-3: signal an external worktree change for a workspace's open editor
-   *  inset (bumps `worktreeChangedPath[workspaceId]` with a fresh nonce). Driven
+   *  inset (bumps `worktreeChangedPath[workspaceId]` with a fresh nonce), or for the
+   *  source diff's repo-root watch when `workspaceId` is a `rootWatchKey`. Driven
    *  by the App-level `worktree-file-change` listener. */
   bumpWorktreeChangedPath: (workspaceId: string, path: string, resumed?: boolean) => void;
   /** Publish the open-file lifecycle for `path` (normalized). A non-`active` value records it;
@@ -3591,7 +3622,7 @@ function tabNameFromPath(filePath: string): string {
   // virtual paths registered without a title.
   const virtualTitle = resolveVirtualTabTitle(filePath);
   if (virtualTitle) return virtualTitle;
-  return stripViewerExtension(filePath.split("/").pop() ?? filePath);
+  return stripViewerExtension(basename(filePath) || filePath);
 }
 
 /** A committed (non-preview) tab built from a file path — the shape shared by
@@ -3705,6 +3736,7 @@ export { getActiveTeamKey };
  */
 export function deriveSourceRepoSlug(repoPath: string): string {
   const parsed = parseSyntheticRepoKey(repoPath);
+  // A repo slug, `/`-delimited by definition: not a file-system path.
   if (parsed) return `${parsed.owner}/${parsed.repo}`.toLowerCase();
   // T.4 Phase 8 review (Cluster H / D3): legacy real-path fallback retires
   // in T.6. `composeWorktreeKey` uses `::` as a separator and does not
@@ -3738,6 +3770,7 @@ export function promptIdentityFromRepoPath(
   if (!parsed) return null;
   return {
     teamKey: buildTeamKey(parsed.orgSlug, parsed.team),
+    // A repo slug, `/`-delimited by definition: not a file-system path.
     sourceRepoSlug:
       `${parsed.host ? `${parsed.host}/` : ""}${parsed.owner}/${parsed.repo}`.toLowerCase(),
   };
@@ -3831,7 +3864,7 @@ export function rekeyKeyedSlices<K extends keyof ViewerState>(
 
 /**
  * SW-HB-8 / SLW-IN-7: after {@link rekeyKeyedSlices} relocates a team's slices
- * to `newKey`, rewrite the flat `/{old}/` team segment → `/{new}/` inside the
+ * to `newKey`, rewrite the flat `/{old}/` team segment → `/{new}/` (either separator) inside the
  * ABSOLUTE content paths those slices carry (`{org_root}/{team}/content/...`),
  * so open story tabs / drill root / expanded nav re-point at the moved dir
  * instead of rendering a "file deleted" placeholder. Operates ONLY on the
@@ -3848,8 +3881,11 @@ export function rewriteTeamContentPaths(
   oldName: string,
   newName: string,
 ): Partial<ViewerState> {
-  const fromRe = new RegExp(`/${oldName}/(content|install|repos|libraries)(/|$)`);
-  const fix = (p: string): string => p.replace(fromRe, `/${newName}/$1$2`);
+  // Either separator, written back as matched, so a `C:\` path keeps its backslashes.
+  const fromRe = new RegExp(
+    `([\\\\/])${oldName}([\\\\/])(content|install|repos|libraries)([\\\\/]|$)`,
+  );
+  const fix = (p: string): string => p.replace(fromRe, `$1${newName}$2$3$4`);
   const fixTab = (t: TabState): TabState => {
     const path = fix(t.path);
     return path === t.path ? t : { ...t, path };
@@ -4056,6 +4092,7 @@ function captureSoftCloseShadow(
   const sourceDiffMode = dropBySid(s.sourceDiffMode);
   const worktreeChangedPath = { ...s.worktreeChangedPath };
   delete worktreeChangedPath[workspaceId];
+  delete worktreeChangedPath[rootWatchKey(workspaceId)];
   const softClosedWorkspaces = keepRunning
     ? {
         ...s.softClosedWorkspaces,
@@ -4277,23 +4314,11 @@ function commitNavTarget(
 }
 
 /**
- * Side-effect helper invoked after `openFile` has committed the new tab.
- *
- * 1. Expand status-nav sub-epic ancestors so the file's row is visible.
- * 2. If the file is outside the current drill path, reset drill to the
- *    viewer root first. Uses direct `drillPaths` mutation (not the
- *    sync callback in repo-viewer-view.tsx) so the pipeline scope is
- *    NOT re-synced from the drill change — we handle scope separately.
- * 3. Pipeline-scope rules (post-R-14: viewerRoot IS the scope base):
- *    - File outside viewerRoot → if drill was reset to root, also
- *      clear pipeline scope so the two slices stay in sync. Otherwise
- *      isDrilledIn becomes false while the scoped tree still shows a
- *      sub-epic, leaking viewerRootEntries into the nav.
- *    - File inside viewerRoot but NOT a story file (README, non-md,
- *      etc.) AND pipeline is currently drilled → reset pipeline scope
- *      to "" so the user sees broader context.
- *    - File inside viewerRoot and IS a story file → do nothing to
- *      scope; `AutoCenterOnActiveTab` handles highlighting/centering.
+ * Side-effect helper invoked after `openFile` has committed the new tab: applies
+ * {@link planReveal} (which folders to expand, and whether the drill and pipeline
+ * scope reset) in one update, and bumps the reveal counter. The drill is written to
+ * `drillPaths` directly, not through the sync callback in repo-viewer-view.tsx, so the
+ * pipeline scope isn't re-synced from the drill change.
  */
 function revealOpenedFile(
   repoPath: string,
@@ -4320,40 +4345,32 @@ function revealOpenedFile(
     null;
   const tree = useTeamSurfaceStore.getState().trees[teamKey];
   const sourceTeam = tree ? owner(tree) : null;
-  const navigationPath = filePath.startsWith(`${treeRoot}/`)
+  const navigationPath = isWithin(treeRoot, filePath)
     ? filePath
     : teamContentNavigationPath(teamKey, filePath, useOrgStore.getState().orgs, sourceTeam);
   if (!navigationPath) return;
 
   const currentDrill = readTeamKeyed(state.drillPaths, teamKey, treeRoot);
-  const effectiveDrill = navigationPath.startsWith(`${currentDrill}/`) ? currentDrill : treeRoot;
+  const currentScope = readTeamKeyed(state.pipelineScope, teamKey, "");
+  const { ancestors, effectiveDrill, resetScope } = planReveal({
+    treeRoot,
+    navigationPath,
+    currentDrill,
+    currentScope,
+    isPipelineFile: isPipelineFileName(basename(filePath)),
+  });
 
   // Build the partial update so it applies atomically.
   const partial: Partial<ViewerState> = {};
-  const currentScope = readTeamKeyed(state.pipelineScope, teamKey, "");
-
   if (effectiveDrill !== currentDrill) {
     partial.drillPaths = updateTeamKeyed(state.drillPaths, teamKey, effectiveDrill);
-    // When drill resets to root, also clear pipeline scope so isDrilledIn
-    // and the scoped tree stay in sync. Without this, opening a file outside
-    // the pipeline root (e.g. docs/) while drilled in leaves scope stale,
-    // causing viewerRootEntries to leak into the scoped nav.
-    if (effectiveDrill === treeRoot && currentScope !== "") {
-      partial.pipelineScope = updateTeamKeyed(state.pipelineScope, teamKey, "");
-    }
+  }
+  if (resetScope) {
+    partial.pipelineScope = updateTeamKeyed(state.pipelineScope, teamKey, "");
   }
 
-  // Walk ancestor dirs between the file and treeRoot, expanding
-  // sub-epic folders in statusNavExpandedPaths so PipelineStatusNav reveals
-  // the file. Files outside the content root produce zero ancestors.
-  const ancestors: string[] = [];
-  let parent = navigationPath.slice(0, navigationPath.lastIndexOf("/"));
-  while (parent.length > treeRoot.length && parent.startsWith(`${treeRoot}/`)) {
-    ancestors.push(parent);
-    const nextSlash = parent.lastIndexOf("/");
-    if (nextSlash < 0) break;
-    parent = parent.slice(0, nextSlash);
-  }
+  // Expand the sub-epic folders between the file and the root so PipelineStatusNav
+  // reveals it. Files outside the content root have no ancestors.
   if (ancestors.length > 0) {
     const existing = readTeamKeyed(state.statusNavExpandedPaths, teamKey, []);
     const merged = Array.from(new Set([...existing, ...ancestors]));
@@ -4363,20 +4380,6 @@ function revealOpenedFile(
         teamKey,
         merged,
       );
-    }
-  }
-  const insideViewerRoot = navigationPath.startsWith(`${treeRoot}/`);
-  const fileName = filePath.slice(filePath.lastIndexOf("/") + 1);
-
-  // Only reset pipeline scope if the opened file is outside the current
-  // scope. Opening a non-story file (e.g. README.md) INSIDE the current
-  // scope should not disrupt the drill/scope context.
-  if (insideViewerRoot && !isPipelineFileName(fileName) && currentScope !== "") {
-    const scopeAbs = `${treeRoot}/${currentScope}`;
-    const fileInsideScope =
-      navigationPath.startsWith(`${scopeAbs}/`) || navigationPath === scopeAbs;
-    if (!fileInsideScope) {
-      partial.pipelineScope = updateTeamKeyed(state.pipelineScope, teamKey, "");
     }
   }
 
@@ -4984,6 +4987,7 @@ export function migrateT1Slices(input: {
     teams.add(teamKey);
     slugToTeamKeys.set(slug, teams);
   };
+  // Repo slugs below are `/`-delimited by definition: not file-system paths.
   const hostlessIdentities = new Map<string, { github: boolean; nonGithub: Set<string> }>();
   for (const { parsed } of parsedRepos) {
     const hostless = `${parsed.owner}/${parsed.repo}`.toLowerCase();
@@ -6218,6 +6222,7 @@ function teamSourceRepoSlugsInOrder(teamKey: string): string[] {
   const slugs: string[] = [];
   for (const r of repos) {
     const parsed = parseSyntheticRepoKey(r.repoPath);
+    // A repo slug, `/`-delimited by definition: not a file-system path.
     if (parsed) slugs.push(`${parsed.owner}/${parsed.repo}`);
   }
   return slugs;
@@ -6441,7 +6446,8 @@ function setupAfterStep1(teamKey: string, workspaceId: string): WorkspaceSetupSt
 /** Whether `ws` is the workspace a Step 2 event names: its local directory,
  *  or its handle on a machine. */
 function workspaceMatchesIdentity(ws: Workspace, identity: string): boolean {
-  const norm = (p: string) => p.replace(/\/+$/, "").replace(/^\/private(?=\/)/, "");
+  // `/private` is macOS's real path for `/tmp` and `/var`, so it's a POSIX-only rule.
+  const norm = (p: string) => trimTrailingSeparators(p).replace(/^\/private(?=\/)/, "");
   const id = norm(identity);
   if (isRemoteWorkspace(ws)) return !!ws.location.handle && ws.location.handle === identity;
   return !!ws.cwd && norm(ws.cwd) === id;
@@ -6700,10 +6706,10 @@ function whereWorkspaceLives(s: ViewerState, teamKey: string, workspaceId: strin
  *  for a small UX win — deferred). */
 function locationConflictMessage(label: string, at: string, movingTo?: string): string {
   if (movingTo) {
-    const target = movingTo === "local" ? "This Mac" : `machine ${movingTo}`;
+    const target = movingTo === "local" ? localMachineLabel() : `machine ${movingTo}`;
     return `${label}'s workspace is being moved to ${target}; try again shortly`;
   }
-  return `${label}'s workspace already lives on ${at === "local" ? "This Mac" : `machine ${at}`}; a workspace stays where it was created`;
+  return `${label}'s workspace already lives on ${at === "local" ? localMachineLabel() : `machine ${at}`}; a workspace stays where it was created`;
 }
 
 /** SW-WS-1: resolve the "move in progress" target for soft-refusal messaging.
@@ -8565,9 +8571,19 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     const record = workspaceRecord(s, teamKey, wsId);
     if (isRemoteWorkspace(record)) {
       // Its terminals open on its machine (remoteWorkspaceDriver), never here.
-      toast(
-        "This workspace lives on a machine: open its terminals with ⌘T or the new-terminal menu",
-      );
+      // `shortcuts-store` is imported late: it reaches `panel-menu`, which imports this
+      // store. A failed import or lookup still shows the toast, without a chord.
+      void import("@/shared/stores/shortcuts-store")
+        .then(({ getToastShortcut }) => getToastShortcut("viewer.new-terminal-tab"))
+        .catch((e: unknown) => {
+          logLayoutVerb("open terminal tab")(e);
+          return "";
+        })
+        .then((chord) =>
+          toast(
+            `This workspace lives on a machine: open its terminals with ${chord ? `${formatKeystrokeDisplay(chord)} or ` : ""}the new-terminal menu`,
+          ),
+        );
       const refused = Promise.reject(
         new Error(`workspace ${wsId} lives on a remote machine; open its terminals there`),
       );
@@ -8595,7 +8611,13 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     }
     const s = get();
     const record = workspaceRecord(s, teamKey, workspaceId);
-    const cwd = opts.cwd || record?.cwd;
+    // A tab with a folder of its own (a story seat worktree) restarts there, never in
+    // the workspace's folder.
+    const tabCwd = [
+      ...selectWorkspaceTabs(s, teamKey, workspaceId),
+      ...selectHiddenTerminalTabs(s, teamKey, workspaceId),
+    ].find((tab) => tab.sessionId === sessionId)?.cwd;
+    const cwd = opts.cwd || tabCwd || record?.cwd;
     if (!cwd) throw new Error(`no workspace ${workspaceId} with a directory to restart in`);
     const ws: Workspace = {
       ...(record ?? { id: workspaceId, kind: "generic", status: "ready" }),
@@ -8639,20 +8661,33 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   // announces it. Guards on the workspace existing so no tab is opened under a
   // dead id.
   openTabInWorkspace: (teamKey, workspaceId, opts) => {
+    const { sessionId, spawned } = get().startTabInWorkspace(teamKey, workspaceId, opts);
+    void spawned.catch(() => {});
+    return sessionId;
+  },
+
+  startTabInWorkspace: (teamKey, workspaceId, opts) => {
+    const none = { sessionId: "", spawned: Promise.resolve() };
     const record = readTeamKeyed(get().workspaces, teamKey, []).find((w) => w.id === workspaceId);
-    if (!record) return "";
+    if (!record) return none;
     if (isRemoteWorkspace(record)) {
       if (record.status === "ready")
         remoteWorkspaceDriver()?.openTerminal({ teamKey, workspaceId, location: record.location });
-      return "";
+      return none;
     }
     // SW-WA-F6 (AC-1): an optional `name` reads as what the tab is FOR; omitted →
     // the host's `Terminal N`.
-    const tab = { ...createTerminalTab(opts?.name), ...(opts?.role ? { role: opts.role } : {}) };
-    void get()
-      .addTerminalTab(teamKey, tab, workspaceId)
-      .catch(() => {});
-    return tab.sessionId;
+    const tab = {
+      ...createTerminalTab(opts?.name),
+      ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}),
+      ...(opts?.role ? { role: opts.role } : {}),
+    };
+    const execution = opts?.execution;
+    const spawned = get().addTerminalTab(teamKey, tab, workspaceId, {
+      ...(opts?.environmentBinding ? { environmentBinding: opts.environmentBinding } : {}),
+      ...(execution ? { commandArgv: execution.argv, nativeLaunch: execution.nativeLaunch } : {}),
+    });
+    return { sessionId: tab.sessionId, spawned };
   },
 
   removeTerminalTab: (teamKey, tabId, workspaceId, opts = {}) => {
@@ -11809,7 +11844,6 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
         logger.warn("viewer", `reconcile re-link failed (non-fatal): ${getErrorMessage(e)}`);
       });
 
-    const samePath = (a: string, b: string) => a.replace(/\/+$/, "") === b.replace(/\/+$/, "");
     const worktrees = await listWorktrees(sourceRepoPath);
     const entry = worktrees.find((w) => samePath(w.path, oldPath));
 

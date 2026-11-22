@@ -1,39 +1,67 @@
 // SPDX-License-Identifier: MIT
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, act } from "@testing-library/react";
+import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
 
 import { fileContentCache } from "@/shared/lib/file-content-cache";
+import { fileViewKey } from "@/shared/lib/view-snapshot";
+import { useViewerStore } from "@/shared/stores/viewer-store";
 
 // Stub the CM6 editor to a controlled textarea so the wrapper's read / guard /
 // read-only wiring is the subject under test. CM internals live in the
-// code-editor suites.
+// code-editor suites. The handle exposes `getScrollElement()`, returning `scroll.el` (CM's scroller).
+// `withhold` holds the handle back until `release()` runs, like CM's lazy chunk
+// landing after the file read.
+type ScrollHandle = { getScrollElement: () => HTMLElement | null };
+const scroll = vi.hoisted(() => ({
+  el: null as HTMLElement | null,
+  withhold: false,
+  release: null as (() => void) | null,
+}));
 vi.mock("@/shared/components/code-editor", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/shared/components/code-editor")>();
   return {
     ...actual,
-    CodeEditor: ({
-      value,
-      path,
-      readOnly,
-      ariaLabel,
-      language,
-    }: {
-      value: string;
-      path?: string;
-      readOnly?: boolean;
-      ariaLabel?: string;
-      language?: string;
-    }) => (
-      <div
-        data-testid="mock-code-editor"
-        data-path={path}
-        data-readonly={String(readOnly)}
-        data-aria={ariaLabel}
-        data-language={language}
-      >
-        <textarea data-testid="editor-value" readOnly value={value} />
-      </div>
-    ),
+    CodeEditor: forwardRef(function MockCodeEditor(
+      {
+        value,
+        path,
+        readOnly,
+        ariaLabel,
+        language,
+      }: {
+        value: string;
+        path?: string;
+        readOnly?: boolean;
+        ariaLabel?: string;
+        language?: string;
+      },
+      ref: React.Ref<ScrollHandle | null>,
+    ) {
+      const [handleReady, setHandleReady] = useState(!scroll.withhold);
+      useEffect(() => {
+        scroll.release = () => setHandleReady(true);
+        return () => {
+          scroll.release = null;
+        };
+      }, []);
+      useImperativeHandle<ScrollHandle | null, ScrollHandle | null>(
+        ref,
+        () => (handleReady ? { getScrollElement: () => scroll.el } : null),
+        [handleReady],
+      );
+      return (
+        <div
+          data-testid="mock-code-editor"
+          data-path={path}
+          data-readonly={String(readOnly)}
+          data-aria={ariaLabel}
+          data-language={language}
+        >
+          <textarea data-testid="editor-value" readOnly value={value} />
+        </div>
+      );
+    }),
   };
 });
 
@@ -50,6 +78,14 @@ const TEAM = "/team/content";
 beforeEach(() => {
   readFileMock.mockReset();
   fileContentCache.clear();
+  scroll.el = document.createElement("div");
+  scroll.withhold = false;
+  scroll.release = null;
+  useViewerStore.setState({ viewStateByKey: {} });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe("CodeFileViewer (SW-VE-2)", () => {
@@ -164,3 +200,111 @@ it.each(["/team/content/a.ts", "/team/content", null])(
     expect(readFileMock).toHaveBeenCalledTimes(2);
   },
 );
+
+describe("CodeFileViewer scroll position across tab switches", () => {
+  const path = "/team/content/a.ts";
+  const KEY = fileViewKey("acme:default", path);
+  type Observer = { cb: ResizeObserverCallback; target: Element | null };
+  let observers: Observer[];
+
+  beforeEach(() => {
+    observers = [];
+    class StubResizeObserver {
+      private readonly record: Observer;
+      constructor(cb: ResizeObserverCallback) {
+        this.record = { cb, target: null };
+        observers.push(this.record);
+      }
+      observe(target: Element) {
+        this.record.target = target;
+      }
+      unobserve() {}
+      disconnect() {
+        observers = observers.filter((o) => o !== this.record);
+      }
+    }
+    vi.stubGlobal("ResizeObserver", StubResizeObserver);
+    readFileMock.mockResolvedValue("line\n".repeat(500));
+  });
+
+  function resize(width: number, height: number) {
+    act(() => {
+      for (const { cb, target } of observers) {
+        cb(
+          [{ target, contentRect: { width, height } } as unknown as ResizeObserverEntry],
+          {} as ResizeObserver,
+        );
+      }
+    });
+  }
+
+  function scrollTo(top: number) {
+    scroll.el!.scrollTop = top;
+    scroll.el!.dispatchEvent(new Event("scroll"));
+  }
+
+  async function renderReady(viewStateKey?: string) {
+    const utils = render(
+      <CodeFileViewer filePath={path} teamContentPath={TEAM} viewStateKey={viewStateKey} />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-value")).toHaveValue("line\n".repeat(500)),
+    );
+    return utils;
+  }
+
+  it("puts the scroll position back when the tab is shown again", async () => {
+    await renderReady(KEY);
+    resize(400, 100);
+    scrollTo(480);
+    resize(0, 0);
+    // A hidden box loses its scroll offset in the engine.
+    scrollTo(0);
+    resize(400, 100);
+    expect(scroll.el!.scrollTop).toBe(480);
+  });
+
+  it("tracks the scroll when the editor handle arrives after the content", async () => {
+    scroll.withhold = true;
+    await renderReady(KEY);
+    await act(async () => {
+      scroll.release!();
+    });
+    resize(400, 100);
+    scrollTo(480);
+    resize(0, 0);
+    scrollTo(0);
+    resize(400, 100);
+    expect(scroll.el!.scrollTop).toBe(480);
+  });
+
+  it("keeps the position across a second hide and show", async () => {
+    await renderReady(KEY);
+    resize(400, 100);
+    scrollTo(480);
+    for (let i = 0; i < 2; i += 1) {
+      resize(0, 0);
+      scrollTo(0);
+      resize(400, 100);
+      expect(scroll.el!.scrollTop).toBe(480);
+    }
+  });
+
+  it("writes the tracked offset under the key on unmount", async () => {
+    const { unmount } = await renderReady(KEY);
+    scrollTo(480);
+    unmount();
+    expect(useViewerStore.getState().readViewState(KEY)).toEqual({ scrollTop: 480 });
+  });
+
+  it("stays inert without a viewStateKey", async () => {
+    const { unmount } = await renderReady();
+    scrollTo(480);
+    resize(0, 0);
+    scrollTo(0);
+    resize(400, 100);
+    expect(scroll.el!.scrollTop).toBe(0);
+    unmount();
+    expect(useViewerStore.getState().viewStateByKey).toEqual({});
+  });
+});

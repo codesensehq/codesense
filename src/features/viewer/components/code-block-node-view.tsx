@@ -8,6 +8,7 @@ import type { NodeViewProps } from "@tiptap/react";
 import { InfoTip } from "@/components/ui/tooltip";
 
 import { COMMON_LANGUAGES } from "@/features/notes/editor/code-block-languages";
+import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
 
 interface CodeBlockNodeViewProps extends NodeViewProps {
   /** Opens "Send to…" for the block's text, anchored on the block. */
@@ -131,7 +132,7 @@ export function CodeBlockNodeView({ node, updateAttributes, onSend }: CodeBlockN
           >
             <Send size={12} />
             <span>Send</span>
-            <kbd className="nt-kbd">⌘↵</kbd>
+            <kbd className="nt-kbd">{formatKeystrokeDisplay("CmdOrCtrl+Enter")}</kbd>
           </button>
         </InfoTip>
       </div>

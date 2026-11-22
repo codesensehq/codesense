@@ -2,6 +2,10 @@
 //! Fast denial for a native hook already selected by its tool-name matcher.
 use std::time::{Duration, Instant};
 
+#[cfg_attr(unix, path = "hook_block/unix.rs")]
+#[cfg_attr(not(unix), path = "hook_block/off.rs")]
+mod transport;
+
 fn decision(input: &[u8]) -> bool {
     match serde_json::from_slice::<serde_json::Value>(input) {
         Ok(value) => match value
@@ -21,31 +25,7 @@ fn decision(input: &[u8]) -> bool {
 // the native matcher already selected this denial invocation.
 pub(super) fn run(_cli: Option<&std::ffi::OsStr>) -> i32 {
     let deadline = Instant::now() + Duration::from_millis(500);
-    let mut input = Vec::new();
-    let mut complete = false;
-    while Instant::now() < deadline && input.len() <= 1024 * 1024 {
-        let mut poll = libc::pollfd {
-            fd: 0,
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        let remaining = deadline
-            .saturating_duration_since(Instant::now())
-            .as_millis() as i32;
-        if unsafe { libc::poll(&mut poll, 1, remaining) } <= 0 {
-            break;
-        }
-        let mut buffer = [0u8; 8192];
-        let count = unsafe { libc::read(0, buffer.as_mut_ptr().cast(), buffer.len()) };
-        if count == 0 {
-            complete = true;
-            break;
-        }
-        if count < 0 {
-            break;
-        }
-        input.extend_from_slice(&buffer[..count as usize]);
-    }
+    let (input, complete) = transport::read_input(deadline);
     if !complete || decision(&input) {
         println!(
             "{}",

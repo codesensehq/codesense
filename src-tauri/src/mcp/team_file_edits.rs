@@ -26,6 +26,7 @@ use crate::agents::prepare::edits::{self, CountRequest, EditsState, WorkspaceEdi
 use crate::agents::prepare::Destination;
 use crate::commands::route_to_context::ActiveContext;
 use crate::content_engine::ResolverContext;
+use crate::shared::machine_wording;
 
 /// A machine workspace: `(owner, machine, handle)`.
 type RemoteKey = (u64, String, String, String);
@@ -783,6 +784,19 @@ struct RemoteRow {
     fresh: bool,
 }
 
+/// That `path` is not one of the team's local workspaces, worded for `os`.
+fn not_team_workspace_for(os: &str, path: &Path) -> String {
+    format!(
+        "{} is not one of this team's workspaces on {}",
+        path.display(),
+        machine_wording::machine_noun_lower(os)
+    )
+}
+
+pub(crate) fn not_team_workspace(path: &Path) -> String {
+    not_team_workspace_for(machine_wording::RUNNING_OS, path)
+}
+
 /// A `target` must be one of the team's workspaces.
 fn check_target(
     refresh: &Refresh,
@@ -798,10 +812,7 @@ fn check_target(
             if local_rows.iter().any(|(root, _)| *root == real) {
                 Ok(())
             } else {
-                Err(format!(
-                    "{} is not one of this team's workspaces on this Mac",
-                    path.display()
-                ))
+                Err(not_team_workspace(path))
             }
         }
         Refresh::Remote { machine_id, handle } => {
@@ -1611,6 +1622,18 @@ mod tests {
         assert!(
             places.iter().any(|p| p.handle == handle),
             "receipts read again"
+        );
+    }
+
+    #[test]
+    fn machine_wording_follows_the_os() {
+        assert_eq!(
+            not_team_workspace_for("macos", Path::new("/w")),
+            "/w is not one of this team's workspaces on this Mac"
+        );
+        assert_eq!(
+            not_team_workspace_for("linux", Path::new("/w")),
+            "/w is not one of this team's workspaces on this computer"
         );
     }
 }

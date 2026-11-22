@@ -22,6 +22,7 @@ import {
   routineSentence,
   routinesOf,
 } from "../lib/agent-routines";
+import { localMachineNoun } from "@/shared/lib/local-machine";
 
 /** Routines shown before the list folds behind "Show all N" (design decision 2). */
 const FOLD_AFTER = 5;
@@ -218,7 +219,9 @@ function AgentRoutineRow({ row, agent, now }: { row: RoutineRow; agent: AgentRow
           </span>
         </button>
         {!row.armed_here && (
-          <p className="mt-0.5 text-xs text-muted-foreground">Runs on another Mac</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Runs on another {localMachineNoun()}
+          </p>
         )}
         <StaleOnMachine row={row} />
         <LastRun row={row} agent={agent} now={now} />

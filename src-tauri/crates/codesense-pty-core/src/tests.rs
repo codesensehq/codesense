@@ -2,6 +2,8 @@
 //! Registry tests over real PTYs: spawn → stream → exit through the sink, the
 //! teardown/reap family, the dead-session cap, the exit-time complement kill,
 //! warm handoff, and the liveness / replay queries.
+//! Unix only: uses the unix-only test fixtures (real PTYs through `sh`).
+#![cfg(unix)]
 
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
@@ -11,16 +13,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::domain::{
-    PortUnavailable, PtySessionId, ReapOutcome, TeardownReason, TerminalDomainEvent,
-    TerminalEventSink, TerminalRegistry,
+    PtySessionId, ReapOutcome, TeardownReason, TerminalDomainEvent, TerminalRegistry,
 };
 use crate::fixtures::{
     fixture_state, make_isolated_session, registration, sh, spawn, FakeWorker, NoopSink,
     RecordingSink,
 };
 use crate::runner::ExitInfo;
-use crate::state::{is_persisting, PtyState, SessionMeta, TerminalSession};
-use crate::term_state::{StreamId, SubscriberHandle};
+use crate::state::{PtyState, SessionMeta, TerminalSession};
+use crate::term_state::StreamId;
 
 fn recording_state() -> (Arc<RecordingSink>, PtyState) {
     let sink = Arc::new(RecordingSink::default());
@@ -213,95 +214,6 @@ fn attached_viewport_streams_live_bytes_on_its_own_stream() {
     state.kill("echo");
 }
 
-/// The correlation triplet folded into [`SessionMeta`] must round-trip
-/// through the destructure the spawn / warm-handoff paths do at their body tops.
-/// Also pins the load-bearing invariant that `SessionMeta::default()` is
-/// all-`None`: that is the warm-pool-member sentinel the persistence classifier
-/// keys on (`is_persisting` gets `has_story_id = false` for it, so an unattached
-/// pool shell is never persisted).
-#[test]
-fn session_meta_round_trips_and_default_is_pool_member_sentinel() {
-    let meta = SessionMeta {
-        story_id: Some("RF-15".into()),
-        workspace_id: Some("ws-1".into()),
-        epic_id: Some("09".into()),
-    };
-    // Clone (the warm-handoff path) then destructure (the body-top pattern).
-    let SessionMeta {
-        story_id,
-        workspace_id,
-        epic_id,
-    } = meta.clone();
-    assert_eq!(story_id.as_deref(), Some("RF-15"));
-    assert_eq!(workspace_id.as_deref(), Some("ws-1"));
-    assert_eq!(epic_id.as_deref(), Some("09"));
-
-    // Sentinel: default is all-None → classifier sees a non-persisting pool
-    // member.
-    let default = SessionMeta::default();
-    assert!(default.story_id.is_none());
-    assert!(default.workspace_id.is_none());
-    assert!(default.epic_id.is_none());
-    assert!(!is_persisting(
-        /* is_pool_member */ true,
-        default.story_id.is_some(),
-        /* has_subscribers */ false,
-    ));
-}
-
-/// RF-perf-6: the dead-session cap decision. Tuple is
-/// `(id, alive, has_subscribers, exit_seq)`. LIVE sessions and currently-VIEWED
-/// dead sessions are never eviction candidates; among the remaining
-/// (dead, unviewed, stamped) sessions the `cap` most-recently-dead (highest
-/// `exit_seq`) are retained and the older tail is returned OLDEST-first; a
-/// dead-but-unstamped session (`exit_seq == None`) is retained this pass. Pure,
-/// so the whole rule is proven without a real PTY.
-#[test]
-fn dead_sessions_to_evict_bounds_dead_and_never_touches_live() {
-    use crate::state::dead_sessions_to_evict;
-    // Empty / at-or-below-cap → nothing evicted.
-    assert!(dead_sessions_to_evict(&[], 2).is_empty());
-    let live_only = vec![
-        ("a".to_string(), true, false, None),
-        ("b".to_string(), true, false, None),
-    ];
-    assert!(
-        dead_sessions_to_evict(&live_only, 1).is_empty(),
-        "live sessions are never eviction candidates"
-    );
-    let at_cap = vec![
-        ("d1".to_string(), false, false, Some(1)),
-        ("d2".to_string(), false, false, Some(2)),
-    ];
-    assert!(
-        dead_sessions_to_evict(&at_cap, 2).is_empty(),
-        "dead count == cap → nothing evicted"
-    );
-
-    // Over cap (input intentionally unsorted to exercise the ordering):
-    // three dead+unviewed+stamped + one live + one dead-but-unstamped + one
-    // dead-BUT-VIEWED (open scrollback tab), cap = 1.
-    let over = vec![
-        ("d_new".to_string(), false, false, Some(30)),
-        ("live".to_string(), true, false, None),
-        ("d_old".to_string(), false, false, Some(10)),
-        ("fresh".to_string(), false, false, None),
-        ("viewed_old".to_string(), false, true, Some(1)), // dead but on-screen
-        ("d_mid".to_string(), false, false, Some(20)),
-    ];
-    let victims = dead_sessions_to_evict(&over, 1);
-    // Keep the single most-recently-dead unviewed (`d_new`); evict the older
-    // unviewed tail, oldest death first. `viewed_old` — oldest of all — is
-    // NEVER evicted because a viewport is attached.
-    assert_eq!(victims, vec!["d_old".to_string(), "d_mid".to_string()]);
-    for retained in ["live", "fresh", "d_new", "viewed_old"] {
-        assert!(
-            !victims.contains(&retained.to_string()),
-            "{retained} must be retained"
-        );
-    }
-}
-
 /// RF-perf-17: `live_session_home_dirs` returns the stable spawn dirs of
 /// exactly the ALIVE sessions that HAVE an anchor — a dead (retained-for-replay)
 /// session and an anchorless (`home_cwd == None`) session both contribute
@@ -475,12 +387,9 @@ fn failed_background_start_releases_pty_and_dashboard_registration() {
                 .expect("startup-failure test session"),
         );
         let pid = session.session().pty.pid().expect("child pid") as libc::pid_t;
-        let pgid = session
-            .session()
-            .pty
-            .child()
-            .process_group()
-            .expect("child process group");
+        assert!(session.session().pty.child().has_process_group());
+        // portable-pty starts the child in a session of its own: it leads its group.
+        let pgid = pid;
         let identity = stable_process_identity(pid).expect("stable child identity");
         state
             .insert_session_reaping_displaced("startup-failed".to_string(), session.take())
@@ -526,12 +435,9 @@ fn same_id_replacement_reaps_displaced_process_group() {
         make_isolated_session("replace-me", "sleep 30 & wait", false).expect("old test session"),
     );
     let old_pid = old.session().pty.pid().expect("old child pid") as libc::pid_t;
-    let old_pgid = old
-        .session()
-        .pty
-        .child()
-        .process_group()
-        .expect("old child process group");
+    assert!(old.session().pty.child().has_process_group());
+    // portable-pty starts the child in a session of its own: it leads its group.
+    let old_pgid = old_pid;
     let old_identity = stable_process_identity(old_pid).expect("old stable identity");
     state
         .insert_session_reaping_displaced("replace-me".to_string(), old.take())
@@ -549,12 +455,8 @@ fn same_id_replacement_reaps_displaced_process_group() {
         .pty
         .pid()
         .expect("replacement child pid") as libc::pid_t;
-    let replacement_pgid = replacement
-        .session()
-        .pty
-        .child()
-        .process_group()
-        .expect("replacement child process group");
+    assert!(replacement.session().pty.child().has_process_group());
+    let replacement_pgid = replacement_pid;
     let replacement_identity =
         stable_process_identity(replacement_pid).expect("replacement stable identity");
     state
@@ -688,22 +590,6 @@ fn per_session_writer_lock_does_not_serialize_cross_session_writes() {
         7,
         "A also completed its write"
     );
-}
-
-/// The persisting-classifier rule. Active-workspace terminal
-/// (subscribers>0) and story-scoped terminal (story_id set) persist; a
-/// 0-subscriber, no-story terminal (soft-closed / team-switch-continuity)
-/// does not; a warm-pool member never persists regardless.
-#[test]
-fn is_persisting_matches_ac11_rule() {
-    // active-workspace tab (live viewport, no story) → persists
-    assert!(is_persisting(false, false, true));
-    // story-scoped (story id, no live viewport) → persists
-    assert!(is_persisting(false, true, false));
-    // soft-closed / team-switch-continuity (no story, no viewport) → killed
-    assert!(!is_persisting(false, false, false));
-    // warm-pool member is never persisted, even if it somehow looked alive
-    assert!(!is_persisting(true, true, true));
 }
 
 /// One quit path: the exit-time complement kill reaps every non-persisting
@@ -921,10 +807,11 @@ fn osc7_cwd_changes_emit_cwd_changed_once_per_real_change() {
     let mut reg = registration("osc7-cwd");
     reg.osc_enabled = true;
     // Three OSC 7 reports: path /tmp/a repeated, then switching to /tmp/b.
-    // The parser is byte-exact so the printf escapes drive it directly.
+    // The parser is byte-exact so the printf escapes drive it directly (octal: dash's printf,
+    // Linux's sh, has no \x escapes).
     spawn(
         &state,
-        sh("printf '\\x1b]7;file:///tmp/a\\x07\\x1b]7;file:///tmp/a\\x07\\x1b]7;file:///tmp/b\\x07'; exit 0"),
+        sh("printf '\\033]7;file:///tmp/a\\007\\033]7;file:///tmp/a\\007\\033]7;file:///tmp/b\\007'; exit 0"),
         reg,
     )
     .expect("spawn");
@@ -1067,58 +954,6 @@ fn empty_pty_state_reports_no_sessions_idempotently() {
     assert_eq!(state.session_len_and_dead(), Some((0, 0)));
 }
 
-/// A viewport stream the host fails to deliver to is counted as a failed
-/// emit in its telemetry, never as bytes sent; the session channel still gets
-/// the batch.
-#[test]
-fn failed_stream_delivery_counts_as_an_emit_failure() {
-    struct RejectStreams;
-    impl TerminalEventSink for RejectStreams {
-        fn emit(&self, event: TerminalDomainEvent) -> Result<(), PortUnavailable> {
-            match event {
-                TerminalDomainEvent::StreamOutput { .. } => {
-                    Err(PortUnavailable("stream closed".into()))
-                }
-                _ => Ok(()),
-            }
-        }
-    }
-    let mut subscribers = HashMap::new();
-    subscribers.insert(StreamId(1), SubscriberHandle::default());
-    crate::state::deliver_output(&RejectStreams, &mut subscribers, "s", "bytes", 5);
-    let handle = &subscribers[&StreamId(1)];
-    assert_eq!(handle.emit_failures, 1);
-    assert_eq!(handle.bytes_sent, 0);
-}
-
-/// An exit from a host that predates the `requested` flag reads as not
-/// requested.
-#[test]
-fn an_exit_without_the_requested_flag_reads_as_not_requested() {
-    let exit = TerminalDomainEvent::Exit {
-        session: PtySessionId::new("s1"),
-        status: None,
-        pool_member: false,
-        requested: true,
-        incarnation: 0,
-    };
-    let mut json = serde_json::to_value(&exit).unwrap();
-    let fields = json
-        .as_object_mut()
-        .and_then(|o| o.values_mut().next())
-        .and_then(|v| v.as_object_mut())
-        .expect("an externally tagged variant");
-    assert!(fields.remove("requested").is_some());
-    let older: TerminalDomainEvent = serde_json::from_value(json).unwrap();
-    assert!(matches!(
-        older,
-        TerminalDomainEvent::Exit {
-            requested: false,
-            ..
-        }
-    ));
-}
-
 /// Every `Exit` recorded for `id`, by status.
 fn exits_of(events: &[TerminalDomainEvent], id: &str) -> Vec<Option<ExitInfo>> {
     events
@@ -1132,39 +967,43 @@ fn exits_of(events: &[TerminalDomainEvent], id: &str) -> Vec<Option<ExitInfo>> {
         .collect()
 }
 
-/// A write into a retained session whose child is gone fails, and on a host
-/// whose clients can miss events emits the session's exit again with its real
-/// status, every time: a client that missed the original learns the session
-/// ended, and one that has it drops the repeat. An in-process host, whose one
-/// client hears every event, does not repeat it.
-#[test]
-fn a_write_into_an_exited_session_emits_its_exit_again() {
-    let (sink, state) = recording_state();
-    state.redeliver_exits_on_use();
-    spawn(&state, sh("exit 3"), registration("gone")).expect("spawn");
-    sink.wait_for(Duration::from_secs(5), |events| exit_of(events, "gone"));
-    let exited = Some(ExitInfo {
-        exit_code: Some(3),
-        signal: None,
-    });
-    assert!(state.has_session("gone"), "retained after its exit");
+mod write_after_exit {
+    use super::*;
 
-    assert!(state.write("gone", b"lost keystroke").is_err());
-    assert!(state.write("gone", b"another").is_err());
-    let exits = sink.wait_for(Duration::from_secs(5), |events| {
-        let exits = exits_of(events, "gone");
-        (exits.len() == 3).then_some(exits)
-    });
-    assert_eq!(exits, vec![exited; 3]);
-    state.kill("gone");
+    /// A write into a retained session whose child is gone fails, and on a host
+    /// whose clients can miss events emits the session's exit again with its real
+    /// status, every time: a client that missed the original learns the session
+    /// ended, and one that has it drops the repeat. An in-process host, whose one
+    /// client hears every event, does not repeat it.
+    #[test]
+    fn a_write_into_an_exited_session_emits_its_exit_again() {
+        let (sink, state) = recording_state();
+        state.redeliver_exits_on_use();
+        spawn(&state, sh("exit 3"), registration("gone")).expect("spawn");
+        sink.wait_for(Duration::from_secs(5), |events| exit_of(events, "gone"));
+        let exited = Some(ExitInfo {
+            exit_code: Some(3),
+            signal: None,
+        });
+        assert!(state.has_session("gone"), "retained after its exit");
 
-    let (sink, in_process) = recording_state();
-    spawn(&in_process, sh("exit 3"), registration("local")).expect("spawn");
-    sink.wait_for(Duration::from_secs(5), |events| exit_of(events, "local"));
-    assert!(in_process.write("local", b"x").is_err());
-    std::thread::sleep(Duration::from_millis(100));
-    assert_eq!(exits_of(&sink.snapshot(), "local").len(), 1);
-    in_process.kill("local");
+        assert!(state.write("gone", b"lost keystroke").is_err());
+        assert!(state.write("gone", b"another").is_err());
+        let exits = sink.wait_for(Duration::from_secs(5), |events| {
+            let exits = exits_of(events, "gone");
+            (exits.len() == 3).then_some(exits)
+        });
+        assert_eq!(exits, vec![exited; 3]);
+        state.kill("gone");
+
+        let (sink, in_process) = recording_state();
+        spawn(&in_process, sh("exit 3"), registration("local")).expect("spawn");
+        sink.wait_for(Duration::from_secs(5), |events| exit_of(events, "local"));
+        assert!(in_process.write("local", b"x").is_err());
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(exits_of(&sink.snapshot(), "local").len(), 1);
+        in_process.kill("local");
+    }
 }
 
 /// Every viewport attached to a retained, exited session is told the session

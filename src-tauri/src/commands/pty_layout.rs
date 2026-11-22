@@ -16,6 +16,7 @@ use codesense_pty_core::layout::{
     TagPatch, Tags, ViewHint, WorkspaceDescriptor,
 };
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::commands::async_helpers::await_blocking;
@@ -443,6 +444,51 @@ pub enum TabSpawn {
     Warm(AttachWarmArgs),
 }
 
+impl TabSpawn {
+    /// The folder the session starts in.
+    fn cwd_mut(&mut self) -> &mut String {
+        match self {
+            TabSpawn::Cold(args) => &mut args.cwd,
+            TabSpawn::Warm(args) => &mut args.target_cwd,
+        }
+    }
+}
+
+/// A tab's own folder on This Mac that is gone (`gone`) is not where it runs: a spawn
+/// that would start there starts in its workspace's folder `ws_dir` instead, when it has
+/// one. The app's two start paths, [`open_layout_tab`] and [`terminal_respawn_tab`],
+/// settle a gone folder here; the host's layout never records one.
+fn start_beside_gone_folder(spawn: &mut TabSpawn, gone: &Path, ws_dir: Option<&Path>) {
+    let cwd = spawn.cwd_mut();
+    if let Some(ws_dir) = ws_dir.filter(|_| Path::new(cwd.as_str()) == gone) {
+        *cwd = ws_dir.to_string_lossy().into_owned();
+    }
+}
+
+/// An agent's Relaunch (`relaunch`: it carries a scope) whose start folder `gone` is
+/// gone is refused, before the ended session is reaped; a shell's Restart goes on in its
+/// workspace's folder ([`start_beside_gone_folder`]).
+fn refuse_relaunch_in_gone_folder(gone: &Path, relaunch: bool) -> Result<(), String> {
+    if relaunch {
+        return Err(format!(
+            "its folder {gone:?} is gone, so the agent was not relaunched; open it again with open_workspace"
+        ));
+    }
+    Ok(())
+}
+
+/// The folder of the workspace holding `session`, as This Mac's hosts record it.
+fn recorded_workspace_folder(app: &tauri::AppHandle, session: &PtySessionId) -> Option<PathBuf> {
+    let boot = webview_boot()?;
+    pty_backend::layout_snapshots(app, &boot)
+        .ok()?
+        .into_iter()
+        .flat_map(|snapshot| snapshot.workspaces.into_values())
+        .find(|ws| ws.tabs.iter().any(|tab| &tab.session == session))?
+        .descriptor
+        .worktree_path
+}
+
 /// A `terminal_open_tab` request; the session id is the tab id.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -459,6 +505,10 @@ pub struct OpenTabRequest {
     pub index: Option<usize>,
     pub activate: bool,
     pub spawn: TabSpawn,
+    /// The tab's own folder when it runs outside the workspace's (a story seat
+    /// worktree); see [`OpenTab::cwd`]. Omitted for a tab in the workspace's folder.
+    #[serde(default)]
+    pub cwd: Option<std::path::PathBuf>,
 }
 
 /// The app launch the webview last asked the hosts' layout under, so a read
@@ -574,9 +624,11 @@ pub async fn terminal_open_tab(
         index,
         activate,
         spawn,
+        cwd,
     } = request;
     refuse_launch_tags(tags.keys())?;
     let open = OpenTab {
+        cwd,
         viewer: app_viewer(),
         workspace,
         session,
@@ -657,13 +709,22 @@ async fn webview_layout_replies(
 pub(crate) async fn open_layout_tab(
     app: tauri::AppHandle,
     machine_id: String,
-    open: OpenTab,
-    spawn: TabSpawn,
+    mut open: OpenTab,
+    mut spawn: TabSpawn,
 ) -> Result<TabEntry, String> {
     let session_id = open.session.as_str().to_string();
     let reap = session_id.clone();
     let reaper = app.clone();
     await_blocking("terminal_open_tab", move || {
+        if machine_id == super::machines::LOCAL_MACHINE_ID {
+            if let Some(gone) = open.cwd.take_if(|dir| !dir.is_dir()) {
+                let ws_dir = open
+                    .descriptor
+                    .as_ref()
+                    .and_then(|d| d.worktree_path.as_deref());
+                start_beside_gone_folder(&mut spawn, &gone, ws_dir);
+            }
+        }
         let spawner = app.clone();
         pty_backend::open_tab(&app, &machine_id, open, |host| {
             let host = SpawnPlacement::Exact(Box::new(host));
@@ -745,7 +806,9 @@ pub struct RespawnedTab {
 /// and in the same place (its workspace, position, name, role and tags), for
 /// Restart and Relaunch on an ended pane:
 ///
-/// - refused while the tab or its process is still running;
+/// - refused while the tab or its process is still running, and for an agent's
+///   Relaunch (with `scope`) whose start folder on This Mac is gone; a shell's
+///   Restart there starts in its workspace's folder;
 /// - the ended session is reaped on the host that holds it — the sidecar
 ///   answers once its teardown is complete — keeping the tab, its dashboard
 ///   binding and its launch provenance (nothing is audited as a kill);
@@ -780,6 +843,16 @@ pub async fn terminal_respawn_tab(
             )?;
         }
         let session = PtySessionId::new(session.session());
+        // A shell whose own folder went away restarts in its workspace's folder. An
+        // agent's Relaunch there is refused: in a seat's folder it would run in the
+        // story's base worktree instead.
+        let mut spawn = spawn;
+        let start = PathBuf::from(spawn.cwd_mut().as_str());
+        if !backend.is_remote() && !start.is_dir() {
+            refuse_relaunch_in_gone_folder(&start, scope.is_some())?;
+            let ws_dir = recorded_workspace_folder(&app, &session);
+            start_beside_gone_folder(&mut spawn, &start, ws_dir.as_deref());
+        }
         let spawner = app.clone();
         let session_id = session.as_str().to_string();
         let remove_args = std::sync::Mutex::new(None);
@@ -1475,6 +1548,59 @@ mod tests {
             TabSpawn::Cold(args) => assert_eq!(args.interactive, Some(true)),
             TabSpawn::Warm(_) => panic!("expected a cold spawn"),
         }
+    }
+
+    /// A spawn that would start in a tab's own folder that is gone starts in its
+    /// workspace's folder; any other start folder, or a workspace without a folder,
+    /// is left as it is.
+    #[test]
+    fn a_spawn_in_a_gone_tab_folder_starts_in_the_workspace_folder() {
+        let size = serde_json::json!({ "cols": 80, "rows": 24 });
+        let warm = |cwd: &str| -> TabSpawn {
+            serde_json::from_value(
+                serde_json::json!({ "kind": "warm", "targetCwd": cwd, "size": size }),
+            )
+            .unwrap()
+        };
+        let cold = |cwd: &str| -> TabSpawn {
+            serde_json::from_value(
+                serde_json::json!({ "kind": "cold", "command": "zsh", "cwd": cwd, "size": size }),
+            )
+            .unwrap()
+        };
+        let (gone, base) = (Path::new("/w/app-seat-dev"), Path::new("/w/app"));
+        for mut spawn in [warm("/w/app-seat-dev"), cold("/w/app-seat-dev")] {
+            start_beside_gone_folder(&mut spawn, gone, Some(base));
+            assert_eq!(spawn.cwd_mut().as_str(), "/w/app");
+        }
+        let mut elsewhere = warm("/home/me");
+        start_beside_gone_folder(&mut elsewhere, gone, Some(base));
+        assert_eq!(elsewhere.cwd_mut().as_str(), "/home/me");
+        let mut no_folder = cold("/w/app-seat-dev");
+        start_beside_gone_folder(&mut no_folder, gone, None);
+        assert_eq!(no_folder.cwd_mut().as_str(), "/w/app-seat-dev");
+    }
+
+    /// An agent's Relaunch in a folder that is gone is refused (it would run in the
+    /// workspace's folder, a seat's story base worktree); a shell's Restart is not.
+    #[test]
+    fn a_relaunch_in_a_gone_folder_is_refused_and_a_restart_is_not() {
+        let gone = Path::new("/w/app-seat-dev");
+        let refused = refuse_relaunch_in_gone_folder(gone, true).unwrap_err();
+        assert!(refused.contains("/w/app-seat-dev"), "{refused}");
+        assert!(refuse_relaunch_in_gone_folder(gone, false).is_ok());
+        // The refusal comes before the ended session is reaped and before any
+        // folder is moved.
+        let source = include_str!("pty_layout.rs");
+        let start = source.find("pub async fn terminal_respawn_tab(").unwrap();
+        let body = &source[start..start + source[start..].find("\n}\n").unwrap()];
+        let refuse = body.find("refuse_relaunch_in_gone_folder(").unwrap();
+        assert!(refuse < body.find("start_beside_gone_folder(").unwrap());
+        assert!(refuse < body.find("respawn_tab_admitted(").unwrap());
+        assert!(
+            !body.contains("scope.cwd ="),
+            "a scope never follows a gone folder"
+        );
     }
 
     /// A Relaunch the host answers by reviving an earlier respawn's process (its

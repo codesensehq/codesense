@@ -61,6 +61,7 @@ import {
   type ScratchVerb,
   type ScratchVerbRow,
 } from "../lib/scratch-item-actions";
+import { localMachinePhrase } from "@/shared/lib/local-machine";
 
 /**
  * SLW-PT-22 — Share with ‹Team›…, Copy to another org…, Use in all orgs / Only this
@@ -430,10 +431,12 @@ function CopyToOrgSheet({
           </DialogDescription>
         </DialogHeader>
         {orgs === null ? (
-          <p className="text-sm text-muted-foreground">Finding the orgs on this Mac…</p>
+          <p className="text-sm text-muted-foreground">
+            Finding the orgs on {localMachinePhrase()}…
+          </p>
         ) : orgs.length === 0 ? (
           <p data-testid="scratch-copy-none" className="text-sm text-muted-foreground">
-            No other org is synced on this Mac yet. Sync one, then copy it there.
+            No other org is synced on {localMachinePhrase()} yet. Sync one, then copy it there.
           </p>
         ) : (
           <label className="flex flex-col gap-1.5 text-sm">

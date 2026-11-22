@@ -629,13 +629,14 @@ fn claudes_status_hooks_report_what_its_own_hooks_do_and_codex_has_none() {
             "{name}"
         );
     }
-    // Claude's status hook runs the script its tab's host installed, never a workspace's.
+    // Claude's status hook runs the bridge its tab's host placed, never a workspace's.
     let hooks = descriptor(AgentCli::Claude).project_hooks.as_ref().unwrap();
     assert_eq!(hooks.committed, ".claude/settings.json");
     assert_eq!(hooks.local, ".claude/settings.local.json");
+    assert_eq!(hooks.status_verb, codesense_host_proto::hook::Verb::Notify);
     assert_eq!(
-        hooks.status_command,
-        "[ -x \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" ] && \"$CODESENSE_ACTIVITY_HOST/codesense-notify.sh\" || true"
+        hooks.reply_verb,
+        Some(codesense_host_proto::hook::Verb::ReplyCheck)
     );
 }
 
@@ -887,6 +888,26 @@ fn claude_task_version_output_needs_the_floor_or_newer() {
         claude.supported,
         format!("Claude Code {major}.{minor}.{patch} or newer")
     );
+}
+
+/// Windows Claude needs `onFailure` on its hooks, so its floor is higher; the unix floor is
+/// unchanged. The names are passed in, so every row runs on whatever OS runs the test.
+#[test]
+fn claudes_minimum_is_per_os() {
+    let claude = claude_release();
+    for (os, min, supported) in [
+        ("windows", (2, 1, 295), "Claude Code 2.1.295 or newer"),
+        ("macos", (2, 1, 141), "Claude Code 2.1.141 or newer"),
+        ("linux", (2, 1, 141), "Claude Code 2.1.141 or newer"),
+    ] {
+        assert_eq!(claude.min_for(os), min, "{os}");
+        assert_eq!(claude.supported_for(os), supported, "{os}");
+    }
+    let codex = codex_release();
+    for os in ["windows", "macos", "linux"] {
+        assert_eq!(codex.min_for(os), codex.min, "{os}");
+        assert_eq!(codex.supported_for(os), codex.supported, "{os}");
+    }
 }
 
 fn startup(args: &[&str], settings: serde_json::Value) -> AgentStartup {
@@ -1512,5 +1533,76 @@ fn an_unprobeable_release_gets_no_hooks_no_engine_and_a_stated_reason_for_every_
     assert!(
         versioned >= 2,
         "the table covers the version-qualified CLIs"
+    );
+}
+
+#[test]
+fn a_channel_to_an_absent_engine_is_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let endpoint = dir.path().join("engine.sock");
+    for cli in [AgentCli::Codex, AgentCli::Hermes] {
+        let connect = adapter(cli)
+            .control()
+            .channel
+            .expect("a host-submitted CLI's channel");
+        // Its callers take a channel with `.ok()`; this pins only that the connect fails
+        // (off unix with the capability-off error), not what a caller does next.
+        assert!(connect(&endpoint, None, Some(dir.path())).is_err(), "{cli}");
+    }
+}
+
+/// Started by `a_home_with_no_verified_gateway_is_left_alone_at_teardown` as a live
+/// process that is not the home's gateway.
+#[test]
+#[ignore = "a process another test starts"]
+fn a_process_that_is_not_a_gateway() {
+    std::thread::sleep(std::time::Duration::from_secs(30));
+}
+
+#[test]
+fn a_home_with_no_verified_gateway_is_left_alone_at_teardown() {
+    use codesense_platform::process::{is_alive, kill_hard, ProcessTree};
+    use std::process::{Command, Stdio};
+    let home = tempfile::tempdir().unwrap();
+    let mut tree = ProcessTree::spawn(
+        Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "agent_cli::tests::a_process_that_is_not_a_gateway",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null()),
+    )
+    .unwrap();
+    let pid = tree.pid();
+    std::fs::write(
+        home.path().join("gateway.pid"),
+        format!("{{\"pid\":{pid}}}"),
+    )
+    .unwrap();
+    adapter(AgentCli::Hermes).teardown_home(home.path(), false);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let running = tree.try_wait().unwrap().is_none() && is_alive(pid);
+    kill_hard(&tree).unwrap();
+    assert!(running, "a live process the home names is not its gateway");
+}
+
+/// The rows the front end's stem helper asserts too, from one shared table.
+#[test]
+fn an_agent_path_names_its_runtime_by_one_stem() {
+    let table: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/binary-stem.json")).unwrap();
+    for row in table["rows"].as_array().unwrap() {
+        let (path, stem) = (row[0].as_str().unwrap(), row[1].as_str().unwrap());
+        assert_eq!(super::binary_stem(path), stem, "{path}");
+    }
+    assert_eq!(
+        super::by_binary(&super::binary_stem(r"C:\npm\claude.cmd")),
+        Some(AgentCli::Claude)
+    );
+    assert_eq!(
+        super::by_binary(&super::binary_stem("CODEX.EXE")),
+        Some(AgentCli::Codex)
     );
 }

@@ -28,6 +28,8 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::shared::machine_wording;
+
 use super::catalog::QueryDef;
 use super::manifest::{self, LiveFields, LiveQueries, MANIFEST_FILE, MAX_FILES, MAX_TITLE_CHARS};
 use super::payload::{self, FolderReader, Mode, MAX_FILE_BYTES, MAX_VERSION_BYTES};
@@ -50,7 +52,7 @@ const FIXED_FILES: usize = 3;
 pub const TOOLKIT: &str = "cs-live.js";
 pub const TOOLKIT_JS: &str = include_str!("toolkit/cs-live.js");
 /// Asset release version in the toolkit header; independent of page API wire `v = 1`.
-pub const TOOLKIT_VERSION: u32 = 4;
+pub const TOOLKIT_VERSION: u32 = 6;
 /// SV-INP-29 embed pipe: the page-side forwarder and message-side SDK for live HTML
 /// messages inside a published dashboard (`live.embeds`). A dashboard copies it next
 /// to `cs-live.js` and lists it in `publish.files`; it makes no network call and holds no token.
@@ -756,14 +758,43 @@ fn starter_query(queries: &LiveQueries, catalog: &[QueryDef]) -> Option<String> 
         })
 }
 
-/// Seed the selected starter query from the already validated pin types.
+/// Where the starter says live answers come from, its owner's computer named
+/// for `os`.
+fn live_answers_from_for(os: &str) -> String {
+    format!(
+        "Live answers come only on codesense.ai, from the owner's {}.",
+        machine_wording::machine_kind(os)
+    )
+}
+
+/// [`APP_JS`] with the owner's computer named for `os` in the text the page
+/// shows: the presence line and the no-answer note.
+fn app_js_for(os: &str) -> String {
+    APP_JS
+        .replace(
+            "\"Owner's Mac: ",
+            &format!("\"Owner's {}: ", machine_wording::machine_kind(os)),
+        )
+        .replace(&live_answers_from_for("macos"), &live_answers_from_for(os))
+}
+
+/// [`starter_app_for`] the OS this build runs on.
 fn starter_app(query: Option<&str>, pins: &manifest::LiveArgs) -> (String, Vec<String>) {
+    starter_app_for(machine_wording::RUNNING_OS, query, pins)
+}
+
+/// Seed the selected starter query from the already validated pin types.
+fn starter_app_for(
+    os: &str,
+    query: Option<&str>,
+    pins: &manifest::LiveArgs,
+) -> (String, Vec<String>) {
     use manifest::{Pin, Selector};
     let Some(pins) = query
         .and_then(|query| pins.get(query))
         .filter(|pins| !pins.is_empty())
     else {
-        return (APP_JS.to_string(), Vec::new());
+        return (app_js_for(os), Vec::new());
     };
     let mut args = serde_json::Map::new();
     let mut next_steps = Vec::new();
@@ -796,18 +827,48 @@ fn starter_app(query: Option<&str>, pins: &manifest::LiveArgs) -> (String, Vec<S
         }
     }
     let args = serde_json::to_string(&args).expect("starter args serialize");
-    let mut script = APP_JS.replace("ask(query, {})", &format!("ask(query, {args})"));
+    let mut script = app_js_for(os).replace("ask(query, {})", &format!("ask(query, {args})"));
     if !next_steps.is_empty() {
-        let hint = format!(
-            "). {} Live answers come only on codesense.ai, from the owner's Mac.",
-            next_steps.join(" ")
-        );
+        let from = live_answers_from_for(os);
+        let hint = format!("). {} {from}", next_steps.join(" "));
         script = script.replace(
-            r#""). Live answers come only on codesense.ai, from the owner's Mac.""#,
+            &format!("\"). {from}\""),
             &serde_json::to_string(&hint).expect("starter guidance serializes"),
         );
     }
     (script, next_steps)
+}
+
+/// [`workspaces_html_for`] the OS this build runs on.
+fn workspaces_html(template: Template, work_it: bool, title: &str) -> String {
+    workspaces_html_for(machine_wording::RUNNING_OS, template, work_it, title)
+}
+
+/// The shared `index.html` of the workspaces, mission-control and bug-triage
+/// templates: its view, its title, and the owner's computer named for `os` in
+/// the status line and the `codesense:owner-machine` meta the page's scripts
+/// read.
+fn workspaces_html_for(os: &str, template: Template, work_it: bool, title: &str) -> String {
+    let html = match template {
+        Template::BugTriage => WORKSPACES_HTML.replace(
+            "data-template=\"workspaces\"",
+            if work_it {
+                "data-template=\"bug-triage\" data-work-it=\"true\""
+            } else {
+                "data-template=\"bug-triage\""
+            },
+        ),
+        Template::MissionControl => WORKSPACES_HTML.replace(
+            "data-template=\"workspaces\"",
+            "data-template=\"mission-control\"",
+        ),
+        Template::Workspaces => WORKSPACES_HTML.to_string(),
+        // create writes this page only in its workspaces arm; the starter writes its own pages.
+        Template::Starter => unreachable!("the starter template has no workspaces page"),
+    };
+    // The noun first, so a title that spells a placeholder stays as it was typed.
+    html.replace("{{owner_machine}}", machine_wording::machine_kind(os))
+        .replace("{{title}}", &escape_html(title))
 }
 
 /// Architecture: creation retains baseline writes; unreadable placement outcomes are missing.
@@ -859,24 +920,7 @@ pub fn create(req: &CreateRequest, catalog: &[QueryDef]) -> Result<Created, Crea
         }
         Template::Workspaces | Template::MissionControl | Template::BugTriage => {
             // One renderer, stylesheet and writer; mission control changes only its view data.
-            let html = if req.template == Template::BugTriage {
-                WORKSPACES_HTML.replace(
-                    "data-template=\"workspaces\"",
-                    if req.agent.is_some() {
-                        "data-template=\"bug-triage\" data-work-it=\"true\""
-                    } else {
-                        "data-template=\"bug-triage\""
-                    },
-                )
-            } else if req.template == Template::MissionControl {
-                WORKSPACES_HTML.replace(
-                    "data-template=\"workspaces\"",
-                    "data-template=\"mission-control\"",
-                )
-            } else {
-                WORKSPACES_HTML.to_string()
-            }
-            .replace("{{title}}", &escape_html(&plan.title));
+            let html = workspaces_html(req.template, req.agent.is_some(), &plan.title);
             writes.push((ENTRY.to_string(), html.into_bytes()));
             writes.push((STYLE.to_string(), WORKSPACES_CSS.as_bytes().to_vec()));
             writes.push((SCRIPT.to_string(), WORKSPACES_JS.as_bytes().to_vec()));
@@ -1592,6 +1636,67 @@ mod tests {
     }
 
     #[test]
+    fn machine_wording_follows_the_os() {
+        assert_eq!(
+            live_answers_from_for("macos"),
+            "Live answers come only on codesense.ai, from the owner's Mac."
+        );
+        assert_eq!(
+            live_answers_from_for("linux"),
+            "Live answers come only on codesense.ai, from the owner's computer."
+        );
+        assert_eq!(app_js_for("macos"), APP_JS);
+        let linux = app_js_for("linux");
+        for shown in [
+            r#"el("p", "Owner's computer: unknown", "muted")"#,
+            r#"presence.textContent = "Owner's computer: " + m.mac;"#,
+            r#"Live answers come only on codesense.ai, from the owner's computer.", "muted""#,
+        ] {
+            assert!(linux.contains(shown), "{shown}");
+        }
+        let pins: manifest::LiveArgs = serde_json::from_value(
+            serde_json::json!({"storyChanges": {"storyId": [{"team": "emea"}]}}),
+        )
+        .unwrap();
+        let (script, _) = starter_app_for("linux", Some("storyChanges"), &pins);
+        assert!(script.contains(
+            r#""). Set storyId in app.js to a story in team emea. Live answers come only on codesense.ai, from the owner's computer.""#
+        ));
+    }
+
+    #[test]
+    fn the_workspaces_page_names_the_owner_computer_for_the_os() {
+        for (os, noun) in [("macos", "Mac"), ("linux", "computer")] {
+            for (template, agent) in [
+                (Template::Workspaces, false),
+                (Template::MissionControl, false),
+                (Template::BugTriage, false),
+                (Template::BugTriage, true),
+            ] {
+                let html = workspaces_html_for(os, template, agent, "Team");
+                assert!(
+                    html.contains(&format!(
+                        "<meta name=\"codesense:owner-machine\" content=\"{noun}\">"
+                    )),
+                    "{os} {template:?}"
+                );
+                assert!(
+                    html.contains(&format!(
+                        "aria-live=\"polite\">Connecting to the owner's {noun}</p>"
+                    )),
+                    "{os} {template:?}"
+                );
+                assert!(!html.contains("{{owner_machine}}"), "{os} {template:?}");
+                assert!(!html.contains("{{title}}"), "{os} {template:?}");
+            }
+        }
+        // macOS keeps the status line it shipped with, byte for byte.
+        assert!(workspaces_html_for("macos", Template::Workspaces, false, "Team").contains(
+            r#"<p class="status" id="status" role="status" aria-live="polite">Connecting to the owner's Mac</p>"#
+        ));
+    }
+
+    #[test]
     fn writes_live_all_and_presence_only() {
         let (_root, folder) = new_folder();
         let mut req = request(&folder);
@@ -1943,6 +2048,12 @@ mod tests {
         let (_root, folder) = new_folder();
         let created = create(&workspaces_request(&folder), CATALOG).unwrap();
         assert_eq!(created.template, "workspaces");
+        let entry = read(&folder, ENTRY);
+        assert!(entry.contains(&format!(
+            "<meta name=\"codesense:owner-machine\" content=\"{}\">",
+            machine_wording::machine_kind(machine_wording::RUNNING_OS)
+        )));
+        assert!(!entry.contains("{{owner_machine}}"));
         let m = manifest::load(&folder).unwrap();
         assert_eq!(
             m.files,

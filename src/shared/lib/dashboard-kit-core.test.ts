@@ -64,6 +64,7 @@ type Core = {
   value: (v: unknown, o?: Record<string, unknown>) => HTMLElement;
   valueState: (v: unknown, o?: Record<string, unknown>) => { state: string; text: string };
   errorText: (err: unknown) => string;
+  ownerMachine: () => string;
   errorKind: (err: unknown) => string;
   errorCodes: () => Record<string, string>;
   stateBanner: (o: Record<string, unknown>) => HTMLElement | null;
@@ -251,6 +252,18 @@ function load(host: keyof typeof HOST_LOADERS): Loaded {
 
 const tick = (ms: number) => vi.advanceTimersByTimeAsync(ms);
 
+// The noun the host writes for the owner's computer: one codesense:owner-machine meta in the head, or none (null).
+function setOwnerMachine(content: string | null) {
+  document.head
+    .querySelectorAll('meta[name="codesense:owner-machine"]')
+    .forEach((meta) => meta.remove());
+  if (content === null) return;
+  const meta = document.createElement("meta");
+  meta.setAttribute("name", "codesense:owner-machine");
+  meta.setAttribute("content", content);
+  document.head.appendChild(meta);
+}
+
 // IntersectionObserver the test drives.
 type Watcher = { cb: (entries: Partial<IntersectionObserverEntry>[]) => void; seen: Set<Element> };
 let watchers: Watcher[] = [];
@@ -314,6 +327,7 @@ afterEach(() => {
     );
   delete (document as unknown as Record<string, unknown>).hidden;
   delete (document as unknown as Record<string, unknown>).visibilityState;
+  setOwnerMachine(null);
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -326,10 +340,10 @@ describe("the shipped sources", () => {
       expect(spliced(readFileSync(file, "utf8"), core)).toBe(readFileSync(file, "utf8"));
   });
   it("the hosted toolkit header and Rust constant name the same toolkit version", () => {
-    expect(LIVE_JS.startsWith("// cs-live 4\n")).toBe(true);
+    expect(LIVE_JS.startsWith("// cs-live 6\n")).toBe(true);
     expect(
       readFileSync(join(process.cwd(), "src-tauri/src/dashboard_publish/create.rs"), "utf8"),
-    ).toContain("TOOLKIT_VERSION: u32 = 4;");
+    ).toContain("TOOLKIT_VERSION: u32 = 6;");
   });
 });
 
@@ -366,6 +380,7 @@ describe.each(["app", "hosted"] as const)("dashboard kit core, %s host", (host) 
       "value",
       "valueState",
       "errorText",
+      "ownerMachine",
       "stateBanner",
       "partial",
       "batchTotals",
@@ -624,6 +639,71 @@ describe.each(["app", "hosted"] as const)("dashboard kit core, %s host", (host) 
       );
       expect(core.partial(3, 9)).toBe("Totals loading · 3 of 9 stories");
       expect(core.partial(9, 9)).toBe("");
+    });
+  });
+
+  describe("the owner's computer", () => {
+    it("is the Mac with no meta, or an empty one, and every sentence reads as before", () => {
+      const { core } = load(host);
+      expect(core.ownerMachine()).toBe("Mac");
+      for (const content of ["", "  "]) {
+        setOwnerMachine(content);
+        expect(core.ownerMachine(), JSON.stringify(content)).toBe("Mac");
+      }
+      setOwnerMachine(null);
+      expect(core.errorText("mac_offline")).toBe("The Mac is offline");
+      expect(core.valueState(null, { waiting: true }).text).toBe("Waiting for the Mac");
+      expect(core.stateBanner({ offline: true, asOf: Date.now() - 120_000 })!.textContent).toBe(
+        "The owner's Mac is offline. Showing data from 2 minutes ago. The page updates when it's back.",
+      );
+    });
+
+    it("is the noun the host wrote, in every sentence that names it", () => {
+      setOwnerMachine(" computer ");
+      const { core } = load(host);
+      expect(core.ownerMachine()).toBe("computer");
+      const table: [unknown, string][] = [
+        ["mac_offline", "The computer is offline"],
+        [new Error("mac_busy"), "The computer is busy"],
+        ["busy", "The computer is busy"],
+        ["rate_limited", "The computer is busy"],
+        ["answer_failed", "The computer couldn't answer"],
+        ["failed", "The computer couldn't read this"],
+        [new Error("no_answer"), "The computer didn't answer in time"],
+        ["timeout", "The computer didn't answer in time"],
+        ["mac_timeout", "The computer didn't answer in time"],
+      ];
+      for (const [input, text] of table) expect(core.errorText(input)).toBe(text);
+      expect(core.valueState(null, { waiting: true })).toEqual({
+        state: "waiting",
+        text: "Waiting for the computer",
+      });
+      expect(core.valueState(null, { error: new Error("mac_busy") }).text).toBe(
+        "Waiting for the computer",
+      );
+      expect(core.valueState(null, { error: "no_answer" }).text).toBe(
+        "Not loaded · The computer didn't answer in time",
+      );
+      expect(core.stateBanner({ offline: true, asOf: Date.now() - 120_000 })!.textContent).toBe(
+        "The owner's computer is offline. Showing data from 2 minutes ago. The page updates when it's back.",
+      );
+      expect(core.stateBanner({ offline: true, hasData: false })!.textContent).toBe(
+        "The owner's computer is offline. The page updates when it's back.",
+      );
+    });
+
+    it("is read each time a sentence is shown, not when the kit loads", () => {
+      const { core } = load(host);
+      setOwnerMachine("computer");
+      expect(core.errorText("mac_offline")).toBe("The computer is offline");
+      expect(core.stateBanner({ offline: true, hasData: false })!.textContent).toBe(
+        "The owner's computer is offline. The page updates when it's back.",
+      );
+      setOwnerMachine(null);
+      expect(core.errorText("mac_offline")).toBe("The Mac is offline");
+      expect(core.stateBanner({ offline: true, hasData: false })!.textContent).toBe(
+        "The owner's Mac is offline. The page updates when it's back.",
+      );
     });
   });
 
@@ -1952,6 +2032,20 @@ describe.each(["app", "hosted"] as const)("dashboard kit core, %s host", (host) 
         into.textContent = `${value.length} items`;
       },
       ...extra,
+    });
+
+    it("a section waiting on a busy computer names it", async () => {
+      setOwnerMachine("computer");
+      const { core } = load(host);
+      const d = details();
+      core.section(
+        d.el,
+        sectionOptions("busy", { load: () => Promise.reject(new Error("mac_busy")) }),
+      );
+      d.open();
+      await tick(0);
+      expect(d.text()).toContain("Waiting for the computer");
+      expect(d.text()).not.toContain("Mac");
     });
 
     it("Cancel frees the section's budget slot at once, so the next queued read starts", async () => {

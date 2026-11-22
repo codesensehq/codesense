@@ -5,6 +5,7 @@ use super::{Attribution, DesktopCli, PermissionBlock, RunnerRecipe, Starter, Una
 use crate::agents::manifest::GeneratedTarget;
 use crate::agents::model::{Permissions, ValidationError};
 use crate::install::agent_account_store::AccountRequirement;
+use crate::shared::machine_wording;
 use url::Url as ModelEndpoint;
 use codesense_pty_core::agent_cli::hermes::native_arguments;
 
@@ -168,6 +169,10 @@ fn permission_display(settings: &serde_json::Value, args: &[String]) -> String {
     format!("{approval} approvals · {toolsets} · {denies} tool deny rules")
 }
 
+#[cfg(cap_agent_cli_sockets)]
+pub(super) mod runtime;
+#[cfg(not(cap_agent_cli_sockets))]
+#[path = "hermes/runtime_off.rs"]
 pub(super) mod runtime;
 
 /// Only non-secret startup model selectors are admitted until endpoint credentials land.
@@ -212,7 +217,17 @@ fn home_config(
 const MODEL_REQUIRED: &str =
     "Hermes needs a model. Set a local endpoint in Edit → Runs on. API-key providers come later.";
 
-const ADMIN_POLICY: &str = "This Mac has an admin-managed Hermes policy; CodeSense-managed Hermes sessions aren't supported here yet.";
+/// That an admin-managed Hermes policy blocks managed sessions here, worded for `os`.
+fn admin_policy_for(os: &str) -> String {
+    format!(
+        "{} has an admin-managed Hermes policy; CodeSense-managed Hermes sessions aren't supported here yet.",
+        machine_wording::machine_noun(os)
+    )
+}
+
+fn admin_policy() -> String {
+    admin_policy_for(machine_wording::RUNNING_OS)
+}
 
 fn unmanaged_host(system: &std::path::Path, ambient: Option<&std::path::Path>) -> Result<(), String> {
     let ambient_policy = ambient.is_some_and(|path| {
@@ -222,7 +237,7 @@ fn unmanaged_host(system: &std::path::Path, ambient: Option<&std::path::Path>) -
         }
     });
     if std::path::Path::exists(system) || ambient_policy {
-        return Err(ADMIN_POLICY.into());
+        return Err(admin_policy());
     }
     Ok(())
 }
@@ -381,6 +396,7 @@ fn model_settings(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(cap_agent_cli_sockets)]
     #[test]
     fn hermes_admin_policy_presence_refuses_system_or_nonempty_ambient() {
         let fixture = super::super::ManagedHomeFixture::new();
@@ -390,9 +406,43 @@ mod tests {
         std::fs::create_dir_all(&ambient).unwrap();
         assert!(unmanaged_host(&system, Some(&ambient)).is_ok());
         std::fs::write(ambient.join("config.yaml"), "admin: true").unwrap();
-        assert_eq!(unmanaged_host(&system, Some(&ambient)).unwrap_err(), ADMIN_POLICY);
+        assert_eq!(
+            unmanaged_host(&system, Some(&ambient)).unwrap_err(),
+            admin_policy()
+        );
         std::fs::create_dir_all(&system).unwrap();
-        assert_eq!(unmanaged_host(&system, None).unwrap_err(), ADMIN_POLICY);
+        assert_eq!(unmanaged_host(&system, None).unwrap_err(), admin_policy());
+    }
+
+    #[test]
+    fn hermes_seeds_its_home_on_every_build_and_fails_closed_without_agent_cli_sockets() {
+        let seed = desktop()
+            .seed_home
+            .expect("Hermes seeds its home on every build");
+        #[cfg(not(cap_agent_cli_sockets))]
+        {
+            let dir = tempfile::tempdir().unwrap();
+            let home = dir.path().join("home");
+            assert_eq!(
+                seed(&home, &dir.path().join("hermes")).unwrap_err(),
+                codesense_pty_core::caps_off("agent-cli-sockets").to_string()
+            );
+            assert!(!home.exists());
+        }
+        #[cfg(cap_agent_cli_sockets)]
+        let _ = seed;
+    }
+
+    #[test]
+    fn machine_wording_follows_the_os() {
+        assert_eq!(
+            admin_policy_for("macos"),
+            "This Mac has an admin-managed Hermes policy; CodeSense-managed Hermes sessions aren't supported here yet."
+        );
+        assert_eq!(
+            admin_policy_for("linux"),
+            "This computer has an admin-managed Hermes policy; CodeSense-managed Hermes sessions aren't supported here yet."
+        );
     }
 
     #[test]
