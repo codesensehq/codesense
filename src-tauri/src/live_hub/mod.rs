@@ -176,6 +176,8 @@ struct Model {
     machine_stats_watches:
         BTreeMap<String, std::sync::Arc<crate::terminal::session_server::SessionServerClient>>,
     rows: Vec<SessionListRow>,
+    /// The active team when `rows` were built: a call-time read's team fallback.
+    active_team: Option<crate::commands::dashboard_launch::LaunchTeam>,
     agent_definitions: agent_definitions::Registry,
     configuration: configuration::Registry,
     processes: BTreeMap<String, String>,
@@ -1175,6 +1177,67 @@ fn count_rebuild(cause: u8) {
     }
 }
 
+/// The decoration a session row carries beyond its projection: its team (its launch's,
+/// else its tab's workspace, else the active team), the inbox waiter armed for it, its
+/// last progress and its launch telemetry. A rebuild and a call-time read both use it.
+fn enrich_rows(
+    rows: &mut [SessionListRow],
+    launch: &DashboardLaunchState,
+    live: &LiveTabs,
+    active: Option<&crate::commands::dashboard_launch::LaunchTeam>,
+    progress: Option<&crate::dashboard_stream::DashboardStreamHub>,
+    telemetry: Option<&crate::commands::launch_telemetry::LaunchTelemetryTracker>,
+) {
+    let teams: HashMap<_, _> = rows
+        .iter()
+        .map(|r| {
+            let team = launch
+                .launch_team(&r.handle)
+                .or_else(|| {
+                    live.tabs
+                        .iter()
+                        .find(|t| {
+                            t.session == r.session.as_deref().unwrap_or(&r.handle)
+                                || t.handle.as_deref() == Some(&r.handle)
+                        })
+                        .and_then(|t| {
+                            t.workspace_key
+                                .split_once(crate::commands::pty_layout::WORKSPACE_KEY_SEPARATOR)
+                        })
+                        .and_then(|(key, _)| {
+                            crate::commands::dashboard_launch::launch_team_from_key(key)
+                        })
+                })
+                .or_else(|| active.cloned());
+            (r.handle.clone(), team)
+        })
+        .collect();
+    for row in rows.iter_mut() {
+        row.team = teams.get(&row.handle).cloned().flatten();
+    }
+    session_list::with_inbox_waiters(rows, |handle| {
+        crate::commands::host_inbox::inbox_target(launch, handle)
+            .map(|(machine, session)| {
+                crate::commands::host_inbox::HostInboxes::armed(
+                    &launch.host_inboxes(),
+                    &machine,
+                    &session,
+                )
+                .map_or(
+                    session_list::InboxWaiter::Unknown,
+                    session_list::InboxWaiter::from,
+                )
+            })
+            .unwrap_or_default()
+    });
+    if let Some(stream) = progress {
+        session_list::with_progress(rows, |id| stream.latest_progress(id));
+    }
+    if let Some(tracker) = telemetry {
+        session_list::with_launch_telemetry_batched(rows, tracker);
+    }
+}
+
 async fn rebuild(app: &tauri::AppHandle, cause: u8) -> Result<(), String> {
     count_rebuild(cause);
     use crate::commands::agent_inbox::InboxHost;
@@ -1203,56 +1266,16 @@ async fn rebuild(app: &tauri::AppHandle, cause: u8) -> Result<(), String> {
     let mut rows = project_registry(&launch, &live, registry);
     let host = AppInboxHost { app: app.clone() };
     let active = host.active_team().await.ok();
-    let teams: HashMap<_, _> = rows
-        .iter()
-        .map(|r| {
-            let team = launch
-                .launch_team(&r.handle)
-                .or_else(|| {
-                    live.tabs
-                        .iter()
-                        .find(|t| {
-                            t.session == r.session.as_deref().unwrap_or(&r.handle)
-                                || t.handle.as_deref() == Some(&r.handle)
-                        })
-                        .and_then(|t| {
-                            t.workspace_key
-                                .split_once(crate::commands::pty_layout::WORKSPACE_KEY_SEPARATOR)
-                        })
-                        .and_then(|(key, _)| {
-                            crate::commands::dashboard_launch::launch_team_from_key(key)
-                        })
-                })
-                .or_else(|| active.clone());
-            (r.handle.clone(), team)
-        })
-        .collect();
-    for row in &mut rows {
-        row.team = teams.get(&row.handle).cloned().flatten();
-    }
-    session_list::with_inbox_waiters(&mut rows, |handle| {
-        crate::commands::host_inbox::inbox_target(&launch, handle)
-            .map(|(machine, session)| {
-                crate::commands::host_inbox::HostInboxes::armed(
-                    &launch.host_inboxes(),
-                    &machine,
-                    &session,
-                )
-                .map_or(
-                    session_list::InboxWaiter::Unknown,
-                    session_list::InboxWaiter::from,
-                )
-            })
-            .unwrap_or_default()
-    });
-    if let Some(stream) = app.try_state::<crate::dashboard_stream::DashboardStreamHub>() {
-        session_list::with_progress(&mut rows, |id| stream.latest_progress(id));
-    }
-    if let Some(tracker) =
+    enrich_rows(
+        &mut rows,
+        &launch,
+        &live,
+        active.as_ref(),
+        app.try_state::<crate::dashboard_stream::DashboardStreamHub>()
+            .as_deref(),
         app.try_state::<crate::commands::launch_telemetry::LaunchTelemetryTracker>()
-    {
-        session_list::with_launch_telemetry_batched(&mut rows, &tracker);
-    }
+            .as_deref(),
+    );
     let mut durable_ready = false;
     let durable = match crate::commands::weft_ledger::wv_list_roster(app.clone()).await {
         Ok(durable) => {
@@ -1549,6 +1572,7 @@ async fn rebuild(app: &tauri::AppHandle, cause: u8) -> Result<(), String> {
             .min();
         model.agent_definitions.sessions(&rows);
         model.rows = rows;
+        model.active_team = active.clone();
         model.agent_ready = durable_ready
             && viewer["workspaces"].is_object()
             && viewer["openedTeams"].is_array()
