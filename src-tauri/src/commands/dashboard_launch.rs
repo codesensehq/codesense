@@ -5444,7 +5444,8 @@ pub fn dashboard_resolve_session(
 }
 
 /// Whether `session_id` is a live CodeSense session: a live headless run (its
-/// liveness is registry presence), or a session any terminal host tracks. The
+/// liveness is registry presence), or a session whose child any terminal host still
+/// runs; a tab kept only for its replay reads gone. The
 /// terminal hosts are asked off the async workers — a sidecar answers over its
 /// socket — and a host that cannot be asked leaves it `Unknown`.
 pub async fn session_liveness(
@@ -5465,13 +5466,8 @@ pub fn session_liveness_now(
     session_id: &str,
 ) -> crate::commands::pty_backend::Liveness<bool> {
     use tauri::Manager;
-    if app
-        .try_state::<DashboardLaunchState>()
-        .is_some_and(|state| state.has_live_headless_session(session_id))
-    {
-        return crate::commands::pty_backend::Liveness::Known(true);
-    }
-    crate::commands::pty_backend::has_session(app, session_id)
+    let launch = app.try_state::<DashboardLaunchState>();
+    liveness::session_liveness_with(launch.as_deref(), &liveness::HostProbe(app), session_id)
 }
 
 /// SW-DX-17a (AC-1/AC-3) + SW-AV-1 (INV-3): enumerate EVERY live managed session as

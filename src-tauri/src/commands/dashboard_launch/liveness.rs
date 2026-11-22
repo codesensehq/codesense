@@ -288,6 +288,26 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn an_exited_tab_kept_for_replay_is_refused() {
+        let launch = DashboardLaunchState::new(4);
+        bound(&launch, "done", "s-done");
+        let probe = StubProbe::with(&[("s-done", Liveness::Known(false))]);
+        assert_eq!(
+            session_liveness_with(Some(&launch), &probe, "s-done"),
+            Liveness::Known(false)
+        );
+        assert_eq!(
+            session_liveness_with(None, &StubProbe::default(), "s-done"),
+            Liveness::Unknown
+        );
+        headless(&launch, "hl", "headless-1");
+        assert_eq!(
+            session_liveness_with(Some(&launch), &probe, "headless-1"),
+            Liveness::Known(true)
+        );
+    }
+
+    #[test]
     fn the_live_session_error_stops_the_read() {
         let launch = DashboardLaunchState::new(4);
         let probe = StubProbe::default();
