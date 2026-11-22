@@ -309,7 +309,7 @@ export function TerminalGridCaption({
             // 8px separation on either side without doubling. Inactive opacity
             // 0.7 lifts to 1.0 on caption-level (group) hover — DESIGN § cwd
             // rule names this "cell hover," and the caption IS the cell bar.
-            className={`flex h-full min-w-0 shrink items-center gap-1.5 pl-2 text-left outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${
+            className={`flex h-full min-w-0 shrink items-center overflow-hidden gap-1.5 pl-2 text-left outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${
               isActive ? "" : "opacity-70 group-hover:opacity-100"
             } ${progressNote || woken ? "max-w-[50%]" : git ? "max-w-[65%]" : "flex-1"}`}
           >

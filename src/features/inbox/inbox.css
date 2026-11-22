@@ -385,11 +385,16 @@
 .ibx-ov-setup,
 .ibx-ov-needs {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 6px;
+  gap: 2px 6px;
   padding: 4px 10px;
   font-size: 12px;
   border-bottom: 1px solid var(--ibx-border);
+}
+/* In a narrow pane the line wraps between its parts; "Show CLI" never splits. */
+.ibx-ov-needs .ibx-ov-pins-retry {
+  white-space: nowrap;
 }
 /* A pins read that failed: one line in the zone, with Retry. */
 .ibx-ov-pins.ibx-ov-pins-failed {

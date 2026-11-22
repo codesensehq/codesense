@@ -139,6 +139,37 @@ test.describe("the Chat | CLI switch", () => {
     expect(overflow.caption).toBeLessThanOrEqual(0);
   });
 
+  for (const width of [250, 300]) {
+    test(`the tab name never overlaps the timer chip at ${width} px`, async ({ page }) => {
+      await paneWidth(page, width);
+      const boxes = await page.evaluate((tab) => {
+        const pane = document.querySelector<HTMLElement>(`[data-focus-pane="${tab}"]`)!;
+        const button = pane.querySelector<HTMLElement>(
+          `[data-testid="terminal-grid-caption-focus-${tab}"]`,
+        )!;
+        const name = document.getElementById(
+          button.getAttribute("aria-labelledby")!.split(" ")[0],
+        )!;
+        // Where the name's text is drawn: its glyph boxes, cut by the button when it clips.
+        const range = document.createRange();
+        range.selectNodeContents(name);
+        const clips = getComputedStyle(button).overflowX !== "visible";
+        const limit = clips ? button.getBoundingClientRect().right : Infinity;
+        const right = Math.max(
+          -Infinity,
+          ...Array.from(range.getClientRects())
+            .filter((r) => r.width > 0)
+            .map((r) => Math.min(r.right, limit)),
+        );
+        const chip = pane
+          .querySelector(`[data-testid="terminal-grid-caption-timers-${tab}"]`)!
+          .getBoundingClientRect();
+        return { right, chipLeft: chip.left };
+      }, AGENT_TAB);
+      expect(boxes.right).toBeLessThanOrEqual(boxes.chipLeft + 0.5);
+    });
+  }
+
   test("a plain shell has no switch and no chat", async ({ page }) => {
     await page.getByTestId(`tile-zoom-${BUG}`).click();
     await page.getByTestId(`tile-zoom-${CONTENT_WS}`).click();
