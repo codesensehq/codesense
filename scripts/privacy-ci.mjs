@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { scan, scanAddedFiles, loadAllow } from "./privacy-engine.mjs";
+import { scan, scanAddedFiles, loadAllow, where } from "./privacy-engine.mjs";
 import { INVENTORY_ERROR, combinedRules, ruleIds } from "./privacy-private-rules.mjs";
 import { DEFAULT_ALLOW, report } from "./privacy-scan.mjs";
 import { resolveRange, revision, gitOptions, git } from "./ci-scan-range.mjs";
@@ -531,22 +531,25 @@ function maintainerFindings(cwd, commits) {
 
 // Commit-msg: the message up to the verbose diff below the scissors. Comment
 // lines are dropped only when the configured cleanup mode drops them; anything
-// else (an unknown or "auto" comment char) keeps every line.
-export function scanMessage({ message, privateRulesFile, cleanup = "", commentChar = "#" }) {
-  const rules = combinedRules(privateRulesFile);
+// else (an unknown or "auto" comment char) keeps every line. `skip` names the
+// comment lines git will still strip.
+function messageText({ message, cleanup = "", commentChar = "#" }) {
   const known = commentChar.length === 1 ? escapeRegExp(commentChar) : null;
   let text = known ? message.split(new RegExp(`^${known} -+ >8 -+$`, "m"))[0] : message;
   if (known && cleanup === "strip") text = text.replace(new RegExp(`^${known}.*$`, "gm"), "");
+  // With commit.cleanup strip, comment lines are blank already. Unset or default
+  // strips them from an editor message, so a comment block after the sign-off
+  // does not end the trailer block (the comments are still scanned, and pre-push
+  // scans the final message). Other modes publish them, so they end it.
+  const editorStrips = !!known && (cleanup === "" || cleanup === "default");
+  return { text, skip: (line) => editorStrips && line.startsWith(commentChar) };
+}
+
+export function scanMessage({ message, privateRulesFile, cleanup = "", commentChar = "#" }) {
+  const rules = combinedRules(privateRulesFile);
+  const { text, skip } = messageText({ message, cleanup, commentChar });
   return withTemp((tmp) => {
-    // With commit.cleanup strip, comment lines are blank already. Unset or default
-    // strips them from an editor message, so a comment block after the sign-off
-    // does not end the trailer block (the comments are still scanned, and pre-push
-    // scans the final message). Other modes publish them, so they end it.
-    const editorStrips = !!known && (cleanup === "" || cleanup === "default");
-    fs.writeFileSync(
-      path.join(tmp, "message.txt"),
-      withoutMaintainerSignoff(text, (line) => editorStrips && line.startsWith(commentChar)),
-    );
+    fs.writeFileSync(path.join(tmp, "message.txt"), withoutMaintainerSignoff(text, skip));
     return scan(tmp, new Map(), { strict: true, rules });
   });
 }
@@ -633,12 +636,84 @@ function hookReport(findings, show) {
   return errors.length === 0;
 }
 
+// Commit-msg's fix for each rule: one fixed string, pinned by tests. The commit
+// was never made, so each fix is a rerun, never an amend (except resetting an
+// amended commit's author). Rules found in content take the fix for where they
+// were found: the message, a staged line or a staged path.
+const EDITMSG = 'git commit -F "$(git rev-parse --git-path COMMIT_EDITMSG)"';
+const MAINTAINER_SETUP = "the maintainer clone setup in CONTRIBUTING.md (AI assistance)";
+export const FIX = Object.freeze({
+  message: `rerun with the message reworded (edit it, then ${EDITMSG})`,
+  content: "rerun with the line edited and the file staged again (git add)",
+  path: "rerun with the file renamed (git mv)",
+  "forbidden-path": "rerun with the file unstaged (git rm --cached)",
+  "key-file": "rerun with the key file unstaged (git rm --cached)",
+  "image-metadata": "rerun with the image's metadata stripped and the file staged again (git add)",
+  gitlink: "rerun with the gitlink unstaged (git rm --cached); submodules are not supported",
+  "scan-error":
+    "rerun with the index checked (git status, git diff --cached --stat); report the hook if it repeats",
+  "author-identity": `rerun with user.name and user.email set as in ${MAINTAINER_SETUP}; for an amended commit, rerun with --amend --reset-author`,
+  "committer-identity": `rerun with user.name and user.email set as in ${MAINTAINER_SETUP}, and no GIT_COMMITTER_* override`,
+  "missing-signoff": "rerun with -s (git commit -s) as the maintainer identity",
+  "ai-co-author": "rerun with the AI Co-authored-by line removed from the message",
+  "signing-config":
+    "rerun with git config commit.gpgsign true and a key (user.signingkey, or gpg.ssh.defaultKeyCommand for ssh); " +
+    "this checks the config, not the signature, and needs commit.gpgsign because the hook cannot see -S",
+});
+
+// The rule ids commit-msg adds to the scanner's.
+export const COMMIT_RULES = Object.freeze([
+  "gitlink",
+  "scan-error",
+  "author-identity",
+  "committer-identity",
+  "missing-signoff",
+  "ai-co-author",
+  "signing-config",
+]);
+
+export function fixFor(finding) {
+  if (Object.hasOwn(FIX, finding.rule)) return FIX[finding.rule];
+  if (finding.source !== "staged") return FIX.message;
+  return finding.path ? FIX.path : FIX.content;
+}
+
+// Where a commit-msg finding is. By default a staged file is named only by its
+// position in `git diff --cached --name-only`, since even a filename can carry
+// private data; `show` names it, and adds a show-kind rule's match.
+export function placeOf(finding, show = false) {
+  const shown = show && finding.shown ? ` ${finding.shown}` : "";
+  if (finding.source === "commit") return `${finding.place}${shown}`;
+  if (finding.source !== "staged") return `message:${finding.line}${shown}`;
+  if (["gitlink", "scan-error"].includes(finding.rule)) return "the staged changes";
+  if (show) return `${finding.path ? finding.file : where(finding)}${shown}`;
+  if (finding.path) return "a staged path";
+  const file = finding.index ? `staged file ${finding.index}` : "a staged file";
+  if (finding.offset !== undefined) return `${file}, byte ${finding.offset}`;
+  return finding.line ? `${file}, line ${finding.line}` : file;
+}
+
+// Commit-msg: one `rule  place  fix` line per unresolved error, then the rule.
+function commitReport(findings, show) {
+  const errors = findings.filter((f) => f.sev === "error" && !f.allowed);
+  for (const f of errors)
+    console.error(`privacy-scan: ${f.rule}  ${placeOf(f, show)}  ${fixFor(f)}`);
+  if (!errors.length) return 0;
+  console.error(
+    "privacy-scan: refused this commit; nothing was committed. Fix each line above and " +
+      `rerun; a typed message is kept for ${EDITMSG}. Never --no-verify.`,
+  );
+  return 1;
+}
+
 const HOOK_FIX =
   "Rewrite the text (amend the message, rename the branch, edit the line); never --no-verify.";
 const INVENTORY_FIX =
   "privacy-scan: no private term inventory, and this clone requires one. Set " +
   "CODESENSE_PRIVACY_TERMS or place it at ~/.config/codesense/privacy-terms.json.";
 const PUBLIC_NOTICE = "privacy hook: public rules only; no private inventory";
+const MERGE_NOTICE =
+  "privacy hook: skipped the staged scan during a merge; pre-push scans what it adds";
 
 // A git config boolean: set and not readable as false (unparseable included) is true.
 function gitBoolean(cwd, key, override = []) {
@@ -696,13 +771,16 @@ export function runHook(kind, args, { env = process.env, cwd = process.cwd(), st
     console.error(PUBLIC_NOTICE);
   }
   if (kind === "commit-msg") {
-    const findings = scanMessage({
+    const form = {
       message: fs.readFileSync(args[0], "utf8"),
-      privateRulesFile,
       cleanup: tryGit(["config", "--get", "commit.cleanup"], cwd).stdout.trim(),
       commentChar: tryGit(["config", "--get", "core.commentChar"], cwd).stdout.trim() || "#",
-    });
-    return blockedReport(findings, "commit", env);
+    };
+    const findings = scanMessage({ ...form, privateRulesFile });
+    const staged = scanStaged({ cwd, privateRulesFile });
+    if (staged === null) console.error(MERGE_NOTICE);
+    else findings.push(...staged.map((f) => ({ ...f, source: "staged" })));
+    return commitReport(findings, env.CODESENSE_PRIVACY_SHOW === "1");
   }
   const maxNewObjects = maxNewCommits(env);
   if (maxNewObjects === null) {

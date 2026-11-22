@@ -169,6 +169,17 @@ const refused = (result, rule) => {
   assert.match(result.stderr, new RegExp(`privacy-scan: ${rule} x\\d+`));
   assert.ok(!result.stderr.includes(HANDLE), "output is redacted");
 };
+// A commit refused at commit time: one `rule  place  fix` line per finding, the
+// fix a rerun, and no term, handle or staged path printed.
+const commitRefused = (result, rule) => {
+  assert.notEqual(result.status, 0, result.stderr);
+  assert.match(result.stderr, new RegExp(`^privacy-scan: ${rule}  \\S.*  rerun with `, "m"));
+  for (const output of [result.stderr, result.stdout]) {
+    assert.ok(!output.includes(TERM), "output is redacted");
+    assert.ok(!output.includes(HANDLE), "output is redacted");
+    assert.ok(!/\b[a-z]\.txt\b/.test(output), "output names no staged file");
+  }
+};
 // The hook's own stderr lines, without git's.
 const hookLines = (stderr) => stderr.split("\n").filter((line) => line.startsWith("privacy-scan:"));
 const PUBLIC_NOTICE = /privacy hook: public rules only; no private inventory/;
@@ -268,7 +279,9 @@ test("without an inventory, a clone runs the public rules with a notice", (t) =>
     assert.ok(!r.stderr.includes(FAKE_KEY), "output is redacted");
   };
   s.stage("b.txt", `${FAKE_KEY}\n`);
-  keyBlocked(s.run(["commit", "-q", "-m", `Add ${FAKE_KEY}`]));
+  const keyCommit = s.run(["commit", "-q", "-m", `Add ${FAKE_KEY}`]);
+  commitRefused(keyCommit, "token");
+  assert.ok(!keyCommit.stderr.includes(FAKE_KEY), "output is redacted");
   s.git("commit", "-q", "--no-verify", "-m", "Add key");
   keyBlocked(s.run(["push", "-q", "public", "main"]));
   // A destination that is not public stays silent, required or not.
@@ -362,7 +375,7 @@ test("a clone that requires the private rules blocks without an inventory", (t) 
   fs.mkdirSync(path.join(s.env.HOME, ".config", "codesense"), { recursive: true });
   fs.copyFileSync(s.terms, path.join(s.env.HOME, ".config", "codesense", "privacy-terms.json"));
   s.stage("b.txt", "two\n");
-  blocked(s.run(["commit", "-q", "-m", `Fix ${TERM}`]));
+  commitRefused(s.run(["commit", "-q", "-m", `Fix ${TERM}`]), "fixture-5");
   for (const result of both(s.env)) {
     passed(result);
     assert.doesNotMatch(result.stderr, PUBLIC_NOTICE);
@@ -665,11 +678,11 @@ test("commit-msg blocks a private term only when a remote is public", (t) => {
   const s = sandbox(t);
   passed(s.install());
   s.stage("a.txt", "one\n");
-  blocked(s.run(["commit", "-q", "-m", `Fix ${TERM}`]));
+  commitRefused(s.run(["commit", "-q", "-m", `Fix ${TERM}`]), "fixture-5");
   // Every message line counts, comments too; only the verbose diff below the scissors does not.
   const file = path.join(s.root, "message.txt");
   fs.writeFileSync(file, `Clean subject\n# ${TERM}\n`);
-  blocked(s.run(["commit", "-q", "--cleanup=strip", "-F", file]));
+  commitRefused(s.run(["commit", "-q", "--cleanup=strip", "-F", file]), "fixture-5");
   fs.writeFileSync(
     file,
     `Clean subject\n# ------------------------ >8 ------------------------\n+${TERM}\n`,
@@ -680,7 +693,7 @@ test("commit-msg blocks a private term only when a remote is public", (t) => {
   s.git("remote", "remove", "public");
   s.git("remote", "set-url", "other", "https://github.com/codesensehq/project.git");
   s.stage("a.txt", "two\n");
-  blocked(s.run(["commit", "-q", "-m", `Fix ${TERM}`], { env }));
+  commitRefused(s.run(["commit", "-q", "-m", `Fix ${TERM}`], { env }), "fixture-5");
   // No public remote: no scan.
   s.git("remote", "set-url", "other", "https://example.com/project.git");
   passed(s.run(["commit", "-q", "-m", `Fix ${TERM}`], { env }));
@@ -698,11 +711,11 @@ test("commit-msg drops comment lines only when cleanup strips them", (t) => {
   passed(s.run(["commit", "-q", "-F", file]));
   s.stage("a.txt", "two\n");
   fs.writeFileSync(file, `Clean subject\n# ${TERM}\n`);
-  blocked(s.run(["commit", "-q", "-F", file]));
+  commitRefused(s.run(["commit", "-q", "-F", file]), "fixture-5");
   // Without a stripping cleanup mode, comment lines are published and scanned.
   s.git("config", "commit.cleanup", "whitespace");
   fs.writeFileSync(file, `Clean subject\n; ${TERM}\n`);
-  blocked(s.run(["commit", "-q", "-F", file]));
+  commitRefused(s.run(["commit", "-q", "-F", file]), "fixture-5");
 });
 
 test("the installer is idempotent and chains a git-ai style hook under its own name", (t) => {
@@ -910,7 +923,7 @@ test("the maintainer's handle anywhere else in a message blocks", (t) => {
   ]) {
     s.stage("a.txt", `${message.length}\n`);
     fs.writeFileSync(file, message);
-    refused(s.run(["commit", "-q", "--cleanup=verbatim", "-F", file]), "fixture-5");
+    commitRefused(s.run(["commit", "-q", "--cleanup=verbatim", "-F", file]), "fixture-5");
   }
 });
 
@@ -932,7 +945,7 @@ test("the public rules allow only the exact maintainer address in a sign-off", (
     `${HANDLE}@users.noreply.github.com`,
   ].entries()) {
     s.stage("a.txt", `${i}\n`);
-    refused(
+    commitRefused(
       s.run(["commit", "-q", "-m", `Clean subject\n\nSigned-off-by: ${HANDLE} <${address}>`]),
       "email",
     );
@@ -1011,14 +1024,14 @@ test("the maintainer's sign-off is masked only as a whole line in the trailer bl
     s.stage("a.txt", `${mode}\n`);
     fs.writeFileSync(file, commented);
     const result = s.run(["commit", "-q", "-F", file]);
-    if (["verbatim", "whitespace", "scissors"].includes(mode)) refused(result, "fixture-5");
+    if (["verbatim", "whitespace", "scissors"].includes(mode)) commitRefused(result, "fixture-5");
     else passed(result);
     if (mode) s.git("config", "--unset", "commit.cleanup");
   }
   // A comment block that names the handle is still scanned.
   s.stage("a.txt", "comment\n");
   fs.writeFileSync(file, `Clean subject\n\n${SIGNOFF}\n\n# ${HANDLE}\n`);
-  refused(s.run(["commit", "-q", "-F", file]), "fixture-5");
+  commitRefused(s.run(["commit", "-q", "-F", file]), "fixture-5");
   for (const message of [
     `${SIGNOFF}\n\nBody\n`,
     `Clean subject\n\n${SIGNOFF}\n\nA later paragraph\n`,
@@ -1026,7 +1039,7 @@ test("the maintainer's sign-off is masked only as a whole line in the trailer bl
     `Clean subject\n\n${SIGNOFF}\u2028x\n`,
     `Clean subject\n\nx\u2029${SIGNOFF}\n`,
   ])
-    refused(commit(message), "fixture-5");
+    commitRefused(commit(message), "fixture-5");
 });
 
 test("the maintainer's annotated or signed tag passes; a tag naming the handle elsewhere blocks", (t) => {
@@ -1108,4 +1121,97 @@ test("pre-push asks for a reinstall when the dispatcher predates the signed-comm
   const fresh = s.run(["push", "-q", "public", "main"]);
   passed(fresh);
   assert.doesNotMatch(fresh.stderr, /out of date/);
+});
+
+test("commit-msg refuses a staged private term, and nothing is committed", (t) => {
+  const s = sandbox(t);
+  passed(s.install());
+  s.commit("a.txt", "clean\n");
+  const count = () => s.git("rev-list", "--count", "HEAD").trim();
+  s.stage("a.txt", "clean\n");
+  s.stage("b.txt", `x ${TERM} y\n`);
+  const result = s.run(["commit", "-q", "-m", "Clean subject"]);
+  commitRefused(result, "fixture-5");
+  assert.match(result.stderr, /^privacy-scan: fixture-5  staged file 1, line 1  /m);
+  assert.equal(count(), "1");
+  s.stage("b.txt", "clean\n");
+  passed(s.run(["commit", "-q", "-m", "Clean subject"]));
+  assert.equal(count(), "2");
+});
+
+test("commit-msg scans the index the commit uses: commit -a and a pathspec", (t) => {
+  const s = sandbox(t);
+  passed(s.install());
+  s.commit("a.txt", "clean\n");
+  s.commit("b.txt", "clean\n");
+  s.commit("c.txt", "clean\n");
+  // commit -a stages a tracked change in a temporary index.
+  fs.writeFileSync(path.join(s.work, "a.txt"), `${TERM}\n`);
+  commitRefused(s.run(["commit", "-q", "-a", "-m", "Clean subject"]), "fixture-5");
+  s.git("checkout", "--", "a.txt");
+  // So does a pathspec commit.
+  fs.writeFileSync(path.join(s.work, "b.txt"), `${TERM}\n`);
+  commitRefused(s.run(["commit", "-q", "-m", "Clean subject", "--", "b.txt"]), "fixture-5");
+  s.git("checkout", "--", "b.txt");
+  // A term staged in the real index but left out of a pathspec commit is not committed.
+  s.stage("a.txt", `${TERM}\n`);
+  fs.writeFileSync(path.join(s.work, "c.txt"), "changed\n");
+  passed(s.run(["commit", "-q", "-m", "Clean subject", "--", "c.txt"]));
+  assert.equal(s.git("show", "--format=", "--name-only", "HEAD").trim(), "c.txt");
+});
+
+test("commit-msg scans a first commit against the empty tree", (t) => {
+  const s = sandbox(t);
+  passed(s.install());
+  s.stage("a.txt", `${TERM}\n`);
+  commitRefused(s.run(["commit", "-q", "-m", "Clean subject"]), "fixture-5");
+  assert.notEqual(s.run(["rev-parse", "--verify", "-q", "HEAD"]).status, 0);
+  s.stage("a.txt", "clean\n");
+  passed(s.run(["commit", "-q", "-m", "Clean subject"]));
+});
+
+test("commit-msg scans only what an amend adds against HEAD", (t) => {
+  const s = sandbox(t);
+  passed(s.install());
+  s.commit("a.txt", `${TERM}\n`);
+  // The term is already in HEAD: rewording it adds nothing new (pre-push still scans it).
+  passed(s.run(["commit", "-q", "--amend", "-m", "Clean subject"]));
+  s.commit("a.txt", "clean\n");
+  s.stage("b.txt", `${TERM}\n`);
+  commitRefused(s.run(["commit", "-q", "--amend", "--no-edit"]), "fixture-5");
+});
+
+test("commit-msg skips the staged scan during a merge, also in a linked worktree", (t) => {
+  const s = sandbox(t);
+  passed(s.install());
+  s.commit("a.txt", "base\n");
+  // A conflicted merge resolved with a term, committed with commit-msg running.
+  const conflict = (cwd, branch) => {
+    const run = (args) => s.run(args, { cwd });
+    const git = (...args) => {
+      const result = run(args);
+      if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
+    };
+    const edit = (text, message) => {
+      fs.writeFileSync(path.join(cwd, "a.txt"), text);
+      git("commit", "-q", "--no-verify", "-am", message);
+    };
+    git("checkout", "-q", "-b", branch);
+    edit("topic\n", "Topic change");
+    git("checkout", "-q", "-");
+    edit("main\n", "Main change");
+    assert.notEqual(run(["merge", "-q", "--no-ff", branch]).status, 0);
+    fs.writeFileSync(path.join(cwd, "a.txt"), `${TERM}\n`);
+    git("add", "a.txt");
+    const result = run(["commit", "-q", "--no-edit"]);
+    passed(result);
+    assert.match(result.stderr, /privacy hook: skipped the staged scan during a merge/);
+  };
+  conflict(s.work, "topic");
+  // pre-push still blocks the term the merge brought in.
+  blocked(s.run(["push", "-q", "public", "main"]));
+  const linked = path.join(s.root, "linked");
+  s.git("worktree", "add", "-q", "-b", "linked", linked);
+  fs.symlinkSync(SCRIPTS, path.join(linked, "scripts"));
+  conflict(linked, "linked-topic");
 });
