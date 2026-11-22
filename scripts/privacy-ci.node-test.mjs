@@ -11,7 +11,8 @@ import {
   commitFindings,
   FIX,
   LOCATION_FIX,
-  rerunCommand,
+  certainComment,
+  trailerView,
   fixFor,
   placeOf,
   addedLines,
@@ -563,12 +564,16 @@ test("the staged scan skips a merge in progress", (t) => {
 });
 
 // Each commit-time fix, pinned: one string per rule or place, a rerun and never an amend.
-const KEPT = '"$(git rev-parse --git-path COMMIT_EDITMSG)"';
-const RERUN = `GIT_EDITOR=true git commit -e -v -F ${KEPT}`;
 const SETUP = "the maintainer clone setup in CONTRIBUTING.md (AI assistance)";
 const IDENTITY = `set to the maintainer's GitHub login and noreply address as in ${SETUP}`;
 const PINNED_LOCATION = {
-  message: `rerun with the message reworded: edit the file git rev-parse --git-path COMMIT_EDITMSG names, then run ${RERUN}`,
+  message:
+    "rerun your git commit command with the message reworded, keeping its -a, pathspec or --amend; " +
+    "for a line in git's own comments, rename the branch or file instead; " +
+    "an editor message is kept in the file git rev-parse --git-path COMMIT_EDITMSG names, to copy from",
+  verbose:
+    "rerun your git commit command without -v (--no-verbose if commit.verbose is set), " +
+    "or with the text below the scissors line reworded; the hook can't see -v, so it scans the verbose diff git would cut",
   content: "rerun with the line edited and the file staged again (git add)",
   path: "rerun with the file renamed (git mv)",
 };
@@ -582,7 +587,10 @@ const PINNED = {
   "allow-file": "rerun with the malformed entry in scripts/privacy-scan.allow fixed",
   "author-identity": `rerun with user.name and user.email ${IDENTITY}, and no --author or GIT_AUTHOR_* override; for an amended commit, rerun with --amend --reset-author`,
   "committer-identity": `rerun with user.name and user.email ${IDENTITY}, and no GIT_COMMITTER_* override`,
-  "missing-signoff": "rerun with -s (git commit -s) as the maintainer identity",
+  "missing-signoff":
+    "rerun with -s (git commit -s) as the maintainer identity and nothing after its Signed-off-by line; " +
+    "in an editor commit under core.commentChar auto, core.commentString, or a commit.cleanup that keeps comments, " +
+    "commit with -m or -F instead",
   "ai-co-author": "rerun with the AI Co-authored-by line removed from the message",
   "signing-config":
     "rerun with git config commit.gpgsign true and a key (user.signingkey, or gpg.ssh.defaultKeyCommand for ssh); " +
@@ -592,16 +600,59 @@ const PINNED = {
 test("each commit-time rule and place has its one pinned fix", () => {
   assert.deepEqual({ ...FIX }, PINNED);
   assert.deepEqual({ ...LOCATION_FIX }, PINNED_LOCATION);
-  // core.commentChar auto: the message rerun pins the character, and only it changes.
-  assert.equal(rerunCommand(), RERUN);
+  // A message finding below a scissors line takes the -v fix.
+  assert.equal(fixFor({ rule: "email", source: "message" }), PINNED_LOCATION.message);
   assert.equal(
-    rerunCommand(";"),
-    `GIT_EDITOR=true git -c core.commentChar=';' commit -e -v -F ${KEPT}`,
+    fixFor({ rule: "email", source: "message", verbose: true }),
+    PINNED_LOCATION.verbose,
   );
-  assert.equal(
-    fixFor({ rule: "email", source: "message" }, "|"),
-    PINNED_LOCATION.message.replace("git commit", "git -c core.commentChar='|' commit"),
-  );
+});
+
+test("the comment string is certain only when config fixes one", () => {
+  const cases = [
+    [[], "#"],
+    [[";"], ";"],
+    [["//"], "//"],
+    [[";", ";"], ";"],
+    [["auto"], null],
+    [[";", "auto"], null],
+    [["auto", ";"], null],
+    [[";", "%"], null],
+    [[""], null],
+  ];
+  for (const [values, want] of cases)
+    assert.equal(certainComment(values), want, JSON.stringify(values));
+});
+
+test("only an editor commit with a certain comment string reads git's comments and scissors", () => {
+  const signoff = "Signed-off-by: M <m@example.com>";
+  for (const comment of ["#", ";"]) {
+    const scissors = `${comment} ------------------------ >8 ------------------------`;
+    const message = `Subject\n\n${signoff}\n${comment} note\n${scissors}\ndiff\n`;
+    const top = `Subject\n\n${signoff}\n${comment} note\n`;
+    for (const editor of [false, true])
+      for (const known of [comment, null])
+        for (const cleanup of ["", "strip", "whitespace", "scissors"]) {
+          const name = JSON.stringify({ comment, editor, known, cleanup });
+          const view = trailerView({ message, editor, comment: known, cleanup });
+          assert.equal(view.head + view.tail, message, name);
+          if (!editor || !known) {
+            // The file as is: no cut, no comment skipped.
+            assert.equal(view.head, message, name);
+            assert.equal(view.skip(`${comment} note`), false, name);
+            continue;
+          }
+          assert.equal(view.head, top, name);
+          assert.equal(view.tail, `${scissors}\ndiff\n`, name);
+          assert.equal(view.skip(`${comment} note`), cleanup === "strip" || cleanup === "", name);
+          assert.equal(view.skip("Subject"), false, name);
+        }
+  }
+  // A scissors line of another comment string, or on the first line, cuts only its own.
+  const other = "Subject\n; ------------------------ >8 ------------------------\nx\n";
+  assert.equal(trailerView({ message: other, editor: true, comment: "#" }).head, other);
+  const first = "# ------------------------ >8 ------------------------\nx\n";
+  assert.equal(trailerView({ message: first, editor: true, comment: "#" }).head, "");
 });
 
 // The rule ids a function passes as the first argument of `call`, read from its
@@ -631,7 +682,7 @@ test("every rule commit-msg reports itself has its own fix; only content rules f
   f.git("config", "user.name", "Someone");
   f.git("config", "user.email", "someone@example.com");
   const message = "Subject\n\nCo-authored-by: Claude <noreply@anthropic.com>\n";
-  const emitted = commitFindings(f.dir, { message });
+  const emitted = commitFindings(f.dir, { message, editor: false, comment: "#", cleanup: "" });
   const fromStaged = () => emitted.push(...staged(f).map((x) => ({ ...x, source: "staged" })));
   f.git("update-index", "--add", "--cacheinfo", "160000", f.base, "vendor/component");
   fromStaged();
@@ -672,10 +723,15 @@ test("every rule commit-msg reports itself has its own fix; only content rules f
     assert.equal(fixFor({ rule: id, source: "staged", path: true }), LOCATION_FIX.path);
   }
   for (const [rule, fix] of Object.entries({ ...FIX, ...LOCATION_FIX })) {
-    assert.match(fix, /^rerun with /, rule);
-    const amends = fix.replace("--amend --reset-author", "");
+    assert.match(fix, /^rerun (with |your git commit command )/, rule);
+    // No fix prints a git commit command line to run: the committer reruns theirs.
+    assert.ok(!/GIT_EDITOR|-F ["$<]|\$\(/.test(fix), `${rule} prints a command`);
+    const amends = fix
+      .replace("--amend --reset-author", "")
+      .replace("keeping its -a, pathspec or --amend", "");
     assert.ok(!amends.includes("--amend"), `${rule} amends`);
-    if (rule !== "author-identity") assert.ok(!fix.includes("--amend"), `${rule} amends`);
+    if (rule !== "author-identity" && rule !== "message")
+      assert.ok(!fix.includes("--amend"), `${rule} amends`);
   }
   // The identity fixes point to the setup and never print the handle.
   const handle = ["alfy", "pops"].join("");

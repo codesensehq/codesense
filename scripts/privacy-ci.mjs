@@ -529,53 +529,84 @@ function maintainerFindings(cwd, commits) {
   return findings;
 }
 
-// git's candidates for core.commentChar=auto, in the order it tries them.
-const AUTO_COMMENT_CHARS = "#;@!$%^&|:";
-
-// The comment prefix git uses for this message, or null when it is unknown.
-// For auto, git picks a character no line of the typed message starts with, so
-// the scissors line, or else the last non-blank line, shows which one it is.
-function commentPrefix(message, commentChar) {
-  if (commentChar !== "auto") return commentChar || null;
-  for (const c of AUTO_COMMENT_CHARS)
-    if (new RegExp(`^${escapeRegExp(c)} -+ >8 -+$`, "m").test(message)) return c;
-  const last = message.trimEnd().split("\n").pop() ?? "";
-  return AUTO_COMMENT_CHARS.includes(last[0] ?? "\n") ? last[0] : null;
+// The comment string git config fixes for an editor commit, or null when it is
+// not certain: no entry means #, and every core.commentChar/commentString
+// entry having the same value (never auto, which git picks per message) means
+// that value.
+export function certainComment(values) {
+  if (!values.length) return "#";
+  const [first] = values;
+  return first && first !== "auto" && values.every((v) => v === first) ? first : null;
 }
 
-// Commit-msg: the message up to the verbose diff below the scissors. Comment
-// lines are dropped only when the configured cleanup mode drops them; an
-// unknown comment prefix keeps every line. `skip` names the comment lines git
-// will still strip.
-function messageText({ message, cleanup = "", commentChar = "#" }) {
-  const prefix = commentPrefix(message, commentChar);
-  const known = prefix ? escapeRegExp(prefix) : null;
-  let text = known ? message.split(new RegExp(`^${known} -+ >8 -+$`, "m"))[0] : message;
-  if (known && cleanup === "strip") text = text.replace(new RegExp(`^${known}.*$`, "gm"), "");
-  // With commit.cleanup strip, comment lines are blank already. Unset or default
-  // strips them from an editor message, so a comment block after the sign-off
-  // does not end the trailer block (the comments are still scanned, and pre-push
-  // scans the final message). Other modes publish them, so they end it.
-  const editorStrips = !!known && (cleanup === "" || cleanup === "default");
-  return { text, skip: (line) => editorStrips && line.startsWith(prefix) };
+// What commit-msg knows about the message file: its text, whether an editor ran
+// (git sets GIT_EDITOR=: for the hook when none does), the certain comment
+// string and commit.cleanup from config. The command line's --cleanup and -v
+// stay unseen, so only the trailer-block lookup interprets the file.
+function messageForm(file, env, cwd) {
+  const values = tryGit(["config", "--get-regexp", "^core\\.comment(char|string)$"], cwd)
+    .stdout.split("\n")
+    .filter(Boolean)
+    .map((line) => (line.includes(" ") ? line.slice(line.indexOf(" ") + 1) : ""));
+  return {
+    message: fs.readFileSync(file, "utf8"),
+    editor: env.GIT_EDITOR !== ":",
+    comment: certainComment(values),
+    cleanup: tryGit(["config", "--get", "commit.cleanup"], cwd).stdout.trim(),
+  };
 }
 
-export function scanMessage({ message, privateRulesFile, cleanup = "", commentChar = "#" }) {
+// The message as the trailer-block lookup reads it: `head` (where the trailer
+// block is), `tail` (from git's scissors line) and `skip` (git's comment
+// lines), with head + tail === message. Only an editor commit with a certain
+// comment string cuts at the scissors line, and skips comment lines when
+// commit.cleanup is unset, default or strip; anything else reads the file as
+// is, so a sign-off followed by text git might keep is refused, never accepted.
+export function trailerView({ message, editor = false, comment = null, cleanup = "" }) {
+  const raw = { head: message, tail: "", skip: () => false };
+  if (!editor || !comment) return raw;
+  const scissors = `${comment} ------------------------ >8 ------------------------`;
+  const lines = message.split("\n");
+  const at = lines.indexOf(scissors);
+  const cutAt = at < 0 ? message.length : lines.slice(0, at).join("\n").length + (at && 1);
+  const strips = ["", "default", "strip"].includes(cleanup);
+  return {
+    head: message.slice(0, cutAt),
+    tail: message.slice(cutAt),
+    skip: strips ? (line) => line.startsWith(comment) : () => false,
+  };
+}
+
+// The first scissors-shaped line (1-based), whatever its comment string, or
+// Infinity: a finding at or below it may be in a -v diff the hook cannot see.
+const SCISSORS = /^\S+ -+ >8 -+$/;
+function scissorsLine(message) {
+  const at = message.split("\n").findIndex((line) => SCISSORS.test(line));
+  return at < 0 ? Infinity : at + 1;
+}
+
+// Commit-msg: every line of git's message file, comments and any -v diff
+// included, since the hook cannot see which lines git drops. Only the
+// maintainer's sign-off in the trailer block is masked.
+export function scanMessage({ form, privateRulesFile }) {
   const rules = combinedRules(privateRulesFile);
-  const { text, skip } = messageText({ message, cleanup, commentChar });
+  const { head, tail, skip } = trailerView(form);
+  const below = scissorsLine(form.message);
   return withTemp((tmp) => {
-    fs.writeFileSync(path.join(tmp, "message.txt"), withoutMaintainerSignoff(text, skip));
-    return scan(tmp, new Map(), { strict: true, rules });
+    fs.writeFileSync(path.join(tmp, "message.txt"), withoutMaintainerSignoff(head, skip) + tail);
+    return scan(tmp, new Map(), { strict: true, rules }).map((f) =>
+      f.line >= below ? { ...f, verbose: true } : f,
+    );
   });
 }
 
 // Commit-msg in a maintainer clone (codesense.requireSigned): the commit being
 // made has the maintainer's identity as author and committer (as git var sees
 // them, so --author, --amend and GIT_* overrides count), their sign-off in the
-// trailer block, no AI co-author trailer, and signing on. The hook cannot see
-// -S, so signing is commit.gpgsign plus a key source; this checks the config,
-// not the signature, which pre-push checks. Places name no person.
-export function commitFindings(cwd, { message, cleanup = "", commentChar = "#" }) {
+// trailer block, no AI co-author trailer on any line, and signing on. The hook
+// cannot see -S, so signing is commit.gpgsign plus a key source; this checks
+// the config, not the signature, which pre-push checks. Places name no person.
+export function commitFindings(cwd, form) {
   const findings = [];
   const found = (rule, place) =>
     findings.push({ rule, sev: "error", place, allowed: false, source: "commit" });
@@ -583,10 +614,10 @@ export function commitFindings(cwd, { message, cleanup = "", commentChar = "#" }
   if (identity("GIT_AUTHOR_IDENT") !== MAINTAINER_IDENTITY) found("author-identity", "author");
   if (identity("GIT_COMMITTER_IDENT") !== MAINTAINER_IDENTITY)
     found("committer-identity", "committer");
-  const { text, skip } = messageText({ message, cleanup, commentChar });
-  if (withoutMaintainerSignoff(text, skip) === text) found("missing-signoff", "trailers");
-  for (const [i, line] of text.split("\n").entries())
-    if (!skip(line) && AI_CO_AUTHOR.test(line)) found("ai-co-author", `message:${i + 1}`);
+  const { head, skip } = trailerView(form);
+  if (withoutMaintainerSignoff(head, skip) === head) found("missing-signoff", "trailers");
+  for (const [i, line] of form.message.split("\n").entries())
+    if (AI_CO_AUTHOR.test(line)) found("ai-co-author", `message:${i + 1}`);
   const config = (key) => tryGit(["config", "--get", key], cwd).stdout.trim();
   // openpgp (the default) and x509 pick a key by the committer's email.
   const keyed =
@@ -688,26 +719,20 @@ function hookReport(findings, show) {
 
 // Commit-msg's fixes: one fixed string each, pinned by tests. The commit was
 // never made, so each fix is a rerun, never an amend (except resetting an
-// amended commit's author).
-//
-// The message rerun runs unattended: GIT_EDITOR=true opens no editor, and -e -v
-// still make git clean the kept message (it drops the comment lines and cuts at
-// the scissors line), so neither git's template nor a verbose diff is
-// published. Under core.commentChar auto, the kept comment lines start with the
-// character the first attempt used, so a rerun would pick another one and
-// publish them: the rerun pins that character.
-export function rerunCommand(pin = null) {
-  const config = pin ? `-c core.commentChar='${pin}' ` : "";
-  return `GIT_EDITOR=true git ${config}commit -e -v -F "$(git rev-parse --git-path COMMIT_EDITMSG)"`;
-}
-const messageFix = (pin) =>
-  `rerun with the message reworded: edit the file git rev-parse --git-path COMMIT_EDITMSG names, then run ${rerunCommand(pin)}`;
+// amended commit's author). The hook cannot see the command that ran it, so a
+// fix names no git commit command of its own: the committer reruns theirs.
 const MAINTAINER_SETUP = "the maintainer clone setup in CONTRIBUTING.md (AI assistance)";
 const IDENTITY = `set to the maintainer's GitHub login and noreply address as in ${MAINTAINER_SETUP}`;
 
 // A content rule (public or private) takes the fix for where it was found.
 export const LOCATION_FIX = Object.freeze({
-  message: messageFix(null),
+  message:
+    "rerun your git commit command with the message reworded, keeping its -a, pathspec or --amend; " +
+    "for a line in git's own comments, rename the branch or file instead; " +
+    "an editor message is kept in the file git rev-parse --git-path COMMIT_EDITMSG names, to copy from",
+  verbose:
+    "rerun your git commit command without -v (--no-verbose if commit.verbose is set), " +
+    "or with the text below the scissors line reworded; the hook can't see -v, so it scans the verbose diff git would cut",
   content: "rerun with the line edited and the file staged again (git add)",
   path: "rerun with the file renamed (git mv)",
 });
@@ -724,7 +749,10 @@ export const FIX = Object.freeze({
   "allow-file": "rerun with the malformed entry in scripts/privacy-scan.allow fixed",
   "author-identity": `rerun with user.name and user.email ${IDENTITY}, and no --author or GIT_AUTHOR_* override; for an amended commit, rerun with --amend --reset-author`,
   "committer-identity": `rerun with user.name and user.email ${IDENTITY}, and no GIT_COMMITTER_* override`,
-  "missing-signoff": "rerun with -s (git commit -s) as the maintainer identity",
+  "missing-signoff":
+    "rerun with -s (git commit -s) as the maintainer identity and nothing after its Signed-off-by line; " +
+    "in an editor commit under core.commentChar auto, core.commentString, or a commit.cleanup that keeps comments, " +
+    "commit with -m or -F instead",
   "ai-co-author": "rerun with the AI Co-authored-by line removed from the message",
   "signing-config":
     "rerun with git config commit.gpgsign true and a key (user.signingkey, or gpg.ssh.defaultKeyCommand for ssh); " +
@@ -732,12 +760,12 @@ export const FIX = Object.freeze({
 });
 
 // A rule commit-msg reports itself (a commit check, or the staged scan's own)
-// has no fallback: a missing fix throws, which the guard test catches. `pin` is
-// the comment character a message rerun pins (core.commentChar auto only).
-export function fixFor(finding, pin = null) {
+// has no fallback: a missing fix throws, which the guard test catches.
+export function fixFor(finding) {
   if (Object.hasOwn(FIX, finding.rule)) return FIX[finding.rule];
   if (finding.source === "commit" || finding.hook) throw new Error(`no fix for ${finding.rule}`);
-  if (finding.source !== "staged") return messageFix(pin);
+  if (finding.source !== "staged")
+    return finding.verbose ? LOCATION_FIX.verbose : LOCATION_FIX.message;
   return finding.path ? LOCATION_FIX.path : LOCATION_FIX.content;
 }
 
@@ -758,14 +786,14 @@ export function placeOf(finding, show = false) {
 }
 
 // Commit-msg: one `rule  place  fix` line per unresolved error, then the rule.
-function commitReport(findings, show, pin) {
+function commitReport(findings, show) {
   const errors = findings.filter((f) => f.sev === "error" && !f.allowed);
   for (const f of errors)
-    console.error(`privacy-scan: ${f.rule}  ${placeOf(f, show)}  ${fixFor(f, pin)}`);
+    console.error(`privacy-scan: ${f.rule}  ${placeOf(f, show)}  ${fixFor(f)}`);
   if (!errors.length) return 0;
   console.error(
     "privacy-scan: refused this commit; nothing was committed. Fix each line above and " +
-      `rerun; a typed message is kept for ${rerunCommand(pin)}. Never --no-verify.`,
+      "rerun the same git commit command. Never --no-verify.",
   );
   return 1;
 }
@@ -835,18 +863,13 @@ export function runHook(kind, args, { env = process.env, cwd = process.cwd(), st
     console.error(PUBLIC_NOTICE);
   }
   if (kind === "commit-msg") {
-    const form = {
-      message: fs.readFileSync(args[0], "utf8"),
-      cleanup: tryGit(["config", "--get", "commit.cleanup"], cwd).stdout.trim(),
-      commentChar: tryGit(["config", "--get", "core.commentChar"], cwd).stdout.trim() || "#",
-    };
-    const findings = scanMessage({ ...form, privateRulesFile });
+    const form = messageForm(args[0], env, cwd);
+    const findings = scanMessage({ form, privateRulesFile });
     const staged = scanStaged({ cwd, privateRulesFile });
     if (staged === null) console.error(MERGE_NOTICE);
     else findings.push(...staged.map((f) => ({ ...f, source: "staged" })));
     if (gitBoolean(cwd, "codesense.requireSigned")) findings.push(...commitFindings(cwd, form));
-    const pin = form.commentChar === "auto" ? commentPrefix(form.message, "auto") : null;
-    return commitReport(findings, env.CODESENSE_PRIVACY_SHOW === "1", pin);
+    return commitReport(findings, env.CODESENSE_PRIVACY_SHOW === "1");
   }
   const maxNewObjects = maxNewCommits(env);
   if (maxNewObjects === null) {

@@ -6,7 +6,12 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { isPublicRemote, scanPush, withoutMaintainerTagIdentity } from "./privacy-ci.mjs";
+import {
+  isPublicRemote,
+  scanPush,
+  withoutMaintainerTagIdentity,
+  LOCATION_FIX,
+} from "./privacy-ci.mjs";
 
 const SCRIPTS = path.dirname(fileURLToPath(import.meta.url));
 const INSTALL = path.join(SCRIPTS, "git-hooks", "install.sh");
@@ -173,7 +178,7 @@ const refused = (result, rule) => {
 // fix a rerun, and no term, handle or staged path printed.
 const commitRefused = (result, rule) => {
   assert.notEqual(result.status, 0, result.stderr);
-  assert.match(result.stderr, new RegExp(`^privacy-scan: ${rule}  \\S.*  rerun with `, "m"));
+  assert.match(result.stderr, new RegExp(`^privacy-scan: ${rule}  \\S.*  rerun (with|your) `, "m"));
   for (const output of [result.stderr, result.stdout]) {
     assert.ok(!output.includes(TERM), "output is redacted");
     assert.ok(!output.includes(HANDLE), "output is redacted");
@@ -679,7 +684,8 @@ test("commit-msg blocks a private term only when a remote is public", (t) => {
   passed(s.install());
   s.stage("a.txt", "one\n");
   commitRefused(s.run(["commit", "-q", "-m", `Fix ${TERM}`]), "fixture-5");
-  // Every message line counts, comments too; only the verbose diff below the scissors does not.
+  // Every message line counts: comments, and text below a scissors line, which
+  // the hook cannot tell from git's own -v diff.
   const file = path.join(s.root, "message.txt");
   fs.writeFileSync(file, `Clean subject\n# ${TERM}\n`);
   commitRefused(s.run(["commit", "-q", "--cleanup=strip", "-F", file]), "fixture-5");
@@ -687,7 +693,10 @@ test("commit-msg blocks a private term only when a remote is public", (t) => {
     file,
     `Clean subject\n# ------------------------ >8 ------------------------\n+${TERM}\n`,
   );
-  passed(s.run(["commit", "-q", "--cleanup=strip", "-F", file]));
+  commitRefused(s.run(["commit", "-q", "--cleanup=strip", "-F", file]), "fixture-5");
+  s.git("config", "commit.cleanup", "scissors");
+  commitRefused(s.run(["commit", "-q", "-F", file]), "fixture-5");
+  s.git("config", "--unset", "commit.cleanup");
   // Without the extra-URL env, the shell prefilter and node still find a public URL.
   const env = { ...s.env, CODESENSE_PRIVACY_PUBLIC_REMOTES: "" };
   s.git("remote", "remove", "public");
@@ -699,23 +708,69 @@ test("commit-msg blocks a private term only when a remote is public", (t) => {
   passed(s.run(["commit", "-q", "-m", `Fix ${TERM}`], { env }));
 });
 
-test("commit-msg drops comment lines only when cleanup strips them", (t) => {
+test("commit-msg scans comment lines whatever the comment character or cleanup", (t) => {
   const s = sandbox(t);
   passed(s.install());
   const file = path.join(s.root, "message.txt");
+  s.stage("a.txt", "one\n");
+  // Config that strips ; lines, overridden on the command line: the hook sees
+  // only the config, so it scans every line either way.
   s.git("config", "commit.cleanup", "strip");
   s.git("config", "core.commentChar", ";");
-  s.stage("a.txt", "one\n");
-  // The configured comment char's lines go; other lines stay.
-  fs.writeFileSync(file, `Clean subject\n; ${TERM}\n`);
-  passed(s.run(["commit", "-q", "-F", file]));
-  s.stage("a.txt", "two\n");
-  fs.writeFileSync(file, `Clean subject\n# ${TERM}\n`);
-  commitRefused(s.run(["commit", "-q", "-F", file]), "fixture-5");
-  // Without a stripping cleanup mode, comment lines are published and scanned.
+  for (const cleanup of [[], ["--cleanup=verbatim"], ["--cleanup=strip"]])
+    for (const char of [";", "#"]) {
+      fs.writeFileSync(file, `Clean subject\n${char} ${TERM}\n`);
+      commitRefused(s.run(["commit", "-q", ...cleanup, "-F", file]), "fixture-5");
+    }
   s.git("config", "commit.cleanup", "whitespace");
   fs.writeFileSync(file, `Clean subject\n; ${TERM}\n`);
   commitRefused(s.run(["commit", "-q", "-F", file]), "fixture-5");
+  // core.commentChar auto: whichever character a line starts with, it is scanned.
+  s.git("config", "core.commentChar", "auto");
+  s.git("config", "commit.cleanup", "strip");
+  for (const char of "#;@!$%^&|:")
+    commitRefused(s.run(["commit", "-q", "-m", `${char}12 ${TERM}`]), "fixture-5");
+});
+
+test("a -v diff is scanned, with its own fix; --no-verbose leaves it out", (t) => {
+  const s = sandbox(t);
+  s.commit("a.txt", `keep\n${TERM}\n`);
+  passed(s.install());
+  s.stage("a.txt", "keep\n");
+  const verbose = s.run(["commit", "-q", "-v"], {
+    env: { ...s.env, ...editor(s, "Clean subject") },
+  });
+  commitRefused(verbose, "fixture-5");
+  const [line] = hookLines(verbose.stderr);
+  const [, at] = /^privacy-scan: fixture-5  message:(\d+)  (.*)$/.exec(line);
+  assert.ok(Number(at) > 3, line);
+  assert.ok(line.endsWith(`  ${LOCATION_FIX.verbose}`), line);
+  passed(
+    s.run(["commit", "-q", "--no-verbose"], { env: { ...s.env, ...editor(s, "Clean subject") } }),
+  );
+});
+
+test("a refused message names no command, and rerunning the same one keeps -a or --amend", (t) => {
+  const s = sandbox(t);
+  passed(s.install());
+  s.commit("a.txt", "one\n");
+  const count = () => s.git("rev-list", "--count", "HEAD").trim();
+  const noCommand = (result) => {
+    commitRefused(result, "fixture-5");
+    assert.ok(!result.stderr.includes("-F"), result.stderr);
+    assert.ok(!result.stderr.includes("GIT_EDITOR="), result.stderr);
+    assert.ok(hookLines(result.stderr).some((l) => l.endsWith(LOCATION_FIX.message)));
+  };
+  fs.writeFileSync(path.join(s.work, "a.txt"), "two\n");
+  noCommand(s.run(["commit", "-q", "-a", "-m", `Subject ${TERM}`]));
+  assert.equal(count(), "1");
+  passed(s.run(["commit", "-q", "-a", "-m", "Subject clean"]));
+  assert.equal(s.git("show", "HEAD:a.txt"), "two\n");
+  assert.equal(count(), "2");
+  noCommand(s.run(["commit", "-q", "--amend", "-m", `Subject ${TERM}`]));
+  passed(s.run(["commit", "-q", "--amend", "-m", "Amended clean"]));
+  assert.equal(count(), "2");
+  assert.equal(s.git("log", "-1", "--format=%s").trim(), "Amended clean");
 });
 
 test("the installer is idempotent and chains a git-ai style hook under its own name", (t) => {
@@ -1015,17 +1070,15 @@ test("the maintainer's sign-off is masked only as a whole line in the trailer bl
     fs.writeFileSync(file, message);
     return s.run(["commit", "-q", `--cleanup=${cleanup}`, "-F", file]);
   };
-  // An editor-style message: git's comment block follows the sign-off. Unset,
-  // default or strip cleanup skips it when finding the trailer block; verbatim,
-  // whitespace and scissors publish it, so it is the block.
+  // A typed message with a comment block after the sign-off and no editor: the
+  // hook reads the file as is, so the block ends the trailer block under every
+  // cleanup mode, and the sign-off is scanned.
   const commented = `Clean subject\n\n${SIGNOFF}\n\n# Please enter the commit message.\n# Lines starting with '#' are ignored.\n`;
   for (const mode of [null, "default", "strip", "verbatim", "whitespace", "scissors"]) {
     if (mode) s.git("config", "commit.cleanup", mode);
     s.stage("a.txt", `${mode}\n`);
     fs.writeFileSync(file, commented);
-    const result = s.run(["commit", "-q", "-F", file]);
-    if (["verbatim", "whitespace", "scissors"].includes(mode)) commitRefused(result, "fixture-5");
-    else passed(result);
+    commitRefused(s.run(["commit", "-q", "-F", file]), "fixture-5");
     if (mode) s.git("config", "--unset", "commit.cleanup");
   }
   // A comment block that names the handle is still scanned.
@@ -1402,68 +1455,15 @@ function editor(s, text) {
   return { GIT_EDITOR: script, EDIT_TEXT: text };
 }
 
-// Edit the kept message as the fix says, then run the printed rerun exactly as
-// printed. Every editor the environment could name fails, so the rerun passes
-// only if it needs none.
-function rerunPrinted(s, refused, from, to) {
-  const editmsg = path.join(s.work, ".git", "COMMIT_EDITMSG");
-  const kept = fs.readFileSync(editmsg, "utf8");
-  fs.writeFileSync(editmsg, kept.replace(from, to));
-  const [, rerun] = /names, then run (GIT_EDITOR=true git .*COMMIT_EDITMSG\)")$/m.exec(
-    refused.stderr,
-  );
-  const env = { ...s.env, GIT_EDITOR: "false", VISUAL: "false", EDITOR: "false" };
-  passed(spawnSync("sh", ["-c", rerun], { cwd: s.work, encoding: "utf8", env }));
-  return { kept, rerun };
-}
-
-test("the message fix reruns unattended with git's cleanup, so no template or verbose diff is published", (t) => {
-  const s = sandbox(t);
-  passed(s.install());
-  s.commit("a.txt", "clean\n");
-  s.stage("b.txt", "clean\n");
-  const typed = s.run(["commit", "-q", "-v"], {
-    env: { ...s.env, ...editor(s, `Subject ${TERM}`) },
-  });
-  commitRefused(typed, "fixture-5");
-  const { kept, rerun } = rerunPrinted(s, typed, TERM, "clean");
-  assert.match(kept, /^# .* >8 /m);
-  assert.match(kept, /^diff --git /m);
-  assert.ok(!rerun.includes("core.commentChar"));
-  assert.equal(s.git("log", "-1", "--format=%B"), "Subject clean\n\n");
-});
-
-test("the message rerun keeps a non-# comment character, pinning the one core.commentChar auto chose", (t) => {
-  // auto picks a character no line of the message starts with: here ;, since
-  // the subject starts with #. The rerun's file then has ; lines too, so an
-  // unpinned rerun would pick yet another character and publish the old block.
-  for (const [commentChar, pinned] of [
-    ["auto", "-c core.commentChar=';' "],
-    [";", ""],
-  ]) {
-    const s = sandbox(t);
-    passed(s.install());
-    s.commit("a.txt", "clean\n");
-    s.stage("b.txt", "clean\n");
-    s.git("config", "core.commentChar", commentChar);
-    const typed = s.run(["commit", "-q", "-e", "-v", "-m", `#1 Subject ${TERM}`], {
-      env: { ...s.env, GIT_EDITOR: "true" },
-    });
-    commitRefused(typed, "fixture-5");
-    const { kept, rerun } = rerunPrinted(s, typed, TERM, "clean");
-    assert.match(kept, /^; .* >8 /m, commentChar);
-    assert.ok(rerun.startsWith(`GIT_EDITOR=true git ${pinned}commit `), commentChar);
-    assert.equal(s.git("log", "-1", "--format=%B"), "#1 Subject clean\n\n", commentChar);
-  }
-});
-
-test("an editor commit's comment block does not hide the sign-off, unless cleanup publishes it", (t) => {
+test("the sign-off passes in an editor commit only when the hook knows git's comment string", (t) => {
   const s = maintainerClone(t);
   passed(s.attempt(["-s"], editor(s, "Clean subject")));
   assert.match(s.git("log", "-1", "--format=%B"), /^Clean subject\n\nSigned-off-by: /);
-  // core.commentChar auto: the template's own lines show the character.
-  s.git("config", "core.commentChar", "auto");
   passed(s.attempt(["-s", "-v"], editor(s, "Clean subject")));
+  // core.commentChar auto: git picks the character per message, so the hook
+  // cannot skip the comment block and refuses.
+  s.git("config", "core.commentChar", "auto");
+  commitRefused(s.attempt(["-s"], editor(s, "Clean subject")), "missing-signoff");
   s.git("config", "--unset", "core.commentChar");
   // commit.cleanup whitespace publishes the comments, so they end the trailer block.
   s.git("config", "commit.cleanup", "whitespace");
@@ -1471,6 +1471,22 @@ test("an editor commit's comment block does not hide the sign-off, unless cleanu
   commitRefused(published, "missing-signoff");
   // Outside the trailer block, the sign-off is not masked and its address is scanned.
   assert.deepEqual(commitRules(published.stderr), ["email", "missing-signoff"]);
+  s.git("config", "--unset", "commit.cleanup");
+  // -m: no comment block, so the sign-off is found under every cleanup mode.
+  for (const mode of [null, "default", "strip", "verbatim", "whitespace", "scissors"]) {
+    if (mode) s.git("config", "commit.cleanup", mode);
+    passed(s.attempt(["-s", "-m", "Clean subject"]));
+    if (mode) s.git("config", "--unset", "commit.cleanup");
+  }
+  // An AI co-author below a typed scissors line is still refused.
+  const file = path.join(s.root, "typed.txt");
+  fs.writeFileSync(
+    file,
+    "Clean subject\n# ------------------------ >8 ------------------------\nCo-authored-by: Claude <noreply@anthropic.com>\n",
+  );
+  const below = s.attempt(["-s", "-F", file]);
+  commitRefused(below, "ai-co-author");
+  assert.ok(commitRules(below.stderr).includes("ai-co-author"));
 });
 
 test("a commit that breaks three rules prints three lines", (t) => {
