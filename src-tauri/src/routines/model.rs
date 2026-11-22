@@ -535,6 +535,11 @@ pub struct Policy {
     /// inside it is coalesced or skipped per `overlap`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_gap: Option<String>,
+    /// Whether an agent fire still runs while the routine's team is paused (its
+    /// `team-control` records). For a routine a pause must not stop, such as a health
+    /// check. Set in routine.yml only; the routine tools neither set nor clear it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub runs_while_team_paused: bool,
     #[serde(flatten)]
     #[schemars(with = "BTreeMap<String, serde_json::Value>")]
     pub extra: BTreeMap<String, serde_yaml::Value>,

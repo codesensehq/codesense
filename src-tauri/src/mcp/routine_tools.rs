@@ -1414,6 +1414,8 @@ pub(crate) fn create_for(
             budget_usd: params.budget_usd.map(Into::into),
             max_wakes_per_day: params.max_wakes_per_day,
             min_gap: non_blank(params.min_gap.as_deref()).map(str::to_string),
+            // routine.yml only: a tool-made routine stops while its team is paused.
+            runs_while_team_paused: false,
             ..Policy::default()
         },
         variables,

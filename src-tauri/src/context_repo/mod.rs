@@ -30,7 +30,7 @@ pub mod sample_source_repo;
 mod scaffold;
 pub mod scoped_key;
 pub mod scratch_space;
-// The launch and routine gates read it once they land; until then only its tests do.
+// The routine gate reads `paused`, `record` and `reason`; `go` is for its tests.
 #[allow(dead_code)]
 pub(crate) mod team_pause;
 mod team_rename;

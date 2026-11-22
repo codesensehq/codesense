@@ -73,6 +73,8 @@ pub mod reason {
     pub const LOOP_GUARD: &str = "loop_guard";
     /// SW-AGR-2: an `inbox_idle` wake left the same mail unread too often.
     pub const IGNORED_WAKES: &str = "ignored_wakes";
+    /// An agent fire while the routine's team is paused by its `team-control` records.
+    pub const TEAM_PAUSED: &str = "team_paused";
 }
 
 /// The adapter id of a routine run's coordinator delivery.
@@ -399,4 +401,13 @@ pub(crate) fn stalled_queues(conn: &Connection) -> rusqlite::Result<Vec<String>>
     )?;
     let rows = stmt.query_map([], |r| r.get(0))?;
     rows.collect()
+}
+
+#[cfg(test)]
+mod reason_tests {
+    /// Stored in `routine_runs.reason` and read by the runs list, so it never changes.
+    #[test]
+    fn reason_team_paused_is_stable() {
+        assert_eq!(super::reason::TEAM_PAUSED, "team_paused");
+    }
 }

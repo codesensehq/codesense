@@ -265,8 +265,9 @@ pub fn admit(conn: &Connection, home: &Path, fire: &Fire<'_>) -> StoreResult<Adm
 }
 
 /// The policy checks, in order: paused or off here (this Mac's switch, where
-/// it runs), loop guard (event fires), overlap, target. A loop-guard skip also returns its detail for the run's
-/// `result_text`.
+/// it runs), team paused (an agent fire, unless its policy opts out), budget,
+/// loop guard (event fires), overlap, target. A team-paused, budget or
+/// loop-guard skip also returns its detail for the run's `result_text`.
 fn decide(
     conn: &Connection,
     home: &Path,
@@ -292,6 +293,21 @@ fn decide(
             reason::PAUSED
         };
         return outcome(skipped(why));
+    }
+    // An agent fire launches nothing while its team is paused, whether it was
+    // scheduled, caught up, fired by an event or run by hand. A command routine
+    // launches no agent of its own, and a builtin has no team.
+    if !fire.def.is_command() && !fire.key.is_builtin() && !fire.def.policy.runs_while_team_paused {
+        let (org, team) = (&fire.key.org, &fire.key.team);
+        let pause = crate::context_repo::team_pause::team_pause(home, principal, org, team);
+        if pause.paused {
+            let detail = match (&pause.record, &pause.reason) {
+                (Some(record), Some(why)) => format!("{org}/{team} is paused ({record}: {why})"),
+                (Some(record), None) => format!("{org}/{team} is paused ({record})"),
+                _ => format!("{org}/{team} is paused"),
+            };
+            return Ok((skipped(reason::TEAM_PAUSED), Some(detail)));
+        }
     }
     if let Err(detail) =
         crate::session_usage::spend_caps::refuse_routine(home, principal, fire.key, fire.def)
