@@ -117,7 +117,10 @@ export function selectCliNeedsYouKind(
     snapshot.reason === "question"
   )
     return "question";
-  // An ask_user is the chat's, but a permission prompt open beside it is still the CLI's.
+  // An ask_user is the chat's, but a permission prompt open beside it is still the CLI's. The
+  // ask_user's own MCP signal also sets needs-permission, so that state counts only when the
+  // record's last Tier-1 signal is not that signal.
+  if (state.crashes?.bySession[sessionId]?.t1?.signal.kind === "ask-user") return null;
   return selectSessionAiStatus(state, state.agentDots, sessionId) === "needs-permission"
     ? "permission"
     : null;

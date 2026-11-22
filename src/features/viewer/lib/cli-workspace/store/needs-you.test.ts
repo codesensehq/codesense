@@ -49,6 +49,13 @@ const records = {
   thinking,
   permission: advanceSessionAgent(thinking, hook("PermissionRequest"), 2),
   idleOut: thinking,
+  // The agent's own ask_user sends the MCP ask-user signal, which sets needs-permission.
+  askSignal: advanceSessionAgent(thinking, { tier: 1, signal: { kind: "ask-user" } }, 2),
+  askThenApproval: advanceSessionAgent(
+    advanceSessionAgent(thinking, { tier: 1, signal: { kind: "ask-user" } }, 2),
+    hook("PermissionRequest"),
+    3,
+  ),
 };
 const agentDots = selectAgentDots({ bySession: records, exitBySession: {} });
 const stored: Record<string, TerminalWireStatus> = {
@@ -231,6 +238,33 @@ describe("selectCliNeedsYouKind — what the CLI itself is waiting on", () => {
     const both = state({ pendingAsks: { q: { sessionId: "permission" } } });
     expect(selectNeedsYouKind(both, "permission")).toBe("question");
     expect(selectCliNeedsYouKind(both, "permission")).toBe("permission");
+  });
+
+  it("an ask_user's own signal is not a CLI permission prompt", () => {
+    expect(records.askSignal.state).toBe("needs-permission");
+    const ask = state({
+      pendingAsks: { q: { sessionId: "askSignal" } },
+      crashes: { bySession: records },
+    });
+    expect(selectNeedsYouKind(ask, "askSignal")).toBe("question");
+    expect(selectCliNeedsYouKind(ask, "askSignal")).toBeNull();
+  });
+
+  it("an ask_user with a hook approval prompt open beside it shows the CLI's permission", () => {
+    const both = state({
+      pendingAsks: { q: { sessionId: "askThenApproval" } },
+      crashes: { bySession: records },
+    });
+    expect(selectCliNeedsYouKind(both, "askThenApproval")).toBe("permission");
+  });
+
+  it("an ask_user with a scraped approval prompt open beside it shows the CLI's permission", () => {
+    // The scrape reaches the store as the wire status; no ask-user signal is on the record.
+    const both = state({
+      pendingAsks: { q: { sessionId: "idleOut" } },
+      crashes: { bySession: records },
+    });
+    expect(selectCliNeedsYouKind(both, "idleOut")).toBe("permission");
   });
 
   it("clears when the CLI's question is answered", () => {

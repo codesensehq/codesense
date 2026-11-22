@@ -885,6 +885,21 @@ describe("ChatOverlay", () => {
           pendingAsks: { q1: { correlationId: "c1", sessionId: SESSION, question: "Ship it?" } },
         }),
       );
+    // The ask_user's MCP signal, which also sets the session's record to needs-permission.
+    const askSignal = () =>
+      act(() =>
+        useAgentStateStore.getState().recordSignal(SESSION, {
+          tier: 1,
+          signal: { kind: "ask-user" },
+        }),
+      );
+    const approvalHook = () =>
+      act(() =>
+        useAgentStateStore.getState().recordSignal(SESSION, {
+          tier: 1,
+          signal: { kind: "claude-hook", event: "PermissionRequest" },
+        }),
+      );
     const activity = (revision: number, waiting: boolean) =>
       act(() =>
         useAgentStateStore.getState().recordActivity(
@@ -935,6 +950,23 @@ describe("ChatOverlay", () => {
       await renderOverlay(600, 300);
       askUser();
       expect(line()).toBeNull();
+    });
+
+    it("an ask_user's own signal is not a CLI permission prompt, and shows no line", async () => {
+      act(() => openAgentInboxRail(SESSION));
+      await renderOverlay(600, 300);
+      askUser();
+      askSignal();
+      expect(line()).toBeNull();
+    });
+
+    it("an ask_user and a CLI approval prompt both open: the approval shows the line", async () => {
+      act(() => openAgentInboxRail(SESSION));
+      await renderOverlay(600, 300);
+      askUser();
+      askSignal();
+      approvalHook();
+      await waitFor(() => expect(line()).not.toBeNull());
     });
 
     it("an ask_user and a CLI question both open: the CLI question shows the line", async () => {
