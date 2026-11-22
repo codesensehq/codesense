@@ -5502,18 +5502,10 @@ pub(crate) fn list_sessions_inner(app: &tauri::AppHandle) -> Result<Vec<SessionR
     use tauri::Manager;
     let launch = app.state::<DashboardLaunchState>();
     // Snapshot under the registry lock, then release it BEFORE probing the
-    // terminal hosts (never hold both locks — see `snapshot`).
+    // terminal hosts (never hold both locks — see `snapshot`). Bound sessions are
+    // probed in one call; an unanswered probe leaves them alive (see
+    // [`liveness::registry_rows`]).
     let rows = launch.snapshot();
-    // Probe every bound session's liveness in ONE `sessions`-lock pass rather
-    // than re-locking the hot map per row.
-    let bound_ids: Vec<&str> = rows
-        .iter()
-        .filter_map(|s| s.session_id.as_deref())
-        .collect();
-    // Unknown is not empty: while a terminal host cannot be asked, a bound session
-    // reads alive — a roster that read a still-running agent as dead would offer to
-    // dismiss or respawn it.
-    let alive_ids = crate::commands::pty_backend::alive_session_ids(app, &bound_ids);
     // An agent launched on a machine has no local session: its tab in the machine's
     // layout says whether it still runs. Read only when there is one.
     let remote_agents = launch.remote_agents();
@@ -5544,36 +5536,22 @@ pub(crate) fn list_sessions_inner(app: &tauri::AppHandle) -> Result<Vec<SessionR
             .collect();
         remote_agent_liveness(&remote_agents, &seen, &live_machines)
     };
-    let registry_rows: Vec<SessionRow> = rows
-        .into_iter()
-        .map(|s| {
-            if let Some(&alive) = remote_alive.get(&s.handle) {
-                let session = remote_sessions.get(&s.handle).cloned();
-                return remote_agent_row(s, alive, session);
-            }
-            // SW-OR-10 (AC-2): a headless pseudo-session has no PTY child to probe, so
-            // its liveness is registry presence — while its entry is in the map the run
-            // is in flight (`Running`); its completion/kill path removes the entry. This
-            // is the documented exception to "alive = child liveness"; every other kind
-            // still probes `PtyState`.
-            let alive = if is_live_headless(s.kind, s.session_id.as_deref()) {
-                true
-            } else {
-                // Reserved (`begin`) but not yet `bind`ed → no session to probe → dead.
-                s.session_id
-                    .as_deref()
-                    .is_some_and(|sid| !alive_ids.known_gone(sid))
-            };
-            session_row(s, alive)
-        })
-        .collect();
     // SW-AV-1 (INV-3): fold in the live-PTY arm across BOTH terminal hosts
     // (in-process + session-server sidecar). The in-process enumeration error
     // surfaces as `Err` (never a silent registry-only fallback); a sidecar that
     // cannot answer contributes nothing this pass (fail-open, like the other
     // cross-host reads).
-    let mut rows = union_registry_and_live_pty(
-        registry_rows,
+    let mut rows = liveness::registry_rows(
+        rows,
+        &liveness::HostProbe(app),
+        |s| {
+            remote_alive
+                .get(&s.handle)
+                .map_or(liveness::Remote::Local, |&alive| liveness::Remote::Row {
+                    alive,
+                    session: remote_sessions.get(&s.handle).cloned(),
+                })
+        },
         crate::commands::pty_backend::live_session_ids(app),
     )?;
     fill_session_chat(app, &mut rows);
