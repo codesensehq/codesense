@@ -440,9 +440,9 @@ fn agent_cap_status(
     principal: &crate::domain::Principal,
     key: &crate::agents::AgentKey,
 ) -> Result<CapStatus, CapLookupError> {
-    let agent = crate::agents::service::get(home, principal, key)
-        .map_err(|e| CapLookupError::Hidden(e.to_string()))?
-        .agent;
+    // Resolved without the usage store, so an unreadable store is never taken for a hidden agent.
+    let agent = crate::agents::service::read_visible(home, principal, key)
+        .map_err(|e| CapLookupError::Hidden(e.to_string()))?;
     status(home, "agent", &key.to_string(), agent.budget_usd).map_err(CapLookupError::Unavailable)
 }
 
@@ -2305,6 +2305,14 @@ mod live_identity_seams {
                 per_week: None,
             }),
         );
+        // Saving the agent already opened the store; replace it (and its WAL sidecars) with a
+        // directory, which SQLite can't open as a database on any OS.
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            let path = home.path().join(format!("usage.sqlite{suffix}"));
+            if let Err(e) = std::fs::remove_file(&path) {
+                assert_eq!(e.kind(), std::io::ErrorKind::NotFound, "{path:?}: {e}");
+            }
+        }
         std::fs::create_dir(home.path().join("usage.sqlite")).unwrap();
         let unreadable = agent_cap_status(home.path(), &alice(), &key);
         assert!(
