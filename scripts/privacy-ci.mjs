@@ -551,6 +551,54 @@ export function scanMessage({ message, privateRulesFile, cleanup = "", commentCh
   });
 }
 
+// The empty tree in this repository's hash, the base of a first commit.
+const emptyTree = (cwd) =>
+  revision(
+    execFileSync("git", ["hash-object", "-t", "tree", "--stdin"], {
+      ...gitOptions(cwd),
+      stdio: ["pipe", "pipe", "pipe"],
+      input: "",
+      encoding: "utf8",
+    }).trim(),
+  );
+
+// Commit-msg: what the commit being made adds, with the same engine and
+// allow-list as pre-push. The index is the one git uses for this commit (a
+// temporary GIT_INDEX_FILE under commit -a or a pathspec), compared with HEAD,
+// or the empty tree on an unborn branch; under --amend that is the amend's own
+// change. A merge in progress is skipped (null): pre-push scans its
+// resolutions. A gitlink or any other failure is one finding of its own rule.
+// Each finding carries `index`, the file's position in
+// `git diff --cached --name-only`, so a report can place it without naming it.
+export function scanStaged({ cwd, privateRulesFile, allowFile = DEFAULT_ALLOW }) {
+  const rules = combinedRules(privateRulesFile);
+  try {
+    const gitPath = (name) =>
+      git(["rev-parse", "--path-format=absolute", "--git-path", name], cwd).trim();
+    if (fs.existsSync(gitPath("MERGE_HEAD"))) return null;
+    const head = tryGit(["rev-parse", "--verify", "-q", "HEAD^{commit}"], cwd);
+    const base = head.status === 0 ? revision(head.stdout.trim()) : emptyTree(cwd);
+    const changed = sideAdditions(cwd, ["diff", "--cached", base]);
+    const blobs = commitBlobs(
+      cwd,
+      [...changed.values()].map(({ oid }) => oid),
+    );
+    const files = [...changed].map(([file, { oid, lineNumbers }]) => ({
+      file,
+      data: blobs.get(oid),
+      lineNumbers,
+    }));
+    const order = git(["diff", "--cached", "--name-only", "-z", base, "--"], cwd).split("\0");
+    return scanAddedFiles(files, loadAllow(allowFile, ruleIds(rules)), { rules }).map((f) => ({
+      ...f,
+      index: order.indexOf(f.file) + 1 || null,
+    }));
+  } catch (error) {
+    const rule = error.message === GITLINK_ERROR ? "gitlink" : "scan-error";
+    return [{ rule, sev: "error", file: "", line: 0, allowed: false }];
+  }
+}
+
 // The private inventory never leaves this machine and is never printed. A clone
 // that requires the private rules takes it only from outside the tree, so a
 // committed file can never satisfy or replace them. `required` is asked only

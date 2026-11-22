@@ -5,7 +5,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
-import { scanChange, addedLines, pairCommitSections, addedLineSelection } from "./privacy-ci.mjs";
+import {
+  scanChange,
+  scanStaged,
+  addedLines,
+  pairCommitSections,
+  addedLineSelection,
+} from "./privacy-ci.mjs";
 import { scan, allowLines } from "./privacy-engine.mjs";
 
 const token = () => "gh" + "p_" + "aB3".repeat(12);
@@ -435,4 +441,108 @@ test("diff sections whose header path is absent from the raw records fail closed
   assert.throws(() =>
     pairCommitSections([{ file: "expected.txt" }], "diff --git a/other.txt b/other.txt\n"),
   );
+});
+
+// The staged scan: what the next commit adds, against HEAD or the empty tree.
+const staged = (f, options = {}) => scanStaged({ cwd: f.dir, allowFile: f.allowFile, ...options });
+const errors = (findings) => findings.filter((x) => x.sev === "error" && !x.allowed);
+
+test("the staged scan finds only added lines, with their real line numbers", (t) => {
+  const f = fixture(t, `keep\n${token()}\nclean\n`);
+  assert.deepEqual(errors(staged(f)), []);
+  // A removed line and an unchanged context line add nothing.
+  f.put("a.txt", "keep\nclean\nmore\n");
+  f.git("add", "a.txt");
+  assert.deepEqual(errors(staged(f)), []);
+  f.put("a.txt", `keep\nclean\n${token()}\n`);
+  f.git("add", "a.txt");
+  const [finding, ...rest] = errors(staged(f));
+  assert.deepEqual(rest, []);
+  assert.equal(finding.file, "a.txt");
+  assert.equal(finding.line, 3);
+  assert.equal(finding.path, undefined);
+});
+
+test("the staged scan judges paths and honours the allow-list", (t) => {
+  const f = fixture(t);
+  const inventory = path.join(f.inputs, "terms.json");
+  const rules = [5, 6, 7, 8, 9, 24].map((order) => ({
+    id: `fixture-${order}`,
+    sev: order === 24 ? "text" : "error",
+    kind: "show",
+    source: `qqstaged${order}qq`,
+    flags: [6, 7, 8].includes(order) ? "gi" : "g",
+    order,
+    classification: "private-only",
+  }));
+  fs.writeFileSync(inventory, JSON.stringify({ version: 1, rules }));
+  f.put("qqstaged5qq.txt", "clean\n");
+  f.git("add", "qqstaged5qq.txt");
+  const [finding] = errors(staged(f, { privateRulesFile: inventory }));
+  assert.equal(finding.rule, "fixture-5");
+  assert.equal(finding.path, true);
+  f.git("rm", "-q", "--cached", "qqstaged5qq.txt");
+  // An allow entry for the staged finding lets it pass; the scan never stales one.
+  f.put("src/fixture.ts", `const value = "${token()}";\n`);
+  f.git("add", "src/fixture.ts");
+  const candidates = scan(f.dir, new Map(), { skipRoot: [".git"] }).filter((x) => x.fp);
+  fs.writeFileSync(f.allowFile, allowLines(candidates, () => "Reviewed fixture").join("\n"));
+  const findings = staged(f);
+  assert.deepEqual(errors(findings), []);
+  assert.ok(findings.some((x) => x.file === "src/fixture.ts" && x.allowed));
+  assert.ok(!findings.some((x) => x.rule === "allow-stale"));
+});
+
+test("binary files and mode-only changes pass the staged scan", (t) => {
+  const f = fixture(t);
+  f.put("image.bin", Buffer.from([0, 1, 2, 3, 0, 255, 254, 0]));
+  f.git("add", "image.bin");
+  assert.deepEqual(errors(staged(f)), []);
+  f.git("update-index", "--chmod=+x", "a.txt");
+  assert.deepEqual(errors(staged(f)), []);
+});
+
+test("a staged gitlink and any other scan failure refuse with their own rules", (t) => {
+  const f = fixture(t);
+  f.git("update-index", "--add", "--cacheinfo", "160000", f.base, "vendor/component");
+  assert.deepEqual(
+    staged(f).map((x) => [x.rule, x.sev, x.allowed]),
+    [["gitlink", "error", false]],
+  );
+  // A directory outside any repository: git fails, and the scan says so.
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "privacy-ci-outside-"));
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+  assert.deepEqual(
+    scanStaged({ cwd: outside }).map((x) => [x.rule, x.sev, x.allowed]),
+    [["scan-error", "error", false]],
+  );
+});
+
+test("the staged scan on an unborn branch uses the empty tree", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "privacy-ci-unborn-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const git = (...args) =>
+    execFileSync("git", args, {
+      cwd: dir,
+      encoding: "utf8",
+      env: { ...process.env, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: "1" },
+    });
+  git("init", "-q", "--initial-branch=main");
+  fs.writeFileSync(path.join(dir, "a.txt"), "clean\n");
+  git("add", "a.txt");
+  assert.deepEqual(errors(scanStaged({ cwd: dir })), []);
+  fs.writeFileSync(path.join(dir, "b.txt"), `${token()}\n`);
+  git("add", "b.txt");
+  assert.deepEqual(
+    errors(scanStaged({ cwd: dir })).map((x) => [x.file, x.line]),
+    [["b.txt", 1]],
+  );
+});
+
+test("the staged scan skips a merge in progress", (t) => {
+  const f = fixture(t);
+  f.put("a.txt", `${token()}\n`);
+  f.git("add", "a.txt");
+  fs.writeFileSync(path.join(f.dir, ".git", "MERGE_HEAD"), `${f.base}\n`);
+  assert.equal(staged(f), null);
 });
