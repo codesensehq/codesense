@@ -57,7 +57,7 @@ struct Entry {
 fn parse_record(record: &Record) -> Parsed {
     let field = |key: &str| record.fields.get(key);
     let at = field("at").and_then(epoch_ms);
-    let reason = field("reason").and_then(|v| v.as_str()).map(str::to_owned);
+    let reason = field("reason").and_then(Value::as_str).map(str::to_owned);
     let read = match (at, field("paused").and_then(flag)) {
         (None, _) => Err(format!("at is {}, not epoch ms", shown(field("at")))),
         (Some(_), None) => Err(format!(
@@ -66,7 +66,7 @@ fn parse_record(record: &Record) -> Parsed {
         )),
         (Some(_), Some(paused)) => Ok(Entry {
             paused,
-            resumes: field("resumes").map(text).unwrap_or_default(),
+            resumes: field("resumes").and_then(text).unwrap_or_default(),
         }),
     };
     Parsed {
@@ -93,21 +93,18 @@ fn epoch_ms(value: &Value) -> Option<i64> {
 fn flag(value: &Value) -> Option<bool> {
     match value {
         Value::Bool(b) => Some(*b),
-        Value::String(s) => match s.trim().to_ascii_lowercase().as_str() {
-            "true" => Some(true),
-            "false" => Some(false),
-            _ => None,
-        },
+        Value::String(s) if s.trim().eq_ignore_ascii_case("true") => Some(true),
+        Value::String(s) if s.trim().eq_ignore_ascii_case("false") => Some(false),
         _ => None,
     }
 }
 
-/// A string or number as trimmed text; anything else is empty.
-fn text(value: &Value) -> String {
+/// A string or number as trimmed text; anything else is none.
+fn text(value: &Value) -> Option<String> {
     match value {
-        Value::String(s) => s.trim().to_owned(),
-        Value::Number(n) => n.to_string(),
-        _ => String::new(),
+        Value::String(s) => Some(s.trim().to_owned()),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
     }
 }
 
@@ -122,7 +119,8 @@ pub fn fold(records: &[Record]) -> TeamPause {
     rows.sort_by(|a, b| {
         (a.at.is_none(), a.at.unwrap_or(0), &a.id).cmp(&(b.at.is_none(), b.at.unwrap_or(0), &b.id))
     });
-    let Some(newest) = rows.last() else {
+    // The newest is never its own resume, so the rest are all `ended` needs.
+    let Some(newest) = rows.pop() else {
         return TeamPause::default();
     };
     let mut state = TeamPause {
@@ -162,13 +160,15 @@ pub fn team_pause(home: &Path, principal: &Principal, org: &str, team: &str) -> 
     let records: Vec<Record> = entries
         .filter_map(Result::ok)
         .filter_map(|entry| {
-            let name = entry.file_name().into_string().ok()?;
+            let Ok(name) = std::ffi::OsString::into_string(entry.file_name()) else {
+                return None;
+            };
             let id = name
                 .strip_suffix(".md")
                 .filter(|_| !name.starts_with('.'))?;
             // A file that can't be read parses as empty frontmatter: no `at`, so
             // it sorts newest and pauses the team.
-            let raw = std::fs::read_to_string(entry.path()).unwrap_or_default();
+            let raw = std::fs::read_to_string(folder.join(&name)).unwrap_or_default();
             Some(parse(id, &raw))
         })
         .collect();
