@@ -203,15 +203,15 @@ public key, and `git config commit.gpgsign true`; set
   (GitHub's Verified badge shows whose key made it), and nothing after this
   hook checks the author or committer identity before a merge.
 
-The hook scans every line of git's message file, comment lines and the `-v`
-diff included, because it can't see which lines git drops. Each refusal prints
-one line per finding: the rule, where it is and how to fix it. A staged file is named only by its position in the commit's file
-list (`git diff --cached --name-only`; for `commit -a` or a pathspec commit,
-the list once those files are staged), never by name. `CODESENSE_PRIVACY_SHOW=1`
-prints the file name and, for some rules, the matched text, so never paste that
-output anywhere public. Fix each finding and rerun the commit. Skipping the
-hooks with `--no-verify` is not allowed: the push check and CI still refuse the
-change.
+The hook scans every line of git's message file, comment lines and the `-v` diff
+included, because it can't see which lines git drops. Each refusal prints one
+line per finding: the rule, where it is and how to fix it. A staged file is
+named only by its position in the commit's file list
+(`git diff --cached --name-only`; for `commit -a` or a pathspec commit, the list
+once those files are staged), never by name. `CODESENSE_PRIVACY_SHOW=1` prints
+the file name and, for some rules, the matched text, so never paste that output
+anywhere public. Fix each finding and rerun the commit. Skipping the hooks with
+`--no-verify` is not allowed: the push check and CI still refuse the change.
 
 You're welcome to use AI tools for your own contributions. You remain
 responsible for what you submit, and your sign-off certifies the DCO for it as
