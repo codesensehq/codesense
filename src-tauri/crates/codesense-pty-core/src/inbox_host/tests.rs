@@ -799,6 +799,8 @@ fn an_agent_that_only_just_stopped_is_covered_by_its_grace_and_its_mail_stays_he
 /// A notice held past one cycle is logged once with its gate: an undecided wake hold
 /// while holds are required, then a dead tools bridge. Once the desktop's refresh lifts
 /// the hold and the tools return, the waiter hands it over within the cycle.
+// Unix only: it serves a waiter over a Unix socket pair (the unix transport's `serve`).
+#[cfg(unix)]
 #[test]
 fn a_waiter_with_no_hold_decision_is_handed_mail_within_one_cycle_after_refresh() {
     let (inbox, outlet) = new();
@@ -838,6 +840,8 @@ fn a_waiter_with_no_hold_decision_is_handed_mail_within_one_cycle_after_refresh(
 }
 
 /// A real hold names its reason in the held log.
+// Unix only: it serves a waiter over a Unix socket pair (the unix transport's `serve`).
+#[cfg(unix)]
 #[test]
 fn a_notice_held_by_a_cap_logs_its_reason() {
     let (inbox, outlet) = new();
