@@ -33,11 +33,14 @@ const COLLECTION: &str = "team-control";
 pub struct TeamPause {
     pub paused: bool,
     /// The newest record's id; `None` with no records.
+    #[allow(dead_code)] // The routine gate reads it.
     pub record: Option<String>,
     /// The go record in force; `None` when running or when a malformed newest
-    /// record is what pauses the team.
+    /// record is what pauses the team. Only the tests read it.
+    #[allow(dead_code)]
     pub go: Option<String>,
     /// The newest record's `reason`, or why it couldn't be read.
+    #[allow(dead_code)] // The routine gate reads it.
     pub reason: Option<String>,
 }
 
