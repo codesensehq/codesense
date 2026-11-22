@@ -688,16 +688,26 @@ function hookReport(findings, show) {
 
 // Commit-msg's fixes: one fixed string each, pinned by tests. The commit was
 // never made, so each fix is a rerun, never an amend (except resetting an
-// amended commit's author). -e -v makes git clean the kept message: it drops
-// the comment lines and cuts at the scissors line, so neither git's template
-// nor a verbose diff is published.
-const EDITMSG = 'git commit -e -v -F "$(git rev-parse --git-path COMMIT_EDITMSG)"';
+// amended commit's author).
+//
+// The message rerun runs unattended: GIT_EDITOR=true opens no editor, and -e -v
+// still make git clean the kept message (it drops the comment lines and cuts at
+// the scissors line), so neither git's template nor a verbose diff is
+// published. Under core.commentChar auto, the kept comment lines start with the
+// character the first attempt used, so a rerun would pick another one and
+// publish them: the rerun pins that character.
+export function rerunCommand(pin = null) {
+  const config = pin ? `-c core.commentChar='${pin}' ` : "";
+  return `GIT_EDITOR=true git ${config}commit -e -v -F "$(git rev-parse --git-path COMMIT_EDITMSG)"`;
+}
+const messageFix = (pin) =>
+  `rerun with the message reworded: edit the file git rev-parse --git-path COMMIT_EDITMSG names, then run ${rerunCommand(pin)}`;
 const MAINTAINER_SETUP = "the maintainer clone setup in CONTRIBUTING.md (AI assistance)";
 const IDENTITY = `set to the maintainer's GitHub login and noreply address as in ${MAINTAINER_SETUP}`;
 
 // A content rule (public or private) takes the fix for where it was found.
 export const LOCATION_FIX = Object.freeze({
-  message: `rerun with the message reworded (${EDITMSG} reopens it)`,
+  message: messageFix(null),
   content: "rerun with the line edited and the file staged again (git add)",
   path: "rerun with the file renamed (git mv)",
 });
@@ -722,11 +732,12 @@ export const FIX = Object.freeze({
 });
 
 // A rule commit-msg reports itself (a commit check, or the staged scan's own)
-// has no fallback: a missing fix throws, which the guard test catches.
-export function fixFor(finding) {
+// has no fallback: a missing fix throws, which the guard test catches. `pin` is
+// the comment character a message rerun pins (core.commentChar auto only).
+export function fixFor(finding, pin = null) {
   if (Object.hasOwn(FIX, finding.rule)) return FIX[finding.rule];
   if (finding.source === "commit" || finding.hook) throw new Error(`no fix for ${finding.rule}`);
-  if (finding.source !== "staged") return LOCATION_FIX.message;
+  if (finding.source !== "staged") return messageFix(pin);
   return finding.path ? LOCATION_FIX.path : LOCATION_FIX.content;
 }
 
@@ -747,14 +758,14 @@ export function placeOf(finding, show = false) {
 }
 
 // Commit-msg: one `rule  place  fix` line per unresolved error, then the rule.
-function commitReport(findings, show) {
+function commitReport(findings, show, pin) {
   const errors = findings.filter((f) => f.sev === "error" && !f.allowed);
   for (const f of errors)
-    console.error(`privacy-scan: ${f.rule}  ${placeOf(f, show)}  ${fixFor(f)}`);
+    console.error(`privacy-scan: ${f.rule}  ${placeOf(f, show)}  ${fixFor(f, pin)}`);
   if (!errors.length) return 0;
   console.error(
     "privacy-scan: refused this commit; nothing was committed. Fix each line above and " +
-      `rerun; a typed message is kept for ${EDITMSG}. Never --no-verify.`,
+      `rerun; a typed message is kept for ${rerunCommand(pin)}. Never --no-verify.`,
   );
   return 1;
 }
@@ -834,7 +845,8 @@ export function runHook(kind, args, { env = process.env, cwd = process.cwd(), st
     if (staged === null) console.error(MERGE_NOTICE);
     else findings.push(...staged.map((f) => ({ ...f, source: "staged" })));
     if (gitBoolean(cwd, "codesense.requireSigned")) findings.push(...commitFindings(cwd, form));
-    return commitReport(findings, env.CODESENSE_PRIVACY_SHOW === "1");
+    const pin = form.commentChar === "auto" ? commentPrefix(form.message, "auto") : null;
+    return commitReport(findings, env.CODESENSE_PRIVACY_SHOW === "1", pin);
   }
   const maxNewObjects = maxNewCommits(env);
   if (maxNewObjects === null) {

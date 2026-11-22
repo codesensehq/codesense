@@ -1402,7 +1402,22 @@ function editor(s, text) {
   return { GIT_EDITOR: script, EDIT_TEXT: text };
 }
 
-test("the message fix reruns with git's cleanup, so no template or verbose diff is published", (t) => {
+// Edit the kept message as the fix says, then run the printed rerun exactly as
+// printed. Every editor the environment could name fails, so the rerun passes
+// only if it needs none.
+function rerunPrinted(s, refused, from, to) {
+  const editmsg = path.join(s.work, ".git", "COMMIT_EDITMSG");
+  const kept = fs.readFileSync(editmsg, "utf8");
+  fs.writeFileSync(editmsg, kept.replace(from, to));
+  const [, rerun] = /names, then run (GIT_EDITOR=true git .*COMMIT_EDITMSG\)")$/m.exec(
+    refused.stderr,
+  );
+  const env = { ...s.env, GIT_EDITOR: "false", VISUAL: "false", EDITOR: "false" };
+  passed(spawnSync("sh", ["-c", rerun], { cwd: s.work, encoding: "utf8", env }));
+  return { kept, rerun };
+}
+
+test("the message fix reruns unattended with git's cleanup, so no template or verbose diff is published", (t) => {
   const s = sandbox(t);
   passed(s.install());
   s.commit("a.txt", "clean\n");
@@ -1411,20 +1426,35 @@ test("the message fix reruns with git's cleanup, so no template or verbose diff 
     env: { ...s.env, ...editor(s, `Subject ${TERM}`) },
   });
   commitRefused(typed, "fixture-5");
-  const editmsg = path.join(s.work, ".git", "COMMIT_EDITMSG");
-  const kept = fs.readFileSync(editmsg, "utf8");
+  const { kept, rerun } = rerunPrinted(s, typed, TERM, "clean");
   assert.match(kept, /^# .* >8 /m);
   assert.match(kept, /^diff --git /m);
-  fs.writeFileSync(editmsg, kept.replace(TERM, "clean"));
-  // Run the printed fix as printed.
-  const [, rerun] = /\((git commit .*COMMIT_EDITMSG\)") reopens it\)/.exec(typed.stderr);
-  const fixed = spawnSync("sh", ["-c", rerun], {
-    cwd: s.work,
-    encoding: "utf8",
-    env: { ...s.env, GIT_EDITOR: "true" },
-  });
-  passed(fixed);
+  assert.ok(!rerun.includes("core.commentChar"));
   assert.equal(s.git("log", "-1", "--format=%B"), "Subject clean\n\n");
+});
+
+test("the message rerun keeps a non-# comment character, pinning the one core.commentChar auto chose", (t) => {
+  // auto picks a character no line of the message starts with: here ;, since
+  // the subject starts with #. The rerun's file then has ; lines too, so an
+  // unpinned rerun would pick yet another character and publish the old block.
+  for (const [commentChar, pinned] of [
+    ["auto", "-c core.commentChar=';' "],
+    [";", ""],
+  ]) {
+    const s = sandbox(t);
+    passed(s.install());
+    s.commit("a.txt", "clean\n");
+    s.stage("b.txt", "clean\n");
+    s.git("config", "core.commentChar", commentChar);
+    const typed = s.run(["commit", "-q", "-e", "-v", "-m", `#1 Subject ${TERM}`], {
+      env: { ...s.env, GIT_EDITOR: "true" },
+    });
+    commitRefused(typed, "fixture-5");
+    const { kept, rerun } = rerunPrinted(s, typed, TERM, "clean");
+    assert.match(kept, /^; .* >8 /m, commentChar);
+    assert.ok(rerun.startsWith(`GIT_EDITOR=true git ${pinned}commit `), commentChar);
+    assert.equal(s.git("log", "-1", "--format=%B"), "#1 Subject clean\n\n", commentChar);
+  }
 });
 
 test("an editor commit's comment block does not hide the sign-off, unless cleanup publishes it", (t) => {

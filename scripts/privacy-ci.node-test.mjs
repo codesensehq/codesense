@@ -11,6 +11,7 @@ import {
   commitFindings,
   FIX,
   LOCATION_FIX,
+  rerunCommand,
   fixFor,
   placeOf,
   addedLines,
@@ -562,11 +563,12 @@ test("the staged scan skips a merge in progress", (t) => {
 });
 
 // Each commit-time fix, pinned: one string per rule or place, a rerun and never an amend.
-const EDITMSG = 'git commit -e -v -F "$(git rev-parse --git-path COMMIT_EDITMSG)"';
+const KEPT = '"$(git rev-parse --git-path COMMIT_EDITMSG)"';
+const RERUN = `GIT_EDITOR=true git commit -e -v -F ${KEPT}`;
 const SETUP = "the maintainer clone setup in CONTRIBUTING.md (AI assistance)";
 const IDENTITY = `set to the maintainer's GitHub login and noreply address as in ${SETUP}`;
 const PINNED_LOCATION = {
-  message: `rerun with the message reworded (${EDITMSG} reopens it)`,
+  message: `rerun with the message reworded: edit the file git rev-parse --git-path COMMIT_EDITMSG names, then run ${RERUN}`,
   content: "rerun with the line edited and the file staged again (git add)",
   path: "rerun with the file renamed (git mv)",
 };
@@ -590,7 +592,38 @@ const PINNED = {
 test("each commit-time rule and place has its one pinned fix", () => {
   assert.deepEqual({ ...FIX }, PINNED);
   assert.deepEqual({ ...LOCATION_FIX }, PINNED_LOCATION);
+  // core.commentChar auto: the message rerun pins the character, and only it changes.
+  assert.equal(rerunCommand(), RERUN);
+  assert.equal(
+    rerunCommand(";"),
+    `GIT_EDITOR=true git -c core.commentChar=';' commit -e -v -F ${KEPT}`,
+  );
+  assert.equal(
+    fixFor({ rule: "email", source: "message" }, "|"),
+    PINNED_LOCATION.message.replace("git commit", "git -c core.commentChar='|' commit"),
+  );
 });
+
+// The rule ids a function passes as the first argument of `call`, read from its
+// source: every argument must name its rule as a string literal.
+function ruleLiterals(fn, call) {
+  const src = fn.toString();
+  const ids = [];
+  for (const m of src.matchAll(new RegExp(`\\b${call}\\(`, "g"))) {
+    let depth = 0;
+    let arg = "";
+    for (const c of src.slice(m.index + m[0].length)) {
+      if (!depth && (c === "," || c === ")")) break;
+      if (c === "(") depth++;
+      if (c === ")") depth--;
+      arg += c;
+    }
+    const literals = [...arg.matchAll(/"([^"]*)"/g)].map((x) => x[1]);
+    assert.ok(literals.length, `${call}(${arg}) names no rule literal`);
+    ids.push(...literals);
+  }
+  return ids;
+}
 
 test("every rule commit-msg reports itself has its own fix; only content rules fall back", (t) => {
   // The rules are what the checks emit, not a list kept by hand.
@@ -611,9 +644,22 @@ test("every rule commit-msg reports itself has its own fix; only content rules f
   emitted.push(...scanStaged({ cwd: outside }).map((x) => ({ ...x, source: "staged" })));
   for (const finding of emitted)
     assert.equal(fixFor(finding), FIX[finding.rule], `${finding.rule} has no fix of its own`);
-  // FIX holds exactly the emitted rules and the scanner's structural ones.
+  // Every rule the code can report, read from its source, so a rule that no
+  // scenario above triggers still needs a fix. The scenarios reach them all.
+  const declared = new Set([
+    ...ruleLiterals(commitFindings, "found"),
+    ...ruleLiterals(scanStaged, "refuse"),
+  ]);
+  assert.deepEqual([...declared].sort(), [...new Set(emitted.map((x) => x.rule))].sort());
+  for (const rule of declared) assert.ok(Object.hasOwn(FIX, rule), `${rule} has no fix`);
+  // The source read sees a new rule, so the check above can fail.
+  const added = function () {
+    found("new-check", "place");
+  };
+  assert.deepEqual(ruleLiterals(added, "found"), ["new-check"]);
+  // FIX holds exactly the declared rules and the scanner's structural ones.
   const structural = ["forbidden-path", "key-file", "image-metadata"];
-  const rules = new Set([...emitted.map((x) => x.rule), ...structural]);
+  const rules = new Set([...declared, ...structural]);
   assert.deepEqual(Object.keys(FIX).sort(), [...rules].sort());
   // A rule of the hook's own with no entry has no fallback.
   assert.throws(() => fixFor({ rule: "new-check", source: "commit" }), /no fix for new-check/);
