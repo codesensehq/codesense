@@ -4402,11 +4402,10 @@ pub fn dashboard_launch_abort(
     // SW-DX-17a: audit ONLY when an entry was actually freed — a no-op abort
     // (unknown/already-gone handle) must not write a phantom line that would make
     // the trail claim a session was aborted when nothing was.
-    if state.abort(&handle) {
+    // SW-AM-8: a reserved-but-unbound row was dropped (has no PTY, so `pty-exit`
+    // never fires for it) → `abort_and_notify` tells the roster to drop it.
+    if abort_and_notify(&app, &state, &handle) {
         audit_unbound_abort(&handle);
-        // SW-AM-8: a reserved-but-unbound row was dropped (has no PTY, so `pty-exit`
-        // never fires for it) → tell the roster to drop it.
-        emit_session_state_changed(&app);
     }
 }
 
