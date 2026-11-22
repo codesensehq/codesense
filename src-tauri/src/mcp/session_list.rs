@@ -470,7 +470,13 @@ pub(crate) fn session_list_rows_with_tabs(
             let failed_turn = matches!(last, Some(AgentState::Errored | AgentState::Crashed));
             let crashed = matches!(last, Some(AgentState::Crashed));
             let mut failed = failed_turn;
+            // A local session the registry's probe reads gone has exited, whatever its
+            // cached tab still shows.
+            let local_gone = !row.alive
+                && row.machine_id.is_none()
+                && tab.as_ref().is_some_and(|tab| tab.machine_id.is_none());
             let state = match tab.as_ref().map(|tab| tab.alive) {
+                _ if local_gone => SessionState::Exited,
                 Some(None) => SessionState::Offline,
                 Some(Some(false)) => SessionState::Exited,
                 Some(Some(true)) => {
@@ -1209,6 +1215,47 @@ mod tests {
             Some(LaunchMode::Argv)
         );
     }
+    #[test]
+    fn a_gone_local_session_reads_exited_over_its_cached_tab() {
+        use crate::commands::dashboard_launch::{session_row, DashboardLaunchState};
+        let state = DashboardLaunchState::new(2);
+        for (handle, session) in [("gone", "s-gone"), ("up", "s-up")] {
+            assert!(state.begin(handle).unwrap());
+            state.bind(handle, session, None).unwrap();
+        }
+        let raw = state
+            .snapshot()
+            .into_iter()
+            .map(|s| {
+                let alive = s.handle == "up";
+                session_row(s, alive)
+            })
+            .collect();
+        let rows = session_list_rows_with_tabs(
+            raw,
+            |_| None,
+            None,
+            |row| {
+                Some(TabView {
+                    name: Some("Worker".into()),
+                    machine: "This Mac".into(),
+                    machine_id: None,
+                    workspace_handle: None,
+                    workspace: None,
+                    session: row.session_id.clone(),
+                    alive: Some(true),
+                    activity: None,
+                    activity_failed: false,
+                    subagents: 0,
+                    agent: None,
+                })
+            },
+        );
+        let state_of = |handle: &str| rows.iter().find(|r| r.handle == handle).unwrap().state;
+        assert_eq!(state_of("gone"), SessionState::Exited);
+        assert_ne!(state_of("up"), SessionState::Exited);
+    }
+
     #[test]
     fn review_trail_live_projection_exposes_the_current_stable_session() {
         use crate::commands::dashboard_launch::{session_row, DashboardLaunchState, LaunchRecord};
