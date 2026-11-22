@@ -52,4 +52,13 @@ describe("MiddleTruncate in a slot squeezed shut", () => {
     act(() => notify(120));
     expect(screen.getByTestId("mt").children).toHaveLength(2);
   });
+
+  it("keeps the head/tail split when the first reading is 0 (a box not laid out yet)", () => {
+    HTMLElement.prototype.getBoundingClientRect = () => ({ width: 0 }) as DOMRect;
+    render(<MiddleTruncate data-testid="mt" text="Login timeout lead for the team" />);
+    const root = screen.getByTestId("mt");
+    expect(root.children).toHaveLength(2);
+    expect(root.className).not.toMatch(/\btruncate\b/);
+    expect(root.textContent).toBe("Login timeout lead for the team");
+  });
 });
