@@ -104,11 +104,14 @@ describe("reasonCopy", () => {
     ["already_running", "Skipped — previous run still running"],
     ["target_unavailable", "Skipped — workspace unavailable"],
     ["loop_guard", "Skipped — loop guard"],
-    ["team_paused", "Skipped — team paused"],
     ["paused", "Skipped — paused"],
     ["queue_full", "Skipped — queue full"],
   ])("%s reads as human copy", (reason, copy) => {
     expect(reasonCopy(skipped(reason))).toBe(copy);
+  });
+
+  it("labels team_paused", () => {
+    expect(reasonCopy(skipped("team_paused"))).toBe("Skipped — team paused");
   });
 
   it("names the fill-in a command could not start without, from its detail", () => {
