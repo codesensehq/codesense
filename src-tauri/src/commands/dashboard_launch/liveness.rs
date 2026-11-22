@@ -8,7 +8,10 @@ use std::collections::{HashMap, HashSet};
 use tauri::{AppHandle, Runtime};
 
 use super::super::pty_backend::{self, Liveness};
-use super::{SessionRow, SessionSnapshot};
+use super::{
+    is_live_headless, remote_agent_row, session_row, union_registry_and_live_pty,
+    DashboardLaunchState, SessionRow, SessionSnapshot,
+};
 
 /// Which of a batch of local sessions have a running child, asked in one call. A
 /// session the terminal hosts cannot answer for is [`Liveness::Unknown`].
@@ -57,6 +60,19 @@ pub(crate) enum Remote {
     },
 }
 
+/// Whether a local registry row is alive. An unbound reservation never is. A headless
+/// run is alive while bound (it has no terminal child to probe). Any
+/// other session is alive unless the probe knows it gone: an unanswered probe leaves
+/// it alive, so a roster never offers to dismiss a session that may still run.
+fn local_alive(row: &SessionSnapshot, answers: &HashMap<String, Liveness<bool>>) -> bool {
+    if is_live_headless(row.kind, row.session_id.as_deref()) {
+        return true;
+    }
+    row.session_id
+        .as_deref()
+        .is_some_and(|id| answers.get(id).is_none_or(|answer| answer.may_be_true()))
+}
+
 /// The registry's rows with their liveness, plus a row for each live session the
 /// registry does not hold. `remote` places each row from the machine layouts the
 /// caller already holds; `live_pty` is every live registry-less candidate, or the
@@ -68,8 +84,53 @@ pub(crate) fn registry_rows(
     remote: impl Fn(&SessionSnapshot) -> Remote,
     live_pty: Result<HashSet<String>, String>,
 ) -> Result<Vec<SessionRow>, String> {
-    let _ = (snapshot, probe, remote, live_pty);
-    unimplemented!("the one liveness rule")
+    let placed: Vec<(SessionSnapshot, Remote)> = snapshot
+        .into_iter()
+        .map(|row| {
+            let place = remote(&row);
+            (row, place)
+        })
+        .collect();
+    let answers = {
+        let ids: Vec<&str> = placed
+            .iter()
+            .filter(|(row, place)| {
+                matches!(place, Remote::Local)
+                    && !is_live_headless(row.kind, row.session_id.as_deref())
+            })
+            .filter_map(|(row, _)| row.session_id.as_deref())
+            .collect();
+        if ids.is_empty() {
+            HashMap::new()
+        } else {
+            probe.alive(&ids)
+        }
+    };
+    let rows = placed
+        .into_iter()
+        .filter_map(|(row, place)| match place {
+            Remote::Local => {
+                let alive = local_alive(&row, &answers);
+                Some(session_row(row, alive))
+            }
+            Remote::Hidden => None,
+            Remote::Row { alive, session } => Some(remote_agent_row(row, alive, session)),
+        })
+        .collect();
+    union_registry_and_live_pty(rows, live_pty)
+}
+
+/// Whether `session_id` runs now: a headless run by its registry entry, any other
+/// session by the probe. A session kept only for its replay reads gone.
+pub(crate) fn session_liveness_with(
+    launch: Option<&DashboardLaunchState>,
+    probe: &dyn SessionProbe,
+    session_id: &str,
+) -> Liveness<bool> {
+    if launch.is_some_and(|launch| launch.has_live_headless_session(session_id)) {
+        return Liveness::Known(true);
+    }
+    probe_one(probe, session_id)
 }
 
 #[cfg(test)]
