@@ -118,7 +118,7 @@ describe("@P1 openWorkspaceTab (SW-GW-2)", () => {
     await openWorkspaceTab({ workspaceId: "generic:/x" }, deps);
     expect(useAgentInboxRailStore.getState().pending).toEqual({});
     await openWorkspaceTab({ workspaceId: "generic:/x", agent: true }, deps);
-    expect(useAgentInboxRailStore.getState().pending["shell-new"]).toBe(true);
+    expect(useAgentInboxRailStore.getState().pending["shell-minted"]).toBe(true);
   });
 
   it("an agent tab whose launch fails keeps no mark", async () => {
