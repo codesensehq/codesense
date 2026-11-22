@@ -175,27 +175,41 @@ pub fn team_pause(home: &Path, principal: &Principal, org: &str, team: &str) -> 
     fold(&records)
 }
 
-/// Write `records` (`(id, frontmatter)` pairs) into a team's `team-control`
-/// folder, as the pause writer would.
 #[cfg(test)]
-pub(crate) fn write_team_control(
-    home: &Path,
-    principal: &Principal,
-    org: &str,
-    team: &str,
-    records: &[(&str, &str)],
-) -> std::path::PathBuf {
-    let org_root = super::path_to_org_root(home, principal, org).expect("org root");
-    let folder = super::path_to_team_content_dir(&org_root, team).join(COLLECTION);
-    std::fs::create_dir_all(&folder).unwrap();
-    for (id, frontmatter) in records {
-        std::fs::write(
-            folder.join(format!("{id}.md")),
-            format!("---\n{frontmatter}\n---\n"),
-        )
-        .unwrap();
+pub(crate) use fixtures::write_team_control;
+
+// In a test module so the guard that counts direct team-folder reads sees only
+// the reader's.
+#[cfg(test)]
+mod fixtures {
+    use std::path::Path;
+
+    use super::COLLECTION;
+    use crate::domain::Principal;
+
+    /// Write `records` (`(id, frontmatter)` pairs) into a team's `team-control`
+    /// folder, as the pause writer would.
+    pub(crate) fn write_team_control(
+        home: &Path,
+        principal: &Principal,
+        org: &str,
+        team: &str,
+        records: &[(&str, &str)],
+    ) -> std::path::PathBuf {
+        let org_root =
+            crate::context_repo::path_to_org_root(home, principal, org).expect("org root");
+        let folder =
+            crate::context_repo::path_to_team_content_dir(&org_root, team).join(COLLECTION);
+        std::fs::create_dir_all(&folder).unwrap();
+        for (id, frontmatter) in records {
+            std::fs::write(
+                folder.join(format!("{id}.md")),
+                format!("---\n{frontmatter}\n---\n"),
+            )
+            .unwrap();
+        }
+        folder
     }
-    folder
 }
 
 #[cfg(test)]
