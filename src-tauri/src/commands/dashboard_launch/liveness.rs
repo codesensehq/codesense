@@ -1,0 +1,236 @@
+// SPDX-License-Identifier: MIT
+//! The one rule for whether a launch-registry row is alive, and the one probe it asks.
+//! The live hub, the roster, the live-session check and the deadline sweep all read
+//! liveness through [`registry_rows`] or [`SessionProbe`], so they cannot disagree.
+
+use std::collections::{HashMap, HashSet};
+
+use tauri::{AppHandle, Runtime};
+
+use super::super::pty_backend::{self, Liveness};
+use super::{SessionRow, SessionSnapshot};
+
+/// Which of a batch of local sessions have a running child, asked in one call. A
+/// session the terminal hosts cannot answer for is [`Liveness::Unknown`].
+pub(crate) trait SessionProbe {
+    fn alive(&self, ids: &[&str]) -> HashMap<String, Liveness<bool>>;
+}
+
+/// The app's probe: the terminal hosts, through [`pty_backend::alive_session_ids`],
+/// which never waits on a sidecar that is not answering.
+pub(crate) struct HostProbe<'a, R: Runtime>(pub &'a AppHandle<R>);
+
+impl<R: Runtime> SessionProbe for HostProbe<'_, R> {
+    fn alive(&self, ids: &[&str]) -> HashMap<String, Liveness<bool>> {
+        per_session(ids, &pty_backend::alive_session_ids(self.0, ids))
+    }
+}
+
+/// One batched host answer, split per session.
+fn per_session(ids: &[&str], alive: &Liveness<HashSet<String>>) -> HashMap<String, Liveness<bool>> {
+    ids.iter()
+        .map(|id| {
+            let answer = match alive {
+                Liveness::Known(running) => Liveness::Known(running.contains(*id)),
+                Liveness::Unknown => Liveness::Unknown,
+            };
+            ((*id).to_string(), answer)
+        })
+        .collect()
+}
+
+/// `id`'s answer from one probe call.
+pub(crate) fn probe_one(probe: &dyn SessionProbe, id: &str) -> Liveness<bool> {
+    probe.alive(&[id]).remove(id).unwrap_or(Liveness::Unknown)
+}
+
+/// Where the caller's machine layouts place a registry row.
+pub(crate) enum Remote {
+    /// A session on this Mac: the probe decides.
+    Local,
+    /// A remote launch its connected machine no longer shows: not listed.
+    Hidden,
+    /// A remote agent, judged by its machine's layout.
+    Row {
+        alive: bool,
+        session: Option<String>,
+    },
+}
+
+/// The registry's rows with their liveness, plus a row for each live session the
+/// registry does not hold. `remote` places each row from the machine layouts the
+/// caller already holds; `live_pty` is every live registry-less candidate, or the
+/// error that stops the read. Local sessions are probed in one batched call, none
+/// when nothing local is bound.
+pub(crate) fn registry_rows(
+    snapshot: Vec<SessionSnapshot>,
+    probe: &dyn SessionProbe,
+    remote: impl Fn(&SessionSnapshot) -> Remote,
+    live_pty: Result<HashSet<String>, String>,
+) -> Result<Vec<SessionRow>, String> {
+    let _ = (snapshot, probe, remote, live_pty);
+    unimplemented!("the one liveness rule")
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use crate::commands::dashboard_launch::DashboardLaunchState;
+    use std::cell::Cell;
+
+    /// A probe with fixed answers that counts its calls. An id it holds no answer for
+    /// reads `Unknown`, as an unanswering host does.
+    #[derive(Default)]
+    pub(crate) struct StubProbe {
+        pub answers: HashMap<String, Liveness<bool>>,
+        pub calls: Cell<usize>,
+    }
+
+    impl StubProbe {
+        pub(crate) fn with(answers: &[(&str, Liveness<bool>)]) -> Self {
+            Self {
+                answers: answers
+                    .iter()
+                    .map(|(id, answer)| ((*id).to_string(), answer.clone()))
+                    .collect(),
+                calls: Cell::new(0),
+            }
+        }
+    }
+
+    impl SessionProbe for StubProbe {
+        fn alive(&self, ids: &[&str]) -> HashMap<String, Liveness<bool>> {
+            self.calls.set(self.calls.get() + 1);
+            ids.iter()
+                .map(|id| {
+                    let answer = self.answers.get(*id).cloned().unwrap_or(Liveness::Unknown);
+                    ((*id).to_string(), answer)
+                })
+                .collect()
+        }
+    }
+
+    fn local(_: &SessionSnapshot) -> Remote {
+        Remote::Local
+    }
+
+    fn bound(launch: &DashboardLaunchState, handle: &str, session: &str) {
+        assert!(launch.begin(handle).unwrap());
+        launch.bind(handle, session, None).unwrap();
+    }
+
+    fn headless(launch: &DashboardLaunchState, handle: &str, session: &str) {
+        bound(launch, handle, session);
+        launch.mark_headless(
+            handle,
+            std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        );
+    }
+
+    fn alive_of(rows: &[SessionRow], handle: &str) -> bool {
+        rows.iter()
+            .find(|row| row.handle == handle)
+            .unwrap_or_else(|| panic!("no row for {handle}"))
+            .alive
+    }
+
+    #[test]
+    fn a_known_answer_decides_a_bound_session() {
+        let launch = DashboardLaunchState::new(4);
+        bound(&launch, "up", "s-up");
+        bound(&launch, "gone", "s-gone");
+        let probe = StubProbe::with(&[
+            ("s-up", Liveness::Known(true)),
+            ("s-gone", Liveness::Known(false)),
+        ]);
+        let rows = registry_rows(launch.snapshot(), &probe, local, Ok(HashSet::new())).unwrap();
+        assert!(alive_of(&rows, "up"));
+        assert!(!alive_of(&rows, "gone"));
+        assert_eq!(probe.calls.get(), 1, "one batched probe call per read");
+    }
+
+    #[test]
+    fn an_unknown_answer_leaves_a_row_alive() {
+        let launch = DashboardLaunchState::new(4);
+        bound(&launch, "w", "s-w");
+        let probe = StubProbe::default();
+        let rows = registry_rows(launch.snapshot(), &probe, local, Ok(HashSet::new())).unwrap();
+        assert!(alive_of(&rows, "w"));
+    }
+
+    #[test]
+    fn an_unbound_reservation_is_dead() {
+        let launch = DashboardLaunchState::new(4);
+        assert!(launch.begin("reserved").unwrap());
+        let probe = StubProbe::default();
+        let rows = registry_rows(launch.snapshot(), &probe, local, Ok(HashSet::new())).unwrap();
+        assert!(!alive_of(&rows, "reserved"));
+        assert_eq!(probe.calls.get(), 0, "nothing bound, nothing probed");
+    }
+
+    #[test]
+    fn a_headless_run_is_alive_only_while_bound_and_not_exited() {
+        let launch = DashboardLaunchState::new(4);
+        headless(&launch, "hl", "headless-1");
+        // The probe knows no terminal child for it; its registry entry decides.
+        let probe = StubProbe::with(&[("headless-1", Liveness::Known(false))]);
+        let rows = registry_rows(launch.snapshot(), &probe, local, Ok(HashSet::new())).unwrap();
+        assert!(alive_of(&rows, "hl"));
+        assert_eq!(probe.calls.get(), 0, "a headless run is never probed");
+
+        launch.mark_headless_exited("headless-1");
+        let rows = registry_rows(launch.snapshot(), &probe, local, Ok(HashSet::new())).unwrap();
+        assert!(!alive_of(&rows, "hl"));
+    }
+
+    #[test]
+    fn a_registry_less_live_session_is_alive() {
+        let launch = DashboardLaunchState::new(4);
+        let probe = StubProbe::default();
+        let rows = registry_rows(
+            launch.snapshot(),
+            &probe,
+            local,
+            Ok(HashSet::from(["pty-1".to_string()])),
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(alive_of(&rows, "pty-1"));
+        assert_eq!(rows[0].session_id.as_deref(), Some("pty-1"));
+    }
+
+    #[test]
+    fn a_remote_row_is_placed_by_the_caller_and_never_probed() {
+        let launch = DashboardLaunchState::new(4);
+        bound(&launch, "shown", "s-shown");
+        bound(&launch, "hidden", "s-hidden");
+        let probe = StubProbe::default();
+        let rows = registry_rows(
+            launch.snapshot(),
+            &probe,
+            |row| match row.handle.as_str() {
+                "hidden" => Remote::Hidden,
+                _ => Remote::Row {
+                    alive: false,
+                    session: Some("remote-session".into()),
+                },
+            },
+            Ok(HashSet::new()),
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(!alive_of(&rows, "shown"));
+        assert_eq!(rows[0].session_id.as_deref(), Some("remote-session"));
+        assert_eq!(probe.calls.get(), 0);
+    }
+
+    #[test]
+    fn the_live_session_error_stops_the_read() {
+        let launch = DashboardLaunchState::new(4);
+        let probe = StubProbe::default();
+        let read = registry_rows(launch.snapshot(), &probe, local, Err("hosts down".into()));
+        assert_eq!(read.unwrap_err(), "hosts down");
+    }
+}

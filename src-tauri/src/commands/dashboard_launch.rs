@@ -7107,6 +7107,7 @@ mod persistence;
 pub(crate) use persistence::registry_path as persistence_registry_path;
 
 pub(crate) mod deadline;
+pub(crate) mod liveness;
 mod ready;
 pub use ready::AgentReadiness;
 pub(crate) use deadline::{run_deadline_sweep, run_startup_sweep};
