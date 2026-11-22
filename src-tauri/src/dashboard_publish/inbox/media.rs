@@ -26,9 +26,13 @@ pub const CHUNK_BYTES: usize = 180 * 1024;
 const _: () = assert!(CHUNK_BYTES.div_ceil(3) * 4 + 1024 <= super::super::live::MAX_ANSWER_BYTES);
 
 /// An attachment as the hosted projection shows it with `media` declared. Never the
-/// source URL or host, or the failure reason.
+/// source URL or host, the provider's id, its view-ping state or the failure reason: only
+/// whose attribution it carries, `giphy` or `klipy`, when it is provider media.
 pub(crate) fn projected(a: &crate::media::Attachment) -> Value {
     let mut out = json!({"kind": a.kind, "alt": a.alt, "state": a.state});
+    if let Some(provider) = crate::media::Attachment::attribution(a) {
+        out["attribution"] = json!(provider);
+    }
     for (key, value) in [
         ("width", a.width.map(u64::from)),
         ("height", a.height.map(u64::from)),

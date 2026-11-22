@@ -27,18 +27,28 @@ pub struct Reference {
     pub source_host: Option<String>,
     /// When the reference was made (ms), so the newest comes first.
     pub at: i64,
-    owner: Owner,
+    /// The sender's provider claim and id, and whether the view ping is settled.
+    pub provider: Option<MediaProvider>,
+    pub provider_id: Option<String>,
+    pub onload_sent: bool,
+    /// The message holding the attachment, and the attachment's place in it.
+    pub owner: Owner,
+    pub slot: usize,
 }
 
 impl Reference {
-    fn new(owner: &Owner, at: i64, a: &Attachment) -> Self {
+    fn new(owner: &Owner, slot: usize, at: i64, a: &Attachment) -> Self {
         Self {
             url: a.source_url.clone(),
             own_sender: a.own_sender,
             media_provider: a.media_provider,
             source_host: a.source_host.clone(),
             at,
+            provider: a.provider,
+            provider_id: a.provider_id.clone(),
+            onload_sent: a.onload_sent,
             owner: owner.clone(),
+            slot,
         }
     }
     /// A provider reference: `mediaProvider` says so, or (an old message only, with no
@@ -102,13 +112,13 @@ impl ShaIndex {
         let mut inner = self.lock();
         inner.forget(owner);
         let mut shas = Vec::new();
-        for a in attachments {
+        for (slot, a) in Iterator::enumerate(attachments.iter()) {
             let Some(sha) = a.sha256.clone() else {
                 continue;
             };
             let refs = inner.by_sha.entry(sha.clone()).or_default();
             let at_index = refs.partition_point(|r| r.at >= at);
-            refs.insert(at_index, Reference::new(owner, at, a));
+            refs.insert(at_index, Reference::new(owner, slot, at, a));
             if !shas.contains(&sha) {
                 shas.push(sha);
             }
@@ -148,6 +158,40 @@ impl ShaIndex {
             .flatten()
             .or_else(|| own().next())
             .and_then(|r| r.url.clone())
+    }
+
+    /// Claim the view pings a serve of `sha` settles, in every synced team: each attachment
+    /// sent from this machine with a GIPHY claim whose ping is not yet settled. Each is marked
+    /// settled here, under the index lock, so a concurrent serve claims none of them again.
+    /// Returns their messages and places.
+    pub fn claim_onloads(&self, sha: &str) -> Vec<(Owner, usize)> {
+        let mut inner = self.lock();
+        let mut claimed = Vec::new();
+        if let Some(refs) = inner.by_sha.get_mut(sha) {
+            for r in refs {
+                if r.own_sender && r.provider == Some(MediaProvider::Giphy) && !r.onload_sent {
+                    r.onload_sent = true;
+                    claimed.push((r.owner.clone(), r.slot));
+                }
+            }
+        }
+        claimed
+    }
+
+    /// Give back claims [`Self::claim_onloads`] made for `sha` whose view ping must wait for a
+    /// later serve.
+    pub fn release_onloads(&self, sha: &str, slots: &[(Owner, usize)]) {
+        let mut inner = self.lock();
+        if let Some(refs) = inner.by_sha.get_mut(sha) {
+            for r in refs {
+                if slots
+                    .iter()
+                    .any(|(owner, slot)| *owner == r.owner && *slot == r.slot)
+                {
+                    r.onload_sent = false;
+                }
+            }
+        }
     }
 
     /// Every sha with a provider reference.
@@ -290,6 +334,35 @@ mod tests {
         );
         let refs = index.references("s");
         assert!(refs.windows(2).all(|w| w[0].at >= w[1].at), "newest first");
+    }
+
+    #[test]
+    fn a_serve_claims_each_unsent_own_giphy_attachment_once_across_teams() {
+        let index = ShaIndex::default();
+        let giphy = |own: bool, tagged: bool, sent: bool| {
+            let mut a = image(
+                "s",
+                Some("https://i.giphy.com/a.gif"),
+                own,
+                Some(MediaProvider::Giphy),
+            );
+            if tagged {
+                a.provider = Some(MediaProvider::Giphy);
+                a.provider_id = Some("abc".into());
+            }
+            a.onload_sent = sent;
+            a
+        };
+        index.set_message(&owner("a", 1), 1, &[giphy(true, true, false)]);
+        index.set_message(&owner("b", 2), 2, &[giphy(true, true, false)]);
+        index.set_message(&owner("b", 3), 3, &[giphy(false, true, false)]);
+        index.set_message(&owner("b", 4), 4, &[giphy(true, false, false)]);
+        index.set_message(&owner("b", 5), 5, &[giphy(true, true, true)]);
+        let mut claimed = index.claim_onloads("s");
+        claimed.sort_by_key(|(o, _)| o.message_id);
+        assert_eq!(claimed, vec![(owner("a", 1), 0), (owner("b", 2), 0)]);
+        assert!(index.claim_onloads("s").is_empty(), "claimed once");
+        assert!(index.claim_onloads("other").is_empty());
     }
 
     #[test]
