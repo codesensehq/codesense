@@ -206,6 +206,7 @@ const REASON_COPY: Record<string, string> = {
   already_running: "Skipped — previous run still running",
   target_unavailable: "Skipped — workspace unavailable",
   loop_guard: "Skipped — loop guard",
+  team_paused: "Skipped — team paused",
   paused: "Skipped — paused",
   get off_here() {
     return `Skipped — off on ${localMachinePhrase()}. Turn on for ${localMachinePhrase()} to run here`;

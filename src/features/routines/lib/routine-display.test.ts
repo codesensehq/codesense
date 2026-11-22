@@ -104,6 +104,7 @@ describe("reasonCopy", () => {
     ["already_running", "Skipped — previous run still running"],
     ["target_unavailable", "Skipped — workspace unavailable"],
     ["loop_guard", "Skipped — loop guard"],
+    ["team_paused", "Skipped — team paused"],
     ["paused", "Skipped — paused"],
     ["queue_full", "Skipped — queue full"],
   ])("%s reads as human copy", (reason, copy) => {
