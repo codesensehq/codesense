@@ -30,8 +30,6 @@ pub mod sample_source_repo;
 mod scaffold;
 pub mod scoped_key;
 pub mod scratch_space;
-// The open gate reads only `paused`; the routine gate reads the rest once it lands.
-#[allow(dead_code)]
 pub(crate) mod team_pause;
 mod team_rename;
 mod url;
