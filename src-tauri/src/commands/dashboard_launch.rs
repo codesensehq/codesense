@@ -3674,6 +3674,20 @@ pub(crate) fn emit_session_state_changed<R: tauri::Runtime>(app: &tauri::AppHand
     let _ = app.emit(SESSION_STATE_CHANGED, ());
 }
 
+/// [`DashboardLaunchState::abort`], announcing a dropped entry: a reservation that never
+/// bound has no session whose exit would, so the roster and the hub hear it here.
+pub(crate) fn abort_and_notify<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &DashboardLaunchState,
+    handle: &str,
+) -> bool {
+    let removed = state.abort(handle);
+    if removed {
+        emit_session_state_changed(app);
+    }
+    removed
+}
+
 fn chat_workspace_for_entry(entry: &LaunchEntry) -> Option<String> {
     if let Some(remote) = &entry.remote_shell {
         return super::workspace_chat::resolve::remote_workspace_id(

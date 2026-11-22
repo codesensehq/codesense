@@ -3541,4 +3541,37 @@ mod call_time_read {
         assert_ne!(state_of(&rows, "w"), session_list::SessionState::Exited);
         assert_eq!(source.running("s-w"), Ok(()));
     }
+
+    #[test]
+    fn a_launch_aborted_before_it_binds_is_announced_and_dropped() {
+        use std::sync::mpsc;
+        use tauri::Listener;
+        let source = FakeSessions::new(StubProbe::default());
+        assert!(source.launch.begin("w").unwrap());
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let (send, changed) = mpsc::channel();
+        app.listen(
+            crate::commands::dashboard_launch::SESSION_STATE_CHANGED,
+            move |_| {
+                let _ = send.send(());
+            },
+        );
+        assert!(crate::commands::dashboard_launch::abort_and_notify(
+            app.handle(),
+            &source.launch,
+            "w"
+        ));
+        assert!(changed.recv_timeout(Duration::from_secs(3)).is_ok());
+        let (rows, _) = session_list::read_session_list_from(&source, None).unwrap();
+        assert!(rows.iter().all(|row| row.handle != "w"));
+        // A second abort drops nothing and announces nothing.
+        assert!(!crate::commands::dashboard_launch::abort_and_notify(
+            app.handle(),
+            &source.launch,
+            "w"
+        ));
+        assert!(changed.recv_timeout(Duration::from_millis(50)).is_err());
+    }
 }
