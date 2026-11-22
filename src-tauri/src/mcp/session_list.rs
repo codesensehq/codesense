@@ -326,7 +326,58 @@ pub(crate) async fn read_session_list_and_unread(
     ),
     String,
 > {
-    crate::live_hub::read(app, launched_by)
+    let (app, launched_by) = (app.clone(), launched_by.map(str::to_owned));
+    crate::commands::await_blocking("session_list.read", move || {
+        read_session_list_from(&AppSessions::of(&app)?, launched_by.as_deref())
+    })
+    .await
+}
+
+/// The app's [`SessionSource`]: its launch registry, live hub and terminal hosts.
+pub(crate) struct AppSessions<'a> {
+    launch: tauri::State<'a, crate::commands::dashboard_launch::DashboardLaunchState>,
+    hub: tauri::State<'a, crate::live_hub::LiveHub>,
+    probe: crate::commands::dashboard_launch::liveness::HostProbe<'a, tauri::Wry>,
+    app: &'a tauri::AppHandle,
+}
+
+impl<'a> AppSessions<'a> {
+    pub(crate) fn of(app: &'a tauri::AppHandle) -> Result<Self, String> {
+        use tauri::Manager;
+        Ok(Self {
+            launch: app.try_state().ok_or("launch registry unavailable")?,
+            hub: app.try_state().ok_or("live hub unavailable")?,
+            probe: crate::commands::dashboard_launch::liveness::HostProbe(app),
+            app,
+        })
+    }
+}
+
+impl SessionSource for AppSessions<'_> {
+    fn launch(&self) -> &crate::commands::dashboard_launch::DashboardLaunchState {
+        &self.launch
+    }
+    fn hub(&self) -> &crate::live_hub::LiveHub {
+        &self.hub
+    }
+    fn probe(&self) -> &dyn crate::commands::dashboard_launch::liveness::SessionProbe {
+        &self.probe
+    }
+    fn local_sessions(&self) -> Result<std::collections::HashSet<String>, String> {
+        crate::commands::pty_backend::live_session_ids(self.app)
+    }
+    fn progress(&self) -> Option<&crate::dashboard_stream::DashboardStreamHub> {
+        use tauri::Manager;
+        self.app
+            .try_state::<crate::dashboard_stream::DashboardStreamHub>()
+            .map(|state| state.inner())
+    }
+    fn telemetry(&self) -> Option<&crate::commands::launch_telemetry::LaunchTelemetryTracker> {
+        use tauri::Manager;
+        self.app
+            .try_state::<crate::commands::launch_telemetry::LaunchTelemetryTracker>()
+            .map(|state| state.inner())
+    }
 }
 
 /// What a session-list read asks when it is called: the launch registry, the session
@@ -353,11 +404,7 @@ pub(crate) fn read_session_list_from(
     ),
     String,
 > {
-    let key = launched_by
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|s| source.launch().normalize_launched_by(s));
-    Ok(source.hub().rows(key.as_deref()))
+    crate::live_hub::read_now(source, launched_by)
 }
 
 /// What a session's terminal tab shows now, read from its host's layout.

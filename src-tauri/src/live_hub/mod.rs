@@ -471,18 +471,49 @@ impl LiveHub {
         (rows, inbox::InboxProjection::unread(&*inbox))
     }
 }
-pub(crate) fn read(
-    app: &tauri::AppHandle,
+/// The session list as it is now. Membership and liveness come from `source` when
+/// called: the registry, judged by its probe, plus this Mac's live sessions. The cached
+/// layouts only name, place and decorate the rows, and supply remote machines' tabs.
+/// `launched_by` (a session id or handle) keeps only the sessions it launched.
+pub(crate) fn read_now(
+    source: &impl session_list::SessionSource,
     launched_by: Option<&str>,
 ) -> Result<(Vec<SessionListRow>, UnreadByHandle), String> {
+    let launch = source.launch();
     let key = launched_by
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(|s| app.state::<DashboardLaunchState>().normalize_launched_by(s));
-    Ok(app
-        .try_state::<LiveHub>()
-        .ok_or("live hub unavailable")?
-        .rows(key.as_deref()))
+        .map(|s| launch.normalize_launched_by(s));
+    let (live, active, inbox) = {
+        let model = source.hub().model.lock().unwrap();
+        (
+            model.live_tabs(),
+            model.active_team.clone(),
+            std::sync::Arc::clone(&model.inbox),
+        )
+    };
+    let mut registry =
+        cached_registry(launch, &live, source.probe(), Some(source.local_sessions()))?;
+    for row in &mut registry {
+        row.chat_workspace_id = row
+            .session_id
+            .as_deref()
+            .and_then(|id| launch.workspace_for_session(id));
+    }
+    let mut rows = project_registry(launch, &live, registry);
+    if let Some(parent) = key.as_deref() {
+        rows.retain(|r| r.launched_by.as_deref() == Some(parent));
+    }
+    enrich_rows(
+        &mut rows,
+        launch,
+        &live,
+        active.as_ref(),
+        source.progress(),
+        source.telemetry(),
+    );
+    inbox.join(&mut rows);
+    Ok((rows, inbox::InboxProjection::unread(&*inbox)))
 }
 
 fn listen_sources<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
