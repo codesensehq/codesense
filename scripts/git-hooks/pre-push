@@ -17,9 +17,7 @@ if ! command -v node >/dev/null 2>&1; then
   exit 0
 fi
 # An installed dispatcher from before the signed-commit check: ask for a reinstall.
-if hooks=$(git rev-parse --path-format=absolute --git-path hooks 2>/dev/null) &&
-  grep -q codesense-privacy-hook-dispatcher "$hooks/pre-push" 2>/dev/null &&
-  ! grep -q "codesense-privacy-hook-version: 2" "$hooks/pre-push" 2>/dev/null; then
-  echo "privacy hook: the installed dispatcher is out of date; rerun scripts/git-hooks/install.sh" >&2
-fi
+# shellcheck source=scripts/git-hooks/dispatcher-check.sh
+. "$here/dispatcher-check.sh"
+stale_dispatcher pre-push
 exec node "$here/../privacy-ci.mjs" --hook pre-push "$@"

@@ -1389,3 +1389,59 @@ test("a commit that breaks three rules prints three lines", (t) => {
     "signing-config",
   ]);
 });
+
+test("a term committed with --no-verify is still refused at pre-push", (t) => {
+  const s = sandbox(t);
+  passed(s.install());
+  s.stage("a.txt", `${TERM}\n`);
+  passed(s.run(["commit", "-q", "--no-verify", "-m", "Clean subject"]));
+  blocked(s.run(["push", "-q", "public", "main"]));
+  assert.ok(!s.remoteHas("refs/heads/main"));
+});
+
+test("commit-msg warns about a stale dispatcher as pre-push does, and still checks", (t) => {
+  const s = sandbox(t);
+  passed(s.install());
+  s.commit("a.txt", "clean\n");
+  const STALE =
+    /privacy hook: the installed dispatcher is out of date; rerun scripts\/git-hooks\/install\.sh/;
+  // A version-1 dispatcher: no version marker.
+  for (const name of ["pre-push", "commit-msg"]) {
+    const hook = path.join(s.hooks, name);
+    const text = fs.readFileSync(hook, "utf8");
+    fs.writeFileSync(hook, text.replace(/^# codesense-privacy-hook-version: .*\n/m, ""));
+  }
+  s.stage("b.txt", `${TERM}\n`);
+  const refusedStale = s.run(["commit", "-q", "-m", "Clean subject"]);
+  commitRefused(refusedStale, "fixture-5");
+  assert.match(refusedStale.stderr, STALE);
+  s.stage("b.txt", "clean\n");
+  const cleanStale = s.run(["commit", "-q", "-m", "Clean subject"]);
+  passed(cleanStale);
+  assert.match(cleanStale.stderr, STALE);
+  const pushed = s.run(["push", "-q", "public", "main"]);
+  passed(pushed);
+  assert.match(pushed.stderr, STALE);
+  // A quiet reinstall is idempotent and clears the warning.
+  const quiet = spawnSync("sh", [INSTALL, "--quiet"], {
+    cwd: s.work,
+    encoding: "utf8",
+    env: s.env,
+  });
+  passed(quiet);
+  assert.equal(quiet.stdout + quiet.stderr, "");
+  const installed = snapshot(s.hooks);
+  passed(spawnSync("sh", [INSTALL, "--quiet"], { cwd: s.work, encoding: "utf8", env: s.env }));
+  assert.deepEqual(snapshot(s.hooks), installed);
+  s.stage("b.txt", "again\n");
+  const fresh = s.run(["commit", "-q", "-m", "Clean subject"]);
+  passed(fresh);
+  assert.doesNotMatch(fresh.stderr, /out of date/);
+  // Every worktree of the clone shares the hooks, so a linked one refuses a term.
+  const linked = path.join(s.root, "linked");
+  s.git("worktree", "add", "-q", "-b", "linked", linked);
+  fs.symlinkSync(SCRIPTS, path.join(linked, "scripts"));
+  fs.writeFileSync(path.join(linked, "c.txt"), `${TERM}\n`);
+  s.git("-C", linked, "add", "c.txt");
+  commitRefused(s.run(["commit", "-q", "-m", "Clean subject"], { cwd: linked }), "fixture-5");
+});

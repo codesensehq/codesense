@@ -26,4 +26,7 @@ if ! command -v node >/dev/null 2>&1; then
   fi
   exit 0
 fi
+# shellcheck source=scripts/git-hooks/dispatcher-check.sh
+. "$here/dispatcher-check.sh"
+stale_dispatcher commit-msg
 exec node "$here/../privacy-ci.mjs" --hook commit-msg "$@"
