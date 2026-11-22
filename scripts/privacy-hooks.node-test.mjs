@@ -1354,3 +1354,38 @@ test("without node, a requireSigned clone's commit-msg warns that its checks did
   s.git("config", "codesense.requireSigned", "false");
   assert.doesNotMatch(run().stderr, /commit-time checks/);
 });
+
+test("commit-msg names a staged file only with CODESENSE_PRIVACY_SHOW=1", (t) => {
+  const s = sandbox(t);
+  passed(s.install());
+  s.commit("a.txt", "clean\n");
+  s.stage("b.txt", `x ${TERM} y\n`);
+  s.stage(`${TERM}.md`, "clean\n");
+  const hidden = s.run(["commit", "-q", "-m", "Clean subject"]);
+  commitRefused(hidden, "fixture-5");
+  assert.deepEqual(
+    hookLines(hidden.stderr)
+      .filter((line) => line.includes("  "))
+      .map((line) => line.split("  ")[1]),
+    // `git diff --cached --name-only` order: b.txt, then the term's file.
+    ["staged file 1, line 1", "a staged path"],
+  );
+  const shown = s.run(["commit", "-q", "-m", "Clean subject"], {
+    env: { ...s.env, CODESENSE_PRIVACY_SHOW: "1" },
+  });
+  assert.notEqual(shown.status, 0);
+  assert.match(shown.stderr, new RegExp(`^privacy-scan: fixture-5  ${TERM}\\.md `, "m"));
+  assert.match(shown.stderr, new RegExp(`^privacy-scan: fixture-5  b\\.txt:1 ${TERM}  `, "m"));
+});
+
+test("a commit that breaks three rules prints three lines", (t) => {
+  const s = maintainerClone(t);
+  s.git("config", "commit.gpgsign", "false");
+  const result = s.attempt(["--author", "Someone <someone@example.com>", "-m", "Clean subject"]);
+  commitRefused(result, "author-identity");
+  assert.deepEqual(commitRules(result.stderr), [
+    "author-identity",
+    "missing-signoff",
+    "signing-config",
+  ]);
+});

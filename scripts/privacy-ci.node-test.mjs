@@ -8,11 +8,16 @@ import { execFileSync, spawnSync } from "node:child_process";
 import {
   scanChange,
   scanStaged,
+  FIX,
+  COMMIT_RULES,
+  fixFor,
+  placeOf,
   addedLines,
   pairCommitSections,
   addedLineSelection,
 } from "./privacy-ci.mjs";
 import { scan, allowLines } from "./privacy-engine.mjs";
+import { GENERIC_RULES } from "./privacy-rules.mjs";
 
 const token = () => "gh" + "p_" + "aB3".repeat(12);
 const bad = (findings) => findings.some((f) => f.sev === "error" && !f.allowed);
@@ -545,4 +550,77 @@ test("the staged scan skips a merge in progress", (t) => {
   f.git("add", "a.txt");
   fs.writeFileSync(path.join(f.dir, ".git", "MERGE_HEAD"), `${f.base}\n`);
   assert.equal(staged(f), null);
+});
+
+// Each commit-time fix, pinned: one string per rule, a rerun and never an amend.
+const EDITMSG = 'git commit -F "$(git rev-parse --git-path COMMIT_EDITMSG)"';
+const SETUP = "the maintainer clone setup in CONTRIBUTING.md (AI assistance)";
+const PINNED = {
+  message: `rerun with the message reworded (edit it, then ${EDITMSG})`,
+  content: "rerun with the line edited and the file staged again (git add)",
+  path: "rerun with the file renamed (git mv)",
+  "forbidden-path": "rerun with the file unstaged (git rm --cached)",
+  "key-file": "rerun with the key file unstaged (git rm --cached)",
+  "image-metadata": "rerun with the image's metadata stripped and the file staged again (git add)",
+  gitlink: "rerun with the gitlink unstaged (git rm --cached); submodules are not supported",
+  "scan-error":
+    "rerun with the index checked (git status, git diff --cached --stat); report the hook if it repeats",
+  "author-identity": `rerun with user.name and user.email set as in ${SETUP}; for an amended commit, rerun with --amend --reset-author`,
+  "committer-identity": `rerun with user.name and user.email set as in ${SETUP}, and no GIT_COMMITTER_* override`,
+  "missing-signoff": "rerun with -s (git commit -s) as the maintainer identity",
+  "ai-co-author": "rerun with the AI Co-authored-by line removed from the message",
+  "signing-config":
+    "rerun with git config commit.gpgsign true and a key (user.signingkey, or gpg.ssh.defaultKeyCommand for ssh); " +
+    "this checks the config, not the signature, and needs commit.gpgsign because the hook cannot see -S",
+};
+
+test("each commit-time rule has its one pinned fix", () => {
+  assert.deepEqual({ ...FIX }, PINNED);
+});
+
+test("every rule commit-msg can report has a fix, a rerun that never amends", () => {
+  const structural = ["forbidden-path", "key-file", "image-metadata"];
+  for (const rule of [...COMMIT_RULES, ...structural])
+    assert.ok(Object.hasOwn(FIX, rule), `no FIX entry for ${rule}`);
+  // Every scanner rule resolves to a fix wherever it is found.
+  for (const { id } of GENERIC_RULES)
+    for (const finding of [
+      { rule: id, source: "message" },
+      { rule: id, source: "staged" },
+      { rule: id, source: "staged", path: true },
+    ])
+      assert.ok(Object.values(FIX).includes(fixFor(finding)), `${id} has no fix`);
+  for (const [rule, fix] of Object.entries(FIX)) {
+    assert.match(fix, /^rerun with /, rule);
+    const amends = fix.replace("--amend --reset-author", "");
+    assert.ok(!amends.includes("--amend"), `${rule} amends`);
+    if (rule !== "author-identity") assert.ok(!fix.includes("--amend"), `${rule} amends`);
+  }
+  // The identity fixes point to the setup and never print the handle.
+  const handle = ["alfy", "pops"].join("");
+  assert.ok(!Object.values(FIX).join("\n").includes(handle));
+  for (const rule of ["author-identity", "committer-identity"])
+    assert.ok(FIX[rule].includes("CONTRIBUTING.md"));
+});
+
+test("a commit-time place names no staged file unless shown", () => {
+  const content = { rule: "token", source: "staged", file: "a.txt", line: 4, index: 2 };
+  const pathFinding = { rule: "fixture", source: "staged", file: "a.txt", line: 0, path: true };
+  const binary = { rule: "token", source: "staged", file: "b.bin", line: 0, offset: 9, index: 1 };
+  const shown = { ...content, shown: "match" };
+  assert.equal(placeOf(content), "staged file 2, line 4");
+  assert.equal(placeOf(pathFinding), "a staged path");
+  assert.equal(placeOf(binary), "staged file 1, byte 9");
+  assert.equal(placeOf({ ...content, line: 0 }), "staged file 2");
+  assert.equal(placeOf({ ...content, index: null }), "a staged file, line 4");
+  assert.equal(placeOf(shown), "staged file 2, line 4");
+  assert.equal(placeOf({ rule: "gitlink", source: "staged" }), "the staged changes");
+  assert.equal(placeOf({ rule: "token", file: "message.txt", line: 3 }), "message:3");
+  assert.equal(placeOf({ rule: "author-identity", source: "commit", place: "author" }), "author");
+  // CODESENSE_PRIVACY_SHOW=1: the path, and a show-kind rule's match.
+  assert.equal(placeOf(content, true), "a.txt:4");
+  assert.equal(placeOf(pathFinding, true), "a.txt");
+  assert.equal(placeOf(binary, true), "b.bin@9");
+  assert.equal(placeOf(shown, true), "a.txt:4 match");
+  assert.equal(placeOf({ rule: "token", line: 3, shown: "m" }, true), "message:3 m");
 });
