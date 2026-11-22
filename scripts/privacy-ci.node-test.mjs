@@ -8,8 +8,9 @@ import { execFileSync, spawnSync } from "node:child_process";
 import {
   scanChange,
   scanStaged,
+  commitFindings,
   FIX,
-  COMMIT_RULES,
+  LOCATION_FIX,
   fixFor,
   placeOf,
   addedLines,
@@ -507,20 +508,28 @@ test("binary files and mode-only changes pass the staged scan", (t) => {
   assert.deepEqual(errors(staged(f)), []);
 });
 
-test("a staged gitlink and any other scan failure refuse with their own rules", (t) => {
+test("a staged gitlink, a malformed allow-list and any other scan failure refuse with their own rules", (t) => {
   const f = fixture(t);
+  const refusal = (findings) => findings.map((x) => [x.rule, x.sev, x.allowed, x.place]);
   f.git("update-index", "--add", "--cacheinfo", "160000", f.base, "vendor/component");
-  assert.deepEqual(
-    staged(f).map((x) => [x.rule, x.sev, x.allowed]),
-    [["gitlink", "error", false]],
-  );
+  assert.deepEqual(refusal(staged(f)), [["gitlink", "error", false, "the staged changes"]]);
+  f.git("rm", "-q", "--cached", "vendor/component");
+  // A malformed allow entry says so, not that the index is wrong.
+  fs.writeFileSync(f.allowFile, "not an entry\n");
+  assert.deepEqual(refusal(staged(f)), [["allow-file", "error", false, "the allow-list"]]);
+  fs.writeFileSync(f.allowFile, "");
+  // A staged blob that cannot be read: the diff parse fails.
+  f.put("b.txt", "clean\n");
+  f.git("add", "b.txt");
+  const oid = f.git("rev-parse", ":b.txt").trim();
+  fs.rmSync(path.join(f.dir, ".git", "objects", oid.slice(0, 2), oid.slice(2)));
+  assert.deepEqual(refusal(staged(f)), [["scan-error", "error", false, "the staged changes"]]);
   // A directory outside any repository: git fails, and the scan says so.
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), "privacy-ci-outside-"));
   t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
-  assert.deepEqual(
-    scanStaged({ cwd: outside }).map((x) => [x.rule, x.sev, x.allowed]),
-    [["scan-error", "error", false]],
-  );
+  assert.deepEqual(refusal(scanStaged({ cwd: outside })), [
+    ["scan-error", "error", false, "the staged changes"],
+  ]);
 });
 
 test("the staged scan on an unborn branch uses the empty tree", (t) => {
@@ -552,21 +561,25 @@ test("the staged scan skips a merge in progress", (t) => {
   assert.equal(staged(f), null);
 });
 
-// Each commit-time fix, pinned: one string per rule, a rerun and never an amend.
-const EDITMSG = 'git commit -F "$(git rev-parse --git-path COMMIT_EDITMSG)"';
+// Each commit-time fix, pinned: one string per rule or place, a rerun and never an amend.
+const EDITMSG = 'git commit -e -v -F "$(git rev-parse --git-path COMMIT_EDITMSG)"';
 const SETUP = "the maintainer clone setup in CONTRIBUTING.md (AI assistance)";
-const PINNED = {
-  message: `rerun with the message reworded (edit it, then ${EDITMSG})`,
+const IDENTITY = `set to the maintainer's GitHub login and noreply address as in ${SETUP}`;
+const PINNED_LOCATION = {
+  message: `rerun with the message reworded (${EDITMSG} reopens it)`,
   content: "rerun with the line edited and the file staged again (git add)",
   path: "rerun with the file renamed (git mv)",
+};
+const PINNED = {
   "forbidden-path": "rerun with the file unstaged (git rm --cached)",
   "key-file": "rerun with the key file unstaged (git rm --cached)",
   "image-metadata": "rerun with the image's metadata stripped and the file staged again (git add)",
   gitlink: "rerun with the gitlink unstaged (git rm --cached); submodules are not supported",
   "scan-error":
     "rerun with the index checked (git status, git diff --cached --stat); report the hook if it repeats",
-  "author-identity": `rerun with user.name and user.email set as in ${SETUP}; for an amended commit, rerun with --amend --reset-author`,
-  "committer-identity": `rerun with user.name and user.email set as in ${SETUP}, and no GIT_COMMITTER_* override`,
+  "allow-file": "rerun with the malformed entry in scripts/privacy-scan.allow fixed",
+  "author-identity": `rerun with user.name and user.email ${IDENTITY}, and no --author or GIT_AUTHOR_* override; for an amended commit, rerun with --amend --reset-author`,
+  "committer-identity": `rerun with user.name and user.email ${IDENTITY}, and no GIT_COMMITTER_* override`,
   "missing-signoff": "rerun with -s (git commit -s) as the maintainer identity",
   "ai-co-author": "rerun with the AI Co-authored-by line removed from the message",
   "signing-config":
@@ -574,23 +587,45 @@ const PINNED = {
     "this checks the config, not the signature, and needs commit.gpgsign because the hook cannot see -S",
 };
 
-test("each commit-time rule has its one pinned fix", () => {
+test("each commit-time rule and place has its one pinned fix", () => {
   assert.deepEqual({ ...FIX }, PINNED);
+  assert.deepEqual({ ...LOCATION_FIX }, PINNED_LOCATION);
 });
 
-test("every rule commit-msg can report has a fix, a rerun that never amends", () => {
+test("every rule commit-msg reports itself has its own fix; only content rules fall back", (t) => {
+  // The rules are what the checks emit, not a list kept by hand.
+  const f = fixture(t);
+  f.git("config", "user.name", "Someone");
+  f.git("config", "user.email", "someone@example.com");
+  const message = "Subject\n\nCo-authored-by: Claude <noreply@anthropic.com>\n";
+  const emitted = commitFindings(f.dir, { message });
+  const fromStaged = () => emitted.push(...staged(f).map((x) => ({ ...x, source: "staged" })));
+  f.git("update-index", "--add", "--cacheinfo", "160000", f.base, "vendor/component");
+  fromStaged();
+  f.git("rm", "-q", "--cached", "vendor/component");
+  fs.writeFileSync(f.allowFile, "not an entry\n");
+  fromStaged();
+  fs.writeFileSync(f.allowFile, "");
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "privacy-ci-outside-"));
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+  emitted.push(...scanStaged({ cwd: outside }).map((x) => ({ ...x, source: "staged" })));
+  for (const finding of emitted)
+    assert.equal(fixFor(finding), FIX[finding.rule], `${finding.rule} has no fix of its own`);
+  // FIX holds exactly the emitted rules and the scanner's structural ones.
   const structural = ["forbidden-path", "key-file", "image-metadata"];
-  for (const rule of [...COMMIT_RULES, ...structural])
-    assert.ok(Object.hasOwn(FIX, rule), `no FIX entry for ${rule}`);
-  // Every scanner rule resolves to a fix wherever it is found.
-  for (const { id } of GENERIC_RULES)
-    for (const finding of [
-      { rule: id, source: "message" },
-      { rule: id, source: "staged" },
-      { rule: id, source: "staged", path: true },
-    ])
-      assert.ok(Object.values(FIX).includes(fixFor(finding)), `${id} has no fix`);
-  for (const [rule, fix] of Object.entries(FIX)) {
+  const rules = new Set([...emitted.map((x) => x.rule), ...structural]);
+  assert.deepEqual(Object.keys(FIX).sort(), [...rules].sort());
+  // A rule of the hook's own with no entry has no fallback.
+  assert.throws(() => fixFor({ rule: "new-check", source: "commit" }), /no fix for new-check/);
+  assert.throws(() => fixFor({ rule: "new-check", source: "staged", hook: true }), /new-check/);
+  // Every scanner rule takes the fix for where it was found.
+  for (const { id } of GENERIC_RULES) {
+    if (Object.hasOwn(FIX, id)) continue;
+    assert.equal(fixFor({ rule: id, source: "message" }), LOCATION_FIX.message);
+    assert.equal(fixFor({ rule: id, source: "staged" }), LOCATION_FIX.content);
+    assert.equal(fixFor({ rule: id, source: "staged", path: true }), LOCATION_FIX.path);
+  }
+  for (const [rule, fix] of Object.entries({ ...FIX, ...LOCATION_FIX })) {
     assert.match(fix, /^rerun with /, rule);
     const amends = fix.replace("--amend --reset-author", "");
     assert.ok(!amends.includes("--amend"), `${rule} amends`);
@@ -600,21 +635,38 @@ test("every rule commit-msg can report has a fix, a rerun that never amends", ()
   const handle = ["alfy", "pops"].join("");
   assert.ok(!Object.values(FIX).join("\n").includes(handle));
   for (const rule of ["author-identity", "committer-identity"])
-    assert.ok(FIX[rule].includes("CONTRIBUTING.md"));
+    assert.ok(
+      FIX[rule].includes("noreply address as in the maintainer clone setup in CONTRIBUTING.md"),
+    );
+  assert.match(FIX["author-identity"], /no --author or GIT_AUTHOR_\* override/);
 });
 
 test("a commit-time place names no staged file unless shown", () => {
-  const content = { rule: "token", source: "staged", file: "a.txt", line: 4, index: 2 };
+  const content = { rule: "token", source: "staged", file: "a.txt", line: 4, index: 2, count: 3 };
   const pathFinding = { rule: "fixture", source: "staged", file: "a.txt", line: 0, path: true };
-  const binary = { rule: "token", source: "staged", file: "b.bin", line: 0, offset: 9, index: 1 };
+  const binary = {
+    rule: "token",
+    source: "staged",
+    file: "b.bin",
+    line: 0,
+    offset: 9,
+    index: 1,
+    count: 1,
+  };
   const shown = { ...content, shown: "match" };
-  assert.equal(placeOf(content), "staged file 2, line 4");
+  assert.equal(placeOf(content), "staged file 2 of 3, line 4");
   assert.equal(placeOf(pathFinding), "a staged path");
-  assert.equal(placeOf(binary), "staged file 1, byte 9");
-  assert.equal(placeOf({ ...content, line: 0 }), "staged file 2");
+  assert.equal(placeOf(binary), "staged file 1 of 1, byte 9");
+  assert.equal(placeOf({ ...content, line: 0 }), "staged file 2 of 3");
+  assert.equal(placeOf({ ...content, count: undefined }), "staged file 2, line 4");
   assert.equal(placeOf({ ...content, index: null }), "a staged file, line 4");
-  assert.equal(placeOf(shown), "staged file 2, line 4");
-  assert.equal(placeOf({ rule: "gitlink", source: "staged" }), "the staged changes");
+  assert.equal(placeOf(shown), "staged file 2 of 3, line 4");
+  const own = { source: "staged", hook: true };
+  assert.equal(
+    placeOf({ ...own, rule: "gitlink", place: "the staged changes" }),
+    "the staged changes",
+  );
+  assert.equal(placeOf({ ...own, rule: "allow-file", place: "the allow-list" }), "the allow-list");
   assert.equal(placeOf({ rule: "token", file: "message.txt", line: 3 }), "message:3");
   assert.equal(placeOf({ rule: "author-identity", source: "commit", place: "author" }), "author");
   // CODESENSE_PRIVACY_SHOW=1: the path, and a show-kind rule's match.

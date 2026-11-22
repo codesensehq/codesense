@@ -529,12 +529,27 @@ function maintainerFindings(cwd, commits) {
   return findings;
 }
 
+// git's candidates for core.commentChar=auto, in the order it tries them.
+const AUTO_COMMENT_CHARS = "#;@!$%^&|:";
+
+// The comment prefix git uses for this message, or null when it is unknown.
+// For auto, git picks a character no line of the typed message starts with, so
+// the scissors line, or else the last non-blank line, shows which one it is.
+function commentPrefix(message, commentChar) {
+  if (commentChar !== "auto") return commentChar || null;
+  for (const c of AUTO_COMMENT_CHARS)
+    if (new RegExp(`^${escapeRegExp(c)} -+ >8 -+$`, "m").test(message)) return c;
+  const last = message.trimEnd().split("\n").pop() ?? "";
+  return AUTO_COMMENT_CHARS.includes(last[0] ?? "\n") ? last[0] : null;
+}
+
 // Commit-msg: the message up to the verbose diff below the scissors. Comment
-// lines are dropped only when the configured cleanup mode drops them; anything
-// else (an unknown or "auto" comment char) keeps every line. `skip` names the
-// comment lines git will still strip.
+// lines are dropped only when the configured cleanup mode drops them; an
+// unknown comment prefix keeps every line. `skip` names the comment lines git
+// will still strip.
 function messageText({ message, cleanup = "", commentChar = "#" }) {
-  const known = commentChar.length === 1 ? escapeRegExp(commentChar) : null;
+  const prefix = commentPrefix(message, commentChar);
+  const known = prefix ? escapeRegExp(prefix) : null;
   let text = known ? message.split(new RegExp(`^${known} -+ >8 -+$`, "m"))[0] : message;
   if (known && cleanup === "strip") text = text.replace(new RegExp(`^${known}.*$`, "gm"), "");
   // With commit.cleanup strip, comment lines are blank already. Unset or default
@@ -542,7 +557,7 @@ function messageText({ message, cleanup = "", commentChar = "#" }) {
   // does not end the trailer block (the comments are still scanned, and pre-push
   // scans the final message). Other modes publish them, so they end it.
   const editorStrips = !!known && (cleanup === "" || cleanup === "default");
-  return { text, skip: (line) => editorStrips && line.startsWith(commentChar) };
+  return { text, skip: (line) => editorStrips && line.startsWith(prefix) };
 }
 
 export function scanMessage({ message, privateRulesFile, cleanup = "", commentChar = "#" }) {
@@ -584,51 +599,56 @@ export function commitFindings(cwd, { message, cleanup = "", commentChar = "#" }
   return findings;
 }
 
-// The empty tree in this repository's hash, the base of a first commit.
-const emptyTree = (cwd) =>
-  revision(
-    execFileSync("git", ["hash-object", "-t", "tree", "--stdin"], {
-      ...gitOptions(cwd),
-      stdio: ["pipe", "pipe", "pipe"],
-      input: "",
-      encoding: "utf8",
-    }).trim(),
-  );
-
 // Commit-msg: what the commit being made adds, with the same engine and
 // allow-list as pre-push. The index is the one git uses for this commit (a
 // temporary GIT_INDEX_FILE under commit -a or a pathspec), compared with HEAD,
 // or the empty tree on an unborn branch; under --amend that is the amend's own
 // change. A merge in progress is skipped (null): pre-push scans its
-// resolutions. A gitlink or any other failure is one finding of its own rule.
-// Each finding carries `index`, the file's position in
-// `git diff --cached --name-only`, so a report can place it without naming it.
+// resolutions. A gitlink, a malformed allow-list or any other failure is one
+// finding of the hook's own rule (`hook`, with its place). Each finding
+// carries `index` and `count`: the file's position in, and the length of, the
+// commit's file list (`git diff --cached --name-only` under the same index),
+// so a report can place it without naming it.
 export function scanStaged({ cwd, privateRulesFile, allowFile = DEFAULT_ALLOW }) {
   const rules = combinedRules(privateRulesFile);
+  const refuse = (rule, place = "the staged changes") => [
+    { rule, sev: "error", file: "", line: 0, allowed: false, hook: true, place },
+  ];
+  let files, order;
   try {
     const gitPath = (name) =>
       git(["rev-parse", "--path-format=absolute", "--git-path", name], cwd).trim();
     if (fs.existsSync(gitPath("MERGE_HEAD"))) return null;
-    const head = tryGit(["rev-parse", "--verify", "-q", "HEAD^{commit}"], cwd);
-    const base = head.status === 0 ? revision(head.stdout.trim()) : emptyTree(cwd);
-    const changed = sideAdditions(cwd, ["diff", "--cached", base]);
+    // With no commit, --cached compares the index with HEAD, or with the empty
+    // tree on an unborn branch.
+    const changed = sideAdditions(cwd, ["diff", "--cached"]);
     const blobs = commitBlobs(
       cwd,
       [...changed.values()].map(({ oid }) => oid),
     );
-    const files = [...changed].map(([file, { oid, lineNumbers }]) => ({
+    files = [...changed].map(([file, { oid, lineNumbers }]) => ({
       file,
       data: blobs.get(oid),
       lineNumbers,
     }));
-    const order = git(["diff", "--cached", "--name-only", "-z", base, "--"], cwd).split("\0");
-    return scanAddedFiles(files, loadAllow(allowFile, ruleIds(rules)), { rules }).map((f) => ({
+    order = git(["diff", "--cached", "--name-only", "-z", "--"], cwd).split("\0").filter(Boolean);
+  } catch (error) {
+    return refuse(error.message === GITLINK_ERROR ? "gitlink" : "scan-error");
+  }
+  let allow;
+  try {
+    allow = loadAllow(allowFile, ruleIds(rules));
+  } catch {
+    return refuse("allow-file", "the allow-list");
+  }
+  try {
+    return scanAddedFiles(files, allow, { rules }).map((f) => ({
       ...f,
       index: order.indexOf(f.file) + 1 || null,
+      count: order.length,
     }));
-  } catch (error) {
-    const rule = error.message === GITLINK_ERROR ? "gitlink" : "scan-error";
-    return [{ rule, sev: "error", file: "", line: 0, allowed: false }];
+  } catch {
+    return refuse("scan-error");
   }
 }
 
@@ -666,24 +686,34 @@ function hookReport(findings, show) {
   return errors.length === 0;
 }
 
-// Commit-msg's fix for each rule: one fixed string, pinned by tests. The commit
-// was never made, so each fix is a rerun, never an amend (except resetting an
-// amended commit's author). Rules found in content take the fix for where they
-// were found: the message, a staged line or a staged path.
-const EDITMSG = 'git commit -F "$(git rev-parse --git-path COMMIT_EDITMSG)"';
+// Commit-msg's fixes: one fixed string each, pinned by tests. The commit was
+// never made, so each fix is a rerun, never an amend (except resetting an
+// amended commit's author). -e -v makes git clean the kept message: it drops
+// the comment lines and cuts at the scissors line, so neither git's template
+// nor a verbose diff is published.
+const EDITMSG = 'git commit -e -v -F "$(git rev-parse --git-path COMMIT_EDITMSG)"';
 const MAINTAINER_SETUP = "the maintainer clone setup in CONTRIBUTING.md (AI assistance)";
-export const FIX = Object.freeze({
-  message: `rerun with the message reworded (edit it, then ${EDITMSG})`,
+const IDENTITY = `set to the maintainer's GitHub login and noreply address as in ${MAINTAINER_SETUP}`;
+
+// A content rule (public or private) takes the fix for where it was found.
+export const LOCATION_FIX = Object.freeze({
+  message: `rerun with the message reworded (${EDITMSG} reopens it)`,
   content: "rerun with the line edited and the file staged again (git add)",
   path: "rerun with the file renamed (git mv)",
+});
+
+// Each rule with a fix of its own: the structural rules, and every rule
+// commit-msg itself reports, which must have one.
+export const FIX = Object.freeze({
   "forbidden-path": "rerun with the file unstaged (git rm --cached)",
   "key-file": "rerun with the key file unstaged (git rm --cached)",
   "image-metadata": "rerun with the image's metadata stripped and the file staged again (git add)",
   gitlink: "rerun with the gitlink unstaged (git rm --cached); submodules are not supported",
   "scan-error":
     "rerun with the index checked (git status, git diff --cached --stat); report the hook if it repeats",
-  "author-identity": `rerun with user.name and user.email set as in ${MAINTAINER_SETUP}; for an amended commit, rerun with --amend --reset-author`,
-  "committer-identity": `rerun with user.name and user.email set as in ${MAINTAINER_SETUP}, and no GIT_COMMITTER_* override`,
+  "allow-file": "rerun with the malformed entry in scripts/privacy-scan.allow fixed",
+  "author-identity": `rerun with user.name and user.email ${IDENTITY}, and no --author or GIT_AUTHOR_* override; for an amended commit, rerun with --amend --reset-author`,
+  "committer-identity": `rerun with user.name and user.email ${IDENTITY}, and no GIT_COMMITTER_* override`,
   "missing-signoff": "rerun with -s (git commit -s) as the maintainer identity",
   "ai-co-author": "rerun with the AI Co-authored-by line removed from the message",
   "signing-config":
@@ -691,34 +721,27 @@ export const FIX = Object.freeze({
     "this checks the config, not the signature, and needs commit.gpgsign because the hook cannot see -S",
 });
 
-// The rule ids commit-msg adds to the scanner's.
-export const COMMIT_RULES = Object.freeze([
-  "gitlink",
-  "scan-error",
-  "author-identity",
-  "committer-identity",
-  "missing-signoff",
-  "ai-co-author",
-  "signing-config",
-]);
-
+// A rule commit-msg reports itself (a commit check, or the staged scan's own)
+// has no fallback: a missing fix throws, which the guard test catches.
 export function fixFor(finding) {
   if (Object.hasOwn(FIX, finding.rule)) return FIX[finding.rule];
-  if (finding.source !== "staged") return FIX.message;
-  return finding.path ? FIX.path : FIX.content;
+  if (finding.source === "commit" || finding.hook) throw new Error(`no fix for ${finding.rule}`);
+  if (finding.source !== "staged") return LOCATION_FIX.message;
+  return finding.path ? LOCATION_FIX.path : LOCATION_FIX.content;
 }
 
 // Where a commit-msg finding is. By default a staged file is named only by its
-// position in `git diff --cached --name-only`, since even a filename can carry
-// private data; `show` names it, and adds a show-kind rule's match.
+// position in the commit's file list, since even a filename can carry private
+// data; `show` names it, and adds a show-kind rule's match.
 export function placeOf(finding, show = false) {
   const shown = show && finding.shown ? ` ${finding.shown}` : "";
   if (finding.source === "commit") return `${finding.place}${shown}`;
   if (finding.source !== "staged") return `message:${finding.line}${shown}`;
-  if (["gitlink", "scan-error"].includes(finding.rule)) return "the staged changes";
+  if (finding.hook) return finding.place;
   if (show) return `${finding.path ? finding.file : where(finding)}${shown}`;
   if (finding.path) return "a staged path";
-  const file = finding.index ? `staged file ${finding.index}` : "a staged file";
+  const of = finding.count ? ` of ${finding.count}` : "";
+  const file = finding.index ? `staged file ${finding.index}${of}` : "a staged file";
   if (finding.offset !== undefined) return `${file}, byte ${finding.offset}`;
   return finding.line ? `${file}, line ${finding.line}` : file;
 }

@@ -18,10 +18,13 @@ if ! command -v node >/dev/null 2>&1; then
   . "$here/fallback.sh"
   if public_remote; then
     unscanned "a commit message"
-    # A maintainer clone: say so, since pre-push alone checks the commit form now.
+    # Only a hook chained to this script by hand gets here: the installed
+    # dispatcher calls fallback.sh itself without node. A maintainer clone: say
+    # so: without node its pre-push refuses, and with node it checks only the
+    # signature and AI trailers.
     value=$(git config --bool --get codesense.requireSigned 2>/dev/null)
     if [ $? -ne 1 ] && [ "$value" != false ]; then
-      echo "privacy hook: the commit-time checks did not run (no node); pre-push still checks this commit" >&2
+      echo "privacy hook: the commit-time checks did not run (no node); pre-push needs node in this clone, then checks only the signature and AI trailers" >&2
     fi
   fi
   exit 0

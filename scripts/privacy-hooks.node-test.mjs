@@ -1132,7 +1132,7 @@ test("commit-msg refuses a staged private term, and nothing is committed", (t) =
   s.stage("b.txt", `x ${TERM} y\n`);
   const result = s.run(["commit", "-q", "-m", "Clean subject"]);
   commitRefused(result, "fixture-5");
-  assert.match(result.stderr, /^privacy-scan: fixture-5  staged file 1, line 1  /m);
+  assert.match(result.stderr, /^privacy-scan: fixture-5  staged file 1 of 1, line 1  /m);
   assert.equal(count(), "1");
   s.stage("b.txt", "clean\n");
   passed(s.run(["commit", "-q", "-m", "Clean subject"]));
@@ -1145,10 +1145,14 @@ test("commit-msg scans the index the commit uses: commit -a and a pathspec", (t)
   s.commit("a.txt", "clean\n");
   s.commit("b.txt", "clean\n");
   s.commit("c.txt", "clean\n");
-  // commit -a stages a tracked change in a temporary index.
-  fs.writeFileSync(path.join(s.work, "a.txt"), `${TERM}\n`);
-  commitRefused(s.run(["commit", "-q", "-a", "-m", "Clean subject"]), "fixture-5");
-  s.git("checkout", "--", "a.txt");
+  // commit -a stages a tracked change in a temporary index, and the place counts
+  // the commit's own file list, not the real index's (empty here).
+  fs.writeFileSync(path.join(s.work, "a.txt"), "changed\n");
+  fs.writeFileSync(path.join(s.work, "b.txt"), `${TERM}\n`);
+  const all = s.run(["commit", "-q", "-a", "-m", "Clean subject"]);
+  commitRefused(all, "fixture-5");
+  assert.match(all.stderr, /^privacy-scan: fixture-5  staged file 2 of 2, line 1  /m);
+  s.git("checkout", "--", "a.txt", "b.txt");
   // So does a pathspec commit.
   fs.writeFileSync(path.join(s.work, "b.txt"), `${TERM}\n`);
   commitRefused(s.run(["commit", "-q", "-m", "Clean subject", "--", "b.txt"]), "fixture-5");
@@ -1333,7 +1337,9 @@ test("the maintainer form is checked only under codesense.requireSigned", (t) =>
   commitRefused(s.attempt(["-m", "Clean subject"]), "missing-signoff");
 });
 
-test("without node, a requireSigned clone's commit-msg warns that its checks did not run", (t) => {
+test("run by hand without node, commit-msg warns only a requireSigned clone that its checks did not run", (t) => {
+  // The installed dispatcher never runs this script without node (it calls
+  // fallback.sh itself); a hook chained to it by hand does.
   const s = maintainerClone(t);
   const bin = path.join(s.root, "bin");
   fs.mkdirSync(bin);
@@ -1351,8 +1357,15 @@ test("without node, a requireSigned clone's commit-msg warns that its checks did
   const warned = run();
   passed(warned);
   assert.match(warned.stderr, /the commit-time checks did not run \(no node\)/);
-  s.git("config", "codesense.requireSigned", "false");
-  assert.doesNotMatch(run().stderr, /commit-time checks/);
+  assert.match(warned.stderr, UNSCANNED);
+  for (const off of [["false"], null]) {
+    if (off) s.git("config", "codesense.requireSigned", ...off);
+    else s.git("config", "--unset", "codesense.requireSigned");
+    const quiet = run();
+    passed(quiet);
+    assert.match(quiet.stderr, UNSCANNED);
+    assert.doesNotMatch(quiet.stderr, /commit-time checks/);
+  }
 });
 
 test("commit-msg names a staged file only with CODESENSE_PRIVACY_SHOW=1", (t) => {
@@ -1368,7 +1381,7 @@ test("commit-msg names a staged file only with CODESENSE_PRIVACY_SHOW=1", (t) =>
       .filter((line) => line.includes("  "))
       .map((line) => line.split("  ")[1]),
     // `git diff --cached --name-only` order: b.txt, then the term's file.
-    ["staged file 1, line 1", "a staged path"],
+    ["staged file 1 of 2, line 1", "a staged path"],
   );
   const shown = s.run(["commit", "-q", "-m", "Clean subject"], {
     env: { ...s.env, CODESENSE_PRIVACY_SHOW: "1" },
@@ -1376,6 +1389,58 @@ test("commit-msg names a staged file only with CODESENSE_PRIVACY_SHOW=1", (t) =>
   assert.notEqual(shown.status, 0);
   assert.match(shown.stderr, new RegExp(`^privacy-scan: fixture-5  ${TERM}\\.md `, "m"));
   assert.match(shown.stderr, new RegExp(`^privacy-scan: fixture-5  b\\.txt:1 ${TERM}  `, "m"));
+});
+
+// An editor that puts `text` above the template git wrote, as a person would.
+function editor(s, text) {
+  const script = path.join(s.root, "editor.sh");
+  fs.writeFileSync(
+    script,
+    '#!/bin/sh\n{ printf "%s\\n" "$EDIT_TEXT"; cat "$1"; } > "$1.new" && mv "$1.new" "$1"\n',
+  );
+  fs.chmodSync(script, 0o755);
+  return { GIT_EDITOR: script, EDIT_TEXT: text };
+}
+
+test("the message fix reruns with git's cleanup, so no template or verbose diff is published", (t) => {
+  const s = sandbox(t);
+  passed(s.install());
+  s.commit("a.txt", "clean\n");
+  s.stage("b.txt", "clean\n");
+  const typed = s.run(["commit", "-q", "-v"], {
+    env: { ...s.env, ...editor(s, `Subject ${TERM}`) },
+  });
+  commitRefused(typed, "fixture-5");
+  const editmsg = path.join(s.work, ".git", "COMMIT_EDITMSG");
+  const kept = fs.readFileSync(editmsg, "utf8");
+  assert.match(kept, /^# .* >8 /m);
+  assert.match(kept, /^diff --git /m);
+  fs.writeFileSync(editmsg, kept.replace(TERM, "clean"));
+  // Run the printed fix as printed.
+  const [, rerun] = /\((git commit .*COMMIT_EDITMSG\)") reopens it\)/.exec(typed.stderr);
+  const fixed = spawnSync("sh", ["-c", rerun], {
+    cwd: s.work,
+    encoding: "utf8",
+    env: { ...s.env, GIT_EDITOR: "true" },
+  });
+  passed(fixed);
+  assert.equal(s.git("log", "-1", "--format=%B"), "Subject clean\n\n");
+});
+
+test("an editor commit's comment block does not hide the sign-off, unless cleanup publishes it", (t) => {
+  const s = maintainerClone(t);
+  passed(s.attempt(["-s"], editor(s, "Clean subject")));
+  assert.match(s.git("log", "-1", "--format=%B"), /^Clean subject\n\nSigned-off-by: /);
+  // core.commentChar auto: the template's own lines show the character.
+  s.git("config", "core.commentChar", "auto");
+  passed(s.attempt(["-s", "-v"], editor(s, "Clean subject")));
+  s.git("config", "--unset", "core.commentChar");
+  // commit.cleanup whitespace publishes the comments, so they end the trailer block.
+  s.git("config", "commit.cleanup", "whitespace");
+  const published = s.attempt(["-s"], editor(s, "Clean subject"));
+  commitRefused(published, "missing-signoff");
+  // Outside the trailer block, the sign-off is not masked and its address is scanned.
+  assert.deepEqual(commitRules(published.stderr), ["email", "missing-signoff"]);
 });
 
 test("a commit that breaks three rules prints three lines", (t) => {
