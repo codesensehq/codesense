@@ -1215,3 +1215,142 @@ test("commit-msg skips the staged scan during a merge, also in a linked worktree
   fs.symlinkSync(SCRIPTS, path.join(linked, "scripts"));
   conflict(linked, "linked-topic");
 });
+
+// The rule ids of a commit-time refusal, in order.
+const commitRules = (stderr) =>
+  hookLines(stderr)
+    .filter((line) => line.includes("  "))
+    .map((line) => line.slice("privacy-scan: ".length).split("  ")[0]);
+
+// A maintainer clone: the switch, the identity and a signing key.
+function maintainerClone(t) {
+  const s = sandbox(t);
+  passed(s.install());
+  s.commit("a.txt", "base\n");
+  const key = path.join(s.root, "signing-key");
+  execFileSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", key]);
+  for (const [name, value] of [
+    ["codesense.requireSigned", "true"],
+    ["user.name", HANDLE],
+    ["user.email", NOREPLY],
+    ["gpg.format", "ssh"],
+    ["user.signingkey", `${key}.pub`],
+    ["commit.gpgsign", "true"],
+  ])
+    s.git("config", name, value);
+  let n = 0;
+  // A commit of a fresh clean change.
+  const attempt = (args, extra = {}) => {
+    s.stage("a.txt", `${n++}\n`);
+    return s.run(["commit", "-q", ...args], { env: { ...s.env, ...extra } });
+  };
+  // commit-msg alone on a message, with nothing committed (and nothing signed).
+  const message = path.join(s.root, "message.txt");
+  const hook = (text, extra = {}) => {
+    fs.writeFileSync(message, text);
+    return spawnSync("node", [CLI, "--hook", "commit-msg", message], {
+      cwd: s.work,
+      encoding: "utf8",
+      env: { ...s.env, ...extra },
+    });
+  };
+  return { ...s, key, attempt, hook };
+}
+
+test("a requireSigned clone refuses each part of the maintainer form at commit time", (t) => {
+  const s = maintainerClone(t);
+  const signed = `Clean subject\n\n${SIGNOFF}`;
+  const only = (result, rule) => {
+    commitRefused(result, rule);
+    assert.deepEqual(commitRules(result.stderr), [rule]);
+  };
+  const result = s.attempt(["-s", "-m", "Clean subject"]);
+  passed(result);
+  assert.equal(result.stderr, "");
+  assert.match(s.git("cat-file", "commit", "HEAD"), /^gpgsig /m);
+  only(s.attempt(["-m", "Clean subject"]), "missing-signoff");
+  // A sign-off outside the trailer block is no sign-off (and its address is scanned).
+  const body = s.attempt(["-m", `${signed}\n\nA later paragraph`]);
+  commitRefused(body, "missing-signoff");
+  assert.deepEqual(commitRules(body.stderr), ["email", "missing-signoff"]);
+  only(s.attempt(["--author", "Someone <someone@example.com>", "-m", signed]), "author-identity");
+  only(s.attempt(["-m", signed], { GIT_COMMITTER_NAME: "Someone" }), "committer-identity");
+  only(
+    s.attempt([
+      "-m",
+      `Clean subject\n\nCo-authored-by: Claude <noreply@anthropic.com>\n${SIGNOFF}`,
+    ]),
+    "ai-co-author",
+  );
+  // Case-insensitive; this address is also one the public rules refuse.
+  const variant = s.attempt([
+    "-m",
+    `Clean subject\n\nco-authored-BY : A <x${"@mail.anthropic.com"}>\n${SIGNOFF}`,
+  ]);
+  commitRefused(variant, "ai-co-author");
+  assert.deepEqual(commitRules(variant.stderr), ["email", "ai-co-author"]);
+  s.git("config", "--unset", "commit.gpgsign");
+  const unsigned = s.attempt(["-m", signed]);
+  only(unsigned, "signing-config");
+  // It says what it checks, and why commit.gpgsign is needed.
+  assert.match(unsigned.stderr, /checks the config, not the signature/);
+  assert.match(unsigned.stderr, /the hook cannot see -S/);
+  s.git("config", "commit.gpgsign", "false");
+  only(s.attempt(["-S", "-m", signed]), "signing-config");
+  s.git("config", "commit.gpgsign", "true");
+  passed(s.attempt(["-m", signed]));
+});
+
+test("a signing key can come from ssh's default key command, or from gpg by email", (t) => {
+  const s = maintainerClone(t);
+  const signed = `Clean subject\n\n${SIGNOFF}\n`;
+  s.git("config", "--unset", "user.signingkey");
+  commitRefused(s.hook(signed), "signing-config");
+  assert.deepEqual(commitRules(s.hook(signed).stderr), ["signing-config"]);
+  s.git("config", "gpg.ssh.defaultKeyCommand", "ssh-add -L");
+  passed(s.hook(signed));
+  s.git("config", "--unset", "gpg.ssh.defaultKeyCommand");
+  // openpgp picks the key by the committer's email.
+  s.git("config", "gpg.format", "openpgp");
+  passed(s.hook(signed));
+  s.git("config", "--unset", "gpg.format");
+  passed(s.hook(signed));
+});
+
+test("the maintainer form is checked only under codesense.requireSigned", (t) => {
+  const s = maintainerClone(t);
+  s.git("config", "--unset", "codesense.requireSigned");
+  s.git("config", "commit.gpgsign", "false");
+  s.git("config", "user.name", "Someone");
+  s.git("config", "user.email", "someone@example.com");
+  const trailer = "Co-authored-by: Claude <noreply@anthropic.com>";
+  // Neither switch, then only privacyRequired: no sign-off, a stranger, a trailer.
+  passed(s.attempt(["-m", `Clean subject\n\n${trailer}`]));
+  s.git("config", "codesense.privacyRequired", "true");
+  passed(s.attempt(["-m", `Clean subject\n\n${trailer}`]));
+  // An unparseable switch counts as set.
+  s.git("config", "codesense.requireSigned", "maybe");
+  commitRefused(s.attempt(["-m", "Clean subject"]), "missing-signoff");
+});
+
+test("without node, a requireSigned clone's commit-msg warns that its checks did not run", (t) => {
+  const s = maintainerClone(t);
+  const bin = path.join(s.root, "bin");
+  fs.mkdirSync(bin);
+  const gitPath = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+  fs.symlinkSync(gitPath, path.join(bin, "git"));
+  const noNode = { ...s.env, PATH: `${bin}:/usr/bin:/bin` };
+  const message = path.join(s.root, "message.txt");
+  fs.writeFileSync(message, "Clean subject\n");
+  const run = () =>
+    spawnSync("sh", [path.join(SCRIPTS, "git-hooks", "commit-msg"), message], {
+      cwd: s.work,
+      encoding: "utf8",
+      env: noNode,
+    });
+  const warned = run();
+  passed(warned);
+  assert.match(warned.stderr, /the commit-time checks did not run \(no node\)/);
+  s.git("config", "codesense.requireSigned", "false");
+  assert.doesNotMatch(run().stderr, /commit-time checks/);
+});

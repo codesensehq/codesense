@@ -554,6 +554,36 @@ export function scanMessage({ message, privateRulesFile, cleanup = "", commentCh
   });
 }
 
+// Commit-msg in a maintainer clone (codesense.requireSigned): the commit being
+// made has the maintainer's identity as author and committer (as git var sees
+// them, so --author, --amend and GIT_* overrides count), their sign-off in the
+// trailer block, no AI co-author trailer, and signing on. The hook cannot see
+// -S, so signing is commit.gpgsign plus a key source; this checks the config,
+// not the signature, which pre-push checks. Places name no person.
+export function commitFindings(cwd, { message, cleanup = "", commentChar = "#" }) {
+  const findings = [];
+  const found = (rule, place) =>
+    findings.push({ rule, sev: "error", place, allowed: false, source: "commit" });
+  const identity = (name) => tryGit(["var", name], cwd).stdout.replace(/ \d+ [+-]\d{4}\n?$/, "");
+  if (identity("GIT_AUTHOR_IDENT") !== MAINTAINER_IDENTITY) found("author-identity", "author");
+  if (identity("GIT_COMMITTER_IDENT") !== MAINTAINER_IDENTITY)
+    found("committer-identity", "committer");
+  const { text, skip } = messageText({ message, cleanup, commentChar });
+  if (withoutMaintainerSignoff(text, skip) === text) found("missing-signoff", "trailers");
+  for (const [i, line] of text.split("\n").entries())
+    if (!skip(line) && AI_CO_AUTHOR.test(line)) found("ai-co-author", `message:${i + 1}`);
+  const config = (key) => tryGit(["config", "--get", key], cwd).stdout.trim();
+  // openpgp (the default) and x509 pick a key by the committer's email.
+  const keyed =
+    config("user.signingkey") !== "" ||
+    config("gpg.format").toLowerCase() !== "ssh" ||
+    config("gpg.ssh.defaultKeyCommand") !== "";
+  if (tryGit(["config", "--bool", "--get", "commit.gpgsign"], cwd).stdout.trim() !== "true")
+    found("signing-config", "commit.gpgsign");
+  else if (!keyed) found("signing-config", "user.signingkey");
+  return findings;
+}
+
 // The empty tree in this repository's hash, the base of a first commit.
 const emptyTree = (cwd) =>
   revision(
@@ -780,6 +810,7 @@ export function runHook(kind, args, { env = process.env, cwd = process.cwd(), st
     const staged = scanStaged({ cwd, privateRulesFile });
     if (staged === null) console.error(MERGE_NOTICE);
     else findings.push(...staged.map((f) => ({ ...f, source: "staged" })));
+    if (gitBoolean(cwd, "codesense.requireSigned")) findings.push(...commitFindings(cwd, form));
     return commitReport(findings, env.CODESENSE_PRIVACY_SHOW === "1");
   }
   const maxNewObjects = maxNewCommits(env);

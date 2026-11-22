@@ -18,6 +18,11 @@ if ! command -v node >/dev/null 2>&1; then
   . "$here/fallback.sh"
   if public_remote; then
     unscanned "a commit message"
+    # A maintainer clone: say so, since pre-push alone checks the commit form now.
+    value=$(git config --bool --get codesense.requireSigned 2>/dev/null)
+    if [ $? -ne 1 ] && [ "$value" != false ]; then
+      echo "privacy hook: the commit-time checks did not run (no node); pre-push still checks this commit" >&2
+    fi
   fi
   exit 0
 fi
