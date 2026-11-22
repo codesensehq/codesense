@@ -227,9 +227,10 @@ impl Drop for HeadlessActivity {
 /// posture the other kinds obey. NOT the SW-GW-7 backgrounded-PTY launcher.
 pub const KIND_HEADLESS: &str = "headless";
 
-/// SW-OR-14: the ONE definition of "a headless pseudo-session is alive" — a
-/// [`KIND_HEADLESS`] entry with a bound session id (registry presence = liveness,
-/// there is no PTY child to probe). Shared by [`list_sessions_inner`] (renders the
+/// SW-OR-14: the ONE definition of "a headless pseudo-session" — a [`KIND_HEADLESS`]
+/// entry with a bound session id (registry presence = liveness, there is no PTY child
+/// to probe). It is alive until its process exits ([`SessionSnapshot::headless_exited`],
+/// read by [`liveness::registry_rows`]). Shared by [`list_sessions_inner`] (renders the
 /// `Running` row) and [`DashboardLaunchState::has_live_headless_session`] (the MCP
 /// gate widening) so the rule can never drift between the two.
 pub(crate) fn is_live_headless(kind: &str, session_id: Option<&str>) -> bool {
@@ -1534,6 +1535,8 @@ pub struct SessionSnapshot {
     /// The team a remote launch was made in (its record's team key), whose machine list
     /// names its machine; `None` on this Mac.
     pub launch_team_key: Option<String>,
+    /// A headless run whose process has exited while its entry waits on its transcript.
+    pub headless_exited: bool,
 }
 
 /// SW-BA-1 (AC-1/AC-3): the ONE agent-lifecycle status vocabulary, serialized to
@@ -3553,6 +3556,10 @@ impl DashboardLaunchState {
                 // registry lock a second time.
                 deadline_at_ms: entry.deadline_ms,
                 exit_sent_at_ms: entry.exit_sent_at_ms,
+                headless_exited: entry
+                    .session_id
+                    .as_deref()
+                    .is_some_and(|sid| inner.headless_exited.contains(sid)),
                 machine_id: entry
                     .remote_shell
                     .as_ref()
@@ -10320,6 +10327,7 @@ mod tests {
                 exit_sent_at_ms: None,
                 machine_id: None,
                 launch_team_key: None,
+                headless_exited: false,
             },
             false,
         );

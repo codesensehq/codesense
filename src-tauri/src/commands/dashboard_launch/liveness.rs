@@ -61,12 +61,12 @@ pub(crate) enum Remote {
 }
 
 /// Whether a local registry row is alive. An unbound reservation never is. A headless
-/// run is alive while bound (it has no terminal child to probe). Any
+/// run is alive while bound and not exited (it has no terminal child to probe). Any
 /// other session is alive unless the probe knows it gone: an unanswered probe leaves
 /// it alive, so a roster never offers to dismiss a session that may still run.
 fn local_alive(row: &SessionSnapshot, answers: &HashMap<String, Liveness<bool>>) -> bool {
     if is_live_headless(row.kind, row.session_id.as_deref()) {
-        return true;
+        return !row.headless_exited;
     }
     row.session_id
         .as_deref()
