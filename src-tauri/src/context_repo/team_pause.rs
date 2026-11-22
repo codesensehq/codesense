@@ -174,3 +174,234 @@ pub fn team_pause(home: &Path, principal: &Principal, org: &str, team: &str) -> 
         .collect();
     fold(&records)
 }
+
+/// Write `records` (`(id, frontmatter)` pairs) into a team's `team-control`
+/// folder, as the pause writer would.
+#[cfg(test)]
+pub(crate) fn write_team_control(
+    home: &Path,
+    principal: &Principal,
+    org: &str,
+    team: &str,
+    records: &[(&str, &str)],
+) -> std::path::PathBuf {
+    let org_root = super::path_to_org_root(home, principal, org).expect("org root");
+    let folder = super::path_to_team_content_dir(&org_root, team).join(COLLECTION);
+    std::fs::create_dir_all(&folder).unwrap();
+    for (id, frontmatter) in records {
+        std::fs::write(
+            folder.join(format!("{id}.md")),
+            format!("---\n{frontmatter}\n---\n"),
+        )
+        .unwrap();
+    }
+    folder
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde::Deserialize;
+
+    const CASES: &str = include_str!("../../tests/fixtures/team_pause/cases.json");
+
+    #[derive(Deserialize)]
+    struct Cases {
+        source: Source,
+        cases: Vec<Case>,
+    }
+
+    #[derive(Deserialize)]
+    struct Source {
+        repo: String,
+        path: String,
+    }
+
+    #[derive(Deserialize)]
+    struct Case {
+        name: String,
+        records: Vec<CaseRecord>,
+        expect: Expect,
+    }
+
+    #[derive(Deserialize)]
+    struct CaseRecord {
+        id: String,
+        frontmatter: String,
+    }
+
+    #[derive(Deserialize, Debug, PartialEq)]
+    struct Expect {
+        paused: bool,
+        go: Option<String>,
+    }
+
+    fn cases() -> Cases {
+        serde_json::from_str(CASES).expect("cases.json parses")
+    }
+
+    fn file(frontmatter: &str) -> String {
+        format!("---\n{frontmatter}\n---\n")
+    }
+
+    fn got(state: &TeamPause) -> Expect {
+        Expect {
+            paused: state.paused,
+            go: state.go.clone(),
+        }
+    }
+
+    fn principal() -> Principal {
+        Principal::from(42u64)
+    }
+
+    fn pairs(case: &Case) -> Vec<(&str, &str)> {
+        case.records
+            .iter()
+            .map(|r| (r.id.as_str(), r.frontmatter.as_str()))
+            .collect()
+    }
+
+    const GO: (&str, &str) = ("go-1", "id: go-1\npaused: \"true\"\nat: 100");
+    const RESUME: (&str, &str) = (
+        "resume-1",
+        "id: resume-1\npaused: \"false\"\nat: 200\nresumes: go-1",
+    );
+
+    #[test]
+    fn every_shared_case_folds_as_expected() {
+        let cases = cases().cases;
+        assert!(cases.len() >= 12, "{} cases", cases.len());
+        for case in &cases {
+            let records: Vec<Record> = case
+                .records
+                .iter()
+                .map(|r| parse(&r.id, &file(&r.frontmatter)))
+                .collect();
+            assert_eq!(got(&fold(&records)), case.expect, "case {}", case.name);
+        }
+    }
+
+    #[test]
+    fn io_half_matches_fold() {
+        for case in &cases().cases {
+            let home = tempfile::tempdir().unwrap();
+            write_team_control(home.path(), &principal(), "acme", "crew", &pairs(case));
+            let records: Vec<Record> = case
+                .records
+                .iter()
+                .map(|r| parse(&r.id, &file(&r.frontmatter)))
+                .collect();
+            let read = team_pause(home.path(), &principal(), "acme", "crew");
+            assert_eq!(read, fold(&records), "case {}", case.name);
+            assert_eq!(got(&read), case.expect, "case {}", case.name);
+        }
+    }
+
+    #[test]
+    fn no_team_folder_is_running() {
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(
+            team_pause(home.path(), &principal(), "acme", "crew"),
+            TeamPause::default()
+        );
+        // Another team's pause doesn't reach this one.
+        write_team_control(home.path(), &principal(), "acme", "other", &[GO]);
+        assert!(!team_pause(home.path(), &principal(), "acme", "crew").paused);
+        assert!(team_pause(home.path(), &principal(), "acme", "other").paused);
+    }
+
+    #[test]
+    fn unresolvable_org_root_is_running() {
+        let home = tempfile::tempdir().unwrap();
+        write_team_control(home.path(), &principal(), "acme", "crew", &[GO]);
+        // A registry that can't be read makes the org root unresolvable.
+        let registry =
+            crate::context_repo::context_attachments::registry_path(home.path(), &principal());
+        std::fs::write(&registry, "attachments: [unclosed\n").unwrap();
+        assert!(crate::context_repo::path_to_org_root(home.path(), &principal(), "acme").is_err());
+        assert_eq!(
+            team_pause(home.path(), &principal(), "acme", "crew"),
+            TeamPause::default()
+        );
+    }
+
+    #[test]
+    fn non_md_files_ignored() {
+        let home = tempfile::tempdir().unwrap();
+        let folder = write_team_control(home.path(), &principal(), "acme", "crew", &[GO, RESUME]);
+        let go_again = file("id: go-2\npaused: \"true\"\nat: 300");
+        std::fs::write(folder.join("go-2.md.bak"), &go_again).unwrap();
+        std::fs::write(folder.join("go-2.txt"), &go_again).unwrap();
+        std::fs::write(folder.join(".go-2.md"), &go_again).unwrap();
+        std::fs::write(folder.join("README"), "not a record").unwrap();
+        let state = team_pause(home.path(), &principal(), "acme", "crew");
+        assert!(!state.paused, "{state:?}");
+        assert_eq!(state.record.as_deref(), Some("resume-1"));
+    }
+
+    #[test]
+    fn reads_fresh_each_call() {
+        let home = tempfile::tempdir().unwrap();
+        write_team_control(home.path(), &principal(), "acme", "crew", &[GO]);
+        let first = team_pause(home.path(), &principal(), "acme", "crew");
+        assert!(first.paused);
+        assert_eq!(first.go.as_deref(), Some("go-1"));
+        write_team_control(home.path(), &principal(), "acme", "crew", &[RESUME]);
+        let second = team_pause(home.path(), &principal(), "acme", "crew");
+        assert!(!second.paused, "{second:?}");
+        assert_eq!(second.record.as_deref(), Some("resume-1"));
+    }
+
+    #[test]
+    fn cases_json_has_source_pin() {
+        let source = cases().source;
+        assert_eq!(source.repo, "codesensehq/codesense");
+        assert_eq!(
+            source.path,
+            "src-tauri/tests/fixtures/team_pause/cases.json"
+        );
+        let here = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join(&source.path);
+        assert_eq!(std::fs::read_to_string(here).unwrap(), CASES);
+    }
+
+    #[test]
+    fn reason_comes_from_the_newest_record() {
+        let records = [parse(
+            "go-1",
+            &file("id: go-1\npaused: true\nat: 100\nreason: upgrade"),
+        )];
+        assert_eq!(fold(&records).reason.as_deref(), Some("upgrade"));
+        let records = [parse("odd-1", &file("id: odd-1\npaused: maybe\nat: 100"))];
+        let state = fold(&records);
+        assert!(state.paused);
+        assert!(state
+            .reason
+            .unwrap()
+            .starts_with("record odd-1: unrecognised paused value"));
+    }
+
+    /// Only this file names the collection in the app's source.
+    #[test]
+    fn only_team_pause_reads_team_control() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let needle = format!("\"{COLLECTION}\"");
+        let mut naming: Vec<String> = walkdir::WalkDir::new(&src)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|e| e.path().extension().is_some_and(|x| x == "rs"))
+            .filter(|e| std::fs::read_to_string(e.path()).is_ok_and(|text| text.contains(&needle)))
+            .map(|e| {
+                e.path()
+                    .strip_prefix(&src)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+        naming.sort();
+        assert_eq!(naming, ["context_repo/team_pause.rs"]);
+    }
+}
