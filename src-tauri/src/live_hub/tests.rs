@@ -3317,22 +3317,24 @@ mod call_time_read {
     }
 
     impl session_list::SessionSource for FakeSessions {
-        fn launch(&self) -> &DashboardLaunchState {
+        fn launch_registry(&self) -> &DashboardLaunchState {
             &self.launch
         }
-        fn hub(&self) -> &LiveHub {
+        fn live_hub(&self) -> &LiveHub {
             &self.hub
         }
-        fn probe(&self) -> &dyn crate::commands::dashboard_launch::liveness::SessionProbe {
+        fn session_probe(&self) -> &dyn crate::commands::dashboard_launch::liveness::SessionProbe {
             &self.probe
         }
-        fn local_sessions(&self) -> Result<std::collections::HashSet<String>, String> {
+        fn local_live_sessions(&self) -> Result<std::collections::HashSet<String>, String> {
             self.local.clone()
         }
-        fn progress(&self) -> Option<&crate::dashboard_stream::DashboardStreamHub> {
+        fn progress_stream(&self) -> Option<&crate::dashboard_stream::DashboardStreamHub> {
             None
         }
-        fn telemetry(&self) -> Option<&crate::commands::launch_telemetry::LaunchTelemetryTracker> {
+        fn launch_telemetry(
+            &self,
+        ) -> Option<&crate::commands::launch_telemetry::LaunchTelemetryTracker> {
             None
         }
     }

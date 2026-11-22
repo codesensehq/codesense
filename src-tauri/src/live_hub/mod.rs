@@ -479,21 +479,25 @@ pub(crate) fn read_now(
     source: &impl session_list::SessionSource,
     launched_by: Option<&str>,
 ) -> Result<(Vec<SessionListRow>, UnreadByHandle), String> {
-    let launch = source.launch();
+    let launch = source.launch_registry();
     let key = launched_by
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| launch.normalize_launched_by(s));
     let (live, active, inbox) = {
-        let model = source.hub().model.lock().unwrap();
+        let model = source.live_hub().model.lock().unwrap();
         (
             model.live_tabs(),
             model.active_team.clone(),
             std::sync::Arc::clone(&model.inbox),
         )
     };
-    let mut registry =
-        cached_registry(launch, &live, source.probe(), Some(source.local_sessions()))?;
+    let mut registry = cached_registry(
+        launch,
+        &live,
+        source.session_probe(),
+        Some(source.local_live_sessions()),
+    )?;
     for row in &mut registry {
         row.chat_workspace_id = row
             .session_id
@@ -509,8 +513,8 @@ pub(crate) fn read_now(
         launch,
         &live,
         active.as_ref(),
-        source.progress(),
-        source.telemetry(),
+        source.progress_stream(),
+        source.launch_telemetry(),
     );
     inbox.join(&mut rows);
     Ok((rows, inbox::InboxProjection::unread(&*inbox)))

@@ -354,25 +354,27 @@ impl<'a> AppSessions<'a> {
 }
 
 impl SessionSource for AppSessions<'_> {
-    fn launch(&self) -> &crate::commands::dashboard_launch::DashboardLaunchState {
+    fn launch_registry(&self) -> &crate::commands::dashboard_launch::DashboardLaunchState {
         &self.launch
     }
-    fn hub(&self) -> &crate::live_hub::LiveHub {
+    fn live_hub(&self) -> &crate::live_hub::LiveHub {
         &self.hub
     }
-    fn probe(&self) -> &dyn crate::commands::dashboard_launch::liveness::SessionProbe {
+    fn session_probe(&self) -> &dyn crate::commands::dashboard_launch::liveness::SessionProbe {
         &self.probe
     }
-    fn local_sessions(&self) -> Result<std::collections::HashSet<String>, String> {
+    fn local_live_sessions(&self) -> Result<std::collections::HashSet<String>, String> {
         crate::commands::pty_backend::live_session_ids(self.app)
     }
-    fn progress(&self) -> Option<&crate::dashboard_stream::DashboardStreamHub> {
+    fn progress_stream(&self) -> Option<&crate::dashboard_stream::DashboardStreamHub> {
         use tauri::Manager;
         self.app
             .try_state::<crate::dashboard_stream::DashboardStreamHub>()
             .map(|state| state.inner())
     }
-    fn telemetry(&self) -> Option<&crate::commands::launch_telemetry::LaunchTelemetryTracker> {
+    fn launch_telemetry(
+        &self,
+    ) -> Option<&crate::commands::launch_telemetry::LaunchTelemetryTracker> {
         use tauri::Manager;
         self.app
             .try_state::<crate::commands::launch_telemetry::LaunchTelemetryTracker>()
@@ -384,13 +386,15 @@ impl SessionSource for AppSessions<'_> {
 /// probe and this Mac's live sessions for membership and liveness, and the live hub's
 /// cached layouts, inbox and activity for decoration.
 pub(crate) trait SessionSource {
-    fn launch(&self) -> &crate::commands::dashboard_launch::DashboardLaunchState;
-    fn hub(&self) -> &crate::live_hub::LiveHub;
-    fn probe(&self) -> &dyn crate::commands::dashboard_launch::liveness::SessionProbe;
+    fn launch_registry(&self) -> &crate::commands::dashboard_launch::DashboardLaunchState;
+    fn live_hub(&self) -> &crate::live_hub::LiveHub;
+    fn session_probe(&self) -> &dyn crate::commands::dashboard_launch::liveness::SessionProbe;
     /// Every live session this Mac's terminal hosts track, read now.
-    fn local_sessions(&self) -> Result<std::collections::HashSet<String>, String>;
-    fn progress(&self) -> Option<&crate::dashboard_stream::DashboardStreamHub>;
-    fn telemetry(&self) -> Option<&crate::commands::launch_telemetry::LaunchTelemetryTracker>;
+    fn local_live_sessions(&self) -> Result<std::collections::HashSet<String>, String>;
+    fn progress_stream(&self) -> Option<&crate::dashboard_stream::DashboardStreamHub>;
+    fn launch_telemetry(
+        &self,
+    ) -> Option<&crate::commands::launch_telemetry::LaunchTelemetryTracker>;
 }
 
 /// [`read_session_list_and_unread`] over `source`.
