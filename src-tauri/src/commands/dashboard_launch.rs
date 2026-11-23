@@ -5460,7 +5460,8 @@ pub fn dashboard_resolve_session(
 /// liveness is registry presence), or a session whose child any terminal host still
 /// runs; a tab kept only for its replay reads gone. The
 /// terminal hosts are asked off the async workers — a sidecar answers over its
-/// socket — and a host that cannot be asked leaves it `Unknown`.
+/// socket. A host that answers decides its own sessions; one that cannot be asked
+/// leaves `Unknown` only a session no answering host runs.
 pub async fn session_liveness(
     app: &tauri::AppHandle,
     session_id: &str,

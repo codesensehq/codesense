@@ -19,23 +19,33 @@ pub(crate) trait SessionProbe {
     fn alive(&self, ids: &[&str]) -> HashMap<String, Liveness<bool>>;
 }
 
-/// The app's probe: the terminal hosts, through [`pty_backend::alive_session_ids`],
-/// which never waits on a sidecar that is not answering.
+/// The app's probe: the terminal hosts, through
+/// [`pty_backend::alive_session_ids_by_host`], which never waits on a sidecar that is
+/// not answering.
 pub(crate) struct HostProbe<'a, R: Runtime>(pub &'a AppHandle<R>);
 
 impl<R: Runtime> SessionProbe for HostProbe<'_, R> {
     fn alive(&self, ids: &[&str]) -> HashMap<String, Liveness<bool>> {
-        per_session(ids, &pty_backend::alive_session_ids(self.0, ids))
+        per_session(ids, &pty_backend::alive_session_ids_by_host(self.0, ids))
     }
 }
 
-/// One batched host answer, split per session.
-fn per_session(ids: &[&str], alive: &Liveness<HashSet<String>>) -> HashMap<String, Liveness<bool>> {
+/// Each host's batched answer, split per session. A session a host that answered runs
+/// is alive; one no answering host runs is gone only when every host answered, and
+/// unknown while one could not.
+fn per_session(
+    ids: &[&str],
+    hosts: &[Liveness<HashSet<String>>],
+) -> HashMap<String, Liveness<bool>> {
+    let every_host_answered = hosts.iter().all(|host| matches!(host, Liveness::Known(_)));
     ids.iter()
         .map(|id| {
-            let answer = match alive {
-                Liveness::Known(running) => Liveness::Known(running.contains(*id)),
-                Liveness::Unknown => Liveness::Unknown,
+            let answer = if hosts.iter().any(|host| host.known_alive(id)) {
+                Liveness::Known(true)
+            } else if every_host_answered {
+                Liveness::Known(false)
+            } else {
+                Liveness::Unknown
             };
             ((*id).to_string(), answer)
         })
@@ -305,6 +315,24 @@ pub(crate) mod tests {
             session_liveness_with(Some(&launch), &probe, "headless-1"),
             Liveness::Known(true)
         );
+    }
+
+    #[test]
+    fn an_answering_host_decides_its_own_sessions_while_another_cannot() {
+        let answered = Liveness::Known(HashSet::from(["s-a".to_string()]));
+        let split = per_session(&["s-a", "s-b"], &[answered.clone(), Liveness::Unknown]);
+        assert_eq!(split["s-a"], Liveness::Known(true));
+        assert_eq!(split["s-b"], Liveness::Unknown);
+
+        let split = per_session(
+            &["s-a", "s-b"],
+            &[answered, Liveness::Known(HashSet::new())],
+        );
+        assert_eq!(split["s-a"], Liveness::Known(true));
+        assert_eq!(split["s-b"], Liveness::Known(false), "every host answered");
+
+        let split = per_session(&["s-a"], &[Liveness::Unknown]);
+        assert_eq!(split["s-a"], Liveness::Unknown);
     }
 
     #[test]

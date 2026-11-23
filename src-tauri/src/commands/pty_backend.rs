@@ -2202,6 +2202,30 @@ impl Hosts {
             })
     }
 
+    /// Which of `sessions` have a running child, as each host answers: one answer per
+    /// host that may hold the app's sessions, `Unknown` (logged) for one that cannot
+    /// be asked.
+    fn alive_session_ids_by_host(
+        &self,
+        sessions: &[PtySessionId],
+    ) -> Vec<Liveness<HashSet<String>>> {
+        self.each(|host| host.alive_session_ids(sessions))
+            .into_iter()
+            .map(|answer| match answer {
+                Ok(alive) => Liveness::Known(
+                    alive
+                        .into_iter()
+                        .map(|id| id.as_str().to_string())
+                        .collect(),
+                ),
+                Err(error) => {
+                    log::warn!(target: "pty", "terminal host read failed: {error}");
+                    Liveness::Unknown
+                }
+            })
+            .collect()
+    }
+
     /// SW-AV-1 (INV-3): every alive, non-pool session id across the hosts — the
     /// live-PTY arm of the union roster, registry-less bare sessions included.
     /// The IN-PROCESS host's error is the
@@ -2319,6 +2343,20 @@ pub fn alive_session_ids<R: Runtime>(
 ) -> Liveness<HashSet<String>> {
     let ids: Vec<PtySessionId> = sessions.iter().copied().map(PtySessionId::from).collect();
     Hosts::of(app).map_or(Liveness::Unknown, |hosts| hosts.alive_session_ids(&ids))
+}
+
+/// Which of `sessions` have a running child, as each host answers: what a host that
+/// answers runs is known while another cannot be asked. No hosts at all is one
+/// `Unknown` answer.
+pub fn alive_session_ids_by_host<R: Runtime>(
+    app: &AppHandle<R>,
+    sessions: &[&str],
+) -> Vec<Liveness<HashSet<String>>> {
+    let ids: Vec<PtySessionId> = sessions.iter().copied().map(PtySessionId::from).collect();
+    Hosts::of(app).map_or_else(
+        || vec![Liveness::Unknown],
+        |hosts| hosts.alive_session_ids_by_host(&ids),
+    )
 }
 
 /// SW-AV-1 (INV-3): every alive, non-pool session id on any host — the live-PTY arm
@@ -4539,6 +4577,14 @@ mod tests {
         let ids = [sid("local-agent"), sid("maybe-hosted")];
         assert_eq!(cut_off.live_session_home_dirs(), Liveness::Unknown);
         assert_eq!(cut_off.alive_session_ids(&ids), Liveness::Unknown);
+        assert_eq!(
+            cut_off.alive_session_ids_by_host(&ids),
+            vec![
+                Liveness::Known(HashSet::from(["local-agent".to_string()])),
+                Liveness::Unknown,
+            ],
+            "the in-process host still answers for its own"
+        );
         assert_eq!(cut_off.has_session(&sid("maybe-hosted")), Liveness::Unknown);
         assert_eq!(
             cut_off.has_session(&sid("local-agent")),
