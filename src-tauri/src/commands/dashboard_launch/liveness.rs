@@ -37,7 +37,7 @@ fn per_session(
     ids: &[&str],
     hosts: &[Liveness<HashSet<String>>],
 ) -> HashMap<String, Liveness<bool>> {
-    let every_host_answered = hosts.iter().all(|host| matches!(host, Liveness::Known(_)));
+    let every_host_answered = !hosts.iter().any(|host| *host == Liveness::Unknown);
     ids.iter()
         .map(|id| {
             let answer = if hosts.iter().any(|host| host.known_alive(id)) {

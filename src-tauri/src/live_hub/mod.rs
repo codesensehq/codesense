@@ -986,28 +986,24 @@ fn cached_registry(
     use crate::commands::machines::LOCAL_MACHINE_ID;
     let snapshot = launch.snapshot();
     let registered: HashSet<&str> = snapshot.iter().map(|r| r.handle.as_str()).collect();
-    let launched: HashSet<&str> = live
+    let launched: HashSet<String> = live
         .tabs
         .iter()
         .filter(|t| t.handle.as_deref().is_some_and(|h| registered.contains(h)))
-        .map(|t| t.session.as_str())
+        .map(|t| t.session.clone())
         .collect();
     let mut live_ids: HashSet<String> = live
         .tabs
         .iter()
         .filter(|t| {
             !t.exited
-                && !launched.contains(t.session.as_str())
+                && !launched.contains(&t.session)
                 && (local_pty.is_none() || t.machine_id != LOCAL_MACHINE_ID)
         })
         .map(|t| t.session.clone())
         .collect();
     if let Some(local) = local_pty {
-        live_ids.extend(
-            local?
-                .into_iter()
-                .filter(|id| !launched.contains(id.as_str())),
-        );
+        live_ids.extend(local?.into_iter().filter(|id| !launched.contains(id)));
     }
     let mut rows = registry_rows(
         snapshot,
