@@ -1,6 +1,6 @@
 [package]
 name = "codesense"
-version = "0.1.0"
+version = "0.1.1"
 description = "Centralized BMAD workflow management for development teams"
 authors = ["Trevor Alfstad"]
 edition = "2021"
