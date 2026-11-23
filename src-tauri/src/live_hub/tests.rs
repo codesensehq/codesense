@@ -3301,7 +3301,7 @@ mod call_time_read {
         }
 
         fn running(&self, id: &str) -> Result<(), String> {
-            let (rows, _) = session_list::read_session_list_from(self, None)?;
+            let (rows, _) = read_now(self, None)?;
             crate::mcp::identity_tools::running_in(&rows, id).map(|_| ())
         }
 
@@ -3511,7 +3511,7 @@ mod call_time_read {
             &LiveTabs::of(&[], BTreeMap::new()),
             &StubProbe::with(&[("s-w", Liveness::Known(true))]),
         );
-        let (rows, _) = session_list::read_session_list_from(&source, None).unwrap();
+        let (rows, _) = read_now(&source, None).unwrap();
         assert_eq!(state_of(&rows, "w"), session_list::SessionState::Exited);
     }
 
@@ -3532,7 +3532,7 @@ mod call_time_read {
             &StubProbe::with(&answers),
         );
         let cached = source.hub.rows(None).0;
-        let (read, _) = session_list::read_session_list_from(&source, None).unwrap();
+        let (read, _) = read_now(&source, None).unwrap();
         for handle in ["up", "gone", "quiet", "reserved"] {
             assert_eq!(
                 state_of(&cached, handle),
@@ -3557,7 +3557,7 @@ mod call_time_read {
             team: "design".into(),
         };
         source.hub.model.lock().unwrap().active_team = Some(team.clone());
-        let (rows, _) = session_list::read_session_list_from(&source, None).unwrap();
+        let (rows, _) = read_now(&source, None).unwrap();
         let row = rows.iter().find(|row| row.handle == "w").unwrap();
         assert_eq!(row.team.as_ref(), Some(&team));
         assert_eq!(row.session.as_deref(), Some("s-w"));
@@ -3569,7 +3569,7 @@ mod call_time_read {
         for (handle, session) in [("a", "s-a"), ("b", "s-b"), ("c", "s-c")] {
             bind(&source.launch, handle, session);
         }
-        session_list::read_session_list_from(&source, None).unwrap();
+        read_now(&source, None).unwrap();
         assert_eq!(source.probe.calls.get(), 1);
     }
 
@@ -3578,7 +3578,7 @@ mod call_time_read {
         // The stub knows no session, as a host that never answers.
         let source = FakeSessions::new(StubProbe::default());
         bind(&source.launch, "w", "s-w");
-        let (rows, _) = session_list::read_session_list_from(&source, None).unwrap();
+        let (rows, _) = read_now(&source, None).unwrap();
         assert_ne!(state_of(&rows, "w"), session_list::SessionState::Exited);
         assert_eq!(source.running("s-w"), Ok(()));
     }
@@ -3605,7 +3605,7 @@ mod call_time_read {
             "w"
         ));
         assert!(changed.recv_timeout(Duration::from_secs(3)).is_ok());
-        let (rows, _) = session_list::read_session_list_from(&source, None).unwrap();
+        let (rows, _) = read_now(&source, None).unwrap();
         assert!(rows.iter().all(|row| row.handle != "w"));
         // A second abort drops nothing and announces nothing.
         assert!(!crate::commands::dashboard_launch::abort_and_notify(

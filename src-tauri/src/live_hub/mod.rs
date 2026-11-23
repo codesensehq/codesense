@@ -28,7 +28,7 @@ pub mod view_key;
 use crate::commands::{
     agent_inbox::{AppInboxHost, UnreadByHandle},
     dashboard_launch::{
-        liveness::{registry_rows, HostProbe, Remote, SessionProbe},
+        liveness::{registry_rows, Remote, SessionProbe},
         DashboardLaunchState,
     },
 };
@@ -492,30 +492,10 @@ pub(crate) fn read_now(
             std::sync::Arc::clone(&model.inbox),
         )
     };
-    let mut registry = cached_registry(
-        launch,
-        &live,
-        source.session_probe(),
-        Some(source.local_live_sessions()),
-    )?;
-    for row in &mut registry {
-        row.chat_workspace_id = row
-            .session_id
-            .as_deref()
-            .and_then(|id| launch.workspace_for_session(id));
-    }
-    let mut rows = project_registry(launch, &live, registry);
+    let (_, mut rows) = registry_list(source, &live, active.as_ref(), true)?;
     if let Some(parent) = key.as_deref() {
         rows.retain(|r| r.launched_by.as_deref() == Some(parent));
     }
-    enrich_rows(
-        &mut rows,
-        launch,
-        &live,
-        active.as_ref(),
-        source.progress_stream(),
-        source.launch_telemetry(),
-    );
     inbox.join(&mut rows);
     Ok((rows, inbox::InboxProjection::unread(&*inbox)))
 }
@@ -1080,6 +1060,47 @@ fn cached_remote(
     }
 }
 
+/// The registry's rows judged now through `source`'s probe, each with its chat
+/// workspace, and the session-list rows projected and enriched from them: the one
+/// pipeline a rebuild and a call-time read share. `fresh_local` replaces the cached
+/// local tabs with `source`'s live sessions read now.
+fn registry_list(
+    source: &impl session_list::SessionSource,
+    live: &LiveTabs,
+    active: Option<&crate::commands::dashboard_launch::LaunchTeam>,
+    fresh_local: bool,
+) -> Result<
+    (
+        Vec<crate::commands::dashboard_launch::SessionRow>,
+        Vec<SessionListRow>,
+    ),
+    String,
+> {
+    let launch = source.launch_registry();
+    let mut registry = cached_registry(
+        launch,
+        live,
+        source.session_probe(),
+        fresh_local.then(|| source.local_live_sessions()),
+    )?;
+    for row in &mut registry {
+        row.chat_workspace_id = row
+            .session_id
+            .as_deref()
+            .and_then(|id| launch.workspace_for_session(id));
+    }
+    let mut rows = project_registry(launch, live, registry.clone());
+    enrich_rows(
+        &mut rows,
+        launch,
+        live,
+        active,
+        source.progress_stream(),
+        source.launch_telemetry(),
+    );
+    Ok((registry, rows))
+}
+
 fn project_registry(
     launch: &DashboardLaunchState,
     live: &LiveTabs,
@@ -1289,39 +1310,21 @@ async fn rebuild(app: &tauri::AppHandle, cause: u8) -> Result<(), String> {
     use crate::commands::agent_inbox::InboxHost;
     let hub = app.state::<LiveHub>();
     let launch = app.state::<DashboardLaunchState>();
+    let active = AppInboxHost { app: app.clone() }.active_team().await.ok();
     // The probe asks the terminal hosts, so the registry read runs off the async runtime.
-    let read_app = app.clone();
-    let (live, mut registry) = crate::commands::await_blocking("live_hub.registry", move || {
+    let (read_app, read_active) = (app.clone(), active.clone());
+    let (live, registry, rows) = crate::commands::await_blocking("live_hub.registry", move || {
         let hub = read_app.state::<LiveHub>();
         let live = hub.model.lock().unwrap().live_tabs();
-        let launch = read_app.state::<DashboardLaunchState>();
-        let registry = cached_registry(&launch, &live, &HostProbe(&read_app), None)?;
-        Ok((live, registry))
+        let source = session_list::AppSessions::of(&read_app)?;
+        let (registry, rows) = registry_list(&source, &live, read_active.as_ref(), false)?;
+        Ok((live, registry, rows))
     })
     .await?;
-    for row in &mut registry {
-        row.chat_workspace_id = row
-            .session_id
-            .as_deref()
-            .and_then(|id| launch.workspace_for_session(id));
-    }
     let registry_values: Vec<_> = registry
         .iter()
         .map(|row| serde_json::to_value(row).unwrap())
         .collect();
-    let mut rows = project_registry(&launch, &live, registry);
-    let host = AppInboxHost { app: app.clone() };
-    let active = host.active_team().await.ok();
-    enrich_rows(
-        &mut rows,
-        &launch,
-        &live,
-        active.as_ref(),
-        app.try_state::<crate::dashboard_stream::DashboardStreamHub>()
-            .as_deref(),
-        app.try_state::<crate::commands::launch_telemetry::LaunchTelemetryTracker>()
-            .as_deref(),
-    );
     let mut durable_ready = false;
     let durable = match crate::commands::weft_ledger::wv_list_roster(app.clone()).await {
         Ok(durable) => {

@@ -328,7 +328,7 @@ pub(crate) async fn read_session_list_and_unread(
 > {
     let (app, launched_by) = (app.clone(), launched_by.map(str::to_owned));
     crate::commands::await_blocking("session_list.read", move || {
-        read_session_list_from(&AppSessions::of(&app)?, launched_by.as_deref())
+        crate::live_hub::read_now(&AppSessions::of(&app)?, launched_by.as_deref())
     })
     .await
 }
@@ -395,20 +395,6 @@ pub(crate) trait SessionSource {
     fn launch_telemetry(
         &self,
     ) -> Option<&crate::commands::launch_telemetry::LaunchTelemetryTracker>;
-}
-
-/// [`read_session_list_and_unread`] over `source`.
-pub(crate) fn read_session_list_from(
-    source: &impl SessionSource,
-    launched_by: Option<&str>,
-) -> Result<
-    (
-        Vec<SessionListRow>,
-        crate::commands::agent_inbox::UnreadByHandle,
-    ),
-    String,
-> {
-    crate::live_hub::read_now(source, launched_by)
 }
 
 /// What a session's terminal tab shows now, read from its host's layout.
