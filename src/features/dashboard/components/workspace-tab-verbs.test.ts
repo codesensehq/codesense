@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { describe, it, expect } from "vitest";
+import { useAgentInboxRailStore } from "@/features/viewer/stores/agent-inbox-rail-store";
 import {
   openWorkspaceTab,
   sendToWorkspaceTab,
@@ -109,6 +110,28 @@ describe("@P1 openWorkspaceTab (SW-GW-2)", () => {
     ).rejects.toThrow(/unavailable: could not open a tab/);
     expect(launched).toEqual([]);
     expect(closed).toEqual([{ workspaceId: "generic:/x", sessionId: "shell-minted" }]);
+  });
+
+  it("marks an agent tab to open on its chat, and a plain tab not", async () => {
+    useAgentInboxRailStore.setState({ bySession: {}, pending: {} });
+    const { deps } = makeDeps();
+    await openWorkspaceTab({ workspaceId: "generic:/x" }, deps);
+    expect(useAgentInboxRailStore.getState().pending).toEqual({});
+    await openWorkspaceTab({ workspaceId: "generic:/x", agent: true }, deps);
+    expect(useAgentInboxRailStore.getState().pending["shell-minted"]).toBe(true);
+  });
+
+  it("an agent tab whose launch fails keeps no mark", async () => {
+    useAgentInboxRailStore.setState({ bySession: {}, pending: {} });
+    const { deps } = makeDeps({
+      launchAgent: async () => {
+        throw new Error("unavailable: agent CLI not found on PATH");
+      },
+    });
+    await expect(
+      openWorkspaceTab({ workspaceId: "generic:/x", agent: true }, deps),
+    ).rejects.toThrow();
+    expect(useAgentInboxRailStore.getState().pending).toEqual({});
   });
 
   it("rejects a non-generic workspace (never opens a tab)", async () => {

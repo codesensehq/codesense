@@ -20,7 +20,11 @@ export function MiddleTruncate({
   useLayoutEffect(() => {
     if (!el || typeof ResizeObserver === "undefined") return;
     const update = (width: number) => {
-      if (width > 0) setAvailableChars(Math.floor(width / TEXT_XS_CHAR_W));
+      // A first reading of 0 is a box not laid out yet; a 0 after a real width is a slot
+      // squeezed shut, and must not keep the stale width.
+      setAvailableChars((prev) =>
+        width > 0 ? Math.floor(width / TEXT_XS_CHAR_W) : prev === undefined ? prev : 0,
+      );
     };
     update(el.getBoundingClientRect().width);
     const ro = new ResizeObserver((entries) => update(entries[0]?.contentRect.width ?? 0));
@@ -29,7 +33,10 @@ export function MiddleTruncate({
   }, [el]);
 
   const { head, tail } = splitForMiddleTruncation(text, availableChars);
-  if (!tail) {
+  // A slot with no room (under two characters) clips the whole label: a tail that
+  // never shrinks would otherwise be drawn over its neighbour.
+  const noRoom = availableChars !== undefined && availableChars < 2;
+  if (!tail || noRoom) {
     return (
       <span {...rest} ref={setEl} className={cn("truncate whitespace-pre", className)}>
         {text}
@@ -37,7 +44,11 @@ export function MiddleTruncate({
     );
   }
   return (
-    <span {...rest} ref={setEl} className={cn("flex min-w-0 whitespace-pre", className)}>
+    <span
+      {...rest}
+      ref={setEl}
+      className={cn("flex min-w-0 overflow-hidden whitespace-pre", className)}
+    >
       {/* `whitespace-pre`, not `truncate`'s `nowrap`: nowrap collapses the head's
           trailing space, gluing "Notifications " + "triage" into one word. */}
       <span className="overflow-hidden text-ellipsis whitespace-pre">{head}</span>

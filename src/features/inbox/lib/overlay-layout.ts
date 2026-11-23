@@ -58,17 +58,3 @@ export function overlayLayout(w: number, h: number): OverlayLayout {
     textPx: w >= 400 && h >= 480 ? 13 : 12,
   };
 }
-
-/** The docked overlay's width. */
-export const OVERLAY_DOCK_WIDTH = 420;
-
-/** Where the overlay goes on a terminal tab: docked on the right when the tab is 840+ wide
- *  and 360+ tall (the terminal reflows beside it), else over the whole tab. */
-export function overlayPlacement(
-  tabWidth: number,
-  tabHeight: number,
-): { mode: "dock"; width: number } | { mode: "cover" } {
-  return tabWidth >= 2 * OVERLAY_DOCK_WIDTH && tabHeight >= 360
-    ? { mode: "dock", width: OVERLAY_DOCK_WIDTH }
-    : { mode: "cover" };
-}
