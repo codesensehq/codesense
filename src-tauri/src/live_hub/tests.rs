@@ -3440,7 +3440,11 @@ mod call_time_read {
     #[test]
     fn a_closed_tab_reads_exited_while_its_host_read_is_in_flight() {
         use crate::commands::pty_backend::Liveness;
-        let source = FakeSessions::new(StubProbe::with(&[("s-closed", Liveness::Known(false))]));
+        let mut source =
+            FakeSessions::new(StubProbe::with(&[("s-closed", Liveness::Known(false))]));
+        bind(&source.launch, "w", "s-closed");
+        // This Mac's session read still lists it: only the probe knows it closed.
+        source.local = Ok(std::collections::HashSet::from(["s-closed".to_string()]));
         {
             let mut model = source.hub.model.lock().unwrap();
             model
@@ -3458,7 +3462,13 @@ mod call_time_read {
             "the cache still lists the closed tab as running"
         );
         // The host has closed the session.
-        assert!(source.running("s-closed").is_err());
+        let (rows, _) = read_now(&source, None).unwrap();
+        assert_eq!(state_of(&rows, "w"), session_list::SessionState::Exited);
+        assert_eq!(
+            crate::mcp::identity_tools::running_in(&rows, "s-closed").map(|_| ()),
+            Err("session 's-closed' (\"Worker\") has exited".to_string())
+        );
+        assert_eq!(source.probe.calls.get(), 1, "the read asked the probe");
     }
 
     fn state_of(rows: &[SessionListRow], handle: &str) -> session_list::SessionState {
