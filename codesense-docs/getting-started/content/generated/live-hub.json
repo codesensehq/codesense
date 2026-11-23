@@ -1145,9 +1145,9 @@
   "sources": {
     "src-tauri/src/live_hub/projection.rs": "2197f82cf052d87e3b7a569b72b633558869d496d37ee0c6d59fc8e544651396",
     "src-tauri/src/live_hub/view_key.rs": "8e76214d7c961f122717219e2893d06ccd504dc042fe96790243089ea0a2ae37",
-    "src-tauri/src/live_hub/mod.rs": "74237178237c1035df00cbe4c677e1a9d66a87bd84bb987ae373bc48dbeb4eb1",
+    "src-tauri/src/live_hub/mod.rs": "5d44c724dd30d787ff18e97837bd4e91f36e78b7dbb239e912fc0a7bd771f033",
     "src-tauri/src/live_hub/agent_list/sessions.rs": "a9726ec640a283d333235a25f81e21791f49f9231fc786e52e0f11dc60cd851d",
-    "src-tauri/src/mcp/session_list.rs": "2420b09b0f14894613e834afb129262310cba91cf725a96134e1091ee5d48b72",
+    "src-tauri/src/mcp/session_list.rs": "3e0ab2f171a27df9a837324c92aa3161a43c6fbbade1dac117ddf317a64e734b",
     "src-tauri/src/agents/session_fields.rs": "9ec6c8ab4833c6b6d6242524dac58c6203df507271a4bfa13233838553c50416",
     "src-tauri/src/live_hub/agent_list/fields.rs": "0e6d5d02a04c2e620fc4e754c5ab140cfe687eae3f3494fabdd1f44ad07416a8",
     "src-tauri/src/live_hub/effective_status.rs": "4c975cc197d37d6f0890ec4905b3db0a3b56b2deae669797bf28c284787aa2ca",
