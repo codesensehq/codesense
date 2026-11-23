@@ -3346,13 +3346,21 @@ mod call_time_read {
 
     /// A local host's live layout holding one tab running `session`.
     fn local_reply(session: &str) -> crate::commands::machines::RuntimeLayoutReply {
+        local_tagged_reply(session, BTreeMap::new())
+    }
+
+    /// [`local_reply`], its tab carrying `tags`.
+    fn local_tagged_reply(
+        session: &str,
+        tags: BTreeMap<String, String>,
+    ) -> crate::commands::machines::RuntimeLayoutReply {
         use crate::commands::machines::{
             RuntimeCounter, RuntimeLayoutReply, RuntimeMemberAddress, RuntimeMemberSlot,
             RuntimeMemberTarget, RuntimeNamespace,
         };
         use codesense_pty_core::domain::{PtySessionId, ServerId, WorkspaceKey};
         use codesense_pty_core::layout::{
-            EntryState, LayoutSnapshot, Placement, TabEntry, Tags, ViewerLayout, WorkspaceLayout,
+            EntryState, LayoutSnapshot, Placement, TabEntry, ViewerLayout, WorkspaceLayout,
         };
         let mut workspace = WorkspaceLayout::default();
         workspace.tabs.push(TabEntry {
@@ -3361,7 +3369,7 @@ mod call_time_read {
             role: None,
             placement: Placement::Tab,
             state: EntryState::Live,
-            tags: Tags::new(),
+            tags,
         });
         RuntimeLayoutReply::Live {
             private_authority_epoch: None,
@@ -3458,6 +3466,29 @@ mod call_time_read {
             .find(|row| row.handle == handle)
             .unwrap_or_else(|| panic!("no row for {handle}"))
             .state
+    }
+
+    #[test]
+    fn a_launch_whose_tab_opened_before_it_binds_is_listed_once_and_not_exited() {
+        let mut source = FakeSessions::new(StubProbe::default());
+        // The launch has reserved its handle and tagged its tab, but not bound yet.
+        assert!(source.launch.begin("w").unwrap());
+        source.hub.model.lock().unwrap().hosts.insert(
+            "local".into(),
+            (
+                local_tagged_reply("s-w", BTreeMap::from([("handle".into(), "w".into())])),
+                Ok(Vec::new()),
+            ),
+        );
+        source.local = Ok(std::collections::HashSet::from(["s-w".to_string()]));
+        let (rows, _) = read_now(&source, None).unwrap();
+        assert_ne!(state_of(&rows, "w"), session_list::SessionState::Exited);
+        let listed: Vec<&str> = rows
+            .iter()
+            .filter(|row| row.session.as_deref() == Some("s-w"))
+            .map(|row| row.handle.as_str())
+            .collect();
+        assert_eq!(listed, ["w"], "the tab is listed once, under its launch");
     }
 
     #[test]

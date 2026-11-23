@@ -470,9 +470,11 @@ pub(crate) fn session_list_rows_with_tabs(
             let failed_turn = matches!(last, Some(AgentState::Errored | AgentState::Crashed));
             let crashed = matches!(last, Some(AgentState::Crashed));
             let mut failed = failed_turn;
-            // A local session the registry's probe reads gone has exited, whatever its
-            // cached tab still shows.
-            let local_gone = !row.alive
+            // A bound local session the registry's probe reads gone has exited,
+            // whatever its cached tab still shows. A launch not bound yet has nothing
+            // to probe: its tab decides.
+            let local_gone = row.session_id.is_some()
+                && !row.alive
                 && row.machine_id.is_none()
                 && tab.as_ref().is_some_and(|tab| tab.machine_id.is_none());
             let state = match tab.as_ref().map(|tab| tab.alive) {
