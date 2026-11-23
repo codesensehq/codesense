@@ -492,7 +492,8 @@ pub(crate) fn read_now(
             std::sync::Arc::clone(&model.inbox),
         )
     };
-    let (_, mut rows) = registry_list(source, &live, active.as_ref(), true)?;
+    let registry = judged_registry(source, &live, true)?;
+    let mut rows = listed_rows(source, &live, active.as_ref(), registry);
     if let Some(parent) = key.as_deref() {
         rows.retain(|r| r.launched_by.as_deref() == Some(parent));
     }
@@ -1057,21 +1058,13 @@ fn cached_remote(
 }
 
 /// The registry's rows judged now through `source`'s probe, each with its chat
-/// workspace, and the session-list rows projected and enriched from them: the one
-/// pipeline a rebuild and a call-time read share. `fresh_local` replaces the cached
-/// local tabs with `source`'s live sessions read now.
-fn registry_list(
+/// workspace: the first step of the pipeline a rebuild and a call-time read share.
+/// `fresh_local` replaces the cached local tabs with `source`'s live sessions read now.
+fn judged_registry(
     source: &impl session_list::SessionSource,
     live: &LiveTabs,
-    active: Option<&crate::commands::dashboard_launch::LaunchTeam>,
     fresh_local: bool,
-) -> Result<
-    (
-        Vec<crate::commands::dashboard_launch::SessionRow>,
-        Vec<SessionListRow>,
-    ),
-    String,
-> {
+) -> Result<Vec<crate::commands::dashboard_launch::SessionRow>, String> {
     let launch = source.launch_registry();
     let mut registry = cached_registry(
         launch,
@@ -1085,7 +1078,19 @@ fn registry_list(
             .as_deref()
             .and_then(|id| launch.workspace_for_session(id));
     }
-    let mut rows = project_registry(launch, live, registry.clone());
+    Ok(registry)
+}
+
+/// The session-list rows projected from [`judged_registry`]'s rows and enriched: the
+/// pipeline's second step.
+fn listed_rows(
+    source: &impl session_list::SessionSource,
+    live: &LiveTabs,
+    active: Option<&crate::commands::dashboard_launch::LaunchTeam>,
+    registry: Vec<crate::commands::dashboard_launch::SessionRow>,
+) -> Vec<SessionListRow> {
+    let launch = source.launch_registry();
+    let mut rows = project_registry(launch, live, registry);
     enrich_rows(
         &mut rows,
         launch,
@@ -1094,7 +1099,7 @@ fn registry_list(
         source.progress_stream(),
         source.launch_telemetry(),
     );
-    Ok((registry, rows))
+    rows
 }
 
 fn project_registry(
@@ -1309,18 +1314,20 @@ async fn rebuild(app: &tauri::AppHandle, cause: u8) -> Result<(), String> {
     let active = AppInboxHost { app: app.clone() }.active_team().await.ok();
     // The probe asks the terminal hosts, so the registry read runs off the async runtime.
     let (read_app, read_active) = (app.clone(), active.clone());
-    let (live, registry, rows) = crate::commands::await_blocking("live_hub.registry", move || {
-        let hub = read_app.state::<LiveHub>();
-        let live = hub.model.lock().unwrap().live_tabs();
-        let source = session_list::AppSessions::of(&read_app)?;
-        let (registry, rows) = registry_list(&source, &live, read_active.as_ref(), false)?;
-        Ok((live, registry, rows))
-    })
-    .await?;
-    let registry_values: Vec<_> = registry
-        .iter()
-        .map(|row| serde_json::to_value(row).unwrap())
-        .collect();
+    let (live, registry_values, rows) =
+        crate::commands::await_blocking("live_hub.registry", move || {
+            let hub = read_app.state::<LiveHub>();
+            let live = hub.model.lock().unwrap().live_tabs();
+            let source = session_list::AppSessions::of(&read_app)?;
+            let registry = judged_registry(&source, &live, false)?;
+            let registry_values: Vec<_> = registry
+                .iter()
+                .map(|row| serde_json::to_value(row).unwrap())
+                .collect();
+            let rows = listed_rows(&source, &live, read_active.as_ref(), registry);
+            Ok((live, registry_values, rows))
+        })
+        .await?;
     let mut durable_ready = false;
     let durable = match crate::commands::weft_ledger::wv_list_roster(app.clone()).await {
         Ok(durable) => {
