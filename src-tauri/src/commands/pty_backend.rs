@@ -2190,16 +2190,16 @@ impl Hosts {
             .map(|answers| answers.into_iter().any(|has| has))
     }
 
-    /// Which of `sessions` have a running child, across the hosts.
+    /// Which of `sessions` have a running child, across the hosts: known once every
+    /// host answers.
     fn alive_session_ids(&self, sessions: &[PtySessionId]) -> Liveness<HashSet<String>> {
-        self.known(|host| host.alive_session_ids(sessions))
-            .map(|answers| {
-                answers
-                    .into_iter()
-                    .flatten()
-                    .map(|id| id.as_str().to_string())
-                    .collect()
+        self.alive_session_ids_by_host(sessions)
+            .into_iter()
+            .try_fold(HashSet::new(), |mut alive, host| {
+                alive.extend(host.known()?);
+                Some(alive)
             })
+            .map_or(Liveness::Unknown, Liveness::Known)
     }
 
     /// Which of `sessions` have a running child, as each host answers: one answer per
