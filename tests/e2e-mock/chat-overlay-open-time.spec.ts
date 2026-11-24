@@ -139,7 +139,7 @@ async function arm(page: Page, trigger: string, newest: string, cap: number) {
 }
 
 async function timedOpen(page: Page, rate: number): Promise<Sample> {
-  const trigger = `[data-testid="terminal-grid-caption-inbox-${AGENT_TAB}"]`;
+  const trigger = `[data-testid="chat-cli-switch-${AGENT_TAB}-chat"]`;
   await arm(page, trigger, NEWEST, IN_VIEW_CAP_MS * rate);
   await page.locator(trigger).click({ timeout: 15_000 * rate });
   return page.evaluate((limit) => {
@@ -155,7 +155,7 @@ async function timedOpen(page: Page, rate: number): Promise<Sample> {
 }
 
 async function closeOverlay(page: Page, wait: number) {
-  await page.locator(`[data-testid="terminal-grid-caption-inbox-${AGENT_TAB}"]`).click({
+  await page.locator(`[data-testid="chat-cli-switch-${AGENT_TAB}-cli"]`).click({
     timeout: wait,
   });
   await expect(page.locator('[data-testid="chat-overlay"]')).toHaveCount(0, { timeout: wait });
@@ -205,9 +205,12 @@ test.describe("chat overlay open time (measurement)", () => {
           const wait = 15_000 * rate;
           await page.goto("/?agents=team", { timeout: 60_000 * rate });
           await page.getByRole("button", { name: "Full screen" }).click({ timeout: wait });
-          await expect(page.getByTestId(`terminal-grid-caption-inbox-${AGENT_TAB}`)).toBeVisible({
+          await expect(page.getByTestId(`chat-cli-switch-${AGENT_TAB}-chat`)).toBeVisible({
             timeout: wait,
           });
+          // The launched agent's tab already opened on its chat: show the CLI first, so the
+          // timed open is a click on Chat (its thread is read already, so this is no longer cold).
+          await closeOverlay(page, wait);
           cold.push(await timedOpen(page, rate));
           await closeOverlay(page, wait);
           warm.push(await timedOpen(page, rate));

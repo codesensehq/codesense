@@ -29,7 +29,7 @@ async function boot(page: Page) {
   await page.setViewportSize({ width: 1600, height: 950 });
   await page.goto("/?agents=team");
   await page.getByRole("button", { name: "Full screen" }).click();
-  await expect(page.getByTestId(`terminal-grid-caption-inbox-${AGENT_TAB}`)).toBeVisible();
+  await expect(page.getByTestId(`chat-cli-switch-${AGENT_TAB}-chat`)).toBeVisible();
 }
 
 async function expand(page: Page, wsId: string) {
@@ -46,7 +46,7 @@ async function showAllTabs(page: Page, wsId: string) {
 }
 
 async function openInbox(page: Page, tabId: string) {
-  await page.getByTestId(`terminal-grid-caption-inbox-${tabId}`).click();
+  await page.getByTestId(`chat-cli-switch-${tabId}-chat`).click();
   const pane = page.locator(paneOf(tabId));
   await expect(pane).toBeInViewport();
   return pane;
@@ -59,7 +59,7 @@ async function box(page: Page, selector: string) {
 }
 
 const byTestId = (id: string) => `[data-testid="${id}"]`;
-/** A tab's body under its caption: its terminal and, when open, its docked inbox. */
+/** A tab's body under its caption: its terminal and, when open, its chat covering it. */
 const regionOf = (tabId: string) => byTestId(`inbox-split-${tabId}`);
 /** The agent's chat in that tab's own body. */
 const paneOf = (tabId: string) => `${regionOf(tabId)} [data-testid="chat-overlay"]`;
@@ -135,8 +135,8 @@ test.describe("a tab's agent inbox pane lives in that tab", () => {
   test("a plain shell has no inbox: only a tab with a live agent offers one", async ({ page }) => {
     await expand(page, CONTENT_WS);
     await showAllTabs(page, CONTENT_WS);
-    await expect(page.getByTestId(`terminal-grid-caption-inbox-${MANAGER_TAB}`)).toBeVisible();
-    await expect(page.getByTestId(`terminal-grid-caption-inbox-${SHELL_TAB}`)).toHaveCount(0);
+    await expect(page.getByTestId(`chat-cli-switch-${MANAGER_TAB}-chat`)).toBeVisible();
+    await expect(page.getByTestId(`chat-cli-switch-${SHELL_TAB}-chat`)).toHaveCount(0);
   });
 
   test("tab grid · two cells open → two panes, each in its own cell", async ({ page }) => {
@@ -152,22 +152,17 @@ test.describe("a tab's agent inbox pane lives in that tab", () => {
     }
   });
 
-  test("a wide tab docks the chat at 420 px and the terminal reflows beside it", async ({
+  test("a wide tab is covered by the chat: the terminal stays beneath, parked and inert", async ({
     page,
   }) => {
     await expand(page, BUG);
-    const before = await box(page, `${regionOf(AGENT_TAB)} .ibx-split-term`);
     await openInbox(page, AGENT_TAB);
-    const chat = page.locator(paneOf(AGENT_TAB));
-    await expect(chat).toHaveAttribute("data-placement", "dock");
     const g = await paneGeometry(page, AGENT_TAB, BUG);
     expect(g.region.width).toBeGreaterThanOrEqual(840);
-    expect(Math.round(g.pane.width)).toBe(420);
-    const term = await box(page, `${regionOf(AGENT_TAB)} .ibx-split-term`);
-    // Beside the chat, not under it: the terminal gave up exactly the chat's width.
-    expect(Math.abs(term.x + term.width - g.pane.x)).toBeLessThanOrEqual(1);
-    expect(Math.abs(before.width - term.width - 420)).toBeLessThanOrEqual(1);
-    await expect(page.locator(`${regionOf(AGENT_TAB)} .ibx-split-term`)).not.toHaveAttribute(
+    // No dock: the chat takes the tab's whole body, the terminal under it takes no keys.
+    expect(Math.abs(g.pane.width - g.region.width)).toBeLessThanOrEqual(1);
+    expect(Math.abs(g.pane.height - g.region.height)).toBeLessThanOrEqual(1);
+    await expect(page.locator(`${regionOf(AGENT_TAB)} .ibx-split-term`)).toHaveAttribute(
       "inert",
       /.*/,
     );
@@ -221,7 +216,6 @@ test.describe("the agent's chat at any pane size", () => {
         { tabId: AGENT_TAB, w: size.w, h: size.h },
       );
       const chat = page.locator(paneOf(AGENT_TAB));
-      await expect(chat).toHaveAttribute("data-placement", "cover");
       for (const k of ["width", "height", "head", "pins"] as const)
         await expect(chat).toHaveAttribute(`data-${k}`, size[k]);
       const b = await box(page, paneOf(AGENT_TAB));
@@ -392,7 +386,7 @@ test.describe("the chat is ready when it opens", () => {
       (id) =>
         new Promise<number>((resolve, reject) => {
           const caption = document.querySelector<HTMLElement>(
-            `[data-testid="terminal-grid-caption-inbox-${id}"]`,
+            `[data-testid="chat-cli-switch-${id}-chat"]`,
           );
           if (!caption) return reject(new Error("no chat button"));
           performance.mark("chat-open:click");
@@ -439,7 +433,7 @@ test.describe("the chat is ready when it opens", () => {
     expect(cold).toBeLessThan(COLD_MS);
 
     // Close it and open it again: the thread is already read, so this is the warm open.
-    await page.getByTestId(`terminal-grid-caption-inbox-${AGENT_TAB}`).click();
+    await page.getByTestId(`chat-cli-switch-${AGENT_TAB}-cli`).click();
     await expect(page.locator(paneOf(AGENT_TAB))).toHaveCount(0);
     const warm = await openToReady(page, AGENT_TAB);
     expect(warm).toBeLessThan(WARM_MS);

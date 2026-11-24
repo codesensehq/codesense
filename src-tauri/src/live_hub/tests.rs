@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::projection::*;
+use crate::commands::dashboard_launch::liveness::tests::StubProbe;
 use serde_json::json;
 
 #[tokio::test]
@@ -473,7 +474,11 @@ fn cached_remote_rows_keep_identity_offline_state_and_closed_tab_behavior() {
         target,
         agent: Some("acme/design/worker".into()),
     });
-    let rows = project_registry(&launch, &live, cached_registry(&launch, &live).unwrap());
+    let rows = project_registry(
+        &launch,
+        &live,
+        cached_registry(&launch, &live, &StubProbe::default(), None).unwrap(),
+    );
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].handle, "remote-agent");
     assert_eq!(rows[0].workspace_handle.as_deref(), Some("ws-1"));
@@ -488,12 +493,18 @@ fn cached_remote_rows_keep_identity_offline_state_and_closed_tab_behavior() {
     live.tabs.clear();
     live.live.clear();
     live.offline.push("droplet".into());
-    let offline = project_registry(&launch, &live, cached_registry(&launch, &live).unwrap());
+    let offline = project_registry(
+        &launch,
+        &live,
+        cached_registry(&launch, &live, &StubProbe::default(), None).unwrap(),
+    );
     assert_eq!(offline[0].state, session_list::SessionState::Offline);
     assert_eq!(offline[0].workspace_handle.as_deref(), Some("ws-1"));
     live.offline.clear();
     live.live.push("droplet".into());
-    assert!(cached_registry(&launch, &live).unwrap().is_empty());
+    assert!(cached_registry(&launch, &live, &StubProbe::default(), None)
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
@@ -561,7 +572,11 @@ fn failed_cached_activity_does_not_invent_a_running_session() {
     );
     let launch = DashboardLaunchState::new(2);
     let live = model.live_tabs();
-    let rows = project_registry(&launch, &live, cached_registry(&launch, &live).unwrap());
+    let rows = project_registry(
+        &launch,
+        &live,
+        cached_registry(&launch, &live, &StubProbe::default(), None).unwrap(),
+    );
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].state, session_list::SessionState::Unknown);
 }
@@ -3260,4 +3275,344 @@ fn hub_retention_returns_to_baseline_after_sessions_exit() {
         super::sweep(app.handle(), sweep_no);
     }
     assert_eq!(gauges(&app), warm);
+}
+
+/// Session-list reads made when a tool is called, over a fake source.
+mod call_time_read {
+    use super::super::*;
+    use super::StubProbe;
+
+    /// A session-list source over a test registry, hub and probe.
+    struct FakeSessions {
+        launch: DashboardLaunchState,
+        hub: LiveHub,
+        probe: StubProbe,
+        local: Result<std::collections::HashSet<String>, String>,
+    }
+
+    impl FakeSessions {
+        fn new(probe: StubProbe) -> Self {
+            Self {
+                launch: DashboardLaunchState::new(4),
+                hub: LiveHub::default(),
+                probe,
+                local: Ok(Default::default()),
+            }
+        }
+
+        fn running(&self, id: &str) -> Result<(), String> {
+            let (rows, _) = read_now(self, None)?;
+            crate::mcp::identity_tools::running_in(&rows, id).map(|_| ())
+        }
+
+        /// Store the rows a rebuild made from `live` with `probe` as the hub's cache.
+        fn cache_rows(&self, live: &LiveTabs, probe: &StubProbe) {
+            let rows = project_registry(
+                &self.launch,
+                live,
+                cached_registry(&self.launch, live, probe, None).unwrap(),
+            );
+            self.hub.model.lock().unwrap().rows = rows;
+        }
+    }
+
+    impl session_list::SessionSource for FakeSessions {
+        fn launch_registry(&self) -> &DashboardLaunchState {
+            &self.launch
+        }
+        fn live_hub(&self) -> &LiveHub {
+            &self.hub
+        }
+        fn session_probe(&self) -> &dyn crate::commands::dashboard_launch::liveness::SessionProbe {
+            &self.probe
+        }
+        fn local_live_sessions(&self) -> Result<std::collections::HashSet<String>, String> {
+            self.local.clone()
+        }
+        fn progress_stream(&self) -> Option<&crate::dashboard_stream::DashboardStreamHub> {
+            None
+        }
+        fn launch_telemetry(
+            &self,
+        ) -> Option<&crate::commands::launch_telemetry::LaunchTelemetryTracker> {
+            None
+        }
+    }
+
+    fn bind(launch: &DashboardLaunchState, handle: &str, session: &str) {
+        assert!(launch.begin(handle).unwrap());
+        launch.bind(handle, session, None).unwrap();
+    }
+
+    /// A local host's live layout holding one tab running `session`.
+    fn local_reply(session: &str) -> crate::commands::machines::RuntimeLayoutReply {
+        local_tagged_reply(session, BTreeMap::new())
+    }
+
+    /// [`local_reply`], its tab carrying `tags`.
+    fn local_tagged_reply(
+        session: &str,
+        tags: BTreeMap<String, String>,
+    ) -> crate::commands::machines::RuntimeLayoutReply {
+        use crate::commands::machines::{
+            RuntimeCounter, RuntimeLayoutReply, RuntimeMemberAddress, RuntimeMemberSlot,
+            RuntimeMemberTarget, RuntimeNamespace,
+        };
+        use codesense_pty_core::domain::{PtySessionId, ServerId, WorkspaceKey};
+        use codesense_pty_core::layout::{
+            EntryState, LayoutSnapshot, Placement, TabEntry, ViewerLayout, WorkspaceLayout,
+        };
+        let mut workspace = WorkspaceLayout::default();
+        workspace.tabs.push(TabEntry {
+            session: PtySessionId::new(session),
+            name: "Worker".into(),
+            role: None,
+            placement: Placement::Tab,
+            state: EntryState::Live,
+            tags,
+        });
+        RuntimeLayoutReply::Live {
+            private_authority_epoch: None,
+            target: RuntimeMemberTarget {
+                member: RuntimeMemberAddress {
+                    machine_id: crate::commands::machines::LOCAL_MACHINE_ID.into(),
+                    slot: RuntimeMemberSlot::InProcess,
+                },
+                admission_revision: RuntimeCounter::new(1),
+                namespace: RuntimeNamespace {
+                    server_id: "server".into(),
+                    epoch: "epoch".into(),
+                    generation: RuntimeCounter::new(1),
+                },
+            },
+            snapshot: Box::new(LayoutSnapshot {
+                schema: 1,
+                server_id: ServerId::new("server"),
+                server_name: "server".into(),
+                epoch: "epoch".into(),
+                rev: 1,
+                workspaces: BTreeMap::from([(WorkspaceKey::new("acme:design|work"), workspace)]),
+                viewer: ViewerLayout::default(),
+            }),
+        }
+    }
+
+    #[test]
+    fn a_launch_bound_after_the_last_rebuild_is_accepted() {
+        use crate::commands::pty_backend::Liveness;
+        let source = FakeSessions::new(StubProbe::with(&[("sess-new", Liveness::Known(true))]));
+        // The last rebuild ran before the launch bound: the cache holds no row for it.
+        source.cache_rows(&LiveTabs::of(&[], BTreeMap::new()), &StubProbe::default());
+        bind(&source.launch, "w", "sess-new");
+        assert_eq!(source.running("sess-new"), Ok(()));
+    }
+
+    #[test]
+    fn a_bound_launch_absent_from_cached_hosts_is_alive() {
+        use crate::commands::pty_backend::Liveness;
+        let source = FakeSessions::new(StubProbe::with(&[("sess-new", Liveness::Known(true))]));
+        bind(&source.launch, "w", "sess-new");
+        // The cached layouts show no tab yet, and the last rebuild judged it gone.
+        let mut live = LiveTabs::of(&[], BTreeMap::new());
+        live.live
+            .push(crate::commands::machines::LOCAL_MACHINE_ID.into());
+        source.cache_rows(
+            &live,
+            &StubProbe::with(&[("sess-new", Liveness::Known(false))]),
+        );
+        assert_eq!(source.running("sess-new"), Ok(()));
+    }
+
+    #[test]
+    fn a_headless_session_bound_after_the_last_rebuild_is_accepted() {
+        let source = FakeSessions::new(StubProbe::default());
+        source.cache_rows(&LiveTabs::of(&[], BTreeMap::new()), &StubProbe::default());
+        bind(&source.launch, "hl", "headless-1");
+        source.launch.mark_headless(
+            "hl",
+            std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        );
+        assert_eq!(source.running("headless-1"), Ok(()));
+    }
+
+    #[test]
+    fn a_closed_tab_reads_exited_while_its_host_read_is_in_flight() {
+        use crate::commands::pty_backend::Liveness;
+        let mut source =
+            FakeSessions::new(StubProbe::with(&[("s-closed", Liveness::Known(false))]));
+        bind(&source.launch, "w", "s-closed");
+        // This Mac's session read still lists it: only the probe knows it closed.
+        source.local = Ok(std::collections::HashSet::from(["s-closed".to_string()]));
+        {
+            let mut model = source.hub.model.lock().unwrap();
+            model
+                .hosts
+                .insert("local".into(), (local_reply("s-closed"), Ok(Vec::new())));
+            // The host's next layout read never finishes: its cached tab stays open.
+            assert!(model.begin_refresh("local"));
+        }
+        let live = source.hub.model.lock().unwrap().live_tabs();
+        source.cache_rows(&live, &StubProbe::default());
+        assert_eq!(
+            crate::mcp::identity_tools::running_in(&source.hub.rows(None).0, "s-closed")
+                .map(|_| ()),
+            Ok(()),
+            "the cache still lists the closed tab as running"
+        );
+        // The host has closed the session.
+        let (rows, _) = read_now(&source, None).unwrap();
+        assert_eq!(state_of(&rows, "w"), session_list::SessionState::Exited);
+        assert_eq!(
+            crate::mcp::identity_tools::running_in(&rows, "s-closed").map(|_| ()),
+            Err("session 's-closed' (\"Worker\") has exited".to_string())
+        );
+        assert_eq!(source.probe.calls.get(), 1, "the read asked the probe");
+    }
+
+    fn state_of(rows: &[SessionListRow], handle: &str) -> session_list::SessionState {
+        rows.iter()
+            .find(|row| row.handle == handle)
+            .unwrap_or_else(|| panic!("no row for {handle}"))
+            .state
+    }
+
+    #[test]
+    fn a_launch_whose_tab_opened_before_it_binds_is_listed_once_and_not_exited() {
+        let mut source = FakeSessions::new(StubProbe::default());
+        // The launch has reserved its handle and tagged its tab, but not bound yet.
+        assert!(source.launch.begin("w").unwrap());
+        source.hub.model.lock().unwrap().hosts.insert(
+            "local".into(),
+            (
+                local_tagged_reply("s-w", BTreeMap::from([("handle".into(), "w".into())])),
+                Ok(Vec::new()),
+            ),
+        );
+        source.local = Ok(std::collections::HashSet::from(["s-w".to_string()]));
+        let (rows, _) = read_now(&source, None).unwrap();
+        assert_ne!(state_of(&rows, "w"), session_list::SessionState::Exited);
+        let listed: Vec<&str> = rows
+            .iter()
+            .filter(|row| row.session.as_deref() == Some("s-w"))
+            .map(|row| row.handle.as_str())
+            .collect();
+        assert_eq!(listed, ["w"], "the tab is listed once, under its launch");
+    }
+
+    #[test]
+    fn a_stale_cache_does_not_decide_a_read() {
+        use crate::commands::pty_backend::Liveness;
+        let source = FakeSessions::new(StubProbe::with(&[("s-w", Liveness::Known(false))]));
+        bind(&source.launch, "w", "s-w");
+        // The last rebuild saw it running; it has exited since.
+        source.cache_rows(
+            &LiveTabs::of(&[], BTreeMap::new()),
+            &StubProbe::with(&[("s-w", Liveness::Known(true))]),
+        );
+        let (rows, _) = read_now(&source, None).unwrap();
+        assert_eq!(state_of(&rows, "w"), session_list::SessionState::Exited);
+    }
+
+    #[test]
+    fn a_rebuild_and_a_read_agree_on_one_probe() {
+        use crate::commands::pty_backend::Liveness;
+        let answers = [
+            ("s-up", Liveness::Known(true)),
+            ("s-gone", Liveness::Known(false)),
+        ];
+        let source = FakeSessions::new(StubProbe::with(&answers));
+        for (handle, session) in [("up", "s-up"), ("gone", "s-gone"), ("quiet", "s-quiet")] {
+            bind(&source.launch, handle, session);
+        }
+        assert!(source.launch.begin("reserved").unwrap());
+        source.cache_rows(
+            &LiveTabs::of(&[], BTreeMap::new()),
+            &StubProbe::with(&answers),
+        );
+        let cached = source.hub.rows(None).0;
+        let (read, _) = read_now(&source, None).unwrap();
+        for handle in ["up", "gone", "quiet", "reserved"] {
+            assert_eq!(
+                state_of(&cached, handle),
+                state_of(&read, handle),
+                "{handle}"
+            );
+        }
+        assert_eq!(state_of(&read, "gone"), session_list::SessionState::Exited);
+        assert_eq!(
+            state_of(&read, "reserved"),
+            session_list::SessionState::Exited
+        );
+    }
+
+    #[test]
+    fn a_read_carries_the_enriched_fields() {
+        use crate::commands::dashboard_launch::LaunchTeam;
+        let source = FakeSessions::new(StubProbe::default());
+        bind(&source.launch, "w", "s-w");
+        let team = LaunchTeam {
+            org: "acme".into(),
+            team: "design".into(),
+        };
+        source.hub.model.lock().unwrap().active_team = Some(team.clone());
+        let (rows, _) = read_now(&source, None).unwrap();
+        let row = rows.iter().find(|row| row.handle == "w").unwrap();
+        assert_eq!(row.team.as_ref(), Some(&team));
+        assert_eq!(row.session.as_deref(), Some("s-w"));
+    }
+
+    #[test]
+    fn a_read_asks_the_probe_once() {
+        let source = FakeSessions::new(StubProbe::default());
+        for (handle, session) in [("a", "s-a"), ("b", "s-b"), ("c", "s-c")] {
+            bind(&source.launch, handle, session);
+        }
+        read_now(&source, None).unwrap();
+        assert_eq!(source.probe.calls.get(), 1);
+    }
+
+    #[test]
+    fn an_unanswering_probe_leaves_rows_alive() {
+        // The stub knows no session, as a host that never answers.
+        let source = FakeSessions::new(StubProbe::default());
+        bind(&source.launch, "w", "s-w");
+        let (rows, _) = read_now(&source, None).unwrap();
+        assert_ne!(state_of(&rows, "w"), session_list::SessionState::Exited);
+        assert_eq!(source.running("s-w"), Ok(()));
+    }
+
+    #[test]
+    fn a_launch_aborted_before_it_binds_is_announced_and_dropped() {
+        use std::sync::mpsc;
+        use tauri::Listener;
+        let source = FakeSessions::new(StubProbe::default());
+        assert!(source.launch.begin("w").unwrap());
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let (send, changed) = mpsc::channel();
+        app.listen(
+            crate::commands::dashboard_launch::SESSION_STATE_CHANGED,
+            move |_| {
+                let _ = send.send(());
+            },
+        );
+        assert!(crate::commands::dashboard_launch::abort_and_notify(
+            app.handle(),
+            &source.launch,
+            "w"
+        ));
+        assert!(changed.recv_timeout(Duration::from_secs(3)).is_ok());
+        let (rows, _) = read_now(&source, None).unwrap();
+        assert!(rows.iter().all(|row| row.handle != "w"));
+        // A second abort drops nothing and announces nothing.
+        assert!(!crate::commands::dashboard_launch::abort_and_notify(
+            app.handle(),
+            &source.launch,
+            "w"
+        ));
+        assert!(changed.recv_timeout(Duration::from_millis(50)).is_err());
+    }
 }

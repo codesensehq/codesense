@@ -23,6 +23,8 @@ pub(crate) struct FakeInbox {
     >,
     /// A real media state, for tests of the memory-only path; none by default.
     media: std::sync::Mutex<Option<Arc<crate::media::MediaState>>>,
+    /// Each role send's `(team, role, sender)`, as the app's seam hears it.
+    queued: std::sync::Mutex<Vec<(String, String, String)>>,
 }
 impl FakeInbox {
     fn new() -> Arc<Self> {
@@ -33,6 +35,7 @@ impl FakeInbox {
             names: Default::default(),
             read_gate: std::sync::Mutex::new(None),
             media: std::sync::Mutex::new(None),
+            queued: Default::default(),
         })
     }
     /// Serve media through a real media state over `fetch`, as the app does.
@@ -143,6 +146,12 @@ impl InboxHost for FakeInbox {
             Some(media) => media.present(&config, attachments),
             None => config.apply(attachments),
         }
+    }
+    fn role_message_queued(&self, team: &LaunchTeam, role: &str, _: i64, sender: &str) {
+        self.queued
+            .lock()
+            .unwrap()
+            .push((team.team.clone(), role.into(), sender.into()));
     }
 }
 
@@ -360,6 +369,15 @@ async fn owner_sends_and_replies_through_the_inbox_with_fixed_team_and_plain_con
         .unwrap();
     assert_eq!(role["delivery"]["state"], "queued");
     assert!(role.get("text").is_none());
+    // The send reaches the seam where the app offers the role's holders their notice.
+    assert_eq!(
+        *host.queued.lock().unwrap(),
+        vec![(
+            "emea".to_string(),
+            "triage".to_string(),
+            "human".to_string()
+        )]
+    );
 }
 
 #[tokio::test]

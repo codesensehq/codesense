@@ -1277,6 +1277,42 @@ pub fn roles_held_by(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// The sessions holding a live registration for `role` at `now` (epoch seconds): the
+/// session each renews under, else its instance id, sorted. Its mail's notice goes to
+/// them. Reading this claims nothing.
+pub fn live_role_sessions(store: &WeftStore, role: &str, now: i64) -> WvWriteResult<Vec<String>> {
+    let conn = store.conn()?;
+    let mut stmt = conn.prepare_cached(
+        "SELECT DISTINCT COALESCE(session_id, instance_id) FROM wv_role_registration \
+         WHERE role = ?1 AND expires_at > ?2 ORDER BY 1",
+    )?;
+    let rows = stmt.query_map(params![role_name(role), now], |r| r.get::<_, String>(0))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// For each role `session` holds live at `now` (epoch seconds), sorted: its deliveries
+/// no instance has claimed, and the newest one's message id. Mail the session sent
+/// itself (as `session` or `handle`) is not counted. Reading this claims nothing.
+pub(crate) fn pending_role_mail(
+    conn: &rusqlite::Connection,
+    session: &str,
+    handle: &str,
+    now: i64,
+) -> rusqlite::Result<Vec<(String, u32, i64)>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT d.role, COUNT(*), MAX(m.id) FROM wv_role_delivery d \
+         JOIN wv_inbox m ON m.id = d.message_id \
+         WHERE d.state = 'pending' AND m.withdrawn_at IS NULL AND m.sender NOT IN (?1, ?2) \
+         AND d.role IN (SELECT role FROM wv_role_registration \
+                        WHERE (session_id = ?1 OR instance_id = ?1) AND expires_at > ?3) \
+         GROUP BY d.role ORDER BY d.role",
+    )?;
+    let rows = stmt.query_map(params![session, handle, now], |r| {
+        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+    })?;
+    rows.collect()
+}
+
 fn verify_registration(
     tx: &rusqlite::Transaction,
     role: &str,

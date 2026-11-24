@@ -23,6 +23,10 @@ import {
 import { whenTerminalLayoutHydrated } from "@/shared/lib/terminal-layout";
 import { logger } from "@/shared/lib/logger";
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
+import {
+  clearOpenedAsAgent,
+  markOpenedAsAgent,
+} from "@/features/viewer/stores/agent-inbox-rail-store";
 import { binaryStem } from "@/shared/lib/path";
 import { platformName } from "@/shared/lib/capabilities";
 
@@ -179,6 +183,8 @@ export interface LaunchParams {
    *  backend already projected it for the session). Without it the agent at `agentPath`
    *  launches with the launcher's default args and a per-session config. */
   prepare?: (sessionId: string) => Promise<PreparedShellLaunch>;
+  /** A background launch nobody watches: its tab does not open on the agent's chat. */
+  headless?: boolean;
 }
 
 export interface LaunchResult {
@@ -244,7 +250,7 @@ async function connectAgentSessionInner(
   params: LaunchParams,
   deps: LaunchDeps,
 ): Promise<LaunchResult> {
-  const { teamKey, orgRoot, agentPath, role, workspaceKey, title } = params;
+  const { teamKey, orgRoot, agentPath, role, workspaceKey, title, headless } = params;
 
   if (!params.prepare) await deps.provision(orgRoot);
   const workspaceId = workspaceKey;
@@ -314,6 +320,8 @@ async function connectAgentSessionInner(
       execution,
     });
     tabOpened = true;
+    // A first launch: the tab opens on its chat once the agent runs.
+    if (!headless) markOpenedAsAgent(tab.sessionId);
 
     // A structured exec already started the agent. Shell launches still use the
     // existing bounded injector and surface its failure.
@@ -331,6 +339,7 @@ async function connectAgentSessionInner(
       activityWrapped = launched.activityWrapped;
     }
   } catch (err) {
+    clearOpenedAsAgent(tab.sessionId);
     try {
       await deps.closeTab(tab.sessionId);
     } catch (closeError) {

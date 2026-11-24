@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { useAgentInboxRailStore } from "@/features/viewer/stores/agent-inbox-rail-store";
 import { installMockBackend } from "./install";
 import { MOCK_ORG_SLUG } from "./fixtures";
 
@@ -55,5 +56,30 @@ describe("installMockBackend (seam)", () => {
     await expect(internals().invoke("totally_unmapped", {})).rejects.toThrow(
       "not mocked: totally_unmapped",
     );
+  });
+});
+
+describe("installMockBackend and the chat cover", () => {
+  const pending = () => Object.keys(useAgentInboxRailStore.getState().pending);
+
+  beforeEach(() => {
+    useAgentInboxRailStore.setState({ bySession: {}, pending: {} });
+    delete (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  });
+  afterEach(() => window.history.pushState({}, "", "/"));
+
+  it("marks the team world's launched agent tabs to open on their chat", () => {
+    window.history.pushState({}, "", "/?agents=team");
+    installMockBackend();
+    expect(pending()).toContain("sess-login-lead");
+    expect(pending()).toContain("sess-manager");
+    // A shell, a CLI typed by hand and a reattached one are not launched as agents.
+    for (const id of ["sess-login-shell", "sess-notify-hand", "sess-notify-reattached"])
+      expect(pending()).not.toContain(id);
+  });
+
+  it("marks nothing in a world with no agents", () => {
+    installMockBackend();
+    expect(pending()).toEqual([]);
   });
 });

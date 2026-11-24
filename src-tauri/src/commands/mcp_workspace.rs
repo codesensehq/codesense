@@ -1853,7 +1853,7 @@ pub(crate) async fn launch_managed_dir_session_typed(
         }) {
             Ok(capture) => capture,
             Err(error) => {
-                state.abort(handle);
+                crate::commands::dashboard_launch::abort_and_notify(app, &state, handle);
                 return Err(LaunchError::Other(error));
             }
         };
@@ -1883,7 +1883,7 @@ pub(crate) async fn launch_managed_dir_session_typed(
     // Only a fresh launch runs the agent: an account the preview already knows cannot run it
     // is refused before anything spawns, and a focus never relabels the session it found.
     if let Err(error) = agent.refuse_unusable_account() {
-        state.abort(handle);
+        crate::commands::dashboard_launch::abort_and_notify(app, &state, handle);
         return Err(LaunchError::Other(error));
     }
     state.set_agent_revision_if_absent(handle, agent.revision_label());
@@ -1908,7 +1908,7 @@ pub(crate) async fn launch_managed_dir_session_typed(
     )
     .await;
     if result.is_err() {
-        state.abort(handle);
+        crate::commands::dashboard_launch::abort_and_notify(app, &state, handle);
     } else {
         // SW-AM-8: an agent-driven launch binds via the registry method (not the
         // `dashboard_launch_bind` command), so it must announce the new session

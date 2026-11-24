@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { isRunningAgent } from "@/features/viewer/lib/hand-agents";
+import { isRunningAgent, useRunningAgent } from "@/features/viewer/lib/hand-agents";
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
 import { create } from "zustand";
 
@@ -22,6 +22,17 @@ export interface AgentInboxRailTarget {
 interface AgentInboxRailState {
   /** Keyed by terminal `sessionId`. Kept for the app's lifetime only. */
   bySession: Record<string, AgentInboxRailTarget | undefined>;
+  /**
+   * Tabs launched as an agent whose chat opens once the agent is eligible (a running agent
+   * CLI). A one-shot mark: set by a first launch, never by a relaunch or a CLI started by hand.
+   */
+  pending: Record<string, true | undefined>;
+  /** Mark a tab as launched as an agent: its chat covers it as soon as the agent runs. */
+  markOpenedAsAgent: (sessionId: string) => void;
+  /** Drop a pending mark (a failed launch). An open chat is left alone. */
+  clearOpenedAsAgent: (sessionId: string) => void;
+  /** Forget everything about a session: its open chat and its pending mark. */
+  forget: (sessionId: string) => void;
   open: (sessionId: string, opts?: { compose?: boolean }) => void;
   close: (sessionId: string) => void;
   openGroup: (sessionId: string) => void;
@@ -37,7 +48,15 @@ function watchEligibility(): void {
   if (watchingEligibility) return;
   watchingEligibility = true;
   useAgentStateStore.subscribe((agent) => {
-    const { bySession } = useAgentInboxRailStore.getState();
+    const { bySession, pending } = useAgentInboxRailStore.getState();
+    const opened: string[] = [];
+    const dropped: string[] = [];
+    for (const id of Object.keys(pending)) {
+      if (!pending[id]) continue;
+      if (isRunningAgent(agent, id)) opened.push(id);
+      // The process ended before the agent was ever eligible: the mark is spent.
+      else if (agent.exitBySession[id]) dropped.push(id);
+    }
     const ended = Object.keys(bySession).filter((id) => {
       if (!bySession[id] || isRunningAgent(agent, id)) return false;
       // A layout refresh or reconnect temporarily hides live controls. Remember
@@ -45,10 +64,16 @@ function watchEligibility(): void {
       const activity = agent.activityBySession[id];
       return !activity || activity.freshness === "current" || !!agent.exitBySession[id];
     });
-    if (ended.length === 0) return;
+    if (opened.length === 0 && dropped.length === 0 && ended.length === 0) return;
     const next = { ...bySession };
+    const nextPending = { ...pending };
+    for (const id of opened) {
+      next[id] = { composeRequest: 0 };
+      nextPending[id] = undefined;
+    }
+    for (const id of dropped) nextPending[id] = undefined;
     for (const id of ended) next[id] = undefined;
-    useAgentInboxRailStore.setState({ bySession: next });
+    useAgentInboxRailStore.setState({ bySession: next, pending: nextPending });
   });
 }
 
@@ -59,6 +84,28 @@ function watchEligibility(): void {
  */
 export const useAgentInboxRailStore = create<AgentInboxRailState>((set) => ({
   bySession: {},
+  pending: {},
+  markOpenedAsAgent: (sessionId) => {
+    watchEligibility();
+    set((s) => {
+      if (isRunningAgent(useAgentStateStore.getState(), sessionId))
+        return s.bySession[sessionId]
+          ? s
+          : { bySession: { ...s.bySession, [sessionId]: { composeRequest: 0 } } };
+      return { pending: { ...s.pending, [sessionId]: true } };
+    });
+  },
+  clearOpenedAsAgent: (sessionId) =>
+    set((s) => (s.pending[sessionId] ? { pending: { ...s.pending, [sessionId]: undefined } } : s)),
+  forget: (sessionId) =>
+    set((s) =>
+      s.bySession[sessionId] || s.pending[sessionId]
+        ? {
+            bySession: { ...s.bySession, [sessionId]: undefined },
+            pending: { ...s.pending, [sessionId]: undefined },
+          }
+        : s,
+    ),
   open: (sessionId, opts) =>
     set((s) => {
       if (!isRunningAgent(useAgentStateStore.getState(), sessionId)) return s;
@@ -92,11 +139,32 @@ export const useAgentInboxRailStore = create<AgentInboxRailState>((set) => ({
       if (!cur || (cur.composeHandled ?? 0) >= n) return s;
       return { bySession: { ...s.bySession, [sessionId]: { ...cur, composeHandled: n } } };
     }),
+  // The person's choice: a closed chat stays closed, so a mark still pending is spent too.
   close: (sessionId) =>
     set((s) =>
-      s.bySession[sessionId] ? { bySession: { ...s.bySession, [sessionId]: undefined } } : s,
+      s.bySession[sessionId] || s.pending[sessionId]
+        ? {
+            bySession: { ...s.bySession, [sessionId]: undefined },
+            pending: { ...s.pending, [sessionId]: undefined },
+          }
+        : s,
     ),
 }));
+
+/** A tab was launched as an agent: its chat covers it once the agent runs. */
+export function markOpenedAsAgent(sessionId: string) {
+  useAgentInboxRailStore.getState().markOpenedAsAgent(sessionId);
+}
+
+/** A launch failed before the agent was eligible: drop the mark. */
+export function clearOpenedAsAgent(sessionId: string) {
+  useAgentInboxRailStore.getState().clearOpenedAsAgent(sessionId);
+}
+
+/** A tab was removed: forget its chat state. */
+export function forgetAgentInboxRail(sessionId: string) {
+  useAgentInboxRailStore.getState().forget(sessionId);
+}
 
 /** Open the per-tab rail on `sessionId`, optionally with the composer focused. */
 export function openAgentInboxRail(sessionId: string, opts?: { compose?: boolean }) {
@@ -127,4 +195,43 @@ export function closeAgentInboxRailToTerminal(sessionId: string, pane: Element |
     requestAnimationFrame(() =>
       pane.querySelector<HTMLTextAreaElement>(".xterm textarea")?.focus(),
     );
+}
+
+/** Whether the chat covers `sessionId`'s tab: it is open and the agent still runs. */
+export function useChatCovers(sessionId: string): boolean {
+  const open = useAgentInboxRailStore((s) => !!s.bySession[sessionId]);
+  const running = useRunningAgent(sessionId);
+  return open && running;
+}
+
+const CHAT_PANE = "[data-focus-pane], [data-pane-id], [data-pane-active]";
+
+/** The pane (caption and body) of the tab whose chat is mounted for `sessionId`. */
+function paneOfChat(sessionId: string): Element | null {
+  if (typeof document === "undefined") return null;
+  return (
+    document
+      .querySelector(`[data-testid="chat-overlay"][data-session-id="${CSS.escape(sessionId)}"]`)
+      ?.closest(CHAT_PANE) ?? null
+  );
+}
+
+/**
+ * Show `sessionId`'s chat over its terminal. `focus`: the composer takes the keyboard (a click or
+ * the shortcut); `keep`: it stays where it is (an arrow key on the Chat | CLI switch).
+ */
+export function showAgentChat(sessionId: string, how: "focus" | "keep") {
+  useAgentInboxRailStore.getState().open(sessionId, { compose: how === "focus" });
+}
+
+/** Show `sessionId`'s CLI, handing it the keyboard on `focus` and leaving it on `keep`. */
+export function showAgentCli(sessionId: string, how: "focus" | "keep") {
+  if (how === "focus") closeAgentInboxRailToTerminal(sessionId, paneOfChat(sessionId));
+  else closeAgentInboxRail(sessionId);
+}
+
+/** Flip a tab between its chat and its CLI, with the keyboard following (the shortcut). */
+export function flipAgentView(sessionId: string) {
+  if (useAgentInboxRailStore.getState().bySession[sessionId]) showAgentCli(sessionId, "focus");
+  else showAgentChat(sessionId, "focus");
 }
