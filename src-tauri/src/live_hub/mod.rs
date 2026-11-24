@@ -27,7 +27,10 @@ pub mod view_key;
 
 use crate::commands::{
     agent_inbox::{AppInboxHost, UnreadByHandle},
-    dashboard_launch::DashboardLaunchState,
+    dashboard_launch::{
+        liveness::{registry_rows, Remote, SessionProbe},
+        DashboardLaunchState,
+    },
 };
 use crate::mcp::{
     session_list::{self, SessionListRow},
@@ -173,6 +176,8 @@ struct Model {
     machine_stats_watches:
         BTreeMap<String, std::sync::Arc<crate::terminal::session_server::SessionServerClient>>,
     rows: Vec<SessionListRow>,
+    /// The active team when `rows` were built: a call-time read's team fallback.
+    active_team: Option<crate::commands::dashboard_launch::LaunchTeam>,
     agent_definitions: agent_definitions::Registry,
     configuration: configuration::Registry,
     processes: BTreeMap<String, String>,
@@ -466,18 +471,34 @@ impl LiveHub {
         (rows, inbox::InboxProjection::unread(&*inbox))
     }
 }
-pub(crate) fn read(
-    app: &tauri::AppHandle,
+/// The session list as it is now. Membership and liveness come from `source` when
+/// called: the registry, judged by its probe, plus this Mac's live sessions. The cached
+/// layouts only name, place and decorate the rows, and supply remote machines' tabs.
+/// `launched_by` (a session id or handle) keeps only the sessions it launched.
+pub(crate) fn read_now(
+    source: &impl session_list::SessionSource,
     launched_by: Option<&str>,
 ) -> Result<(Vec<SessionListRow>, UnreadByHandle), String> {
+    let launch = source.launch_registry();
     let key = launched_by
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(|s| app.state::<DashboardLaunchState>().normalize_launched_by(s));
-    Ok(app
-        .try_state::<LiveHub>()
-        .ok_or("live hub unavailable")?
-        .rows(key.as_deref()))
+        .map(|s| launch.normalize_launched_by(s));
+    let (live, active, inbox) = {
+        let model = source.live_hub().model.lock().unwrap();
+        (
+            model.live_tabs(),
+            model.active_team.clone(),
+            std::sync::Arc::clone(&model.inbox),
+        )
+    };
+    let registry = judged_registry(source, &live, true)?;
+    let mut rows = listed_rows(source, &live, active.as_ref(), registry);
+    if let Some(parent) = key.as_deref() {
+        rows.retain(|r| r.launched_by.as_deref() == Some(parent));
+    }
+    inbox.join(&mut rows);
+    Ok((rows, inbox::InboxProjection::unread(&*inbox)))
 }
 
 fn listen_sources<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
@@ -952,64 +973,45 @@ async fn refresh_hosts(app: &tauri::AppHandle) {
     }
 }
 
+/// The registry's rows, judged by the one liveness rule: local sessions by `probe`,
+/// remote agents and registry-less tabs by the cached host layouts in `live`.
+/// `local_pty`, when given, is this Mac's live sessions read now, and replaces the
+/// cached local tabs as its registry-less rows. A tab tagged with a registered launch's
+/// handle is that launch's, never a registry-less row, whichever arm lists it.
 fn cached_registry(
     launch: &DashboardLaunchState,
     live: &LiveTabs,
+    probe: &dyn SessionProbe,
+    local_pty: Option<Result<HashSet<String>, String>>,
 ) -> Result<Vec<crate::commands::dashboard_launch::SessionRow>, String> {
-    use crate::commands::dashboard_launch::{
-        remote_agent_row, session_row, union_registry_and_live_pty,
-    };
-    let registry: Vec<_> = launch
-        .snapshot()
-        .into_iter()
-        .filter_map(|record| {
-            if let Some(remote) = launch.remote_shell_by_handle(&record.handle) {
-                let tab = crate::mcp::terminal_tabs::by_handle(
-                    &live.tabs,
-                    &record.handle,
-                    Some(remote.target.session.as_str()),
-                );
-                let machine_live = live.live.contains(&remote.machine_id);
-                if matches!(remote.status, "opened" | "alreadyLive" | "ended")
-                    && machine_live
-                    && tab.is_none()
-                {
-                    return None;
-                }
-                let alive = tab.map_or(!machine_live, |t| !t.exited);
-                let session = tab
-                    .map(|t| t.session.clone())
-                    .unwrap_or_else(|| remote.target.session.as_str().to_string());
-                Some(remote_agent_row(record, alive, Some(session)))
-            } else {
-                let alive = crate::commands::dashboard_launch::is_live_headless(
-                    record.kind,
-                    record.session_id.as_deref(),
-                ) || record.session_id.as_deref().is_some_and(|id| {
-                    live.tabs.iter().find(|t| t.session == id).map_or(
-                        !live
-                            .live
-                            .contains(&crate::commands::machines::LOCAL_MACHINE_ID.to_string()),
-                        |t| !t.exited,
-                    )
-                });
-                Some(session_row(record, alive))
-            }
-        })
+    use crate::commands::machines::LOCAL_MACHINE_ID;
+    let snapshot = launch.snapshot();
+    let registered: HashSet<&str> = snapshot.iter().map(|r| r.handle.as_str()).collect();
+    let launched: HashSet<String> = live
+        .tabs
+        .iter()
+        .filter(|t| t.handle.as_deref().is_some_and(|h| registered.contains(h)))
+        .map(|t| t.session.clone())
         .collect();
-    let live_ids = live
+    let mut live_ids: HashSet<String> = live
         .tabs
         .iter()
         .filter(|t| {
             !t.exited
-                && !t
-                    .handle
-                    .as_ref()
-                    .is_some_and(|h| registry.iter().any(|r| &r.handle == h))
+                && !launched.contains(&t.session)
+                && (local_pty.is_none() || t.machine_id != LOCAL_MACHINE_ID)
         })
         .map(|t| t.session.clone())
         .collect();
-    let mut rows = union_registry_and_live_pty(registry, Ok(live_ids))?;
+    if let Some(local) = local_pty {
+        live_ids.extend(local?.into_iter().filter(|id| !launched.contains(id)));
+    }
+    let mut rows = registry_rows(
+        snapshot,
+        probe,
+        |record| cached_remote(launch, live, record),
+        Ok(live_ids),
+    )?;
     for row in &mut rows {
         if row.machine_id.is_none() {
             if let Some(tab) = live
@@ -1025,6 +1027,81 @@ fn cached_registry(
     }
     Ok(rows)
 }
+
+/// Where the cached layouts place a remote launch: hidden once its connected machine
+/// no longer shows the tab it opened, else judged by that tab.
+fn cached_remote(
+    launch: &DashboardLaunchState,
+    live: &LiveTabs,
+    record: &crate::commands::dashboard_launch::SessionSnapshot,
+) -> Remote {
+    let Some(remote) = launch.remote_shell_by_handle(&record.handle) else {
+        return Remote::Local;
+    };
+    let tab = crate::mcp::terminal_tabs::by_handle(
+        &live.tabs,
+        &record.handle,
+        Some(remote.target.session.as_str()),
+    );
+    let machine_live = live.live.contains(&remote.machine_id);
+    if matches!(remote.status, "opened" | "alreadyLive" | "ended") && machine_live && tab.is_none()
+    {
+        return Remote::Hidden;
+    }
+    Remote::Row {
+        alive: tab.map_or(!machine_live, |t| !t.exited),
+        session: Some(
+            tab.map(|t| t.session.clone())
+                .unwrap_or_else(|| remote.target.session.as_str().to_string()),
+        ),
+    }
+}
+
+/// The registry's rows judged now through `source`'s probe, each with its chat
+/// workspace: the first step of the pipeline a rebuild and a call-time read share.
+/// `fresh_local` replaces the cached local tabs with `source`'s live sessions read now.
+fn judged_registry(
+    source: &impl session_list::SessionSource,
+    live: &LiveTabs,
+    fresh_local: bool,
+) -> Result<Vec<crate::commands::dashboard_launch::SessionRow>, String> {
+    let launch = source.launch_registry();
+    let mut registry = cached_registry(
+        launch,
+        live,
+        source.session_probe(),
+        fresh_local.then(|| source.local_live_sessions()),
+    )?;
+    for row in &mut registry {
+        row.chat_workspace_id = row
+            .session_id
+            .as_deref()
+            .and_then(|id| launch.workspace_for_session(id));
+    }
+    Ok(registry)
+}
+
+/// The session-list rows projected from [`judged_registry`]'s rows and enriched: the
+/// pipeline's second step.
+fn listed_rows(
+    source: &impl session_list::SessionSource,
+    live: &LiveTabs,
+    active: Option<&crate::commands::dashboard_launch::LaunchTeam>,
+    registry: Vec<crate::commands::dashboard_launch::SessionRow>,
+) -> Vec<SessionListRow> {
+    let launch = source.launch_registry();
+    let mut rows = project_registry(launch, live, registry);
+    enrich_rows(
+        &mut rows,
+        launch,
+        live,
+        active,
+        source.progress_stream(),
+        source.launch_telemetry(),
+    );
+    rows
+}
+
 fn project_registry(
     launch: &DashboardLaunchState,
     live: &LiveTabs,
@@ -1168,26 +1245,17 @@ fn count_rebuild(cause: u8) {
     }
 }
 
-async fn rebuild(app: &tauri::AppHandle, cause: u8) -> Result<(), String> {
-    count_rebuild(cause);
-    use crate::commands::agent_inbox::InboxHost;
-    let hub = app.state::<LiveHub>();
-    let live = hub.model.lock().unwrap().live_tabs();
-    let launch = app.state::<DashboardLaunchState>();
-    let mut registry = cached_registry(&launch, &live)?;
-    for row in &mut registry {
-        row.chat_workspace_id = row
-            .session_id
-            .as_deref()
-            .and_then(|id| launch.workspace_for_session(id));
-    }
-    let registry_values: Vec<_> = registry
-        .iter()
-        .map(|row| serde_json::to_value(row).unwrap())
-        .collect();
-    let mut rows = project_registry(&launch, &live, registry);
-    let host = AppInboxHost { app: app.clone() };
-    let active = host.active_team().await.ok();
+/// The decoration a session row carries beyond its projection: its team (its launch's,
+/// else its tab's workspace, else the active team), the inbox waiter armed for it, its
+/// last progress and its launch telemetry. A rebuild and a call-time read both use it.
+fn enrich_rows(
+    rows: &mut [SessionListRow],
+    launch: &DashboardLaunchState,
+    live: &LiveTabs,
+    active: Option<&crate::commands::dashboard_launch::LaunchTeam>,
+    progress: Option<&crate::dashboard_stream::DashboardStreamHub>,
+    telemetry: Option<&crate::commands::launch_telemetry::LaunchTelemetryTracker>,
+) {
     let teams: HashMap<_, _> = rows
         .iter()
         .map(|r| {
@@ -1208,15 +1276,15 @@ async fn rebuild(app: &tauri::AppHandle, cause: u8) -> Result<(), String> {
                             crate::commands::dashboard_launch::launch_team_from_key(key)
                         })
                 })
-                .or_else(|| active.clone());
+                .or_else(|| active.cloned());
             (r.handle.clone(), team)
         })
         .collect();
-    for row in &mut rows {
+    for row in rows.iter_mut() {
         row.team = teams.get(&row.handle).cloned().flatten();
     }
-    session_list::with_inbox_waiters(&mut rows, |handle| {
-        crate::commands::host_inbox::inbox_target(&launch, handle)
+    session_list::with_inbox_waiters(rows, |handle| {
+        crate::commands::host_inbox::inbox_target(launch, handle)
             .map(|(machine, session)| {
                 crate::commands::host_inbox::HostInboxes::armed(
                     &launch.host_inboxes(),
@@ -1230,14 +1298,36 @@ async fn rebuild(app: &tauri::AppHandle, cause: u8) -> Result<(), String> {
             })
             .unwrap_or_default()
     });
-    if let Some(stream) = app.try_state::<crate::dashboard_stream::DashboardStreamHub>() {
-        session_list::with_progress(&mut rows, |id| stream.latest_progress(id));
+    if let Some(stream) = progress {
+        session_list::with_progress(rows, |id| stream.latest_progress(id));
     }
-    if let Some(tracker) =
-        app.try_state::<crate::commands::launch_telemetry::LaunchTelemetryTracker>()
-    {
-        session_list::with_launch_telemetry_batched(&mut rows, &tracker);
+    if let Some(tracker) = telemetry {
+        session_list::with_launch_telemetry_batched(rows, tracker);
     }
+}
+
+async fn rebuild(app: &tauri::AppHandle, cause: u8) -> Result<(), String> {
+    count_rebuild(cause);
+    use crate::commands::agent_inbox::InboxHost;
+    let hub = app.state::<LiveHub>();
+    let launch = app.state::<DashboardLaunchState>();
+    let active = AppInboxHost { app: app.clone() }.active_team().await.ok();
+    // The probe asks the terminal hosts, so the registry read runs off the async runtime.
+    let (read_app, read_active) = (app.clone(), active.clone());
+    let (live, registry_values, rows) =
+        crate::commands::await_blocking("live_hub.registry", move || {
+            let hub = read_app.state::<LiveHub>();
+            let live = hub.model.lock().unwrap().live_tabs();
+            let source = session_list::AppSessions::of(&read_app)?;
+            let registry = judged_registry(&source, &live, false)?;
+            let registry_values: Vec<_> = registry
+                .iter()
+                .map(|row| serde_json::to_value(row).unwrap())
+                .collect();
+            let rows = listed_rows(&source, &live, read_active.as_ref(), registry);
+            Ok((live, registry_values, rows))
+        })
+        .await?;
     let mut durable_ready = false;
     let durable = match crate::commands::weft_ledger::wv_list_roster(app.clone()).await {
         Ok(durable) => {
@@ -1534,6 +1624,7 @@ async fn rebuild(app: &tauri::AppHandle, cause: u8) -> Result<(), String> {
             .min();
         model.agent_definitions.sessions(&rows);
         model.rows = rows;
+        model.active_team = active.clone();
         model.agent_ready = durable_ready
             && viewer["workspaces"].is_object()
             && viewer["openedTeams"].is_array()

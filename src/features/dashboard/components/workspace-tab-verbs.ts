@@ -33,6 +33,7 @@ import {
 import { projectMcpScopeConfig, type ScopedExecution } from "@/tauri/commands";
 import { DEFAULT_AGENT_CLI, resolveAgentCliPath } from "@/shared/lib/default-agent";
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
+import { markOpenedAsAgent } from "@/features/viewer/stores/agent-inbox-rail-store";
 
 /** The role tag on a generic-workspace tab that hosts an agent (SW-GW-2). A
  *  free string tag on the `TerminalTab` — mirrors other role tags like
@@ -123,6 +124,8 @@ export async function openWorkspaceTab(
     });
     if (!opened) throw new Error(`unavailable: could not open a tab in "${workspaceId}"`);
     await deps.launchAgent(sessionId, launch);
+    // A first launch: the tab opens on its chat once the agent runs.
+    markOpenedAsAgent(sessionId);
   } catch (err) {
     // The session was projected for and may hold a tab: a refused spawn, a workspace
     // that vanished, or a launch that failed would otherwise strand a

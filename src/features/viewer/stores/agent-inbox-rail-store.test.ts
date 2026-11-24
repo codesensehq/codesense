@@ -5,6 +5,9 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   closeAgentInboxRail,
   closeAgentInboxRailToTerminal,
+  clearOpenedAsAgent,
+  forgetAgentInboxRail,
+  markOpenedAsAgent,
   openAgentInboxRail,
   useAgentInboxRailStore,
 } from "./agent-inbox-rail-store";
@@ -18,7 +21,7 @@ beforeEach(() => {
     exitBySession: {},
     processAgentBySession: { "sid-triage": "codex", "sid-a": "codex", "sid-b": "codex" },
   });
-  useAgentInboxRailStore.setState({ bySession: {} });
+  useAgentInboxRailStore.setState({ bySession: {}, pending: {} });
 });
 
 describe("agent inbox rail store", () => {
@@ -85,5 +88,76 @@ describe("agent inbox rail store", () => {
     openAgentInboxRail(SID);
     expect(() => closeAgentInboxRailToTerminal(SID, null)).not.toThrow();
     expect(useAgentInboxRailStore.getState().bySession[SID]).toBeUndefined();
+  });
+});
+
+describe("opened as an agent", () => {
+  const NEW = "sid-new";
+  const open = () => useAgentInboxRailStore.getState().bySession[NEW];
+  const becomeAgent = () => useAgentStateStore.getState().setProcessAgent(NEW, "claude");
+  const exit = () =>
+    useAgentStateStore.getState().recordPtyExit(NEW, { code: 1, signal: null, requested: false });
+
+  it("opens the chat at once when the launched agent already runs", () => {
+    becomeAgent();
+    markOpenedAsAgent(NEW);
+    expect(open()).toEqual({ composeRequest: 0 });
+  });
+
+  it("waits for the agent to become eligible, then covers", () => {
+    markOpenedAsAgent(NEW);
+    expect(open()).toBeUndefined();
+    becomeAgent();
+    expect(open()).toEqual({ composeRequest: 0 });
+    expect(useAgentInboxRailStore.getState().pending[NEW]).toBeUndefined();
+  });
+
+  it("a failed launch clears the mark, so a CLI started later by hand stays uncovered", () => {
+    markOpenedAsAgent(NEW);
+    clearOpenedAsAgent(NEW);
+    becomeAgent();
+    expect(open()).toBeUndefined();
+  });
+
+  it("a process that exits before the agent is eligible clears the mark", () => {
+    markOpenedAsAgent(NEW);
+    exit();
+    expect(useAgentInboxRailStore.getState().pending[NEW]).toBeUndefined();
+    useAgentStateStore.setState({ exitBySession: {} });
+    becomeAgent();
+    expect(open()).toBeUndefined();
+  });
+
+  it("the person's closed choice holds, even while the mark is still pending", () => {
+    markOpenedAsAgent(NEW);
+    closeAgentInboxRail(NEW);
+    becomeAgent();
+    expect(open()).toBeUndefined();
+  });
+
+  it("an agent that ends is forgotten, and a restart in the tab opens on the CLI", () => {
+    markOpenedAsAgent(NEW);
+    becomeAgent();
+    expect(open()).toBeDefined();
+    exit();
+    expect(open()).toBeUndefined();
+    useAgentStateStore.setState({ exitBySession: {} });
+    becomeAgent();
+    expect(open()).toBeUndefined();
+  });
+
+  it("forget drops the open entry and a pending mark", () => {
+    markOpenedAsAgent(NEW);
+    forgetAgentInboxRail(NEW);
+    becomeAgent();
+    expect(open()).toBeUndefined();
+    openAgentInboxRail(NEW);
+    forgetAgentInboxRail(NEW);
+    expect(open()).toBeUndefined();
+  });
+
+  it("a hand-started agent gets no mark and so no cover", () => {
+    becomeAgent();
+    expect(open()).toBeUndefined();
   });
 });

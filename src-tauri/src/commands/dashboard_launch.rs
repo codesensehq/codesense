@@ -227,9 +227,10 @@ impl Drop for HeadlessActivity {
 /// posture the other kinds obey. NOT the SW-GW-7 backgrounded-PTY launcher.
 pub const KIND_HEADLESS: &str = "headless";
 
-/// SW-OR-14: the ONE definition of "a headless pseudo-session is alive" — a
-/// [`KIND_HEADLESS`] entry with a bound session id (registry presence = liveness,
-/// there is no PTY child to probe). Shared by [`list_sessions_inner`] (renders the
+/// SW-OR-14: the ONE definition of "a headless pseudo-session" — a [`KIND_HEADLESS`]
+/// entry with a bound session id (registry presence = liveness, there is no PTY child
+/// to probe). It is alive until its process exits ([`SessionSnapshot::headless_exited`],
+/// read by [`liveness::registry_rows`]). Shared by [`list_sessions_inner`] (renders the
 /// `Running` row) and [`DashboardLaunchState::has_live_headless_session`] (the MCP
 /// gate widening) so the rule can never drift between the two.
 pub(crate) fn is_live_headless(kind: &str, session_id: Option<&str>) -> bool {
@@ -1534,6 +1535,8 @@ pub struct SessionSnapshot {
     /// The team a remote launch was made in (its record's team key), whose machine list
     /// names its machine; `None` on this Mac.
     pub launch_team_key: Option<String>,
+    /// A headless run whose process has exited while its entry waits on its transcript.
+    pub headless_exited: bool,
 }
 
 /// SW-BA-1 (AC-1/AC-3): the ONE agent-lifecycle status vocabulary, serialized to
@@ -3553,6 +3556,10 @@ impl DashboardLaunchState {
                 // registry lock a second time.
                 deadline_at_ms: entry.deadline_ms,
                 exit_sent_at_ms: entry.exit_sent_at_ms,
+                headless_exited: entry
+                    .session_id
+                    .as_deref()
+                    .is_some_and(|sid| inner.headless_exited.contains(sid)),
                 machine_id: entry
                     .remote_shell
                     .as_ref()
@@ -3665,6 +3672,20 @@ pub const SESSION_STATE_CHANGED: &str = "session-state-changed";
 pub(crate) fn emit_session_state_changed<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     use tauri::Emitter;
     let _ = app.emit(SESSION_STATE_CHANGED, ());
+}
+
+/// [`DashboardLaunchState::abort`], announcing a dropped entry: a reservation that never
+/// bound has no session whose exit would, so the roster and the hub hear it here.
+pub(crate) fn abort_and_notify<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &DashboardLaunchState,
+    handle: &str,
+) -> bool {
+    let removed = state.abort(handle);
+    if removed {
+        emit_session_state_changed(app);
+    }
+    removed
 }
 
 fn chat_workspace_for_entry(entry: &LaunchEntry) -> Option<String> {
@@ -4381,11 +4402,10 @@ pub fn dashboard_launch_abort(
     // SW-DX-17a: audit ONLY when an entry was actually freed — a no-op abort
     // (unknown/already-gone handle) must not write a phantom line that would make
     // the trail claim a session was aborted when nothing was.
-    if state.abort(&handle) {
+    // SW-AM-8: a reserved-but-unbound row was dropped (has no PTY, so `pty-exit`
+    // never fires for it) → `abort_and_notify` tells the roster to drop it.
+    if abort_and_notify(&app, &state, &handle) {
         audit_unbound_abort(&handle);
-        // SW-AM-8: a reserved-but-unbound row was dropped (has no PTY, so `pty-exit`
-        // never fires for it) → tell the roster to drop it.
-        emit_session_state_changed(&app);
     }
 }
 
@@ -5437,9 +5457,11 @@ pub fn dashboard_resolve_session(
 }
 
 /// Whether `session_id` is a live CodeSense session: a live headless run (its
-/// liveness is registry presence), or a session any terminal host tracks. The
+/// liveness is registry presence), or a session whose child any terminal host still
+/// runs; a tab kept only for its replay reads gone. The
 /// terminal hosts are asked off the async workers — a sidecar answers over its
-/// socket — and a host that cannot be asked leaves it `Unknown`.
+/// socket. A host that answers decides its own sessions; one that cannot be asked
+/// leaves `Unknown` only a session no answering host runs.
 pub async fn session_liveness(
     app: &tauri::AppHandle,
     session_id: &str,
@@ -5458,13 +5480,8 @@ pub fn session_liveness_now(
     session_id: &str,
 ) -> crate::commands::pty_backend::Liveness<bool> {
     use tauri::Manager;
-    if app
-        .try_state::<DashboardLaunchState>()
-        .is_some_and(|state| state.has_live_headless_session(session_id))
-    {
-        return crate::commands::pty_backend::Liveness::Known(true);
-    }
-    crate::commands::pty_backend::has_session(app, session_id)
+    let launch = app.try_state::<DashboardLaunchState>();
+    liveness::session_liveness_with(launch.as_deref(), &liveness::HostProbe(app), session_id)
 }
 
 /// SW-DX-17a (AC-1/AC-3) + SW-AV-1 (INV-3): enumerate EVERY live managed session as
@@ -5495,18 +5512,10 @@ pub(crate) fn list_sessions_inner(app: &tauri::AppHandle) -> Result<Vec<SessionR
     use tauri::Manager;
     let launch = app.state::<DashboardLaunchState>();
     // Snapshot under the registry lock, then release it BEFORE probing the
-    // terminal hosts (never hold both locks — see `snapshot`).
+    // terminal hosts (never hold both locks — see `snapshot`). Bound sessions are
+    // probed in one call; an unanswered probe leaves them alive (see
+    // [`liveness::registry_rows`]).
     let rows = launch.snapshot();
-    // Probe every bound session's liveness in ONE `sessions`-lock pass rather
-    // than re-locking the hot map per row.
-    let bound_ids: Vec<&str> = rows
-        .iter()
-        .filter_map(|s| s.session_id.as_deref())
-        .collect();
-    // Unknown is not empty: while a terminal host cannot be asked, a bound session
-    // reads alive — a roster that read a still-running agent as dead would offer to
-    // dismiss or respawn it.
-    let alive_ids = crate::commands::pty_backend::alive_session_ids(app, &bound_ids);
     // An agent launched on a machine has no local session: its tab in the machine's
     // layout says whether it still runs. Read only when there is one.
     let remote_agents = launch.remote_agents();
@@ -5537,36 +5546,22 @@ pub(crate) fn list_sessions_inner(app: &tauri::AppHandle) -> Result<Vec<SessionR
             .collect();
         remote_agent_liveness(&remote_agents, &seen, &live_machines)
     };
-    let registry_rows: Vec<SessionRow> = rows
-        .into_iter()
-        .map(|s| {
-            if let Some(&alive) = remote_alive.get(&s.handle) {
-                let session = remote_sessions.get(&s.handle).cloned();
-                return remote_agent_row(s, alive, session);
-            }
-            // SW-OR-10 (AC-2): a headless pseudo-session has no PTY child to probe, so
-            // its liveness is registry presence — while its entry is in the map the run
-            // is in flight (`Running`); its completion/kill path removes the entry. This
-            // is the documented exception to "alive = child liveness"; every other kind
-            // still probes `PtyState`.
-            let alive = if is_live_headless(s.kind, s.session_id.as_deref()) {
-                true
-            } else {
-                // Reserved (`begin`) but not yet `bind`ed → no session to probe → dead.
-                s.session_id
-                    .as_deref()
-                    .is_some_and(|sid| !alive_ids.known_gone(sid))
-            };
-            session_row(s, alive)
-        })
-        .collect();
     // SW-AV-1 (INV-3): fold in the live-PTY arm across BOTH terminal hosts
     // (in-process + session-server sidecar). The in-process enumeration error
     // surfaces as `Err` (never a silent registry-only fallback); a sidecar that
     // cannot answer contributes nothing this pass (fail-open, like the other
     // cross-host reads).
-    let mut rows = union_registry_and_live_pty(
-        registry_rows,
+    let mut rows = liveness::registry_rows(
+        rows,
+        &liveness::HostProbe(app),
+        |s| {
+            remote_alive
+                .get(&s.handle)
+                .map_or(liveness::Remote::Local, |&alive| liveness::Remote::Row {
+                    alive,
+                    session: remote_sessions.get(&s.handle).cloned(),
+                })
+        },
         crate::commands::pty_backend::live_session_ids(app),
     )?;
     fill_session_chat(app, &mut rows);
@@ -7107,6 +7102,7 @@ mod persistence;
 pub(crate) use persistence::registry_path as persistence_registry_path;
 
 pub(crate) mod deadline;
+pub(crate) mod liveness;
 mod ready;
 pub use ready::AgentReadiness;
 pub(crate) use deadline::{run_deadline_sweep, run_startup_sweep};
@@ -10319,6 +10315,7 @@ mod tests {
                 exit_sent_at_ms: None,
                 machine_id: None,
                 launch_team_key: None,
+                headless_exited: false,
             },
             false,
         );

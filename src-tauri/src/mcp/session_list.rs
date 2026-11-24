@@ -326,7 +326,75 @@ pub(crate) async fn read_session_list_and_unread(
     ),
     String,
 > {
-    crate::live_hub::read(app, launched_by)
+    let (app, launched_by) = (app.clone(), launched_by.map(str::to_owned));
+    crate::commands::await_blocking("session_list.read", move || {
+        crate::live_hub::read_now(&AppSessions::of(&app)?, launched_by.as_deref())
+    })
+    .await
+}
+
+/// The app's [`SessionSource`]: its launch registry, live hub and terminal hosts.
+pub(crate) struct AppSessions<'a> {
+    launch: tauri::State<'a, crate::commands::dashboard_launch::DashboardLaunchState>,
+    hub: tauri::State<'a, crate::live_hub::LiveHub>,
+    probe: crate::commands::dashboard_launch::liveness::HostProbe<'a, tauri::Wry>,
+    app: &'a tauri::AppHandle,
+}
+
+impl<'a> AppSessions<'a> {
+    pub(crate) fn of(app: &'a tauri::AppHandle) -> Result<Self, String> {
+        use tauri::Manager;
+        Ok(Self {
+            launch: app.try_state().ok_or("launch registry unavailable")?,
+            hub: app.try_state().ok_or("live hub unavailable")?,
+            probe: crate::commands::dashboard_launch::liveness::HostProbe(app),
+            app,
+        })
+    }
+}
+
+impl SessionSource for AppSessions<'_> {
+    fn launch_registry(&self) -> &crate::commands::dashboard_launch::DashboardLaunchState {
+        &self.launch
+    }
+    fn live_hub(&self) -> &crate::live_hub::LiveHub {
+        &self.hub
+    }
+    fn session_probe(&self) -> &dyn crate::commands::dashboard_launch::liveness::SessionProbe {
+        &self.probe
+    }
+    fn local_live_sessions(&self) -> Result<std::collections::HashSet<String>, String> {
+        crate::commands::pty_backend::live_session_ids(self.app)
+    }
+    fn progress_stream(&self) -> Option<&crate::dashboard_stream::DashboardStreamHub> {
+        use tauri::Manager;
+        self.app
+            .try_state::<crate::dashboard_stream::DashboardStreamHub>()
+            .map(|state| state.inner())
+    }
+    fn launch_telemetry(
+        &self,
+    ) -> Option<&crate::commands::launch_telemetry::LaunchTelemetryTracker> {
+        use tauri::Manager;
+        self.app
+            .try_state::<crate::commands::launch_telemetry::LaunchTelemetryTracker>()
+            .map(|state| state.inner())
+    }
+}
+
+/// What a session-list read asks when it is called: the launch registry, the session
+/// probe and this Mac's live sessions for membership and liveness, and the live hub's
+/// cached layouts, inbox and activity for decoration.
+pub(crate) trait SessionSource {
+    fn launch_registry(&self) -> &crate::commands::dashboard_launch::DashboardLaunchState;
+    fn live_hub(&self) -> &crate::live_hub::LiveHub;
+    fn session_probe(&self) -> &dyn crate::commands::dashboard_launch::liveness::SessionProbe;
+    /// Every live session this Mac's terminal hosts track, read now.
+    fn local_live_sessions(&self) -> Result<std::collections::HashSet<String>, String>;
+    fn progress_stream(&self) -> Option<&crate::dashboard_stream::DashboardStreamHub>;
+    fn launch_telemetry(
+        &self,
+    ) -> Option<&crate::commands::launch_telemetry::LaunchTelemetryTracker>;
 }
 
 /// What a session's terminal tab shows now, read from its host's layout.
@@ -388,7 +456,15 @@ pub(crate) fn session_list_rows_with_tabs(
             let failed_turn = matches!(last, Some(AgentState::Errored | AgentState::Crashed));
             let crashed = matches!(last, Some(AgentState::Crashed));
             let mut failed = failed_turn;
+            // A bound local session the registry's probe reads gone has exited,
+            // whatever its cached tab still shows. A launch not bound yet has nothing
+            // to probe: its tab decides.
+            let local_gone = row.session_id.is_some()
+                && !row.alive
+                && row.machine_id.is_none()
+                && tab.as_ref().is_some_and(|tab| tab.machine_id.is_none());
             let state = match tab.as_ref().map(|tab| tab.alive) {
+                _ if local_gone => SessionState::Exited,
                 Some(None) => SessionState::Offline,
                 Some(Some(false)) => SessionState::Exited,
                 Some(Some(true)) => {
@@ -1127,6 +1203,47 @@ mod tests {
             Some(LaunchMode::Argv)
         );
     }
+    #[test]
+    fn a_gone_local_session_reads_exited_over_its_cached_tab() {
+        use crate::commands::dashboard_launch::{session_row, DashboardLaunchState};
+        let state = DashboardLaunchState::new(2);
+        for (handle, session) in [("gone", "s-gone"), ("up", "s-up")] {
+            assert!(state.begin(handle).unwrap());
+            state.bind(handle, session, None).unwrap();
+        }
+        let raw = state
+            .snapshot()
+            .into_iter()
+            .map(|s| {
+                let alive = s.handle == "up";
+                session_row(s, alive)
+            })
+            .collect();
+        let rows = session_list_rows_with_tabs(
+            raw,
+            |_| None,
+            None,
+            |row| {
+                Some(TabView {
+                    name: Some("Worker".into()),
+                    machine: "This Mac".into(),
+                    machine_id: None,
+                    workspace_handle: None,
+                    workspace: None,
+                    session: row.session_id.clone(),
+                    alive: Some(true),
+                    activity: None,
+                    activity_failed: false,
+                    subagents: 0,
+                    agent: None,
+                })
+            },
+        );
+        let state_of = |handle: &str| rows.iter().find(|r| r.handle == handle).unwrap().state;
+        assert_eq!(state_of("gone"), SessionState::Exited);
+        assert_ne!(state_of("up"), SessionState::Exited);
+    }
+
     #[test]
     fn review_trail_live_projection_exposes_the_current_stable_session() {
         use crate::commands::dashboard_launch::{session_row, DashboardLaunchState, LaunchRecord};

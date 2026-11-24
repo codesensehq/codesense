@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@/test-utils";
 import {
   closeAgentInboxRail,
+  markOpenedAsAgent,
   openAgentInboxRail,
   useAgentInboxRailStore,
 } from "@/features/viewer/stores/agent-inbox-rail-store";
@@ -15,7 +16,6 @@ vi.mock("./chat-overlay", () => ({
   ChatOverlay: (p: {
     sessionId: string;
     style: React.CSSProperties;
-    placement: string;
     size: { width: number; height: number };
   }) => {
     const [selected, setSelected] = useState(false);
@@ -23,7 +23,6 @@ vi.mock("./chat-overlay", () => ({
       <aside
         data-testid="chat-overlay"
         data-session-id={p.sessionId}
-        data-placement={p.placement}
         data-size={`${p.size.width}x${p.size.height}`}
         style={p.style}
       >
@@ -55,7 +54,7 @@ beforeEach(() => {
     processAgentBySession: { "sess-1": "codex" },
   });
   mounts.mockClear();
-  useAgentInboxRailStore.setState({ bySession: {} });
+  useAgentInboxRailStore.setState({ bySession: {}, pending: {} });
 });
 
 describe("InboxSplit", () => {
@@ -184,17 +183,17 @@ describe("InboxSplit", () => {
     },
   );
 
-  it("docks the chat at 420 px on a wide tab, and covers a tab under 840 wide", async () => {
-    const box = { width: 1200, height: 700 };
-    const observers: Array<() => void> = [];
+  it.each([
+    [900, 600],
+    [250, 250],
+    [1200, 700],
+  ])("covers the whole tab at %i × %i", async (width, height) => {
     vi.stubGlobal(
       "ResizeObserver",
       class {
         constructor(private cb: ResizeObserverCallback) {}
         observe() {
-          const fire = () => this.cb([{ contentRect: box } as ResizeObserverEntry], this as never);
-          observers.push(fire);
-          fire();
+          this.cb([{ contentRect: { width, height } } as ResizeObserverEntry], this as never);
         }
         disconnect() {}
       },
@@ -207,54 +206,42 @@ describe("InboxSplit", () => {
         </InboxSplit>,
       );
       const chat = await screen.findByTestId("chat-overlay");
-      expect(chat).toHaveAttribute("data-placement", "dock");
-      expect(chat).toHaveAttribute("data-size", "420x700");
-      expect(chat.style.width).toBe("420px");
-      Object.assign(box, { width: 600, height: 300 });
-      act(() => observers.forEach((f) => f()));
-      expect(chat).toHaveAttribute("data-placement", "cover");
-      expect(chat).toHaveAttribute("data-size", "600x300");
+      expect(chat).toHaveAttribute("data-size", `${width}x${height}`);
       expect(chat.style.position).toBe("absolute");
+      expect(chat.style.width).toBe("");
+      expect(screen.getByTestId("terminal").parentElement).toHaveAttribute("inert");
       expect(mounts).toHaveBeenCalledTimes(1);
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
-  it("takes the covered terminal's keys and focus while the chat covers the tab, and gives them back", async () => {
-    const box = { width: 1200, height: 700 };
-    const observers: Array<() => void> = [];
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        constructor(private cb: ResizeObserverCallback) {}
-        observe() {
-          const fire = () => this.cb([{ contentRect: box } as ResizeObserverEntry], this as never);
-          observers.push(fire);
-          fire();
-        }
-        disconnect() {}
-      },
+  it("takes the covered terminal's keys while the chat covers the tab, and gives them back", async () => {
+    render(
+      <InboxSplit tab={TAB} teamKey="o:t">
+        <Terminal />
+      </InboxSplit>,
     );
-    try {
-      render(
-        <InboxSplit tab={TAB} teamKey="o:t">
-          <Terminal />
-        </InboxSplit>,
-      );
-      const terminal = screen.getByTestId("terminal").parentElement!;
-      act(() => openAgentInboxRail("sess-1"));
-      await screen.findByTestId("chat-overlay");
-      // Docked beside the terminal, both take keys.
-      expect(terminal).not.toHaveAttribute("inert");
-      Object.assign(box, { width: 600, height: 300 });
-      act(() => observers.forEach((f) => f()));
-      expect(screen.getByTestId("chat-overlay")).toHaveAttribute("data-placement", "cover");
-      expect(terminal).toHaveAttribute("inert");
-      act(() => closeAgentInboxRail("sess-1"));
-      expect(terminal).not.toHaveAttribute("inert");
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    const terminal = screen.getByTestId("terminal").parentElement!;
+    expect(terminal).not.toHaveAttribute("inert");
+    act(() => openAgentInboxRail("sess-1"));
+    await screen.findByTestId("chat-overlay");
+    expect(terminal).toHaveAttribute("inert");
+    act(() => closeAgentInboxRail("sess-1"));
+    expect(terminal).not.toHaveAttribute("inert");
+  });
+
+  it("a tab launched as an agent opens on its chat once the agent runs", async () => {
+    useAgentStateStore.setState({ processAgentBySession: {} });
+    render(
+      <InboxSplit tab={TAB} teamKey="o:t">
+        <Terminal />
+      </InboxSplit>,
+    );
+    act(() => markOpenedAsAgent("sess-1"));
+    expect(screen.queryByTestId("chat-overlay")).toBeNull();
+    act(() => useAgentStateStore.getState().setProcessAgent("sess-1", "codex"));
+    expect(await screen.findByTestId("chat-overlay")).toBeVisible();
+    expect(mounts).toHaveBeenCalledTimes(1);
   });
 });

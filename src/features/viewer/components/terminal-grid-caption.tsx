@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { useRunningAgent } from "@/features/viewer/lib/hand-agents";
-import { useEffect, useId, useRef, type KeyboardEvent, type MouseEvent } from "react";
-import { AlarmClock, Code, GitCompareArrows, Inbox, PanelTopOpen, X } from "lucide-react";
+import { useCallback, useEffect, useId, useRef, type KeyboardEvent, type MouseEvent } from "react";
+import { AlarmClock, Code, GitCompareArrows, PanelTopOpen, X } from "lucide-react";
 import type { TerminalTab } from "@/features/viewer/lib/cli-workspace/store/viewer-access";
 import { InfoTip } from "@/components/ui/tooltip";
 import { hasAnyModifier, isMac } from "@/shared/lib/shortcuts/keystroke";
@@ -35,10 +35,14 @@ import {
   type Workspace,
 } from "@/features/viewer/lib/cli-workspace/store/terminal-selectors";
 import {
-  closeAgentInboxRail,
-  openAgentInboxRail,
+  showAgentChat,
+  showAgentCli,
   useAgentInboxRailStore,
 } from "@/features/viewer/stores/agent-inbox-rail-store";
+import { useHeldLines } from "@/features/viewer/stores/held-output-store";
+import { useCliNeedsYou } from "@/features/viewer/lib/cli-workspace/store/terminal-tab-selectors";
+import { useContainerWidth } from "@/shared/hooks/use-container-width";
+import { ChatCliSwitch } from "@/features/inbox/components/chat-cli-switch";
 import { useTabInboxCounts } from "@/features/inbox/hooks/use-tab-inbox-unread";
 import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
 import { useEffectiveShortcut } from "@/shared/stores/shortcuts-store";
@@ -150,15 +154,15 @@ export function TerminalGridCaption({
   const editorShortcut = formatKeystrokeDisplay(useEffectiveShortcut("viewer.toggle-code-editor"));
   const hudShortcut = formatKeystrokeDisplay(useEffectiveShortcut("viewer.toggle-story-hud"));
   const inboxShortcut = formatKeystrokeDisplay(useEffectiveShortcut("viewer.toggle-agent-inbox"));
+  const heldLines = useHeldLines(tab.sessionId);
+  const cliNeeds = useCliNeedsYou(tab.sessionId);
+  // The caption is as wide as its pane: the switch reads that width (not a container query).
+  const [measureCaption, captionWidth] = useContainerWidth<HTMLDivElement>();
   const toggleDiff = () =>
     toggleSourceDiffShownAction({ sessionId: tab.sessionId, workspaceId: ws.id, teamKey });
   const toggleEditor = () =>
     toggleWorktreeEditorOpenAction({ sessionId: tab.sessionId, workspaceId: ws.id, teamKey });
   const toggleHud = () => toggleStoryHudShownAction(ws.id);
-  const toggleInbox = () => {
-    if (inboxOpen) closeAgentInboxRail(tab.sessionId);
-    else openAgentInboxRail(tab.sessionId);
-  };
 
   // SW-TP CAP-11 / CAP-13: the live cwd for this tab's session, replacing the
   // duplicated agent name in the caption's identity slot. Lazy on-mount resolve;
@@ -167,7 +171,14 @@ export function TerminalGridCaption({
   // The prompt segment: cwd, the session account's home and its checkout's
   // Git status, read on the host that runs the session (a remote tab's
   // Machine included) and refreshed on OSC 133 marks / a visible-only poll.
-  const captionRef = useRef<HTMLDivElement>(null);
+  const captionRef = useRef<HTMLDivElement | null>(null);
+  const setCaption = useCallback(
+    (node: HTMLDivElement | null) => {
+      captionRef.current = node;
+      measureCaption(node);
+    },
+    [measureCaption],
+  );
   const prompt = useSessionPrompt(tab.sessionId, captionRef);
   const liveCwd = prompt?.cwd?.trim() ? prompt.cwd : null;
   const promptPath = liveCwd ? abbreviatePromptPath(liveCwd, prompt?.home) : null;
@@ -264,7 +275,7 @@ export function TerminalGridCaption({
       )}
       data-focus-indicator={tileFocusIndicator}
       data-focus-line={hasFocusLine ? "on" : undefined}
-      ref={captionRef}
+      ref={setCaption}
       style={{ backgroundColor: background, color: foreground }}
       onClick={focus}
       onDoubleClick={(e) => {
@@ -298,7 +309,7 @@ export function TerminalGridCaption({
             // 8px separation on either side without doubling. Inactive opacity
             // 0.7 lifts to 1.0 on caption-level (group) hover — DESIGN § cwd
             // rule names this "cell hover," and the caption IS the cell bar.
-            className={`flex h-full min-w-0 shrink items-center gap-1.5 pl-2 text-left outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${
+            className={`flex h-full min-w-0 shrink items-center overflow-hidden gap-1.5 pl-2 text-left outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${
               isActive ? "" : "opacity-70 group-hover:opacity-100"
             } ${progressNote || woken ? "max-w-[50%]" : git ? "max-w-[65%]" : "flex-1"}`}
           >
@@ -517,19 +528,20 @@ export function TerminalGridCaption({
           />
         )}
         {runningAgent && (
-          <CaptionIconButton
-            testId={`terminal-grid-caption-inbox-${tab.id}`}
-            label={
-              inboxUnread > 0
-                ? `Inbox — ${inboxCounts.direct} messages · ${inboxCounts.group} in group chat`
-                : "Inbox"
-            }
-            word="Inbox"
-            count={inboxUnread}
+          <ChatCliSwitch
+            tabId={tab.id}
+            mode={inboxOpen ? "chat" : "cli"}
+            onChange={(next, how) => {
+              const focus = how === "pointer" ? "focus" : "keep";
+              if (next === "chat") showAgentChat(tab.sessionId, focus);
+              else showAgentCli(tab.sessionId, focus);
+            }}
+            width={captionWidth ?? 0}
+            unread={inboxUnread}
+            unreadDetail={`${inboxCounts.direct} messages · ${inboxCounts.group} in group chat`}
+            heldLines={heldLines}
+            needs={cliNeeds}
             shortcut={inboxShortcut}
-            icon={<Inbox size={16} strokeWidth={1.75} />}
-            active={inboxOpen}
-            onClick={toggleInbox}
           />
         )}
       </div>

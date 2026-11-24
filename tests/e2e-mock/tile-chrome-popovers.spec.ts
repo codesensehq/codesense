@@ -88,7 +88,7 @@ test.describe("tile chrome popovers", () => {
   });
 
   test("a caption icon's tooltip sits below the icon, never over it", async ({ page }) => {
-    const icon = page.getByTestId(`terminal-grid-caption-inbox-${TAB}`);
+    const icon = page.getByTestId(`chat-cli-switch-${TAB}-chat`);
     await icon.hover();
     const tip = page.getByRole("tooltip");
     await expect(tip).toBeVisible();
