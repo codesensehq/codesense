@@ -25,6 +25,7 @@ import {
   refreshLayout,
 } from "@/features/viewer/lib/remote-tab-open";
 import { getErrorMessage } from "@/shared/lib/error-message";
+import { markOpenedAsAgent } from "@/features/viewer/stores/agent-inbox-rail-store";
 import {
   registerRemoteWorkspaceDriver,
   type MachineLocation,
@@ -295,7 +296,11 @@ const launchAgent: RemoteWorkspaceDriver["launchAgent"] = async (input) => {
     preparedWorkspaceHandle: location.handle,
     ...(input.initialPrompt?.trim() ? { initialPrompt: input.initialPrompt } : {}),
   });
-  if (settled.status === "opened") return { sessionId: settled.session, fresh: true };
+  if (settled.status === "opened") {
+    // A first headed launch: the tab opens on its chat once the agent runs.
+    if (input.headed !== false) markOpenedAsAgent(settled.session);
+    return { sessionId: settled.session, fresh: true };
+  }
   // SW-XS-10: the machine's typed reason (e.g. `terminalServerOutdated`) rides
   // along, so the setup line can offer its one-click fix without parsing text.
   throw Object.assign(

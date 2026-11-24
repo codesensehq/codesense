@@ -74,6 +74,9 @@ export interface TerminalSlotProps extends Omit<HTMLAttributes<HTMLDivElement>, 
   /** The terminal face is loaded (or gave up waiting) and the slot measured:
    *  the display is at its real size from here on. */
   onMeasured?: () => void;
+  /** Told how many lines the display took while parked, whenever that changes (and once on
+   *  mount): what a covering chat holds back. */
+  onHeldChange?: (lines: number) => void;
   /** Tests pass their own manager. */
   manager?: TerminalManager;
 }
@@ -109,6 +112,7 @@ export function TerminalSlot({
   borrow = false,
   onEnsured,
   onMeasured,
+  onHeldChange,
   manager = terminalManager,
   style,
   ...divProps
@@ -120,6 +124,7 @@ export function TerminalSlot({
   const borrowRef = useRef(borrow);
   const onEnsuredRef = useRef(onEnsured);
   const onMeasuredRef = useRef(onMeasured);
+  const onHeldChangeRef = useRef(onHeldChange);
   /** No measurement until the terminal face is ready (or waited out). */
   const fontReadyRef = useRef(false);
   const life = display.life ?? 0;
@@ -152,6 +157,7 @@ export function TerminalSlot({
     borrowRef.current = borrow;
     onEnsuredRef.current = onEnsured;
     onMeasuredRef.current = onMeasured;
+    onHeldChangeRef.current = onHeldChange;
     measureRef.current = measure;
   });
 
@@ -224,6 +230,13 @@ export function TerminalSlot({
     const frame = requestAnimationFrame(() => manager.repaint(sessionId, el));
     return () => cancelAnimationFrame(frame);
   }, [manager, sessionId, active]);
+
+  // What the display held back while parked, for whoever shows it.
+  useEffect(() => {
+    const report = () => onHeldChangeRef.current?.(manager.heldLines(sessionId));
+    report();
+    return manager.watchHeld(sessionId, report);
+  }, [manager, sessionId]);
 
   // Size owner: a change in the slot's pixels, once quiet for
   // `RESIZE_SETTLE_MS` (or at the end of a CSS transition), resizes the

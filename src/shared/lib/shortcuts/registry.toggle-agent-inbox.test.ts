@@ -36,7 +36,7 @@ const ws = { id: "w1", kind: "story" as const };
 
 describe("SW-TP CAP-8 viewer.toggle-agent-inbox shortcut action", () => {
   beforeEach(() => {
-    useAgentInboxRailStore.setState({ bySession: {} });
+    useAgentInboxRailStore.setState({ bySession: {}, pending: {} });
     useAgentStateStore.setState({
       bySession: {},
       activityBySession: {},
@@ -57,9 +57,27 @@ describe("SW-TP CAP-8 viewer.toggle-agent-inbox shortcut action", () => {
     expect(action!.scope).toBe("workspace");
   });
 
-  it("opens the inbox for the active tab's session when closed", () => {
+  it("opens the chat for the active tab's session when it shows the CLI, and asks for the composer", () => {
     run();
     expect(useAgentInboxRailStore.getState().bySession.sess1).toBeDefined();
+    expect(useAgentInboxRailStore.getState().bySession.sess1?.composeRequest).toBe(1);
+  });
+
+  it("flipping to the CLI hands focus to the tab's terminal even when the switch had it", async () => {
+    useAgentInboxRailStore.getState().open("sess1");
+    const pane = document.createElement("div");
+    pane.setAttribute("data-focus-pane", "tab-1");
+    pane.innerHTML =
+      '<button data-testid="switch"></button>' +
+      '<div class="xterm"><textarea data-testid="term"></textarea></div>' +
+      '<aside data-testid="chat-overlay" data-session-id="sess1"></aside>';
+    document.body.appendChild(pane);
+    pane.querySelector<HTMLButtonElement>('[data-testid="switch"]')!.focus();
+    run();
+    expect(useAgentInboxRailStore.getState().bySession.sess1).toBeUndefined();
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    expect(document.activeElement).toBe(pane.querySelector('[data-testid="term"]'));
+    pane.remove();
   });
 
   it("closes the inbox for the active tab's session when already open", () => {

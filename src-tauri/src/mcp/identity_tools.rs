@@ -221,7 +221,10 @@ mod tests {
             )],
             Default::default(),
         );
-        let listed = listed(registered_row("pty-local", Some("pty-local")), &live, None);
+        // The registry's probe reads the tab's session alive.
+        let mut row = registered_row("pty-local", Some("pty-local"));
+        row.alive = true;
+        let listed = listed(row, &live, None);
         let me = who_am_i_in(&listed, "pty-local").unwrap();
         assert_eq!(me.machine.as_deref(), Some("This Mac"));
     }

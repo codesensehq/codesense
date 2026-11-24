@@ -3,6 +3,8 @@ import { buildTauriInternals } from "./tauri-internals";
 import { createMockBackend } from "./mock-backend";
 import { resolveScenario } from "./scenario";
 import { MockEventBus } from "./mock-events";
+import { isAgentTeamWorld, launchedAgentSessions } from "./handlers/agents-team";
+import { markOpenedAsAgent } from "@/features/viewer/stores/agent-inbox-rail-store";
 
 /**
  * Install the mock backend by planting `window.__TAURI_INTERNALS__`. Call this
@@ -25,6 +27,9 @@ export function installMockBackend(): void {
     window.localStorage.setItem("theme", "dark");
   }
   const scenario = resolveScenario(window.location.search);
+  // The agents the team world launched open on their chat, as a first launch opens one.
+  if (isAgentTeamWorld(window.location.search))
+    for (const session of launchedAgentSessions(window.location.search)) markOpenedAsAgent(session);
   const events = new MockEventBus();
   const router = createMockBackend(scenario, window.location.search, events);
   const internals = buildTauriInternals(router);

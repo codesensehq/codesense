@@ -372,6 +372,23 @@ export const AGENT_TEAM_PROCESSES: Readonly<Record<string, string>> = {
   [HAND_CODEX_SESSION]: "codex",
 };
 
+/**
+ * The tabs of the team world that were launched as agents: every agent tab but a shell and the
+ * three where an agent was typed by hand or reattached. Each carries the "opened as agent" mark,
+ * as a first launch would set it, so the world opens them on their chat.
+ */
+export function launchedAgentSessions(search: string): string[] {
+  const notLaunched = new Set([
+    "sess-login-shell",
+    HAND_STARTED_SESSION,
+    REATTACHED_CLAUDE_SESSION,
+    HAND_CODEX_SESSION,
+  ]);
+  return agentTeamTabs(search)
+    .map((tab) => tab.session)
+    .filter((session) => !notLaunched.has(session));
+}
+
 /** The hook the hand-started Claude sends, delivered as the real `terminal-status-update`. */
 export const HAND_STARTED_STATUS = {
   tab_session_id: HAND_STARTED_SESSION,

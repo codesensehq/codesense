@@ -191,7 +191,6 @@ async function renderOverlay() {
       teamKey={TEAM_KEY}
       composeRequest={0}
       size={{ width: 420, height: 700 }}
-      placement="dock"
     />,
   );
   return screen.findByTestId("ibx-msgs");

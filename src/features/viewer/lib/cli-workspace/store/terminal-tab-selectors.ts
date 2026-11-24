@@ -10,13 +10,16 @@ import { useEqualSelector } from "@/shared/hooks/use-equal-selector";
 import { useMachinesStore } from "@/features/machines/stores/machines-store";
 import { offlineMachineName } from "@/features/machines/lib/machine-offline";
 import {
+  selectCliNeedsYouKind,
   selectNeedsYouKind,
   selectSessionAiStatus,
+  type CliNeedsKind,
   type DotSources,
   type NeedsYouState,
   type PendingAsks,
 } from "@/features/viewer/lib/session-status-signals";
 export {
+  selectCliNeedsYouKind,
   selectNeedsYouKind,
   selectSessionAiStatus,
   type NeedsYouState,
@@ -807,6 +810,15 @@ export function useSessionNeedsYou(sessionId: string): boolean {
     s
       ? selectSessionNeedsYou(needsYouListState(s, agent, pendingAsks, outcomes), sessionId)
       : false,
+  );
+}
+
+/** Reactive {@link selectCliNeedsYouKind} for one session: what its CLI waits on, if anything. */
+export function useCliNeedsYou(sessionId: string): CliNeedsKind | null {
+  const pendingAsks = useManagedSessionStore((m) => m.pendingAsks);
+  const outcomes = useManagedSessionStore((m) => m.states);
+  return useDotSelector((s, _dots, agent) =>
+    s ? selectCliNeedsYouKind(needsYouListState(s, agent, pendingAsks, outcomes), sessionId) : null,
   );
 }
 

@@ -737,6 +737,96 @@ describe("a parked display matches the reference (I4)", () => {
   });
 });
 
+describe("a covered display keeps every line while parked", () => {
+  it("holds numbered output in order and shows all of it at the same size", async () => {
+    const m = newManager();
+    await open(m);
+    const target = slot();
+    m.attach("s1", target, { focus: false, visible: true });
+    const size = m.size("s1");
+    m.setVisible("s1", target, false);
+    for (let i = 1; i <= 300; i++) fake.server.produce("s1", `line ${i}\r\n`);
+    await vi.advanceTimersByTimeAsync(200);
+    m.setVisible("s1", target, true);
+    const dump = await dumped(m, "s1");
+    const numbered = dump.lines.filter((l) => l.startsWith("line "));
+    expect(numbered).toEqual(Array.from({ length: 300 }, (_, i) => `line ${i + 1}`));
+    expect(m.size("s1")).toEqual(size);
+  });
+});
+
+describe("output held while a display is parked", () => {
+  async function parked() {
+    const m = newManager();
+    await open(m);
+    const target = slot();
+    m.attach("s1", target, { focus: false, visible: true });
+    m.setVisible("s1", target, false);
+    return { m, target };
+  }
+
+  it("counts the lines that arrive while parked, and none while shown", async () => {
+    const m = newManager();
+    await open(m);
+    const target = slot();
+    m.attach("s1", target, { focus: false, visible: true });
+    fake.server.produce("s1", "shown\r\n");
+    await vi.advanceTimersByTimeAsync(100);
+    expect(m.heldLines("s1")).toBe(0);
+    m.setVisible("s1", target, false);
+    fake.server.produce("s1", "a\r\nb\r\n");
+    fake.server.produce("s1", "c\r\n");
+    await vi.advanceTimersByTimeAsync(100);
+    expect(m.heldLines("s1")).toBe(3);
+  });
+
+  it("resets only when the display is shown", async () => {
+    const { m, target } = await parked();
+    fake.server.produce("s1", "a\r\nb\r\n");
+    await vi.advanceTimersByTimeAsync(100);
+    expect(m.heldLines("s1")).toBe(2);
+    m.setVisible("s1", target, true);
+    expect(m.heldLines("s1")).toBe(0);
+  });
+
+  it("survives a terminal query that drains the parked ring", async () => {
+    const { m } = await parked();
+    fake.server.produce("s1", "a\r\nb\r\n\x1b[6n");
+    await vi.advanceTimersByTimeAsync(200);
+    expect(m.heldLines("s1")).toBe(2);
+  });
+
+  it("survives an overflow that releases the display", async () => {
+    const { m, target } = await parked();
+    const line = `${"x".repeat(999)}\r\n`;
+    for (let i = 0; i < 2200; i++) fake.server.produce("s1", line);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(m.terminal("s1")).toBeNull();
+    // Lines after the overflow have nowhere to go: the display is already released.
+    expect(m.heldLines("s1")).toBeGreaterThan(1900);
+    m.attach("s1", target, { focus: false });
+    expect(m.heldLines("s1")).toBe(0);
+  });
+
+  it("notifies at most once per frame", async () => {
+    const { m, target } = await parked();
+    const seen = vi.fn();
+    const stop = m.watchHeld("s1", seen);
+    for (let i = 0; i < 50; i++) fake.server.produce("s1", `l${i}\r\n`);
+    expect(seen).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(20);
+    expect(seen).toHaveBeenCalledTimes(1);
+    m.setVisible("s1", target, true);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(seen).toHaveBeenCalledTimes(2);
+    stop();
+    m.setVisible("s1", target, false);
+    fake.server.produce("s1", "more\r\n");
+    await vi.advanceTimersByTimeAsync(20);
+    expect(seen).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("scroll position survives a park (AC-7)", () => {
   async function scrolledDisplay(scrollback: number) {
     const m = newManager();
