@@ -360,11 +360,13 @@ test("rust.yml runs macOS on a pull request only with ci:macos, and Linux always
   // The shards follow the build: they run only when it succeeds and main had not moved on.
   assert.equal(workflow.jobs["rust-macos-test"].needs, "rust-macos-build");
   assert.equal(workflow.jobs["rust-macos-test"].if, shardsNotSuperseded);
-  // Another label's run, ci:windows included, has a group of its own, so it cannot cancel the
-  // pull request's run or a ci:macos run.
+  // One commit's push, schedule and workflow_dispatch runs each get their own group, so none
+  // cancels another. Every pull_request event for one PR shares a group (ci:macos labeled
+  // included), so a newer push still supersedes; another label's run, ci:windows included, has a
+  // group of its own, so it cannot cancel the pull request's run or a ci:macos run.
   assert.equal(
     workflow.concurrency.group,
-    "${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci:macos' && format('-{0}', github.run_id) || '' }}",
+    "${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}-${{ github.event_name }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci:macos' && format('-{0}', github.run_id) || '' }}",
   );
   assert.equal(workflow.jobs["rust-linux"].if, `\${{ ${pathFilter} }}`);
 });
