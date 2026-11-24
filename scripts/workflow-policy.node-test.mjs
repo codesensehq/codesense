@@ -138,6 +138,21 @@ test("every pull request workflow also runs on merge groups, each in its own con
   }
 });
 
+// A push run and a scheduled or dispatched run on the same commit must not share a cancelling
+// group, or the later one cancels the other; keying the group on the event keeps them apart.
+test("a workflow on push and another non-PR event keys its cancelling group on the event", () => {
+  const shared = files.filter((file) => {
+    const workflow = parse(fs.readFileSync(path.join(directory, file), "utf8"));
+    if (!Object.hasOwn(workflow.on ?? {}, "push")) return false;
+    const others = Object.keys(workflow.on).filter(
+      (event) => !["push", "pull_request", "merge_group"].includes(event),
+    );
+    if (others.length === 0 || workflow.concurrency?.["cancel-in-progress"] === false) return false;
+    return !/github\.event_name/.test(workflow.concurrency.group);
+  });
+  assert.deepEqual(shared, []);
+});
+
 // No cache is saved on a merge group: each caching step is checked on a merge_group workflow.
 const cacheStep = (step) =>
   queued() +
