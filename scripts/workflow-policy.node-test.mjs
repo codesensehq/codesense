@@ -148,7 +148,7 @@ test("a workflow on push and another non-PR event keys its cancelling group on t
       (event) => !["push", "pull_request", "merge_group"].includes(event),
     );
     if (others.length === 0 || workflow.concurrency?.["cancel-in-progress"] === false) return false;
-    return !/github\.event_name/.test(workflow.concurrency.group);
+    return !/\$\{\{\s*github\.event_name\s*\}\}/.test(workflow.concurrency.group);
   });
   assert.deepEqual(shared, []);
 });
