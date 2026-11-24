@@ -7,7 +7,7 @@ use std::sync::Arc;
 use codesense_pty_core::agent_cli::{adapter, AgentCli};
 
 use super::super::agent_inbox::{self, AppInboxHost, InboxHost, NoteExtras};
-use super::super::{mcp_workspace, pty, pty_backend};
+use super::super::{mcp_workspace, pty};
 use super::{DashboardLaunchState, LaunchTeam};
 
 pub(crate) const EXIT_GRACE_MS: u64 = 30_000;
@@ -237,9 +237,8 @@ impl DeadlinePort for AppDeadlinePort {
     }
 
     fn is_running(&self, entry: &DeadlineEntry) -> Option<bool> {
-        pty_backend::alive_session_ids(&self.app, &[&entry.session_id])
+        super::liveness::probe_one(&super::liveness::HostProbe(&self.app), &entry.session_id)
             .known()
-            .map(|ids| ids.contains(&entry.session_id))
     }
 
     fn mark_enforced(&self, entry: &DeadlineEntry, killed: bool) {

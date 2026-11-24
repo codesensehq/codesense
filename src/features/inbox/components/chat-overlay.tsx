@@ -1,23 +1,22 @@
 // SPDX-License-Identifier: MIT
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { Maximize2, SquareTerminal, X } from "lucide-react";
+import { Maximize2, X } from "lucide-react";
 
 import { isForemanAgent, openForeman } from "@/features/foreman/open-foreman";
 import { FOREMAN_TEAM, useForemanThread } from "@/features/foreman/use-foreman-thread";
 import { RemoteServerUpdateAction } from "@/features/viewer/components/remote-server-update";
 import { useAgentStatusOf } from "@/features/viewer/hooks/use-agent-status-of";
 import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
+import { useCliNeedsYou } from "@/features/viewer/lib/cli-workspace/store/terminal-tab-selectors";
 import { formatElapsed } from "@/features/viewer/lib/agent-row-presentation";
 import {
-  closeAgentInboxRailToTerminal,
+  showAgentCli,
   markAgentInboxRailComposeHandled,
   useAgentInboxRailComposeHandled,
   useAgentInboxRailStore,
 } from "@/features/viewer/stores/agent-inbox-rail-store";
 import { StatusMark } from "@/shared/components/status-mark";
 import { useNow } from "@/shared/hooks/use-now";
-import { formatKeystrokeDisplay } from "@/shared/lib/shortcuts/keystroke";
-import { findShortcutAction } from "@/shared/lib/shortcuts/registry";
 import { markOfAgentStatus } from "@/shared/lib/status-mark";
 import { agentStatusWords } from "@/shared/lib/terminal-dot-words";
 import { useSubagentsOpen } from "@/shared/stores/agent-state-store";
@@ -39,6 +38,7 @@ import { useAgentInbox } from "../hooks/use-session-inbox";
 import { formatCost, modelLabel, useSessionRecord } from "../hooks/use-session-record";
 import { openAgentFullView, teamAgentPage } from "../lib/agent-full-view";
 import { createDeliveryTracker } from "../lib/delivery-marks";
+import { mayCoverTakeFocus } from "../lib/overlay-focus";
 import { overlayLayout, type OverlayRecordField } from "../lib/overlay-layout";
 import { HUMAN, formatClock, labelOf, msgKey, sameTeam } from "../model";
 import { InboxViewProvider, type InboxView } from "./inbox-view-context";
@@ -47,20 +47,20 @@ import { Ico, InboxLoading, MessageBody, ReadFailure, StaleNotice } from "./prim
 import { PinPreview, type OwnPinCard } from "./pin-preview";
 import { Conversation } from "./threads-lens";
 
-/**
- * The shortcut that flips a covered tab between its chat and its terminal (and opens or closes a
- * docked chat). One place, so the key can change without touching the overlay.
- */
-export const CHAT_TERMINAL_SHORTCUT_ID = "viewer.toggle-agent-inbox";
-
 const NO_ROWS: readonly AgentSessionRow[] = [];
+
+/** What the CLI is waiting on, as the chat's chrome line says it. */
+const CLI_NEEDS_WORDS = {
+  permission: "it is asking for permission",
+  startup: "it is on a startup screen",
+  question: "it is asking a question",
+} as const;
 
 /**
  * An agent's chat on its own terminal tab: the conversation with you (the same thread its full
  * view shows), its pins as previews shaped by the pane, and a one-line composer. Every part
  * reads the pane's width and height through {@link overlayLayout}, so one markup serves a
- * 250 × 250 tile and a 900 × 250 strip. `placement` says whether it docks beside the terminal
- * or covers the tab.
+ * 250 × 250 tile and a 900 × 250 strip. It always covers its tab.
  */
 export function ChatOverlay({
   tabId,
@@ -68,7 +68,6 @@ export function ChatOverlay({
   teamKey,
   composeRequest,
   size,
-  placement,
   visible = true,
   style,
 }: {
@@ -78,7 +77,6 @@ export function ChatOverlay({
   composeRequest: number;
   /** The overlay's own size: what its layout is read from. */
   size: { width: number; height: number };
-  placement: "dock" | "cover";
   visible?: boolean;
   style?: React.CSSProperties;
 }) {
@@ -107,6 +105,7 @@ export function ChatOverlay({
   const statusOf = useAgentStatusOf(statusRows);
   const status = row ? statusOf(row) : null;
   const subagents = useSubagentsOpen(sessionId);
+  const cliNeeds = useCliNeedsYou(sessionId);
   const rootRef = useRef<HTMLElement>(null);
   const layout = overlayLayout(size.width, size.height);
   const tall = layout.height === "tall";
@@ -302,26 +301,20 @@ export function ChatOverlay({
   const agentPage = useOrgStore((state) =>
     team ? teamAgentPage(state.orgs, team.org, team.team) : null,
   );
-  const keyHint = formatKeystrokeDisplay(
-    findShortcutAction(CHAT_TERMINAL_SHORTCUT_ID)?.defaultKeystroke ?? "",
-  );
-  const toTerminal = () =>
-    closeAgentInboxRailToTerminal(
-      sessionId,
-      rootRef.current?.closest("[data-pane-id], [data-pane-active]") ?? null,
-    );
+  const toTerminal = () => showAgentCli(sessionId, "focus");
 
   // Covering the tab, the chat takes the keyboard from the terminal it hides: focus lands in
   // its composer once that shows (or on the chat itself while it loads), unless it is already
-  // inside it (the chat itself, held while it loads, gives way to the composer).
+  // inside it (the chat itself, held while it loads, gives way to the composer). It never takes
+  // the focus from an element outside its own pane.
   useEffect(() => {
     const root = rootRef.current;
     const held = document.activeElement;
-    if (placement !== "cover" || !visible || !root || (held !== root && root.contains(held)))
-      return;
+    if (!visible || !root || (held !== root && root.contains(held))) return;
+    if (!mayCoverTakeFocus(root, held)) return;
     const composer = root.querySelector<HTMLTextAreaElement>(".ibx-comp textarea");
     (composer ?? root).focus({ preventScroll: true });
-  }, [placement, visible, loaded, groupShown]);
+  }, [visible, loaded, groupShown]);
 
   const now = useNow(visible, 60_000);
   const statusWord = status ? agentStatusWords(status, subagents) : null;
@@ -391,7 +384,6 @@ export function ChatOverlay({
         aria-label={`Chat with ${name}`}
         data-testid="chat-overlay"
         data-session-id={sessionId}
-        data-placement={placement}
         data-width={layout.width}
         data-height={layout.height}
         data-head={layout.head}
@@ -429,12 +421,6 @@ export function ChatOverlay({
             )}
             {layout.record === "in-head" && record}
             <span className="ibx-ov-sp" />
-            {button(
-              "Terminal",
-              SquareTerminal,
-              toTerminal,
-              keyHint ? `Terminal (${keyHint} brings the chat back)` : "Terminal",
-            )}
             {foreman
               ? button("Full view", Maximize2, openForeman)
               : agentPage &&
@@ -537,6 +523,17 @@ export function ChatOverlay({
             <span aria-hidden>·</span>
             <button type="button" className="ibx-ov-pins-retry" onClick={openForeman}>
               Open full view
+            </button>
+          </div>
+        )}
+        {cliNeeds && (
+          // Chrome, not a message: the CLI's own prompt, which only the CLI can answer.
+          <div className="ibx-ov-needs" role="status" data-testid="chat-overlay-needs">
+            <b>Input needed</b>
+            <span aria-hidden>·</span>
+            <span>{CLI_NEEDS_WORDS[cliNeeds]}</span>
+            <button type="button" className="ibx-ov-pins-retry" onClick={toTerminal}>
+              Show CLI
             </button>
           </div>
         )}

@@ -68,17 +68,19 @@ async function boot(page: Page) {
   await page.getByRole("button", { name: "Full screen" }).click();
 }
 
-const toggle = (page: Page) => page.getByTestId(`terminal-grid-caption-inbox-${AGENT_TAB}`);
+const chatSegment = (page: Page) => page.getByTestId(`chat-cli-switch-${AGENT_TAB}-chat`);
+const cliSegment = (page: Page) => page.getByTestId(`chat-cli-switch-${AGENT_TAB}-cli`);
 
+// A launched agent's tab opens on its chat: Chat is the open state, CLI the closed one.
 async function open(page: Page): Promise<Locator> {
-  await toggle(page).click();
+  await chatSegment(page).click();
   const msgs = page.getByTestId("chat-overlay").getByTestId("ibx-msgs");
   await expect(msgs.locator(`[data-mid="${NEWEST}"]`)).toBeAttached();
   return msgs;
 }
 
 async function close(page: Page) {
-  await toggle(page).click();
+  await cliSegment(page).click();
   await expect(page.getByTestId("chat-overlay")).toHaveCount(0);
 }
 

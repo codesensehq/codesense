@@ -34,6 +34,8 @@ import { terminalManager, type DisplayHandle } from "@/shared/terminal/terminal-
 import { holdForTerminalServer } from "@/features/shell/lib/terminal-server";
 import { isFreshOpen } from "@/shared/lib/terminal-open";
 import { TerminalSlot } from "@/shared/terminal/terminal-slot";
+import { useChatCovers } from "@/features/viewer/stores/agent-inbox-rail-store";
+import { useHeldLinesReporter } from "@/features/viewer/stores/held-output-store";
 
 /** Under "Couldn't restore this terminal.": the session is not lost. */
 const RESTORE_FAILED_DETAIL = "The session is still running.";
@@ -211,7 +213,10 @@ function ShellTerminalPanelBody({
   const [started, setStarted] = useState(false);
   // Until the first paint the pane says what it is doing: nothing for a fast
   // open, then the spinner, then "Still starting…", then "Failed · Retry".
-  const startup = usePaneStartup(visible);
+  const covered = useChatCovers(sessionId);
+  // A covered pane is parked and draws no frame, so its startup is timed from when it shows.
+  const startup = usePaneStartup(visible && !covered);
+  const reportHeld = useHeldLinesReporter(sessionId);
   const { markReady, markRendered, markFailed } = startup;
 
   // The process exited: the pane is read-only (no input, no resize).
@@ -590,7 +595,10 @@ function ShellTerminalPanelBody({
       <TerminalSlot
         sessionId={sessionId}
         display={displayOpts}
-        active={visible}
+        // A chat covering the tab parks the terminal; `visible` still drives startup, restore
+        // and the context menu.
+        active={visible && !covered}
+        onHeldChange={reportHeld}
         focusOnReveal={mayFocusOnReveal}
         onEnsured={onEnsured}
         onMeasured={onMeasured}

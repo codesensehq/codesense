@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 import { describe, expect, it } from "vitest";
-import { overlayLayout, overlayPlacement } from "./overlay-layout";
+import { overlayLayout } from "./overlay-layout";
 
 describe("overlayLayout", () => {
-  // The design's breakpoints: the four reference pane sizes and the docked overlay.
+  // The design's breakpoints: the four reference pane sizes.
   it.each([
     [
       250,
@@ -55,13 +55,5 @@ describe("overlayLayout", () => {
     expect(overlayLayout(300, 700).avatars).toBe(false);
     expect(overlayLayout(900, 250).avatars).toBe(false);
     expect(overlayLayout(420, 690).avatars).toBe(true);
-  });
-});
-
-describe("overlayPlacement", () => {
-  it("docks at 420 px when the tab is 840+ wide and 360+ tall, else covers it", () => {
-    expect(overlayPlacement(840, 360)).toEqual({ mode: "dock", width: 420 });
-    expect(overlayPlacement(839, 800)).toEqual({ mode: "cover" });
-    expect(overlayPlacement(1200, 359)).toEqual({ mode: "cover" });
   });
 });

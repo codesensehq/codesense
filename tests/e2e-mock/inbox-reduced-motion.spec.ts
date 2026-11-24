@@ -46,7 +46,7 @@ test("the agent chat overlay respects reduced motion in its conversation and com
   await page.setViewportSize({ width: 1600, height: 950 });
   await page.goto("/?agents=team");
   await page.getByRole("button", { name: "Full screen" }).click();
-  await page.getByTestId("terminal-grid-caption-inbox-sess-login-lead").click();
+  await page.getByTestId("chat-cli-switch-sess-login-lead-chat").click();
   const chat = page.getByTestId("chat-overlay").first();
   await expect(chat).toBeVisible();
   const composer = chat.locator(".ibx-box");
