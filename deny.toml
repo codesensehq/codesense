@@ -84,4 +84,5 @@ ignore = [
   # aarch64-apple-darwin filter would drop it, and that filter would also stop checking the
   # session server's crates.
   { id = "RUSTSEC-2024-0429", reason = "glib (GTK) is Linux-only via tauri/tray-icon; absent from the shipped aarch64-apple-darwin graph (cargo tree --target aarch64-apple-darwin -i glib: empty); it reaches only the desktop crate through tauri -> tray-icon -> libappindicator, not the shipped linux-musl session server (cargo tree -p codesense-session-server -i glib, --target x86_64-unknown-linux-musl and aarch64-unknown-linux-musl: empty); maintainer, 2026-11-05" },
+  { id = "RUSTSEC-2026-0457", reason = "rmcp's OAuth client (feature `auth`) is not enabled, so its SSRF filter is unreachable (cargo tree -e features -i rmcp lists no `auth` feature, and oauth2 is not in the graph). Remove on the rmcp 3.x bump; maintainer, 2026-11-23" },
 ]
