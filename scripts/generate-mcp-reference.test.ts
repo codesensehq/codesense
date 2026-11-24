@@ -160,7 +160,8 @@ describe("served MCP reference", () => {
   });
 });
 
-describe("Node-only freshness and resolving teaching links", () => {
+// These build scratch git checkouts, which overran the 5 s default on CI.
+describe("Node-only freshness and resolving teaching links", { timeout: 30_000 }, () => {
   it("rejects missing pages and missing anchors", () => {
     for (const pointer of ["missing-page.html", "mcp-explorer.html#missing-anchor"]) {
       const catalog = readCatalog();
@@ -403,7 +404,7 @@ describe("Node-only freshness and resolving teaching links", () => {
   });
 });
 
-describe("a stale export in write mode and the PR gate", () => {
+describe("a stale export in write mode and the PR gate", { timeout: 30_000 }, () => {
   it("leaves a catalog tool the export lacks out, with a notice, and the gate accepts it", async () => {
     // Main added records_read to handler.rs, META and the catalog without re-exporting.
     const { root, mod } = await staleScratch("mcp-reference-pending-", (root) => {
