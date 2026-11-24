@@ -331,7 +331,8 @@ pub(crate) async fn refuse_session_input(
 ) -> Result<(), String> {
     refuse_held_session(session)?;
     match session_cap_status(app, session)
-        .await?
+        .await
+        .map_err(String::from)?
         .and_then(|s| s.refusal)
     {
         Some(reason) => Err(reason),
@@ -340,7 +341,7 @@ pub(crate) async fn refuse_session_input(
 }
 
 pub(crate) async fn refuse_mail_offer(app: &tauri::AppHandle, session: &str) -> Result<(), String> {
-    if let Some(status) = session_cap_status(app, session).await? {
+    if let Some(status) = mail_offer_status(session, session_cap_status(app, session).await)? {
         let local_host = if status.effective != Budget::default() {
             let app = app.clone();
             let session = session.to_string();
@@ -366,10 +367,46 @@ pub(crate) fn admit_mail_offer(
     status.refusal.clone().map_or(Ok(()), Err)
 }
 
+/// Why a session's cap status could not be read.
+#[derive(Debug)]
+enum CapLookupError {
+    /// The caller can't see the session's agent; it stays refused, so a cap can't be dodged.
+    Hidden(String),
+    /// The evaluation itself failed (the usage store, the caller).
+    Unavailable(String),
+}
+
+impl From<CapLookupError> for String {
+    fn from(error: CapLookupError) -> Self {
+        match error {
+            CapLookupError::Hidden(error) | CapLookupError::Unavailable(error) => error,
+        }
+    }
+}
+
+/// A mail offer's cap status: a failed evaluation fails open with a warning, while a hidden
+/// agent is refused.
+fn mail_offer_status(
+    session: &str,
+    status: Result<Option<CapStatus>, CapLookupError>,
+) -> Result<Option<CapStatus>, String> {
+    match status {
+        Ok(status) => Ok(status),
+        Err(CapLookupError::Hidden(error)) => Err(error),
+        Err(CapLookupError::Unavailable(error)) => {
+            log::warn!(
+                target:"spend_caps",
+                "session {session}: spend unavailable, mail is offered: {error}"
+            );
+            Ok(None)
+        }
+    }
+}
+
 async fn session_cap_status(
     app: &tauri::AppHandle,
     session: &str,
-) -> Result<Option<CapStatus>, String> {
+) -> Result<Option<CapStatus>, CapLookupError> {
     use tauri::Manager;
     let revision = app
         .try_state::<crate::commands::dashboard_launch::DashboardLaunchState>()
@@ -387,14 +424,26 @@ async fn session_cap_status(
     let Some(key) = key else {
         return Ok(None);
     };
-    let caller = crate::commands::routines::caller(app).await?;
+    let caller = crate::commands::routines::caller(app)
+        .await
+        .map_err(CapLookupError::Unavailable)?;
     crate::commands::await_blocking("spend_caps.input", move || {
-        let agent = crate::agents::service::get(&caller.home, &caller.principal, &key)
-            .map_err(|e| e.to_string())?
-            .agent;
-        status(&caller.home, "agent", &key.to_string(), agent.budget_usd).map(Some)
+        Ok(agent_cap_status(&caller.home, &caller.principal, &key))
     })
     .await
+    .map_err(CapLookupError::Unavailable)?
+    .map(Some)
+}
+
+fn agent_cap_status(
+    home: &Path,
+    principal: &crate::domain::Principal,
+    key: &crate::agents::AgentKey,
+) -> Result<CapStatus, CapLookupError> {
+    // Resolved without the usage store, so an unreadable store is never taken for a hidden agent.
+    let agent = crate::agents::service::read_visible(home, principal, key)
+        .map_err(|e| CapLookupError::Hidden(e.to_string()))?;
+    status(home, "agent", &key.to_string(), agent.budget_usd).map_err(CapLookupError::Unavailable)
 }
 
 pub fn refuse_agent(
@@ -877,18 +926,11 @@ pub fn install(app: tauri::AppHandle) {
     }
     tauri::async_runtime::spawn(async move {
         loop {
-            if let Err(error) = refresh(&app).await {
+            let recheck = refresh(&app).await.unwrap_or_else(|error| {
                 log::warn!(target:"spend_caps","spend evaluation: {error}");
-            }
-            let now = chrono::Local::now();
-            let next = now
-                .date_naive()
-                .succ_opt()
-                .and_then(|d| d.and_hms_opt(0, 0, 0))
-                .and_then(|d| d.and_local_timezone(chrono::Local).earliest());
-            let wait = next
-                .map(|t| (t - now).to_std().unwrap_or_default())
-                .unwrap_or(std::time::Duration::from_secs(60));
+                true
+            });
+            let wait = next_refresh(chrono::Local::now(), recheck);
             tokio::select! { _ = wake().notified() => {}, _ = tokio::time::sleep(wait) => {} }
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
@@ -952,12 +994,38 @@ pub(crate) async fn evaluate_and_publish<R: tauri::Runtime>(
     })
     .await;
     if let Ok(value) = &result {
-        crate::live_hub::spend_changed(app, value)?;
+        // Publishing is a projection: the evaluation, and its cap holds, stand without it.
+        if let Err(error) = crate::live_hub::spend_changed(app, value) {
+            log::warn!(target:"spend_caps", "spend publish: {error}");
+        }
     }
     Ok((caller, result))
 }
 
-async fn refresh(app: &tauri::AppHandle) -> Result<(), String> {
+/// How soon a decision that could not be made is made again: one notice cycle, so no
+/// session's mail waits on it longer.
+const RECHECK: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// How long after `now` to evaluate again with no event: at local midnight (a new day's
+/// spend), or within [`RECHECK`] when the last evaluation left a decision unavailable.
+fn next_refresh(now: chrono::DateTime<chrono::Local>, recheck: bool) -> std::time::Duration {
+    let midnight = now
+        .date_naive()
+        .succ_opt()
+        .and_then(|d| d.and_hms_opt(0, 0, 0))
+        .and_then(|d| d.and_local_timezone(chrono::Local).earliest())
+        .map(|t| (t - now).to_std().unwrap_or_default())
+        .unwrap_or(RECHECK);
+    if recheck {
+        midnight.min(RECHECK)
+    } else {
+        midnight
+    }
+}
+
+/// Evaluates spend and pushes each live session's wake decision: whether a decision was
+/// unavailable, so the next evaluation comes within [`RECHECK`].
+async fn refresh(app: &tauri::AppHandle) -> Result<bool, String> {
     use tauri::Manager;
     let layouts = crate::commands::pty_layout::webview_local_layout_snapshots(app.clone()).await;
     let launches = app
@@ -966,15 +1034,32 @@ async fn refresh(app: &tauri::AppHandle) -> Result<(), String> {
         .unwrap_or_default();
     let decisions = session_revisions(layouts.and_then(Result::ok).unwrap_or_default(), launches);
     #[cfg(test)]
-    let (caller, result) = evaluate_and_publish(app, &decisions, None).await?;
+    let published = evaluate_and_publish(app, &decisions, None).await;
     #[cfg(not(test))]
-    let (caller, result) = evaluate_and_publish(app, &decisions).await?;
+    let published = evaluate_and_publish(app, &decisions).await;
     let hosts = crate::commands::host_inbox::local_hosts(app);
-    let app_holds = app.clone();
-    let value = crate::commands::await_blocking("spend_caps.holds", move || {
-        if let Err(error) = push_session_holds(&result, decisions.clone(), &hosts) {
-            log::warn!(target:"spend_caps", "spend hold propagation: {error}");
+    let (caller, result) = match published {
+        Ok(published) => published,
+        Err(error) => {
+            // No decision was made, so every session fails open rather than stay undecided.
+            let failed: Result<Evaluation, String> = Err(error.clone());
+            if let Err(push) = crate::commands::await_blocking("spend_caps.holds", move || {
+                push_session_holds(&failed, decisions, &hosts)
+            })
+            .await
+            {
+                log::warn!(target:"spend_caps", "spend hold propagation: {push}");
+            }
+            return Err(error);
         }
+    };
+    let app_holds = app.clone();
+    let (value, recheck) = crate::commands::await_blocking("spend_caps.holds", move || {
+        let recheck =
+            push_session_holds(&result, decisions.clone(), &hosts).unwrap_or_else(|error| {
+                log::warn!(target:"spend_caps", "spend hold propagation: {error}");
+                true
+            });
         let value = result?;
         let mut unavailable = std::collections::BTreeMap::new();
         for (session, revision) in decisions {
@@ -995,7 +1080,7 @@ async fn refresh(app: &tauri::AppHandle) -> Result<(), String> {
                 }
             }
         }
-        Ok(with_hold_result(value, unavailable))
+        Ok((with_hold_result(value, unavailable), recheck))
     })
     .await?;
     let notify = crate::routines::wake_app::AppWakeEnv::new(app.clone());
@@ -1003,7 +1088,8 @@ async fn refresh(app: &tauri::AppHandle) -> Result<(), String> {
         let usage = UsageStore::open(&caller.home.join("usage.sqlite"))?;
         notify_evaluation(&usage, &value, &notify)
     })
-    .await
+    .await?;
+    Ok(recheck)
 }
 
 fn with_hold_result(
@@ -1021,31 +1107,48 @@ fn with_hold_result(
     value
 }
 
-/// Production propagation boundary: current evaluation and live session ownership go to hosts.
+/// Production propagation boundary: current evaluation and live session ownership go to
+/// hosts. A cap's refusal holds its sessions, and so does an agent the evaluation could
+/// not see (it would otherwise dodge its cap). A failed evaluation holds none: it fails
+/// open, with a warning. Whether any decision was unavailable, so it is made again soon.
 pub(crate) fn push_session_holds(
     result: &Result<Evaluation, String>,
     sessions: impl IntoIterator<Item = (String, Option<String>)>,
     hosts: &[std::sync::Arc<dyn codesense_pty_core::domain::TerminalDomain>],
-) -> Result<(), String> {
+) -> Result<bool, String> {
+    let mut unavailable = false;
+    let mut let_through = 0;
     let holds: Vec<_> = sessions
         .into_iter()
         .map(|(session, revision)| {
             let reason = revision.as_deref().and_then(|revision| {
                 let key = revision.split('@').next().unwrap_or(revision);
                 match result {
-                    Ok(value) => value
-                        .agents
-                        .get(key)
-                        .map(|s| s.refusal.clone())
-                        .unwrap_or_else(|| {
+                    Ok(value) => match value.agents.get(key) {
+                        Some(status) => status.refusal.clone(),
+                        None => {
+                            unavailable = true;
                             Some(format!("agent {key}: spend cap could not be evaluated"))
-                        }),
-                    Err(error) => Some(format!("agent {key}: spend unavailable: {error}")),
+                        }
+                    },
+                    Err(_) => {
+                        unavailable = true;
+                        let_through += 1;
+                        None
+                    }
                 }
             });
             codesense_pty_core::inbox_host::WakeHold { session, reason }
         })
         .collect();
+    if let Err(error) = result {
+        if let_through > 0 {
+            log::warn!(
+                target:"spend_caps",
+                "spend unavailable, mail is not held for {let_through} session(s): {error}"
+            );
+        }
+    }
     let generation = chrono::Utc::now()
         .timestamp_nanos_opt()
         .ok_or("clock cannot version wake holds")? as u64;
@@ -1059,7 +1162,7 @@ pub(crate) fn push_session_holds(
             failure = Some(error.to_string());
         }
     }
-    failure.map_or(Ok(()), Err)
+    failure.map_or(Ok(unavailable), Err)
 }
 
 pub(crate) fn notify_evaluation(
@@ -2171,13 +2274,80 @@ mod live_identity_seams {
             .unwrap()
             .agents
             .contains_key(&missing.to_string()));
-        push_session_holds(&result, sessions.clone(), &[]).unwrap();
+        assert!(push_session_holds(&result, sessions.clone(), &[]).unwrap());
         assert!(refuse_held_session(&session)
             .unwrap_err()
             .contains("could not be evaluated"));
-        push_session_holds(&Err("usage unavailable".into()), sessions, &[]).unwrap();
+        // An evaluation that fails holds no mail (it fails open, and is re-evaluated
+        // within a cycle); an agent hidden from evaluation stays refused when it is.
+        assert!(
+            push_session_holds(&Err("usage unavailable".into()), sessions.clone(), &[]).unwrap()
+        );
+        refuse_held_session(&session).unwrap();
+        assert!(push_session_holds(&result, sessions, &[]).unwrap());
         assert!(refuse_held_session(&session)
             .unwrap_err()
-            .contains("spend unavailable"));
+            .contains("could not be evaluated"));
+    }
+
+    /// A mail offer fails open when the usage store can't be read; an agent the caller can't
+    /// see is still refused, so it can't dodge its cap.
+    #[test]
+    fn a_mail_offer_fails_open_on_an_unreadable_usage_store_but_not_for_a_hidden_agent() {
+        let home = tempfile::tempdir().unwrap();
+        write_org(home.path(), 1);
+        let key = save_personal_agent(home.path(), &alice(), agent("worker", AgentCli::Claude));
+        update_budget(
+            home.path(),
+            &key,
+            Some(Budget {
+                per_day: Some(1.0),
+                per_week: None,
+            }),
+        );
+        // Saving the agent already opened the store; replace it (and its WAL sidecars) with a
+        // directory, which SQLite can't open as a database on any OS.
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            let path = home.path().join(format!("usage.sqlite{suffix}"));
+            if let Err(e) = std::fs::remove_file(&path) {
+                assert_eq!(e.kind(), std::io::ErrorKind::NotFound, "{path:?}: {e}");
+            }
+        }
+        std::fs::create_dir(home.path().join("usage.sqlite")).unwrap();
+        let unreadable = agent_cap_status(home.path(), &alice(), &key);
+        assert!(
+            matches!(unreadable, Err(CapLookupError::Unavailable(_))),
+            "{unreadable:?}"
+        );
+        assert_eq!(mail_offer_status("s1", unreadable.map(Some)), Ok(None));
+
+        let missing = AgentKey::personal(&alice(), "acme/api", "missing");
+        let hidden = agent_cap_status(home.path(), &alice(), &missing);
+        assert!(matches!(hidden, Err(CapLookupError::Hidden(_))), "{hidden:?}");
+        assert!(mail_offer_status("s1", hidden.map(Some)).is_err());
+    }
+
+    /// An unavailable decision (a failed evaluation, or an agent it could not see) asks for
+    /// the next evaluation within one cycle; otherwise the next is at local midnight.
+    #[test]
+    fn an_unavailable_spend_decision_is_re_evaluated_within_one_cycle() {
+        use chrono::TimeZone;
+        let now = chrono::Local
+            .with_ymd_and_hms(2026, 11, 15, 22, 0, 0)
+            .earliest()
+            .unwrap();
+        assert_eq!(next_refresh(now, true), RECHECK);
+        assert_eq!(
+            next_refresh(now, false),
+            std::time::Duration::from_secs(2 * 3600)
+        );
+        let late = chrono::Local
+            .with_ymd_and_hms(2026, 11, 15, 23, 59, 30)
+            .earliest()
+            .unwrap();
+        assert_eq!(next_refresh(late, true), std::time::Duration::from_secs(30));
+        // A session with no agent revision has nothing to decide.
+        let sessions = [(uuid::Uuid::new_v4().to_string(), None)];
+        assert!(!push_session_holds(&Err("usage unavailable".into()), sessions, &[]).unwrap());
     }
 }

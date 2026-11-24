@@ -900,6 +900,19 @@ pub(crate) fn read_current(
     Ok(agent)
 }
 
+/// [`read_current`] without opening the usage store, so a caller can tell an agent it can't
+/// see from a store it can't read.
+pub(crate) fn read_visible(
+    home: &Path,
+    principal: &Principal,
+    key: &AgentKey,
+) -> Result<Agent, AgentError> {
+    if let Some(agent) = builtin::get(key) {
+        return Ok(agent);
+    }
+    read_existing(&locate(home, principal, key)?)
+}
+
 /// SW-XS-13: every per-repo context override of `key`, keyed
 /// `host/owner/repo`, and one message per override file that could not be
 /// read (it is skipped). A starter has none.

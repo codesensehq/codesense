@@ -553,19 +553,22 @@ fn on_waiter(app: &AppHandle, machine: &str, state: &InboxWaiterState) {
         HostInboxes::changed(&inboxes, machine, state);
     }
     let _ = app.emit("sessions-waiter-changed", ());
+    let session = state.session.as_str();
+    if !state.waiting {
+        refusal_ended(session);
+    }
     // Only a tab of this app's on that machine is offered its mail.
-    if state.waiting && tab_machine(app, state.session.as_str()).as_deref() == Some(machine) {
+    if state.waiting && tab_machine(app, session).as_deref() == Some(machine) {
         // A launched agent whose waiter armed is at its prompt or mid-turn: one that never
         // reported a turn reads idle, not unknown.
         if let Some(launch) = app.try_state::<DashboardLaunchState>() {
-            let session = state.session.as_str();
             if DashboardLaunchState::handle_for_session(&launch, session).is_some()
                 || launch.remote_handle_for_session(session).is_some()
             {
                 launch.turns().record_ready(session);
             }
         }
-        let (app, session) = (app.clone(), state.session.as_str().to_string());
+        let (app, session) = (app.clone(), session.to_string());
         tauri::async_runtime::spawn(async move { offer(&app, &session, Offer::New, 0).await });
     }
 }
@@ -624,8 +627,12 @@ where
 {
     if let Err(reason) = host.admit_automatic_input(session).await {
         log::debug!(target: "inbox", "holding automatic input for {session}: {reason}");
+        if refused_past_a_cycle(session, std::time::Instant::now()) {
+            log::info!(target: "inbox", "session={session} waiter=held reason=refusal: {reason}");
+        }
         return Some((RETRY_PUSH, 0));
     }
+    refusal_ended(session);
     let reoffer = why == Offer::Restored;
     match agent_inbox::check_for_mail(host, session, reoffer).await {
         Ok(Check::Offer { notice, token }) => match push(notice, token.clone()).await {
@@ -644,6 +651,36 @@ where
         Ok(Check::Nothing | Check::Held) => None,
         Err(()) => (attempt + 1 < PUSH_ATTEMPTS).then_some((RETRY_PUSH, attempt + 1)),
     }
+}
+
+/// Since when each session's automatic input has been refused, and whether that was
+/// logged: a refusal is logged once, when it outlasts one notice cycle.
+fn lock_refused() -> std::sync::MutexGuard<'static, HashMap<String, (std::time::Instant, bool)>> {
+    static REFUSED: std::sync::OnceLock<
+        std::sync::Mutex<HashMap<String, (std::time::Instant, bool)>>,
+    > = std::sync::OnceLock::new();
+    REFUSED
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
+/// `session`'s input was refused at `now`: whether its refusal just outlasted one notice
+/// cycle, so it is logged (once per refused stretch).
+fn refused_past_a_cycle(session: &str, now: std::time::Instant) -> bool {
+    let mut refused = lock_refused();
+    let (since, logged) = refused.entry(session.to_string()).or_insert((now, false));
+    if *logged || now.saturating_duration_since(*since) < ttl() {
+        return false;
+    }
+    *logged = true;
+    true
+}
+
+/// `session`'s waiter went away, so its refused stretch (if any) ended: a later refusal
+/// starts a new one, logged again.
+fn refusal_ended(session: &str) {
+    lock_refused().remove(session);
 }
 
 /// How long after a push its reservation has lapsed.
@@ -744,6 +781,26 @@ fn schedule(app: &AppHandle, session: &str, wait: Duration, attempt: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A refused notice is logged once, when the refusal outlasts one cycle (fixed clock).
+    #[test]
+    fn a_refusal_is_logged_once_when_it_outlasts_a_cycle() {
+        let t0 = std::time::Instant::now();
+        assert!(!refused_past_a_cycle("refused-1", t0));
+        assert!(!refused_past_a_cycle(
+            "refused-1",
+            t0 + Duration::from_secs(1)
+        ));
+        assert!(refused_past_a_cycle("refused-1", t0 + ttl()));
+        assert!(!refused_past_a_cycle("refused-1", t0 + ttl() * 2), "once");
+        // Its waiter went away: the next refusal is a new stretch, logged again.
+        refusal_ended("refused-1");
+        let t1 = t0 + ttl() * 3;
+        assert!(!refused_past_a_cycle("refused-1", t1));
+        assert!(refused_past_a_cycle("refused-1", t1 + ttl()));
+        refusal_ended("refused-1");
+        assert!(!lock_refused().contains_key("refused-1"), "pruned");
+    }
 
     pub(super) fn state(session: &str, waiting: bool, grace_ms: Option<u64>) -> InboxWaiterState {
         InboxWaiterState {
