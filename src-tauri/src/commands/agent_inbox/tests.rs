@@ -68,6 +68,10 @@ pub(crate) struct FakeHost {
     media_fetched: Mutex<Vec<(i64, crate::media::Attachment)>>,
     /// The provider registration `media_sent` and `media_fetched` reach, as the app's do.
     registration: Mutex<Option<Arc<crate::gif::register::Registration>>>,
+    /// Team → its media config, where a test sets one; the default config otherwise.
+    media_configs: Mutex<HashMap<String, crate::media::Config>>,
+    /// Every chat media change reported: `(workspace, message id)`.
+    chat_media_changes: Mutex<Vec<(String, i64)>>,
 }
 
 impl FakeHost {
@@ -117,7 +121,56 @@ impl FakeHost {
             media_sent: Mutex::default(),
             media_fetched: Mutex::default(),
             registration: Mutex::default(),
+            media_configs: Mutex::default(),
+            chat_media_changes: Mutex::default(),
         })
+    }
+
+    /// `team`'s media config is `config`.
+    pub(crate) fn set_media_config(&self, team: &str, config: crate::media::Config) {
+        self.media_configs
+            .lock()
+            .unwrap()
+            .insert(team.to_string(), config);
+    }
+
+    /// `sender`'s session runs on this machine.
+    pub(crate) fn own_sender(&self, sender: &str) {
+        self.own_media.lock().unwrap().insert(sender.to_string());
+    }
+
+    /// Every `media_sent` call, and whether its message was stored by then.
+    pub(crate) fn media_sent_calls(&self) -> Vec<(StoredMedia, bool)> {
+        self.media_sent.lock().unwrap().clone()
+    }
+
+    /// Every chat media change reported so far.
+    pub(crate) fn chat_media_changes(&self) -> Vec<(String, i64)> {
+        self.chat_media_changes.lock().unwrap().clone()
+    }
+
+    /// The workspace chat store this fake holds.
+    pub(crate) fn chat(&self) -> &crate::commands::workspace_chat::WorkspaceChatStore {
+        &self.chat
+    }
+
+    /// The temp dir this fake keeps its stores and media cache in.
+    pub(crate) fn dir(&self) -> &std::path::Path {
+        self.dir.path()
+    }
+
+    /// `handle`'s session was launched in `team`, or in none.
+    pub(crate) fn set_launch_team(&self, handle: &str, team: Option<&str>) {
+        let mut teams = self.teams.lock().unwrap();
+        match team {
+            Some(team) => teams.insert(handle.to_string(), team.to_string()),
+            None => teams.remove(handle),
+        };
+    }
+
+    /// Install `registration` as the provider registration `media_sent` reaches.
+    pub(crate) fn use_registration(&self, registration: Arc<crate::gif::register::Registration>) {
+        *self.registration.lock().unwrap() = Some(registration);
     }
 
     /// Serve media through a real media state over `fetch`, as the app does; returns it.
@@ -266,11 +319,27 @@ impl InboxHost for FakeHost {
         self.own_media.lock().unwrap().contains(sender)
     }
 
+    fn media_config(&self, team: &LaunchTeam) -> crate::media::Config {
+        self.media_configs
+            .lock()
+            .unwrap()
+            .get(&team.team)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     fn media_sent(&self, media: &StoredMedia) {
-        let stored = self
-            .rows_in(&media.team.team)
-            .iter()
-            .any(|m| m.id == media.message_id);
+        let stored = match &media.chat {
+            Some(workspace) => self
+                .chat
+                .media_message(workspace, media.message_id)
+                .unwrap()
+                .is_some(),
+            None => self
+                .rows_in(&media.team.team)
+                .iter()
+                .any(|m| m.id == media.message_id),
+        };
         self.media_sent
             .lock()
             .unwrap()
@@ -318,9 +387,52 @@ impl InboxHost for FakeHost {
                 org: team.org.clone(),
                 team: team.team.clone(),
                 message_id,
+                chat: None,
             };
             media.note(&owner, inbox::now_ms(), attachments);
         }
+    }
+
+    fn chat_store(&self) -> Option<crate::commands::workspace_chat::WorkspaceChatStore> {
+        Some(self.chat.clone())
+    }
+
+    async fn note_chat_media(
+        &self,
+        owner: crate::media::index::Owner,
+        attachments: &[crate::media::Attachment],
+    ) {
+        if let Some(media) = self.media_state() {
+            media.note(&owner, inbox::now_ms(), attachments);
+        }
+    }
+
+    fn chat_media_fetched(
+        &self,
+        owner: crate::media::index::Owner,
+        slot: usize,
+        attachment: &crate::media::Attachment,
+    ) {
+        self.media_fetched
+            .lock()
+            .unwrap()
+            .push((owner.message_id, attachment.clone()));
+        if let Some(registration) = self.registration.lock().unwrap().clone() {
+            crate::gif::register::fetched_by(&registration, owner, slot, attachment);
+        }
+    }
+
+    async fn index_chat_media(&self, workspace: &str) {
+        if let Some(media) = self.media_state() {
+            crate::commands::workspace_chat::media::index_chat(&media, &self.chat, workspace).await;
+        }
+    }
+
+    fn chat_media_changed(&self, workspace: &str, message_id: i64) {
+        self.chat_media_changes
+            .lock()
+            .unwrap()
+            .push((workspace.to_string(), message_id));
     }
 
     async fn caller_scope(&self, sender: &str) -> crate::context_repo::caller_scope::CallerScope {
@@ -338,7 +450,7 @@ impl InboxHost for FakeHost {
 
     async fn prepare_media(
         &self,
-        _team: &LaunchTeam,
+        team: &LaunchTeam,
         input: &crate::media::MediaInput,
         own: bool,
         scope: &crate::context_repo::caller_scope::CallerScope,
@@ -363,17 +475,17 @@ impl InboxHost for FakeHost {
             )?;
             return Ok((attachment, false));
         }
+        let config = self.media_config(team);
         let attachment = crate::media::Attachment::remote(
             input.url.as_deref().unwrap(),
             &input.alt,
-            &crate::media::Config::default(),
+            &config,
             own,
         )
         .map_err(|e| e.reason.to_string())?;
         // With a media state, an own-machine sender's allowed host is fetched at once.
         let auto = self.media_state().is_some()
-            && crate::media::Config::default()
-                .should_auto_fetch(attachment.source_host.as_deref().unwrap_or(""), own);
+            && config.should_auto_fetch(attachment.source_host.as_deref().unwrap_or(""), own);
         Ok((crate::media::Attachment::claimed(attachment, input), auto))
     }
 
@@ -4389,6 +4501,7 @@ async fn workspace_chat_append_to_native_notice_and_late_bind() {
                 content_type: None,
                 on_click: None,
                 primary_file: None,
+                media: None,
             },
             1,
         )

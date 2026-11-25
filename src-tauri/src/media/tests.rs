@@ -548,6 +548,7 @@ fn owner(team: &str, message_id: i64) -> index::Owner {
         org: "acme".into(),
         team: team.into(),
         message_id,
+        chat: None,
     }
 }
 
