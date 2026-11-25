@@ -8,7 +8,7 @@
 //! removed, and never the key. They are fire-and-forget, never queued, outside the search rate
 //! limit, dropped while a provider backoff runs and capped at [`PINGS_PER_HOUR`] per provider and
 //! key. KLIPY's share trigger joins as a second [`Registrar`].
-use super::{analytics, bucket, giphy, settings, GifError, GifService, Provider};
+use super::{analytics, bucket, settings, transport, GifError, GifService, Provider};
 use crate::commands::credential_store::Secret;
 use crate::media::{index::Owner, MediaProvider};
 use futures_util::future::BoxFuture;
@@ -71,7 +71,7 @@ pub(crate) enum Outcome {
     Unusable,
     /// The provider answered this status.
     Status(u16),
-    Failed(giphy::Failure),
+    Failed(transport::Failure),
 }
 
 /// Which registration a ping is.
@@ -132,17 +132,17 @@ pub(crate) fn pingback_url(pingback: &str, random_id: &str, at_ms: i64) -> Optio
 
 /// GIPHY's pingbacks, over the 5 s registration client. The body is not read.
 pub(crate) struct GiphyPings {
-    transport: Arc<dyn giphy::Transport>,
+    transport: Arc<dyn transport::Transport>,
 }
 impl GiphyPings {
-    pub(crate) fn new(transport: Arc<dyn giphy::Transport>) -> Self {
+    pub(crate) fn new(transport: Arc<dyn transport::Transport>) -> Self {
         Self { transport }
     }
     async fn ping_giphy(&self, ping: Ping<'_>) -> Outcome {
         let Some(url) = pingback_url(ping.pingback, ping.install_id, ping.at_ms) else {
             return Outcome::Unusable;
         };
-        match giphy::Transport::get(self.transport.as_ref(), &url).await {
+        match transport::Transport::get(self.transport.as_ref(), &url).await {
             Ok(reply) if (200..300).contains(&reply.status) => Outcome::Sent,
             Ok(reply) => Outcome::Status(reply.status),
             Err(failure) => Outcome::Failed(failure),
@@ -162,8 +162,8 @@ impl Registrar for GiphyPings {
 }
 
 /// The 5 s transport pings and the random id call use: the shared hardened client.
-pub(crate) fn ping_client() -> Result<giphy::Http, String> {
-    giphy::Http::on(crate::media::hardened_client_builder(TIMEOUT).https_only(true))
+pub(crate) fn ping_client() -> Result<transport::Http, String> {
+    transport::Http::on(crate::media::hardened_client_builder(TIMEOUT).https_only(true))
 }
 
 /// The random id GIPHY issued for this install with the key whose fingerprint is `fp`, if
@@ -263,7 +263,7 @@ pub(crate) struct Settled {
 pub(crate) struct Registration {
     service: Arc<GifService>,
     registrar: Arc<dyn Registrar>,
-    transport: Arc<dyn giphy::Transport>,
+    transport: Arc<dyn transport::Transport>,
     clock: super::Clock,
     onloads: Mutex<HashMap<Slot, Pending>>,
     /// (GIF id, message) of each onsent, until an hour after it.
@@ -283,7 +283,7 @@ pub(crate) struct Registration {
 impl Registration {
     pub(crate) fn new(
         service: Arc<GifService>,
-        transport: Arc<dyn giphy::Transport>,
+        transport: Arc<dyn transport::Transport>,
         clock: super::Clock,
     ) -> Self {
         Self {
@@ -413,7 +413,7 @@ impl Registration {
         }
         let mut url: url::Url = RANDOM_ID_API.parse().expect("the GIPHY random id URL");
         url.query_pairs_mut().append_pair("api_key", key.expose());
-        let id = match giphy::Transport::get(self.transport.as_ref(), &url).await {
+        let id = match transport::Transport::get(self.transport.as_ref(), &url).await {
             Ok(reply) if (200..300).contains(&reply.status) => parse_random_id(&reply.body),
             Ok(reply) => {
                 log::warn!(target: "gif", "gif registration: GIPHY's random id call answered HTTP {}", reply.status);
@@ -904,7 +904,7 @@ pub(crate) fn registration<R: tauri::Runtime>(
         return Ok(registration.clone());
     }
     let service = super::service(app)?;
-    let transport: Arc<dyn giphy::Transport> = Arc::new(ping_client()?);
+    let transport: Arc<dyn transport::Transport> = Arc::new(ping_client()?);
     let clock: super::Clock = Arc::new(crate::weft::inbox::now_ms);
     Ok(REGISTRATION
         .get_or_init(|| Arc::new(Registration::new(service, transport, clock)))

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-use super::giphy::{Failure, Giphy, Reply, Transport};
+use super::giphy::Giphy;
 use super::settings::{self, KeyState, Keys, SettingsUpdate};
+use super::transport::{Failure, Reply, Transport};
 use super::*;
 use crate::commands::credential_store::{
     CredentialError, CredentialStore, EnvStore, FakeStore, Secret,
@@ -1355,7 +1356,7 @@ async fn the_key_never_reaches_an_error_a_log_line_or_a_file() {
 async fn the_real_transport_keeps_the_key_out_of_a_failure_and_its_logs() {
     crate::test_logger::clear("gif");
     crate::test_logger::clear("reqwest");
-    let http = giphy::Http::new().unwrap();
+    let http = transport::Http::new().unwrap();
     let url: url::Url = format!("https://gif-test.invalid/v1/gifs/search?api_key={KEY}&q=x")
         .parse()
         .unwrap();
@@ -1369,8 +1370,8 @@ async fn the_real_transport_keeps_the_key_out_of_a_failure_and_its_logs() {
     }
 }
 
-fn local_http() -> giphy::Http {
-    giphy::Http::on(reqwest::Client::builder()).unwrap()
+fn local_http() -> transport::Http {
+    transport::Http::on(reqwest::Client::builder()).unwrap()
 }
 
 fn at(server: &wiremock::MockServer, path: &str) -> url::Url {
@@ -1398,7 +1399,7 @@ async fn the_transport_sends_its_agent_follows_no_redirect_and_reads_retry_after
         .await;
     Mock::given(method("GET"))
         .and(path("/limited"))
-        .and(header("user-agent", giphy::USER_AGENT))
+        .and(header("user-agent", transport::USER_AGENT))
         .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "120"))
         .mount(&server)
         .await;
@@ -1415,7 +1416,10 @@ async fn the_transport_reads_at_most_2_mib_with_a_content_length() {
     use wiremock::matchers::path;
     use wiremock::{Mock, MockServer, ResponseTemplate};
     let server = MockServer::start().await;
-    for (route, size) in [("/fits", giphy::MAX_BODY), ("/over", giphy::MAX_BODY + 1)] {
+    for (route, size) in [
+        ("/fits", transport::MAX_BODY),
+        ("/over", transport::MAX_BODY + 1),
+    ] {
         Mock::given(path(route))
             .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![b'a'; size]))
             .mount(&server)
@@ -1423,7 +1427,7 @@ async fn the_transport_reads_at_most_2_mib_with_a_content_length() {
     }
     let http = local_http();
     let fits = http.get(&at(&server, "/fits")).await.unwrap();
-    assert_eq!(fits.body.len(), giphy::MAX_BODY);
+    assert_eq!(fits.body.len(), transport::MAX_BODY);
     assert_eq!(
         http.get(&at(&server, "/over")).await,
         Err(Failure::TooLarge)
@@ -1464,7 +1468,8 @@ async fn the_transport_reads_at_most_2_mib_without_a_content_length() {
     let small = http.get(&chunked_server(1000).await).await.unwrap();
     assert_eq!(small.body.len(), 1000);
     assert_eq!(
-        http.get(&chunked_server(giphy::MAX_BODY + 1).await).await,
+        http.get(&chunked_server(transport::MAX_BODY + 1).await)
+            .await,
         Err(Failure::TooLarge)
     );
 }

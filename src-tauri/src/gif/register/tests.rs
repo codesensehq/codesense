@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::commands::credential_store::{CredentialStore, FakeStore};
-use crate::gif::giphy::{Failure, Giphy, Reply, Transport};
+use crate::gif::giphy::Giphy;
 use crate::gif::settings::{Keys, SettingsUpdate};
+use crate::gif::transport::{Failure, Reply, Transport};
 use crate::gif::{Adapters, Candidate, Found, GifProvider, Pingbacks};
 use std::sync::atomic::{AtomicI64, Ordering};
 

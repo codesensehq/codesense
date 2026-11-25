@@ -8,6 +8,7 @@ pub(crate) mod giphy;
 pub(crate) mod page;
 pub(crate) mod register;
 pub(crate) mod settings;
+pub(crate) mod transport;
 
 use crate::commands::credential_store::Secret;
 use futures_util::future::BoxFuture;
@@ -662,7 +663,7 @@ pub(crate) fn service<R: tauri::Runtime>(
         return Ok(service.clone());
     }
     let dir = settings::data_dir(app)?;
-    let transport: Arc<dyn giphy::Transport> = Arc::new(giphy::Http::new()?);
+    let transport: Arc<dyn transport::Transport> = Arc::new(transport::Http::new()?);
     let adapters: Adapters = Arc::new(
         move |provider: Provider, key: Secret, now: i64| -> Box<dyn GifProvider> {
             match provider {
