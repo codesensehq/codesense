@@ -61,11 +61,13 @@ test.describe("the Chat | CLI switch", () => {
               `[data-testid="chat-cli-switch-${tab}-${to}"]`,
             );
             if (!button) return reject(new Error("no switch"));
+            // The chat stays mounted on the CLI side, out of sight.
             const shown = () => {
               const chat = document.querySelector(
                 `[data-testid="inbox-split-${tab}"] [data-testid="chat-overlay"]`,
               );
-              return to === "cli" ? chat === null : chat !== null;
+              const seen = !!chat && chat.checkVisibility({ visibilityProperty: true });
+              return to === "cli" ? !seen : seen;
             };
             const start = performance.now();
             button.click();
@@ -92,7 +94,7 @@ test.describe("the Chat | CLI switch", () => {
     await page.keyboard.press("ArrowRight");
     await expect(cliSeg(page)).toHaveAttribute("aria-checked", "true");
     await expect(cliSeg(page)).toBeFocused();
-    await expect(overlay(page)).toHaveCount(0);
+    await expect(overlay(page)).toBeHidden();
     await page.keyboard.press("ArrowLeft");
     await expect(chatSeg(page)).toHaveAttribute("aria-checked", "true");
     await expect(chatSeg(page)).toBeFocused();
@@ -100,7 +102,7 @@ test.describe("the Chat | CLI switch", () => {
 
   test("the tab keeps its choice through a tab switch", async ({ page }) => {
     await cliSeg(page).click();
-    await expect(overlay(page)).toHaveCount(0);
+    await expect(overlay(page)).toBeHidden();
     await page
       .getByRole("tab", { name: /Reproduce timeout/ })
       .first()
@@ -110,7 +112,7 @@ test.describe("the Chat | CLI switch", () => {
       .first()
       .click();
     await expect(cliSeg(page)).toHaveAttribute("aria-checked", "true");
-    await expect(overlay(page)).toHaveCount(0);
+    await expect(overlay(page)).toBeHidden();
   });
 
   test("labels from 480 px of pane width, icons only below", async ({ page }) => {
