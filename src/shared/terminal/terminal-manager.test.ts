@@ -755,6 +755,45 @@ describe("a covered display keeps every line while parked", () => {
   });
 });
 
+describe("flipping a tab between its chat and its CLI", () => {
+  it("five flips under the ring cap write each held chunk once, with no rebuild or replay", async () => {
+    const written: string[] = [];
+    const m = newManager({
+      applyOutput: (term, data, parsed) => {
+        written.push(data);
+        term.write(data, parsed);
+      },
+    });
+    await open(m);
+    const target = slot();
+    m.attach("s1", target, { focus: false, visible: true });
+    const term = m.terminal("s1");
+    const before = await dumped(m, "s1");
+    written.length = 0;
+    const produced: string[] = [];
+    for (let flip = 1; flip <= 5; flip++) {
+      // The chat covers the tab: the display parks and holds what arrives.
+      m.setVisible("s1", target, false);
+      for (let i = 1; i <= 40; i++) {
+        const chunk = `flip ${flip} line ${i}\r\n`;
+        produced.push(chunk);
+        fake.server.produce("s1", chunk);
+      }
+      await vi.advanceTimersByTimeAsync(50);
+      // Back on the CLI: the held output is written once, into the same display.
+      m.setVisible("s1", target, true);
+      await vi.advanceTimersByTimeAsync(50);
+    }
+    const after = await dumped(m, "s1");
+    expect(m.terminal("s1")).toBe(term);
+    expect(after.rebuilds).toBe(before.rebuilds);
+    expect(after.created).toBe(before.created);
+    expect(after.restoredFromSnapshot).toBe(before.restoredFromSnapshot);
+    expect(written.join("")).toBe(produced.join(""));
+    expect(after.appliedSeq).toBe(fake.server.seqOf("s1"));
+  });
+});
+
 describe("output held while a display is parked", () => {
   async function parked() {
     const m = newManager();
