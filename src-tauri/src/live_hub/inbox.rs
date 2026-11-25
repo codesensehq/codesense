@@ -575,11 +575,14 @@ impl InboxProjection {
             if let Some(fields) = self.session_fields.get(&row.handle) {
                 row.unread = fields["unread"].as_u64().map(|n| n as u32);
                 row.oldest_unread_at = fields["oldestUnreadAt"].as_str().map(str::to_string);
+                // A stored `held` may predate the row's hold lifting: the row's current
+                // `held` decides.
                 row.mail_notice = match fields["mailNotice"].as_str() {
-                    Some("pending") => Some(crate::mcp::session_list::MailNotice::Pending),
+                    Some("pending" | "held") => Some(crate::mcp::session_list::MailNotice::Pending),
                     Some("told") => Some(crate::mcp::session_list::MailNotice::Told),
                     _ => None,
                 };
+                crate::mcp::session_list::mark_held(row);
                 row.notified_at = fields["notifiedAt"].as_str().map(str::to_string);
                 row.group_unread = fields["groupUnread"].as_u64().unwrap_or(0) as u32;
                 row.group_read_id = fields["groupReadId"].as_i64().unwrap_or(0);
@@ -686,5 +689,38 @@ mod tests {
             changed_count_teams(&before, &after),
             named(&["web", "new", "old"])
         );
+    }
+
+    /// Fields computed while a notice was held read `pending` once the hold lifts: only
+    /// the row's current `held` makes it read `held`.
+    #[test]
+    fn a_stored_held_notice_reads_pending_once_its_hold_lifts() {
+        use crate::mcp::session_list::{with_held, HeldNotice, MailNotice};
+        let state = crate::commands::dashboard_launch::DashboardLaunchState::new(3);
+        state.register("held", "s-held", Some("codesense"));
+        let rows = state
+            .snapshot()
+            .into_iter()
+            .map(|e| crate::commands::dashboard_launch::session_row(e, true))
+            .collect();
+        let mut rows =
+            crate::mcp::session_list::session_list_rows_with_tabs(rows, |_| None, None, |_| None);
+        let mut projection = InboxProjection::default();
+        projection.session_fields.insert(
+            "held".into(),
+            serde_json::json!({"unread": 1, "mailNotice": "held"}),
+        );
+        with_held(&mut rows, |_| {
+            Some(HeldNotice {
+                gate: "tools".into(),
+                since_ms: 1,
+            })
+        });
+        projection.join(&mut rows);
+        assert_eq!(rows[0].mail_notice, Some(MailNotice::Held));
+        with_held(&mut rows, |_| None);
+        projection.join(&mut rows);
+        assert_eq!(rows[0].mail_notice, Some(MailNotice::Pending));
+        assert_eq!(rows[0].held, None);
     }
 }

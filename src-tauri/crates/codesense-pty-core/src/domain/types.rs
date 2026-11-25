@@ -836,4 +836,17 @@ pub struct InboxWaiterState {
     pub waiting: bool,
     #[serde(default)]
     pub grace_ms: Option<u64>,
+    /// The notice waiting for this waiter that something has held back for longer than
+    /// one notice cycle, if one is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held: Option<HeldNotice>,
+}
+
+/// A waiting notice held back from its waiter past one notice cycle: what holds it
+/// (`hold: <reason>`, `hold: undecided` or `tools`) and for how long so far. A duration,
+/// like a waiter's grace, so the two hosts' clocks never meet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeldNotice {
+    pub gate: String,
+    pub held_ms: u64,
 }

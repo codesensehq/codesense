@@ -27,6 +27,7 @@ use super::agent_inbox::{self, AppInboxHost, Check, InboxHost};
 use super::dashboard_launch::DashboardLaunchState;
 use super::host_connection_manager::{HostConnectionManager, HostConnectionState};
 use super::machines::LOCAL_MACHINE_ID;
+use crate::mcp::session_list::HeldNotice;
 use crate::shared::machine_wording;
 
 /// Retry delay for a failed handoff before the host accepts the notice (for example,
@@ -42,20 +43,27 @@ const SNAPSHOT_ATTEMPTS: u32 = 3;
 const RESTORE_WAIT: Duration = Duration::from_secs(120);
 
 /// One tab's inbox waiter as its host last reported it.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct Waiter {
     waiting: bool,
     /// Until when (on this Mac's clock) its agent reads as one new mail wakes.
     until: Option<Instant>,
+    /// The notice its host holds back from it past one cycle, if one, dated on this
+    /// Mac's clock.
+    held: Option<HeldNotice>,
 }
 
 impl Waiter {
-    fn of(state: &InboxWaiterState) -> Self {
+    fn of(state: &InboxWaiterState, now_ms: u64) -> Self {
         Self {
             waiting: state.waiting,
             until: state
                 .grace_ms
                 .and_then(|grace| Instant::now().checked_add(Duration::from_millis(grace))),
+            held: state.held.as_ref().map(|held| HeldNotice {
+                gate: held.gate.clone(),
+                since_ms: now_ms.saturating_sub(held.held_ms),
+            }),
         }
     }
 
@@ -118,6 +126,14 @@ impl HostInboxes {
         read.then(|| waiters.get(session).is_some_and(Waiter::armed))
     }
 
+    /// The notice held back from the waiter of `session` on `machine` past one cycle, if
+    /// one waits there and something holds it.
+    pub(crate) fn held(&self, machine: &str, session: &str) -> Option<HeldNotice> {
+        let machines = locked(&self.machines);
+        let waiter = machines.get(machine)?.2.get(session)?;
+        waiter.held.clone().filter(|_| waiter.waiting)
+    }
+
     /// `machine` connected: each change pushed from now on is kept, and its waiters are
     /// known once its snapshot is read.
     fn connecting(&self, machine: &str) -> u64 {
@@ -153,7 +169,7 @@ impl HostInboxes {
             for state in states {
                 waiters
                     .entry(state.session.as_str().to_string())
-                    .or_insert_with(|| Waiter::of(&state));
+                    .or_insert_with(|| Waiter::of(&state, crate::runtime::now_ms()));
             }
             *read = true;
         }
@@ -161,7 +177,10 @@ impl HostInboxes {
 
     fn changed(&self, machine: &str, state: &InboxWaiterState) {
         if let Some((_, _, waiters)) = locked(&self.machines).get_mut(machine) {
-            waiters.insert(state.session.as_str().to_string(), Waiter::of(state));
+            waiters.insert(
+                state.session.as_str().to_string(),
+                Waiter::of(state, crate::runtime::now_ms()),
+            );
         }
     }
 
@@ -807,6 +826,7 @@ mod tests {
             session: PtySessionId::new(session),
             waiting,
             grace_ms,
+            held: None,
         }
     }
 
@@ -869,11 +889,40 @@ mod tests {
 
     #[test]
     fn a_grace_is_counted_on_this_macs_clock_from_when_it_arrived() {
-        assert!(!Waiter::of(&state("S1", false, Some(0))).armed());
-        assert!(Waiter::of(&state("S1", false, Some(60_000))).armed());
-        assert!(Waiter::of(&state("S1", true, None)).armed());
+        assert!(!Waiter::of(&state("S1", false, Some(0)), 0).armed());
+        assert!(Waiter::of(&state("S1", false, Some(60_000)), 0).armed());
+        assert!(Waiter::of(&state("S1", true, None), 0).armed());
         // A grace past what this clock can count never panics.
-        let _ = Waiter::of(&state("S1", false, Some(u64::MAX))).armed();
+        let _ = Waiter::of(&state("S1", false, Some(u64::MAX)), 0).armed();
+    }
+
+    /// A held notice is dated on this Mac's clock from when its report arrived, and
+    /// reads held only while its waiter waits (fixed clock).
+    #[test]
+    fn a_held_notice_is_dated_from_when_its_report_arrived() {
+        let mut held = state("S1", true, None);
+        held.held = Some(codesense_pty_core::domain::HeldNotice {
+            gate: "tools".into(),
+            held_ms: 90_000,
+        });
+        let waiter = Waiter::of(&held, 1_790_000_100_000);
+        assert_eq!(
+            waiter.held,
+            Some(HeldNotice {
+                gate: "tools".into(),
+                since_ms: 1_790_000_010_000,
+            })
+        );
+        let inboxes = HostInboxes::default();
+        inboxes.changed(LOCAL_MACHINE_ID, &held);
+        assert_eq!(
+            inboxes.held(LOCAL_MACHINE_ID, "S1").map(|held| held.gate),
+            Some("tools".to_string())
+        );
+        held.waiting = false;
+        inboxes.changed(LOCAL_MACHINE_ID, &held);
+        assert_eq!(inboxes.held(LOCAL_MACHINE_ID, "S1"), None);
+        assert_eq!(inboxes.held("m1", "S1"), None);
     }
 }
 

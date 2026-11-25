@@ -649,6 +649,7 @@ mod tests {
             notified_at: None,
             subagents: 0,
             inbox_waiter: Default::default(),
+            held: None,
             progress: None,
             launch_telemetry: None,
             release_qualified: None,
