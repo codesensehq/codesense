@@ -140,6 +140,7 @@ fn resolve_team(home: &Path, key: &AgentKey) -> ResolvedAgent {
         key,
         ResolveOptions {
             target_team: Some((ORG.into(), TEAM.into())),
+            launch_org: None,
         },
     )
     .unwrap()
@@ -543,6 +544,7 @@ fn into_team<'a>() -> crate::agents::launch::PrepareOptions<'a> {
         target_team: Some((ORG.into(), TEAM.into())),
         mode_override: None,
         prompt: None,
+        launch_org: None,
     }
 }
 
@@ -826,6 +828,49 @@ fn guardrails_of_an_org_with_no_remote_are_read_at_head() {
     let deny = denies(&resolve_team(home, &key));
     assert!(deny.contains(&"WebFetch".to_string()));
     assert!(!deny.contains(&RM.to_string()));
+}
+
+#[test]
+fn guardrails_bind_a_starter_launched_with_no_team_in_an_org() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    guarded_org(home, &[(PARENT, CLAUDE_RM)]);
+    let starter = AgentKey::builtin("claude");
+    let resolve = |launch_org: Option<&str>| {
+        resolve_agent(
+            home,
+            &alice(),
+            &starter,
+            ResolveOptions {
+                target_team: None,
+                launch_org: launch_org.map(str::to_string),
+            },
+        )
+        .unwrap()
+    };
+    // In no org, a starter has no guardrails to run under.
+    assert_eq!(resolve(None).guardrails, None);
+    // Launched in the org's workspace with no team, it runs under the org's.
+    assert!(denies(&resolve(Some(ORG))).contains(&RM.to_string()));
+    let launch = crate::agents::launch::prepare_named(
+        home,
+        &alice(),
+        "builtin/claude",
+        crate::agents::launch::PrepareOptions {
+            launch_org: Some(ORG.into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let settings = launch
+        .generated
+        .iter()
+        .find(|entry| entry.target == GeneratedTarget::LaunchSettings)
+        .unwrap();
+    assert!(settings.content["permissions"]["deny"]
+        .as_array()
+        .unwrap()
+        .contains(&json!(RM)));
 }
 
 #[test]

@@ -54,6 +54,10 @@ pub struct ResolveOptions {
     /// The `(org, team)` the launch runs against. `None` resolves against the
     /// agent's own team (a personal agent: the personal space alone).
     pub target_team: Option<(String, String)>,
+    /// The org a launch with no target team runs in (a starter launched in an org's
+    /// workspace that has no team), whose guardrails it runs under. A launch whose target
+    /// names an org runs under that org's instead.
+    pub launch_org: Option<String>,
 }
 
 /// Where this user's account choice for the agent came from.
@@ -296,10 +300,17 @@ fn compose_with_reader(
             .map(|(org, team)| ManifestTarget::team(org, team)),
     );
 
-    let (guardrails, guardrails_error) = match roots::org_guardrails(home, principal, &target) {
-        Ok(guardrails) => (guardrails, None),
-        Err(message) => (None, Some(message)),
-    };
+    // A target with no org (a starter with no target team) runs under the launch's org.
+    let launch_org = options
+        .launch_org
+        .filter(|org| target.org.is_empty() && !org.is_empty())
+        .map(|org| ManifestTarget::team(org, ""));
+    let guardrails_target = launch_org.as_ref().unwrap_or(&target);
+    let (guardrails, guardrails_error) =
+        match roots::org_guardrails(home, principal, guardrails_target) {
+            Ok(guardrails) => (guardrails, None),
+            Err(message) => (None, Some(message)),
+        };
     let generated =
         permissions::generate(agent, agent.runtime, agent.launch, guardrails.as_deref());
     let mut errors = definition_errors(agent);

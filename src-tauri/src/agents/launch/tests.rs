@@ -769,6 +769,7 @@ fn a_launch_mode_override_is_used_for_the_entries_but_never_injects_flags() {
             target_team: team(),
             mode_override: Some(LaunchMode::Headless),
             prompt: None,
+            launch_org: None,
         },
     );
     assert_eq!(headless.launch.args, interactive.launch.args);

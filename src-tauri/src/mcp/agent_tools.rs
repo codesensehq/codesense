@@ -1729,6 +1729,7 @@ fn preview_detail(
         let options = match (params.org.clone(), params.team.clone()) {
             (Some(org), Some(team)) => ResolveOptions {
                 target_team: Some((org, team)),
+                launch_org: None,
             },
             _ => options,
         };

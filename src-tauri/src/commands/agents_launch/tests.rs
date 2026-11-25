@@ -47,6 +47,7 @@ fn interactive(prompt: Option<&str>) -> PrepareOptions<'_> {
         target_team: Some((ORG.to_string(), TEAM.to_string())),
         mode_override: Some(LaunchMode::Interactive),
         prompt,
+        launch_org: None,
     }
 }
 

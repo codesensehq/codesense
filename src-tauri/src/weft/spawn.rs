@@ -409,6 +409,7 @@ pub(crate) fn prepare_worker_agent(
             mode_override: Some(crate::agents::adapter::LaunchMode::Headless),
             prompt: req.initial_prompt.as_deref(),
             account: None,
+            launch_org: None,
         },
     )?;
     agent.launch.mcp_allow = req.subclass.mcp_servers();

@@ -388,6 +388,20 @@ pub async fn agent_launch_prepare(
             .map(|(org, team)| (org.as_str(), team.as_str())),
         Path::new(&cwd),
     )?;
+    // A launch with no team still runs in an org when its team key or its workspace names
+    // one, and runs under that org's guardrails.
+    let launch_org = team
+        .as_deref()
+        .map(|key| super::pty_layout::parse_team_key(key).0.to_string())
+        .filter(|org| !org.is_empty())
+        .or_else(|| {
+            crate::context_repo::caller_scope::workspace_team(
+                &ctx.codesense_home,
+                &ctx.principal(),
+                Path::new(&cwd),
+            )
+            .map(|owner| owner.org)
+        });
     let initial_prompt = prompt.clone();
     let (home, principal) = (ctx.codesense_home.clone(), ctx.principal());
     let mut prepared = await_blocking("agent_launch_prepare.prepare", move || {
@@ -403,6 +417,7 @@ pub async fn agent_launch_prepare(
                     id,
                     generation: account_generation,
                 }),
+                launch_org,
             },
         )
     })

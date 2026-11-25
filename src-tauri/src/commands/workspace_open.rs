@@ -1564,6 +1564,7 @@ pub(crate) fn open_workspace_prepare(
             target_team,
             mode_override: mode,
             prompt,
+            launch_org: None,
         },
     )
 }
