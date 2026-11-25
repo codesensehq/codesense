@@ -486,6 +486,103 @@ fn guardrails_fail_closed() {
     }
 }
 
+/// The reason a launch of `key` into the team is refused, checked to be the loader's.
+fn refusal(home: &Path, key: &AgentKey) -> String {
+    let resolved = resolve_team(home, key);
+    let errors = resolved
+        .manifest
+        .errors
+        .iter()
+        .filter(|e| e.code == ManifestErrorCode::Guardrails)
+        .count();
+    assert_eq!(errors, 1, "{:?}", resolved.manifest.errors);
+    assert!(!resolved.launch_admission.allowed);
+    resolved.launch_admission.reason.clone().unwrap()
+}
+
+/// Commit and push `root` with `teams` as its `teams.yml` (`None`: without one), then put the
+/// working tree's file back as it was.
+fn push_teams_yml(root: &Path, teams: Option<&str>) {
+    let path = root.join("teams.yml");
+    let before = std::fs::read(&path).unwrap();
+    match teams {
+        Some(teams) => std::fs::write(&path, teams).unwrap(),
+        None => std::fs::remove_file(&path).unwrap(),
+    }
+    commit_all(root, "teams.yml");
+    push(root);
+    std::fs::write(&path, before).unwrap();
+}
+
+#[test]
+fn guardrails_fail_closed_when_the_org_clone_cant_be_read() {
+    let file = guardrails_path(PARENT);
+    // An org folder that is no repository, but whose team folder has a guardrails file.
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    team_content(home, &alice());
+    write(&org_root(home), &file, CLAUDE_RM.as_bytes());
+    let key = save(home, &alice(), escalating("no-repo"));
+    let reason = refusal(home, &key);
+    assert!(reason.contains(&file), "{reason}");
+    assert!(reason.contains("not a git repository"), "{reason}");
+
+    // A `.git` that can't be opened, with no guardrails file anywhere in the working tree:
+    // a link to a missing git folder, and a git folder that lost its HEAD.
+    for broken in ["gitlink", "no HEAD"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        team_content(home, &alice());
+        let key = save(home, &alice(), escalating("broken"));
+        let root = org_root(home);
+        if broken == "gitlink" {
+            std::fs::remove_dir(root.join(".git")).unwrap();
+            std::fs::write(root.join(".git"), "gitdir: /nowhere/at/all\n").unwrap();
+        } else {
+            init_clone(&root);
+            std::fs::remove_file(root.join(".git/HEAD")).unwrap();
+        }
+        let reason = refusal(home, &key);
+        assert!(reason.contains("org guardrails"), "{broken}: {reason}");
+    }
+
+    // A branch with no commit yet, whose working tree has a guardrails file.
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    team_content(home, &alice());
+    let key = save(home, &alice(), escalating("unborn"));
+    let root = org_root(home);
+    std::fs::remove_dir(root.join(".git")).unwrap();
+    git2::Repository::init(&root).unwrap();
+    // A new org, with nothing committed and no file, has no guardrails yet.
+    let resolved = resolve_team(home, &key);
+    assert!(resolved.launch_admission.allowed);
+    assert_eq!(resolved.guardrails, None);
+    write(&root, &file, CLAUDE_RM.as_bytes());
+    let reason = refusal(home, &key);
+    assert!(reason.contains(&file), "{reason}");
+    assert!(reason.contains("no commit yet"), "{reason}");
+}
+
+#[test]
+fn guardrails_fail_closed_on_a_commit_without_root_teams() {
+    let no_roots = format!(
+        "teams:\n  - name: {TEAM}\n    parent_team: {PARENT}\n  - name: {PARENT}\n    parent_team: {TEAM}\n"
+    );
+    for (why, teams) in [
+        ("no teams.yml in the commit", None),
+        ("every team has a parent", Some(no_roots.as_str())),
+    ] {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let root = guarded_org(home, &[(PARENT, CLAUDE_RM)]);
+        let key = save(home, &alice(), escalating("rootless"));
+        push_teams_yml(&root, teams);
+        let reason = refusal(home, &key);
+        assert!(reason.contains("teams.yml"), "{why}: {reason}");
+    }
+}
+
 #[test]
 fn guardrails_codex_warns() {
     let tmp = tempfile::tempdir().unwrap();
