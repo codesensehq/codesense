@@ -1118,6 +1118,8 @@ pub(crate) mod tests {
                 "setHumanStatus",
                 "sendAsHuman",
                 "replyAsHuman",
+                "gifSearch",
+                "gifPicked",
                 "commands.run",
             ] {
                 let spec = crate::verbs::builtin_registry().get(verb).unwrap();

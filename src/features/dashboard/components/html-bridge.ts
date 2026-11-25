@@ -674,8 +674,6 @@ function validateContentType(value: unknown): MessageContentType | null {
   throw new Error("contentType, if present, must be 'plain', 'markdown' or 'html'");
 }
 
-/** Validate an optional one-line `summary` (the message's list preview). Absent or
- *  blank → none; the store trims and caps it. */
 /** `media` on `sendAsHuman`/`replyAsHuman`: `{url, alt, provider?, providerId?}`, else null.
  *  The host checks it again and takes it only from the Inbox pane. */
 function validateHumanMedia(value: unknown, verb: string): HumanMedia | null {
@@ -700,6 +698,8 @@ function validateHumanMedia(value: unknown, verb: string): HumanMedia | null {
   };
 }
 
+/** Validate an optional one-line `summary` (the message's list preview). Absent or
+ *  blank → none; the store trims and caps it. */
 function validateSummary(value: unknown, verb: string): string | null {
   if (value === undefined || value === null) return null;
   if (typeof value !== "string") throw new Error(`${verb}: summary, if present, must be a string`);
