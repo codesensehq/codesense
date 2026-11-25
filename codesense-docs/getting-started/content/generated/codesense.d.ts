@@ -1413,6 +1413,7 @@ declare namespace CodesenseSdk {
       before?: number;
       conversation?: string;
       sessionId?: string;
+      story?: string;
       storyId?: string;
       [key: string]: unknown;
     }): Promise<unknown>;

@@ -1124,6 +1124,9 @@
           "minLength": 1,
           "type": "string"
         },
+        "story": {
+          "type": "string"
+        },
         "storyId": {
           "type": "string"
         }
