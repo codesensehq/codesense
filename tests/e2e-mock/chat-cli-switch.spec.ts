@@ -52,7 +52,17 @@ test.describe("the Chat | CLI switch", () => {
     ).not.toBeFocused();
   });
 
-  test("flips to the CLI and back, in under 100 ms each way", async ({ page }) => {
+  test("flips to the CLI and back, in under 100 ms each way, never remounting the chat", async ({
+    page,
+  }) => {
+    // The chat is mounted once: each flip must find this same element.
+    await overlay(page).evaluate((el) => {
+      (window as unknown as { firstChat: Element }).firstChat = el;
+    });
+    const sameChat = () =>
+      overlay(page).evaluate(
+        (el) => el === (window as unknown as { firstChat: Element }).firstChat,
+      );
     const flip = (to: "cli" | "chat") =>
       page.evaluate(
         ({ tab, to }) =>
@@ -79,14 +89,18 @@ test.describe("the Chat | CLI switch", () => {
           }),
         { tab: AGENT_TAB, to },
       );
-    expect(await flip("cli")).toBeLessThan(100);
-    await expect(cliSeg(page)).toHaveAttribute("aria-checked", "true");
-    await expect(
-      page.locator(`[data-testid="inbox-split-${AGENT_TAB}"] .xterm textarea`),
-    ).toBeFocused();
-    expect(await flip("chat")).toBeLessThan(100);
-    await expect(chatSeg(page)).toHaveAttribute("aria-checked", "true");
-    await expect(overlay(page).locator(".ibx-comp textarea")).toBeFocused();
+    for (let round = 0; round < 2; round++) {
+      expect(await flip("cli")).toBeLessThan(100);
+      await expect(cliSeg(page)).toHaveAttribute("aria-checked", "true");
+      await expect(
+        page.locator(`[data-testid="inbox-split-${AGENT_TAB}"] .xterm textarea`),
+      ).toBeFocused();
+      expect(await sameChat()).toBe(true);
+      expect(await flip("chat")).toBeLessThan(100);
+      await expect(chatSeg(page)).toHaveAttribute("aria-checked", "true");
+      await expect(overlay(page).locator(".ibx-comp textarea")).toBeFocused();
+      expect(await sameChat()).toBe(true);
+    }
   });
 
   test("arrow keys move the selection and keep focus on the switch", async ({ page }) => {
