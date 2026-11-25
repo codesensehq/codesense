@@ -272,7 +272,7 @@ describe("TerminalGridCaption: a CLI started by hand, with no launch mark", () =
   );
 });
 
-describe("TerminalGridCaption: the F11 chrome of a CLI started by hand", () => {
+describe("TerminalGridCaption: the face, pill and pending ring of a CLI started by hand", () => {
   /** The roster's bare row for the tab: what runs there, with no saved agent. */
   const listed = (row: object) =>
     useAgentListProjectionStore.setState({
@@ -314,6 +314,22 @@ describe("TerminalGridCaption: the F11 chrome of a CLI started by hand", () => {
     act(() => hooked("idle"));
     expect(chatSeg()).not.toHaveAttribute("data-pending");
     expect(chatSeg()).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("clicking the selected CLI segment before Ready keeps the tab on the CLI past Ready", () => {
+    listed({ kind: "live-pty", detected: { cli: "claude", dot: null } });
+    hooked("working");
+    mountFor(story);
+    expect(chatSeg()).toHaveAttribute("data-pending", "true");
+    fireEvent.click(cliSeg());
+    expect(useAgentInboxRailStore.getState().bySession["sid-a"]).toEqual({
+      composeRequest: 0,
+      shown: false,
+    });
+    expect(chatSeg()).not.toHaveAttribute("data-pending");
+    act(() => hooked("idle"));
+    expect(cliSeg()).toHaveAttribute("aria-checked", "true");
+    expect(useAgentInboxRailStore.getState().bySession["sid-a"]?.shown).toBe(false);
   });
 
   it("a CLI only the process tree knows of has no ring: it stays on the CLI", () => {

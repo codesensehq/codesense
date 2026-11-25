@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { AGENT_RUNTIMES, REMOTE_LAUNCH_CLIS } from "@/shared/lib/agent-runtimes";
+import { AGENT_RUNTIMES } from "@/shared/lib/agent-runtimes";
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
 import { beforeEach, describe, expect, it } from "vitest";
 
@@ -188,7 +188,7 @@ describe("opened as an agent", () => {
     markOpenedAsAgent(NEW);
     closeAgentInboxRail(NEW);
     becomeAgent();
-    expect(open()).toBeUndefined();
+    expect(open()).toEqual({ composeRequest: 0, shown: false });
   });
 
   it("the person's closed choice holds once the chat has covered the tab", () => {
@@ -257,7 +257,7 @@ describe("a CLI started by hand", () => {
     expect(useAgentInboxRailStore.getState().pending[HAND]).toBeUndefined();
   });
 
-  it.each(REMOTE_LAUNCH_CLIS)(
+  it.each(AGENT_RUNTIMES)(
     "a remote %s, known from its host's activity, is covered at its first idle",
     (cli) => {
       const snapshot = (state: "working" | "idle", revision: number) =>

@@ -4,8 +4,12 @@ import {
   isRunningAgent,
   useRunningAgent,
 } from "@/features/viewer/lib/hand-agents";
+import { isRegisteredAgentRuntime } from "@/shared/lib/agent-runtimes";
+import type { AgentRuntime } from "@/tauri/commands";
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
+import { useViewerStore } from "@/shared/stores/viewer-store";
 import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 
 /** How a tab's inbox is drawn: conversations, a dense log, or a sequence diagram. */
 export type InboxLens = "threads" | "spool" | "wire";
@@ -58,9 +62,9 @@ interface AgentInboxRailState {
 type AgentState = ReturnType<typeof useAgentStateStore.getState>;
 
 /**
- * Where a CLI started by hand stands on its chat cover (Q1: it covers once the CLI is first
- * Ready). `pending`: it runs, with hooks or an observed host, but is not yet idle; `ready`: its
- * first idle. Null for a launched tab, a tab with a chat entry (shown, or hidden by the person's
+ * Where a CLI started by hand stands on its chat cover: the chat covers the tab once the CLI is
+ * first Ready, never before. `pending`: it runs, with hooks or an observed host, but is not yet
+ * idle; `ready`: its first idle. Null for a launched tab, a tab with a chat entry (shown, or hidden by the person's
  * choice) or a pending launch mark, a plain shell, and a CLI only the process tree knows of,
  * which never reports Ready and so stays on the CLI.
  */
@@ -69,10 +73,17 @@ export function handCoverOf(
   rail: Pick<AgentInboxRailState, "bySession" | "pending">,
   sessionId: string,
 ): "pending" | "ready" | null {
-  if (rail.bySession[sessionId] || rail.pending[sessionId] || agent.launchBySession[sessionId])
-    return null;
-  const detected = detectSessionAgent(agent, sessionId);
-  if (!detected || detected.processOnly || !isRunningAgent(agent, sessionId)) return null;
+  if (rail.bySession[sessionId] || rail.pending[sessionId]) return null;
+  return unclaimedHandCoverOf(agent, sessionId, detectSessionAgent(agent, sessionId));
+}
+
+function unclaimedHandCoverOf(
+  agent: AgentState,
+  sessionId: string,
+  detected: ReturnType<typeof detectSessionAgent>,
+): "pending" | "ready" | null {
+  if (agent.launchBySession[sessionId]) return null;
+  if (!detected || detected.processOnly || !isRegisteredAgentRuntime(detected.cli)) return null;
   const snapshot = agent.activityBySession[sessionId]?.snapshot;
   const idle = snapshot?.observed
     ? snapshot.state === "idle"
@@ -80,13 +91,26 @@ export function handCoverOf(
   return idle ? "ready" : "pending";
 }
 
-/** Whether `sessionId` runs a CLI started by hand whose chat covers it once the CLI is Ready. */
-export function useHandCoverPending(sessionId: string): boolean {
+/**
+ * A tab's agent CLI as its Chat | CLI switch reads it, from one detection: whether one runs, and
+ * the CLI started by hand whose chat covers the tab once it is Ready (`pendingCover`, null when
+ * none waits).
+ */
+export function useTabAgentCli(sessionId: string): {
+  running: boolean;
+  pendingCover: AgentRuntime | null;
+} {
+  const layout = useViewerStore((s) => s.terminalLayout);
   const claimed = useAgentInboxRailStore((s) => !!s.bySession[sessionId] || !!s.pending[sessionId]);
-  const pending = useAgentStateStore(
-    (agent) => handCoverOf(agent, { bySession: {}, pending: {} }, sessionId) === "pending",
+  return useAgentStateStore(
+    useShallow((agent) => {
+      const detected = detectSessionAgent(agent, sessionId, layout);
+      const cli = isRegisteredAgentRuntime(detected?.cli) ? detected.cli : null;
+      const pending =
+        cli !== null && !claimed && unclaimedHandCoverOf(agent, sessionId, detected) === "pending";
+      return { running: cli !== null, pendingCover: pending ? cli : null };
+    }),
   );
-  return !claimed && pending;
 }
 
 let watchingEligibility = false;

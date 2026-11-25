@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
-import { cliLabel, detectSessionAgent, useRunningAgent } from "@/features/viewer/lib/hand-agents";
+import { cliLabel } from "@/features/viewer/lib/hand-agents";
 import { useHandStartedCli } from "@/features/viewer/hooks/use-hand-started-cli";
-import { useAgentStateStore } from "@/shared/stores/agent-state-store";
 import { useCallback, useEffect, useId, useRef, type KeyboardEvent, type MouseEvent } from "react";
 import { AlarmClock, Code, GitCompareArrows, PanelTopOpen, X } from "lucide-react";
 import type { TerminalTab } from "@/features/viewer/lib/cli-workspace/store/viewer-access";
@@ -40,7 +39,7 @@ import {
   showAgentChat,
   showAgentCli,
   useAgentChatShown,
-  useHandCoverPending,
+  useTabAgentCli,
 } from "@/features/viewer/stores/agent-inbox-rail-store";
 import { useHeldLines } from "@/features/viewer/stores/held-output-store";
 import { useCliNeedsYou } from "@/features/viewer/lib/cli-workspace/store/terminal-tab-selectors";
@@ -149,13 +148,10 @@ export function TerminalGridCaption({
   const diffOpen = useSourceDiffShown(tab.sessionId);
   const editorOpen = useWorktreeEditorOpen(tab.sessionId);
   const hudShown = useStoryHudShown(ws.id);
-  const runningAgent = useRunningAgent(tab.sessionId);
+  const { running: runningAgent, pendingCover } = useTabAgentCli(tab.sessionId);
   const inboxOpen = useAgentChatShown(tab.sessionId);
   const handCli = useHandStartedCli(tab.sessionId);
   const hand = handCli ? cliLabel(handCli) : null;
-  const coverPending = useHandCoverPending(tab.sessionId);
-  // The pending ring names the CLI before the roster lists it.
-  const liveCli = useAgentStateStore((s) => detectSessionAgent(s, tab.sessionId)?.cli ?? null);
   const inboxCounts = useTabInboxCounts(tab.sessionId);
   const inboxUnread = inboxCounts.direct + inboxCounts.group;
   const diffShortcut = formatKeystrokeDisplay(useEffectiveShortcut("viewer.toggle-source-diff"));
@@ -577,7 +573,8 @@ export function TerminalGridCaption({
             heldLines={heldLines}
             needs={cliNeeds}
             shortcut={inboxShortcut}
-            pendingCover={coverPending ? cliLabel(liveCli) : null}
+            // The pending ring names the CLI before the roster lists it.
+            pendingCover={pendingCover && cliLabel(pendingCover)}
           />
         )}
       </div>

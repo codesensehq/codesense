@@ -41,7 +41,8 @@ export interface ChatCliSwitchProps {
   /** The key that flips the tab, as displayed ("⌘I"). */
   shortcut: string;
   /** A CLI started by hand that the chat covers once it is Ready: its name ("Claude"). While
-   *  the CLI shows, the Chat segment carries a dashed ring and says so. */
+   *  the CLI shows, the Chat segment carries a dashed ring and says so, and choosing the CLI
+   *  segment again calls `onChange("cli")` to keep the tab there. */
   pendingCover?: string | null;
 }
 
@@ -78,9 +79,12 @@ export function ChatCliSwitch({
   const flagged = covered && needs !== null;
   const held = covered && !flagged && heldLines > 0 ? heldLines : 0;
 
+  const pending = mode === "cli" && !!pendingCover;
   const choose = (next: ChatCliMode, how: "pointer" | "keyboard") => {
-    if (next === mode) return;
-    focusNext.current = how === "keyboard" ? next : null;
+    // Before the chat first covers a CLI started by hand, choosing the CLI it already shows is
+    // the person's choice to stay there: the caller records it, and the chat never covers.
+    if (next === mode && !(pending && next === "cli")) return;
+    focusNext.current = how === "keyboard" && next !== mode ? next : null;
     onChange(next, how);
   };
   const onArrow = (e: KeyboardEvent<HTMLButtonElement>) => {
@@ -108,7 +112,6 @@ export function ChatCliSwitch({
       ? `CLI, ${held} new ${held === 1 ? "line" : "lines"}`
       : "CLI";
   const keys = shortcut ? ` (${shortcut})` : "";
-  const pending = mode === "cli" && !!pendingCover;
   const chatTip =
     mode === "chat"
       ? "Chat"
