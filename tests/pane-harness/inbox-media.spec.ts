@@ -587,3 +587,41 @@ test("a re-fetch that changed names the change", async ({ mountPane }) => {
     "Couldn't load this GIF. The source now serves a different image.",
   );
 });
+
+test("the person's own GIF, sent with no text, renders in the thread like an agent's", async ({
+  mountPane,
+}) => {
+  const gif = media("cached", { provider: "giphy", providerId: "g1", mediaProvider: "giphy" });
+  const pane = await mountPane(INBOX_PANE, {
+    ...fixtures(media("cached")),
+    inbox: [
+      inboxFixtureRow(
+        1,
+        "Ship it?",
+        { from: "builder", fromName: "Builder", contentType: "markdown", unread: false },
+        team,
+      ),
+      inboxFixtureRow(
+        2,
+        "",
+        {
+          from: "human",
+          fromName: "human",
+          to: "builder",
+          toName: "Builder",
+          contentType: "markdown",
+          unread: false,
+          inReplyTo: 1,
+          attachments: [gif],
+          createdAtMs: Date.now() + 1000,
+        },
+        team,
+      ),
+    ],
+  });
+  await servePixel(pane.page);
+  await pane.frame.locator(".ib-row").first().click();
+  const open = pane.frame.getByRole("button", { name: "Open GIF: A cat types very fast" });
+  await expect(open.locator("img")).toHaveAttribute("src", `/media/v1/${sha}`);
+  await expect(pane.frame.locator(".ib-media-attr")).toHaveText("Powered by GIPHY");
+});

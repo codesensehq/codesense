@@ -104,6 +104,7 @@ import {
   type InboxScope,
   type MessageKind,
   type InboxTeam,
+  type HumanMedia,
   type MessageContentType,
   type MessageOnClick,
   type MetadataEdit,
@@ -675,6 +676,30 @@ function validateContentType(value: unknown): MessageContentType | null {
 
 /** Validate an optional one-line `summary` (the message's list preview). Absent or
  *  blank → none; the store trims and caps it. */
+/** `media` on `sendAsHuman`/`replyAsHuman`: `{url, alt, provider?, providerId?}`, else null.
+ *  The host checks it again and takes it only from the Inbox pane. */
+function validateHumanMedia(value: unknown, verb: string): HumanMedia | null {
+  if (value === undefined || value === null) return null;
+  const bad = () =>
+    new Error(`${verb}: media, if present, must be {url, alt, provider?, providerId?}`);
+  if (typeof value !== "object" || Array.isArray(value)) throw bad();
+  const m = value as Record<string, unknown>;
+  if (Object.keys(m).some((k) => !["url", "alt", "provider", "providerId"].includes(k))) {
+    throw bad();
+  }
+  if (typeof m.url !== "string" || !m.url || typeof m.alt !== "string" || !m.alt.trim()) {
+    throw bad();
+  }
+  if (m.provider != null && m.provider !== "giphy" && m.provider !== "klipy") throw bad();
+  if (m.providerId != null && (typeof m.providerId !== "string" || !m.providerId)) throw bad();
+  return {
+    url: m.url,
+    alt: m.alt,
+    ...(m.provider != null ? { provider: m.provider as HumanMedia["provider"] } : {}),
+    ...(m.providerId != null ? { providerId: m.providerId as string } : {}),
+  };
+}
+
 function validateSummary(value: unknown, verb: string): string | null {
   if (value === undefined || value === null) return null;
   if (typeof value !== "string") throw new Error(`${verb}: summary, if present, must be a string`);
@@ -1437,8 +1462,9 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
     if (typeof a.to !== "string" || !a.to.trim()) {
       throw new Error("sendAsHuman: {to} must be a session handle or an agent role");
     }
-    if (typeof a.text !== "string" || !a.text.trim()) {
-      throw new Error("sendAsHuman: {text} must be a non-empty string");
+    const media = validateHumanMedia(a.media, "sendAsHuman");
+    if (typeof a.text !== "string" || (!media && !a.text.trim())) {
+      throw new Error("sendAsHuman: {text} must be a non-empty string, or any string with media");
     }
     const attachFile = optionalNonEmptyString(
       a.attachFile,
@@ -1462,6 +1488,7 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
         replyTo ?? null,
         validateSummary(a.summary, "sendAsHuman"),
         inReplyTo,
+        media,
       ),
     );
   },
@@ -1503,8 +1530,9 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
   replyAsHuman: async (args, ctx) => {
     const a = argObject(args, "replyAsHuman");
     const id = messageId(a.messageId, "replyAsHuman");
-    if (typeof a.text !== "string" || !a.text.trim()) {
-      throw new Error("replyAsHuman: {text} must be a non-empty string");
+    const media = validateHumanMedia(a.media, "replyAsHuman");
+    if (typeof a.text !== "string" || (!media && !a.text.trim())) {
+      throw new Error("replyAsHuman: {text} must be a non-empty string, or any string with media");
     }
     const text = a.text;
     return inboxWrite(ctx, "replyAsHuman", a, (team) =>
@@ -1514,6 +1542,7 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
         text,
         validateContentType(a.contentType),
         validateSummary(a.summary, "replyAsHuman"),
+        media,
       ),
     );
   },

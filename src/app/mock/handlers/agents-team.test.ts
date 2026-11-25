@@ -15,7 +15,14 @@ import {
   SECOND_TEAM_STATUSES,
 } from "./agents-team";
 
-type Row = { id: number; to: string | null; toRole: string | null; unread: boolean };
+type Row = {
+  id: number;
+  from: string;
+  to: string | null;
+  toRole: string | null;
+  unread: boolean;
+  attachments?: unknown[];
+};
 
 function handlers() {
   return agentTeamInboxHandlers(() => {}) as unknown as Record<
@@ -61,6 +68,60 @@ describe("agent team inbox mock: parity with the real human send and status", ()
     const sent = h.send_inbox_as_human!({ to: "#triage", text: "on it", inReplyTo: unread!.id });
     expect(sent).toMatchObject({ status: "sent" });
     expect(rollup(h).find((m) => m.id === unread!.id)?.unread).toBe(false);
+  });
+
+  it("sends the person's GIF with blank text, and refuses it to a role or as a path", () => {
+    const h = handlers();
+    const media = {
+      url: "https://media.giphy.com/media/mockgif1/giphy.gif",
+      alt: "A cat",
+      provider: "giphy",
+      providerId: "mockgif1",
+    };
+    const session = rollup(h).find((m) => m.to === "human")!;
+    const sent = h.send_inbox_as_human!({ to: `@${session.from}`, text: "", media }) as {
+      messageId: number;
+    };
+    expect(sent).toMatchObject({ status: "sent" });
+    const reply = h.reply_as_human!({ messageId: session.id, text: " ", media }) as {
+      messageId: number;
+    };
+    expect(reply).toMatchObject({ status: "sent" });
+    for (const id of [sent.messageId, reply.messageId]) {
+      expect(rollup(h).find((m) => m.id === id)?.attachments).toEqual([
+        expect.objectContaining({ alt: "A cat", state: "pending", provider: "giphy" }),
+      ]);
+    }
+    expect(h.send_inbox_as_human!({ to: "#triage", text: "", media })).toMatchObject({
+      status: "invalid",
+    });
+    expect(
+      h.send_inbox_as_human!({
+        to: "#triage",
+        text: "hi",
+        media: { path: "/tmp/a.gif", alt: "a" },
+      }),
+    ).toMatchObject({ status: "invalid" });
+    expect(h.send_inbox_as_human!({ to: `@${session.from}`, text: "" })).toMatchObject({
+      status: "invalid",
+    });
+  });
+
+  it("answers the Inbox pane's GIF search and pick", () => {
+    const h = handlers();
+    const found = h.gif_search_page!({ query: "cat" }) as {
+      candidates: { id: string; previewData: string }[];
+    };
+    expect(found).toMatchObject({ status: "ok", provider: "giphy" });
+    expect(found.candidates[0]!.previewData).toMatch(/^data:image\/gif;base64,/);
+    expect(h.gif_search_page!({ ids: [found.candidates[0]!.id] })).toMatchObject({
+      candidates: [{ id: found.candidates[0]!.id }],
+    });
+    expect(h.gif_search_page!({})).toMatchObject({ status: "error", error: "badQuery" });
+    expect(h.gif_picked!({ provider: "giphy", id: found.candidates[0]!.id })).toEqual({
+      status: "ok",
+    });
+    expect(h.gif_picked!({ provider: "giphy", id: "nope" })).toMatchObject({ status: "error" });
   });
 
   it("reads #role:<id> and role:<id> as the role <id>, as the real send does", () => {

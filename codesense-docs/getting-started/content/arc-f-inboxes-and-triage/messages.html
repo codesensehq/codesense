@@ -325,7 +325,7 @@
         </ol>
       </section>
 
-      <section id="send-media" data-search="Send a GIF or image meme media alt path attachFile team config inbox.media gif_search GIPHY search key rating autoLoads">
+      <section id="send-media" data-search="Send a GIF or image meme media alt path attachFile team config inbox.media gif_search gifSearch gifPicked sendAsHuman replyAsHuman GIPHY search key rating autoLoads">
         <h2>Send a GIF or image</h2>
         <p>An agent can add one image to <code>send_message</code> or <code>reply</code> with
           <code>media</code>. Supply exactly one source, <code>url</code> or <code>path</code>, and
@@ -399,6 +399,19 @@ gif_search({ ids: ["&lt;id&gt;"] })  // the same GIFs again, from ids kept from 
           own: GIPHY and KLIPY copies it cached before this behavior stay until they age out, and a
           picture first shown as ordinary media keeps its browser copy when a GIPHY or KLIPY message
           later shares the same image.</p>
+        <p>The person sends pictures too, from the built-in Inbox pane only. There
+          <code>act('gifSearch', {query})</code> (or <code>{ids}</code>) returns the same candidates as
+          <code>gif_search</code>, each with its still as <code>previewData</code>, a <code>data:</code>
+          URI the host fetched. With the team's <code>inbox.media</code> at <code>off</code> it returns
+          <code>mediaOff</code> and fetches nothing. <code>act('gifPicked', {provider, id})</code> tells
+          GIPHY the person picked that GIF. <code>sendAsHuman</code> and <code>replyAsHuman</code> take
+          <code>media: {url, alt, provider?, providerId?}</code>, and the text may then be blank. Any
+          other frame sending <code>media</code> gets <code>invalid</code> and nothing is stored, as does
+          media to a role queue or a <code>path</code>. The person's picture loads at once from a listed
+          host under <code>auto</code>, as an agent's on this Mac does.</p>
+        <p>An agent reading a message with media through <code>read_messages</code> gets
+          <code>[GIF: &lt;alt&gt;]</code> or <code>[Image: &lt;alt&gt;]</code> after the text, one per
+          picture, so it knows what was sent without loading it.</p>
         <p>For a document attachment instead, <code>attachFile: "design/ux-brief.md"</code> adds
           the existing file card with Open. It is a logical team-content reference, separate from
           <code>media</code>, and leaves the message's primary file unchanged.</p>
@@ -488,7 +501,7 @@ signal_done { status: 'success', summary: 'Checks passed' }</code></pre>
         <p>Reference for the inbox, human-status, role-queue and workspace-chat tools. Inbox mail comes from people and agents your user's setup lets reach you. Times are epoch milliseconds unless a tool says otherwise. <code>team</code> is written <code>{org, team}</code> and <code>teamKey</code> is written <code>org:team</code>. Unless an entry says otherwise, a missing team defaults to the team active in the app; <code>inbox_list</code> tries its <code>sessionId</code>'s team first. Where a tool takes <code>sessionId</code> or <code>session_id</code> to identify the caller (<code>read_messages</code>, the workspace chat tools), a supplied one must name the caller itself; in <code>inbox_list</code>, <code>sessionId</code> names the session whose mail you list.</p>
         <p id="inbox"><strong>Reading and posting mail</strong></p>
         <h3 id="tool-read_messages"><code>read_messages</code></h3>
-        <p>Drains your unread inbox messages, oldest first; each is returned once, then marked read. Pass your <code>$CODESENSE_TAB_SESSION_ID</code> as <code>session_id</code>, or omit it to read the inbox of the tab the connection runs in. An outside or unbound connection is refused, and a supplied <code>session_id</code> must name the same tab. Returns <code>{messages:[{messageId, from, fromName, text, inReplyTo, inReplyToTeam, replyTo?, summary?, primaryFile?, attachmentHint?}]}</code>. Answer any one with <code>reply</code>.</p>
+        <p>Drains your unread inbox messages, oldest first; each is returned once, then marked read. Pass your <code>$CODESENSE_TAB_SESSION_ID</code> as <code>session_id</code>, or omit it to read the inbox of the tab the connection runs in. An outside or unbound connection is refused, and a supplied <code>session_id</code> must name the same tab. Returns <code>{messages:[{messageId, from, fromName, text, inReplyTo, inReplyToTeam, replyTo?, summary?, primaryFile?, attachments?, attachmentHint?}]}</code>. A message with media has <code>[GIF: &lt;alt&gt;]</code> or <code>[Image: &lt;alt&gt;]</code> after its <code>text</code>, one per picture; the stored message is unchanged. Answer any one with <code>reply</code>.</p>
         <pre data-tool-example="read_messages"><code>{
   &quot;tool&quot;: &quot;read_messages&quot;,
   &quot;arguments&quot;: {

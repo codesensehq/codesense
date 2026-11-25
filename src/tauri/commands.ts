@@ -1376,15 +1376,33 @@ export type WithdrawInboxMessageResult =
 export const withdrawInboxMessage = (team: InboxTeam, messageId: number) =>
   invoke<WithdrawInboxMessageResult>("withdraw_inbox_message", { team, messageId });
 
+/** A picture the person sends from the Inbox pane: a remote `url` with its `alt`, and the
+ *  provider it came from with its id for a GIF. The host takes it only from the Inbox pane. */
+export interface HumanMedia {
+  url: string;
+  alt: string;
+  provider?: "giphy" | "klipy";
+  providerId?: string;
+}
+
 /** The human answers message `messageId` of `team`'s inbox; the reply goes to its
- *  sender, who is nudged. */
+ *  sender, who is nudged. With `media`, `text` may be blank. */
 export const replyAsHuman = (
   team: InboxTeam,
   messageId: number,
   text: string,
   contentType: MessageContentType | null = null,
   summary: string | null = null,
-) => invoke<InboxSendResult>("reply_as_human", { team, messageId, text, contentType, summary });
+  media: HumanMedia | null = null,
+) =>
+  invoke<InboxSendResult>("reply_as_human", {
+    team,
+    messageId,
+    text,
+    contentType,
+    summary,
+    media,
+  });
 
 /** SW-BSI-UX: an agent → UI progress notification persisted for the Inbox's
  *  Updates lane. Non-actionable: no reply, no attachment, no archive-ness. */
@@ -1640,7 +1658,8 @@ export type HumanSendResult =
  *  (a session when one answers to it, else a role). Only that recipient gets it.
  *  `replyTo` (a running session, `human` or `role:<id>`) is where replies go instead of
  *  to the human. `summary` is the message's one-line list preview. `inReplyTo` is the
- *  message of `team`'s inbox it answers (marked read for the human). */
+ *  message of `team`'s inbox it answers (marked read for the human). `media` is a picture
+ *  sent with it (then `text` may be blank); a role queue refuses it. */
 export const sendInboxAsHuman = (
   team: InboxTeam,
   to: string,
@@ -1651,6 +1670,7 @@ export const sendInboxAsHuman = (
   replyTo: string | null = null,
   summary: string | null = null,
   inReplyTo: number | null = null,
+  media: HumanMedia | null = null,
 ) =>
   invoke<HumanSendResult>("send_inbox_as_human", {
     team,
@@ -1662,6 +1682,7 @@ export const sendInboxAsHuman = (
     replyTo,
     summary,
     inReplyTo,
+    media,
   });
 
 /** One message as a session's conversation and the rollup show it (mirror of Rust

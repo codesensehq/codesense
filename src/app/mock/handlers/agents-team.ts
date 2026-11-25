@@ -12,6 +12,7 @@ import type {
   ConversationMessage,
   HumanStatusView,
   InboxDelivery,
+  InboxMediaAttachment,
   SessionListRow,
 } from "@/tauri/commands";
 
@@ -541,7 +542,49 @@ interface MockInboxRow {
   summary?: string | null;
   /** What it asks of the human; `update` when unset (SW-AGR-18). */
   kind?: "needs-you" | "update";
+  attachments?: InboxMediaAttachment[];
 }
+
+/** The person's `media` as the real send stores it (pending until fetched), an error message
+ *  for media the host refuses, or null for none. */
+function humanMedia(v: unknown): InboxMediaAttachment | string | null {
+  if (v === undefined || v === null) return null;
+  const m = v as Record<string, unknown>;
+  if (typeof m.path === "string") return "Not sent: media from the person must be a url.";
+  if (typeof m.url !== "string" || typeof m.alt !== "string" || !m.alt.trim()) {
+    return "Not sent: media needs a url and an alt.";
+  }
+  let host: string;
+  try {
+    host = new URL(m.url).host;
+  } catch {
+    return "Not sent: media needs a url and an alt.";
+  }
+  return {
+    kind: "image",
+    alt: m.alt,
+    sourceUrl: m.url,
+    sourceHost: host,
+    state: "pending",
+    ...(m.provider === "giphy" || m.provider === "klipy" ? { provider: m.provider } : {}),
+    ...(typeof m.providerId === "string" ? { providerId: m.providerId } : {}),
+  };
+}
+
+/** The mock GIF search's candidates: a few GIFs, each with a 1×1 still. */
+const MOCK_GIF_STILL =
+  "data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==";
+const MOCK_GIFS = ["cat", "wave", "thumbs up", "party"].map((title, i) => ({
+  provider: "giphy" as const,
+  id: `mockgif${i + 1}`,
+  title: `A ${title}`,
+  url: `https://media.giphy.com/media/mockgif${i + 1}/giphy.gif`,
+  previewUrl: `https://media.giphy.com/media/mockgif${i + 1}/giphy_s.gif`,
+  width: 480,
+  height: 270,
+  autoLoads: true,
+  previewData: MOCK_GIF_STILL,
+}));
 
 /** As the store keeps a summary: one trimmed line, control and format
  *  characters dropped, at most 280 characters (code points). */
@@ -877,6 +920,7 @@ export function agentTeamInboxHandlers(
       unread: r.unread,
       delivery: role ? claimState(r.delivery ?? queued()) : null,
       kind: r.kind ?? "update",
+      ...(r.attachments ? { attachments: r.attachments } : {}),
     };
   };
   const sessionRows = (): SessionListRow[] =>
@@ -1049,7 +1093,9 @@ export function agentTeamInboxHandlers(
     }),
     send_inbox_as_human: (args: Record<string, unknown>) => {
       const text = String(args.text ?? "");
-      if (!text.trim()) return { status: "invalid", message: "text must not be blank" };
+      const media = humanMedia(args.media);
+      if (typeof media === "string") return { status: "invalid", message: media };
+      if (!text.trim() && !media) return { status: "invalid", message: "text must not be blank" };
       const raw = String(args.to ?? "").trim();
       const bare = raw.replace(/^@/, "");
       // `role:<id>` (the Reply-To spelling, also after `#`) names the role `<id>`.
@@ -1073,6 +1119,9 @@ export function agentTeamInboxHandlers(
       // The real send refuses a blank recipient and a role queue named `human`.
       if (!to) return { status: "invalid", message: "Not sent: no recipient." };
       if (role === "human") return { status: "invalid", message: "Not sent: human is not a role." };
+      if (role && media) {
+        return { status: "invalid", message: "Not sent: media can't go to a role queue." };
+      }
       const messageId = next++;
       const row: MockInboxRow = {
         messageId,
@@ -1087,6 +1136,7 @@ export function agentTeamInboxHandlers(
         contentType: (args.contentType as MockInboxRow["contentType"]) ?? null,
         summary: storedSummary(args.summary),
         ...(role ? { delivery: queued() } : {}),
+        ...(media ? { attachments: [media] } : {}),
       };
       rows.push(row);
       // Answering a message reads it, as the real send does (`mark_answered`).
@@ -1196,7 +1246,9 @@ export function agentTeamInboxHandlers(
     },
     reply_as_human: (args: Record<string, unknown>) => {
       const text = String(args.text ?? "");
-      if (!text.trim()) return { status: "invalid", message: "text must not be blank" };
+      const media = humanMedia(args.media);
+      if (typeof media === "string") return { status: "invalid", message: media };
+      if (!text.trim() && !media) return { status: "invalid", message: "text must not be blank" };
       const parent = find(args);
       if (!parent) return { status: "invalid", message: "unknown message" };
       const messageId = next++;
@@ -1210,10 +1262,28 @@ export function agentTeamInboxHandlers(
         createdAtMs: Date.now(),
         inReplyTo: parent.messageId,
         unread: true,
+        ...(media ? { attachments: [media] } : {}),
       });
       inboxChanged([messageId]);
       return { status: "sent", messageId };
     },
+    // The Inbox pane's GIF search: a query matches titles, ids name candidates.
+    gif_search_page: (args: Record<string, unknown>) => {
+      const query = typeof args.query === "string" ? args.query.trim().toLowerCase() : null;
+      const ids = Array.isArray(args.ids) ? args.ids.map(String) : null;
+      if ((query === null) === (ids === null) || query === "") {
+        return { status: "error", error: "badQuery", message: "Pass a search or GIF ids." };
+      }
+      const limit = typeof args.limit === "number" ? args.limit : 10;
+      const candidates = MOCK_GIFS.filter((g) =>
+        ids ? ids.includes(g.id) : g.title.toLowerCase().includes(query!) || query === "gif",
+      ).slice(0, limit);
+      return { status: "ok", provider: "giphy", candidates };
+    },
+    gif_picked: (args: Record<string, unknown>) =>
+      MOCK_GIFS.some((g) => g.id === args.id) && args.provider === "giphy"
+        ? { status: "ok" }
+        : { status: "error", error: "badQuery", message: "unknown GIF" },
     send_role_message_cmd: (args: Record<string, unknown>) => {
       const text = String(args.text ?? "");
       if (!text.trim()) return { status: "invalid", message: "text must not be blank" };
