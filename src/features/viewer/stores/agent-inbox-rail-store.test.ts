@@ -6,9 +6,11 @@ import {
   closeAgentInboxRail,
   closeAgentInboxRailToTerminal,
   clearOpenedAsAgent,
+  flipAgentView,
   forgetAgentInboxRail,
   markOpenedAsAgent,
   openAgentInboxRail,
+  showAgentChat,
   useAgentInboxRailStore,
 } from "./agent-inbox-rail-store";
 
@@ -63,6 +65,44 @@ describe("agent inbox rail store", () => {
     expect(useAgentInboxRailStore.getState().bySession[SID]).toEqual({
       composeRequest: 1,
       shown: false,
+    });
+  });
+
+  it("open shows a hidden chat again, even with no new compose request", () => {
+    openAgentInboxRail(SID);
+    closeAgentInboxRail(SID);
+    showAgentChat(SID, "keep");
+    expect(useAgentInboxRailStore.getState().bySession[SID]).toEqual({
+      composeRequest: 0,
+      shown: true,
+    });
+  });
+
+  it("the group chat shortcut shows a hidden chat", () => {
+    openAgentInboxRail(SID);
+    closeAgentInboxRail(SID);
+    useAgentInboxRailStore.getState().openGroup(SID);
+    expect(useAgentInboxRailStore.getState().bySession[SID]).toMatchObject({
+      shown: true,
+      groupRequest: 1,
+    });
+  });
+
+  it("the flip hides a shown chat and shows a hidden one, asking for the composer", () => {
+    flipAgentView(SID);
+    expect(useAgentInboxRailStore.getState().bySession[SID]).toEqual({
+      composeRequest: 1,
+      shown: true,
+    });
+    flipAgentView(SID);
+    expect(useAgentInboxRailStore.getState().bySession[SID]).toEqual({
+      composeRequest: 1,
+      shown: false,
+    });
+    flipAgentView(SID);
+    expect(useAgentInboxRailStore.getState().bySession[SID]).toEqual({
+      composeRequest: 2,
+      shown: true,
     });
   });
 
