@@ -9,11 +9,13 @@ use serde_json::json;
 
 use super::tests::{alice, draft, save, team_content, write, ORG, TEAM};
 use super::*;
-use crate::agents::guardrails::{RefusalKind, GUARDRAILS_FILE};
+use crate::agents::guardrails::{RefusalKind, GUARDRAILS_FILE, GUARDRAIL_TIER_ACTION};
 use crate::agents::launch_check::LaunchWarningCode;
 use crate::agents::manifest::{GeneratedTarget, ManifestErrorCode};
 use crate::agents::manifest_resolve::ContextRoot;
-use crate::agents::model::{ClaudePermissions, Permissions};
+use crate::agents::model::{
+    ClaudePermissions, HermesPermissions, McpAccess, OpenCodePermissions, Permissions,
+};
 use crate::context_repo::path_to_org_root;
 use crate::routines::PersonalOwner;
 use codesense_pty_core::agent_cli::AgentCli;
@@ -200,6 +202,144 @@ fn guardrails_claude_deny() {
     assert!(allow.as_array().unwrap().contains(&json!("Bash(rm -rf:*)")));
     assert!(resolved.launch_admission.allowed);
     assert!(resolved.manifest.errors.is_empty());
+}
+
+/// `agent` with no startup files, context or MCP servers, which the fixture has only for Claude.
+fn bare(agent: Agent) -> Agent {
+    Agent {
+        startup: Vec::new(),
+        context: Some(Vec::new()),
+        mcp: McpAccess::default(),
+        ..agent
+    }
+}
+
+/// `agent` resolved as a draft placed in the team, as `agent_preview` resolves it, with no
+/// guardrails error.
+fn preview_in_team(home: &Path, agent: &Agent) -> ResolvedAgent {
+    let resolved = preview_agent(
+        home,
+        &alice(),
+        agent,
+        &Placement::Team {
+            org: ORG.into(),
+            team: TEAM.into(),
+        },
+        ResolveOptions::default(),
+    )
+    .unwrap();
+    assert!(
+        !resolved
+            .manifest
+            .errors
+            .iter()
+            .any(|e| e.code == ManifestErrorCode::Guardrails),
+        "{:?}",
+        resolved.manifest.errors
+    );
+    resolved
+}
+
+#[test]
+fn guardrails_opencode_deny() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    guarded_org(
+        home,
+        &[(
+            PARENT,
+            "permissions:\n  opencode:\n    deny: ['github_*', bash]\n",
+        )],
+    );
+    let agent = Agent {
+        permissions: Some(Permissions {
+            opencode: Some(OpenCodePermissions {
+                permission: [
+                    ("github_create_issue", "allow"),
+                    ("bash", "allow"),
+                    ("edit", "allow"),
+                ]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+                ..OpenCodePermissions::default()
+            }),
+            ..Permissions::default()
+        }),
+        ..bare(draft("open", AgentCli::OpenCode))
+    };
+    let resolved = preview_in_team(home, &agent);
+    let rules = launch_settings(&resolved)["permissions"]
+        .as_array()
+        .unwrap();
+    // OpenCode applies the last rule that matches an action.
+    let effect = |action: &str| {
+        rules
+            .iter()
+            .filter(|rule| {
+                let pattern = rule["action"].as_str().unwrap();
+                pattern == "*"
+                    || pattern == action
+                    || pattern
+                        .strip_suffix('*')
+                        .is_some_and(|prefix| action.starts_with(prefix))
+            })
+            .last()
+            .map(|rule| rule["effect"].as_str().unwrap().to_string())
+    };
+    // `bash` is OpenCode's `shell` action on the wire.
+    assert_eq!(effect("github_create_issue").as_deref(), Some("deny"));
+    assert_eq!(effect("shell").as_deref(), Some("deny"));
+    assert_eq!(effect("edit").as_deref(), Some("allow"));
+    let markers = rules
+        .iter()
+        .filter(|rule| rule["action"] == GUARDRAIL_TIER_ACTION)
+        .count();
+    assert_eq!(markers, 1, "{rules:?}");
+    let report = resolved.manifest.guardrails.unwrap();
+    assert_eq!(report.denied_by, vec![guardrails_path(PARENT)]);
+    assert_eq!(
+        report
+            .refused
+            .iter()
+            .map(|refusal| refusal.item.as_str())
+            .collect::<Vec<_>>(),
+        ["bash"],
+        "only the same string as an org deny is reported"
+    );
+}
+
+#[test]
+fn guardrails_hermes_deny() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    guarded_org(
+        home,
+        &[(
+            PARENT,
+            "permissions:\n  hermes:\n    deny: ['^terminal$']\n",
+        )],
+    );
+    let agent = Agent {
+        permissions: Some(Permissions {
+            hermes: Some(HermesPermissions {
+                approval: Some("yolo".into()),
+                ..HermesPermissions::default()
+            }),
+            ..Permissions::default()
+        }),
+        ..bare(draft("herm", AgentCli::Hermes))
+    };
+    let resolved = preview_in_team(home, &agent);
+    let hooks = launch_settings(&resolved)["hooks"]["pre_tool_call"]
+        .as_array()
+        .unwrap();
+    let block = crate::agents::adapter::hermes::block_hook("^terminal$");
+    assert_eq!(hooks.iter().filter(|hook| **hook == block).count(), 1);
+    assert_eq!(
+        resolved.manifest.guardrails.unwrap().denied_by,
+        vec![guardrails_path(PARENT)]
+    );
 }
 
 #[test]
