@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { projectedSession } from "./agent-list-projection";
-import { hasTurnAfterCompletion } from "@/shared/lib/agent-state";
+import { hasTurnAfterCompletion, isAskOnlyNeed } from "@/shared/lib/agent-state";
 import type { ManagedSessionState } from "@/shared/lib/managed-session";
 import { isTerminalManagedState } from "@/shared/lib/managed-session";
 import type {
@@ -119,8 +119,9 @@ export function selectCliNeedsYouKind(
     return "question";
   // An ask_user is the chat's, but a permission prompt open beside it is still the CLI's. The
   // ask_user's own MCP signal also sets needs-permission, so that state counts only when the
-  // record's last Tier-1 signal is not that signal.
-  if (state.crashes?.bySession[sessionId]?.t1?.signal.kind === "ask-user") return null;
+  // record holds more than the ask: a hook approval raised before or after it.
+  const rec = state.crashes?.bySession[sessionId];
+  if (rec !== undefined && isAskOnlyNeed(rec)) return null;
   return selectSessionAiStatus(state, state.agentDots, sessionId) === "needs-permission"
     ? "permission"
     : null;

@@ -395,6 +395,12 @@ export interface SessionAgentRecord {
   openTools?: number;
   t1: Tier1Input | null;
   t2: Tier2Input | null;
+  /**
+   * A hook approval (`PermissionRequest`) is still open beneath an `ask_user` raised after it. The
+   * ask's own signal took `t1`, so the approval waits here; `ask-resolved` puts it back in `t1`.
+   * Any other Tier-1 input, or a process exit, drops it.
+   */
+  approvalBeneathAsk?: true;
   state: AgentState;
   /**
    * The agent process established in this session (the liveness probe's
@@ -432,6 +438,25 @@ export type SessionAgentInput =
  */
 export function hookClearsPermission(event: ClaudeHookEvent): boolean {
   return event !== "PreToolUse";
+}
+
+/** True while a hook approval is open in the record, in `t1` or beneath an ask. */
+function approvalOpen(rec: SessionAgentRecord): boolean {
+  if (rec.approvalBeneathAsk === true) return true;
+  const signal = rec.t1?.signal;
+  return (
+    rec.state === "needs-permission" &&
+    signal?.kind === "claude-hook" &&
+    signal.event === "PermissionRequest"
+  );
+}
+
+/**
+ * True when the record's Tier-1 need is an `ask_user` alone: its `needs-permission` is the ask's,
+ * which the chat answers, with no hook approval open beside it for the CLI.
+ */
+export function isAskOnlyNeed(rec: SessionAgentRecord): boolean {
+  return rec.t1?.signal.kind === "ask-user" && rec.approvalBeneathAsk !== true;
 }
 
 /** True while the record's turn is open (the agent process should be running). */
@@ -626,14 +651,32 @@ export function advanceSessionAgent(
   ) {
     return prev;
   }
-  const t1 = input.tier === 1 ? { signal: input.signal, seq } : (prev?.t1 ?? null);
+  let t1: Tier1Input | null = input.tier === 1 ? { signal: input.signal, seq } : (prev?.t1 ?? null);
+  // An ask raised over an open approval leaves it open beneath; the ask closing puts it back.
+  let approvalBeneathAsk =
+    input.tier === 2 ? input.signal.kind === "alive" && prev?.approvalBeneathAsk === true : false;
+  if (input.tier === 1 && prev != null && approvalOpen(prev)) {
+    if (input.signal.kind === "ask-user") approvalBeneathAsk = true;
+    if (input.signal.kind === "ask-resolved")
+      t1 = { signal: { kind: "claude-hook", event: "PermissionRequest" }, seq };
+  }
   const t2 =
     input.tier === 2
       ? { signal: stampExit(prev, input.signal, input.source), seq }
       : (prev?.t2 ?? null);
   let state = resolveAgentState(t1, t2, null, prev?.state);
   if (state === "thinking" && openTools > 0) state = "working";
-  return { ...prev, t1, t2, state, openTools, agent: nextAgent(prev, input) };
+  const next: SessionAgentRecord = {
+    ...prev,
+    t1,
+    t2,
+    state,
+    openTools,
+    agent: nextAgent(prev, input),
+  };
+  if (approvalBeneathAsk) next.approvalBeneathAsk = true;
+  else delete next.approvalBeneathAsk;
+  return next;
 }
 
 // ---------------------------------------------------------------------------
