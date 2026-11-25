@@ -10373,7 +10373,7 @@ export type GifPickedResult =
   | { status: "error"; error: "badQuery"; message: string };
 /** The person picked GIF `id` in the Inbox pane's picker: the host registers the pick with
  *  the provider in the background. */
-export const gifPicked = (provider: "giphy", id: string) =>
+export const gifPicked = (provider: GifProvider, id: string) =>
   invoke<GifPickedResult>("gif_picked", { provider, id });
 
 export const dashboardInventory = (folder?: string, localOnly = false) =>

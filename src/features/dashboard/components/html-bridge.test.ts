@@ -2626,10 +2626,15 @@ describe("agents read model verbs", () => {
       runBridgeCommand("gifPicked", { provider: "giphy", id: "g1" }, DOC),
     ).resolves.toEqual({ status: "ok" });
     expect(mockGifPicked).toHaveBeenLastCalledWith("giphy", "g1");
-    for (const bad of [{}, { provider: "other", id: "g1" }, { provider: "giphy", id: "" }]) {
+    await expect(
+      runBridgeCommand("gifPicked", { provider: "klipy", id: "ship-it-77" }, DOC),
+    ).resolves.toEqual({ status: "ok" });
+    expect(mockGifPicked).toHaveBeenLastCalledWith("klipy", "ship-it-77");
+    const others = [{}, { provider: "other", id: "g1" }, { provider: "KLIPY", id: "g1" }];
+    for (const bad of [...others, { provider: "giphy", id: "" }]) {
       await expect(runBridgeCommand("gifPicked", bad, DOC)).rejects.toThrow(/gifPicked/);
     }
-    expect(mockGifPicked).toHaveBeenCalledTimes(1);
+    expect(mockGifPicked).toHaveBeenCalledTimes(2);
 
     mockReplyAsHuman.mockResolvedValue({ status: "sent", messageId: 10 });
     await runBridgeCommand("replyAsHuman", { messageId: 9, text: "yes" }, DOC);
