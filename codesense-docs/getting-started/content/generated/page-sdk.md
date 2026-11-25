@@ -902,7 +902,7 @@ Class: read; default grant: repo:read; MCP twin: Host operation bound to the ren
 ```ts
 gifPicked(args: {
       id: string;
-      provider: "giphy";
+      provider: "giphy" | "klipy";
       [key: string]: unknown;
     }): Promise<{
       status: "ok";
@@ -936,13 +936,13 @@ gifSearch(args?: {
         id: string;
         previewData?: string;
         previewUrl: string;
-        provider: "giphy";
+        provider: "giphy" | "klipy";
         title: string;
         url: string;
         width: number;
         [key: string]: unknown;
       }>;
-      provider: "giphy";
+      provider: "giphy" | "klipy";
       status: "ok";
       [key: string]: unknown;
     } | {

@@ -2034,7 +2034,7 @@
     {
       "name": "gifPicked",
       "owner": "VerbMethods",
-      "signature": "gifPicked(args: {\n      id: string;\n      provider: \"giphy\";\n      [key: string]: unknown;\n    }): Promise<{\n      status: \"ok\";\n      [key: string]: unknown;\n    } | {\n      error: \"badQuery\";\n      message: string;\n      status: \"error\";\n      [key: string]: unknown;\n    }>;",
+      "signature": "gifPicked(args: {\n      id: string;\n      provider: \"giphy\" | \"klipy\";\n      [key: string]: unknown;\n    }): Promise<{\n      status: \"ok\";\n      [key: string]: unknown;\n    } | {\n      error: \"badQuery\";\n      message: string;\n      status: \"error\";\n      [key: string]: unknown;\n    }>;",
       "description": "metadata · inbox:write",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "class": "metadata",
@@ -2050,7 +2050,8 @@
           },
           "provider": {
             "enum": [
-              "giphy"
+              "giphy",
+              "klipy"
             ]
           }
         },
@@ -2101,7 +2102,7 @@
     {
       "name": "gifSearch",
       "owner": "VerbMethods",
-      "signature": "gifSearch(args?: {\n      ids?: string[];\n      limit?: number;\n      org?: string;\n      query?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      candidates: Array<{\n        autoLoads: boolean;\n        height: number;\n        id: string;\n        previewData?: string;\n        previewUrl: string;\n        provider: \"giphy\";\n        title: string;\n        url: string;\n        width: number;\n        [key: string]: unknown;\n      }>;\n      provider: \"giphy\";\n      status: \"ok\";\n      [key: string]: unknown;\n    } | {\n      error: \"noProvider\" | \"keychainUnavailable\" | \"invalidKey\" | \"rateLimited\" | \"providerUnavailable\" | \"badQuery\" | \"mediaOff\";\n      message: string;\n      retryAfter?: number;\n      status: \"error\";\n      [key: string]: unknown;\n    }>;",
+      "signature": "gifSearch(args?: {\n      ids?: string[];\n      limit?: number;\n      org?: string;\n      query?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      candidates: Array<{\n        autoLoads: boolean;\n        height: number;\n        id: string;\n        previewData?: string;\n        previewUrl: string;\n        provider: \"giphy\" | \"klipy\";\n        title: string;\n        url: string;\n        width: number;\n        [key: string]: unknown;\n      }>;\n      provider: \"giphy\" | \"klipy\";\n      status: \"ok\";\n      [key: string]: unknown;\n    } | {\n      error: \"noProvider\" | \"keychainUnavailable\" | \"invalidKey\" | \"rateLimited\" | \"providerUnavailable\" | \"badQuery\" | \"mediaOff\";\n      message: string;\n      retryAfter?: number;\n      status: \"error\";\n      [key: string]: unknown;\n    }>;",
       "description": "read · inbox:write",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "class": "read",
@@ -2165,7 +2166,8 @@
                     },
                     "provider": {
                       "enum": [
-                        "giphy"
+                        "giphy",
+                        "klipy"
                       ]
                     },
                     "title": {
@@ -2195,7 +2197,8 @@
               },
               "provider": {
                 "enum": [
-                  "giphy"
+                  "giphy",
+                  "klipy"
                 ]
               },
               "status": {
@@ -11196,7 +11199,8 @@
           },
           "provider": {
             "enum": [
-              "giphy"
+              "giphy",
+              "klipy"
             ]
           }
         },
@@ -11309,7 +11313,8 @@
                     },
                     "provider": {
                       "enum": [
-                        "giphy"
+                        "giphy",
+                        "klipy"
                       ]
                     },
                     "title": {
@@ -11339,7 +11344,8 @@
               },
               "provider": {
                 "enum": [
-                  "giphy"
+                  "giphy",
+                  "klipy"
                 ]
               },
               "status": {
@@ -22202,7 +22208,7 @@
     {
       "verb": "gifPicked",
       "tier": "metadata",
-      "args": "{\"additionalProperties\":true,\"properties\":{\"id\":{\"pattern\":\"^[A-Za-z0-9_-]{1,128}$\",\"type\":\"string\"},\"provider\":{\"enum\":[\"giphy\"]}},\"required\":[\"provider\",\"id\"],\"type\":\"object\"}",
+      "args": "{\"additionalProperties\":true,\"properties\":{\"id\":{\"pattern\":\"^[A-Za-z0-9_-]{1,128}$\",\"type\":\"string\"},\"provider\":{\"enum\":[\"giphy\",\"klipy\"]}},\"required\":[\"provider\",\"id\"],\"type\":\"object\"}",
       "description": "metadata · inbox:write",
       "denyExample": "denied: grant",
       "result": {
@@ -22273,7 +22279,8 @@
                     },
                     "provider": {
                       "enum": [
-                        "giphy"
+                        "giphy",
+                        "klipy"
                       ]
                     },
                     "title": {
@@ -22303,7 +22310,8 @@
               },
               "provider": {
                 "enum": [
-                  "giphy"
+                  "giphy",
+                  "klipy"
                 ]
               },
               "status": {
@@ -25574,8 +25582,8 @@
     }
   ],
   "sources": {
-    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "f4fead9b629cdeda0e530907d5e32047f376a1df38c8210b3730f5c5130bbe70",
-    "src-tauri/src/verbs/registry.generated.json": "65c856e8e02316aaf38b523ed774c5691530e40d4499b73140e4084d919b5a9f",
+    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "1354cc633b5b076c553ba6e3690d5dfbed16533515fcacdd69068e30a7c18fc3",
+    "src-tauri/src/verbs/registry.generated.json": "a127a419054e6b27a27e2a2ccb735295fd8418c9ef5c2c115f8684238df0edcf",
     "src-tauri/src/verbs/registry.rs": "499877204d4ca8d40953b934024355ba150e534386e60f086e090159649ee6b0",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29",

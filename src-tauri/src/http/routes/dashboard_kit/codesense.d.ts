@@ -1357,7 +1357,7 @@ declare namespace CodesenseSdk {
     /** metadata · inbox:write */
     gifPicked(args: {
       id: string;
-      provider: "giphy";
+      provider: "giphy" | "klipy";
       [key: string]: unknown;
     }): Promise<{
       status: "ok";
@@ -1383,13 +1383,13 @@ declare namespace CodesenseSdk {
         id: string;
         previewData?: string;
         previewUrl: string;
-        provider: "giphy";
+        provider: "giphy" | "klipy";
         title: string;
         url: string;
         width: number;
         [key: string]: unknown;
       }>;
-      provider: "giphy";
+      provider: "giphy" | "klipy";
       status: "ok";
       [key: string]: unknown;
     } | {

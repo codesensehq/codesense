@@ -852,7 +852,8 @@
         },
         "provider": {
           "enum": [
-            "giphy"
+            "giphy",
+            "klipy"
           ]
         }
       },
@@ -965,7 +966,8 @@
                   },
                   "provider": {
                     "enum": [
-                      "giphy"
+                      "giphy",
+                      "klipy"
                     ]
                   },
                   "title": {
@@ -995,7 +997,8 @@
             },
             "provider": {
               "enum": [
-                "giphy"
+                "giphy",
+                "klipy"
               ]
             },
             "status": {
