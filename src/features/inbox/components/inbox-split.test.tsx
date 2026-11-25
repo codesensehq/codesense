@@ -246,4 +246,61 @@ describe("InboxSplit", () => {
     expect(await screen.findByTestId("chat-overlay")).toBeVisible();
     expect(mounts).toHaveBeenCalledTimes(1);
   });
+
+  describe("a CLI started by hand in the tab", () => {
+    const hooked = (cli: string | null, state: "working" | "idle" | "done") =>
+      useAgentStateStore.setState((s) => ({
+        bySession: { ...s.bySession, [TAB.sessionId]: { t1: null, t2: null, state, agent: cli } },
+      }));
+
+    it.each(AGENT_RUNTIMES)(
+      "%s covers the tab with its chat at its first idle, without remounting the terminal",
+      async (cli) => {
+        useAgentStateStore.setState({ processAgentBySession: {} });
+        render(
+          <InboxSplit tab={TAB} teamKey="o:t">
+            <Terminal />
+          </InboxSplit>,
+        );
+        act(() => hooked(cli, "working"));
+        expect(screen.queryByTestId("chat-overlay")).toBeNull();
+        act(() => hooked(cli, "idle"));
+        expect(await screen.findByTestId("chat-overlay")).toBeVisible();
+        expect(screen.getByTestId("terminal").parentElement).toHaveAttribute("inert");
+        // The cover asks nothing of the composer: it never takes the keyboard.
+        expect(useAgentInboxRailStore.getState().bySession[TAB.sessionId]?.composeRequest).toBe(0);
+        expect(mounts).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it.each(AGENT_RUNTIMES)("%s seen only in the process tree stays on the CLI", (cli) => {
+      useAgentStateStore.getState().setProcessAgent(TAB.sessionId, cli);
+      render(
+        <InboxSplit tab={TAB} teamKey="o:t">
+          <Terminal />
+        </InboxSplit>,
+      );
+      expect(screen.queryByTestId("chat-overlay")).toBeNull();
+      expect(screen.getByTestId("terminal").parentElement).not.toHaveAttribute("inert");
+    });
+
+    it("leaves a plain shell once the CLI exits, even with the flip to the CLI held", async () => {
+      useAgentStateStore.setState({ processAgentBySession: {} });
+      render(
+        <InboxSplit tab={TAB} teamKey="o:t">
+          <Terminal />
+        </InboxSplit>,
+      );
+      act(() => hooked("claude", "idle"));
+      await screen.findByTestId("chat-overlay");
+      act(() => closeAgentInboxRail(TAB.sessionId));
+      act(() => hooked(null, "done"));
+      expect(useAgentInboxRailStore.getState().bySession[TAB.sessionId]?.shown).toBe(false);
+      expect(screen.queryByTestId("chat-overlay")).toBeNull();
+      expect(screen.getByTestId("terminal").parentElement).not.toHaveAttribute("inert");
+      act(() => hooked("claude", "idle"));
+      expect(screen.getByTestId("chat-overlay")).not.toBeVisible();
+      expect(mounts).toHaveBeenCalledTimes(1);
+    });
+  });
 });

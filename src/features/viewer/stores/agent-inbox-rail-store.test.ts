@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import { AGENT_RUNTIMES, REMOTE_LAUNCH_CLIS } from "@/shared/lib/agent-runtimes";
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
 import { beforeEach, describe, expect, it } from "vitest";
 
@@ -223,5 +224,114 @@ describe("opened as an agent", () => {
   it("a hand-started agent gets no mark and so no cover", () => {
     becomeAgent();
     expect(open()).toBeUndefined();
+  });
+});
+
+describe("a CLI started by hand", () => {
+  const HAND = "sid-hand";
+  const entry = () => useAgentInboxRailStore.getState().bySession[HAND];
+  /** The CLI's hooks or signals say it runs, in `state`. */
+  const hooked = (cli: string, state: "working" | "thinking" | "idle") =>
+    useAgentStateStore.setState((s) => ({
+      bySession: { ...s.bySession, [HAND]: { t1: null, t2: null, state, agent: cli } },
+    }));
+  /** The CLI ends; the tab's shell stays. */
+  const cliExits = () =>
+    useAgentStateStore.setState((s) => ({
+      bySession: { ...s.bySession, [HAND]: { t1: null, t2: null, state: "done", agent: null } },
+      processAgentBySession: {},
+    }));
+
+  beforeEach(() => useAgentStateStore.setState({ launchBySession: {} }));
+
+  it.each(AGENT_RUNTIMES)("%s is covered at its first idle, and not before", (cli) => {
+    hooked(cli, "working");
+    expect(entry()).toBeUndefined();
+    hooked(cli, "idle");
+    expect(entry()).toEqual({ composeRequest: 0, shown: true });
+  });
+
+  it.each(AGENT_RUNTIMES)("%s seen only in the process tree keeps the CLI", (cli) => {
+    useAgentStateStore.getState().setProcessAgent(HAND, cli);
+    expect(entry()).toBeUndefined();
+    expect(useAgentInboxRailStore.getState().pending[HAND]).toBeUndefined();
+  });
+
+  it.each(REMOTE_LAUNCH_CLIS)(
+    "a remote %s, known from its host's activity, is covered at its first idle",
+    (cli) => {
+      const snapshot = (state: "working" | "idle", revision: number) =>
+        useAgentStateStore.getState().recordActivity(
+          {
+            session: HAND,
+            identity: { hostBootId: "box", sessionIncarnation: "shell", invocationId: "cli" },
+            revision,
+            turnGeneration: 0,
+            provider: cli as never,
+            state,
+            observed: true,
+            limited: false,
+            exit: null,
+            asks: [],
+          },
+          0,
+        );
+      snapshot("working", 1);
+      expect(entry()).toBeUndefined();
+      snapshot("idle", 2);
+      expect(entry()).toEqual({ composeRequest: 0, shown: true });
+    },
+  );
+
+  it("a launched agent is not one: its tab's launch decides", () => {
+    useAgentStateStore.getState().recordLaunch(HAND, { line: "claude", agent: "claude" } as never);
+    hooked("claude", "idle");
+    expect(entry()).toBeUndefined();
+  });
+
+  it("an exit drops a shown chat, so the next CLI waits for its own Ready", () => {
+    hooked("claude", "idle");
+    cliExits();
+    expect(entry()).toBeUndefined();
+    hooked("codex", "working");
+    expect(entry()).toBeUndefined();
+    hooked("codex", "idle");
+    expect(entry()).toEqual({ composeRequest: 0, shown: true });
+  });
+
+  it("the person's flip to the CLI holds through an exit and a second CLI, until the tab goes", () => {
+    hooked("claude", "idle");
+    closeAgentInboxRail(HAND);
+    cliExits();
+    expect(entry()).toEqual({ composeRequest: 0, shown: false });
+    hooked("claude", "working");
+    hooked("claude", "idle");
+    expect(entry()).toEqual({ composeRequest: 0, shown: false });
+    forgetAgentInboxRail(HAND);
+    expect(entry()).toBeUndefined();
+    hooked("claude", "thinking");
+    hooked("claude", "idle");
+    expect(entry()).toEqual({ composeRequest: 0, shown: true });
+  });
+
+  it("a flip to the CLI before Ready is the person's choice too", () => {
+    hooked("claude", "working");
+    closeAgentInboxRail(HAND);
+    expect(entry()).toEqual({ composeRequest: 0, shown: false });
+    hooked("claude", "idle");
+    expect(entry()?.shown).toBe(false);
+  });
+
+  it("closing a launched tab's chat before its agent runs keeps that choice as a hidden entry", () => {
+    markOpenedAsAgent(HAND);
+    closeAgentInboxRail(HAND);
+    expect(entry()).toEqual({ composeRequest: 0, shown: false });
+    expect(useAgentInboxRailStore.getState().pending[HAND]).toBeUndefined();
+  });
+
+  it("a plain shell gets nothing, and closing it records nothing", () => {
+    useAgentStateStore.getState().setProcessAgent(HAND, null);
+    closeAgentInboxRail(HAND);
+    expect(entry()).toBeUndefined();
   });
 });
