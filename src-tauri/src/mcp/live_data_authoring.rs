@@ -2012,6 +2012,17 @@ mod tests {
         assert!(updates.contains("inbox({kind:'update'})"), "{updates}");
     }
 
+    /// A dashboard reads a message's story from the contract: the `story` filter and the row's
+    /// `storyId`, listed just before `kind`.
+    #[test]
+    fn contract_teaches_the_story_id() {
+        let c = local_contract_payload();
+        let inbox = serde_json::to_string(&c["sdk"]["agents_and_inbox"]["inbox"]).unwrap();
+        for needle in ["story?", "storyId, kind}"] {
+            assert!(inbox.contains(needle), "inbox teaches `{needle}`");
+        }
+    }
+
     /// The contract teaches the terminal paste: its read, its nudge and sendPrompt's active mode.
     #[test]
     fn contract_teaches_the_terminal_paste() {

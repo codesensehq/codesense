@@ -20782,6 +20782,76 @@ mod message_kind_param_tests {
 }
 
 #[cfg(test)]
+mod story_id_param_tests {
+    use super::{InboxListParams, ReplyParams, SendMessageParams, SendRoleMessageParams};
+    use serde_json::json;
+
+    #[test]
+    fn story_id_params_read_story_id_and_its_snake_case_alias() {
+        let send: SendMessageParams = serde_json::from_value(
+            json!({"to": "human", "text": "x", "storyId": "DEMO-5"}),
+        )
+        .unwrap();
+        assert_eq!(send.story_id.as_deref(), Some("DEMO-5"));
+        let send: SendMessageParams = serde_json::from_value(
+            json!({"to": "human", "text": "x", "story_id": "DEMO-6"}),
+        )
+        .unwrap();
+        assert_eq!(send.story_id.as_deref(), Some("DEMO-6"));
+        let plain: SendMessageParams =
+            serde_json::from_value(json!({"to": "human", "text": "x"})).unwrap();
+        assert_eq!(plain.story_id, None);
+        let reply: ReplyParams = serde_json::from_value(
+            json!({"messageId": 7, "text": "done", "storyId": "DEMO-5"}),
+        )
+        .unwrap();
+        assert_eq!(reply.story_id.as_deref(), Some("DEMO-5"));
+        let role: SendRoleMessageParams = serde_json::from_value(json!({
+            "team": {"org": "o", "team": "t"},
+            "role": "triage",
+            "text": "x",
+            "storyId": "DEMO-5"
+        }))
+        .unwrap();
+        assert_eq!(role.story_id.as_deref(), Some("DEMO-5"));
+        let list: InboxListParams = serde_json::from_value(json!({"story": "DEMO-5"})).unwrap();
+        assert_eq!(list.query.story.as_deref(), Some("DEMO-5"));
+    }
+
+    #[test]
+    fn story_id_the_schemas_offer_story_id_and_the_list_offers_story() {
+        for schema in [
+            serde_json::to_string(&schemars::schema_for!(SendMessageParams)).unwrap(),
+            serde_json::to_string(&schemars::schema_for!(ReplyParams)).unwrap(),
+            serde_json::to_string(&schemars::schema_for!(SendRoleMessageParams)).unwrap(),
+        ] {
+            assert!(schema.contains("\"storyId\""), "{schema}");
+        }
+        let list = serde_json::to_string(&schemars::schema_for!(InboxListParams)).unwrap();
+        assert!(list.contains("\"story\""), "{list}");
+    }
+
+    #[test]
+    fn story_id_the_tool_descriptions_name_it() {
+        for tool in ["send_message", "send_role_message", "reply", "read_messages"] {
+            let description = super::tests::tool_description(tool).unwrap();
+            assert!(description.contains("storyId"), "{tool}: {description}");
+        }
+        let reply = super::tests::tool_description("reply").unwrap();
+        assert!(reply.contains("inherit"), "{reply}");
+        let list = super::tests::tool_description("inbox_list").unwrap();
+        assert!(list.contains("{story}"), "{list}");
+        let role = super::tests::tool_description("send_role_message").unwrap();
+        let hash = role
+            .split("payload hash includes")
+            .nth(1)
+            .and_then(|rest| rest.split(')').next())
+            .unwrap();
+        assert!(!hash.contains("story"), "story is not in the requestId hash: {hash}");
+    }
+}
+
+#[cfg(test)]
 mod own_session_tests {
     use super::own_session;
 
