@@ -107,6 +107,20 @@ pub struct DesktopCli {
     /// CodeSense reads there while managed settings send its usage logs elsewhere; `None` for
     /// any other.
     pub session_log_usage: Option<fn(&Path) -> Vec<UsageEvent>>,
+    /// How the CLI enforces the org's guardrail denies ([`super::guardrails`]); `None` for
+    /// a CLI with no rule model, whose launch is warned instead.
+    pub guardrails: Option<GuardrailPort>,
+}
+
+/// How a CLI enforces the org's guardrail denies in its generated launch settings.
+#[derive(Debug, Clone, Copy)]
+pub struct GuardrailPort {
+    /// Adds the denied `rules`, in the CLI's own syntax, to the launch settings `content`,
+    /// so no rule the agent or a layer holds can allow them again.
+    pub deny: fn(content: &mut serde_json::Value, rules: &[&str]),
+    /// The agent's own rules that allow or ask, exactly as written, for the report of the
+    /// ones an org deny refuses.
+    pub tried: fn(&Agent) -> Vec<(super::guardrails::RefusalKind, String)>,
 }
 
 pub type ModelEndpointResolver = fn(
@@ -179,7 +193,15 @@ pub fn launch_admission(
             Err(reason) => (true, None, Some(reason)),
         },
     };
-    let reason = reason.or_else(|| initial_prompt_refusal(runtime, prompt));
+    // The org's guardrails could not be read: launching without their denies would widen
+    // it, so the launch is refused with the loader's error.
+    let guardrails = Iterator::find(&mut manifest.errors.iter(), |e| {
+        e.code == super::manifest::ManifestErrorCode::Guardrails
+    })
+    .map(|e| e.message.clone());
+    let reason = guardrails
+        .or(reason)
+        .or_else(|| initial_prompt_refusal(runtime, prompt));
     LaunchAdmission {
         model_arguments: desktop.model_endpoint.map(|port| (port.model_arguments)(args)),
         permission_display: desktop.permission_display.map(|describe| {

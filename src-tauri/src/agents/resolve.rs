@@ -54,6 +54,10 @@ pub struct ResolveOptions {
     /// The `(org, team)` the launch runs against. `None` resolves against the
     /// agent's own team (a personal agent: the personal space alone).
     pub target_team: Option<(String, String)>,
+    /// The org a launch with no target team runs in (a starter launched in an org's
+    /// workspace that has no team), whose guardrails it runs under. A launch whose target
+    /// names an org runs under that org's instead.
+    pub launch_org: Option<String>,
 }
 
 /// Where this user's account choice for the agent came from.
@@ -111,6 +115,9 @@ pub struct ResolvedAgent {
     /// rollout: named local product launches apply it; other paths retain prior behavior.
     pub manifest_applies_at_launch: bool,
     pub archived: bool,
+    /// The org guardrails the launch runs under, so a launch that regenerates the
+    /// permission entries (a mode override) narrows them the same way.
+    pub guardrails: Option<std::sync::Arc<super::guardrails::Guardrails>>,
 }
 
 impl ResolvedAgent {
@@ -293,8 +300,27 @@ fn compose_with_reader(
             .map(|(org, team)| ManifestTarget::team(org, team)),
     );
 
-    let generated = permissions::generate(agent, agent.runtime, agent.launch);
+    // A target with no org (a starter with no target team) runs under the launch's org.
+    let launch_org = options
+        .launch_org
+        .filter(|org| str::is_empty(&target.org) && !str::is_empty(org))
+        .map(|org| ManifestTarget::team(org, ""));
+    let guardrails_target = Option::as_ref(&launch_org).unwrap_or(&target);
+    let (guardrails, guardrails_error) =
+        match roots::org_guardrails(home, principal, guardrails_target) {
+            Ok(guardrails) => (guardrails, None),
+            Err(message) => (None, Some(message)),
+        };
+    let generated =
+        permissions::generate(agent, agent.runtime, agent.launch, guardrails.as_deref());
     let mut errors = definition_errors(agent);
+    // An unreadable guardrails file refuses the launch ([`adapter::launch_admission`]):
+    // running without the org's denies would silently widen it.
+    errors.extend(guardrails_error.map(|message| ManifestError {
+        path: None,
+        code: ManifestErrorCode::Guardrails,
+        message,
+    }));
     let dropped_mcp = dropped_mcp_servers(reader, home, principal, agent, &target, descriptor);
     errors.extend(dropped_mcp_errors(agent, &target, descriptor, &dropped_mcp));
     let offered_mcp_servers = offered_servers_with(reader, home, principal, agent.runtime, &target);
@@ -345,6 +371,13 @@ fn compose_with_reader(
     if let Some(listed) = &launch.skill_allowlist {
         permissions::turn_off_unlisted_manifest_skills(&mut manifest, agent.runtime, listed);
     }
+    if let Some(report) = guardrails
+        .as_deref()
+        .and_then(|g| g.report(agent, &reference.key))
+    {
+        manifest.guardrails = Some(report);
+        manifest.manifest_hash = manifest.compute_hash();
+    }
     let provides =
         provides::derive(agent.runtime, &manifest).allowing(launch.skill_allowlist.as_deref());
 
@@ -368,6 +401,7 @@ fn compose_with_reader(
         offered_mcp_servers,
         manifest_applies_at_launch: false,
         archived: agent.is_archived(),
+        guardrails,
     };
     let prompt = Some(agent.default_prompt.as_str()).filter(|p| !p.trim().is_empty());
     resolved.warnings = launch_check::warnings(&resolved, prompt);
@@ -940,3 +974,6 @@ fn present_servers(
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(test)]
+pub(crate) mod guardrails_tests;

@@ -46,6 +46,22 @@ pub(crate) fn org_root(
     path_to_org_root(home, principal, org).map_err(AgentError::InvalidLocation)
 }
 
+/// The org guardrails a launch into `target` runs under, read from `target.org`'s synced
+/// clone and never from the context root a launch chose, so a sparse or edited worktree
+/// can't lift them. A personal agent's target carries its key's org, so private-space and
+/// scratch launches get them too; a target with no org has none.
+pub(crate) fn org_guardrails(
+    home: &Path,
+    principal: &Principal,
+    target: &super::manifest_resolve::ManifestTarget,
+) -> Result<Option<std::sync::Arc<super::guardrails::Guardrails>>, String> {
+    if str::is_empty(&target.org) {
+        return Ok(None);
+    }
+    let root = path_to_org_root(home, principal, &target.org)?;
+    crate::context_repo::inheritance::org_guardrails(&root, &target.org)
+}
+
 /// The `agents/` dir of `principal`'s scratch space for `org`, or `None`
 /// before that space exists.
 pub fn personal_agents_dir(

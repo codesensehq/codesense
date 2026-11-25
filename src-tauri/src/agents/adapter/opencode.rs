@@ -65,7 +65,68 @@ pub(super) fn desktop() -> DesktopCli {
         usage_record,
         managed_settings: &[],
         session_log_usage: None,
+        guardrails: Some(super::GuardrailPort {
+            deny: guardrail_deny,
+            tried: guardrail_tried,
+        }),
     }
+}
+
+/// OpenCode's last matching rule wins, so the org's denies go in a final tier, after the
+/// agent's and the native rules, behind [`GUARDRAIL_TIER_ACTION`]'s marker. The agent's own
+/// rule for a denied key also becomes `deny`: the one rewrite, and it narrows.
+fn guardrail_deny(content: &mut serde_json::Value, rules: &[&str]) {
+    let map: serde_json::Map<String, serde_json::Value> = rules
+        .iter()
+        .map(|key| (ToString::to_string(key), serde_json::json!("deny")))
+        .collect();
+    let native = crate::agents::adapter::native_permission_rules(&serde_json::Value::Object(map));
+    let tier = Option::<&Vec<serde_json::Value>>::cloned(serde_json::Value::as_array(
+        &native["permissions"],
+    ))
+        .unwrap_or_default();
+    let actions: Vec<&str> = tier
+        .iter()
+        .filter_map(|rule| serde_json::Value::as_str(&rule["action"]))
+        .collect();
+    if !serde_json::Value::is_array(&content["permissions"]) {
+        content["permissions"] = serde_json::json!([]);
+    }
+    let Some(own) = serde_json::Value::as_array_mut(&mut content["permissions"]) else {
+        return;
+    };
+    for rule in own.iter_mut().filter_map(serde_json::Value::as_object_mut) {
+        let denied = rule
+            .get("action")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|action| actions.contains(&action));
+        if denied {
+            serde_json::Map::insert(rule, "effect".into(), serde_json::json!("deny"));
+        }
+    }
+    crate::agents::guardrails::append_final_tier(own, tier);
+}
+
+/// Each permission key the agent allows or asks for (any decision but `deny`).
+fn guardrail_tried(
+    agent: &crate::agents::model::Agent,
+) -> Vec<(crate::agents::guardrails::RefusalKind, String)> {
+    use crate::agents::guardrails::RefusalKind;
+    let Some(own) = agent.permissions.as_ref().and_then(|p| p.opencode.as_ref()) else {
+        return Vec::new();
+    };
+    own.permission
+        .iter()
+        .filter(|(_, decision)| **decision != "deny")
+        .map(|(key, decision)| {
+            let kind = if decision == "ask" {
+                RefusalKind::PermissionAsk
+            } else {
+                RefusalKind::PermissionAllow
+            };
+            (kind, key.clone())
+        })
+        .collect()
 }
 
 /// The one definition of an unattended OpenCode run's permission map, read by profile launches
@@ -316,6 +377,11 @@ fn validate_permissions(permissions: &Permissions) -> Result<(), ValidationError
     )?;
     for (pattern, decision) in &permission.permission {
         check_permission(pattern)?;
+        // The marker that starts the org's guardrail tier: an agent naming it could move
+        // the org's denies back among its own rules.
+        if pattern == crate::agents::guardrails::GUARDRAIL_TIER_ACTION {
+            return Err(ValidationError::ReservedPermission(pattern.clone()));
+        }
         if !matches!(decision.as_str(), "allow" | "ask" | "deny") {
             return Err(ValidationError::InvalidPermission(decision.clone()));
         }

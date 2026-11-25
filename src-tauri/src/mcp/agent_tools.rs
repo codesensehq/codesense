@@ -1003,9 +1003,9 @@ fn field_of(e: &ValidationError) -> Option<String> {
         ValidationError::UnknownPermissionKey { runtime, key } => {
             format!("permissions.{runtime}.{key}")
         }
-        ValidationError::InvalidPermission(_) | ValidationError::DuplicatePermission(_) => {
-            "permissions".into()
-        }
+        ValidationError::InvalidPermission(_)
+        | ValidationError::DuplicatePermission(_)
+        | ValidationError::ReservedPermission(_) => "permissions".into(),
         ValidationError::InvalidContext(_) => "context".into(),
         ValidationError::InvalidRepoOverride(_) => "repoOverrides".into(),
         ValidationError::InvalidRevision => return None,
@@ -1729,6 +1729,7 @@ fn preview_detail(
         let options = match (params.org.clone(), params.team.clone()) {
             (Some(org), Some(team)) => ResolveOptions {
                 target_team: Some((org, team)),
+                launch_org: None,
             },
             _ => options,
         };

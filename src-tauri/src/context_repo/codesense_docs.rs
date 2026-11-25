@@ -1201,6 +1201,7 @@ mod tests {
             &helper,
             AgentCli::Claude,
             crate::agents::model::LaunchMode::Headless,
+            None,
         );
         let permissions = &settings[0].content["permissions"];
         assert_eq!(permissions["defaultMode"], "dontAsk");

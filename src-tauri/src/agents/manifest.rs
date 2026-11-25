@@ -194,6 +194,10 @@ pub struct StartupManifest {
     /// Why the manifest cannot be applied as is. Non-empty means: do not
     /// bootstrap.
     pub errors: Vec<ManifestError>,
+    /// What the org's guardrails deny this launch and which of the agent's rules they
+    /// refuse. Absent when the org has none for this runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guardrails: Option<super::guardrails::GuardrailReport>,
     /// [`StartupManifest::compute_hash`]: identifies this exact manifest.
     pub manifest_hash: String,
 }
@@ -434,4 +438,6 @@ pub enum ManifestErrorCode {
     DependencyCycle,
     /// The entry or its dependency declaration is malformed.
     Invalid,
+    /// The org's guardrails could not be read, so the launch is refused.
+    Guardrails,
 }

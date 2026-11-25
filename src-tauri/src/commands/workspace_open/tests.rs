@@ -5004,12 +5004,22 @@ async fn team_workspace_preflight_and_open_default_to_recorded_child_across_acti
     use tauri::Manager;
     let f = AppFixture::new();
     f.session("own-workspace", Some("child"));
-    // This consumer prepares a real context worktree, so give it a real Git checkout.
+    // This consumer prepares a real context worktree, so give it a real Git checkout. The
+    // root teams' folders are committed too: org guardrails refuse a launch when `teams.yml`
+    // lists a root team the commit lacks.
     for args in [
         vec!["init", "-b", "main"],
         vec!["config", "user.name", "Test"],
         vec!["config", "user.email", "test@example.test"],
-        vec!["add", "org.yml", "teams.yml", "people.yml", "child/content"],
+        vec![
+            "add",
+            "org.yml",
+            "teams.yml",
+            "people.yml",
+            "child/content",
+            "grand/content",
+            "sibling/content",
+        ],
         vec!["commit", "-m", "fixture"],
     ] {
         let output = std::process::Command::new("git")

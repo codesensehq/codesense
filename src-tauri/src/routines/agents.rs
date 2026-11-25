@@ -301,6 +301,7 @@ pub(crate) fn prepare_run_for(
             target_team: Some((routine.org.clone(), routine.team.clone())),
             mode_override: Some(mode),
             prompt: Some(prompt),
+            launch_org: None,
         },
     )
     .map_err(|e| {

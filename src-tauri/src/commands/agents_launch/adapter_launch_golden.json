@@ -2585,7 +2585,8 @@
         "DEEPSEEK_API_KEY",
         "OPENCODE_AUTH_CONTENT",
         "OPENCODE_CONFIG_DIR",
-        "OPENCODE_CONFIG"
+        "OPENCODE_CONFIG",
+        "OPENCODE_PERMISSION"
       ],
       "escalating": false,
       "id": "builtin/opencode",
@@ -2674,6 +2675,7 @@
         "OPENCODE_AUTH_CONTENT",
         "OPENCODE_CONFIG_DIR",
         "OPENCODE_CONFIG",
+        "OPENCODE_PERMISSION",
         "CODESENSE_ACTIVITY_HOST",
         "CODESENSE_ACTIVITY_SOCKET",
         "CODESENSE_ACTIVITY_TOKEN"
@@ -2721,7 +2723,8 @@
         "DEEPSEEK_API_KEY",
         "OPENCODE_AUTH_CONTENT",
         "OPENCODE_CONFIG_DIR",
-        "OPENCODE_CONFIG"
+        "OPENCODE_CONFIG",
+        "OPENCODE_PERMISSION"
       ],
       "escalating": false,
       "id": "builtin/opencode",
@@ -2757,7 +2760,8 @@
         "DEEPSEEK_API_KEY",
         "OPENCODE_AUTH_CONTENT",
         "OPENCODE_CONFIG_DIR",
-        "OPENCODE_CONFIG"
+        "OPENCODE_CONFIG",
+        "OPENCODE_PERMISSION"
       ]
     },
     "structured_headless": [
@@ -2802,7 +2806,8 @@
         "DEEPSEEK_API_KEY",
         "OPENCODE_AUTH_CONTENT",
         "OPENCODE_CONFIG_DIR",
-        "OPENCODE_CONFIG"
+        "OPENCODE_CONFIG",
+        "OPENCODE_PERMISSION"
       ],
       "escalating": true,
       "id": "builtin/opencode-unattended",
@@ -2892,6 +2897,7 @@
         "OPENCODE_AUTH_CONTENT",
         "OPENCODE_CONFIG_DIR",
         "OPENCODE_CONFIG",
+        "OPENCODE_PERMISSION",
         "CODESENSE_ACTIVITY_HOST",
         "CODESENSE_ACTIVITY_SOCKET",
         "CODESENSE_ACTIVITY_TOKEN"
@@ -2941,7 +2947,8 @@
         "DEEPSEEK_API_KEY",
         "OPENCODE_AUTH_CONTENT",
         "OPENCODE_CONFIG_DIR",
-        "OPENCODE_CONFIG"
+        "OPENCODE_CONFIG",
+        "OPENCODE_PERMISSION"
       ],
       "escalating": true,
       "id": "builtin/opencode-unattended",
@@ -2979,7 +2986,8 @@
         "DEEPSEEK_API_KEY",
         "OPENCODE_AUTH_CONTENT",
         "OPENCODE_CONFIG_DIR",
-        "OPENCODE_CONFIG"
+        "OPENCODE_CONFIG",
+        "OPENCODE_PERMISSION"
       ]
     },
     "structured_headless": [
@@ -13922,7 +13930,8 @@
         "DEEPSEEK_API_KEY",
         "OPENCODE_AUTH_CONTENT",
         "OPENCODE_CONFIG_DIR",
-        "OPENCODE_CONFIG"
+        "OPENCODE_CONFIG",
+        "OPENCODE_PERMISSION"
       ],
       "escalating": false,
       "id": "acme/api/backend/opencode-allowlist",
@@ -14015,6 +14024,7 @@
         "OPENCODE_AUTH_CONTENT",
         "OPENCODE_CONFIG_DIR",
         "OPENCODE_CONFIG",
+        "OPENCODE_PERMISSION",
         "CODESENSE_ACTIVITY_HOST",
         "CODESENSE_ACTIVITY_SOCKET",
         "CODESENSE_ACTIVITY_TOKEN"
@@ -14065,7 +14075,8 @@
         "DEEPSEEK_API_KEY",
         "OPENCODE_AUTH_CONTENT",
         "OPENCODE_CONFIG_DIR",
-        "OPENCODE_CONFIG"
+        "OPENCODE_CONFIG",
+        "OPENCODE_PERMISSION"
       ],
       "escalating": false,
       "id": "acme/api/backend/opencode-allowlist",
@@ -14106,7 +14117,8 @@
         "DEEPSEEK_API_KEY",
         "OPENCODE_AUTH_CONTENT",
         "OPENCODE_CONFIG_DIR",
-        "OPENCODE_CONFIG"
+        "OPENCODE_CONFIG",
+        "OPENCODE_PERMISSION"
       ]
     },
     "structured_headless": [
@@ -14152,7 +14164,8 @@
         "DEEPSEEK_API_KEY",
         "OPENCODE_AUTH_CONTENT",
         "OPENCODE_CONFIG_DIR",
-        "OPENCODE_CONFIG"
+        "OPENCODE_CONFIG",
+        "OPENCODE_PERMISSION"
       ],
       "escalating": false,
       "id": "acme/api/backend/opencode-open",
@@ -14243,6 +14256,7 @@
         "OPENCODE_AUTH_CONTENT",
         "OPENCODE_CONFIG_DIR",
         "OPENCODE_CONFIG",
+        "OPENCODE_PERMISSION",
         "CODESENSE_ACTIVITY_HOST",
         "CODESENSE_ACTIVITY_SOCKET",
         "CODESENSE_ACTIVITY_TOKEN"
@@ -14293,7 +14307,8 @@
         "DEEPSEEK_API_KEY",
         "OPENCODE_AUTH_CONTENT",
         "OPENCODE_CONFIG_DIR",
-        "OPENCODE_CONFIG"
+        "OPENCODE_CONFIG",
+        "OPENCODE_PERMISSION"
       ],
       "escalating": false,
       "id": "acme/api/backend/opencode-open",
@@ -14332,7 +14347,8 @@
         "DEEPSEEK_API_KEY",
         "OPENCODE_AUTH_CONTENT",
         "OPENCODE_CONFIG_DIR",
-        "OPENCODE_CONFIG"
+        "OPENCODE_CONFIG",
+        "OPENCODE_PERMISSION"
       ]
     },
     "structured_headless": [

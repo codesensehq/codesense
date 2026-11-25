@@ -302,7 +302,7 @@ fn seam_saved_agent_resolves_to_launch_inputs_and_the_composed_manifest() {
 
     // Composed, never re-derived.
     let pinned = service::get_pinned(home, &alice(), &key, 1).unwrap();
-    let generated = permissions::generate(&pinned.agent, AgentCli::Claude, LaunchMode::Foreground);
+    let generated = permissions::generate(&pinned.agent, AgentCli::Claude, LaunchMode::Foreground, None);
     let direct = crate::agents::manifest_resolve::resolve_manifest(
         home,
         &alice(),
@@ -969,6 +969,7 @@ fn a_draft_previews_like_the_saved_agent_and_reports_what_it_breaks() {
         }),
         ResolveOptions {
             target_team: Some((ORG.into(), TEAM.into())),
+            launch_org: None,
         },
     )
     .unwrap();

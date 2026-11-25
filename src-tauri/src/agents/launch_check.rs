@@ -148,6 +148,8 @@ pub enum LaunchWarningCode {
     /// This Mac's managed Claude settings send the session's usage to the organization's own
     /// collector, so CodeSense records no tokens or cost for it and a spend cap can't be enforced.
     UsageNotRecorded,
+    /// The org denies permission rules this runtime has no rule model to enforce (Codex).
+    GuardrailsNotEnforced,
     AdapterNote,
 }
 
@@ -248,6 +250,12 @@ pub fn warnings(resolved: &ResolvedAgent, prompt: Option<&str>) -> Vec<LaunchWar
     out.extend(skills_warning(resolved));
     out.extend(size_warnings(&resolved.manifest));
     out.extend(permission_warning(&resolved.manifest));
+    out.extend(
+        resolved
+            .guardrails
+            .as_deref()
+            .and_then(|g| g.not_enforced_warning(resolved.account.policy.runtime)),
+    );
     if let Some(tools) = &resolved.launch.bridge_tools {
         out.push(LaunchWarning {
             code: LaunchWarningCode::BridgeToolsLocalOnly,
@@ -630,6 +638,7 @@ mod tests {
             generated: Vec::new(),
             totals,
             errors: Vec::new(),
+            guardrails: None,
             manifest_hash: String::new(),
         }
     }
@@ -747,7 +756,7 @@ mod tests {
             env: Default::default(),
         };
         let mut m = manifest(Vec::new());
-        m.generated = permissions::generate(&agent, AgentCli::Claude, LaunchMode::Headless);
+        m.generated = permissions::generate(&agent, AgentCli::Claude, LaunchMode::Headless, None);
         m
     }
 

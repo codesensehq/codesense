@@ -69,6 +69,10 @@ pub(super) fn desktop() -> DesktopCli {
         usage_record: |_| None,
         managed_settings: &[],
         session_log_usage: None,
+        guardrails: Some(super::GuardrailPort {
+            deny: guardrail_deny,
+            tried: |_| Vec::new(),
+        }),
     }
 }
 
@@ -140,6 +144,15 @@ fn launch_notes(args: &[String]) -> Vec<String> {
 
 pub(crate) fn block_hook(matcher: &str) -> serde_json::Value {
     serde_json::json!({"matcher": matcher, "command": format!("--hook-block {}", codesense_pty_core::agent_cli::AgentCli::as_str(super::AgentCli::Hermes)), "fail_closed": true, "timeout": 2})
+}
+
+/// One fail-closed `pre_tool_call` block hook per denied matcher.
+fn guardrail_deny(content: &mut serde_json::Value, rules: &[&str]) {
+    crate::agents::permissions::push_unique(
+        content,
+        ("hooks", "pre_tool_call"),
+        rules.iter().map(|matcher| block_hook(matcher)),
+    );
 }
 
 fn permission_display(settings: &serde_json::Value, args: &[String]) -> String {
@@ -495,7 +508,7 @@ mod tests {
                 crate::agents::model::LaunchMode::Foreground,
                 crate::agents::model::LaunchMode::Headless,
             ] {
-                let generated = crate::agents::permissions::generate(&agent, agent.runtime, mode);
+                let generated = crate::agents::permissions::generate(&agent, agent.runtime, mode, None);
                 let blocks = generated[0].content["hooks"]["pre_tool_call"]
                     .as_array()
                     .unwrap();

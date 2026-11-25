@@ -793,7 +793,10 @@ pub(crate) fn preview_at(
             team: None,
             session_id: None,
         },
-        ResolveOptions { target_team },
+        ResolveOptions {
+            target_team,
+            launch_org: None,
+        },
     )?;
     Ok(match reply {
         AgentReply::Ok(resolved) => {

@@ -129,7 +129,34 @@ pub(super) fn desktop() -> DesktopCli {
         usage_record,
         managed_settings: claude_managed(std::env::consts::OS).settings,
         session_log_usage: Some(|path: &std::path::Path| crate::session_usage::session_log_usage::read(AgentCli::Claude, path)),
+        guardrails: Some(super::GuardrailPort {
+            deny: guardrail_deny,
+            tried: guardrail_tried,
+        }),
     }
+}
+
+/// Claude checks deny before allow across every settings source, so each denied rule is
+/// appended to `permissions.deny` and no allow the agent or a layer adds can re-open it.
+fn guardrail_deny(content: &mut serde_json::Value, rules: &[&str]) {
+    crate::agents::permissions::push_unique(
+        content,
+        ("permissions", "deny"),
+        rules.iter().map(|rule| serde_json::json!(rule)),
+    );
+}
+
+/// The agent's own allow rules, then its ask rules.
+fn guardrail_tried(
+    agent: &crate::agents::model::Agent,
+) -> Vec<(crate::agents::guardrails::RefusalKind, String)> {
+    use crate::agents::guardrails::RefusalKind;
+    let Some(own) = agent.permissions.as_ref().and_then(|p| p.claude.as_ref()) else {
+        return Vec::new();
+    };
+    let allows = own.allow.iter().map(|r| (RefusalKind::PermissionAllow, r.clone()));
+    let asks = own.ask.iter().map(|r| (RefusalKind::PermissionAsk, r.clone()));
+    allows.chain(asks).collect()
 }
 
 /// Its native `permissions` keys, each rule listed once.

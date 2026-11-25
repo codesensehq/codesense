@@ -897,6 +897,7 @@ async fn a_team_routine_runs_the_builtin_claude_and_records_its_revision() {
         &starter,
         crate::agents::ResolveOptions {
             target_team: Some((ORG.into(), TEAM.into())),
+            launch_org: None,
         },
     )
     .unwrap();

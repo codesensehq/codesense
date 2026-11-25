@@ -47,6 +47,7 @@ fn interactive(prompt: Option<&str>) -> PrepareOptions<'_> {
         target_team: Some((ORG.to_string(), TEAM.to_string())),
         mode_override: Some(LaunchMode::Interactive),
         prompt,
+        launch_org: None,
     }
 }
 
@@ -2784,5 +2785,104 @@ fn page_launch_settings_carry_status_hooks() {
                 "{event} hook (attribution hook trust {hook_trust})"
             );
         }
+    }
+}
+
+/// Org guardrails on the files a launch actually writes: the per-launch Claude settings
+/// file of an escalating agent that re-allows what the org denies.
+mod guardrails {
+    use super::*;
+    use crate::agents::resolve::guardrails_tests::guarded_org;
+
+    const RM: &str = "Bash(rm:*)";
+    const CLAUDE_RM: &str = "permissions:\n  claude:\n    deny: ['Bash(rm:*)']\n";
+
+    fn bypassing(id: &str) -> Agent {
+        claude_with(
+            id,
+            ClaudePermissions {
+                allow: vec![RM.into()],
+                default_mode: Some("bypassPermissions".into()),
+                ..ClaudePermissions::default()
+            },
+        )
+    }
+
+    fn written_denies(launch: AgentLaunch, tmp: &Path, tag: &str) -> serde_json::Value {
+        let cwd = worktree(&tmp.join(tag));
+        let id = session(tag);
+        let (_prepared, _creation, settings) =
+            apply_for_session(launch, Path::new(CLI), &id, &cwd, None, true).unwrap();
+        let file = settings.as_ref().unwrap().path().to_path_buf();
+        let denies = read_json(&file)["permissions"]["deny"].clone();
+        mcp_scope::remove_scope_config(&id);
+        denies
+    }
+
+    #[test]
+    fn guardrails_reach_the_prepared_settings_file_in_every_mode() {
+        let _home_env = crate::routines::test_support::TempHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        guarded_org(&home, &[("platform", CLAUDE_RM)]);
+        let agent = bypassing("bypass");
+        assert!(agent.is_escalating());
+        let key = save(&home, &alice(), agent);
+        // The agent declares a foreground launch; the headless override regenerates its
+        // permission entries, and the org's deny must survive that too.
+        for (tag, mode) in [
+            ("declared", Some(LaunchMode::Interactive)),
+            ("override", Some(LaunchMode::Headless)),
+        ] {
+            let launch = prepare(
+                &home,
+                &alice(),
+                &key,
+                PrepareOptions {
+                    mode_override: mode,
+                    ..interactive(None)
+                },
+            )
+            .unwrap();
+            let generated = launch
+                .manifest
+                .generated
+                .iter()
+                .find(|g| g.target == crate::agents::manifest::GeneratedTarget::LaunchSettings)
+                .unwrap()
+                .content["permissions"]["deny"]
+                .clone();
+            assert!(generated.as_array().unwrap().contains(&json!(RM)), "{tag}");
+            let written = written_denies(launch, tmp.path(), tag);
+            assert!(written.as_array().unwrap().contains(&json!(RM)), "{tag}: {written}");
+        }
+    }
+
+    #[test]
+    fn guardrails_survives_settings_merge() {
+        let _home_env = crate::routines::test_support::TempHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        guarded_org(&home, &[("platform", CLAUDE_RM)]);
+        let key = save(&home, &alice(), bypassing("own-settings"));
+        let mut launch = prepare(&home, &alice(), &key, interactive(None)).unwrap();
+        // The agent's own `--settings` allows the denied rule; arrays union in the merge.
+        launch.launch.args = vec![
+            "--settings".into(),
+            r#"{"permissions":{"allow":["Bash(rm:*)"],"deny":[]}}"#.into(),
+        ];
+        let written = written_denies(launch, tmp.path(), "own-settings");
+        assert!(written.as_array().unwrap().contains(&json!(RM)), "{written}");
+    }
+
+    #[test]
+    fn an_unreadable_guardrails_file_refuses_the_launch() {
+        let _home_env = crate::routines::test_support::TempHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        guarded_org(&home, &[("platform", "permissions:\n  claude:\n    deny: [\n")]);
+        let key = save(&home, &alice(), bypassing("refused"));
+        let error = prepare(&home, &alice(), &key, interactive(None)).unwrap_err();
+        assert!(error.contains("platform/config/guardrails.yml"), "{error}");
     }
 }

@@ -309,6 +309,7 @@ pub(crate) fn resolve_manifest_with(
         generated,
         totals,
         errors: run.errors,
+        guardrails: None,
         manifest_hash: String::new(),
     };
     manifest.manifest_hash = manifest.compute_hash();

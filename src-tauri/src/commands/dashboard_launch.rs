@@ -8832,6 +8832,7 @@ mod tests {
             &agent,
             AgentCli::OpenCode,
             crate::agents::model::LaunchMode::Headless,
+            None,
         )
         .remove(0);
         let req = headless_capture_request(

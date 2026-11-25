@@ -2,9 +2,11 @@
 //! The agent's native CLI permissions turned into the per-launch settings the
 //! runtime reads, merged with what CodeSense itself needs.
 //!
-//! CodeSense never interprets, removes or rewrites a rule, and never enforces
+//! CodeSense never interprets, removes or widens a rule, and never enforces
 //! a mode: the agent's rules pass through verbatim and the CLI enforces them.
-//! CodeSense only adds the allows it needs ([`CLAUDE_REQUIRED_ALLOW`]). A rule
+//! CodeSense only adds the allows it needs ([`CLAUDE_REQUIRED_ALLOW`]) and the
+//! org's guardrail denies ([`super::guardrails`]), which may turn an OpenCode
+//! decision for a denied key into `deny` and nothing else. A rule
 //! that blocks one of those still applies as written; the launch warnings
 //! ([`super::launch_check`]) say so, using [`blocks_required`].
 //!
@@ -36,6 +38,7 @@ use std::collections::BTreeSet;
 
 use serde_json::{json, Map, Value};
 
+use super::guardrails::Guardrails;
 use super::manifest::{json_hash, GeneratedEntry, GeneratedTarget};
 use super::model::{Agent, LaunchMode, BRIDGE_SERVER};
 use codesense_pty_core::agent_cli::AgentCli;
@@ -94,11 +97,18 @@ pub const CODEX_HEADLESS_SANDBOX_MODE: &str = "workspace-write";
 pub const CLAUDE_SKIP_BYPASS_PROMPT: &str = "skipDangerousModePermissionPrompt";
 
 /// The generated launch entries for `agent` running on `runtime` in `mode`: its
-/// runtime's launch settings.
-pub fn generate(agent: &Agent, runtime: AgentCli, mode: LaunchMode) -> Vec<GeneratedEntry> {
-    vec![(super::adapter::desktop(runtime).launch_settings)(
-        agent, mode,
-    )]
+/// runtime's launch settings, narrowed by the org's `guardrails` when it has any.
+pub fn generate(
+    agent: &Agent,
+    runtime: AgentCli,
+    mode: LaunchMode,
+    guardrails: Option<&Guardrails>,
+) -> Vec<GeneratedEntry> {
+    let mut entry = (super::adapter::desktop(runtime).launch_settings)(agent, mode);
+    if let Some(guardrails) = guardrails {
+        guardrails.apply(runtime, &mut entry);
+    }
+    vec![entry]
 }
 
 pub(super) fn entry(
@@ -118,6 +128,26 @@ pub(super) fn entry(
     }
 }
 
+/// Append to the array at `content[outer][inner]` each of `values` it doesn't hold yet, in
+/// order, making the array when that key has none.
+pub(crate) fn push_unique(
+    content: &mut Value,
+    (outer, inner): (&str, &str),
+    values: impl IntoIterator<Item = Value>,
+) {
+    let list = &mut content[outer][inner];
+    if !list.is_array() {
+        *list = Value::Array(Vec::new());
+    }
+    if let Value::Array(list) = list {
+        for value in values {
+            if !<[Value]>::contains(list, &value) {
+                Vec::push(list, value);
+            }
+        }
+    }
+}
+
 /// A Claude agent's launch settings: the whole body of its per-launch settings file.
 pub(super) fn claude(agent: &Agent, mode: LaunchMode) -> GeneratedEntry {
     let mut entry = claude_permissions(
@@ -125,14 +155,13 @@ pub(super) fn claude(agent: &Agent, mode: LaunchMode) -> GeneratedEntry {
         mode,
     );
     if let Some(tools) = &agent.mcp.bridge_tools {
-        let deny = entry.content["permissions"]["deny"]
-            .as_array_mut()
-            .expect("generated Claude permissions carry a deny list");
-        for rule in claude_bridge_tool_denies(tools) {
-            if !deny.iter().any(|existing| existing == &rule) {
-                deny.push(json!(rule));
-            }
-        }
+        push_unique(
+            &mut entry.content,
+            ("permissions", "deny"),
+            claude_bridge_tool_denies(tools)
+                .into_iter()
+                .map(Value::from),
+        );
         entry.hash = json_hash(&entry.content);
     }
     if mode == LaunchMode::Headless && agent.is_escalating() {
@@ -866,7 +895,7 @@ mod tests {
     }
 
     fn one(agent: &Agent, mode: LaunchMode) -> GeneratedEntry {
-        let entries = generate(agent, agent.runtime, mode);
+        let entries = generate(agent, agent.runtime, mode, None);
         assert_eq!(entries.len(), 1);
         entries.into_iter().next().unwrap()
     }
@@ -1117,7 +1146,7 @@ mod tests {
                 ..Permissions::default()
             }),
         );
-        let entries = generate(&a, AgentCli::Codex, LaunchMode::Foreground);
+        let entries = generate(&a, AgentCli::Codex, LaunchMode::Foreground, None);
         assert_eq!(entries[0].target, GeneratedTarget::LaunchSettings);
     }
 }

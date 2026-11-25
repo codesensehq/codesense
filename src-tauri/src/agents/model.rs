@@ -286,6 +286,8 @@ pub enum ValidationError {
     },
     InvalidPermission(String),
     DuplicatePermission(String),
+    /// A permission key CodeSense reserves for the org's guardrails.
+    ReservedPermission(String),
     InvalidRevision,
     InvalidBudget(String),
     /// A `context` entry is not valid.
@@ -358,6 +360,10 @@ impl fmt::Display for ValidationError {
                 "permission value {v:?} is not valid: values must be non-empty with no NUL"
             ),
             Self::DuplicatePermission(v) => write!(f, "permission rule {v:?} is listed twice"),
+            Self::ReservedPermission(v) => write!(
+                f,
+                "permission key {v:?} is reserved for the org's guardrails"
+            ),
             Self::InvalidRevision => write!(f, "a saved agent has a revision of at least 1"),
             Self::InvalidContext(e) | Self::InvalidRepoOverride(e) => write!(f, "{e}"),
         }

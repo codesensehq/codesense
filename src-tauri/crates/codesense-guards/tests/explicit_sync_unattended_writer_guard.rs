@@ -2610,6 +2610,10 @@ const MAX_UNRESOLVED_PATHS: usize = 281;
 /// `ChatMediaState::of` (commands/workspace_chat/model.rs). They are std io-error, path,
 /// iterator, collection and string calls, and a read-only overlay of an in-memory map onto a
 /// message; none calls a write primitive (`no_unresolved_call_may_hide_a_writer` still passes).
+/// Org guardrails add no unresolved calls on top of that: their own std collection, string,
+/// iterator and git2 calls (`agents/guardrails.rs`, the adapters' guardrail ports and the
+/// committed-tree read in `context_repo/inheritance.rs`) are written with typed receivers or
+/// fully qualified paths, so the graph resolves them. None calls a write primitive.
 const MAX_UNRESOLVED_METHODS: usize = 6_607;
 
 /// The most lines each census list prints on failure; the env vars print them all.

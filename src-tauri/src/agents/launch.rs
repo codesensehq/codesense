@@ -78,6 +78,8 @@ pub struct PrepareOptions<'a> {
     /// An account for this launch only, in place of the user's binding, which
     /// stays as it is.
     pub account: Option<resolve::ChosenAccount>,
+    /// The org a launch with no target team runs in ([`ResolveOptions::launch_org`]).
+    pub launch_org: Option<String>,
 }
 
 /// Everything one launch of one agent by one user runs with.
@@ -283,6 +285,7 @@ pub(crate) fn prepare_with(
         key,
         ResolveOptions {
             target_team: options.target_team.clone(),
+            launch_org: Option::clone(&options.launch_org),
         },
     )
     .map_err(|e| e.to_string())?;
@@ -340,7 +343,12 @@ fn prepare_resolved(
             .filter(|g| g.target == GeneratedTarget::WorkspaceFile)
             .cloned()
             .collect();
-        resolved.manifest.generated = permissions::generate(&agent, agent.runtime, effective);
+        resolved.manifest.generated = permissions::generate(
+            &agent,
+            agent.runtime,
+            effective,
+            resolved.guardrails.as_deref(),
+        );
         resolved.manifest.generated.extend(workspace_files);
         match &launch.skill_allowlist {
             Some(listed) => permissions::turn_off_unlisted_manifest_skills(
@@ -1281,6 +1289,7 @@ pub(crate) fn prepare_typed_for_test(
         &key,
         ResolveOptions {
             target_team: options.target_team.clone(),
+            launch_org: Option::clone(&options.launch_org),
         },
     )
     .map_err(|e| e.to_string())?;

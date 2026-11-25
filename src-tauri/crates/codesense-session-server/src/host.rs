@@ -1467,23 +1467,8 @@ impl Host {
                 owner: None,
             });
         }
-        let intent = SpawnIntent {
-            remote_launch: Some(recipe.launch),
-            command: None,
-            argv: None,
-            shell: None,
-            cwd: target.cwd.clone(),
-            cols: 80,
-            rows: 24,
-            shell_integration: false,
-            starship_preset: None,
-            api_port: None,
-            env_remove: vec![],
-            env: vec![],
-            agent_env: Vec::new(),
-            login_path: None,
-        }
-        .with_agent_startup(Some(&recipe.agent_startup));
+        let intent =
+            SpawnIntent::armed(target.cwd.clone(), recipe.launch, &recipe.agent_startup);
         let mut spec = intent
             .resolve(session.as_str(), &self.environment)
             .map_err(|error| not_started(error.to_string()))?;
@@ -3234,7 +3219,8 @@ impl Host {
                             env: vec![],
                             agent_env: Vec::new(),
                             login_path: None,
-                        };
+                        }
+                        .with_cli_env_suppressed();
                         let spec = intent
                             .resolve(session.as_str(), &host.environment)
                             .map_err(|error| PortUnavailable(error.to_string()))?;
@@ -4278,6 +4264,8 @@ impl Host {
         intent: SpawnIntent,
         registration: SessionRegistration,
     ) -> Result<Option<u32>, String> {
+        // The CLI's guarded variables never reach it, whatever strip list the client sent.
+        let intent = intent.with_cli_env_suppressed();
         // Resolving writes the managed RC wrappers: off the async workers.
         let environment = self.environment.clone();
         let session = registration.session_id.clone();
@@ -6882,6 +6870,29 @@ mod tests {
             for (name, agent_value) in owned {
                 assert_ne!(vars.get(name), Some(&agent_value), "{name} is CodeSense's");
             }
+        }
+
+        /// A fired arm of an OpenCode saved Agent strips `OPENCODE_PERMISSION` from the CLI's
+        /// process, though the Agent's own variables carry it and no strip list came with the arm.
+        #[test]
+        fn an_armed_opencode_launch_strips_the_permission_override() {
+            let mut recipe = recipe();
+            recipe.launch = NativeLaunch::Cli(AgentCli::OpenCode);
+            recipe.agent_startup.env = [(
+                "OPENCODE_PERMISSION".to_string(),
+                r#"{"bash":"allow"}"#.to_string(),
+            )]
+            .into_iter()
+            .collect();
+            let intent =
+                SpawnIntent::armed(target().cwd.clone(), recipe.launch, &recipe.agent_startup);
+            assert!(intent
+                .agent_env
+                .iter()
+                .any(|(name, _)| name == "OPENCODE_PERMISSION"));
+            assert!(intent
+                .env_remove
+                .contains(&"OPENCODE_PERMISSION".to_string()));
         }
 
         #[test]

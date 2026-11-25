@@ -1090,6 +1090,210 @@ pub(crate) fn inherited_by_active_team(
     matches!(view.admits_path(path), Admit::Inherited { .. }).then_some((root, owner))
 }
 
+/// The org's guardrails ([`crate::agents::guardrails`]): the union of every root team's
+/// `config/guardrails.yml`, the root teams being the ones `teams.yml` gives no parent. Both
+/// are read from the org clone at `root` as committed on its branch's upstream (HEAD's commit
+/// only for an org with no remote), never from a working tree, so no worktree edit, unpushed
+/// commit, sparse checkout or re-parenting can lift them.
+///
+/// `Ok(None)` when the org denies nothing: no root team has the file, or nothing has ever been
+/// committed (`root` was never a repository, or its branch has no commit yet) and no team
+/// folder in the working tree has the file either. Every other failure is an error naming the
+/// org and the path, and the launch is refused: a `.git` that can't be opened, a clone with a
+/// remote and no upstream commit, a commit with no `teams.yml`, a `teams.yml` whose teams all
+/// have a parent, a guardrails file in a team that has a parent or that `teams.yml` doesn't
+/// list, a file that can't be read.
+pub(crate) fn org_guardrails(
+    root: &Path,
+    org: &str,
+) -> Result<Option<Arc<crate::agents::guardrails::Guardrails>>, String> {
+    use crate::agents::guardrails::{self, Guardrails, GUARDRAILS_FILE};
+    use crate::shared::git_util::{blob_at, upstream_oid};
+
+    type Cache = Mutex<HashMap<(PathBuf, git2::Oid), Option<Arc<Guardrails>>>>;
+    static CACHE: OnceLock<Cache> = OnceLock::new();
+
+    let fail = |what: &str, e: &dyn std::fmt::Display| {
+        format!("Can't read the org guardrails of {org} ({what}): {e}")
+    };
+    let repo = match git2::Repository::open_ext(
+        root,
+        git2::RepositoryOpenFlags::NO_SEARCH,
+        std::iter::empty::<&std::ffi::OsStr>(),
+    ) {
+        Ok(repo) => repo,
+        Err(e) if e.code() == git2::ErrorCode::NotFound && never_a_repository(root) => {
+            return uncommitted(root, org, "the org folder is not a git repository");
+        }
+        Err(e) => return Err(fail(&Path::display(root).to_string(), &e)),
+    };
+    // An org with a remote is read only at its upstream commit: HEAD could hold a local commit
+    // nobody reviewed. HEAD's commit is read only for an org that has no remote at all.
+    let has_remote = repo
+        .remotes()
+        .map(|remotes| !git2::string_array::StringArray::is_empty(&remotes))
+        .map_err(|e| fail("its remotes", &e))?;
+    let commit = match upstream_oid(&repo) {
+        Some(oid) => oid,
+        None => match repo.head() {
+            Ok(_) if has_remote => {
+                return Err(fail(
+                    "upstream",
+                    &"the org clone has a remote but its branch has no upstream commit to \
+                      read (a detached HEAD, an unset upstream or a missing tracking branch)",
+                ));
+            }
+            Ok(head) => match head.target() {
+                Some(oid) => oid,
+                None => return Err(fail("HEAD", &"no commit")),
+            },
+            Err(e) if e.code() == git2::ErrorCode::UnbornBranch => {
+                return uncommitted(root, org, "the org's branch has no commit yet");
+            }
+            Err(e) => return Err(fail("HEAD", &e)),
+        },
+    };
+    let cache = CACHE.get_or_init(Default::default);
+    let key = (root.to_path_buf(), commit);
+    if let Some(hit) = Result::ok(cache.lock()).and_then(|c| HashMap::get(&c, &key).cloned()) {
+        return Ok(hit);
+    }
+    let tree = repo
+        .find_commit(commit)
+        .and_then(|c| c.tree())
+        .map_err(|e| fail(&format!("commit {commit}"), &e))?;
+    let read = |path: &str| -> Result<Option<Vec<u8>>, String> {
+        let Some(id) = blob_at(&tree, path) else {
+            return Ok(None);
+        };
+        repo.find_blob(id)
+            .map(|blob| Some(blob.content().to_vec()))
+            .map_err(|e| fail(path, &e))
+    };
+    let Some(teams) = read("teams.yml")? else {
+        return Err(fail(
+            &format!("commit {commit}"),
+            &"teams.yml is not in the commit",
+        ));
+    };
+    let teams = crate::domain::parse_teams_yml(&teams).map_err(|e| fail("teams.yml", &e))?;
+    if !Vec::is_empty(&teams.teams) && !teams.teams.iter().any(|t| t.parent_team.is_none()) {
+        return Err(fail(
+            "teams.yml",
+            &"no team is a root: every team has a parent",
+        ));
+    }
+    let mut files = Vec::new();
+    for team in teams.teams.iter().filter(|t| t.parent_team.is_none()) {
+        let name = &team.name[..];
+        if let Some(e) = validate_path_segment(name) {
+            return Err(fail(&format!("root team {name}"), &e));
+        }
+        let folder = Result::ok(tree.get_path(Path::new(name)));
+        if folder.and_then(|e| git2::TreeEntry::kind(&e)) != Some(git2::ObjectType::Tree) {
+            return Err(fail(
+                &format!("root team {name}"),
+                &"teams.yml lists it but its folder is not in the commit",
+            ));
+        }
+        let path = format!("{name}/{GUARDRAILS_FILE}");
+        if let Some(bytes) = read(&path)? {
+            files.push((
+                path.clone(),
+                guardrails::parse(&bytes).map_err(|e| fail(&path, &e))?,
+            ));
+        }
+    }
+    // Only a root team's file is read, so a file in a child team would deny nothing. Refusing
+    // it keeps re-parenting a root team from dropping its guardrails silently.
+    for team in teams.teams.iter().filter(|t| t.parent_team.is_some()) {
+        let path = format!("{}/{GUARDRAILS_FILE}", team.name);
+        if blob_at(&tree, &path).is_some() {
+            return Err(fail(
+                &path,
+                &"only a root team's guardrails apply: move the file to a root team or remove it",
+            ));
+        }
+    }
+    // A top-level folder `teams.yml` doesn't list as a root can't have its file read, so a
+    // root dropped from the list, or an empty list, would otherwise lift that team's denies.
+    for entry in git2::Tree::iter(&tree) {
+        let Ok(name) = git2::TreeEntry::name(&entry) else {
+            continue;
+        };
+        if git2::TreeEntry::kind(&entry) != Some(git2::ObjectType::Tree)
+            || teams
+                .teams
+                .iter()
+                .any(|t| t.parent_team.is_none() && t.name == name)
+        {
+            continue;
+        }
+        let path = format!("{name}/{GUARDRAILS_FILE}");
+        if blob_at(&tree, &path).is_some() {
+            return Err(fail(
+                &path,
+                &"the team folder has a guardrails file but teams.yml doesn't list it as a root \
+                  team: list it again or remove the file",
+            ));
+        }
+    }
+    let guardrails = Guardrails::union(files).map(Arc::new);
+    if let Ok(mut cache) = cache.lock() {
+        if HashMap::len(&cache) >= 64 {
+            HashMap::clear(&mut cache);
+        }
+        HashMap::insert(&mut cache, key, guardrails.clone());
+    }
+    Ok(guardrails)
+}
+
+/// Whether `root` has never been a git repository: it has no `.git`, or an empty `.git`
+/// folder. A `.git` with anything in it that can't be opened is a broken repository instead.
+fn never_a_repository(root: &Path) -> bool {
+    let dot_git = Path::join(root, ".git");
+    match std::fs::read_dir(&dot_git) {
+        Ok(mut entries) => Iterator::next(&mut entries).is_none(),
+        Err(_) => std::fs::symlink_metadata(&dot_git).is_err(),
+    }
+}
+
+/// The org guardrails of an org at `root` with nothing committed to read them from (`why`):
+/// none, unless a team folder in its working tree has a guardrails file, which says the org
+/// has them and they can't be read.
+fn uncommitted(
+    root: &Path,
+    org: &str,
+    why: &str,
+) -> Result<Option<Arc<crate::agents::guardrails::Guardrails>>, String> {
+    use crate::agents::guardrails::GUARDRAILS_FILE;
+    let fail = |what: &str, e: &dyn std::fmt::Display| {
+        format!("Can't read the org guardrails of {org} ({what}): {e}")
+    };
+    let entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(e) if std::io::Error::kind(&e) == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(fail(&Path::display(root).to_string(), &e)),
+    };
+    let mut files: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| Path::is_file(&Path::join(&std::fs::DirEntry::path(entry), GUARDRAILS_FILE)))
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            std::ffi::OsStr::to_str(&name)
+                .map(|name| format!("{name}/{GUARDRAILS_FILE}"))
+        })
+        .collect();
+    <[String]>::sort(&mut files);
+    match <[String]>::first(&files) {
+        Some(path) => Err(fail(
+            path,
+            &format!("{why}, so it can't be read as committed"),
+        )),
+        None => Ok(None),
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn test_fixture() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();

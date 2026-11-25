@@ -592,8 +592,13 @@ pub(crate) fn extend_launch_env(
 /// encodes its precedence. A specific `action` must outrank its namespace's wildcard no
 /// matter which source (the launch's MCP scope or the agent's defaults) it came from: order
 /// the catch-all first, prefix wildcards next and exact actions last, deduplicating on
-/// `action` so the two sources' shared wildcard lands once.
+/// `action` so the two sources' shared wildcard lands once. The org's guardrail denies
+/// ([`crate::agents::guardrails`]) stay after all of them, in their own final tier.
 fn merge_native_permission_rules(agent: Vec<Value>, scope: Vec<Value>) -> Vec<Value> {
+    use crate::agents::guardrails::{append_final_tier, split_final_tier};
+    let (agent, mut guardrails) = split_final_tier(agent);
+    let (scope, scope_guardrails) = split_final_tier(scope);
+    guardrails.extend(scope_guardrails);
     let tier = |rule: &Value| match rule["action"].as_str() {
         Some("*") => 0,
         Some(action) if action.ends_with('*') => 1,
@@ -613,6 +618,7 @@ fn merge_native_permission_rules(agent: Vec<Value>, scope: Vec<Value>) -> Vec<Va
             None => merged.push(rule),
         }
     }
+    append_final_tier(&mut merged, guardrails);
     merged
 }
 
