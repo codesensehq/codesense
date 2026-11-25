@@ -986,6 +986,7 @@ async fn store_message(
     request_id: Option<&str>,
     request_hash: Option<String>,
     media: Option<&crate::media::MediaInput>,
+    owner: MediaOwner,
 ) -> Result<(SendResult, Option<StoredMedia>), String> {
     let request_hash = request_hash.or_else(|| {
         media?;
@@ -1011,7 +1012,11 @@ async fn store_message(
         }
     }
     let prepared = if let Some(input) = media {
-        let own = input.url.is_some() && host.own_media_sender(&from).await;
+        let own = input.url.is_some()
+            && match owner {
+                MediaOwner::Human => true,
+                MediaOwner::Sender => host.own_media_sender(&from).await,
+            };
         let scope = host.caller_scope(&from).await;
         let workspace_root = host.caller_media_workspace(&from).await;
         match host
@@ -1160,6 +1165,7 @@ pub(crate) async fn note_to_human_with(
         extras.request_id,
         request_hash,
         None,
+        MediaOwner::Sender,
     )
     .await?
     .0
@@ -1207,6 +1213,7 @@ pub(crate) async fn note_to_session_with(
         extras.request_id,
         request_hash,
         None,
+        MediaOwner::Sender,
     )
     .await?
     .0
@@ -1366,6 +1373,7 @@ pub(crate) async fn send_message_request<'a>(
         kind,
         request_id,
         media,
+        MediaOwner::Sender,
     )
     .await?;
     // Registered here, once per send call, after the store; a replay stored nothing.
@@ -1376,46 +1384,11 @@ pub(crate) async fn send_message_request<'a>(
 }
 
 /// [`send_message`], recording the message it answers (`in_reply_to`: its id and the
-/// team whose inbox holds it). `reply_to` is the new message's own Reply-To address.
+/// team whose inbox holds it), with the media attachment it newly stored, if any.
+/// `reply_to` is the new message's own Reply-To address; `owner` says whose machine a
+/// `url` picture counts as.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn send_message_replying(
-    host: &Arc<dyn InboxHost>,
-    session_id: Caller<'_>,
-    to: &str,
-    text: &str,
-    attach_file: Option<&str>,
-    on_click: Option<MessageOnClick>,
-    content_type: Option<inbox::MessageContentType>,
-    in_reply_to: Option<(i64, InboxReplyTeam)>,
-    reply_to: Option<&str>,
-    summary: Option<&str>,
-    kind: Option<inbox::MessageKind>,
-
-    request_id: Option<&str>,
-    media: Option<&crate::media::MediaInput>,
-) -> Result<SendResult, String> {
-    let (result, _) = send_message_stored(
-        host,
-        session_id,
-        to,
-        text,
-        attach_file,
-        on_click,
-        content_type,
-        in_reply_to,
-        reply_to,
-        summary,
-        kind,
-        request_id,
-        media,
-    )
-    .await?;
-    Ok(result)
-}
-
-/// [`send_message_replying`], with the media attachment it newly stored, if any.
-#[allow(clippy::too_many_arguments)]
-async fn send_message_stored(
+pub(crate) async fn send_message_stored(
     host: &Arc<dyn InboxHost>,
     session_id: Caller<'_>,
     to: &str,
@@ -1429,6 +1402,7 @@ async fn send_message_stored(
     kind: Option<inbox::MessageKind>,
     request_id: Option<&str>,
     media: Option<&crate::media::MediaInput>,
+    owner: MediaOwner,
 ) -> Result<(SendResult, Option<StoredMedia>), String> {
     if text.trim().is_empty() && media.is_none() {
         return Ok((SendResult::invalid("the text is blank"), None));
@@ -1524,6 +1498,7 @@ async fn send_message_stored(
         request_id,
         request_hash.clone(),
         media,
+        owner,
     )
     .await?;
     if matches!(result, SendResult::Sent { .. }) {
@@ -1597,6 +1572,7 @@ async fn reply_as(
 
     request_id: Option<&str>,
     media: Option<&crate::media::MediaInput>,
+    owner: MediaOwner,
 ) -> Result<(SendResult, Option<StoredMedia>), String> {
     if text.trim().is_empty() && media.is_none() {
         return Ok((SendResult::invalid("the text is blank"), None));
@@ -1635,9 +1611,15 @@ async fn reply_as(
                 request_id,
                 None,
                 media,
+                owner,
             )
             .await?
         }
+        // The person's picture goes to a session or the human, never a role queue (v1).
+        ReplyTo::Role(_) if owner == MediaOwner::Human && media.is_some() => (
+            SendResult::invalid("media can't go to a role queue"),
+            None,
+        ),
         ReplyTo::Role(role) => {
             queue_role_reply(
                 host,
@@ -1681,6 +1663,7 @@ async fn reply_as(
                 request_id,
                 None,
                 media,
+                owner,
             )
             .await?
         }
@@ -1924,6 +1907,7 @@ pub(crate) async fn reply_request<'a>(
                 kind,
                 request_id,
                 media,
+                MediaOwner::Sender,
             )
             .await?
         }
@@ -1941,6 +1925,7 @@ pub(crate) async fn reply_request<'a>(
                 kind,
                 request_id,
                 media,
+                MediaOwner::Sender,
             )
             .await?
         }
@@ -1965,8 +1950,27 @@ pub(crate) async fn reply_from_human(
     content_type: Option<inbox::MessageContentType>,
     summary: Option<&str>,
 ) -> Result<SendResult, String> {
+    reply_from_human_with_media(host, team, message_id, text, content_type, summary, None).await
+}
+
+/// [`reply_from_human`] with an optional GIF or image. The person's `url` media is
+/// admitted as this machine's own; `path` media and a reply that would go to a role
+/// queue are `invalid`, with nothing stored. A newly stored provider GIF is registered
+/// once.
+pub(crate) async fn reply_from_human_with_media(
+    host: &Arc<dyn InboxHost>,
+    team: &LaunchTeam,
+    message_id: i64,
+    text: &str,
+    content_type: Option<inbox::MessageContentType>,
+    summary: Option<&str>,
+    media: Option<&crate::media::MediaInput>,
+) -> Result<SendResult, String> {
+    if let Some(message) = media.and_then(human_media_refusal) {
+        return Ok(SendResult::invalid(message));
+    }
     let own = team_inbox(&**host, team.clone()).await?;
-    let (result, _) = reply_as(
+    let (result, stored) = reply_as(
         host,
         HUMAN.to_string(),
         own,
@@ -1977,10 +1981,37 @@ pub(crate) async fn reply_from_human(
         summary,
         None,
         None,
-        None,
+        media,
+        MediaOwner::Human,
     )
     .await?;
+    if let Some(stored) = &stored {
+        host.media_sent(stored);
+    }
     Ok(result)
+}
+
+/// Why the person's `media` can't be sent, if it can't: it must be valid, and a `url`
+/// (a `path` names a file on whichever machine sent it, which v1 does not take from the
+/// person).
+pub(crate) fn human_media_refusal(media: &crate::media::MediaInput) -> Option<String> {
+    if let Err(message) = media.validate() {
+        return Some(message);
+    }
+    media
+        .path
+        .is_some()
+        .then(|| "media from the person must be a url".to_string())
+}
+
+/// Whose machine a send's `url` media counts as: the sending session's (when it runs on
+/// this Mac), or the person's. The human paths run only from this Mac's own Tauri
+/// commands, so their pictures are always this machine's. An unbound MCP caller that
+/// sends as `human` is still [`MediaOwner::Sender`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MediaOwner {
+    Sender,
+    Human,
 }
 
 /// Record that `text` was typed into the terminal of the session under `target` (a
@@ -3466,7 +3497,8 @@ pub async fn inbox_reply_recipient(
 
 /// The human replies to message `message_id` of `team`'s inbox from the Agents panel
 /// or a dashboard. `content_type` is how the reply renders (markdown by default);
-/// `summary` is its optional one-line list preview.
+/// `summary` is its optional one-line list preview; `media` an optional GIF or image by
+/// url, which the action gate admits from the Inbox pane only.
 #[tauri::command]
 pub async fn reply_as_human(
     app: tauri::AppHandle,
@@ -3475,14 +3507,16 @@ pub async fn reply_as_human(
     text: String,
     content_type: Option<inbox::MessageContentType>,
     summary: Option<String>,
+    media: Option<crate::media::MediaInput>,
 ) -> Result<SendResult, String> {
-    reply_from_human(
+    reply_from_human_with_media(
         &AppInboxHost::port(app),
         &team.into(),
         message_id,
         &text,
         content_type,
         summary.as_deref(),
+        media.as_ref(),
     )
     .await
 }

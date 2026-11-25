@@ -94,13 +94,18 @@ pub fn args_schema(name: &str) -> Value {
         "sendToWorkspaceTab" => {
             json!({"sessionId":string(),"text":string(),"mode":{"enum":["prompt","command"]}})
         }
-        "sendAsHuman" | "postMessage" => {
-            json!({"to":string(),"text":string(),"team":{"type":"object"}})
-        }
+        "sendAsHuman" => json!({
+            "to":string(),"text":string(),"team":{"type":"object"},
+            "inReplyTo":{"type":"integer","minimum":1},"attachFile":string(),"replyTo":string(),"summary":string(),
+            "media":human_media()
+        }),
+        "postMessage" => json!({"to":string(),"text":string(),"team":{"type":"object"}}),
         "loadMedia" => {
             json!({"messageId":{"type":"integer","minimum":1},"org":string(),"team":string()})
         }
-        "replyAsHuman" => json!({"messageId":{"type":"integer"},"text":string()}),
+        "replyAsHuman" => {
+            json!({"messageId":{"type":"integer"},"text":string(),"media":human_media()})
+        }
         "gifSearch" => json!({
             "query":{"type":"string","minLength":1,"maxLength":crate::gif::MAX_QUERY_CHARS},
             "ids":{"type":"array","minItems":1,"maxItems":crate::gif::MAX_IDS,"items":{"type":"string","pattern":crate::gif::ID_PATTERN}},
@@ -324,4 +329,14 @@ fn pin_preview_schema() -> Value {
         ]},
         "lines":{"type":"array","items":text(160),"maxItems":3}
     }})
+}
+
+/// The person's optional picture on `sendAsHuman`/`replyAsHuman`: an HTTPS `url` with alt
+/// text and, for a GIF from `gifSearch`, its provider and id. The host takes it from the
+/// Inbox pane only and never a `path`; `null` is no picture.
+fn human_media() -> Value {
+    json!({"type":["object","null"],"properties":{
+        "url":{"type":"string","minLength":1},"alt":{"type":"string","minLength":1},
+        "provider":{"enum":["giphy","klipy"]},"providerId":{"type":"string","pattern":crate::gif::ID_PATTERN}
+    },"required":["url","alt"],"additionalProperties":false})
 }

@@ -2485,6 +2485,12 @@ Class: metadata; default grant: inbox:write; MCP twin: The person replaces a pin
 
 ```ts
 replyAsHuman(args?: {
+      media?: {
+        alt: string;
+        provider?: "giphy" | "klipy";
+        providerId?: string;
+        url: string;
+      } | null;
       messageId?: number;
       text?: string;
       [key: string]: unknown;
@@ -2755,6 +2761,16 @@ Class: read; default grant: routines:read; MCP twin: list_runs.
 
 ```ts
 sendAsHuman(args?: {
+      attachFile?: string;
+      inReplyTo?: number;
+      media?: {
+        alt: string;
+        provider?: "giphy" | "klipy";
+        providerId?: string;
+        url: string;
+      } | null;
+      replyTo?: string;
+      summary?: string;
       team?: Record<string, unknown>;
       text?: string;
       to?: string;

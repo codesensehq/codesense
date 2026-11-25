@@ -2488,6 +2488,12 @@ declare namespace CodesenseSdk {
     }>;
     /** send · inbox:write · confirmable · MCP twin reply */
     replyAsHuman(args?: {
+      media?: {
+        alt: string;
+        provider?: "giphy" | "klipy";
+        providerId?: string;
+        url: string;
+      } | null;
       messageId?: number;
       text?: string;
       [key: string]: unknown;
@@ -2614,6 +2620,16 @@ declare namespace CodesenseSdk {
     runs(args?: Record<string, unknown>): Promise<unknown>;
     /** send · inbox:write · confirmable · MCP twin send_message */
     sendAsHuman(args?: {
+      attachFile?: string;
+      inReplyTo?: number;
+      media?: {
+        alt: string;
+        provider?: "giphy" | "klipy";
+        providerId?: string;
+        url: string;
+      } | null;
+      replyTo?: string;
+      summary?: string;
       team?: Record<string, unknown>;
       text?: string;
       to?: string;

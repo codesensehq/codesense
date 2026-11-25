@@ -1147,6 +1147,93 @@ fn pin_verbs_are_team_bound_inbox_verbs_under_the_inbox_grants() {
     );
 }
 
+fn human_media_args(verb: &str) -> serde_json::Value {
+    let media = json!({"url":"https://media.giphy.com/media/g1/giphy.gif","alt":"A cat","provider":"giphy","providerId":"g1"});
+    match verb {
+        "sendAsHuman" => json!({"to":"H2","text":"","media":media}),
+        _ => json!({"messageId":4,"text":"","media":media}),
+    }
+}
+
+#[test]
+fn human_media_refused_from_a_message_frame_and_a_team_dashboard() {
+    use crate::dashboard_stream::frame::FrameCallerKind;
+    let mut team_dashboard = review_media_frame(FrameCallerKind::Builtin, true);
+    team_dashboard.grant.slot = "main".into();
+    let frames = [
+        review_media_frame(FrameCallerKind::Message, false),
+        review_media_frame(FrameCallerKind::Message, true),
+        review_media_frame(FrameCallerKind::Builtin, false),
+        team_dashboard,
+    ];
+    for verb in ["sendAsHuman", "replyAsHuman"] {
+        for frame in &frames {
+            assert_eq!(
+                Dispatcher::default().dispatch_frame(
+                    frame,
+                    verb,
+                    human_media_args(verb),
+                    &Policy::default(),
+                    0
+                ),
+                Decision::Deny {
+                    reason: "invalid: media requires the Inbox pane".into()
+                },
+                "{verb} {:?} slot={}",
+                frame.kind,
+                frame.grant.slot
+            );
+            // Text alone is not the pane's to gate.
+            let mut text = human_media_args(verb);
+            text["text"] = json!("hi");
+            text.as_object_mut().unwrap().remove("media");
+            assert!(
+                !matches!(
+                    Dispatcher::default().dispatch_frame(frame, verb, text.clone(), &Policy::default(), 0),
+                    Decision::Deny { reason } if reason.contains("Inbox pane")
+                ),
+                "{verb} text"
+            );
+            text["media"] = serde_json::Value::Null;
+            assert!(
+                !matches!(
+                    Dispatcher::default().dispatch_frame(frame, verb, text, &Policy::default(), 0),
+                    Decision::Deny { reason } if reason.contains("Inbox pane")
+                ),
+                "{verb} null media"
+            );
+        }
+    }
+}
+
+#[test]
+fn human_media_allowed_from_the_inbox_pane() {
+    let registry = Registry::default();
+    for verb in ["sendAsHuman", "replyAsHuman"] {
+        let spec = registry.get(verb).unwrap();
+        let args = human_media_args(verb);
+        assert!(jsonschema::is_valid(&spec.args_schema, &args), "{verb}");
+        let mut no_alt = args.clone();
+        no_alt["media"]["alt"] = json!("");
+        let mut by_path = args.clone();
+        by_path["media"] = json!({"path":"/tmp/cat.gif","alt":"A cat"});
+        let mut bad_id = args.clone();
+        bad_id["media"]["providerId"] = json!("no spaces");
+        for refused in [no_alt, by_path, bad_id] {
+            assert!(!jsonschema::is_valid(&spec.args_schema, &refused), "{verb} {refused}");
+        }
+        let pane = review_media_frame(crate::dashboard_stream::frame::FrameCallerKind::Builtin, true);
+        let decision = Dispatcher::default().dispatch_frame(&pane, verb, args, &Policy::default(), 0);
+        assert!(
+            !matches!(&decision, Decision::Deny { .. }),
+            "{verb}: {decision:?}"
+        );
+    }
+    // postMessage keeps its own arguments.
+    let post = registry.get("postMessage").unwrap();
+    assert!(post.args_schema["properties"].get("media").is_none());
+}
+
 #[test]
 fn gif_search_is_an_inbox_pane_only_inbox_write_with_no_prompt() {
     use crate::dashboard_stream::frame::FrameCallerKind;

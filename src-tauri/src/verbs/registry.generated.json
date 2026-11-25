@@ -5902,6 +5902,37 @@
     "argsSchema": {
       "additionalProperties": true,
       "properties": {
+        "media": {
+          "additionalProperties": false,
+          "properties": {
+            "alt": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "provider": {
+              "enum": [
+                "giphy",
+                "klipy"
+              ]
+            },
+            "providerId": {
+              "pattern": "^[A-Za-z0-9_-]{1,64}$",
+              "type": "string"
+            },
+            "url": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "url",
+            "alt"
+          ],
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "messageId": {
           "type": "integer"
         },
@@ -6597,6 +6628,50 @@
     "argsSchema": {
       "additionalProperties": true,
       "properties": {
+        "attachFile": {
+          "type": "string"
+        },
+        "inReplyTo": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "media": {
+          "additionalProperties": false,
+          "properties": {
+            "alt": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "provider": {
+              "enum": [
+                "giphy",
+                "klipy"
+              ]
+            },
+            "providerId": {
+              "pattern": "^[A-Za-z0-9_-]{1,64}$",
+              "type": "string"
+            },
+            "url": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "url",
+            "alt"
+          ],
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "replyTo": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
         "team": {
           "type": "object"
         },

@@ -2777,6 +2777,7 @@ async fn unread_by_handle_counts_each_sessions_own_mail_in_its_team_and_marks_no
             None,
             None,
             None,
+            MediaOwner::Sender,
         )
         .await
         .unwrap()
@@ -6862,6 +6863,256 @@ async fn a_send_call_registers_once_after_the_store_and_a_replay_never() {
     .unwrap();
     assert!(is_invalid(&refused), "{refused:?}");
     assert_eq!(fake.media_sent.lock().unwrap().len(), 3);
+}
+
+// The person's GIF from the Inbox pane: this machine's own, registered once per send.
+
+async fn human_send(
+    host: &Arc<dyn InboxHost>,
+    to: &str,
+    text: &str,
+    media: Option<&crate::media::MediaInput>,
+) -> crate::commands::agent_read_model::HumanSendResult {
+    crate::commands::agent_read_model::send_as_human_with_media(
+        host,
+        &launch_team("default"),
+        to,
+        text,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        media,
+    )
+    .await
+    .unwrap()
+}
+
+fn human_sent_id(result: crate::commands::agent_read_model::HumanSendResult) -> i64 {
+    match result {
+        crate::commands::agent_read_model::HumanSendResult::Sent { message_id, .. } => message_id,
+        other => panic!("expected sent, got {other:?}"),
+    }
+}
+
+/// A question from H2 to the person, and one with its replies going to `role:triage`.
+async fn asked_by_h2(host: &Arc<dyn InboxHost>, reply_to: Option<&str>) -> i64 {
+    sent_id(
+        send_message(
+            host,
+            Some("S2"),
+            "human",
+            "which one?",
+            None,
+            None,
+            None,
+            reply_to,
+            None,
+        )
+        .await
+        .unwrap(),
+    )
+}
+
+#[tokio::test]
+async fn human_send_with_media_registers_onsent_once() {
+    let fake = FakeHost::new();
+    let host = port(&fake);
+    // Blank text with a GIF is a send.
+    let id = human_sent_id(human_send(&host, "H2", "", Some(&tagged_media())).await);
+    {
+        let sent = fake.media_sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        let (media, stored_first) = &sent[0];
+        assert!(stored_first, "registration runs after the store");
+        assert_eq!(media.message_id, id);
+        assert_eq!(media.attachment.provider_id.as_deref(), Some("g1"));
+    }
+    let row = fake.rows().into_iter().find(|m| m.id == id).unwrap();
+    assert_eq!((row.from.as_str(), row.to.as_str()), (HUMAN, "H2"));
+    assert_eq!(row.text, "");
+    // The person's reply with a GIF registers once too.
+    let asked = asked_by_h2(&host, None).await;
+    let answer = sent_id(
+        reply_from_human_with_media(
+            &host,
+            &launch_team("default"),
+            asked,
+            "",
+            None,
+            None,
+            Some(&tagged_media()),
+        )
+        .await
+        .unwrap(),
+    );
+    assert_eq!(fake.media_sent.lock().unwrap().len(), 2);
+    assert_eq!(fake.media_sent.lock().unwrap()[1].0.message_id, answer);
+    let row = fake.rows().into_iter().find(|m| m.id == answer).unwrap();
+    assert_eq!((row.from.as_str(), row.to.as_str()), (HUMAN, "H2"));
+    assert_eq!(row.attachments.len(), 1);
+    // Text alone registers nothing, and blank text without media is not a send.
+    human_sent_id(human_send(&host, "H2", "hi", None).await);
+    assert!(matches!(
+        human_send(&host, "H2", " ", None).await,
+        crate::commands::agent_read_model::HumanSendResult::Invalid { .. }
+    ));
+    assert_eq!(fake.media_sent.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn human_replay_never_registers() {
+    let fake = FakeHost::new();
+    let host = port(&fake);
+    let send = || {
+        let host = host.clone();
+        async move {
+            send_message_stored(
+                &host,
+                None.into(),
+                "H2",
+                "",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some("pick-1"),
+                Some(&tagged_media()),
+                MediaOwner::Human,
+            )
+            .await
+            .unwrap()
+        }
+    };
+    let (first, stored) = send().await;
+    assert!(stored.is_some(), "the first send stores the GIF");
+    let (again, replayed) = send().await;
+    assert_eq!(sent_id(again), sent_id(first));
+    assert!(replayed.is_none(), "a replay stores nothing to register");
+    // A refused send stores and registers nothing.
+    let before = fake.rows().len();
+    let path = crate::media::MediaInput {
+        url: None,
+        path: Some("/tmp/cat.gif".into()),
+        ..provider_media(TAGGED_URL)
+    };
+    let refused = human_send(&host, "H2", "", Some(&path)).await;
+    assert!(
+        matches!(&refused, crate::commands::agent_read_model::HumanSendResult::Invalid { message } if message.contains("url")),
+        "{refused:?}"
+    );
+    let unpaired = crate::media::MediaInput {
+        provider_id: None,
+        ..tagged_media()
+    };
+    let refused = human_send(&host, "H2", "", Some(&unpaired)).await;
+    assert!(matches!(
+        refused,
+        crate::commands::agent_read_model::HumanSendResult::Invalid { .. }
+    ));
+    assert_eq!(fake.rows().len(), before);
+    assert!(fake.media_sent.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn human_media_is_stored_own_true() {
+    let fake = FakeHost::new();
+    let host = port(&fake);
+    // No session of this machine is the sender: the person is.
+    assert!(fake.own_media.lock().unwrap().is_empty());
+    let id = human_sent_id(human_send(&host, "H2", "", Some(&tagged_media())).await);
+    let row = fake.rows().into_iter().find(|m| m.id == id).unwrap();
+    assert!(
+        row.attachments[0].own_sender,
+        "the person's GIF is this machine's own"
+    );
+    let asked = asked_by_h2(&host, None).await;
+    let answer = sent_id(
+        reply_from_human_with_media(
+            &host,
+            &launch_team("default"),
+            asked,
+            "this one",
+            None,
+            None,
+            Some(&tagged_media()),
+        )
+        .await
+        .unwrap(),
+    );
+    let row = fake.rows().into_iter().find(|m| m.id == answer).unwrap();
+    assert!(row.attachments[0].own_sender);
+    // An unbound MCP caller also sends as `human`, but stays session-keyed: not own.
+    let unbound = sent_id(
+        send_message_request(
+            &host,
+            None,
+            "H2",
+            "",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(&tagged_media()),
+        )
+        .await
+        .unwrap(),
+    );
+    let row = fake.rows().into_iter().find(|m| m.id == unbound).unwrap();
+    assert_eq!(row.from, HUMAN);
+    assert!(!row.attachments[0].own_sender);
+}
+
+#[tokio::test]
+async fn media_to_role_queue_is_invalid() {
+    let fake = FakeHost::new();
+    let host = port(&fake);
+    let asked = asked_by_h2(&host, Some("role:triage")).await;
+    let before = fake.rows().len();
+    let deliveries = role_deliveries(&fake, "default").len();
+    let refused = human_send(&host, "#triage", "", Some(&tagged_media())).await;
+    assert!(
+        matches!(&refused, crate::commands::agent_read_model::HumanSendResult::Invalid { message } if message.contains("role queue")),
+        "{refused:?}"
+    );
+    let refused = reply_from_human_with_media(
+        &host,
+        &launch_team("default"),
+        asked,
+        "here",
+        None,
+        None,
+        Some(&tagged_media()),
+    )
+    .await
+    .unwrap();
+    assert!(is_invalid(&refused), "{refused:?}");
+    assert_eq!(fake.rows().len(), before, "nothing stored");
+    assert_eq!(role_deliveries(&fake, "default").len(), deliveries);
+    assert!(fake.media_sent.lock().unwrap().is_empty());
+    // Text alone still goes to the role.
+    sent_id(
+        reply_from_human_with_media(
+            &host,
+            &launch_team("default"),
+            asked,
+            "here",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap(),
+    );
+    assert_eq!(role_deliveries(&fake, "default").len(), deliveries + 1);
 }
 
 #[tokio::test]

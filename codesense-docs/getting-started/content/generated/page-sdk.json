@@ -7373,7 +7373,7 @@
     {
       "name": "replyAsHuman",
       "owner": "VerbMethods",
-      "signature": "replyAsHuman(args?: {\n      messageId?: number;\n      text?: string;\n      [key: string]: unknown;\n    }): Promise<unknown>;",
+      "signature": "replyAsHuman(args?: {\n      media?: {\n        alt: string;\n        provider?: \"giphy\" | \"klipy\";\n        providerId?: string;\n        url: string;\n      } | null;\n      messageId?: number;\n      text?: string;\n      [key: string]: unknown;\n    }): Promise<unknown>;",
       "description": "send · inbox:write · confirmable · MCP twin reply",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "class": "send",
@@ -7383,6 +7383,37 @@
       "argsSchema": {
         "additionalProperties": true,
         "properties": {
+          "media": {
+            "additionalProperties": false,
+            "properties": {
+              "alt": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "provider": {
+                "enum": [
+                  "giphy",
+                  "klipy"
+                ]
+              },
+              "providerId": {
+                "pattern": "^[A-Za-z0-9_-]{1,64}$",
+                "type": "string"
+              },
+              "url": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "url",
+              "alt"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "messageId": {
             "type": "integer"
           },
@@ -8104,7 +8135,7 @@
     {
       "name": "sendAsHuman",
       "owner": "VerbMethods",
-      "signature": "sendAsHuman(args?: {\n      team?: Record<string, unknown>;\n      text?: string;\n      to?: string;\n      [key: string]: unknown;\n    }): Promise<unknown>;",
+      "signature": "sendAsHuman(args?: {\n      attachFile?: string;\n      inReplyTo?: number;\n      media?: {\n        alt: string;\n        provider?: \"giphy\" | \"klipy\";\n        providerId?: string;\n        url: string;\n      } | null;\n      replyTo?: string;\n      summary?: string;\n      team?: Record<string, unknown>;\n      text?: string;\n      to?: string;\n      [key: string]: unknown;\n    }): Promise<unknown>;",
       "description": "send · inbox:write · confirmable · MCP twin send_message",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "class": "send",
@@ -8114,6 +8145,50 @@
       "argsSchema": {
         "additionalProperties": true,
         "properties": {
+          "attachFile": {
+            "type": "string"
+          },
+          "inReplyTo": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "media": {
+            "additionalProperties": false,
+            "properties": {
+              "alt": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "provider": {
+                "enum": [
+                  "giphy",
+                  "klipy"
+                ]
+              },
+              "providerId": {
+                "pattern": "^[A-Za-z0-9_-]{1,64}$",
+                "type": "string"
+              },
+              "url": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "url",
+              "alt"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "replyTo": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
           "team": {
             "type": "object"
           },
@@ -16290,6 +16365,37 @@
       "argsSchema": {
         "additionalProperties": true,
         "properties": {
+          "media": {
+            "additionalProperties": false,
+            "properties": {
+              "alt": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "provider": {
+                "enum": [
+                  "giphy",
+                  "klipy"
+                ]
+              },
+              "providerId": {
+                "pattern": "^[A-Za-z0-9_-]{1,64}$",
+                "type": "string"
+              },
+              "url": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "url",
+              "alt"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "messageId": {
             "type": "integer"
           },
@@ -16985,6 +17091,50 @@
       "argsSchema": {
         "additionalProperties": true,
         "properties": {
+          "attachFile": {
+            "type": "string"
+          },
+          "inReplyTo": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "media": {
+            "additionalProperties": false,
+            "properties": {
+              "alt": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "provider": {
+                "enum": [
+                  "giphy",
+                  "klipy"
+                ]
+              },
+              "providerId": {
+                "pattern": "^[A-Za-z0-9_-]{1,64}$",
+                "type": "string"
+              },
+              "url": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "url",
+              "alt"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "replyTo": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
           "team": {
             "type": "object"
           },
@@ -24447,7 +24597,7 @@
     {
       "verb": "replyAsHuman",
       "tier": "send",
-      "args": "{\"additionalProperties\":true,\"properties\":{\"messageId\":{\"type\":\"integer\"},\"text\":{\"type\":\"string\"}},\"required\":[],\"type\":\"object\"}",
+      "args": "{\"additionalProperties\":true,\"properties\":{\"media\":{\"additionalProperties\":false,\"properties\":{\"alt\":{\"minLength\":1,\"type\":\"string\"},\"provider\":{\"enum\":[\"giphy\",\"klipy\"]},\"providerId\":{\"pattern\":\"^[A-Za-z0-9_-]{1,64}$\",\"type\":\"string\"},\"url\":{\"minLength\":1,\"type\":\"string\"}},\"required\":[\"url\",\"alt\"],\"type\":[\"object\",\"null\"]},\"messageId\":{\"type\":\"integer\"},\"text\":{\"type\":\"string\"}},\"required\":[],\"type\":\"object\"}",
       "description": "send · inbox:write · confirmable · MCP twin reply",
       "denyExample": "denied: grant",
       "result": {
@@ -24794,7 +24944,7 @@
     {
       "verb": "sendAsHuman",
       "tier": "send",
-      "args": "{\"additionalProperties\":true,\"properties\":{\"team\":{\"type\":\"object\"},\"text\":{\"type\":\"string\"},\"to\":{\"type\":\"string\"}},\"required\":[],\"type\":\"object\"}",
+      "args": "{\"additionalProperties\":true,\"properties\":{\"attachFile\":{\"type\":\"string\"},\"inReplyTo\":{\"minimum\":1,\"type\":\"integer\"},\"media\":{\"additionalProperties\":false,\"properties\":{\"alt\":{\"minLength\":1,\"type\":\"string\"},\"provider\":{\"enum\":[\"giphy\",\"klipy\"]},\"providerId\":{\"pattern\":\"^[A-Za-z0-9_-]{1,64}$\",\"type\":\"string\"},\"url\":{\"minLength\":1,\"type\":\"string\"}},\"required\":[\"url\",\"alt\"],\"type\":[\"object\",\"null\"]},\"replyTo\":{\"type\":\"string\"},\"summary\":{\"type\":\"string\"},\"team\":{\"type\":\"object\"},\"text\":{\"type\":\"string\"},\"to\":{\"type\":\"string\"}},\"required\":[],\"type\":\"object\"}",
       "description": "send · inbox:write · confirmable · MCP twin send_message",
       "denyExample": "denied: grant",
       "result": {
@@ -25240,8 +25390,8 @@
     }
   ],
   "sources": {
-    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "9e582ca6f6358d340cd8c51222666fd81a17787ebee8bfdac4aa202e5253b4aa",
-    "src-tauri/src/verbs/registry.generated.json": "ebfee5f033d6fb7550e014e0f1664d8ca3d0693d69f473d875427dda4a35f769",
+    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "6c5fb65b951f3d27683a22d15aff9b2b0201a42204e43241d8ad74048a60d7e6",
+    "src-tauri/src/verbs/registry.generated.json": "db9531b902aadd7ed549e2d38f23bc0083051e03563e538b8c67067f5c5de24a",
     "src-tauri/src/verbs/registry.rs": "d27904235c7810a0cdb89e232fae47141f1c1d0beab996950e1bcf5dd05ef486",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29",
