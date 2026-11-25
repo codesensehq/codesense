@@ -1185,7 +1185,7 @@ pub(crate) fn org_guardrails(
     }
     let mut files = Vec::new();
     for team in teams.teams.iter().filter(|t| t.parent_team.is_none()) {
-        let name = String::as_str(&team.name);
+        let name = &team.name[..];
         if let Some(e) = validate_path_segment(name) {
             return Err(fail(&format!("root team {name}"), &e));
         }

@@ -81,8 +81,7 @@ fn guardrail_deny(content: &mut serde_json::Value, rules: &[&str]) {
         .map(|key| (key.to_string(), serde_json::json!("deny")))
         .collect();
     let native = crate::agents::adapter::native_permission_rules(&serde_json::Value::Object(map));
-    let tier = serde_json::Value::as_array(&native["permissions"])
-        .cloned()
+    let tier = Option::cloned(serde_json::Value::as_array(&native["permissions"]))
         .unwrap_or_default();
     let actions: Vec<&str> = tier
         .iter()
@@ -100,7 +99,7 @@ fn guardrail_deny(content: &mut serde_json::Value, rules: &[&str]) {
             .and_then(serde_json::Value::as_str)
             .is_some_and(|action| actions.contains(&action));
         if denied {
-            rule.insert("effect".into(), serde_json::json!("deny"));
+            serde_json::Map::insert(rule, "effect".into(), serde_json::json!("deny"));
         }
     }
     crate::agents::guardrails::append_final_tier(own, tier);
@@ -116,7 +115,7 @@ fn guardrail_tried(
     };
     own.permission
         .iter()
-        .filter(|(_, decision)| String::as_str(decision) != "deny")
+        .filter(|(_, decision)| **decision != "deny")
         .map(|(key, decision)| {
             let kind = if decision == "ask" {
                 RefusalKind::PermissionAsk
