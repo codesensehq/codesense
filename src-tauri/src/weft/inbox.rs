@@ -278,6 +278,10 @@ pub struct InboxMessage {
     /// SW-AGR-18: the kind the sender set, as stored; `None` when it set none. Lanes use
     /// [`InboxMessage::effective_kind`].
     pub kind: Option<MessageKind>,
+    /// The story the message is about: the story's `cs:id` as the sender gave it, stored
+    /// by [`normalize_story_id`]. A reply without one carries its parent's. `None` → no
+    /// story.
+    pub story_id: Option<String>,
 }
 
 impl InboxMessage {
@@ -332,6 +336,57 @@ pub fn normalize_summary(raw: Option<&str>) -> Option<String> {
     cut.truncate(cut.trim_end().len());
     cut.push('…');
     Some(cut)
+}
+
+/// The longest stored [`InboxMessage::story_id`], in chars.
+pub const STORY_ID_MAX_CHARS: usize = 128;
+
+/// A Unicode format (Cf) character: the spoofing set a summary drops, plus the rest of
+/// the category (soft hyphen, word joiners, invisible operators, tags, ...).
+fn is_format_char(c: char) -> bool {
+    is_spoofing_format_char(c)
+        || matches!(
+            c,
+            '\u{00AD}'
+                | '\u{0600}'..='\u{0605}'
+                | '\u{061C}'
+                | '\u{06DD}'
+                | '\u{070F}'
+                | '\u{0890}'..='\u{0891}'
+                | '\u{08E2}'
+                | '\u{180E}'
+                | '\u{2060}'..='\u{2064}'
+                | '\u{206A}'..='\u{206F}'
+                | '\u{FFF9}'..='\u{FFFB}'
+                | '\u{110BD}'
+                | '\u{110CD}'
+                | '\u{13430}'..='\u{1343F}'
+                | '\u{1BCA0}'..='\u{1BCA3}'
+                | '\u{1D173}'..='\u{1D17A}'
+                | '\u{E0001}'
+                | '\u{E0020}'..='\u{E007F}'
+        )
+}
+
+/// A sender's story id as the store keeps it: trimmed, blank → `None`. One over
+/// [`STORY_ID_MAX_CHARS`] chars, or carrying a control, format or line/paragraph
+/// separator character, is refused, never cut or cleaned: a story id is matched exactly.
+pub fn normalize_story_id(raw: Option<&str>) -> WvWriteResult<Option<String>> {
+    let Some(story) = raw.map(str::trim).filter(|s| !str::is_empty(s)) else {
+        return Ok(None);
+    };
+    if Iterator::count(str::chars(story)) > STORY_ID_MAX_CHARS {
+        return Err(invalid("storyId must be at most 128 characters"));
+    }
+    if story
+        .chars()
+        .any(|c| c.is_control() || is_format_char(c) || matches!(c, '\u{2028}' | '\u{2029}'))
+    {
+        return Err(invalid(
+            "storyId must not contain control, format or separator characters",
+        ));
+    }
+    Ok(Some(story.to_string()))
 }
 
 /// The prefix that marks a [`InboxMessage::reply_to`] as a role queue.
@@ -399,7 +454,7 @@ pub struct InboxUnread {
 }
 
 const SELECT_COLUMNS: &str =
-    "SELECT id, sender, recipient, text, created_at, read_at, in_reply_to, in_reply_to_org, in_reply_to_team, primary_file, archived_at, withdrawn_at, on_click, content_type, via, reply_to, summary, kind, attachments, told_at FROM wv_inbox";
+    "SELECT id, sender, recipient, text, created_at, read_at, in_reply_to, in_reply_to_org, in_reply_to_team, primary_file, archived_at, withdrawn_at, on_click, content_type, via, reply_to, summary, kind, attachments, told_at, story_id FROM wv_inbox";
 
 fn row_to_message(r: &rusqlite::Row<'_>) -> rusqlite::Result<InboxMessage> {
     let org: Option<String> = r.get(7)?;
@@ -439,6 +494,7 @@ fn row_to_message(r: &rusqlite::Row<'_>) -> rusqlite::Result<InboxMessage> {
             .get::<_, Option<String>>(16)?
             .filter(|s| !s.trim().is_empty()),
         kind: MessageKind::from_stored(r.get::<_, Option<String>>(17)?.as_deref()),
+        story_id: r.get::<_, Option<String>>(20)?,
     })
 }
 
@@ -764,11 +820,14 @@ pub(crate) fn inbox_insert_request(
         request_id,
         request_hash,
         None,
+        None,
     )
     .map(|(id, _)| id)
 }
 
-/// The insert decision is made in the same transaction as the retry receipt.
+/// The insert decision is made in the same transaction as the retry receipt. `story_id`
+/// is stored by [`normalize_story_id`] and is not part of the retry hash: a retry that
+/// differs only in its story replays the first message.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn inbox_insert_request_outcome(
     store: &WeftStore,
@@ -786,7 +845,9 @@ pub(crate) fn inbox_insert_request_outcome(
     request_id: Option<&str>,
     request_hash: Option<&str>,
     attachments: Option<&[crate::media::Attachment]>,
+    story_id: Option<&str>,
 ) -> WvWriteResult<(i64, bool)> {
+    let story_id = normalize_story_id(story_id)?;
     let text = if text.trim().is_empty() && attachments.is_some_and(|a| !a.is_empty()) {
         String::new()
     } else {
@@ -835,9 +896,9 @@ pub(crate) fn inbox_insert_request_outcome(
         }
     }
     tx.execute(
-        "INSERT INTO wv_inbox (sender, recipient, text, created_at, in_reply_to, in_reply_to_org, in_reply_to_team, primary_file, on_click, content_type, reply_to, summary, kind, attachments) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
-        params![from, to, text, now_ms(), in_reply_to, reply_org, reply_team, primary_file, on_click_json, content_type_str, reply_to, summary, kind, attachments_json],
+        "INSERT INTO wv_inbox (sender, recipient, text, created_at, in_reply_to, in_reply_to_org, in_reply_to_team, primary_file, on_click, content_type, reply_to, summary, kind, attachments, story_id) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        params![from, to, text, now_ms(), in_reply_to, reply_org, reply_team, primary_file, on_click_json, content_type_str, reply_to, summary, kind, attachments_json, story_id],
     )?;
     let id = tx.last_insert_rowid();
     write_audit_public(&tx, INBOX, "append", id)?;

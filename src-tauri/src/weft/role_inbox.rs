@@ -1117,13 +1117,15 @@ pub fn send_role_message_commit(
         content_type,
         None,
         None,
+        None,
     )
 }
 
 /// [`send_role_message_commit`] with a `reply_to` stored on the inbox row (where
 /// replies to it go instead of `sender`), as the caller resolved it, and a `summary`
 /// (the list preview, stored normalized). Both belong in `payload_hash` when a
-/// request id is used.
+/// request id is used. `story_id` (the story the message is about) is stored by
+/// [`super::inbox::normalize_story_id`] and never belongs in `payload_hash`.
 #[allow(clippy::too_many_arguments)]
 pub fn send_role_message_commit_with_reply_to(
     store: &WeftStore,
@@ -1140,6 +1142,7 @@ pub fn send_role_message_commit_with_reply_to(
     content_type: Option<super::inbox::MessageContentType>,
     reply_to: Option<&str>,
     summary: Option<&str>,
+    story_id: Option<&str>,
 ) -> RoleInboxResult<(i64, i64)> {
     send_role_message_commit_outcome(
         store,
@@ -1157,6 +1160,7 @@ pub fn send_role_message_commit_with_reply_to(
         reply_to,
         summary,
         None,
+        story_id,
     )
     .map(|(message_id, delivery_id, _)| (message_id, delivery_id))
 }
@@ -1179,8 +1183,10 @@ pub(crate) fn send_role_message_commit_outcome(
     reply_to: Option<&str>,
     summary: Option<&str>,
     attachments: Option<&[crate::media::Attachment]>,
+    story_id: Option<&str>,
 ) -> RoleInboxResult<(i64, i64, bool)> {
     let role = stored_role(role)?;
+    let story_id = super::inbox::normalize_story_id(story_id)?;
     let reply_to = reply_to.map(str::trim).filter(|s| !s.is_empty());
     let summary = super::inbox::normalize_summary(summary);
     if text.trim().is_empty() && !attachments.is_some_and(|a| !a.is_empty()) {
@@ -1219,9 +1225,9 @@ pub(crate) fn send_role_message_commit_outcome(
     let now_ms = chrono::Utc::now().timestamp_millis();
     tx.execute(
         "INSERT INTO wv_inbox \
-         (sender, recipient, text, created_at, in_reply_to, in_reply_to_org, in_reply_to_team, primary_file, on_click, content_type, reply_to, summary, attachments) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-        params![sender, role, stored_text, now_ms, in_reply_to, reply_org, reply_team, primary_file, on_click_json, content_type_str, reply_to, summary, attachments_json],
+         (sender, recipient, text, created_at, in_reply_to, in_reply_to_org, in_reply_to_team, primary_file, on_click, content_type, reply_to, summary, attachments, story_id) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        params![sender, role, stored_text, now_ms, in_reply_to, reply_org, reply_team, primary_file, on_click_json, content_type_str, reply_to, summary, attachments_json, story_id],
     )?;
     let message_id = tx.last_insert_rowid();
     write_audit_public(&tx, "wv_inbox", "append", message_id)?;

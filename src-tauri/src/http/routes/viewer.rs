@@ -2202,6 +2202,7 @@ mod tests {
             reply_to: None,
             summary: None,
             kind: None,
+            story_id: None,
         }
     }
 
