@@ -278,9 +278,7 @@ pub(crate) async fn inbox_matching(
         view.messages.retain(|m| m.kind == kind);
     }
     if let Some(story) = &story {
-        Vec::retain(&mut view.messages, |m| {
-            Option::as_deref(&m.story_id) == Some(String::as_str(story))
-        });
+        Vec::retain(&mut view.messages, |m| m.story_id.as_ref() == Some(story));
     }
     if let Some(conversation) = &query.conversation {
         view.messages.retain(|m| &m.conversation == conversation);
