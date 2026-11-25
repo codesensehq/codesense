@@ -254,18 +254,25 @@ a key, none of them is made.
 - **Code:** `src-tauri/src/dashboard_publish/` (`client.rs`, `watch.rs`,
   `live.rs`, `approval.rs`, `confirm.rs`, `keys.rs`).
 
-### 12. GIF search for agents (GIPHY)
+### 12. GIF search for agents (GIPHY or KLIPY)
 
-- **What:** when an agent calls the `gif_search` tool, the app asks GIPHY's API
-  for matching GIFs, straight from this computer with the GIPHY API key you
-  saved in Settings → Messaging. Nothing is sent without a key or while GIF
-  search is Off.
-- **What it sends:** a `GET` to `api.giphy.com` (`/v1/gifs/search` with the
-  agent's search words, how many results and the rating ceiling, or `/v1/gifs`
-  with the ids of GIFs found earlier), with your key,
+- **What:** when an agent calls the `gif_search` tool, the app asks the GIF
+  provider you chose in Settings → Messaging, GIPHY or KLIPY, for matching GIFs,
+  straight from this computer with that provider's API key you saved there.
+  Nothing is sent without a key or while GIF search is Off, and nothing goes to
+  the provider you didn't choose.
+- **What it sends to GIPHY:** a `GET` to `api.giphy.com` (`/v1/gifs/search` with
+  the agent's search words, how many results and the rating ceiling, or
+  `/v1/gifs` with the ids of GIFs found earlier), with your key,
   `User-Agent: CodeSense-GifSearch/1.0` and no referrer. GIPHY sees your IP
   address, your key and the search words.
-- **Send and view pings:** if you turn on GIF search with your GIPHY key,
+- **What it sends to KLIPY:** a `GET` to `api.klipy.com` (`/api/v1/<key>/gifs/search`
+  with the agent's search words, how many results, the content filter for the
+  rating ceiling and the customer id below, or `/api/v1/<key>/gifs/items` with
+  the ids of GIFs found earlier), with the same `User-Agent` and no referrer.
+  KLIPY's API takes the key in the URL path, so it goes only in that request.
+  KLIPY sees your IP address, your key, the search words and the customer id.
+- **GIPHY's send and view pings:** if you turn on GIF search with GIPHY,
   CodeSense sends GIPHY's required send and view pings with a random id GIPHY
   issues for this install. Turning GIF search off or removing the key stops them
   and deletes the id; replacing the key deletes it too. A send ping goes when an
@@ -280,23 +287,35 @@ a key, none of them is made.
   that call together stay within 300 an hour per key, and none are sent while
   GIPHY has paused searches. The 300-an-hour count and the 15-minute wait are kept
   in memory, so each run of the app starts them afresh.
+- **KLIPY's share ping:** if you turn on GIF search with KLIPY, CodeSense sends
+  KLIPY a share ping when an agent on this computer sends a GIF a KLIPY search
+  found in the last hour: a `POST` to `api.klipy.com/api/v1/<key>/gifs/share/<id>`
+  with the words that search used and the customer id. KLIPY gets nothing when a
+  GIF is shown or clicked. The customer id is a random id CodeSense makes on this
+  computer, with no network call, the first time a KLIPY search needs it; each
+  KLIPY key gets its own. Share pings count toward the search limit below, and
+  none are sent while KLIPY has paused searches. Turning GIF search off or
+  removing the key stops them and deletes the id; replacing the key gives the new
+  key a new id.
 - **Limits:** public addresses only, `https://` only, no redirects, 2 MiB of
-  response at most. At most 90 searches in any hour per key unless you mark it a
-  production key, and none for as long as GIPHY asks after it refuses one (a
-  `429`).
-- **What is kept:** the key stays in your OS keychain, in the
-  `ai.codesense.giphy-api-key` item under your login name. In the app's data
-  folder, `gif.json` keeps On or Off, the rating ceiling and which key is a
-  production key, `gif-rate.json` keeps the last hour's search times and
-  `gif-install.json` keeps the random id, readable by you only; all three name a
-  key only by a fingerprint. The pingback links GIPHY returns with each
-  result are held in memory for an hour. A GIF is downloaded only when an agent sends it,
-  as in [Pictures in the inbox](#4-pictures-in-the-inbox).
-- **Turning it off:** set GIF search to Off in Settings → Messaging, or remove
-  the key there. Either one deletes `gif-install.json`, as replacing the key
-  does.
-- **Code:** `src-tauri/src/gif/` (`giphy.rs`, `bucket.rs`, `settings.rs`,
-  `register.rs`),
+  response at most. At most 90 searches in any hour per key (for KLIPY, searches
+  and share pings together) unless you mark it a production key, and none for as
+  long as the provider asks after it refuses one (a `429`).
+- **What is kept:** each key stays in your OS keychain, in the
+  `ai.codesense.giphy-api-key` or `ai.codesense.klipy-api-key` item under your
+  login name; switching provider keeps both. In the app's data folder,
+  `gif.json` keeps On or Off, the chosen provider, the rating ceiling and which
+  keys are production keys, `gif-rate.json` keeps the last hour's search times
+  and `gif-install.json` keeps GIPHY's random id and KLIPY's customer id,
+  readable by you only; all three name a key only by a fingerprint. The pingback
+  links GIPHY returns with each result, and the search words of each KLIPY
+  result, are held in memory for an hour. A GIF is downloaded only when an agent
+  sends it, as in [Pictures in the inbox](#4-pictures-in-the-inbox).
+- **Turning it off:** set GIF search to Off in Settings → Messaging, which
+  deletes `gif-install.json`, or remove a provider's key there, which deletes
+  that provider's id. Replacing a key deletes its id too.
+- **Code:** `src-tauri/src/gif/` (`giphy.rs`, `klipy.rs`, `transport.rs`,
+  `bucket.rs`, `settings.rs`, `install.rs`, `register.rs`),
   `src-tauri/src/mcp/gif_tools.rs`.
 
 ## Content you open

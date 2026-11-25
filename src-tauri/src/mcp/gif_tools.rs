@@ -17,7 +17,7 @@ pub struct GifSearchParams {
     #[serde(default)]
     pub query: Option<String>,
     /// Provider ids from an earlier result, to fetch those GIFs again: 1 to 10, each
-    /// `^[A-Za-z0-9_-]{1,64}$`.
+    /// `^[A-Za-z0-9_-]{1,128}$`.
     #[serde(default)]
     pub ids: Option<Vec<String>>,
     /// How many candidates a search returns: 1 to 10, default 6.
@@ -27,7 +27,7 @@ pub struct GifSearchParams {
     /// ceiling.
     #[serde(default)]
     pub rating: Option<String>,
-    /// Whose ids `ids` are: `giphy`, the only provider today. Omitted means the active one.
+    /// Whose ids `ids` are: `giphy` or `klipy`. Omitted means the active one.
     #[serde(default)]
     pub provider: Option<String>,
 }
