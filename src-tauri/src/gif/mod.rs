@@ -5,6 +5,7 @@
 pub(crate) mod analytics;
 pub(crate) mod bucket;
 pub(crate) mod giphy;
+pub(crate) mod klipy;
 pub(crate) mod page;
 pub(crate) mod register;
 pub(crate) mod settings;
@@ -705,6 +706,30 @@ impl GifService {
         let production = current.is_production(provider, &fingerprint);
         let bucket_key = self::bucket_key(provider, &fingerprint);
         let rating = Rating::clamp(rating, current.ceiling);
+        // A lookup that takes no rating asks only for GIFs a search within the hour returned at
+        // or under `rating`. With none, nothing is asked and no token is taken.
+        let cut;
+        let request = match request {
+            Request::Lookup { ids } if !Provider::rates_lookup(provider) => {
+                let now = (self.clock)();
+                analytics::Analytics::start_epoch(&self.analytics, epoch);
+                let held: Vec<String> = ids
+                    .iter()
+                    .filter(|id| {
+                        analytics::Analytics::held_entry(&self.analytics, provider, id, now)
+                            .is_some_and(|entry| entry.rating <= rating)
+                    })
+                    .cloned()
+                    .collect();
+                if held.is_empty() {
+                    log::info!(target: "gif", "gif search: no {} search in the last hour returned these ids", provider.display_name());
+                    return Ok((provider, Vec::new()));
+                }
+                cut = Request::Lookup { ids: held };
+                &cut
+            }
+            request => request,
+        };
         let (bucket, counted, now) = (self.bucket.clone(), bucket_key.clone(), (self.clock)());
         tokio::task::spawn_blocking(move || bucket.take(&counted, production, now))
             .await
@@ -722,10 +747,17 @@ impl GifService {
         match result {
             Ok(found) => {
                 // Held only when search stayed On with the same key the whole time, so a new
-                // install id never registers a GIF found under the old one.
-                if register::install_epoch(&self.data_dir) == epoch {
+                // install id never registers a GIF found under the old one. A lookup that took no
+                // rating is never held, so only a rated search can start or extend a hold.
+                let query = match request {
+                    Request::Search { query, .. } => Some(query.as_str()),
+                    Request::Lookup { .. } => None,
+                };
+                let holds = query.is_some() || Provider::rates_lookup(provider);
+                if holds && register::install_epoch(&self.data_dir) == epoch {
                     analytics::Analytics::start_epoch(&self.analytics, epoch);
-                    self.analytics.record(provider, &found, (self.clock)());
+                    let now = (self.clock)();
+                    self.analytics.record(provider, &found, rating, query, now);
                 }
                 Ok((provider, found.into_iter().map(|f| f.candidate).collect()))
             }
@@ -744,26 +776,6 @@ impl GifService {
     }
 }
 
-/// The provider with no adapter yet: every call is `providerUnavailable`.
-struct Unready;
-impl GifProvider for Unready {
-    fn search_gifs<'a>(
-        &'a self,
-        _: &'a str,
-        _: Rating,
-        _: usize,
-    ) -> BoxFuture<'a, Result<Vec<Found>, GifError>> {
-        Box::pin(async { Err(GifError::ProviderUnavailable) })
-    }
-    fn lookup_gifs<'a>(
-        &'a self,
-        _: &'a [String],
-        _: Rating,
-    ) -> BoxFuture<'a, Result<Vec<Found>, GifError>> {
-        Box::pin(async { Err(GifError::ProviderUnavailable) })
-    }
-}
-
 /// The app's GIF service, made on first use.
 pub(crate) fn service<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
@@ -778,7 +790,7 @@ pub(crate) fn service<R: tauri::Runtime>(
         move |provider: Provider, key: Secret, now: i64| -> Box<dyn GifProvider> {
             match provider {
                 Provider::Giphy => Box::new(giphy::Giphy::new(key, transport.clone(), now)),
-                Provider::Klipy => Box::new(Unready),
+                Provider::Klipy => Box::new(klipy::Klipy::new(key, None, transport.clone(), now)),
             }
         },
     );

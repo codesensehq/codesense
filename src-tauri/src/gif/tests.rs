@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::giphy::Giphy;
+use super::klipy::Klipy;
 use super::settings::{self, KeyState, Keys, SettingsUpdate};
 use super::transport::{Failure, Reply, Transport};
 use super::*;
@@ -167,8 +168,12 @@ fn harness_with(keys: impl FnOnce(Arc<Counting>) -> Keys, with_key: bool) -> Har
     let now = Arc::new(AtomicI64::new(START_MS));
     let adapter_transport: Arc<dyn Transport> = transport.clone();
     let adapters: Adapters = Arc::new(
-        move |_: Provider, key: Secret, now: i64| -> Box<dyn GifProvider> {
-            Box::new(Giphy::new(key, adapter_transport.clone(), now))
+        move |provider: Provider, key: Secret, now: i64| -> Box<dyn GifProvider> {
+            let transport = adapter_transport.clone();
+            match provider {
+                Provider::Giphy => Box::new(Giphy::new(key, transport, now)),
+                Provider::Klipy => Box::new(Klipy::new(key, None, transport, now)),
+            }
         },
     );
     let clock_now = now.clone();
@@ -555,7 +560,7 @@ fn the_pingback_map_holds_at_most_2000_entries_and_drops_the_oldest() {
         }),
     };
     let batch: Vec<Found> = (0..2100).map(found).collect();
-    held.record(Provider::Giphy, &batch, START_MS);
+    held.record(Provider::Giphy, &batch, Rating::Pg, None, START_MS);
     assert_eq!(held.held_count(), analytics::MAX_ENTRIES);
     assert!(held
         .pingbacks_for(Provider::Giphy, "id0", START_MS)
@@ -567,7 +572,13 @@ fn the_pingback_map_holds_at_most_2000_entries_and_drops_the_oldest() {
         .pingbacks_for(Provider::Giphy, "id100", START_MS)
         .is_some());
     // Recording one again makes it the newest.
-    held.record(Provider::Giphy, &[found(100), found(5000)], START_MS + 1);
+    held.record(
+        Provider::Giphy,
+        &[found(100), found(5000)],
+        Rating::Pg,
+        None,
+        START_MS + 1,
+    );
     assert_eq!(held.held_count(), analytics::MAX_ENTRIES);
     assert!(held
         .pingbacks_for(Provider::Giphy, "id100", START_MS)
@@ -2133,4 +2144,450 @@ fn a_pick_registers_only_a_known_provider_and_a_valid_id() {
         assert_eq!(refused["status"], "error", "{provider} {id}");
         assert_eq!(refused["error"], "badQuery");
     }
+}
+
+// ---- KLIPY: search, lookup and its bucket ----
+
+const KLIPY_SEARCH: &str = include_str!("fixtures/klipy/search.json");
+const KLIPY_ITEMS: &str = include_str!("fixtures/klipy/items.json");
+/// The fixture's usable results, in KLIPY's order: an ad, a result with no slug, one off
+/// KLIPY's hosts, one with only video and one with an invalid slug sit between them.
+const KLIPY_KEPT: [&str; 12] = [
+    "hello-hi-662",
+    "wave-hello-101",
+    "ship-it-77",
+    "thumbs-up-12",
+    "party-time-55",
+    "thank-you-so-much-for-everything-you-did-today-it-really-made-my-whole-week-better-42",
+    "high-five-8",
+    "dance-floor-21",
+    "mic-drop-4",
+    "lets-go-90",
+    "celebrate-33",
+    "nailed-it-6",
+];
+const KLIPY_EMPTY: &str = r#"{"result":true,"data":{"data":[]}}"#;
+
+/// The KLIPY adapter on a recorded transport.
+fn klipy_adapter(key: &str, customer_id: Option<&str>) -> (Klipy, Arc<Recorded>) {
+    let wire = Arc::new(Recorded::default());
+    let transport: Arc<dyn Transport> = wire.clone();
+    let adapter = Klipy::new(
+        Secret::new(key),
+        customer_id.map(str::to_string),
+        transport,
+        START_MS,
+    );
+    (adapter, wire)
+}
+
+/// The harness with KLIPY the active provider.
+fn klipy_harness() -> Harness {
+    let h = harness();
+    std::fs::write(h.dir.path().join(settings::FILE), r#"{"provider":"klipy"}"#).unwrap();
+    h
+}
+
+fn pairs_of(url: &url::Url) -> Vec<(String, String)> {
+    url.query_pairs()
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect()
+}
+
+fn lookup(ids: &[&str]) -> Request {
+    let ids: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
+    normalize(None, Some(ids.as_slice()), None).unwrap()
+}
+
+#[tokio::test]
+async fn klipy_search_sends_q_per_page_filter_customer_id() {
+    let (klipy, wire) = klipy_adapter(KEY, Some("an-install-id"));
+    wire.reply(200, None, KLIPY_SEARCH);
+    GifProvider::search_gifs(&klipy, "ship it", Rating::Pg, 6)
+        .await
+        .unwrap();
+    let url = wire.urls.lock().unwrap()[0].clone();
+    assert_eq!(url.scheme(), "https");
+    assert_eq!(url.host_str(), Some("api.klipy.com"));
+    assert_eq!(url.path(), format!("/api/v1/{KEY}/gifs/search"));
+    let expected = [
+        ("q", "ship it"),
+        ("per_page", "8"),
+        ("page", "1"),
+        ("content_filter", "medium"),
+        ("customer_id", "an-install-id"),
+    ]
+    .map(|(k, v)| (k.to_string(), v.to_string()));
+    assert_eq!(pairs_of(&url), expected);
+}
+
+#[tokio::test]
+async fn klipy_search_asks_for_8_and_returns_limit_in_order() {
+    for (limit, per_page) in [(1, "8"), (6, "8"), (10, "10")] {
+        let (klipy, wire) = klipy_adapter(KEY, None);
+        wire.reply(200, None, KLIPY_SEARCH);
+        let found = GifProvider::search_gifs(&klipy, "hello", Rating::Pg, limit)
+            .await
+            .unwrap();
+        let candidates: Vec<Candidate> = found.into_iter().map(|f| f.candidate).collect();
+        assert_eq!(ids(&candidates), KLIPY_KEPT[..limit], "limit {limit}");
+        assert!(wire
+            .last_pairs()
+            .contains(&("per_page".into(), per_page.into())));
+    }
+}
+
+#[tokio::test]
+async fn klipy_search_never_sends_content_filter_off() {
+    for (rating, filter) in [
+        (Rating::G, "high"),
+        (Rating::Pg, "medium"),
+        (Rating::Pg13, "low"),
+    ] {
+        assert_eq!(klipy::content_filter(rating), filter);
+        let (klipy, wire) = klipy_adapter(KEY, None);
+        wire.reply(200, None, KLIPY_EMPTY);
+        GifProvider::search_gifs(&klipy, "hello", rating, 6)
+            .await
+            .unwrap();
+        let filters: Vec<String> = wire
+            .last_pairs()
+            .into_iter()
+            .filter(|(k, _)| k == "content_filter")
+            .map(|(_, v)| v)
+            .collect();
+        assert_eq!(filters, [filter]);
+    }
+}
+
+#[tokio::test]
+async fn klipy_search_maps_401_403_429_5xx_and_bad_json() {
+    let cases: [(u16, Option<&str>, &str, GifError); 11] = [
+        (401, None, "{}", GifError::InvalidKey),
+        (403, None, "{}", GifError::InvalidKey),
+        (
+            429,
+            Some("30"),
+            "{}",
+            GifError::RateLimited { retry_after: 30 },
+        ),
+        (
+            429,
+            None,
+            "{}",
+            GifError::RateLimited {
+                retry_after: bucket::retry_after_secs(None, START_MS),
+            },
+        ),
+        (
+            404,
+            None,
+            "{}",
+            GifError::BadQuery("KLIPY refused the request"),
+        ),
+        (
+            400,
+            None,
+            "{}",
+            GifError::BadQuery("KLIPY refused the request"),
+        ),
+        (500, None, "{}", GifError::ProviderUnavailable),
+        (503, None, "{}", GifError::ProviderUnavailable),
+        (200, None, "not json", GifError::ProviderUnavailable),
+        (
+            200,
+            None,
+            r#"{"result":false,"data":{"data":[]}}"#,
+            GifError::ProviderUnavailable,
+        ),
+        (
+            200,
+            None,
+            r#"{"result":true,"data":[]}"#,
+            GifError::ProviderUnavailable,
+        ),
+    ];
+    for (status, retry_after, body, expected) in cases {
+        let (klipy, wire) = klipy_adapter(KEY, None);
+        wire.reply(status, retry_after, body);
+        let result = GifProvider::search_gifs(&klipy, "hello", Rating::Pg, 6).await;
+        assert_eq!(result.map(|_| ()), Err(expected), "{status} {body}");
+    }
+    let (klipy, wire) = klipy_adapter(KEY, None);
+    wire.fail(Failure::Timeout);
+    assert_eq!(
+        GifProvider::search_gifs(&klipy, "hello", Rating::Pg, 6)
+            .await
+            .map(|_| ()),
+        Err(GifError::ProviderUnavailable)
+    );
+}
+
+#[tokio::test]
+async fn klipy_search_drops_ads_offhost_unfit_and_bad_slugs_only() {
+    let (klipy, wire) = klipy_adapter(KEY, None);
+    wire.reply(200, None, KLIPY_SEARCH);
+    let found = GifProvider::search_gifs(&klipy, "hello", Rating::Pg, 10)
+        .await
+        .unwrap();
+    let candidates: Vec<Candidate> = found.iter().map(|f| f.candidate.clone()).collect();
+    for dropped in [
+        "ad-slot-1",
+        "off-host-9",
+        "no-fitting-rendition-3",
+        "bad/slug",
+    ] {
+        assert!(!ids(&candidates).contains(&dropped), "{dropped}");
+    }
+    assert!(found.iter().all(|f| f.pingbacks.is_none()));
+    let first = &candidates[0];
+    assert_eq!(first.provider, Provider::Klipy);
+    assert_eq!(first.id, "hello-hi-662");
+    assert_eq!(first.title, "Hello");
+    // The smallest animated rendition at least 480 wide, and the sm still.
+    assert_eq!(
+        first.url,
+        "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/01/af/md1.webp"
+    );
+    assert_eq!(
+        first.preview_url,
+        "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/01/af/sm1.jpg"
+    );
+    assert_eq!((first.width, first.height), (498, 280));
+    // A slug longer than 64 characters is kept.
+    assert!(candidates.iter().any(|c| c.id.len() > 64));
+}
+
+#[tokio::test]
+async fn klipy_key_is_percent_escaped_in_the_path() {
+    let key = "k/ey?x=1#y%z-and-padding-0001";
+    let (klipy, wire) = klipy_adapter(key, Some("an-install-id"));
+    wire.reply(200, None, KLIPY_EMPTY);
+    wire.reply(200, None, KLIPY_EMPTY);
+    GifProvider::search_gifs(&klipy, "hello", Rating::Pg, 6)
+        .await
+        .unwrap();
+    GifProvider::lookup_gifs(&klipy, &["hello-hi-662".to_string()], Rating::Pg)
+        .await
+        .unwrap();
+    let urls = wire.urls.lock().unwrap().clone();
+    for (url, tail) in urls.iter().zip(["search", "items"]) {
+        let segments: Vec<&str> = url.path_segments().unwrap().collect();
+        assert_eq!(
+            segments,
+            [
+                "api",
+                "v1",
+                "k%2Fey%3Fx=1%23y%25z-and-padding-0001",
+                "gifs",
+                tail
+            ],
+            "{url}"
+        );
+        assert_eq!(url.fragment(), None);
+        assert!(pairs_of(url)
+            .iter()
+            .all(|(k, v)| k != "x" && !v.contains("ey")));
+    }
+    assert_eq!(
+        pairs_of(&urls[1]),
+        [("slugs".to_string(), "hello-hi-662".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn klipy_no_error_log_or_result_holds_the_key() {
+    crate::test_logger::clear("gif");
+    let h = klipy_harness();
+    h.transport.fail(Failure::Network);
+    h.transport
+        .reply(500, None, &format!("{{\"echo\":\"{KEY}\"}}"));
+    h.transport.reply(401, None, "{}");
+    h.transport.reply(404, None, "{}");
+    h.transport.reply(200, None, "not json");
+    h.transport.reply(200, None, r#"{"result":false}"#);
+    h.transport.reply(429, Some("5"), "{}");
+    let request = normalize(Some("ship it"), None, None).unwrap();
+    for _ in 0..7 {
+        let failed = h.service.run_in(&request, None, None).await.unwrap_err();
+        assert_eq!(failed.provider, Some(Provider::Klipy));
+        let result = failed.tool_result().to_string();
+        assert!(
+            !result.contains(KEY) && !result.contains("api.klipy.com"),
+            "{result}"
+        );
+        assert!(!format!("{failed:?}").contains(KEY));
+    }
+    assert!(h
+        .transport
+        .urls
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|u| u.path().contains(KEY) && u.query().is_some_and(|q| !q.contains(KEY))));
+    let lines = crate::test_logger::lines("gif");
+    assert!(lines.len() >= 7, "{lines:?}");
+    for line in &lines {
+        assert!(!line.contains(KEY), "{line}");
+    }
+    assert!(h.file(bucket::FILE).contains("klipy:"));
+    assert!(!h.file(bucket::FILE).contains(KEY));
+}
+
+#[tokio::test]
+async fn klipy_lookup_held_slug() {
+    let h = klipy_harness();
+    h.transport.reply(200, None, KLIPY_SEARCH);
+    h.search("ship it").await.unwrap();
+    h.transport.reply(200, None, KLIPY_ITEMS);
+    let found = h.run(&lookup(&["thumbs-up-12"]), None).await.unwrap();
+    assert_eq!(ids(&found), ["thumbs-up-12"]);
+    assert_eq!(h.transport.requests(), 2);
+    let url = h.transport.urls.lock().unwrap()[1].clone();
+    assert_eq!(url.path(), format!("/api/v1/{KEY}/gifs/items"));
+    assert_eq!(
+        pairs_of(&url),
+        [("slugs".to_string(), "thumbs-up-12".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn klipy_lookup_unheld_slug_no_request_no_token() {
+    let h = klipy_harness();
+    let found = h.run(&lookup(&["hello-hi-662"]), None).await;
+    assert_eq!(found, Ok(vec![]));
+    assert_eq!(h.transport.requests(), 0);
+    assert!(!h.file(bucket::FILE).contains("klipy:"));
+}
+
+#[tokio::test]
+async fn klipy_lookup_slug_held_at_a_higher_rating() {
+    let h = klipy_harness();
+    let ceiling = SettingsUpdate {
+        ceiling: Some("pg-13".into()),
+        ..Default::default()
+    };
+    settings::set_with(&h.keys(), h.dir.path(), ceiling).unwrap();
+    h.transport.reply(200, None, KLIPY_SEARCH);
+    let search = normalize(Some("ship it"), None, Some(6)).unwrap();
+    h.run(&search, Some("pg-13")).await.unwrap();
+    for rating in ["g", "pg"] {
+        assert_eq!(
+            h.run(&lookup(&["thumbs-up-12"]), Some(rating)).await,
+            Ok(vec![]),
+            "{rating}"
+        );
+    }
+    assert_eq!(h.transport.requests(), 1);
+    h.transport.reply(200, None, KLIPY_ITEMS);
+    let found = h
+        .run(&lookup(&["thumbs-up-12"]), Some("pg-13"))
+        .await
+        .unwrap();
+    assert_eq!(ids(&found), ["thumbs-up-12"]);
+}
+
+#[tokio::test]
+async fn klipy_lookup_order_asked() {
+    let h = klipy_harness();
+    h.transport.reply(200, None, KLIPY_SEARCH);
+    h.search("ship it").await.unwrap();
+    h.transport.reply(200, None, KLIPY_ITEMS);
+    let asked = ["ship-it-77", "never-held-1", "hello-hi-662", "thumbs-up-12"];
+    let found = h.run(&lookup(&asked), None).await.unwrap();
+    assert_eq!(ids(&found), ["ship-it-77", "hello-hi-662", "thumbs-up-12"]);
+    assert!(h.transport.last_pairs().contains(&(
+        "slugs".into(),
+        "ship-it-77,hello-hi-662,thumbs-up-12".into()
+    )));
+}
+
+#[tokio::test]
+async fn klipy_lookup_expired_hold() {
+    let h = klipy_harness();
+    h.transport.reply(200, None, KLIPY_SEARCH);
+    h.search("ship it").await.unwrap();
+    h.advance(61 * 60 * 1000);
+    assert_eq!(h.run(&lookup(&["hello-hi-662"]), None).await, Ok(vec![]));
+    assert_eq!(h.transport.requests(), 1);
+}
+
+#[tokio::test]
+async fn klipy_lookup_mixed_provider_id() {
+    let h = harness();
+    h.transport.reply(200, None, SEARCH);
+    let giphy = h.search("ship it").await.unwrap();
+    let id = giphy[0].id.clone();
+    std::fs::write(h.dir.path().join(settings::FILE), r#"{"provider":"klipy"}"#).unwrap();
+    assert_eq!(h.run(&lookup(&[id.as_str()]), None).await, Ok(vec![]));
+    assert_eq!(h.transport.requests(), 1);
+}
+
+#[tokio::test]
+async fn klipy_lookup_never_extends_hold() {
+    let h = klipy_harness();
+    h.transport.reply(200, None, KLIPY_SEARCH);
+    h.search("ship it").await.unwrap();
+    h.advance(50 * 60 * 1000);
+    h.transport.reply(200, None, KLIPY_ITEMS);
+    let found = h.run(&lookup(&["thumbs-up-12"]), None).await.unwrap();
+    assert_eq!(ids(&found), ["thumbs-up-12"]);
+    let entry = h
+        .service
+        .analytics
+        .held_entry(Provider::Klipy, "thumbs-up-12", h.now())
+        .unwrap();
+    assert_eq!(
+        entry.query.as_deref(),
+        Some("ship it"),
+        "the share keeps the query"
+    );
+    assert_eq!(entry.rating, Rating::Pg);
+    // The hold still ends an hour after the search.
+    h.advance(10 * 60 * 1000);
+    assert_eq!(h.run(&lookup(&["thumbs-up-12"]), None).await, Ok(vec![]));
+    assert_eq!(h.transport.requests(), 2);
+}
+
+#[tokio::test]
+async fn klipy_test_key_caps_at_90_own_bucket() {
+    let h = klipy_harness();
+    for _ in 0..90 {
+        h.transport.reply(200, None, KLIPY_EMPTY);
+        h.search("ship it").await.unwrap();
+    }
+    assert_eq!(
+        h.search("ship it").await,
+        Err(GifError::RateLimited { retry_after: 3600 })
+    );
+    assert_eq!(h.transport.requests(), 90);
+    let fp = fingerprint(&Secret::new(KEY));
+    let restarted = bucket::Bucket::new(h.dir.path().join(bucket::FILE));
+    assert!(restarted
+        .take(&format!("klipy:{fp}"), false, h.now())
+        .is_err());
+    // GIPHY's bucket for the same key is untouched.
+    assert!(restarted
+        .take(&format!("giphy:{fp}"), false, h.now())
+        .is_ok());
+}
+
+#[tokio::test]
+async fn klipy_production_key_exempt() {
+    let h = klipy_harness();
+    let production = SettingsUpdate {
+        production: Some(true),
+        ..Default::default()
+    };
+    settings::set_with(&h.keys(), h.dir.path(), production).unwrap();
+    for _ in 0..100 {
+        h.transport.reply(200, None, KLIPY_EMPTY);
+        h.search("ship it").await.unwrap();
+    }
+    assert_eq!(h.transport.requests(), 100);
+    // The mark is KLIPY's alone: GIPHY's searches with the same key stay capped.
+    let loaded = settings::load(h.dir.path());
+    let fp = fingerprint(&Secret::new(KEY));
+    assert!(loaded.is_production(Provider::Klipy, &fp));
+    assert!(!loaded.is_production(Provider::Giphy, &fp));
 }

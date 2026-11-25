@@ -175,6 +175,8 @@ impl Harness {
                 candidate,
                 pingbacks: Some(pingbacks),
             }],
+            crate::gif::Rating::Pg,
+            Some("ship it"),
             self.now(),
         );
     }
@@ -749,6 +751,8 @@ fn a_sent_url_binds_in_either_form() {
         url: "https://MEDIA.giphy.com/media/g1/giphy.gif".into(),
         preview_url: STILL.into(),
         pingbacks: all_pingbacks(),
+        rating: crate::gif::Rating::Pg,
+        query: None,
     };
     assert!(crate::gif::analytics::Entry::binds(&entry, URL));
     assert!(crate::gif::analytics::Entry::binds(&entry, STILL));
