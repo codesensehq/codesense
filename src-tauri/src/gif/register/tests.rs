@@ -10,16 +10,23 @@ use std::sync::atomic::{AtomicI64, Ordering};
 const ACCOUNT: &str = "someone";
 const KEY: &str = "fake-gif-key-for-tests-7f3a";
 const OTHER_KEY: &str = "another-fake-gif-key-for-tests-91c";
+const KLIPY_KEY: &str = "fake-klipy-key-for-tests-5d2e";
 const START_MS: i64 = 1_800_000_000_000;
 const MINUTE: i64 = 60 * 1000;
 const URL: &str = "https://media.giphy.com/media/g1/giphy.gif";
 const STILL: &str = "https://media.giphy.com/media/g1/giphy_s.gif";
 const SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const KLIPY_URL: &str = "https://static.klipy.com/ii/935d7ab9/01/af/md1.webp";
+const KLIPY_STILL: &str = "https://static.klipy.com/ii/935d7ab9/01/af/sm1.jpg";
+const SLUG: &str = "ship-it-77";
 
-/// GIPHY's network as the tests need it: the random id call answers [`Wire::random`], a
-/// pingback answers [`Wire::ping_status`], a search answers no results. Every URL is kept.
+/// GIPHY's and KLIPY's network as the tests need it: the random id call answers
+/// [`Wire::random`], a pingback answers [`Wire::ping_status`], a KLIPY share answers
+/// [`Wire::share`], a search answers no results. Every URL is kept, and each POST's body.
 pub(crate) struct Wire {
     urls: Mutex<Vec<url::Url>>,
+    posts: Mutex<Vec<(url::Url, serde_json::Value)>>,
+    share: Mutex<Reply>,
     /// Every pingback waits this long first.
     pub(crate) ping_delay: Mutex<Option<Duration>>,
     random: Mutex<Result<Reply, Failure>>,
@@ -34,6 +41,8 @@ impl Wire {
     fn new() -> Self {
         Self {
             urls: Mutex::new(Vec::new()),
+            posts: Mutex::new(Vec::new()),
+            share: Mutex::new(reply(200, r#"{"result":true}"#)),
             random: Mutex::new(Ok(reply(200, r#"{"data":{"random_id":"rid-123"}}"#))),
             ping_status: Mutex::new(200),
             during_random: Mutex::new(None),
@@ -57,6 +66,10 @@ impl Wire {
             .iter()
             .map(|u| pair(u, "action_type").unwrap_or_default())
             .collect()
+    }
+    /// The KLIPY shares posted, in order.
+    fn shares(&self) -> Vec<(url::Url, serde_json::Value)> {
+        self.posts.lock().unwrap().clone()
     }
     fn random_calls(&self) -> usize {
         self.urls()
@@ -100,6 +113,16 @@ impl Transport for Wire {
             }
             answer
         })
+    }
+    fn post_json<'a>(
+        &'a self,
+        url: &'a url::Url,
+        body: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Reply, Failure>> {
+        self.urls.lock().unwrap().push(url.clone());
+        self.posts.lock().unwrap().push((url.clone(), body.clone()));
+        let answer = self.share.lock().unwrap().clone();
+        Box::pin(async move { Ok(answer) })
     }
 }
 
@@ -197,6 +220,58 @@ impl Harness {
             .register_send(sent(message_id, id, url))
             .await;
     }
+
+    /// The harness with GIF search on KLIPY, over a keychain holding `key`.
+    fn klipy_with(key: &str) -> Self {
+        let store = Arc::new(FakeStore::default());
+        store.set(ACCOUNT, &Secret::new(key)).unwrap();
+        let h = Self::over(store);
+        h.use_provider(r#"{"provider":"klipy"}"#);
+        h
+    }
+    fn klipy() -> Self {
+        Self::klipy_with(KLIPY_KEY)
+    }
+    /// Write `gif.json` as `json`, as the Settings card would.
+    fn use_provider(&self, json: &str) {
+        std::fs::write(self.dir.path().join(settings::FILE), json).unwrap();
+    }
+    /// A KLIPY search for `query` returned `slug` at `KLIPY_URL` (still `KLIPY_STILL`) with the
+    /// key `key`, and made the install's customer id, as `run_in` does. Returns the id.
+    fn found_klipy(&self, key: &str, slug: &str, query: Option<&str>) -> String {
+        let candidate = Candidate {
+            provider: Provider::Klipy,
+            id: slug.into(),
+            title: "ship it".into(),
+            url: KLIPY_URL.into(),
+            preview_url: KLIPY_STILL.into(),
+            width: 498,
+            height: 280,
+            auto_loads: true,
+        };
+        let epoch = install_epoch(self.dir.path());
+        crate::gif::analytics::Analytics::start_epoch(&self.service.analytics, epoch);
+        self.service.analytics.record(
+            Provider::Klipy,
+            &[Found {
+                candidate,
+                pingbacks: None,
+            }],
+            crate::gif::Rating::Pg,
+            query,
+            self.now(),
+        );
+        let fp = crate::gif::fingerprint(&Secret::new(key));
+        crate::gif::install::customer_id(self.dir.path(), &fp, epoch).unwrap()
+    }
+    fn klipy_bucket_key(&self, key: &str) -> String {
+        crate::gif::bucket_key(Provider::Klipy, &crate::gif::fingerprint(&Secret::new(key)))
+    }
+    async fn send_klipy(&self, message_id: i64, slug: &str, url: &str) {
+        let mut sent = sent(message_id, slug, url);
+        sent.provider = MediaProvider::Klipy;
+        self.registration.register_send(sent).await;
+    }
 }
 
 fn all_pingbacks() -> Pingbacks {
@@ -273,7 +348,7 @@ async fn each_skip_sends_nothing() {
     let h = Harness::new();
     // No search returned it.
     h.send(1, "unknown", URL).await;
-    // A KLIPY send registers later.
+    // A KLIPY send of a GIF only a GIPHY search returned.
     let mut klipy = sent(2, "g1", "https://static.klipy.com/a.gif");
     klipy.provider = MediaProvider::Klipy;
     h.found_all("g1");
@@ -1087,4 +1162,234 @@ async fn a_send_a_pick_and_a_serve_refuse_the_same_cases() {
             assert_eq!(h.wire.pings().len(), before, "{refusal:?}: {entry}");
         }
     }
+}
+
+// KLIPY's share.
+
+#[tokio::test]
+async fn klipy_send_posts_one_share_with_customer_id_and_q() {
+    let h = Harness::klipy();
+    let customer_id = h.found_klipy(KLIPY_KEY, SLUG, Some("ship it"));
+    h.send_klipy(1, SLUG, KLIPY_URL).await;
+    let shares = h.wire.shares();
+    assert_eq!(shares.len(), 1);
+    let (url, body) = &shares[0];
+    assert_eq!(url.scheme(), "https");
+    assert_eq!(url.host_str(), Some("api.klipy.com"));
+    assert_eq!(url.path(), format!("/api/v1/{KLIPY_KEY}/gifs/share/{SLUG}"));
+    assert_eq!(url.query(), None);
+    assert_eq!(
+        *body,
+        serde_json::json!({ "customer_id": customer_id, "q": "ship it" })
+    );
+    // Once per send in a message; the still URL binds too.
+    h.send_klipy(1, SLUG, KLIPY_URL).await;
+    assert_eq!(h.wire.shares().len(), 1);
+    h.send_klipy(2, SLUG, KLIPY_STILL).await;
+    assert_eq!(h.wire.shares().len(), 2);
+    // No GIPHY call of any kind.
+    assert_eq!(h.wire.random_calls(), 0);
+    assert!(h.wire.pings().is_empty());
+}
+
+#[tokio::test]
+async fn klipy_load_and_click_send_nothing_and_read_no_keychain() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(CountingStore::default());
+    let keys = Keys::new(store.clone(), true, Some(ACCOUNT), Duration::from_secs(3));
+    std::fs::write(dir.path().join(settings::FILE), r#"{"provider":"klipy"}"#).unwrap();
+    let wire = Arc::new(Wire::new());
+    let adapters: Adapters = Arc::new(
+        move |_: Provider, key: Secret, _: Option<String>, now: i64| -> Box<dyn GifProvider> {
+            Box::new(Giphy::new(key, Arc::new(Wire::new()), now))
+        },
+    );
+    let clock: crate::gif::Clock = Arc::new(|| START_MS);
+    let service = Arc::new(GifService::new(
+        dir.path().to_path_buf(),
+        keys,
+        adapters,
+        clock.clone(),
+    ));
+    let registration = Registration::new(service.clone(), wire.clone(), clock);
+    let candidate = Candidate {
+        provider: Provider::Klipy,
+        id: SLUG.into(),
+        title: "ship it".into(),
+        url: KLIPY_URL.into(),
+        preview_url: KLIPY_STILL.into(),
+        width: 498,
+        height: 280,
+        auto_loads: true,
+    };
+    service.analytics.record(
+        Provider::Klipy,
+        &[Found {
+            candidate,
+            pingbacks: None,
+        }],
+        crate::gif::Rating::Pg,
+        Some("ship it"),
+        START_MS,
+    );
+    // A pick of a GIF a KLIPY search returned.
+    registration.register_click(Provider::Klipy, SLUG).await;
+    // A view: a KLIPY-tagged fetch arms no onload, and its serve is marked.
+    registration.note_fetched(&slot(1), Some(SHA), false);
+    let taken = registration.take_onloads(SHA);
+    let settled = registration.settle_serve(vec![slot(1)], taken).await;
+    assert_eq!(settled.marks, vec![slot(1)]);
+    assert_eq!(store.gets.load(Ordering::SeqCst), 0);
+    assert!(wire.urls().is_empty(), "{:?}", wire.urls());
+}
+
+#[tokio::test]
+async fn klipy_entry_without_query_or_unbound_url_is_skipped() {
+    let h = Harness::klipy();
+    h.found_klipy(KLIPY_KEY, SLUG, None);
+    h.send_klipy(1, SLUG, KLIPY_URL).await;
+    h.found_klipy(KLIPY_KEY, "hello-hi-662", Some("hello"));
+    h.send_klipy(
+        2,
+        "hello-hi-662",
+        "https://static.klipy.com/ii/other/af/md9.webp",
+    )
+    .await;
+    // A KLIPY slug no KLIPY search returned.
+    h.send_klipy(3, "never-found-1", KLIPY_URL).await;
+    assert!(h.wire.urls().is_empty(), "{:?}", h.wire.urls());
+}
+
+#[tokio::test]
+async fn klipy_share_takes_a_search_token_on_a_test_key() {
+    let h = Harness::klipy();
+    let key = h.klipy_bucket_key(KLIPY_KEY);
+    h.found_klipy(KLIPY_KEY, SLUG, Some("ship it"));
+    // 89 of the hour's 90 searches are spent: the share takes the last.
+    for _ in 0..89 {
+        h.service.bucket.take(&key, false, h.now()).unwrap();
+    }
+    h.send_klipy(1, SLUG, KLIPY_URL).await;
+    assert_eq!(h.wire.shares().len(), 1);
+    assert!(h.service.bucket.take(&key, false, h.now()).is_err());
+    // With none left, a share is dropped.
+    h.send_klipy(2, SLUG, KLIPY_URL).await;
+    assert_eq!(h.wire.shares().len(), 1);
+    // A production key takes no token.
+    let production = format!(r#"{{"provider":"klipy","productionKeys":["{key}"]}}"#);
+    h.use_provider(&production);
+    h.send_klipy(3, SLUG, KLIPY_URL).await;
+    assert_eq!(h.wire.shares().len(), 2);
+}
+
+#[tokio::test]
+async fn klipy_share_429_backs_off_search() {
+    let h = Harness::klipy();
+    let key = h.klipy_bucket_key(KLIPY_KEY);
+    h.found_klipy(KLIPY_KEY, SLUG, Some("ship it"));
+    *h.wire.share.lock().unwrap() = Reply {
+        status: 429,
+        retry_after: Some("120".into()),
+        body: Vec::new(),
+    };
+    h.send_klipy(1, SLUG, KLIPY_URL).await;
+    assert_eq!(h.wire.shares().len(), 1);
+    assert_eq!(
+        h.service.bucket.backoff_until(&key, h.now()),
+        Some(h.now() + 120_000)
+    );
+    // The backoff drops the next share and holds KLIPY's searches.
+    h.send_klipy(2, SLUG, KLIPY_URL).await;
+    assert_eq!(h.wire.shares().len(), 1);
+    let request = crate::gif::normalize(Some("cat"), None, None).unwrap();
+    let failed = h.service.run_in(&request, None, None).await.unwrap_err();
+    assert!(matches!(failed.error, GifError::RateLimited { .. }));
+    // GIPHY's bucket is untouched.
+    assert_eq!(
+        h.service.bucket.backoff_until(&h.bucket_key(), h.now()),
+        None
+    );
+}
+
+#[tokio::test]
+async fn klipy_share_key_only_in_path_never_logged() {
+    crate::test_logger::clear("gif");
+    let key = "k/ey?x=1#y%z-and-padding-0001";
+    let h = Harness::klipy_with(key);
+    let customer_id = h.found_klipy(key, SLUG, Some("ship it"));
+    h.send_klipy(1, SLUG, KLIPY_URL).await;
+    *h.wire.share.lock().unwrap() = reply(500, key);
+    h.send_klipy(2, SLUG, KLIPY_URL).await;
+    let shares = h.wire.shares();
+    assert_eq!(shares.len(), 2);
+    for (url, body) in &shares {
+        let segments: Vec<&str> = url.path_segments().unwrap().collect();
+        assert_eq!(
+            segments,
+            [
+                "api",
+                "v1",
+                "k%2Fey%3Fx=1%23y%25z-and-padding-0001",
+                "gifs",
+                "share",
+                SLUG
+            ]
+        );
+        assert_eq!(url.query(), None);
+        assert_eq!(url.fragment(), None);
+        assert!(!body.to_string().contains("k/ey"), "{body}");
+        assert_eq!(body["customer_id"], customer_id.as_str());
+    }
+    let lines = crate::test_logger::lines("gif");
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("KLIPY share not registered")),
+        "{lines:?}"
+    );
+    for line in &lines {
+        assert!(!line.contains("k/ey") && !line.contains("k%2Fey"), "{line}");
+    }
+}
+
+#[tokio::test]
+async fn klipy_send_after_a_switch_to_giphy_is_skipped() {
+    let h = Harness::klipy();
+    h.found_klipy(KLIPY_KEY, SLUG, Some("ship it"));
+    h.use_provider(r#"{"provider":"giphy"}"#);
+    h.send_klipy(1, SLUG, KLIPY_URL).await;
+    assert!(h.wire.urls().is_empty(), "{:?}", h.wire.urls());
+    // Back on KLIPY, a new send of it registers.
+    h.use_provider(r#"{"provider":"klipy"}"#);
+    h.send_klipy(2, SLUG, KLIPY_URL).await;
+    assert_eq!(h.wire.shares().len(), 1);
+}
+
+#[tokio::test]
+async fn klipy_share_without_a_saved_customer_id_is_skipped() {
+    let h = Harness::klipy();
+    h.found_klipy(KLIPY_KEY, SLUG, Some("ship it"));
+    std::fs::remove_file(h.install_file()).unwrap();
+    h.send_klipy(1, SLUG, KLIPY_URL).await;
+    assert!(h.wire.urls().is_empty(), "{:?}", h.wire.urls());
+    assert!(!h.install_file().exists(), "a share never makes an id");
+}
+
+#[test]
+fn a_send_is_once_per_provider_gif_and_message() {
+    let h = Harness::new();
+    let message = slot(1).0;
+    let now = h.now();
+    assert!(h
+        .registration
+        .first_send(Provider::Giphy, "same", &message, now));
+    assert!(h
+        .registration
+        .first_send(Provider::Klipy, "same", &message, now));
+    assert!(!h
+        .registration
+        .first_send(Provider::Giphy, "same", &message, now));
+    assert!(!h
+        .registration
+        .first_send(Provider::Klipy, "same", &message, now));
 }

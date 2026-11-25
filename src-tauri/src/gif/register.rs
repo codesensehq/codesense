@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: MIT
 //! Registering sent provider GIFs, as the providers' terms ask: GIPHY's onsent ping when an
 //! agent sends a GIF a search found, its onload ping the first time the sent GIF is shown, and
-//! its onclick ping when the person picks a GIF in the Inbox pane's picker.
+//! its onclick ping when the person picks a GIF in the Inbox pane's picker; and KLIPY's share
+//! when an agent sends a GIF a KLIPY search found.
 //!
-//! Pings go out only while GIF search is On with a key. They carry a random id GIPHY issues for
-//! this install, kept in `gif-install.json` and deleted when search is turned Off or the key is
-//! removed, and never the key. They are fire-and-forget, never queued, outside the search rate
-//! limit, dropped while a provider backoff runs and capped at [`PINGS_PER_HOUR`] per provider and
-//! key. KLIPY's share trigger joins as a second [`Registrar`].
+//! Registrations go out only while GIF search is On with that provider and a key. A GIPHY ping
+//! carries a random id GIPHY issues for this install and never the key; a KLIPY share carries
+//! the install's `customer_id` and the search's query, with the key only in the URL path. Both
+//! ids are kept in `gif-install.json` and dropped when search is turned Off or the key is
+//! removed. Registrations are fire-and-forget, never queued, dropped while a provider backoff
+//! runs and capped at [`PINGS_PER_HOUR`] per provider and key. GIPHY's pings are outside the
+//! search rate limit; a KLIPY share on a test key takes a search token, as KLIPY's cap counts
+//! every call.
 #[cfg(test)]
 use super::install::{forget_install, FILE};
 use super::install::{install_epoch, read_install, write_install};
@@ -50,10 +54,15 @@ pub(crate) struct Sent {
     pub url: String,
 }
 
-/// One ping: a provider pingback URL and the install id it carries.
+/// One registration: the GIF, what its search gave (GIPHY's pingback URL, the query KLIPY's
+/// share sends), the install id it carries and the key, which only KLIPY's share uses, in the
+/// URL path.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Ping<'a> {
-    pub pingback: &'a str,
+    pub key: &'a Secret,
+    pub gif_id: &'a str,
+    pub pingback: Option<&'a str>,
+    pub query: Option<&'a str>,
     pub install_id: &'a str,
     pub at_ms: i64,
 }
@@ -62,10 +71,14 @@ pub(crate) struct Ping<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Outcome {
     Sent,
-    /// No URL could be made from the pingback.
+    /// No URL or body could be made from the ping.
     Unusable,
     /// The provider answered this status.
     Status(u16),
+    /// The provider answered 429 and asked for this many seconds' wait; it backs off search.
+    RateLimited {
+        retry_after: u64,
+    },
     Failed(transport::Failure),
 }
 
@@ -82,6 +95,13 @@ impl Event {
             Event::Sent => "onsent",
             Event::Load => "onload",
             Event::Click => "onclick",
+        }
+    }
+    /// The event's name for log lines: KLIPY's send registration is a share.
+    fn label(self, provider: Provider) -> &'static str {
+        match (provider, self) {
+            (Provider::Klipy, Event::Sent) => "share",
+            _ => Event::name(self),
         }
     }
 }
@@ -130,7 +150,10 @@ impl GiphyPings {
         Self { transport }
     }
     async fn ping_giphy(&self, ping: Ping<'_>) -> Outcome {
-        let Some(url) = pingback_url(ping.pingback, ping.install_id, ping.at_ms) else {
+        let Some(pingback) = ping.pingback else {
+            return Outcome::Unusable;
+        };
+        let Some(url) = pingback_url(pingback, ping.install_id, ping.at_ms) else {
             return Outcome::Unusable;
         };
         match transport::Transport::get(self.transport.as_ref(), &url).await {
@@ -144,6 +167,45 @@ impl Registrar for GiphyPings {
     /// Every event is the pingback GIPHY gave for it.
     fn register<'a>(&'a self, _: Event, ping: Ping<'a>) -> BoxFuture<'a, Outcome> {
         Box::pin(self.ping_giphy(ping))
+    }
+}
+
+/// KLIPY's share: `POST api/v1/{key}/gifs/share/{slug}` with `{customer_id, q}`, over the 5 s
+/// registration client. The key is one escaped path segment; the body is not read.
+pub(crate) struct KlipyShare {
+    transport: Arc<dyn transport::Transport>,
+    clock: super::Clock,
+}
+impl KlipyShare {
+    pub(crate) fn new(transport: Arc<dyn transport::Transport>, clock: super::Clock) -> Self {
+        Self { transport, clock }
+    }
+    async fn share(&self, ping: Ping<'_>) -> Outcome {
+        let Some(query) = ping.query else {
+            return Outcome::Unusable;
+        };
+        let url = super::klipy::api_url(ping.key, &["gifs", "share", ping.gif_id], &[]);
+        let body = serde_json::json!({ "customer_id": ping.install_id, "q": query });
+        let reply = transport::Transport::post_json(self.transport.as_ref(), &url, &body).await;
+        match reply {
+            Ok(reply) if (200..300).contains(&reply.status) => Outcome::Sent,
+            Ok(reply) if reply.status == 429 => Outcome::RateLimited {
+                retry_after: bucket::retry_after_secs(reply.retry_after.as_deref(), (self.clock)()),
+            },
+            Ok(reply) => Outcome::Status(reply.status),
+            Err(failure) => Outcome::Failed(failure),
+        }
+    }
+}
+impl Registrar for KlipyShare {
+    /// KLIPY registers a send only ([`Provider::registers`]); anything else is unusable.
+    fn register<'a>(&'a self, event: Event, ping: Ping<'a>) -> BoxFuture<'a, Outcome> {
+        Box::pin(async move {
+            match event {
+                Event::Sent => self.share(ping).await,
+                Event::Load | Event::Click => Outcome::Unusable,
+            }
+        })
     }
 }
 
@@ -183,7 +245,8 @@ const ONLOAD_PROVIDER: Provider = Provider::Giphy;
 fn provider_of(tag: MediaProvider) -> Option<Provider> {
     match tag {
         MediaProvider::Giphy => Some(Provider::Giphy),
-        MediaProvider::Klipy | MediaProvider::None => None,
+        MediaProvider::Klipy => Some(Provider::Klipy),
+        MediaProvider::None => None,
     }
 }
 
@@ -196,6 +259,13 @@ pub(crate) enum NoKey {
     Unavailable,
 }
 
+/// The active provider's key, its fingerprint and whether the user marked it production.
+struct Keyed {
+    key: Secret,
+    fp: String,
+    production: bool,
+}
+
 /// What a serve settled: the attachments to mark `onloadSent`, and those whose view ping
 /// stays pending for a later serve (their claim is given back).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -204,17 +274,18 @@ pub(crate) struct Settled {
     pub retry: Vec<Slot>,
 }
 
-/// Registration for the app: the GIF service's settings, keys, bucket and analytics, the
-/// provider registrar, and what it holds in memory (pending onloads, sent GIFs, the hourly
+/// Registration for the app: the GIF service's settings, keys, bucket and analytics, each
+/// provider's registrar, and what it holds in memory (pending onloads, sent GIFs, the hourly
 /// ping count).
 pub(crate) struct Registration {
     service: Arc<GifService>,
-    registrar: Arc<dyn Registrar>,
+    giphy: Arc<dyn Registrar>,
+    klipy: Arc<dyn Registrar>,
     transport: Arc<dyn transport::Transport>,
     clock: super::Clock,
     onloads: Mutex<HashMap<Slot, Pending>>,
-    /// (GIF id, message) of each onsent, until an hour after it.
-    sent: Mutex<HashMap<(String, Owner), i64>>,
+    /// (provider, GIF id, message) of each send registered, until an hour after it.
+    sent: Mutex<HashMap<(Provider, String, Owner), i64>>,
     /// Each bucket key's pings in the last hour, oldest first.
     pings: Mutex<HashMap<String, VecDeque<i64>>>,
     /// Held while the random id is read or made, so concurrent sends make one.
@@ -235,7 +306,8 @@ impl Registration {
     ) -> Self {
         Self {
             service,
-            registrar: Arc::new(GiphyPings::new(transport.clone())),
+            giphy: Arc::new(GiphyPings::new(transport.clone())),
+            klipy: Arc::new(KlipyShare::new(transport.clone(), clock.clone())),
             transport,
             clock,
             onloads: std::sync::Mutex::new(HashMap::new()),
@@ -245,6 +317,14 @@ impl Registration {
             random_retry_at: std::sync::Mutex::new(0),
             key_retry_at: std::sync::Mutex::new(0),
             epoch: std::sync::Mutex::new(0),
+        }
+    }
+
+    /// `provider`'s registrar.
+    fn registrar(&self, provider: Provider) -> &dyn Registrar {
+        match provider {
+            Provider::Giphy => self.giphy.as_ref(),
+            Provider::Klipy => self.klipy.as_ref(),
         }
     }
 
@@ -288,9 +368,9 @@ impl Registration {
         }
     }
 
-    /// The provider's key and its fingerprint, while GIF search is On with that provider and
-    /// a key; else `None`, logged.
-    async fn active_key(&self, provider: Provider) -> Result<(Secret, String, u64), NoKey> {
+    /// The provider's key, its fingerprint and production mark, while GIF search is On with that
+    /// provider and a key; else `None`, logged. Search switched to another provider is Off.
+    async fn active_key(&self, provider: Provider) -> Result<(Keyed, u64), NoKey> {
         let dir = self.service.data_dir().to_path_buf();
         let epoch = install_epoch(&dir);
         let current = match tokio::task::spawn_blocking(move || settings::load(&dir)).await {
@@ -300,29 +380,43 @@ impl Registration {
                 return Err(NoKey::Unavailable);
             }
         };
-        if !current.enabled || current.provider != provider {
-            log::info!(target: "gif", "gif registration: GIF search is off; no ping");
+        let name = Provider::display_name(provider);
+        if !current.enabled {
+            log::info!(target: "gif", "gif registration: GIF search is off; no {name} ping");
+            return Err(NoKey::Off);
+        }
+        if current.provider != provider {
+            log::info!(target: "gif", "gif registration: GIF search uses another provider; no {name} ping");
             return Err(NoKey::Off);
         }
         match settings::Keys::read_timed(&self.service.keys, provider).await {
             Ok(key) => {
                 let fp = super::fingerprint(&key);
-                Ok((key, fp, epoch))
+                let production = settings::GifSettings::is_production(&current, provider, &fp);
+                Ok((
+                    Keyed {
+                        key,
+                        fp,
+                        production,
+                    },
+                    epoch,
+                ))
             }
             Err(error @ (GifError::NoProvider | GifError::NoSecretStore)) => {
-                log::info!(target: "gif", "gif registration: no key ({}); no ping", error.code());
+                log::info!(target: "gif", "gif registration: no {name} key ({}); no ping", error.code());
                 Err(NoKey::Off)
             }
             Err(error) => {
-                log::info!(target: "gif", "gif registration: the key can't be read now ({})", error.code());
+                log::info!(target: "gif", "gif registration: the {name} key can't be read now ({})", error.code());
                 Err(NoKey::Unavailable)
             }
         }
     }
 
-    /// The install's random id for this key: the saved one, else one made by GIPHY's random id
-    /// call (outside the search bucket) and saved, while search is still On with the same key.
-    /// `None`, logged, when it can't be had: pings wait until it exists.
+    /// The install's id with `provider` for this key. GIPHY's is the saved one, else one made by
+    /// GIPHY's random id call (outside the search bucket) and saved, while search is still On
+    /// with the same key. KLIPY's is only the saved `customer_id` a search sent: a share never
+    /// makes one. `None`, logged, when it can't be had: pings wait until it exists.
     async fn install_id(
         &self,
         provider: Provider,
@@ -341,6 +435,10 @@ impl Registration {
             Err(e) => {
                 log::warn!(target: "gif", "gif registration: the install id read stopped: {e}")
             }
+        }
+        if provider == Provider::Klipy {
+            log::info!(target: "gif", "gif registration: no KLIPY customer id saved for this key; no share");
+            return None;
         }
         // The call carries the key, so it is bounded like a ping: not during a backoff, within
         // the hour's pings, and not again within RANDOM_ID_RETRY_MS of a failure.
@@ -419,34 +517,66 @@ impl Registration {
         true
     }
 
-    /// Send one ping now, unless the provider's backoff is running or the hour's pings for
-    /// this key are spent (dropped, logged). A 429 is logged only: it never sets the search
-    /// backoff.
-    async fn send_ping(&self, provider: Provider, fp: &str, kind: Event, pingback: &str, id: &str) {
-        let key = super::bucket_key(provider, fp);
+    /// Whether a registration on a test key took a token from `key`'s search bucket, which
+    /// also refuses one during a backoff. A production key takes none.
+    async fn take_search_token(&self, key: &str, production: bool, now: i64) -> bool {
+        let (rate, counted) = (self.service.bucket.clone(), key.to_string());
+        let taken = tokio::task::spawn_blocking(move || {
+            bucket::Bucket::take(&rate, &counted, production, now)
+        })
+        .await;
+        matches!(taken, Ok(Ok(())))
+    }
+
+    /// Back `key`'s searches off for `retry_after` seconds; the seconds it blocks for.
+    async fn back_off_search(&self, key: &str, retry_after: u64, now: i64) -> u64 {
+        let (rate, counted) = (self.service.bucket.clone(), key.to_string());
+        tokio::task::spawn_blocking(move || {
+            bucket::Bucket::back_off(&rate, &counted, retry_after, now)
+        })
+        .await
+        .unwrap_or(retry_after.max(1))
+    }
+
+    /// Send one registration now, unless the provider's backoff is running or the hour's pings
+    /// for this key are spent (dropped, logged). One that counts against the search cap (a
+    /// KLIPY share) takes a search token on a test key and is dropped when none is left. A
+    /// GIPHY 429 is logged only; a KLIPY 429 sets the search backoff, as its cap counts every
+    /// call.
+    async fn send_ping(&self, provider: Provider, keyed: &Keyed, kind: Event, ping: Ping<'_>) {
+        let key = super::bucket_key(provider, &keyed.fp);
         let now = (self.clock)();
-        let event = kind.name();
+        let (name, event) = (
+            Provider::display_name(provider),
+            Event::label(kind, provider),
+        );
         if !self.provider_open(&key, now).await {
-            log::info!(target: "gif", "gif registration: {event} dropped during a GIPHY backoff");
+            log::info!(target: "gif", "gif registration: {name} {event} dropped during a {name} backoff");
+            return;
+        }
+        if Provider::registers_in_search_cap(provider)
+            && !self.take_search_token(&key, keyed.production, now).await
+        {
+            log::warn!(target: "gif", "gif registration: {name} {event} dropped; no {name} search left this hour");
             return;
         }
         if !self.spend_ping(&key, now) {
-            log::warn!(target: "gif", "gif registration: {event} dropped; {PINGS_PER_HOUR} pings this hour");
+            log::warn!(target: "gif", "gif registration: {name} {event} dropped; {PINGS_PER_HOUR} pings this hour");
             return;
         }
-        let ping = Ping {
-            pingback,
-            install_id: id,
-            at_ms: now,
-        };
-        let outcome = Registrar::register(self.registrar.as_ref(), kind, ping).await;
+        let ping = Ping { at_ms: now, ..ping };
+        let outcome = Registrar::register(self.registrar(provider), kind, ping).await;
         match outcome {
             Outcome::Sent => {}
             Outcome::Status(429) => {
-                log::warn!(target: "gif", "gif registration: GIPHY rate limited an {event} (HTTP 429)")
+                log::warn!(target: "gif", "gif registration: {name} rate limited an {event} (HTTP 429)")
+            }
+            Outcome::RateLimited { retry_after } => {
+                let secs = self.back_off_search(&key, retry_after, now).await;
+                log::warn!(target: "gif", "gif registration: {name} rate limited a {event} (HTTP 429); {name} searches wait {secs} s");
             }
             other => {
-                log::warn!(target: "gif", "gif registration: {event} not registered ({other:?})")
+                log::warn!(target: "gif", "gif registration: {name} {event} not registered ({other:?})")
             }
         }
     }
@@ -491,21 +621,22 @@ impl Registration {
         provider: Provider,
         event: Event,
         epoch: u64,
-    ) -> Result<(Secret, String), NoKey> {
-        let (key, fp, read_in) = self.active_key(provider).await?;
+    ) -> Result<Keyed, NoKey> {
+        let (keyed, read_in) = self.active_key(provider).await?;
         if read_in != epoch || !self.still_in(epoch) {
-            let name = event.name();
+            let name = Event::label(event, provider);
             log::info!(target: "gif", "gif registration: the install id changed before the {name}; not registered");
             return Err(NoKey::Off);
         }
-        Ok((key, fp))
+        Ok(keyed)
     }
 
-    /// The first onsent of GIF `id` in `message`, or an hour after the last.
-    fn first_send(&self, id: &str, message: &Owner, now: i64) -> bool {
+    /// The first send of `provider`'s GIF `id` in `message` registered, or an hour after the
+    /// last. The provider is part of the key, so a KLIPY slug never matches a GIPHY id.
+    fn first_send(&self, provider: Provider, id: &str, message: &Owner, now: i64) -> bool {
         let mut sent = lock(&self.sent);
         HashMap::retain(&mut sent, |_, expires| *expires > now);
-        let key = (id.to_string(), message.clone());
+        let key = (provider, id.to_string(), message.clone());
         if sent.contains_key(&key) {
             return false;
         }
@@ -553,10 +684,11 @@ impl Registration {
         self.with_pending(slot, now, |p| p.waiting = true);
     }
 
-    /// Register a stored message's provider GIF: its onload is armed, an hour from now, and its
-    /// onsent sent, both only for a GIF a search returned with the URL that was sent. Each skip
-    /// is logged: GIF search Off, no key, no analytics entry, an id not bound to the sent URL,
-    /// a second send of the GIF in the message, no onsent URL, no install id.
+    /// Register a stored message's provider GIF, only for a GIF a search returned with the URL
+    /// that was sent: GIPHY's onload is armed, an hour from now, and its onsent sent; KLIPY's
+    /// share is sent with the search's query. Each skip is logged: GIF search Off or on another
+    /// provider, no key, no analytics entry, an id not bound to the sent URL, a second send of
+    /// the GIF in the message, no onsent URL or query, no install id.
     pub(crate) async fn register_send(&self, sent: Sent) {
         let slot = sent.slot.clone();
         self.register_inner(sent).await;
@@ -578,7 +710,7 @@ impl Registration {
         else {
             return;
         };
-        let Ok((key, fp)) = self.authorize(provider, Event::Sent, epoch).await else {
+        let Ok(keyed) = self.authorize(provider, Event::Sent, epoch).await else {
             return;
         };
         if let Some(onload) = entry.pingbacks.onload.clone() {
@@ -588,20 +720,38 @@ impl Registration {
                 p.expires = expires;
             });
         }
-        if !self.first_send(&sent.provider_id, &sent.slot.0, now) {
+        if !self.first_send(provider, &sent.provider_id, &sent.slot.0, now) {
             log::info!(target: "gif", "gif registration: this GIF's send in the message is registered already");
             return;
         }
-        let Some(onsent) = entry.pingbacks.onsent.as_deref() else {
-            log::info!(target: "gif", "gif registration: the search gave no onsent URL; no ping");
-            return;
-        };
-        let Some(id) = self.install_id(provider, &key, &fp, epoch).await else {
+        let (pingback, query) = (entry.pingbacks.onsent.as_deref(), entry.query.as_deref());
+        match provider {
+            Provider::Giphy if pingback.is_none() => {
+                log::info!(target: "gif", "gif registration: the search gave no onsent URL; no ping");
+                return;
+            }
+            Provider::Klipy if query.is_none() => {
+                log::info!(target: "gif", "gif registration: no KLIPY search query is held for this GIF; no share");
+                return;
+            }
+            Provider::Giphy | Provider::Klipy => {}
+        }
+        let Some(id) = self
+            .install_id(provider, &keyed.key, &keyed.fp, epoch)
+            .await
+        else {
             return;
         };
         if self.still_in(epoch) {
-            self.send_ping(provider, &fp, Event::Sent, onsent, &id)
-                .await;
+            let ping = Ping {
+                key: &keyed.key,
+                gif_id: &sent.provider_id,
+                pingback,
+                query,
+                install_id: &id,
+                at_ms: now,
+            };
+            self.send_ping(provider, &keyed, Event::Sent, ping).await;
         }
     }
 
@@ -622,15 +772,25 @@ impl Registration {
             log::info!(target: "gif", "gif registration: the search gave no onclick URL; no ping");
             return;
         };
-        let Ok((key, fp)) = self.authorize(provider, Event::Click, epoch).await else {
+        let Ok(keyed) = self.authorize(provider, Event::Click, epoch).await else {
             return;
         };
-        let Some(install) = self.install_id(provider, &key, &fp, epoch).await else {
+        let Some(install) = self
+            .install_id(provider, &keyed.key, &keyed.fp, epoch)
+            .await
+        else {
             return;
         };
         if self.still_in(epoch) {
-            self.send_ping(provider, &fp, Event::Click, onclick, &install)
-                .await;
+            let ping = Ping {
+                key: &keyed.key,
+                gif_id: id,
+                pingback: Some(onclick),
+                query: None,
+                install_id: &install,
+                at_ms: now,
+            };
+            self.send_ping(provider, &keyed, Event::Click, ping).await;
         }
     }
 
@@ -733,14 +893,22 @@ impl Registration {
                         *lock(&self.key_retry_at) = now + KEY_RETRY_MS;
                     }
                 }
-                Ok((key, fp)) => {
-                    if let Some(id) = self.install_id(provider, &key, &fp, started).await {
+                Ok(keyed) => {
+                    let (key, fp) = (&keyed.key, &keyed.fp);
+                    if let Some(id) = self.install_id(provider, key, fp, started).await {
                         let current = self.still_in(started);
                         for (slot, p) in Vec::drain(&mut due, ..) {
                             match &p.onload {
                                 Some(onload) if current => {
-                                    self.send_ping(provider, &fp, Event::Load, onload, &id)
-                                        .await
+                                    let ping = Ping {
+                                        key,
+                                        gif_id: "",
+                                        pingback: Some(onload),
+                                        query: None,
+                                        install_id: &id,
+                                        at_ms: now,
+                                    };
+                                    self.send_ping(provider, &keyed, Event::Load, ping).await
                                 }
                                 _ => {}
                             }

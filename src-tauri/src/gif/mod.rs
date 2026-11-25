@@ -147,6 +147,14 @@ impl Provider {
             Self::Klipy => event == register::Event::Sent,
         }
     }
+    /// Whether a registration counts against the search cap: KLIPY's test cap counts every
+    /// call with the key, a share included; GIPHY's pings are outside it.
+    pub(crate) fn registers_in_search_cap(self) -> bool {
+        match self {
+            Self::Giphy => false,
+            Self::Klipy => true,
+        }
+    }
 }
 
 /// One GIF a search found.
