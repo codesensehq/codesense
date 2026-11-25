@@ -918,6 +918,26 @@ impl SpawnIntent {
         self
     }
 
+    /// This intent with the guarded variables of the CLI it launches (the
+    /// [`Self::remote_launch`] marker's `env_suppress`) added to [`Self::env_remove`], as the
+    /// desktop's own spawn adds them. A host applies it to every agent intent it resolves, so a
+    /// client that sent no strip list, or a host that inherits one of the names, still never
+    /// hands the child one. A shell or unmarked intent is left as it is.
+    pub fn with_cli_env_suppressed(mut self) -> Self {
+        let Some(cli) = self
+            .remote_launch
+            .and_then(codesense_host_proto::agent_cli::NativeLaunch::cli)
+        else {
+            return self;
+        };
+        for name in crate::agent_cli::descriptor(cli).env_suppress.iter() {
+            if !self.env_remove.contains(name) {
+                self.env_remove.push(name.clone());
+            }
+        }
+        self
+    }
+
     /// Whether this is the user's interactive shell (no command to run).
     /// An [`Self::argv`]-direct spawn is NOT interactive even when
     /// `command` is `None` — the spawn runs the given program as PID-1 of the
@@ -1429,6 +1449,65 @@ mod tests {
                 "{os}"
             );
         }
+    }
+
+    /// A remote OpenCode launch drops `OPENCODE_PERMISSION` whether the saved Agent or the host
+    /// sets it, though the client sent no strip list: the host adds the CLI's own.
+    #[test]
+    fn a_remote_opencode_launch_drops_the_permission_override_from_agent_and_host() {
+        let fx = Fixture::new();
+        let host = fx.host(&[
+            ("SHELL", "/bin/zsh"),
+            ("PATH", "/usr/bin:/bin"),
+            ("OPENCODE_PERMISSION", r#"{"bash":"allow"}"#),
+        ]);
+        let cwd = fx.resources.to_string_lossy().into_owned();
+        let intent = SpawnIntent {
+            remote_launch: Some(codesense_host_proto::agent_cli::NativeLaunch::Cli(
+                crate::agent_cli::AgentCli::OpenCode,
+            )),
+            argv: Some(vec!["/opt/opencode".to_string()]),
+            agent_env: given(&[("OPENCODE_PERMISSION", r#"{"bash":"allow"}"#)]),
+            ..interactive(&cwd)
+        };
+        let unstripped = intent
+            .resolve("tab-remote-opencode-raw", &host)
+            .expect("the spawn resolves");
+        assert!(
+            env(&unstripped, "OPENCODE_PERMISSION").is_some(),
+            "the fixture reaches the child without the host's strip"
+        );
+        let spec = intent
+            .with_cli_env_suppressed()
+            .resolve("tab-remote-opencode", &host)
+            .expect("the spawn resolves");
+        assert_eq!(env(&spec, "OPENCODE_PERMISSION"), None);
+    }
+
+    /// The host's strip adds each name once and leaves a shell launch alone.
+    #[test]
+    fn the_cli_strip_is_added_once_and_a_shell_launch_adds_none() {
+        let cwd = "/work".to_string();
+        let opencode = SpawnIntent {
+            remote_launch: Some(codesense_host_proto::agent_cli::NativeLaunch::Cli(
+                crate::agent_cli::AgentCli::OpenCode,
+            )),
+            env_remove: vec!["OPENCODE_PERMISSION".to_string()],
+            ..interactive(&cwd)
+        }
+        .with_cli_env_suppressed();
+        let again = opencode.clone().with_cli_env_suppressed();
+        assert_eq!(again, opencode);
+        assert_eq!(
+            opencode
+                .env_remove
+                .iter()
+                .filter(|name| name.as_str() == "OPENCODE_PERMISSION")
+                .count(),
+            1
+        );
+        let shell = interactive(&cwd).with_cli_env_suppressed();
+        assert!(shell.env_remove.is_empty());
     }
 
     /// An agent launch on `os`: the program as the PTY's root, with `env` and `agent_env`.
