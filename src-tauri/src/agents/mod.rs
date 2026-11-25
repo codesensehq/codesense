@@ -44,6 +44,7 @@ pub mod context_suggestion;
 pub mod defs;
 pub mod discover;
 pub mod events;
+pub mod guardrails;
 pub mod keys;
 pub mod launch;
 pub(crate) mod launch_budget;

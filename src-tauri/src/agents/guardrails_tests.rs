@@ -81,8 +81,12 @@ fn parsed(yaml: &str) -> GuardrailsFile {
 }
 
 fn org(files: &[(&str, &str)]) -> Guardrails {
-    Guardrails::union(files.iter().map(|(source, yaml)| (source.to_string(), parsed(yaml))))
-        .expect("the files deny something")
+    Guardrails::union(
+        files
+            .iter()
+            .map(|(source, yaml)| (source.to_string(), parsed(yaml))),
+    )
+    .expect("the files deny something")
 }
 
 fn team_key() -> AgentKey {
@@ -113,7 +117,12 @@ fn guardrails_parse_reads_each_clis_deny_list() {
 
 #[test]
 fn guardrails_parse_empty_and_absent_sections_deny_nothing() {
-    for yaml in ["", "# nothing yet\n", "permissions: {}\n", "permissions:\n  claude: {}\n"] {
+    for yaml in [
+        "",
+        "# nothing yet\n",
+        "permissions: {}\n",
+        "permissions:\n  claude: {}\n",
+    ] {
         let file = parsed(yaml);
         assert_eq!(file, GuardrailsFile::default(), "{yaml:?}");
         assert!(
@@ -194,7 +203,10 @@ fn guardrails_monotone() {
     let plain = launch_settings(&agent, None);
     for content in [&narrow, &narrower] {
         // Never an allow added or removed, never an ask touched.
-        assert_eq!(content["permissions"]["allow"], plain["permissions"]["allow"]);
+        assert_eq!(
+            content["permissions"]["allow"],
+            plain["permissions"]["allow"]
+        );
         assert_eq!(content["permissions"]["ask"], plain["permissions"]["ask"]);
     }
     let deny = |c: &Value| -> Vec<Value> { c["permissions"]["deny"].as_array().unwrap().clone() };
@@ -224,21 +236,38 @@ fn guardrails_claude_deny_is_appended_and_allows_are_kept() {
         json!(["Bash(git push --force:*)", "Bash(rm:*)"])
     );
     let allow = content["permissions"]["allow"].as_array().unwrap();
-    assert!(allow.contains(&json!("Bash(rm:*)")), "CodeSense never removes an allow");
+    assert!(
+        allow.contains(&json!("Bash(rm:*)")),
+        "CodeSense never removes an allow"
+    );
     assert!(allow.contains(&json!("Bash(rm -rf:*)")));
 
     // The entry's hash covers the added deny.
-    let entry = permissions::generate(&agent, AgentCli::Claude, LaunchMode::Foreground, Some(&union))
-        .remove(0);
-    assert_eq!(entry.hash, crate::agents::manifest::json_hash(&entry.content));
+    let entry = permissions::generate(
+        &agent,
+        AgentCli::Claude,
+        LaunchMode::Foreground,
+        Some(&union),
+    )
+    .remove(0);
+    assert_eq!(
+        entry.hash,
+        crate::agents::manifest::json_hash(&entry.content)
+    );
 }
 
 #[test]
 fn guardrails_claude_deny_holds_for_every_mode_and_an_escalating_agent() {
     let union = org(&[(ROOT_FILE, CLAUDE_RM)]);
     let mut agent = claude(&["Bash(rm:*)"], &[]);
-    agent.permissions.as_mut().unwrap().claude.as_mut().unwrap().default_mode =
-        Some("bypassPermissions".into());
+    agent
+        .permissions
+        .as_mut()
+        .unwrap()
+        .claude
+        .as_mut()
+        .unwrap()
+        .default_mode = Some("bypassPermissions".into());
     for mode in [LaunchMode::Foreground, LaunchMode::Headless] {
         let entry = permissions::generate(&agent, AgentCli::Claude, mode, Some(&union)).remove(0);
         assert!(entry.content["permissions"]["deny"]
@@ -268,7 +297,10 @@ fn opencode_effect(rules: &[Value], action: &str) -> Option<String> {
 
 #[test]
 fn guardrails_opencode_overwrite() {
-    let union = org(&[(ROOT_FILE, "permissions:\n  opencode:\n    deny: [bash, webfetch]\n")]);
+    let union = org(&[(
+        ROOT_FILE,
+        "permissions:\n  opencode:\n    deny: [bash, webfetch]\n",
+    )]);
     let agent = opencode(&[("bash", "allow"), ("webfetch", "ask"), ("edit", "allow")]);
     let content = launch_settings(&agent, Some(&union));
     let rules = content["permissions"].as_array().unwrap();
@@ -288,11 +320,13 @@ fn guardrails_opencode_overwrite() {
 
 #[test]
 fn guardrails_opencode_wildcard_deny_beats_an_exact_allow() {
-    let union = org(&[(ROOT_FILE, "permissions:\n  opencode:\n    deny: ['github_*']\n")]);
+    let union = org(&[(
+        ROOT_FILE,
+        "permissions:\n  opencode:\n    deny: ['github_*']\n",
+    )]);
     let agent = opencode(&[("github_create_issue", "allow")]);
     for mode in [LaunchMode::Foreground, LaunchMode::Headless] {
-        let entry =
-            permissions::generate(&agent, AgentCli::OpenCode, mode, Some(&union)).remove(0);
+        let entry = permissions::generate(&agent, AgentCli::OpenCode, mode, Some(&union)).remove(0);
         let rules = entry.content["permissions"].as_array().unwrap();
         assert_eq!(
             opencode_effect(rules, "github_create_issue").as_deref(),
@@ -325,8 +359,14 @@ fn guardrails_opencode_final_tier_survives_the_scope_merge() {
     );
     let merged: Value = serde_json::from_str(&env[0].1).unwrap();
     let rules = merged["permissions"].as_array().unwrap();
-    assert_eq!(opencode_effect(rules, "github_create_issue").as_deref(), Some("deny"));
-    assert_eq!(opencode_effect(rules, "codesense_reply").as_deref(), Some("deny"));
+    assert_eq!(
+        opencode_effect(rules, "github_create_issue").as_deref(),
+        Some("deny")
+    );
+    assert_eq!(
+        opencode_effect(rules, "codesense_reply").as_deref(),
+        Some("deny")
+    );
 
     // Merging the merged settings again (a relaunch replays them) keeps the tier last.
     let mut again = vec![(var.clone(), scope.to_string())];
@@ -337,15 +377,24 @@ fn guardrails_opencode_final_tier_survives_the_scope_merge() {
     );
     let replayed: Value = serde_json::from_str(&again[0].1).unwrap();
     let rules = replayed["permissions"].as_array().unwrap();
-    assert_eq!(opencode_effect(rules, "github_create_issue").as_deref(), Some("deny"));
-    assert_eq!(opencode_effect(rules, "codesense_reply").as_deref(), Some("deny"));
+    assert_eq!(
+        opencode_effect(rules, "github_create_issue").as_deref(),
+        Some("deny")
+    );
+    assert_eq!(
+        opencode_effect(rules, "codesense_reply").as_deref(),
+        Some("deny")
+    );
 }
 
 // --- apply: Hermes and Codex ---
 
 #[test]
 fn guardrails_hermes_block_hook() {
-    let union = org(&[(ROOT_FILE, "permissions:\n  hermes:\n    deny: ['^terminal$', '^patch$']\n")]);
+    let union = org(&[(
+        ROOT_FILE,
+        "permissions:\n  hermes:\n    deny: ['^terminal$', '^patch$']\n",
+    )]);
     let agent = agent(
         AgentCli::Hermes,
         Some(Permissions {
@@ -405,10 +454,16 @@ fn guardrails_for_another_cli_leave_the_launch_unchanged() {
 
 #[test]
 fn guardrails_report() {
-    let union = org(&[(ROOT_FILE, "permissions:\n  claude:\n    deny: ['Bash(rm:*)', 'WebFetch']\n")]);
+    let union = org(&[(
+        ROOT_FILE,
+        "permissions:\n  claude:\n    deny: ['Bash(rm:*)', 'WebFetch']\n",
+    )]);
     // Same-string allow and ask are refused and listed; an overlapping rule is enforced by the
     // CLI but not listed (no matcher of ours).
-    let agent = claude(&["Bash(rm:*)", "Bash(rm -rf:*)", "Bash(ls:*)"], &["WebFetch"]);
+    let agent = claude(
+        &["Bash(rm:*)", "Bash(rm -rf:*)", "Bash(ls:*)"],
+        &["WebFetch"],
+    );
     let report = union.report(&agent, &team_key()).unwrap();
     assert_eq!(report.denied_by, vec![ROOT_FILE]);
     assert_eq!(
@@ -439,14 +494,19 @@ fn guardrails_report() {
     assert!(report.refused.iter().all(|r| r.tried_by == mine));
 
     // An agent that re-allows nothing still gets the report: the org's denies applied.
-    let report = union.report(&claude(&["Bash(ls:*)"], &[]), &team_key()).unwrap();
+    let report = union
+        .report(&claude(&["Bash(ls:*)"], &[]), &team_key())
+        .unwrap();
     assert_eq!(report.denied_by, vec![ROOT_FILE]);
     assert!(report.refused.is_empty());
 }
 
 #[test]
 fn guardrails_report_opencode_non_deny_decisions() {
-    let union = org(&[(ROOT_FILE, "permissions:\n  opencode:\n    deny: [bash, webfetch, edit]\n")]);
+    let union = org(&[(
+        ROOT_FILE,
+        "permissions:\n  opencode:\n    deny: [bash, webfetch, edit]\n",
+    )]);
     let agent = opencode(&[("bash", "allow"), ("webfetch", "ask"), ("edit", "deny")]);
     let report = union.report(&agent, &team_key()).unwrap();
     let refused: Vec<_> = report
