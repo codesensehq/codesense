@@ -25570,7 +25570,7 @@
     "src-tauri/src/verbs/registry.rs": "499877204d4ca8d40953b934024355ba150e534386e60f086e090159649ee6b0",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29",
-    "src-tauri/src/http/routes/viewer.rs": "7259c32d0948b8fabc61feed2ce222facd5fbfea629ee99f6bb1cb5fd5a57656",
+    "src-tauri/src/http/routes/viewer.rs": "cb3b267840ff535fcdf4bf56677a6885cd05d5abae2f838e99fc02ce25779657",
     "src-tauri/src/context_query/model.rs": "4e81c3eaa7ed4ea0dc93fe5017c7defe77655b124f0d5bc447557b646f42d345"
   }
 }

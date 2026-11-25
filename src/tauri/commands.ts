@@ -1120,6 +1120,9 @@ export interface InboxMessageRow {
   /** The sender's one-line plain-text preview (≤280 chars), shown in every list in
    *  place of a preview derived from the body. Null/omitted when they set none. */
   summary?: string | null;
+  /** The story the message is about (a story's `cs:id`); null when it carries none.
+   *  Absent from an older app build. */
+  storyId?: string | null;
   /** SW-AGR-18: what it asks of the human (see {@link MessageKind}). */
   kind: MessageKind;
   /** The emoji reactions on it, grouped by emoji in first-seen order. A reaction is not
