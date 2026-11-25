@@ -42,6 +42,11 @@ const killed: SessionAgentInput = {
   source: "command-end",
 };
 const thinking = advanceSessionAgent(undefined, hook("UserPromptSubmit"), 1);
+const approvalThenAsk = advanceSessionAgent(
+  advanceSessionAgent(thinking, hook("PermissionRequest"), 2),
+  { tier: 1, signal: { kind: "ask-user" } },
+  3,
+);
 const records = {
   crashed: advanceSessionAgent(thinking, killed, 2),
   failed: advanceSessionAgent(thinking, hook("StopFailure"), 2),
@@ -56,18 +61,10 @@ const records = {
     hook("PermissionRequest"),
     3,
   ),
-  approvalThenAsk: advanceSessionAgent(
-    advanceSessionAgent(thinking, hook("PermissionRequest"), 2),
-    { tier: 1, signal: { kind: "ask-user" } },
-    3,
-  ),
+  approvalThenAsk,
   // The ask closed (ask-resolved) while the approval stayed open.
   approvalAfterAsk: advanceSessionAgent(
-    advanceSessionAgent(
-      advanceSessionAgent(thinking, hook("PermissionRequest"), 2),
-      { tier: 1, signal: { kind: "ask-user" } },
-      3,
-    ),
+    approvalThenAsk,
     { tier: 1, signal: { kind: "ask-resolved" } },
     4,
   ),
