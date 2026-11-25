@@ -186,7 +186,7 @@ impl Guardrails {
             code: LaunchWarningCode::GuardrailsNotEnforced,
             message: format!(
                 "{runtime} can't enforce the org's permission denies ({}): this launch runs without them.",
-                files.into_iter().collect::<Vec<_>>().join(", ")
+                <[&str]>::join(&files.into_iter().collect::<Vec<_>>(), ", ")
             ),
         })
     }

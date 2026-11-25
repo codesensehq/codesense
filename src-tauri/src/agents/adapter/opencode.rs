@@ -78,10 +78,12 @@ pub(super) fn desktop() -> DesktopCli {
 fn guardrail_deny(content: &mut serde_json::Value, rules: &[&str]) {
     let map: serde_json::Map<String, serde_json::Value> = rules
         .iter()
-        .map(|key| (key.to_string(), serde_json::json!("deny")))
+        .map(|key| (ToString::to_string(key), serde_json::json!("deny")))
         .collect();
     let native = crate::agents::adapter::native_permission_rules(&serde_json::Value::Object(map));
-    let tier = Option::cloned(serde_json::Value::as_array(&native["permissions"]))
+    let tier = Option::<&Vec<serde_json::Value>>::cloned(serde_json::Value::as_array(
+        &native["permissions"],
+    ))
         .unwrap_or_default();
     let actions: Vec<&str> = tier
         .iter()
