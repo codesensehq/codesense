@@ -280,6 +280,7 @@ export function ChatOverlay({
       const first = pins[0];
       if (first) pinRefs.current.get(first.messageId)?.focus();
     },
+    visible,
   });
   const closePin = () => {
     const id = openPin;
