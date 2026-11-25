@@ -19,6 +19,10 @@ use crate::media::{index::Owner, Attachment, MediaInput, Remote};
 /// Emitted when a chat message's image changes state on this Mac (a fetch finished).
 pub const MEDIA_EVENT: &str = "codesense:workspace-chat-media";
 
+/// The longest `alt` a chat image may carry, in bytes, so a post stays well inside the
+/// log's line bound.
+pub const MAX_ALT_BYTES: usize = 1024;
+
 /// The [`MEDIA_EVENT`] payload.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,7 +44,7 @@ pub(crate) fn owner(team: &LaunchTeam, workspace: &str, message_id: i64) -> Owne
 }
 
 /// Prepare `input` for a post by `handle`, `remote` when its session runs on another
-/// machine. Refuses an invalid input, a file path from a sender not on this machine,
+/// machine. Refuses an invalid input or an overlong alt, a file path from a sender not on this machine,
 /// and a sender with no team; prepares as `send_message` does and records what the
 /// send admitted.
 pub(crate) async fn prepare(
@@ -50,6 +54,9 @@ pub(crate) async fn prepare(
     input: &MediaInput,
 ) -> Result<PreparedChatMedia, String> {
     input.validate()?;
+    if input.alt.len() > MAX_ALT_BYTES {
+        return Err(format!("media.alt exceeds {MAX_ALT_BYTES} bytes"));
+    }
     // Decided on the sender: a remote team's caller scope would read its path here.
     let own = !remote && host.own_media_sender(handle).await;
     if input.path.is_some() && !own {

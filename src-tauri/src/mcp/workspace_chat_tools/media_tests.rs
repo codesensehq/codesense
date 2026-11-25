@@ -173,6 +173,26 @@ async fn chat_media_send_refuses_a_blank_alt() {
 }
 
 #[tokio::test]
+async fn chat_media_send_refuses_an_overlong_alt() {
+    use crate::commands::workspace_chat::media::MAX_ALT_BYTES;
+    let media = MediaInput {
+        alt: "a".repeat(MAX_ALT_BYTES + 1),
+        ..url_media(TAGGED_URL)
+    };
+    assert_refused(media, "media.alt exceeds 1024 bytes").await;
+    let fake = FakeHost::new();
+    fake.own_sender("H1");
+    let at_cap = MediaInput {
+        alt: "a".repeat(MAX_ALT_BYTES),
+        ..url_media(TAGGED_URL)
+    };
+    let sent = send(&fake, poster("H1", false), "", Some(at_cap))
+        .await
+        .unwrap();
+    assert_eq!(sent.attachments[0].alt.len(), MAX_ALT_BYTES);
+}
+
+#[tokio::test]
 async fn chat_media_send_refuses_both_url_and_path() {
     let media = MediaInput {
         path: Some("cat.gif".into()),
