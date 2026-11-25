@@ -2045,7 +2045,7 @@
         "additionalProperties": true,
         "properties": {
           "id": {
-            "pattern": "^[A-Za-z0-9_-]{1,64}$",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$",
             "type": "string"
           },
           "provider": {
@@ -2113,7 +2113,7 @@
         "properties": {
           "ids": {
             "items": {
-              "pattern": "^[A-Za-z0-9_-]{1,64}$",
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
               "type": "string"
             },
             "maxItems": 10,
@@ -7467,7 +7467,7 @@
                 ]
               },
               "providerId": {
-                "pattern": "^[A-Za-z0-9_-]{1,64}$",
+                "pattern": "^[A-Za-z0-9_-]{1,128}$",
                 "type": "string"
               },
               "url": {
@@ -8236,7 +8236,7 @@
                 ]
               },
               "providerId": {
-                "pattern": "^[A-Za-z0-9_-]{1,64}$",
+                "pattern": "^[A-Za-z0-9_-]{1,128}$",
                 "type": "string"
               },
               "url": {
@@ -11191,7 +11191,7 @@
         "additionalProperties": true,
         "properties": {
           "id": {
-            "pattern": "^[A-Za-z0-9_-]{1,64}$",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$",
             "type": "string"
           },
           "provider": {
@@ -11257,7 +11257,7 @@
         "properties": {
           "ids": {
             "items": {
-              "pattern": "^[A-Za-z0-9_-]{1,64}$",
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
               "type": "string"
             },
             "maxItems": 10,
@@ -16517,7 +16517,7 @@
                 ]
               },
               "providerId": {
-                "pattern": "^[A-Za-z0-9_-]{1,64}$",
+                "pattern": "^[A-Za-z0-9_-]{1,128}$",
                 "type": "string"
               },
               "url": {
@@ -17250,7 +17250,7 @@
                 ]
               },
               "providerId": {
-                "pattern": "^[A-Za-z0-9_-]{1,64}$",
+                "pattern": "^[A-Za-z0-9_-]{1,128}$",
                 "type": "string"
               },
               "url": {
@@ -22202,7 +22202,7 @@
     {
       "verb": "gifPicked",
       "tier": "metadata",
-      "args": "{\"additionalProperties\":true,\"properties\":{\"id\":{\"pattern\":\"^[A-Za-z0-9_-]{1,64}$\",\"type\":\"string\"},\"provider\":{\"enum\":[\"giphy\"]}},\"required\":[\"provider\",\"id\"],\"type\":\"object\"}",
+      "args": "{\"additionalProperties\":true,\"properties\":{\"id\":{\"pattern\":\"^[A-Za-z0-9_-]{1,128}$\",\"type\":\"string\"},\"provider\":{\"enum\":[\"giphy\"]}},\"required\":[\"provider\",\"id\"],\"type\":\"object\"}",
       "description": "metadata · inbox:write",
       "denyExample": "denied: grant",
       "result": {
@@ -22245,7 +22245,7 @@
     {
       "verb": "gifSearch",
       "tier": "read",
-      "args": "{\"additionalProperties\":true,\"properties\":{\"ids\":{\"items\":{\"pattern\":\"^[A-Za-z0-9_-]{1,64}$\",\"type\":\"string\"},\"maxItems\":10,\"minItems\":1,\"type\":\"array\"},\"limit\":{\"maximum\":10,\"minimum\":1,\"type\":\"integer\"},\"org\":{\"type\":\"string\"},\"query\":{\"maxLength\":100,\"minLength\":1,\"type\":\"string\"},\"team\":{\"type\":\"string\"}},\"required\":[],\"type\":\"object\"}",
+      "args": "{\"additionalProperties\":true,\"properties\":{\"ids\":{\"items\":{\"pattern\":\"^[A-Za-z0-9_-]{1,128}$\",\"type\":\"string\"},\"maxItems\":10,\"minItems\":1,\"type\":\"array\"},\"limit\":{\"maximum\":10,\"minimum\":1,\"type\":\"integer\"},\"org\":{\"type\":\"string\"},\"query\":{\"maxLength\":100,\"minLength\":1,\"type\":\"string\"},\"team\":{\"type\":\"string\"}},\"required\":[],\"type\":\"object\"}",
       "description": "read · inbox:write",
       "denyExample": "denied: grant",
       "result": {
@@ -24781,7 +24781,7 @@
     {
       "verb": "replyAsHuman",
       "tier": "send",
-      "args": "{\"additionalProperties\":true,\"properties\":{\"media\":{\"additionalProperties\":false,\"properties\":{\"alt\":{\"minLength\":1,\"type\":\"string\"},\"provider\":{\"enum\":[\"giphy\",\"klipy\"]},\"providerId\":{\"pattern\":\"^[A-Za-z0-9_-]{1,64}$\",\"type\":\"string\"},\"url\":{\"minLength\":1,\"type\":\"string\"}},\"required\":[\"url\",\"alt\"],\"type\":[\"object\",\"null\"]},\"messageId\":{\"type\":\"integer\"},\"text\":{\"type\":\"string\"}},\"required\":[],\"type\":\"object\"}",
+      "args": "{\"additionalProperties\":true,\"properties\":{\"media\":{\"additionalProperties\":false,\"properties\":{\"alt\":{\"minLength\":1,\"type\":\"string\"},\"provider\":{\"enum\":[\"giphy\",\"klipy\"]},\"providerId\":{\"pattern\":\"^[A-Za-z0-9_-]{1,128}$\",\"type\":\"string\"},\"url\":{\"minLength\":1,\"type\":\"string\"}},\"required\":[\"url\",\"alt\"],\"type\":[\"object\",\"null\"]},\"messageId\":{\"type\":\"integer\"},\"text\":{\"type\":\"string\"}},\"required\":[],\"type\":\"object\"}",
       "description": "send · inbox:write · confirmable · MCP twin reply",
       "denyExample": "denied: grant",
       "result": {
@@ -25128,7 +25128,7 @@
     {
       "verb": "sendAsHuman",
       "tier": "send",
-      "args": "{\"additionalProperties\":true,\"properties\":{\"attachFile\":{\"type\":\"string\"},\"inReplyTo\":{\"minimum\":1,\"type\":\"integer\"},\"media\":{\"additionalProperties\":false,\"properties\":{\"alt\":{\"minLength\":1,\"type\":\"string\"},\"provider\":{\"enum\":[\"giphy\",\"klipy\"]},\"providerId\":{\"pattern\":\"^[A-Za-z0-9_-]{1,64}$\",\"type\":\"string\"},\"url\":{\"minLength\":1,\"type\":\"string\"}},\"required\":[\"url\",\"alt\"],\"type\":[\"object\",\"null\"]},\"replyTo\":{\"type\":\"string\"},\"summary\":{\"type\":\"string\"},\"team\":{\"type\":\"object\"},\"text\":{\"type\":\"string\"},\"to\":{\"type\":\"string\"}},\"required\":[],\"type\":\"object\"}",
+      "args": "{\"additionalProperties\":true,\"properties\":{\"attachFile\":{\"type\":\"string\"},\"inReplyTo\":{\"minimum\":1,\"type\":\"integer\"},\"media\":{\"additionalProperties\":false,\"properties\":{\"alt\":{\"minLength\":1,\"type\":\"string\"},\"provider\":{\"enum\":[\"giphy\",\"klipy\"]},\"providerId\":{\"pattern\":\"^[A-Za-z0-9_-]{1,128}$\",\"type\":\"string\"},\"url\":{\"minLength\":1,\"type\":\"string\"}},\"required\":[\"url\",\"alt\"],\"type\":[\"object\",\"null\"]},\"replyTo\":{\"type\":\"string\"},\"summary\":{\"type\":\"string\"},\"team\":{\"type\":\"object\"},\"text\":{\"type\":\"string\"},\"to\":{\"type\":\"string\"}},\"required\":[],\"type\":\"object\"}",
       "description": "send · inbox:write · confirmable · MCP twin send_message",
       "denyExample": "denied: grant",
       "result": {
@@ -25575,7 +25575,7 @@
   ],
   "sources": {
     "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "f4fead9b629cdeda0e530907d5e32047f376a1df38c8210b3730f5c5130bbe70",
-    "src-tauri/src/verbs/registry.generated.json": "644a79cdd6a7504e9fc2515cefbddb038d92c4e5da53147443cfaf06bf834398",
+    "src-tauri/src/verbs/registry.generated.json": "65c856e8e02316aaf38b523ed774c5691530e40d4499b73140e4084d919b5a9f",
     "src-tauri/src/verbs/registry.rs": "499877204d4ca8d40953b934024355ba150e534386e60f086e090159649ee6b0",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29",
