@@ -138,6 +138,21 @@ test("every pull request workflow also runs on merge groups, each in its own con
   }
 });
 
+// A push run and a scheduled or dispatched run on the same commit must not share a cancelling
+// group, or the later one cancels the other; keying the group on the event keeps them apart.
+test("a workflow on push and another non-PR event keys its cancelling group on the event", () => {
+  const shared = files.filter((file) => {
+    const workflow = parse(fs.readFileSync(path.join(directory, file), "utf8"));
+    if (!Object.hasOwn(workflow.on ?? {}, "push")) return false;
+    const others = Object.keys(workflow.on).filter(
+      (event) => !["push", "pull_request", "merge_group"].includes(event),
+    );
+    if (others.length === 0 || workflow.concurrency?.["cancel-in-progress"] === false) return false;
+    return !/\$\{\{\s*github\.event_name\s*\}\}/.test(workflow.concurrency.group);
+  });
+  assert.deepEqual(shared, []);
+});
+
 // No cache is saved on a merge group: each caching step is checked on a merge_group workflow.
 const cacheStep = (step) =>
   queued() +
@@ -345,11 +360,13 @@ test("rust.yml runs macOS on a pull request only with ci:macos, and Linux always
   // The shards follow the build: they run only when it succeeds and main had not moved on.
   assert.equal(workflow.jobs["rust-macos-test"].needs, "rust-macos-build");
   assert.equal(workflow.jobs["rust-macos-test"].if, shardsNotSuperseded);
-  // Another label's run, ci:windows included, has a group of its own, so it cannot cancel the
-  // pull request's run or a ci:macos run.
+  // One commit's push, schedule and workflow_dispatch runs each get their own group, so none
+  // cancels another. Every pull_request event for one PR shares a group (ci:macos labeled
+  // included), so a newer push still supersedes; another label's run, ci:windows included, has a
+  // group of its own, so it cannot cancel the pull request's run or a ci:macos run.
   assert.equal(
     workflow.concurrency.group,
-    "${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci:macos' && format('-{0}', github.run_id) || '' }}",
+    "${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}-${{ github.event_name }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci:macos' && format('-{0}', github.run_id) || '' }}",
   );
   assert.equal(workflow.jobs["rust-linux"].if, `\${{ ${pathFilter} }}`);
 });
