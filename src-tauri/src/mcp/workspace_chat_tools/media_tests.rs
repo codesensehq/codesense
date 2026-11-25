@@ -491,13 +491,19 @@ async fn chat_media_app_read_presents_against_the_team() {
         .await
         .unwrap();
     settled(&fake, cached.message_id).await;
-    let read_rows = || fake.chat().read(WS, Some(0), None).unwrap().messages;
     let host = port(&fake);
-    let mut rows = read_rows();
+    // The log also holds the chat's first-use anchor; the image is on the sent row.
+    let mut rows = fake.chat().read(WS, Some(0), None).unwrap().messages;
     present(&*host, WS, &mut rows).await;
-    let a = &rows[0].attachments[0];
-    assert_eq!(a.state, "cached");
-    assert_eq!(a.sha256.as_deref(), Some(gif_sha().as_str()));
+    let row = rows
+        .iter()
+        .find(|m| m.message_id == cached.message_id)
+        .unwrap();
+    assert_eq!(row.attachments[0].state, "cached");
+    assert_eq!(
+        row.attachments[0].sha256.as_deref(),
+        Some(gif_sha().as_str())
+    );
     fake.set_media_config(
         "default",
         Config {
@@ -505,13 +511,17 @@ async fn chat_media_app_read_presents_against_the_team() {
             ..Config::default()
         },
     );
-    let mut rows = read_rows();
+    let mut rows = fake.chat().read(WS, Some(0), None).unwrap().messages;
     present(&*host, WS, &mut rows).await;
-    let a = &rows[0].attachments[0];
+    let row = rows
+        .iter()
+        .find(|m| m.message_id == cached.message_id)
+        .unwrap();
+    let a = &row.attachments[0];
     assert_eq!(a.state, "blocked", "the team's Off switch wins on the read");
     assert_eq!(a.sha256, None, "a blocked image names no cached bytes");
     assert_eq!(
-        rows[0].media_state,
+        row.media_state,
         Some(ChatMediaState::Cached),
         "the row's own state is left as stored"
     );
