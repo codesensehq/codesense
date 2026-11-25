@@ -20,8 +20,8 @@
     "localMachinePhrase"
   ],
   "counts": {
-    "bridgeMethods": 123,
-    "actionVerbs": 65,
+    "bridgeMethods": 125,
+    "actionVerbs": 67,
     "readVerbs": 58,
     "surfaceMembers": 59
   },
@@ -2026,6 +2026,221 @@
       },
       "resultSchema": {
         "description": "JSON result of the existing host handler; see get_live_data_contract for its fields."
+      },
+      "action": true,
+      "confirmable": false,
+      "feature": null
+    },
+    {
+      "name": "gifPicked",
+      "owner": "VerbMethods",
+      "signature": "gifPicked(args: {\n      id: string;\n      provider: \"giphy\";\n      [key: string]: unknown;\n    }): Promise<{\n      status: \"ok\";\n      [key: string]: unknown;\n    } | {\n      error: \"badQuery\";\n      message: string;\n      status: \"error\";\n      [key: string]: unknown;\n    }>;",
+      "description": "metadata · inbox:write",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "class": "metadata",
+      "grant": "inbox:write",
+      "mcpTwin": null,
+      "presentationOnlyReason": "Registers the person's pick in the Inbox pane GIF picker with the provider",
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "pattern": "^[A-Za-z0-9_-]{1,64}$",
+            "type": "string"
+          },
+          "provider": {
+            "enum": [
+              "giphy"
+            ]
+          }
+        },
+        "required": [
+          "provider",
+          "id"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "status": {
+                "const": "ok"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "error": {
+                "const": "badQuery"
+              },
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "error"
+              }
+            },
+            "required": [
+              "status",
+              "error",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "action": true,
+      "confirmable": false,
+      "feature": null
+    },
+    {
+      "name": "gifSearch",
+      "owner": "VerbMethods",
+      "signature": "gifSearch(args?: {\n      ids?: string[];\n      limit?: number;\n      org?: string;\n      query?: string;\n      team?: string;\n      [key: string]: unknown;\n    }): Promise<{\n      candidates: Array<{\n        autoLoads: boolean;\n        height: number;\n        id: string;\n        previewData?: string;\n        previewUrl: string;\n        provider: \"giphy\";\n        title: string;\n        url: string;\n        width: number;\n        [key: string]: unknown;\n      }>;\n      provider: \"giphy\";\n      status: \"ok\";\n      [key: string]: unknown;\n    } | {\n      error: \"noProvider\" | \"keychainUnavailable\" | \"invalidKey\" | \"rateLimited\" | \"providerUnavailable\" | \"badQuery\" | \"mediaOff\";\n      message: string;\n      retryAfter?: number;\n      status: \"error\";\n      [key: string]: unknown;\n    }>;",
+      "description": "read · inbox:write",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "class": "read",
+      "grant": "inbox:write",
+      "mcpTwin": null,
+      "presentationOnlyReason": "Inbox pane GIF search with host-fetched stills; agents use gif_search",
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "ids": {
+            "items": {
+              "pattern": "^[A-Za-z0-9_-]{1,64}$",
+              "type": "string"
+            },
+            "maxItems": 10,
+            "minItems": 1,
+            "type": "array"
+          },
+          "limit": {
+            "maximum": 10,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "org": {
+            "type": "string"
+          },
+          "query": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "resultSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "candidates": {
+                "items": {
+                  "properties": {
+                    "autoLoads": {
+                      "type": "boolean"
+                    },
+                    "height": {
+                      "type": "integer"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "previewData": {
+                      "pattern": "^data:image/(gif|png|webp|jpeg);base64,",
+                      "type": "string"
+                    },
+                    "previewUrl": {
+                      "type": "string"
+                    },
+                    "provider": {
+                      "enum": [
+                        "giphy"
+                      ]
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "url": {
+                      "type": "string"
+                    },
+                    "width": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "provider",
+                    "id",
+                    "title",
+                    "url",
+                    "previewUrl",
+                    "width",
+                    "height",
+                    "autoLoads"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 10,
+                "type": "array"
+              },
+              "provider": {
+                "enum": [
+                  "giphy"
+                ]
+              },
+              "status": {
+                "const": "ok"
+              }
+            },
+            "required": [
+              "status",
+              "provider",
+              "candidates"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "error": {
+                "enum": [
+                  "noProvider",
+                  "keychainUnavailable",
+                  "invalidKey",
+                  "rateLimited",
+                  "providerUnavailable",
+                  "badQuery",
+                  "mediaOff"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "retryAfter": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "status": {
+                "const": "error"
+              }
+            },
+            "required": [
+              "status",
+              "error",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "action": true,
       "confirmable": false,
@@ -7225,7 +7440,7 @@
     {
       "name": "replyAsHuman",
       "owner": "VerbMethods",
-      "signature": "replyAsHuman(args?: {\n      messageId?: number;\n      text?: string;\n      [key: string]: unknown;\n    }): Promise<unknown>;",
+      "signature": "replyAsHuman(args?: {\n      media?: {\n        alt: string;\n        provider?: \"giphy\" | \"klipy\";\n        providerId?: string;\n        url: string;\n      } | null;\n      messageId?: number;\n      text?: string;\n      [key: string]: unknown;\n    }): Promise<unknown>;",
       "description": "send · inbox:write · confirmable · MCP twin reply",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "class": "send",
@@ -7235,6 +7450,37 @@
       "argsSchema": {
         "additionalProperties": true,
         "properties": {
+          "media": {
+            "additionalProperties": false,
+            "properties": {
+              "alt": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "provider": {
+                "enum": [
+                  "giphy",
+                  "klipy"
+                ]
+              },
+              "providerId": {
+                "pattern": "^[A-Za-z0-9_-]{1,64}$",
+                "type": "string"
+              },
+              "url": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "url",
+              "alt"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "messageId": {
             "type": "integer"
           },
@@ -7956,7 +8202,7 @@
     {
       "name": "sendAsHuman",
       "owner": "VerbMethods",
-      "signature": "sendAsHuman(args?: {\n      team?: Record<string, unknown>;\n      text?: string;\n      to?: string;\n      [key: string]: unknown;\n    }): Promise<unknown>;",
+      "signature": "sendAsHuman(args?: {\n      attachFile?: string;\n      inReplyTo?: number;\n      media?: {\n        alt: string;\n        provider?: \"giphy\" | \"klipy\";\n        providerId?: string;\n        url: string;\n      } | null;\n      replyTo?: string;\n      summary?: string;\n      team?: Record<string, unknown>;\n      text?: string;\n      to?: string;\n      [key: string]: unknown;\n    }): Promise<unknown>;",
       "description": "send · inbox:write · confirmable · MCP twin send_message",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "class": "send",
@@ -7966,6 +8212,50 @@
       "argsSchema": {
         "additionalProperties": true,
         "properties": {
+          "attachFile": {
+            "type": "string"
+          },
+          "inReplyTo": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "media": {
+            "additionalProperties": false,
+            "properties": {
+              "alt": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "provider": {
+                "enum": [
+                  "giphy",
+                  "klipy"
+                ]
+              },
+              "providerId": {
+                "pattern": "^[A-Za-z0-9_-]{1,64}$",
+                "type": "string"
+              },
+              "url": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "url",
+              "alt"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "replyTo": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
           "team": {
             "type": "object"
           },
@@ -10890,6 +11180,217 @@
       "audited": true,
       "action": true,
       "module": "records"
+    },
+    {
+      "name": "gifPicked",
+      "class": "metadata",
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "pattern": "^[A-Za-z0-9_-]{1,64}$",
+            "type": "string"
+          },
+          "provider": {
+            "enum": [
+              "giphy"
+            ]
+          }
+        },
+        "required": [
+          "provider",
+          "id"
+        ],
+        "type": "object"
+      },
+      "resultSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "status": {
+                "const": "ok"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "error": {
+                "const": "badQuery"
+              },
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "error"
+              }
+            },
+            "required": [
+              "status",
+              "error",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "grant": "inbox:write",
+      "inboxTarget": false,
+      "confirmable": false,
+      "mcpTwin": null,
+      "presentationOnlyReason": "Registers the person's pick in the Inbox pane GIF picker with the provider",
+      "audited": true,
+      "action": true,
+      "module": "inbox"
+    },
+    {
+      "name": "gifSearch",
+      "class": "read",
+      "argsSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "ids": {
+            "items": {
+              "pattern": "^[A-Za-z0-9_-]{1,64}$",
+              "type": "string"
+            },
+            "maxItems": 10,
+            "minItems": 1,
+            "type": "array"
+          },
+          "limit": {
+            "maximum": 10,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "org": {
+            "type": "string"
+          },
+          "query": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "resultSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "candidates": {
+                "items": {
+                  "properties": {
+                    "autoLoads": {
+                      "type": "boolean"
+                    },
+                    "height": {
+                      "type": "integer"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "previewData": {
+                      "pattern": "^data:image/(gif|png|webp|jpeg);base64,",
+                      "type": "string"
+                    },
+                    "previewUrl": {
+                      "type": "string"
+                    },
+                    "provider": {
+                      "enum": [
+                        "giphy"
+                      ]
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "url": {
+                      "type": "string"
+                    },
+                    "width": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "provider",
+                    "id",
+                    "title",
+                    "url",
+                    "previewUrl",
+                    "width",
+                    "height",
+                    "autoLoads"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 10,
+                "type": "array"
+              },
+              "provider": {
+                "enum": [
+                  "giphy"
+                ]
+              },
+              "status": {
+                "const": "ok"
+              }
+            },
+            "required": [
+              "status",
+              "provider",
+              "candidates"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "error": {
+                "enum": [
+                  "noProvider",
+                  "keychainUnavailable",
+                  "invalidKey",
+                  "rateLimited",
+                  "providerUnavailable",
+                  "badQuery",
+                  "mediaOff"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "retryAfter": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "status": {
+                "const": "error"
+              }
+            },
+            "required": [
+              "status",
+              "error",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "grant": "inbox:write",
+      "inboxTarget": true,
+      "confirmable": false,
+      "mcpTwin": null,
+      "presentationOnlyReason": "Inbox pane GIF search with host-fetched stills; agents use gif_search",
+      "audited": true,
+      "action": true,
+      "module": "inbox"
     },
     {
       "name": "gotoAgent",
@@ -15996,6 +16497,37 @@
       "argsSchema": {
         "additionalProperties": true,
         "properties": {
+          "media": {
+            "additionalProperties": false,
+            "properties": {
+              "alt": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "provider": {
+                "enum": [
+                  "giphy",
+                  "klipy"
+                ]
+              },
+              "providerId": {
+                "pattern": "^[A-Za-z0-9_-]{1,64}$",
+                "type": "string"
+              },
+              "url": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "url",
+              "alt"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "messageId": {
             "type": "integer"
           },
@@ -16691,6 +17223,50 @@
       "argsSchema": {
         "additionalProperties": true,
         "properties": {
+          "attachFile": {
+            "type": "string"
+          },
+          "inReplyTo": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "media": {
+            "additionalProperties": false,
+            "properties": {
+              "alt": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "provider": {
+                "enum": [
+                  "giphy",
+                  "klipy"
+                ]
+              },
+              "providerId": {
+                "pattern": "^[A-Za-z0-9_-]{1,64}$",
+                "type": "string"
+              },
+              "url": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "url",
+              "alt"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "replyTo": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
           "team": {
             "type": "object"
           },
@@ -21615,6 +22191,160 @@
       "mcpTwin": null
     },
     {
+      "verb": "gifPicked",
+      "tier": "metadata",
+      "args": "{\"additionalProperties\":true,\"properties\":{\"id\":{\"pattern\":\"^[A-Za-z0-9_-]{1,64}$\",\"type\":\"string\"},\"provider\":{\"enum\":[\"giphy\"]}},\"required\":[\"provider\",\"id\"],\"type\":\"object\"}",
+      "description": "metadata · inbox:write",
+      "denyExample": "denied: grant",
+      "result": {
+        "oneOf": [
+          {
+            "properties": {
+              "status": {
+                "const": "ok"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "error": {
+                "const": "badQuery"
+              },
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "const": "error"
+              }
+            },
+            "required": [
+              "status",
+              "error",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "grant": "inbox:write",
+      "mcpTwin": null
+    },
+    {
+      "verb": "gifSearch",
+      "tier": "read",
+      "args": "{\"additionalProperties\":true,\"properties\":{\"ids\":{\"items\":{\"pattern\":\"^[A-Za-z0-9_-]{1,64}$\",\"type\":\"string\"},\"maxItems\":10,\"minItems\":1,\"type\":\"array\"},\"limit\":{\"maximum\":10,\"minimum\":1,\"type\":\"integer\"},\"org\":{\"type\":\"string\"},\"query\":{\"maxLength\":100,\"minLength\":1,\"type\":\"string\"},\"team\":{\"type\":\"string\"}},\"required\":[],\"type\":\"object\"}",
+      "description": "read · inbox:write",
+      "denyExample": "denied: grant",
+      "result": {
+        "oneOf": [
+          {
+            "properties": {
+              "candidates": {
+                "items": {
+                  "properties": {
+                    "autoLoads": {
+                      "type": "boolean"
+                    },
+                    "height": {
+                      "type": "integer"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "previewData": {
+                      "pattern": "^data:image/(gif|png|webp|jpeg);base64,",
+                      "type": "string"
+                    },
+                    "previewUrl": {
+                      "type": "string"
+                    },
+                    "provider": {
+                      "enum": [
+                        "giphy"
+                      ]
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "url": {
+                      "type": "string"
+                    },
+                    "width": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "provider",
+                    "id",
+                    "title",
+                    "url",
+                    "previewUrl",
+                    "width",
+                    "height",
+                    "autoLoads"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 10,
+                "type": "array"
+              },
+              "provider": {
+                "enum": [
+                  "giphy"
+                ]
+              },
+              "status": {
+                "const": "ok"
+              }
+            },
+            "required": [
+              "status",
+              "provider",
+              "candidates"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "error": {
+                "enum": [
+                  "noProvider",
+                  "keychainUnavailable",
+                  "invalidKey",
+                  "rateLimited",
+                  "providerUnavailable",
+                  "badQuery",
+                  "mediaOff"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "retryAfter": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "status": {
+                "const": "error"
+              }
+            },
+            "required": [
+              "status",
+              "error",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "grant": "inbox:write",
+      "mcpTwin": null
+    },
+    {
       "verb": "gotoAgent",
       "tier": "spawn",
       "args": "{\"additionalProperties\":true,\"properties\":{\"agentId\":{\"type\":\"string\"},\"preserveFocus\":{\"type\":\"boolean\"}},\"required\":[\"agentId\"],\"type\":\"object\"}",
@@ -24042,7 +24772,7 @@
     {
       "verb": "replyAsHuman",
       "tier": "send",
-      "args": "{\"additionalProperties\":true,\"properties\":{\"messageId\":{\"type\":\"integer\"},\"text\":{\"type\":\"string\"}},\"required\":[],\"type\":\"object\"}",
+      "args": "{\"additionalProperties\":true,\"properties\":{\"media\":{\"additionalProperties\":false,\"properties\":{\"alt\":{\"minLength\":1,\"type\":\"string\"},\"provider\":{\"enum\":[\"giphy\",\"klipy\"]},\"providerId\":{\"pattern\":\"^[A-Za-z0-9_-]{1,64}$\",\"type\":\"string\"},\"url\":{\"minLength\":1,\"type\":\"string\"}},\"required\":[\"url\",\"alt\"],\"type\":[\"object\",\"null\"]},\"messageId\":{\"type\":\"integer\"},\"text\":{\"type\":\"string\"}},\"required\":[],\"type\":\"object\"}",
       "description": "send · inbox:write · confirmable · MCP twin reply",
       "denyExample": "denied: grant",
       "result": {
@@ -24389,7 +25119,7 @@
     {
       "verb": "sendAsHuman",
       "tier": "send",
-      "args": "{\"additionalProperties\":true,\"properties\":{\"team\":{\"type\":\"object\"},\"text\":{\"type\":\"string\"},\"to\":{\"type\":\"string\"}},\"required\":[],\"type\":\"object\"}",
+      "args": "{\"additionalProperties\":true,\"properties\":{\"attachFile\":{\"type\":\"string\"},\"inReplyTo\":{\"minimum\":1,\"type\":\"integer\"},\"media\":{\"additionalProperties\":false,\"properties\":{\"alt\":{\"minLength\":1,\"type\":\"string\"},\"provider\":{\"enum\":[\"giphy\",\"klipy\"]},\"providerId\":{\"pattern\":\"^[A-Za-z0-9_-]{1,64}$\",\"type\":\"string\"},\"url\":{\"minLength\":1,\"type\":\"string\"}},\"required\":[\"url\",\"alt\"],\"type\":[\"object\",\"null\"]},\"replyTo\":{\"type\":\"string\"},\"summary\":{\"type\":\"string\"},\"team\":{\"type\":\"object\"},\"text\":{\"type\":\"string\"},\"to\":{\"type\":\"string\"}},\"required\":[],\"type\":\"object\"}",
       "description": "send · inbox:write · confirmable · MCP twin send_message",
       "denyExample": "denied: grant",
       "result": {
@@ -24805,7 +25535,7 @@
   "tiers": [
     {
       "tier": "metadata",
-      "verbs": "archive, dismiss_agent_mark, draft, files.create, files.delete, files.move, inbox.pin, inbox.reorderPins, inbox.replacePin, inbox.restorePin, inbox.unpin, loadMedia, markRead, markUnread, pin, react, records.create, records.delete, records.restore, records.setFields, records.write, reorderPins, replacePin, restorePin, routeToContext, setField, setHumanStatus, setModelRate, setStatus, unarchive, unpin",
+      "verbs": "archive, dismiss_agent_mark, draft, files.create, files.delete, files.move, gifPicked, inbox.pin, inbox.reorderPins, inbox.replacePin, inbox.restorePin, inbox.unpin, loadMedia, markRead, markUnread, pin, react, records.create, records.delete, records.restore, records.setFields, records.write, reorderPins, replacePin, restorePin, routeToContext, setField, setHumanStatus, setModelRate, setStatus, unarchive, unpin",
       "note": "metadata class; Rust checks the effective grant on every call."
     },
     {
@@ -24815,7 +25545,7 @@
     },
     {
       "tier": "read",
-      "verbs": "commands.run, files.list, files.read, getWorkspaceStatus, readWorkspace, routineResult, routineStatus",
+      "verbs": "commands.run, files.list, files.read, getWorkspaceStatus, gifSearch, readWorkspace, routineResult, routineStatus",
       "note": "read class; Rust checks the effective grant on every call."
     },
     {
@@ -24835,9 +25565,9 @@
     }
   ],
   "sources": {
-    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "afe91d36439877f8b2975380fa0335bc49b5175127dfe9ad994012b9eeaabf09",
-    "src-tauri/src/verbs/registry.generated.json": "37b956e3c1451649b0d0e5c06121cd31abd5a49e13e61d26149b9d8078710e39",
-    "src-tauri/src/verbs/registry.rs": "f599ccbb17d3f3b23bb5e557cb4d12199480e3a536b109a13ad4496309fb3770",
+    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "652a633be708b5c9387e3e2370695c56ce4d0289897caf60f2e8169f33099f1e",
+    "src-tauri/src/verbs/registry.generated.json": "60ab7b078781a6b33eefbe4fd0ffe90ff2dc5c10d3b6366d3b2526a995af2d4a",
+    "src-tauri/src/verbs/registry.rs": "499877204d4ca8d40953b934024355ba150e534386e60f086e090159649ee6b0",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29",
     "src-tauri/src/http/routes/viewer.rs": "7259c32d0948b8fabc61feed2ce222facd5fbfea629ee99f6bb1cb5fd5a57656",

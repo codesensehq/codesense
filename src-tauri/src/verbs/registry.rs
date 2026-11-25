@@ -159,6 +159,7 @@ fn spec(
                 | "openMessage"
                 | "embedMessage"
                 | "loadMedia"
+                | "gifSearch"
                 | "markRead"
                 | "markUnread"
                 | "archive"
@@ -208,9 +209,11 @@ fn capability_for_verb(name: &str) -> &'static str {
         | "watchAgentActivity" | "openMessage" | "embedMessage" | "openAgentInbox"
         | "pins" => "inbox:read:team",
         "inboxRollup" => "inbox:read:all-teams",
-        "loadMedia" | "archive" | "unarchive" | "markRead" | "markUnread" | "postMessage"
-        | "replyAsHuman" | "react" | "sendAsHuman" | "setHumanStatus" | "pin" | "unpin"
-        | "restorePin" | "replacePin" | "reorderPins" => "inbox:write",
+        "loadMedia" | "gifSearch" | "gifPicked" | "archive" | "unarchive" | "markRead"
+        | "markUnread" | "postMessage" | "replyAsHuman" | "react" | "sendAsHuman"
+        | "setHumanStatus" | "pin" | "unpin" | "restorePin" | "replacePin" | "reorderPins" => {
+            "inbox:write"
+        }
         "analyze" | "context" | "getDocDir" | "getEpicHandle" | "openFile" | "queryContext"
         | "validateYaml" => "context:read",
         "draft" | "routeToContext" | "setField" | "setStatus" => "context:write",
@@ -579,6 +582,30 @@ fn register_resources(registry: &mut Registry) {
             true,
             None,
             Some("Fetch one inbox image after the user requests it"),
+            true,
+            true,
+        ),
+    );
+    registry.register_existing(
+        "inbox",
+        spec(
+            "gifSearch",
+            Class::Read,
+            false,
+            None,
+            Some("Inbox pane GIF search with host-fetched stills; agents use gif_search"),
+            true,
+            true,
+        ),
+    );
+    registry.register_existing(
+        "inbox",
+        spec(
+            "gifPicked",
+            Class::Metadata,
+            false,
+            None,
+            Some("Registers the person's pick in the Inbox pane GIF picker with the provider"),
             true,
             true,
         ),

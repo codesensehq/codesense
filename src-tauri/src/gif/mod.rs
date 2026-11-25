@@ -5,6 +5,7 @@
 pub(crate) mod analytics;
 pub(crate) mod bucket;
 pub(crate) mod giphy;
+pub(crate) mod page;
 pub(crate) mod register;
 pub(crate) mod settings;
 
@@ -184,6 +185,8 @@ pub enum GifError {
     ProviderUnavailable,
     /// The input was refused before any network call, or the provider refused the request.
     BadQuery(&'static str),
+    /// The Inbox pane's search only: the team's remote media is off, so nothing is fetched.
+    MediaOff,
 }
 impl GifError {
     /// The camelCase code a tool result carries.
@@ -195,6 +198,7 @@ impl GifError {
             Self::RateLimited { .. } => "rateLimited",
             Self::ProviderUnavailable => "providerUnavailable",
             Self::BadQuery(_) => "badQuery",
+            Self::MediaOff => "mediaOff",
         }
     }
     /// The tool result for this error.
@@ -238,6 +242,9 @@ impl std::fmt::Display for GifError {
                 f.write_str("GIPHY is unavailable right now. Try again later.")
             }
             Self::BadQuery(reason) => write!(f, "Bad gif_search input: {reason}."),
+            Self::MediaOff => f.write_str(
+                "Remote media is off for this team, so GIF search can't show anything.",
+            ),
         }
     }
 }
@@ -489,6 +496,38 @@ pub fn set_auto_loads(candidates: &mut [Candidate], config: &crate::media::Confi
             Err(_) => false,
         };
     }
+}
+
+/// A search as its caller sent it, before [`normalize`]: the `gif_search` tool's and the Inbox
+/// pane's `gifSearch` verb's shared input.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct SearchArgs<'a> {
+    pub query: Option<&'a str>,
+    pub ids: Option<&'a [String]>,
+    pub limit: Option<i64>,
+    pub rating: Option<&'a str>,
+    pub provider: Option<&'a str>,
+}
+
+/// Check `args` and run them on `service`, marking what the team `config` shows inline (none:
+/// nothing auto-loads). Every error but the provider's returns before any network call.
+pub(crate) async fn search(
+    service: &GifService,
+    config: Option<&crate::media::Config>,
+    args: SearchArgs<'_>,
+) -> Result<(Provider, Vec<Candidate>), GifError> {
+    let request = normalize(args.query, args.ids, args.limit)?;
+    let requested = match args.provider {
+        None => None,
+        Some(name) => Some(Provider::parse(name).ok_or(GifError::BadQuery("unknown provider"))?),
+    };
+    let (provider, mut candidates) = service.run(&request, requested, args.rating).await?;
+    let off = crate::media::Config {
+        remote: crate::media::Remote::Off,
+        ..Default::default()
+    };
+    set_auto_loads(&mut candidates, config.unwrap_or(&off));
+    Ok((provider, candidates))
 }
 
 /// A GIF provider adapter, holding its key.

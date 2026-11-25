@@ -4,6 +4,7 @@
 //! require; everything else keeps the content-addressed disk cache.
 pub(crate) mod index;
 pub(crate) mod memory;
+pub(crate) mod preview;
 pub(crate) mod purge;
 mod state;
 #[cfg(test)]
@@ -513,23 +514,30 @@ async fn download(url: &str, config: &Config) -> Result<Downloaded, Failure> {
     send(&client, url).await
 }
 async fn send(client: &reqwest::Client, url: url::Url) -> Result<Downloaded, Failure> {
-    let response = client.get(url).send().await.map_err(|e| {
-        let mut cause: Option<&dyn std::error::Error> = Some(&e);
-        while let Some(error) = cause {
-            if error.to_string().contains("media-private-address") {
-                return failure("address");
-            }
-            cause = error.source();
-        }
-        if e.is_redirect() {
-            failure("redirect")
-        } else {
-            network(e)
-        }
-    })?;
+    let response = client.get(url).send().await.map_err(request_failure)?;
     read_response(response).await
 }
-async fn read_response(mut response: reqwest::Response) -> Result<Downloaded, Failure> {
+/// A request that got no response: a private address, a refused redirect or the network.
+fn request_failure(e: reqwest::Error) -> Failure {
+    let mut cause: Option<&dyn std::error::Error> = Some(&e);
+    while let Some(error) = cause {
+        if error.to_string().contains("media-private-address") {
+            return failure("address");
+        }
+        cause = error.source();
+    }
+    if e.is_redirect() {
+        failure("redirect")
+    } else {
+        network(e)
+    }
+}
+async fn read_response(response: reqwest::Response) -> Result<Downloaded, Failure> {
+    read_capped(response, MAX_BYTES).await
+}
+/// A successful response's body, refused as `size` once it passes `cap` bytes: by its length
+/// up front, or while streaming when it has none.
+async fn read_capped(mut response: reqwest::Response, cap: usize) -> Result<Downloaded, Failure> {
     let final_url = response.url().clone();
     let cache_control = response
         .headers()
@@ -542,15 +550,12 @@ async fn read_response(mut response: reqwest::Response) -> Result<Downloaded, Fa
             retryable: response.status().is_server_error() || response.status().as_u16() == 429,
         });
     }
-    if response
-        .content_length()
-        .is_some_and(|n| n > MAX_BYTES as u64)
-    {
+    if response.content_length().is_some_and(|n| n > cap as u64) {
         return Err(failure("size"));
     }
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(network)? {
-        if bytes.len() + chunk.len() > MAX_BYTES {
+        if bytes.len() + chunk.len() > cap {
             return Err(failure("size"));
         }
         bytes.extend_from_slice(&chunk);

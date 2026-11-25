@@ -1658,3 +1658,295 @@ fn ids_are_one_to_ten_entries_of_the_shared_pattern_and_exclusive_with_query() {
         Err(GifError::BadQuery(_))
     ));
 }
+
+// ---- The Inbox pane's gifSearch: stills as data: URIs ----
+
+const STILL: &[u8] = b"GIF89a\x02\x00\x03\x00";
+
+/// Stills served in call order: each call's URL is kept, and the calls named in `fail` fail and
+/// those in `hang` never answer.
+#[derive(Default)]
+struct Stills {
+    urls: Mutex<Vec<String>>,
+    fail: Vec<usize>,
+    hang: Vec<usize>,
+}
+impl Stills {
+    fn calls(&self) -> usize {
+        self.urls.lock().unwrap().len()
+    }
+}
+impl crate::media::preview::PreviewFetch for Stills {
+    fn get<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<Vec<u8>, crate::media::Failure>> {
+        let call = {
+            let mut urls = self.urls.lock().unwrap();
+            urls.push(url.to_string());
+            urls.len() - 1
+        };
+        if self.hang.contains(&call) {
+            return Box::pin(futures_util::future::pending());
+        }
+        let failed = self.fail.contains(&call);
+        Box::pin(async move {
+            if failed {
+                Err(crate::media::Failure {
+                    reason: "network",
+                    retryable: true,
+                })
+            } else {
+                Ok(STILL.to_vec())
+            }
+        })
+    }
+}
+
+fn page_args(query: &str) -> SearchArgs<'_> {
+    SearchArgs {
+        query: Some(query),
+        ..Default::default()
+    }
+}
+
+async fn page(h: &Harness, config: &crate::media::Config, stills: &Stills) -> serde_json::Value {
+    page::search_page(
+        &h.service,
+        config,
+        page_args("ship it"),
+        stills,
+        Duration::from_secs(3),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn gif_search_verb_returns_previews_as_data_uris() {
+    let h = harness();
+    let stills = Stills::default();
+    h.transport.reply(200, None, SEARCH);
+    let result = page(&h, &crate::media::Config::default(), &stills).await;
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["provider"], "giphy");
+    let candidates = result["candidates"].as_array().unwrap();
+    assert_eq!(candidates.len(), 3);
+    let expected = format!(
+        "data:image/gif;base64,{}",
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, STILL)
+    );
+    for candidate in candidates {
+        assert_eq!(candidate["previewData"], expected.as_str());
+        assert_eq!(
+            candidate["autoLoads"], true,
+            "the team config still marks autoLoads"
+        );
+    }
+    let asked: Vec<&str> = candidates
+        .iter()
+        .map(|c| c["previewUrl"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        *stills.urls.lock().unwrap(),
+        asked,
+        "each still fetched once, in order"
+    );
+    assert_eq!(h.transport.requests(), 1, "one provider request per search");
+}
+
+#[tokio::test]
+async fn gif_search_verb_never_returns_the_key() {
+    let h = harness();
+    let stills = Stills::default();
+    h.transport.reply(200, None, SEARCH);
+    let ok = page(&h, &crate::media::Config::default(), &stills).await;
+    h.transport.reply(401, None, "{}");
+    let refused = page(&h, &crate::media::Config::default(), &stills).await;
+    assert_eq!(refused["error"], "invalidKey");
+    for result in [ok, refused] {
+        assert!(!result.to_string().contains(KEY), "{result}");
+    }
+}
+
+#[tokio::test]
+async fn gif_search_verb_off_no_key_keychain_make_no_network_call() {
+    let team = crate::media::Config::default();
+    let off = harness();
+    settings::set_with(
+        &off.keys(),
+        off.dir.path(),
+        SettingsUpdate {
+            enabled: Some(false),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let no_key = harness_with(
+        |store| Keys::new(store, true, Some(ACCOUNT), Duration::from_secs(3)),
+        false,
+    );
+    let locked = harness_with(
+        |_| {
+            Keys::new(
+                Arc::new(Locked),
+                true,
+                Some(ACCOUNT),
+                Duration::from_secs(3),
+            )
+        },
+        true,
+    );
+    let no_store = harness_with(
+        |store| Keys::new(store, false, Some(ACCOUNT), Duration::from_secs(3)),
+        true,
+    );
+    for (h, code) in [
+        (&off, "noProvider"),
+        (&no_key, "noProvider"),
+        (&locked, "keychainUnavailable"),
+        (&no_store, "keychainUnavailable"),
+    ] {
+        let stills = Stills::default();
+        let result = page(h, &team, &stills).await;
+        assert_eq!(result["status"], "error");
+        assert_eq!(result["error"], code);
+        assert_eq!(h.transport.requests(), 0, "{code}: no provider request");
+        assert_eq!(stills.calls(), 0, "{code}: no still fetched");
+    }
+}
+
+#[tokio::test]
+async fn gif_search_verb_team_media_off_makes_no_network_call() {
+    let h = harness();
+    let stills = Stills::default();
+    let before = h.store.calls.load(Ordering::SeqCst);
+    let off = crate::media::Config {
+        remote: crate::media::Remote::Off,
+        ..Default::default()
+    };
+    let result = page(&h, &off, &stills).await;
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error"], "mediaOff");
+    assert_eq!(h.transport.requests(), 0);
+    assert_eq!(stills.calls(), 0);
+    assert_eq!(
+        h.store.calls.load(Ordering::SeqCst),
+        before,
+        "the key is not read"
+    );
+    // Ask still searches: it guards media other people send, not the person's own search.
+    let ask = crate::media::Config {
+        remote: crate::media::Remote::Ask,
+        ..Default::default()
+    };
+    h.transport.reply(200, None, SEARCH);
+    assert_eq!(page(&h, &ask, &stills).await["status"], "ok");
+    assert_eq!(stills.calls(), 3);
+}
+
+#[tokio::test]
+async fn gif_search_verb_drops_a_failed_still_without_error() {
+    let h = harness();
+    let stills = Stills {
+        fail: vec![1],
+        ..Default::default()
+    };
+    h.transport.reply(200, None, SEARCH);
+    let result = page(&h, &crate::media::Config::default(), &stills).await;
+    assert_eq!(result["status"], "ok");
+    let candidates = result["candidates"].as_array().unwrap();
+    assert_eq!(
+        candidates.len(),
+        3,
+        "the candidate stays, with an empty tile"
+    );
+    assert!(candidates[0]["previewData"].is_string());
+    assert!(candidates[1].get("previewData").is_none());
+    assert!(candidates[2]["previewData"].is_string());
+}
+
+#[tokio::test]
+async fn gif_search_verb_drops_a_still_past_the_deadline() {
+    let h = harness();
+    let stills = Stills {
+        hang: vec![0],
+        ..Default::default()
+    };
+    h.transport.reply(200, None, SEARCH);
+    let started = std::time::Instant::now();
+    let result = page::search_page(
+        &h.service,
+        &crate::media::Config::default(),
+        page_args("ship it"),
+        &stills,
+        Duration::from_millis(200),
+    )
+    .await;
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "one shared deadline"
+    );
+    assert_eq!(result["status"], "ok");
+    let candidates = result["candidates"].as_array().unwrap();
+    assert!(candidates[0].get("previewData").is_none());
+    assert!(candidates[1]["previewData"].is_string());
+    assert!(candidates[2]["previewData"].is_string());
+}
+
+#[tokio::test]
+async fn mcp_gif_search_is_unchanged_by_previews() {
+    use crate::mcp::gif_tools::{search_with, GifSearchParams};
+    let h = harness();
+    h.transport.reply(200, None, SEARCH);
+    let result = search_with(
+        &h.service,
+        Some(&crate::media::Config::default()),
+        GifSearchParams {
+            query: Some("ship it".into()),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(h.transport.requests(), 1, "exactly one request per search");
+    let mut top: Vec<&str> = result
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    top.sort_unstable();
+    assert_eq!(top, ["candidates", "provider", "status"]);
+    for candidate in result["candidates"].as_array().unwrap() {
+        let mut keys: Vec<&str> = candidate
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "autoLoads",
+                "height",
+                "id",
+                "previewUrl",
+                "provider",
+                "title",
+                "url",
+                "width"
+            ],
+            "no previewData on the MCP result"
+        );
+    }
+}
+
+#[test]
+fn a_pick_registers_only_a_known_provider_and_a_valid_id() {
+    let mut picks = Vec::new();
+    let ok = super::page::picked("giphy", "g1", |provider, id| picks.push((provider, id)));
+    assert_eq!(ok, serde_json::json!({"status": "ok"}));
+    assert_eq!(picks, vec![(Provider::Giphy, "g1".to_string())]);
+    for (provider, id) in [("other", "g1"), ("giphy", "a b"), ("giphy", "")] {
+        let refused = super::page::picked(provider, id, |_, _| panic!("not registered"));
+        assert_eq!(refused["status"], "error", "{provider} {id}");
+        assert_eq!(refused["error"], "badQuery");
+    }
+}

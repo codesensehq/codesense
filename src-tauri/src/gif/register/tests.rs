@@ -902,3 +902,90 @@ async fn after_a_failed_keychain_read_serves_wait_before_reading_it_again() {
     assert_eq!(store.gets.load(Ordering::SeqCst), 2);
     assert!(h.wire.urls().is_empty());
 }
+
+// The person's pick in the Inbox pane's picker: onclick, once per pick.
+
+#[tokio::test]
+async fn click_fires_once_per_pick() {
+    let h = Harness::new();
+    h.found_all("g1");
+    h.registration.register_click(Provider::Giphy, "g1").await;
+    assert_eq!(h.wire.actions(), vec!["CLICK"]);
+    let ping = &h.wire.pings()[0];
+    assert_eq!(pair(ping, "random_id").as_deref(), Some("rid-123"));
+    assert!(!ping.as_str().contains("api_key") && !ping.as_str().contains(KEY));
+    // Each pick is its own click, the same GIF's included; a pick is never a send.
+    h.registration.register_click(Provider::Giphy, "g1").await;
+    assert_eq!(h.wire.actions(), vec!["CLICK", "CLICK"]);
+    // Sending the picked GIF is still one onsent.
+    h.send(1, "g1", URL).await;
+    assert_eq!(h.wire.actions(), vec!["CLICK", "CLICK", "SENT"]);
+    assert_eq!(h.wire.random_calls(), 1);
+}
+
+#[tokio::test]
+async fn click_is_a_noop_when_off_or_unknown_id() {
+    let h = Harness::new();
+    // No search returned it, or not within the hour.
+    h.registration
+        .register_click(Provider::Giphy, "unknown")
+        .await;
+    h.found_all("g1");
+    h.advance(crate::gif::analytics::TTL_MS);
+    h.registration.register_click(Provider::Giphy, "g1").await;
+    // No onclick URL in the search's pingbacks.
+    h.found(
+        "g3",
+        Pingbacks {
+            onclick: None,
+            ..all_pingbacks()
+        },
+    );
+    h.registration.register_click(Provider::Giphy, "g3").await;
+    assert!(h.wire.urls().is_empty(), "{:?}", h.wire.urls());
+    // Search Off: the held entries go with the install id, and nothing is sent.
+    let off = SettingsUpdate {
+        enabled: Some(false),
+        ..SettingsUpdate::default()
+    };
+    settings::set_with(&h.keys(), h.dir.path(), off).unwrap();
+    h.found_all("g1");
+    h.registration.register_click(Provider::Giphy, "g1").await;
+    assert!(h.wire.urls().is_empty(), "no click or random id while Off");
+}
+
+#[tokio::test]
+async fn click_is_a_noop_without_key_or_after_epoch_change() {
+    let h = Harness::new();
+    h.found_all("g1");
+    settings::remove_with(&h.keys(), h.dir.path()).unwrap();
+    h.registration.register_click(Provider::Giphy, "g1").await;
+    assert!(h.wire.urls().is_empty(), "no call without a key");
+    // A search under an earlier epoch: its entry is let go, so its pick sends nothing.
+    let h = Harness::new();
+    h.found_all("g1");
+    h.registration.register_click(Provider::Giphy, "g1").await;
+    assert_eq!(h.wire.actions(), vec!["CLICK"]);
+    forget_install(h.dir.path());
+    h.registration.register_click(Provider::Giphy, "g1").await;
+    assert_eq!(
+        h.wire.actions(),
+        vec!["CLICK"],
+        "the old epoch's entry is gone"
+    );
+}
+
+#[tokio::test]
+async fn click_counts_against_the_ceiling() {
+    let h = Harness::new();
+    h.found_all("g1");
+    for _ in 0..PINGS_PER_HOUR {
+        h.registration.register_click(Provider::Giphy, "g1").await;
+    }
+    // The install id call is one of the hour's calls.
+    assert_eq!(h.wire.pings().len(), PINGS_PER_HOUR - 1);
+    // Clicks and sends share the hour.
+    h.send(1, "g1", URL).await;
+    assert_eq!(h.wire.pings().len(), PINGS_PER_HOUR - 1);
+    assert!(h.wire.actions().iter().all(|a| a == "CLICK"));
+}

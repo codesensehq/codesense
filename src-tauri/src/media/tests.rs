@@ -1314,3 +1314,215 @@ async fn every_serve_is_told_to_the_serve_hook_and_a_failed_read_is_not() {
     assert!(state.read(&config, &gone).await.is_err());
     assert_eq!(served.lock().unwrap().len(), 2);
 }
+
+// ---- GIF picker stills (media::preview) ----
+
+/// Stills from memory, counting every fetch.
+#[derive(Default)]
+struct Stills {
+    calls: std::sync::Mutex<Vec<String>>,
+    bytes: Vec<u8>,
+}
+impl preview::PreviewFetch for Stills {
+    fn get<'a>(
+        &'a self,
+        url: &'a str,
+    ) -> futures_util::future::BoxFuture<'a, Result<Vec<u8>, Failure>> {
+        self.calls.lock().unwrap().push(url.to_string());
+        Box::pin(async move { Ok(self.bytes.clone()) })
+    }
+}
+
+#[tokio::test]
+async fn preview_refuses_private_ip_and_non_provider_host() {
+    let stills = Stills {
+        bytes: gif(1),
+        ..Default::default()
+    };
+    for url in [
+        "https://example.com/still.gif",
+        "https://giphy.com.example.net/still.gif",
+        "http://media.giphy.com/still.gif",
+        format!("https://{}@media.giphy.com/still.gif", "user").as_str(),
+        "https://127.0.0.1/still.gif",
+    ] {
+        let error = preview::preview(&stills, GIPHY_HOSTS, url)
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason, "host", "{url}");
+    }
+    // A literal private address is refused even where the host list names it.
+    let private: [std::net::IpAddr; 3] = [
+        std::net::Ipv4Addr::LOCALHOST.into(),
+        std::net::Ipv4Addr::new(10, 0, 0, 1).into(),
+        std::net::Ipv6Addr::LOCALHOST.into(),
+    ];
+    for ip in private {
+        let host = match ip {
+            std::net::IpAddr::V4(v4) => v4.to_string(),
+            std::net::IpAddr::V6(v6) => format!("[{v6}]"),
+        };
+        let url = format!("https://{host}/still.gif");
+        let error = preview::preview(&stills, &[host.as_str()], &url)
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason, "address", "{url}");
+    }
+    assert!(stills.calls.lock().unwrap().is_empty(), "no fetch was made");
+    // A name that resolves to a private address is refused by the still client's resolver.
+    let http = preview::Http::new().unwrap();
+    let error = preview::preview(&http, &["localhost"], "https://localhost:1/still.gif")
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason, "address");
+    // A provider still comes back as a data: URI.
+    let data = preview::preview(
+        &stills,
+        GIPHY_HOSTS,
+        "https://media1.giphy.com/m/200w_s.gif",
+    )
+    .await
+    .unwrap();
+    assert!(data.starts_with("data:image/gif;base64,"), "{data}");
+}
+
+#[tokio::test]
+async fn preview_refuses_a_redirect_off_the_provider_host() {
+    use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
+    let server = MockServer::start().await;
+    let port = server.address().port();
+    let redirect = |to: String| ResponseTemplate::new(302).insert_header("location", to);
+    Mock::given(path("/off-host"))
+        .respond_with(redirect("https://example.com/still.gif".into()))
+        .mount(&server)
+        .await;
+    Mock::given(path("/lookalike"))
+        .respond_with(redirect("https://giphy.com.example.net/still.gif".into()))
+        .mount(&server)
+        .await;
+    Mock::given(path("/other-provider"))
+        .respond_with(redirect("https://static.klipy.com/still.gif".into()))
+        .mount(&server)
+        .await;
+    Mock::given(path("/private"))
+        .respond_with(redirect("https://127.0.0.1/still.gif".into()))
+        .mount(&server)
+        .await;
+    Mock::given(path("/plain-http"))
+        .respond_with(redirect(format!("http://media.giphy.com:{port}/still")))
+        .mount(&server)
+        .await;
+    Mock::given(path("/still"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(gif(1)))
+        .mount(&server)
+        .await;
+    // The fixture serves plain HTTP on GIPHY's name; production also sets `https_only`.
+    let client = preview::client_builder()
+        .resolve("media.giphy.com", *server.address())
+        .build()
+        .unwrap();
+    for hop in [
+        "off-host",
+        "lookalike",
+        "other-provider",
+        "private",
+        "plain-http",
+    ] {
+        let error = preview::read(&client, &format!("http://media.giphy.com:{port}/{hop}"))
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason, "redirect", "{hop}");
+    }
+    let still = preview::read(&client, &format!("http://media.giphy.com:{port}/still"))
+        .await
+        .unwrap();
+    assert_eq!(still, gif(1));
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 6, "no refused hop was requested");
+    for request in &requests {
+        assert!(request.headers.get("cookie").is_none());
+        assert!(request.headers.get("referer").is_none());
+    }
+}
+
+#[tokio::test]
+async fn preview_stops_reading_past_256_kb() {
+    use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
+    let server = MockServer::start().await;
+    Mock::given(path("/large"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0; preview::MAX_BYTES + 1]))
+        .mount(&server)
+        .await;
+    Mock::given(path("/fits"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0; preview::MAX_BYTES]))
+        .mount(&server)
+        .await;
+    let client = preview::client_builder().build().unwrap();
+    let large = preview::read(&client, &format!("{}/large", server.uri())).await;
+    assert_eq!(large.unwrap_err().reason, "size");
+    let fits = preview::read(&client, &format!("{}/fits", server.uri())).await;
+    assert_eq!(fits.unwrap().len(), preview::MAX_BYTES);
+    // A body with no length stops once it passes the cap, rather than reading it all.
+    use axum::{body::Body, routing::get, Router};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = Router::new().route(
+        "/",
+        get(|| async {
+            Body::from_stream(futures_util::stream::iter(
+                (0..64).map(|_| Ok::<_, std::io::Error>(vec![0; 64 * 1024])),
+            ))
+        }),
+    );
+    let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let streamed = preview::read(&client, &format!("http://{address}/")).await;
+    assert_eq!(streamed.unwrap_err().reason, "size");
+    task.abort();
+}
+
+#[tokio::test]
+async fn preview_bytes_never_reach_memory_store_or_disk() {
+    let fetch = Arc::new(FakeFetch::default());
+    let (_dir, state) = state_over(&fetch);
+    let bytes = gif(7);
+    let stills = Stills {
+        bytes: bytes.clone(),
+        ..Default::default()
+    };
+    let urls = [
+        "https://media1.giphy.com/m/a/200w_s.gif",
+        "https://media1.giphy.com/m/b/200w_s.gif",
+    ];
+    let data = preview::previews(&stills, GIPHY_HOSTS, &urls, preview::DEADLINE).await;
+    assert!(data.iter().all(Option::is_some));
+    let sha = sha_of(&bytes);
+    assert!(files(state.dir()).is_empty(), "nothing under the cache dir");
+    assert!(!state.memory.contains(&sha, std::time::Instant::now()));
+    assert_eq!(state.memory.total(), 0);
+    assert!(
+        state.index.references(&sha).is_empty(),
+        "no sha index entry"
+    );
+    assert!(
+        state.index.provider_shas().is_empty(),
+        "nothing for the purge to find"
+    );
+    assert!(fetch.calls().is_empty(), "the inbox fetcher is never used");
+}
+
+#[tokio::test]
+async fn previews_take_at_most_ten_stills_in_order() {
+    let stills = Stills {
+        bytes: gif(1),
+        ..Default::default()
+    };
+    let urls: Vec<String> = (0..12)
+        .map(|n| format!("https://media1.giphy.com/m/{n}/200w_s.gif"))
+        .collect();
+    let urls: Vec<&str> = urls.iter().map(String::as_str).collect();
+    let data = preview::previews(&stills, GIPHY_HOSTS, &urls, preview::DEADLINE).await;
+    assert_eq!(data.len(), 12);
+    assert!(data[..10].iter().all(Option::is_some));
+    assert!(data[10..].iter().all(Option::is_none));
+    assert_eq!(*stills.calls.lock().unwrap(), urls[..10]);
+}

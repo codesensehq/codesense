@@ -1376,15 +1376,33 @@ export type WithdrawInboxMessageResult =
 export const withdrawInboxMessage = (team: InboxTeam, messageId: number) =>
   invoke<WithdrawInboxMessageResult>("withdraw_inbox_message", { team, messageId });
 
+/** A picture the person sends from the Inbox pane: a remote `url` with its `alt`, and the
+ *  provider it came from with its id for a GIF. The host takes it only from the Inbox pane. */
+export interface HumanMedia {
+  url: string;
+  alt: string;
+  provider?: "giphy" | "klipy";
+  providerId?: string;
+}
+
 /** The human answers message `messageId` of `team`'s inbox; the reply goes to its
- *  sender, who is nudged. */
+ *  sender, who is nudged. With `media`, `text` may be blank. */
 export const replyAsHuman = (
   team: InboxTeam,
   messageId: number,
   text: string,
   contentType: MessageContentType | null = null,
   summary: string | null = null,
-) => invoke<InboxSendResult>("reply_as_human", { team, messageId, text, contentType, summary });
+  media: HumanMedia | null = null,
+) =>
+  invoke<InboxSendResult>("reply_as_human", {
+    team,
+    messageId,
+    text,
+    contentType,
+    summary,
+    media,
+  });
 
 /** SW-BSI-UX: an agent → UI progress notification persisted for the Inbox's
  *  Updates lane. Non-actionable: no reply, no attachment, no archive-ness. */
@@ -1640,7 +1658,8 @@ export type HumanSendResult =
  *  (a session when one answers to it, else a role). Only that recipient gets it.
  *  `replyTo` (a running session, `human` or `role:<id>`) is where replies go instead of
  *  to the human. `summary` is the message's one-line list preview. `inReplyTo` is the
- *  message of `team`'s inbox it answers (marked read for the human). */
+ *  message of `team`'s inbox it answers (marked read for the human). `media` is a picture
+ *  sent with it (then `text` may be blank); a role queue refuses it. */
 export const sendInboxAsHuman = (
   team: InboxTeam,
   to: string,
@@ -1651,6 +1670,7 @@ export const sendInboxAsHuman = (
   replyTo: string | null = null,
   summary: string | null = null,
   inReplyTo: number | null = null,
+  media: HumanMedia | null = null,
 ) =>
   invoke<HumanSendResult>("send_inbox_as_human", {
     team,
@@ -1662,6 +1682,7 @@ export const sendInboxAsHuman = (
     replyTo,
     summary,
     inReplyTo,
+    media,
   });
 
 /** One message as a session's conversation and the rollup show it (mirror of Rust
@@ -10287,6 +10308,50 @@ export const gifSettingsSet = (update: GifSettingsUpdate) =>
 export const gifKeyStatus = () => invoke<GifKeyStatus>("gif_key_status");
 export const gifKeySave = (key: string) => invoke<GifKeyStatus>("gif_key_save", { key });
 export const gifKeyRemove = () => invoke<GifKeyStatus>("gif_key_remove");
+
+/** One GIF the Inbox pane's search found. `previewData` is its still as a `data:` URI,
+ *  fetched in the host; it is absent when the still failed or missed the search deadline. */
+export interface GifPageCandidate {
+  provider: "giphy";
+  id: string;
+  title: string;
+  url: string;
+  previewUrl: string;
+  width: number;
+  height: number;
+  autoLoads: boolean;
+  previewData?: string;
+}
+export type GifSearchPageResult =
+  | { status: "ok"; provider: "giphy"; candidates: GifPageCandidate[] }
+  | {
+      status: "error";
+      error:
+        | "noProvider"
+        | "keychainUnavailable"
+        | "invalidKey"
+        | "rateLimited"
+        | "providerUnavailable"
+        | "badQuery"
+        | "mediaOff";
+      message: string;
+      retryAfter?: number;
+    };
+/** The Inbox pane's GIF search: exactly one of `query` and `ids`, as `gif_search` takes them. */
+export const gifSearchPage = (
+  team: InboxTeam,
+  query: string | null,
+  ids: string[] | null,
+  limit: number | null,
+) => invoke<GifSearchPageResult>("gif_search_page", { team, query, ids, limit });
+
+export type GifPickedResult =
+  | { status: "ok" }
+  | { status: "error"; error: "badQuery"; message: string };
+/** The person picked GIF `id` in the Inbox pane's picker: the host registers the pick with
+ *  the provider in the background. */
+export const gifPicked = (provider: "giphy", id: string) =>
+  invoke<GifPickedResult>("gif_picked", { provider, id });
 
 export const dashboardInventory = (folder?: string, localOnly = false) =>
   invoke<import("@/features/dashboard-publishing/types").DashboardInventory>(

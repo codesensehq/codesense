@@ -21,9 +21,9 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use super::agent_inbox::{
-    address_name, list_messages_unbounded, send_message_replying, team_inbox, with_store,
-    AppInboxHost, InboxHost, InboxScope, InboxTeam, InboxView, KnownSession, KnownSessions,
-    SendResult,
+    address_name, human_media_refusal, list_messages_unbounded, send_message_stored, team_inbox,
+    with_store, AppInboxHost, InboxHost, InboxScope, InboxTeam, InboxView, KnownSession,
+    KnownSessions, MediaOwner, SendResult,
 };
 use super::await_blocking;
 use super::dashboard_launch::LaunchTeam;
@@ -643,6 +643,44 @@ pub(crate) async fn send_as_human(
     reply_to: Option<&str>,
     summary: Option<&str>,
 ) -> Result<HumanSendResult, String> {
+    send_as_human_with_media(
+        host,
+        team,
+        to,
+        text,
+        content_type,
+        on_click,
+        attach_file,
+        in_reply_to,
+        reply_to,
+        summary,
+        None,
+    )
+    .await
+}
+
+/// [`send_as_human`] with an optional GIF or image. The person's `url` media is admitted
+/// as this machine's own; `path` media and media to a role queue are `invalid`, with
+/// nothing stored. A newly stored provider GIF is registered once; a replay never.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn send_as_human_with_media(
+    host: &Arc<dyn InboxHost>,
+    team: &LaunchTeam,
+    to: &str,
+    text: &str,
+    content_type: Option<MessageContentType>,
+    on_click: Option<MessageOnClick>,
+    attach_file: Option<String>,
+    in_reply_to: Option<i64>,
+    reply_to: Option<&str>,
+    summary: Option<&str>,
+    media: Option<&crate::media::MediaInput>,
+) -> Result<HumanSendResult, String> {
+    if let Some(message) = media.and_then(human_media_refusal) {
+        return Ok(HumanSendResult::Invalid {
+            message: format!("Not sent: {message}."),
+        });
+    }
     // Session recipients resolve their own inbox; validate the selected team too.
     let path = host.team_store(team).await?;
     if let Some(id) = in_reply_to {
@@ -706,8 +744,14 @@ pub(crate) async fn send_as_human(
                 || host.sessions().await?.find(to).is_some()
         }
     };
+    // Role rows carry no pictures in v1.
+    if !is_session && media.is_some() {
+        return Ok(HumanSendResult::Invalid {
+            message: "Not sent: media can't go to a role queue.".into(),
+        });
+    }
     let result = if is_session {
-        match send_message_replying(
+        let (sent, stored) = send_message_stored(
             host,
             None.into(),
             &name,
@@ -721,10 +765,15 @@ pub(crate) async fn send_as_human(
             // The human's own send asks nothing of the human: it carries no kind.
             None,
             None,
-            None,
+            media,
+            MediaOwner::Human,
         )
-        .await?
-        {
+        .await?;
+        // Registered once, after the store.
+        if let Some(stored) = &stored {
+            host.media_sent(stored);
+        }
+        match sent {
             SendResult::Sent { message_id, .. } => HumanSendResult::Sent {
                 message_id,
                 delivery_id: None,
@@ -1806,7 +1855,8 @@ pub async fn agent_read_roles(
 
 /// The human sends a message from a dashboard or the inbox (the bridge's
 /// `sendAsHuman`): `to` is `@session`, `#role`, or a bare name; `in_reply_to` is the
-/// message of `team`'s inbox it answers.
+/// message of `team`'s inbox it answers; `media` an optional GIF or image by url, which
+/// the action gate admits from the Inbox pane only.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn send_inbox_as_human(
@@ -1820,9 +1870,10 @@ pub async fn send_inbox_as_human(
     in_reply_to: Option<i64>,
     reply_to: Option<String>,
     summary: Option<String>,
+    media: Option<crate::media::MediaInput>,
 ) -> Result<HumanSendResult, String> {
     let host = AppInboxHost::port(app.clone());
-    let result = send_as_human(
+    let result = send_as_human_with_media(
         &host,
         &team.into(),
         &to,
@@ -1833,6 +1884,7 @@ pub async fn send_inbox_as_human(
         in_reply_to,
         reply_to.as_deref(),
         summary.as_deref(),
+        media.as_ref(),
     )
     .await?;
     if matches!(

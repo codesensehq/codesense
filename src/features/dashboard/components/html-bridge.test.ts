@@ -48,6 +48,8 @@ const mockAgentReadRoles = vi.fn();
 const mockGetHumanStatus = vi.fn();
 const mockSetHumanStatus = vi.fn();
 const mockReplyAsHuman = vi.fn();
+const mockGifSearchPage = vi.fn();
+const mockGifPicked = vi.fn();
 const mockReactAsHuman = vi.fn();
 const mockAgentPins = vi.fn();
 const mockAgentPinsPrepareView = vi.fn();
@@ -122,6 +124,8 @@ vi.mock("@/tauri/commands", () => ({
   getHumanStatus: (...a: unknown[]) => mockGetHumanStatus(...a),
   setHumanStatus: (...a: unknown[]) => mockSetHumanStatus(...a),
   replyAsHuman: (...a: unknown[]) => mockReplyAsHuman(...a),
+  gifSearchPage: (...a: unknown[]) => mockGifSearchPage(...a),
+  gifPicked: (...a: unknown[]) => mockGifPicked(...a),
   reactAsHuman: (...a: unknown[]) => mockReactAsHuman(...a),
   agentPins: (...a: unknown[]) => mockAgentPins(...a),
   agentPinsPrepareView: (...a: unknown[]) => mockAgentPinsPrepareView(...a),
@@ -299,6 +303,8 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       "getDocDir",
       "getEpicHandle",
       "getWorkspaceStatus",
+      "gifPicked",
+      "gifSearch",
       "gotoAgent",
       "humanStatus",
       "inbox",
@@ -2526,6 +2532,7 @@ describe("agents read model verbs", () => {
       null,
       null,
       7,
+      null,
     );
     await expect(runBridgeCommand("sendAsHuman", { to: "H1", text: " " }, DOC)).rejects.toThrow(
       /text/,
@@ -2544,6 +2551,7 @@ describe("agents read model verbs", () => {
       null,
       null,
       "role:manager",
+      null,
       null,
       null,
     );
@@ -2568,6 +2576,7 @@ describe("agents read model verbs", () => {
       null,
       null,
       "Deploy: green",
+      null,
       null,
     );
     await expect(
@@ -2599,12 +2608,91 @@ describe("agents read model verbs", () => {
       runBridgeCommand("sendAsHuman", { to: "H1", text: "hi", replyTo: 7 }, DOC),
     ).rejects.toThrow(/replyTo/);
 
+    const found = { status: "ok", provider: "giphy", candidates: [] };
+    mockGifSearchPage.mockResolvedValue(found);
+    await expect(runBridgeCommand("gifSearch", { query: "cat", limit: 4 }, DOC)).resolves.toBe(
+      found,
+    );
+    expect(mockGifSearchPage).toHaveBeenLastCalledWith(TEAM, "cat", null, 4);
+    await runBridgeCommand("gifSearch", { ids: ["g1"] }, DOC);
+    expect(mockGifSearchPage).toHaveBeenLastCalledWith(TEAM, null, ["g1"], null);
+    for (const bad of [{}, { query: "cat", ids: ["g1"] }, { query: 3 }, { ids: [1] }]) {
+      await expect(runBridgeCommand("gifSearch", bad, DOC)).rejects.toThrow(/gifSearch/);
+    }
+    expect(mockGifSearchPage).toHaveBeenCalledTimes(2);
+
+    mockGifPicked.mockResolvedValue({ status: "ok" });
+    await expect(
+      runBridgeCommand("gifPicked", { provider: "giphy", id: "g1" }, DOC),
+    ).resolves.toEqual({ status: "ok" });
+    expect(mockGifPicked).toHaveBeenLastCalledWith("giphy", "g1");
+    for (const bad of [{}, { provider: "other", id: "g1" }, { provider: "giphy", id: "" }]) {
+      await expect(runBridgeCommand("gifPicked", bad, DOC)).rejects.toThrow(/gifPicked/);
+    }
+    expect(mockGifPicked).toHaveBeenCalledTimes(1);
+
     mockReplyAsHuman.mockResolvedValue({ status: "sent", messageId: 10 });
     await runBridgeCommand("replyAsHuman", { messageId: 9, text: "yes" }, DOC);
-    expect(mockReplyAsHuman).toHaveBeenCalledWith(TEAM, 9, "yes", null, null);
+    expect(mockReplyAsHuman).toHaveBeenCalledWith(TEAM, 9, "yes", null, null, null);
     await expect(
       runBridgeCommand("replyAsHuman", { messageId: "9", text: "yes" }, DOC),
     ).rejects.toThrow(/messageId/);
+
+    // media: a picture from the Inbox pane; blank text sends with it, never without.
+    const gif = {
+      url: "https://media.giphy.com/media/g1/giphy.gif",
+      alt: "A cat",
+      provider: "giphy",
+      providerId: "g1",
+    };
+    await runBridgeCommand("sendAsHuman", { to: "H1", text: " ", media: gif }, DOC);
+    expect(mockSendInboxAsHuman).toHaveBeenLastCalledWith(
+      TEAM,
+      "H1",
+      " ",
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      gif,
+    );
+    await runBridgeCommand(
+      "replyAsHuman",
+      { messageId: 9, text: "", media: { url: gif.url, alt: "A cat" } },
+      DOC,
+    );
+    expect(mockReplyAsHuman).toHaveBeenLastCalledWith(TEAM, 9, "", null, null, {
+      url: gif.url,
+      alt: "A cat",
+    });
+    const sends = mockSendInboxAsHuman.mock.calls.length;
+    const replies = mockReplyAsHuman.mock.calls.length;
+    for (const media of [undefined, null]) {
+      await expect(
+        runBridgeCommand("sendAsHuman", { to: "H1", text: "", media }, DOC),
+      ).rejects.toThrow(/text/);
+      await expect(
+        runBridgeCommand("replyAsHuman", { messageId: 9, text: " ", media }, DOC),
+      ).rejects.toThrow(/text/);
+    }
+    for (const media of [
+      "https://media.giphy.com/g.gif",
+      { url: gif.url },
+      { url: gif.url, alt: " " },
+      { url: gif.url, alt: "A cat", provider: "other" },
+      { url: gif.url, alt: "A cat", path: "/tmp/cat.gif" },
+    ]) {
+      await expect(
+        runBridgeCommand("sendAsHuman", { to: "H1", text: "hi", media }, DOC),
+      ).rejects.toThrow(/media/);
+      await expect(
+        runBridgeCommand("replyAsHuman", { messageId: 9, text: "hi", media }, DOC),
+      ).rejects.toThrow(/media/);
+    }
+    expect(mockSendInboxAsHuman).toHaveBeenCalledTimes(sends);
+    expect(mockReplyAsHuman).toHaveBeenCalledTimes(replies);
 
     mockMarkInboxMessagesRead.mockResolvedValue(1);
     await expect(runBridgeCommand("markRead", { messageIds: [3, 4] }, DOC)).resolves.toEqual({

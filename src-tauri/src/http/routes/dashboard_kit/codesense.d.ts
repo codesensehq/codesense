@@ -1354,6 +1354,51 @@ declare namespace CodesenseSdk {
       storyId?: string;
       [key: string]: unknown;
     }): Promise<unknown>;
+    /** metadata · inbox:write */
+    gifPicked(args: {
+      id: string;
+      provider: "giphy";
+      [key: string]: unknown;
+    }): Promise<{
+      status: "ok";
+      [key: string]: unknown;
+    } | {
+      error: "badQuery";
+      message: string;
+      status: "error";
+      [key: string]: unknown;
+    }>;
+    /** read · inbox:write */
+    gifSearch(args?: {
+      ids?: string[];
+      limit?: number;
+      org?: string;
+      query?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      candidates: Array<{
+        autoLoads: boolean;
+        height: number;
+        id: string;
+        previewData?: string;
+        previewUrl: string;
+        provider: "giphy";
+        title: string;
+        url: string;
+        width: number;
+        [key: string]: unknown;
+      }>;
+      provider: "giphy";
+      status: "ok";
+      [key: string]: unknown;
+    } | {
+      error: "noProvider" | "keychainUnavailable" | "invalidKey" | "rateLimited" | "providerUnavailable" | "badQuery" | "mediaOff";
+      message: string;
+      retryAfter?: number;
+      status: "error";
+      [key: string]: unknown;
+    }>;
     /** spawn · sessions:read */
     gotoAgent(args: {
       agentId: string;
@@ -2457,6 +2502,12 @@ declare namespace CodesenseSdk {
     }>;
     /** send · inbox:write · confirmable · MCP twin reply */
     replyAsHuman(args?: {
+      media?: {
+        alt: string;
+        provider?: "giphy" | "klipy";
+        providerId?: string;
+        url: string;
+      } | null;
       messageId?: number;
       text?: string;
       [key: string]: unknown;
@@ -2583,6 +2634,16 @@ declare namespace CodesenseSdk {
     runs(args?: Record<string, unknown>): Promise<unknown>;
     /** send · inbox:write · confirmable · MCP twin send_message */
     sendAsHuman(args?: {
+      attachFile?: string;
+      inReplyTo?: number;
+      media?: {
+        alt: string;
+        provider?: "giphy" | "klipy";
+        providerId?: string;
+        url: string;
+      } | null;
+      replyTo?: string;
+      summary?: string;
       team?: Record<string, unknown>;
       text?: string;
       to?: string;

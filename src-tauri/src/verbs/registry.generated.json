@@ -841,6 +841,217 @@
     "module": "records"
   },
   {
+    "name": "gifPicked",
+    "class": "metadata",
+    "argsSchema": {
+      "additionalProperties": true,
+      "properties": {
+        "id": {
+          "pattern": "^[A-Za-z0-9_-]{1,64}$",
+          "type": "string"
+        },
+        "provider": {
+          "enum": [
+            "giphy"
+          ]
+        }
+      },
+      "required": [
+        "provider",
+        "id"
+      ],
+      "type": "object"
+    },
+    "resultSchema": {
+      "oneOf": [
+        {
+          "properties": {
+            "status": {
+              "const": "ok"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "error": {
+              "const": "badQuery"
+            },
+            "message": {
+              "type": "string"
+            },
+            "status": {
+              "const": "error"
+            }
+          },
+          "required": [
+            "status",
+            "error",
+            "message"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "grant": "inbox:write",
+    "inboxTarget": false,
+    "confirmable": false,
+    "mcpTwin": null,
+    "presentationOnlyReason": "Registers the person's pick in the Inbox pane GIF picker with the provider",
+    "audited": true,
+    "action": true,
+    "module": "inbox"
+  },
+  {
+    "name": "gifSearch",
+    "class": "read",
+    "argsSchema": {
+      "additionalProperties": true,
+      "properties": {
+        "ids": {
+          "items": {
+            "pattern": "^[A-Za-z0-9_-]{1,64}$",
+            "type": "string"
+          },
+          "maxItems": 10,
+          "minItems": 1,
+          "type": "array"
+        },
+        "limit": {
+          "maximum": 10,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "org": {
+          "type": "string"
+        },
+        "query": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "team": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "resultSchema": {
+      "oneOf": [
+        {
+          "properties": {
+            "candidates": {
+              "items": {
+                "properties": {
+                  "autoLoads": {
+                    "type": "boolean"
+                  },
+                  "height": {
+                    "type": "integer"
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "previewData": {
+                    "pattern": "^data:image/(gif|png|webp|jpeg);base64,",
+                    "type": "string"
+                  },
+                  "previewUrl": {
+                    "type": "string"
+                  },
+                  "provider": {
+                    "enum": [
+                      "giphy"
+                    ]
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "url": {
+                    "type": "string"
+                  },
+                  "width": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "provider",
+                  "id",
+                  "title",
+                  "url",
+                  "previewUrl",
+                  "width",
+                  "height",
+                  "autoLoads"
+                ],
+                "type": "object"
+              },
+              "maxItems": 10,
+              "type": "array"
+            },
+            "provider": {
+              "enum": [
+                "giphy"
+              ]
+            },
+            "status": {
+              "const": "ok"
+            }
+          },
+          "required": [
+            "status",
+            "provider",
+            "candidates"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "error": {
+              "enum": [
+                "noProvider",
+                "keychainUnavailable",
+                "invalidKey",
+                "rateLimited",
+                "providerUnavailable",
+                "badQuery",
+                "mediaOff"
+              ]
+            },
+            "message": {
+              "type": "string"
+            },
+            "retryAfter": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "status": {
+              "const": "error"
+            }
+          },
+          "required": [
+            "status",
+            "error",
+            "message"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "grant": "inbox:write",
+    "inboxTarget": true,
+    "confirmable": false,
+    "mcpTwin": null,
+    "presentationOnlyReason": "Inbox pane GIF search with host-fetched stills; agents use gif_search",
+    "audited": true,
+    "action": true,
+    "module": "inbox"
+  },
+  {
     "name": "gotoAgent",
     "class": "spawn",
     "argsSchema": {
@@ -5756,6 +5967,37 @@
     "argsSchema": {
       "additionalProperties": true,
       "properties": {
+        "media": {
+          "additionalProperties": false,
+          "properties": {
+            "alt": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "provider": {
+              "enum": [
+                "giphy",
+                "klipy"
+              ]
+            },
+            "providerId": {
+              "pattern": "^[A-Za-z0-9_-]{1,64}$",
+              "type": "string"
+            },
+            "url": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "url",
+            "alt"
+          ],
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "messageId": {
           "type": "integer"
         },
@@ -6451,6 +6693,50 @@
     "argsSchema": {
       "additionalProperties": true,
       "properties": {
+        "attachFile": {
+          "type": "string"
+        },
+        "inReplyTo": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "media": {
+          "additionalProperties": false,
+          "properties": {
+            "alt": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "provider": {
+              "enum": [
+                "giphy",
+                "klipy"
+              ]
+            },
+            "providerId": {
+              "pattern": "^[A-Za-z0-9_-]{1,64}$",
+              "type": "string"
+            },
+            "url": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "url",
+            "alt"
+          ],
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "replyTo": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
         "team": {
           "type": "object"
         },

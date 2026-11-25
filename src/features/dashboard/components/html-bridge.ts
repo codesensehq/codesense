@@ -66,6 +66,8 @@ import {
   agentPins,
   agentPinsPrepareView,
   loadInboxMedia,
+  gifSearchPage,
+  gifPicked,
   markInboxMessagesRead,
   markInboxMessagesUnread,
   markInboxMessagesArchived,
@@ -102,6 +104,7 @@ import {
   type InboxScope,
   type MessageKind,
   type InboxTeam,
+  type HumanMedia,
   type MessageContentType,
   type MessageOnClick,
   type MetadataEdit,
@@ -669,6 +672,30 @@ function validateContentType(value: unknown): MessageContentType | null {
   if (value === undefined || value === null) return null;
   if (value === "plain" || value === "markdown" || value === "html") return value;
   throw new Error("contentType, if present, must be 'plain', 'markdown' or 'html'");
+}
+
+/** `media` on `sendAsHuman`/`replyAsHuman`: `{url, alt, provider?, providerId?}`, else null.
+ *  The host checks it again and takes it only from the Inbox pane. */
+function validateHumanMedia(value: unknown, verb: string): HumanMedia | null {
+  if (value === undefined || value === null) return null;
+  const bad = () =>
+    new Error(`${verb}: media, if present, must be {url, alt, provider?, providerId?}`);
+  if (typeof value !== "object" || Array.isArray(value)) throw bad();
+  const m = value as Record<string, unknown>;
+  if (Object.keys(m).some((k) => !["url", "alt", "provider", "providerId"].includes(k))) {
+    throw bad();
+  }
+  if (typeof m.url !== "string" || !m.url || typeof m.alt !== "string" || !m.alt.trim()) {
+    throw bad();
+  }
+  if (m.provider != null && m.provider !== "giphy" && m.provider !== "klipy") throw bad();
+  if (m.providerId != null && (typeof m.providerId !== "string" || !m.providerId)) throw bad();
+  return {
+    url: m.url,
+    alt: m.alt,
+    ...(m.provider != null ? { provider: m.provider as HumanMedia["provider"] } : {}),
+    ...(m.providerId != null ? { providerId: m.providerId as string } : {}),
+  };
 }
 
 /** Validate an optional one-line `summary` (the message's list preview). Absent or
@@ -1435,8 +1462,9 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
     if (typeof a.to !== "string" || !a.to.trim()) {
       throw new Error("sendAsHuman: {to} must be a session handle or an agent role");
     }
-    if (typeof a.text !== "string" || !a.text.trim()) {
-      throw new Error("sendAsHuman: {text} must be a non-empty string");
+    const media = validateHumanMedia(a.media, "sendAsHuman");
+    if (typeof a.text !== "string" || (!media && !a.text.trim())) {
+      throw new Error("sendAsHuman: {text} must be a non-empty string, or any string with media");
     }
     const attachFile = optionalNonEmptyString(
       a.attachFile,
@@ -1460,6 +1488,7 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
         replyTo ?? null,
         validateSummary(a.summary, "sendAsHuman"),
         inReplyTo,
+        media,
       ),
     );
   },
@@ -1468,11 +1497,42 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
     const id = messageId(a.messageId, "loadMedia");
     return inboxWrite(ctx, "loadMedia", a, (team) => loadInboxMedia(team, id));
   },
+  // The Inbox pane's GIF search; the host refuses it from any other frame. Resolves to
+  // `{status:"ok", candidates}`, each still as `previewData`, or `{status:"error", error}`.
+  gifSearch: async (args, ctx) => {
+    const a = argObject(args, "gifSearch");
+    if (a.query != null && typeof a.query !== "string") {
+      throw new Error("gifSearch: query, if present, must be a string");
+    }
+    if (a.ids != null && (!Array.isArray(a.ids) || !a.ids.every((id) => typeof id === "string"))) {
+      throw new Error("gifSearch: ids, if present, must be an array of GIF ids");
+    }
+    const query = typeof a.query === "string" ? a.query : null;
+    const ids = Array.isArray(a.ids) ? (a.ids as string[]) : null;
+    if ((query === null) === (ids === null)) {
+      throw new Error("gifSearch: pass exactly one of {query} and {ids}");
+    }
+    const limit = optionalLimit(a.limit, "gifSearch") ?? null;
+    return inboxWrite(ctx, "gifSearch", a, (team) => gifSearchPage(team, query, ids, limit));
+  },
+  // A pick in the Inbox pane's GIF picker, once per pick; the host registers it with the
+  // provider in the background and refuses it from any other frame.
+  gifPicked: async (args) => {
+    const a = argObject(args, "gifPicked");
+    if (a.provider !== "giphy") {
+      throw new Error("gifPicked: {provider} must be 'giphy'");
+    }
+    if (typeof a.id !== "string" || !a.id) {
+      throw new Error("gifPicked: {id} must be a GIF id from gifSearch");
+    }
+    return gifPicked(a.provider, a.id);
+  },
   replyAsHuman: async (args, ctx) => {
     const a = argObject(args, "replyAsHuman");
     const id = messageId(a.messageId, "replyAsHuman");
-    if (typeof a.text !== "string" || !a.text.trim()) {
-      throw new Error("replyAsHuman: {text} must be a non-empty string");
+    const media = validateHumanMedia(a.media, "replyAsHuman");
+    if (typeof a.text !== "string" || (!media && !a.text.trim())) {
+      throw new Error("replyAsHuman: {text} must be a non-empty string, or any string with media");
     }
     const text = a.text;
     return inboxWrite(ctx, "replyAsHuman", a, (team) =>
@@ -1482,6 +1542,7 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
         text,
         validateContentType(a.contentType),
         validateSummary(a.summary, "replyAsHuman"),
+        media,
       ),
     );
   },

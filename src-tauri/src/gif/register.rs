@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Registering sent provider GIFs, as the providers' terms ask: GIPHY's onsent ping when an
-//! agent sends a GIF a search found, and its onload ping the first time the sent GIF is shown.
+//! agent sends a GIF a search found, its onload ping the first time the sent GIF is shown, and
+//! its onclick ping when the person picks a GIF in the Inbox pane's picker.
 //!
 //! Pings go out only while GIF search is On with a key. They carry a random id GIPHY issues for
 //! this install, kept in `gif-install.json` and deleted when search is turned Off or the key is
@@ -73,13 +74,32 @@ pub(crate) enum Outcome {
     Failed(giphy::Failure),
 }
 
-/// A provider's send and view registration, provider-neutral, so a second provider joins
-/// without changing callers.
+/// Which registration a ping is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Event {
+    Sent,
+    Load,
+    Click,
+}
+impl Event {
+    fn name(self) -> &'static str {
+        match self {
+            Event::Sent => "onsent",
+            Event::Load => "onload",
+            Event::Click => "onclick",
+        }
+    }
+}
+
+/// A provider's send, view and pick registration, provider-neutral, so a second provider
+/// joins without changing callers.
 pub(crate) trait Registrar: Send + Sync {
     /// The provider's send registration.
     fn on_sent<'a>(&'a self, ping: Ping<'a>) -> BoxFuture<'a, Outcome>;
     /// The provider's view registration.
     fn on_load<'a>(&'a self, ping: Ping<'a>) -> BoxFuture<'a, Outcome>;
+    /// The provider's pick registration.
+    fn on_click<'a>(&'a self, ping: Ping<'a>) -> BoxFuture<'a, Outcome>;
 }
 
 /// `pingback` with the install's `random_id` and the time in ms, which GIPHY asks for, added;
@@ -134,6 +154,9 @@ impl Registrar for GiphyPings {
         Box::pin(self.ping_giphy(ping))
     }
     fn on_load<'a>(&'a self, ping: Ping<'a>) -> BoxFuture<'a, Outcome> {
+        Box::pin(self.ping_giphy(ping))
+    }
+    fn on_click<'a>(&'a self, ping: Ping<'a>) -> BoxFuture<'a, Outcome> {
         Box::pin(self.ping_giphy(ping))
     }
 }
@@ -452,17 +475,10 @@ impl Registration {
     /// Send one ping now, unless the provider's backoff is running or the hour's pings for
     /// this key are spent (dropped, logged). A 429 is logged only: it never sets the search
     /// backoff.
-    async fn send_ping(
-        &self,
-        provider: Provider,
-        fp: &str,
-        onload: bool,
-        pingback: &str,
-        id: &str,
-    ) {
+    async fn send_ping(&self, provider: Provider, fp: &str, kind: Event, pingback: &str, id: &str) {
         let key = super::bucket_key(provider, fp);
         let now = (self.clock)();
-        let event = if onload { "onload" } else { "onsent" };
+        let event = kind.name();
         if !self.provider_open(&key, now).await {
             log::info!(target: "gif", "gif registration: {event} dropped during a GIPHY backoff");
             return;
@@ -476,10 +492,11 @@ impl Registration {
             install_id: id,
             at_ms: now,
         };
-        let outcome = if onload {
-            Registrar::on_load(self.registrar.as_ref(), ping).await
-        } else {
-            Registrar::on_sent(self.registrar.as_ref(), ping).await
+        let registrar = self.registrar.as_ref();
+        let outcome = match kind {
+            Event::Sent => Registrar::on_sent(registrar, ping).await,
+            Event::Load => Registrar::on_load(registrar, ping).await,
+            Event::Click => Registrar::on_click(registrar, ping).await,
         };
         match outcome {
             Outcome::Sent => {}
@@ -604,7 +621,46 @@ impl Registration {
             return;
         };
         if self.still_in(epoch) {
-            self.send_ping(provider, &fp, false, onsent, &id).await;
+            self.send_ping(provider, &fp, Event::Sent, onsent, &id)
+                .await;
+        }
+    }
+
+    /// The person picked GIF `id` in the Inbox pane's picker: its onclick goes out, once per
+    /// pick, for a GIF a search returned in the last hour. Like a send's onsent it needs search
+    /// On with a key and the install id, and counts against the hour's pings. Each skip is
+    /// logged: not GIPHY, no search entry, no onclick URL, search Off or no key, the install id
+    /// changed meanwhile, no install id.
+    pub(crate) async fn register_click(&self, provider: Provider, id: &str) {
+        if provider != Provider::Giphy {
+            log::info!(target: "gif", "gif registration: {provider:?} picks are not registered yet");
+            return;
+        }
+        let epoch = self.follow_epoch();
+        let now = (self.clock)();
+        // The local checks come first, so a pick that can't register never reads the keychain.
+        let held = &self.service.analytics;
+        let Some(entry) = analytics::Analytics::held_entry(held, provider, id, now) else {
+            log::info!(target: "gif", "gif registration: no search returned the picked GIF in the last hour; no ping");
+            return;
+        };
+        let Some(onclick) = entry.pingbacks.onclick.as_deref() else {
+            log::info!(target: "gif", "gif registration: the search gave no onclick URL; no ping");
+            return;
+        };
+        let Ok((key, fp, read_in)) = self.active_key(provider).await else {
+            return;
+        };
+        if read_in != epoch || !self.still_in(epoch) {
+            log::info!(target: "gif", "gif registration: the install id changed during the pick; not registered");
+            return;
+        }
+        let Some(install) = self.install_id(provider, &key, &fp, epoch).await else {
+            return;
+        };
+        if self.still_in(epoch) {
+            self.send_ping(provider, &fp, Event::Click, onclick, &install)
+                .await;
         }
     }
 
@@ -712,7 +768,7 @@ impl Registration {
                         for (slot, p) in Vec::drain(&mut due, ..) {
                             match &p.onload {
                                 Some(onload) if current => {
-                                    self.send_ping(Provider::Giphy, &fp, true, onload, &id)
+                                    self.send_ping(Provider::Giphy, &fp, Event::Load, onload, &id)
                                         .await
                                 }
                                 _ => {}
@@ -778,6 +834,16 @@ pub(crate) fn send_in_background(
     registration.expect_send(&sent.slot);
     let registration = registration.clone();
     tauri::async_runtime::spawn(async move { registration.register_send(sent).await });
+}
+
+/// Register a pick in the background: the picker never waits on it.
+pub(crate) fn click_in_background(
+    registration: &Arc<Registration>,
+    provider: Provider,
+    id: String,
+) {
+    let registration = registration.clone();
+    tauri::async_runtime::spawn(async move { registration.register_click(provider, &id).await });
 }
 
 /// A stored message's media fetch finished (see [`Registration::note_fetched`]).
