@@ -374,6 +374,11 @@ fn validate_permissions(permissions: &Permissions) -> Result<(), ValidationError
     )?;
     for (pattern, decision) in &permission.permission {
         check_permission(pattern)?;
+        // The marker that starts the org's guardrail tier: an agent naming it could move
+        // the org's denies back among its own rules.
+        if pattern == crate::agents::guardrails::GUARDRAIL_TIER_ACTION {
+            return Err(ValidationError::ReservedPermission(pattern.clone()));
+        }
         if !matches!(decision.as_str(), "allow" | "ask" | "deny") {
             return Err(ValidationError::InvalidPermission(decision.clone()));
         }

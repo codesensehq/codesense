@@ -145,6 +145,8 @@ fn guardrails_parse_refuses_unknown_keys_and_bad_types() {
         "permissions:\n  claude:\n    deny: ['']\n",
         "permissions:\n  claude:\n    deny: ['   ']\n",
         "permissions:\n  claude:\n    deny: [\n",
+        // The guardrail tier's marker is reserved.
+        "permissions:\n  opencode:\n    deny: [codesense-org-guardrails]\n",
     ] {
         assert!(parse(yaml.as_bytes()).is_err(), "{yaml:?} must be refused");
     }
@@ -384,6 +386,136 @@ fn guardrails_opencode_final_tier_survives_the_scope_merge() {
     assert_eq!(
         opencode_effect(rules, "codesense_reply").as_deref(),
         Some("deny")
+    );
+}
+
+/// `rules` merged with the MCP scope's `scope` rules as a launch merges them, then merged
+/// again as a relaunch replays them; the rules of both merges.
+fn scope_merges(settings: &Value, scope: &Value) -> [Vec<Value>; 2] {
+    let var = "OPENCODE_CONFIG_CONTENT".to_string();
+    let merge = |settings: &Value| -> Value {
+        let mut env = vec![(var.clone(), scope.to_string())];
+        crate::commands::mcp_scope::extend_launch_env(
+            AgentCli::OpenCode,
+            &mut env,
+            [(var.clone(), settings.to_string())],
+        );
+        serde_json::from_str(&env[0].1).unwrap()
+    };
+    let merged = merge(settings);
+    let replayed = merge(&merged);
+    [merged, replayed].map(|v| v["permissions"].as_array().unwrap().clone())
+}
+
+#[test]
+fn guardrails_opencode_forged_tier_marker_cannot_lift_an_org_deny() {
+    // An agent can't name the marker: it is reserved.
+    let forged = opencode(&[
+        (GUARDRAIL_TIER_ACTION, "deny"),
+        ("github_*", "deny"),
+        ("github_create_issue", "allow"),
+    ]);
+    let validate = crate::agents::adapter::desktop(AgentCli::OpenCode)
+        .permissions
+        .validate;
+    assert_eq!(
+        validate(forged.permissions.as_ref().unwrap()),
+        Err(crate::agents::model::ValidationError::ReservedPermission(
+            GUARDRAIL_TIER_ACTION.into()
+        ))
+    );
+
+    // A definition saved before the key was reserved still can't lift the org's deny: the
+    // org's wildcard stays last through generation, the scope merge and a replay.
+    let union = org(&[(
+        ROOT_FILE,
+        "permissions:\n  opencode:\n    deny: ['github_*']\n",
+    )]);
+    let settings = launch_settings(&forged, Some(&union));
+    let rules = settings["permissions"].as_array().unwrap();
+    assert_eq!(
+        opencode_effect(rules, "github_create_issue").as_deref(),
+        Some("deny")
+    );
+    let scope = json!({"mcp": {}, "permissions": [
+        {"action": "codesense_*", "resource": "*", "effect": "deny"},
+    ]});
+    for (n, rules) in scope_merges(&settings, &scope).iter().enumerate() {
+        assert_eq!(
+            opencode_effect(rules, "github_create_issue").as_deref(),
+            Some("deny"),
+            "merge {n}: {rules:?}"
+        );
+        let markers = rules
+            .iter()
+            .filter(|rule| rule["action"] == GUARDRAIL_TIER_ACTION)
+            .count();
+        assert_eq!(markers, 1, "merge {n}: only the real marker is kept");
+    }
+
+    // With no guardrails at all, a forged marker can't move the agent's own allow past the
+    // MCP scope's rules either.
+    let forged = opencode(&[
+        (GUARDRAIL_TIER_ACTION, "deny"),
+        ("codesense_reply", "allow"),
+    ]);
+    let settings = launch_settings(&forged, None);
+    let scope = json!({"mcp": {}, "permissions": [
+        {"action": "codesense_reply", "resource": "*", "effect": "deny"},
+    ]});
+    for (n, rules) in scope_merges(&settings, &scope).iter().enumerate() {
+        assert_eq!(
+            opencode_effect(rules, "codesense_reply").as_deref(),
+            Some("deny"),
+            "merge {n}: {rules:?}"
+        );
+    }
+}
+
+#[test]
+fn guardrails_final_tier_splits_at_the_last_marker_and_keeps_every_org_rule() {
+    let marker = json!({"action": GUARDRAIL_TIER_ACTION, "resource": "*", "effect": "deny"});
+    let rule =
+        |action: &str, effect: &str| json!({"action": action, "resource": "*", "effect": effect});
+    let rules = vec![
+        rule("*", "allow"),
+        marker.clone(),
+        rule("github_*", "deny"),
+        rule("github_create_issue", "allow"),
+        marker.clone(),
+        rule("github_*", "deny"),
+        rule("webfetch", "allow"),
+    ];
+    let (head, tier) = split_final_tier(rules);
+    assert_eq!(
+        head,
+        vec![
+            rule("*", "allow"),
+            rule("github_*", "deny"),
+            rule("github_create_issue", "allow"),
+            rule("webfetch", "allow"),
+        ],
+        "every marker dropped; a non-deny after the last marker stays out of the tier"
+    );
+    assert_eq!(tier, vec![rule("github_*", "deny")]);
+
+    // The tier keeps each distinct org rule, and a rule listed twice once.
+    let mut merged = head;
+    append_final_tier(
+        &mut merged,
+        vec![
+            rule("github_*", "deny"),
+            json!({"action": "github_*", "resource": "repo/*", "effect": "deny"}),
+            rule("github_*", "deny"),
+        ],
+    );
+    assert_eq!(
+        merged[4..],
+        [
+            marker,
+            rule("github_*", "deny"),
+            json!({"action": "github_*", "resource": "repo/*", "effect": "deny"}),
+        ]
     );
 }
 

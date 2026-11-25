@@ -1003,9 +1003,9 @@ fn field_of(e: &ValidationError) -> Option<String> {
         ValidationError::UnknownPermissionKey { runtime, key } => {
             format!("permissions.{runtime}.{key}")
         }
-        ValidationError::InvalidPermission(_) | ValidationError::DuplicatePermission(_) => {
-            "permissions".into()
-        }
+        ValidationError::InvalidPermission(_)
+        | ValidationError::DuplicatePermission(_)
+        | ValidationError::ReservedPermission(_) => "permissions".into(),
         ValidationError::InvalidContext(_) => "context".into(),
         ValidationError::InvalidRepoOverride(_) => "repoOverrides".into(),
         ValidationError::InvalidRevision => return None,

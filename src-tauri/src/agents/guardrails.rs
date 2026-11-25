@@ -85,6 +85,11 @@ pub fn parse(bytes: &[u8]) -> Result<GuardrailsFile, String> {
         if list.deny.iter().any(|rule| rule.trim().is_empty()) {
             return Err(format!("permissions.{cli}.deny has a blank rule"));
         }
+        if list.deny.iter().any(|rule| rule == GUARDRAIL_TIER_ACTION) {
+            return Err(format!(
+                "permissions.{cli}.deny lists {GUARDRAIL_TIER_ACTION}, which CodeSense reserves"
+            ));
+        }
     }
     file.permissions.retain(|_, list| !list.deny.is_empty());
     Ok(file)
@@ -192,34 +197,43 @@ fn tier_marker() -> Value {
 }
 
 /// Split native ordered `rules` at the guardrail tier: the rules before it, and the org's
-/// denies after it (the marker dropped). A launch's rules are merged by tier, and the org's
-/// denies must stay after every other rule however often they are merged.
+/// denies after it. A launch's rules are merged by tier, and the org's denies must stay after
+/// every other rule however often they are merged.
+///
+/// The split is at the last marker, so a marker earlier in the rules (one an agent's own
+/// permission map names, which validation refuses) can't pull the org's denies back among
+/// the agent's rules. Every marker is dropped, and only denies go to the tier: a rule after
+/// the marker that isn't a deny stays with the rules before it, so the tier only narrows.
 pub(crate) fn split_final_tier(rules: Vec<Value>) -> (Vec<Value>, Vec<Value>) {
-    match rules
-        .iter()
-        .position(|rule| rule["action"] == GUARDRAIL_TIER_ACTION)
-    {
-        Some(at) => {
-            let mut head = rules;
-            let tier = head.split_off(at).into_iter().skip(1).collect();
-            (head, tier)
-        }
-        None => (rules, Vec::new()),
-    }
+    let is_marker = |rule: &Value| rule["action"] == GUARDRAIL_TIER_ACTION;
+    let Some(at) = rules.iter().rposition(is_marker) else {
+        return (rules, Vec::new());
+    };
+    let mut head = rules;
+    let after = head.split_off(at);
+    head.retain(|rule| !is_marker(rule));
+    let (tier, rest): (Vec<Value>, Vec<Value>) = after
+        .into_iter()
+        .skip(1)
+        .partition(|rule| rule["effect"] == "deny");
+    head.extend(rest);
+    (head, tier)
 }
 
-/// `merged` with the guardrail `tier` after it, behind its marker; each action once.
+/// `merged` with the guardrail `tier` after it, behind its marker. A rule listed twice is
+/// kept once; no other rule of the tier is dropped.
 pub(crate) fn append_final_tier(merged: &mut Vec<Value>, tier: Vec<Value>) {
     if tier.is_empty() {
         return;
     }
     merged.push(tier_marker());
-    let mut seen = BTreeSet::new();
+    let mut kept: Vec<Value> = Vec::new();
     for rule in tier {
-        if seen.insert(rule["action"].to_string()) {
-            merged.push(rule);
+        if !kept.contains(&rule) {
+            kept.push(rule);
         }
     }
+    merged.extend(kept);
 }
 
 /// What the org's guardrails did to one launch, on its [`super::manifest::StartupManifest`].
