@@ -237,8 +237,12 @@ function seed(now: number): MockRoutine[] {
         mine: true,
       },
       runs: [
-        run(digest, 2, "needs_you", 5 * HOUR, {
+        run(digest, 3, "needs_you", 5 * HOUR, {
           result_text: "Which repos belong in the digest? Two new ones appeared.",
+        }),
+        run(digest, 2, "skipped", 3 * 24 * HOUR, {
+          reason: "team_paused",
+          result_text: "acme/backend is paused (go-1: maintenance)",
         }),
         run(digest, 1, "succeeded", 7 * 24 * HOUR, { result_text: "Posted the digest." }),
       ],

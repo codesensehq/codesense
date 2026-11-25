@@ -9376,6 +9376,8 @@ export interface RoutineDef {
     max_wakes_per_day?: number;
     /** The least time between two wakes into one session (`30m`, `2h`, `1d`). */
     min_gap?: string;
+    /** Set in routine.yml only: agent fires keep running while the team is paused. */
+    runs_while_team_paused?: boolean;
   };
   variables?: Record<string, { type: "text" | "number" | "boolean"; default?: string }>;
   revision: number;

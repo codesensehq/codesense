@@ -316,12 +316,12 @@ test("verifySources is the strict freshness check and never rehashes the fixture
       ? bytes.replace("pub name: String,", "pub name: String,\n    pub newly_added_field: String,")
       : bytes;
   };
-  // Only the mutation is new: main's fixture may already lag a source this branch changed.
-  const lagging = staleSources(fixture);
-  assert.deepEqual(
-    staleSources(fixture, mutated).filter((path) => !lagging.includes(path)),
-    [MODEL],
-  );
+  // Only the mutation is new: main's fixture may already lag a source this branch changed,
+  // the model included, so the model is stale either way and nothing else moves.
+  const others = (paths) => paths.filter((path) => path !== MODEL);
+  const stale = staleSources(fixture, mutated);
+  assert.ok(stale.includes(MODEL));
+  assert.deepEqual(others(stale), others(staleSources(fixture)));
   assert.throws(
     () => verifySources(fixture, mutated),
     /fixture is stale: (?:\S+, )*src-tauri\/src\/routines\/model.rs/,

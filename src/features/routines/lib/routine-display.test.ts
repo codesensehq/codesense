@@ -110,6 +110,10 @@ describe("reasonCopy", () => {
     expect(reasonCopy(skipped(reason))).toBe(copy);
   });
 
+  it("labels team_paused", () => {
+    expect(reasonCopy(skipped("team_paused"))).toBe("Skipped — team paused");
+  });
+
   it("names the fill-in a command could not start without, from its detail", () => {
     expect(
       reasonCopy({

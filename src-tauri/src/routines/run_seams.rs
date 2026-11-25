@@ -2644,3 +2644,366 @@ mod ending_explanations {
         assert_eq!((phase.as_str(), result.as_deref(), detail), ("succeeded", Some("T"), None));
     }
 }
+
+// A paused team (its `team-control` records) skips every agent fire under it at
+// admission, before budget and overlap, unless the routine opts out.
+
+const GO: (&str, &str) = (
+    "go-1",
+    "id: go-1\npaused: \"true\"\nat: 100\nreason: maintenance",
+);
+const RESUME: (&str, &str) = (
+    "resume-1",
+    "id: resume-1\npaused: \"false\"\nat: 200\nresumes: go-1",
+);
+
+fn pause_team(home: &Path, records: &[(&str, &str)]) {
+    crate::context_repo::team_pause::write_team_control(home, &alice(), ORG, TEAM, records);
+}
+
+fn team_paused() -> Outcome {
+    Outcome::Skipped {
+        reason: super::runs::reason::TEAM_PAUSED.into(),
+    }
+}
+
+/// Admit one fire of `def` under `key` from `source`, as its trigger would.
+fn fire_from(
+    home: &Path,
+    key: &RoutineKey,
+    def: &RoutineDef,
+    source: super::tick::RunSource,
+    occurrence_key: Option<&str>,
+) -> super::admit::Admission {
+    let causation = crate::commands::sprint_run::causation::Causation::default();
+    let cause = (source == super::tick::RunSource::Event).then_some(super::admit::EventCause {
+        origin: "finished session s1",
+        causation: &causation,
+        rate_limited: false,
+    });
+    let principal = alice();
+    store(home)
+        .transaction(|tx| {
+            super::admit::admit(
+                tx,
+                home,
+                &super::admit::Fire {
+                    key,
+                    principal: &principal,
+                    def,
+                    source,
+                    occurrence_key,
+                    scheduled_at: None,
+                    now: finish::now_ms(),
+                    variables: BTreeMap::new(),
+                    trigger_payload: None,
+                    cause,
+                },
+            )
+        })
+        .unwrap()
+}
+
+fn stored(home: &Path, id: &str) -> RoutineDef {
+    service::get(home, &alice(), &key(id)).unwrap().def
+}
+
+/// Nothing to run: no runnable coordinator row and no pending delivery.
+fn nothing_runnable(home: &Path) {
+    assert_eq!(
+        coordinator(home)
+            .count_runs_in_state(RunState::Runnable)
+            .unwrap(),
+        0
+    );
+    assert_eq!(pending_routine_deliveries(home), 0);
+}
+
+#[test]
+fn a_paused_team_skips_an_enabled_routine() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    write_org(home, 1);
+    save(home, routine("digest", "*/5 * * * *"));
+    pause_team(home, &[GO]);
+    let skipped = fire_from(
+        home,
+        &key("digest"),
+        &stored(home, "digest"),
+        super::tick::RunSource::Schedule,
+        Some("acme/api/backend/digest@2026-10-05T09:05:00Z"),
+    );
+    assert_eq!(skipped.outcome, team_paused());
+    let row = run(home, &skipped.run_id);
+    assert_eq!(row.phase, "skipped");
+    assert_eq!(row.reason.as_deref(), Some("team_paused"));
+    assert_eq!(row.session_id, None);
+    let why = row.result_text.unwrap_or_default();
+    assert!(why.contains("is paused (go-1: maintenance)"), "{why}");
+    nothing_runnable(home);
+}
+
+#[test]
+fn a_manual_run_now_is_skipped_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    write_org(home, 1);
+    save(home, routine("digest", "*/5 * * * *"));
+    pause_team(home, &[GO]);
+    assert_eq!(manual(home, "digest").outcome, team_paused());
+    nothing_runnable(home);
+}
+
+#[test]
+fn a_routine_made_after_the_go_record_is_skipped() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    write_org(home, 1);
+    pause_team(home, &[GO]);
+    save(home, routine("late", "*/5 * * * *"));
+    assert_eq!(manual(home, "late").outcome, team_paused());
+    nothing_runnable(home);
+}
+
+#[test]
+fn scheduled_catch_up_and_event_fires_all_skip() {
+    use super::tick::RunSource;
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    write_org(home, 1);
+    save(home, routine("digest", "*/5 * * * *"));
+    pause_team(home, &[GO]);
+    let def = stored(home, "digest");
+    for (source, occurrence) in [
+        (RunSource::Schedule, Some("digest@schedule")),
+        (RunSource::CatchUp, Some("digest@catch-up")),
+        (RunSource::Event, Some("digest@event")),
+        (RunSource::Manual, None),
+    ] {
+        let admission = fire_from(home, &key("digest"), &def, source, occurrence);
+        assert_eq!(admission.outcome, team_paused(), "{}", source.as_str());
+    }
+    nothing_runnable(home);
+}
+
+#[test]
+fn a_routine_armed_elsewhere_is_skipped_here() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    write_org(home, 1);
+    save(home, routine("shared", "*/5 * * * *"));
+    pause_team(home, &[GO]);
+    // Armed on another Mac, so this Mac's switch doesn't apply to a fire here.
+    let mut def = stored(home, "shared");
+    def.armed_host = "another-mac".into();
+    assert!(!super::host::is_armed_here(
+        &def,
+        &super::host::local_host_id(home).unwrap()
+    ));
+    let admission = fire_from(
+        home,
+        &key("shared"),
+        &def,
+        super::tick::RunSource::Manual,
+        None,
+    );
+    assert_eq!(admission.outcome, team_paused());
+}
+
+#[test]
+fn off_here_keeps_its_reason_while_paused() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    write_org(home, 1);
+    save(home, routine("off", "*/5 * * * *"));
+    service::set_enabled(home, &alice(), &key("off"), false).unwrap();
+    pause_team(home, &[GO]);
+    // The switch check stays first.
+    assert_eq!(
+        manual(home, "off").outcome,
+        Outcome::Skipped {
+            reason: "paused".into()
+        }
+    );
+}
+
+#[test]
+fn personal_routine_under_paused_team_is_skipped() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    write_org(home, 1);
+    save(home, routine("mine", "*/5 * * * *"));
+    pause_team(home, &[GO]);
+    let personal = RoutineKey {
+        account: Some("1".into()),
+        ..key("mine")
+    };
+    let admission = fire_from(
+        home,
+        &personal,
+        &stored(home, "mine"),
+        super::tick::RunSource::Manual,
+        None,
+    );
+    assert_eq!(admission.outcome, team_paused());
+}
+
+#[test]
+fn builtin_routine_runs_while_paused() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    write_org(home, 1);
+    save(home, routine("digest", "*/5 * * * *"));
+    pause_team(home, &[GO]);
+    let builtin = RoutineKey::builtin("digest");
+    assert!(builtin.is_builtin());
+    let admission = fire_from(
+        home,
+        &builtin,
+        &stored(home, "digest"),
+        super::tick::RunSource::Manual,
+        None,
+    );
+    assert_ne!(admission.outcome, team_paused());
+}
+
+#[test]
+fn a_command_routine_is_not_gated() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    write_org(home, 1);
+    save(home, routine("cmd", "*/5 * * * *"));
+    pause_team(home, &[GO]);
+    let mut def = stored(home, "cmd");
+    def.action = super::model::RoutineAction::Command;
+    def.command = vec!["echo".into(), "hello".into()];
+    def.agent = AgentRef::default();
+    def.task.clear();
+    assert!(def.is_command());
+    let admission = fire_from(
+        home,
+        &key("cmd"),
+        &def,
+        super::tick::RunSource::Manual,
+        None,
+    );
+    assert_eq!(admission.outcome, Outcome::Queued);
+}
+
+#[test]
+fn runs_while_team_paused_admits_the_fire() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    write_org(home, 1);
+    let mut def = routine("health", "*/5 * * * *");
+    def.policy.runs_while_team_paused = true;
+    save(home, def);
+    pause_team(home, &[GO]);
+    assert!(stored(home, "health").policy.runs_while_team_paused);
+    assert_eq!(manual(home, "health").outcome, Outcome::Queued);
+}
+
+#[test]
+fn resumed_team_admits_the_next_fire() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    write_org(home, 1);
+    save(home, routine("digest", "*/5 * * * *"));
+    pause_team(home, &[GO]);
+    assert_eq!(manual(home, "digest").outcome, team_paused());
+    pause_team(home, &[RESUME]);
+    assert_eq!(manual(home, "digest").outcome, Outcome::Queued);
+}
+
+#[test]
+fn no_team_folder_admits() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    write_org(home, 1);
+    save(home, routine("digest", "*/5 * * * *"));
+    assert_eq!(
+        crate::context_repo::team_pause::team_pause(home, &alice(), ORG, TEAM),
+        Default::default()
+    );
+    assert_eq!(manual(home, "digest").outcome, Outcome::Queued);
+}
+
+#[test]
+fn team_pause_is_checked_before_budget_loop_and_overlap() {
+    use crate::session_usage::{event::Tokens, spend_caps::Budget, tests::event, UsageStore};
+    let temp = TempHome::new();
+    let home = temp.codesense_home();
+    // Over its budget: paused wins.
+    let mut def = routine("budget", "0 * * * *");
+    def.policy.budget_usd = Some(Budget {
+        per_day: Some(1.0),
+        per_week: None,
+    });
+    save(&home, def);
+    let mut usage = UsageStore::open(&home.join("usage.sqlite")).unwrap();
+    usage
+        .attribute(
+            "spent",
+            ORG,
+            Some(TEAM),
+            "agent",
+            &format!("routine:{}@one", key("budget")),
+            None,
+        )
+        .unwrap();
+    let mut call = event(
+        "e",
+        "spent",
+        "claude-opus-5-5",
+        chrono::Utc::now().timestamp_millis(),
+        Tokens::default(),
+    );
+    call.reported_cost_usd = Some(1.0);
+    usage.ingest(&[call]).unwrap();
+    assert_eq!(
+        manual(&home, "budget").outcome,
+        Outcome::Skipped {
+            reason: "budget_reached".into()
+        }
+    );
+    // A run already active: paused wins over the overlap policy.
+    let mut skip = routine("busy", "0 * * * *");
+    skip.policy.overlap = OverlapPolicy::Skip;
+    save(&home, skip);
+    assert_eq!(manual(&home, "busy").outcome, Outcome::Queued);
+    pause_team(&home, &[GO]);
+    assert_eq!(manual(&home, "budget").outcome, team_paused());
+    assert_eq!(manual(&home, "busy").outcome, team_paused());
+}
+
+#[test]
+fn flag_defaults_false_in_serde_and_yaml() {
+    let absent: Policy = serde_yaml::from_str("max_runtime: 30m\n").unwrap();
+    assert!(!absent.runs_while_team_paused);
+    assert!(absent.extra.is_empty());
+    let set: Policy =
+        serde_yaml::from_str("max_runtime: 30m\nruns_while_team_paused: true\n").unwrap();
+    assert!(set.runs_while_team_paused);
+    assert!(set.extra.is_empty());
+    // Unset, it isn't written; set, it round-trips.
+    assert!(!serde_yaml::to_string(&absent)
+        .unwrap()
+        .contains("runs_while_team_paused"));
+    let written = serde_yaml::to_string(&set).unwrap();
+    assert!(
+        written.contains("runs_while_team_paused: true"),
+        "{written}"
+    );
+    let read: Policy = serde_yaml::from_str(&written).unwrap();
+    assert_eq!(read, set);
+    // Through a saved routine.yml too.
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    write_org(home, 1);
+    save(home, routine("plain", "*/5 * * * *"));
+    assert!(!stored(home, "plain").policy.runs_while_team_paused);
+    let mut def = routine("kept", "*/5 * * * *");
+    def.policy.runs_while_team_paused = true;
+    save(home, def);
+    assert!(stored(home, "kept").policy.runs_while_team_paused);
+}
