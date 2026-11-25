@@ -41,16 +41,16 @@ pub fn tree_or_err<'a>(
 /// The checked-out branch's upstream tracking-ref OID (e.g. `origin/master`).
 /// `None` if HEAD is detached/unborn or the branch has no upstream configured.
 pub fn upstream_oid(repo: &Repository) -> Option<git2::Oid> {
-    let head = repo.head().ok()?;
+    let head = Result::ok(repo.head())?;
     if !head.is_branch() {
         return None;
     }
-    git2::Branch::wrap(head).upstream().ok()?.get().target()
+    Result::ok(git2::Branch::wrap(head).upstream())?.get().target()
 }
 
 /// The id of the tree entry at `path` in `tree`, or `None` if there is none.
 pub fn blob_at(tree: &Tree, path: &str) -> Option<git2::Oid> {
-    tree.get_path(Path::new(path)).ok().map(|e| e.id())
+    Result::ok(tree.get_path(Path::new(path))).map(|e| e.id())
 }
 
 #[cfg(test)]

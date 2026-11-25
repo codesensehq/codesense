@@ -1155,7 +1155,7 @@ pub(crate) fn org_guardrails(
     };
     let cache = CACHE.get_or_init(Default::default);
     let key = (root.to_path_buf(), commit);
-    if let Some(hit) = cache.lock().ok().and_then(|c| c.get(&key).cloned()) {
+    if let Some(hit) = Result::ok(cache.lock()).and_then(|c| HashMap::get(&c, &key).cloned()) {
         return Ok(hit);
     }
     let tree = repo
@@ -1240,10 +1240,10 @@ pub(crate) fn org_guardrails(
     }
     let guardrails = Guardrails::union(files).map(Arc::new);
     if let Ok(mut cache) = cache.lock() {
-        if cache.len() >= 64 {
-            cache.clear();
+        if HashMap::len(&cache) >= 64 {
+            HashMap::clear(&mut cache);
         }
-        cache.insert(key, guardrails.clone());
+        HashMap::insert(&mut cache, key, guardrails.clone());
     }
     Ok(guardrails)
 }
@@ -1277,15 +1277,15 @@ fn uncommitted(
     };
     let mut files: Vec<String> = entries
         .filter_map(Result::ok)
-        .filter(|entry| Path::join(&std::fs::DirEntry::path(entry), GUARDRAILS_FILE).is_file())
+        .filter(|entry| Path::is_file(&Path::join(&std::fs::DirEntry::path(entry), GUARDRAILS_FILE)))
         .filter_map(|entry| {
             let name = entry.file_name();
-            name.to_str()
+            std::ffi::OsStr::to_str(&name)
                 .map(|name| format!("{name}/{GUARDRAILS_FILE}"))
         })
         .collect();
-    files.sort();
-    match files.first() {
+    <[String]>::sort(&mut files);
+    match <[String]>::first(&files) {
         Some(path) => Err(fail(
             path,
             &format!("{why}, so it can't be read as committed"),
