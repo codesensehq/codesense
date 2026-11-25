@@ -774,6 +774,31 @@ fn guardrails_fail_closed_on_a_commit_without_root_teams() {
 }
 
 #[test]
+fn guardrails_of_a_team_folder_that_is_not_a_listed_root_refuse() {
+    // A root team dropped from `teams.yml`, or a `teams: []` file, must not lift its denies.
+    let only_child = format!("teams:\n  - name: {TEAM}\n");
+    for (why, teams) in [
+        ("a removed root entry", only_child.as_str()),
+        ("an empty teams list", "teams: []\n"),
+    ] {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let root = guarded_org(home, &[(PARENT, CLAUDE_RM)]);
+        let key = save(home, &alice(), escalating("dropped"));
+        push_teams_yml(&root, Some(teams));
+        let reason = refusal(home, &key);
+        assert!(reason.contains(&guardrails_path(PARENT)), "{why}: {reason}");
+    }
+
+    // A listed root team's file still loads.
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    guarded_org(home, &[(PARENT, CLAUDE_RM)]);
+    let key = save(home, &alice(), escalating("listed"));
+    assert!(denies(&resolve_team(home, &key)).contains(&RM.to_string()));
+}
+
+#[test]
 fn guardrails_fail_closed_when_a_clone_with_a_remote_has_no_upstream() {
     let cases: [(&str, fn(&git2::Repository)); 3] = [
         ("a detached HEAD", |repo| {

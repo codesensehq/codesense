@@ -1101,7 +1101,8 @@ pub(crate) fn inherited_by_active_team(
 /// folder in the working tree has the file either. Every other failure is an error naming the
 /// org and the path, and the launch is refused: a `.git` that can't be opened, a clone with a
 /// remote and no upstream commit, a commit with no `teams.yml`, a `teams.yml` whose teams all
-/// have a parent, a guardrails file in a team that has a parent, a file that can't be read.
+/// have a parent, a guardrails file in a team that has a parent or that `teams.yml` doesn't
+/// list, a file that can't be read.
 pub(crate) fn org_guardrails(
     root: &Path,
     org: &str,
@@ -1211,6 +1212,29 @@ pub(crate) fn org_guardrails(
             return Err(fail(
                 &path,
                 &"only a root team's guardrails apply: move the file to a root team or remove it",
+            ));
+        }
+    }
+    // A top-level folder `teams.yml` doesn't list as a root can't have its file read, so a
+    // root dropped from the list, or an empty list, would otherwise lift that team's denies.
+    for entry in git2::Tree::iter(&tree) {
+        let Some(name) = git2::TreeEntry::name(&entry) else {
+            continue;
+        };
+        if git2::TreeEntry::kind(&entry) != Some(git2::ObjectType::Tree)
+            || teams
+                .teams
+                .iter()
+                .any(|t| t.parent_team.is_none() && t.name.as_str() == name)
+        {
+            continue;
+        }
+        let path = format!("{name}/{GUARDRAILS_FILE}");
+        if blob_at(&tree, &path).is_some() {
+            return Err(fail(
+                &path,
+                &"the team folder has a guardrails file but teams.yml doesn't list it as a root \
+                  team: list it again or remove the file",
             ));
         }
     }
