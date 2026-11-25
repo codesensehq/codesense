@@ -363,12 +363,6 @@ fn prepare_resolved(
         .filter(|p| !p.trim().is_empty());
     let mut warnings = launch_check::warnings(&resolved, prompt);
     warnings.extend(launch_check::usage_not_recorded_warning(&agent));
-    warnings.extend(
-        resolved
-            .guardrails
-            .as_deref()
-            .and_then(|g| g.not_enforced_warning(agent.runtime)),
-    );
     let manifest = resolved.manifest;
 
     let prepared = AgentLaunch {

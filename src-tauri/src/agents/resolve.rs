@@ -395,12 +395,6 @@ fn compose_with_reader(
     let prompt = Some(agent.default_prompt.as_str()).filter(|p| !p.trim().is_empty());
     resolved.warnings = launch_check::warnings(&resolved, prompt);
     resolved.warnings.extend(sharing_warnings);
-    resolved.warnings.extend(
-        resolved
-            .guardrails
-            .as_deref()
-            .and_then(|g| g.not_enforced_warning(agent.runtime)),
-    );
     resolved.warnings.extend(context_warning(agent));
     resolved
         .warnings

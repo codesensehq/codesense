@@ -250,6 +250,12 @@ pub fn warnings(resolved: &ResolvedAgent, prompt: Option<&str>) -> Vec<LaunchWar
     out.extend(skills_warning(resolved));
     out.extend(size_warnings(&resolved.manifest));
     out.extend(permission_warning(&resolved.manifest));
+    out.extend(
+        resolved
+            .guardrails
+            .as_deref()
+            .and_then(|g| g.not_enforced_warning(resolved.account.policy.runtime)),
+    );
     if let Some(tools) = &resolved.launch.bridge_tools {
         out.push(LaunchWarning {
             code: LaunchWarningCode::BridgeToolsLocalOnly,
