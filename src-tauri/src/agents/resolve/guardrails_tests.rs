@@ -536,23 +536,48 @@ fn guardrails_are_read_from_the_upstream_commit() {
     assert!(!deny.contains(&RM.to_string()));
 }
 
+/// `PrepareOptions` for a launch into the team.
+fn into_team<'a>() -> crate::agents::launch::PrepareOptions<'a> {
+    crate::agents::launch::PrepareOptions {
+        account: None,
+        target_team: Some((ORG.into(), TEAM.into())),
+        mode_override: None,
+        prompt: None,
+    }
+}
+
 #[test]
 fn guardrails_ignore_a_chosen_context_worktree() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();
-    guarded_org(home, &[(PARENT, CLAUDE_RM)]);
-    // A sparse seat worktree that has no guardrails file at all, or an edited one.
-    let sparse = tmp.path().join("seat-worktree");
-    std::fs::create_dir_all(sparse.join(PARENT).join("config")).unwrap();
-    std::fs::write(
-        sparse.join("teams.yml"),
-        format!("teams:\n  - name: {TEAM}\n"),
-    )
-    .unwrap();
+    let root = guarded_org(home, &[(PARENT, CLAUDE_RM)]);
+    let key = save(home, &alice(), escalating("seat"));
+    // A seat's context worktree of the org clone, on a pushed branch that removed the file.
+    let repo = git2::Repository::open(&root).unwrap();
+    let head = repo.head().unwrap().peel_to_commit().unwrap();
+    let branch = repo.branch("seat", &head, false).unwrap();
+    let seat = tmp.path().join("seat-worktree");
+    let mut options = git2::WorktreeAddOptions::new();
+    options.reference(Some(branch.get()));
+    repo.worktree("seat", &seat, Some(&options)).unwrap();
+    std::fs::remove_file(seat.join(guardrails_path(PARENT))).unwrap();
+    let lifted = commit_all(&seat, "drop the guardrails in the seat");
+    repo.reference("refs/remotes/origin/seat", lifted, true, "push")
+        .unwrap();
+    repo.find_branch("seat", git2::BranchType::Local)
+        .unwrap()
+        .set_upstream(Some("origin/seat"))
+        .unwrap();
+    // Read as an org, the worktree denies nothing, so a loader that read it would lift the deny.
+    assert_eq!(
+        crate::context_repo::inheritance::org_guardrails(&seat, ORG),
+        Ok(None)
+    );
+
     let mut target = ManifestTarget::team(ORG, TEAM);
     target.context_root = Some(ContextRoot {
         id: "seat".into(),
-        root: sparse.clone(),
+        root: seat.clone(),
     });
     let guardrails = roots::org_guardrails(home, &alice(), &target)
         .unwrap()
@@ -565,6 +590,17 @@ fn guardrails_ignore_a_chosen_context_worktree() {
     )
     .remove(0);
     assert!(entry.content["permissions"]["deny"]
+        .as_array()
+        .unwrap()
+        .contains(&json!(RM)));
+    // And a launch into the team runs under them while the seat's branch lacks the file.
+    let launch = crate::agents::launch::prepare(home, &alice(), &key, into_team()).unwrap();
+    let settings = launch
+        .generated
+        .iter()
+        .find(|entry| entry.target == GeneratedTarget::LaunchSettings)
+        .unwrap();
+    assert!(settings.content["permissions"]["deny"]
         .as_array()
         .unwrap()
         .contains(&json!(RM)));
@@ -633,17 +669,7 @@ fn guardrails_fail_closed() {
         assert!(!resolved.launch_admission.allowed, "{why}");
         let reason = resolved.launch_admission.reason.clone().unwrap();
         assert!(reason.contains(&expected_path), "{why}: {reason}");
-        let launch = crate::agents::launch::prepare(
-            home,
-            &alice(),
-            &key,
-            crate::agents::launch::PrepareOptions {
-                account: None,
-                target_team: Some((ORG.into(), TEAM.into())),
-                mode_override: None,
-                prompt: None,
-            },
-        );
+        let launch = crate::agents::launch::prepare(home, &alice(), &key, into_team());
         assert_eq!(launch.err(), Some(reason), "{why}");
     }
 }
@@ -829,6 +855,14 @@ fn guardrails_codex_warns() {
         permissions::generate(&codex, AgentCli::Codex, codex.launch, None)[0].content,
         "nothing is injected into a Codex launch"
     );
+    // A launch warns once, as its preview does.
+    let launch = crate::agents::launch::prepare(home, &alice(), &key, into_team()).unwrap();
+    let warned = launch
+        .warnings
+        .iter()
+        .filter(|w| w.code == LaunchWarningCode::GuardrailsNotEnforced)
+        .count();
+    assert_eq!(warned, 1, "{:?}", launch.warnings);
 }
 
 #[test]
