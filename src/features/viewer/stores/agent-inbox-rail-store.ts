@@ -6,12 +6,22 @@ import { create } from "zustand";
 /** How a tab's inbox is drawn: conversations, a dense log, or a sequence diagram. */
 export type InboxLens = "threads" | "spool" | "wire";
 
-/** One session's rail state. Present → the rail is open on that session. */
+/**
+ * One session's chat state. Present → the tab has a chat, mounted while its pane shows; `shown`
+ * says whether it covers the tab or sits hidden behind the CLI.
+ */
 export interface AgentInboxRailTarget {
+  /** The chat covers the tab. False: the person flipped to the CLI, and the chat waits hidden. */
+  shown: boolean;
   /** Bumped each time someone asks to write: the rail's composer takes focus. */
   composeRequest: number;
   groupRequest?: number;
   groupHandled?: number;
+  /**
+   * The latest group request came while the chat was hidden or absent: it shows the room. Asked
+   * while the chat covers the tab, it flips between the room and the agent's own thread.
+   */
+  groupOpens?: boolean;
   /**
    * The last request the rail acted on. Kept here, not in the rail, so a remount (the tab
    * moved to another pane) never acts on an old request again.
@@ -68,7 +78,7 @@ function watchEligibility(): void {
     const next = { ...bySession };
     const nextPending = { ...pending };
     for (const id of opened) {
-      next[id] = { composeRequest: 0 };
+      next[id] = { composeRequest: 0, shown: true };
       nextPending[id] = undefined;
     }
     for (const id of dropped) nextPending[id] = undefined;
@@ -78,9 +88,9 @@ function watchEligibility(): void {
 }
 
 /**
- * The per-terminal-tab agent inbox rail's state: which tabs are showing it, and
- * whether the composer was asked for. Not persisted — every tile boots with the
- * rail closed, same as the HUD and source-diff overlays.
+ * The per-terminal-tab agent chat's state: which tabs have a chat, whether it covers the tab or
+ * waits hidden behind the CLI, and whether the composer was asked for. Not persisted — every
+ * tile boots with no chat, same as the HUD and source-diff overlays.
  */
 export const useAgentInboxRailStore = create<AgentInboxRailState>((set) => ({
   bySession: {},
@@ -91,7 +101,7 @@ export const useAgentInboxRailStore = create<AgentInboxRailState>((set) => ({
       if (isRunningAgent(useAgentStateStore.getState(), sessionId))
         return s.bySession[sessionId]
           ? s
-          : { bySession: { ...s.bySession, [sessionId]: { composeRequest: 0 } } };
+          : { bySession: { ...s.bySession, [sessionId]: { composeRequest: 0, shown: true } } };
       return { pending: { ...s.pending, [sessionId]: true } };
     });
   },
@@ -113,8 +123,10 @@ export const useAgentInboxRailStore = create<AgentInboxRailState>((set) => ({
       const compose = opts?.compose === true;
       const cur = s.bySession[sessionId];
       const composeRequest = compose ? (cur?.composeRequest ?? 0) + 1 : (cur?.composeRequest ?? 0);
-      if (cur && cur.composeRequest === composeRequest) return s;
-      return { bySession: { ...s.bySession, [sessionId]: { ...cur, composeRequest } } };
+      if (cur?.shown && cur.composeRequest === composeRequest) return s;
+      return {
+        bySession: { ...s.bySession, [sessionId]: { ...cur, composeRequest, shown: true } },
+      };
     }),
   openGroup: (sessionId) =>
     set((s) => {
@@ -124,7 +136,13 @@ export const useAgentInboxRailStore = create<AgentInboxRailState>((set) => ({
       return {
         bySession: {
           ...s.bySession,
-          [sessionId]: { composeRequest: 0, ...cur, groupRequest: (cur?.groupRequest ?? 0) + 1 },
+          [sessionId]: {
+            composeRequest: 0,
+            ...cur,
+            shown: true,
+            groupRequest: (cur?.groupRequest ?? 0) + 1,
+            groupOpens: cur?.shown !== true,
+          },
         },
       };
     }),
@@ -139,16 +157,17 @@ export const useAgentInboxRailStore = create<AgentInboxRailState>((set) => ({
       if (!cur || (cur.composeHandled ?? 0) >= n) return s;
       return { bySession: { ...s.bySession, [sessionId]: { ...cur, composeHandled: n } } };
     }),
-  // The person's choice: a closed chat stays closed, so a mark still pending is spent too.
+  // The person's choice: a closed chat stays closed, so a mark still pending is spent too. The
+  // entry stays, hidden, so the chat keeps its thread, scroll and draft for when it shows again.
   close: (sessionId) =>
-    set((s) =>
-      s.bySession[sessionId] || s.pending[sessionId]
-        ? {
-            bySession: { ...s.bySession, [sessionId]: undefined },
-            pending: { ...s.pending, [sessionId]: undefined },
-          }
-        : s,
-    ),
+    set((s) => {
+      const cur = s.bySession[sessionId];
+      if (!cur?.shown && !s.pending[sessionId]) return s;
+      return {
+        bySession: cur ? { ...s.bySession, [sessionId]: { ...cur, shown: false } } : s.bySession,
+        pending: { ...s.pending, [sessionId]: undefined },
+      };
+    }),
 }));
 
 /** A tab was launched as an agent: its chat covers it once the agent runs. */
@@ -180,14 +199,14 @@ export function markAgentInboxRailComposeHandled(sessionId: string, n: number): 
   useAgentInboxRailStore.getState().markComposeHandled(sessionId, n);
 }
 
-/** Close the per-tab rail on `sessionId`. */
+/** Hide the chat on `sessionId`: its tab shows the CLI, and the chat waits, still mounted. */
 export function closeAgentInboxRail(sessionId: string) {
   useAgentInboxRailStore.getState().close(sessionId);
 }
 
 /**
- * Close the chat on `sessionId`, then focus the terminal in `pane` (the tab's pane, if known).
- * A terminal the chat covered is inert until the chat is gone, so focus waits for the next frame.
+ * Hide the chat on `sessionId`, then focus the terminal in `pane` (the tab's pane, if known).
+ * A terminal the chat covered is inert until the chat is hidden, so focus waits for the next frame.
  */
 export function closeAgentInboxRailToTerminal(sessionId: string, pane: Element | null) {
   closeAgentInboxRail(sessionId);
@@ -197,11 +216,16 @@ export function closeAgentInboxRailToTerminal(sessionId: string, pane: Element |
     );
 }
 
-/** Whether the chat covers `sessionId`'s tab: it is open and the agent still runs. */
+/** Whether `sessionId`'s chat is shown (it covers the tab), not hidden behind the CLI or absent. */
+export function useAgentChatShown(sessionId: string): boolean {
+  return useAgentInboxRailStore((s) => s.bySession[sessionId]?.shown === true);
+}
+
+/** Whether the chat covers `sessionId`'s tab: it is shown and the agent still runs. */
 export function useChatCovers(sessionId: string): boolean {
-  const open = useAgentInboxRailStore((s) => !!s.bySession[sessionId]);
+  const shown = useAgentChatShown(sessionId);
   const running = useRunningAgent(sessionId);
-  return open && running;
+  return shown && running;
 }
 
 const CHAT_PANE = "[data-focus-pane], [data-pane-id], [data-pane-active]";
@@ -232,6 +256,7 @@ export function showAgentCli(sessionId: string, how: "focus" | "keep") {
 
 /** Flip a tab between its chat and its CLI, with the keyboard following (the shortcut). */
 export function flipAgentView(sessionId: string) {
-  if (useAgentInboxRailStore.getState().bySession[sessionId]) showAgentCli(sessionId, "focus");
+  if (useAgentInboxRailStore.getState().bySession[sessionId]?.shown)
+    showAgentCli(sessionId, "focus");
   else showAgentChat(sessionId, "focus");
 }

@@ -37,7 +37,7 @@ import {
 import {
   showAgentChat,
   showAgentCli,
-  useAgentInboxRailStore,
+  useAgentChatShown,
 } from "@/features/viewer/stores/agent-inbox-rail-store";
 import { useHeldLines } from "@/features/viewer/stores/held-output-store";
 import { useCliNeedsYou } from "@/features/viewer/lib/cli-workspace/store/terminal-tab-selectors";
@@ -147,7 +147,7 @@ export function TerminalGridCaption({
   const editorOpen = useWorktreeEditorOpen(tab.sessionId);
   const hudShown = useStoryHudShown(ws.id);
   const runningAgent = useRunningAgent(tab.sessionId);
-  const inboxOpen = useAgentInboxRailStore((s) => !!s.bySession[tab.sessionId]);
+  const inboxOpen = useAgentChatShown(tab.sessionId);
   const inboxCounts = useTabInboxCounts(tab.sessionId);
   const inboxUnread = inboxCounts.direct + inboxCounts.group;
   const diffShortcut = formatKeystrokeDisplay(useEffectiveShortcut("viewer.toggle-source-diff"));

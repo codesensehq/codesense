@@ -146,7 +146,7 @@ describe("TerminalGridCaption Chat | CLI switch", () => {
       expect(useAgentInboxRailStore.getState().bySession["sid-a"]?.composeRequest).toBe(1);
       expect(chatSeg()).toHaveAttribute("aria-checked", "true");
       fireEvent.click(cliSeg());
-      expect(useAgentInboxRailStore.getState().bySession["sid-a"]).toBeUndefined();
+      expect(useAgentInboxRailStore.getState().bySession["sid-a"]?.shown).toBe(false);
       expect(cliSeg()).toHaveAttribute("aria-checked", "true");
       cleanup();
     },
@@ -156,10 +156,13 @@ describe("TerminalGridCaption Chat | CLI switch", () => {
     mountFor(story);
     cliSeg().focus();
     fireEvent.keyDown(cliSeg(), { key: "ArrowLeft" });
-    expect(useAgentInboxRailStore.getState().bySession["sid-a"]).toEqual({ composeRequest: 0 });
+    expect(useAgentInboxRailStore.getState().bySession["sid-a"]).toEqual({
+      composeRequest: 0,
+      shown: true,
+    });
     expect(chatSeg()).toHaveFocus();
     fireEvent.keyDown(chatSeg(), { key: "ArrowRight" });
-    expect(useAgentInboxRailStore.getState().bySession["sid-a"]).toBeUndefined();
+    expect(useAgentInboxRailStore.getState().bySession["sid-a"]?.shown).toBe(false);
     expect(cliSeg()).toHaveFocus();
     cleanup();
   });

@@ -131,7 +131,7 @@ describe("InboxSplit", () => {
   });
 
   it.each(AGENT_RUNTIMES)(
-    "opens the %s chat on its tab without remounting the terminal",
+    "opens the %s chat on its tab without remounting the terminal, and hides it on close",
     async (cli) => {
       useAgentStateStore.getState().setProcessAgent(TAB.sessionId, cli);
       render(
@@ -145,7 +145,9 @@ describe("InboxSplit", () => {
       expect(rail).toBeVisible();
       expect(rail).toHaveAttribute("data-session-id", "sess-1");
       act(() => closeAgentInboxRail("sess-1"));
-      expect(screen.queryByTestId("chat-overlay")).toBeNull();
+      // Closed, the chat stays mounted out of sight, so showing it again is instant.
+      expect(screen.getByTestId("chat-overlay")).toBe(rail);
+      expect(rail).not.toBeVisible();
       expect(mounts).toHaveBeenCalledTimes(1);
     },
   );

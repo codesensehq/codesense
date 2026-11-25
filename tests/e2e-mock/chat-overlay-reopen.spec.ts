@@ -2,11 +2,10 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 /**
- * An agent's chat overlay opens at its newest message every time, not only the first time
- * (frontend mock backend, `?agents=team` world). Reopened, the list is laid out once and then
- * gets shorter as the cards above it are drawn; that must not leave it short of its end. A
- * reader who scrolled up and closed the chat finds it at the newest message too: closing ends
- * that read.
+ * An agent's chat overlay opens at its newest message, and a flip to the CLI and back keeps
+ * it where it was (frontend mock backend, `?agents=team` world). Shown again, the list is not
+ * laid out anew, so it is never left short of its end. A reader who scrolled up and flipped to
+ * the CLI finds the chat where they left it: the chat stays mounted while the CLI shows.
  *
  * The mock backend has no session inbox, so `list_session_inbox` is answered here with a
  * generated conversation.
@@ -81,7 +80,7 @@ async function open(page: Page): Promise<Locator> {
 
 async function close(page: Page) {
   await cliSegment(page).click();
-  await expect(page.getByTestId("chat-overlay")).toHaveCount(0);
+  await expect(page.getByTestId("chat-overlay")).toBeHidden();
 }
 
 /** How far (px) the newest message's bottom sits below the list's visible edge; 0 in view. */
@@ -106,13 +105,19 @@ test.describe("chat overlay reopen", () => {
     await expectAtNewest(page, await open(page));
   });
 
-  test("a reader who scrolled up and closed it reopens at the newest message", async ({ page }) => {
+  test("a reader who scrolled up and flipped to the CLI comes back where they were", async ({
+    page,
+  }) => {
     await boot(page);
     const msgs = await open(page);
     await expectAtNewest(page, msgs);
-    await msgs.evaluate((el) => (el.scrollTop = el.scrollHeight / 3));
+    const top = await msgs.evaluate((el) => {
+      el.scrollTop = el.scrollHeight / 3;
+      return el.scrollTop;
+    });
     await expect.poll(() => gapBelow(msgs)).toBeGreaterThan(0);
     await close(page);
-    await expectAtNewest(page, await open(page));
+    await open(page);
+    expect(await msgs.evaluate((el) => el.scrollTop)).toBe(top);
   });
 });

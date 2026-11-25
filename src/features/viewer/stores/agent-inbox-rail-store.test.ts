@@ -6,9 +6,11 @@ import {
   closeAgentInboxRail,
   closeAgentInboxRailToTerminal,
   clearOpenedAsAgent,
+  flipAgentView,
   forgetAgentInboxRail,
   markOpenedAsAgent,
   openAgentInboxRail,
+  showAgentChat,
   useAgentInboxRailStore,
 } from "./agent-inbox-rail-store";
 
@@ -35,9 +37,12 @@ describe("agent inbox rail store", () => {
     expect(useAgentInboxRailStore.getState().bySession[SID]).toBeUndefined();
   });
 
-  it("open adds an entry with composeRequest 0", () => {
+  it("open adds a shown entry with composeRequest 0", () => {
     openAgentInboxRail(SID);
-    expect(useAgentInboxRailStore.getState().bySession[SID]).toEqual({ composeRequest: 0 });
+    expect(useAgentInboxRailStore.getState().bySession[SID]).toEqual({
+      composeRequest: 0,
+      shown: true,
+    });
   });
 
   it("open with compose bumps composeRequest each call", () => {
@@ -54,29 +59,79 @@ describe("agent inbox rail store", () => {
     expect(after).toBe(before);
   });
 
-  it("close drops the entry", () => {
+  it("close keeps the entry and hides the chat", () => {
     openAgentInboxRail(SID, { compose: true });
     closeAgentInboxRail(SID);
-    expect(useAgentInboxRailStore.getState().bySession[SID]).toBeUndefined();
+    expect(useAgentInboxRailStore.getState().bySession[SID]).toEqual({
+      composeRequest: 1,
+      shown: false,
+    });
+  });
+
+  it("open shows a hidden chat again, even with no new compose request", () => {
+    openAgentInboxRail(SID);
+    closeAgentInboxRail(SID);
+    showAgentChat(SID, "keep");
+    expect(useAgentInboxRailStore.getState().bySession[SID]).toEqual({
+      composeRequest: 0,
+      shown: true,
+    });
+  });
+
+  it("the group chat shortcut shows a hidden chat", () => {
+    openAgentInboxRail(SID);
+    closeAgentInboxRail(SID);
+    useAgentInboxRailStore.getState().openGroup(SID);
+    expect(useAgentInboxRailStore.getState().bySession[SID]).toMatchObject({
+      shown: true,
+      groupRequest: 1,
+    });
+  });
+
+  it("the flip hides a shown chat and shows a hidden one, asking for the composer", () => {
+    flipAgentView(SID);
+    expect(useAgentInboxRailStore.getState().bySession[SID]).toEqual({
+      composeRequest: 1,
+      shown: true,
+    });
+    flipAgentView(SID);
+    expect(useAgentInboxRailStore.getState().bySession[SID]).toEqual({
+      composeRequest: 1,
+      shown: false,
+    });
+    flipAgentView(SID);
+    expect(useAgentInboxRailStore.getState().bySession[SID]).toEqual({
+      composeRequest: 2,
+      shown: true,
+    });
   });
 
   it("each session is isolated", () => {
     openAgentInboxRail("sid-a", { compose: true });
     openAgentInboxRail("sid-b");
-    expect(useAgentInboxRailStore.getState().bySession["sid-a"]).toEqual({ composeRequest: 1 });
-    expect(useAgentInboxRailStore.getState().bySession["sid-b"]).toEqual({ composeRequest: 0 });
+    expect(useAgentInboxRailStore.getState().bySession["sid-a"]).toEqual({
+      composeRequest: 1,
+      shown: true,
+    });
+    expect(useAgentInboxRailStore.getState().bySession["sid-b"]).toEqual({
+      composeRequest: 0,
+      shown: true,
+    });
     closeAgentInboxRail("sid-a");
-    expect(useAgentInboxRailStore.getState().bySession["sid-a"]).toBeUndefined();
-    expect(useAgentInboxRailStore.getState().bySession["sid-b"]).toEqual({ composeRequest: 0 });
+    expect(useAgentInboxRailStore.getState().bySession["sid-a"]?.shown).toBe(false);
+    expect(useAgentInboxRailStore.getState().bySession["sid-b"]).toEqual({
+      composeRequest: 0,
+      shown: true,
+    });
   });
 
-  it("closes the chat, then focuses the pane's terminal once the chat has gone", async () => {
+  it("hides the chat, then focuses the pane's terminal once the chat has gone", async () => {
     openAgentInboxRail(SID);
     const pane = document.createElement("div");
     pane.innerHTML = '<div class="xterm"><textarea data-testid="term"></textarea></div>';
     document.body.appendChild(pane);
     closeAgentInboxRailToTerminal(SID, pane);
-    expect(useAgentInboxRailStore.getState().bySession[SID]).toBeUndefined();
+    expect(useAgentInboxRailStore.getState().bySession[SID]?.shown).toBe(false);
     // A covered terminal is inert until then: focus waits for the next frame.
     expect(document.activeElement).not.toBe(pane.querySelector("textarea"));
     await new Promise((resolve) => requestAnimationFrame(resolve));
@@ -84,10 +139,10 @@ describe("agent inbox rail store", () => {
     pane.remove();
   });
 
-  it("closes the chat and leaves focus alone when there is no pane to hand it to", () => {
+  it("hides the chat and leaves focus alone when there is no pane to hand it to", () => {
     openAgentInboxRail(SID);
     expect(() => closeAgentInboxRailToTerminal(SID, null)).not.toThrow();
-    expect(useAgentInboxRailStore.getState().bySession[SID]).toBeUndefined();
+    expect(useAgentInboxRailStore.getState().bySession[SID]?.shown).toBe(false);
   });
 });
 
@@ -101,14 +156,14 @@ describe("opened as an agent", () => {
   it("opens the chat at once when the launched agent already runs", () => {
     becomeAgent();
     markOpenedAsAgent(NEW);
-    expect(open()).toEqual({ composeRequest: 0 });
+    expect(open()).toEqual({ composeRequest: 0, shown: true });
   });
 
   it("waits for the agent to become eligible, then covers", () => {
     markOpenedAsAgent(NEW);
     expect(open()).toBeUndefined();
     becomeAgent();
-    expect(open()).toEqual({ composeRequest: 0 });
+    expect(open()).toEqual({ composeRequest: 0, shown: true });
     expect(useAgentInboxRailStore.getState().pending[NEW]).toBeUndefined();
   });
 
@@ -133,6 +188,15 @@ describe("opened as an agent", () => {
     closeAgentInboxRail(NEW);
     becomeAgent();
     expect(open()).toBeUndefined();
+  });
+
+  it("the person's closed choice holds once the chat has covered the tab", () => {
+    markOpenedAsAgent(NEW);
+    becomeAgent();
+    closeAgentInboxRail(NEW);
+    becomeAgent();
+    markOpenedAsAgent(NEW);
+    expect(open()).toEqual({ composeRequest: 0, shown: false });
   });
 
   it("an agent that ends is forgotten, and a restart in the tab opens on the CLI", () => {
