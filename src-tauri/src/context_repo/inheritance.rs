@@ -1093,14 +1093,15 @@ pub(crate) fn inherited_by_active_team(
 /// The org's guardrails ([`crate::agents::guardrails`]): the union of every root team's
 /// `config/guardrails.yml`, the root teams being the ones `teams.yml` gives no parent. Both
 /// are read from the org clone at `root` as committed on its branch's upstream (HEAD's commit
-/// for an org with no remote), never from a working tree, so no worktree edit, sparse
-/// checkout or re-parenting can lift them.
+/// only for an org with no remote), never from a working tree, so no worktree edit, unpushed
+/// commit, sparse checkout or re-parenting can lift them.
 ///
 /// `Ok(None)` when the org denies nothing: no root team has the file, or nothing has ever been
 /// committed (`root` was never a repository, or its branch has no commit yet) and no team
 /// folder in the working tree has the file either. Every other failure is an error naming the
-/// org and the path, and the launch is refused: a `.git` that can't be opened, a commit with
-/// no `teams.yml`, a `teams.yml` whose teams all have a parent, a file that can't be read.
+/// org and the path, and the launch is refused: a `.git` that can't be opened, a clone with a
+/// remote and no upstream commit, a commit with no `teams.yml`, a `teams.yml` whose teams all
+/// have a parent, a file that can't be read.
 pub(crate) fn org_guardrails(
     root: &Path,
     org: &str,
@@ -1125,9 +1126,22 @@ pub(crate) fn org_guardrails(
         }
         Err(e) => return Err(fail(&root.display().to_string(), &e)),
     };
+    // An org with a remote is read only at its upstream commit: HEAD could hold a local commit
+    // nobody reviewed. HEAD's commit is read only for an org that has no remote at all.
+    let has_remote = repo
+        .remotes()
+        .map(|remotes| !remotes.is_empty())
+        .map_err(|e| fail("its remotes", &e))?;
     let commit = match upstream_oid(&repo) {
         Some(oid) => oid,
         None => match repo.head() {
+            Ok(_) if has_remote => {
+                return Err(fail(
+                    "upstream",
+                    &"the org clone has a remote but its branch has no upstream commit to \
+                      read (a detached HEAD, an unset upstream or a missing tracking branch)",
+                ));
+            }
             Ok(head) => match head.target() {
                 Some(oid) => oid,
                 None => return Err(fail("HEAD", &"no commit")),

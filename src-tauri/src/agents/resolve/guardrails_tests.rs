@@ -584,6 +584,63 @@ fn guardrails_fail_closed_on_a_commit_without_root_teams() {
 }
 
 #[test]
+fn guardrails_fail_closed_when_a_clone_with_a_remote_has_no_upstream() {
+    let cases: [(&str, fn(&git2::Repository)); 3] = [
+        ("a detached HEAD", |repo| {
+            let head = repo.head().unwrap().target().unwrap();
+            repo.set_head_detached(head).unwrap();
+        }),
+        ("an unset upstream", |repo| {
+            repo.find_branch("main", git2::BranchType::Local)
+                .unwrap()
+                .set_upstream(None)
+                .unwrap();
+        }),
+        ("a missing tracking branch", |repo| {
+            repo.find_reference("refs/remotes/origin/main")
+                .unwrap()
+                .delete()
+                .unwrap();
+        }),
+    ];
+    for (why, break_upstream) in cases {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let root = guarded_org(home, &[(PARENT, CLAUDE_RM)]);
+        let key = save(home, &alice(), escalating("no-upstream"));
+        // A local commit that drops the guardrails must not be read in the upstream's place.
+        std::fs::remove_file(root.join(guardrails_path(PARENT))).unwrap();
+        commit_all(&root, "drop the guardrails locally");
+        break_upstream(&git2::Repository::open(&root).unwrap());
+        let reason = refusal(home, &key);
+        assert!(reason.contains("no upstream commit"), "{why}: {reason}");
+    }
+}
+
+#[test]
+fn guardrails_of_an_org_with_no_remote_are_read_at_head() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    let root = guarded_org(home, &[(PARENT, CLAUDE_RM)]);
+    let key = save(home, &alice(), escalating("local-org"));
+    git2::Repository::open(&root)
+        .unwrap()
+        .remote_delete("origin")
+        .unwrap();
+    assert!(denies(&resolve_team(home, &key)).contains(&RM.to_string()));
+    // With nothing upstream to review, HEAD's commit is the org's: a new commit takes effect.
+    write(
+        &root,
+        &guardrails_path(PARENT),
+        b"permissions:\n  claude:\n    deny: ['WebFetch']\n",
+    );
+    commit_all(&root, "deny WebFetch instead");
+    let deny = denies(&resolve_team(home, &key));
+    assert!(deny.contains(&"WebFetch".to_string()));
+    assert!(!deny.contains(&RM.to_string()));
+}
+
+#[test]
 fn guardrails_codex_warns() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();
