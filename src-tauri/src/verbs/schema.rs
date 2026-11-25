@@ -101,6 +101,12 @@ pub fn args_schema(name: &str) -> Value {
             json!({"messageId":{"type":"integer","minimum":1},"org":string(),"team":string()})
         }
         "replyAsHuman" => json!({"messageId":{"type":"integer"},"text":string()}),
+        "gifSearch" => json!({
+            "query":{"type":"string","minLength":1,"maxLength":crate::gif::MAX_QUERY_CHARS},
+            "ids":{"type":"array","minItems":1,"maxItems":crate::gif::MAX_IDS,"items":{"type":"string","pattern":crate::gif::ID_PATTERN}},
+            "limit":{"type":"integer","minimum":1,"maximum":crate::gif::MAX_LIMIT},
+            "org":string(),"team":string()
+        }),
         "react" => {
             json!({"messageId":{"type":"integer"},"emoji":string(),"remove":{"type":"boolean"}})
         }
@@ -228,6 +234,18 @@ pub fn result_schema(name: &str) -> Value {
         }
         "files.move" => {
             json!({"type":"object","properties":{"fromPath":{"type":"string"},"toPath":{"type":"string"}},"required":["fromPath","toPath"]})
+        }
+        "gifSearch" => {
+            let candidate = json!({"type":"object","properties":{
+                "provider":{"enum":["giphy"]},"id":{"type":"string"},"title":{"type":"string"},
+                "url":{"type":"string"},"previewUrl":{"type":"string"},
+                "width":{"type":"integer"},"height":{"type":"integer"},"autoLoads":{"type":"boolean"},
+                "previewData":{"type":"string","pattern":"^data:image/(gif|png|webp|jpeg);base64,"}
+            },"required":["provider","id","title","url","previewUrl","width","height","autoLoads"]});
+            json!({"oneOf":[
+                {"type":"object","properties":{"status":{"const":"ok"},"provider":{"enum":["giphy"]},"candidates":{"type":"array","maxItems":crate::gif::MAX_LIMIT,"items":candidate}},"required":["status","provider","candidates"]},
+                {"type":"object","properties":{"status":{"const":"error"},"error":{"enum":["noProvider","keychainUnavailable","invalidKey","rateLimited","providerUnavailable","badQuery","mediaOff"]},"message":{"type":"string"},"retryAfter":{"type":"integer","minimum":1}},"required":["status","error","message"]}
+            ]})
         }
         "unarchive" => {
             json!({"type":"object","properties":{"unarchived":{"type":"integer","minimum":0}},"required":["unarchived"]})

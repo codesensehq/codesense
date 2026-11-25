@@ -155,6 +155,20 @@ pub(super) fn action_target(caller: &Caller, verb: &str, args: &Value) -> Option
         "getWorkspaceStatus" => string("storyId"),
         "sendPrompt" | "stopSession" | "closeTerminalTab" => string("handle"),
         "sendAsHuman" => string("to"),
+        // The query's length only: the audit line never carries what the person searched for.
+        "gifSearch" => match (args["query"].as_str(), args["ids"].as_array()) {
+            (Some(query), _) => Some(format!("query of {} chars", query.chars().count())),
+            (None, Some(ids)) => Some(format!("{} ids", ids.len())),
+            _ => None,
+        },
+        "gifPicked" => match (args["provider"].as_str(), args["id"].as_str()) {
+            (Some(provider), Some(id))
+                if crate::gif::Provider::parse(provider).is_some() && crate::gif::valid_id(id) =>
+            {
+                Some(format!("{provider} {id}"))
+            }
+            _ => None,
+        },
         "reorderPins" => args["messageIds"]
             .as_array()
             .map(|pins| format!("{} pins", pins.len())),
@@ -301,14 +315,23 @@ impl Dispatcher {
         policy: &Policy,
         now: u64,
     ) -> Decision {
-        if verb == "loadMedia"
+        // Inbox-pane-only work: an image fetch, a GIF search or pick, and media on the human's
+        // send, which is stored as this machine's own. Other frames keep text-only human sends.
+        let pane_only = matches!(verb, "loadMedia" | "gifSearch" | "gifPicked");
+        let human_media =
+            matches!(verb, "sendAsHuman" | "replyAsHuman") && !args["media"].is_null();
+        if (pane_only || human_media)
             && (!frame.policy.inbox_media
                 || frame.message.is_some()
                 || frame.kind == crate::dashboard_stream::frame::FrameCallerKind::Message
                 || frame.grant.slot != "right-pane")
         {
             return Decision::Deny {
-                reason: "denied: loadMedia requires the Inbox pane".into(),
+                reason: if human_media {
+                    "invalid: media requires the Inbox pane".into()
+                } else {
+                    format!("denied: {verb} requires the Inbox pane")
+                },
             };
         }
         let caller = Caller::from(frame);

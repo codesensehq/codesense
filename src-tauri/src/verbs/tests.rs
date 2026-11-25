@@ -1146,3 +1146,78 @@ fn pin_verbs_are_team_bound_inbox_verbs_under_the_inbox_grants() {
         Some("2 pins")
     );
 }
+
+#[test]
+fn gif_search_is_an_inbox_pane_only_inbox_write_with_no_prompt() {
+    use crate::dashboard_stream::frame::FrameCallerKind;
+    let registry = Registry::default();
+    let verb = registry.get("gifSearch").unwrap();
+    assert_eq!(verb.grant, "inbox:write");
+    assert_eq!(verb.class, Class::Read);
+    assert!(verb.inbox_target && verb.audited && !verb.confirmable);
+    assert!(verb.mcp_twin.is_none() && verb.presentation_only_reason.is_some());
+    for args in [json!({"query":"cat"}), json!({"ids":["g1"], "limit":3})] {
+        assert!(jsonschema::is_valid(&verb.args_schema, &args), "{args}");
+    }
+    for args in [
+        json!({"query":""}),
+        json!({"query":"x".repeat(101)}),
+        json!({"ids":["no spaces"]}),
+        json!({"query":"cat","limit":11}),
+    ] {
+        assert!(!jsonschema::is_valid(&verb.args_schema, &args), "{args}");
+    }
+    let search = json!({"query":"cat"});
+    // A message frame and a page other than the Inbox pane are refused.
+    for (kind, inbox) in [
+        (FrameCallerKind::Message, false),
+        (FrameCallerKind::Message, true),
+        (FrameCallerKind::Builtin, false),
+    ] {
+        assert_eq!(
+            Dispatcher::default().dispatch_frame(
+                &review_media_frame(kind, inbox),
+                "gifSearch",
+                search.clone(),
+                &Policy::default(),
+                0
+            ),
+            Decision::Deny {
+                reason: "denied: gifSearch requires the Inbox pane".into()
+            },
+            "{kind:?} inbox={inbox}"
+        );
+    }
+    let mut pane = review_media_frame(FrameCallerKind::Builtin, true);
+    assert!(matches!(
+        Dispatcher::default().dispatch_frame(
+            &pane,
+            "gifSearch",
+            search.clone(),
+            &Policy::default(),
+            0
+        ),
+        Decision::Admit { .. }
+    ));
+    pane.effective_grant.clear();
+    assert_eq!(
+        Dispatcher::default().dispatch_frame(&pane, "gifSearch", search, &Policy::default(), 0),
+        Decision::Deny {
+            reason: "denied: grant".into()
+        },
+        "the pane still needs inbox:write"
+    );
+}
+
+#[test]
+fn gif_search_audit_names_the_query_length_never_the_text() {
+    let caller = caller("builtin");
+    let target =
+        |args: serde_json::Value| super::dispatcher::action_target(&caller, "gifSearch", &args);
+    assert_eq!(
+        target(json!({"query":"secret plans"})).as_deref(),
+        Some("query of 12 chars")
+    );
+    assert_eq!(target(json!({"ids":["a","b"]})).as_deref(), Some("2 ids"));
+    assert_eq!(target(json!({})), None);
+}

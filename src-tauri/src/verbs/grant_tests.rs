@@ -187,7 +187,7 @@ fn open_frame_admits_registered_verbs_except_inbox_media_and_team_safe_denies_te
         None,
     );
     for verb in builtin_registry().all() {
-        if verb.name == "loadMedia" {
+        if matches!(verb.name.as_str(), "loadMedia" | "gifSearch" | "gifPicked") {
             assert!(matches!(
                 Dispatcher::default().dispatch_frame(
                     &record,

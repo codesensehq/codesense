@@ -66,6 +66,7 @@ import {
   agentPins,
   agentPinsPrepareView,
   loadInboxMedia,
+  gifSearchPage,
   markInboxMessagesRead,
   markInboxMessagesUnread,
   markInboxMessagesArchived,
@@ -1467,6 +1468,24 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
     const a = argObject(args, "loadMedia");
     const id = messageId(a.messageId, "loadMedia");
     return inboxWrite(ctx, "loadMedia", a, (team) => loadInboxMedia(team, id));
+  },
+  // The Inbox pane's GIF search; the host refuses it from any other frame. Resolves to
+  // `{status:"ok", candidates}`, each still as `previewData`, or `{status:"error", error}`.
+  gifSearch: async (args, ctx) => {
+    const a = argObject(args, "gifSearch");
+    if (a.query != null && typeof a.query !== "string") {
+      throw new Error("gifSearch: query, if present, must be a string");
+    }
+    if (a.ids != null && (!Array.isArray(a.ids) || !a.ids.every((id) => typeof id === "string"))) {
+      throw new Error("gifSearch: ids, if present, must be an array of GIF ids");
+    }
+    const query = typeof a.query === "string" ? a.query : null;
+    const ids = Array.isArray(a.ids) ? (a.ids as string[]) : null;
+    if ((query === null) === (ids === null)) {
+      throw new Error("gifSearch: pass exactly one of {query} and {ids}");
+    }
+    const limit = optionalLimit(a.limit, "gifSearch") ?? null;
+    return inboxWrite(ctx, "gifSearch", a, (team) => gifSearchPage(team, query, ids, limit));
   },
   replyAsHuman: async (args, ctx) => {
     const a = argObject(args, "replyAsHuman");

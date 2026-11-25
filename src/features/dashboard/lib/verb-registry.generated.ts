@@ -251,6 +251,16 @@ export const VERB_REGISTRY = [
     "presentationOnlyReason": "Host operation bound to the rendered dashboard; no identical MCP binding"
   },
   {
+    "name": "gifSearch",
+    "class": "read",
+    "grant": "inbox:write",
+    "inboxTarget": true,
+    "confirmable": false,
+    "action": true,
+    "mcpTwin": null,
+    "presentationOnlyReason": "Inbox pane GIF search with host-fetched stills; agents use gif_search"
+  },
+  {
     "name": "gotoAgent",
     "class": "spawn",
     "grant": "sessions:read",

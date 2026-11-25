@@ -1,6 +1,6 @@
 # Page SDK
 
-Generated from the Rust registry and TypeScript declarations. All 123 verbs and every declared Surface member are listed below. Rust checks each call against its frame grant.
+Generated from the Rust registry and TypeScript declarations. All 124 verbs and every declared Surface member are listed below. Rust checks each call against its frame grant.
 
 [Exact TypeScript declarations](codesense.d.ts) · [Machine reference](page-sdk.json) · [Capabilities](capabilities.md) · [LiveHub](live-hub.md)
 
@@ -896,6 +896,45 @@ getWorkspaceStatus(args?: {
 read · repo:read
 
 Class: read; default grant: repo:read; MCP twin: Host operation bound to the rendered dashboard; no identical MCP binding.
+
+## VerbMethods: gifSearch
+
+```ts
+gifSearch(args?: {
+      ids?: string[];
+      limit?: number;
+      org?: string;
+      query?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      candidates: Array<{
+        autoLoads: boolean;
+        height: number;
+        id: string;
+        previewData?: string;
+        previewUrl: string;
+        provider: "giphy";
+        title: string;
+        url: string;
+        width: number;
+        [key: string]: unknown;
+      }>;
+      provider: "giphy";
+      status: "ok";
+      [key: string]: unknown;
+    } | {
+      error: "noProvider" | "keychainUnavailable" | "invalidKey" | "rateLimited" | "providerUnavailable" | "badQuery" | "mediaOff";
+      message: string;
+      retryAfter?: number;
+      status: "error";
+      [key: string]: unknown;
+    }>;
+```
+
+read · inbox:write
+
+Class: read; default grant: inbox:write; MCP twin: Inbox pane GIF search with host-fetched stills; agents use gif_search.
 
 ## VerbMethods: gotoAgent
 

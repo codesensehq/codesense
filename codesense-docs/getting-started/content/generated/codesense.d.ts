@@ -1354,6 +1354,37 @@ declare namespace CodesenseSdk {
       storyId?: string;
       [key: string]: unknown;
     }): Promise<unknown>;
+    /** read · inbox:write */
+    gifSearch(args?: {
+      ids?: string[];
+      limit?: number;
+      org?: string;
+      query?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      candidates: Array<{
+        autoLoads: boolean;
+        height: number;
+        id: string;
+        previewData?: string;
+        previewUrl: string;
+        provider: "giphy";
+        title: string;
+        url: string;
+        width: number;
+        [key: string]: unknown;
+      }>;
+      provider: "giphy";
+      status: "ok";
+      [key: string]: unknown;
+    } | {
+      error: "noProvider" | "keychainUnavailable" | "invalidKey" | "rateLimited" | "providerUnavailable" | "badQuery" | "mediaOff";
+      message: string;
+      retryAfter?: number;
+      status: "error";
+      [key: string]: unknown;
+    }>;
     /** spawn · sessions:read */
     gotoAgent(args: {
       agentId: string;

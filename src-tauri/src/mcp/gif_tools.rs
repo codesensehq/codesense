@@ -6,7 +6,7 @@ use rmcp::schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::commands::dashboard_launch::LaunchTeam;
-use crate::gif::{self, GifError, GifService, Provider};
+use crate::gif::{self, GifError, GifService};
 use crate::media::Config;
 
 /// `gif_search` inputs: exactly one of `query` and `ids`.
@@ -62,7 +62,14 @@ pub(crate) async fn search_with(
     config: Option<&Config>,
     params: GifSearchParams,
 ) -> serde_json::Value {
-    match run(service, config, params).await {
+    let args = gif::SearchArgs {
+        query: params.query.as_deref(),
+        ids: params.ids.as_deref(),
+        limit: params.limit,
+        rating: params.rating.as_deref(),
+        provider: params.provider.as_deref(),
+    };
+    match gif::search(service, config, args).await {
         Ok((provider, candidates)) => serde_json::json!({
             "status": "ok",
             "provider": provider,
@@ -70,24 +77,4 @@ pub(crate) async fn search_with(
         }),
         Err(error) => GifError::tool_result(error),
     }
-}
-
-async fn run(
-    service: &GifService,
-    config: Option<&Config>,
-    params: GifSearchParams,
-) -> Result<(Provider, Vec<gif::Candidate>), GifError> {
-    let request = gif::normalize(params.query.as_deref(), params.ids.as_deref(), params.limit)?;
-    let requested = match params.provider.as_deref() {
-        None => None,
-        Some(name) => Some(Provider::parse(name).ok_or(GifError::BadQuery("unknown provider"))?),
-    };
-    let (provider, mut candidates) =
-        GifService::run(service, &request, requested, params.rating.as_deref()).await?;
-    let off = Config {
-        remote: crate::media::Remote::Off,
-        ..Default::default()
-    };
-    gif::set_auto_loads(&mut candidates, config.unwrap_or(&off));
-    Ok((provider, candidates))
 }

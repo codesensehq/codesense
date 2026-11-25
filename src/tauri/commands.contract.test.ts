@@ -1341,8 +1341,10 @@ describe("Tauri IPC Contract", () => {
     // +2 on both sides for loadWorkspaceChatMedia/load_workspace_chat_media and
     // readWorkspaceChatMedia/read_workspace_chat_media (a workspace chat message's image in
     // the app window), so 546/565.
-    const EXPECTED_TS_COMMAND_COUNT = 546;
-    const EXPECTED_RUST_COMMAND_COUNT = 565;
+    // +1 on both sides for gifSearchPage/gif_search_page (the Inbox pane's GIF search), so
+    // 547/566.
+    const EXPECTED_TS_COMMAND_COUNT = 547;
+    const EXPECTED_RUST_COMMAND_COUNT = 566;
     // The Rust count runs ahead of the TS count by the RUST_ONLY_COMMANDS that have no
     // renderer IPC wrapper (the access revocation and two session watchers plus the WV-B5/C6
     // scope-layer and harvest-norm Tauri commands whose FE wrappers land in later WV stories):

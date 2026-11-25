@@ -10288,6 +10288,42 @@ export const gifKeyStatus = () => invoke<GifKeyStatus>("gif_key_status");
 export const gifKeySave = (key: string) => invoke<GifKeyStatus>("gif_key_save", { key });
 export const gifKeyRemove = () => invoke<GifKeyStatus>("gif_key_remove");
 
+/** One GIF the Inbox pane's search found. `previewData` is its still as a `data:` URI,
+ *  fetched in the host; it is absent when the still failed or missed the search deadline. */
+export interface GifPageCandidate {
+  provider: "giphy";
+  id: string;
+  title: string;
+  url: string;
+  previewUrl: string;
+  width: number;
+  height: number;
+  autoLoads: boolean;
+  previewData?: string;
+}
+export type GifSearchPageResult =
+  | { status: "ok"; provider: "giphy"; candidates: GifPageCandidate[] }
+  | {
+      status: "error";
+      error:
+        | "noProvider"
+        | "keychainUnavailable"
+        | "invalidKey"
+        | "rateLimited"
+        | "providerUnavailable"
+        | "badQuery"
+        | "mediaOff";
+      message: string;
+      retryAfter?: number;
+    };
+/** The Inbox pane's GIF search: exactly one of `query` and `ids`, as `gif_search` takes them. */
+export const gifSearchPage = (
+  team: InboxTeam,
+  query: string | null,
+  ids: string[] | null,
+  limit: number | null,
+) => invoke<GifSearchPageResult>("gif_search_page", { team, query, ids, limit });
+
 export const dashboardInventory = (folder?: string, localOnly = false) =>
   invoke<import("@/features/dashboard-publishing/types").DashboardInventory>(
     "dashboard_inventory",

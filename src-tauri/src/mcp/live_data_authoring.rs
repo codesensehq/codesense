@@ -326,6 +326,13 @@ pub(crate) const ACTION_VERB_DOCS: &[ActionVerbDoc] = &[
         deny_example: "media is off in team config",
     },
     ActionVerbDoc {
+        verb: "gifSearch",
+        tier: "read",
+        args: "{org?: string, team?: string, query?: string, ids?: string[], limit?: number}",
+        purpose: "Search GIFs from the Inbox pane only: message frames and other pages are refused, and it requires inbox:write. Pass exactly one of `query` (1 to 100 characters) and `ids` (1 to 10 provider ids from an earlier result); `limit` is 1 to 10, default 6. Runs the same search as the MCP tool gif_search, under the same rate limit, rating ceiling and Settings: off, no key or an unreadable keychain return their error with no network call. Each candidate also carries `previewData`, its still as a `data:` URI fetched by the host (at most 256 KB, all stills within one 3-second deadline); a still that fails or is late has none. Resolves `{status:'ok', provider, candidates}` or `{status:'error', error, message, retryAfter?}`; `error` is `mediaOff` when the team's config/inbox.yml sets media.remote: off, checked before anything else. The key never appears in a result.",
+        deny_example: "denied: gifSearch requires the Inbox pane",
+    },
+    ActionVerbDoc {
         verb: "react",
         tier: "metadata",
         args: "{org?: string, team?: string, messageId: number, emoji: string, remove?: boolean}",
