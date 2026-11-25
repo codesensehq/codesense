@@ -2397,6 +2397,25 @@ describe("ChatOverlay in its tab: the Chat | CLI flip", () => {
     expect(reads()).toBe(before);
   });
 
+  it("the group shortcut from the CLI shows the room the chat was on, never toggles it away", async () => {
+    roster({ chatWorkspaceId: "ws-1", groupUnread: 0, groupReadId: 0 });
+    await renderTab();
+    const group = () => act(() => useAgentInboxRailStore.getState().openGroup(SESSION));
+    group();
+    expect(await screen.findByTestId("group-pane")).toHaveAttribute("data-room", "ws-1");
+    flip();
+    expect(screen.getByTestId("chat-overlay")).not.toBeVisible();
+    group();
+    await waitFor(() =>
+      expect(useAgentInboxRailStore.getState().bySession[SESSION]?.groupHandled).toBe(2),
+    );
+    expect(screen.getByTestId("chat-overlay")).toBeVisible();
+    expect(screen.getByTestId("group-pane")).toBeInTheDocument();
+    // Shown, the shortcut still flips the room back to the agent's own thread.
+    group();
+    await waitFor(() => expect(screen.queryByTestId("group-pane")).toBeNull());
+  });
+
   it("hidden, the chat marks nothing read and leaves the keyboard on the CLI; shown, it reads", async () => {
     const box = vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
       x: 0,

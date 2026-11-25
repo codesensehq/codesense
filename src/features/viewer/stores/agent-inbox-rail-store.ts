@@ -18,6 +18,11 @@ export interface AgentInboxRailTarget {
   groupRequest?: number;
   groupHandled?: number;
   /**
+   * The latest group request came while the chat was hidden or absent: it shows the room. Asked
+   * while the chat covers the tab, it flips between the room and the agent's own thread.
+   */
+  groupOpens?: boolean;
+  /**
    * The last request the rail acted on. Kept here, not in the rail, so a remount (the tab
    * moved to another pane) never acts on an old request again.
    */
@@ -83,9 +88,9 @@ function watchEligibility(): void {
 }
 
 /**
- * The per-terminal-tab agent inbox rail's state: which tabs are showing it, and
- * whether the composer was asked for. Not persisted — every tile boots with the
- * rail closed, same as the HUD and source-diff overlays.
+ * The per-terminal-tab agent chat's state: which tabs have a chat, whether it covers the tab or
+ * waits hidden behind the CLI, and whether the composer was asked for. Not persisted — every
+ * tile boots with no chat, same as the HUD and source-diff overlays.
  */
 export const useAgentInboxRailStore = create<AgentInboxRailState>((set) => ({
   bySession: {},
@@ -136,6 +141,7 @@ export const useAgentInboxRailStore = create<AgentInboxRailState>((set) => ({
             ...cur,
             shown: true,
             groupRequest: (cur?.groupRequest ?? 0) + 1,
+            groupOpens: cur?.shown !== true,
           },
         },
       };

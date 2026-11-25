@@ -187,7 +187,7 @@ describe("opened as an agent", () => {
     markOpenedAsAgent(NEW);
     closeAgentInboxRail(NEW);
     becomeAgent();
-    expect(open()?.shown).not.toBe(true);
+    expect(open()).toBeUndefined();
   });
 
   it("the person's closed choice holds once the chat has covered the tab", () => {
