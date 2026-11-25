@@ -55,6 +55,7 @@ fn opencode_suppresses_config_selectors_and_extra_credential_sources() {
         "OPENCODE_CONFIG_DIR",
         "OPENCODE_CONFIG",
         "OPENCODE_AUTH_CONTENT",
+        "OPENCODE_PERMISSION",
         "DEEPSEEK_API_KEY",
     ] {
         assert!(

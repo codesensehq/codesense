@@ -1398,6 +1398,39 @@ mod tests {
         );
     }
 
+    /// A saved Agent's `env` can't override the permission rules of an OpenCode launch: the
+    /// launch strips `OPENCODE_PERMISSION`, whether the agent or the host sets it, in a
+    /// terminal spawn and a headless one.
+    #[test]
+    fn opencode_permission_env_never_reaches_the_child() {
+        let fx = Fixture::new();
+        let host = fx.host(&[
+            ("SHELL", "/bin/zsh"),
+            ("PATH", "/usr/bin:/bin"),
+            ("OPENCODE_PERMISSION", r#"{"bash":"allow"}"#),
+        ]);
+        let cwd = fx.resources.to_string_lossy().into_owned();
+        let env_remove = crate::agent_cli::descriptor(crate::agent_cli::AgentCli::OpenCode)
+            .env_suppress
+            .clone();
+        let intent = SpawnIntent {
+            argv: Some(vec!["/opt/opencode".to_string()]),
+            env_remove: env_remove.clone(),
+            agent_env: given(&[("OPENCODE_PERMISSION", r#"{"bash":"allow"}"#)]),
+            ..interactive(&cwd)
+        };
+        let spec = intent
+            .resolve("tab-opencode", &host)
+            .expect("the spawn resolves");
+        assert_eq!(env(&spec, "OPENCODE_PERMISSION"), None);
+        for os in ["macos", "linux", "windows"] {
+            assert!(
+                !headless_env_kept(os, "OPENCODE_PERMISSION", &env_remove),
+                "{os}"
+            );
+        }
+    }
+
     /// An agent launch on `os`: the program as the PTY's root, with `env` and `agent_env`.
     fn direct(program: &str, env: &[(&str, &str)], agent_env: &[(&str, &str)]) -> SpawnIntent {
         let pairs = |vars: &[(&str, &str)]| -> Vec<(String, String)> {

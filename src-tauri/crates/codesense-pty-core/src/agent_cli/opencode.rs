@@ -28,6 +28,9 @@ static DESCRIPTOR: LazyLock<Descriptor> = LazyLock::new(|| Descriptor {
         "OPENCODE_AUTH_CONTENT",
         "OPENCODE_CONFIG_DIR",
         "OPENCODE_CONFIG",
+        // OpenCode's own permission override: the launch's rules, org guardrails included, are
+        // only ever the ones CodeSense writes into OPENCODE_CONFIG_CONTENT.
+        "OPENCODE_PERMISSION",
     ]),
     account_env_scrub: Vec::new(),
     root_doc: "AGENTS.md".into(),
