@@ -180,6 +180,7 @@ mod tests {
             generated: Vec::new(),
             totals: ManifestTotals::default(),
             errors: Vec::new(),
+            guardrails: None,
             manifest_hash: String::new(),
         }
     }

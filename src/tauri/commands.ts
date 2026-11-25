@@ -6630,7 +6630,20 @@ export interface AgentStartupManifest {
   essentials: Array<{ id: string; reason: string }>;
   generated: AgentGeneratedEntry[];
   totals: { files: number; bytes: number };
+  /** `code` is `missing`, `escapes_content`, `dependency_cycle`, `invalid` or `guardrails`
+   * (the org's guardrails could not be read, so the launch is refused). */
   errors: Array<{ path: string | null; code: string; message: string }>;
+  /** What the org's guardrails deny this launch and which of the agent's rules they refuse.
+   * Absent when the org has none for this runtime. */
+  guardrails?: {
+    denied_by: string[];
+    refused: Array<{
+      kind: "permission_allow" | "permission_ask";
+      item: string;
+      tried_by: string;
+      denied_by: string[];
+    }>;
+  };
   manifest_hash: string;
 }
 

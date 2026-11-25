@@ -1534,6 +1534,7 @@ fn golden_manifest() -> StartupManifest {
                 message: "MCP server \"jira\" is not in this team's MCP config".into(),
             },
         ],
+        guardrails: None,
         manifest_hash: String::new(),
     };
     manifest.manifest_hash = manifest.compute_hash();
