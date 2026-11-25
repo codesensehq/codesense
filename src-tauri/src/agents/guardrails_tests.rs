@@ -110,9 +110,9 @@ fn guardrails_parse_reads_each_clis_deny_list() {
     let file = parsed(
         "permissions:\n  claude:\n    deny: ['Bash(rm:*)']\n  opencode:\n    deny: [bash]\n  hermes:\n    deny: ['^terminal$']\n",
     );
-    assert_eq!(file.permissions.claude.deny, vec!["Bash(rm:*)"]);
-    assert_eq!(file.permissions.opencode.deny, vec!["bash"]);
-    assert_eq!(file.permissions.hermes.deny, vec!["^terminal$"]);
+    assert_eq!(file.permissions[&AgentCli::Claude].deny, vec!["Bash(rm:*)"]);
+    assert_eq!(file.permissions[&AgentCli::OpenCode].deny, vec!["bash"]);
+    assert_eq!(file.permissions[&AgentCli::Hermes].deny, vec!["^terminal$"]);
 }
 
 #[test]
@@ -311,7 +311,7 @@ fn guardrails_opencode_overwrite() {
     // The agent's own decision for a denied key becomes deny: the one rewrite, and it narrows.
     let own: Vec<_> = rules
         .iter()
-        .take_while(|rule| rule["action"] != OPENCODE_GUARDRAIL_TIER)
+        .take_while(|rule| rule["action"] != GUARDRAIL_TIER_ACTION)
         .filter(|rule| rule["action"] == "shell")
         .collect();
     assert_eq!(own.len(), 1);

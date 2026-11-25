@@ -18,26 +18,22 @@
 //! ([`crate::context_repo::inheritance::org_guardrails`]) reads them from the org clone's
 //! committed upstream tree; this module is pure and does no I/O.
 //!
-//! [`Guardrails::apply`] narrows one runtime's generated launch settings with native denies
-//! and the CLI does the matching: CodeSense never matches a rule to enforce it.
+//! [`Guardrails::apply`] narrows one runtime's generated launch settings with native denies,
+//! through its adapter's [`GuardrailPort`], and the CLI does the matching: CodeSense never
+//! matches a rule to enforce it. A CLI with no rule model has no port: nothing is injected
+//! and the launch gets a warning ([`Guardrails::not_enforced_warning`]). OpenCode's port puts
+//! the org's rules in a final tier, behind [`GUARDRAIL_TIER_ACTION`]'s marker, that stays last
+//! however often the launch's rules are merged ([`split_final_tier`]).
 //!
-//! - **Claude**: each rule is appended to `permissions.deny`. Claude checks deny before allow
-//!   across every settings source, so no allow the agent or a layer adds can re-open it.
-//! - **OpenCode**: the last matching rule wins, so the org's rules go in a final tier, after
-//!   the agent's and the native rules, behind [`OPENCODE_GUARDRAIL_TIER`]. An agent rule for a
-//!   denied key also becomes `deny`: the one rewrite, and it narrows.
-//! - **Hermes**: one fail-closed `pre_tool_call` block hook per matcher.
-//! - **Codex** has no rule model, so nothing is injected and the launch gets a warning
-//!   ([`Guardrails::not_enforced_warning`]).
-//!
-//! Strings are compared only to report ([`Guardrails::report`]): an agent allow or ask that is
-//! the same string as an org deny, or an OpenCode non-deny decision for a denied key.
+//! Strings are compared only to report ([`Guardrails::report`]): an agent rule that allows or
+//! asks and is the same string as an org deny.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use super::adapter::{desktop, GuardrailPort};
 use super::keys::AgentKey;
 use super::launch_check::{LaunchWarning, LaunchWarningCode};
 use super::manifest::{json_hash, GeneratedEntry};
@@ -47,29 +43,18 @@ use codesense_pty_core::agent_cli::AgentCli;
 /// Where a root team keeps its guardrails, relative to the team's folder.
 pub const GUARDRAILS_FILE: &str = "config/guardrails.yml";
 
-/// The action of the OpenCode rule that starts the guardrail tier. It names no tool, so as a
-/// rule it denies nothing; every rule after it is an org deny and stays last when the launch's
-/// rules are merged ([`split_opencode_tier`]).
-pub const OPENCODE_GUARDRAIL_TIER: &str = "codesense-org-guardrails";
+/// The action of the native rule that starts the guardrail tier of a CLI whose last matching
+/// rule wins. It names no tool, so as a rule it denies nothing; every rule after it is an org
+/// deny and stays last when the launch's rules are merged ([`split_final_tier`]).
+pub const GUARDRAIL_TIER_ACTION: &str = "codesense-org-guardrails";
 
 /// One root team's `config/guardrails.yml`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GuardrailsFile {
+    /// The permission rules the file denies, per CLI, in the CLI's own syntax.
     #[serde(default)]
-    pub permissions: PermissionDenies,
-}
-
-/// The permission rules a file denies, per CLI.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PermissionDenies {
-    #[serde(default)]
-    pub claude: DenyList,
-    #[serde(default)]
-    pub opencode: DenyList,
-    #[serde(default)]
-    pub hermes: DenyList,
+    pub permissions: BTreeMap<AgentCli, DenyList>,
 }
 
 /// One CLI's denied rules.
@@ -81,7 +66,8 @@ pub struct DenyList {
 }
 
 /// Parse a `config/guardrails.yml`. An empty file denies nothing; an unknown key, a value of
-/// the wrong type or a blank rule is an error, so a typo can't lift the ceiling silently.
+/// the wrong type, a CLI that can't enforce a deny or a blank rule is an error, so a typo
+/// can't lift the ceiling silently.
 pub fn parse(bytes: &[u8]) -> Result<GuardrailsFile, String> {
     let text = std::str::from_utf8(bytes).map_err(|_| "the file is not UTF-8".to_string())?;
     let text = text.trim_start_matches('\u{feff}');
@@ -89,16 +75,18 @@ pub fn parse(bytes: &[u8]) -> Result<GuardrailsFile, String> {
     if value.is_null() {
         return Ok(GuardrailsFile::default());
     }
-    let file: GuardrailsFile = serde_yaml::from_value(value).map_err(|e| e.to_string())?;
-    for (cli, list) in [
-        ("claude", &file.permissions.claude),
-        ("opencode", &file.permissions.opencode),
-        ("hermes", &file.permissions.hermes),
-    ] {
+    let mut file: GuardrailsFile = serde_yaml::from_value(value).map_err(|e| e.to_string())?;
+    for (cli, list) in &file.permissions {
+        if desktop(*cli).guardrails.is_none() {
+            return Err(format!(
+                "permissions.{cli}: {cli} has no permission rules to deny"
+            ));
+        }
         if list.deny.iter().any(|rule| rule.trim().is_empty()) {
             return Err(format!("permissions.{cli}.deny has a blank rule"));
         }
     }
+    file.permissions.retain(|_, list| !list.deny.is_empty());
     Ok(file)
 }
 
@@ -108,9 +96,7 @@ type Denied = BTreeMap<String, BTreeSet<String>>;
 /// The org's guardrails: the union of every root team's file.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Guardrails {
-    claude: Denied,
-    opencode: Denied,
-    hermes: Denied,
+    denied: BTreeMap<AgentCli, Denied>,
 }
 
 impl Guardrails {
@@ -119,94 +105,35 @@ impl Guardrails {
     pub fn union(files: impl IntoIterator<Item = (String, GuardrailsFile)>) -> Option<Self> {
         let mut out = Self::default();
         for (source, file) in files {
-            for (denied, list) in [
-                (&mut out.claude, file.permissions.claude),
-                (&mut out.opencode, file.permissions.opencode),
-                (&mut out.hermes, file.permissions.hermes),
-            ] {
+            for (cli, list) in file.permissions {
                 for rule in list.deny {
-                    denied.entry(rule).or_default().insert(source.clone());
+                    out.denied
+                        .entry(cli)
+                        .or_default()
+                        .entry(rule)
+                        .or_default()
+                        .insert(source.clone());
                 }
             }
         }
-        (!out.is_empty()).then_some(out)
+        (!out.denied.is_empty()).then_some(out)
     }
 
-    fn is_empty(&self) -> bool {
-        self.claude.is_empty() && self.opencode.is_empty() && self.hermes.is_empty()
-    }
-
-    /// The rules `runtime` is denied, or `None` for a runtime with no rule model (Codex).
-    fn rules(&self, runtime: AgentCli) -> Option<&Denied> {
-        match runtime {
-            AgentCli::Claude => Some(&self.claude),
-            AgentCli::OpenCode => Some(&self.opencode),
-            AgentCli::Hermes => Some(&self.hermes),
-            AgentCli::Codex => None,
-        }
-    }
-
-    /// Every file that denies something.
-    fn sources(&self) -> BTreeSet<&str> {
-        [&self.claude, &self.opencode, &self.hermes]
-            .into_iter()
-            .flat_map(|denied| denied.values().flatten())
-            .map(String::as_str)
-            .collect()
+    /// The rules `runtime` is denied and the port that enforces them; `None` when it is
+    /// denied nothing or can't enforce a deny.
+    fn enforced(&self, runtime: AgentCli) -> Option<(&Denied, GuardrailPort)> {
+        let rules = self.denied.get(&runtime).filter(|rules| !rules.is_empty())?;
+        Some((rules, desktop(runtime).guardrails?))
     }
 
     /// Narrow `entry`, the launch settings generated for `runtime`, with the org's denies for
     /// that runtime, and rehash it. Denies for other runtimes leave it untouched.
     pub fn apply(&self, runtime: AgentCli, entry: &mut GeneratedEntry) {
-        let Some(rules) = self.rules(runtime).filter(|rules| !rules.is_empty()) else {
+        let Some((rules, port)) = self.enforced(runtime) else {
             return;
         };
-        match runtime {
-            AgentCli::Claude => {
-                let Some(deny) = array_at(&mut entry.content, &["permissions", "deny"]) else {
-                    return;
-                };
-                for rule in rules.keys() {
-                    let rule = json!(rule);
-                    if !deny.contains(&rule) {
-                        deny.push(rule);
-                    }
-                }
-            }
-            AgentCli::OpenCode => {
-                let tier = opencode_rules(rules);
-                let actions: BTreeSet<&str> = tier
-                    .iter()
-                    .filter_map(|rule| rule["action"].as_str())
-                    .collect();
-                let Some(own) = array_at(&mut entry.content, &["permissions"]) else {
-                    return;
-                };
-                for rule in own.iter_mut().filter_map(Value::as_object_mut) {
-                    let denied = rule
-                        .get("action")
-                        .and_then(Value::as_str)
-                        .is_some_and(|action| actions.contains(action));
-                    if denied {
-                        rule.insert("effect".into(), json!("deny"));
-                    }
-                }
-                own.push(opencode_tier_marker());
-                own.extend(tier);
-            }
-            AgentCli::Hermes => {
-                let Some(blocks) = array_at(&mut entry.content, &["hooks", "pre_tool_call"]) else {
-                    return;
-                };
-                for pattern in rules.keys() {
-                    let block = super::adapter::hermes::block_hook(pattern);
-                    if !blocks.contains(&block) {
-                        blocks.push(block);
-                    }
-                }
-            }
-            AgentCli::Codex => return,
-        }
+        let rules: Vec<&str> = rules.keys().map(String::as_str).collect();
+        (port.deny)(&mut entry.content, &rules);
         entry.hash = json_hash(&entry.content);
     }
 
@@ -214,54 +141,16 @@ impl Guardrails {
     /// that deny rules for its runtime and each of its rules they refuse. `None` when they
     /// deny nothing its runtime can enforce.
     pub fn report(&self, agent: &Agent, tried_by: &AgentKey) -> Option<GuardrailReport> {
-        let rules = self
-            .rules(agent.runtime)
-            .filter(|rules| !rules.is_empty())?;
+        let (rules, port) = self.enforced(agent.runtime)?;
         let denied_by: BTreeSet<&String> = rules.values().flatten().collect();
-        let own = agent.permissions.as_ref();
-        let tried: Vec<(RefusalKind, &str)> = match agent.runtime {
-            AgentCli::Claude => own
-                .and_then(|p| p.claude.as_ref())
-                .map(|claude| {
-                    let allows = claude
-                        .allow
-                        .iter()
-                        .map(|rule| (RefusalKind::PermissionAllow, rule.as_str()));
-                    let asks = claude
-                        .ask
-                        .iter()
-                        .map(|rule| (RefusalKind::PermissionAsk, rule.as_str()));
-                    allows.chain(asks).collect()
-                })
-                .unwrap_or_default(),
-            AgentCli::OpenCode => own
-                .and_then(|p| p.opencode.as_ref())
-                .map(|opencode| {
-                    opencode
-                        .permission
-                        .iter()
-                        .filter(|(_, decision)| decision.as_str() != "deny")
-                        .map(|(key, decision)| {
-                            let kind = if decision == "ask" {
-                                RefusalKind::PermissionAsk
-                            } else {
-                                RefusalKind::PermissionAllow
-                            };
-                            (kind, key.as_str())
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
-            AgentCli::Hermes | AgentCli::Codex => Vec::new(),
-        };
         let mut seen = BTreeSet::new();
-        let refused = tried
+        let refused = (port.tried)(agent)
             .into_iter()
             .filter_map(|(kind, item)| {
-                let sources = rules.get(item)?;
-                seen.insert((kind, item)).then(|| GuardrailRefusal {
+                let sources = rules.get(&item)?;
+                seen.insert((kind, item.clone())).then(|| GuardrailRefusal {
                     kind,
-                    item: item.to_string(),
+                    item,
                     tried_by: tried_by.clone(),
                     denied_by: sources.iter().cloned().collect(),
                 })
@@ -274,48 +163,41 @@ impl Guardrails {
     }
 
     /// The warning for a launch on `runtime` when it can't enforce the org's permission
-    /// denies (Codex has no rule model), naming the files that deny them.
+    /// denies (its CLI has no rule model), naming the files that deny them.
     pub fn not_enforced_warning(&self, runtime: AgentCli) -> Option<LaunchWarning> {
-        if self.rules(runtime).is_some() || self.is_empty() {
+        if desktop(runtime).guardrails.is_some() {
             return None;
         }
-        let files: Vec<&str> = self.sources().into_iter().collect();
+        let files: BTreeSet<&str> = self
+            .denied
+            .values()
+            .flat_map(|rules| rules.values().flatten())
+            .map(String::as_str)
+            .collect();
+        if files.is_empty() {
+            return None;
+        }
         Some(LaunchWarning {
             code: LaunchWarningCode::GuardrailsNotEnforced,
             message: format!(
                 "{runtime} can't enforce the org's permission denies ({}): this launch runs without them.",
-                files.join(", ")
+                files.into_iter().collect::<Vec<_>>().join(", ")
             ),
         })
     }
 }
 
-/// The OpenCode rules that deny each of `rules`, in OpenCode's native ordered form.
-fn opencode_rules(rules: &Denied) -> Vec<Value> {
-    let map: serde_json::Map<String, Value> = rules
-        .keys()
-        .map(|key| (key.clone(), json!("deny")))
-        .collect();
-    match super::adapter::native_permission_rules(&Value::Object(map)) {
-        Value::Object(mut native) => match native.remove("permissions") {
-            Some(Value::Array(rules)) => rules,
-            _ => Vec::new(),
-        },
-        _ => Vec::new(),
-    }
+fn tier_marker() -> Value {
+    json!({"action": GUARDRAIL_TIER_ACTION, "resource": "*", "effect": "deny"})
 }
 
-fn opencode_tier_marker() -> Value {
-    json!({"action": OPENCODE_GUARDRAIL_TIER, "resource": "*", "effect": "deny"})
-}
-
-/// Split OpenCode's native `rules` at the guardrail tier: the rules before it, and the org's
+/// Split native ordered `rules` at the guardrail tier: the rules before it, and the org's
 /// denies after it (the marker dropped). A launch's rules are merged by tier, and the org's
 /// denies must stay after every other rule however often they are merged.
-pub(crate) fn split_opencode_tier(rules: Vec<Value>) -> (Vec<Value>, Vec<Value>) {
+pub(crate) fn split_final_tier(rules: Vec<Value>) -> (Vec<Value>, Vec<Value>) {
     match rules
         .iter()
-        .position(|rule| rule["action"] == OPENCODE_GUARDRAIL_TIER)
+        .position(|rule| rule["action"] == GUARDRAIL_TIER_ACTION)
     {
         Some(at) => {
             let mut head = rules;
@@ -327,32 +209,17 @@ pub(crate) fn split_opencode_tier(rules: Vec<Value>) -> (Vec<Value>, Vec<Value>)
 }
 
 /// `merged` with the guardrail `tier` after it, behind its marker; each action once.
-pub(crate) fn append_opencode_tier(merged: &mut Vec<Value>, tier: Vec<Value>) {
+pub(crate) fn append_final_tier(merged: &mut Vec<Value>, tier: Vec<Value>) {
     if tier.is_empty() {
         return;
     }
-    merged.push(opencode_tier_marker());
+    merged.push(tier_marker());
     let mut seen = BTreeSet::new();
     for rule in tier {
         if seen.insert(rule["action"].to_string()) {
             merged.push(rule);
         }
     }
-}
-
-/// The array at `path` in `content`, made an empty one when absent.
-fn array_at<'a>(content: &'a mut Value, path: &[&str]) -> Option<&'a mut Vec<Value>> {
-    let mut at = content;
-    for key in path {
-        if !at.is_object() {
-            *at = json!({});
-        }
-        at = at.as_object_mut()?.entry(*key).or_insert(Value::Null);
-    }
-    if !at.is_array() {
-        *at = Value::Array(Vec::new());
-    }
-    at.as_array_mut()
 }
 
 /// What the org's guardrails did to one launch, on its [`super::manifest::StartupManifest`].

@@ -595,9 +595,9 @@ pub(crate) fn extend_launch_env(
 /// `action` so the two sources' shared wildcard lands once. The org's guardrail denies
 /// ([`crate::agents::guardrails`]) stay after all of them, in their own final tier.
 fn merge_native_permission_rules(agent: Vec<Value>, scope: Vec<Value>) -> Vec<Value> {
-    use crate::agents::guardrails::{append_opencode_tier, split_opencode_tier};
-    let (agent, mut guardrails) = split_opencode_tier(agent);
-    let (scope, scope_guardrails) = split_opencode_tier(scope);
+    use crate::agents::guardrails::{append_final_tier, split_final_tier};
+    let (agent, mut guardrails) = split_final_tier(agent);
+    let (scope, scope_guardrails) = split_final_tier(scope);
     guardrails.extend(scope_guardrails);
     let tier = |rule: &Value| match rule["action"].as_str() {
         Some("*") => 0,
@@ -618,7 +618,7 @@ fn merge_native_permission_rules(agent: Vec<Value>, scope: Vec<Value>) -> Vec<Va
             None => merged.push(rule),
         }
     }
-    append_opencode_tier(&mut merged, guardrails);
+    append_final_tier(&mut merged, guardrails);
     merged
 }
 

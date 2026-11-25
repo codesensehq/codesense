@@ -79,6 +79,8 @@ pub(super) fn desktop() -> DesktopCli {
         usage_record,
         managed_settings: &[],
         session_log_usage: None,
+        // No rule model: the org's permission denies can't be enforced, so the launch warns.
+        guardrails: None,
     }
 }
 

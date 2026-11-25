@@ -65,7 +65,65 @@ pub(super) fn desktop() -> DesktopCli {
         usage_record,
         managed_settings: &[],
         session_log_usage: None,
+        guardrails: Some(super::GuardrailPort {
+            deny: guardrail_deny,
+            tried: guardrail_tried,
+        }),
     }
+}
+
+/// OpenCode's last matching rule wins, so the org's denies go in a final tier, after the
+/// agent's and the native rules, behind [`GUARDRAIL_TIER_ACTION`]'s marker. The agent's own
+/// rule for a denied key also becomes `deny`: the one rewrite, and it narrows.
+fn guardrail_deny(content: &mut serde_json::Value, rules: &[&str]) {
+    let map: serde_json::Map<String, serde_json::Value> = rules
+        .iter()
+        .map(|key| (key.to_string(), serde_json::json!("deny")))
+        .collect();
+    let native = crate::agents::adapter::native_permission_rules(&serde_json::Value::Object(map));
+    let tier = native["permissions"].as_array().cloned().unwrap_or_default();
+    let actions: Vec<&str> = tier
+        .iter()
+        .filter_map(|rule| rule["action"].as_str())
+        .collect();
+    if !content["permissions"].is_array() {
+        content["permissions"] = serde_json::json!([]);
+    }
+    let Some(own) = content["permissions"].as_array_mut() else {
+        return;
+    };
+    for rule in own.iter_mut().filter_map(serde_json::Value::as_object_mut) {
+        let denied = rule
+            .get("action")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|action| actions.contains(&action));
+        if denied {
+            rule.insert("effect".into(), serde_json::json!("deny"));
+        }
+    }
+    crate::agents::guardrails::append_final_tier(own, tier);
+}
+
+/// Each permission key the agent allows or asks for (any decision but `deny`).
+fn guardrail_tried(
+    agent: &crate::agents::model::Agent,
+) -> Vec<(crate::agents::guardrails::RefusalKind, String)> {
+    use crate::agents::guardrails::RefusalKind;
+    let Some(own) = agent.permissions.as_ref().and_then(|p| p.opencode.as_ref()) else {
+        return Vec::new();
+    };
+    own.permission
+        .iter()
+        .filter(|(_, decision)| decision.as_str() != "deny")
+        .map(|(key, decision)| {
+            let kind = if decision == "ask" {
+                RefusalKind::PermissionAsk
+            } else {
+                RefusalKind::PermissionAllow
+            };
+            (kind, key.clone())
+        })
+        .collect()
 }
 
 /// The one definition of an unattended OpenCode run's permission map, read by profile launches

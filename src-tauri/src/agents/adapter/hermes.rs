@@ -69,6 +69,10 @@ pub(super) fn desktop() -> DesktopCli {
         usage_record: |_| None,
         managed_settings: &[],
         session_log_usage: None,
+        guardrails: Some(super::GuardrailPort {
+            deny: guardrail_deny,
+            tried: |_| Vec::new(),
+        }),
     }
 }
 
@@ -140,6 +144,22 @@ fn launch_notes(args: &[String]) -> Vec<String> {
 
 pub(crate) fn block_hook(matcher: &str) -> serde_json::Value {
     serde_json::json!({"matcher": matcher, "command": format!("--hook-block {}", codesense_pty_core::agent_cli::AgentCli::as_str(super::AgentCli::Hermes)), "fail_closed": true, "timeout": 2})
+}
+
+/// One fail-closed `pre_tool_call` block hook per denied matcher.
+fn guardrail_deny(content: &mut serde_json::Value, rules: &[&str]) {
+    if !content["hooks"]["pre_tool_call"].is_array() {
+        content["hooks"]["pre_tool_call"] = serde_json::json!([]);
+    }
+    let Some(blocks) = content["hooks"]["pre_tool_call"].as_array_mut() else {
+        return;
+    };
+    for matcher in rules {
+        let block = block_hook(matcher);
+        if !blocks.contains(&block) {
+            blocks.push(block);
+        }
+    }
 }
 
 fn permission_display(settings: &serde_json::Value, args: &[String]) -> String {
