@@ -1374,6 +1374,42 @@ pub(crate) async fn send_message_request<'a>(
     request_id: Option<&str>,
     media: Option<&crate::media::MediaInput>,
 ) -> Result<SendResult, String> {
+    send_message_request_with_story(
+        host,
+        session_id,
+        to,
+        text,
+        attach_file,
+        on_click,
+        content_type,
+        reply_to,
+        summary,
+        kind,
+        request_id,
+        media,
+        None,
+    )
+    .await
+}
+
+/// [`send_message_request`] about the story `story_id` (a story's `cs:id`), which is
+/// stored on the message and is not part of the `request_id` hash.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn send_message_request_with_story<'a>(
+    host: &Arc<dyn InboxHost>,
+    session_id: impl Into<Caller<'a>>,
+    to: &str,
+    text: &str,
+    attach_file: Option<&str>,
+    on_click: Option<MessageOnClick>,
+    content_type: Option<inbox::MessageContentType>,
+    reply_to: Option<&str>,
+    summary: Option<&str>,
+    kind: Option<inbox::MessageKind>,
+    request_id: Option<&str>,
+    media: Option<&crate::media::MediaInput>,
+    story_id: Option<&str>,
+) -> Result<SendResult, String> {
     let (result, stored) = send_message_stored(
         host,
         session_id.into(),
@@ -1389,6 +1425,7 @@ pub(crate) async fn send_message_request<'a>(
         request_id,
         media,
         MediaOwner::Sender,
+        story_id,
     )
     .await?;
     // Registered here, once per send call, after the store; a replay stored nothing.
