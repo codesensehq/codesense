@@ -495,7 +495,7 @@ mod tests {
                 crate::agents::model::LaunchMode::Foreground,
                 crate::agents::model::LaunchMode::Headless,
             ] {
-                let generated = crate::agents::permissions::generate(&agent, agent.runtime, mode);
+                let generated = crate::agents::permissions::generate(&agent, agent.runtime, mode, None);
                 let blocks = generated[0].content["hooks"]["pre_tool_call"]
                     .as_array()
                     .unwrap();

@@ -111,6 +111,9 @@ pub struct ResolvedAgent {
     /// rollout: named local product launches apply it; other paths retain prior behavior.
     pub manifest_applies_at_launch: bool,
     pub archived: bool,
+    /// The org guardrails the launch runs under, so a launch that regenerates the
+    /// permission entries (a mode override) narrows them the same way.
+    pub guardrails: Option<std::sync::Arc<super::guardrails::Guardrails>>,
 }
 
 impl ResolvedAgent {
@@ -293,8 +296,20 @@ fn compose_with_reader(
             .map(|(org, team)| ManifestTarget::team(org, team)),
     );
 
-    let generated = permissions::generate(agent, agent.runtime, agent.launch);
+    let (guardrails, guardrails_error) = match roots::org_guardrails(home, principal, &target) {
+        Ok(guardrails) => (guardrails, None),
+        Err(message) => (None, Some(message)),
+    };
+    let generated =
+        permissions::generate(agent, agent.runtime, agent.launch, guardrails.as_deref());
     let mut errors = definition_errors(agent);
+    // An unreadable guardrails file refuses the launch ([`adapter::launch_admission`]):
+    // running without the org's denies would silently widen it.
+    errors.extend(guardrails_error.map(|message| ManifestError {
+        path: None,
+        code: ManifestErrorCode::Guardrails,
+        message,
+    }));
     let dropped_mcp = dropped_mcp_servers(reader, home, principal, agent, &target, descriptor);
     errors.extend(dropped_mcp_errors(agent, &target, descriptor, &dropped_mcp));
     let offered_mcp_servers = offered_servers_with(reader, home, principal, agent.runtime, &target);
@@ -345,6 +360,13 @@ fn compose_with_reader(
     if let Some(listed) = &launch.skill_allowlist {
         permissions::turn_off_unlisted_manifest_skills(&mut manifest, agent.runtime, listed);
     }
+    if let Some(report) = guardrails
+        .as_deref()
+        .and_then(|g| g.report(agent, &reference.key))
+    {
+        manifest.guardrails = Some(report);
+        manifest.manifest_hash = manifest.compute_hash();
+    }
     let provides =
         provides::derive(agent.runtime, &manifest).allowing(launch.skill_allowlist.as_deref());
 
@@ -368,10 +390,17 @@ fn compose_with_reader(
         offered_mcp_servers,
         manifest_applies_at_launch: false,
         archived: agent.is_archived(),
+        guardrails,
     };
     let prompt = Some(agent.default_prompt.as_str()).filter(|p| !p.trim().is_empty());
     resolved.warnings = launch_check::warnings(&resolved, prompt);
     resolved.warnings.extend(sharing_warnings);
+    resolved.warnings.extend(
+        resolved
+            .guardrails
+            .as_deref()
+            .and_then(|g| g.not_enforced_warning(agent.runtime)),
+    );
     resolved.warnings.extend(context_warning(agent));
     resolved
         .warnings
@@ -940,3 +969,6 @@ fn present_servers(
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(test)]
+pub(crate) mod guardrails_tests;

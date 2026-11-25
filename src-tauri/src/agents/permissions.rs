@@ -2,9 +2,11 @@
 //! The agent's native CLI permissions turned into the per-launch settings the
 //! runtime reads, merged with what CodeSense itself needs.
 //!
-//! CodeSense never interprets, removes or rewrites a rule, and never enforces
+//! CodeSense never interprets, removes or widens a rule, and never enforces
 //! a mode: the agent's rules pass through verbatim and the CLI enforces them.
-//! CodeSense only adds the allows it needs ([`CLAUDE_REQUIRED_ALLOW`]). A rule
+//! CodeSense only adds the allows it needs ([`CLAUDE_REQUIRED_ALLOW`]) and the
+//! org's guardrail denies ([`super::guardrails`]), which may turn an OpenCode
+//! decision for a denied key into `deny` and nothing else. A rule
 //! that blocks one of those still applies as written; the launch warnings
 //! ([`super::launch_check`]) say so, using [`blocks_required`].
 //!
@@ -36,6 +38,7 @@ use std::collections::BTreeSet;
 
 use serde_json::{json, Map, Value};
 
+use super::guardrails::Guardrails;
 use super::manifest::{json_hash, GeneratedEntry, GeneratedTarget};
 use super::model::{Agent, LaunchMode, BRIDGE_SERVER};
 use codesense_pty_core::agent_cli::AgentCli;
@@ -94,11 +97,18 @@ pub const CODEX_HEADLESS_SANDBOX_MODE: &str = "workspace-write";
 pub const CLAUDE_SKIP_BYPASS_PROMPT: &str = "skipDangerousModePermissionPrompt";
 
 /// The generated launch entries for `agent` running on `runtime` in `mode`: its
-/// runtime's launch settings.
-pub fn generate(agent: &Agent, runtime: AgentCli, mode: LaunchMode) -> Vec<GeneratedEntry> {
-    vec![(super::adapter::desktop(runtime).launch_settings)(
-        agent, mode,
-    )]
+/// runtime's launch settings, narrowed by the org's `guardrails` when it has any.
+pub fn generate(
+    agent: &Agent,
+    runtime: AgentCli,
+    mode: LaunchMode,
+    guardrails: Option<&Guardrails>,
+) -> Vec<GeneratedEntry> {
+    let mut entry = (super::adapter::desktop(runtime).launch_settings)(agent, mode);
+    if let Some(guardrails) = guardrails {
+        guardrails.apply(runtime, &mut entry);
+    }
+    vec![entry]
 }
 
 pub(super) fn entry(
@@ -866,7 +876,7 @@ mod tests {
     }
 
     fn one(agent: &Agent, mode: LaunchMode) -> GeneratedEntry {
-        let entries = generate(agent, agent.runtime, mode);
+        let entries = generate(agent, agent.runtime, mode, None);
         assert_eq!(entries.len(), 1);
         entries.into_iter().next().unwrap()
     }
@@ -1117,7 +1127,7 @@ mod tests {
                 ..Permissions::default()
             }),
         );
-        let entries = generate(&a, AgentCli::Codex, LaunchMode::Foreground);
+        let entries = generate(&a, AgentCli::Codex, LaunchMode::Foreground, None);
         assert_eq!(entries[0].target, GeneratedTarget::LaunchSettings);
     }
 }

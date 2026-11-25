@@ -58,16 +58,21 @@ pub(crate) fn commit_all(root: &Path, message: &str) -> git2::Oid {
     index
         .add_all(["*"], git2::IndexAddOption::DEFAULT, None)
         .unwrap();
-    index
-        .update_all(["*"], None)
-        .unwrap();
+    index.update_all(["*"], None).unwrap();
     index.write().unwrap();
     let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
     let signature = git2::Signature::now("Test", "test@example.invalid").unwrap();
     let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
     let parents: Vec<&git2::Commit> = parent.iter().collect();
-    repo.commit(Some("HEAD"), &signature, &signature, message, &tree, &parents)
-        .unwrap()
+    repo.commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        message,
+        &tree,
+        &parents,
+    )
+    .unwrap()
 }
 
 /// Move `origin/main` to `root`'s HEAD, as a push (or a pull of a reviewed change) would.
@@ -255,10 +260,7 @@ fn agent_preview_guardrails() {
     assert_eq!(report["denied_by"], json!([guardrails_path(PARENT)]));
     assert_eq!(report["refused"][0]["item"], RM);
     assert_eq!(report["refused"][0]["kind"], "permission_allow");
-    assert_eq!(
-        report["refused"][0]["tried_by"],
-        "acme/api/backend/draft"
-    );
+    assert_eq!(report["refused"][0]["tried_by"], "acme/api/backend/draft");
 }
 
 #[test]
@@ -278,7 +280,11 @@ fn guardrails_union_roots() {
         b"permissions:\n  claude:\n    deny: ['WebFetch']\n",
     );
     // A root that shares nothing with its children still binds them.
-    write(&root, &format!("{PARENT}/config/sharing.yml"), b"share: []\n");
+    write(
+        &root,
+        &format!("{PARENT}/config/sharing.yml"),
+        b"share: []\n",
+    );
     init_clone(&root);
     let key = save(home, &alice(), escalating("union"));
 
@@ -376,7 +382,11 @@ fn guardrails_ignore_a_chosen_context_worktree() {
     // A sparse seat worktree that has no guardrails file at all, or an edited one.
     let sparse = tmp.path().join("seat-worktree");
     std::fs::create_dir_all(sparse.join(PARENT).join("config")).unwrap();
-    std::fs::write(sparse.join("teams.yml"), format!("teams:\n  - name: {TEAM}\n")).unwrap();
+    std::fs::write(
+        sparse.join("teams.yml"),
+        format!("teams:\n  - name: {TEAM}\n"),
+    )
+    .unwrap();
     let mut target = ManifestTarget::team(ORG, TEAM);
     target.context_root = Some(ContextRoot {
         id: "seat".into(),
@@ -389,7 +399,7 @@ fn guardrails_ignore_a_chosen_context_worktree() {
         &escalating("seat"),
         AgentCli::Claude,
         model::LaunchMode::Foreground,
-        Some(&guardrails),
+        Some(guardrails.as_ref()),
     )
     .remove(0);
     assert!(entry.content["permissions"]["deny"]
@@ -404,7 +414,11 @@ fn guardrails_fail_closed() {
         "teams:\n  - name: {TEAM}\n    parent_team: {PARENT}\n  - name: {PARENT}\n  - name: {OPS}\n"
     );
     let cases: [(&str, &[(&str, &str)], Option<&str>); 4] = [
-        ("invalid yaml", &[(PARENT, "permissions:\n  claude:\n    deny: [\n")], None),
+        (
+            "invalid yaml",
+            &[(PARENT, "permissions:\n  claude:\n    deny: [\n")],
+            None,
+        ),
         (
             "an unknown key",
             &[(PARENT, "mcp_servers:\n  deny: [slack]\n")],
