@@ -395,6 +395,11 @@ test.describe("the chat is ready when it opens", () => {
             const chat = document.querySelector(
               `[data-testid="inbox-split-${id}"] [data-testid="chat-overlay"]`,
             );
+            // Hidden behind the CLI the chat stays mounted, so "ready" also means shown again.
+            const shown =
+              !!chat &&
+              chat.checkVisibility({ visibilityProperty: true }) &&
+              !chat.closest("[inert]");
             const composer = chat?.querySelector<HTMLTextAreaElement>(".ibx-comp textarea");
             const list = chat?.querySelector<HTMLElement>('[data-testid="ibx-msgs"]');
             const newest = [...(list?.querySelectorAll<HTMLElement>(".ibx-m") ?? [])]
@@ -406,7 +411,7 @@ test.describe("the chat is ready when it opens", () => {
               !!newest &&
               newest.getBoundingClientRect().bottom <= list.getBoundingClientRect().bottom + 1 &&
               newest.getBoundingClientRect().top >= list.getBoundingClientRect().top - 1;
-            return !!composer && !composer.disabled && inView;
+            return shown && !!composer && !composer.disabled && inView;
           };
           const done = () => {
             performance.mark("chat-open:ready");
@@ -432,9 +437,11 @@ test.describe("the chat is ready when it opens", () => {
     const cold = await openToReady(page, AGENT_TAB);
     expect(cold).toBeLessThan(COLD_MS);
 
-    // Close it and open it again: the thread is already read, so this is the warm open.
+    // Flip to the CLI and back: the thread is already read, so this is the warm open. The chat
+    // stays mounted behind the CLI, hidden and inert, and the warm open is its re-show.
     await page.getByTestId(`chat-cli-switch-${AGENT_TAB}-cli`).click();
-    await expect(page.locator(paneOf(AGENT_TAB))).toHaveCount(0);
+    await expect(page.locator(paneOf(AGENT_TAB))).toHaveCount(1);
+    await expect(page.locator(paneOf(AGENT_TAB))).toBeHidden();
     const warm = await openToReady(page, AGENT_TAB);
     expect(warm).toBeLessThan(WARM_MS);
   });

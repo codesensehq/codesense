@@ -107,7 +107,10 @@ async function arm(page: Page, trigger: string, newest: string, cap: number) {
         const input = chat?.querySelector<HTMLTextAreaElement>(
           '[data-testid="ibx-composer"] textarea',
         );
-        if (!list || !last || !input || input.disabled) return null;
+        // Hidden behind the CLI the chat stays mounted, so it must be shown again first.
+        const shown =
+          !!chat && chat.checkVisibility({ visibilityProperty: true }) && !chat.closest("[inert]");
+        if (!shown || !list || !last || !input || input.disabled) return null;
         const box = list.getBoundingClientRect();
         const row = last.getBoundingClientRect();
         if (row.height <= 0) return null;
@@ -158,7 +161,8 @@ async function closeOverlay(page: Page, wait: number) {
   await page.locator(`[data-testid="chat-cli-switch-${AGENT_TAB}-cli"]`).click({
     timeout: wait,
   });
-  await expect(page.locator('[data-testid="chat-overlay"]')).toHaveCount(0, { timeout: wait });
+  // The chat stays mounted behind the CLI, hidden and inert.
+  await expect(page.locator('[data-testid="chat-overlay"]')).toBeHidden({ timeout: wait });
 }
 
 const quantile = (sorted: number[], q: number) =>
