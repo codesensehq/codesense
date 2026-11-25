@@ -5,6 +5,7 @@
 pub(crate) mod analytics;
 pub(crate) mod bucket;
 pub(crate) mod giphy;
+pub(crate) mod install;
 pub(crate) mod klipy;
 pub(crate) mod page;
 pub(crate) mod register;
@@ -623,8 +624,10 @@ pub(crate) trait GifProvider: Send + Sync {
 /// Milliseconds since the Unix epoch.
 pub(crate) type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 
-/// Makes the adapter for a provider's key; tests stand in a recorded transport.
-pub(crate) type Adapters = Arc<dyn Fn(Provider, Secret, i64) -> Box<dyn GifProvider> + Send + Sync>;
+/// Makes the adapter for a provider's key and, for KLIPY, the install's `customer_id`; tests
+/// stand in a recorded transport.
+pub(crate) type Adapters =
+    Arc<dyn Fn(Provider, Secret, Option<String>, i64) -> Box<dyn GifProvider> + Send + Sync>;
 
 /// Everything `gif_search` needs: the settings and bucket files, the key, the adapter and the
 /// analytics map. One per app, so every search shares the bucket's lock and the key's single read.
@@ -681,7 +684,7 @@ impl GifService {
         requested: Option<Provider>,
         rating: Option<&str>,
     ) -> Result<(Provider, Vec<Candidate>), Failed> {
-        let epoch = register::install_epoch(&self.data_dir);
+        let epoch = install::install_epoch(&self.data_dir);
         let dir = self.data_dir.clone();
         let current = tokio::task::spawn_blocking(move || settings::load(&dir))
             .await
@@ -730,12 +733,34 @@ impl GifService {
             }
             request => request,
         };
+        // KLIPY's searches carry the install's customer_id, read or made before any request; one
+        // that can't be saved fails the search, so a share never sends an id the search didn't.
+        let customer_id = match provider {
+            Provider::Giphy => None,
+            Provider::Klipy => {
+                let (dir, fp) = (self.data_dir.clone(), fingerprint.clone());
+                let made =
+                    tokio::task::spawn_blocking(move || install::customer_id(&dir, &fp, epoch))
+                        .await;
+                match made {
+                    Ok(Ok(id)) => Some(id),
+                    Ok(Err(e)) => {
+                        log::warn!(target: "gif", "gif search: KLIPY's customer id could not be saved: {e}");
+                        return Err(named(GifError::ProviderUnavailable));
+                    }
+                    Err(e) => {
+                        log::warn!(target: "gif", "gif search: KLIPY's customer id read stopped: {e}");
+                        return Err(named(GifError::ProviderUnavailable));
+                    }
+                }
+            }
+        };
         let (bucket, counted, now) = (self.bucket.clone(), bucket_key.clone(), (self.clock)());
         tokio::task::spawn_blocking(move || bucket.take(&counted, production, now))
             .await
             .map_err(|_| named(GifError::ProviderUnavailable))?
             .map_err(named)?;
-        let adapter = (self.adapters)(provider, key, (self.clock)());
+        let adapter = (self.adapters)(provider, key, customer_id, (self.clock)());
         let result = match request {
             Request::Search { query, limit } => {
                 GifProvider::search_gifs(adapter.as_ref(), query, rating, *limit).await
@@ -754,7 +779,7 @@ impl GifService {
                     Request::Lookup { .. } => None,
                 };
                 let holds = query.is_some() || Provider::rates_lookup(provider);
-                if holds && register::install_epoch(&self.data_dir) == epoch {
+                if holds && install::install_epoch(&self.data_dir) == epoch {
                     analytics::Analytics::start_epoch(&self.analytics, epoch);
                     let now = (self.clock)();
                     self.analytics.record(provider, &found, rating, query, now);
@@ -787,10 +812,16 @@ pub(crate) fn service<R: tauri::Runtime>(
     let dir = settings::data_dir(app)?;
     let transport: Arc<dyn transport::Transport> = Arc::new(transport::Http::new()?);
     let adapters: Adapters = Arc::new(
-        move |provider: Provider, key: Secret, now: i64| -> Box<dyn GifProvider> {
+        move |provider: Provider,
+              key: Secret,
+              customer_id: Option<String>,
+              now: i64|
+              -> Box<dyn GifProvider> {
             match provider {
                 Provider::Giphy => Box::new(giphy::Giphy::new(key, transport.clone(), now)),
-                Provider::Klipy => Box::new(klipy::Klipy::new(key, None, transport.clone(), now)),
+                Provider::Klipy => {
+                    Box::new(klipy::Klipy::new(key, customer_id, transport.clone(), now))
+                }
             }
         },
     );

@@ -8,19 +8,19 @@
 //! removed, and never the key. They are fire-and-forget, never queued, outside the search rate
 //! limit, dropped while a provider backoff runs and capped at [`PINGS_PER_HOUR`] per provider and
 //! key. KLIPY's share trigger joins as a second [`Registrar`].
+#[cfg(test)]
+use super::install::{forget_install, FILE};
+use super::install::{install_epoch, read_install, write_install};
 use super::{analytics, bucket, settings, transport, GifError, GifService, Provider};
 use crate::commands::credential_store::Secret;
 use crate::media::{index::Owner, MediaProvider};
 use futures_util::future::BoxFuture;
 use std::{
-    collections::{BTreeMap, HashMap, VecDeque},
-    path::{Path, PathBuf},
+    collections::{HashMap, VecDeque},
     sync::{Arc, Mutex, OnceLock},
     time::Duration,
 };
 
-/// The install id file's name in the app data dir.
-pub(crate) const FILE: &str = "gif-install.json";
 /// Pings past this many in a rolling hour, per provider and key, are dropped.
 pub(crate) const PINGS_PER_HOUR: usize = 300;
 const HOUR_MS: i64 = 60 * 60 * 1000;
@@ -33,11 +33,6 @@ const RANDOM_ID_API: &str = "https://api.giphy.com/v1/randomid";
 pub(crate) const RANDOM_ID_RETRY_MS: i64 = 15 * 60 * 1000;
 /// After a failed keychain read for a serve, the next serve waits this long to read it again.
 pub(crate) const KEY_RETRY_MS: i64 = 15 * 60 * 1000;
-/// Held while `gif-install.json` is written or deleted, with each data dir's install epoch: it
-/// moves on every delete (search Off, the key removed or replaced), so an id made before one is
-/// never saved after it, and what was held for the old id is let go.
-static INSTALL_FILE: Mutex<BTreeMap<PathBuf, u64>> =
-    std::sync::Mutex::new(std::collections::BTreeMap::new());
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -155,62 +150,6 @@ impl Registrar for GiphyPings {
 /// The 5 s transport pings and the random id call use: the shared hardened client.
 pub(crate) fn ping_client() -> Result<transport::Http, String> {
     transport::Http::on(crate::media::hardened_client_builder(TIMEOUT).https_only(true))
-}
-
-/// The random id GIPHY issued for this install with the key whose fingerprint is `fp`, if
-/// `gif-install.json` holds one.
-fn read_install(dir: &Path, provider: Provider, fp: &str) -> Option<String> {
-    let bytes = Result::ok(std::fs::read(dir.join(FILE)))?;
-    let file: serde_json::Value = Result::ok(serde_json::from_slice(&bytes))?;
-    let entry = file.get(Provider::as_str(provider))?;
-    let id = serde_json::Value::as_str(entry.get("randomId")?)?;
-    let key = serde_json::Value::as_str(entry.get("key")?)?;
-    (key == fp && super::valid_id(id)).then(|| id.to_string())
-}
-
-/// Save `id` as the install's random id for the key `fp`: a temp file readable by this user
-/// only, renamed over the file.
-fn write_install(
-    dir: &Path,
-    provider: Provider,
-    fp: &str,
-    id: &str,
-    epoch: u64,
-) -> std::io::Result<bool> {
-    let epochs = lock(&INSTALL_FILE);
-    if epochs.get(dir).copied().unwrap_or(0) != epoch {
-        return Ok(false);
-    }
-    let mut body = serde_json::Map::new();
-    body.insert(
-        Provider::as_str(provider).to_string(),
-        serde_json::json!({"randomId": id, "key": fp}),
-    );
-    std::fs::create_dir_all(dir)?;
-    let mut temp = tempfile::NamedTempFile::new_in(dir)?;
-    std::io::Write::write_all(&mut temp, &serde_json::to_vec_pretty(&body)?)?;
-    codesense_platform::fs::set_owner_only(tempfile::NamedTempFile::path(&temp))?;
-    tempfile::NamedTempFile::persist(temp, dir.join(FILE)).map_err(|e| e.error)?;
-    drop(epochs);
-    Ok(true)
-}
-
-/// The install epoch of `dir` (see [`INSTALL_FILE`]).
-pub(crate) fn install_epoch(dir: &Path) -> u64 {
-    lock(&INSTALL_FILE).get(dir).copied().unwrap_or(0)
-}
-
-/// Delete `gif-install.json`, so nothing that identifies the install stays: GIF search was
-/// turned Off or the key removed or replaced. A failure is logged.
-pub(crate) fn forget_install(dir: &Path) {
-    let mut epochs = lock(&INSTALL_FILE);
-    *epochs.entry(dir.to_path_buf()).or_insert(0) += 1;
-    match std::fs::remove_file(dir.join(FILE)) {
-        Err(e) if std::io::Error::kind(&e) != std::io::ErrorKind::NotFound => {
-            log::warn!(target: "gif", "gif registration: the install id could not be deleted: {e}");
-        }
-        _ => {}
-    }
 }
 
 /// The id in GIPHY's random id response, when it matches the GIF id pattern.

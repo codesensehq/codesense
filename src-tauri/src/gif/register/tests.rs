@@ -127,7 +127,7 @@ impl Harness {
         let now = Arc::new(AtomicI64::new(START_MS));
         let adapter_wire: Arc<dyn Transport> = wire.clone();
         let adapters: Adapters = Arc::new(
-            move |_: Provider, key: Secret, now: i64| -> Box<dyn GifProvider> {
+            move |_: Provider, key: Secret, _: Option<String>, now: i64| -> Box<dyn GifProvider> {
                 Box::new(Giphy::new(key, adapter_wire.clone(), now))
             },
         );
@@ -659,7 +659,7 @@ async fn a_send_that_cannot_register_never_reads_the_keychain() {
     let keys = Keys::new(store.clone(), true, Some(ACCOUNT), Duration::from_secs(3));
     let wire = Arc::new(Wire::new());
     let adapters: Adapters = Arc::new(
-        move |_: Provider, key: Secret, now: i64| -> Box<dyn GifProvider> {
+        move |_: Provider, key: Secret, _: Option<String>, now: i64| -> Box<dyn GifProvider> {
             Box::new(Giphy::new(key, Arc::new(Wire::new()), now))
         },
     );

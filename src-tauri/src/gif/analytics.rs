@@ -95,7 +95,11 @@ impl Analytics {
         for f in found {
             let pingbacks = match (&f.pingbacks, provider) {
                 (Some(pingbacks), _) => Some(pingbacks.clone()),
-                (None, Provider::Klipy) => Some(Pingbacks::default()),
+                (None, Provider::Klipy) => Some(Pingbacks {
+                    onload: None,
+                    onclick: None,
+                    onsent: None,
+                }),
                 (None, Provider::Giphy) => None,
             };
             if let Some(pingbacks) = pingbacks {

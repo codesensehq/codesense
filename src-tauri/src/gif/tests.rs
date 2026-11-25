@@ -168,11 +168,15 @@ fn harness_with(keys: impl FnOnce(Arc<Counting>) -> Keys, with_key: bool) -> Har
     let now = Arc::new(AtomicI64::new(START_MS));
     let adapter_transport: Arc<dyn Transport> = transport.clone();
     let adapters: Adapters = Arc::new(
-        move |provider: Provider, key: Secret, now: i64| -> Box<dyn GifProvider> {
+        move |provider: Provider,
+              key: Secret,
+              customer_id: Option<String>,
+              now: i64|
+              -> Box<dyn GifProvider> {
             let transport = adapter_transport.clone();
             match provider {
                 Provider::Giphy => Box::new(Giphy::new(key, transport, now)),
-                Provider::Klipy => Box::new(Klipy::new(key, None, transport, now)),
+                Provider::Klipy => Box::new(Klipy::new(key, customer_id, transport, now)),
             }
         },
     );
@@ -633,7 +637,7 @@ async fn the_service_runs_any_provider_through_the_trait_in_its_order() {
         })
         .collect();
     let adapters: Adapters = Arc::new(
-        move |_: Provider, _: Secret, _: i64| -> Box<dyn GifProvider> {
+        move |_: Provider, _: Secret, _: Option<String>, _: i64| -> Box<dyn GifProvider> {
             Box::new(Canned(canned.clone()))
         },
     );
@@ -2590,4 +2594,187 @@ async fn klipy_production_key_exempt() {
     let fp = fingerprint(&Secret::new(KEY));
     assert!(loaded.is_production(Provider::Klipy, &fp));
     assert!(!loaded.is_production(Provider::Giphy, &fp));
+}
+
+// ---- gif-install.json: one entry per provider ----
+
+fn install_json(dir: &std::path::Path) -> serde_json::Value {
+    let text = std::fs::read_to_string(dir.join(install::FILE)).unwrap();
+    serde_json::from_str(&text).unwrap()
+}
+
+#[test]
+fn install_write_keeps_other_provider_entry_562c80() {
+    let dir = tempfile::tempdir().unwrap();
+    let fp = fingerprint(&Secret::new(KEY));
+    std::fs::write(
+        dir.path().join(install::FILE),
+        serde_json::json!({"klipy": {"customerId": "a-customer-id", "key": fp}}).to_string(),
+    )
+    .unwrap();
+    let epoch = install::install_epoch(dir.path());
+    assert!(install::write_install(dir.path(), Provider::Giphy, &fp, "rid-1", epoch).unwrap());
+    let file = install_json(dir.path());
+    assert_eq!(file["klipy"]["customerId"], "a-customer-id");
+    assert_eq!(file["giphy"]["randomId"], "rid-1");
+    assert_eq!(
+        install::read_install(dir.path(), Provider::Klipy, &fp).as_deref(),
+        Some("a-customer-id")
+    );
+    assert_eq!(
+        install::read_install(dir.path(), Provider::Giphy, &fp).as_deref(),
+        Some("rid-1")
+    );
+}
+
+#[test]
+fn key_removal_drops_only_that_providers_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let fp = fingerprint(&Secret::new(KEY));
+    let epoch = install::install_epoch(dir.path());
+    install::write_install(dir.path(), Provider::Giphy, &fp, "rid-1", epoch).unwrap();
+    let customer = install::customer_id(dir.path(), &fp, epoch).unwrap();
+    install::forget_install_for(dir.path(), Provider::Giphy);
+    assert_eq!(
+        install::install_epoch(dir.path()),
+        epoch + 1,
+        "the epoch moves"
+    );
+    assert_eq!(
+        install::read_install(dir.path(), Provider::Giphy, &fp),
+        None
+    );
+    assert_eq!(
+        install::read_install(dir.path(), Provider::Klipy, &fp),
+        Some(customer)
+    );
+    install::forget_install_for(dir.path(), Provider::Klipy);
+    assert!(
+        !dir.path().join(install::FILE).exists(),
+        "no entry left, no file"
+    );
+}
+
+#[test]
+fn off_deletes_the_file() {
+    let h = harness();
+    let fp = fingerprint(&Secret::new(KEY));
+    let epoch = install::install_epoch(h.dir.path());
+    install::write_install(h.dir.path(), Provider::Giphy, &fp, "rid-1", epoch).unwrap();
+    install::customer_id(h.dir.path(), &fp, epoch).unwrap();
+    let off = SettingsUpdate {
+        enabled: Some(false),
+        ..Default::default()
+    };
+    settings::set_with(&h.keys(), h.dir.path(), off).unwrap();
+    assert!(!h.dir.path().join(install::FILE).exists());
+}
+
+#[test]
+fn customer_id_survives_a_giphy_key_save() {
+    let h = harness();
+    let fp = fingerprint(&Secret::new(KEY));
+    let customer =
+        install::customer_id(h.dir.path(), &fp, install::install_epoch(h.dir.path())).unwrap();
+    settings::save_with(&h.keys(), h.dir.path(), "a-new-giphy-key-0001").unwrap();
+    assert_eq!(
+        install::read_install(h.dir.path(), Provider::Klipy, &fp),
+        Some(customer)
+    );
+}
+
+#[test]
+fn giphy_random_id_survives_klipy_save_and_a_new_klipy_key_gets_a_new_id() {
+    let h = klipy_harness();
+    let fp = fingerprint(&Secret::new(KEY));
+    let epoch = install::install_epoch(h.dir.path());
+    install::write_install(h.dir.path(), Provider::Giphy, &fp, "rid-1", epoch).unwrap();
+    let old = install::customer_id(h.dir.path(), &fp, epoch).unwrap();
+    let replacement = "a-new-klipy-key-0001";
+    settings::save_with(&h.keys(), h.dir.path(), replacement).unwrap();
+    assert_eq!(
+        install::read_install(h.dir.path(), Provider::Giphy, &fp).as_deref(),
+        Some("rid-1")
+    );
+    assert_eq!(
+        install::read_install(h.dir.path(), Provider::Klipy, &fp),
+        None
+    );
+    let new_fp = fingerprint(&Secret::new(replacement));
+    let new =
+        install::customer_id(h.dir.path(), &new_fp, install::install_epoch(h.dir.path())).unwrap();
+    assert_ne!(new, old);
+}
+
+#[tokio::test]
+async fn customer_id_is_stable_across_searches() {
+    let h = klipy_harness();
+    for _ in 0..2 {
+        h.transport.reply(200, None, KLIPY_EMPTY);
+        h.search("ship it").await.unwrap();
+    }
+    let sent: Vec<String> = h
+        .transport
+        .urls
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|url| {
+            pairs_of(url)
+                .into_iter()
+                .find(|(k, _)| k == "customer_id")
+                .map(|(_, v)| v)
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(sent[0], sent[1]);
+    assert!(uuid::Uuid::parse_str(&sent[0]).is_ok(), "{}", sent[0]);
+    let fp = fingerprint(&Secret::new(KEY));
+    assert_eq!(
+        install_json(h.dir.path())["klipy"],
+        serde_json::json!({"customerId": sent[0], "key": fp})
+    );
+    assert!(!h.file(install::FILE).contains(KEY));
+}
+
+#[tokio::test]
+async fn unsaveable_customer_id_fails_search_as_unavailable() {
+    let h = klipy_harness();
+    // A folder where the file goes: the id can't be saved.
+    std::fs::create_dir_all(h.dir.path().join(install::FILE)).unwrap();
+    let request = normalize(Some("ship it"), None, None).unwrap();
+    assert_eq!(
+        h.service.run_in(&request, None, None).await,
+        Err(Failed {
+            provider: Some(Provider::Klipy),
+            error: GifError::ProviderUnavailable,
+        })
+    );
+    assert_eq!(h.transport.requests(), 0);
+    assert!(!h.file(bucket::FILE).contains("klipy:"), "no token taken");
+}
+
+#[test]
+fn concurrent_install_writes_keep_both_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let fp = fingerprint(&Secret::new(KEY));
+    let epoch = install::install_epoch(dir.path());
+    std::thread::scope(|scope| {
+        let giphy = scope.spawn(|| {
+            for i in 0..50 {
+                let id = format!("rid-{i}");
+                install::write_install(dir.path(), Provider::Giphy, &fp, &id, epoch).unwrap();
+            }
+        });
+        let klipy = scope.spawn(|| {
+            for _ in 0..50 {
+                install::customer_id(dir.path(), &fp, epoch).unwrap();
+            }
+        });
+        giphy.join().unwrap();
+        klipy.join().unwrap();
+    });
+    let file = install_json(dir.path());
+    assert_eq!(file["giphy"]["randomId"], "rid-49");
+    assert!(file["klipy"]["customerId"].is_string());
 }
