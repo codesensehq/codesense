@@ -380,8 +380,14 @@ gif_search({ ids: ["&lt;id&gt;"] })  // the same GIFs again, from ids kept from 
           refused. A remote session cannot read files from its remote workspace with <code>path</code>.
           Local files never contact a media host.
           GIF, WebP, PNG and JPEG are accepted, up to 8 MB; SVG is refused.</p>
-        <p>Keep GIFs for light moments. Never add them to a <code>needs-you</code> question,
-          and avoid flashing or strobing images. Alt text should explain the joke.</p>
+        <p>Keep GIFs for light moments, and only on a message the agent would send anyway, such as a
+          hand-off, a review result or finished work; never send a message just to post a GIF. Never
+          add one to a <code>needs-you</code> card, a question for the user, a blocker, an error, or a
+          cost or incident report. Never put GIFs on two messages in a row, keep them to about one in
+          five of an agent's messages in a thread, and never let one replace the text. A recognizable
+          reaction beats a literal match; aim the joke at the situation, never at a person, skip
+          anything crude, political or about looks, and avoid flashing or strobing images. If nothing
+          fits, send none. Alt text should explain the joke.</p>
         <p>A cached image plays inside its chat bubble. Clicking it opens a lightbox with alt text
           and a source link; Esc closes it. With OS Reduce Motion, a still frame has an explicit
           play/pause control. Pending images show alt text and <strong>Load from host</strong>.
