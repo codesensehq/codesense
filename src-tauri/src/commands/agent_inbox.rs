@@ -972,9 +972,9 @@ pub(crate) async fn offer_queued_role(host: &dyn InboxHost, team: &LaunchTeam, r
     }
 }
 
-/// Store a message to the already-resolved `to` in the store at `path`. `story_id` is
-/// stored as given (after [`inbox::normalize_story_id`]) and is not part of any request
-/// hash; an invalid one is refused before anything is prepared or stored.
+/// Store a message to the already-resolved `to` in the store at `path`. `story_id` comes
+/// normalized by the caller ([`inbox::normalize_story_id`]) and is not part of any request
+/// hash.
 #[allow(clippy::too_many_arguments)]
 async fn store_message(
     host: &Arc<dyn InboxHost>,
@@ -996,10 +996,6 @@ async fn store_message(
     owner: MediaOwner,
     story_id: Option<String>,
 ) -> Result<(SendResult, Option<StoredMedia>), String> {
-    let story_id = match inbox::normalize_story_id(Option::as_deref(&story_id)) {
-        Ok(story_id) => story_id,
-        Err(e) => return Ok((SendResult::invalid(e), None)),
-    };
     let request_hash = request_hash.or_else(|| {
         media?;
         request_id.map(|_| {
