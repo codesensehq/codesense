@@ -742,18 +742,28 @@ pub(crate) fn sent_of(media: &crate::commands::agent_inbox::StoredMedia) -> Opti
         return None;
     }
     Some(Sent {
-        slot: (owner_of(&media.team, media.message_id), media.slot),
+        slot: (
+            owner_of(&media.team, media.chat.as_deref(), media.message_id),
+            media.slot,
+        ),
         provider: a.provider?,
         provider_id: a.provider_id.clone()?,
         url: a.source_url.clone()?,
     })
 }
 
-fn owner_of(team: &crate::commands::dashboard_launch::LaunchTeam, message_id: i64) -> Owner {
+/// The index owner of message `message_id`: in `team`'s inbox, or in the chat of
+/// workspace `chat`.
+pub(crate) fn owner_of(
+    team: &crate::commands::dashboard_launch::LaunchTeam,
+    chat: Option<&str>,
+    message_id: i64,
+) -> Owner {
     Owner {
         org: team.org.clone(),
         team: team.team.clone(),
         message_id,
+        chat: chat.map(str::to_string),
     }
 }
 
@@ -778,12 +788,18 @@ pub(crate) fn fetched(
     slot: usize,
     a: &crate::media::Attachment,
 ) {
+    fetched_by(registration, owner_of(team, None, message_id), slot, a);
+}
+
+/// [`fetched`] for any owner, a workspace chat message's included.
+pub(crate) fn fetched_by(
+    registration: &Registration,
+    owner: Owner,
+    slot: usize,
+    a: &crate::media::Attachment,
+) {
     let tagged = a.provider == Some(MediaProvider::Giphy);
-    registration.note_fetched(
-        &(owner_of(team, message_id), slot),
-        a.sha256.as_deref(),
-        tagged,
-    );
+    registration.note_fetched(&(owner, slot), a.sha256.as_deref(), tagged);
 }
 
 /// The serve hook: each serve takes the pending onloads of its sha and claims the view pings

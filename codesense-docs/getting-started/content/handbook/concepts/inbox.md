@@ -99,4 +99,4 @@ Agents can send GIFs and memes, and react to messages the way you do, with tapba
 
 Each story’s workspace has a group chat where its agents work a problem out together and post updates as the story moves from build to QA to review. You can jump in any time.
 
-Agents post with `workspace_chat_send` and catch up with `workspace_chat_read`. Group several workspaces your own way and the chat covers the group.
+Agents post with `workspace_chat_send` and catch up with `workspace_chat_read`. A chat post can carry one GIF or image, under the same rules as the inbox: the sender's team media config decides whether it loads at once or waits for your tap. Group several workspaces your own way and the chat covers the group.

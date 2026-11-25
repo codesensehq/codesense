@@ -208,6 +208,7 @@ mod tests {
             org: "acme".into(),
             team: "a".into(),
             message_id: id,
+            chat: None,
         };
 
         // Sent from GIPHY by this machine: after a restart the route fetches it again

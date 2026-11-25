@@ -464,6 +464,7 @@ pub(crate) struct FakeFetch {
     routes: Mutex<HashMap<String, Result<(Vec<u8>, String, Option<String>), Failure>>>,
     calls: Mutex<Vec<String>>,
     delay: Mutex<Option<Duration>>,
+    gate: Mutex<Option<Arc<tokio::sync::Notify>>>,
 }
 
 #[cfg(test)]
@@ -495,6 +496,13 @@ impl FakeFetch {
     pub(crate) fn calls(&self) -> Vec<String> {
         lock(&self.calls).clone()
     }
+    /// Every answer waits, after recording its call, until the returned gate is
+    /// notified once for it.
+    pub(crate) fn hold(&self) -> Arc<tokio::sync::Notify> {
+        let gate = Arc::new(tokio::sync::Notify::new());
+        *lock(&self.gate) = Some(gate.clone());
+        gate
+    }
 }
 
 #[cfg(test)]
@@ -506,6 +514,10 @@ impl Fetch for FakeFetch {
     ) -> BoxFuture<'a, Result<Downloaded, Failure>> {
         Box::pin(async move {
             lock(&self.calls).push(url.to_string());
+            let gate = lock(&self.gate).clone();
+            if let Some(gate) = gate {
+                gate.notified().await;
+            }
             let delay = *lock(&self.delay);
             if let Some(delay) = delay {
                 tokio::time::sleep(delay).await;

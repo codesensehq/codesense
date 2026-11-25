@@ -164,6 +164,31 @@ pub(crate) trait InboxHost: Send + Sync {
     ) -> Result<crate::media::Attachment, String> {
         Err("media fetch unavailable".into())
     }
+    /// The workspace chat store: a handle on the app's.
+    fn chat_store(&self) -> Option<super::workspace_chat::WorkspaceChatStore> {
+        None
+    }
+    /// A workspace chat message's attachments changed (sent, fetched, view ping settled):
+    /// the media sha index records them under `owner`.
+    async fn note_chat_media(
+        &self,
+        _owner: crate::media::index::Owner,
+        _attachments: &[crate::media::Attachment],
+    ) {
+    }
+    /// A workspace chat message's media fetch finished: a pending view ping gets the
+    /// image's sha.
+    fn chat_media_fetched(
+        &self,
+        _owner: crate::media::index::Owner,
+        _slot: usize,
+        _attachment: &crate::media::Attachment,
+    ) {
+    }
+    /// Index workspace chat `workspace`'s media before any of it is served.
+    async fn index_chat_media(&self, _workspace: &str) {}
+    /// A workspace chat message's image changed state: the app window hears of it.
+    fn chat_media_changed(&self, _workspace: &str, _message_id: i64) {}
 
     async fn admit_automatic_input(&self, _session: &str) -> Result<(), String> {
         Ok(())
@@ -414,6 +439,8 @@ pub(crate) struct StoredMedia {
     pub message_id: i64,
     pub slot: usize,
     pub attachment: crate::media::Attachment,
+    /// The workspace whose chat holds the message; `None` for an inbox message.
+    pub chat: Option<String>,
 }
 
 /// The outcome of `send_message`, `reply` and the human's reply.
@@ -1046,6 +1073,7 @@ async fn store_message(
                 message_id,
                 slot: MEDIA_SLOT,
                 attachment: attachment.clone(),
+                chat: None,
             });
         }
         if let Some((attachment, true)) = prepared {
@@ -1792,6 +1820,7 @@ async fn queue_role_reply(
                         message_id,
                         slot: MEDIA_SLOT,
                         attachment: attachment.clone(),
+                        chat: None,
                     });
                 }
                 if let Some((attachment, true)) = prepared {
@@ -3086,6 +3115,48 @@ impl InboxHost for AppInboxHost {
     ) -> Result<crate::media::Attachment, String> {
         crate::media::fetch(&self.app, team, attachment, automatic).await
     }
+    fn chat_store(&self) -> Option<super::workspace_chat::WorkspaceChatStore> {
+        use tauri::Manager;
+        self.app
+            .try_state::<super::workspace_chat::WorkspaceChatStore>()
+            .map(|s| s.inner().clone())
+    }
+    async fn note_chat_media(
+        &self,
+        owner: crate::media::index::Owner,
+        attachments: &[crate::media::Attachment],
+    ) {
+        crate::media::note_owner(&self.app, owner, attachments.to_vec()).await;
+    }
+    fn chat_media_fetched(
+        &self,
+        owner: crate::media::index::Owner,
+        slot: usize,
+        attachment: &crate::media::Attachment,
+    ) {
+        if let Ok(registration) = crate::gif::register::registration(&self.app) {
+            crate::gif::register::fetched_by(&registration, owner, slot, attachment);
+        }
+    }
+    async fn index_chat_media(&self, workspace: &str) {
+        if let (Some(media), Some(store)) = (crate::media::app_state(&self.app), self.chat_store())
+        {
+            super::workspace_chat::media::index_chat(&media, &store, workspace).await;
+        }
+    }
+    fn chat_media_changed(&self, workspace: &str, message_id: i64) {
+        let payload = super::workspace_chat::media::ChatMediaPayload {
+            workspace_id: workspace.to_string(),
+            message_id,
+        };
+        if let Err(e) = tauri::Emitter::emit(
+            &self.app,
+            super::workspace_chat::media::MEDIA_EVENT,
+            payload,
+        ) {
+            log::warn!(target: "workspace_chat", "emit chat media change: {e}");
+        }
+    }
 
     async fn admit_automatic_input(&self, session: &str) -> Result<(), String> {
         crate::session_usage::spend_caps::refuse_mail_offer(&self.app, session).await
@@ -3747,6 +3818,10 @@ pub(crate) async fn mark_onloads_sent(
     slots: Vec<(crate::media::index::Owner, usize)>,
 ) {
     for (owner, slot) in slots {
+        if owner.chat.is_some() {
+            super::workspace_chat::media::mark_onload_sent(host, owner, slot).await;
+            continue;
+        }
         let team = LaunchTeam {
             org: owner.org,
             team: owner.team,

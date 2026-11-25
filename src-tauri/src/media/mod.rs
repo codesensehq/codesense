@@ -957,13 +957,24 @@ pub(crate) async fn note(
     message_id: i64,
     attachments: Vec<Attachment>,
 ) {
-    let Some(state) = app_state(app) else {
-        return;
-    };
     let owner = index::Owner {
         org: team.org.clone(),
         team: team.team.clone(),
         message_id,
+        chat: None,
+    };
+    note_owner(app, owner, attachments).await;
+}
+
+/// Record the attachments of `owner`, an inbox or a workspace chat message, in the
+/// sha index.
+pub(crate) async fn note_owner(
+    app: &tauri::AppHandle,
+    owner: index::Owner,
+    attachments: Vec<Attachment>,
+) {
+    let Some(state) = app_state(app) else {
+        return;
     };
     let at = crate::weft::inbox::now_ms();
     let _ = crate::commands::await_blocking("media.note", move || {
