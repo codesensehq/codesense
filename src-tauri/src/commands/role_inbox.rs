@@ -274,6 +274,7 @@ pub async fn send_role_message_cmd(
             content_type,
             None,
             summary.as_deref(),
+            None,
         )
     })
     .await;
@@ -330,6 +331,8 @@ pub(crate) struct RoleSend {
     pub content_type: Option<crate::weft::inbox::MessageContentType>,
     pub reply_to: Option<String>,
     pub summary: Option<String>,
+    /// The story the message is about (a story's `cs:id`). Not part of the request hash.
+    pub story_id: Option<String>,
 }
 
 /// MCP's queue/notify boundary: only a committed send is offered to routines.
@@ -387,6 +390,7 @@ pub(crate) fn commit_role_send(
         send.content_type,
         send.reply_to.as_deref(),
         send.summary.as_deref(),
+        send.story_id.as_deref(),
     ) {
         Ok((message_id, delivery_id)) => Ok(serde_json::json!({
             "status": "sent",
@@ -825,6 +829,7 @@ mod tests {
                 Some(Html),
                 None,
                 summary,
+                None,
             )
         };
         let (message_id, _) = send(Some("Build is green")).unwrap();
@@ -856,6 +861,7 @@ mod tests {
             content_type: Some(crate::weft::inbox::MessageContentType::Html),
             reply_to: None,
             summary: summary.map(String::from),
+            story_id: None,
         };
         let first = commit_role_send(&store, &send(Some("Build is green")), 1_000).unwrap();
         assert_eq!(first["status"], "sent");
@@ -873,6 +879,47 @@ mod tests {
         };
         assert_eq!(
             commit_role_send(&store, &blank, 1_004).unwrap()["status"],
+            "invalid"
+        );
+    }
+
+    /// The role send's hash leaves the story out: the hash is unchanged, and a retry that
+    /// differs only in its story replays the first message with the first story.
+    #[test]
+    fn retry_ignores_story_on_a_role_send() {
+        let td = tempfile::TempDir::new().unwrap();
+        // RI-2-ALLOW: a test, no UI thread.
+        let store = WeftStore::open(td.path().join("weft.sqlite3")).unwrap();
+        let send = |story: Option<&str>| RoleSend {
+            sender: "h1".into(),
+            role: "triage".into(),
+            text: "card".into(),
+            request_id: Some("req-1".into()),
+            attach_file: None,
+            on_click: None,
+            content_type: None,
+            reply_to: None,
+            summary: None,
+            story_id: story.map(String::from),
+        };
+        let first = commit_role_send(&store, &send(Some("DEMO-5")), 1_000).unwrap();
+        assert_eq!(first["status"], "sent");
+        for story in [None, Some("DEMO-6")] {
+            let retry = commit_role_send(&store, &send(story), 1_001).unwrap();
+            assert_eq!(retry["status"], "sent");
+            assert_eq!(retry["messageId"], first["messageId"]);
+        }
+        let stored =
+            crate::weft::inbox::inbox_get(&store, first["messageId"].as_i64().unwrap())
+                .unwrap()
+                .unwrap();
+        assert_eq!(stored.story_id.as_deref(), Some("DEMO-5"));
+        let refused = RoleSend {
+            request_id: None,
+            ..send(Some("DEMO\n5"))
+        };
+        assert_eq!(
+            commit_role_send(&store, &refused, 1_002).unwrap()["status"],
             "invalid"
         );
     }

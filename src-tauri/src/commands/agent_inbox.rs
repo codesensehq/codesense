@@ -541,6 +541,9 @@ pub(crate) struct ReadMessage {
     /// Absent when there is no attachment or the owning story is unknown.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attachment_hint: Option<AttachmentHint>,
+    /// The story the message is about (a story's `cs:id`), when it carries one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub story_id: Option<String>,
 }
 
 /// SW-BSI-3: a structured hint pointing at the recovery call for a remote
@@ -619,6 +622,8 @@ pub(crate) struct InboxRow {
     /// has it. Absent for mail.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub via: Option<String>,
+    /// The story the message is about (a story's `cs:id`); `null` when it carries none.
+    pub story_id: Option<String>,
     /// SW-AGR-18: what it asks of the human — `needs-you` (waits on them) or `update`
     /// (informational). The sender's kind, else `needs-you` when it set a `replyTo`
     /// naming someone other than the human, else `update`.
@@ -967,7 +972,9 @@ pub(crate) async fn offer_queued_role(host: &dyn InboxHost, team: &LaunchTeam, r
     }
 }
 
-/// Store a message to the already-resolved `to` in the store at `path`.
+/// Store a message to the already-resolved `to` in the store at `path`. `story_id` comes
+/// normalized by the caller ([`inbox::normalize_story_id`]) and is not part of any request
+/// hash.
 #[allow(clippy::too_many_arguments)]
 async fn store_message(
     host: &Arc<dyn InboxHost>,
@@ -987,6 +994,7 @@ async fn store_message(
     request_hash: Option<String>,
     media: Option<&crate::media::MediaInput>,
     owner: MediaOwner,
+    story_id: Option<String>,
 ) -> Result<(SendResult, Option<StoredMedia>), String> {
     let request_hash = request_hash.or_else(|| {
         media?;
@@ -1058,6 +1066,7 @@ async fn store_message(
             request_id.as_deref(),
             request_hash.as_deref(),
             attachments.as_deref(),
+            story_id.as_deref(),
         )
     })
     .await?;
@@ -1166,6 +1175,7 @@ pub(crate) async fn note_to_human_with(
         request_hash,
         None,
         MediaOwner::Sender,
+        None,
     )
     .await?
     .0
@@ -1214,6 +1224,7 @@ pub(crate) async fn note_to_session_with(
         request_hash,
         None,
         MediaOwner::Sender,
+        None,
     )
     .await?
     .0
@@ -1359,6 +1370,42 @@ pub(crate) async fn send_message_request<'a>(
     request_id: Option<&str>,
     media: Option<&crate::media::MediaInput>,
 ) -> Result<SendResult, String> {
+    send_message_request_with_story(
+        host,
+        session_id,
+        to,
+        text,
+        attach_file,
+        on_click,
+        content_type,
+        reply_to,
+        summary,
+        kind,
+        request_id,
+        media,
+        None,
+    )
+    .await
+}
+
+/// [`send_message_request`] about the story `story_id` (a story's `cs:id`), which is
+/// stored on the message and is not part of the `request_id` hash.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn send_message_request_with_story<'a>(
+    host: &Arc<dyn InboxHost>,
+    session_id: impl Into<Caller<'a>>,
+    to: &str,
+    text: &str,
+    attach_file: Option<&str>,
+    on_click: Option<MessageOnClick>,
+    content_type: Option<inbox::MessageContentType>,
+    reply_to: Option<&str>,
+    summary: Option<&str>,
+    kind: Option<inbox::MessageKind>,
+    request_id: Option<&str>,
+    media: Option<&crate::media::MediaInput>,
+    story_id: Option<&str>,
+) -> Result<SendResult, String> {
     let (result, stored) = send_message_stored(
         host,
         session_id.into(),
@@ -1374,6 +1421,7 @@ pub(crate) async fn send_message_request<'a>(
         request_id,
         media,
         MediaOwner::Sender,
+        story_id,
     )
     .await?;
     // Registered here, once per send call, after the store; a replay stored nothing.
@@ -1386,7 +1434,7 @@ pub(crate) async fn send_message_request<'a>(
 /// [`send_message`], recording the message it answers (`in_reply_to`: its id and the
 /// team whose inbox holds it), with the media attachment it newly stored, if any.
 /// `reply_to` is the new message's own Reply-To address; `owner` says whose machine a
-/// `url` picture counts as.
+/// `url` picture counts as. `story_id` is stored on the message and is not hashed.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn send_message_stored(
     host: &Arc<dyn InboxHost>,
@@ -1403,10 +1451,15 @@ pub(crate) async fn send_message_stored(
     request_id: Option<&str>,
     media: Option<&crate::media::MediaInput>,
     owner: MediaOwner,
+    story_id: Option<&str>,
 ) -> Result<(SendResult, Option<StoredMedia>), String> {
     if text.trim().is_empty() && media.is_none() {
         return Ok((SendResult::invalid("the text is blank"), None));
     }
+    let story_id = match inbox::normalize_story_id(story_id) {
+        Ok(story_id) => story_id,
+        Err(e) => return Ok((SendResult::invalid(e), None)),
+    };
     let request_hash = request_id.filter(|id| !id.trim().is_empty()).map(|_| {
         let mut payload = serde_json::json!([
             to,
@@ -1499,6 +1552,7 @@ pub(crate) async fn send_message_stored(
         request_hash.clone(),
         media,
         owner,
+        story_id,
     )
     .await?;
     if matches!(result, SendResult::Sent { .. }) {
@@ -1547,17 +1601,32 @@ async fn replay_send(
 /// Resolve one stored message directly, including messages outside recent list windows.
 /// Both the approval preview and the actual reply use this lookup and selection rule.
 async fn stored_reply_recipient(path: PathBuf, message_id: i64) -> Result<Option<String>, String> {
+    Ok(stored_reply_parent(path, message_id)
+        .await?
+        .map(|(target, _)| target))
+}
+
+/// [`stored_reply_recipient`], with the answered message's story, which a reply that
+/// names none inherits.
+async fn stored_reply_parent(
+    path: PathBuf,
+    message_id: i64,
+) -> Result<Option<(String, Option<String>)>, String> {
     let original = with_store("reply", path, move |store| {
         inbox::inbox_get(store, message_id)
     })
     .await??;
-    Ok(original.map(|message| message.reply_to.unwrap_or(message.from)))
+    Ok(original.map(|message: inbox::InboxMessage| {
+        (message.reply_to.unwrap_or(message.from), message.story_id)
+    }))
 }
 
 /// Answer message `message_id` of the inbox at `own`. The reply goes to the message's
 /// `reply_to` when it names one, else to its sender: a session's own team, the human in
 /// the same team, or (for `role:<id>`) a pending delivery in that role's queue in the
-/// same team. When `marks_read`, the answered message is marked read for `from`.
+/// same team. When `marks_read`, the answered message is marked read for `from`. The
+/// reply carries `story_id`, else the answered message's story; an invalid `story_id` is
+/// refused, never replaced by the inherited one.
 #[allow(clippy::too_many_arguments)]
 async fn reply_as(
     host: &Arc<dyn InboxHost>,
@@ -1573,16 +1642,23 @@ async fn reply_as(
     request_id: Option<&str>,
     media: Option<&crate::media::MediaInput>,
     owner: MediaOwner,
+    story_id: Option<&str>,
 ) -> Result<(SendResult, Option<StoredMedia>), String> {
     if text.trim().is_empty() && media.is_none() {
         return Ok((SendResult::invalid("the text is blank"), None));
     }
-    let Some(target) = stored_reply_recipient(own.path.clone(), message_id).await? else {
+    let story_id = match inbox::normalize_story_id(story_id) {
+        Ok(story_id) => story_id,
+        Err(e) => return Ok((SendResult::invalid(e), None)),
+    };
+    let Some((target, parent_story)) = stored_reply_parent(own.path.clone(), message_id).await?
+    else {
         return Ok((
             SendResult::invalid(format_args!("no message {message_id}")),
             None,
         ));
     };
+    let story_id = Option::or(story_id, parent_story);
     let origin = InboxReplyTeam {
         org: own.team.org.clone(),
         team: own.team.team.clone(),
@@ -1612,6 +1688,7 @@ async fn reply_as(
                 None,
                 media,
                 owner,
+                story_id.clone(),
             )
             .await?
         }
@@ -1633,6 +1710,7 @@ async fn reply_as(
                 summary,
                 request_id,
                 media,
+                story_id.as_deref(),
             )
             .await?
         }
@@ -1664,6 +1742,7 @@ async fn reply_as(
                 None,
                 media,
                 owner,
+                story_id.clone(),
             )
             .await?
         }
@@ -1712,8 +1791,10 @@ async fn queue_role_reply(
 
     request_id: Option<&str>,
     media: Option<&crate::media::MediaInput>,
+    story_id: Option<&str>,
 ) -> Result<(SendResult, Option<StoredMedia>), String> {
     let queued_role = role.to_string();
+    let story_id = story_id.map(str::to_string);
     let queued_sender = from.to_string();
     let (from, role, text) = (from.to_string(), role.to_string(), text.to_string());
     let summary = summary.map(str::to_string);
@@ -1783,6 +1864,7 @@ async fn queue_role_reply(
             None,
             summary.as_deref(),
             attachments.as_deref(),
+            story_id.as_deref(),
         )
         .map(|(message_id, _delivery_id, inserted)| (message_id, inserted))
         .map_err(|e| match e {
@@ -1886,6 +1968,36 @@ pub(crate) async fn reply_request<'a>(
     request_id: Option<&str>,
     media: Option<&crate::media::MediaInput>,
 ) -> Result<SendResult, String> {
+    reply_request_with_story(
+        host,
+        session_id,
+        message_id,
+        text,
+        summary,
+        kind,
+        content_type,
+        request_id,
+        media,
+        None,
+    )
+    .await
+}
+
+/// [`reply_request`] about the story `story_id` (a story's `cs:id`); with none the reply
+/// carries the answered message's story. Not part of the `request_id` hash.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn reply_request_with_story<'a>(
+    host: &Arc<dyn InboxHost>,
+    session_id: impl Into<Caller<'a>>,
+    message_id: i64,
+    text: &str,
+    summary: Option<&str>,
+    kind: Option<inbox::MessageKind>,
+    content_type: Option<inbox::MessageContentType>,
+    request_id: Option<&str>,
+    media: Option<&crate::media::MediaInput>,
+    story_id: Option<&str>,
+) -> Result<SendResult, String> {
     let session_id = session_id.into();
     let sessions = host.sessions().await?;
     let caller = match caller_handle(&sessions, session_id) {
@@ -1908,6 +2020,7 @@ pub(crate) async fn reply_request<'a>(
                 request_id,
                 media,
                 MediaOwner::Sender,
+                story_id,
             )
             .await?
         }
@@ -1926,6 +2039,7 @@ pub(crate) async fn reply_request<'a>(
                 request_id,
                 media,
                 MediaOwner::Sender,
+                story_id,
             )
             .await?
         }
@@ -1983,6 +2097,7 @@ pub(crate) async fn reply_from_human_with_media(
         None,
         media,
         MediaOwner::Human,
+        None,
     )
     .await?;
     if let Some(stored) = &stored {
@@ -2271,6 +2386,7 @@ pub(crate) async fn read_messages<'a>(
             primary_file: m.primary_file,
             attachments,
             attachment_hint,
+            story_id: m.story_id,
         });
     }
     Ok(results)
@@ -2686,6 +2802,7 @@ pub(crate) fn inbox_row(
         reply_to: m.reply_to,
         summary: m.summary,
         via: m.via,
+        story_id: m.story_id,
         kind,
         reactions: Vec::new(),
     }

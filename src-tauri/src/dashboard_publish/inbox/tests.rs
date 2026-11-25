@@ -641,6 +641,25 @@ async fn meta_and_media_fields_are_opt_in_and_hide_the_source() {
     }
 }
 
+#[tokio::test]
+async fn story_id_never_reaches_a_dashboard_and_the_catalog_refuses_story() {
+    let (host, ctx, call) = fixture();
+    store::inbox_insert_request_outcome(
+        &WeftStore::open(host.path("emea")).unwrap(),
+        "agent", "human", "card", None, None, None, None, None, None, None, None, None, None,
+        None, Some("DEMO-5"),
+    )
+    .unwrap();
+    for fields in [&[][..], &["meta"][..], &["text", "meta", "media", "reactions"][..]] {
+        let mut c = call.clone();
+        c.fields = fields.iter().map(|f| f.to_string()).collect();
+        let answer = query(ctx.clone(), c).await.unwrap().to_string();
+        assert!(!answer.contains("storyId") && !answer.contains("DEMO-5"), "{fields:?}: {answer}");
+    }
+    assert!(matches!(args(json!({"story": "DEMO-5"})), Err(QueryError::InvalidArgs(_))));
+    assert!(MessageArgs::parse(json!({"to": "human", "text": "x", "storyId": "DEMO-5"})).is_err());
+}
+
 /// What the hosted projection never carries about provider media: its URL, host or id, or
 /// its view-ping state.
 const PROVIDER_LEAKS: &[&str] = &[

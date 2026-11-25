@@ -771,6 +771,10 @@ impl WeftStore {
         // When the recipient's agent was first told about the message: a notice covering
         // it was confirmed (epoch ms). Nullable — NULL means not told yet.
         ensure_column(&conn, "wv_inbox", "told_at", "INTEGER")?;
+        // The story the message is about: the story's `cs:id`, exactly as the sender gave it
+        // (trimmed). Nullable — NULL means no story. A reply without one inherits its
+        // parent's when it is written.
+        ensure_column(&conn, "wv_inbox", "story_id", "TEXT")?;
         // When a pin was unpinned (epoch ms). Nullable: NULL is a live pin. An unpinned
         // pin keeps its row so a restore (the Undo) brings it back as it was.
         ensure_column(&conn, "wv_pins", "removed_at", "INTEGER")?;

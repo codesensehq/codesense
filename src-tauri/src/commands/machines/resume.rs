@@ -1056,6 +1056,7 @@ mod tests {
                 reply_to: None,
                 summary: None,
                 kind: None,
+                story_id: None,
             };
             row.read_at_ms = read.then_some(1);
             row.withdrawn_at_ms = withdrawn.then_some(1);

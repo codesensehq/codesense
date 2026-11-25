@@ -278,6 +278,10 @@ pub struct InboxMessage {
     /// SW-AGR-18: the kind the sender set, as stored; `None` when it set none. Lanes use
     /// [`InboxMessage::effective_kind`].
     pub kind: Option<MessageKind>,
+    /// The story the message is about: the story's `cs:id` as the sender gave it, stored
+    /// by [`normalize_story_id`]. A reply without one carries its parent's. `None` → no
+    /// story.
+    pub story_id: Option<String>,
 }
 
 impl InboxMessage {
@@ -332,6 +336,57 @@ pub fn normalize_summary(raw: Option<&str>) -> Option<String> {
     cut.truncate(cut.trim_end().len());
     cut.push('…');
     Some(cut)
+}
+
+/// The longest stored [`InboxMessage::story_id`], in chars.
+pub const STORY_ID_MAX_CHARS: usize = 128;
+
+/// A Unicode format (Cf) character: the spoofing set a summary drops, plus the rest of
+/// the category (soft hyphen, word joiners, invisible operators, tags, ...).
+fn is_format_char(c: char) -> bool {
+    is_spoofing_format_char(c)
+        || matches!(
+            c,
+            '\u{00AD}'
+                | '\u{0600}'..='\u{0605}'
+                | '\u{061C}'
+                | '\u{06DD}'
+                | '\u{070F}'
+                | '\u{0890}'..='\u{0891}'
+                | '\u{08E2}'
+                | '\u{180E}'
+                | '\u{2060}'..='\u{2064}'
+                | '\u{206A}'..='\u{206F}'
+                | '\u{FFF9}'..='\u{FFFB}'
+                | '\u{110BD}'
+                | '\u{110CD}'
+                | '\u{13430}'..='\u{1343F}'
+                | '\u{1BCA0}'..='\u{1BCA3}'
+                | '\u{1D173}'..='\u{1D17A}'
+                | '\u{E0001}'
+                | '\u{E0020}'..='\u{E007F}'
+        )
+}
+
+/// A sender's story id as the store keeps it: trimmed, blank → `None`. One over
+/// [`STORY_ID_MAX_CHARS`] chars, or carrying a control, format or line/paragraph
+/// separator character, is refused, never cut or cleaned: a story id is matched exactly.
+pub fn normalize_story_id(raw: Option<&str>) -> WvWriteResult<Option<String>> {
+    let Some(story) = raw.map(str::trim).filter(|s| !str::is_empty(s)) else {
+        return Ok(None);
+    };
+    if Iterator::count(str::chars(story)) > STORY_ID_MAX_CHARS {
+        return Err(invalid("storyId must be at most 128 characters"));
+    }
+    if story
+        .chars()
+        .any(|c| c.is_control() || is_format_char(c) || matches!(c, '\u{2028}' | '\u{2029}'))
+    {
+        return Err(invalid(
+            "storyId must not contain control, format or separator characters",
+        ));
+    }
+    Ok(Some(story.to_string()))
 }
 
 /// The prefix that marks a [`InboxMessage::reply_to`] as a role queue.
@@ -399,7 +454,7 @@ pub struct InboxUnread {
 }
 
 const SELECT_COLUMNS: &str =
-    "SELECT id, sender, recipient, text, created_at, read_at, in_reply_to, in_reply_to_org, in_reply_to_team, primary_file, archived_at, withdrawn_at, on_click, content_type, via, reply_to, summary, kind, attachments, told_at FROM wv_inbox";
+    "SELECT id, sender, recipient, text, created_at, read_at, in_reply_to, in_reply_to_org, in_reply_to_team, primary_file, archived_at, withdrawn_at, on_click, content_type, via, reply_to, summary, kind, attachments, told_at, story_id FROM wv_inbox";
 
 fn row_to_message(r: &rusqlite::Row<'_>) -> rusqlite::Result<InboxMessage> {
     let org: Option<String> = r.get(7)?;
@@ -439,6 +494,7 @@ fn row_to_message(r: &rusqlite::Row<'_>) -> rusqlite::Result<InboxMessage> {
             .get::<_, Option<String>>(16)?
             .filter(|s| !s.trim().is_empty()),
         kind: MessageKind::from_stored(r.get::<_, Option<String>>(17)?.as_deref()),
+        story_id: r.get::<_, Option<String>>(20)?,
     })
 }
 
@@ -764,11 +820,14 @@ pub(crate) fn inbox_insert_request(
         request_id,
         request_hash,
         None,
+        None,
     )
     .map(|(id, _)| id)
 }
 
-/// The insert decision is made in the same transaction as the retry receipt.
+/// The insert decision is made in the same transaction as the retry receipt. `story_id`
+/// is stored by [`normalize_story_id`] and is not part of the retry hash: a retry that
+/// differs only in its story replays the first message.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn inbox_insert_request_outcome(
     store: &WeftStore,
@@ -786,7 +845,9 @@ pub(crate) fn inbox_insert_request_outcome(
     request_id: Option<&str>,
     request_hash: Option<&str>,
     attachments: Option<&[crate::media::Attachment]>,
+    story_id: Option<&str>,
 ) -> WvWriteResult<(i64, bool)> {
+    let story_id = normalize_story_id(story_id)?;
     let text = if text.trim().is_empty() && attachments.is_some_and(|a| !a.is_empty()) {
         String::new()
     } else {
@@ -835,9 +896,9 @@ pub(crate) fn inbox_insert_request_outcome(
         }
     }
     tx.execute(
-        "INSERT INTO wv_inbox (sender, recipient, text, created_at, in_reply_to, in_reply_to_org, in_reply_to_team, primary_file, on_click, content_type, reply_to, summary, kind, attachments) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
-        params![from, to, text, now_ms(), in_reply_to, reply_org, reply_team, primary_file, on_click_json, content_type_str, reply_to, summary, kind, attachments_json],
+        "INSERT INTO wv_inbox (sender, recipient, text, created_at, in_reply_to, in_reply_to_org, in_reply_to_team, primary_file, on_click, content_type, reply_to, summary, kind, attachments, story_id) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        params![from, to, text, now_ms(), in_reply_to, reply_org, reply_team, primary_file, on_click_json, content_type_str, reply_to, summary, kind, attachments_json, story_id],
     )?;
     let id = tx.last_insert_rowid();
     write_audit_public(&tx, INBOX, "append", id)?;
@@ -2569,6 +2630,218 @@ mod tests {
             Some(team)
         );
         assert_eq!(inbox_list(&reopened).unwrap().len(), 3);
+    }
+
+    // ---------- story ids ----------
+
+    /// A message to the human tagged with `story`, under retry key `request_id`.
+    fn insert_story(
+        store: &WeftStore,
+        story: Option<&str>,
+        request_id: Option<&str>,
+    ) -> WvWriteResult<(i64, bool)> {
+        inbox_insert_request_outcome(
+            store, "H1", HUMAN, "card", None, None, None, None, None, None, None, None,
+            request_id, None, None, story,
+        )
+    }
+
+    fn columns(path: &std::path::Path) -> Vec<String> {
+        let conn = rusqlite::Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let mut stmt = conn.prepare("PRAGMA table_info(wv_inbox)").unwrap();
+        let names = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        names
+    }
+
+    #[test]
+    fn story_id_migration_adds_the_column_and_keeps_every_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy.sqlite3");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE wv_inbox (id INTEGER PRIMARY KEY AUTOINCREMENT, sender TEXT NOT NULL,
+             recipient TEXT NOT NULL, text TEXT NOT NULL, created_at INTEGER NOT NULL,
+             read_at INTEGER, in_reply_to INTEGER);
+             INSERT INTO wv_inbox VALUES (1,'H1','H2','original',10,77,NULL);
+             INSERT INTO wv_inbox VALUES (2,'H2','H1','legacy reply',20,NULL,1);",
+        )
+        .unwrap();
+        drop(conn);
+        assert!(!columns(&path).iter().any(|c| c == "story_id"));
+
+        let store = WeftStore::open(&path).unwrap();
+        let rows = inbox_list(&store).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|m| m.story_id.is_none()));
+        let original = inbox_get(&store, 1).unwrap().unwrap();
+        assert_eq!(
+            (original.text.as_str(), original.read_at_ms, original.created_at_ms),
+            ("original", Some(77), 10)
+        );
+        let migrated = columns(&path);
+        assert!(migrated.iter().any(|c| c == "story_id"));
+        drop(store);
+
+        // A second open, as a fresh process would make it, adds nothing and changes no row.
+        crate::weft::sqlite::reset_cached_store_for_test(&path);
+        let reopened = WeftStore::open(&path).unwrap();
+        assert_eq!(columns(&path), migrated);
+        assert_eq!(inbox_list(&reopened).unwrap(), rows);
+        // On a read-only connection the column is already there, so nothing is written.
+        let read_only = rusqlite::Connection::open_with_flags(
+            &path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        crate::shared::sqlite::ensure_column(&read_only, "wv_inbox", "story_id", "TEXT").unwrap();
+        // An older build names its columns, so its insert still works and stores no story.
+        reopened
+            .conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO wv_inbox (sender, recipient, text, created_at) \
+                 VALUES ('H1', 'H2', 'older build', 30)",
+                [],
+            )
+            .unwrap();
+        let all = inbox_list(&reopened).unwrap();
+        assert_eq!(all.len(), 3);
+        assert!(all.iter().all(|m| m.story_id.is_none()));
+    }
+
+    #[test]
+    fn story_id_round_trips_trimmed_and_blank_is_none() {
+        let (_dir, store) = open_temp();
+        let story = |id| inbox_get(&store, id).unwrap().unwrap().story_id;
+        let (tagged, _) = insert_story(&store, Some("  DEMO-5 "), None).unwrap();
+        assert_eq!(story(tagged).as_deref(), Some("DEMO-5"));
+        for blank in [None, Some(""), Some("   "), Some(" \t\n ")] {
+            let (id, _) = insert_story(&store, blank, None).unwrap();
+            assert_eq!(story(id), None, "{blank:?}");
+        }
+        // The plain inserts store none.
+        assert_eq!(story(mail(&store, "H2")), None);
+        // Stored exactly as given: case is kept.
+        let (lower, _) = insert_story(&store, Some("demo-5"), None).unwrap();
+        assert_eq!(story(lower).as_deref(), Some("demo-5"));
+    }
+
+    #[test]
+    fn story_id_over_the_cap_or_with_control_or_format_chars_is_refused() {
+        let (_dir, store) = open_temp();
+        // Counted in chars, not bytes: 128 two-byte chars are accepted.
+        let at_cap = "é".repeat(STORY_ID_MAX_CHARS);
+        let (id, _) = insert_story(&store, Some(&at_cap), None).unwrap();
+        assert_eq!(
+            inbox_get(&store, id).unwrap().unwrap().story_id,
+            Some(at_cap)
+        );
+        let before = inbox_list(&store).unwrap().len();
+        let mut refused = vec!["a".repeat(STORY_ID_MAX_CHARS + 1)];
+        for c in [
+            '\0', '\n', '\u{7F}', '\u{85}', '\u{00AD}', '\u{200B}', '\u{202E}', '\u{2028}',
+            '\u{2029}', '\u{2060}', '\u{FEFF}', '\u{E0041}',
+        ] {
+            refused.push(format!("DEMO{c}5"));
+        }
+        for raw in &refused {
+            assert!(
+                matches!(normalize_story_id(Some(raw)), Err(WvWriteError::Invalid(_))),
+                "{raw:?}"
+            );
+            // Refused, never truncated: no row is written.
+            assert!(
+                matches!(
+                    insert_story(&store, Some(raw), None),
+                    Err(WvWriteError::Invalid(_))
+                ),
+                "{raw:?}"
+            );
+            assert!(
+                crate::weft::role_inbox::send_role_message_commit_with_reply_to(
+                    &store, "H1", "triage", "card", None, None, None, "", 0, None, None, None,
+                    None, None, Some(raw),
+                )
+                .is_err(),
+                "{raw:?}"
+            );
+        }
+        assert_eq!(inbox_list(&store).unwrap().len(), before);
+        for ok in ["DEMO-5", "story_2", "Été-1"] {
+            assert_eq!(normalize_story_id(Some(ok)).unwrap().as_deref(), Some(ok));
+        }
+    }
+
+    #[test]
+    fn story_id_is_stored_on_a_role_message() {
+        let (_dir, store) = open_temp();
+        let (tagged, _) = crate::weft::role_inbox::send_role_message_commit_with_reply_to(
+            &store, "H1", "triage", "card", None, None, None, "", 0, None, None, None, None,
+            None, Some(" DEMO-5 "),
+        )
+        .unwrap();
+        let (plain, _) = crate::weft::role_inbox::send_role_message_commit(
+            &store, "H1", "triage", "card", None, None, None, "", 0, None, None, None,
+        )
+        .unwrap();
+        let story = |id| inbox_get(&store, id).unwrap().unwrap().story_id;
+        assert_eq!(story(tagged).as_deref(), Some("DEMO-5"));
+        assert_eq!(story(plain), None);
+    }
+
+    /// No request hash reads the story: the receipt's hash is the one this build's
+    /// predecessor computed, and a retry that differs only in its story replays the first
+    /// message, story and all.
+    #[test]
+    fn retry_ignores_story_on_the_inbox_insert() {
+        let (_dir, store) = open_temp();
+        let (first, inserted) = insert_story(&store, None, Some("k1")).unwrap();
+        assert!(inserted);
+        let hash: String = store
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT payload_hash FROM wv_send_message_request WHERE request_id = 'mail:H1:k1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let unchanged = request_payload_hash(&serde_json::json!([
+            "H1",
+            HUMAN,
+            "card",
+            None::<i64>,
+            None::<&str>,
+            None::<&str>,
+            None::<&str>,
+            None::<String>,
+            None::<&str>,
+            None::<&str>,
+            None::<String>,
+            None::<&str>
+        ]));
+        assert_eq!(hash, unchanged);
+        assert_eq!(
+            insert_story(&store, Some("DEMO-5"), Some("k1")).unwrap(),
+            (first, false)
+        );
+        assert_eq!(inbox_get(&store, first).unwrap().unwrap().story_id, None);
+        let (tagged, _) = insert_story(&store, Some("DEMO-5"), Some("k2")).unwrap();
+        assert_eq!(insert_story(&store, None, Some("k2")).unwrap(), (tagged, false));
+        assert_eq!(insert_story(&store, Some("DEMO-6"), Some("k2")).unwrap(), (tagged, false));
+        assert_eq!(
+            inbox_get(&store, tagged).unwrap().unwrap().story_id.as_deref(),
+            Some("DEMO-5")
+        );
+        assert_eq!(inbox_list(&store).unwrap().len(), 2);
     }
 
     #[test]

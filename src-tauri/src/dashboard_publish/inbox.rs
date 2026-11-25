@@ -463,6 +463,7 @@ pub(crate) async fn deliver(
             content_type: Some(MessageContentType::Plain),
             reply_to: None,
             summary: Some(summary),
+            story_id: None,
         };
         let result = crate::commands::await_blocking("dashboard inbox", move || {
             // RI-2-ALLOW: SQLite work runs on the blocking pool.

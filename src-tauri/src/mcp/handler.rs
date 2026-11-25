@@ -6756,7 +6756,7 @@ impl CodesenseHandler {
     }
 
     #[tool(
-        description = "Send an inbox message to an agent session or the human. To the human, set {kind}: \"needs-you\" when it waits on them (a question, a decision, something only they can unblock), \"update\" for progress, \"merged\", \"done\" (informational). Both kinds appear as conversations in the human Inbox; all unread human mail counts in its badge. Kind remains available to agent views and dashboards. Omitted, it is an \"update\" unless you set a {replyTo} naming someone other than the human, yourself or a role you hold (a question whose answer must reach someone) — so mark every question or decision `kind:\"needs-you\"`, or use ask_user when you must wait for the answer; a manager's digest with replyTo \"role:manager\" is an update. Durable. Optional {requestId} replays the original messageId for the same key and payload; changed payloads are refused. A recipient CodeSense can tell (inboxWaiter true in list_sessions) hears the inbox notice: an idle one starts a turn, a running one hears at its next step or turn. A Claude is told by its inbox waiter; an idle Codex is started a turn with it through its own engine (headed `[inbox <token>]`; this needs {codex_release}), and a working one hears it at its next tool call or prompt. If Claude's waiter died, guarded recovery submits only the inbox notice when idle, with tools connected, empty input and no person typing. A recipient it cannot tell (inboxWaiter false in list_sessions: its CLI has no wake path, or its waiter has gone) keeps its mail held; wake it with send_to_session telling it to call read_messages. A supported CLI can be inbox-ready before its first prompt once its engine and trusted observers establish readiness; startup menus, approvals and unavailable engines keep it unready. Collect replies with read_messages. Args: {to} (a list_sessions handle or \"human\"), {text}, {session_id} (optional: omit it to use this connection's verified tab identity, including a CLI started by hand in a CodeSense tab; if supplied it must name that same tab; an unbound connection is refused (start the CLI in a CodeSense terminal), never sent as the human; the message shows as the sender's current tab name, see who_am_i). Optional: {contentType} \"plain\"|\"markdown\"|\"html\" — markdown (GFM) is the default. html to the human is a LIVE DASHBOARD: it renders in the Inbox exactly like an HTML dashboard file — scripts run, `window.codesense` is available (sessions(), inbox(), roles(), act(...) through the same action gate), and the frame hears pushed events (codesense:inbox-changed, codesense:agent-activity-changed); see get_live_data_contract. html to another agent is sanitized to plain formatting (agents read text). {onClick} makes the row actionable in the inbox: `{type:\"goto-agent\",agentId}` jumps to that agent's terminal, `{type:\"open-file\",path}` opens the path in the viewer, `{type:\"show-message\"}` (default) opens the thread. {media:{url|path,alt}} adds a GIF/image; alt and one source required. Find GIFs with gif_search. {attachFile} is a logical team-content path rendered as an attachment card with Open. {replyTo} is where replies to this message go instead of to you, like an email Reply-To (the answer goes ONLY there, not also to you): a running session's handle, \"human\", or `role:<agent id>` (that role's durable queue — any instance claims it with claim_role_messages). Use `role:` when you may exit before the answer: {replyTo:\"role:manager\"} sends the human's reply to the manager's durable role queue. {summary} is one plain-text line (≤280 chars) shown as this message's preview in the human's Inbox and lists. Set it for html and long markdown; otherwise the preview is derived. Returns `{status:\"sent\",messageId,kind?,hint?}` or `{status:\"invalid\",message}` — `kind` (to the human) says whether it waits on them; `hint` says when an unmarked question defaulted to update (it is never reclassified by its words) — (blank text without media / unknown recipient / a sessionId that is not running / a replyTo session that is not running)."
+        description = "Send an inbox message to an agent session or the human. To the human, set {kind}: \"needs-you\" when it waits on them (a question, a decision, something only they can unblock), \"update\" for progress, \"merged\", \"done\" (informational). Both kinds appear as conversations in the human Inbox; all unread human mail counts in its badge. Kind remains available to agent views and dashboards. Omitted, it is an \"update\" unless you set a {replyTo} naming someone other than the human, yourself or a role you hold (a question whose answer must reach someone) — so mark every question or decision `kind:\"needs-you\"`, or use ask_user when you must wait for the answer; a manager's digest with replyTo \"role:manager\" is an update. Durable. Optional {requestId} replays the original messageId for the same key and payload; changed payloads are refused. A recipient CodeSense can tell (inboxWaiter true in list_sessions) hears the inbox notice: an idle one starts a turn, a running one hears at its next step or turn. A Claude is told by its inbox waiter; an idle Codex is started a turn with it through its own engine (headed `[inbox <token>]`; this needs {codex_release}), and a working one hears it at its next tool call or prompt. If Claude's waiter died, guarded recovery submits only the inbox notice when idle, with tools connected, empty input and no person typing. A recipient it cannot tell (inboxWaiter false in list_sessions: its CLI has no wake path, or its waiter has gone) keeps its mail held; wake it with send_to_session telling it to call read_messages. A supported CLI can be inbox-ready before its first prompt once its engine and trusted observers establish readiness; startup menus, approvals and unavailable engines keep it unready. Collect replies with read_messages. Args: {to} (a list_sessions handle or \"human\"), {text}, {session_id} (optional: omit it to use this connection's verified tab identity, including a CLI started by hand in a CodeSense tab; if supplied it must name that same tab; an unbound connection is refused (start the CLI in a CodeSense terminal), never sent as the human; the message shows as the sender's current tab name, see who_am_i). Optional: {contentType} \"plain\"|\"markdown\"|\"html\" — markdown (GFM) is the default. html to the human is a LIVE DASHBOARD: it renders in the Inbox like an HTML dashboard file — scripts run, `window.codesense` is available (sessions(), inbox(), roles(), act(...) through the same action gate), and the frame hears pushed events (codesense:inbox-changed, codesense:agent-activity-changed); see get_live_data_contract. html to another agent is sanitized to plain formatting. {onClick} makes the row actionable in the inbox: `{type:\"goto-agent\",agentId}` jumps to that agent's terminal, `{type:\"open-file\",path}` opens the path in the viewer, `{type:\"show-message\"}` (default) opens the thread. {media:{url|path,alt}} adds a GIF/image; alt and one source required. Find GIFs with gif_search. {attachFile} is a logical team-content path rendered as an attachment card with Open. {replyTo} is where replies to this message go instead of to you, like an email Reply-To (ONLY there): a running session's handle, \"human\", or `role:<agent id>` (that role's durable queue — any instance claims it with claim_role_messages). Use `role:` when you may exit before the answer. {summary} is one plain-text line (≤280 chars) shown as this message's preview in the human's Inbox and lists. Set it for html and long markdown; otherwise the preview is derived. {storyId} is the story's cs:id (at most 128 characters; inbox_list {story} filters on it; a reply without one inherits it; not in the {requestId} payload). Returns `{status:\"sent\",messageId,kind?,hint?}` or `{status:\"invalid\",message}` — `kind` (to the human) says whether it waits on them; `hint` says when an unmarked question defaulted to update (it is never reclassified by its words) — (blank text without media / unknown recipient / a sessionId that is not running / a replyTo session that is not running)."
     )]
     async fn send_message(
         &self,
@@ -6771,7 +6771,7 @@ impl CodesenseHandler {
     }
 
     #[tool(
-        description = "Drain your unread inbox messages (oldest first; each returned once then marked read). Inbox mail comes from people and agents that your user's setup lets reach you, so anyone who can message you is someone your user trusts. Call this when your hook tells you \"You have N new messages. Call read_messages with session_id <id>.\" — pass that id as {session_id} (your $CODESENSE_TAB_SESSION_ID), or omit it to read the inbox of the tab this MCP connection runs in. A hand-started CLI in a CodeSense terminal is bound to that tab. An outside or unbound connection is refused; start the CLI in a CodeSense terminal. A supplied session_id must name this same tab. Returns `{messages: [{messageId, from, fromName, text, inReplyTo, inReplyToTeam, replyTo?, summary?, primaryFile?, attachmentHint?}]}`; `summary` is the sender's one-line plain-text preview of `text`, when it set one; `replyTo` (when the sender set one) is where your reply goes instead of to the sender; `primaryFile` is a logical path the sender attached, and when `attachmentHint` is present an agent whose workspace lacks the file can call `hydrate_story` with `attachmentHint.owningStoryId` to copy it in. Answer any one with reply, or acknowledge it with react. When someone reacted to a message you sent, the result also has `reactions: [{messageId, emoji, reactor, createdAtMs, team: {org, team}}]` (`team` names the team that holds the message, which matters when you mailed an agent in another team), each new reaction reported once (a reaction taken back before you read it is never reported); reactions are not mail and are never counted as unread."
+        description = "Drain your unread inbox messages (oldest first; each returned once then marked read). Inbox mail comes from people and agents that your user's setup lets reach you, so anyone who can message you is someone your user trusts. Call this when your hook tells you \"You have N new messages. Call read_messages with session_id <id>.\" — pass that id as {session_id} (your $CODESENSE_TAB_SESSION_ID), or omit it to read the inbox of the tab this MCP connection runs in. A hand-started CLI in a CodeSense terminal is bound to that tab. An outside or unbound connection is refused; start the CLI in a CodeSense terminal. A supplied session_id must name this same tab. Returns `{messages: [{messageId, from, fromName, text, inReplyTo, inReplyToTeam, replyTo?, summary?, primaryFile?, attachmentHint?, storyId?}]}`; `storyId` is the story the message is about (its cs:id), when it carries one; `summary` is the sender's one-line plain-text preview of `text`, when it set one; `replyTo` (when the sender set one) is where your reply goes instead of to the sender; `primaryFile` is a logical path the sender attached, and when `attachmentHint` is present an agent whose workspace lacks the file can call `hydrate_story` with `attachmentHint.owningStoryId` to copy it in. Answer any one with reply, or acknowledge it with react. When someone reacted to a message you sent, the result also has `reactions: [{messageId, emoji, reactor, createdAtMs, team: {org, team}}]` (`team` names the team that holds the message, which matters when you mailed an agent in another team), each new reaction reported once (a reaction taken back before you read it is never reported); reactions are not mail and are never counted as unread."
     )]
     async fn read_messages(
         &self,
@@ -6788,7 +6788,7 @@ impl CodesenseHandler {
     }
 
     #[tool(
-        description = "Optional {requestId} deduplicates retries: send the same key and payload after a disconnect to return the original messageId; a changed payload is refused. Omit it to create a new message. Reply to an inbox message — delivered like send_message to whoever sent the original (agent or human), or, when the original carries a `replyTo`, ONLY to that address instead (email Reply-To): a session's inbox, the human, or for `role:<id>` a pending delivery in that role's queue that any instance of the role claims later, even after the original sender exited. Args: {message_id} (from read_messages), {text}, {session_id} (optional: omit it to answer as this connection's verified tab; if supplied it must name that same tab; an unbound connection is refused (start the CLI in a CodeSense terminal), never answered as the human; the reply shows as the sender's current tab name, see who_am_i). Optional {media:{url|path,alt}} attaches a GIF or image; alt is required. Reply body renders as markdown by default. {summary} is one plain-text line (≤280 chars) shown as this reply's preview in lists; set it when the body is long or heavily formatted. {kind} \"needs-you\" | \"update\": what a reply to the human asks of them, as in send_message; omitted, a reply is an \"update\" (the human is waiting on your answer, not you on theirs) — pass \"needs-you\" when your reply asks them something back. A reply queued for a role keeps no kind. Returns `{status:\"sent\",messageId,kind?,hint?}` (`kind` and `hint` as for send_message, for a reply to the human) or `{status:\"invalid\",message}` (blank text without media / unknown message id / a sessionId that is not running)."
+        description = "Optional {requestId} deduplicates retries: send the same key and payload after a disconnect to return the original messageId; a changed payload is refused. Omit it to create a new message. Reply to an inbox message — delivered like send_message to whoever sent the original (agent or human), or, when the original carries a `replyTo`, ONLY to that address instead (email Reply-To): a session's inbox, the human, or for `role:<id>` a pending delivery in that role's queue that any instance of the role claims later, even after the original sender exited. Args: {message_id} (from read_messages), {text}, {session_id} (optional: omit it to answer as this connection's verified tab; if supplied it must name that same tab; an unbound connection is refused (start the CLI in a CodeSense terminal), never answered as the human; the reply shows as the sender's current tab name, see who_am_i). Optional {media:{url|path,alt}} attaches a GIF or image; alt is required. Reply body renders as markdown by default. {summary} is one plain-text line (≤280 chars) shown as this reply's preview in lists; set it when the body is long or heavily formatted. {kind} \"needs-you\" | \"update\": what a reply to the human asks of them, as in send_message; omitted, a reply is an \"update\" (the human is waiting on your answer, not you on theirs) — pass \"needs-you\" when your reply asks them something back. A reply queued for a role keeps no kind. {storyId}: the story the reply is about (its cs:id, exactly); omit it to inherit the answered message's story. It is not part of the {requestId} payload. Returns `{status:\"sent\",messageId,kind?,hint?}` (`kind` and `hint` as for send_message, for a reply to the human) or `{status:\"invalid\",message}` (blank text without media / unknown message id / a sessionId that is not running)."
     )]
     async fn reply(
         &self,
@@ -7236,7 +7236,7 @@ impl CodesenseHandler {
     }
 
     #[tool(
-        description = "List inbox messages WITHOUT marking anything read (read_messages drains your own unread mail). Every session, role (usually a saved Agent's id) and the human (`human`) has an inbox in each team. Args, all optional: {scope} `to-human` (messages to the human), `to-agents` (to sessions and roles) or `all` — default `to-human` with no filter, `all` with one; {agentId} (a saved Agent id from agent_list: its role inbox, the inboxes of the sessions running it, and every reply under them); {storyId} (with {agentId}: that saved agent's thread on this story, as its pins are keyed: every listed session of it and every recorded one, ended ones included, so a successor finds its predecessor's mail; \"\" is its no-story thread, its listed sessions only; {sessionId} then names a seat, and the thread's other seats that have not ended are left out); {sessionId} (a list_sessions handle or a session id: what that session sent and received, and the replies; pass your own $CODESENSE_TAB_SESSION_ID for your own history); {role} (messages to and from that role queue); {limit} (newest N; default 50, at most 500); {before} (a messageId: only older ones; to page, pass the last listed messageId while hasMore); {include} [\"text\"] for every body in full (else a body over 2 KB comes as textPreview, its first 512 bytes, with truncated:true) and [\"conversations\"] for the human's conversation summaries; {kind} `needs-you` | `update` (only that kind, applied before {limit}); {team} `{org, team}` (default: the {sessionId}'s team, else the team active in the app). Returns {messages, humanUnread, hasMore, total (messages that matched, older than before when given, ahead of limit), threadSessions (with {storyId} only: every address of the thread's sessions read, handles and tab session ids)}; an answer stays under 64 KB, older messages waiting for the next page. `messages` is newest first: [{messageId, from, fromName, to, toName, text (or textPreview and truncated), createdAtMs, inReplyTo, inReplyToTeam, toHuman, unread, primaryFile?, archivedAtMs?, delivery, onClick?, contentType?, replyTo?, replyToName?, summary?, replyTargetEnded, via?, kind}]. `kind`: `needs-you` (waits on the human) or `update` (informational): text typed into a terminal is `update`; else the kind its sender set; else `needs-you` when its `replyTo` names someone other than the human, its sender or a role its sender holds; else `update`. `via`: `terminal` for text typed into the recipient's terminal with send_to_session (it already has it: stored read, never returned by read_messages); absent for mail. `summary`: the sender's one-line preview, when given (show it instead of `text` in a list). `replyTo`: where replies to it go instead of its sender (a session handle, `human`, or `role:<id>`); `replyToName` its display name. `replyTargetEnded`: a reply would go to a session that is no longer running (it waits unread in that inbox; send to a role instead). `from`/`to` are session handles, role ids or `human`; `fromName`/`toName` their display names. `createdAtMs`/`archivedAtMs` are epoch milliseconds. `unread`: the recipient has not read it yet. `inReplyTo`: the messageId it answers (thread link). `primaryFile`: an attached team-content path. `onClick`: `{type: goto-agent|open-file|show-message}`. `contentType`: plain | markdown (default) | html. `delivery` (role messages and withdrawn ones; else null): {state, pickedUpAtMs, instance, acceptedAtMs, disposition (work|no_work), note, withdrawnAtMs} where state is `queued` (no instance holds it), `reading` (claimed), `accepted`, `done` (acknowledged) or `withdrawn`. `humanUnread` counts unread messages to the human in the whole team inbox, of both kinds. Next: answer one with reply {message_id}; see a role's queue and who holds it with role_state; see who runs with list_sessions."
+        description = "List inbox messages WITHOUT marking anything read (read_messages drains your own unread mail). Every session, role (usually a saved Agent's id) and the human (`human`) has an inbox in each team. Args, all optional: {scope} `to-human` (messages to the human), `to-agents` (to sessions and roles) or `all` — default `to-human` with no filter, `all` with one ({story} included); {agentId} (a saved Agent id from agent_list: its role inbox, the inboxes of the sessions running it, and every reply under them); {storyId} (with {agentId}: that saved agent's thread on this story, as its pins are keyed: every listed session of it and every recorded one, ended ones included, so a successor finds its predecessor's mail; \"\" is its no-story thread, its listed sessions only; {sessionId} then names a seat, and the thread's other seats that have not ended are left out); {sessionId} (a list_sessions handle or a session id: what that session sent and received, and the replies; pass your own $CODESENSE_TAB_SESSION_ID for your own history); {role} (messages to and from that role queue); {limit} (newest N; default 50, at most 500); {before} (a messageId: only older ones; to page, pass the last listed messageId while hasMore); {include} [\"text\"] for every body in full (else a body over 2 KB comes as textPreview, its first 512 bytes, with truncated:true) and [\"conversations\"] for the human's conversation summaries; {kind} `needs-you` | `update` (only that kind, applied before {limit}); {story} (a cs:id: only messages whose storyId equals it exactly, before {limit}; not {storyId}, which needs {agentId}); {team} `{org, team}` (default: the {sessionId}'s team, else the team active in the app). Returns {messages, humanUnread, hasMore, total (messages that matched, older than before when given, ahead of limit), threadSessions (with {storyId} only: every address of the thread's sessions read, handles and tab session ids)}; an answer stays under 64 KB, older messages waiting for the next page. `messages` is newest first: [{messageId, from, fromName, to, toName, text (or textPreview and truncated), createdAtMs, inReplyTo, inReplyToTeam, toHuman, unread, primaryFile?, archivedAtMs?, delivery, onClick?, contentType?, replyTo?, replyToName?, summary?, replyTargetEnded, via?, storyId, kind}]. `storyId`: its story's cs:id, or null. `kind`: `needs-you` (waits on the human) or `update` (informational): text typed into a terminal is `update`; else the kind its sender set; else `needs-you` when its `replyTo` names someone other than the human, its sender or a role its sender holds; else `update`. `via`: `terminal` for text typed into the recipient's terminal with send_to_session (it already has it: stored read, never returned by read_messages); absent for mail. `summary`: the sender's one-line preview, when given (show it instead of `text` in a list). `replyTo`: where replies to it go instead of its sender (a session handle, `human`, or `role:<id>`); `replyToName` its display name. `replyTargetEnded`: a reply would go to a session that is no longer running (it waits unread in that inbox; send to a role instead). `from`/`to` are session handles, role ids or `human`; `fromName`/`toName` their display names. `createdAtMs`/`archivedAtMs` are epoch milliseconds. `unread`: the recipient has not read it yet. `inReplyTo`: the messageId it answers (thread link). `primaryFile`: an attached team-content path. `onClick`: `{type: goto-agent|open-file|show-message}`. `contentType`: plain | markdown (default) | html. `delivery` (role messages and withdrawn ones; else null): {state, pickedUpAtMs, instance, acceptedAtMs, disposition (work|no_work), note, withdrawnAtMs} where state is `queued` (no instance holds it), `reading` (claimed), `accepted`, `done` (acknowledged) or `withdrawn`. `humanUnread` counts unread messages to the human in the whole team inbox, of both kinds. Next: answer one with reply {message_id}; see a role's queue and who holds it with role_state; see who runs with list_sessions."
     )]
     async fn inbox_list(
         &self,
@@ -7335,7 +7335,7 @@ impl CodesenseHandler {
     }
 
     #[tool(
-        description = "Send a message addressed to a ROLE (any role name, usually an agent id); the inbox row + pending wv_role_delivery row commit together. {requestId} is an idempotency key: same key + same payload replays the stored {messageId, deliveryId}; same key + different payload returns `conflict` and the original wins (payload hash includes text, attachFile, contentType, replyTo and summary). Omit requestId to always create a new row. {sender} defaults to this connection's verified tab, including a CLI started by hand in a CodeSense terminal. A supplied sender must name that same tab. Unbound callers are refused; MCP cannot send as the human. The message stays queued until an instance of the role claims it (claim_role_messages); reading the queue never claims, and routines with a `role_pending` trigger hear of it. {replyTo} is where replies to this message go instead of to you, like an email Reply-To (the answer goes ONLY there, not also to you): a running session's handle, \"human\", or `role:<agent id>` (that role's durable queue — any instance claims it with claim_role_messages). Use `role:` when you may be gone before the answer comes: a worker briefed by a manager sends its question to the human with {replyTo:\"role:manager\"}, then exits; the human's reply lands as a pending delivery in the manager role's queue, not in the dead worker's inbox. The inbox shows \"Replies go to: …\" under the message. Optional: {contentType} \"plain\"|\"markdown\"|\"html\" — markdown is the default so **bold** / code fences / tables render formatted; html is strictly sanitized (scripts, iframes, forms, event handlers, and non-http(s)/mailto/# URLs are dropped). {onClick} makes the row actionable in the inbox: `{type:\"goto-agent\",agentId}`, `{type:\"open-file\",path}`, or `{type:\"show-message\"}` (default). {attachFile} is a logical team-content path rendered as an attachment card with Open. {summary} is one plain-text line (≤280 chars) shown as this message's preview in inbox lists. Set it whenever contentType is html (otherwise the preview is derived from the markup) and for long markdown messages. Returns `{status:\"sent\",messageId,deliveryId}`, `{status:\"conflict\"}`, or `{status:\"invalid\",message}` (blank text / a replyTo session that is not running)."
+        description = "Send a message addressed to a ROLE (any role name, usually an agent id); the inbox row + pending wv_role_delivery row commit together. {requestId} is an idempotency key: same key + same payload replays the stored {messageId, deliveryId}; same key + different payload returns `conflict` and the original wins (payload hash includes text, attachFile, contentType, replyTo and summary). Omit requestId to always create a new row. {sender} defaults to this connection's verified tab, including a CLI started by hand in a CodeSense terminal. A supplied sender must name that same tab. Unbound callers are refused; MCP cannot send as the human. The message stays queued until an instance of the role claims it (claim_role_messages); reading the queue never claims, and routines with a `role_pending` trigger hear of it. {replyTo} is where replies to this message go instead of to you, like an email Reply-To (the answer goes ONLY there, not also to you): a running session's handle, \"human\", or `role:<agent id>` (that role's durable queue — any instance claims it with claim_role_messages). Use `role:` when you may be gone before the answer comes: a worker briefed by a manager sends its question to the human with {replyTo:\"role:manager\"}, then exits; the human's reply lands as a pending delivery in the manager role's queue, not in the dead worker's inbox. The inbox shows \"Replies go to: …\" under the message. Optional: {contentType} \"plain\"|\"markdown\"|\"html\" — markdown is the default so **bold** / code fences / tables render formatted; html is strictly sanitized (scripts, iframes, forms, event handlers, and non-http(s)/mailto/# URLs are dropped). {onClick} makes the row actionable in the inbox: `{type:\"goto-agent\",agentId}`, `{type:\"open-file\",path}`, or `{type:\"show-message\"}` (default). {attachFile} is a logical team-content path rendered as an attachment card with Open. {summary} is one plain-text line (≤280 chars) shown as this message's preview in inbox lists. Set it whenever contentType is html (otherwise the preview is derived from the markup) and for long markdown messages. {storyId} is the story the message is about (its cs:id, exactly; at most 128 characters); readers filter on it with inbox_list {story}. It is not in the payload hash. Returns `{status:\"sent\",messageId,deliveryId}`, `{status:\"conflict\"}`, or `{status:\"invalid\",message}` (blank text / a replyTo session that is not running)."
     )]
     async fn send_role_message(
         &self,
@@ -7389,6 +7389,7 @@ impl CodesenseHandler {
         let on_click = params.on_click;
         let content_type = params.content_type;
         let summary = params.summary;
+        let story_id = params.story_id;
         let reply_to =
             match crate::commands::agent_inbox::resolve_reply_to(&host, params.reply_to.as_deref())
                 .await
@@ -7413,6 +7414,7 @@ impl CodesenseHandler {
             content_type,
             reply_to,
             summary,
+            story_id,
         };
         let outcome =
             crate::commands::role_inbox::send_role_and_notify(path, send, |role, message_id| {
@@ -12803,6 +12805,11 @@ pub struct SendMessageParams {
     /// Retry key: reuse the same value and payload after a transport disconnect.
     #[serde(default, rename = "requestId", alias = "request_id")]
     pub request_id: Option<String>,
+    /// The story this message is about: the story's `cs:id`, exactly (at most 128
+    /// characters, no control or invisible format characters). Readers filter on it with
+    /// `inbox_list {story}`. Not part of the `requestId` hash.
+    #[serde(default, rename = "storyId", alias = "story_id")]
+    pub story_id: Option<String>,
 }
 
 /// `read_messages` inputs.
@@ -12872,6 +12879,11 @@ pub struct ReplyParams {
     /// Retry key: reuse the same value and payload after a transport disconnect.
     #[serde(default, rename = "requestId", alias = "request_id")]
     pub request_id: Option<String>,
+    /// The story this reply is about: the story's `cs:id`, exactly (at most 128
+    /// characters, no control or invisible format characters). Omit it to carry the
+    /// answered message's story. Not part of the `requestId` hash.
+    #[serde(default, rename = "storyId", alias = "story_id")]
+    pub story_id: Option<String>,
 }
 
 /// `react` inputs.
@@ -13218,6 +13230,11 @@ pub struct SendRoleMessageParams {
     /// from the markup) and for long markdown messages. Part of the `requestId` hash.
     #[serde(default)]
     pub summary: Option<String>,
+    /// The story this message is about: the story's `cs:id`, exactly (at most 128
+    /// characters, no control or invisible format characters). Readers filter on it with
+    /// `inbox_list {story}`. Not part of the `requestId` hash.
+    #[serde(default, rename = "storyId", alias = "story_id")]
+    pub story_id: Option<String>,
 }
 
 /// `open_terminal_tab` inputs. Opens a NORMAL CLI terminal tab in an
@@ -20778,6 +20795,76 @@ mod message_kind_param_tests {
                 "{schema}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod story_id_param_tests {
+    use super::{InboxListParams, ReplyParams, SendMessageParams, SendRoleMessageParams};
+    use serde_json::json;
+
+    #[test]
+    fn story_id_params_read_story_id_and_its_snake_case_alias() {
+        let send: SendMessageParams = serde_json::from_value(
+            json!({"to": "human", "text": "x", "storyId": "DEMO-5"}),
+        )
+        .unwrap();
+        assert_eq!(send.story_id.as_deref(), Some("DEMO-5"));
+        let send: SendMessageParams = serde_json::from_value(
+            json!({"to": "human", "text": "x", "story_id": "DEMO-6"}),
+        )
+        .unwrap();
+        assert_eq!(send.story_id.as_deref(), Some("DEMO-6"));
+        let plain: SendMessageParams =
+            serde_json::from_value(json!({"to": "human", "text": "x"})).unwrap();
+        assert_eq!(plain.story_id, None);
+        let reply: ReplyParams = serde_json::from_value(
+            json!({"messageId": 7, "text": "done", "storyId": "DEMO-5"}),
+        )
+        .unwrap();
+        assert_eq!(reply.story_id.as_deref(), Some("DEMO-5"));
+        let role: SendRoleMessageParams = serde_json::from_value(json!({
+            "team": {"org": "o", "team": "t"},
+            "role": "triage",
+            "text": "x",
+            "storyId": "DEMO-5"
+        }))
+        .unwrap();
+        assert_eq!(role.story_id.as_deref(), Some("DEMO-5"));
+        let list: InboxListParams = serde_json::from_value(json!({"story": "DEMO-5"})).unwrap();
+        assert_eq!(list.query.story.as_deref(), Some("DEMO-5"));
+    }
+
+    #[test]
+    fn story_id_the_schemas_offer_story_id_and_the_list_offers_story() {
+        for schema in [
+            serde_json::to_string(&schemars::schema_for!(SendMessageParams)).unwrap(),
+            serde_json::to_string(&schemars::schema_for!(ReplyParams)).unwrap(),
+            serde_json::to_string(&schemars::schema_for!(SendRoleMessageParams)).unwrap(),
+        ] {
+            assert!(schema.contains("\"storyId\""), "{schema}");
+        }
+        let list = serde_json::to_string(&schemars::schema_for!(InboxListParams)).unwrap();
+        assert!(list.contains("\"story\""), "{list}");
+    }
+
+    #[test]
+    fn story_id_the_tool_descriptions_name_it() {
+        for tool in ["send_message", "send_role_message", "reply", "read_messages"] {
+            let description = super::tests::tool_description(tool).unwrap();
+            assert!(description.contains("storyId"), "{tool}: {description}");
+        }
+        let reply = super::tests::tool_description("reply").unwrap();
+        assert!(reply.contains("inherit"), "{reply}");
+        let list = super::tests::tool_description("inbox_list").unwrap();
+        assert!(list.contains("{story}"), "{list}");
+        let role = super::tests::tool_description("send_role_message").unwrap();
+        let hash = role
+            .split("payload hash includes")
+            .nth(1)
+            .and_then(|rest| rest.split(')').next())
+            .unwrap();
+        assert!(!hash.contains("story"), "story is not in the requestId hash: {hash}");
     }
 }
 

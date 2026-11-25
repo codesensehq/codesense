@@ -2833,3 +2833,183 @@ async fn the_inbox_with_a_story_reads_the_agents_thread_in_its_team_with_the_ses
     let agent = read(None, None).await;
     assert!(!ids(&agent).contains(&old));
 }
+
+// ── story filter ────────────────────────────────────────────────────────────────
+
+fn insert_story(
+    store: &WeftStore,
+    from: &str,
+    to: &str,
+    text: &str,
+    reply: Option<i64>,
+    story: Option<&str>,
+) -> i64 {
+    inbox::inbox_insert_request_outcome(
+        store, from, to, text, reply, None, None, None, None, None, None, None, None, None, None,
+        story,
+    )
+    .unwrap()
+    .0
+}
+
+fn story_query(story: &str) -> InboxQuery {
+    InboxQuery {
+        story: Some(story.into()),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn story_filter_alone_reads_the_card_and_its_answer() {
+    let host = FakeHost::new();
+    let store = host.store("default");
+    let card = insert_story(&store, "H1", HUMAN, "decide?", None, Some("DEMO-5"));
+    let answer = insert_story(&store, HUMAN, "H1", "go", Some(card), Some("DEMO-5"));
+    let other = insert_story(&store, "H1", HUMAN, "other", None, Some("DEMO-6"));
+    let plain = insert(&store, "H1", HUMAN, "no story", None);
+    let read = |query: InboxQuery| {
+        let host = host.clone();
+        async move { inbox(&*host, &team("default"), &query, &listed()).await.unwrap() }
+    };
+    // The story is not an address filter: alone it reads every direction, not nothing.
+    assert!(!story_query("DEMO-5").has_filter());
+    let story = read(story_query("DEMO-5")).await;
+    assert_eq!(ids(&story), vec![answer, card]);
+    assert_eq!(story.matched, 2);
+    // An explicit scope still holds.
+    let to_human = read(InboxQuery {
+        scope: Some(InboxScope::ToHuman),
+        ..story_query("DEMO-5")
+    })
+    .await;
+    assert_eq!(ids(&to_human), vec![card]);
+    // Exact and case-sensitive; an unknown story reads none.
+    for none in ["demo-5", "DEMO-50", "DEMO"] {
+        let view = read(story_query(none)).await;
+        assert!(view.messages.is_empty(), "{none}");
+        assert_eq!(view.matched, 0);
+    }
+    // Blank is ignored: the default read.
+    assert_eq!(ids(&read(story_query("  ")).await), vec![plain, other, card]);
+    // Surrounding whitespace is trimmed, as the store trims it.
+    assert_eq!(ids(&read(story_query(" DEMO-6 ")).await), vec![other]);
+    // `storyId` without `agentId` is still ignored.
+    let thread_only = read(InboxQuery {
+        story_id: Some("DEMO-5".into()),
+        ..Default::default()
+    })
+    .await;
+    assert_eq!(ids(&thread_only), vec![plain, other, card]);
+}
+
+#[tokio::test]
+async fn story_filter_counts_total_limit_and_has_more_after_the_filter() {
+    let host = FakeHost::new();
+    let store = host.store("default");
+    let mut five = Vec::new();
+    for n in 0..600 {
+        let story = if n % 2 == 0 { "DEMO-5" } else { "DEMO-6" };
+        let id = insert_story(&store, "H1", HUMAN, &format!("n{n}"), None, Some(story));
+        if story == "DEMO-5" {
+            five.push(id);
+        }
+    }
+    five.reverse();
+    let page = agent_answer(&host, serde_json::json!({"story": "DEMO-5", "limit": 100})).await;
+    let got: Vec<i64> = page["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["messageId"].as_i64().unwrap())
+        .collect();
+    assert_eq!(got, five[..100].to_vec());
+    assert_eq!(page["total"], 300);
+    assert_eq!(page["hasMore"], true);
+    assert!(page["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|m| m["storyId"] == "DEMO-5"));
+    // Paging with `before` while `hasMore` visits every filtered message once, even when
+    // the 64 KB budget ends a page before `limit`.
+    let (mut seen, mut before) = (Vec::new(), None::<i64>);
+    loop {
+        let mut args = serde_json::json!({"story": "DEMO-5", "limit": 300});
+        if let Some(before) = before {
+            args["before"] = before.into();
+        }
+        let answer = agent_answer(&host, args).await;
+        let messages = answer["messages"].as_array().unwrap();
+        assert!(messages.iter().all(|m| m["storyId"] == "DEMO-5"));
+        seen.extend(messages.iter().map(|m| m["messageId"].as_i64().unwrap()));
+        if answer["hasMore"] != true {
+            break;
+        }
+        before = messages.last().and_then(|m| m["messageId"].as_i64());
+    }
+    assert_eq!(seen, five, "every DEMO-5 message once, newest first");
+    let unknown = agent_answer(&host, serde_json::json!({"story": "DEMO-7"})).await;
+    assert!(unknown["messages"].as_array().unwrap().is_empty());
+    assert_eq!(unknown["total"], 0);
+}
+
+#[tokio::test]
+async fn story_filter_ands_with_the_agents_thread() {
+    let host = FakeHost::new();
+    let store = host.store("default");
+    let tagged = insert_story(&store, "H1", HUMAN, "seat, tagged", None, Some("DEMO-5"));
+    let untagged = insert(&store, "H1", HUMAN, "seat, untagged", None);
+    insert_story(&store, "H2", HUMAN, "not this thread", None, Some("DEMO-5"));
+    thread_of(&host, &[("H1", "1")], &[("S1", "H1")]);
+    let read = |story: Option<&str>| {
+        let query = InboxQuery {
+            agent_id: Some(format!("{REVIEWER}@7")),
+            story_id: Some("STORY-1".into()),
+            story: story.map(str::to_owned),
+            ..Default::default()
+        };
+        let host = host.clone();
+        async move { inbox(&*host, &team("default"), &query, &listed()).await.unwrap() }
+    };
+    assert_eq!(ids(&read(None).await), vec![untagged, tagged]);
+    assert_eq!(ids(&read(Some("DEMO-5")).await), vec![tagged]);
+    assert!(read(Some("DEMO-6")).await.messages.is_empty());
+}
+
+/// The export: a story's whole history, more than 500 rows and well past the 64 KB answer
+/// budget, is read by walking `before` with `story` until `hasMore` is false.
+#[tokio::test]
+async fn story_filter_walk_reads_every_matching_row_once() {
+    let host = FakeHost::new();
+    let store = host.store("default");
+    let mut seeded = Vec::new();
+    for n in 0..620 {
+        let body = format!("{n:03}{}", "x".repeat(1024));
+        if n % 6 == 5 {
+            insert_story(&store, HUMAN, "H1", &body, None, Some("DEMO-6"));
+        } else {
+            seeded.push(insert_story(&store, "H1", HUMAN, &body, None, Some("DEMO-5")));
+        }
+    }
+    assert!(seeded.len() > 500);
+    seeded.reverse();
+    let (mut seen, mut before, mut budget_cut) = (Vec::new(), None::<i64>, false);
+    loop {
+        let mut args = serde_json::json!({"story": "DEMO-5", "include": ["text"], "limit": 100});
+        if let Some(before) = before {
+            args["before"] = before.into();
+        }
+        let answer = agent_answer(&host, args).await;
+        assert!(serde_json::to_vec(&answer).unwrap().len() <= AGENT_ANSWER_BUDGET);
+        let messages = answer["messages"].as_array().unwrap();
+        assert!(!messages.is_empty());
+        seen.extend(messages.iter().map(|m| m["messageId"].as_i64().unwrap()));
+        if answer["hasMore"] != true {
+            break;
+        }
+        budget_cut |= messages.len() < 100;
+        before = messages.last().and_then(|m| m["messageId"].as_i64());
+    }
+    assert!(budget_cut, "the 64 KB budget ended a page before its limit");
+    assert_eq!(seen, seeded, "every matching row once, newest first");
+}

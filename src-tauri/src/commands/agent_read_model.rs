@@ -139,7 +139,8 @@ pub(crate) fn instances_of(sessions: &[SessionListRow], agent: &str) -> Vec<Sess
 #[serde(rename_all = "camelCase")]
 pub struct InboxQuery {
     /// `to-human` (messages to the human), `to-agents` (messages to sessions and
-    /// roles) or `all`. Default: `to-human` with no filter below, `all` with one.
+    /// roles) or `all`. Default: `to-human` with no filter below, `all` with one (`story`
+    /// included).
     #[serde(default)]
     #[schemars(with = "Option<String>")]
     pub scope: Option<InboxScope>,
@@ -161,8 +162,9 @@ pub struct InboxQuery {
     /// A role (any role name, usually a saved Agent's id): messages to and from it, and replies.
     #[serde(default)]
     pub role: Option<String>,
-    /// At most this many messages, newest first: at most 500 (the inbox keeps the newest
-    /// 500); an agent's `inbox_list` lists 50 when it names none, a page's `inbox()` 500.
+    /// At most this many messages, newest first: at most 500 per answer (page older ones
+    /// with `before`); an agent's `inbox_list` lists 50 when it names none, a page's
+    /// `inbox()` 500.
     #[serde(default)]
     pub limit: Option<u32>,
     #[serde(default)]
@@ -175,6 +177,10 @@ pub struct InboxQuery {
     /// `update` (informational). Applied before `limit`.
     #[serde(default)]
     pub kind: Option<MessageKind>,
+    /// Only messages about this story: their `storyId` equals it exactly (trimmed; case
+    /// counts). Applied before `limit`. Not the thread `storyId` above, which needs `agentId`.
+    #[serde(default)]
+    pub story: Option<String>,
 }
 
 impl InboxQuery {
@@ -247,13 +253,14 @@ pub(crate) async fn inbox_matching(
             addresses.push(role.to_string());
         }
     }
-    let scope = query
-        .scope
-        .unwrap_or(if query.has_filter() || query.conversation.is_some() {
+    let story = trimmed(&query.story);
+    let scope = query.scope.unwrap_or(
+        if query.has_filter() || query.conversation.is_some() || story.is_some() {
             InboxScope::All
         } else {
             InboxScope::ToHuman
-        });
+        },
+    );
     let mut view = match addresses.split_first() {
         Some((first, rest)) => {
             list_messages_unbounded(host, team, scope, Some(first), rest).await?
@@ -269,6 +276,9 @@ pub(crate) async fn inbox_matching(
     view.messages.retain(|m| keep(m));
     if let Some(kind) = query.kind {
         view.messages.retain(|m| m.kind == kind);
+    }
+    if let Some(story) = &story {
+        Vec::retain(&mut view.messages, |m| m.story_id.as_ref() == Some(story));
     }
     if let Some(conversation) = &query.conversation {
         view.messages.retain(|m| &m.conversation == conversation);
@@ -683,17 +693,19 @@ pub(crate) async fn send_as_human_with_media(
     }
     // Session recipients resolve their own inbox; validate the selected team too.
     let path = host.team_store(team).await?;
+    // An answer carries the story of the message it answers.
+    let mut story_id = None;
     if let Some(id) = in_reply_to {
-        let exists = with_store("send_as_human", path, move |store| {
+        let parent = with_store("send_as_human", path, move |store| {
             crate::weft::inbox::inbox_get(store, id)
         })
-        .await??
-        .is_some();
-        if !exists {
+        .await??;
+        let Some(parent) = parent else {
             return Ok(HumanSendResult::Invalid {
                 message: "Not sent: no such message to reply to.".into(),
             });
-        }
+        };
+        story_id = parent.story_id;
     }
     let target = HumanTarget::parse(to);
     let name = match &target {
@@ -767,6 +779,7 @@ pub(crate) async fn send_as_human_with_media(
             None,
             media,
             MediaOwner::Human,
+            story_id.as_deref(),
         )
         .await?;
         // Registered once, after the store.
@@ -792,6 +805,7 @@ pub(crate) async fn send_as_human_with_media(
             in_reply_to_ref,
             reply_to,
             summary,
+            story_id,
         )
         .await?
     };
@@ -814,6 +828,7 @@ async fn send_role_as_human(
     in_reply_to: Option<(i64, InboxReplyTeam)>,
     reply_to: Option<String>,
     summary: Option<&str>,
+    story_id: Option<String>,
 ) -> Result<HumanSendResult, String> {
     if text.trim().is_empty() {
         return Ok(HumanSendResult::Invalid {
@@ -845,6 +860,7 @@ async fn send_role_as_human(
             content_type,
             reply_to.as_deref(),
             summary.as_deref(),
+            story_id.as_deref(),
         ) {
             Ok(ids) => Ok(Ok(ids)),
             Err(RoleInboxError::Store(WvWriteError::Invalid(reason))) => Ok(Err(reason.0)),
