@@ -65,8 +65,9 @@ export function InboxSplit({
         {children}
       </div>
       {/* Hidden behind the CLI, the chat keeps its layout box (`visibility`, not `display`, so
-          its scroll position holds) and takes no keys, clicks or focus. */}
-      {target && visible && (
+          its scroll position holds) and takes no keys, clicks or focus. A hidden chat whose CLI
+          exited is unmounted: the tab is a plain shell, and only the person's choice is kept. */}
+      {target && visible && (runningAgent || shown) && (
         <div
           data-surface="canvas"
           hidden={!runningAgent}
