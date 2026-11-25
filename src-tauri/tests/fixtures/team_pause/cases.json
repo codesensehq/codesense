@@ -1,0 +1,121 @@
+{
+  "source": {
+    "repo": "codesensehq/codesense",
+    "path": "src-tauri/tests/fixtures/team_pause/cases.json"
+  },
+  "about": "How the records in a team's content/team-control folder fold into a pause state. Each record is one .md file named <id>.md; frontmatter is the raw YAML between its fences. The team is paused when the newest record by (readable at, then id; an unreadable at sorts newest) is a go record (paused true) that no readable resume record names in resumes. A malformed newest record means paused. A copy of this file elsewhere records the commit it came from in source.commit.",
+  "cases": [
+    {
+      "name": "go_alone_is_paused",
+      "records": [{ "id": "go-1", "frontmatter": "id: go-1\npaused: \"true\"\nat: 100\nreason: maintenance" }],
+      "expect": { "paused": true, "go": "go-1" }
+    },
+    {
+      "name": "newest_by_at_is_go",
+      "records": [
+        { "id": "a-go", "frontmatter": "id: a-go\npaused: true\nat: 300" },
+        { "id": "b-resume", "frontmatter": "id: b-resume\npaused: false\nat: 200\nresumes: c-go" },
+        { "id": "c-go", "frontmatter": "id: c-go\npaused: true\nat: 100" }
+      ],
+      "expect": { "paused": true, "go": "a-go" }
+    },
+    {
+      "name": "resume_names_go_is_running",
+      "records": [
+        { "id": "go-1", "frontmatter": "id: go-1\npaused: \"true\"\nat: 100" },
+        { "id": "resume-1", "frontmatter": "id: resume-1\npaused: \"false\"\nat: 200\nresumes: go-1" }
+      ],
+      "expect": { "paused": false, "go": null }
+    },
+    {
+      "name": "resume_with_lower_at_still_ends_go",
+      "records": [
+        { "id": "go-1", "frontmatter": "id: go-1\npaused: \"true\"\nat: 200" },
+        { "id": "resume-1", "frontmatter": "id: resume-1\npaused: \"false\"\nat: 100\nresumes: go-1" }
+      ],
+      "expect": { "paused": false, "go": null }
+    },
+    {
+      "name": "resume_names_other_go_stays_paused",
+      "records": [
+        { "id": "go-1", "frontmatter": "id: go-1\npaused: \"true\"\nat: 100" },
+        { "id": "go-2", "frontmatter": "id: go-2\npaused: \"true\"\nat: 300" },
+        { "id": "resume-1", "frontmatter": "id: resume-1\npaused: \"false\"\nat: 200\nresumes: go-1" }
+      ],
+      "expect": { "paused": true, "go": "go-2" }
+    },
+    {
+      "name": "newer_go_after_resume_is_paused",
+      "records": [
+        { "id": "go-1", "frontmatter": "id: go-1\npaused: \"true\"\nat: 100" },
+        { "id": "resume-1", "frontmatter": "id: resume-1\npaused: \"false\"\nat: 200\nresumes: go-1" },
+        { "id": "go-2", "frontmatter": "id: go-2\npaused: \"true\"\nat: 300" }
+      ],
+      "expect": { "paused": true, "go": "go-2" }
+    },
+    {
+      "name": "no_records_is_running",
+      "records": [],
+      "expect": { "paused": false, "go": null }
+    },
+    {
+      "name": "non_integer_at_newest_is_paused",
+      "records": [
+        { "id": "go-1", "frontmatter": "id: go-1\npaused: \"true\"\nat: 100" },
+        { "id": "resume-1", "frontmatter": "id: resume-1\npaused: \"false\"\nat: 200\nresumes: go-1" },
+        { "id": "resume-2", "frontmatter": "id: resume-2\npaused: \"false\"\nat: \"300\"" }
+      ],
+      "expect": { "paused": true, "go": null }
+    },
+    {
+      "name": "paused_not_true_false_newest_is_paused",
+      "records": [
+        { "id": "go-1", "frontmatter": "id: go-1\npaused: \"true\"\nat: 100" },
+        { "id": "resume-1", "frontmatter": "id: resume-1\npaused: \"false\"\nat: 200\nresumes: go-1" },
+        { "id": "odd-1", "frontmatter": "id: odd-1\npaused: maybe\nat: 300" }
+      ],
+      "expect": { "paused": true, "go": null }
+    },
+    {
+      "name": "unparseable_frontmatter_newest_is_paused",
+      "records": [
+        { "id": "resume-1", "frontmatter": "id: resume-1\npaused: \"false\"\nat: 200" },
+        { "id": "broken-1", "frontmatter": "id: broken-1\npaused: [true\nat: 300" }
+      ],
+      "expect": { "paused": true, "go": null }
+    },
+    {
+      "name": "unreadable_at_sorts_last",
+      "records": [
+        { "id": "a-early", "frontmatter": "id: a-early\npaused: \"false\"\nat: later" },
+        { "id": "go-1", "frontmatter": "id: go-1\npaused: \"true\"\nat: 100" },
+        { "id": "resume-1", "frontmatter": "id: resume-1\npaused: \"false\"\nat: 900\nresumes: go-1" }
+      ],
+      "expect": { "paused": true, "go": null }
+    },
+    {
+      "name": "malformed_resume_does_not_end_go",
+      "records": [
+        { "id": "go-1", "frontmatter": "id: go-1\npaused: \"true\"\nat: 300" },
+        { "id": "resume-1", "frontmatter": "id: resume-1\npaused: maybe\nat: 200\nresumes: go-1" }
+      ],
+      "expect": { "paused": true, "go": "go-1" }
+    },
+    {
+      "name": "same_at_newest_by_id",
+      "records": [
+        { "id": "a-resume", "frontmatter": "id: a-resume\npaused: \"false\"\nat: 100\nresumes: other" },
+        { "id": "b-go", "frontmatter": "id: b-go\npaused: \"true\"\nat: 100" }
+      ],
+      "expect": { "paused": true, "go": "b-go" }
+    },
+    {
+      "name": "integral_float_at_reads_as_ms",
+      "records": [
+        { "id": "go-1", "frontmatter": "id: go-1\npaused: \"true\"\nat: 300.0" },
+        { "id": "resume-1", "frontmatter": "id: resume-1\npaused: \"false\"\nat: 200\nresumes: go-0" }
+      ],
+      "expect": { "paused": true, "go": "go-1" }
+    }
+  ]
+}

@@ -30,6 +30,7 @@ pub mod sample_source_repo;
 mod scaffold;
 pub mod scoped_key;
 pub mod scratch_space;
+pub(crate) mod team_pause;
 mod team_rename;
 mod url;
 mod workdir_write;

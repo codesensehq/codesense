@@ -15,6 +15,7 @@ pub use history::{ActorKind, NoteActor as Actor, NoteRevision as Revision};
 pub use schema::{
     is_valid_id, load_collections, Collection, HistoryOptions, IdRule, Options, Scope,
 };
+pub(crate) use store::parse;
 pub use store::{Record, SearchHit, Store, Written};
 
 #[cfg(test)]
