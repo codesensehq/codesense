@@ -143,6 +143,18 @@
   /* InboxMessageContent carries its own layout; keep this cell honest. */
   min-width: 0;
 }
+/* A media message's alt stand-in: wraps anywhere and stops at three lines; the full alt is
+   its title. */
+.wc-msg__media {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
 
 /* "You" (human) row — accent sweep over the role chroma. */
 .wc-msg[data-you] .wc-msg__handle {

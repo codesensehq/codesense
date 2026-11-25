@@ -93,7 +93,7 @@ export function WorkspaceChatMessageRow({
           )}
           {media && (
             // A stand-in until the row draws the image itself, so a bare GIF row is never empty.
-            <p className="wc-msg__media" data-testid="workspace-chat-media">
+            <p className="wc-msg__media" data-testid="workspace-chat-media" title={media.alt}>
               GIF: {media.alt}
             </p>
           )}
