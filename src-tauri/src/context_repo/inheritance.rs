@@ -1130,7 +1130,7 @@ pub(crate) fn org_guardrails(
     // nobody reviewed. HEAD's commit is read only for an org that has no remote at all.
     let has_remote = repo
         .remotes()
-        .map(|remotes| !git2::StringArray::is_empty(&remotes))
+        .map(|remotes| !git2::string_array::StringArray::is_empty(&remotes))
         .map_err(|e| fail("its remotes", &e))?;
     let commit = match upstream_oid(&repo) {
         Some(oid) => oid,
