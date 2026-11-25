@@ -2596,7 +2596,10 @@ const MAX_UNRESOLVED_PATHS: usize = 279;
 /// screening (commands/tools/terminals.rs) add two more, taking it to 6_598: std process, io,
 /// channel and thread calls on the `ProcessTree` child and its reader. None calls a write
 /// primitive (`no_unresolved_call_may_hide_a_writer` still passes).
-const MAX_UNRESOLVED_METHODS: usize = 6_598;
+/// Org guardrails add 14, taking it to 6_612: std collection, string and iterator calls in
+/// `agents/guardrails.rs` and the adapters' guardrail ports, and the committed-tree read in
+/// `context_repo/inheritance.rs` (git2 lookups that only read). None calls a write primitive.
+const MAX_UNRESOLVED_METHODS: usize = 6_612;
 
 /// The most lines each census list prints on failure; the env vars print them all.
 const LISTING_CAP: usize = 100;
