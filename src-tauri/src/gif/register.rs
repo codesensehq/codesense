@@ -94,12 +94,8 @@ impl Event {
 /// A provider's send, view and pick registration, provider-neutral, so a second provider
 /// joins without changing callers.
 pub(crate) trait Registrar: Send + Sync {
-    /// The provider's send registration.
-    fn on_sent<'a>(&'a self, ping: Ping<'a>) -> BoxFuture<'a, Outcome>;
-    /// The provider's view registration.
-    fn on_load<'a>(&'a self, ping: Ping<'a>) -> BoxFuture<'a, Outcome>;
-    /// The provider's pick registration.
-    fn on_click<'a>(&'a self, ping: Ping<'a>) -> BoxFuture<'a, Outcome>;
+    /// Register `event` with the provider.
+    fn register<'a>(&'a self, event: Event, ping: Ping<'a>) -> BoxFuture<'a, Outcome>;
 }
 
 /// `pingback` with the install's `random_id` and the time in ms, which GIPHY asks for, added;
@@ -150,13 +146,8 @@ impl GiphyPings {
     }
 }
 impl Registrar for GiphyPings {
-    fn on_sent<'a>(&'a self, ping: Ping<'a>) -> BoxFuture<'a, Outcome> {
-        Box::pin(self.ping_giphy(ping))
-    }
-    fn on_load<'a>(&'a self, ping: Ping<'a>) -> BoxFuture<'a, Outcome> {
-        Box::pin(self.ping_giphy(ping))
-    }
-    fn on_click<'a>(&'a self, ping: Ping<'a>) -> BoxFuture<'a, Outcome> {
+    /// Every event is the pingback GIPHY gave for it.
+    fn register<'a>(&'a self, _: Event, ping: Ping<'a>) -> BoxFuture<'a, Outcome> {
         Box::pin(self.ping_giphy(ping))
     }
 }
@@ -238,6 +229,23 @@ pub(crate) struct Pending {
     pub expires: i64,
     /// The send is still being registered: an onload may yet be armed.
     pub waiting: bool,
+}
+
+/// What [`Registration::admit`] let through: the held search entry of a send or a pick, or
+/// none for a serve's view pings.
+struct Admitted {
+    entry: Option<analytics::Entry>,
+}
+
+/// The only provider with a view ping: a serve's pending onloads are all GIPHY's.
+const ONLOAD_PROVIDER: Provider = Provider::Giphy;
+
+/// The provider of a stored message's tag, when it is one GIF search knows.
+fn provider_of(tag: MediaProvider) -> Option<Provider> {
+    match tag {
+        MediaProvider::Giphy => Some(Provider::Giphy),
+        MediaProvider::Klipy | MediaProvider::None => None,
+    }
 }
 
 /// Why no key is at hand.
@@ -492,12 +500,7 @@ impl Registration {
             install_id: id,
             at_ms: now,
         };
-        let registrar = self.registrar.as_ref();
-        let outcome = match kind {
-            Event::Sent => Registrar::on_sent(registrar, ping).await,
-            Event::Load => Registrar::on_load(registrar, ping).await,
-            Event::Click => Registrar::on_click(registrar, ping).await,
-        };
+        let outcome = Registrar::register(self.registrar.as_ref(), kind, ping).await;
         match outcome {
             Outcome::Sent => {}
             Outcome::Status(429) => {
@@ -507,6 +510,56 @@ impl Registration {
                 log::warn!(target: "gif", "gif registration: {event} not registered ({other:?})")
             }
         }
+    }
+
+    /// The local checks a registration passes before any keychain read, so one that can't
+    /// register never reads it: `provider` registers `event`, and for a send or a pick (`gif`,
+    /// the GIF id and a send's URL) a search within the last hour returned the GIF, with a send's
+    /// URL one it returned. `None`, logged, when one fails.
+    fn admit(
+        &self,
+        provider: Provider,
+        event: Event,
+        gif: Option<(&str, Option<&str>)>,
+        now: i64,
+    ) -> Option<Admitted> {
+        let name = event.name();
+        if provider != Provider::Giphy {
+            log::info!(target: "gif", "gif registration: {provider:?} sends no {name}; not registered");
+            return None;
+        }
+        let Some((id, url)) = gif else {
+            return Some(Admitted { entry: None });
+        };
+        let held = &self.service.analytics;
+        let Some(entry) = analytics::Analytics::held_entry(held, provider, id, now) else {
+            log::info!(target: "gif", "gif registration: no search returned this GIF in the last hour; no {name}");
+            return None;
+        };
+        if url.is_some_and(|url| !analytics::Entry::binds(&entry, url)) {
+            log::warn!(target: "gif", "gif registration: the GIF id was sent with another GIF's URL; not registered");
+            return None;
+        }
+        Some(Admitted { entry: Some(entry) })
+    }
+
+    /// The key checks, after [`Self::admit`]: GIF search is On with `provider` and a key, and
+    /// the install epoch is still `epoch`, the one the work began in. A moved epoch (search
+    /// turned Off and On, or the key replaced, while the key was read) is [`NoKey::Off`]: what
+    /// was held belongs to the old install id.
+    async fn authorize(
+        &self,
+        provider: Provider,
+        event: Event,
+        epoch: u64,
+    ) -> Result<(Secret, String), NoKey> {
+        let (key, fp, read_in) = self.active_key(provider).await?;
+        if read_in != epoch || !self.still_in(epoch) {
+            let name = event.name();
+            log::info!(target: "gif", "gif registration: the install id changed before the {name}; not registered");
+            return Err(NoKey::Off);
+        }
+        Ok((key, fp))
     }
 
     /// The first onsent of GIF `id` in `message`, or an hour after the last.
@@ -575,33 +628,20 @@ impl Registration {
     }
 
     async fn register_inner(&self, sent: Sent) {
-        if sent.provider != MediaProvider::Giphy {
-            log::info!(target: "gif", "gif registration: {:?} sends are not registered yet", sent.provider);
+        let Some(provider) = provider_of(sent.provider) else {
+            log::info!(target: "gif", "gif registration: {:?} sends are not registered", sent.provider);
             return;
-        }
-        let provider = Provider::Giphy;
+        };
         let epoch = self.follow_epoch();
         let now = (self.clock)();
-        // The local checks come first, so a send that can't register never reads the keychain.
-        let held = &self.service.analytics;
-        let Some(entry) = analytics::Analytics::held_entry(held, provider, &sent.provider_id, now)
+        let gif = Some((sent.provider_id.as_str(), Some(sent.url.as_str())));
+        let Some(Admitted { entry: Some(entry) }) = self.admit(provider, Event::Sent, gif, now)
         else {
-            log::info!(target: "gif", "gif registration: no search returned this GIF in the last hour; no ping");
             return;
         };
-        if !analytics::Entry::binds(&entry, &sent.url) {
-            log::warn!(target: "gif", "gif registration: the GIF id was sent with another GIF's URL; not registered");
-            return;
-        }
-        let Ok((key, fp, read_in)) = self.active_key(provider).await else {
+        let Ok((key, fp)) = self.authorize(provider, Event::Sent, epoch).await else {
             return;
         };
-        // Search turned Off and On, or the key replaced, while the key was read: the entry
-        // belongs to the old id.
-        if read_in != epoch || !self.still_in(epoch) {
-            log::info!(target: "gif", "gif registration: the install id changed during the send; not registered");
-            return;
-        }
         if let Some(onload) = entry.pingbacks.onload.clone() {
             let expires = now + ONLOAD_WINDOW_MS;
             self.with_pending(&sent.slot, now, |p| {
@@ -632,29 +672,20 @@ impl Registration {
     /// logged: not GIPHY, no search entry, no onclick URL, search Off or no key, the install id
     /// changed meanwhile, no install id.
     pub(crate) async fn register_click(&self, provider: Provider, id: &str) {
-        if provider != Provider::Giphy {
-            log::info!(target: "gif", "gif registration: {provider:?} picks are not registered yet");
-            return;
-        }
         let epoch = self.follow_epoch();
         let now = (self.clock)();
-        // The local checks come first, so a pick that can't register never reads the keychain.
-        let held = &self.service.analytics;
-        let Some(entry) = analytics::Analytics::held_entry(held, provider, id, now) else {
-            log::info!(target: "gif", "gif registration: no search returned the picked GIF in the last hour; no ping");
+        let gif = Some((id, None));
+        let Some(Admitted { entry: Some(entry) }) = self.admit(provider, Event::Click, gif, now)
+        else {
             return;
         };
         let Some(onclick) = entry.pingbacks.onclick.as_deref() else {
             log::info!(target: "gif", "gif registration: the search gave no onclick URL; no ping");
             return;
         };
-        let Ok((key, fp, read_in)) = self.active_key(provider).await else {
+        let Ok((key, fp)) = self.authorize(provider, Event::Click, epoch).await else {
             return;
         };
-        if read_in != epoch || !self.still_in(epoch) {
-            log::info!(target: "gif", "gif registration: the install id changed during the pick; not registered");
-            return;
-        }
         let Some(install) = self.install_id(provider, &key, &fp, epoch).await else {
             return;
         };
@@ -736,6 +767,12 @@ impl Registration {
             log::info!(target: "gif", "gif registration: {} pending onloads not yet indexed; kept", taken.len());
             Vec::append(&mut back, &mut taken);
         }
+        let provider = ONLOAD_PROVIDER;
+        if !Vec::is_empty(&due) && self.admit(provider, Event::Load, None, now).is_none() {
+            settled
+                .marks
+                .extend(Vec::drain(&mut due, ..).map(|(slot, _)| slot));
+        }
         if !Vec::is_empty(&due) {
             // After a failed keychain read, serves wait before reading it again, so a denied
             // access prompt is not raised by every view; their onloads stay pending meanwhile.
@@ -743,7 +780,8 @@ impl Registration {
             let active = if waiting_for_key {
                 Err(NoKey::Unavailable)
             } else {
-                self.active_key(Provider::Giphy).await
+                // Taken under an earlier epoch (search turned Off meanwhile) is Off: marked.
+                self.authorize(provider, Event::Load, started).await
             };
             match active {
                 Err(NoKey::Off) => {
@@ -756,19 +794,13 @@ impl Registration {
                         *lock(&self.key_retry_at) = now + KEY_RETRY_MS;
                     }
                 }
-                Ok((_, _, epoch)) if epoch != started => {
-                    // Taken under an earlier epoch: search was turned Off meanwhile.
-                    settled
-                        .marks
-                        .extend(Vec::drain(&mut due, ..).map(|(slot, _)| slot));
-                }
-                Ok((key, fp, epoch)) => {
-                    if let Some(id) = self.install_id(Provider::Giphy, &key, &fp, epoch).await {
+                Ok((key, fp)) => {
+                    if let Some(id) = self.install_id(provider, &key, &fp, started).await {
                         let current = self.still_in(started);
                         for (slot, p) in Vec::drain(&mut due, ..) {
                             match &p.onload {
                                 Some(onload) if current => {
-                                    self.send_ping(Provider::Giphy, &fp, Event::Load, onload, &id)
+                                    self.send_ping(provider, &fp, Event::Load, onload, &id)
                                         .await
                                 }
                                 _ => {}

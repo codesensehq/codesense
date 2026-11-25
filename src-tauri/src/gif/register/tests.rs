@@ -990,3 +990,97 @@ async fn click_counts_against_the_ceiling() {
     assert_eq!(h.wire.pings().len(), PINGS_PER_HOUR - 1);
     assert!(h.wire.actions().iter().all(|a| a == "CLICK"));
 }
+
+// One guard path: a send, a pick and a serve refuse the same cases.
+
+/// A keychain the test can lock.
+#[derive(Default)]
+struct Lockable {
+    inner: FakeStore,
+    locked: std::sync::atomic::AtomicBool,
+}
+impl CredentialStore for Lockable {
+    fn get(
+        &self,
+        account: &str,
+    ) -> Result<Option<Secret>, crate::commands::credential_store::CredentialError> {
+        if self.locked.load(Ordering::SeqCst) {
+            return Err("keychain read failed: locked".into());
+        }
+        self.inner.get(account)
+    }
+    fn set(
+        &self,
+        account: &str,
+        value: &Secret,
+    ) -> Result<(), crate::commands::credential_store::CredentialError> {
+        self.inner.set(account, value)
+    }
+    fn delete(
+        &self,
+        account: &str,
+    ) -> Result<(), crate::commands::credential_store::CredentialError> {
+        self.inner.delete(account)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Refusal {
+    Off,
+    NoKey,
+    Locked,
+    SearchHourOver,
+}
+
+fn refuse(h: &Harness, store: &Lockable, refusal: Refusal) {
+    match refusal {
+        Refusal::Off => {
+            let off = SettingsUpdate {
+                enabled: Some(false),
+                ..SettingsUpdate::default()
+            };
+            settings::set_with(&h.keys(), h.dir.path(), off).unwrap();
+        }
+        Refusal::NoKey => h.keys().remove_key(Provider::Giphy).unwrap(),
+        Refusal::Locked => {
+            // Saved outside the app, so nothing caches it, then locked.
+            h.keys().remove_key(Provider::Giphy).unwrap();
+            store.inner.set(ACCOUNT, &Secret::new(KEY)).unwrap();
+            store.locked.store(true, Ordering::SeqCst);
+        }
+        Refusal::SearchHourOver => h.advance(crate::gif::analytics::TTL_MS),
+    }
+}
+
+#[tokio::test]
+async fn a_send_a_pick_and_a_serve_refuse_the_same_cases() {
+    let refusals = [
+        Refusal::Off,
+        Refusal::NoKey,
+        Refusal::Locked,
+        Refusal::SearchHourOver,
+    ];
+    for refusal in refusals {
+        for entry in ["send", "pick", "serve"] {
+            let store = Arc::new(Lockable::default());
+            store.inner.set(ACCOUNT, &Secret::new(KEY)).unwrap();
+            let h = Harness::over(store.clone());
+            h.found_all("g1");
+            if entry == "serve" {
+                h.send(1, "g1", URL).await;
+                h.registration.note_fetched(&slot(1), Some(SHA), true);
+            }
+            let before = h.wire.pings().len();
+            refuse(&h, &store, refusal);
+            match entry {
+                "send" => h.send(2, "g1", URL).await,
+                "pick" => h.registration.register_click(Provider::Giphy, "g1").await,
+                _ => {
+                    let taken = h.registration.take_onloads(SHA);
+                    h.registration.settle_serve(vec![slot(1)], taken).await;
+                }
+            }
+            assert_eq!(h.wire.pings().len(), before, "{refusal:?}: {entry}");
+        }
+    }
+}
