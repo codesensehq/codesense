@@ -906,6 +906,33 @@ fn build_spawn_command(
 }
 
 impl SpawnIntent {
+    /// The spawn a machine-armed routine's agent starts from: the saved Agent `startup`'s
+    /// variables, under the CLI's own strip, as a desktop's launch of it has.
+    pub fn armed(
+        cwd: String,
+        launch: codesense_host_proto::agent_cli::NativeLaunch,
+        startup: &codesense_host_proto::reverse_mcp::AgentStartup,
+    ) -> Self {
+        Self {
+            remote_launch: Some(launch),
+            command: None,
+            argv: None,
+            shell: None,
+            cwd,
+            cols: 80,
+            rows: 24,
+            shell_integration: false,
+            starship_preset: None,
+            api_port: None,
+            env_remove: vec![],
+            env: vec![],
+            agent_env: Vec::new(),
+            login_path: None,
+        }
+        .with_agent_startup(Some(startup))
+        .with_cli_env_suppressed()
+    }
+
     /// This intent running the saved Agent `startup` carries: its own variables become the
     /// spawn's [`Self::agent_env`]. No startup leaves the intent as it is.
     pub fn with_agent_startup(

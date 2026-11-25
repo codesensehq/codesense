@@ -1441,33 +1441,6 @@ impl Host {
         }
     }
 
-    /// The spawn a machine-armed routine's agent starts from: the saved Agent's variables,
-    /// under the CLI's own strip, as a desktop's launch of it has.
-    #[cfg(unix)]
-    fn arm_intent(
-        target: &codesense_pty_core::routine_arm::ArmTarget,
-        recipe: &codesense_pty_core::routine_arm::ArmLaunch,
-    ) -> SpawnIntent {
-        SpawnIntent {
-            remote_launch: Some(recipe.launch),
-            command: None,
-            argv: None,
-            shell: None,
-            cwd: target.cwd.clone(),
-            cols: 80,
-            rows: 24,
-            shell_integration: false,
-            starship_preset: None,
-            api_port: None,
-            env_remove: vec![],
-            env: vec![],
-            agent_env: Vec::new(),
-            login_path: None,
-        }
-        .with_agent_startup(Some(&recipe.agent_startup))
-        .with_cli_env_suppressed()
-    }
-
     /// The spec, registration, activity writer and MCP binding a
     /// machine-armed routine's agent starts with.
     #[cfg(unix)]
@@ -1494,7 +1467,8 @@ impl Host {
                 owner: None,
             });
         }
-        let intent = Self::arm_intent(target, recipe);
+        let intent =
+            SpawnIntent::armed(target.cwd.clone(), recipe.launch, &recipe.agent_startup);
         let mut spec = intent
             .resolve(session.as_str(), &self.environment)
             .map_err(|error| not_started(error.to_string()))?;
@@ -6910,7 +6884,8 @@ mod tests {
             )]
             .into_iter()
             .collect();
-            let intent = Host::arm_intent(&target(), &recipe);
+            let intent =
+                SpawnIntent::armed(target().cwd.clone(), recipe.launch, &recipe.agent_startup);
             assert!(intent
                 .agent_env
                 .iter()
