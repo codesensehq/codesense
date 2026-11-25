@@ -2930,10 +2930,24 @@ async fn story_filter_counts_total_limit_and_has_more_after_the_filter() {
         .unwrap()
         .iter()
         .all(|m| m["storyId"] == "DEMO-5"));
-    let all = agent_answer(&host, serde_json::json!({"story": "DEMO-5", "limit": 300})).await;
-    assert_eq!(all["messages"].as_array().unwrap().len(), 300);
-    assert_eq!(all["total"], 300);
-    assert_eq!(all["hasMore"], false);
+    // Paging with `before` while `hasMore` visits every filtered message once, even when
+    // the 64 KB budget ends a page before `limit`.
+    let (mut seen, mut before) = (Vec::new(), None::<i64>);
+    loop {
+        let mut args = serde_json::json!({"story": "DEMO-5", "limit": 300});
+        if let Some(before) = before {
+            args["before"] = before.into();
+        }
+        let answer = agent_answer(&host, args).await;
+        let messages = answer["messages"].as_array().unwrap();
+        assert!(messages.iter().all(|m| m["storyId"] == "DEMO-5"));
+        seen.extend(messages.iter().map(|m| m["messageId"].as_i64().unwrap()));
+        if answer["hasMore"] != true {
+            break;
+        }
+        before = messages.last().and_then(|m| m["messageId"].as_i64());
+    }
+    assert_eq!(seen, five, "every DEMO-5 message once, newest first");
     let unknown = agent_answer(&host, serde_json::json!({"story": "DEMO-7"})).await;
     assert!(unknown["messages"].as_array().unwrap().is_empty());
     assert_eq!(unknown["total"], 0);
