@@ -195,11 +195,10 @@ pub fn launch_admission(
     };
     // The org's guardrails could not be read: launching without their denies would widen
     // it, so the launch is refused with the loader's error.
-    let guardrails = manifest
-        .errors
-        .iter()
-        .find(|e| e.code == super::manifest::ManifestErrorCode::Guardrails)
-        .map(|e| e.message.clone());
+    let guardrails = Iterator::find(&mut manifest.errors.iter(), |e| {
+        e.code == super::manifest::ManifestErrorCode::Guardrails
+    })
+    .map(|e| e.message.clone());
     let reason = guardrails
         .or(reason)
         .or_else(|| initial_prompt_refusal(runtime, prompt));

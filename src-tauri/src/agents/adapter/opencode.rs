@@ -81,15 +81,17 @@ fn guardrail_deny(content: &mut serde_json::Value, rules: &[&str]) {
         .map(|key| (key.to_string(), serde_json::json!("deny")))
         .collect();
     let native = crate::agents::adapter::native_permission_rules(&serde_json::Value::Object(map));
-    let tier = native["permissions"].as_array().cloned().unwrap_or_default();
+    let tier = serde_json::Value::as_array(&native["permissions"])
+        .cloned()
+        .unwrap_or_default();
     let actions: Vec<&str> = tier
         .iter()
-        .filter_map(|rule| rule["action"].as_str())
+        .filter_map(|rule| serde_json::Value::as_str(&rule["action"]))
         .collect();
-    if !content["permissions"].is_array() {
+    if !serde_json::Value::is_array(&content["permissions"]) {
         content["permissions"] = serde_json::json!([]);
     }
-    let Some(own) = content["permissions"].as_array_mut() else {
+    let Some(own) = serde_json::Value::as_array_mut(&mut content["permissions"]) else {
         return;
     };
     for rule in own.iter_mut().filter_map(serde_json::Value::as_object_mut) {
@@ -114,7 +116,7 @@ fn guardrail_tried(
     };
     own.permission
         .iter()
-        .filter(|(_, decision)| decision.as_str() != "deny")
+        .filter(|(_, decision)| String::as_str(decision) != "deny")
         .map(|(key, decision)| {
             let kind = if decision == "ask" {
                 RefusalKind::PermissionAsk

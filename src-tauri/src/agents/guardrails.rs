@@ -70,19 +70,19 @@ pub struct DenyList {
 /// can't lift the ceiling silently.
 pub fn parse(bytes: &[u8]) -> Result<GuardrailsFile, String> {
     let text = std::str::from_utf8(bytes).map_err(|_| "the file is not UTF-8".to_string())?;
-    let text = text.trim_start_matches('\u{feff}');
+    let text = str::trim_start_matches(text, '\u{feff}');
     let value: serde_yaml::Value = serde_yaml::from_str(text).map_err(|e| e.to_string())?;
-    if value.is_null() {
+    if serde_yaml::Value::is_null(&value) {
         return Ok(GuardrailsFile::default());
     }
     let mut file: GuardrailsFile = serde_yaml::from_value(value).map_err(|e| e.to_string())?;
     for (cli, list) in &file.permissions {
-        if desktop(*cli).guardrails.is_none() {
+        if Option::is_none(&desktop(*cli).guardrails) {
             return Err(format!(
                 "permissions.{cli}: {cli} has no permission rules to deny"
             ));
         }
-        if list.deny.iter().any(|rule| rule.trim().is_empty()) {
+        if list.deny.iter().any(|rule| str::is_empty(rule.trim())) {
             return Err(format!("permissions.{cli}.deny has a blank rule"));
         }
         if list.deny.iter().any(|rule| rule == GUARDRAIL_TIER_ACTION) {
@@ -91,7 +91,7 @@ pub fn parse(bytes: &[u8]) -> Result<GuardrailsFile, String> {
             ));
         }
     }
-    file.permissions.retain(|_, list| !list.deny.is_empty());
+    BTreeMap::retain(&mut file.permissions, |_, list| !Vec::is_empty(&list.deny));
     Ok(file)
 }
 
@@ -121,13 +121,13 @@ impl Guardrails {
                 }
             }
         }
-        (!out.denied.is_empty()).then_some(out)
+        (!BTreeMap::is_empty(&out.denied)).then_some(out)
     }
 
     /// The rules `runtime` is denied and the port that enforces them; `None` when it is
     /// denied nothing or can't enforce a deny.
     fn enforced(&self, runtime: AgentCli) -> Option<(&Denied, GuardrailPort)> {
-        let rules = self.denied.get(&runtime).filter(|rules| !rules.is_empty())?;
+        let rules = BTreeMap::get(&self.denied, &runtime).filter(|rules| !Denied::is_empty(rules))?;
         Some((rules, desktop(runtime).guardrails?))
     }
 
@@ -137,7 +137,7 @@ impl Guardrails {
         let Some((rules, port)) = self.enforced(runtime) else {
             return;
         };
-        let rules: Vec<&str> = rules.keys().map(String::as_str).collect();
+        let rules: Vec<&str> = BTreeMap::keys(rules).map(String::as_str).collect();
         (port.deny)(&mut entry.content, &rules);
         entry.hash = json_hash(&entry.content);
     }
@@ -152,7 +152,7 @@ impl Guardrails {
         let refused = (port.tried)(agent)
             .into_iter()
             .filter_map(|(kind, item)| {
-                let sources = rules.get(&item)?;
+                let sources = BTreeMap::get(rules, &item)?;
                 seen.insert((kind, item.clone())).then(|| GuardrailRefusal {
                     kind,
                     item,
@@ -170,7 +170,7 @@ impl Guardrails {
     /// The warning for a launch on `runtime` when it can't enforce the org's permission
     /// denies (its CLI has no rule model), naming the files that deny them.
     pub fn not_enforced_warning(&self, runtime: AgentCli) -> Option<LaunchWarning> {
-        if desktop(runtime).guardrails.is_some() {
+        if Option::is_some(&desktop(runtime).guardrails) {
             return None;
         }
         let files: BTreeSet<&str> = self
@@ -179,7 +179,7 @@ impl Guardrails {
             .flat_map(|rules| rules.values().flatten())
             .map(String::as_str)
             .collect();
-        if files.is_empty() {
+        if BTreeSet::is_empty(&files) {
             return None;
         }
         Some(LaunchWarning {
@@ -210,30 +210,30 @@ pub(crate) fn split_final_tier(rules: Vec<Value>) -> (Vec<Value>, Vec<Value>) {
         return (rules, Vec::new());
     };
     let mut head = rules;
-    let after = head.split_off(at);
+    let after = Vec::split_off(&mut head, at);
     Vec::retain(&mut head, |rule| !is_marker(rule));
     let (tier, rest): (Vec<Value>, Vec<Value>) = after
         .into_iter()
         .skip(1)
         .partition(|rule| rule["effect"] == "deny");
-    head.extend(rest);
+    Extend::extend(&mut head, rest);
     (head, tier)
 }
 
 /// `merged` with the guardrail `tier` after it, behind its marker. A rule listed twice is
 /// kept once; no other rule of the tier is dropped.
 pub(crate) fn append_final_tier(merged: &mut Vec<Value>, tier: Vec<Value>) {
-    if tier.is_empty() {
+    if Vec::is_empty(&tier) {
         return;
     }
-    merged.push(tier_marker());
+    Vec::push(&mut *merged, tier_marker());
     let mut kept: Vec<Value> = Vec::new();
     for rule in tier {
         if !<[Value]>::contains(&kept, &rule) {
             Vec::push(&mut kept, rule);
         }
     }
-    merged.extend(kept);
+    Extend::extend(&mut *merged, kept);
 }
 
 /// What the org's guardrails did to one launch, on its [`super::manifest::StartupManifest`].

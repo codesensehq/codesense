@@ -55,7 +55,7 @@ pub(crate) fn org_guardrails(
     principal: &Principal,
     target: &super::manifest_resolve::ManifestTarget,
 ) -> Result<Option<std::sync::Arc<super::guardrails::Guardrails>>, String> {
-    if target.org.is_empty() {
+    if str::is_empty(&target.org) {
         return Ok(None);
     }
     let root = path_to_org_root(home, principal, &target.org)?;

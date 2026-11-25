@@ -1125,7 +1125,7 @@ pub(crate) fn org_guardrails(
         Err(e) if e.code() == git2::ErrorCode::NotFound && never_a_repository(root) => {
             return uncommitted(root, org, "the org folder is not a git repository");
         }
-        Err(e) => return Err(fail(&root.display().to_string(), &e)),
+        Err(e) => return Err(fail(&Path::display(root).to_string(), &e)),
     };
     // An org with a remote is read only at its upstream commit: HEAD could hold a local commit
     // nobody reviewed. HEAD's commit is read only for an org that has no remote at all.
@@ -1185,12 +1185,12 @@ pub(crate) fn org_guardrails(
     }
     let mut files = Vec::new();
     for team in teams.teams.iter().filter(|t| t.parent_team.is_none()) {
-        let name = team.name.as_str();
+        let name = String::as_str(&team.name);
         if let Some(e) = validate_path_segment(name) {
             return Err(fail(&format!("root team {name}"), &e));
         }
-        let folder = tree.get_path(Path::new(name)).ok();
-        if folder.and_then(|e| e.kind()) != Some(git2::ObjectType::Tree) {
+        let folder = Result::ok(tree.get_path(Path::new(name)));
+        if folder.and_then(|e| git2::TreeEntry::kind(&e)) != Some(git2::ObjectType::Tree) {
             return Err(fail(
                 &format!("root team {name}"),
                 &"teams.yml lists it but its folder is not in the commit",
@@ -1218,14 +1218,14 @@ pub(crate) fn org_guardrails(
     // A top-level folder `teams.yml` doesn't list as a root can't have its file read, so a
     // root dropped from the list, or an empty list, would otherwise lift that team's denies.
     for entry in git2::Tree::iter(&tree) {
-        let Some(name) = git2::TreeEntry::name(&entry) else {
+        let Ok(name) = git2::TreeEntry::name(&entry) else {
             continue;
         };
         if git2::TreeEntry::kind(&entry) != Some(git2::ObjectType::Tree)
             || teams
                 .teams
                 .iter()
-                .any(|t| t.parent_team.is_none() && t.name.as_str() == name)
+                .any(|t| t.parent_team.is_none() && t.name == name)
         {
             continue;
         }
