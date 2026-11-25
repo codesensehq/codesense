@@ -45,6 +45,8 @@ export function WorkspaceChatMessageRow({
     ["--wc-handle" as string]: identity?.color ?? roleColour,
   };
 
+  const media = message.attachments?.[0];
+
   const classes = ["wc-msg"];
   if (isLead) classes.push("wc-msg--lead");
   else classes.push("wc-msg--follow");
@@ -86,7 +88,15 @@ export function WorkspaceChatMessageRow({
           </time>
         </div>
         <div className="wc-msg__content">
-          <InboxMessageContent text={message.text} contentType={message.contentType} />
+          {(message.text.trim() !== "" || !media) && (
+            <InboxMessageContent text={message.text} contentType={message.contentType} />
+          )}
+          {media && (
+            // A stand-in until the row draws the image itself, so a bare GIF row is never empty.
+            <p className="wc-msg__media" data-testid="workspace-chat-media">
+              GIF: {media.alt}
+            </p>
+          )}
         </div>
       </div>
     </div>
