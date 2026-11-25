@@ -10324,6 +10324,14 @@ export const gifSearchPage = (
   limit: number | null,
 ) => invoke<GifSearchPageResult>("gif_search_page", { team, query, ids, limit });
 
+export type GifPickedResult =
+  | { status: "ok" }
+  | { status: "error"; error: "badQuery"; message: string };
+/** The person picked GIF `id` in the Inbox pane's picker: the host registers the pick with
+ *  the provider in the background. */
+export const gifPicked = (provider: "giphy", id: string) =>
+  invoke<GifPickedResult>("gif_picked", { provider, id });
+
 export const dashboardInventory = (folder?: string, localOnly = false) =>
   invoke<import("@/features/dashboard-publishing/types").DashboardInventory>(
     "dashboard_inventory",

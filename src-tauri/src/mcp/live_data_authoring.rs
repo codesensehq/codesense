@@ -333,6 +333,13 @@ pub(crate) const ACTION_VERB_DOCS: &[ActionVerbDoc] = &[
         deny_example: "denied: gifSearch requires the Inbox pane",
     },
     ActionVerbDoc {
+        verb: "gifPicked",
+        tier: "metadata",
+        args: "{provider: 'giphy', id: string}",
+        purpose: "Tell the provider the person picked a GIF in the Inbox pane's picker, as its terms ask: call it once per pick (choosing a result counts; staging, unstaging and picking again are each a pick). From the Inbox pane only, under inbox:write. The click registration goes out in the background, so it resolves at once with `{status:'ok'}`; an id no gifSearch returned in the last hour, GIF search off or no key sends nothing and is still ok. Resolves `{status:'error', error:'badQuery', message}` for a provider or id that isn't one. It sends no message: sendAsHuman and replyAsHuman with `media` do that.",
+        deny_example: "denied: gifPicked requires the Inbox pane",
+    },
+    ActionVerbDoc {
         verb: "react",
         tier: "metadata",
         args: "{org?: string, team?: string, messageId: number, emoji: string, remove?: boolean}",

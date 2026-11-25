@@ -1937,3 +1937,16 @@ async fn mcp_gif_search_is_unchanged_by_previews() {
         );
     }
 }
+
+#[test]
+fn a_pick_registers_only_a_known_provider_and_a_valid_id() {
+    let mut picks = Vec::new();
+    let ok = super::page::picked("giphy", "g1", |provider, id| picks.push((provider, id)));
+    assert_eq!(ok, serde_json::json!({"status": "ok"}));
+    assert_eq!(picks, vec![(Provider::Giphy, "g1".to_string())]);
+    for (provider, id) in [("other", "g1"), ("giphy", "a b"), ("giphy", "")] {
+        let refused = super::page::picked(provider, id, |_, _| panic!("not registered"));
+        assert_eq!(refused["status"], "error", "{provider} {id}");
+        assert_eq!(refused["error"], "badQuery");
+    }
+}

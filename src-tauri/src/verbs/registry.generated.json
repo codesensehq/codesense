@@ -841,6 +841,71 @@
     "module": "records"
   },
   {
+    "name": "gifPicked",
+    "class": "metadata",
+    "argsSchema": {
+      "additionalProperties": true,
+      "properties": {
+        "id": {
+          "pattern": "^[A-Za-z0-9_-]{1,64}$",
+          "type": "string"
+        },
+        "provider": {
+          "enum": [
+            "giphy"
+          ]
+        }
+      },
+      "required": [
+        "provider",
+        "id"
+      ],
+      "type": "object"
+    },
+    "resultSchema": {
+      "oneOf": [
+        {
+          "properties": {
+            "status": {
+              "const": "ok"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "error": {
+              "const": "badQuery"
+            },
+            "message": {
+              "type": "string"
+            },
+            "status": {
+              "const": "error"
+            }
+          },
+          "required": [
+            "status",
+            "error",
+            "message"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "grant": "inbox:write",
+    "inboxTarget": false,
+    "confirmable": false,
+    "mcpTwin": null,
+    "presentationOnlyReason": "Registers the person's pick in the Inbox pane GIF picker with the provider",
+    "audited": true,
+    "action": true,
+    "module": "inbox"
+  },
+  {
     "name": "gifSearch",
     "class": "read",
     "argsSchema": {

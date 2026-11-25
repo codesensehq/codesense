@@ -112,6 +112,10 @@ pub fn args_schema(name: &str) -> Value {
             "limit":{"type":"integer","minimum":1,"maximum":crate::gif::MAX_LIMIT},
             "org":string(),"team":string()
         }),
+        "gifPicked" => json!({
+            "provider":{"enum":["giphy"]},
+            "id":{"type":"string","pattern":crate::gif::ID_PATTERN}
+        }),
         "react" => {
             json!({"messageId":{"type":"integer"},"emoji":string(),"remove":{"type":"boolean"}})
         }
@@ -168,6 +172,7 @@ pub fn args_schema(name: &str) -> Value {
     };
     let required: &[&str] = match name {
         "loadMedia" => &["messageId"],
+        "gifPicked" => &["provider", "id"],
         "files.read" | "files.delete" => &["path"],
         "files.move" => &["from", "to"],
         "files.create" => &["path", "onCollision"],
@@ -252,6 +257,10 @@ pub fn result_schema(name: &str) -> Value {
                 {"type":"object","properties":{"status":{"const":"error"},"error":{"enum":["noProvider","keychainUnavailable","invalidKey","rateLimited","providerUnavailable","badQuery","mediaOff"]},"message":{"type":"string"},"retryAfter":{"type":"integer","minimum":1}},"required":["status","error","message"]}
             ]})
         }
+        "gifPicked" => json!({"oneOf":[
+            {"type":"object","properties":{"status":{"const":"ok"}},"required":["status"]},
+            {"type":"object","properties":{"status":{"const":"error"},"error":{"const":"badQuery"},"message":{"type":"string"}},"required":["status","error","message"]}
+        ]}),
         "unarchive" => {
             json!({"type":"object","properties":{"unarchived":{"type":"integer","minimum":0}},"required":["unarchived"]})
         }

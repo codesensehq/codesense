@@ -49,6 +49,7 @@ const mockGetHumanStatus = vi.fn();
 const mockSetHumanStatus = vi.fn();
 const mockReplyAsHuman = vi.fn();
 const mockGifSearchPage = vi.fn();
+const mockGifPicked = vi.fn();
 const mockReactAsHuman = vi.fn();
 const mockAgentPins = vi.fn();
 const mockAgentPinsPrepareView = vi.fn();
@@ -124,6 +125,7 @@ vi.mock("@/tauri/commands", () => ({
   setHumanStatus: (...a: unknown[]) => mockSetHumanStatus(...a),
   replyAsHuman: (...a: unknown[]) => mockReplyAsHuman(...a),
   gifSearchPage: (...a: unknown[]) => mockGifSearchPage(...a),
+  gifPicked: (...a: unknown[]) => mockGifPicked(...a),
   reactAsHuman: (...a: unknown[]) => mockReactAsHuman(...a),
   agentPins: (...a: unknown[]) => mockAgentPins(...a),
   agentPinsPrepareView: (...a: unknown[]) => mockAgentPinsPrepareView(...a),
@@ -301,6 +303,7 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       "getDocDir",
       "getEpicHandle",
       "getWorkspaceStatus",
+      "gifPicked",
       "gifSearch",
       "gotoAgent",
       "humanStatus",
@@ -2614,6 +2617,16 @@ describe("agents read model verbs", () => {
       await expect(runBridgeCommand("gifSearch", bad, DOC)).rejects.toThrow(/gifSearch/);
     }
     expect(mockGifSearchPage).toHaveBeenCalledTimes(2);
+
+    mockGifPicked.mockResolvedValue({ status: "ok" });
+    await expect(
+      runBridgeCommand("gifPicked", { provider: "giphy", id: "g1" }, DOC),
+    ).resolves.toEqual({ status: "ok" });
+    expect(mockGifPicked).toHaveBeenLastCalledWith("giphy", "g1");
+    for (const bad of [{}, { provider: "other", id: "g1" }, { provider: "giphy", id: "" }]) {
+      await expect(runBridgeCommand("gifPicked", bad, DOC)).rejects.toThrow(/gifPicked/);
+    }
+    expect(mockGifPicked).toHaveBeenCalledTimes(1);
 
     mockReplyAsHuman.mockResolvedValue({ status: "sent", messageId: 10 });
     await runBridgeCommand("replyAsHuman", { messageId: 9, text: "yes" }, DOC);

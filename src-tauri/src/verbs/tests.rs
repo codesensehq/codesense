@@ -1308,3 +1308,53 @@ fn gif_search_audit_names_the_query_length_never_the_text() {
     assert_eq!(target(json!({"ids":["a","b"]})).as_deref(), Some("2 ids"));
     assert_eq!(target(json!({})), None);
 }
+
+#[test]
+fn gif_picked_is_an_inbox_pane_only_metadata_write_audited_by_provider_and_id() {
+    use crate::dashboard_stream::frame::FrameCallerKind;
+    let registry = Registry::default();
+    let verb = registry.get("gifPicked").unwrap();
+    assert_eq!(verb.grant, "inbox:write");
+    assert_eq!(verb.class, Class::Metadata);
+    assert!(!verb.inbox_target && verb.audited && verb.action && !verb.confirmable);
+    assert!(verb.mcp_twin.is_none() && verb.presentation_only_reason.is_some());
+    let pick = json!({"provider":"giphy","id":"g1"});
+    assert!(jsonschema::is_valid(&verb.args_schema, &pick));
+    for args in [
+        json!({"provider":"giphy"}),
+        json!({"provider":"other","id":"g1"}),
+        json!({"provider":"giphy","id":"no spaces"}),
+    ] {
+        assert!(!jsonschema::is_valid(&verb.args_schema, &args), "{args}");
+    }
+    for (kind, inbox) in [
+        (FrameCallerKind::Message, false),
+        (FrameCallerKind::Message, true),
+        (FrameCallerKind::Builtin, false),
+    ] {
+        assert_eq!(
+            Dispatcher::default().dispatch_frame(
+                &review_media_frame(kind, inbox),
+                "gifPicked",
+                pick.clone(),
+                &Policy::default(),
+                0
+            ),
+            Decision::Deny {
+                reason: "denied: gifPicked requires the Inbox pane".into()
+            },
+            "{kind:?} inbox={inbox}"
+        );
+    }
+    let pane = review_media_frame(FrameCallerKind::Builtin, true);
+    assert!(matches!(
+        Dispatcher::default().dispatch_frame(&pane, "gifPicked", pick.clone(), &Policy::default(), 0),
+        Decision::Admit { .. }
+    ));
+    let target = |args: serde_json::Value| {
+        super::dispatcher::action_target(&caller("builtin"), "gifPicked", &args)
+    };
+    assert_eq!(target(pick).as_deref(), Some("giphy g1"));
+    assert_eq!(target(json!({"provider":"giphy","id":"a b"})), None);
+    assert_eq!(target(json!({"provider":"elsewhere","id":"g1"})), None);
+}

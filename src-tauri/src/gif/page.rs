@@ -2,7 +2,8 @@
 //! `gifSearch`, the Inbox pane's GIF search: the `gif_search` tool's candidates, each with its
 //! still as a `data:` URI the pane can show under its `img-src 'self' data:` CSP. The stills are
 //! fetched for the person's own search, so only the team's remote media Off stops them.
-use super::{search, Candidate, GifError, GifService, SearchArgs};
+//! `gifPicked` registers the person's pick with the provider.
+use super::{search, Candidate, GifError, GifService, Provider, SearchArgs};
 use crate::media::{preview, Config, Remote};
 use serde::Serialize;
 use std::time::Duration;
@@ -88,4 +89,37 @@ pub async fn gif_search_page(
         ..Default::default()
     };
     Ok(search_page(&service, &config, args, stills.as_ref(), preview::DEADLINE).await)
+}
+
+/// Check a pick of GIF `id` from `provider` and hand it to `register`. Resolves `{status:"ok"}`,
+/// or `badQuery` for a provider or id that isn't one, with nothing registered.
+pub(crate) fn picked(
+    provider: &str,
+    id: &str,
+    register: impl FnOnce(Provider, String),
+) -> serde_json::Value {
+    let (Some(provider), true) = (Provider::parse(provider), super::valid_id(id)) else {
+        return GifError::BadQuery("unknown GIF").tool_result();
+    };
+    register(provider, id.to_string());
+    serde_json::json!({"status": "ok"})
+}
+
+/// `gifPicked` from the Inbox pane: the person picked a GIF in the picker. Its onclick goes
+/// out in the background, once per pick; an id no search returned in the last hour, search Off
+/// or no key is a quiet no-op. The dispatcher admits it from the pane only.
+#[tauri::command]
+pub async fn gif_picked(
+    app: tauri::AppHandle,
+    provider: String,
+    id: String,
+) -> Result<serde_json::Value, String> {
+    Ok(picked(
+        &provider,
+        &id,
+        |provider, id| match super::register::registration(&app) {
+            Ok(registration) => super::register::click_in_background(&registration, provider, id),
+            Err(e) => log::warn!(target: "gif", "gif pick: registration unavailable: {e}"),
+        },
+    ))
 }

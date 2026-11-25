@@ -1354,6 +1354,20 @@ declare namespace CodesenseSdk {
       storyId?: string;
       [key: string]: unknown;
     }): Promise<unknown>;
+    /** metadata · inbox:write */
+    gifPicked(args: {
+      id: string;
+      provider: "giphy";
+      [key: string]: unknown;
+    }): Promise<{
+      status: "ok";
+      [key: string]: unknown;
+    } | {
+      error: "badQuery";
+      message: string;
+      status: "error";
+      [key: string]: unknown;
+    }>;
     /** read · inbox:write */
     gifSearch(args?: {
       ids?: string[];

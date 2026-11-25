@@ -1,6 +1,6 @@
 # Page SDK
 
-Generated from the Rust registry and TypeScript declarations. All 124 verbs and every declared Surface member are listed below. Rust checks each call against its frame grant.
+Generated from the Rust registry and TypeScript declarations. All 125 verbs and every declared Surface member are listed below. Rust checks each call against its frame grant.
 
 [Exact TypeScript declarations](codesense.d.ts) · [Machine reference](page-sdk.json) · [Capabilities](capabilities.md) · [LiveHub](live-hub.md)
 
@@ -896,6 +896,28 @@ getWorkspaceStatus(args?: {
 read · repo:read
 
 Class: read; default grant: repo:read; MCP twin: Host operation bound to the rendered dashboard; no identical MCP binding.
+
+## VerbMethods: gifPicked
+
+```ts
+gifPicked(args: {
+      id: string;
+      provider: "giphy";
+      [key: string]: unknown;
+    }): Promise<{
+      status: "ok";
+      [key: string]: unknown;
+    } | {
+      error: "badQuery";
+      message: string;
+      status: "error";
+      [key: string]: unknown;
+    }>;
+```
+
+metadata · inbox:write
+
+Class: metadata; default grant: inbox:write; MCP twin: Registers the person's pick in the Inbox pane GIF picker with the provider.
 
 ## VerbMethods: gifSearch
 

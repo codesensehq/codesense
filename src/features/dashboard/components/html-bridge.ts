@@ -67,6 +67,7 @@ import {
   agentPinsPrepareView,
   loadInboxMedia,
   gifSearchPage,
+  gifPicked,
   markInboxMessagesRead,
   markInboxMessagesUnread,
   markInboxMessagesArchived,
@@ -1486,6 +1487,18 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
     }
     const limit = optionalLimit(a.limit, "gifSearch") ?? null;
     return inboxWrite(ctx, "gifSearch", a, (team) => gifSearchPage(team, query, ids, limit));
+  },
+  // A pick in the Inbox pane's GIF picker, once per pick; the host registers it with the
+  // provider in the background and refuses it from any other frame.
+  gifPicked: async (args) => {
+    const a = argObject(args, "gifPicked");
+    if (a.provider !== "giphy") {
+      throw new Error("gifPicked: {provider} must be 'giphy'");
+    }
+    if (typeof a.id !== "string" || !a.id) {
+      throw new Error("gifPicked: {id} must be a GIF id from gifSearch");
+    }
+    return gifPicked(a.provider, a.id);
   },
   replyAsHuman: async (args, ctx) => {
     const a = argObject(args, "replyAsHuman");
