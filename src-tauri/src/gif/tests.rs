@@ -276,7 +276,10 @@ fn renditions_without_a_size_or_dimensions_or_over_the_limits_never_qualify() {
     ));
     assert_eq!(pick_animated(&some).unwrap().name, "exactly_8mb");
     // A still is never animated, and the 480w still is the preview only when it is the one still.
-    assert_eq!(pick_preview(&none).unwrap().name, "480w_still");
+    assert_eq!(
+        pick_preview(Provider::Giphy, &none).unwrap().name,
+        "480w_still"
+    );
 }
 
 #[test]
@@ -868,6 +871,180 @@ async fn no_results_is_an_empty_list() {
     h.transport
         .reply(200, None, r#"{"data":[],"meta":{"status":200}}"#);
     assert_eq!(h.search("nothing matches this").await, Ok(vec![]));
+}
+
+#[test]
+fn every_gif_error_names_the_active_provider() {
+    let after_settings = [
+        GifError::NoProvider,
+        GifError::KeychainUnavailable,
+        GifError::NoSecretStore,
+        GifError::InvalidKey,
+        GifError::RateLimited { retry_after: 30 },
+        GifError::ProviderUnavailable,
+        GifError::BadQuery("provider is not the active GIF provider"),
+    ];
+    for (provider, other) in [
+        (Provider::Giphy, Provider::Klipy),
+        (Provider::Klipy, Provider::Giphy),
+    ] {
+        for error in after_settings {
+            let text = error.message(Some(provider));
+            assert!(text.contains(provider.display_name()), "{text}");
+            assert!(!text.contains(other.display_name()), "{text}");
+            let failed = Failed {
+                provider: Some(provider),
+                error,
+            };
+            assert_eq!(failed.tool_result()["message"], text);
+            assert_eq!(failed.tool_result()["error"], error.code());
+        }
+        // A provider's own refusal names it once.
+        let refused = transport::classify(
+            provider,
+            Ok(Reply {
+                status: 404,
+                retry_after: None,
+                body: Vec::new(),
+            }),
+            START_MS,
+        )
+        .unwrap_err();
+        let text = refused.message(Some(provider));
+        assert_eq!(text.matches(provider.display_name()).count(), 1, "{text}");
+    }
+    // Input checks, search Off and the pane's media check come before any provider: they say
+    // "GIF search" and name none.
+    let before_settings = [
+        GifError::NoProvider,
+        GifError::BadQuery("query is blank"),
+        GifError::BadQuery("unknown provider"),
+        GifError::MediaOff,
+    ];
+    for error in after_settings.into_iter().chain(before_settings) {
+        let text = error.message(None);
+        assert_eq!(text, error.to_string());
+        assert!(text.contains("GIF search"), "{text}");
+        assert!(!text.contains("GIPHY") && !text.contains("KLIPY"), "{text}");
+    }
+}
+
+/// A harness whose KLIPY keychain item is empty while GIPHY's holds [`KEY`].
+fn harness_without_a_klipy_key() -> Harness {
+    harness_with(
+        |store| {
+            let store: Arc<dyn CredentialStore> = store;
+            let empty: Arc<dyn CredentialStore> = Arc::new(FakeStore::default());
+            Keys::per_provider(
+                move |provider| -> Arc<dyn CredentialStore> {
+                    match provider {
+                        Provider::Giphy => store.clone(),
+                        Provider::Klipy => empty.clone(),
+                    }
+                },
+                true,
+                Some(ACCOUNT),
+                Duration::from_secs(3),
+            )
+        },
+        true,
+    )
+}
+
+#[tokio::test]
+async fn a_search_error_names_the_provider_it_ran_under() {
+    let h = harness_without_a_klipy_key();
+    let request = normalize(Some("ship it"), None, None).unwrap();
+    let settings = h.dir.path().join(settings::FILE);
+    std::fs::write(&settings, r#"{"provider":"klipy"}"#).unwrap();
+    let failed = h.service.run_in(&request, None, None).await.unwrap_err();
+    assert_eq!(
+        failed,
+        Failed {
+            provider: Some(Provider::Klipy),
+            error: GifError::NoProvider,
+        }
+    );
+    assert!(failed.tool_result()["message"]
+        .as_str()
+        .unwrap()
+        .contains("no KLIPY key"));
+    let other = h
+        .service
+        .run_in(&request, Some(Provider::Giphy), None)
+        .await
+        .unwrap_err();
+    assert_eq!(other.provider, Some(Provider::Klipy));
+    assert_eq!(other.error.code(), "badQuery");
+    // With search Off no provider is active, so none is named.
+    std::fs::write(&settings, r#"{"enabled":false,"provider":"klipy"}"#).unwrap();
+    assert_eq!(
+        h.service.run_in(&request, None, None).await,
+        Err(Failed {
+            provider: None,
+            error: GifError::NoProvider,
+        })
+    );
+    assert_eq!(h.transport.requests(), 0);
+}
+
+#[tokio::test]
+async fn klipy_key_reads_from_its_own_service() {
+    assert_eq!(Provider::Klipy.key_service(), "ai.codesense.klipy-api-key");
+    assert_eq!(Provider::Giphy.key_service(), "ai.codesense.giphy-api-key");
+    let (giphy, klipy) = (
+        Arc::new(FakeStore::default()),
+        Arc::new(FakeStore::default()),
+    );
+    giphy.set(ACCOUNT, &Secret::new(KEY)).unwrap();
+    let (g, k): (Arc<dyn CredentialStore>, Arc<dyn CredentialStore>) =
+        (giphy.clone(), klipy.clone());
+    let keys = Keys::per_provider(
+        move |provider| match provider {
+            Provider::Giphy => g.clone(),
+            Provider::Klipy => k.clone(),
+        },
+        true,
+        Some(ACCOUNT),
+        Duration::from_secs(3),
+    );
+    assert!(keys.read_key(Provider::Klipy).unwrap().is_none());
+    assert_eq!(
+        keys.read_timed(Provider::Klipy).await.map(|_| ()),
+        Err(GifError::NoProvider)
+    );
+    klipy
+        .set(ACCOUNT, &Secret::new("a-klipy-key-value-0001"))
+        .unwrap();
+    assert_eq!(
+        keys.read_timed(Provider::Klipy).await.unwrap().expose(),
+        "a-klipy-key-value-0001"
+    );
+    assert_eq!(
+        keys.read_timed(Provider::Giphy).await.unwrap().expose(),
+        KEY
+    );
+}
+
+#[test]
+fn klipy_has_its_own_bucket_and_production_mark() {
+    let fp = fingerprint(&Secret::new(KEY));
+    assert_eq!(bucket_key(Provider::Klipy, &fp), format!("klipy:{fp}"));
+    assert_ne!(
+        bucket_key(Provider::Klipy, &fp),
+        bucket_key(Provider::Giphy, &fp)
+    );
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join(settings::FILE),
+        serde_json::json!({"provider": "klipy", "productionKeys": [format!("klipy:{fp}")]})
+            .to_string(),
+    )
+    .unwrap();
+    let loaded = settings::load(dir.path());
+    assert_eq!(loaded.provider, Provider::Klipy);
+    assert!(loaded.is_production(Provider::Klipy, &fp));
+    assert!(!loaded.is_production(Provider::Giphy, &fp));
 }
 
 // ---- AC 3: the rate limit ----
@@ -1531,7 +1708,7 @@ async fn the_tool_result_names_the_provider_and_marks_auto_loads_from_the_team()
         serde_json::json!({
             "status": "error",
             "error": "rateLimited",
-            "message": "GIF search is paused. Try again in 30 seconds.",
+            "message": "GIPHY search is paused. Try again in 30 seconds.",
             "retryAfter": 30,
         })
     );
@@ -1630,12 +1807,12 @@ async fn lookup_returns_the_ids_asked_in_order_and_counts_against_the_bucket() {
 #[test]
 fn ids_are_one_to_ten_entries_of_the_shared_pattern_and_exclusive_with_query() {
     let list = |ids: &[&str]| ids.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-    assert_eq!(ID_PATTERN, "^[A-Za-z0-9_-]{1,64}$");
+    assert_eq!(ID_PATTERN, "^[A-Za-z0-9_-]{1,128}$");
     assert!(normalize(None, Some(list(&["a", "B-2", "c_3"]).as_slice()), None).is_ok());
     let ten: Vec<String> = (0..10).map(|i| format!("id{i}")).collect();
     assert!(normalize(None, Some(ten.as_slice()), None).is_ok());
     let eleven: Vec<String> = (0..11).map(|i| format!("id{i}")).collect();
-    let long = "x".repeat(65);
+    let long = "x".repeat(129);
     for bad in [
         vec![],
         eleven,
@@ -1653,7 +1830,9 @@ fn ids_are_one_to_ten_entries_of_the_shared_pattern_and_exclusive_with_query() {
             "{bad:?}"
         );
     }
-    assert!(valid_id(&"x".repeat(64)));
+    assert!(valid_id(&"x".repeat(128)));
+    assert!(!valid_id(&"x".repeat(129)));
+    assert!(normalize(None, Some(&["x".repeat(128)]), None).is_ok());
     assert!(matches!(
         normalize(Some("ship it"), Some(list(&["a"]).as_slice()), None),
         Err(GifError::BadQuery(_))

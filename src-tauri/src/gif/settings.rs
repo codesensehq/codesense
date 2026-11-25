@@ -170,8 +170,19 @@ impl Keys {
         account: Option<&str>,
         read_timeout: Duration,
     ) -> Self {
+        Self::per_provider(move |_| store.clone(), available, account, read_timeout)
+    }
+
+    /// Keys with one store per provider, as the keychain's items are.
+    #[cfg(test)]
+    pub(crate) fn per_provider(
+        stores: impl Fn(Provider) -> Arc<dyn CredentialStore> + Send + Sync + 'static,
+        available: bool,
+        account: Option<&str>,
+        read_timeout: Duration,
+    ) -> Self {
         Self {
-            stores: Arc::new(move |_: Provider| store.clone()),
+            stores: Arc::new(stores),
             available: Arc::new(move || available),
             account: account.map(str::to_string),
             read_timeout,

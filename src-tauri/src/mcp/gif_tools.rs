@@ -75,6 +75,6 @@ pub(crate) async fn search_with(
             "provider": provider,
             "candidates": candidates,
         }),
-        Err(error) => GifError::tool_result(error),
+        Err(failed) => failed.tool_result(),
     }
 }

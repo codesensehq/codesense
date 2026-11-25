@@ -524,8 +524,8 @@ impl Registration {
         now: i64,
     ) -> Option<Admitted> {
         let name = event.name();
-        if provider != Provider::Giphy {
-            log::info!(target: "gif", "gif registration: {provider:?} sends no {name}; not registered");
+        if !Provider::registers(provider, event) {
+            log::info!(target: "gif", "gif registration: {} takes no {name}; not registered", Provider::display_name(provider));
             return None;
         }
         let Some((id, url)) = gif else {

@@ -134,6 +134,7 @@ impl Transport for Http {
 fn refused(provider: Provider) -> &'static str {
     match provider {
         Provider::Giphy => "GIPHY refused the request",
+        Provider::Klipy => "KLIPY refused the request",
     }
 }
 
