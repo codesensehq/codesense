@@ -2257,25 +2257,52 @@ pub(crate) async fn read_messages<'a>(
         } else {
             None
         };
+        let mut attachments = m.attachments;
+        host.present_media(&team, &mut attachments);
         results.push(ReadMessage {
             message_id: m.id,
             from_name: address_name(host, &sessions, &m.from),
             from: m.from,
-            text: m.text,
+            text: text_with_media(m.text, &attachments),
             in_reply_to: m.in_reply_to,
             in_reply_to_team: m.in_reply_to_team,
             reply_to: m.reply_to,
             summary: m.summary,
             primary_file: m.primary_file,
-            attachments: {
-                let mut a = m.attachments;
-                host.present_media(&team, &mut a);
-                a
-            },
+            attachments,
             attachment_hint,
         });
     }
     Ok(results)
+}
+
+/// `text` as `read_messages` hands it to an agent: one suffix per picture, in order,
+/// `[GIF: <alt>]` for provider media or an `image/gif`, else `[Image: <alt>]`, so an agent
+/// that reads only `text` still knows what was sent. The alt is cleaned like a GIF title,
+/// its square brackets turned to parentheses so it can't close the suffix. The stored text
+/// is unchanged.
+pub(crate) fn text_with_media(text: String, attachments: &[crate::media::Attachment]) -> String {
+    use crate::media::MediaProvider;
+    let named = |p: Option<MediaProvider>| p.is_some_and(|p| p != MediaProvider::None);
+    let suffixes: Vec<String> = attachments
+        .iter()
+        .map(|a| {
+            let gif = named(a.provider)
+                || named(a.media_provider)
+                || a.mime.as_deref() == Some("image/gif");
+            let alt = crate::gif::clean_title(&a.alt)
+                .replace('[', "(")
+                .replace(']', ")");
+            format!("[{}: {alt}]", if gif { "GIF" } else { "Image" })
+        })
+        .collect();
+    if suffixes.is_empty() {
+        text
+    } else if text.trim().is_empty() {
+        suffixes.join("\n")
+    } else {
+        format!("{text}\n\n{}", suffixes.join("\n"))
+    }
 }
 
 /// When a session's agent was last told about its mail (see [`SessionUnread::announced`]).
