@@ -754,7 +754,7 @@ async fn with_no_secret_store_nothing_touches_the_keyring_or_network_and_saves_a
                 .to_string()
         )
     );
-    assert!(settings::remove_with(&keys, h.dir.path()).is_err());
+    assert!(settings::remove_with(&keys, h.dir.path(), Provider::Giphy).is_err());
     assert_eq!(
         settings::status_with(&keys, h.dir.path()).status,
         KeyState::Unavailable
@@ -1132,7 +1132,7 @@ async fn a_production_key_has_no_local_cap_and_replacing_it_clears_the_flag() {
     assert!(h.search("ship it").await.is_ok());
 
     settings::set_with(&h.keys(), h.dir.path(), production(true)).unwrap();
-    let removed = settings::remove_with(&h.keys(), h.dir.path()).unwrap();
+    let removed = settings::remove_with(&h.keys(), h.dir.path(), Provider::Giphy).unwrap();
     assert_eq!(removed.status, KeyState::Missing);
     assert!(!h.file(settings::FILE).contains("giphy:"));
     assert!(settings::set_with(&h.keys(), h.dir.path(), production(true)).is_err());
@@ -1385,7 +1385,7 @@ fn the_key_is_the_giphy_keychain_item_under_the_login_name() {
         settings::status_with(&other, dir.path()).status,
         KeyState::Missing
     );
-    settings::remove_with(&keys, dir.path()).unwrap();
+    settings::remove_with(&keys, dir.path(), Provider::Giphy).unwrap();
     assert_eq!(store.get(ACCOUNT).unwrap(), None);
 }
 
@@ -2777,4 +2777,198 @@ fn concurrent_install_writes_keep_both_entries() {
     let file = install_json(dir.path());
     assert_eq!(file["giphy"]["randomId"], "rid-49");
     assert!(file["klipy"]["customerId"].is_string());
+}
+
+// ---- AC 4: the provider choice and each provider's key ----
+
+const KLIPY_KEY: &str = "a-klipy-key-for-settings-0042";
+
+/// A harness whose GIPHY key and KLIPY key live in their own counting keychain items.
+fn two_key_harness() -> (Harness, Arc<Counting>) {
+    let klipy = Arc::new(Counting::default());
+    klipy.inner.set(ACCOUNT, &Secret::new(KLIPY_KEY)).unwrap();
+    let k: Arc<dyn CredentialStore> = klipy.clone();
+    let h = harness_with(
+        move |giphy| {
+            let g: Arc<dyn CredentialStore> = giphy;
+            Keys::per_provider(
+                move |provider| match provider {
+                    Provider::Giphy => g.clone(),
+                    Provider::Klipy => k.clone(),
+                },
+                true,
+                Some(ACCOUNT),
+                Duration::from_secs(3),
+            )
+        },
+        true,
+    );
+    (h, klipy)
+}
+
+fn choose(provider: &str) -> SettingsUpdate {
+    SettingsUpdate {
+        enabled: Some(true),
+        provider: Some(provider.to_string()),
+        ..SettingsUpdate::default()
+    }
+}
+
+fn turn_off() -> SettingsUpdate {
+    SettingsUpdate {
+        enabled: Some(false),
+        ..SettingsUpdate::default()
+    }
+}
+
+#[test]
+fn klipy_round_trips_and_an_unknown_provider_loads_the_default() {
+    let h = harness();
+    let view = settings::set_with(&h.keys(), h.dir.path(), choose("klipy")).unwrap();
+    assert_eq!(view.provider, Provider::Klipy);
+    assert!(h.file(settings::FILE).contains(r#""provider": "klipy""#));
+    assert_eq!(settings::load(h.dir.path()).provider, Provider::Klipy);
+    std::fs::write(
+        h.dir.path().join(settings::FILE),
+        r#"{"provider":"tenor","ceiling":"g"}"#,
+    )
+    .unwrap();
+    let loaded = settings::load(h.dir.path());
+    assert_eq!(loaded.provider, settings::GifSettings::default().provider);
+    assert_eq!(loaded.ceiling, Rating::G, "the other fields still load");
+}
+
+#[test]
+fn set_refuses_an_unknown_provider_and_changes_nothing() {
+    let h = harness();
+    for name in ["tenor", "KLIPY", " klipy", "off", ""] {
+        let refused = settings::set_with(&h.keys(), h.dir.path(), choose(name)).unwrap_err();
+        assert_eq!(refused, "The GIF provider is giphy or klipy.", "{name:?}");
+    }
+    assert_eq!(h.file(settings::FILE), "", "nothing was written");
+}
+
+#[tokio::test]
+async fn switching_keeps_both_keys_and_their_production_marks() {
+    let (h, klipy) = two_key_harness();
+    let production = |flag| SettingsUpdate {
+        production: Some(flag),
+        ..SettingsUpdate::default()
+    };
+    settings::set_with(&h.keys(), h.dir.path(), production(true)).unwrap();
+    settings::set_with(&h.keys(), h.dir.path(), choose("klipy")).unwrap();
+    let status = settings::status_with(&h.keys(), h.dir.path());
+    assert_eq!(status.status, KeyState::Saved);
+    assert_eq!(status.hint.as_deref(), Some("…0042"));
+    assert!(!status.production, "KLIPY has its own production mark");
+    settings::set_with(&h.keys(), h.dir.path(), production(true)).unwrap();
+    settings::set_with(&h.keys(), h.dir.path(), choose("giphy")).unwrap();
+    let status = settings::status_with(&h.keys(), h.dir.path());
+    assert_eq!(status.status, KeyState::Saved);
+    assert!(status.production, "GIPHY's mark stayed");
+    assert!(h.store.inner.get(ACCOUNT).unwrap().is_some());
+    assert!(klipy.inner.get(ACCOUNT).unwrap().is_some());
+    let fp = fingerprint(&Secret::new(KLIPY_KEY));
+    assert!(settings::load(h.dir.path()).is_production(Provider::Klipy, &fp));
+}
+
+#[tokio::test]
+async fn save_status_and_remove_follow_the_loaded_provider() {
+    let (h, klipy) = two_key_harness();
+    settings::set_with(&h.keys(), h.dir.path(), choose("klipy")).unwrap();
+    let saved =
+        settings::save_with(&h.keys(), h.dir.path(), "another-klipy-key-for-tests-77").unwrap();
+    assert_eq!(saved.hint.as_deref(), Some("…s-77"));
+    assert_eq!(
+        klipy.inner.get(ACCOUNT).unwrap().unwrap().expose(),
+        "another-klipy-key-for-tests-77"
+    );
+    assert_eq!(
+        h.store.inner.get(ACCOUNT).unwrap().unwrap().expose(),
+        KEY,
+        "the GIPHY key is untouched"
+    );
+    // A KLIPY key is checked and named as KLIPY's.
+    let refused = settings::save_with(&h.keys(), h.dir.path(), "short").unwrap_err();
+    assert!(refused.starts_with("A KLIPY key has at least"), "{refused}");
+}
+
+#[tokio::test]
+async fn off_keys_row_removes_only_that_provider() {
+    let (h, klipy) = two_key_harness();
+    // Each provider has an install id, KLIPY a production mark.
+    settings::set_with(&h.keys(), h.dir.path(), choose("klipy")).unwrap();
+    let fp = fingerprint(&Secret::new(KLIPY_KEY));
+    install::customer_id(h.dir.path(), &fp, install::install_epoch(h.dir.path())).unwrap();
+    let production = SettingsUpdate {
+        production: Some(true),
+        ..SettingsUpdate::default()
+    };
+    settings::set_with(&h.keys(), h.dir.path(), production).unwrap();
+    let giphy_fp = fingerprint(&Secret::new(KEY));
+    let epoch = install::install_epoch(h.dir.path());
+    install::write_install(h.dir.path(), Provider::Giphy, &giphy_fp, "rid-1", epoch).unwrap();
+    settings::set_with(&h.keys(), h.dir.path(), turn_off()).unwrap();
+    // Off deleted the install file; the Keys row reads production marks and that file only.
+    install::write_install(
+        h.dir.path(),
+        Provider::Giphy,
+        &giphy_fp,
+        "rid-1",
+        install::install_epoch(h.dir.path()),
+    )
+    .unwrap();
+    let reads = (
+        h.store.calls.load(Ordering::SeqCst),
+        klipy.calls.load(Ordering::SeqCst),
+    );
+    let giphy_row = settings::status_of(&h.keys(), h.dir.path(), Provider::Giphy);
+    let klipy_row = settings::status_of(&h.keys(), h.dir.path(), Provider::Klipy);
+    assert_eq!(
+        (
+            giphy_row.status,
+            giphy_row.hint.clone(),
+            giphy_row.production
+        ),
+        (KeyState::Saved, None, false)
+    );
+    assert_eq!(
+        (klipy_row.status, klipy_row.production),
+        (KeyState::Saved, true)
+    );
+    assert_eq!(
+        (
+            h.store.calls.load(Ordering::SeqCst),
+            klipy.calls.load(Ordering::SeqCst)
+        ),
+        reads,
+        "the Keys row reads no keychain"
+    );
+    // Removing KLIPY's key clears only KLIPY's key, mark and install entry.
+    let removed = settings::remove_with(&h.keys(), h.dir.path(), Provider::Klipy).unwrap();
+    assert_eq!(removed.status, KeyState::Missing);
+    assert!(klipy.inner.get(ACCOUNT).unwrap().is_none());
+    assert!(h.store.inner.get(ACCOUNT).unwrap().is_some());
+    assert!(!h.file(settings::FILE).contains("klipy:"));
+    assert_eq!(
+        install::read_install(h.dir.path(), Provider::Giphy, &giphy_fp).as_deref(),
+        Some("rid-1")
+    );
+    assert!(!install::has_entry(h.dir.path(), Provider::Klipy));
+    let giphy_row = settings::status_of(&h.keys(), h.dir.path(), Provider::Giphy);
+    assert_eq!(giphy_row.status, KeyState::Saved);
+    assert!(!settings::load(h.dir.path()).enabled, "still Off");
+}
+
+#[tokio::test]
+async fn search_page_result_names_provider() {
+    let h = klipy_harness();
+    let stills = Stills::default();
+    h.transport.reply(200, None, KLIPY_SEARCH);
+    let result = page(&h, &crate::media::Config::default(), &stills).await;
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["provider"], "klipy");
+    let candidates = result["candidates"].as_array().unwrap();
+    assert!(!candidates.is_empty());
+    assert!(candidates.iter().all(|c| c["provider"] == "klipy"));
 }

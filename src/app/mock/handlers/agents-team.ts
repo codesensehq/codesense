@@ -1281,7 +1281,8 @@ export function agentTeamInboxHandlers(
       return { status: "ok", provider: "giphy", candidates };
     },
     gif_picked: (args: Record<string, unknown>) =>
-      MOCK_GIFS.some((g) => g.id === args.id) && args.provider === "giphy"
+      MOCK_GIFS.some((g) => g.id === args.id) &&
+      (args.provider === "giphy" || args.provider === "klipy")
         ? { status: "ok" }
         : { status: "error", error: "badQuery", message: "unknown GIF" },
     send_role_message_cmd: (args: Record<string, unknown>) => {

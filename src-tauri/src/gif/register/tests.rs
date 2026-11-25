@@ -414,7 +414,7 @@ async fn off_or_no_key_makes_no_call_and_turning_off_or_removing_the_key_deletes
     h.found_all("g1");
     h.send(3, "g1", URL).await;
     assert!(h.install_file().exists());
-    settings::remove_with(&h.keys(), h.dir.path()).unwrap();
+    settings::remove_with(&h.keys(), h.dir.path(), Provider::Giphy).unwrap();
     assert!(
         !h.install_file().exists(),
         "removing the key deletes the install id"
@@ -1038,7 +1038,7 @@ async fn click_is_a_noop_when_off_or_unknown_id() {
 async fn click_is_a_noop_without_key_or_after_epoch_change() {
     let h = Harness::new();
     h.found_all("g1");
-    settings::remove_with(&h.keys(), h.dir.path()).unwrap();
+    settings::remove_with(&h.keys(), h.dir.path(), Provider::Giphy).unwrap();
     h.registration.register_click(Provider::Giphy, "g1").await;
     assert!(h.wire.urls().is_empty(), "no call without a key");
     // A search under an earlier epoch: its entry is let go, so its pick sends nothing.

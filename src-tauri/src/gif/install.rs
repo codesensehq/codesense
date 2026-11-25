@@ -58,6 +58,11 @@ pub(crate) fn read_install(dir: &Path, provider: Provider, fp: &str) -> Option<S
     (key == fp && super::valid_id(id)).then(|| id.to_string())
 }
 
+/// Whether the file holds an entry for `provider`, for any key.
+pub(crate) fn has_entry(dir: &Path, provider: Provider) -> bool {
+    entries(dir).contains_key(Provider::as_str(provider))
+}
+
 /// Replace the file with `entries`, or delete it when there are none: a temp file readable by
 /// this user only, renamed over the file. The caller holds [`INSTALL_FILE`].
 fn replace(

@@ -20,6 +20,7 @@ pub(crate) const FILE: &str = "gif.json";
 /// The longest a search waits for the keychain: past it, an access prompt is waiting on the user.
 pub(crate) const KEY_READ_TIMEOUT: Duration = Duration::from_secs(3);
 const NO_STORE: &str = "This computer has no secret store, so the key can't be kept here.";
+const UNKNOWN_PROVIDER: &str = "The GIF provider is giphy or klipy.";
 /// Held while `gif.json` is read, changed and written.
 static WRITE: Mutex<()> = std::sync::Mutex::new(());
 
@@ -48,6 +49,11 @@ impl GifSettings {
     pub(crate) fn is_production(&self, provider: Provider, fingerprint: &str) -> bool {
         self.production_keys
             .contains(&production_key(provider, fingerprint))
+    }
+    /// Whether any key of `provider` is marked production.
+    fn has_production(&self, provider: Provider) -> bool {
+        let prefix = format!("{}:", provider.as_str());
+        self.production_keys.iter().any(|k| k.starts_with(&prefix))
     }
     fn clear_production(&mut self, provider: Provider) {
         let prefix = format!("{}:", provider.as_str());
@@ -347,6 +353,9 @@ fn view(settings: &GifSettings) -> SettingsView {
 pub struct SettingsUpdate {
     #[serde(default)]
     pub enabled: Option<bool>,
+    /// `giphy` or `klipy`. Each provider's key and production mark stay saved across a switch.
+    #[serde(default)]
+    pub provider: Option<String>,
     #[serde(default)]
     pub ceiling: Option<String>,
     /// Mark the saved key as a production key (no local cap), or not.
@@ -372,8 +381,37 @@ pub struct KeyStatus {
     pub production: bool,
 }
 
-/// The key's status, read fresh from the keychain (the read that may raise an access prompt,
-/// while the user is in Settings to allow it).
+/// `provider` as the Settings card names it, or why it can't be one.
+fn provider_named(name: &str) -> Result<Provider, String> {
+    Provider::parse(name)
+        .filter(|p| p.as_str() == name)
+        .ok_or_else(|| UNKNOWN_PROVIDER.to_string())
+}
+
+/// `provider`'s key status for the Settings card. The active provider's key row reads the
+/// keychain ([`status_with`]); any other provider, or any while search is Off (the Keys row),
+/// is read from the saved production marks and install file, with no keychain read: a key
+/// marked production or with an install id is saved, with no hint.
+pub(crate) fn status_of(keys: &Keys, dir: &Path, provider: Provider) -> KeyStatus {
+    let settings = load(dir);
+    if settings.enabled && settings.provider == provider {
+        return status_with(keys, dir);
+    }
+    let production = settings.has_production(provider);
+    let saved = production || super::install::has_entry(dir, provider);
+    KeyStatus {
+        status: if saved {
+            KeyState::Saved
+        } else {
+            KeyState::Missing
+        },
+        hint: None,
+        production,
+    }
+}
+
+/// The active provider's key status, read fresh from the keychain (the read that may raise an
+/// access prompt, while the user is in Settings to allow it).
 pub(crate) fn status_with(keys: &Keys, dir: &Path) -> KeyStatus {
     let settings = load(dir);
     match keys.read_key(settings.provider) {
@@ -423,14 +461,17 @@ pub(crate) fn save_with(keys: &Keys, dir: &Path, key: &str) -> Result<KeyStatus,
     Ok(status_with(keys, dir))
 }
 
-/// Remove the key and its production flag (the flag first, so a failed remove never leaves a
-/// half-applied state behind it).
-pub(crate) fn remove_with(keys: &Keys, dir: &Path) -> Result<KeyStatus, String> {
-    let provider = load(dir).provider;
+/// Remove `provider`'s key, production flag and install id, keeping the other provider's (the
+/// flag first, so a failed remove never leaves a half-applied state behind it).
+pub(crate) fn remove_with(
+    keys: &Keys,
+    dir: &Path,
+    provider: Provider,
+) -> Result<KeyStatus, String> {
     update(dir, |s| s.clear_production(provider))?;
     keys.remove_key(provider)?;
     super::install::forget_install_for(dir, provider);
-    Ok(status_with(keys, dir))
+    Ok(status_of(keys, dir, provider))
 }
 
 pub(crate) fn set_with(
@@ -443,9 +484,10 @@ pub(crate) fn set_with(
         .as_deref()
         .map(|c| Rating::parse(c).ok_or("The rating ceiling is g, pg or pg-13."))
         .transpose()?;
+    let chosen = change.provider.as_deref().map(provider_named).transpose()?;
     let production = match change.production {
         Some(flag) => {
-            let provider = load(dir).provider;
+            let provider = chosen.unwrap_or(load(dir).provider);
             let key = keys
                 .read_key(provider)
                 .map_err(|_| "Couldn't read the key from your OS keychain.".to_string())?
@@ -457,6 +499,9 @@ pub(crate) fn set_with(
     let settings = update(dir, |s| {
         if let Some(enabled) = change.enabled {
             s.enabled = enabled;
+        }
+        if let Some(provider) = chosen {
+            s.provider = provider;
         }
         if let Some(ceiling) = ceiling {
             s.ceiling = ceiling;
@@ -500,18 +545,36 @@ pub async fn gif_settings_set(
     let (keys, dir) = service_keys(&app)?;
     crate::commands::await_blocking("gif.settings_set", move || set_with(&keys, &dir, update)).await
 }
+/// `provider`'s key status, or the active provider's without one (see [`status_of`]).
 #[tauri::command]
-pub async fn gif_key_status(app: tauri::AppHandle) -> Result<KeyStatus, String> {
+pub async fn gif_key_status(
+    app: tauri::AppHandle,
+    provider: Option<String>,
+) -> Result<KeyStatus, String> {
+    let provider = provider.as_deref().map(provider_named).transpose()?;
     let (keys, dir) = service_keys(&app)?;
-    crate::commands::await_blocking("gif.key_status", move || Ok(status_with(&keys, &dir))).await
+    crate::commands::await_blocking("gif.key_status", move || {
+        let provider = provider.unwrap_or_else(|| load(&dir).provider);
+        Ok(status_of(&keys, &dir, provider))
+    })
+    .await
 }
 #[tauri::command]
 pub async fn gif_key_save(app: tauri::AppHandle, key: String) -> Result<KeyStatus, String> {
     let (keys, dir) = service_keys(&app)?;
     crate::commands::await_blocking("gif.key_save", move || save_with(&keys, &dir, &key)).await
 }
+/// Remove `provider`'s key, or the active provider's without one.
 #[tauri::command]
-pub async fn gif_key_remove(app: tauri::AppHandle) -> Result<KeyStatus, String> {
+pub async fn gif_key_remove(
+    app: tauri::AppHandle,
+    provider: Option<String>,
+) -> Result<KeyStatus, String> {
+    let provider = provider.as_deref().map(provider_named).transpose()?;
     let (keys, dir) = service_keys(&app)?;
-    crate::commands::await_blocking("gif.key_remove", move || remove_with(&keys, &dir)).await
+    crate::commands::await_blocking("gif.key_remove", move || {
+        let provider = provider.unwrap_or_else(|| load(&dir).provider);
+        remove_with(&keys, &dir, provider)
+    })
+    .await
 }
