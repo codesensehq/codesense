@@ -323,7 +323,8 @@ fn guardrails_union_roots() {
 }
 
 #[test]
-fn guardrails_non_root_file_is_ignored() {
+fn guardrails_non_root_file_refuses() {
+    // A child team's file would deny nothing, so it refuses the launch instead.
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();
     guarded_org(
@@ -334,14 +335,35 @@ fn guardrails_non_root_file_is_ignored() {
         ],
     );
     let key = save(home, &alice(), escalating("child"));
-    let resolved = resolve_team(home, &key);
-    let deny = denies(&resolved);
-    assert!(deny.contains(&RM.to_string()));
-    assert!(!deny.contains(&"WebFetch".to_string()));
-    assert_eq!(
-        resolved.manifest.guardrails.unwrap().denied_by,
-        vec![guardrails_path(PARENT)]
+    let reason = refusal(home, &key);
+    assert!(reason.contains(&guardrails_path(TEAM)), "{reason}");
+
+    // Re-parenting a root team under another team doesn't drop its file silently either.
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    team_content(home, &alice());
+    let root = org_root(home);
+    set_teams(
+        &root,
+        &format!("teams:\n  - name: {TEAM}\n    parent_team: {PARENT}\n  - name: {PARENT}\n  - name: {OPS}\n"),
     );
+    write(&root, &guardrails_path(PARENT), CLAUDE_RM.as_bytes());
+    write(
+        &root,
+        &guardrails_path(OPS),
+        b"permissions:\n  claude:\n    deny: ['WebFetch']\n",
+    );
+    init_clone(&root);
+    let key = save(home, &alice(), escalating("re-parented"));
+    assert!(denies(&resolve_team(home, &key)).contains(&"WebFetch".to_string()));
+    set_teams(
+        &root,
+        &format!("teams:\n  - name: {TEAM}\n    parent_team: {PARENT}\n  - name: {PARENT}\n  - name: {OPS}\n    parent_team: {PARENT}\n"),
+    );
+    commit_all(&root, "re-parent ops");
+    push(&root);
+    let reason = refusal(home, &key);
+    assert!(reason.contains(&guardrails_path(OPS)), "{reason}");
 }
 
 #[test]

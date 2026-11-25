@@ -1101,7 +1101,7 @@ pub(crate) fn inherited_by_active_team(
 /// folder in the working tree has the file either. Every other failure is an error naming the
 /// org and the path, and the launch is refused: a `.git` that can't be opened, a clone with a
 /// remote and no upstream commit, a commit with no `teams.yml`, a `teams.yml` whose teams all
-/// have a parent, a file that can't be read.
+/// have a parent, a guardrails file in a team that has a parent, a file that can't be read.
 pub(crate) fn org_guardrails(
     root: &Path,
     org: &str,
@@ -1200,6 +1200,17 @@ pub(crate) fn org_guardrails(
             files.push((
                 path.clone(),
                 guardrails::parse(&bytes).map_err(|e| fail(&path, &e))?,
+            ));
+        }
+    }
+    // Only a root team's file is read, so a file in a child team would deny nothing. Refusing
+    // it keeps re-parenting a root team from dropping its guardrails silently.
+    for team in teams.teams.iter().filter(|t| t.parent_team.is_some()) {
+        let path = format!("{}/{GUARDRAILS_FILE}", team.name);
+        if blob_at(&tree, &path).is_some() {
+            return Err(fail(
+                &path,
+                &"only a root team's guardrails apply: move the file to a root team or remove it",
             ));
         }
     }
