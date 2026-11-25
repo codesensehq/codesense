@@ -145,6 +145,8 @@ impl Harness {
     /// The harness over this keychain.
     fn over(store: Arc<dyn CredentialStore>) -> Self {
         let dir = tempfile::tempdir().unwrap();
+        // KLIPY is the default; these tests search GIPHY unless one chooses KLIPY.
+        std::fs::write(dir.path().join(settings::FILE), r#"{"provider":"giphy"}"#).unwrap();
         let keys = Keys::new(store, true, Some(ACCOUNT), Duration::from_secs(3));
         let wire = Arc::new(Wire::new());
         let now = Arc::new(AtomicI64::new(START_MS));
@@ -730,6 +732,7 @@ async fn turning_search_off_and_on_or_replacing_the_key_forgets_what_the_old_id_
 #[tokio::test]
 async fn a_send_that_cannot_register_never_reads_the_keychain() {
     let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(settings::FILE), r#"{"provider":"giphy"}"#).unwrap();
     let store = Arc::new(CountingStore::default());
     let keys = Keys::new(store.clone(), true, Some(ACCOUNT), Duration::from_secs(3));
     let wire = Arc::new(Wire::new());

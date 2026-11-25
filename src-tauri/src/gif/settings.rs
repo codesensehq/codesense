@@ -25,7 +25,7 @@ const UNKNOWN_PROVIDER: &str = "The GIF provider is giphy or klipy.";
 static WRITE: Mutex<()> = std::sync::Mutex::new(());
 
 /// What `gif.json` holds. A missing or unreadable file, or field, reads as its default: On,
-/// GIPHY, a pg ceiling and no production key.
+/// KLIPY, a pg ceiling and no production key.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GifSettings {
@@ -39,7 +39,7 @@ impl Default for GifSettings {
     fn default() -> Self {
         Self {
             enabled: true,
-            provider: Provider::Giphy,
+            provider: Provider::Klipy,
             ceiling: Rating::Pg,
             production_keys: Vec::new(),
         }

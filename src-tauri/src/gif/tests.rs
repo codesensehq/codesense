@@ -158,8 +158,17 @@ impl Harness {
     }
 }
 
+/// `gif.json` choosing GIPHY: KLIPY is the default, and most tests here search GIPHY.
+const GIPHY_SETTINGS: &str = r#"{"provider":"giphy"}"#;
+
+/// Choose GIPHY in `dir`'s `gif.json`.
+fn pin_giphy(dir: &std::path::Path) {
+    std::fs::write(dir.join(settings::FILE), GIPHY_SETTINGS).unwrap();
+}
+
 fn harness_with(keys: impl FnOnce(Arc<Counting>) -> Keys, with_key: bool) -> Harness {
     let dir = tempfile::tempdir().unwrap();
+    pin_giphy(dir.path());
     let store = Arc::new(Counting::default());
     if with_key {
         store.inner.set(ACCOUNT, &Secret::new(KEY)).unwrap();
@@ -615,6 +624,7 @@ impl GifProvider for Canned {
 #[tokio::test]
 async fn the_service_runs_any_provider_through_the_trait_in_its_order() {
     let dir = tempfile::tempdir().unwrap();
+    pin_giphy(dir.path());
     let store = Arc::new(FakeStore::default());
     store.set(ACCOUNT, &Secret::new(KEY)).unwrap();
     let canned: Vec<Found> = ["c", "a", "b"]
@@ -1342,6 +1352,7 @@ fn concurrent_searches_never_lose_a_count() {
 fn the_key_is_the_giphy_keychain_item_under_the_login_name() {
     assert_eq!(Provider::Giphy.key_service(), "ai.codesense.giphy-api-key");
     let dir = tempfile::tempdir().unwrap();
+    pin_giphy(dir.path());
     // An item saved outside the app under the login name is found with no re-entry.
     let store = Arc::new(FakeStore::default());
     store.set(ACCOUNT, &Secret::new(KEY)).unwrap();
@@ -1411,6 +1422,7 @@ async fn a_key_saved_outside_the_app_with_a_trailing_newline_is_trimmed_on_read(
 #[test]
 fn a_short_key_saved_outside_the_app_shows_no_hint() {
     let dir = tempfile::tempdir().unwrap();
+    pin_giphy(dir.path());
     let store = Arc::new(FakeStore::default());
     store.set(ACCOUNT, &Secret::new("short-key")).unwrap();
     let keys = Keys::new(store, true, Some(ACCOUNT), Duration::from_secs(3));
@@ -1433,6 +1445,7 @@ impl CredentialStore for ReadOnly {
 #[test]
 fn a_failed_key_save_says_what_changed() {
     let dir = tempfile::tempdir().unwrap();
+    pin_giphy(dir.path());
     let inner = FakeStore::default();
     inner.set(ACCOUNT, &Secret::new(KEY)).unwrap();
     let keys = Keys::new(
@@ -1462,6 +1475,7 @@ fn a_failed_key_save_says_what_changed() {
 #[test]
 fn a_bad_paste_is_refused_before_the_production_flag_changes() {
     let dir = tempfile::tempdir().unwrap();
+    pin_giphy(dir.path());
     let store = Arc::new(FakeStore::default());
     store.set(ACCOUNT, &Secret::new(KEY)).unwrap();
     let keys = Keys::new(store.clone(), true, Some(ACCOUNT), Duration::from_secs(3));
@@ -1488,6 +1502,7 @@ fn a_bad_paste_is_refused_before_the_production_flag_changes() {
 #[test]
 fn an_environment_credential_source_refuses_key_writes() {
     let dir = tempfile::tempdir().unwrap();
+    pin_giphy(dir.path());
     let env = Arc::new(EnvStore::new(Provider::Giphy.key_service()));
     let keys = Keys::new(env, true, Some(ACCOUNT), Duration::from_secs(3));
     let error = settings::save_with(&keys, dir.path(), "a-key-value-long-enough").unwrap_err();
@@ -1736,7 +1751,11 @@ fn missing_or_corrupt_settings_read_as_on_pg_and_not_production() {
     let dir = tempfile::tempdir().unwrap();
     let defaults = settings::load(dir.path());
     assert!(defaults.enabled);
-    assert_eq!(defaults.provider, Provider::Giphy);
+    assert_eq!(
+        defaults.provider,
+        Provider::Klipy,
+        "KLIPY on a fresh install"
+    );
     assert_eq!(defaults.ceiling, Rating::Pg);
     assert!(defaults.production_keys.is_empty());
     let read = |contents: &str| {
@@ -1750,7 +1769,7 @@ fn missing_or_corrupt_settings_read_as_on_pg_and_not_production() {
         "giphy:0123456789abcdef", 7, "klipy:0123456789abcdef"]}"#,
     );
     assert!(odd.enabled);
-    assert_eq!(odd.provider, Provider::Giphy);
+    assert_eq!(odd.provider, Provider::Klipy);
     assert_eq!(odd.ceiling, Rating::Pg);
     assert_eq!(odd.production_keys, ["giphy:0123456789abcdef"]);
     let off = read(r#"{"enabled":false,"ceiling":"PG-13","provider":"giphy"}"#);
@@ -2845,7 +2864,11 @@ fn set_refuses_an_unknown_provider_and_changes_nothing() {
         let refused = settings::set_with(&h.keys(), h.dir.path(), choose(name)).unwrap_err();
         assert_eq!(refused, "The GIF provider is giphy or klipy.", "{name:?}");
     }
-    assert_eq!(h.file(settings::FILE), "", "nothing was written");
+    assert_eq!(
+        h.file(settings::FILE),
+        GIPHY_SETTINGS,
+        "nothing was written"
+    );
 }
 
 #[tokio::test]
