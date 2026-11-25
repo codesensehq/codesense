@@ -1771,7 +1771,10 @@ fn missing_or_corrupt_settings_read_as_on_pg_and_not_production() {
     assert!(odd.enabled);
     assert_eq!(odd.provider, Provider::Klipy);
     assert_eq!(odd.ceiling, Rating::Pg);
-    assert_eq!(odd.production_keys, ["giphy:0123456789abcdef"]);
+    assert_eq!(
+        odd.production_keys,
+        ["giphy:0123456789abcdef", "klipy:0123456789abcdef"]
+    );
     let off = read(r#"{"enabled":false,"ceiling":"PG-13","provider":"giphy"}"#);
     assert!(!off.enabled);
     assert_eq!(off.ceiling, Rating::Pg13);
@@ -1802,7 +1805,7 @@ fn the_ceiling_is_g_pg_or_pg13_and_never_r() {
     let wire = serde_json::to_value(set("pg-13").unwrap()).unwrap();
     assert_eq!(
         wire,
-        serde_json::json!({"enabled": true, "provider": "giphy", "ceiling": "pg-13"})
+        serde_json::json!({"enabled": true, "provider": "klipy", "ceiling": "pg-13"})
     );
 }
 

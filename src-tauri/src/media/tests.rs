@@ -1108,7 +1108,7 @@ fn a_provider_claim_is_paired_known_well_formed_and_on_its_own_hosts() {
             ClaimError::BadId,
         ),
         (
-            claim(giphy_url, None, Some(Giphy), Some(&"a".repeat(65))),
+            claim(giphy_url, None, Some(Giphy), Some(&"a".repeat(129))),
             ClaimError::BadId,
         ),
         (
