@@ -148,18 +148,11 @@ pub(crate) fn block_hook(matcher: &str) -> serde_json::Value {
 
 /// One fail-closed `pre_tool_call` block hook per denied matcher.
 fn guardrail_deny(content: &mut serde_json::Value, rules: &[&str]) {
-    if !content["hooks"]["pre_tool_call"].is_array() {
-        content["hooks"]["pre_tool_call"] = serde_json::json!([]);
-    }
-    let Some(blocks) = content["hooks"]["pre_tool_call"].as_array_mut() else {
-        return;
-    };
-    for matcher in rules {
-        let block = block_hook(matcher);
-        if !blocks.contains(&block) {
-            blocks.push(block);
-        }
-    }
+    crate::agents::permissions::push_unique(
+        content,
+        ("hooks", "pre_tool_call"),
+        rules.iter().map(|matcher| block_hook(matcher)),
+    );
 }
 
 fn permission_display(settings: &serde_json::Value, args: &[String]) -> String {

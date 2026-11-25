@@ -139,18 +139,11 @@ pub(super) fn desktop() -> DesktopCli {
 /// Claude checks deny before allow across every settings source, so each denied rule is
 /// appended to `permissions.deny` and no allow the agent or a layer adds can re-open it.
 fn guardrail_deny(content: &mut serde_json::Value, rules: &[&str]) {
-    if !content["permissions"]["deny"].is_array() {
-        content["permissions"]["deny"] = serde_json::json!([]);
-    }
-    let Some(deny) = content["permissions"]["deny"].as_array_mut() else {
-        return;
-    };
-    for rule in rules {
-        let rule = serde_json::json!(rule);
-        if !deny.contains(&rule) {
-            deny.push(rule);
-        }
-    }
+    crate::agents::permissions::push_unique(
+        content,
+        ("permissions", "deny"),
+        rules.iter().map(|rule| serde_json::json!(rule)),
+    );
 }
 
 /// The agent's own allow rules, then its ask rules.

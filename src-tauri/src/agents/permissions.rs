@@ -128,6 +128,26 @@ pub(super) fn entry(
     }
 }
 
+/// Append to the array at `content[outer][inner]` each of `values` it doesn't hold yet, in
+/// order, making the array when that key has none.
+pub(crate) fn push_unique(
+    content: &mut Value,
+    (outer, inner): (&str, &str),
+    values: impl IntoIterator<Item = Value>,
+) {
+    let list = &mut content[outer][inner];
+    if !list.is_array() {
+        *list = Value::Array(Vec::new());
+    }
+    if let Value::Array(list) = list {
+        for value in values {
+            if !list.contains(&value) {
+                list.push(value);
+            }
+        }
+    }
+}
+
 /// A Claude agent's launch settings: the whole body of its per-launch settings file.
 pub(super) fn claude(agent: &Agent, mode: LaunchMode) -> GeneratedEntry {
     let mut entry = claude_permissions(
@@ -135,14 +155,13 @@ pub(super) fn claude(agent: &Agent, mode: LaunchMode) -> GeneratedEntry {
         mode,
     );
     if let Some(tools) = &agent.mcp.bridge_tools {
-        let deny = entry.content["permissions"]["deny"]
-            .as_array_mut()
-            .expect("generated Claude permissions carry a deny list");
-        for rule in claude_bridge_tool_denies(tools) {
-            if !deny.iter().any(|existing| existing == &rule) {
-                deny.push(json!(rule));
-            }
-        }
+        push_unique(
+            &mut entry.content,
+            ("permissions", "deny"),
+            claude_bridge_tool_denies(tools)
+                .into_iter()
+                .map(Value::from),
+        );
         entry.hash = json_hash(&entry.content);
     }
     if mode == LaunchMode::Headless && agent.is_escalating() {
