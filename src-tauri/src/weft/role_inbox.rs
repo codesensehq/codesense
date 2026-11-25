@@ -1702,6 +1702,49 @@ mod tests {
     }
 
     #[test]
+    fn a_claim_and_accept_keep_the_messages_story() {
+        let (store, _td) = open();
+        let now = 1_000_000;
+        let (message_id, delivery_id) = send_role_message_commit_with_reply_to(
+            &store,
+            "sender-agent",
+            "triage",
+            "x",
+            None,
+            None,
+            None,
+            "nohash",
+            now,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("DEMO-5"),
+        )
+        .unwrap();
+        let reg =
+            register_role_as(&store, "triage", "sess-a", &held_by("sess-a", true), now).unwrap();
+        let c = claim_role_messages(&store, "triage", "sess-a", reg.generation, 10, now).unwrap();
+        assert_eq!(c[0].message_id, message_id);
+        accept_role_message(
+            &store,
+            delivery_id,
+            &c[0].claim_token,
+            "sess-a",
+            reg.generation,
+            AcceptKind::Work,
+            "n",
+            now,
+        )
+        .unwrap();
+        let row = super::super::inbox::inbox_get(&store, message_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.story_id.as_deref(), Some("DEMO-5"));
+    }
+
+    #[test]
     fn an_ended_sessions_accepted_work_is_adoptable_at_once() {
         let (store, _td) = open();
         let now = 1_000_000;
