@@ -7334,3 +7334,270 @@ async fn read_messages_text_ends_with_gif_alt() {
     let row = fake.rows().into_iter().find(|m| m.id == pictures).unwrap();
     assert_eq!(row.text, "look", "the stored text is unchanged");
 }
+
+// ---------- story ids ----------
+
+/// `from` (a session id) sends `text` to `to`, tagged with `story`.
+#[allow(clippy::too_many_arguments)]
+async fn send_story(
+    host: &Arc<dyn InboxHost>,
+    from: &str,
+    to: &str,
+    text: &str,
+    reply_to: Option<&str>,
+    story: Option<&str>,
+    request_id: Option<&str>,
+) -> SendResult {
+    send_message_request_with_story(
+        host,
+        Some(from),
+        to,
+        text,
+        None,
+        None,
+        None,
+        reply_to,
+        None,
+        None,
+        request_id,
+        None,
+        story,
+    )
+    .await
+    .unwrap()
+}
+
+/// `from` (a session id) answers `message_id`, naming `story` or not.
+async fn reply_story(
+    host: &Arc<dyn InboxHost>,
+    from: &str,
+    message_id: i64,
+    story: Option<&str>,
+    request_id: Option<&str>,
+    media: Option<&crate::media::MediaInput>,
+) -> SendResult {
+    reply_request_with_story(
+        host,
+        Some(from),
+        message_id,
+        if media.is_some() { "" } else { "answer" },
+        None,
+        None,
+        None,
+        request_id,
+        media,
+        story,
+    )
+    .await
+    .unwrap()
+}
+
+fn story_of(fake: &FakeHost, id: i64) -> Option<String> {
+    fake.rows()
+        .into_iter()
+        .find(|m| m.id == id)
+        .unwrap()
+        .story_id
+}
+
+#[tokio::test]
+async fn story_id_rides_a_send_and_a_reply_to_read_messages_and_inbox_rows() {
+    let fake = FakeHost::new();
+    let host = port(&fake);
+    let card = sent_id(send_story(&host, "S1", "H2", "card", None, Some(" DEMO-5 "), None).await);
+    let plain = sent_id(send_story(&host, "S1", "H2", "plain", None, None, None).await);
+    assert_eq!(story_of(&fake, card).as_deref(), Some("DEMO-5"));
+    assert_eq!(story_of(&fake, plain), None);
+
+    let read = serde_json::to_value(read_messages(&*host, Some("S2")).await.unwrap()).unwrap();
+    let read_row = |id: i64| {
+        read.as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["messageId"] == id)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(read_row(card)["storyId"], "DEMO-5");
+    assert!(read_row(plain).get("storyId").is_none(), "omitted when unset");
+
+    // An explicit story on a reply wins over the parent's.
+    let answer = sent_id(reply_story(&host, "S2", card, Some("DEMO-6"), None, None).await);
+    assert_eq!(story_of(&fake, answer).as_deref(), Some("DEMO-6"));
+
+    let rows = list_messages_unbounded(&*host, &launch_team("default"), InboxScope::All, None, &[])
+        .await
+        .unwrap();
+    let row = |id: i64| {
+        serde_json::to_value(rows.messages.iter().find(|m| m.message_id == id).unwrap()).unwrap()
+    };
+    assert_eq!(row(card)["storyId"], "DEMO-5");
+    assert_eq!(row(answer)["storyId"], "DEMO-6");
+    assert_eq!(row(plain)["storyId"], serde_json::Value::Null, "null when unset");
+    assert!(row(plain).as_object().unwrap().contains_key("storyId"));
+}
+
+#[tokio::test]
+async fn an_invalid_story_id_is_refused_on_every_sender_and_stores_nothing() {
+    let fake = FakeHost::new();
+    let host = port(&fake);
+    let card = sent_id(send_story(&host, "S1", "H2", "card", None, None, None).await);
+    let long = "a".repeat(129);
+    for bad in ["DEMO\n5", "DEMO\u{200B}5", long.as_str()] {
+        assert!(is_invalid(
+            &send_story(&host, "S1", "H2", "card", None, Some(bad), None).await
+        ));
+        assert!(is_invalid(
+            &reply_story(&host, "S2", card, Some(bad), None, None).await
+        ));
+    }
+    assert_eq!(fake.rows().len(), 1);
+}
+
+#[tokio::test]
+async fn reply_inherits_story_on_an_agent_reply() {
+    let fake = FakeHost::new();
+    let host = port(&fake);
+    let card = sent_id(send_story(&host, "S1", "H2", "card", None, Some("DEMO-5"), None).await);
+    let answer = sent_id(reply(&host, Some("S2"), card, "answer", None).await.unwrap());
+    assert_eq!(story_of(&fake, answer).as_deref(), Some("DEMO-5"));
+    // A blank story is no story: it inherits too.
+    let blank = sent_id(reply_story(&host, "S2", card, Some("  "), None, None).await);
+    assert_eq!(story_of(&fake, blank).as_deref(), Some("DEMO-5"));
+    // One hop: the answer to the answer inherits the answer's story.
+    let back = sent_id(reply(&host, Some("S1"), answer, "thanks", None).await.unwrap());
+    assert_eq!(story_of(&fake, back).as_deref(), Some("DEMO-5"));
+    // A story-less root gives none.
+    let plain = sent_id(send_story(&host, "S1", "H2", "plain", None, None, None).await);
+    let none = sent_id(reply(&host, Some("S2"), plain, "ok", None).await.unwrap());
+    assert_eq!(story_of(&fake, none), None);
+}
+
+#[tokio::test]
+async fn reply_inherits_story_on_the_humans_reply() {
+    let fake = FakeHost::new();
+    let host = port(&fake);
+    let card = sent_id(send_story(&host, "S2", "human", "decide?", None, Some("DEMO-5"), None).await);
+    let answer = sent_id(
+        reply_from_human(&host, &launch_team("default"), card, "go", None, None)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(story_of(&fake, answer).as_deref(), Some("DEMO-5"));
+}
+
+#[tokio::test]
+async fn reply_inherits_story_on_a_reply_queued_for_a_role() {
+    let fake = FakeHost::new();
+    let host = port(&fake);
+    let card = sent_id(
+        send_story(&host, "S1", "H2", "review this", Some("role:manager"), Some("DEMO-5"), None)
+            .await,
+    );
+    let answer = sent_id(reply(&host, Some("S2"), card, "reviewed", None).await.unwrap());
+    let row = fake.rows().into_iter().find(|m| m.id == answer).unwrap();
+    assert_eq!(row.to, "manager");
+    assert_eq!(row.story_id.as_deref(), Some("DEMO-5"));
+}
+
+#[tokio::test]
+async fn reply_inherits_story_on_the_humans_composer_send_to_a_session() {
+    let fake = FakeHost::new();
+    let host = port(&fake);
+    let card = sent_id(send_story(&host, "S2", "human", "decide?", None, Some("DEMO-5"), None).await);
+    let answer = human_sent_id(
+        crate::commands::agent_read_model::send_as_human(
+            &host,
+            &launch_team("default"),
+            "H2",
+            "go",
+            None,
+            None,
+            None,
+            Some(card),
+            None,
+            None,
+        )
+        .await
+        .unwrap(),
+    );
+    assert_eq!(story_of(&fake, answer).as_deref(), Some("DEMO-5"));
+}
+
+#[tokio::test]
+async fn reply_inherits_story_on_the_humans_composer_send_to_a_role() {
+    let fake = FakeHost::new();
+    let host = port(&fake);
+    let card = sent_id(send_story(&host, "S2", "human", "decide?", None, Some("DEMO-5"), None).await);
+    let answer = human_sent_id(
+        crate::commands::agent_read_model::send_as_human(
+            &host,
+            &launch_team("default"),
+            "#triage",
+            "go",
+            None,
+            None,
+            None,
+            Some(card),
+            None,
+            None,
+        )
+        .await
+        .unwrap(),
+    );
+    let row = fake.rows().into_iter().find(|m| m.id == answer).unwrap();
+    assert_eq!(row.to, "triage");
+    assert_eq!(row.story_id.as_deref(), Some("DEMO-5"));
+}
+
+/// No request hash reads the story: a retry with or without one replays the first message.
+#[tokio::test]
+async fn retry_ignores_story_on_send_message() {
+    let fake = FakeHost::new();
+    let host = port(&fake);
+    let first = sent_id(send_story(&host, "S1", "H2", "card", None, None, Some("k1")).await);
+    let retry = send_story(&host, "S1", "H2", "card", None, Some("DEMO-5"), Some("k1")).await;
+    assert_eq!(sent_id(retry), first);
+    let tagged =
+        sent_id(send_story(&host, "S1", "H2", "card", None, Some("DEMO-5"), Some("k2")).await);
+    assert_eq!(
+        sent_id(send_story(&host, "S1", "H2", "card", None, None, Some("k2")).await),
+        tagged
+    );
+    assert_eq!(fake.rows().len(), 2);
+    assert_eq!(story_of(&fake, first), None);
+    assert_eq!(story_of(&fake, tagged).as_deref(), Some("DEMO-5"));
+}
+
+#[tokio::test]
+async fn retry_ignores_story_on_a_reply_with_media() {
+    let fake = FakeHost::new();
+    let host = port(&fake);
+    let media = crate::media::MediaInput {
+        url: Some("https://i.giphy.com/cat.gif".into()),
+        path: None,
+        alt: "Typing cat".into(),
+        provider: None,
+        provider_id: None,
+    };
+    let card = sent_id(send_story(&host, "S1", "H2", "card", None, Some("DEMO-5"), None).await);
+    let first = sent_id(reply_story(&host, "S2", card, None, Some("media-reply"), Some(&media)).await);
+    let retry = reply_story(&host, "S2", card, Some("DEMO-6"), Some("media-reply"), Some(&media)).await;
+    assert_eq!(sent_id(retry), first);
+    assert_eq!(fake.rows().len(), 2);
+    assert_eq!(story_of(&fake, first).as_deref(), Some("DEMO-5"));
+}
+
+#[tokio::test]
+async fn retry_ignores_story_on_a_role_reply() {
+    let fake = FakeHost::new();
+    let host = port(&fake);
+    let card = sent_id(
+        send_story(&host, "S1", "H2", "review this", Some("role:manager"), None, None).await,
+    );
+    let first = sent_id(reply_story(&host, "S2", card, None, Some("role-reply"), None).await);
+    let retry = reply_story(&host, "S2", card, Some("DEMO-5"), Some("role-reply"), None).await;
+    assert_eq!(sent_id(retry), first);
+    assert_eq!(fake.rows().len(), 2);
+    assert_eq!(story_of(&fake, first), None);
+}
