@@ -165,6 +165,16 @@ pub(crate) struct ChatPoster {
     pub remote: bool,
 }
 
+/// A poster runs on another machine when its handle has a remote caller team, or when only
+/// a remote session (not a local tab) answers to its session id.
+pub(crate) fn poster_is_remote(
+    has_remote_team: bool,
+    has_local_handle: bool,
+    has_remote_handle: bool,
+) -> bool {
+    has_remote_team || (!has_local_handle && has_remote_handle)
+}
+
 fn store_error(e: ChatStoreError) -> ErrorData {
     match e {
         ChatStoreError::EmptyText
@@ -274,11 +284,13 @@ pub async fn workspace_chat_send(
 
     let launch = app.state::<DashboardLaunchState>();
     let poster = ChatPoster {
-        remote: crate::mcp::remote_authority::caller_team(&handle).is_some()
-            || (launch.handle_for_session(&params.session_id).is_none()
-                && launch
-                    .remote_handle_for_session(&params.session_id)
-                    .is_some()),
+        remote: poster_is_remote(
+            crate::mcp::remote_authority::caller_team(&handle).is_some(),
+            launch.handle_for_session(&params.session_id).is_some(),
+            launch
+                .remote_handle_for_session(&params.session_id)
+                .is_some(),
+        ),
         handle,
         from_name,
         workspace: bound_ws.clone(),
@@ -379,6 +391,21 @@ mod tests {
                 .contains("workspace override does not match"),
             "unexpected: {err}"
         );
+    }
+
+    #[test]
+    fn a_poster_is_remote_by_its_team_or_by_only_a_remote_handle() {
+        // A remote caller team, with or without a local tab.
+        assert!(poster_is_remote(true, false, false));
+        assert!(poster_is_remote(true, true, false), "the remote team wins over a local handle");
+        assert!(poster_is_remote(true, true, true));
+        // A local tab is local, even when a remote session shares its id.
+        assert!(!poster_is_remote(false, true, false));
+        assert!(!poster_is_remote(false, true, true));
+        // Only a remote session answers to it.
+        assert!(poster_is_remote(false, false, true));
+        // Neither.
+        assert!(!poster_is_remote(false, false, false));
     }
 
     #[test]
