@@ -40,6 +40,9 @@ export interface ChatCliSwitchProps {
   needs: CliNeedsKind | null;
   /** The key that flips the tab, as displayed ("⌘I"). */
   shortcut: string;
+  /** A CLI started by hand that the chat covers once it is Ready: its name ("Claude"). While
+   *  the CLI shows, the Chat segment carries a dashed ring and says so. */
+  pendingCover?: string | null;
 }
 
 /**
@@ -57,6 +60,7 @@ export function ChatCliSwitch({
   heldLines,
   needs,
   shortcut,
+  pendingCover = null,
 }: ChatCliSwitchProps) {
   const refs = useRef<Partial<Record<ChatCliMode, HTMLButtonElement | null>>>({});
   // An arrow key moves the selection and keeps focus on the switch, on the segment that is now
@@ -104,7 +108,13 @@ export function ChatCliSwitch({
       ? `CLI, ${held} new ${held === 1 ? "line" : "lines"}`
       : "CLI";
   const keys = shortcut ? ` (${shortcut})` : "";
-  const chatTip = mode === "chat" ? "Chat" : `Show chat${keys}`;
+  const pending = mode === "cli" && !!pendingCover;
+  const chatTip =
+    mode === "chat"
+      ? "Chat"
+      : pending
+        ? `Chat covers this tab when ${pendingCover} is Ready.`
+        : `Show chat${keys}`;
   const cliTip = flagged
     ? `The CLI needs your input. Show CLI${keys}`
     : held > 0
@@ -137,6 +147,8 @@ export function ChatCliSwitch({
           aria-label={chatName}
           tabIndex={mode === "chat" ? 0 : -1}
           data-testid={`chat-cli-switch-${tabId}-chat`}
+          data-pending={pending ? "true" : undefined}
+          aria-description={pending ? chatTip : undefined}
           className="ibx-sw-seg"
           onClick={() => choose("chat", "pointer")}
           onKeyDown={onArrow}

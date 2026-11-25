@@ -41,6 +41,7 @@ vi.mock("@/features/viewer/hooks/use-tab-source-repo", () => ({
 
 import { TerminalGridCaption } from "./terminal-grid-caption";
 import { useAgentInboxRailStore } from "@/features/viewer/stores/agent-inbox-rail-store";
+import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
 import { useHeldOutputStore } from "@/features/viewer/stores/held-output-store";
 import { projectSessionStatus, resetSessionProjection } from "@/test/session-projection-fixture";
 import { stubResizeObserver } from "@/test/resize-observer-stub";
@@ -269,6 +270,58 @@ describe("TerminalGridCaption: a CLI started by hand, with no launch mark", () =
       cleanup();
     },
   );
+});
+
+describe("TerminalGridCaption: the F11 chrome of a CLI started by hand", () => {
+  /** The roster's bare row for the tab: what runs there, with no saved agent. */
+  const listed = (row: object) =>
+    useAgentListProjectionStore.setState({
+      sessions: [{ handle: "sid-a", sessionId: "sid-a", alive: true, ...row } as never],
+    });
+  const hooked = (state: "working" | "idle") =>
+    useAgentStateStore.setState({
+      bySession: { "sid-a": { t1: null, t2: null, state, agent: "claude" } },
+      processAgentBySession: {},
+    });
+  afterEach(() => useAgentListProjectionStore.setState({ sessions: null }));
+
+  it("has a lettered face and a dashed by-hand pill in place of the cwd", () => {
+    listed({ kind: "live-pty", detected: { cli: "claude", dot: null } });
+    hooked("working");
+    mountFor(story);
+    expect(screen.getByTestId("terminal-grid-caption-hand-tab-a")).toHaveTextContent("by hand");
+    expect(screen.getByTestId("terminal-grid-caption-face-tab-a")).toHaveTextContent("C");
+    expect(screen.getByTestId("terminal-grid-caption-focus-tab-a")).toHaveAccessibleName(
+      /^Claude\b/,
+    );
+    expect(screen.queryByText("barb")).toBeNull();
+  });
+
+  it("a launched agent keeps its cwd, with no face or pill", () => {
+    listed({ kind: "claude", agentRevision: "builtin/claude@13" });
+    hooked("working");
+    mountFor(story);
+    expect(screen.queryByTestId("terminal-grid-caption-hand-tab-a")).toBeNull();
+    expect(screen.queryByTestId("terminal-grid-caption-face-tab-a")).toBeNull();
+    expect(screen.getByText("barb")).toBeInTheDocument();
+  });
+
+  it("the Chat segment has a dashed pending ring until the CLI is Ready, then the chat covers", () => {
+    listed({ kind: "live-pty", detected: { cli: "claude", dot: null } });
+    hooked("working");
+    mountFor(story);
+    expect(chatSeg()).toHaveAttribute("data-pending", "true");
+    act(() => hooked("idle"));
+    expect(chatSeg()).not.toHaveAttribute("data-pending");
+    expect(chatSeg()).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("a CLI only the process tree knows of has no ring: it stays on the CLI", () => {
+    useAgentStateStore.setState({ processAgentBySession: { "sid-a": "claude" } });
+    listed({ kind: "live-pty", detected: { cli: "claude", dot: null, processOnly: true } });
+    mountFor(story);
+    expect(chatSeg()).not.toHaveAttribute("data-pending");
+  });
 });
 
 describe("TerminalGridCaption Diff / Editor / HUD toggles (SW-TP CAP-6)", () => {

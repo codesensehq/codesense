@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: MIT
-import { useRunningAgent } from "@/features/viewer/lib/hand-agents";
+import {
+  cliLabel,
+  detectSessionAgent,
+  useRunningAgent,
+  type ListedAgentRow,
+} from "@/features/viewer/lib/hand-agents";
+import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
+import { useAgentStateStore } from "@/shared/stores/agent-state-store";
 import { useCallback, useEffect, useId, useRef, type KeyboardEvent, type MouseEvent } from "react";
 import { AlarmClock, Code, GitCompareArrows, PanelTopOpen, X } from "lucide-react";
 import type { TerminalTab } from "@/features/viewer/lib/cli-workspace/store/viewer-access";
@@ -38,6 +45,7 @@ import {
   showAgentChat,
   showAgentCli,
   useAgentChatShown,
+  useHandCoverPending,
 } from "@/features/viewer/stores/agent-inbox-rail-store";
 import { useHeldLines } from "@/features/viewer/stores/held-output-store";
 import { useCliNeedsYou } from "@/features/viewer/lib/cli-workspace/store/terminal-tab-selectors";
@@ -148,6 +156,16 @@ export function TerminalGridCaption({
   const hudShown = useStoryHudShown(ws.id);
   const runningAgent = useRunningAgent(tab.sessionId);
   const inboxOpen = useAgentChatShown(tab.sessionId);
+  // A CLI started by hand: the roster lists what it detected, with no saved agent.
+  const handCli = useAgentListProjectionStore((s) => {
+    const row = s.sessions?.find((r) => r.sessionId === tab.sessionId) as
+      | ListedAgentRow
+      | undefined;
+    return row?.detected && !row.agentRevision ? row.detected.cli : null;
+  });
+  const hand = runningAgent && handCli ? cliLabel(handCli) : null;
+  const liveCli = useAgentStateStore((s) => detectSessionAgent(s, tab.sessionId)?.cli ?? null);
+  const coverPending = useHandCoverPending(tab.sessionId);
   const inboxCounts = useTabInboxCounts(tab.sessionId);
   const inboxUnread = inboxCounts.direct + inboxCounts.group;
   const diffShortcut = formatKeystrokeDisplay(useEffectiveShortcut("viewer.toggle-source-diff"));
@@ -327,7 +345,34 @@ export function TerminalGridCaption({
               the foreground at weight 500 (600 on the active tab), the rest
               muted; it gives way from the left, never wrapping. Without a cwd
               yet, the tab name holds the slot so it is never empty. */}
-            {promptPath ? (
+            {hand ? (
+              // No saved agent, so a lettered face, and "by hand" where a launched tab has its cwd.
+              <>
+                <span
+                  className="ibx-hand-face"
+                  aria-hidden="true"
+                  data-testid={`terminal-grid-caption-face-${tab.id}`}
+                >
+                  {hand.charAt(0)}
+                </span>
+                <span
+                  id={nameId}
+                  className={cn(
+                    "min-w-0 truncate text-[12px] leading-4",
+                    isActive ? "font-semibold" : "font-medium",
+                  )}
+                >
+                  {hand}
+                </span>
+                <span
+                  className="ibx-hand"
+                  title="Started by hand in this tab"
+                  data-testid={`terminal-grid-caption-hand-${tab.id}`}
+                >
+                  by hand
+                </span>
+              </>
+            ) : promptPath ? (
               <PromptPathLabel
                 id={nameId}
                 path={promptPath}
@@ -542,6 +587,7 @@ export function TerminalGridCaption({
             heldLines={heldLines}
             needs={cliNeeds}
             shortcut={inboxShortcut}
+            pendingCover={coverPending ? cliLabel(handCli ?? liveCli) : null}
           />
         )}
       </div>
