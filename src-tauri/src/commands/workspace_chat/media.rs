@@ -23,6 +23,9 @@ pub const MEDIA_EVENT: &str = "codesense:workspace-chat-media";
 /// log's line bound.
 pub const MAX_ALT_BYTES: usize = 1024;
 
+/// The longest `url` a chat image may carry, in bytes, for the same reason.
+pub const MAX_URL_BYTES: usize = 2048;
+
 /// The [`MEDIA_EVENT`] payload.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,7 +47,7 @@ pub(crate) fn owner(team: &LaunchTeam, workspace: &str, message_id: i64) -> Owne
 }
 
 /// Prepare `input` for a post by `handle`, `remote` when its session runs on another
-/// machine. Refuses an invalid input or an overlong alt, a file path from a sender not on this machine,
+/// machine. Refuses an invalid input, an overlong alt or url, a file path from a sender not on this machine,
 /// and a sender with no team; prepares as `send_message` does and records what the
 /// send admitted.
 pub(crate) async fn prepare(
@@ -56,6 +59,9 @@ pub(crate) async fn prepare(
     input.validate()?;
     if input.alt.len() > MAX_ALT_BYTES {
         return Err(format!("media.alt exceeds {MAX_ALT_BYTES} bytes"));
+    }
+    if input.url.as_ref().is_some_and(|u| u.len() > MAX_URL_BYTES) {
+        return Err(format!("media.url exceeds {MAX_URL_BYTES} bytes"));
     }
     // Decided on the sender: a remote team's caller scope would read its path here.
     let own = !remote && host.own_media_sender(handle).await;
@@ -134,11 +140,14 @@ pub(crate) async fn stored(host: &Arc<dyn InboxHost>, message: &WorkspaceChatMes
         {
             log::warn!(target: "workspace_chat", "chat media: {e}");
         }
+        store.fetch_done(&workspace, message_id);
     });
 }
 
 /// Fetch `attachment` of chat message `message_id` and record the result in the media
-/// sidecar, then in the index and the provider registration.
+/// sidecar, then in the index and the provider registration. An automatic fetch that
+/// errors is recorded as failed, so the message does not stay pending; a tap's error
+/// goes back to the tap.
 async fn finish_fetch(
     host: &Arc<dyn InboxHost>,
     store: &WorkspaceChatStore,
@@ -148,7 +157,16 @@ async fn finish_fetch(
     attachment: Attachment,
     automatic: bool,
 ) -> Result<(), String> {
-    let fetched = host.fetch_media(team, attachment, automatic).await?;
+    let (fetched, ok) = match host.fetch_media(team, attachment.clone(), automatic).await {
+        Ok(fetched) => (fetched, true),
+        Err(e) if automatic => {
+            log::warn!(target: "workspace_chat", "chat media: fetch failed: {e}");
+            let mut failed = attachment;
+            super::store::mark_failed(&mut failed, "fetch");
+            (failed, false)
+        }
+        Err(e) => return Err(e),
+    };
     let state = ChatMediaState::of(&fetched);
     let (writer, ws, done) = (store.clone(), workspace.to_string(), fetched.clone());
     crate::commands::await_blocking("chat_media.fetched", move || {
@@ -158,7 +176,9 @@ async fn finish_fetch(
     })
     .await?;
     let owner = owner(team, workspace, message_id);
-    host.chat_media_fetched(owner.clone(), MEDIA_SLOT, &fetched);
+    if ok {
+        host.chat_media_fetched(owner.clone(), MEDIA_SLOT, &fetched);
+    }
     host.note_chat_media(owner, std::slice::from_ref(&fetched))
         .await;
     host.chat_media_changed(workspace, message_id);
@@ -218,7 +238,7 @@ pub(crate) async fn present(
     }
 }
 
-/// Load the image of chat message `message_id`, held for a tap or failed.
+/// Load the image of chat message `message_id`, held for a tap or failed retryably.
 pub(crate) async fn load(
     host: &Arc<dyn InboxHost>,
     workspace: &str,
@@ -230,6 +250,10 @@ pub(crate) async fn load(
         Some(ChatMediaState::TapToLoad | ChatMediaState::Failed)
     ) {
         return Err("media cannot be loaded".into());
+    }
+    let attachment = &message.attachments[MEDIA_SLOT];
+    if message.media_state == Some(ChatMediaState::Failed) && !attachment.retryable {
+        return Err("media cannot be retried".into());
     }
     let attachment = message.attachments[MEDIA_SLOT].clone();
     finish_fetch(

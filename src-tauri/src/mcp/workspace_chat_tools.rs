@@ -169,13 +169,15 @@ fn store_error(e: ChatStoreError) -> ErrorData {
     match e {
         ChatStoreError::EmptyText
         | ChatStoreError::TooLong
-        | ChatStoreError::InvalidWorkspaceId(_) => ErrorData::invalid_params(e.to_string(), None),
+        | ChatStoreError::InvalidWorkspaceId(_)
+        | ChatStoreError::LineTooLong => ErrorData::invalid_params(e.to_string(), None),
         other => ErrorData::internal_error(other.to_string(), None),
     }
 }
 
-/// Post `params` as `poster`. Text and media are checked before `started` (the first-use
-/// anchor) runs or anything is appended, so a refused send writes nothing. A post with
+/// Post `params` as `poster`. Text, media and the encoded line are checked before
+/// `started` (the first-use anchor) runs or anything is appended, so a refused send
+/// writes nothing. A post with
 /// media is then indexed, registered once and, when admitted, fetched in the background.
 pub(crate) async fn send_core(
     host: &std::sync::Arc<dyn InboxHost>,
@@ -200,7 +202,6 @@ pub(crate) async fn send_core(
         ),
         None => None,
     };
-    started.await;
     let fetch = prepared.as_ref().is_some_and(|p| p.fetch);
     let at = ChatAppend {
         workspace_id: poster.workspace,
@@ -213,6 +214,8 @@ pub(crate) async fn send_core(
         primary_file: params.primary_file,
         media: prepared.map(|p| p.media),
     };
+    store.check_line(&at).map_err(store_error)?;
+    started.await;
     let writer = store.clone();
     let message = tauri::async_runtime::spawn_blocking(move || {
         writer.append(at, chrono::Utc::now().timestamp_millis())

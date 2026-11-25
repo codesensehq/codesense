@@ -423,6 +423,67 @@ fn chat_media_text_is_optional_only_with_media() {
 }
 
 #[test]
+fn chat_media_line_past_the_log_bound_is_refused() {
+    let (store, tmp) = setup();
+    store.append(user_post("story:a", "first"), 1).unwrap();
+    let before = log_lines(&tmp, "story:a");
+    // Inside the text cap, but escaped in JSON past what a read takes back.
+    let wide = "\u{1}".repeat(12_000);
+    for post in [user_post("story:a", &wide), media_post("story:a", &wide)] {
+        assert!(matches!(
+            store.check_line(&post),
+            Err(super::store::ChatStoreError::LineTooLong)
+        ));
+        assert!(matches!(
+            store.append(post, 2),
+            Err(super::store::ChatStoreError::LineTooLong)
+        ));
+    }
+    assert_eq!(log_lines(&tmp, "story:a"), before);
+    store.check_line(&media_post("story:a", "look")).unwrap();
+    assert_eq!(
+        store
+            .append(user_post("story:a", "next"), 3)
+            .unwrap()
+            .message_id,
+        2
+    );
+}
+
+#[test]
+fn chat_media_pending_with_no_fetch_reads_as_interrupted() {
+    let (store, _tmp) = setup();
+    let sent = store.append(media_post("story:a", "look"), 1).unwrap();
+    assert_eq!(
+        store
+            .media_message("story:a", 1)
+            .unwrap()
+            .unwrap()
+            .media_state,
+        Some(ChatMediaState::Pending)
+    );
+    // The fetch ended without recording a result.
+    store.fetch_done("story:a", sent.message_id);
+    let row = store.media_message("story:a", 1).unwrap().unwrap();
+    assert_eq!(row.media_state, Some(ChatMediaState::Failed));
+    assert_eq!(row.attachments[0].state, "failed");
+    assert_eq!(row.attachments[0].reason.as_deref(), Some("interrupted"));
+    assert!(row.attachments[0].retryable);
+    assert_eq!(
+        store.read("story:a", None, None).unwrap().messages,
+        vec![row]
+    );
+    // A result recorded for it stands.
+    let done = fetched(sent.attachments[0].clone());
+    store
+        .set_media("story:a", 1, vec![done.clone()], ChatMediaState::Cached)
+        .unwrap();
+    let row = store.media_message("story:a", 1).unwrap().unwrap();
+    assert_eq!(row.media_state, Some(ChatMediaState::Cached));
+    assert_eq!(row.attachments, vec![done]);
+}
+
+#[test]
 fn chat_media_sidecar_concurrent_writers() {
     let (store, tmp) = setup();
     let sent = store.append(media_post("story:a", "look"), 1).unwrap();

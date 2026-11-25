@@ -70,18 +70,41 @@ fn row(path: &Path, message_id: i64) -> Result<Option<WorkspaceChatMessage>, Cha
         .find(|m| m.message_id == message_id))
 }
 
-/// `messages` with their media as the sidecar of `workspace` says, if any carries media.
-pub(super) fn overlay(home: &Path, workspace: &str, messages: &mut [WorkspaceChatMessage]) {
-    if messages.iter().all(|m| m.attachments.is_empty()) {
-        return;
-    }
-    let sidecar = load(&sidecar_path(home, workspace));
-    for message in messages {
-        sidecar.overlay(message);
-    }
+/// Record `attachment` as failed for `reason`, loadable again when it has a source url.
+pub(crate) fn mark_failed(attachment: &mut Attachment, reason: &str) {
+    attachment.state = "failed".into();
+    attachment.reason = Some(reason.into());
+    attachment.retryable = attachment.source_url.is_some();
 }
 
 impl WorkspaceChatStore {
+    /// `messages` with their media as the sidecar of `workspace` says, if any carries
+    /// media. A pending image with no fetch in flight in this process (the app quit
+    /// before it finished) reads as failed, `interrupted`. The sidecar is read under the
+    /// store lock, so a fetch that finishes meanwhile is either in it or still in flight.
+    pub(super) fn overlay_media(&self, workspace: &str, messages: &mut [WorkspaceChatMessage]) {
+        if messages.iter().all(|m| m.attachments.is_empty()) {
+            return;
+        }
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(home) = &inner.home else {
+            return;
+        };
+        let sidecar = load(&sidecar_path(home, workspace));
+        for message in messages {
+            sidecar.overlay(message);
+            let key = (workspace.to_string(), message.message_id);
+            if message.media_state == Some(ChatMediaState::Pending)
+                && !inner.fetching.contains(&key)
+            {
+                message.media_state = Some(ChatMediaState::Failed);
+                for a in &mut message.attachments {
+                    mark_failed(a, "interrupted");
+                }
+            }
+        }
+    }
+
     /// Run `f` on message `message_id`'s media entry (the sidecar's, else the row's as
     /// sent) and write the sidecar when `f` changed it, all under the store lock.
     /// `None` when the message is unknown or carries no media.
@@ -174,7 +197,7 @@ impl WorkspaceChatStore {
         else {
             return Ok(None);
         };
-        overlay(&home, &workspace, std::slice::from_mut(&mut message));
+        self.overlay_media(&workspace, std::slice::from_mut(&mut message));
         Ok(Some(message))
     }
 
@@ -194,7 +217,7 @@ impl WorkspaceChatStore {
             .into_iter()
             .filter(|m| !m.attachments.is_empty())
             .collect();
-        overlay(&home, &workspace, &mut messages);
+        self.overlay_media(&workspace, &mut messages);
         Ok(messages)
     }
 

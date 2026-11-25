@@ -32,6 +32,7 @@ use crate::shared::json_io::JsonIoError;
 use crate::weft::inbox::{MessageContentType, MessageOnClick};
 
 mod media;
+pub(crate) use media::mark_failed;
 pub use media::ChatMediaEntry;
 
 /// Default limit for `read()` when the caller passes `None`.
@@ -61,6 +62,8 @@ pub enum ChatStoreError {
     TooLong,
     InvalidWorkspaceId(&'static str),
     Encode(serde_json::Error),
+    /// The message would encode to a line longer than the log reads back.
+    LineTooLong,
     /// The workspace carries an `archived_at_ms` stamp — writes refused
     /// (CR3-7). System rows bypass this gate so a lifecycle anchor can
     /// still land on an archived workspace.
@@ -80,6 +83,10 @@ impl std::fmt::Display for ChatStoreError {
             Self::TooLong => write!(f, "text exceeds {} bytes", MAX_TEXT_BYTES),
             Self::InvalidWorkspaceId(reason) => write!(f, "workspace id invalid: {reason}"),
             Self::Encode(e) => write!(f, "message encode: {e}"),
+            Self::LineTooLong => write!(
+                f,
+                "message exceeds the log's {MAX_LINE_BYTES}-byte line bound once encoded"
+            ),
             Self::Archived => write!(f, "workspace archived"),
         }
     }
@@ -133,6 +140,8 @@ struct Inner {
     index: PersistedIndex,
     positions: HashMap<String, ChatPositions>,
     missing_once: HashSet<(String, String)>,
+    /// Media messages appended pending whose fetch this process has not finished.
+    fetching: HashSet<(String, i64)>,
 }
 
 impl Default for WorkspaceChatStore {
@@ -143,6 +152,7 @@ impl Default for WorkspaceChatStore {
                 index: PersistedIndex::default(),
                 positions: HashMap::new(),
                 missing_once: HashSet::new(),
+                fetching: HashSet::new(),
             })),
         }
     }
@@ -583,29 +593,10 @@ impl WorkspaceChatStore {
         }
 
         let message_id = entry.head_id + 1;
-        let (attachments, media_team, media_state) = match at.media {
-            Some(m) => (vec![m.attachment], Some(m.team), Some(m.state)),
-            None => (Vec::new(), None, None),
-        };
-        let message = WorkspaceChatMessage {
-            message_id,
-            from: at.from,
-            from_name: at.from_name,
-            created_at_ms: now_ms,
-            in_reply_to: None,
-            text,
-            primary_file: at.primary_file,
-            on_click: at.on_click,
-            content_type: at.content_type,
-            attachments,
-            workspace_id: workspace_id.clone(),
-            kind: at.kind,
-            media_team,
-            media_state,
-        };
+        let message = message_of(at, text, &workspace_id, message_id, now_ms);
 
         // Serialize once, write once, fsync once.
-        let mut line = serde_json::to_vec(&message)?;
+        let mut line = encode_line(&message)?;
         line.push(b'\n');
         {
             let mut file = std::fs::OpenOptions::new()
@@ -628,6 +619,9 @@ impl WorkspaceChatStore {
             archived_at_ms: entry.archived_at_ms,
         };
         inner.index.workspaces.insert(workspace_id.clone(), updated);
+        if message.media_state == Some(ChatMediaState::Pending) {
+            inner.fetching.insert((workspace_id.clone(), message_id));
+        }
         let path_idx = index_path(&home);
         if let Err(e) = write_index(&path_idx, &inner.index) {
             log::warn!(
@@ -637,6 +631,25 @@ impl WorkspaceChatStore {
             );
         }
         Ok(Some(message))
+    }
+
+    /// Refuse `at` before any append when its line would outgrow the log's bound, so
+    /// a send writes nothing it cannot read back.
+    pub fn check_line(&self, at: &ChatAppend) -> Result<(), ChatStoreError> {
+        let text = validate_text(&at.text, at.media.is_some())?;
+        let workspace_id = validate_workspace_id(&at.workspace_id)?;
+        // The widest id and time a row can carry.
+        let message = message_of(at.clone(), text, &workspace_id, i64::MAX, i64::MAX);
+        encode_line(&message).map(|_| ())
+    }
+
+    /// The fetch this process started for media message `message_id` has finished.
+    pub fn fetch_done(&self, workspace_id: &str, message_id: i64) {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .fetching
+            .remove(&(workspace_id.to_string(), message_id));
     }
 
     /// Return the head id for `workspace_id` after append — the companion
@@ -685,7 +698,7 @@ impl WorkspaceChatStore {
         } else {
             read_messages(&path, since, effective_limit)?
         };
-        media::overlay(&home, &workspace_id, &mut messages);
+        self.overlay_media(&workspace_id, &mut messages);
         Ok(ChatReadResult {
             workspace_id,
             messages,
@@ -787,6 +800,45 @@ fn validate_workspace_id(raw: &str) -> Result<String, ChatStoreError> {
 /// partial-write concatenation that would otherwise be read into one `String`
 /// without bound (CR-13). Lines beyond this cap are skipped with a warning.
 const MAX_LINE_BYTES: usize = MAX_TEXT_BYTES * 2;
+
+/// The row `at` appends as `message_id` at `now_ms`.
+fn message_of(
+    at: ChatAppend,
+    text: String,
+    workspace_id: &str,
+    message_id: i64,
+    now_ms: i64,
+) -> WorkspaceChatMessage {
+    let (attachments, media_team, media_state) = match at.media {
+        Some(m) => (vec![m.attachment], Some(m.team), Some(m.state)),
+        None => (Vec::new(), None, None),
+    };
+    WorkspaceChatMessage {
+        message_id,
+        from: at.from,
+        from_name: at.from_name,
+        created_at_ms: now_ms,
+        in_reply_to: None,
+        text,
+        primary_file: at.primary_file,
+        on_click: at.on_click,
+        content_type: at.content_type,
+        attachments,
+        workspace_id: workspace_id.to_string(),
+        kind: at.kind,
+        media_team,
+        media_state,
+    }
+}
+
+/// `message` as its log line, without the newline; refused when the log would skip it.
+fn encode_line(message: &WorkspaceChatMessage) -> Result<Vec<u8>, ChatStoreError> {
+    let line = serde_json::to_vec(message)?;
+    if line.len() > MAX_LINE_BYTES {
+        return Err(ChatStoreError::LineTooLong);
+    }
+    Ok(line)
+}
 
 /// Read lines up to `MAX_LINE_BYTES` each. Oversized lines are discarded with
 /// a logged warning rather than growing the buffer unboundedly (CR-13).

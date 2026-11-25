@@ -193,6 +193,34 @@ async fn chat_media_send_refuses_an_overlong_alt() {
 }
 
 #[tokio::test]
+async fn chat_media_send_refuses_an_overlong_url() {
+    use crate::commands::workspace_chat::media::MAX_URL_BYTES;
+    let url = format!(
+        "https://media.giphy.com/media/{}/giphy.gif",
+        "a".repeat(MAX_URL_BYTES)
+    );
+    assert_refused(url_media(&url), "media.url exceeds 2048 bytes").await;
+}
+
+#[tokio::test]
+async fn chat_media_send_refuses_a_line_the_log_cannot_read_back() {
+    // Inside the text cap, but escaped in JSON past the log's line bound.
+    let text = "\u{1}".repeat(12_000);
+    let fake = FakeHost::new();
+    fake.own_sender("H1");
+    let before = written(&fake);
+    for media in [Some(url_media(TAGGED_URL)), None] {
+        let err = send(&fake, poster("H1", false), &text, media)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS, "{err:?}");
+        assert!(err.message.contains("message exceeds"), "{err:?}");
+        assert_eq!(written(&fake), before, "a refused send writes nothing");
+    }
+    assert!(fake.media_sent_calls().is_empty());
+}
+
+#[tokio::test]
 async fn chat_media_send_refuses_both_url_and_path() {
     let media = MediaInput {
         path: Some("cat.gif".into()),
@@ -485,6 +513,131 @@ async fn chat_media_team_off_refuses_load_and_read() {
 }
 
 #[tokio::test]
+async fn chat_media_append_completes_while_a_fetch_is_parked() {
+    let (fake, fetch, _media) = serving(TAGGED_URL);
+    let gate = fetch.hold();
+    let sent = send(&fake, poster("H1", false), "", Some(tagged()))
+        .await
+        .unwrap();
+    eventually(|| fetch.calls().len() == 1).await;
+    // The fetch is parked inside `fetch_media`: no store lock is held across it.
+    let posted = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        send(&fake, poster("H1", false), "meanwhile", None),
+    )
+    .await
+    .expect("an append waits on no fetch")
+    .unwrap();
+    assert_eq!(posted.message_id, sent.message_id + 1);
+    assert_eq!(
+        row(&fake, sent.message_id).media_state,
+        Some(ChatMediaState::Pending),
+        "a fetch in flight reads as pending"
+    );
+    let err = load(&port(&fake), WS, sent.message_id).await.unwrap_err();
+    assert_eq!(
+        err, "media cannot be loaded",
+        "an image in flight loads once"
+    );
+    gate.notify_one();
+    assert_eq!(
+        settled(&fake, sent.message_id).await.media_state,
+        Some(ChatMediaState::Cached)
+    );
+}
+
+#[tokio::test]
+async fn chat_media_fetch_error_reads_as_failed_and_loads() {
+    let (fake, fetch, _media) = serving(TAGGED_URL);
+    fake.fail_fetches(Some("media fetch unavailable"));
+    let sent = send(&fake, poster("H1", false), "", Some(tagged()))
+        .await
+        .unwrap();
+    assert_eq!(sent.media_state, Some(ChatMediaState::Pending));
+    let failed = settled(&fake, sent.message_id).await;
+    assert_eq!(failed.media_state, Some(ChatMediaState::Failed));
+    let a = &failed.attachments[0];
+    assert_eq!(
+        (a.state.as_str(), a.reason.as_deref(), a.retryable),
+        ("failed", Some("fetch"), true)
+    );
+    let on_disk = std::fs::read_to_string(sidecar(&fake)).unwrap();
+    assert!(
+        on_disk.contains("\"failed\""),
+        "the failure is recorded: {on_disk}"
+    );
+    fake.fail_fetches(None);
+    load(&port(&fake), WS, sent.message_id).await.unwrap();
+    assert_eq!(
+        row(&fake, sent.message_id).media_state,
+        Some(ChatMediaState::Cached)
+    );
+    assert_eq!(fetch.calls().len(), 1, "only the tap reached the network");
+}
+
+#[tokio::test]
+async fn chat_media_stale_pending_reads_as_interrupted_and_loads() {
+    let (fake, fetch, _media) = serving(TAGGED_URL);
+    // A previous run of the app appended a pending image and quit before its fetch
+    // finished: this process has no fetch in flight for it.
+    let earlier = crate::commands::workspace_chat::WorkspaceChatStore::default();
+    earlier.install(fake.dir());
+    let image = Attachment::remote(TAGGED_URL, "Typing cat", &Config::default(), true).unwrap();
+    let stale = earlier
+        .append(
+            ChatAppend {
+                workspace_id: WS.into(),
+                from: "H1".into(),
+                from_name: "H1".into(),
+                text: String::new(),
+                kind: MessageKind::Chat,
+                content_type: None,
+                on_click: None,
+                primary_file: None,
+                media: Some(ChatAppendMedia {
+                    team: team(),
+                    attachment: image,
+                    state: ChatMediaState::Pending,
+                }),
+            },
+            1,
+        )
+        .unwrap();
+    assert_eq!(
+        earlier
+            .media_message(WS, stale.message_id)
+            .unwrap()
+            .unwrap()
+            .media_state,
+        Some(ChatMediaState::Pending),
+        "the run that fetches it reads it as pending"
+    );
+    let now = row(&fake, stale.message_id);
+    assert_eq!(now.media_state, Some(ChatMediaState::Failed));
+    let a = &now.attachments[0];
+    assert_eq!(
+        (a.state.as_str(), a.reason.as_deref(), a.retryable),
+        ("failed", Some("interrupted"), true)
+    );
+    let page = fake.chat().read(WS, Some(0), None).unwrap().messages;
+    let read: WorkspaceChatReadMessage = page
+        .into_iter()
+        .find(|m| m.message_id == stale.message_id)
+        .unwrap()
+        .into();
+    assert_eq!(
+        serde_json::to_value(&read).unwrap()["media"]["state"],
+        "failed"
+    );
+    load(&port(&fake), WS, stale.message_id).await.unwrap();
+    assert_eq!(
+        row(&fake, stale.message_id).media_state,
+        Some(ChatMediaState::Cached)
+    );
+    assert_eq!(fetch.calls().len(), 1);
+}
+
+#[tokio::test]
 async fn chat_media_app_read_presents_against_the_team() {
     let (fake, _fetch, _media) = serving(TAGGED_URL);
     let cached = send(&fake, poster("H1", false), "", Some(tagged()))
@@ -618,15 +771,27 @@ async fn chat_media_load_refusals() {
         .unwrap();
     load(&host, WS, held.message_id).await.unwrap();
     assert_eq!(fetch.calls().len(), 2);
-    fake.chat()
-        .set_media(
-            WS,
-            held.message_id,
-            held.attachments.clone(),
-            ChatMediaState::Failed,
-        )
-        .unwrap();
-    load(&host, WS, held.message_id).await.unwrap();
+    // A failed one loads again only when its failure is retryable, as in the inbox.
+    let mut failed = held.attachments[0].clone();
+    failed.state = "failed".into();
+    failed.reason = Some("http".into());
+    for retryable in [false, true] {
+        failed.retryable = retryable;
+        fake.chat()
+            .set_media(
+                WS,
+                held.message_id,
+                vec![failed.clone()],
+                ChatMediaState::Failed,
+            )
+            .unwrap();
+        let loaded = load(&host, WS, held.message_id).await;
+        if retryable {
+            loaded.unwrap();
+        } else {
+            assert_eq!(loaded.unwrap_err(), "media cannot be retried");
+        }
+    }
     assert_eq!(fetch.calls().len(), 3);
     assert_eq!(
         row(&fake, held.message_id).media_state,

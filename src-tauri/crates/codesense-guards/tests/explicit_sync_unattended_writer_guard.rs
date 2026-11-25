@@ -2599,15 +2599,17 @@ const MAX_UNRESOLVED_PATHS: usize = 281;
 /// screening (commands/tools/terminals.rs) add two more, taking it to 6_598: std process, io,
 /// channel and thread calls on the `ProcessTree` child and its reader. None calls a write
 /// primitive (`no_unresolved_call_may_hide_a_writer` still passes).
-/// Images in workspace chat take it to 6_607, as CI measured. The new calls are `.kind()` and
-/// `.display()` in the media sidecar's `load`, `.exists()` and `.find(..)` in `row`, `.all(..)`,
-/// `.is_empty()` and the sidecar's own `.overlay(..)` in `overlay`, and `.is_empty()` in
-/// `with_media` and `media_messages` (commands/workspace_chat/store/media.rs); `.is_empty()` in
-/// `media_message` and `.all(..)` and `.is_empty()` in `present`
-/// (commands/workspace_chat/media.rs); and `.as_str()` in `ChatMediaState::of`
-/// (commands/workspace_chat/model.rs). They are std io-error, path, iterator, collection and
-/// string calls, and a read-only overlay of an in-memory map onto a message; none calls a write
-/// primitive (`no_unresolved_call_may_hide_a_writer` still passes).
+/// Images in workspace chat take it to 6_607, as CI measured. The change adds 13 calls and
+/// removes or replaces none (its send path moved into `send_core` with each call it had), so
+/// its base stood at 6_594: four under the 6_598 ceiling, from calls removed on main since that
+/// raise. The 13 are `.kind()` and `.display()` in the media sidecar's `load`, `.exists()` and
+/// `.find(..)` in `row`, `.all(..)`, `.is_empty()` and the sidecar's own `.overlay(..)` in
+/// `overlay_media`, and `.is_empty()` in `with_media` and `media_messages`
+/// (commands/workspace_chat/store/media.rs); `.is_empty()` in `media_message` and `.all(..)` and
+/// `.is_empty()` in `present` (commands/workspace_chat/media.rs); and `.as_str()` in
+/// `ChatMediaState::of` (commands/workspace_chat/model.rs). They are std io-error, path,
+/// iterator, collection and string calls, and a read-only overlay of an in-memory map onto a
+/// message; none calls a write primitive (`no_unresolved_call_may_hide_a_writer` still passes).
 const MAX_UNRESOLVED_METHODS: usize = 6_607;
 
 /// The most lines each census list prints on failure; the env vars print them all.
