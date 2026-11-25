@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use super::git_sync::{
     build_ref_label_map, commit_changed_paths, new_sorted_revwalk, ref_kind, RefKind, RefLabel,
 };
-use crate::shared::git_util::open_repo;
+use crate::shared::git_util::{blob_at, open_repo};
 use crate::shared::machine_wording;
 
 /// An operation that has not been touched for this long has stopped, not run.
@@ -339,10 +339,6 @@ fn incoming_commit(repo: &git2::Repository) -> Option<git2::Oid> {
         }
     }
     None
-}
-
-fn blob_at(tree: &git2::Tree, path: &str) -> Option<git2::Oid> {
-    tree.get_path(Path::new(path)).ok().map(|e| e.id())
 }
 
 /// The newest commit reachable from `tip` (first parents) that changed `path`.

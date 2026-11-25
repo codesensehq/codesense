@@ -22,7 +22,7 @@
 
 use crate::attribution::history::{default_branch, default_branch_name, default_branch_ref};
 use crate::commands::raster_bytes;
-use crate::shared::git_util::{open_repo, tree_or_err};
+use crate::shared::git_util::{open_repo, tree_or_err, upstream_oid};
 use std::path::Path;
 
 pub(crate) mod context_worktree;
@@ -678,16 +678,6 @@ fn resolve_source_baseline_tree<'r>(
         .and_then(|c| c.tree())
         .map_err(|e| format!("head tree: {e}"))?;
     Ok(Some(tree))
-}
-
-/// The checked-out branch's upstream tracking-ref OID (e.g. `origin/master`).
-/// `None` if HEAD is detached/unborn or the branch has no upstream configured.
-fn upstream_oid(repo: &git2::Repository) -> Option<git2::Oid> {
-    let head = repo.head().ok()?;
-    if !head.is_branch() {
-        return None;
-    }
-    git2::Branch::wrap(head).upstream().ok()?.get().target()
 }
 
 fn path_string(p: &Path) -> String {

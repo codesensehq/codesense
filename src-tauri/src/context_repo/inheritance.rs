@@ -1090,6 +1090,98 @@ pub(crate) fn inherited_by_active_team(
     matches!(view.admits_path(path), Admit::Inherited { .. }).then_some((root, owner))
 }
 
+/// The org's guardrails ([`crate::agents::guardrails`]): the union of every root team's
+/// `config/guardrails.yml`, the root teams being the ones `teams.yml` gives no parent. Both
+/// are read from the org clone at `root` as committed on its branch's upstream (HEAD's commit
+/// for an org with no remote), never from a working tree, so no worktree edit, sparse
+/// checkout or re-parenting can lift them. `Ok(None)` when the org denies nothing: `root` is
+/// no repository, has no commit or no `teams.yml`, or no root team has the file. Any other
+/// failure is an error naming the org and the path, and the launch is refused.
+pub(crate) fn org_guardrails(
+    root: &Path,
+    org: &str,
+) -> Result<Option<Arc<crate::agents::guardrails::Guardrails>>, String> {
+    use crate::agents::guardrails::{self, Guardrails, GUARDRAILS_FILE};
+    use crate::shared::git_util::{blob_at, upstream_oid};
+
+    type Cache = Mutex<HashMap<(PathBuf, git2::Oid), Option<Arc<Guardrails>>>>;
+    static CACHE: OnceLock<Cache> = OnceLock::new();
+
+    let fail = |what: &str, e: &dyn std::fmt::Display| {
+        format!("Can't read the org guardrails of {org} ({what}): {e}")
+    };
+    let repo = match git2::Repository::open_ext(
+        root,
+        git2::RepositoryOpenFlags::NO_SEARCH,
+        std::iter::empty::<&std::ffi::OsStr>(),
+    ) {
+        Ok(repo) => repo,
+        Err(e) if e.code() == git2::ErrorCode::NotFound => return Ok(None),
+        Err(e) => return Err(fail(&root.display().to_string(), &e)),
+    };
+    let commit = match upstream_oid(&repo) {
+        Some(oid) => oid,
+        None => match repo.head() {
+            Ok(head) => match head.target() {
+                Some(oid) => oid,
+                None => return Err(fail("HEAD", &"no commit")),
+            },
+            Err(e) if e.code() == git2::ErrorCode::UnbornBranch => return Ok(None),
+            Err(e) => return Err(fail("HEAD", &e)),
+        },
+    };
+    let cache = CACHE.get_or_init(Default::default);
+    let key = (root.to_path_buf(), commit);
+    if let Some(hit) = cache.lock().ok().and_then(|c| c.get(&key).cloned()) {
+        return Ok(hit);
+    }
+    let tree = repo
+        .find_commit(commit)
+        .and_then(|c| c.tree())
+        .map_err(|e| fail(&format!("commit {commit}"), &e))?;
+    let read = |path: &str| -> Result<Option<Vec<u8>>, String> {
+        let Some(id) = blob_at(&tree, path) else {
+            return Ok(None);
+        };
+        repo.find_blob(id)
+            .map(|blob| Some(blob.content().to_vec()))
+            .map_err(|e| fail(path, &e))
+    };
+    let Some(teams) = read("teams.yml")? else {
+        return Ok(None);
+    };
+    let teams = crate::domain::parse_teams_yml(&teams).map_err(|e| fail("teams.yml", &e))?;
+    let mut files = Vec::new();
+    for team in teams.teams.iter().filter(|t| t.parent_team.is_none()) {
+        let name = team.name.as_str();
+        if let Some(e) = validate_path_segment(name) {
+            return Err(fail(&format!("root team {name}"), &e));
+        }
+        let folder = tree.get_path(Path::new(name)).ok();
+        if folder.and_then(|e| e.kind()) != Some(git2::ObjectType::Tree) {
+            return Err(fail(
+                &format!("root team {name}"),
+                &"teams.yml lists it but its folder is not in the commit",
+            ));
+        }
+        let path = format!("{name}/{GUARDRAILS_FILE}");
+        if let Some(bytes) = read(&path)? {
+            files.push((
+                path.clone(),
+                guardrails::parse(&bytes).map_err(|e| fail(&path, &e))?,
+            ));
+        }
+    }
+    let guardrails = Guardrails::union(files).map(Arc::new);
+    if let Ok(mut cache) = cache.lock() {
+        if cache.len() >= 64 {
+            cache.clear();
+        }
+        cache.insert(key, guardrails.clone());
+    }
+    Ok(guardrails)
+}
+
 #[cfg(test)]
 pub(crate) fn test_fixture() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
