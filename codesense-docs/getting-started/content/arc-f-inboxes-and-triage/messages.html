@@ -599,7 +599,7 @@ signal_done { status: 'success', summary: 'Checks passed' }</code></pre>
         <p id="chat"><strong>Workspace chat</strong></p>
         <p>One chat per workspace, bound to the session; a session is bound to one workspace.</p>
         <h3 id="tool-workspace_chat_read"><code>workspace_chat_read</code></h3>
-        <p>Reads messages from the chat of the workspace this session is bound to, oldest first. With <code>since</code> set, returns messages with id greater than it; omitted, it returns from this session's first unread page; <code>since: 0</code> inspects the whole history. <code>limit</code> defaults to 50 (cap 500); <code>limit: 0</code> is a cheap head-id and archive probe that reads nothing and does not advance the read watermark. Returns <code>{workspaceId, messages, headId, archived, unreadRemaining}</code>. Only contiguous returned history advances the read position. An archived workspace may be read. <code>workspace</code>, if given, must equal your bound workspace.</p>
+        <p>Reads messages from the chat of the workspace this session is bound to, oldest first. With <code>since</code> set, returns messages with id greater than it; omitted, it returns from this session's first unread page; <code>since: 0</code> inspects the whole history. <code>limit</code> defaults to 50 (cap 500); <code>limit: 0</code> is a cheap head-id and archive probe that reads nothing and does not advance the read watermark. Returns <code>{workspaceId, messages, headId, archived, unreadRemaining}</code>. Only contiguous returned history advances the read position. An archived workspace may be read. <code>workspace</code>, if given, must equal your bound workspace. A message with an image carries <code>media: {alt, provider?, state}</code>, where <code>state</code> is <code>pending</code>, <code>tapToLoad</code>, <code>cached</code> or <code>failed</code>; the image itself is never returned.</p>
         <pre data-tool-example="workspace_chat_read"><code>{
   &quot;tool&quot;: &quot;workspace_chat_read&quot;,
   &quot;arguments&quot;: {
@@ -608,12 +608,16 @@ signal_done { status: 'success', summary: 'Checks passed' }</code></pre>
   }
 }</code></pre>
         <h3 id="tool-workspace_chat_send"><code>workspace_chat_send</code></h3>
-        <p>Posts one message to the chat of the workspace this session is bound to. <code>text</code> is non-empty, at most 32 KiB and secret-scanned before it is stored. Every other bound supported agent is offered an inbox notice, and the human sees the same transcript in the inbox group chat. Optional <code>workspace</code> (must equal your bound workspace), <code>contentType</code> (<code>plain</code>, <code>markdown</code> or <code>html</code>; html is sanitised between agents), <code>onClick</code> and <code>primaryFile</code>. Returns <code>{status:&quot;sent&quot;, messageId, workspaceId}</code>. Refusals: no session binding, session not bound to a workspace, workspace mismatch, and archived workspace.</p>
+        <p>Posts one message to the chat of the workspace this session is bound to. <code>text</code> is non-empty unless <code>media</code> is set, at most 32 KiB and secret-scanned before it is stored. Every other bound supported agent is offered an inbox notice, and the human sees the same transcript in the inbox group chat. Optional <code>workspace</code> (must equal your bound workspace), <code>contentType</code> (<code>plain</code>, <code>markdown</code> or <code>html</code>; html is sanitised between agents), <code>onClick</code> and <code>primaryFile</code>. Optional <code>media</code> adds one image, as on <code>send_message</code>: exactly one of <code>url</code> or <code>path</code>, with required <code>alt</code>. The sender's team media config governs the image; it loads at once only for a session on this Mac sending from an allowed host, and otherwise waits for a tap. Returns <code>{status:&quot;sent&quot;, messageId, workspaceId}</code>. Refusals: no session binding, session not bound to a workspace, workspace mismatch, archived workspace, empty text without media, invalid media, a <code>path</code> from a session on another machine, and media from a session with no team.</p>
         <pre data-tool-example="workspace_chat_send"><code>{
   &quot;tool&quot;: &quot;workspace_chat_send&quot;,
   &quot;arguments&quot;: {
     &quot;text&quot;: &quot;Docs page is ready for review&quot;,
-    &quot;contentType&quot;: &quot;markdown&quot;
+    &quot;contentType&quot;: &quot;markdown&quot;,
+    &quot;media&quot;: {
+      &quot;url&quot;: &quot;https://i.giphy.com/111ebonMs90YLu.gif&quot;,
+      &quot;alt&quot;: &quot;A smiling thumbs-up&quot;
+    }
   }
 }</code></pre>
       </section>
