@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { openAgentInboxRail } from "@/features/viewer/stores/agent-inbox-rail-store";
-import { REGISTERED_AGENT_CLIS } from "@/shared/lib/agent-runtimes";
+import { AGENT_RUNTIMES, REGISTERED_AGENT_CLIS } from "@/shared/lib/agent-runtimes";
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
 import type React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -245,6 +245,30 @@ describe("TerminalGridCaption Chat | CLI switch", () => {
     expect(close.className).toContain("opacity-35");
     cleanup();
   });
+});
+
+describe("TerminalGridCaption: a CLI started by hand, with no launch mark", () => {
+  it.each(AGENT_RUNTIMES)(
+    "%s gets the switch, and once its chat shows, the held count and the needs-you flag",
+    (cli) => {
+      useAgentStateStore.setState({ processAgentBySession: { "sid-a": cli } });
+      const ro2 = stubResizeObserver(700);
+      mountFor(story);
+      expect(useAgentInboxRailStore.getState().pending["sid-a"]).toBeUndefined();
+      expect(screen.getByTestId(SWITCH)).toBeInTheDocument();
+      fireEvent.click(chatSeg());
+      act(() => useHeldOutputStore.setState({ bySession: { "sid-a": 12 } }));
+      expect(cliSeg()).toHaveTextContent("12 new");
+      act(() => {
+        useHeldOutputStore.setState({ bySession: {} });
+        projectSessionStatus("sid-a", "paused", { needsYouKind: "permission" });
+      });
+      expect(cliSeg()).toHaveAttribute("data-needs", "true");
+      resetSessionProjection();
+      ro2.restore();
+      cleanup();
+    },
+  );
 });
 
 describe("TerminalGridCaption Diff / Editor / HUD toggles (SW-TP CAP-6)", () => {
