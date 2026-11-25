@@ -9,7 +9,8 @@ import { useAgentStatusOf } from "@/features/viewer/hooks/use-agent-status-of";
 import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
 import { useCliNeedsYou } from "@/features/viewer/lib/cli-workspace/store/terminal-tab-selectors";
 import { formatElapsed } from "@/features/viewer/lib/agent-row-presentation";
-import { cliLabel, type ListedAgentRow } from "@/features/viewer/lib/hand-agents";
+import { cliLabel } from "@/features/viewer/lib/hand-agents";
+import { useHandStartedCli } from "@/features/viewer/hooks/use-hand-started-cli";
 import {
   showAgentCli,
   markAgentInboxRailComposeHandled,
@@ -94,7 +95,8 @@ export function ChatOverlay({
   const pinAgent = pinThread.agentId || null;
   const pinStory = pinThread.storyId || null;
   // A CLI started by hand in the tab: no saved agent, so no earlier thread, only its session's.
-  const handCli = pinAgent ? null : (row as ListedAgentRow | null)?.detected?.cli;
+  const startedByHand = useHandStartedCli(sessionId);
+  const handCli = pinAgent ? null : startedByHand;
   // The Foreman's chat is its page's: the same thread (its earlier sessions' mail too, merged by
   // useForemanThread), the same pins (the page's team) and its one tab as the full view.
   const foreman = isForemanAgent(pinAgent);

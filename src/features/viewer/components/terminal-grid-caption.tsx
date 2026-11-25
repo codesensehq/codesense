@@ -1,11 +1,6 @@
 // SPDX-License-Identifier: MIT
-import {
-  cliLabel,
-  detectSessionAgent,
-  useRunningAgent,
-  type ListedAgentRow,
-} from "@/features/viewer/lib/hand-agents";
-import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
+import { cliLabel, detectSessionAgent, useRunningAgent } from "@/features/viewer/lib/hand-agents";
+import { useHandStartedCli } from "@/features/viewer/hooks/use-hand-started-cli";
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
 import { useCallback, useEffect, useId, useRef, type KeyboardEvent, type MouseEvent } from "react";
 import { AlarmClock, Code, GitCompareArrows, PanelTopOpen, X } from "lucide-react";
@@ -156,16 +151,11 @@ export function TerminalGridCaption({
   const hudShown = useStoryHudShown(ws.id);
   const runningAgent = useRunningAgent(tab.sessionId);
   const inboxOpen = useAgentChatShown(tab.sessionId);
-  // A CLI started by hand: the roster lists what it detected, with no saved agent.
-  const handCli = useAgentListProjectionStore((s) => {
-    const row = s.sessions?.find((r) => r.sessionId === tab.sessionId) as
-      | ListedAgentRow
-      | undefined;
-    return row?.detected && !row.agentRevision ? row.detected.cli : null;
-  });
-  const hand = runningAgent && handCli ? cliLabel(handCli) : null;
-  const liveCli = useAgentStateStore((s) => detectSessionAgent(s, tab.sessionId)?.cli ?? null);
+  const handCli = useHandStartedCli(tab.sessionId);
+  const hand = handCli ? cliLabel(handCli) : null;
   const coverPending = useHandCoverPending(tab.sessionId);
+  // The pending ring names the CLI before the roster lists it.
+  const liveCli = useAgentStateStore((s) => detectSessionAgent(s, tab.sessionId)?.cli ?? null);
   const inboxCounts = useTabInboxCounts(tab.sessionId);
   const inboxUnread = inboxCounts.direct + inboxCounts.group;
   const diffShortcut = formatKeystrokeDisplay(useEffectiveShortcut("viewer.toggle-source-diff"));
@@ -587,7 +577,7 @@ export function TerminalGridCaption({
             heldLines={heldLines}
             needs={cliNeeds}
             shortcut={inboxShortcut}
-            pendingCover={coverPending ? cliLabel(handCli ?? liveCli) : null}
+            pendingCover={coverPending ? cliLabel(liveCli) : null}
           />
         )}
       </div>
