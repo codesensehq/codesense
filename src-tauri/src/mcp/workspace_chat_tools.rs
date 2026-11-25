@@ -217,13 +217,17 @@ pub(crate) async fn send_core(
     store.check_line(&at).map_err(store_error)?;
     started.await;
     let writer = store.clone();
-    let message = tauri::async_runtime::spawn_blocking(move || {
-        writer.append(at, chrono::Utc::now().timestamp_millis())
+    // The fetch's in-flight mark is taken with the append, so a send dropped before the
+    // fetch starts drops the mark with it.
+    let (message, in_flight) = tauri::async_runtime::spawn_blocking(move || {
+        let message = writer.append(at, chrono::Utc::now().timestamp_millis())?;
+        let in_flight = fetch.then(|| writer.in_flight(&message.workspace_id, message.message_id));
+        Ok::<_, ChatStoreError>((message, in_flight))
     })
     .await
     .map_err(|e| ErrorData::internal_error(format!("join: {e}"), None))?
     .map_err(store_error)?;
-    crate::commands::workspace_chat::media::stored(host, &message, fetch).await;
+    crate::commands::workspace_chat::media::stored(host, &message, in_flight).await;
     Ok(message)
 }
 

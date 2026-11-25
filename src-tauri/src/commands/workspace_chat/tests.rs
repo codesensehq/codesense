@@ -462,8 +462,18 @@ fn chat_media_pending_with_no_fetch_reads_as_interrupted() {
             .media_state,
         Some(ChatMediaState::Pending)
     );
-    // The fetch ended without recording a result.
-    store.fetch_done("story:a", sent.message_id);
+    // The fetch's task ended, by any path, without recording a result.
+    let task = store.in_flight("story:a", sent.message_id);
+    assert_eq!(
+        store
+            .media_message("story:a", 1)
+            .unwrap()
+            .unwrap()
+            .media_state,
+        Some(ChatMediaState::Pending),
+        "a mark owned by a live task keeps the row pending"
+    );
+    drop(task);
     let row = store.media_message("story:a", 1).unwrap().unwrap();
     assert_eq!(row.media_state, Some(ChatMediaState::Failed));
     assert_eq!(row.attachments[0].state, "failed");

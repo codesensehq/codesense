@@ -5,7 +5,7 @@
 //! bytes. Writes go through `write_json_atomic` under the store lock; a corrupt or
 //! unreadable file reads as missing, and the next write replaces it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -79,23 +79,33 @@ pub(crate) fn mark_failed(attachment: &mut Attachment, reason: &str) {
 
 impl WorkspaceChatStore {
     /// `messages` with their media as the sidecar of `workspace` says, if any carries
-    /// media. A pending image with no fetch in flight in this process (the app quit
-    /// before it finished) reads as failed, `interrupted`. The sidecar is read under the
-    /// store lock, so a fetch that finishes meanwhile is either in it or still in flight.
+    /// media. A pending image with no fetch in flight in this process (the app quit, or
+    /// its fetch ended without a result) reads as failed, `interrupted`. The in-flight
+    /// marks are copied before the sidecar is read, with no lock held over the parse: a
+    /// fetch records its result before its mark clears, so a mark missing from the copy
+    /// means the result is in the sidecar this reads.
     pub(super) fn overlay_media(&self, workspace: &str, messages: &mut [WorkspaceChatMessage]) {
         if messages.iter().all(|m| m.attachments.is_empty()) {
             return;
         }
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(home) = &inner.home else {
-            return;
+        let (home, fetching) = {
+            let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(home) = inner.home.clone() else {
+                return;
+            };
+            let fetching: HashSet<i64> = inner
+                .fetching
+                .iter()
+                .filter(|(ws, _)| ws == workspace)
+                .map(|&(_, id)| id)
+                .collect();
+            (home, fetching)
         };
-        let sidecar = load(&sidecar_path(home, workspace));
+        let sidecar = load(&sidecar_path(&home, workspace));
         for message in messages {
             sidecar.overlay(message);
-            let key = (workspace.to_string(), message.message_id);
             if message.media_state == Some(ChatMediaState::Pending)
-                && !inner.fetching.contains(&key)
+                && !fetching.contains(&message.message_id)
             {
                 message.media_state = Some(ChatMediaState::Failed);
                 for a in &mut message.attachments {

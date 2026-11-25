@@ -31,5 +31,6 @@ pub use resolve::session_workspace_id;
 pub use state::{ChatPosition, ChatUnread};
 #[allow(unused_imports)]
 pub use store::{
-    ChatAppend, ChatAppendMedia, ChatMediaEntry, ChatReadResult, ChatStoreError, WorkspaceChatStore,
+    ChatAppend, ChatAppendMedia, ChatMediaEntry, ChatReadResult, ChatStoreError, InFlight,
+    WorkspaceChatStore,
 };

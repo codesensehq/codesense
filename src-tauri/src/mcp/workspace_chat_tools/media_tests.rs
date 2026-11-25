@@ -576,6 +576,30 @@ async fn chat_media_fetch_error_reads_as_failed_and_loads() {
 }
 
 #[tokio::test]
+async fn chat_media_panicking_fetch_reads_as_interrupted_and_loads() {
+    let (fake, fetch, _media) = serving(TAGGED_URL);
+    fake.panic_fetches(true);
+    let sent = send(&fake, poster("H1", false), "", Some(tagged()))
+        .await
+        .unwrap();
+    // The fetch task unwinds without recording a result; its in-flight mark goes with it.
+    let failed = settled(&fake, sent.message_id).await;
+    assert_eq!(failed.media_state, Some(ChatMediaState::Failed));
+    let a = &failed.attachments[0];
+    assert_eq!(
+        (a.state.as_str(), a.reason.as_deref(), a.retryable),
+        ("failed", Some("interrupted"), true)
+    );
+    fake.panic_fetches(false);
+    load(&port(&fake), WS, sent.message_id).await.unwrap();
+    assert_eq!(
+        row(&fake, sent.message_id).media_state,
+        Some(ChatMediaState::Cached)
+    );
+    assert_eq!(fetch.calls().len(), 1, "only the tap reached the network");
+}
+
+#[tokio::test]
 async fn chat_media_stale_pending_reads_as_interrupted_and_loads() {
     let (fake, fetch, _media) = serving(TAGGED_URL);
     // A previous run of the app appended a pending image and quit before its fetch

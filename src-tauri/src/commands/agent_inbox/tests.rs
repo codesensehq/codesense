@@ -74,6 +74,8 @@ pub(crate) struct FakeHost {
     chat_media_changes: Mutex<Vec<(String, i64)>>,
     /// Every media fetch errors with this, where a test sets it.
     fetch_error: Mutex<Option<String>>,
+    /// Every media fetch panics, where a test sets it.
+    fetch_panics: std::sync::atomic::AtomicBool,
 }
 
 impl FakeHost {
@@ -126,6 +128,7 @@ impl FakeHost {
             media_configs: Mutex::default(),
             chat_media_changes: Mutex::default(),
             fetch_error: Mutex::default(),
+            fetch_panics: Default::default(),
         })
     }
 
@@ -140,6 +143,12 @@ impl FakeHost {
     /// Every media fetch errors with `error` until it is cleared.
     pub(crate) fn fail_fetches(&self, error: Option<&str>) {
         *self.fetch_error.lock().unwrap() = error.map(String::from);
+    }
+
+    /// Every media fetch panics while `on`.
+    pub(crate) fn panic_fetches(&self, on: bool) {
+        self.fetch_panics
+            .store(on, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// `sender`'s session runs on this machine.
@@ -380,6 +389,9 @@ impl InboxHost for FakeHost {
     ) -> Result<crate::media::Attachment, String> {
         if let Some(e) = self.fetch_error.lock().unwrap().clone() {
             return Err(e);
+        }
+        if self.fetch_panics.load(std::sync::atomic::Ordering::SeqCst) {
+            panic!("media fetch panicked");
         }
         let media = self.media_state().ok_or("media fetch unavailable")?;
         media

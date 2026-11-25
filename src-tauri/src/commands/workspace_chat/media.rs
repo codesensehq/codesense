@@ -9,7 +9,7 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use super::model::{ChatMediaState, WorkspaceChatMessage};
-use super::store::{ChatAppendMedia, WorkspaceChatStore};
+use super::store::{ChatAppendMedia, InFlight, WorkspaceChatStore};
 use crate::commands::agent_inbox::{
     handle_team, InboxHost, InboxMediaBytes, StoredMedia, MEDIA_SLOT,
 };
@@ -101,8 +101,13 @@ pub(crate) async fn prepare(
 }
 
 /// `message` was appended with media: index it, register it once, and start the fetch
-/// the send admitted. The fetch runs with no store lock held.
-pub(crate) async fn stored(host: &Arc<dyn InboxHost>, message: &WorkspaceChatMessage, fetch: bool) {
+/// the send admitted, which owns `in_flight` until it ends. The fetch runs with no store
+/// lock held.
+pub(crate) async fn stored(
+    host: &Arc<dyn InboxHost>,
+    message: &WorkspaceChatMessage,
+    in_flight: Option<InFlight>,
+) {
     let (Some(team), Some(attachment)) = (&message.media_team, message.attachments.first()) else {
         return;
     };
@@ -119,9 +124,9 @@ pub(crate) async fn stored(host: &Arc<dyn InboxHost>, message: &WorkspaceChatMes
         attachment: attachment.clone(),
         chat: Some(workspace.clone()),
     });
-    if !fetch {
+    let Some(in_flight) = in_flight else {
         return;
-    }
+    };
     let Some(store) = host.chat_store() else {
         return;
     };
@@ -133,6 +138,8 @@ pub(crate) async fn stored(host: &Arc<dyn InboxHost>, message: &WorkspaceChatMes
     );
     let message_id = message.message_id;
     tauri::async_runtime::spawn(async move {
+        // Dropped when the task ends, by a result, an error, a panic or a cancel.
+        let _in_flight = in_flight;
         if let Err(e) = finish_fetch(
             &host, &store, &team, &workspace, message_id, attachment, true,
         )
@@ -140,7 +147,6 @@ pub(crate) async fn stored(host: &Arc<dyn InboxHost>, message: &WorkspaceChatMes
         {
             log::warn!(target: "workspace_chat", "chat media: {e}");
         }
-        store.fetch_done(&workspace, message_id);
     });
 }
 

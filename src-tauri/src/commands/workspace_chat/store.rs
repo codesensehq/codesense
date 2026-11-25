@@ -158,6 +158,24 @@ impl Default for WorkspaceChatStore {
     }
 }
 
+/// A pending media message's fetch in flight in this process; see
+/// [`WorkspaceChatStore::in_flight`].
+pub struct InFlight {
+    store: WorkspaceChatStore,
+    key: (String, i64),
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.store
+            .inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .fetching
+            .remove(&self.key);
+    }
+}
+
 /// Composite result of a read. The chat-local archive stamp is read via
 /// `WorkspaceChatStore::list()` → `ChatIndexEntry.archived_at_ms`; the
 /// admission check reads SW-WC-1's registry for the authoritative
@@ -643,13 +661,13 @@ impl WorkspaceChatStore {
         encode_line(&message).map(|_| ())
     }
 
-    /// The fetch this process started for media message `message_id` has finished.
-    pub fn fetch_done(&self, workspace_id: &str, message_id: i64) {
-        self.inner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .fetching
-            .remove(&(workspace_id.to_string(), message_id));
+    /// The in-flight mark `append` set for media message `message_id`, owned from here
+    /// on by its fetch: dropping it, however the fetch ends, clears the mark.
+    pub fn in_flight(&self, workspace_id: &str, message_id: i64) -> InFlight {
+        InFlight {
+            store: self.clone(),
+            key: (workspace_id.to_string(), message_id),
+        }
     }
 
     /// Return the head id for `workspace_id` after append — the companion
