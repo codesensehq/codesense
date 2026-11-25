@@ -168,6 +168,25 @@ describe("ChatCliSwitch held output", () => {
   });
 });
 
+describe("ChatCliSwitch pending cover", () => {
+  it("a dashed ring on Chat says the chat covers the tab once the CLI is Ready", async () => {
+    render(<Harness initial="cli" pendingCover="Claude" />);
+    expect(chat()).toHaveAttribute("data-pending", "true");
+    chat().focus();
+    expect(
+      (await screen.findAllByText("Chat covers this tab when Claude is Ready.")).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("has no ring with nothing pending, or once the chat shows", () => {
+    render(<Harness initial="cli" />);
+    expect(chat()).not.toHaveAttribute("data-pending");
+    cleanup();
+    render(<Harness initial="chat" pendingCover="Claude" />);
+    expect(chat()).not.toHaveAttribute("data-pending");
+  });
+});
+
 describe("ChatCliSwitch needs-you flag", () => {
   it.each(["permission", "startup", "question"] as const)(
     "a %s turns the CLI segment to the needs tone with Input needed",

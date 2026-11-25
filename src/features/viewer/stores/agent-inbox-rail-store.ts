@@ -1,7 +1,15 @@
 // SPDX-License-Identifier: MIT
-import { isRunningAgent, useRunningAgent } from "@/features/viewer/lib/hand-agents";
+import {
+  detectSessionAgent,
+  isRunningAgent,
+  useRunningAgent,
+} from "@/features/viewer/lib/hand-agents";
+import { isRegisteredAgentRuntime } from "@/shared/lib/agent-runtimes";
+import type { AgentRuntime } from "@/tauri/commands";
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
+import { useViewerStore } from "@/shared/stores/viewer-store";
 import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 
 /** How a tab's inbox is drawn: conversations, a dense log, or a sequence diagram. */
 export type InboxLens = "threads" | "spool" | "wire";
@@ -51,6 +59,60 @@ interface AgentInboxRailState {
   markComposeHandled: (sessionId: string, n: number) => void;
 }
 
+type AgentState = ReturnType<typeof useAgentStateStore.getState>;
+
+/**
+ * Where a CLI started by hand stands on its chat cover: the chat covers the tab once the CLI is
+ * first Ready, never before. `pending`: it runs, with hooks or an observed host, but is not yet
+ * idle; `ready`: its first idle. Null for a launched tab, a tab with a chat entry (shown, or hidden by the person's
+ * choice) or a pending launch mark, a plain shell, and a CLI only the process tree knows of,
+ * which never reports Ready and so stays on the CLI.
+ */
+export function handCoverOf(
+  agent: AgentState,
+  rail: Pick<AgentInboxRailState, "bySession" | "pending">,
+  sessionId: string,
+): "pending" | "ready" | null {
+  if (rail.bySession[sessionId] || rail.pending[sessionId]) return null;
+  return unclaimedHandCoverOf(agent, sessionId, detectSessionAgent(agent, sessionId));
+}
+
+function unclaimedHandCoverOf(
+  agent: AgentState,
+  sessionId: string,
+  detected: ReturnType<typeof detectSessionAgent>,
+): "pending" | "ready" | null {
+  if (agent.launchBySession[sessionId]) return null;
+  if (!detected || detected.processOnly || !isRegisteredAgentRuntime(detected.cli)) return null;
+  const snapshot = agent.activityBySession[sessionId]?.snapshot;
+  const idle = snapshot?.observed
+    ? snapshot.state === "idle"
+    : agent.bySession[sessionId]?.state === "idle";
+  return idle ? "ready" : "pending";
+}
+
+/**
+ * A tab's agent CLI as its Chat | CLI switch reads it, from one detection: whether one runs, and
+ * the CLI started by hand whose chat covers the tab once it is Ready (`pendingCover`, null when
+ * none waits).
+ */
+export function useTabAgentCli(sessionId: string): {
+  running: boolean;
+  pendingCover: AgentRuntime | null;
+} {
+  const layout = useViewerStore((s) => s.terminalLayout);
+  const claimed = useAgentInboxRailStore((s) => !!s.bySession[sessionId] || !!s.pending[sessionId]);
+  return useAgentStateStore(
+    useShallow((agent) => {
+      const detected = detectSessionAgent(agent, sessionId, layout);
+      const cli = isRegisteredAgentRuntime(detected?.cli) ? detected.cli : null;
+      const pending =
+        cli !== null && !claimed && unclaimedHandCoverOf(agent, sessionId, detected) === "pending";
+      return { running: cli !== null, pendingCover: pending ? cli : null };
+    }),
+  );
+}
+
 let watchingEligibility = false;
 
 /** Rails follow lifecycle even when their tab is hidden or its workspace is minimized. */
@@ -67,17 +129,28 @@ function watchEligibility(): void {
       // The process ended before the agent was ever eligible: the mark is spent.
       else if (agent.exitBySession[id]) dropped.push(id);
     }
+    // A CLI started by hand: covered at its first idle, never asking for the composer, so the
+    // cover takes no focus.
+    const sessions = new Set([
+      ...Object.keys(agent.bySession),
+      ...Object.keys(agent.activityBySession),
+    ]);
+    const covered = [...sessions].filter(
+      (id) => handCoverOf(agent, { bySession, pending }, id) === "ready",
+    );
+    // Only a shown chat goes with its agent. A hidden one is the person's choice for the tab,
+    // held through the exit and any later CLI there until the tab closes (`forget`).
     const ended = Object.keys(bySession).filter((id) => {
-      if (!bySession[id] || isRunningAgent(agent, id)) return false;
+      if (!bySession[id]?.shown || isRunningAgent(agent, id)) return false;
       // A layout refresh or reconnect temporarily hides live controls. Remember
       // the open rail until current lifecycle evidence confirms the agent ended.
       const activity = agent.activityBySession[id];
       return !activity || activity.freshness === "current" || !!agent.exitBySession[id];
     });
-    if (opened.length === 0 && dropped.length === 0 && ended.length === 0) return;
+    if (!opened.length && !dropped.length && !ended.length && !covered.length) return;
     const next = { ...bySession };
     const nextPending = { ...pending };
-    for (const id of opened) {
+    for (const id of [...opened, ...covered]) {
       next[id] = { composeRequest: 0, shown: true };
       nextPending[id] = undefined;
     }
@@ -159,12 +232,20 @@ export const useAgentInboxRailStore = create<AgentInboxRailState>((set) => ({
     }),
   // The person's choice: a closed chat stays closed, so a mark still pending is spent too. The
   // entry stays, hidden, so the chat keeps its thread, scroll and draft for when it shows again.
+  // A close before any chat (a launch still pending, a CLI started by hand not yet Ready) records
+  // the choice as a hidden entry; a plain shell records nothing.
   close: (sessionId) =>
     set((s) => {
       const cur = s.bySession[sessionId];
-      if (!cur?.shown && !s.pending[sessionId]) return s;
+      if (cur && !cur.shown && !s.pending[sessionId]) return s;
+      if (
+        !cur &&
+        !s.pending[sessionId] &&
+        !isRunningAgent(useAgentStateStore.getState(), sessionId)
+      )
+        return s;
       return {
-        bySession: cur ? { ...s.bySession, [sessionId]: { ...cur, shown: false } } : s.bySession,
+        bySession: { ...s.bySession, [sessionId]: { composeRequest: 0, ...cur, shown: false } },
         pending: { ...s.pending, [sessionId]: undefined },
       };
     }),
@@ -260,3 +341,14 @@ export function flipAgentView(sessionId: string) {
     showAgentCli(sessionId, "focus");
   else showAgentChat(sessionId, "focus");
 }
+
+// A CLI started by hand has no launch to start the watch, so it runs from the start. This store
+// and the agent-state store import each other through the viewer store, so the other may not
+// exist yet while this one loads: wait for it (a module loader that loads asynchronously, as
+// vitest's does, can take a few turns).
+function startWatching(tries = 0): void {
+  if ((useAgentStateStore as typeof useAgentStateStore | undefined) !== undefined)
+    watchEligibility();
+  else if (tries < 100) setTimeout(() => startWatching(tries + 1), 0);
+}
+queueMicrotask(startWatching);

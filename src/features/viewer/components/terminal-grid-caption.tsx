@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-import { useRunningAgent } from "@/features/viewer/lib/hand-agents";
+import { cliLabel } from "@/features/viewer/lib/hand-agents";
+import { useHandStartedCli } from "@/features/viewer/hooks/use-hand-started-cli";
 import { useCallback, useEffect, useId, useRef, type KeyboardEvent, type MouseEvent } from "react";
 import { AlarmClock, Code, GitCompareArrows, PanelTopOpen, X } from "lucide-react";
 import type { TerminalTab } from "@/features/viewer/lib/cli-workspace/store/viewer-access";
@@ -38,6 +39,7 @@ import {
   showAgentChat,
   showAgentCli,
   useAgentChatShown,
+  useTabAgentCli,
 } from "@/features/viewer/stores/agent-inbox-rail-store";
 import { useHeldLines } from "@/features/viewer/stores/held-output-store";
 import { useCliNeedsYou } from "@/features/viewer/lib/cli-workspace/store/terminal-tab-selectors";
@@ -146,8 +148,10 @@ export function TerminalGridCaption({
   const diffOpen = useSourceDiffShown(tab.sessionId);
   const editorOpen = useWorktreeEditorOpen(tab.sessionId);
   const hudShown = useStoryHudShown(ws.id);
-  const runningAgent = useRunningAgent(tab.sessionId);
+  const { running: runningAgent, pendingCover } = useTabAgentCli(tab.sessionId);
   const inboxOpen = useAgentChatShown(tab.sessionId);
+  const handCli = useHandStartedCli(tab.sessionId);
+  const hand = handCli ? cliLabel(handCli) : null;
   const inboxCounts = useTabInboxCounts(tab.sessionId);
   const inboxUnread = inboxCounts.direct + inboxCounts.group;
   const diffShortcut = formatKeystrokeDisplay(useEffectiveShortcut("viewer.toggle-source-diff"));
@@ -327,7 +331,34 @@ export function TerminalGridCaption({
               the foreground at weight 500 (600 on the active tab), the rest
               muted; it gives way from the left, never wrapping. Without a cwd
               yet, the tab name holds the slot so it is never empty. */}
-            {promptPath ? (
+            {hand ? (
+              // No saved agent, so a lettered face, and "by hand" where a launched tab has its cwd.
+              <>
+                <span
+                  className="ibx-hand-face"
+                  aria-hidden="true"
+                  data-testid={`terminal-grid-caption-face-${tab.id}`}
+                >
+                  {hand.charAt(0)}
+                </span>
+                <span
+                  id={nameId}
+                  className={cn(
+                    "min-w-0 truncate text-[12px] leading-4",
+                    isActive ? "font-semibold" : "font-medium",
+                  )}
+                >
+                  {hand}
+                </span>
+                <span
+                  className="ibx-hand"
+                  title="Started by hand in this tab"
+                  data-testid={`terminal-grid-caption-hand-${tab.id}`}
+                >
+                  by hand
+                </span>
+              </>
+            ) : promptPath ? (
               <PromptPathLabel
                 id={nameId}
                 path={promptPath}
@@ -542,6 +573,8 @@ export function TerminalGridCaption({
             heldLines={heldLines}
             needs={cliNeeds}
             shortcut={inboxShortcut}
+            // The pending ring names the CLI before the roster lists it.
+            pendingCover={pendingCover && cliLabel(pendingCover)}
           />
         )}
       </div>
