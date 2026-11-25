@@ -1073,15 +1073,18 @@ pub(crate) mod tests {
                 ..Default::default()
             };
             let frames = FrameStore::default();
+            let mut args: MintFrameArgs = serde_json::from_value(json!({
+                "documentPath": "/h/users/42/builtin-panes/panes/inbox.html",
+                "contentRoot": "/ctx", "slot": "right-pane"
+            }))
+            .unwrap();
+            // As `mint_frame` does for the pane's `human-inbox` surface before minting.
+            inbox_network_policy(&mut args.policy, "right-pane", Some("human-inbox"));
             let frame = mint_record(
                 &frames,
                 9321,
                 &policy,
-                serde_json::from_value(json!({
-                    "documentPath": "/h/users/42/builtin-panes/panes/inbox.html",
-                    "contentRoot": "/ctx", "slot": "right-pane"
-                }))
-                .unwrap(),
+                args,
                 "human".into(),
                 "dashboard:built-in:acme/api/inbox".into(),
                 "built-in",
