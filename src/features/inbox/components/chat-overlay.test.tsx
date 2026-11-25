@@ -2449,6 +2449,72 @@ describe("ChatOverlay in its tab: the Chat | CLI flip", () => {
   });
 });
 
+describe("ChatOverlay for a CLI started by hand", () => {
+  const TAB = { id: "tab-1", sessionId: SESSION };
+  /** A CLI typed into the tab: the roster's bare row, with no saved agent or story. */
+  const handRow = () =>
+    roster({
+      kind: "live-pty",
+      agentRevision: undefined,
+      story: undefined,
+      role: undefined,
+      displayName: "",
+      detected: { cli: "claude", dot: null },
+    } as never);
+  const hooked = (agent: string | null, state: "idle" | "done") =>
+    useAgentStateStore.setState((s) => ({
+      bySession: { ...s.bySession, [SESSION]: { t1: null, t2: null, state, agent } },
+      processAgentBySession: {},
+    }));
+
+  beforeEach(() => {
+    handRow();
+    api.loadSessionInbox.mockResolvedValue({
+      dto: { handle: LEAD, roles: [], messages: [] },
+      source: "live",
+    });
+  });
+
+  it("has no earlier thread: it reads its own session, and its empty chat says why", async () => {
+    render(
+      <ChatOverlay
+        tabId="tab-1"
+        sessionId={SESSION}
+        teamKey={TEAM_KEY}
+        composeRequest={0}
+        size={{ width: 420, height: 700 }}
+      />,
+    );
+    const empty = await screen.findByTestId("chat-overlay-empty");
+    expect(empty).toHaveTextContent("No messages with Claude yet");
+    expect(empty).toHaveTextContent(
+      "Claude was started by hand in this tab, so it has no earlier thread. What you send here reaches it as inbox mail.",
+    );
+    expect(api.loadThreadInbox).not.toHaveBeenCalled();
+    expect(vi.mocked(invoke).mock.calls.some(([cmd]) => cmd === "agent_pins")).toBe(false);
+  });
+
+  it("a draft left when the CLI exits stays with that session's thread", async () => {
+    render(
+      <div data-focus-pane="tab-1" data-pane-active="">
+        <InboxSplit tab={TAB} teamKey={TEAM_KEY}>
+          <div className="xterm">
+            <textarea data-testid="cli" />
+          </div>
+        </InboxSplit>
+      </div>,
+    );
+    act(() => hooked("claude", "idle"));
+    await screen.findByTestId("chat-overlay-empty");
+    fireEvent.change(composerBox(), { target: { value: "half a thought" } });
+    act(() => hooked(null, "done"));
+    expect(screen.queryByTestId("chat-overlay")).toBeNull();
+    act(() => hooked("claude", "idle"));
+    await screen.findByTestId("chat-overlay-empty");
+    expect(composerBox().value).toBe("half a thought");
+  });
+});
+
 describe("ChatOverlay on a successor session", () => {
   it("reads the thread of its saved agent and story, so its predecessor's mail shows though the roster no longer lists it", async () => {
     api.loadThreadInbox.mockResolvedValue({

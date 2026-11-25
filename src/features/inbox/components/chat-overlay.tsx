@@ -9,6 +9,7 @@ import { useAgentStatusOf } from "@/features/viewer/hooks/use-agent-status-of";
 import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
 import { useCliNeedsYou } from "@/features/viewer/lib/cli-workspace/store/terminal-tab-selectors";
 import { formatElapsed } from "@/features/viewer/lib/agent-row-presentation";
+import { cliLabel, type ListedAgentRow } from "@/features/viewer/lib/hand-agents";
 import {
   showAgentCli,
   markAgentInboxRailComposeHandled,
@@ -92,6 +93,8 @@ export function ChatOverlay({
   const pinThread = threadOf(launched?.agent ?? row?.agentRevision, row?.story ?? launched?.story);
   const pinAgent = pinThread.agentId || null;
   const pinStory = pinThread.storyId || null;
+  // A CLI started by hand in the tab: no saved agent, so no earlier thread, only its session's.
+  const handCli = pinAgent ? null : (row as ListedAgentRow | null)?.detected?.cli;
   // The Foreman's chat is its page's: the same thread (its earlier sessions' mail too, merged by
   // useForemanThread), the same pins (the page's team) and its one tab as the full view.
   const foreman = isForemanAgent(pinAgent);
@@ -578,9 +581,19 @@ export function ChatOverlay({
                 pins={personPins}
                 // The placeholder and the route hint already say where a message goes.
                 empty={
-                  <div className="ibx-empty" data-testid="chat-overlay-empty">
-                    <strong>No messages yet</strong>
-                  </div>
+                  handCli ? (
+                    <div className="ibx-empty" data-testid="chat-overlay-empty">
+                      <strong>No messages with {cliLabel(handCli)} yet</strong>
+                      <span>
+                        {cliLabel(handCli)} was started by hand in this tab, so it has no earlier
+                        thread. What you send here reaches it as inbox mail.
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="ibx-empty" data-testid="chat-overlay-empty">
+                      <strong>No messages yet</strong>
+                    </div>
+                  )
                 }
               />
             )}
