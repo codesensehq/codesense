@@ -13,7 +13,7 @@ pub(crate) async fn send_message(
     caller: Caller<'_>,
     params: SendMessageParams,
 ) -> Result<CallToolResult, ErrorData> {
-    let result = agent_inbox::send_message_request(
+    let result = agent_inbox::send_message_request_with_story(
         host,
         caller,
         &params.to,
@@ -26,6 +26,7 @@ pub(crate) async fn send_message(
         params.kind,
         params.request_id.as_deref(),
         params.media.as_ref(),
+        params.story_id.as_deref(),
     )
     .await
     .map_err(|e| ErrorData::internal_error(e, None))?;
@@ -100,7 +101,7 @@ pub(crate) async fn reply(
     caller: Caller<'_>,
     params: ReplyParams,
 ) -> Result<CallToolResult, ErrorData> {
-    let result = agent_inbox::reply_request(
+    let result = agent_inbox::reply_request_with_story(
         host,
         caller,
         params.message_id,
@@ -110,6 +111,7 @@ pub(crate) async fn reply(
         None,
         params.request_id.as_deref(),
         params.media.as_ref(),
+        params.story_id.as_deref(),
     )
     .await
     .map_err(|e| ErrorData::internal_error(e, None))?;

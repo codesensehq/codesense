@@ -874,6 +874,7 @@ async fn read_messages_returns_oldest_first_then_empty() {
                 primary_file: None,
                 attachments: Vec::new(),
                 attachment_hint: None,
+                story_id: None,
             },
             ReadMessage {
                 message_id: second,
@@ -887,6 +888,7 @@ async fn read_messages_returns_oldest_first_then_empty() {
                 primary_file: None,
                 attachments: Vec::new(),
                 attachment_hint: None,
+                story_id: None,
             },
         ]
     );
@@ -2778,6 +2780,7 @@ async fn unread_by_handle_counts_each_sessions_own_mail_in_its_team_and_marks_no
             None,
             None,
             MediaOwner::Sender,
+            None,
         )
         .await
         .unwrap()
@@ -6984,6 +6987,7 @@ async fn human_replay_never_registers() {
                 Some("pick-1"),
                 Some(&tagged_media()),
                 MediaOwner::Human,
+                None,
             )
             .await
             .unwrap()

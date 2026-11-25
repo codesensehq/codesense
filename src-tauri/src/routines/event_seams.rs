@@ -954,6 +954,7 @@ async fn mcp_role_filters_run_only_matching_queues_without_claiming_mail() {
                 content_type: None,
                 reply_to: None,
                 summary: None,
+                story_id: None,
             },
             |role, message_id| {
                 super::role_pending::offer_role_pending(

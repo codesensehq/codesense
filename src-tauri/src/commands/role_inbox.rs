@@ -274,6 +274,7 @@ pub async fn send_role_message_cmd(
             content_type,
             None,
             summary.as_deref(),
+            None,
         )
     })
     .await;
@@ -330,6 +331,8 @@ pub(crate) struct RoleSend {
     pub content_type: Option<crate::weft::inbox::MessageContentType>,
     pub reply_to: Option<String>,
     pub summary: Option<String>,
+    /// The story the message is about (a story's `cs:id`). Not part of the request hash.
+    pub story_id: Option<String>,
 }
 
 /// MCP's queue/notify boundary: only a committed send is offered to routines.
@@ -387,6 +390,7 @@ pub(crate) fn commit_role_send(
         send.content_type,
         send.reply_to.as_deref(),
         send.summary.as_deref(),
+        send.story_id.as_deref(),
     ) {
         Ok((message_id, delivery_id)) => Ok(serde_json::json!({
             "status": "sent",
@@ -825,6 +829,7 @@ mod tests {
                 Some(Html),
                 None,
                 summary,
+                None,
             )
         };
         let (message_id, _) = send(Some("Build is green")).unwrap();
