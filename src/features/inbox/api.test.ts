@@ -106,6 +106,7 @@ describe("inbox api", () => {
       replyTo: null,
       summary: null,
       inReplyTo: 9,
+      media: null,
     });
   });
 });
