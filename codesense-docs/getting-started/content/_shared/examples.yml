@@ -374,7 +374,7 @@
       "title": "Roles and workspace chat",
       "tools": ["roles_list", "role_save", "inbox_post", "release_role", "get_human_status", "mark_unread", "role_state", "workspace_chat_send", "workspace_chat_read"],
       "docs": "arc-f-inboxes-and-triage/messages.html",
-      "searchTerms": ["roles", "workspace", "chat"],
+      "searchTerms": ["roles", "workspace", "chat", "media"],
       "calls": [{"tool": "roles_list", "arguments": {"teamKey": "example/team-context:engineering"}}]
     },
     {

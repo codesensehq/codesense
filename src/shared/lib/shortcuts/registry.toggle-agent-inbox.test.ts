@@ -74,17 +74,17 @@ describe("SW-TP CAP-8 viewer.toggle-agent-inbox shortcut action", () => {
     document.body.appendChild(pane);
     pane.querySelector<HTMLButtonElement>('[data-testid="switch"]')!.focus();
     run();
-    expect(useAgentInboxRailStore.getState().bySession.sess1).toBeUndefined();
+    expect(useAgentInboxRailStore.getState().bySession.sess1?.shown).toBe(false);
     await new Promise((resolve) => requestAnimationFrame(resolve));
     expect(document.activeElement).toBe(pane.querySelector('[data-testid="term"]'));
     pane.remove();
   });
 
-  it("closes the inbox for the active tab's session when already open", () => {
+  it("hides the chat for the active tab's session when it shows", () => {
     useAgentInboxRailStore.getState().open("sess1");
     expect(useAgentInboxRailStore.getState().bySession.sess1).toBeDefined();
     run();
-    expect(useAgentInboxRailStore.getState().bySession.sess1).toBeUndefined();
+    expect(useAgentInboxRailStore.getState().bySession.sess1?.shown).toBe(false);
   });
 
   it("closing with focus inside the chat hands focus to that tab's terminal", async () => {
@@ -97,7 +97,7 @@ describe("SW-TP CAP-8 viewer.toggle-agent-inbox shortcut action", () => {
     document.body.appendChild(pane);
     pane.querySelector<HTMLTextAreaElement>('[data-testid="box"]')!.focus();
     run();
-    expect(useAgentInboxRailStore.getState().bySession.sess1).toBeUndefined();
+    expect(useAgentInboxRailStore.getState().bySession.sess1?.shown).toBe(false);
     await new Promise((resolve) => requestAnimationFrame(resolve));
     expect(document.activeElement).toBe(pane.querySelector('[data-testid="term"]'));
     pane.remove();

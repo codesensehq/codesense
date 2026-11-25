@@ -1099,7 +1099,9 @@ pub use async_helpers::await_blocking;
 // +1 `agent_read_model::list_thread_inbox` (a saved agent + story thread's conversation, ended
 // sessions included). → 516.
 // +1 `system::get_platform_caps` (which optional features this OS supports). → 517.
-pub const EXPECTED_COMMAND_COUNT: usize = 517;
+// +2 `workspace_chat::load_workspace_chat_media` / `read_workspace_chat_media` (the app
+// window loads and reads a workspace chat message's image). → 519.
+pub const EXPECTED_COMMAND_COUNT: usize = 519;
 
 #[cfg(test)]
 mod tests {

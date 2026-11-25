@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { openAgentInboxRail } from "@/features/viewer/stores/agent-inbox-rail-store";
-import { REGISTERED_AGENT_CLIS } from "@/shared/lib/agent-runtimes";
+import { AGENT_RUNTIMES, REGISTERED_AGENT_CLIS } from "@/shared/lib/agent-runtimes";
 import { useAgentStateStore } from "@/shared/stores/agent-state-store";
 import type React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -41,6 +41,7 @@ vi.mock("@/features/viewer/hooks/use-tab-source-repo", () => ({
 
 import { TerminalGridCaption } from "./terminal-grid-caption";
 import { useAgentInboxRailStore } from "@/features/viewer/stores/agent-inbox-rail-store";
+import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
 import { useHeldOutputStore } from "@/features/viewer/stores/held-output-store";
 import { projectSessionStatus, resetSessionProjection } from "@/test/session-projection-fixture";
 import { stubResizeObserver } from "@/test/resize-observer-stub";
@@ -146,7 +147,7 @@ describe("TerminalGridCaption Chat | CLI switch", () => {
       expect(useAgentInboxRailStore.getState().bySession["sid-a"]?.composeRequest).toBe(1);
       expect(chatSeg()).toHaveAttribute("aria-checked", "true");
       fireEvent.click(cliSeg());
-      expect(useAgentInboxRailStore.getState().bySession["sid-a"]).toBeUndefined();
+      expect(useAgentInboxRailStore.getState().bySession["sid-a"]?.shown).toBe(false);
       expect(cliSeg()).toHaveAttribute("aria-checked", "true");
       cleanup();
     },
@@ -156,10 +157,13 @@ describe("TerminalGridCaption Chat | CLI switch", () => {
     mountFor(story);
     cliSeg().focus();
     fireEvent.keyDown(cliSeg(), { key: "ArrowLeft" });
-    expect(useAgentInboxRailStore.getState().bySession["sid-a"]).toEqual({ composeRequest: 0 });
+    expect(useAgentInboxRailStore.getState().bySession["sid-a"]).toEqual({
+      composeRequest: 0,
+      shown: true,
+    });
     expect(chatSeg()).toHaveFocus();
     fireEvent.keyDown(chatSeg(), { key: "ArrowRight" });
-    expect(useAgentInboxRailStore.getState().bySession["sid-a"]).toBeUndefined();
+    expect(useAgentInboxRailStore.getState().bySession["sid-a"]?.shown).toBe(false);
     expect(cliSeg()).toHaveFocus();
     cleanup();
   });
@@ -241,6 +245,98 @@ describe("TerminalGridCaption Chat | CLI switch", () => {
     expect(close.className).not.toContain("opacity-0");
     expect(close.className).toContain("opacity-35");
     cleanup();
+  });
+});
+
+describe("TerminalGridCaption: a CLI started by hand, with no launch mark", () => {
+  it.each(AGENT_RUNTIMES)(
+    "%s gets the switch, and once its chat shows, the held count and the needs-you flag",
+    (cli) => {
+      useAgentStateStore.setState({ processAgentBySession: { "sid-a": cli } });
+      const ro2 = stubResizeObserver(700);
+      mountFor(story);
+      expect(useAgentInboxRailStore.getState().pending["sid-a"]).toBeUndefined();
+      expect(screen.getByTestId(SWITCH)).toBeInTheDocument();
+      fireEvent.click(chatSeg());
+      act(() => useHeldOutputStore.setState({ bySession: { "sid-a": 12 } }));
+      expect(cliSeg()).toHaveTextContent("12 new");
+      act(() => {
+        useHeldOutputStore.setState({ bySession: {} });
+        projectSessionStatus("sid-a", "paused", { needsYouKind: "permission" });
+      });
+      expect(cliSeg()).toHaveAttribute("data-needs", "true");
+      resetSessionProjection();
+      ro2.restore();
+      cleanup();
+    },
+  );
+});
+
+describe("TerminalGridCaption: the face, pill and pending ring of a CLI started by hand", () => {
+  /** The roster's bare row for the tab: what runs there, with no saved agent. */
+  const listed = (row: object) =>
+    useAgentListProjectionStore.setState({
+      sessions: [{ handle: "sid-a", sessionId: "sid-a", alive: true, ...row } as never],
+    });
+  const hooked = (state: "working" | "idle") =>
+    useAgentStateStore.setState({
+      bySession: { "sid-a": { t1: null, t2: null, state, agent: "claude" } },
+      processAgentBySession: {},
+    });
+  afterEach(() => useAgentListProjectionStore.setState({ sessions: null }));
+
+  it("has a lettered face and a dashed by-hand pill in place of the cwd", () => {
+    listed({ kind: "live-pty", detected: { cli: "claude", dot: null } });
+    hooked("working");
+    mountFor(story);
+    expect(screen.getByTestId("terminal-grid-caption-hand-tab-a")).toHaveTextContent("by hand");
+    expect(screen.getByTestId("terminal-grid-caption-face-tab-a")).toHaveTextContent("C");
+    expect(screen.getByTestId("terminal-grid-caption-focus-tab-a")).toHaveAccessibleName(
+      /^Claude\b/,
+    );
+    expect(screen.queryByText("barb")).toBeNull();
+  });
+
+  it("a launched agent keeps its cwd, with no face or pill", () => {
+    listed({ kind: "claude", agentRevision: "builtin/claude@13" });
+    hooked("working");
+    mountFor(story);
+    expect(screen.queryByTestId("terminal-grid-caption-hand-tab-a")).toBeNull();
+    expect(screen.queryByTestId("terminal-grid-caption-face-tab-a")).toBeNull();
+    expect(screen.getByText("barb")).toBeInTheDocument();
+  });
+
+  it("the Chat segment has a dashed pending ring until the CLI is Ready, then the chat covers", () => {
+    listed({ kind: "live-pty", detected: { cli: "claude", dot: null } });
+    hooked("working");
+    mountFor(story);
+    expect(chatSeg()).toHaveAttribute("data-pending", "true");
+    act(() => hooked("idle"));
+    expect(chatSeg()).not.toHaveAttribute("data-pending");
+    expect(chatSeg()).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("clicking the selected CLI segment before Ready keeps the tab on the CLI past Ready", () => {
+    listed({ kind: "live-pty", detected: { cli: "claude", dot: null } });
+    hooked("working");
+    mountFor(story);
+    expect(chatSeg()).toHaveAttribute("data-pending", "true");
+    fireEvent.click(cliSeg());
+    expect(useAgentInboxRailStore.getState().bySession["sid-a"]).toEqual({
+      composeRequest: 0,
+      shown: false,
+    });
+    expect(chatSeg()).not.toHaveAttribute("data-pending");
+    act(() => hooked("idle"));
+    expect(cliSeg()).toHaveAttribute("aria-checked", "true");
+    expect(useAgentInboxRailStore.getState().bySession["sid-a"]?.shown).toBe(false);
+  });
+
+  it("a CLI only the process tree knows of has no ring: it stays on the CLI", () => {
+    useAgentStateStore.setState({ processAgentBySession: { "sid-a": "claude" } });
+    listed({ kind: "live-pty", detected: { cli: "claude", dot: null, processOnly: true } });
+    mountFor(story);
+    expect(chatSeg()).not.toHaveAttribute("data-pending");
   });
 });
 

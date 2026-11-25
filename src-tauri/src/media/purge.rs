@@ -16,6 +16,7 @@ fn owner(team: &LaunchTeam, message_id: i64) -> Owner {
         org: team.org.clone(),
         team: team.team.clone(),
         message_id,
+        chat: None,
     }
 }
 

@@ -637,6 +637,47 @@ routine_cancel {"runId":"&lt;run_id from routine_runs&gt;"}</code></pre>
           The current turn finishes; queued automatic turns wait. See <a href="../arc-e-agents/spend-caps.html">Spend caps</a>.</p>
       </section>
 
+      <section id="team-paused" data-search="pause a team team_paused team-control resume paused refused">
+        <h2>Pause a team</h2>
+        <p>A team is paused by records in its content's <code>team-control</code> folder, one
+          <code>.md</code> file per record, named <code>&lt;id&gt;.md</code>. Each record's
+          frontmatter has <code>id</code>, <code>paused</code> (<code>true</code> or
+          <code>false</code>), <code>at</code> (when it was written, in milliseconds since the epoch)
+          and, on a resume, <code>resumes</code> (the id of the pause it ends). An optional
+          <code>reason</code> is shown on skipped runs.</p>
+        <pre><code>---
+id: pause-1
+paused: true
+at: 1795300000000
+reason: maintenance
+---</code></pre>
+        <p>The team is paused when its newest record (by <code>at</code>, then <code>id</code>) has
+          <code>paused: true</code> and no resume record names it in <code>resumes</code>. To end
+          the pause, write a resume record that names it, with its own <code>at</code>:</p>
+        <pre><code>---
+id: resume-1
+paused: false
+at: 1795310000000
+resumes: pause-1
+---</code></pre>
+        <p>A resume ends the pause it names even if its <code>at</code> is older. Every record
+          needs a readable <code>at</code>: a newest record CodeSense can't read (no readable
+          <code>at</code>, or <code>paused</code> that isn't true or false) keeps the team paused.
+          No folder means running. CodeSense reads the folder on every check, so a resume takes
+          effect at the next launch or fire.</p>
+        <p>While a team is paused:</p>
+        <ul>
+          <li>Each agent fire of a routine in the team, scheduled, caught up, fired by an event
+            or run by hand, is a skipped run with reason <code>team_paused</code>, before budget,
+            loop guard and overlap. Its result names the pause. Command routines and built-in
+            routines keep running, and so does a routine whose <code>routine.yml</code> sets
+            <code>policy.runs_while_team_paused: true</code>.</li>
+          <li><code>open_workspace</code> into the team returns <code>refused: team paused</code>
+            and makes nothing, for agents, MCP sessions and published dashboard actions; a
+            dashboard shows the action as failed. Your own launch sheet still launches.</li>
+        </ul>
+      </section>
+
       <p style="margin-top: 24px">
         <a href="./remote.html">← Remote</a> · Back to: <a href="./index.html">Arc G index</a> ·
         Edge cases &amp; reference → <a href="../mcp-explorer.html">mcp-explorer</a> ·

@@ -14,9 +14,11 @@ use rmcp::schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::commands::agent_inbox::InboxHost;
 use crate::commands::dashboard_launch::DashboardLaunchState;
 use crate::commands::workspace_chat::{
-    fire_fanout, ChatAppend, MessageKind, WorkspaceChatMessage, WorkspaceChatStore,
+    fire_fanout, ChatAppend, ChatMediaState, ChatStoreError, MessageKind, WorkspaceChatMessage,
+    WorkspaceChatStore,
 };
 use crate::commands::workspace_registry::WorkspaceRegistryState;
 use crate::weft::inbox::{MessageContentType, MessageOnClick};
@@ -28,6 +30,8 @@ pub struct WorkspaceChatSendParams {
     /// Omit to use the verified connection. A supplied id must name the same caller.
     #[serde(default)]
     pub session_id: String,
+    /// The post. Optional when `media` is set; blank text without media is refused.
+    #[serde(default)]
     pub text: String,
     #[serde(default)]
     pub workspace: Option<String>,
@@ -37,6 +41,9 @@ pub struct WorkspaceChatSendParams {
     pub on_click: Option<MessageOnClick>,
     #[serde(default)]
     pub primary_file: Option<String>,
+    /// One image, as for `send_message`: `{url|path, alt, provider?, providerId?}`.
+    #[serde(default)]
+    pub media: Option<crate::media::MediaInput>,
 }
 
 /// `workspace_chat_send` result.
@@ -68,10 +75,47 @@ pub struct WorkspaceChatReadParams {
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceChatReadResult {
     pub workspace_id: String,
-    pub messages: Vec<WorkspaceChatMessage>,
+    pub messages: Vec<WorkspaceChatReadMessage>,
     pub head_id: i64,
     pub archived: bool,
     pub unread_remaining: u32,
+}
+
+/// A message as `workspace_chat_read` returns it: the chat row, with its image told as
+/// `media` rather than as stored attachments.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceChatReadMessage {
+    #[serde(flatten)]
+    pub message: WorkspaceChatMessage,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media: Option<WorkspaceChatMediaView>,
+}
+
+/// A chat message's image as an agent reads it: what it shows and where it stands on
+/// this Mac. Never its URL or hash.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceChatMediaView {
+    pub alt: String,
+    /// The GIF provider the image is attributed to, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<crate::media::MediaProvider>,
+    pub state: ChatMediaState,
+}
+
+impl From<WorkspaceChatMessage> for WorkspaceChatReadMessage {
+    fn from(mut message: WorkspaceChatMessage) -> Self {
+        let attachments = std::mem::take(&mut message.attachments);
+        message.media_team = None;
+        let state = message.media_state.take();
+        let media = attachments.first().map(|a| WorkspaceChatMediaView {
+            alt: a.alt.clone(),
+            provider: a.attribution(),
+            state: state.unwrap_or_else(|| ChatMediaState::of(a)),
+        });
+        Self { message, media }
+    }
 }
 
 fn resolve_bound_workspace(
@@ -109,6 +153,82 @@ fn check_override(override_ws: Option<&str>, bound: &str) -> Result<(), ErrorDat
         }
     }
     Ok(())
+}
+
+/// Who posts to a workspace chat, as the send resolved them.
+pub(crate) struct ChatPoster {
+    pub handle: String,
+    pub from_name: String,
+    pub workspace: String,
+    /// The session runs on another machine: its media is held for a tap, and it can't
+    /// send a file path.
+    pub remote: bool,
+}
+
+fn store_error(e: ChatStoreError) -> ErrorData {
+    match e {
+        ChatStoreError::EmptyText
+        | ChatStoreError::TooLong
+        | ChatStoreError::InvalidWorkspaceId(_)
+        | ChatStoreError::LineTooLong => ErrorData::invalid_params(e.to_string(), None),
+        other => ErrorData::internal_error(other.to_string(), None),
+    }
+}
+
+/// Post `params` as `poster`. Text, media and the encoded line are checked before
+/// `started` (the first-use anchor) runs or anything is appended, so a refused send
+/// writes nothing. A post with
+/// media is then indexed, registered once and, when admitted, fetched in the background.
+pub(crate) async fn send_core(
+    host: &std::sync::Arc<dyn InboxHost>,
+    store: &WorkspaceChatStore,
+    poster: ChatPoster,
+    params: WorkspaceChatSendParams,
+    started: impl std::future::Future<Output = ()>,
+) -> Result<WorkspaceChatMessage, ErrorData> {
+    if params.text.trim().is_empty() && params.media.is_none() {
+        return Err(store_error(ChatStoreError::EmptyText));
+    }
+    let prepared = match &params.media {
+        Some(input) => Some(
+            crate::commands::workspace_chat::media::prepare(
+                &**host,
+                &poster.handle,
+                poster.remote,
+                input,
+            )
+            .await
+            .map_err(|e| ErrorData::invalid_params(e, None))?,
+        ),
+        None => None,
+    };
+    let fetch = prepared.as_ref().is_some_and(|p| p.fetch);
+    let at = ChatAppend {
+        workspace_id: poster.workspace,
+        from: poster.handle,
+        from_name: poster.from_name,
+        text: params.text,
+        kind: MessageKind::Chat,
+        content_type: params.content_type,
+        on_click: params.on_click,
+        primary_file: params.primary_file,
+        media: prepared.map(|p| p.media),
+    };
+    store.check_line(&at).map_err(store_error)?;
+    started.await;
+    let writer = store.clone();
+    // The fetch's in-flight mark is taken with the append, so a send dropped before the
+    // fetch starts drops the mark with it.
+    let (message, in_flight) = tauri::async_runtime::spawn_blocking(move || {
+        let message = writer.append(at, chrono::Utc::now().timestamp_millis())?;
+        let in_flight = fetch.then(|| writer.in_flight(&message.workspace_id, message.message_id));
+        Ok::<_, ChatStoreError>((message, in_flight))
+    })
+    .await
+    .map_err(|e| ErrorData::internal_error(format!("join: {e}"), None))?
+    .map_err(store_error)?;
+    crate::commands::workspace_chat::media::stored(host, &message, in_flight).await;
+    Ok(message)
 }
 
 /// MCP: `workspace_chat_send`.
@@ -152,37 +272,23 @@ pub async fn workspace_chat_send(
         .display_name(&handle)
         .unwrap_or_else(|| handle.clone());
 
+    let launch = app.state::<DashboardLaunchState>();
+    let poster = ChatPoster {
+        remote: crate::mcp::remote_authority::caller_team(&handle).is_some()
+            || (launch.handle_for_session(&params.session_id).is_none()
+                && launch
+                    .remote_handle_for_session(&params.session_id)
+                    .is_some()),
+        handle,
+        from_name,
+        workspace: bound_ws.clone(),
+    };
+    let host = crate::commands::agent_inbox::AppInboxHost::port(app.clone());
+    let store = store.inner().clone();
     // First-use: emit `Chat started.` so an agent's post into a fresh
     // workspace opens the thread with the lifecycle anchor.
-    crate::commands::workspace_chat::ensure_chat_started(app, &bound_ws).await;
-
-    let app_clone = app.clone();
-    let bound_clone = bound_ws.clone();
-    let outcome = tauri::async_runtime::spawn_blocking(move || {
-        let store = app_clone.state::<WorkspaceChatStore>();
-        let now = chrono::Utc::now().timestamp_millis();
-        let at = ChatAppend {
-            workspace_id: bound_clone,
-            from: handle,
-            from_name,
-            text: params.text,
-            kind: MessageKind::Chat,
-            content_type: params.content_type,
-            on_click: params.on_click,
-            primary_file: params.primary_file,
-        };
-        store.append(at, now)
-    })
-    .await
-    .map_err(|e| ErrorData::internal_error(format!("join: {e}"), None))?;
-    let message = outcome.map_err(|e| match e {
-        crate::commands::workspace_chat::ChatStoreError::EmptyText
-        | crate::commands::workspace_chat::ChatStoreError::TooLong
-        | crate::commands::workspace_chat::ChatStoreError::InvalidWorkspaceId(_) => {
-            ErrorData::invalid_params(e.to_string(), None)
-        }
-        other => ErrorData::internal_error(other.to_string(), None),
-    })?;
+    let started = crate::commands::workspace_chat::ensure_chat_started(app, &bound_ws);
+    let message = send_core(&host, &store, poster, params, started).await?;
 
     // Share the Tauri `#[command]` path's fan-out helper so a future tweak
     // to the fan-out contract (payload field, additional subscribers) does
@@ -251,12 +357,15 @@ pub async fn workspace_chat_read(
     let _ = app.emit("codesense:workspace-chat-updated", ());
     Ok(WorkspaceChatReadResult {
         workspace_id: out.page.workspace_id,
-        messages: out.page.messages,
+        messages: out.page.messages.into_iter().map(Into::into).collect(),
         head_id: out.page.head_id,
         unread_remaining: out.unread_remaining,
         archived,
     })
 }
+
+#[cfg(test)]
+mod media_tests;
 
 #[cfg(test)]
 mod tests {

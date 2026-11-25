@@ -1169,10 +1169,10 @@ describe("a tab's agent inbox lives in that tab", () => {
     expect(region.contains(inRemote)).toBe(true);
     expect(region.querySelector(".ibx-split-term")).not.toBeNull();
 
-    // Closing one leaves the other where it is.
+    // Closing one hides it and leaves the other where it is.
     act(() => closeAgentInboxRail("local-1"));
-    expect(within(local).queryByTestId("chat-overlay")).toBeNull();
-    expect(within(remote).getByTestId("chat-overlay")).toBeTruthy();
+    expect(within(local).getByTestId("chat-overlay")).not.toBeVisible();
+    expect(within(remote).getByTestId("chat-overlay")).toBeVisible();
     act(() => closeAgentInboxRail("remote-shell-1"));
   });
 

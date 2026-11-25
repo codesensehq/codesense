@@ -154,6 +154,7 @@ export function usePersonPins({
   titleOf,
   ownOf = () => null,
   onShowPins,
+  visible = true,
 }: {
   team: InboxTeam | null;
   agentId: string | null;
@@ -168,6 +169,8 @@ export function usePersonPins({
   /** How the strip draws a pin sent without a preview (the person's own). */
   ownOf?: (pin: AgentPin) => "quote" | "name" | null;
   onShowPins: () => void;
+  /** The chat shows. Hidden behind its CLI, keys typed there are not the person's next move here. */
+  visible?: boolean;
 }): PersonPins | null {
   const [note, setNote] = useState<PinNote | null>(null);
   const [live, setLive] = useState("");
@@ -175,9 +178,10 @@ export function usePersonPins({
   const [fresh, setFresh] = useState<number | null>(null);
   const [open, setOpen] = useState<Open | null>(null);
   const [focusPin, setFocusPin] = useState<string | null>(null);
-  // The new pin stays marked until the person's next click or key press: input events, no timer.
+  // The new pin stays marked until the person's next click or key press in the shown chat: input
+  // events, no timer.
   useEffect(() => {
-    if (fresh === null) return;
+    if (fresh === null || !visible) return;
     const clear = () => setFresh(null);
     window.addEventListener("keydown", clear, { capture: true, once: true });
     window.addEventListener("pointerdown", clear, { capture: true, once: true });
@@ -185,7 +189,7 @@ export function usePersonPins({
       window.removeEventListener("keydown", clear, { capture: true });
       window.removeEventListener("pointerdown", clear, { capture: true });
     };
-  }, [fresh]);
+  }, [fresh, visible]);
   const byId = useMemo(() => new Map(pins.map((p) => [p.messageId, p])), [pins]);
   // The list as it stands when an async call settles, for the note a refused Undo shows.
   const pinsRef = useRef(pins);

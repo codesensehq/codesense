@@ -10,12 +10,16 @@ use std::{
 };
 use url::Url;
 
-/// The message an attachment belongs to: org, team and message id.
+/// The message an attachment belongs to: org, team and message id, and for a
+/// workspace chat message its workspace. An inbox message and a chat message with
+/// the same id are different owners.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Owner {
     pub org: String,
     pub team: String,
     pub message_id: i64,
+    /// The workspace whose chat holds the message; `None` for an inbox message.
+    pub chat: Option<String>,
 }
 
 /// One attachment's reference to a sha.
@@ -70,6 +74,7 @@ struct Inner {
     by_sha: HashMap<String, Vec<Reference>>,
     by_owner: HashMap<Owner, Vec<String>>,
     teams: HashSet<(String, String)>,
+    chats: HashSet<String>,
 }
 
 impl Inner {
@@ -137,6 +142,15 @@ impl ShaIndex {
 
     pub fn is_team_indexed(&self, org: &str, team: &str) -> bool {
         self.lock().teams.contains(&(org.into(), team.into()))
+    }
+
+    /// Mark a workspace chat indexed.
+    pub fn mark_chat(&self, workspace: &str) {
+        self.lock().chats.insert(workspace.into());
+    }
+
+    pub fn is_chat_indexed(&self, workspace: &str) -> bool {
+        self.lock().chats.contains(workspace)
     }
 
     /// Whether any reference to `sha` is provider media: then every attachment that
@@ -221,6 +235,7 @@ mod tests {
             org: "acme".into(),
             team: team.into(),
             message_id: id,
+            chat: None,
         }
     }
 

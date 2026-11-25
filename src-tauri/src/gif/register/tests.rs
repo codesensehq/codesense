@@ -215,6 +215,7 @@ fn slot(message_id: i64) -> Slot {
             org: "acme".into(),
             team: "core".into(),
             message_id,
+            chat: None,
         },
         0,
     )
@@ -771,6 +772,7 @@ fn only_a_send_from_this_machine_registers() {
         message_id: 1,
         slot: 0,
         attachment,
+        chat: None,
     };
     assert_eq!(sent_of(&media), None);
     let mut own = media.clone();

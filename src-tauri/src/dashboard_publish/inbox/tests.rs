@@ -829,7 +829,7 @@ async fn hosted_media_refetches_a_memory_only_sha_once_and_only_after_authorizin
         a
     };
     let note = |team: &str, id: i64, a: &crate::media::Attachment| {
-        let owner = crate::media::index::Owner { org: "acme".into(), team: team.into(), message_id: id };
+        let owner = crate::media::index::Owner { org: "acme".into(), team: team.into(), message_id: id, chat: None };
         state.note(&owner, id, std::slice::from_ref(a));
     };
     let bytes = gif(400 * 1024);

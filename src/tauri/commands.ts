@@ -1065,10 +1065,12 @@ export const readInboxMedia = async (
   team: InboxTeam,
   messageId: number,
   sha256: string,
-): Promise<Blob> => {
-  const frame = new Uint8Array(
-    await invoke<ArrayBuffer>("read_inbox_media", { team, messageId, sha256 }),
-  );
+): Promise<Blob> =>
+  mediaFrameBlob(await invoke<ArrayBuffer>("read_inbox_media", { team, messageId, sha256 }));
+
+/** The image a media read framed as its MIME, a newline, then the bytes. */
+const mediaFrameBlob = (buffer: ArrayBuffer): Blob => {
+  const frame = new Uint8Array(buffer);
   const newline = frame.indexOf(10);
   if (newline < 0) throw new Error("media unavailable");
   const type = new TextDecoder().decode(frame.subarray(0, newline));
@@ -10124,7 +10126,37 @@ export interface WorkspaceChatMessage {
   contentType?: MessageContentType | null;
   workspaceId: string;
   kind: "chat" | "system";
+  /** The sender's team, whose media config governs `attachments`. */
+  mediaTeam?: InboxTeam;
+  /** Where the image stands on this Mac. */
+  mediaState?: WorkspaceChatMediaState;
 }
+
+/** A chat message's image on this Mac: admitted to load and not fetched yet, held for a
+ *  tap, fetched (or a local file), or failed. */
+export type WorkspaceChatMediaState = "pending" | "tapToLoad" | "cached" | "failed";
+
+/** Payload for the `codesense:workspace-chat-media` event: a chat image changed state. */
+export interface WorkspaceChatMediaPayload {
+  workspaceId: string;
+  messageId: number;
+}
+
+/** Load a chat message's image held for a tap, or failed. Refused when its team's media
+ *  is off. */
+export const loadWorkspaceChatMedia = (workspace: string, messageId: number) =>
+  invoke<void>("load_workspace_chat_media", { workspace, messageId });
+
+/** A chat message's cached image, framed as `readInboxMedia` reads it: refused unless the
+ *  message carries `sha256` as a cached attachment. */
+export const readWorkspaceChatMedia = async (
+  workspace: string,
+  messageId: number,
+  sha256: string,
+): Promise<Blob> =>
+  mediaFrameBlob(
+    await invoke<ArrayBuffer>("read_workspace_chat_media", { workspace, messageId, sha256 }),
+  );
 
 /** One workspace's row in the chat index — carries the sidebar's badge data
  *  without having to scan every log file. */

@@ -42,6 +42,11 @@ const killed: SessionAgentInput = {
   source: "command-end",
 };
 const thinking = advanceSessionAgent(undefined, hook("UserPromptSubmit"), 1);
+const approvalThenAsk = advanceSessionAgent(
+  advanceSessionAgent(thinking, hook("PermissionRequest"), 2),
+  { tier: 1, signal: { kind: "ask-user" } },
+  3,
+);
 const records = {
   crashed: advanceSessionAgent(thinking, killed, 2),
   failed: advanceSessionAgent(thinking, hook("StopFailure"), 2),
@@ -55,6 +60,13 @@ const records = {
     advanceSessionAgent(thinking, { tier: 1, signal: { kind: "ask-user" } }, 2),
     hook("PermissionRequest"),
     3,
+  ),
+  approvalThenAsk,
+  // The ask closed (ask-resolved) while the approval stayed open.
+  approvalAfterAsk: advanceSessionAgent(
+    approvalThenAsk,
+    { tier: 1, signal: { kind: "ask-resolved" } },
+    4,
   ),
 };
 const agentDots = selectAgentDots({ bySession: records, exitBySession: {} });
@@ -256,6 +268,21 @@ describe("selectCliNeedsYouKind — what the CLI itself is waiting on", () => {
       crashes: { bySession: records },
     });
     expect(selectCliNeedsYouKind(both, "askThenApproval")).toBe("permission");
+  });
+
+  it("a hook approval then an ask_user: the CLI's permission shows until the ask closes", () => {
+    const both = state({
+      pendingAsks: { q: { sessionId: "approvalThenAsk" } },
+      crashes: { bySession: records },
+    });
+    expect(selectNeedsYouKind(both, "approvalThenAsk")).toBe("question");
+    expect(selectCliNeedsYouKind(both, "approvalThenAsk")).toBe("permission");
+  });
+
+  it("the approval's needs-you holds after the ask closes", () => {
+    const after = state({ crashes: { bySession: records } });
+    expect(selectNeedsYouKind(after, "approvalAfterAsk")).toBe("permission");
+    expect(selectCliNeedsYouKind(after, "approvalAfterAsk")).toBe("permission");
   });
 
   it("an ask_user with a scraped approval prompt open beside it shows the CLI's permission", () => {

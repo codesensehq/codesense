@@ -5,7 +5,7 @@
 //! The tests here cover compositions that span modules, exercised through
 //! public API only.
 
-use super::model::{MessageKind, HUMAN};
+use super::model::{ChatMediaState, MessageKind, HUMAN};
 use super::store::{ChatAppend, WorkspaceChatStore};
 use tempfile::TempDir;
 
@@ -26,6 +26,7 @@ fn user_post(workspace: &str, text: &str) -> ChatAppend {
         content_type: None,
         on_click: None,
         primary_file: None,
+        media: None,
     }
 }
 
@@ -41,6 +42,7 @@ fn system_message_can_be_the_first_line_in_the_log() {
         content_type: Some(super::model::MessageContentType::Plain),
         on_click: None,
         primary_file: None,
+        media: None,
     };
     let m = store.append(sys, 1).unwrap();
     assert_eq!(m.message_id, 1);
@@ -136,6 +138,7 @@ fn archive_stamp_blocks_non_system_append_but_allows_system_rows() {
         content_type: Some(super::model::MessageContentType::Plain),
         on_click: None,
         primary_file: None,
+        media: None,
     };
     let m = store.append(sys, 3).unwrap();
     assert_eq!(m.message_id, 2);
@@ -326,5 +329,236 @@ fn chat_positions_keep_a_reattached_session_but_reset_a_relaunched_handle() {
         (p.read, p.told),
         (0, 0),
         "late old-session confirmations stay isolated"
+    );
+}
+
+fn media_post(workspace: &str, text: &str) -> ChatAppend {
+    let attachment = crate::media::Attachment::remote(
+        "https://media.giphy.com/media/g1/giphy.gif",
+        "a cat",
+        &crate::media::Config::default(),
+        true,
+    )
+    .unwrap();
+    ChatAppend {
+        media: Some(super::store::ChatAppendMedia {
+            team: crate::commands::dashboard_launch::LaunchTeam {
+                org: "acme".into(),
+                team: "default".into(),
+            },
+            attachment,
+            state: ChatMediaState::Pending,
+        }),
+        ..user_post(workspace, text)
+    }
+}
+
+fn fetched(mut a: crate::media::Attachment) -> crate::media::Attachment {
+    a.state = "cached".into();
+    a.sha256 = Some("ab".repeat(32));
+    a.width = Some(2);
+    a.height = Some(3);
+    a
+}
+
+fn log_lines(tmp: &TempDir, workspace: &str) -> Vec<String> {
+    let path = super::index::log_path(tmp.path(), &super::index::workspace_slug(workspace));
+    std::fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .map(String::from)
+        .collect()
+}
+
+fn sidecar(tmp: &TempDir, workspace: &str) -> std::path::PathBuf {
+    super::index::chats_dir(tmp.path()).join(format!(
+        "{}.media.json",
+        super::index::workspace_slug(workspace)
+    ))
+}
+
+#[test]
+fn chat_media_old_log_row_loads() {
+    let (store, tmp) = setup();
+    // A row written before chat media: no attachments, media team or state, and no
+    // sidecar beside the log.
+    let path = super::index::log_path(tmp.path(), &super::index::workspace_slug("story:old"));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        concat!(
+            r#"{"messageId":1,"from":"human","fromName":"Sam","createdAtMs":5,"#,
+            r#""text":"hello","workspaceId":"story:old","kind":"chat"}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+    let page = store.read("story:old", None, None).unwrap();
+    assert_eq!(page.messages.len(), 1);
+    let row = &page.messages[0];
+    assert_eq!(row.text, "hello");
+    assert!(row.attachments.is_empty());
+    assert_eq!(row.media_team, None);
+    assert_eq!(row.media_state, None);
+    assert!(!sidecar(&tmp, "story:old").exists());
+    assert_eq!(
+        store.media_message("story:old", 1).unwrap().as_ref(),
+        Some(row)
+    );
+    assert!(store.media_messages("story:old").unwrap().is_empty());
+}
+
+#[test]
+fn chat_media_text_is_optional_only_with_media() {
+    let (store, _tmp) = setup();
+    assert!(matches!(
+        store.append(user_post("story:a", "  "), 1),
+        Err(super::store::ChatStoreError::EmptyText)
+    ));
+    let bare = store.append(media_post("story:a", "  "), 2).unwrap();
+    assert_eq!(bare.text, "");
+    assert_eq!(bare.attachments.len(), 1);
+    assert_eq!(bare.media_state, Some(ChatMediaState::Pending));
+    assert_eq!(bare.media_team.unwrap().team, "default");
+}
+
+#[test]
+fn chat_media_line_past_the_log_bound_is_refused() {
+    let (store, tmp) = setup();
+    store.append(user_post("story:a", "first"), 1).unwrap();
+    let before = log_lines(&tmp, "story:a");
+    // Inside the text cap, but escaped in JSON past what a read takes back.
+    let wide = "\u{1}".repeat(12_000);
+    for post in [user_post("story:a", &wide), media_post("story:a", &wide)] {
+        assert!(matches!(
+            store.check_line(&post),
+            Err(super::store::ChatStoreError::LineTooLong)
+        ));
+        assert!(matches!(
+            store.append(post, 2),
+            Err(super::store::ChatStoreError::LineTooLong)
+        ));
+    }
+    assert_eq!(log_lines(&tmp, "story:a"), before);
+    store.check_line(&media_post("story:a", "look")).unwrap();
+    assert_eq!(
+        store
+            .append(user_post("story:a", "next"), 3)
+            .unwrap()
+            .message_id,
+        2
+    );
+}
+
+#[test]
+fn chat_media_pending_with_no_fetch_reads_as_interrupted() {
+    let (store, _tmp) = setup();
+    let sent = store.append(media_post("story:a", "look"), 1).unwrap();
+    assert_eq!(
+        store
+            .media_message("story:a", 1)
+            .unwrap()
+            .unwrap()
+            .media_state,
+        Some(ChatMediaState::Pending)
+    );
+    // The fetch's task ended, by any path, without recording a result.
+    let task = store.in_flight("story:a", sent.message_id);
+    assert_eq!(
+        store
+            .media_message("story:a", 1)
+            .unwrap()
+            .unwrap()
+            .media_state,
+        Some(ChatMediaState::Pending),
+        "a mark owned by a live task keeps the row pending"
+    );
+    drop(task);
+    let row = store.media_message("story:a", 1).unwrap().unwrap();
+    assert_eq!(row.media_state, Some(ChatMediaState::Failed));
+    assert_eq!(row.attachments[0].state, "failed");
+    assert_eq!(row.attachments[0].reason.as_deref(), Some("interrupted"));
+    assert!(row.attachments[0].retryable);
+    assert_eq!(
+        store.read("story:a", None, None).unwrap().messages,
+        vec![row]
+    );
+    // A result recorded for it stands.
+    let done = fetched(sent.attachments[0].clone());
+    store
+        .set_media("story:a", 1, vec![done.clone()], ChatMediaState::Cached)
+        .unwrap();
+    let row = store.media_message("story:a", 1).unwrap().unwrap();
+    assert_eq!(row.media_state, Some(ChatMediaState::Cached));
+    assert_eq!(row.attachments, vec![done]);
+}
+
+#[test]
+fn chat_media_sidecar_concurrent_writers() {
+    let (store, tmp) = setup();
+    let sent = store.append(media_post("story:a", "look"), 1).unwrap();
+    let before = log_lines(&tmp, "story:a");
+    // A fetch finishing while other posts land: neither waits on the other's file, and
+    // the image's row stays as sent.
+    let done = fetched(sent.attachments[0].clone());
+    let writer = {
+        let (store, done) = (store.clone(), done.clone());
+        std::thread::spawn(move || {
+            store
+                .set_media("story:a", 1, vec![done], ChatMediaState::Cached)
+                .unwrap()
+        })
+    };
+    for n in 0..20 {
+        store
+            .append(user_post("story:a", &format!("post {n}")), 2 + n)
+            .unwrap();
+    }
+    assert!(writer.join().unwrap());
+    let after = log_lines(&tmp, "story:a");
+    assert_eq!(after.len(), 21);
+    assert_eq!(after[0], before[0], "the media row is never rewritten");
+    let row = store.media_message("story:a", 1).unwrap().unwrap();
+    assert_eq!(row.attachments, vec![done.clone()]);
+    assert_eq!(row.media_state, Some(ChatMediaState::Cached));
+    let page = store.read("story:a", Some(0), Some(1)).unwrap();
+    assert_eq!(page.messages[0].attachments, vec![done]);
+    let on_disk = std::fs::read_to_string(sidecar(&tmp, "story:a")).unwrap();
+    assert!(on_disk.contains(&"ab".repeat(32)));
+    // A message with no media has no entry to set.
+    assert!(!store
+        .set_media("story:a", 2, Vec::new(), ChatMediaState::Cached)
+        .unwrap());
+    assert!(!store
+        .set_media("story:a", 99, Vec::new(), ChatMediaState::Cached)
+        .unwrap());
+}
+
+#[test]
+fn chat_media_sidecar_corrupt_reads_as_rows() {
+    let (store, tmp) = setup();
+    let sent = store.append(media_post("story:a", "look"), 1).unwrap();
+    std::fs::write(sidecar(&tmp, "story:a"), b"{not json").unwrap();
+    // Unreadable: the rows read as sent.
+    let page = store.read("story:a", None, None).unwrap();
+    assert_eq!(page.messages, vec![sent.clone()]);
+    assert_eq!(
+        store.media_message("story:a", 1).unwrap(),
+        Some(sent.clone())
+    );
+    // The next write replaces it.
+    let marked = store.mark_media_onload("story:a", 1, 0).unwrap().unwrap();
+    assert!(marked[0].onload_sent);
+    let row = store.media_message("story:a", 1).unwrap().unwrap();
+    assert!(row.attachments[0].onload_sent);
+    assert_eq!(row.media_state, Some(ChatMediaState::Pending));
+    // Settled once: a second mark changes nothing.
+    assert_eq!(store.mark_media_onload("story:a", 1, 0).unwrap(), None);
+    assert_eq!(store.mark_media_onload("story:a", 1, 1).unwrap(), None);
+    let on_disk: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(sidecar(&tmp, "story:a")).unwrap()).unwrap();
+    assert_eq!(
+        on_disk["messages"]["1"]["attachments"][0]["onloadSent"],
+        true
     );
 }

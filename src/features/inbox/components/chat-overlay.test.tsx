@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@/test-utils";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  flipAgentView,
   openAgentInboxRail,
   useAgentInboxRailStore,
 } from "@/features/viewer/stores/agent-inbox-rail-store";
@@ -91,6 +92,7 @@ vi.mock("../lib/agent-full-view", async (orig) => ({
 
 import { ChatOverlay } from "./chat-overlay";
 import { clearInboxDrafts } from "./inbox-view-context";
+import { InboxSplit } from "./inbox-split";
 
 const TEAM = { org: "acme", team: "widgets" };
 const TEAM_KEY = "acme:widgets";
@@ -931,7 +933,7 @@ describe("ChatOverlay", () => {
         expect(needs).toHaveTextContent("Input needed");
         expect(screen.getAllByTestId("chat-overlay-needs")).toHaveLength(1);
         fireEvent.click(within(needs).getByRole("button", { name: "Show CLI" }));
-        expect(useAgentInboxRailStore.getState().bySession[SESSION]).toBeUndefined();
+        expect(useAgentInboxRailStore.getState().bySession[SESSION]?.shown).toBe(false);
       },
     );
 
@@ -986,12 +988,12 @@ describe("ChatOverlay", () => {
     });
   });
 
-  it("Escape outside the composer closes the chat", async () => {
+  it("Escape outside the composer hides the chat behind the CLI", async () => {
     act(() => openAgentInboxRail(SESSION));
     await renderOverlay(420, 700);
     expect(useAgentInboxRailStore.getState().bySession[SESSION]).toBeDefined();
     fireEvent.keyDown(screen.getByTestId("ibx-msgs"), { key: "Escape" });
-    expect(useAgentInboxRailStore.getState().bySession[SESSION]).toBeUndefined();
+    expect(useAgentInboxRailStore.getState().bySession[SESSION]?.shown).toBe(false);
   });
 
   it.each([
@@ -1854,6 +1856,32 @@ describe("ChatOverlay: the person pins a message", () => {
     expect(screen.getByTestId("chat-overlay-pin-4")).not.toHaveAttribute("data-new");
   });
 
+  it("keeps the new pin marked through keys typed into the CLI while the chat is hidden", async () => {
+    const overlay = (visible: boolean) => (
+      <div>
+        <ChatOverlay
+          tabId="tab-1"
+          sessionId={SESSION}
+          teamKey={TEAM_KEY}
+          composeRequest={0}
+          size={{ width: 420, height: 700 }}
+          visible={visible}
+        />
+      </div>
+    );
+    const { rerender } = render(overlay(true));
+    await screen.findByTestId("chat-overlay-pin-3");
+    fireEvent.click(pinOf(4));
+    expect(await screen.findByTestId("chat-overlay-pin-4")).toHaveAttribute("data-new", "true");
+    rerender(overlay(false));
+    fireEvent.keyDown(window, { key: "l" });
+    fireEvent.pointerDown(window);
+    rerender(overlay(true));
+    expect(screen.getByTestId("chat-overlay-pin-4")).toHaveAttribute("data-new", "true");
+    fireEvent.keyDown(window, { key: "ArrowDown" });
+    expect(screen.getByTestId("chat-overlay-pin-4")).not.toHaveAttribute("data-new");
+  });
+
   it("an Undo refused because the agent filled the list since says so with the cap note, not Try again", async () => {
     await renderOverlay(420, 700);
     await screen.findByTestId("chat-overlay-pin-3");
@@ -2318,6 +2346,172 @@ describe("ChatOverlay for the Foreman", () => {
     fireEvent.click(card!);
     expect(screen.queryByText("This view is no longer in the thread.")).toBeNull();
     expect(screen.getAllByText(/Lead note for the Foreman/).length).toBeGreaterThan(1);
+  });
+});
+
+describe("ChatOverlay in its tab: the Chat | CLI flip", () => {
+  const TAB = { id: "tab-1", sessionId: SESSION };
+  async function renderTab() {
+    render(
+      <div data-focus-pane="tab-1" data-pane-active="">
+        <InboxSplit tab={TAB} teamKey={TEAM_KEY}>
+          <div className="xterm">
+            <textarea data-testid="cli" />
+          </div>
+        </InboxSplit>
+      </div>,
+    );
+    act(() => openAgentInboxRail(SESSION));
+    await screen.findByText("Review is clean; merge card is next.");
+  }
+  const flip = () => act(() => flipAgentView(SESSION));
+  const nextFrame = () => act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+  const reads = () =>
+    api.loadThreadInbox.mock.calls.length + api.loadSessionInbox.mock.calls.length;
+  const markedRead = () =>
+    vi
+      .mocked(invoke)
+      .mock.calls.filter(([cmd]) => cmd === "mark_inbox_message_read")
+      .map(([, args]) => (args as { messageId: number }).messageId);
+
+  it("five flips mount the chat once: back on the chat, the same thread, scroll and draft, read once", async () => {
+    await renderTab();
+    const chat = screen.getByTestId("chat-overlay");
+    const thread = screen.getByTestId("ibx-msgs");
+    thread.scrollTop = 40;
+    fireEvent.change(composerBox(), { target: { value: "half a thought" } });
+    const before = reads();
+    for (let i = 0; i < 5; i++) {
+      flip();
+      expect(screen.getByTestId("chat-overlay")).toBe(chat);
+      // No loading frame stands in for the chat on either side.
+      expect(document.querySelectorAll(".ibx-ov")).toHaveLength(1);
+    }
+    expect(useAgentInboxRailStore.getState().bySession[SESSION]?.shown).toBe(false);
+    expect(chat).not.toBeVisible();
+    flip();
+    expect(chat).toBeVisible();
+    expect(screen.getByTestId("ibx-msgs")).toBe(thread);
+    expect(thread.scrollTop).toBe(40);
+    expect(composerBox().value).toBe("half a thought");
+    expect(reads()).toBe(before);
+  });
+
+  it("the group shortcut from the CLI shows the room the chat was on, never toggles it away", async () => {
+    roster({ chatWorkspaceId: "ws-1", groupUnread: 0, groupReadId: 0 });
+    await renderTab();
+    const group = () => act(() => useAgentInboxRailStore.getState().openGroup(SESSION));
+    group();
+    expect(await screen.findByTestId("group-pane")).toHaveAttribute("data-room", "ws-1");
+    flip();
+    expect(screen.getByTestId("chat-overlay")).not.toBeVisible();
+    group();
+    await waitFor(() =>
+      expect(useAgentInboxRailStore.getState().bySession[SESSION]?.groupHandled).toBe(2),
+    );
+    expect(screen.getByTestId("chat-overlay")).toBeVisible();
+    expect(screen.getByTestId("group-pane")).toBeInTheDocument();
+    // Shown, the shortcut still flips the room back to the agent's own thread.
+    group();
+    await waitFor(() => expect(screen.queryByTestId("group-pane")).toBeNull());
+  });
+
+  it("hidden, the chat marks nothing read and leaves the keyboard on the CLI; shown, it reads", async () => {
+    const box = vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 420,
+      bottom: 700,
+      width: 420,
+      height: 700,
+      toJSON: () => ({}),
+    });
+    try {
+      await renderTab();
+      flip();
+      await nextFrame();
+      const cli = screen.getByTestId("cli");
+      expect(cli).toHaveFocus();
+      arrive(msg(7, LEAD, "human", "Sent while the CLI shows", { unread: true }));
+      expect(await screen.findByText("Sent while the CLI shows")).not.toBeVisible();
+      await nextFrame();
+      expect(markedRead()).not.toContain(7);
+      expect(cli).toHaveFocus();
+      expect(screen.getByTestId("chat-overlay").closest("[inert]")).not.toBeNull();
+      flip();
+      await waitFor(() => expect(markedRead()).toContain(7));
+      expect(screen.getByTestId("chat-overlay").closest("[inert]")).toBeNull();
+    } finally {
+      box.mockRestore();
+    }
+  });
+});
+
+describe("ChatOverlay for a CLI started by hand", () => {
+  const TAB = { id: "tab-1", sessionId: SESSION };
+  /** A CLI typed into the tab: the roster's bare row, with no saved agent or story. */
+  const handRow = () =>
+    roster({
+      kind: "live-pty",
+      agentRevision: undefined,
+      story: undefined,
+      role: undefined,
+      displayName: "",
+      detected: { cli: "claude", dot: null },
+    } as never);
+  const hooked = (agent: string | null, state: "idle" | "done") =>
+    useAgentStateStore.setState((s) => ({
+      bySession: { ...s.bySession, [SESSION]: { t1: null, t2: null, state, agent } },
+      processAgentBySession: {},
+    }));
+
+  beforeEach(() => {
+    handRow();
+    api.loadSessionInbox.mockResolvedValue({
+      dto: { handle: LEAD, roles: [], messages: [] },
+      source: "live",
+    });
+  });
+
+  it("has no earlier thread: it reads its own session, and its empty chat says why", async () => {
+    render(
+      <ChatOverlay
+        tabId="tab-1"
+        sessionId={SESSION}
+        teamKey={TEAM_KEY}
+        composeRequest={0}
+        size={{ width: 420, height: 700 }}
+      />,
+    );
+    const empty = await screen.findByTestId("chat-overlay-empty");
+    expect(empty).toHaveTextContent("No messages with Claude yet");
+    expect(empty).toHaveTextContent(
+      "Claude was started by hand in this tab, so it has no earlier thread. What you send here reaches it as inbox mail.",
+    );
+    expect(api.loadThreadInbox).not.toHaveBeenCalled();
+    expect(vi.mocked(invoke).mock.calls.some(([cmd]) => cmd === "agent_pins")).toBe(false);
+  });
+
+  it("a draft left when the CLI exits stays with that session's thread", async () => {
+    render(
+      <div data-focus-pane="tab-1" data-pane-active="">
+        <InboxSplit tab={TAB} teamKey={TEAM_KEY}>
+          <div className="xterm">
+            <textarea data-testid="cli" />
+          </div>
+        </InboxSplit>
+      </div>,
+    );
+    act(() => hooked("claude", "idle"));
+    await screen.findByTestId("chat-overlay-empty");
+    fireEvent.change(composerBox(), { target: { value: "half a thought" } });
+    act(() => hooked(null, "done"));
+    expect(screen.queryByTestId("chat-overlay")).toBeNull();
+    act(() => hooked("claude", "idle"));
+    await screen.findByTestId("chat-overlay-empty");
+    expect(composerBox().value).toBe("half a thought");
   });
 });
 

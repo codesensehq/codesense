@@ -9,6 +9,8 @@ import { useAgentStatusOf } from "@/features/viewer/hooks/use-agent-status-of";
 import { useAgentListProjectionStore } from "@/features/viewer/lib/agent-list-projection";
 import { useCliNeedsYou } from "@/features/viewer/lib/cli-workspace/store/terminal-tab-selectors";
 import { formatElapsed } from "@/features/viewer/lib/agent-row-presentation";
+import { cliLabel } from "@/features/viewer/lib/hand-agents";
+import { useHandStartedCli } from "@/features/viewer/hooks/use-hand-started-cli";
 import {
   showAgentCli,
   markAgentInboxRailComposeHandled,
@@ -60,7 +62,8 @@ const CLI_NEEDS_WORDS = {
  * An agent's chat on its own terminal tab: the conversation with you (the same thread its full
  * view shows), its pins as previews shaped by the pane, and a one-line composer. Every part
  * reads the pane's width and height through {@link overlayLayout}, so one markup serves a
- * 250 × 250 tile and a 900 × 250 strip. It always covers its tab.
+ * 250 × 250 tile and a 900 × 250 strip. Shown, it covers its tab; flipped to the CLI, it stays
+ * mounted out of sight (`visible` false).
  */
 export function ChatOverlay({
   tabId,
@@ -91,6 +94,9 @@ export function ChatOverlay({
   const pinThread = threadOf(launched?.agent ?? row?.agentRevision, row?.story ?? launched?.story);
   const pinAgent = pinThread.agentId || null;
   const pinStory = pinThread.storyId || null;
+  // A CLI started by hand in the tab: no saved agent, so no earlier thread, only its session's.
+  const startedByHand = useHandStartedCli(sessionId);
+  const handCli = pinAgent ? null : startedByHand;
   // The Foreman's chat is its page's: the same thread (its earlier sessions' mail too, merged by
   // useForemanThread), the same pins (the page's team) and its one tab as the full view.
   const foreman = isForemanAgent(pinAgent);
@@ -213,17 +219,24 @@ export function ChatOverlay({
   const groupShown = group.shown && room !== null;
   const groupRequest = useAgentInboxRailStore((s) => s.bySession[sessionId]?.groupRequest ?? 0);
   const groupHandled = useAgentInboxRailStore((s) => s.bySession[sessionId]?.groupHandled ?? 0);
+  const groupOpens = useAgentInboxRailStore((s) => s.bySession[sessionId]?.groupOpens === true);
   const roomKnown = sessions !== null;
   const hasRoom = room !== null;
   useEffect(() => {
     if (groupRequest <= groupHandled || !loaded || !roomKnown) return;
     const frame = requestAnimationFrame(() => {
-      // A session with no room has nothing to open: the request ends here.
-      if (hasRoom) setGroup((g) => ({ ...g, shown: !g.shown, focus: g.shown ? 0 : g.focus + 1 }));
+      // A session with no room has nothing to open: the request ends here. Asked from the CLI,
+      // the request shows the room (even the one the chat was on); asked on the chat, it flips.
+      if (hasRoom)
+        setGroup((g) =>
+          g.shown && !groupOpens
+            ? { ...g, shown: false, focus: 0 }
+            : { ...g, shown: true, focus: g.focus + 1 },
+        );
       useAgentInboxRailStore.getState().markGroupHandled(sessionId, groupRequest);
     });
     return () => cancelAnimationFrame(frame);
-  }, [groupRequest, groupHandled, loaded, roomKnown, hasRoom, sessionId]);
+  }, [groupRequest, groupHandled, groupOpens, loaded, roomKnown, hasRoom, sessionId]);
 
   const {
     pins,
@@ -280,6 +293,7 @@ export function ChatOverlay({
       const first = pins[0];
       if (first) pinRefs.current.get(first.messageId)?.focus();
     },
+    visible,
   });
   const closePin = () => {
     const id = openPin;
@@ -569,9 +583,19 @@ export function ChatOverlay({
                 pins={personPins}
                 // The placeholder and the route hint already say where a message goes.
                 empty={
-                  <div className="ibx-empty" data-testid="chat-overlay-empty">
-                    <strong>No messages yet</strong>
-                  </div>
+                  handCli ? (
+                    <div className="ibx-empty" data-testid="chat-overlay-empty">
+                      <strong>No messages with {cliLabel(handCli)} yet</strong>
+                      <span>
+                        {cliLabel(handCli)} was started by hand in this tab, so it has no earlier
+                        thread. What you send here reaches it as inbox mail.
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="ibx-empty" data-testid="chat-overlay-empty">
+                      <strong>No messages yet</strong>
+                    </div>
+                  )
                 }
               />
             )}
