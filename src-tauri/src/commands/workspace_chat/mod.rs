@@ -4,6 +4,7 @@
 
 pub mod commands;
 pub mod index;
+pub mod media;
 pub mod model;
 pub mod resolve;
 pub mod state;
@@ -22,10 +23,13 @@ pub use commands::{emit_system_message, ensure_chat_started, ChatUpdatedPayload,
 pub use index::{workspace_slug, ChatIndexEntry};
 #[allow(unused_imports)]
 pub use model::{
-    MessageContentType, MessageKind, MessageOnClick, WorkspaceChatMessage, HUMAN, MAX_TEXT_BYTES,
+    ChatMediaState, MessageContentType, MessageKind, MessageOnClick, WorkspaceChatMessage, HUMAN,
+    MAX_TEXT_BYTES,
 };
 pub use resolve::session_workspace_id;
 #[allow(unused_imports)]
 pub use state::{ChatPosition, ChatUnread};
 #[allow(unused_imports)]
-pub use store::{ChatAppend, ChatReadResult, ChatStoreError, WorkspaceChatStore};
+pub use store::{
+    ChatAppend, ChatAppendMedia, ChatMediaEntry, ChatReadResult, ChatStoreError, WorkspaceChatStore,
+};

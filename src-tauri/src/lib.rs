@@ -1368,6 +1368,8 @@ pub fn run() {
             commands::agent_inbox::inbox_attachment_status,
             commands::agent_inbox::load_inbox_media,
             commands::agent_inbox::read_inbox_media,
+            commands::workspace_chat::load_workspace_chat_media,
+            commands::workspace_chat::read_workspace_chat_media,
             commands::agent_inbox::trigger_hydrate_from_inbox,
             live_hub::live_hub_subscribe,
             live_hub::agent_definitions::agent_definitions_prepare,

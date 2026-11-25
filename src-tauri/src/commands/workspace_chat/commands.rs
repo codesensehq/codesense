@@ -193,6 +193,7 @@ pub async fn ensure_chat_started(app: &AppHandle, workspace_id: &str) {
         content_type: Some(MessageContentType::Plain),
         on_click: None,
         primary_file: None,
+        media: None,
     };
     let app_clone = app.clone();
     let now = now_ms();
@@ -244,6 +245,7 @@ pub async fn emit_system_message(
         content_type: Some(MessageContentType::Plain),
         on_click: None,
         primary_file: None,
+        media: None,
     };
     append_and_emit(app, at).await
 }
@@ -280,6 +282,7 @@ pub async fn workspace_chat_send(
         content_type,
         on_click,
         primary_file,
+        media: None,
     };
     let msg = append_and_emit(&app, at).await.map_err(|e| e.to_string())?;
     Ok(ChatSendResult {
@@ -287,6 +290,32 @@ pub async fn workspace_chat_send(
         created_at_ms: msg.created_at_ms,
         head_id: msg.message_id,
     })
+}
+
+/// Load the image of message `message_id` in `workspace`'s chat, held for a tap or
+/// failed. Refused when its team's media is off.
+#[tauri::command]
+pub async fn load_workspace_chat_media(
+    app: AppHandle,
+    workspace: String,
+    message_id: i64,
+) -> Result<(), String> {
+    let host = crate::commands::agent_inbox::AppInboxHost::port(app);
+    super::media::load(&host, &workspace, message_id).await
+}
+
+/// The bytes of image `sha256` on message `message_id` in `workspace`'s chat, framed as
+/// `read_inbox_media` frames them. The message must carry it as a cached attachment.
+#[tauri::command]
+pub async fn read_workspace_chat_media(
+    app: AppHandle,
+    workspace: String,
+    message_id: i64,
+    sha256: String,
+) -> Result<tauri::ipc::Response, String> {
+    let host = crate::commands::agent_inbox::AppInboxHost::port(app);
+    let media = super::media::read(&host, &workspace, message_id, &sha256).await?;
+    Ok(tauri::ipc::Response::new(media.into_frame()))
 }
 
 /// Observational history read. Only the explicit human-view command moves the human
@@ -438,6 +467,7 @@ mod tests {
             content_type: Some(MessageContentType::Plain),
             on_click: None,
             primary_file: None,
+            media: None,
         };
         let m = store.append(at, 1).unwrap();
         assert_eq!(m.from, "system");

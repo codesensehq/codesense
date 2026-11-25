@@ -4,8 +4,8 @@
 //! The schema is a **strict superset** of `InboxMessageRow`
 //! (`src/tauri/commands.ts:770` ↔ `src-tauri/src/weft/inbox.rs::InboxMessage`):
 //! every field the inbox carries is kept under the same name and type; the chat
-//! adds only `workspace_id` and `kind`. The inbox-shared `MessageContentType`
-//! and `MessageOnClick` enums are **re-exported, not re-declared** — one source
+//! adds `workspace_id`, `kind` and the media fields `media_team` and
+//! `media_state`. The inbox-shared `MessageContentType` and `MessageOnClick` enums are **re-exported, not re-declared** — one source
 //! of truth, zero drift risk (per `_bmad-output/21-workspace-chat/design/engine-architecture.md`
 //! §3.1 and §3.5).
 
@@ -20,7 +20,7 @@ pub use crate::weft::inbox::{MessageContentType, MessageOnClick, HUMAN};
 /// Fields that mirror `InboxMessageRow` carry the SAME names and types so a FE
 /// consumer written for the inbox can render a chat message with no transform
 /// beyond ignoring `workspaceId` and `kind`. The chat-specific additions are
-/// the final two fields (`workspace_id`, `kind`).
+/// the final fields (`workspace_id`, `kind`, `media_team`, `media_state`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceChatMessage {
@@ -58,6 +58,11 @@ pub struct WorkspaceChatMessage {
     /// (`markdown`), matching inbox behaviour exactly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_type: Option<MessageContentType>,
+    /// The message's image, at most one, under the inbox's name and type. The log
+    /// line holds it as sent and is never rewritten; a read overlays its later
+    /// states (fetched, failed, view ping sent) from the media sidecar.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<crate::media::Attachment>,
 
     // ─── chat-specific additions (the ONLY two) ─────────────────────────────
     /// The workspace this message belongs to. Carried **inside** each line so a
@@ -66,6 +71,41 @@ pub struct WorkspaceChatMessage {
     /// `Chat` (ordinary user/agent post) or `System` (lifecycle event — the
     /// chat has lifecycle rows the inbox does not).
     pub kind: MessageKind,
+    /// The team whose media config governs `attachments`: the sender session's,
+    /// frozen at send. That team's current Off switch still wins at load and read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_team: Option<crate::commands::dashboard_launch::LaunchTeam>,
+    /// Where `attachments` stands on this Mac: what the send admitted, or what the
+    /// media sidecar says since.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_state: Option<ChatMediaState>,
+}
+
+/// Where a chat message's image stands on this Mac.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChatMediaState {
+    /// Admitted to load on its own, not fetched yet.
+    Pending,
+    /// Held until someone loads it: a sender on another machine, a host the team
+    /// doesn't list, a team that asks first, or media turned off.
+    TapToLoad,
+    /// Fetched, or a local file read at send.
+    Cached,
+    /// The fetch failed.
+    Failed,
+}
+
+impl ChatMediaState {
+    /// The state an attachment's own record shows, for a fetch result: `pending`
+    /// and `blocked` (not fetched) both wait for a load.
+    pub fn of(attachment: &crate::media::Attachment) -> Self {
+        match attachment.state.as_str() {
+            "cached" => Self::Cached,
+            "failed" => Self::Failed,
+            _ => Self::TapToLoad,
+        }
+    }
 }
 
 /// What a chat row records.
@@ -111,8 +151,11 @@ mod tests {
             primary_file: None,
             on_click: None,
             content_type: Some(MessageContentType::Markdown),
+            attachments: Vec::new(),
             workspace_id: "story:ex-1".to_string(),
             kind: MessageKind::Chat,
+            media_team: None,
+            media_state: None,
         };
         let encoded = serde_json::to_value(&msg).unwrap();
         // Camel-case on the wire, matching InboxMessageRow:
@@ -129,6 +172,10 @@ mod tests {
         assert!(encoded.get("inReplyTo").is_none());
         assert!(encoded.get("primaryFile").is_none());
         assert!(encoded.get("onClick").is_none());
+        // A text-only row carries no media fields at all.
+        assert!(encoded.get("attachments").is_none());
+        assert!(encoded.get("mediaTeam").is_none());
+        assert!(encoded.get("mediaState").is_none());
 
         let decoded: WorkspaceChatMessage = serde_json::from_value(encoded).unwrap();
         assert_eq!(decoded, msg);

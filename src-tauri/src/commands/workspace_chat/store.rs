@@ -18,16 +18,21 @@ use std::collections::{HashMap, HashSet};
 
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use super::index::{
     chat_root, chats_dir, index_path, load_index, log_path, workspace_slug, write_index,
     ChatIndexEntry, PersistedIndex,
 };
-use super::model::{MessageKind, WorkspaceChatMessage, MAX_TEXT_BYTES};
+use super::model::{ChatMediaState, MessageKind, WorkspaceChatMessage, MAX_TEXT_BYTES};
 use super::state::{ChatPosition, ChatPositions, ChatUnread};
+use crate::commands::dashboard_launch::LaunchTeam;
+use crate::media::Attachment;
 use crate::shared::json_io::JsonIoError;
 use crate::weft::inbox::{MessageContentType, MessageOnClick};
+
+mod media;
+pub use media::ChatMediaEntry;
 
 /// Default limit for `read()` when the caller passes `None`.
 pub const DEFAULT_READ_LIMIT: u32 = 50;
@@ -115,8 +120,12 @@ impl From<serde_json::Error> for ChatStoreError {
 /// workspace); the simpler lock keeps the hot path a few lines of code and
 /// avoids the usual `DashMap<_, Arc<Mutex<_>>>` dance. If a workspace ever
 /// hits write contention, we revert to per-workspace locking.
+///
+/// A clone is another handle on the same store, for work moved off the async
+/// runtime.
+#[derive(Clone)]
 pub struct WorkspaceChatStore {
-    inner: Mutex<Inner>,
+    inner: Arc<Mutex<Inner>>,
 }
 
 struct Inner {
@@ -129,12 +138,12 @@ struct Inner {
 impl Default for WorkspaceChatStore {
     fn default() -> Self {
         WorkspaceChatStore {
-            inner: Mutex::new(Inner {
+            inner: Arc::new(Mutex::new(Inner {
                 home: None,
                 index: PersistedIndex::default(),
                 positions: HashMap::new(),
                 missing_once: HashSet::new(),
-            }),
+            })),
         }
     }
 }
@@ -162,6 +171,18 @@ pub struct ChatAppend {
     pub content_type: Option<MessageContentType>,
     pub on_click: Option<MessageOnClick>,
     pub primary_file: Option<String>,
+    /// The message's image, prepared and admitted by the send path.
+    pub media: Option<ChatAppendMedia>,
+}
+
+/// An image to store on an appended message.
+#[derive(Debug, Clone)]
+pub struct ChatAppendMedia {
+    /// The sender session's team, whose media config governs the image.
+    pub team: LaunchTeam,
+    pub attachment: Attachment,
+    /// What the send admitted: `pending` (it fetches now), `tapToLoad` or `cached`.
+    pub state: ChatMediaState,
 }
 
 pub struct SessionChatRead {
@@ -503,7 +524,7 @@ impl WorkspaceChatStore {
         now_ms: i64,
         only_if_first: bool,
     ) -> Result<Option<WorkspaceChatMessage>, ChatStoreError> {
-        let text = validate_text(&at.text)?;
+        let text = validate_text(&at.text, at.media.is_some())?;
         let workspace_id = validate_workspace_id(&at.workspace_id)?;
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let home = inner.home.clone().ok_or(ChatStoreError::NotInstalled)?;
@@ -562,6 +583,10 @@ impl WorkspaceChatStore {
         }
 
         let message_id = entry.head_id + 1;
+        let (attachments, media_team, media_state) = match at.media {
+            Some(m) => (vec![m.attachment], Some(m.team), Some(m.state)),
+            None => (Vec::new(), None, None),
+        };
         let message = WorkspaceChatMessage {
             message_id,
             from: at.from,
@@ -572,8 +597,11 @@ impl WorkspaceChatStore {
             primary_file: at.primary_file,
             on_click: at.on_click,
             content_type: at.content_type,
+            attachments,
             workspace_id: workspace_id.clone(),
             kind: at.kind,
+            media_team,
+            media_state,
         };
 
         // Serialize once, write once, fsync once.
@@ -652,11 +680,12 @@ impl WorkspaceChatStore {
         // in-memory index already carries `head_id`, so a probe against a
         // workspace with thousands of messages must not pay a parse cost
         // just to throw the body away.
-        let messages = if effective_limit == 0 || !path.exists() {
+        let mut messages = if effective_limit == 0 || !path.exists() {
             Vec::new()
         } else {
             read_messages(&path, since, effective_limit)?
         };
+        media::overlay(&home, &workspace_id, &mut messages);
         Ok(ChatReadResult {
             workspace_id,
             messages,
@@ -710,7 +739,9 @@ fn clamp_limit(limit: Option<u32>) -> u32 {
     }
 }
 
-fn validate_text(text: &str) -> Result<String, ChatStoreError> {
+/// `text` as stored. Blank text is refused unless the message carries media, when
+/// it is stored empty.
+fn validate_text(text: &str, has_media: bool) -> Result<String, ChatStoreError> {
     // CR3-12: trim BEFORE the empty check AND persist the trimmed value, so
     // the "reject empty" gate (uses `.trim().is_empty()`) and the stored
     // bytes agree. Previously the gate ran on `text.trim()` but the stored
@@ -719,7 +750,11 @@ fn validate_text(text: &str) -> Result<String, ChatStoreError> {
     // the inbox row renderer's whitespace discipline.
     let trimmed = text.trim();
     if trimmed.is_empty() {
-        return Err(ChatStoreError::EmptyText);
+        return if has_media {
+            Ok(String::new())
+        } else {
+            Err(ChatStoreError::EmptyText)
+        };
     }
     // Redact BEFORE enforcing the size cap. Short secret-shaped substrings
     // can expand to `[redacted]` and push a near-cap input past the cap on
@@ -960,6 +995,7 @@ mod tests {
             content_type: None,
             on_click: None,
             primary_file: None,
+            media: None,
         }
     }
 
@@ -1142,6 +1178,7 @@ mod tests {
                     content_type: Some(MessageContentType::Plain),
                     on_click: None,
                     primary_file: None,
+                    media: None,
                 },
                 1,
             )
@@ -1160,6 +1197,7 @@ mod tests {
                     content_type: Some(MessageContentType::Plain),
                     on_click: None,
                     primary_file: None,
+                    media: None,
                 },
                 2,
             )
@@ -1195,7 +1233,7 @@ mod tests {
         assert!(input.len() <= MAX_TEXT_BYTES || input.len() > MAX_TEXT_BYTES);
         // Either validate succeeds (secret didn't match) or it rejects. If
         // it rejects, we expect `TooLong` under the fixed ordering.
-        if let Err(e) = validate_text(&input) {
+        if let Err(e) = validate_text(&input, false) {
             assert!(
                 matches!(e, ChatStoreError::TooLong),
                 "unexpected error variant: {e:?}"
