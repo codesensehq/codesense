@@ -343,7 +343,9 @@ pub async fn workspace_chat_read(
     .await
     .map_err(|e| format!("join: {e}"))?
     .map_err(|e| e.to_string())?;
-    let (out, human_read_id) = out;
+    let (mut out, human_read_id) = out;
+    let host = crate::commands::agent_inbox::AppInboxHost::port(app);
+    super::media::present(&*host, &out.workspace_id, &mut out.messages).await;
     Ok(ChatReadResult {
         human_read_id,
         workspace_id: out.workspace_id,

@@ -186,6 +186,31 @@ async fn media_message(
     Ok((store, message, team))
 }
 
+/// `messages` of chat `workspace` as the app shows them: each image presented against
+/// its message's team config, after the chat is indexed. Media Off reads as blocked,
+/// with no hash of cached bytes.
+pub(crate) async fn present(
+    host: &dyn InboxHost,
+    workspace: &str,
+    messages: &mut [WorkspaceChatMessage],
+) {
+    if messages.iter().all(|m| m.attachments.is_empty()) {
+        return;
+    }
+    host.index_chat_media(workspace).await;
+    for message in messages {
+        let Some(team) = &message.media_team else {
+            continue;
+        };
+        host.present_media(team, &mut message.attachments);
+        for a in &mut message.attachments {
+            if a.state == "blocked" {
+                a.sha256 = None;
+            }
+        }
+    }
+}
+
 /// Load the image of chat message `message_id`, held for a tap or failed.
 pub(crate) async fn load(
     host: &Arc<dyn InboxHost>,

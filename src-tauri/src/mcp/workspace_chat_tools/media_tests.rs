@@ -8,7 +8,7 @@ use super::*;
 use crate::commands::agent_inbox::tests::{port, FakeHost};
 use crate::commands::agent_inbox::{mark_onloads_sent, InboxHost};
 use crate::commands::dashboard_launch::LaunchTeam;
-use crate::commands::workspace_chat::media::{load, read};
+use crate::commands::workspace_chat::media::{load, present, read};
 use crate::commands::workspace_chat::{index, ChatAppendMedia, HUMAN};
 use crate::media::{Attachment, Config, FakeFetch, MediaInput, MediaProvider, Remote};
 
@@ -462,6 +462,39 @@ async fn chat_media_team_off_refuses_load_and_read() {
     assert_eq!(err, "media is off in team config");
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     assert_eq!(fetch.calls().len(), 1, "only the first send fetched");
+}
+
+#[tokio::test]
+async fn chat_media_app_read_presents_against_the_team() {
+    let (fake, _fetch, _media) = serving(TAGGED_URL);
+    let cached = send(&fake, poster("H1", false), "", Some(tagged()))
+        .await
+        .unwrap();
+    settled(&fake, cached.message_id).await;
+    let read_rows = || fake.chat().read(WS, Some(0), None).unwrap().messages;
+    let host = port(&fake);
+    let mut rows = read_rows();
+    present(&*host, WS, &mut rows).await;
+    let a = &rows[0].attachments[0];
+    assert_eq!(a.state, "cached");
+    assert_eq!(a.sha256.as_deref(), Some(gif_sha().as_str()));
+    fake.set_media_config(
+        "default",
+        Config {
+            remote: Remote::Off,
+            ..Config::default()
+        },
+    );
+    let mut rows = read_rows();
+    present(&*host, WS, &mut rows).await;
+    let a = &rows[0].attachments[0];
+    assert_eq!(a.state, "blocked", "the team's Off switch wins on the read");
+    assert_eq!(a.sha256, None, "a blocked image names no cached bytes");
+    assert_eq!(
+        rows[0].media_state,
+        Some(ChatMediaState::Cached),
+        "the row's own state is left as stored"
+    );
 }
 
 #[tokio::test]
