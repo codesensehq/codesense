@@ -24,6 +24,7 @@ import {
   type ProcessSignal,
   processSignalState,
   isAbnormalExit,
+  isAskOnlyNeed,
   sessionExitOutcome,
   ptyExitIsAgentExit,
   stoppedStatuses,
@@ -721,6 +722,75 @@ describe("advanceSessionAgent — turn tracking with the liveness heartbeat", ()
     }
     const blocked = fold([onHook("PermissionRequest"), gone]);
     expect(blocked.at(-1)?.state).toBe("done");
+  });
+
+  describe("a hook approval and an ask_user open together", () => {
+    const ask: SessionAgentInput = { tier: 1, signal: { kind: "ask-user" } };
+    const resolved: SessionAgentInput = { tier: 1, signal: { kind: "ask-resolved" } };
+
+    it("an ask over an open approval keeps the approval open after the ask closes", () => {
+      const recs = fold([onHook("UserPromptSubmit"), onHook("PermissionRequest"), ask, resolved]);
+      expect(states(recs)).toEqual([
+        "thinking",
+        "needs-permission",
+        "needs-permission",
+        "needs-permission",
+      ]);
+      expect(recs.map(isAskOnlyNeed)).toEqual([false, false, false, false]);
+    });
+
+    it("an approval raised while an ask is open outlasts the ask", () => {
+      const recs = fold([onHook("UserPromptSubmit"), ask, onHook("PermissionRequest"), resolved]);
+      expect(states(recs)).toEqual([
+        "thinking",
+        "needs-permission",
+        "needs-permission",
+        "needs-permission",
+      ]);
+      expect(recs.map(isAskOnlyNeed)).toEqual([false, true, false, false]);
+    });
+
+    it("the approval settles as it does alone once the ask has closed", () => {
+      const recs = fold([
+        onHook("UserPromptSubmit"),
+        onHook("PermissionRequest"),
+        ask,
+        resolved,
+        onHook("PreToolUse"),
+        onHook("PostToolUse"),
+      ]);
+      expect(states(recs.slice(3))).toEqual(["needs-permission", "needs-permission", "thinking"]);
+    });
+
+    it("answering the approval while the ask is open leaves no approval behind", () => {
+      const recs = fold([
+        onHook("UserPromptSubmit"),
+        onHook("PermissionRequest"),
+        ask,
+        onHook("PostToolUse"),
+        resolved,
+      ]);
+      expect(states(recs.slice(3))).toEqual(["thinking", "working"]);
+    });
+
+    it("an exit ends both", () => {
+      const recs = fold([onHook("PermissionRequest"), ask, gone, resolved]);
+      expect(recs[2].state).toBe("done");
+      expect(recs[3].state).toBe("working");
+    });
+
+    it("with one need open, the record reads as it always has", () => {
+      expect(states(fold([onHook("UserPromptSubmit"), ask, resolved]))).toEqual([
+        "thinking",
+        "needs-permission",
+        "working",
+      ]);
+      expect(isAskOnlyNeed(fold([onHook("UserPromptSubmit"), ask])[1])).toBe(true);
+      expect(states(fold([onHook("UserPromptSubmit"), onHook("PermissionRequest")]))).toEqual([
+        "thinking",
+        "needs-permission",
+      ]);
+    });
   });
 
   it("a live process with no hook floors to working (non-hooking agents)", () => {
