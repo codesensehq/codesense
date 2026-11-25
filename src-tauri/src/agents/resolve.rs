@@ -303,9 +303,9 @@ fn compose_with_reader(
     // A target with no org (a starter with no target team) runs under the launch's org.
     let launch_org = options
         .launch_org
-        .filter(|org| target.org.is_empty() && !org.is_empty())
+        .filter(|org| str::is_empty(&target.org) && !str::is_empty(org))
         .map(|org| ManifestTarget::team(org, ""));
-    let guardrails_target = launch_org.as_ref().unwrap_or(&target);
+    let guardrails_target = Option::as_ref(&launch_org).unwrap_or(&target);
     let (guardrails, guardrails_error) =
         match roots::org_guardrails(home, principal, guardrails_target) {
             Ok(guardrails) => (guardrails, None),

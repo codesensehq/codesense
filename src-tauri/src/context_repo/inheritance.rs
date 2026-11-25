@@ -1130,7 +1130,7 @@ pub(crate) fn org_guardrails(
     // nobody reviewed. HEAD's commit is read only for an org that has no remote at all.
     let has_remote = repo
         .remotes()
-        .map(|remotes| !remotes.is_empty())
+        .map(|remotes| !git2::StringArray::is_empty(&remotes))
         .map_err(|e| fail("its remotes", &e))?;
     let commit = match upstream_oid(&repo) {
         Some(oid) => oid,
@@ -1176,7 +1176,7 @@ pub(crate) fn org_guardrails(
         ));
     };
     let teams = crate::domain::parse_teams_yml(&teams).map_err(|e| fail("teams.yml", &e))?;
-    if !teams.teams.is_empty() && teams.teams.iter().all(|t| t.parent_team.is_some()) {
+    if !Vec::is_empty(&teams.teams) && !teams.teams.iter().any(|t| t.parent_team.is_none()) {
         return Err(fail(
             "teams.yml",
             &"no team is a root: every team has a parent",
@@ -1227,9 +1227,9 @@ pub(crate) fn org_guardrails(
 /// Whether `root` has never been a git repository: it has no `.git`, or an empty `.git`
 /// folder. A `.git` with anything in it that can't be opened is a broken repository instead.
 fn never_a_repository(root: &Path) -> bool {
-    let dot_git = root.join(".git");
+    let dot_git = Path::join(root, ".git");
     match std::fs::read_dir(&dot_git) {
-        Ok(mut entries) => entries.next().is_none(),
+        Ok(mut entries) => Iterator::next(&mut entries).is_none(),
         Err(_) => std::fs::symlink_metadata(&dot_git).is_err(),
     }
 }
@@ -1248,12 +1248,12 @@ fn uncommitted(
     };
     let entries = match std::fs::read_dir(root) {
         Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(fail(&root.display().to_string(), &e)),
+        Err(e) if std::io::Error::kind(&e) == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(fail(&Path::display(root).to_string(), &e)),
     };
     let mut files: Vec<String> = entries
         .filter_map(Result::ok)
-        .filter(|entry| entry.path().join(GUARDRAILS_FILE).is_file())
+        .filter(|entry| Path::join(&std::fs::DirEntry::path(entry), GUARDRAILS_FILE).is_file())
         .filter_map(|entry| {
             let name = entry.file_name();
             name.to_str()

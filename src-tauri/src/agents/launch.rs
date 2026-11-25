@@ -285,7 +285,7 @@ pub(crate) fn prepare_with(
         key,
         ResolveOptions {
             target_team: options.target_team.clone(),
-            launch_org: options.launch_org.clone(),
+            launch_org: Option::clone(&options.launch_org),
         },
     )
     .map_err(|e| e.to_string())?;
@@ -1289,7 +1289,7 @@ pub(crate) fn prepare_typed_for_test(
         &key,
         ResolveOptions {
             target_team: options.target_team.clone(),
-            launch_org: options.launch_org.clone(),
+            launch_org: Option::clone(&options.launch_org),
         },
     )
     .map_err(|e| e.to_string())?;

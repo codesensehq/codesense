@@ -141,8 +141,8 @@ pub(crate) fn push_unique(
     }
     if let Value::Array(list) = list {
         for value in values {
-            if !list.contains(&value) {
-                list.push(value);
+            if !<[Value]>::contains(list, &value) {
+                Vec::push(list, value);
             }
         }
     }

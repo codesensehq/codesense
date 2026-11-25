@@ -211,7 +211,7 @@ pub(crate) fn split_final_tier(rules: Vec<Value>) -> (Vec<Value>, Vec<Value>) {
     };
     let mut head = rules;
     let after = head.split_off(at);
-    head.retain(|rule| !is_marker(rule));
+    Vec::retain(&mut head, |rule| !is_marker(rule));
     let (tier, rest): (Vec<Value>, Vec<Value>) = after
         .into_iter()
         .skip(1)
@@ -229,8 +229,8 @@ pub(crate) fn append_final_tier(merged: &mut Vec<Value>, tier: Vec<Value>) {
     merged.push(tier_marker());
     let mut kept: Vec<Value> = Vec::new();
     for rule in tier {
-        if !kept.contains(&rule) {
-            kept.push(rule);
+        if !<[Value]>::contains(&kept, &rule) {
+            Vec::push(&mut kept, rule);
         }
     }
     merged.extend(kept);
