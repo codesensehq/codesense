@@ -15,10 +15,11 @@ const ChatOverlay = lazy(() => import("./chat-overlay").then((m) => ({ default: 
 const UNMEASURED = { width: 640, height: 480 };
 
 /**
- * A tab's body under its caption: the terminal and, when the tab's chat is open, the agent's
- * chat overlay, which covers the whole tab. The terminal keeps the same parent element whether
- * or not the chat shows, so opening it never remounts (or re-attaches) the terminal; while the
- * chat covers it the terminal is parked and takes no keys.
+ * A tab's body under its caption: the terminal and, once the tab has a chat, the agent's chat
+ * overlay, which covers the whole tab while it is shown. The terminal keeps the same parent
+ * element whether or not the chat shows, so opening it never remounts (or re-attaches) the
+ * terminal; while the chat covers it the terminal is parked and takes no keys. Flipped to the
+ * CLI, the chat stays mounted out of sight, so flipping back keeps its thread, scroll and draft.
  */
 export function InboxSplit({
   tab,
@@ -33,6 +34,7 @@ export function InboxSplit({
 }) {
   const runningAgent = useRunningAgent(tab.sessionId);
   const target = useAgentInboxRailStore((s) => s.bySession[tab.sessionId]);
+  const shown = target?.shown === true;
   const ref = useRef<HTMLDivElement>(null);
   const [split, setSplit] = useState({ width: 0, height: 0 });
 
@@ -67,11 +69,15 @@ export function InboxSplit({
       <div className="ibx-split-term" inert={covered}>
         {children}
       </div>
+      {/* Hidden behind the CLI, the chat keeps its layout box (`visibility`, not `display`, so
+          its scroll position holds) and takes no keys, clicks or focus. */}
       {target && visible && (
         <div
           data-surface="canvas"
           hidden={!runningAgent}
           className={runningAgent ? "contents" : "hidden"}
+          style={shown ? undefined : { visibility: "hidden" }}
+          inert={!shown}
         >
           <Suspense fallback={<div className="ibx-ov" style={style} />}>
             <ChatOverlay
@@ -80,7 +86,7 @@ export function InboxSplit({
               teamKey={teamKey}
               composeRequest={target.composeRequest}
               size={size}
-              visible={runningAgent}
+              visible={runningAgent && shown}
               style={style}
             />
           </Suspense>

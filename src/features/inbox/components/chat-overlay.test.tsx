@@ -933,7 +933,7 @@ describe("ChatOverlay", () => {
         expect(needs).toHaveTextContent("Input needed");
         expect(screen.getAllByTestId("chat-overlay-needs")).toHaveLength(1);
         fireEvent.click(within(needs).getByRole("button", { name: "Show CLI" }));
-        expect(useAgentInboxRailStore.getState().bySession[SESSION]).toBeUndefined();
+        expect(useAgentInboxRailStore.getState().bySession[SESSION]?.shown).toBe(false);
       },
     );
 
@@ -988,12 +988,12 @@ describe("ChatOverlay", () => {
     });
   });
 
-  it("Escape outside the composer closes the chat", async () => {
+  it("Escape outside the composer hides the chat behind the CLI", async () => {
     act(() => openAgentInboxRail(SESSION));
     await renderOverlay(420, 700);
     expect(useAgentInboxRailStore.getState().bySession[SESSION]).toBeDefined();
     fireEvent.keyDown(screen.getByTestId("ibx-msgs"), { key: "Escape" });
-    expect(useAgentInboxRailStore.getState().bySession[SESSION]).toBeUndefined();
+    expect(useAgentInboxRailStore.getState().bySession[SESSION]?.shown).toBe(false);
   });
 
   it.each([
@@ -2420,10 +2420,10 @@ describe("ChatOverlay in its tab: the Chat | CLI flip", () => {
       await nextFrame();
       expect(markedRead()).not.toContain(7);
       expect(cli).toHaveFocus();
-      expect(screen.getByTestId("chat-overlay")).toHaveAttribute("inert");
+      expect(screen.getByTestId("chat-overlay").closest("[inert]")).not.toBeNull();
       flip();
       await waitFor(() => expect(markedRead()).toContain(7));
-      expect(screen.getByTestId("chat-overlay")).not.toHaveAttribute("inert");
+      expect(screen.getByTestId("chat-overlay").closest("[inert]")).toBeNull();
     } finally {
       box.mockRestore();
     }
