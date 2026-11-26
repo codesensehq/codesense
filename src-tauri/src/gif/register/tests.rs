@@ -491,7 +491,7 @@ async fn a_new_key_gets_a_new_install_id() {
     h.found_all("g1");
     h.send(1, "g1", URL).await;
     assert_eq!(h.wire.random_calls(), 1);
-    settings::save_with(&h.keys(), h.dir.path(), OTHER_KEY).unwrap();
+    settings::save_with(&h.keys(), h.dir.path(), Provider::Giphy, OTHER_KEY).unwrap();
     assert!(!h.install_file().exists());
     *h.wire.random.lock().unwrap() = Ok(reply(200, r#"{"data":{"random_id":"rid-new"}}"#));
     h.found_all("g1");
@@ -723,7 +723,7 @@ async fn turning_search_off_and_on_or_replacing_the_key_forgets_what_the_old_id_
     assert_eq!(h.service.analytics.held_count(), 0);
     // Replacing the key forgets them too.
     h.found_all("g1");
-    settings::save_with(&h.keys(), h.dir.path(), OTHER_KEY).unwrap();
+    settings::save_with(&h.keys(), h.dir.path(), Provider::Giphy, OTHER_KEY).unwrap();
     h.send(2, "g1", URL).await;
     assert_eq!(h.wire.urls().len(), calls);
     assert_eq!(h.service.analytics.held_count(), 0);
@@ -913,7 +913,7 @@ async fn a_new_key_ends_the_wait_after_a_failed_random_id_call() {
     *h.wire.random.lock().unwrap() = Ok(reply(500, ""));
     h.send(1, "g1", URL).await;
     assert_eq!(h.wire.random_calls(), 1);
-    settings::save_with(&h.keys(), h.dir.path(), OTHER_KEY).unwrap();
+    settings::save_with(&h.keys(), h.dir.path(), Provider::Giphy, OTHER_KEY).unwrap();
     *h.wire.random.lock().unwrap() = Ok(reply(200, r#"{"data":{"random_id":"rid-2"}}"#));
     h.found_all("g1");
     h.send(2, "g1", URL).await;

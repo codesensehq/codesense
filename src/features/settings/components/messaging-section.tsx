@@ -241,7 +241,7 @@ function GifSearchCard({ shown }: { shown: ReadonlySet<string> }) {
                 onRetry={() => void readKey(active)}
                 onSave={(value) =>
                   run(
-                    () => keyCall(active, () => api.gifKeySave(value)),
+                    () => keyCall(active, () => api.gifKeySave(active, value)),
                     () => {},
                   )
                 }

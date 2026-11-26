@@ -166,6 +166,15 @@ fn pin_giphy(dir: &std::path::Path) {
     std::fs::write(dir.join(settings::FILE), GIPHY_SETTINGS).unwrap();
 }
 
+/// Save `key` for the provider `gif.json` names, as the Settings card's key row does.
+fn save_active(
+    keys: &Keys,
+    dir: &std::path::Path,
+    key: &str,
+) -> Result<settings::KeyStatus, String> {
+    settings::save_with(keys, dir, settings::load(dir).provider, key)
+}
+
 fn harness_with(keys: impl FnOnce(Arc<Counting>) -> Keys, with_key: bool) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     pin_giphy(dir.path());
@@ -758,7 +767,7 @@ async fn with_no_secret_store_nothing_touches_the_keyring_or_network_and_saves_a
         Duration::from_secs(3),
     );
     assert_eq!(
-        settings::save_with(&keys, h.dir.path(), "another-key-value-0001"),
+        save_active(&keys, h.dir.path(), "another-key-value-0001"),
         Err(
             "This computer has no secret store, so the key can't be kept here. Nothing changed."
                 .to_string()
@@ -1135,7 +1144,7 @@ async fn a_production_key_has_no_local_cap_and_replacing_it_clears_the_flag() {
     }
     assert_eq!(h.transport.requests(), 100);
 
-    let replaced = settings::save_with(&h.keys(), h.dir.path(), "a-replacement-key").unwrap();
+    let replaced = save_active(&h.keys(), h.dir.path(), "a-replacement-key").unwrap();
     assert!(!replaced.production);
     assert!(!h.file(settings::FILE).contains("giphy:"));
     // The replacement is a new key with a full bucket of its own.
@@ -1365,7 +1374,7 @@ fn the_key_is_the_giphy_keychain_item_under_the_login_name() {
         serde_json::json!({"status": "saved", "hint": "…7f3a", "production": false})
     );
 
-    settings::save_with(&keys, dir.path(), "  a-new-key-value-0001 \n").unwrap();
+    save_active(&keys, dir.path(), "  a-new-key-value-0001 \n").unwrap();
     assert_eq!(
         store.get(ACCOUNT).unwrap().unwrap().expose(),
         "a-new-key-value-0001"
@@ -1377,10 +1386,7 @@ fn the_key_is_the_giphy_keychain_item_under_the_login_name() {
         "tab\tinside-a-long-key",
         "short-key-15chr",
     ] {
-        assert!(
-            settings::save_with(&keys, dir.path(), bad).is_err(),
-            "{bad:?}"
-        );
+        assert!(save_active(&keys, dir.path(), bad).is_err(), "{bad:?}");
     }
     assert_eq!(
         store.get(ACCOUNT).unwrap().unwrap().expose(),
@@ -1454,7 +1460,7 @@ fn a_failed_key_save_says_what_changed() {
         Some(ACCOUNT),
         Duration::from_secs(3),
     );
-    let error = settings::save_with(&keys, dir.path(), "a-replacement-key-0001").unwrap_err();
+    let error = save_active(&keys, dir.path(), "a-replacement-key-0001").unwrap_err();
     assert!(error.ends_with("Nothing changed."), "{error}");
 
     let production = SettingsUpdate {
@@ -1462,7 +1468,7 @@ fn a_failed_key_save_says_what_changed() {
         ..Default::default()
     };
     settings::set_with(&keys, dir.path(), production.clone()).unwrap();
-    let error = settings::save_with(&keys, dir.path(), "a-replacement-key-0001").unwrap_err();
+    let error = save_active(&keys, dir.path(), "a-replacement-key-0001").unwrap_err();
     assert!(
         error.contains("no longer marked as a production key"),
         "{error}"
@@ -1478,11 +1484,41 @@ fn a_failed_key_save_says_what_changed() {
         ..Default::default()
     };
     settings::set_with(&keys, dir.path(), klipy).unwrap();
-    let error = settings::save_with(&keys, dir.path(), "a-replacement-key-0001").unwrap_err();
+    let error = save_active(&keys, dir.path(), "a-replacement-key-0001").unwrap_err();
     assert!(error.ends_with("Nothing changed."), "{error}");
     let marks = settings::load(dir.path()).production_keys;
     assert!(marks.iter().all(|k| k.starts_with("giphy:")), "{marks:?}");
     assert_eq!(marks.len(), 1);
+}
+
+#[test]
+fn a_key_pasted_for_the_other_provider_is_refused_and_changes_nothing() {
+    let (h, klipy) = two_key_harness();
+    let production = SettingsUpdate {
+        production: Some(true),
+        ..SettingsUpdate::default()
+    };
+    settings::set_with(&h.keys(), h.dir.path(), production).unwrap();
+    // The card switched to KLIPY after the GIPHY key was pasted.
+    settings::set_with(&h.keys(), h.dir.path(), choose("klipy")).unwrap();
+    let before = h.file(settings::FILE);
+    let refused = settings::save_with(
+        &h.keys(),
+        h.dir.path(),
+        Provider::Giphy,
+        "a-replacement-key-0001",
+    )
+    .unwrap_err();
+    assert_eq!(
+        refused,
+        "GIF search now uses KLIPY, not GIPHY. Nothing changed."
+    );
+    assert_eq!(h.file(settings::FILE), before, "nothing was written");
+    assert_eq!(h.store.inner.get(ACCOUNT).unwrap().unwrap().expose(), KEY);
+    assert_eq!(
+        klipy.inner.get(ACCOUNT).unwrap().unwrap().expose(),
+        KLIPY_KEY
+    );
 }
 
 #[test]
@@ -1498,7 +1534,7 @@ fn a_bad_paste_is_refused_before_the_production_flag_changes() {
     };
     settings::set_with(&keys, dir.path(), production).unwrap();
     for bad in ["too-short", "two words in a key", ""] {
-        let error = settings::save_with(&keys, dir.path(), bad).unwrap_err();
+        let error = save_active(&keys, dir.path(), bad).unwrap_err();
         assert!(error.ends_with("Nothing changed."), "{error}");
         assert!(
             settings::status_with(&keys, dir.path()).production,
@@ -1518,7 +1554,7 @@ fn an_environment_credential_source_refuses_key_writes() {
     pin_giphy(dir.path());
     let env = Arc::new(EnvStore::new(Provider::Giphy.key_service()));
     let keys = Keys::new(env, true, Some(ACCOUNT), Duration::from_secs(3));
-    let error = settings::save_with(&keys, dir.path(), "a-key-value-long-enough").unwrap_err();
+    let error = save_active(&keys, dir.path(), "a-key-value-long-enough").unwrap_err();
     assert!(error.contains("OS keychain"), "{error}");
 }
 
@@ -2793,7 +2829,7 @@ fn customer_id_survives_a_giphy_key_save() {
     let fp = fingerprint(&Secret::new(KEY));
     let customer =
         install::customer_id(h.dir.path(), &fp, install::install_epoch(h.dir.path())).unwrap();
-    settings::save_with(&h.keys(), h.dir.path(), "a-new-giphy-key-0001").unwrap();
+    save_active(&h.keys(), h.dir.path(), "a-new-giphy-key-0001").unwrap();
     assert_eq!(
         install::read_install(h.dir.path(), Provider::Klipy, &fp),
         Some(customer)
@@ -2808,7 +2844,7 @@ fn giphy_random_id_survives_klipy_save_and_a_new_klipy_key_gets_a_new_id() {
     install::write_install(h.dir.path(), Provider::Giphy, &fp, "rid-1", epoch).unwrap();
     let old = install::customer_id(h.dir.path(), &fp, epoch).unwrap();
     let replacement = "a-new-klipy-key-0001";
-    settings::save_with(&h.keys(), h.dir.path(), replacement).unwrap();
+    save_active(&h.keys(), h.dir.path(), replacement).unwrap();
     assert_eq!(
         install::read_install(h.dir.path(), Provider::Giphy, &fp).as_deref(),
         Some("rid-1")
@@ -2997,8 +3033,7 @@ async fn switching_keeps_both_keys_and_their_production_marks() {
 async fn save_status_and_remove_follow_the_loaded_provider() {
     let (h, klipy) = two_key_harness();
     settings::set_with(&h.keys(), h.dir.path(), choose("klipy")).unwrap();
-    let saved =
-        settings::save_with(&h.keys(), h.dir.path(), "another-klipy-key-for-tests-77").unwrap();
+    let saved = save_active(&h.keys(), h.dir.path(), "another-klipy-key-for-tests-77").unwrap();
     assert_eq!(saved.hint.as_deref(), Some("…s-77"));
     assert_eq!(
         klipy.inner.get(ACCOUNT).unwrap().unwrap().expose(),
@@ -3010,7 +3045,7 @@ async fn save_status_and_remove_follow_the_loaded_provider() {
         "the GIPHY key is untouched"
     );
     // A KLIPY key is checked and named as KLIPY's.
-    let refused = settings::save_with(&h.keys(), h.dir.path(), "short").unwrap_err();
+    let refused = save_active(&h.keys(), h.dir.path(), "short").unwrap_err();
     assert!(refused.starts_with("A KLIPY key has at least"), "{refused}");
 }
 
@@ -3018,9 +3053,9 @@ async fn save_status_and_remove_follow_the_loaded_provider() {
 async fn off_keys_row_removes_only_that_provider() {
     let (h, klipy) = two_key_harness();
     // Each key saved in Settings, KLIPY's marked production.
-    settings::save_with(&h.keys(), h.dir.path(), KEY).unwrap();
+    save_active(&h.keys(), h.dir.path(), KEY).unwrap();
     settings::set_with(&h.keys(), h.dir.path(), choose("klipy")).unwrap();
-    settings::save_with(&h.keys(), h.dir.path(), KLIPY_KEY).unwrap();
+    save_active(&h.keys(), h.dir.path(), KLIPY_KEY).unwrap();
     let production = SettingsUpdate {
         production: Some(true),
         ..SettingsUpdate::default()
@@ -3073,7 +3108,7 @@ fn a_saved_key_never_used_reads_as_saved_right_after_off() {
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(Counting::default());
     let keys = Keys::new(store.clone(), true, Some(ACCOUNT), Duration::from_secs(3));
-    settings::save_with(&keys, dir.path(), KLIPY_KEY).unwrap();
+    save_active(&keys, dir.path(), KLIPY_KEY).unwrap();
     settings::set_with(&keys, dir.path(), turn_off()).unwrap();
     let reads = store.calls.load(Ordering::SeqCst);
     let row = settings::status_of(&keys, dir.path(), Provider::Klipy);

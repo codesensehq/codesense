@@ -56,8 +56,8 @@ const backend = vi.hoisted(() => {
       },
     ),
     gifKeyStatus: vi.fn(async (provider?: Provider) => status(provider ?? state.settings.provider)),
-    gifKeySave: vi.fn(async (key: string) => {
-      const provider = state.settings.provider;
+    gifKeySave: vi.fn(async (provider: Provider, key: string) => {
+      if (provider !== state.settings.provider) throw new Error("Nothing changed.");
       state.keys[provider] = key.trim();
       state.production[provider] = false;
       return status(provider);
@@ -149,7 +149,7 @@ describe("Messaging → GIF search card", () => {
     fireEvent.change(field, { target: { value: "  test-key-a1b2  " } });
     fireEvent.click(screen.getByRole("button", { name: "Save key" }));
     await screen.findByText("Key saved");
-    expect(backend.gifKeySave).toHaveBeenCalledWith("test-key-a1b2");
+    expect(backend.gifKeySave).toHaveBeenCalledWith("giphy", "test-key-a1b2");
     expect(screen.getByText("…a1b2")).toBeInTheDocument();
     expect(screen.queryByLabelText("GIPHY API key")).toBeNull();
 
@@ -317,6 +317,7 @@ describe("Messaging → GIF search card", () => {
     fireEvent.change(field, { target: { value: "klipy-test-key-x7Qa" } });
     fireEvent.click(screen.getByRole("button", { name: "Save key" }));
     await screen.findByText("…x7Qa");
+    expect(backend.gifKeySave).toHaveBeenCalledWith("klipy", "klipy-test-key-x7Qa");
     expect(backend.state.keys).toEqual({ giphy: null, klipy: "klipy-test-key-x7Qa" });
     expect(within(card()).getByText(GIF_PROVIDERS.klipy.productionNote)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("checkbox", { name: "This is a production key" }));

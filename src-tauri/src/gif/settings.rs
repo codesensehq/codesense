@@ -486,11 +486,24 @@ pub(crate) fn status_with(keys: &Keys, dir: &Path) -> KeyStatus {
     }
 }
 
-/// Save a new key. Its production flag is cleared first, as a replaced key's is, so a failed
-/// save never leaves a new key marked production.
-pub(crate) fn save_with(keys: &Keys, dir: &Path, key: &str) -> Result<KeyStatus, String> {
+/// Save a new key for `provider`, the provider it was pasted for, which must still be the active
+/// one. Its production flag is cleared first, as a replaced key's is, so a failed save never
+/// leaves a new key marked production.
+pub(crate) fn save_with(
+    keys: &Keys,
+    dir: &Path,
+    provider: Provider,
+    key: &str,
+) -> Result<KeyStatus, String> {
     let current = load(dir);
-    let provider = current.provider;
+    if current.provider != provider {
+        // The provider changed since the key was pasted: never file it under the other one.
+        return Err(format!(
+            "GIF search now uses {}, not {}. Nothing changed.",
+            Provider::display_name(current.provider),
+            Provider::display_name(provider)
+        ));
+    }
     // A key that can't be one changes nothing, the current key's production flag included.
     check_key(provider, key).map_err(|error| format!("{error} Nothing changed."))?;
     let had_production = current.has_production(provider);
@@ -610,10 +623,19 @@ pub async fn gif_key_status(
     })
     .await
 }
+/// Save `key` as `provider`'s key, refused unless `provider` is still the active one.
 #[tauri::command]
-pub async fn gif_key_save(app: tauri::AppHandle, key: String) -> Result<KeyStatus, String> {
+pub async fn gif_key_save(
+    app: tauri::AppHandle,
+    provider: String,
+    key: String,
+) -> Result<KeyStatus, String> {
+    let provider = provider_named(&provider)?;
     let (keys, dir) = service_keys(&app)?;
-    crate::commands::await_blocking("gif.key_save", move || save_with(&keys, &dir, &key)).await
+    crate::commands::await_blocking("gif.key_save", move || {
+        save_with(&keys, &dir, provider, &key)
+    })
+    .await
 }
 /// Remove `provider`'s key, or the active provider's without one.
 #[tauri::command]

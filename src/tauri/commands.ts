@@ -10327,7 +10327,10 @@ export const gifSettingsSet = (update: GifSettingsUpdate) =>
  *  status reads the keychain; another's, or any while search is Off, never does. */
 export const gifKeyStatus = (provider?: GifProvider) =>
   invoke<GifKeyStatus>("gif_key_status", { provider: provider ?? null });
-export const gifKeySave = (key: string) => invoke<GifKeyStatus>("gif_key_save", { key });
+/** Save `key` as `provider`'s key; refused, with nothing changed, unless `provider` is still the
+ *  active one. */
+export const gifKeySave = (provider: GifProvider, key: string) =>
+  invoke<GifKeyStatus>("gif_key_save", { provider, key });
 /** Remove `provider`'s key, production mark and install id, or the active provider's. */
 export const gifKeyRemove = (provider?: GifProvider) =>
   invoke<GifKeyStatus>("gif_key_remove", { provider: provider ?? null });
