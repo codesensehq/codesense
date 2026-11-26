@@ -62,7 +62,10 @@ impl GifSettings {
     }
     /// Mark `provider` as having a saved key, or not.
     fn mark_saved(&mut self, provider: Provider, saved: bool) {
-        self.saved_keys.retain(|p| *p != provider);
+        let kept = std::mem::take(&mut self.saved_keys)
+            .into_iter()
+            .filter(|p| *p != provider);
+        self.saved_keys = kept.collect();
         if saved {
             self.saved_keys.push(provider);
         }
