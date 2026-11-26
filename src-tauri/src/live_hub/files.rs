@@ -33,6 +33,7 @@ fn rows(value: Value) -> BTreeMap<String, Value> {
         .map(|r| (r["relativePath"].as_str().unwrap().into(), r.clone()))
         .collect()
 }
+/// Each folder's listing, untinted: [`tint_view`] tints them with the view's rows.
 fn folder_rows(
     access: &ContentAccess,
     entries: &BTreeMap<String, Value>,
@@ -44,10 +45,25 @@ fn folder_rows(
             let folder = row["relativePath"].as_str()?;
             Some((
                 folder.to_owned(),
-                rows(json!({"rows":access.list_rows(Some(folder)).unwrap_or_default()})),
+                rows(json!({"rows":access.untinted_rows(Some(folder)).unwrap_or_default()})),
             ))
         })
         .collect()
+}
+/// Tint a view's rows and every folder listing it holds from one git status.
+fn tint_view<'a>(
+    access: &ContentAccess,
+    rows: impl IntoIterator<Item = &'a mut Value>,
+    folder_rows: &'a mut BTreeMap<String, BTreeMap<String, Value>>,
+) {
+    let mut rows = rows.into_iter().peekable();
+    if rows.peek().is_none() && folder_rows.is_empty() {
+        return;
+    }
+    file_surface::apply_tints(
+        &access.git_tints(None),
+        rows.chain(folder_rows.values_mut().flat_map(BTreeMap::values_mut)),
+    );
 }
 
 fn key(base: &str, args: &ListFiles, access: &ContentAccess) -> String {
@@ -88,14 +104,35 @@ pub(crate) async fn list_native<R: tauri::Runtime>(
     args: &ListFiles,
     base: &str,
 ) -> Result<(Value, Vec<Value>), String> {
-    let values = if is_installed_dir(app, base, args) {
-        json!({"rows":[]})
-    } else {
-        file_surface::list_with_access(app.clone(), access.clone(), args.clone(), base).await?
-    };
+    let values = listing(app, access, args, base, true).await?;
     let raw = values["rows"].as_array().cloned().unwrap_or_default();
-    let delivered = app
-        .try_state::<super::LiveHub>()
+    Ok((values, native_listing(app, access, args, base, raw)))
+}
+
+/// The raw rows; an installed folder has no physical directory. `tint: false` leaves git
+/// tints to the caller.
+async fn listing<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    access: &ContentAccess,
+    args: &ListFiles,
+    base: &str,
+    tint: bool,
+) -> Result<Value, String> {
+    if is_installed_dir(app, base, args) {
+        return Ok(json!({"rows":[]}));
+    }
+    file_surface::list_with(app.clone(), access.clone(), args.clone(), base, tint).await
+}
+
+/// `raw` with the native overlay applied.
+fn native_listing<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    access: &ContentAccess,
+    args: &ListFiles,
+    base: &str,
+    raw: Vec<Value>,
+) -> Vec<Value> {
+    app.try_state::<super::LiveHub>()
         .and_then(|hub| {
             hub.model
                 .lock()
@@ -104,8 +141,7 @@ pub(crate) async fn list_native<R: tauri::Runtime>(
                 .get(base)
                 .map(|native| native.listing(access, args, raw.clone()))
         })
-        .unwrap_or(raw);
-    Ok((values, delivered))
+        .unwrap_or(raw)
 }
 
 #[tauri::command]
@@ -131,9 +167,16 @@ pub async fn file_surface_prepare_view<R: tauri::Runtime>(
     } else {
         access.logical_path(std::path::Path::new(args.dir.as_deref().unwrap_or("")))?
     };
-    let (values, delivered) = list_native(&app, &access, &args, &base).await?;
-    let rows = rows(values);
-    let folder_rows = folder_rows(&access, &rows);
+    // First paint tints the listing and every folder in it from one git status.
+    let mut values = listing(&app, &access, &args, &base, false).await?;
+    let mut raw = values["rows"]
+        .as_array_mut()
+        .map(std::mem::take)
+        .unwrap_or_default();
+    let mut folder_rows = folder_rows(&access, &rows(json!({"rows":&raw})));
+    tint_view(&access, &mut raw, &mut folder_rows);
+    let rows = rows(json!({"rows":&raw}));
+    let delivered = native_listing(&app, &access, &args, &base, raw);
     let hub = app.state::<super::LiveHub>();
     let mut model = hub.model.lock().unwrap();
     model.projections.replace_view(
@@ -233,9 +276,12 @@ pub(super) fn start<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     }
 }
 
+/// Relist a view, tinting it and its folders from one git status.
 fn reset(view: &mut FileView) {
-    view.rows = rows(json!({"rows":view.access.list_rows(view.root.to_str()).unwrap_or_default()}));
+    view.rows =
+        rows(json!({"rows":view.access.untinted_rows(view.root.to_str()).unwrap_or_default()}));
     view.folder_rows = folder_rows(&view.access, &view.rows);
+    tint_view(&view.access, view.rows.values_mut(), &mut view.folder_rows);
 }
 
 /// Roots and child keys are logical. Physical paths only admit and identify files.
