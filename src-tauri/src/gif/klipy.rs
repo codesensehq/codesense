@@ -84,6 +84,14 @@ pub(crate) fn api_url(key: &Secret, path: &[&str], pairs: &[(&str, &str)]) -> ur
     url
 }
 
+/// Whether `url` holds `key`, as it is or escaped as [`api_url`] escapes it.
+fn holds_key(url: &str, key: &Secret) -> bool {
+    let escaped = api_url(key, &[], &[]);
+    let escaped = url::Url::path_segments(&escaped).and_then(|mut s| s.nth(2));
+    let escaped = escaped.unwrap_or("");
+    url.contains(key.expose()) || (escaped != "" && url.contains(escaped))
+}
+
 fn malformed() -> GifError {
     log::warn!(target: "gif", "gif search: KLIPY's response was not the expected JSON");
     GifError::ProviderUnavailable
@@ -118,7 +126,8 @@ impl GifProvider for Klipy {
             }
             let url = self.api_url(&["gifs", "search"], &pairs);
             let items = self.api_data(url).await?;
-            Ok(items.iter().filter_map(found).take(limit).collect())
+            let candidates = items.iter().filter_map(|item| found(item, &self.key));
+            Ok(candidates.take(limit).collect())
         })
     }
 
@@ -133,7 +142,7 @@ impl GifProvider for Klipy {
             let items = self.api_data(url).await?;
             let mut by_slug: HashMap<String, Found> = items
                 .iter()
-                .filter_map(found)
+                .filter_map(|item| found(item, &self.key))
                 .map(|f| (f.candidate.id.clone(), f))
                 .collect();
             Ok(ids.iter().filter_map(|id| by_slug.remove(id)).collect())
@@ -142,8 +151,8 @@ impl GifProvider for Klipy {
 }
 
 /// One KLIPY result as a candidate, or `None` for an ad, a missing or invalid slug, no
-/// qualifying rendition or a URL off KLIPY's hosts.
-fn found(item: &Value) -> Option<Found> {
+/// qualifying rendition, a URL off KLIPY's media hosts or a URL that holds `key`.
+fn found(item: &Value, key: &Secret) -> Option<Found> {
     if item.get("type").and_then(Value::as_str) == Some("ad") {
         return None;
     }
@@ -151,6 +160,9 @@ fn found(item: &Value) -> Option<Found> {
     let title = item.get("title").and_then(Value::as_str).unwrap_or("");
     let file = item.get("file")?.as_object()?;
     let candidate = super::candidate(Provider::Klipy, slug, title, &renditions(file))?;
+    if holds_key(&candidate.url, key) || holds_key(&candidate.preview_url, key) {
+        return None;
+    }
     Some(Found {
         candidate,
         pingbacks: None,

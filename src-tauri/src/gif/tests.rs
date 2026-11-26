@@ -2473,6 +2473,85 @@ async fn klipy_no_error_log_or_result_holds_the_key() {
     assert!(!h.file(bucket::FILE).contains(KEY));
 }
 
+/// A KLIPY search reply with one md GIF per `(slug, url)`.
+fn klipy_reply(items: &[(&str, String)]) -> String {
+    let items: Vec<serde_json::Value> = items
+        .iter()
+        .map(|(slug, url)| {
+            serde_json::json!({
+                "slug": slug,
+                "title": "x",
+                "file": {"md": {"gif": {"url": url, "width": 498, "height": 280, "size": 300000}}},
+            })
+        })
+        .collect();
+    serde_json::json!({"result": true, "data": {"data": items}}).to_string()
+}
+
+#[tokio::test]
+async fn klipy_drops_a_candidate_on_the_api_host_or_holding_the_key() {
+    let key = "k/ey?x=1#y%z-and-padding-0001";
+    let escaped = "k%2Fey%3Fx=1%23y%25z-and-padding-0001";
+    let (klipy, wire) = klipy_adapter(key, None);
+    wire.reply(
+        200,
+        None,
+        &klipy_reply(&[
+            (
+                "api-host-1",
+                "https://api.klipy.com/ii/x/md1.gif".to_string(),
+            ),
+            (
+                "escaped-key-2",
+                format!("https://static.klipy.com/ii/{escaped}/md1.gif"),
+            ),
+            (
+                "kept-3",
+                "https://static.klipy.com/ii/x/md1.gif".to_string(),
+            ),
+        ]),
+    );
+    let found = GifProvider::search_gifs(&klipy, "hello", Rating::Pg, 10)
+        .await
+        .unwrap();
+    let candidates: Vec<Candidate> = found.into_iter().map(|f| f.candidate).collect();
+    assert_eq!(ids(&candidates), ["kept-3"]);
+
+    // On the service, a reply that echoes the key in a media URL leaves no trace of it.
+    crate::test_logger::clear("gif");
+    let h = klipy_harness();
+    h.transport.reply(
+        200,
+        None,
+        &klipy_reply(&[
+            (
+                "raw-key-1",
+                format!("https://static.klipy.com/ii/{KEY}/md1.gif"),
+            ),
+            (
+                "api-host-2",
+                format!("https://api.klipy.com/api/v1/{KEY}/md1.gif"),
+            ),
+            (
+                "kept-3",
+                "https://static.klipy.com/ii/x/md1.gif".to_string(),
+            ),
+        ]),
+    );
+    let request = normalize(Some("ship it"), None, None).unwrap();
+    let (provider, candidates) = h.service.run(&request, None, None).await.unwrap();
+    assert_eq!(ids(&candidates), ["kept-3"]);
+    assert_eq!(provider, Provider::Klipy);
+    let shown = format!("{candidates:?}");
+    assert!(
+        !shown.contains(KEY) && !shown.contains("api.klipy.com"),
+        "{shown}"
+    );
+    for line in crate::test_logger::lines("gif") {
+        assert!(!line.contains(KEY), "{line}");
+    }
+}
+
 #[tokio::test]
 async fn klipy_lookup_held_slug() {
     let h = klipy_harness();

@@ -534,9 +534,13 @@ pub fn pick_preview(provider: Provider, renditions: &[Rendition]) -> Option<&Ren
         .map(|(r, _)| r)
 }
 
-/// Whether `url` is https on one of `provider`'s hosts, with no credentials in it.
+/// KLIPY's API host. It is on KLIPY's host list but serves no media, and its URLs hold the key.
+const KLIPY_API_HOST: &str = "api.klipy.com";
+
+/// Whether `url` is https on one of `provider`'s media hosts, with no credentials in it.
 pub fn on_provider_host(provider: Provider, url: &str) -> bool {
     crate::media::on_hosts(Provider::hosts(provider), url)
+        && !(provider == Provider::Klipy && crate::media::on_hosts(&[KLIPY_API_HOST], url))
 }
 
 /// A candidate from one provider result, or `None` when it has no qualifying animated rendition
