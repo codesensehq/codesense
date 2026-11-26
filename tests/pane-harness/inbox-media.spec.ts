@@ -533,11 +533,11 @@ test("the lightbox image is painted inside its figure", async ({ mountPane }) =>
 });
 
 for (const state of ["cached", "pending", "blocked", "failed"] as const) {
-  test(`a ${state} GIPHY image shows Powered by GIPHY under it`, async ({ mountPane }) => {
+  test(`a ${state} GIPHY image shows Powered By GIPHY under it`, async ({ mountPane }) => {
     const pane = await mountPane(INBOX_PANE, fixtures(media(state)));
     await servePixel(pane.page);
     await pane.frame.locator(".ib-row").first().click();
-    await expect(pane.frame.locator(".ib-msg .bd .ib-media-attr")).toHaveText("Powered by GIPHY");
+    await expect(pane.frame.locator(".ib-msg .bd .ib-media-attr")).toHaveText("Powered By GIPHY");
   });
 }
 
@@ -568,7 +568,7 @@ test("a KLIPY image names KLIPY in the lightbox source line", async ({ mountPane
   await expect(pane.frame.locator(".ib-media-attr")).toHaveCount(0);
   await pane.frame.getByRole("button", { name: "Open GIF: A cat types very fast" }).click();
   await expect(pane.frame.locator(".ib-lb-foot .row2")).toContainText(
-    "GIF · 480 × 270 · via KLIPY",
+    "GIF · 480 × 270 · Powered by KLIPY",
   );
 });
 
@@ -623,5 +623,5 @@ test("the person's own GIF, sent with no text, renders in the thread like an age
   await pane.frame.locator(".ib-row").first().click();
   const open = pane.frame.getByRole("button", { name: "Open GIF: A cat types very fast" });
   await expect(open.locator("img")).toHaveAttribute("src", `/media/v1/${sha}`);
-  await expect(pane.frame.locator(".ib-media-attr")).toHaveText("Powered by GIPHY");
+  await expect(pane.frame.locator(".ib-media-attr")).toHaveText("Powered By GIPHY");
 });

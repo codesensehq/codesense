@@ -3713,6 +3713,9 @@
             (on("giphy.com") ? "giphy" : on("klipy.com") ? "klipy" : null);
           return provider === "giphy" || provider === "klipy" ? provider : null;
         }
+        // Each provider's attribution line, as src/shared/lib/gif-providers.ts writes it (a parity
+        // test keeps the two equal).
+        const GIF_POWERED_BY = { giphy: "Powered By GIPHY", klipy: "Powered by KLIPY" };
         function mediaImage(a, m, lightbox = false) {
           const wrap = h("figure", "ib-media loading");
           const w = a.width || 480,
@@ -3811,9 +3814,10 @@
             renderMarkdown(caption, m.text);
             bd.append(caption);
           }
-          // GIPHY's terms ask for a conspicuous "Powered by GIPHY", in every state.
+          // GIPHY's terms ask for a conspicuous "Powered By GIPHY", in every state.
           const attribution = () => {
-            if (mediaAttribution(a) === "giphy") bd.append(h("div", "ib-media-attr", "Powered by GIPHY"));
+            if (mediaAttribution(a) === "giphy")
+              bd.append(h("div", "ib-media-attr", GIF_POWERED_BY.giphy));
             return bd;
           };
           if (a.state === "cached" && /^[a-f0-9]{64}$/.test(a.sha256 || "")) {
@@ -3916,9 +3920,13 @@
           const foot = h("div", "ib-lb-foot");
           foot.append(h("figcaption", "", a.alt));
           const details = h("div", "row2");
-          const provider = { giphy: " · Powered by GIPHY", klipy: " · via KLIPY" }[mediaAttribution(a)];
+          const provider = GIF_POWERED_BY[mediaAttribution(a)];
           details.append(
-            h("span", "", mediaKind(a) + " · " + a.width + " × " + a.height + (provider || "")),
+            h(
+              "span",
+              "",
+              mediaKind(a) + " · " + a.width + " × " + a.height + (provider ? " · " + provider : ""),
+            ),
             h("span", "sp"),
           );
           const source = mediaSource(a, "Open source page · " + a.sourceHost + " ↗");
