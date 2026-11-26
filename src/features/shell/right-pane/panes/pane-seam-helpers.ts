@@ -28,9 +28,11 @@ export function bootPaneDoc(
     settings: {
       enableJavaScriptEvaluation: true,
       suppressInsecureJavaScriptEnvironmentWarning: true,
-      // No server answers the pane's stylesheet links (the kit's editor.css); a failed link
-      // would post codesense:doc-error and can beat codesense.ready() to the host.
+      // No server answers the pane's stylesheet links (the kit's editor.css) or kit scripts
+      // (/kit/v1/chat.js); a failed load would post codesense:doc-error and can beat
+      // codesense.ready() to the host. A test that needs a kit script passes it in `shim`.
       disableCSSFileLoading: true,
+      disableJavaScriptFileLoading: true,
       handleDisabledFileLoadingAsSuccess: true,
     } as never,
   });

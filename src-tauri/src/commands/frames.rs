@@ -1103,6 +1103,7 @@ pub(crate) mod tests {
                 "context",
                 "prefs",
                 "setPrefs",
+                "setUiState",
                 "inbox",
                 "inboxRollup",
                 "roles",

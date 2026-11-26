@@ -130,6 +130,13 @@ const PANEL = INBOX_PANEL_ID;
 const STORY = `${CONTENT}/e/SW-1.md`;
 
 const PANE = readFileSync(resolve(__dirname, "../__fixtures__/inbox-pane.html"), "utf8");
+// The pane behind the kit chat bundle, as the app serves /kit/v1/chat.js after kit.js (the seam
+// loads no script files, so the pane's own tag is a no-op here).
+const KIT_CHAT = readFileSync(
+  resolve(__dirname, "../../../../../src-tauri/src/http/routes/dashboard_kit/chat.js"),
+  "utf8",
+);
+const PANE_WITH_GIFS = `<script>window.codesense.kit = window.codesense.kit || {};</script><script>${KIT_CHAT}</script>${PANE}`;
 /** The pane's declared commands, as discovery reads its `codesense:commands` meta. */
 const PANE_COMMANDS = JSON.parse(
   /name="codesense:commands"\s+content='([^']*)'/.exec(PANE)![1],
@@ -544,6 +551,29 @@ function inboxIpc(cmd: string, args: Record<string, any> | undefined): unknown {
       return sendInvalid
         ? { status: "invalid", message: "Recipient ended" }
         : { status: "sent", messageId: 50 };
+    // The GIF picker's host reads, answered as the gif page module answers them.
+    case "gif_provider_page":
+      return { status: "ok", provider: "giphy" };
+    case "gif_search_page":
+      return {
+        status: "ok",
+        provider: "giphy",
+        candidates: [
+          {
+            provider: "giphy",
+            id: "g1",
+            title: "Ship It Dog",
+            url: "https://media.giphy.com/media/g1/giphy.gif",
+            previewUrl: "https://media.giphy.com/media/g1/giphy_s.gif",
+            width: 480,
+            height: 270,
+            autoLoads: false,
+            previewData: "data:image/gif;base64,R0lGODlhAQABAAAAACw=",
+          },
+        ],
+      };
+    case "gif_picked":
+      return { status: "ok" };
     case "local_profile_status":
       return { active: null };
     case "load_app_state":
@@ -5392,5 +5422,127 @@ describe("cross-team Mark all read", () => {
     expect(writes[0][1]).toMatchObject({ team: { team: "web" }, messageIds: [2] });
     expect(rollup.filter((m) => m.unread).map((m) => m.id)).toEqual([2]);
     expect(toast(p).textContent).toBe("");
+  });
+});
+
+describe("the composer's GIF button", () => {
+  const gifCalls = () =>
+    tauriInvoke.mock.calls.filter((c) => String(c[0]).startsWith("gif_")).map((c) => c[0]);
+  const sends = () => [...calls("send_inbox_as_human"), ...calls("reply_as_human")];
+  async function stageGif(p: PaneDoc) {
+    fireEvent.click(el(p, "gif"));
+    const allow = await waitFor(() => {
+      const b = [...p.doc.querySelectorAll<HTMLButtonElement>(".gp-body button")].find(
+        (b) => b.textContent === "Allow search",
+      );
+      expect(b).toBeDefined();
+      return b!;
+    });
+    expect(gifCalls()).toEqual(["gif_provider_page"]);
+    fireEvent.click(allow);
+    const input = p.doc.querySelector<HTMLInputElement>(".gp-input")!;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    fireEvent.input(input, { target: { value: "ship" } });
+    const cell = await waitFor(
+      () => {
+        const c = p.doc.querySelector<HTMLElement>(".gp-grid [role=option]");
+        expect(c).not.toBeNull();
+        return c!;
+      },
+      { timeout: 2000 },
+    );
+    fireEvent.click(cell);
+    await waitFor(() => expect(p.doc.querySelector(".ib-box .gs")).not.toBeNull());
+  }
+
+  it("follows the recipient: shown for a session, hidden for a #role queue and without the kit", async () => {
+    const p = await openInbox(true, PANE_WITH_GIFS);
+    await openThread(p);
+    const gif = el(p, "gif");
+    expect(gif.hidden).toBe(false);
+    expect(gif.getAttribute("aria-label")).toBe("Add a GIF");
+    expect(gif.getAttribute("aria-haspopup")).toBe("dialog");
+    // One tab stop after the text, before Send.
+    expect(gif.closest(".row")!.firstElementChild).toBe(gif);
+    await pick(p, "#docs");
+    expect(el(p, "gif").hidden).toBe(true);
+    cleanup();
+    const bare = await openInbox();
+    await openThread(bare);
+    expect(el(bare, "gif").hidden).toBe(true);
+  });
+
+  it("sends a picked GIF alone as media with its alt text, once picked, and clears the stage", async () => {
+    const p = await openInbox(true, PANE_WITH_GIFS);
+    await openThread(p);
+    await stageGif(p);
+    expect(gifCalls()).toEqual(["gif_provider_page", "gif_search_page", "gif_picked"]);
+    expect(calls("gif_picked")[0][1]).toEqual({ provider: "giphy", id: "g1" });
+    const alt = p.doc.querySelector<HTMLInputElement>(".gs-in")!;
+    expect(p.doc.activeElement).toBe(alt);
+    expect(alt.value).toBe("Ship It Dog");
+    expect((el(p, "draft") as HTMLTextAreaElement).value).toBe("");
+    // A GIF alone is sendable; with no alt text it is not.
+    expect((el(p, "send") as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.input(alt, { target: { value: " " } });
+    expect((el(p, "send") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.input(alt, { target: { value: "A dog ships it" } });
+    expect((el(p, "send") as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(el(p, "send"));
+    await waitFor(() => expect(sends()).toHaveLength(1));
+    expect(sends()[0][1]).toMatchObject({
+      text: "",
+      media: {
+        url: "https://media.giphy.com/media/g1/giphy.gif",
+        alt: "A dog ships it",
+        provider: "giphy",
+        providerId: "g1",
+      },
+    });
+    await waitFor(() => expect(p.doc.querySelector(".ib-box .gs")).toBeNull());
+    expect((el(p, "send") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("a reply carries the GIF through replyAsHuman, with the text", async () => {
+    const p = await openInbox(true, PANE_WITH_GIFS);
+    await openThread(p);
+    await menuAction(p, "reply", { kind: "message", messageId: 1 });
+    await stageGif(p);
+    type(p, "Nice work");
+    fireEvent.click(el(p, "send"));
+    await waitFor(() => expect(calls("reply_as_human")).toHaveLength(1));
+    expect(calls("reply_as_human")[0][1]).toMatchObject({
+      messageId: 1,
+      text: "Nice work",
+      media: { alt: "Ship It Dog", provider: "giphy", providerId: "g1" },
+    });
+  });
+
+  it("a staged GIF leaves on a switch to a #role queue, saying why, so no media goes to a role", async () => {
+    const p = await openInbox(true, PANE_WITH_GIFS);
+    await openThread(p);
+    await stageGif(p);
+    type(p, "For the queue");
+    await pick(p, "#docs");
+    expect(p.doc.querySelector(".ib-box .gs")).toBeNull();
+    expect(el(p, "toast").textContent).toContain("GIFs can't go to a role queue");
+    expect(el(p, "gif").hidden).toBe(true);
+    fireEvent.click(el(p, "send"));
+    await waitFor(() => expect(sends()).toHaveLength(1));
+    expect((sends()[0][1] as { media?: unknown }).media ?? null).toBeNull();
+  });
+
+  it("Esc closes the popover and focus goes back to the message; × on the stage unstages", async () => {
+    const p = await openInbox(true, PANE_WITH_GIFS);
+    await openThread(p);
+    await stageGif(p);
+    fireEvent.click(p.doc.querySelector(".gs-x")!);
+    expect(p.doc.querySelector(".ib-box .gs")).toBeNull();
+    expect(p.doc.activeElement).toBe(el(p, "draft"));
+    fireEvent.click(el(p, "gif"));
+    await waitFor(() => expect(el(p, "gif").getAttribute("aria-expanded")).toBe("true"));
+    fireEvent.keyDown(p.doc.querySelector(".gp-input")!, { key: "Escape" });
+    expect(el(p, "gif").getAttribute("aria-expanded")).toBe("false");
+    expect(p.doc.activeElement).toBe(el(p, "draft"));
   });
 });
