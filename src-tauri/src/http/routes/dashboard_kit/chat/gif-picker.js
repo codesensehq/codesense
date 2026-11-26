@@ -84,9 +84,10 @@ export function mountGifPicker(el,{act,uiState=null,onStage=()=>{},provider:gues
  function setInert(on){inert=on;input.disabled=on;root.classList.toggle('inert',on);}
  function foot(text,{bold=null}={}){now.replaceChildren(...(bold?[h('b',{text:bold}),text]:[text]));}
  function dropGrid(){if(rover){rover.release();rover=null;}grid=null;candidates=[];}
- // The query already asked for: its search is in flight (`flying` is its seq) or its results are showing. Each search takes a token from the bucket
- // agents share, so Enter, a chip or the pause never asks for it again.
- function alreadyAsked(query){const q=query.trim();return q===last&&(flying!==null||grid!==null);}
+ // The query already asked for: its search is in flight (`flying` is its seq, and no later seq has superseded it) or its
+ // results are showing. Each search takes a token from the bucket agents share, so Enter, a chip or the pause never asks
+ // for it again.
+ function alreadyAsked(query){const q=query.trim();return q===last&&(flying===seq||grid!==null);}
  function chips(){return h('div',{class:'gp-chips'},GIF_COPY.starters.map(text=>h('button',{type:'button',class:'gp-chip',onclick:()=>{if(inert||alreadyAsked(text))return;input.value=text;syncClear();searchNow(text);}},text)));}
  function showStart(){dropGrid();body.replaceChildren(h('div',{class:'gp-start'},h('span',{text:GIF_COPY.start(words().name)}),chips()));foot(`${GIF_COPY.typeMore} · ${GIF_COPY.escClose}`);}
  // A state in the body: a title, a line, the fine print, and its buttons.
@@ -203,7 +204,7 @@ export function mountGifPicker(el,{act,uiState=null,onStage=()=>{},provider:gues
   if(timer!==null){win.clearTimeout(timer);timer=null;}
   const q=query.trim();
   if(inert||!open||!allowed[provider])return;
-  if(q.length<GIF_MIN_QUERY){seq++;showStart();return;}
+  if(q.length<GIF_MIN_QUERY){seq++;last='';showStart();return;}
   const mine=++seq,at=generation,asked=provider;
   last=q;flying=mine;
   showSkeleton();
@@ -238,7 +239,7 @@ export function mountGifPicker(el,{act,uiState=null,onStage=()=>{},provider:gues
   if(timer!==null)win.clearTimeout(timer);
   const q=input.value.trim();
   // Under two characters nothing goes out, and an answer still on its way is dropped.
-  if(q.length<GIF_MIN_QUERY){timer=null;seq++;showStart();return;}
+  if(q.length<GIF_MIN_QUERY){timer=null;seq++;last='';showStart();return;}
   timer=later(()=>{timer=null;if(!alreadyAsked(input.value))searchNow(input.value);},GIF_DEBOUNCE_MS);
  });
  input.addEventListener('keydown',event=>{
