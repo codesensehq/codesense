@@ -3616,3 +3616,214 @@ mod call_time_read {
         assert!(changed.recv_timeout(Duration::from_millis(50)).is_err());
     }
 }
+
+/// A files step that counts its runs, records the paths each run takes and holds until
+/// the test hands it a permit. `fail` makes it return an error, `panic` makes it panic.
+#[derive(Clone)]
+struct HeldFilesStep {
+    permits: std::sync::Arc<tokio::sync::Semaphore>,
+    runs: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    seen: std::sync::Arc<std::sync::Mutex<Vec<std::collections::BTreeSet<std::path::PathBuf>>>>,
+    fail: bool,
+    panic: bool,
+}
+impl Default for HeldFilesStep {
+    fn default() -> Self {
+        Self {
+            permits: std::sync::Arc::new(tokio::sync::Semaphore::new(0)),
+            runs: Default::default(),
+            seen: Default::default(),
+            fail: false,
+            panic: false,
+        }
+    }
+}
+impl HeldFilesStep {
+    fn step(
+        &self,
+    ) -> impl Fn(
+        tauri::AppHandle<tauri::test::MockRuntime>,
+    )
+        -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>
+           + Send
+           + 'static {
+        use tauri::Manager;
+        let held = self.clone();
+        move |app| {
+            let held = held.clone();
+            Box::pin(async move {
+                let paths = std::mem::take(
+                    &mut app
+                        .state::<super::LiveHub>()
+                        .model
+                        .lock()
+                        .unwrap()
+                        .files
+                        .pending,
+                );
+                held.seen.lock().unwrap().push(paths);
+                held.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                held.permits.acquire().await.unwrap().forget();
+                if held.panic {
+                    panic!("files step panicked");
+                }
+                if held.fail {
+                    return Err("files step failed".into());
+                }
+                Ok(())
+            })
+        }
+    }
+    fn runs(&self) -> usize {
+        self.runs.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+fn files_app() -> tauri::App<tauri::test::MockRuntime> {
+    use tauri::Manager;
+    let app = tauri::test::mock_builder()
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    app.manage(super::LiveHub::default());
+    app
+}
+
+fn files_refreshing(app: &tauri::App<tauri::test::MockRuntime>) -> bool {
+    use tauri::Manager;
+    app.state::<super::LiveHub>()
+        .model
+        .lock()
+        .unwrap()
+        .reading
+        .contains(super::FILES_REFRESH_KEY)
+}
+
+/// Wait, bounded, until `done` holds.
+async fn until(what: &str, done: impl Fn() -> bool) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !done() {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out waiting for {what}"));
+}
+
+#[tokio::test]
+async fn a_rebuild_reaches_rows_while_a_files_refresh_is_blocked() {
+    use super::*;
+    let app = files_app();
+    let held = HeldFilesStep::default();
+    // One loop pass: the files step, then a stand-in for `rebuild`, which writes the rows
+    // `list_sessions` and the identity check read.
+    tokio::time::timeout(Duration::from_secs(1), async {
+        spawn_files_refresh(app.handle(), held.step());
+        app.state::<LiveHub>().model.lock().unwrap().rows = vec![super::inbox_gate_tests::row(
+            "fresh",
+            "Fresh seat",
+            crate::mcp::session_list::SessionState::Idle,
+        )];
+    })
+    .await
+    .expect("the loop pass waited on the files step");
+    until("the files step to start", || held.runs() == 1).await;
+    let (rows, _) = app.state::<LiveHub>().rows(None);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].handle, "fresh");
+    assert!(files_refreshing(&app), "the files step is still blocked");
+    held.permits.add_permits(1);
+    until("the files refresh to finish", || !files_refreshing(&app)).await;
+    assert_eq!(held.runs(), 1);
+}
+
+#[tokio::test]
+async fn files_invalidations_during_a_refresh_coalesce_to_one_rerun() {
+    use super::*;
+    let app = files_app();
+    let held = HeldFilesStep::default();
+    let queue = |path: &str| {
+        app.state::<LiveHub>()
+            .model
+            .lock()
+            .unwrap()
+            .files
+            .pending
+            .insert(path.into());
+    };
+    queue("/first.md");
+    spawn_files_refresh(app.handle(), held.step());
+    until("the files step to start", || held.runs() == 1).await;
+    for path in ["/second.md", "/third.md", "/fourth.md"] {
+        queue(path);
+        spawn_files_refresh(app.handle(), held.step());
+    }
+    assert_eq!(held.runs(), 1, "no second refresh runs beside the first");
+    held.permits.add_permits(2);
+    until("the files refresh to finish", || !files_refreshing(&app)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(held.runs(), 2);
+    let seen = held.seen.lock().unwrap().clone();
+    assert_eq!(seen[0], BTreeSet::from(["/first.md".into()]));
+    assert_eq!(
+        seen[1],
+        BTreeSet::from(["/second.md".into(), "/third.md".into(), "/fourth.md".into()])
+    );
+}
+
+#[tokio::test]
+async fn an_erroring_files_step_leaves_files_runnable() {
+    use super::*;
+    for (fail, panic) in [(true, false), (false, true)] {
+        let app = files_app();
+        let broken = HeldFilesStep {
+            fail,
+            panic,
+            ..Default::default()
+        };
+        spawn_files_refresh(app.handle(), broken.step());
+        until("the broken step to start", || broken.runs() == 1).await;
+        // An invalidation queued behind the broken run still gets its rerun.
+        spawn_files_refresh(app.handle(), broken.step());
+        broken.permits.add_permits(1);
+        if panic {
+            until("the panicked refresh to release FILES", || {
+                !files_refreshing(&app)
+            })
+            .await;
+            assert_ne!(
+                app.state::<LiveHub>().dirty.load(Ordering::Acquire) & FILES,
+                0,
+                "the queued rerun is handed back to the hub loop"
+            );
+        } else {
+            until("the queued rerun", || broken.runs() == 2).await;
+            broken.permits.add_permits(1);
+            until("the failed refresh to release FILES", || {
+                !files_refreshing(&app)
+            })
+            .await;
+        }
+        let next = HeldFilesStep::default();
+        next.permits.add_permits(1);
+        spawn_files_refresh(app.handle(), next.step());
+        until("the next files step", || next.runs() == 1).await;
+        until("the next refresh to finish", || !files_refreshing(&app)).await;
+    }
+}
+
+#[test]
+fn start_spawns_the_files_refresh() {
+    let source = include_str!("mod.rs");
+    let start = source
+        .split_once("pub fn start(app: &tauri::AppHandle) {")
+        .expect("live_hub::start")
+        .1;
+    let start = start.split_once("\n}\n").expect("the end of start").0;
+    let files = start
+        .split_once("if flags & FILES != 0 {")
+        .expect("start's FILES branch")
+        .1;
+    let files = files.split_once("if flags & HOSTS != 0").unwrap().0;
+    assert!(files.contains("spawn_files_refresh("), "{files}");
+    assert!(!start.contains("files::refresh(&handle).await"), "{start}");
+}
