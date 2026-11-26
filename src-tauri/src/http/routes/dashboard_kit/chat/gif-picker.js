@@ -170,8 +170,9 @@ export function mountGifPicker(el,{act,uiState=null,onStage=()=>{},provider:gues
    grid.append(cell);
   });
   rover=rovingGrid(grid,{cols:GIF_COLS,onMove:cell=>{const c=candidates[Number(cell.dataset.index)];foot(` · ${GIF_COPY.focus}`,{bold:c&&c.title||GIF_COPY.untitled});},onPick:cell=>pick(Number(cell.dataset.index))});
-  grid.addEventListener('focus',()=>grid.classList.add('kbd'));
-  grid.addEventListener('blur',()=>grid.classList.remove('kbd'));
+  // A pick drops the grid while it still has focus, so its blur comes after `grid` is null: the handlers use their own element.
+  grid.addEventListener('focus',e=>e.currentTarget.classList.add('kbd'));
+  grid.addEventListener('blur',e=>e.currentTarget.classList.remove('kbd'));
   body.replaceChildren(grid);
   foot(`${GIF_COPY.typeMore} · ${GIF_COPY.escClose}`);
  }

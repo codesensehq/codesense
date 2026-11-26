@@ -2378,8 +2378,8 @@
         const c = candidates[Number(cell.dataset.index)];
         foot(` · ${GIF_COPY.focus}`, { bold: c && c.title || GIF_COPY.untitled });
       }, onPick: (cell) => pick(Number(cell.dataset.index)) });
-      grid.addEventListener("focus", () => grid.classList.add("kbd"));
-      grid.addEventListener("blur", () => grid.classList.remove("kbd"));
+      grid.addEventListener("focus", (e) => e.currentTarget.classList.add("kbd"));
+      grid.addEventListener("blur", (e) => e.currentTarget.classList.remove("kbd"));
       body.replaceChildren(grid);
       foot(`${GIF_COPY.typeMore} · ${GIF_COPY.escClose}`);
     }

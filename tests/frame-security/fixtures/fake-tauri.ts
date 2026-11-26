@@ -462,6 +462,34 @@ export function installFakeTauri(options: FakeTauriOptions = {}) {
           outcome: remove ? "removed" : "added",
         };
       }
+      // The Inbox pane's GIF search: GIPHY on, four GIFs with a 1×1 still, and the human's sends.
+      // A spec sets `gifProviderResult` or `gifSearchResult` for another answer, and holds a
+      // search on `gifGate`.
+      if (command === "gif_provider_page")
+        return api.gifProviderResult ?? { status: "ok", provider: "giphy" };
+      if (command === "gif_search_page") {
+        if (api.gifGate) await api.gifGate;
+        if (api.gifSearchResult) return api.gifSearchResult;
+        return {
+          status: "ok",
+          provider: "giphy",
+          candidates: ["Ship It Dog", "A cat", "Wave", "Thumbs up"].map((title, i) => ({
+            provider: "giphy",
+            id: `fixturegif${i + 1}`,
+            title,
+            url: `https://media.giphy.com/media/fixturegif${i + 1}/giphy.gif`,
+            previewUrl: `https://media.giphy.com/media/fixturegif${i + 1}/giphy_s.gif`,
+            width: 480,
+            height: 270,
+            autoLoads: true,
+            previewData:
+              "data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==",
+          })),
+        };
+      }
+      if (command === "gif_picked") return { status: "ok" };
+      if (command === "send_inbox_as_human" || command === "reply_as_human")
+        return { status: "sent", messageId: 9000 + api.calls.length };
       if (command === "local_profile_status") return { active: { principal: "fixture" } };
       if (command === "live_hub_view_key")
         return (options as { slotId?: string }).slotId === "file-nav" ? "team:fixture/dev" : "all";
