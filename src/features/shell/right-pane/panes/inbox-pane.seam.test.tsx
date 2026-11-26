@@ -5503,6 +5503,25 @@ describe("the composer's GIF button", () => {
     expect((el(p, "send") as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("while the alt field has focus the hint row says Enter goes to the message, and Enter there does", async () => {
+    const p = await openInbox(true, PANE_WITH_GIFS);
+    await openThread(p);
+    const hint = el(p, "composer-hint");
+    expect(hint.textContent).toBe("Enter to send · Shift+Enter for a new line");
+    await stageGif(p);
+    const alt = p.doc.querySelector<HTMLInputElement>(".gs-in")!;
+    expect(p.doc.activeElement).toBe(alt);
+    expect(hint.textContent).toBe("Enter to go to your message");
+    fireEvent.keyDown(alt, { key: "Enter" });
+    expect(p.doc.activeElement).toBe(el(p, "draft"));
+    expect(hint.textContent).toBe("Enter to send · Shift+Enter for a new line");
+    expect(sends()).toHaveLength(0);
+    alt.focus();
+    expect(hint.textContent).toBe("Enter to go to your message");
+    fireEvent.click(p.doc.querySelector(".gs-x")!);
+    expect(hint.textContent).toBe("Enter to send · Shift+Enter for a new line");
+  });
+
   it("a reply carries the GIF through replyAsHuman, with the text", async () => {
     const p = await openInbox(true, PANE_WITH_GIFS);
     await openThread(p);

@@ -2732,7 +2732,8 @@
                     <rect x="2" y="5" width="20" height="14" rx="2.5" />
                     <text x="12" y="15" text-anchor="middle">GIF</text>
                   </svg></button
-                ><span>Enter to send · Shift+Enter for a new line</span><span class="sp"></span
+                ><span id="composer-hint">Enter to send · Shift+Enter for a new line</span
+                ><span class="sp"></span
                 ><button type="submit" class="ib-btn primary" id="send" disabled>
                   Send <kbd data-keys="CmdOrCtrl+Enter"></kbd>
                 </button>
@@ -7157,24 +7158,35 @@
             cs.unsubscribe?.("ui:gif")?.catch?.(() => {});
           }
         }
+        // Enter in the alt field moves to the message and never sends, so the hint row says so
+        // while it has focus.
+        const COMPOSER_HINT = "Enter to send · Shift+Enter for a new line",
+          ALT_HINT = "Enter to go to your message";
+        const hintAlt = (on) => ($("composer-hint").textContent = on ? ALT_HINT : COMPOSER_HINT);
         function stageGif(pick) {
-          gifStaged?.clear();
+          unstageGif();
           gifStaged = cs.kit?.chat?.gifStage?.($("draft").closest(".ib-box"), {
             pick,
             onRemove: () => {
               gifStaged = null;
+              hintAlt(false);
               drawComposer();
               $("draft").focus({ preventScroll: true });
             },
             onChange: drawComposer,
             onEnter: () => $("draft").focus({ preventScroll: true }),
           });
+          const alt = gifStaged?.root.querySelector(".gs-in");
+          alt?.addEventListener("focus", () => hintAlt(true));
+          alt?.addEventListener("blur", () => hintAlt(false));
           drawComposer();
           gifStaged?.focusAlt();
         }
+        // A field removed while it has focus fires no blur in every engine, so the hint is reset here.
         function unstageGif() {
           gifStaged?.clear();
           gifStaged = null;
+          hintAlt(false);
         }
         gifPicker = cs.kit?.chat?.gifPicker
           ? cs.kit.chat.gifPicker($("composer"), {

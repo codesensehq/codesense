@@ -67,6 +67,13 @@ test("the GIF button opens the picker over the composer; a pick stages the still
   const alt = frame.locator(".gs-in");
   await expect(alt).toHaveValue("Ship It Dog");
   await expect(alt).toBeFocused();
+  // Enter in the alt field goes to the message and never sends, and the hint row says so while it has focus.
+  const hint = frame.locator("#composer-hint");
+  await expect(hint).toHaveText("Enter to go to your message");
+  await frame.locator("#draft").focus();
+  await expect(hint).toHaveText("Enter to send · Shift+Enter for a new line");
+  await alt.focus();
+  await expect(hint).toHaveText("Enter to go to your message");
   await expect(frame.locator(".gs-thumb img")).toHaveAttribute("src", /^data:image\/gif/);
   await expect(frame.locator(".gs button")).toHaveCount(1);
   await expect(frame.locator("#send")).toBeEnabled();
