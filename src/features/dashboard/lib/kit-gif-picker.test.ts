@@ -540,10 +540,20 @@ describe("kit.chat.gifPicker: states", () => {
     expect(w.calls("gifSearch")).toHaveLength(0);
   });
 
+  it("keychainUnavailable names the provider whose key it couldn't read", async () => {
+    const w = await opened({
+      provider: "klipy",
+      ui: { consent: { klipy: true } },
+      search: [{ status: "error", error: "keychainUnavailable", message: "locked" }],
+    });
+    await typeAndWait(w, "cats");
+    expect(w.text()).toContain("Couldn't read your KLIPY key");
+  });
+
   it("keychainUnavailable: Try again once; a second failure keeps the message with no button", async () => {
     const w = await opened(failing("keychainUnavailable"));
     await typeAndWait(w, "cats");
-    expect(w.text()).toContain("Couldn't read the key");
+    expect(w.text()).toContain("Couldn't read your GIPHY key");
     expect(w.input().disabled).toBe(true);
     await typeAndWait(w, "dogs");
     expect(w.calls("gifSearch")).toHaveLength(1);
@@ -553,7 +563,7 @@ describe("kit.chat.gifPicker: states", () => {
       ["gifSearch", { query: "cats", limit: 10, provider: "giphy" }],
       ["gifSearch", { query: "cats", limit: 10, provider: "giphy" }],
     ]);
-    expect(w.text()).toContain("Couldn't read the key");
+    expect(w.text()).toContain("Couldn't read your GIPHY key");
     expect(w.button("Try again")).toBeUndefined();
     await typeAndWait(w, "birds");
     expect(w.calls("gifSearch")).toHaveLength(2);

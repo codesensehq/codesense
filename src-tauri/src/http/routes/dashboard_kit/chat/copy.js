@@ -44,7 +44,7 @@ export const GIF_COPY={
   noProvider:{big:'Turn on GIF search and add a key',body:()=>'GIF search is off, or it has no key yet.'},
   invalidKey:{big:'The key was refused',body:name=>`${name} didn't accept the key. Replace it in Settings to search again.`},
   mediaOff:{big:'GIFs are off for this team',body:()=>"This team's remote media is off (media.remote: off in its config/inbox.yml), so no GIFs load."},
-  keychainUnavailable:{big:"Couldn't read the key",body:()=>"The keychain didn't answer, or this Mac has no secret store. If it's locked, unlock it, then try again."},
+  keychainUnavailable:{big:name=>`Couldn't read your ${name} key`,body:()=>"The keychain didn't answer, or this Mac has no secret store. If it's locked, unlock it, then try again."},
   rateLimited:{big:'GIF search limit reached',body:(_name,wait)=>`You and your agents share an hourly limit on GIF searches. Try again in ${wait}.`},
   providerUnavailable:{big:name=>`${name} isn't answering`,body:()=>"The search didn't go through. Your message is safe."},
   badQuery:{big:'Try different words',body:name=>`${name} couldn't search for that.`},
