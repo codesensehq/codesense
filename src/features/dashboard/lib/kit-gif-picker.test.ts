@@ -590,6 +590,80 @@ describe("kit.chat.gifPicker: states", () => {
     expect(w.text()).toContain("Try again in 42 s.");
   });
 
+  describe("an inert state outlives a close", () => {
+    const reopen = async (w: ReturnType<typeof world>) => {
+      w.picker.close();
+      w.picker.open();
+      await settle();
+    };
+
+    it("invalidKey: a reopen shows the refusal again and sends nothing until Open Settings", async () => {
+      const w = await opened(failing("invalidKey"));
+      await typeAndWait(w, "cats");
+      await reopen(w);
+      expect(w.text()).toContain("The key was refused");
+      expect(w.input().disabled).toBe(true);
+      expect(w.input().value).toBe("cats");
+      await typeAndWait(w, "dogs");
+      expect(w.calls("gifSearch")).toHaveLength(1);
+      w.button("Open Settings")!.click();
+      w.state.search = [{ status: "ok", provider: "giphy", candidates: [candidate("a1")] }];
+      await reopen(w);
+      expect(w.input().disabled).toBe(false);
+      await typeAndWait(w, "birds");
+      expect(w.calls("gifSearch")).toHaveLength(2);
+    });
+
+    it("keychainUnavailable: a reopen keeps a used Try again used", async () => {
+      const w = await opened(failing("keychainUnavailable"));
+      await typeAndWait(w, "cats");
+      await reopen(w);
+      expect(w.text()).toContain("Couldn't read your GIPHY key");
+      w.button("Try again")!.click();
+      await settle();
+      expect(w.calls("gifSearch")).toHaveLength(2);
+      await reopen(w);
+      expect(w.text()).toContain("Couldn't read your GIPHY key");
+      expect(w.button("Try again")).toBeUndefined();
+      await typeAndWait(w, "dogs");
+      expect(w.calls("gifSearch")).toHaveLength(2);
+    });
+
+    it("rateLimited: a reopen shows the rest of the wait, and one after it ends searches", async () => {
+      const w = await opened(failing("rateLimited", { retryAfter: 720 }));
+      await typeAndWait(w, "cats");
+      w.picker.close();
+      await vi.advanceTimersByTimeAsync(360_000);
+      w.picker.open();
+      await settle();
+      expect(w.text()).toContain("Try again in 6 min.");
+      await typeAndWait(w, "dogs");
+      expect(w.calls("gifSearch")).toHaveLength(1);
+      w.picker.close();
+      await vi.advanceTimersByTimeAsync(360_000);
+      w.state.search = [{ status: "ok", provider: "giphy", candidates: [candidate("a1")] }];
+      w.picker.open();
+      await settle();
+      expect(w.input().disabled).toBe(false);
+      await typeAndWait(w, "birds");
+      expect(w.calls("gifSearch")).toHaveLength(2);
+    });
+
+    it("a different provider from Settings releases it", async () => {
+      const w = await opened({
+        ...failing("invalidKey"),
+        ui: { consent: { giphy: true, klipy: true } },
+      });
+      await typeAndWait(w, "cats");
+      w.state.provider = "klipy";
+      w.state.search = [{ status: "ok", provider: "klipy", candidates: [candidate("k1")] }];
+      await reopen(w);
+      expect(w.input().disabled).toBe(false);
+      await typeAndWait(w, "birds");
+      expect(w.calls("gifSearch").at(-1)![1]).toMatchObject({ query: "birds", provider: "klipy" });
+    });
+  });
+
   it("providerUnavailable: the draft is safe, Try again once, and typing goes on", async () => {
     const w = await opened(failing("providerUnavailable"));
     await typeAndWait(w, "cats");

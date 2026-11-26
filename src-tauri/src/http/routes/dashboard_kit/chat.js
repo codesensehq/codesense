@@ -2203,6 +2203,7 @@
     );
     el.append(root);
     let open = false, generation = 0, provider = GIF_PROVIDERS.includes(guess) ? guess : "giphy", allowed = {}, inert = true, seq = 0, timer = null, wake = null, last = "", retried = null, grid = null, rover = null, candidates = [];
+    let held = null;
     const words = () => GIF_PROVIDER_COPY[provider];
     const later = (fn, ms) => win.setTimeout(fn, ms);
     const stopTimers = () => {
@@ -2257,17 +2258,20 @@
     function syncClear() {
       clear.hidden = !input.value || inert;
     }
-    function showError(result, query) {
+    function showError(result, query, { hold = false, until = null } = {}) {
       const code = GIF_STATES[result && result.error] ? result.error : "failed";
       const kind = GIF_STATES[code], text = GIF_COPY.state[code], name = words().name;
-      const seconds = Number(result && result.retryAfter);
-      const wait = GIF_COPY.wait(Number.isFinite(seconds) && seconds > 0 ? seconds : 60);
+      const given = Number(result && result.retryAfter), seconds = Number.isFinite(given) && given > 0 ? given : 60;
+      const wait = GIF_COPY.wait(seconds);
+      if (hold && kind.inert) held = { provider, result, query, retried, until: code === "rateLimited" ? until ?? Date.now() + seconds * 1e3 : null };
       const acts = [];
       if (kind.action === "settings" && openSettings) acts.push(h("button", { type: "button", class: "gp-btn primary", onclick: () => {
+        held = null;
         openSettings();
       } }, gifIcon("open"), GIF_COPY.openSettings));
       if (kind.action === "retry" && retried !== code) acts.push(h("button", { type: "button", class: "gp-btn outline", onclick: () => {
         retried = code;
+        held = null;
         setInert(false);
         searchNow(query);
       } }, GIF_COPY.tryAgain));
@@ -2279,12 +2283,13 @@
       if (code === "rateLimited") {
         wake = later(() => {
           wake = null;
+          held = null;
           if (!open) return;
           setInert(false);
           syncClear();
           showStart();
           input.focus();
-        }, (Number.isFinite(seconds) && seconds > 0 ? seconds : 60) * 1e3);
+        }, seconds * 1e3);
       }
       if (acts.length) acts[0].focus();
       else if (!inert) input.focus();
@@ -2310,7 +2315,18 @@
       if (at !== generation || !open) return;
       ready();
     }
+    function showHeld() {
+      const { result, query, until } = held;
+      retried = held.retried;
+      input.value = query;
+      last = query;
+      showError(until === null ? result : { ...result, retryAfter: Math.ceil((until - Date.now()) / 1e3) }, query, { hold: true, until });
+    }
     function ready() {
+      if (held) {
+        showHeld();
+        return;
+      }
       setInert(false);
       input.value = "";
       last = "";
@@ -2345,7 +2361,9 @@
       body.replaceChildren(h("div", { class: "gp-start", role: "status", text: GIF_COPY.loading }));
       foot("");
       const [named, consent] = await Promise.all([readProvider(), gifReadState(uiState)]);
-      if (at !== generation || !open || !named) return;
+      if (at !== generation || !open) return;
+      if (held && (held.provider !== named || held.until !== null && Date.now() >= held.until)) held = null;
+      if (!named) return;
       allowed = consent;
       if (allowed[named]) ready();
       else showConsent();
@@ -2431,7 +2449,7 @@
           return;
         }
       }
-      showError(result, q);
+      showError(result, q, { hold: true });
     }
     function pick(index) {
       const c = candidates[index];

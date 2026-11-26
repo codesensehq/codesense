@@ -72,6 +72,9 @@ export function mountGifPicker(el,{act,uiState=null,onStage=()=>{},provider:gues
  el.append(root);
  // provider: the one the host named on this open; allowed: the consent read at open; inert: typing sends nothing; seq: the newest search (a stale answer is dropped).
  let open=false,generation=0,provider=GIF_PROVIDERS.includes(guess)?guess:'giphy',allowed={},inert=true,seq=0,timer=null,wake=null,last='',retried=null,grid=null,rover=null,candidates=[];
+ // held: the inert state a search last returned, kept across close so a reopen shows it again rather than send a refused key or spend the shared
+ // bucket: {provider, result, query, retried, until}. Its action (Open Settings, Try again), the end of the wait, or a different provider releases it.
+ let held=null;
  const words=()=>GIF_PROVIDER_COPY[provider];
  const later=(fn,ms)=>win.setTimeout(fn,ms);
  const stopTimers=()=>{if(timer!==null){win.clearTimeout(timer);timer=null;}if(wake!==null){win.clearTimeout(wake);wake=null;}};
@@ -90,22 +93,24 @@ export function mountGifPicker(el,{act,uiState=null,onStage=()=>{},provider:gues
  }
  function syncClear(){clear.hidden=!input.value||inert;}
  // Each error the verbs return, in its own words. An inert state holds the field until its action: Open Settings, Try again or the end of the wait.
- function showError(result,query){
+ // A search's inert state is held (`hold`); `until` keeps a held wait's end when it is shown again.
+ function showError(result,query,{hold=false,until=null}={}){
   const code=GIF_STATES[result&&result.error]?result.error:'failed';
   const kind=GIF_STATES[code],text=GIF_COPY.state[code],name=words().name;
-  const seconds=Number(result&&result.retryAfter);
-  const wait=GIF_COPY.wait(Number.isFinite(seconds)&&seconds>0?seconds:60);
+  const given=Number(result&&result.retryAfter),seconds=Number.isFinite(given)&&given>0?given:60;
+  const wait=GIF_COPY.wait(seconds);
+  if(hold&&kind.inert)held={provider,result,query,retried,until:code==='rateLimited'?until??Date.now()+seconds*1000:null};
   const acts=[];
-  if(kind.action==='settings'&&openSettings)acts.push(h('button',{type:'button',class:'gp-btn primary',onclick:()=>{openSettings();}},gifIcon('open'),GIF_COPY.openSettings));
+  if(kind.action==='settings'&&openSettings)acts.push(h('button',{type:'button',class:'gp-btn primary',onclick:()=>{held=null;openSettings();}},gifIcon('open'),GIF_COPY.openSettings));
   // Try again once: a second failure of the same kind keeps the message with no button.
-  if(kind.action==='retry'&&retried!==code)acts.push(h('button',{type:'button',class:'gp-btn outline',onclick:()=>{retried=code;setInert(false);searchNow(query);}},GIF_COPY.tryAgain));
+  if(kind.action==='retry'&&retried!==code)acts.push(h('button',{type:'button',class:'gp-btn outline',onclick:()=>{retried=code;held=null;setInert(false);searchNow(query);}},GIF_COPY.tryAgain));
   const why=result&&typeof result.message==='string'?result.message:String(result&&result.error||'');
   showState({icon:kind.icon,tone:kind.tone,big:typeof text.big==='function'?text.big(name):text.big,line:text.body(name,wait,why),fine:kind.action==='settings'?GIF_COPY.settingsPath:null,acts});
   foot('');
   setInert(kind.inert);syncClear();
   if(code==='rateLimited'){
    // The bucket is shared with agents: no retry, and the field wakes when the wait ends.
-   wake=later(()=>{wake=null;if(!open)return;setInert(false);syncClear();showStart();input.focus();},(Number.isFinite(seconds)&&seconds>0?seconds:60)*1000);
+   wake=later(()=>{wake=null;held=null;if(!open)return;setInert(false);syncClear();showStart();input.focus();},seconds*1000);
   }
   if(acts.length)acts[0].focus();else if(!inert)input.focus();
  }
@@ -127,7 +132,13 @@ export function mountGifPicker(el,{act,uiState=null,onStage=()=>{},provider:gues
   if(at!==generation||!open)return;
   ready();
  }
- function ready(){setInert(false);input.value='';last='';retried=null;syncClear();showStart();input.focus();}
+ // The held state again, with the query it answered, the Try again it had left and the rest of its wait.
+ function showHeld(){
+  const {result,query,until}=held;
+  retried=held.retried;input.value=query;last=query;
+  showError(until===null?result:{...result,retryAfter:Math.ceil((until-Date.now())/1000)},query,{hold:true,until});
+ }
+ function ready(){if(held){showHeld();return;}setInert(false);input.value='';last='';retried=null;syncClear();showStart();input.focus();}
  // The provider the host names, then its consent. An error here (Off, no key, the team's media off) is the state.
  async function readProvider(){
   const at=generation;
@@ -144,7 +155,9 @@ export function mountGifPicker(el,{act,uiState=null,onStage=()=>{},provider:gues
   setInert(true);dropGrid();
   body.replaceChildren(h('div',{class:'gp-start',role:'status',text:GIF_COPY.loading}));foot('');
   const [named,consent]=await Promise.all([readProvider(),gifReadState(uiState)]);
-  if(at!==generation||!open||!named)return;
+  if(at!==generation||!open)return;
+  if(held&&(held.provider!==named||(held.until!==null&&Date.now()>=held.until)))held=null;
+  if(!named)return;
   allowed=consent;
   if(allowed[named])ready();else showConsent();
  }
@@ -202,7 +215,7 @@ export function mountGifPicker(el,{act,uiState=null,onStage=()=>{},provider:gues
    if(mine!==seq||at!==generation||!open||!named)return;
    if(named!==asked){allowed=await gifReadState(uiState);if(at!==generation||!open)return;if(!allowed[named]){showConsent();return;}searchNow(q);return;}
   }
-  showError(result,q);
+  showError(result,q,{hold:true});
  }
  function pick(index){
   const c=candidates[index];
