@@ -1433,7 +1433,8 @@ fn gif_provider_is_an_inbox_pane_only_read_with_no_prompt() {
 #[test]
 fn open_gif_settings_is_an_inbox_pane_only_read_with_no_args() {
     use crate::dashboard_stream::frame::FrameCallerKind;
-    let verb = Registry::default().get("openGifSettings").unwrap();
+    let registry = Registry::default();
+    let verb = registry.get("openGifSettings").unwrap();
     assert_eq!(verb.grant, "inbox:write");
     assert_eq!(verb.class, Class::Read);
     assert!(!verb.inbox_target && verb.audited && verb.action && !verb.confirmable);
@@ -1487,7 +1488,8 @@ fn open_gif_settings_is_an_inbox_pane_only_read_with_no_args() {
 
 #[test]
 fn gif_search_takes_the_provider_the_picker_asked_consent_for() {
-    let verb = Registry::default().get("gifSearch").unwrap();
+    let registry = Registry::default();
+    let verb = registry.get("gifSearch").unwrap();
     for provider in ["giphy", "klipy"] {
         let args = json!({"query":"cat","provider":provider});
         assert!(jsonschema::is_valid(&verb.args_schema, &args), "{args}");
