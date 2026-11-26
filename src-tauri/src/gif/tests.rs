@@ -3129,6 +3129,55 @@ fn a_keychain_read_brings_the_saved_key_marker_in_step() {
     assert!(settings::load(dir.path()).saved_keys.is_empty());
 }
 
+/// A keychain whose first read is overtaken by a key remove, as a remove from another window is.
+struct RemovedMidRead {
+    inner: FakeStore,
+    dir: std::path::PathBuf,
+    keys: std::sync::OnceLock<Keys>,
+    removed: std::sync::atomic::AtomicBool,
+}
+impl CredentialStore for RemovedMidRead {
+    fn get(&self, account: &str) -> Result<Option<Secret>, CredentialError> {
+        let before = self.inner.get(account);
+        if !self.removed.swap(true, Ordering::SeqCst) {
+            let keys = self.keys.get().expect("the keys");
+            settings::remove_with(keys, &self.dir, Provider::Klipy).unwrap();
+        }
+        before
+    }
+    fn set(&self, account: &str, value: &Secret) -> Result<(), CredentialError> {
+        self.inner.set(account, value)
+    }
+    fn delete(&self, account: &str) -> Result<(), CredentialError> {
+        CredentialStore::delete(&self.inner, account)
+    }
+}
+
+#[test]
+fn a_key_removed_during_a_read_is_not_marked_saved() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(RemovedMidRead {
+        inner: FakeStore::default(),
+        dir: dir.path().to_path_buf(),
+        keys: std::sync::OnceLock::new(),
+        removed: std::sync::atomic::AtomicBool::new(false),
+    });
+    // A key saved before the marker existed, removed while this read is in flight.
+    store.inner.set(ACCOUNT, &Secret::new(KLIPY_KEY)).unwrap();
+    let keys = Keys::new(store.clone(), true, Some(ACCOUNT), Duration::from_secs(3));
+    assert!(store.keys.set(keys.clone()).is_ok());
+    let stale = settings::status_with(&keys, dir.path());
+    assert_eq!(stale.status, KeyState::Saved);
+    assert!(
+        settings::load(dir.path()).saved_keys.is_empty(),
+        "the remove stands"
+    );
+    assert_eq!(
+        settings::status_with(&keys, dir.path()).status,
+        KeyState::Missing
+    );
+}
+
 #[tokio::test]
 async fn search_page_result_names_provider() {
     let h = klipy_harness();

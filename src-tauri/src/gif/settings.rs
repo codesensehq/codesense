@@ -441,15 +441,20 @@ pub(crate) fn status_of(keys: &Keys, dir: &Path, provider: Provider) -> KeyStatu
 /// The active provider's key status, read fresh from the keychain (the read that may raise an
 /// access prompt, while the user is in Settings to allow it). A read that finds a key, or none,
 /// brings the provider's saved-key marker in step: a key saved before the marker, or removed
-/// outside the app.
+/// outside the app. A save or remove during the read wins, and the marker is left as it set it.
 pub(crate) fn status_with(keys: &Keys, dir: &Path) -> KeyStatus {
     let settings = load(dir);
     let provider = settings.provider;
+    let read_at = Keys::generation(keys);
     let read = keys.read_key(provider);
     if let Ok(key) = &read {
         if key.is_some() != settings.saved_keys.contains(&provider) {
             // Best effort: the Keys row is only a hint, and this read stands without it.
-            let _ = update(dir, |s| s.mark_saved(provider, key.is_some()));
+            let _ = update(dir, |s| {
+                if Keys::generation(keys) == read_at {
+                    s.mark_saved(provider, key.is_some());
+                }
+            });
         }
     }
     match read {
