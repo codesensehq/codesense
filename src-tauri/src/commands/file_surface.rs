@@ -83,87 +83,88 @@ impl ContentAccess {
         }
         Ok(value)
     }
+    /// Tint `rows` from one git status. A delta refresh passes one row: its status is
+    /// restricted to that path.
     pub(crate) fn tint_rows(&self, rows: &mut [Value]) {
-        if let Ok(repo) = git2::Repository::discover(&self.own) {
-            if let Some(workdir) = repo.workdir() {
-                let mut options = git2::StatusOptions::new();
-                options
-                    .include_untracked(true)
-                    .recurse_untracked_dirs(true)
-                    .renames_head_to_index(true)
-                    .renames_index_to_workdir(true);
-                // Delta refreshes pass one row: restrict git work to that path.
-                if rows.len() == 1 {
-                    if let Some(relative) = rows[0]["path"]
-                        .as_str()
-                        .and_then(|path| Path::new(path).strip_prefix(workdir).ok())
-                    {
-                        options.pathspec(relative);
-                    }
-                }
-                if let Ok(statuses) = repo.statuses(Some(&mut options)) {
-                    for entry in statuses.iter() {
-                        let delta = entry.index_to_workdir().or_else(|| entry.head_to_index());
-                        let path = delta
-                            .as_ref()
-                            .and_then(|d| d.new_file().path())
-                            .or_else(|| Result::ok(entry.path()).map(Path::new));
-                        let Some(path) = path else {
-                            continue;
-                        };
-                        let absolute = workdir.join(path);
-                        let Some(row) = rows
-                            .iter_mut()
-                            .find(|row| row["path"].as_str() == absolute.to_str())
-                        else {
-                            continue;
-                        };
-                        let status = entry.status();
-                        let state = if status.is_conflicted() {
-                            "conflict"
-                        } else if status
-                            .intersects(git2::Status::WT_DELETED | git2::Status::INDEX_DELETED)
-                        {
-                            "deleted"
-                        } else if status
-                            .intersects(git2::Status::WT_RENAMED | git2::Status::INDEX_RENAMED)
-                        {
-                            "renamed"
-                        } else if status.intersects(git2::Status::WT_NEW | git2::Status::INDEX_NEW)
-                        {
-                            "added"
-                        } else {
-                            "modified"
-                        };
-                        let old = delta.and_then(|d| d.old_file().path().map(Path::to_path_buf));
-                        let old = old.filter(|old| {
-                            let path = workdir.join(old);
-                            self.caller.allows(&path)
-                                && self.view.as_ref().map_or_else(
-                                    || path.starts_with(&self.own),
-                                    |view| {
-                                        matches!(view.admits_path(&path),
-                                        crate::context_repo::inheritance::Admit::Own
-                                        | crate::context_repo::inheritance::Admit::Inherited { .. })
-                                    },
-                                )
-                        });
-                        let state = if state == "renamed" && old.is_none() {
-                            "added"
-                        } else {
-                            state
-                        };
-                        row["gitState"] = json!(state);
-                        if state == "renamed" {
-                            if let Some(old) = old {
-                                row["oldName"] =
-                                    json!(old.file_name().unwrap_or_default().to_string_lossy());
-                            }
-                        }
-                    }
-                }
-            }
+        let pathspec = match &*rows {
+            [row] => row["path"].as_str().map(Path::new),
+            _ => None,
+        };
+        apply_tints(&self.git_tints(pathspec), rows.iter_mut());
+    }
+    /// One git status over this content's repository, narrowed to `pathspec` when given:
+    /// each changed file's tint, by its absolute path.
+    pub(crate) fn git_tints(&self, pathspec: Option<&Path>) -> Tints {
+        let mut tints = Tints::new();
+        let Ok(repo) = git2::Repository::discover(&self.own) else {
+            return tints;
+        };
+        let Some(workdir) = repo.workdir() else {
+            return tints;
+        };
+        let mut options = tint_status_options();
+        let pathspec = pathspec.and_then(|path| path.strip_prefix(workdir).ok());
+        if let Some(relative) = pathspec {
+            options.pathspec(relative);
         }
+        #[cfg(test)]
+        TINT_STATUSES.with_borrow_mut(|calls| calls.push(pathspec.map(Path::to_path_buf)));
+        let Ok(statuses) = repo.statuses(Some(&mut options)) else {
+            return tints;
+        };
+        for entry in statuses.iter() {
+            let delta = entry.index_to_workdir().or_else(|| entry.head_to_index());
+            let path = delta
+                .as_ref()
+                .and_then(|d| d.new_file().path())
+                .or_else(|| Result::ok(entry.path()).map(Path::new));
+            let Some(path) = path else {
+                continue;
+            };
+            let Some(absolute) = workdir.join(path).to_str().map(str::to_owned) else {
+                continue;
+            };
+            let status = entry.status();
+            let state = if status.is_conflicted() {
+                "conflict"
+            } else if status.intersects(git2::Status::WT_DELETED | git2::Status::INDEX_DELETED) {
+                "deleted"
+            } else if status.intersects(git2::Status::WT_RENAMED | git2::Status::INDEX_RENAMED) {
+                "renamed"
+            } else if status.intersects(git2::Status::WT_NEW | git2::Status::INDEX_NEW) {
+                "added"
+            } else {
+                "modified"
+            };
+            let old = delta.and_then(|d| d.old_file().path().map(Path::to_path_buf));
+            let old = old.filter(|old| {
+                let path = workdir.join(old);
+                self.caller.allows(&path)
+                    && self.view.as_ref().map_or_else(
+                        || path.starts_with(&self.own),
+                        |view| {
+                            matches!(
+                                view.admits_path(&path),
+                                crate::context_repo::inheritance::Admit::Own
+                                    | crate::context_repo::inheritance::Admit::Inherited { .. }
+                            )
+                        },
+                    )
+            });
+            let state = if state == "renamed" && old.is_none() {
+                "added"
+            } else {
+                state
+            };
+            let old = old.filter(|_| state == "renamed").map(|old| {
+                old.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            });
+            tints.insert(absolute, (state, old));
+        }
+        tints
     }
     /// Coordinates shared by all layers; this maps identity, never authorizes a read.
     pub(crate) fn logical_path(&self, path: &Path) -> Result<PathBuf, String> {
@@ -197,6 +198,13 @@ impl ContentAccess {
             .collect())
     }
     pub(crate) fn list_rows(&self, dir: Option<&str>) -> Result<Vec<Value>, String> {
+        let mut rows = self.untinted_rows(dir)?;
+        self.tint_rows(&mut rows);
+        Ok(rows)
+    }
+    /// [`Self::list_rows`] without git tints, for a caller that tints several listings from
+    /// one status.
+    pub(crate) fn untinted_rows(&self, dir: Option<&str>) -> Result<Vec<Value>, String> {
         let relative = self.logical_path(Path::new(dir.unwrap_or("")))?;
         let mut rows = self.entries(&relative)?;
         for row in rows.values_mut().filter(|row| is_folder(row)) {
@@ -204,9 +212,7 @@ impl ContentAccess {
                 self.entries(Path::new(row["relativePath"].as_str().ok_or(NOT_FOUND)?))?;
             folder_summary(row, children.values());
         }
-        let mut rows: Vec<Value> = rows.into_values().collect();
-        self.tint_rows(&mut rows);
-        Ok(rows)
+        Ok(rows.into_values().collect())
     }
     fn layers(
         &self,
@@ -308,6 +314,44 @@ impl ContentAccess {
             }
         }
         Ok(rows)
+    }
+}
+
+/// Git tints by absolute file path: the row state and, for a rename, the old file name.
+pub(crate) type Tints = std::collections::HashMap<String, (&'static str, Option<String>)>;
+
+#[cfg(test)]
+thread_local! {
+    /// Each tint status's pathspec, in call order, so a test can count the statuses a read runs.
+    pub(crate) static TINT_STATUSES: std::cell::RefCell<Vec<Option<PathBuf>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The status a tint reads. Staged renames keep their old name; pairing unstaged moves is
+/// left out, as it compares every deleted file against every untracked one.
+pub(crate) fn tint_status_options() -> git2::StatusOptions {
+    let mut options = git2::StatusOptions::new();
+    options
+        .include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .renames_head_to_index(true)
+        .renames_index_to_workdir(false);
+    options
+}
+
+/// Tint each row whose file `tints` holds.
+pub(crate) fn apply_tints<'a>(tints: &Tints, rows: impl IntoIterator<Item = &'a mut Value>) {
+    if tints.is_empty() {
+        return;
+    }
+    for row in rows {
+        let Some((state, old)) = row["path"].as_str().and_then(|path| tints.get(path)) else {
+            continue;
+        };
+        row["gitState"] = json!(state);
+        if let Some(old) = old {
+            row["oldName"] = json!(old);
+        }
     }
 }
 
@@ -530,6 +574,18 @@ pub(crate) async fn list_with_access<R: tauri::Runtime>(
     args: ListFiles,
     team_key: &str,
 ) -> Result<Value, String> {
+    list_with(app, access, args, team_key, true).await
+}
+
+/// [`list_with_access`]; `tint: false` leaves git tints to a caller that tints several
+/// listings from one status.
+pub(crate) async fn list_with<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    access: ContentAccess,
+    args: ListFiles,
+    team_key: &str,
+    tint: bool,
+) -> Result<Value, String> {
     if matches!(args.scope.as_deref(), Some("story" | "agent")) {
         let paths = scope_paths(&app, &access, &args, &team_key).await?;
         let dir = args
@@ -542,11 +598,18 @@ pub(crate) async fn list_with_access<R: tauri::Runtime>(
             .filter(|p| dir.as_ref().is_none_or(|d| p.starts_with(d)))
             .filter_map(|p| access.row_for_path(&p).ok())
             .collect::<Vec<_>>();
-        access.tint_rows(&mut rows);
+        if tint {
+            access.tint_rows(&mut rows);
+        }
         return Ok(json!({"rows":rows}));
     }
     super::await_blocking("files.list", move || {
-        Ok(json!({"rows":access.list_rows(args.dir.as_deref())?}))
+        let rows = if tint {
+            access.list_rows(args.dir.as_deref())?
+        } else {
+            access.untinted_rows(args.dir.as_deref())?
+        };
+        Ok(json!({"rows":rows}))
     })
     .await
 }
