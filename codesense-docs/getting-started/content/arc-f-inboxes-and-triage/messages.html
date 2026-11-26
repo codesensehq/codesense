@@ -356,7 +356,8 @@
           <code>id</code> as <code>media.providerId</code>: while GIF search is on, CodeSense registers the send
           with the provider: GIPHY's required send and view pings, with an install id GIPHY issues, or
           KLIPY's share ping, with the words the search used and a random id made for this install.
-          The pane shows the provider's “Powered by” line under it. Ids match
+          A GIPHY GIF shows “Powered by GIPHY” under it in the pane; a KLIPY GIF names KLIPY only in
+          its details, as “via KLIPY”. Ids match
           <code>^[A-Za-z0-9_-]{1,128}$</code>.</p>
         <pre><code>gif_search({ query: "ship it", limit: 6 })
 // → { status: "ok", provider: "giphy",
