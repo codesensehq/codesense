@@ -1771,6 +1771,7 @@ fn missing_or_corrupt_settings_read_as_on_pg_and_not_production() {
     );
     assert_eq!(defaults.ceiling, Rating::Pg);
     assert!(defaults.production_keys.is_empty());
+    assert!(defaults.saved_keys.is_empty());
     let read = |contents: &str| {
         std::fs::write(dir.path().join(settings::FILE), contents).unwrap();
         settings::load(dir.path())
@@ -1779,8 +1780,10 @@ fn missing_or_corrupt_settings_read_as_on_pg_and_not_production() {
     assert_eq!(read("[1,2]"), defaults);
     let odd = read(
         r#"{"enabled":"no","provider":"tenor","ceiling":"r","productionKeys":["giphy:short",
-        "giphy:0123456789abcdef", 7, "klipy:0123456789abcdef"]}"#,
+        "giphy:0123456789abcdef", 7, "klipy:0123456789abcdef"],
+        "savedKeys":["klipy","GIPHY","tenor",3,"klipy","giphy"]}"#,
     );
+    assert_eq!(odd.saved_keys, [Provider::Klipy, Provider::Giphy]);
     assert!(odd.enabled);
     assert_eq!(odd.provider, Provider::Klipy);
     assert_eq!(odd.ceiling, Rating::Pg);
@@ -3014,28 +3017,19 @@ async fn save_status_and_remove_follow_the_loaded_provider() {
 #[tokio::test]
 async fn off_keys_row_removes_only_that_provider() {
     let (h, klipy) = two_key_harness();
-    // Each provider has an install id, KLIPY a production mark.
+    // Each key saved in Settings, KLIPY's marked production.
+    settings::save_with(&h.keys(), h.dir.path(), KEY).unwrap();
     settings::set_with(&h.keys(), h.dir.path(), choose("klipy")).unwrap();
-    let fp = fingerprint(&Secret::new(KLIPY_KEY));
-    install::customer_id(h.dir.path(), &fp, install::install_epoch(h.dir.path())).unwrap();
+    settings::save_with(&h.keys(), h.dir.path(), KLIPY_KEY).unwrap();
     let production = SettingsUpdate {
         production: Some(true),
         ..SettingsUpdate::default()
     };
     settings::set_with(&h.keys(), h.dir.path(), production).unwrap();
-    let giphy_fp = fingerprint(&Secret::new(KEY));
-    let epoch = install::install_epoch(h.dir.path());
-    install::write_install(h.dir.path(), Provider::Giphy, &giphy_fp, "rid-1", epoch).unwrap();
     settings::set_with(&h.keys(), h.dir.path(), turn_off()).unwrap();
-    // Off deleted the install file; the Keys row reads production marks and that file only.
-    install::write_install(
-        h.dir.path(),
-        Provider::Giphy,
-        &giphy_fp,
-        "rid-1",
-        install::install_epoch(h.dir.path()),
-    )
-    .unwrap();
+    // Off deleted the install file; the Keys row reads gif.json alone.
+    assert!(!install::has_entry(h.dir.path(), Provider::Giphy));
+    assert!(!install::has_entry(h.dir.path(), Provider::Klipy));
     let reads = (
         h.store.calls.load(Ordering::SeqCst),
         klipy.calls.load(Ordering::SeqCst),
@@ -3062,20 +3056,77 @@ async fn off_keys_row_removes_only_that_provider() {
         reads,
         "the Keys row reads no keychain"
     );
-    // Removing KLIPY's key clears only KLIPY's key, mark and install entry.
+    // Removing KLIPY's key clears only KLIPY's key, mark and marker.
     let removed = settings::remove_with(&h.keys(), h.dir.path(), Provider::Klipy).unwrap();
     assert_eq!(removed.status, KeyState::Missing);
     assert!(klipy.inner.get(ACCOUNT).unwrap().is_none());
     assert!(h.store.inner.get(ACCOUNT).unwrap().is_some());
     assert!(!h.file(settings::FILE).contains("klipy:"));
-    assert_eq!(
-        install::read_install(h.dir.path(), Provider::Giphy, &giphy_fp).as_deref(),
-        Some("rid-1")
-    );
-    assert!(!install::has_entry(h.dir.path(), Provider::Klipy));
+    assert_eq!(settings::load(h.dir.path()).saved_keys, [Provider::Giphy]);
     let giphy_row = settings::status_of(&h.keys(), h.dir.path(), Provider::Giphy);
     assert_eq!(giphy_row.status, KeyState::Saved);
     assert!(!settings::load(h.dir.path()).enabled, "still Off");
+}
+
+#[test]
+fn a_saved_key_never_used_reads_as_saved_right_after_off() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(Counting::default());
+    let keys = Keys::new(store.clone(), true, Some(ACCOUNT), Duration::from_secs(3));
+    settings::save_with(&keys, dir.path(), KLIPY_KEY).unwrap();
+    settings::set_with(&keys, dir.path(), turn_off()).unwrap();
+    let reads = store.calls.load(Ordering::SeqCst);
+    let row = settings::status_of(&keys, dir.path(), Provider::Klipy);
+    assert_eq!(
+        (row.status, row.hint, row.production),
+        (KeyState::Saved, None, false)
+    );
+    // A provider switch leaves the marker alone, and GIPHY has no key.
+    let giphy = SettingsUpdate {
+        provider: Some("giphy".to_string()),
+        ..SettingsUpdate::default()
+    };
+    settings::set_with(&keys, dir.path(), giphy).unwrap();
+    let klipy_row = settings::status_of(&keys, dir.path(), Provider::Klipy);
+    let giphy_row = settings::status_of(&keys, dir.path(), Provider::Giphy);
+    assert_eq!(
+        (klipy_row.status, giphy_row.status),
+        (KeyState::Saved, KeyState::Missing)
+    );
+    assert_eq!(
+        store.calls.load(Ordering::SeqCst),
+        reads,
+        "no keychain read"
+    );
+    // The marker is the provider's name only.
+    let file = std::fs::read_to_string(dir.path().join(settings::FILE)).unwrap();
+    assert!(!file.contains(KLIPY_KEY), "{file}");
+    assert!(
+        !file.contains(&fingerprint(&Secret::new(KLIPY_KEY))),
+        "{file}"
+    );
+}
+
+#[test]
+fn a_keychain_read_brings_the_saved_key_marker_in_step() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(FakeStore::default());
+    // A key saved before the marker existed.
+    store.set(ACCOUNT, &Secret::new(KLIPY_KEY)).unwrap();
+    let keys = Keys::new(store.clone(), true, Some(ACCOUNT), Duration::from_secs(3));
+    assert!(settings::load(dir.path()).saved_keys.is_empty());
+    assert_eq!(
+        settings::status_with(&keys, dir.path()).status,
+        KeyState::Saved
+    );
+    assert_eq!(settings::load(dir.path()).saved_keys, [Provider::Klipy]);
+    // A key removed outside the app.
+    CredentialStore::delete(store.as_ref(), ACCOUNT).unwrap();
+    assert_eq!(
+        settings::status_with(&keys, dir.path()).status,
+        KeyState::Missing
+    );
+    assert!(settings::load(dir.path()).saved_keys.is_empty());
 }
 
 #[tokio::test]

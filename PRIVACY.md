@@ -304,10 +304,10 @@ a key, none of them is made.
 - **What is kept:** each key stays in your OS keychain, in the
   `ai.codesense.giphy-api-key` or `ai.codesense.klipy-api-key` item under your
   login name; switching provider keeps both. In the app's data folder,
-  `gif.json` keeps On or Off, the chosen provider, the rating ceiling and which
-  keys are production keys, `gif-rate.json` keeps the last hour's search times
-  and `gif-install.json` keeps GIPHY's random id and KLIPY's customer id,
-  readable by you only; all three name a key only by a fingerprint. The pingback
+  `gif.json` keeps On or Off, the chosen provider, the rating ceiling, which
+  providers have a saved key and which keys are production keys,
+  `gif-rate.json` keeps the last hour's search times and `gif-install.json`
+  keeps GIPHY's random id and KLIPY's customer id, readable by you only; all three name a key only by a fingerprint. The pingback
   links GIPHY returns with each result, and the search words of each KLIPY
   result, are held in memory for an hour. A GIF is downloaded only when an agent
   sends it, as in [Pictures in the inbox](#4-pictures-in-the-inbox).
