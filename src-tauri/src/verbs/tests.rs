@@ -1297,6 +1297,52 @@ fn gif_search_is_an_inbox_pane_only_inbox_write_with_no_prompt() {
 }
 
 #[test]
+fn only_the_inbox_pane_writes_the_gif_pickers_consent() {
+    use crate::dashboard_stream::frame::FrameCallerKind;
+    let frame = |kind, inbox| {
+        let mut frame = review_media_frame(kind, inbox);
+        frame.effective_grant.push("sessions:read".into());
+        frame
+    };
+    let consent = json!({"topic":"ui:gif","patch":{"consent":{"giphy":true}}});
+    for (kind, inbox) in [
+        (FrameCallerKind::Message, false),
+        (FrameCallerKind::Message, true),
+        (FrameCallerKind::Builtin, false),
+    ] {
+        assert_eq!(
+            Dispatcher::default().dispatch_frame(
+                &frame(kind, inbox),
+                "setUiState",
+                consent.clone(),
+                &Policy::default(),
+                0
+            ),
+            Decision::Deny {
+                reason: "denied: setUiState requires the Inbox pane".into()
+            },
+            "{kind:?} inbox={inbox}"
+        );
+    }
+    let pane = frame(FrameCallerKind::Builtin, true);
+    assert!(matches!(
+        Dispatcher::default().dispatch_frame(&pane, "setUiState", consent, &Policy::default(), 0),
+        Decision::Admit { .. }
+    ));
+    // Another page keeps its own UI state; only the ui:gif topic is the pane's.
+    assert!(matches!(
+        Dispatcher::default().dispatch_frame(
+            &frame(FrameCallerKind::Builtin, false),
+            "setUiState",
+            json!({"topic":"ui:right-pane","patch":{"tab":"inbox"}}),
+            &Policy::default(),
+            0
+        ),
+        Decision::Admit { .. }
+    ));
+}
+
+#[test]
 fn gif_search_audit_names_the_query_length_never_the_text() {
     let caller = caller("builtin");
     let target =

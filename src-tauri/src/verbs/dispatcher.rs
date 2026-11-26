@@ -316,12 +316,13 @@ impl Dispatcher {
         now: u64,
     ) -> Decision {
         // Inbox-pane-only work: an image fetch, the GIF provider read, a GIF search or pick, the
-        // GIF picker's way to Settings, and media on the human's send, which is stored as this
-        // machine's own. Other frames keep text-only human sends.
+        // GIF picker's way to Settings, a write to the picker's consent in ui:gif, and media on
+        // the human's send, which is stored as this machine's own. Other frames keep text-only
+        // human sends.
         let pane_only = matches!(
             verb,
             "loadMedia" | "gifSearch" | "gifProvider" | "gifPicked" | "openGifSettings"
-        );
+        ) || (verb == "setUiState" && args["topic"] == "ui:gif");
         let human_media =
             matches!(verb, "sendAsHuman" | "replyAsHuman") && !args["media"].is_null();
         if (pane_only || human_media)
