@@ -826,12 +826,9 @@ impl<R: tauri::Runtime> Drop for FilesRefreshGuard<R> {
         let Ok(mut model) = hub.model.lock() else {
             return;
         };
-        let again = model.finish_refresh(FILES_REFRESH_KEY);
-        if again {
+        if model.finish_refresh(FILES_REFRESH_KEY) {
             model.finish_refresh(FILES_REFRESH_KEY);
-        }
-        drop(model);
-        if again {
+            // Under the lock, so whoever sees FILES released also sees the rerun queued.
             hub.invalidate(FILES);
         }
     }
