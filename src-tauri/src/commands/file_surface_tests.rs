@@ -168,3 +168,80 @@ fn rename_tints_admit_sources_before_exposing_old_names() {
         );
     }
 }
+
+#[test]
+fn tint_status_options_detect_staged_renames_only() {
+    let (_dir, repo, own) = tests::committed_repo(&[
+        ("staged-before.md", "staged bytes"),
+        ("moved-before.md", "moved bytes"),
+    ]);
+    tests::stage_move(&repo, &own, "staged-before.md", "staged-after.md");
+    std::fs::rename(own.join("moved-before.md"), own.join("moved-after.md")).unwrap();
+    let statuses = repo.statuses(Some(&mut tint_status_options())).unwrap();
+    let entries: Vec<_> = statuses
+        .iter()
+        .map(|entry| (entry.path().unwrap().to_owned(), entry.status()))
+        .collect();
+    assert!(
+        entries
+            .iter()
+            .any(|(path, status)| path == "content/staged-after.md"
+                && status.contains(git2::Status::INDEX_RENAMED)),
+        "{entries:?}"
+    );
+    assert!(
+        entries
+            .iter()
+            .all(|(_, status)| !status.contains(git2::Status::WT_RENAMED)),
+        "{entries:?}"
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|(path, status)| path == "content/moved-after.md"
+                && status.contains(git2::Status::WT_NEW)),
+        "{entries:?}"
+    );
+}
+
+#[test]
+fn an_unstaged_move_tints_added_without_old_name() {
+    let (_dir, _repo, own) =
+        tests::committed_repo(&[("before.md", "identical bytes"), ("other.md", "other")]);
+    std::fs::rename(own.join("before.md"), own.join("after.md")).unwrap();
+    let access = ContentAccess::new(
+        own,
+        None,
+        crate::context_repo::caller_scope::CallerScope::Human,
+    );
+    let rows = access.list_rows(None).unwrap();
+    let moved = rows.iter().find(|r| r["name"] == "after.md").unwrap();
+    assert_eq!(moved["gitState"], "added");
+    assert!(moved.get("oldName").is_none(), "{moved}");
+}
+
+#[test]
+fn a_delta_tint_keeps_its_single_row_pathspec() {
+    let (_dir, _repo, own) =
+        tests::committed_repo(&[("tracked.md", "first"), ("other.md", "other")]);
+    std::fs::write(own.join("tracked.md"), "changed").unwrap();
+    std::fs::write(own.join("untracked.md"), "new").unwrap();
+    let access = ContentAccess::new(
+        own.clone(),
+        None,
+        crate::context_repo::caller_scope::CallerScope::Human,
+    );
+    let listed = access.list_rows(None).unwrap();
+    let mut row = access.row_for_path(&own.join("tracked.md")).unwrap();
+    TINT_STATUSES.take();
+    access.tint_rows(std::slice::from_mut(&mut row));
+    assert_eq!(
+        TINT_STATUSES.take(),
+        vec![Some(PathBuf::from("content/tracked.md"))]
+    );
+    assert_eq!(row["gitState"], "modified");
+    assert_eq!(
+        &row,
+        listed.iter().find(|r| r["name"] == "tracked.md").unwrap()
+    );
+}

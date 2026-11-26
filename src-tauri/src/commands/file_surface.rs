@@ -917,6 +917,40 @@ pub(crate) mod tests {
         private_root: PathBuf,
         _home: crate::routines::test_support::TempHome,
     }
+    /// A git repository whose `content` folder holds `files`, all committed. Returns the
+    /// content folder, canonical as listings spell it.
+    pub(crate) fn committed_repo(
+        files: &[(&str, &str)],
+    ) -> (tempfile::TempDir, git2::Repository, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let own = root.join("content");
+        std::fs::create_dir_all(&own).unwrap();
+        let repo = git2::Repository::init(&root).unwrap();
+        {
+            let mut index = repo.index().unwrap();
+            for (path, text) in files {
+                let file = own.join(path);
+                std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+                std::fs::write(&file, text).unwrap();
+                index.add_path(&Path::new("content").join(path)).unwrap();
+            }
+            index.write().unwrap();
+            let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+            let sig = git2::Signature::now("Test", "test@example.test").unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "initial", &tree, &[])
+                .unwrap();
+        }
+        (dir, repo, own)
+    }
+    /// Stage the move of committed `from` to `to`, both under `content`.
+    pub(crate) fn stage_move(repo: &git2::Repository, own: &Path, from: &str, to: &str) {
+        std::fs::rename(own.join(from), own.join(to)).unwrap();
+        let mut index = repo.index().unwrap();
+        index.remove_path(&Path::new("content").join(from)).unwrap();
+        index.add_path(&Path::new("content").join(to)).unwrap();
+        index.write().unwrap();
+    }
     impl SurfaceFixture {
         pub(crate) fn new() -> Self {
             use crate::routines::test_support::{launch_app, TempHome, ORG, TEAM};
