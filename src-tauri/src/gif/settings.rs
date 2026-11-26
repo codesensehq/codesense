@@ -447,7 +447,7 @@ pub(crate) fn save_with(keys: &Keys, dir: &Path, key: &str) -> Result<KeyStatus,
     let provider = current.provider;
     // A key that can't be one changes nothing, the current key's production flag included.
     check_key(provider, key).map_err(|error| format!("{error} Nothing changed."))?;
-    let had_production = current.production_keys.len() > 0;
+    let had_production = current.has_production(provider);
     update(dir, |s| s.clear_production(provider))?;
     keys.save_key(provider, key).map_err(|error| {
         if had_production {

@@ -1461,7 +1461,7 @@ fn a_failed_key_save_says_what_changed() {
         production: Some(true),
         ..Default::default()
     };
-    settings::set_with(&keys, dir.path(), production).unwrap();
+    settings::set_with(&keys, dir.path(), production.clone()).unwrap();
     let error = settings::save_with(&keys, dir.path(), "a-replacement-key-0001").unwrap_err();
     assert!(
         error.contains("no longer marked as a production key"),
@@ -1470,6 +1470,19 @@ fn a_failed_key_save_says_what_changed() {
     assert!(!error.contains("Nothing changed"));
     assert!(settings::load(dir.path()).production_keys.is_empty());
     assert!(!settings::status_with(&keys, dir.path()).production);
+
+    // Only the provider being saved counts: GIPHY's production mark says nothing about KLIPY.
+    settings::set_with(&keys, dir.path(), production).unwrap();
+    let klipy = SettingsUpdate {
+        provider: Some("klipy".to_string()),
+        ..Default::default()
+    };
+    settings::set_with(&keys, dir.path(), klipy).unwrap();
+    let error = settings::save_with(&keys, dir.path(), "a-replacement-key-0001").unwrap_err();
+    assert!(error.ends_with("Nothing changed."), "{error}");
+    let marks = settings::load(dir.path()).production_keys;
+    assert!(marks.iter().all(|k| k.starts_with("giphy:")), "{marks:?}");
+    assert_eq!(marks.len(), 1);
 }
 
 #[test]
