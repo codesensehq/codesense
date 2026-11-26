@@ -29,6 +29,8 @@ export type FakeTauriOptions = {
   sessions?: Row[];
   /** Production live-hub inbox message envelopes and projection count rows. */
   inbox?: Row[];
+  /** The team's roles, as agent_read_roles answers; omitted, none. */
+  roles?: Array<{ role: string; roleName?: string; registrations?: unknown[] }>;
   /** Further live-hub topics, served whole or by window. */
   topics?: Record<string, Row[]>;
   /** Explicit projection fixtures, keyed by [topic, viewKey]. */
@@ -299,7 +301,7 @@ export function installFakeTauri(options: FakeTauriOptions = {}) {
       if (command === "verb_settle") return null;
       if (command === "run_read_list") return options.runs ?? [];
       if (command === "run_read") return options.runReads?.[args.runId] ?? null;
-      if (command === "agent_read_roles") return { roles: [] };
+      if (command === "agent_read_roles") return { roles: options.roles ?? [] };
       if (command === "avatar_packs_list_for_team")
         return { packs: [], warnings: [], default_pack: null };
       if (command === "agent_definitions_prepare")

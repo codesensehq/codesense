@@ -116,6 +116,37 @@ test("without consent the picker asks first and searches nothing until Allow", a
   ]);
 });
 
+// A #role queue takes no attachments: no GIF button for it, and a staged GIF leaves on the switch, saying why.
+test("a #role recipient has no GIF button, and a switch to one unstages the GIF", async ({
+  mountPane,
+}) => {
+  const pane = await mountPane(INBOX_PANE, {
+    ...fixtures(),
+    roles: [{ role: "docs", roleName: "Docs", registrations: [] }],
+  });
+  const frame = pane.frame;
+  await frame.locator(".ib-row").first().click();
+  const button = frame.getByRole("button", { name: "Add a GIF" });
+  await button.click();
+  await frame.locator(".gp-input").fill("ship it");
+  await frame.locator(".gp-grid [role=option]").first().click();
+  await expect(frame.locator(".gs")).toHaveCount(1);
+  await frame.locator("#draft").fill("For the queue");
+  await frame.locator("#recipient").click();
+  await frame.locator("#picker-options button", { hasText: "#docs" }).click();
+  await expect(frame.locator("#recipient")).toContainText("#docs");
+  await expect(frame.locator(".gs")).toHaveCount(0);
+  await expect(frame.locator("#toast")).toContainText("GIFs can't go to a role queue");
+  await expect(frame.locator("#gif")).toBeHidden();
+  await frame.locator("#send").click();
+  await expect
+    .poll(async () => (await pane.verbs()).filter(({ verb }) => /AsHuman$/.test(verb)))
+    .toHaveLength(1);
+  const [sent] = (await pane.verbs()).filter(({ verb }) => /AsHuman$/.test(verb));
+  expect(sent.args).toMatchObject({ to: "#docs", text: "For the queue" });
+  expect(sent.args).not.toHaveProperty("media");
+});
+
 test("Esc closes the picker and gives the draft its focus back", async ({ mountPane }) => {
   const pane = await mountPane(INBOX_PANE, fixtures());
   const frame = pane.frame;
