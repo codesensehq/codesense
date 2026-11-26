@@ -343,6 +343,62 @@ describe("kit.chat.gifPicker: open, search and pick", () => {
     await pause();
     expect(w.calls("gifSearch")).toHaveLength(0);
   });
+
+  // Each search spends a token from the bucket agents share: a held Enter, a second Enter or a second chip click asks once.
+  const held = (w: ReturnType<typeof world>) => {
+    const base = w.act.getMockImplementation()!;
+    const waiting: (() => void)[] = [];
+    w.act.mockImplementation((verb, args) =>
+      verb === "gifSearch"
+        ? new Promise((done) => waiting.push(() => done(base(verb, args))))
+        : base(verb, args),
+    );
+    return () => waiting.splice(0).forEach((go) => go());
+  };
+  const enter = (w: ReturnType<typeof world>, repeat = false) =>
+    w.input().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", repeat, bubbles: true }));
+
+  it("repeated Enter keydowns on one query send one search, in flight and once its results show", async () => {
+    const w = world();
+    w.picker.open();
+    await settle();
+    const release = held(w);
+    w.input().value = "cat";
+    enter(w);
+    enter(w, true);
+    enter(w, true);
+    enter(w);
+    release();
+    await settle();
+    expect(w.picker.root.querySelectorAll(".gp-grid [role=option]")).toHaveLength(2);
+    enter(w);
+    enter(w, true);
+    await pause();
+    expect(w.calls("gifSearch")).toEqual([
+      ["gifSearch", { query: "cat", limit: 10, provider: "giphy" }],
+    ]);
+    w.input().value = "dog";
+    enter(w);
+    await settle();
+    expect(w.calls("gifSearch")).toHaveLength(2);
+  });
+
+  it("a second click on a chip whose search is in flight sends nothing", async () => {
+    const w = world();
+    w.picker.open();
+    await settle();
+    const release = held(w);
+    const chip = [...w.picker.root.querySelectorAll<HTMLButtonElement>(".gp-chip")].find(
+      (b) => b.textContent === "ship it",
+    )!;
+    chip.click();
+    chip.click();
+    release();
+    await settle();
+    expect(w.calls("gifSearch")).toEqual([
+      ["gifSearch", { query: "ship it", limit: 10, provider: "giphy" }],
+    ]);
+  });
 });
 
 describe("kit.chat.gifPicker: consent", () => {

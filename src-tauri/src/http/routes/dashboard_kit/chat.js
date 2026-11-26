@@ -2202,7 +2202,7 @@
       h("div", { class: "gp-foot" }, now, attr)
     );
     el.append(root);
-    let open = false, generation = 0, provider = GIF_PROVIDERS.includes(guess) ? guess : "giphy", allowed = {}, inert = true, seq = 0, timer = null, wake = null, last = "", retried = null, grid = null, rover = null, candidates = [];
+    let open = false, generation = 0, provider = GIF_PROVIDERS.includes(guess) ? guess : "giphy", allowed = {}, inert = true, seq = 0, timer = null, wake = null, last = "", retried = null, grid = null, rover = null, candidates = [], flying = null;
     let held = null;
     const words = () => GIF_PROVIDER_COPY[provider];
     const later = (fn, ms) => win.setTimeout(fn, ms);
@@ -2236,9 +2236,13 @@
       grid = null;
       candidates = [];
     }
+    function alreadyAsked(query) {
+      const q = query.trim();
+      return q === last && (flying !== null || grid !== null);
+    }
     function chips() {
       return h("div", { class: "gp-chips" }, GIF_COPY.starters.map((text) => h("button", { type: "button", class: "gp-chip", onclick: () => {
-        if (inert) return;
+        if (inert || alreadyAsked(text)) return;
         input.value = text;
         syncClear();
         searchNow(text);
@@ -2415,6 +2419,7 @@
       }
       const mine = ++seq, at = generation, asked = provider;
       last = q;
+      flying = mine;
       showSkeleton();
       let result;
       try {
@@ -2422,6 +2427,7 @@
       } catch (e) {
         result = { status: "error", error: "failed", message: e && e.message || String(e) };
       }
+      if (flying === mine) flying = null;
       if (mine !== seq || at !== generation || !open) return;
       if (result && result.status === "ok" && Array.isArray(result.candidates)) {
         retried = null;
@@ -2471,14 +2477,14 @@
       }
       timer = later(() => {
         timer = null;
-        if (input.value.trim() !== last || !grid) searchNow(input.value);
+        if (!alreadyAsked(input.value)) searchNow(input.value);
       }, GIF_DEBOUNCE_MS);
     });
     input.addEventListener("keydown", (event) => {
       if (imeKey(event)) return;
       if (event.key === "Enter") {
         event.preventDefault();
-        if (!inert) searchNow(input.value);
+        if (!inert && !event.repeat && !alreadyAsked(input.value)) searchNow(input.value);
       } else if (event.key === "ArrowDown" && grid) {
         event.preventDefault();
         grid.focus();
@@ -2526,6 +2532,7 @@
       open = false;
       generation++;
       seq++;
+      flying = null;
       stopTimers();
       dropGrid();
       root.hidden = true;

@@ -72,7 +72,7 @@ export function mountGifPicker(el,{act,uiState=null,onStage=()=>{},provider:gues
   h('div',{class:'gp-top'},h('div',{class:'gp-search'},gifIcon('search'),input,clear),closeButton),body,h('div',{class:'gp-foot'},now,attr));
  el.append(root);
  // provider: the one the host named on this open; allowed: the consent read at open; inert: typing sends nothing; seq: the newest search (a stale answer is dropped).
- let open=false,generation=0,provider=GIF_PROVIDERS.includes(guess)?guess:'giphy',allowed={},inert=true,seq=0,timer=null,wake=null,last='',retried=null,grid=null,rover=null,candidates=[];
+ let open=false,generation=0,provider=GIF_PROVIDERS.includes(guess)?guess:'giphy',allowed={},inert=true,seq=0,timer=null,wake=null,last='',retried=null,grid=null,rover=null,candidates=[],flying=null;
  // held: the last held state (GIF_STATES `hold`) a search returned, kept across close so a reopen shows it again rather than send a refused or missing
  // key or spend the shared bucket: {provider, result, query, until}. Open Settings, the end of the wait, or a different provider releases it. The other
  // inert states (keychainUnavailable, mediaOff) send nothing, so a reopen starts fresh from them.
@@ -84,7 +84,10 @@ export function mountGifPicker(el,{act,uiState=null,onStage=()=>{},provider:gues
  function setInert(on){inert=on;input.disabled=on;root.classList.toggle('inert',on);}
  function foot(text,{bold=null}={}){now.replaceChildren(...(bold?[h('b',{text:bold}),text]:[text]));}
  function dropGrid(){if(rover){rover.release();rover=null;}grid=null;candidates=[];}
- function chips(){return h('div',{class:'gp-chips'},GIF_COPY.starters.map(text=>h('button',{type:'button',class:'gp-chip',onclick:()=>{if(inert)return;input.value=text;syncClear();searchNow(text);}},text)));}
+ // The query already asked for: its search is in flight (`flying` is its seq) or its results are showing. Each search takes a token from the bucket
+ // agents share, so Enter, a chip or the pause never asks for it again.
+ function alreadyAsked(query){const q=query.trim();return q===last&&(flying!==null||grid!==null);}
+ function chips(){return h('div',{class:'gp-chips'},GIF_COPY.starters.map(text=>h('button',{type:'button',class:'gp-chip',onclick:()=>{if(inert||alreadyAsked(text))return;input.value=text;syncClear();searchNow(text);}},text)));}
  function showStart(){dropGrid();body.replaceChildren(h('div',{class:'gp-start'},h('span',{text:GIF_COPY.start(words().name)}),chips()));foot(`${GIF_COPY.typeMore} · ${GIF_COPY.escClose}`);}
  // A state in the body: a title, a line, the fine print, and its buttons.
  function showState({icon,tone='',big,line,fine=null,acts=[],extra=null}){
@@ -202,10 +205,11 @@ export function mountGifPicker(el,{act,uiState=null,onStage=()=>{},provider:gues
   if(inert||!open||!allowed[provider])return;
   if(q.length<GIF_MIN_QUERY){seq++;showStart();return;}
   const mine=++seq,at=generation,asked=provider;
-  last=q;
+  last=q;flying=mine;
   showSkeleton();
   let result;
   try{result=await act('gifSearch',{query:q,limit:GIF_LIMIT,provider:asked});}catch(e){result={status:'error',error:'failed',message:e&&e.message||String(e)};}
+  if(flying===mine)flying=null;
   if(mine!==seq||at!==generation||!open)return;
   if(result&&result.status==='ok'&&Array.isArray(result.candidates)){
    retried=null;
@@ -235,11 +239,12 @@ export function mountGifPicker(el,{act,uiState=null,onStage=()=>{},provider:gues
   const q=input.value.trim();
   // Under two characters nothing goes out, and an answer still on its way is dropped.
   if(q.length<GIF_MIN_QUERY){timer=null;seq++;showStart();return;}
-  timer=later(()=>{timer=null;if(input.value.trim()!==last||!grid)searchNow(input.value);},GIF_DEBOUNCE_MS);
+  timer=later(()=>{timer=null;if(!alreadyAsked(input.value))searchNow(input.value);},GIF_DEBOUNCE_MS);
  });
  input.addEventListener('keydown',event=>{
   if(imeKey(event))return;
-  if(event.key==='Enter'){event.preventDefault();if(!inert)searchNow(input.value);}
+  // A held Enter repeats its keydown; neither a repeat nor a second Enter on the query already asked for sends another search.
+  if(event.key==='Enter'){event.preventDefault();if(!inert&&!event.repeat&&!alreadyAsked(input.value))searchNow(input.value);}
   else if(event.key==='ArrowDown'&&grid){event.preventDefault();grid.focus();}
  });
  clear.addEventListener('click',()=>{input.value='';syncClear();seq++;last='';if(!inert)showStart();input.focus();});
@@ -258,7 +263,7 @@ export function mountGifPicker(el,{act,uiState=null,onStage=()=>{},provider:gues
  }
  function close(reason='close'){
   if(!open)return;
-  open=false;generation++;seq++;stopTimers();dropGrid();
+  open=false;generation++;seq++;flying=null;stopTimers();dropGrid();
   root.hidden=true;
   if(anchor)anchor.setAttribute('aria-expanded','false');
   doc.removeEventListener('pointerdown',outside,true);
