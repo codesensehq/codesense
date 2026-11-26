@@ -167,16 +167,17 @@ pub async fn file_surface_prepare_view<R: tauri::Runtime>(
     } else {
         access.logical_path(std::path::Path::new(args.dir.as_deref().unwrap_or("")))?
     };
-    // First paint tints the listing and every folder in it from one git status.
-    let mut values = listing(&app, &access, &args, &base, false).await?;
-    let mut raw = values["rows"]
-        .as_array_mut()
-        .map(std::mem::take)
-        .unwrap_or_default();
-    let mut folder_rows = folder_rows(&access, &rows(json!({"rows":&raw})));
-    tint_view(&access, &mut raw, &mut folder_rows);
-    let rows = rows(json!({"rows":&raw}));
-    let delivered = native_listing(&app, &access, &args, &base, raw);
+    // First paint tints the listing and every folder in it from one git status, as reset does.
+    let mut rows = rows(listing(&app, &access, &args, &base, false).await?);
+    let mut folder_rows = folder_rows(&access, &rows);
+    tint_view(&access, rows.values_mut(), &mut folder_rows);
+    let delivered = native_listing(
+        &app,
+        &access,
+        &args,
+        &base,
+        rows.values().cloned().collect(),
+    );
     let hub = app.state::<super::LiveHub>();
     let mut model = hub.model.lock().unwrap();
     model.projections.replace_view(
