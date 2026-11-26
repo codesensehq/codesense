@@ -67,6 +67,7 @@ import {
   agentPinsPrepareView,
   loadInboxMedia,
   gifSearchPage,
+  gifProviderPage,
   gifPicked,
   markInboxMessagesRead,
   markInboxMessagesUnread,
@@ -1513,7 +1514,19 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
       throw new Error("gifSearch: pass exactly one of {query} and {ids}");
     }
     const limit = optionalLimit(a.limit, "gifSearch") ?? null;
-    return inboxWrite(ctx, "gifSearch", a, (team) => gifSearchPage(team, query, ids, limit));
+    if (a.provider != null && a.provider !== "giphy" && a.provider !== "klipy") {
+      throw new Error("gifSearch: provider, if present, must be 'giphy' or 'klipy'");
+    }
+    const provider = a.provider ?? null;
+    return inboxWrite(ctx, "gifSearch", a, (team) =>
+      gifSearchPage(team, query, ids, limit, provider),
+    );
+  },
+  // The provider the Inbox pane's GIF search would use, from the settings alone (no key read,
+  // no search), so the picker asks consent for that provider. The host refuses other frames.
+  gifProvider: async (args, ctx) => {
+    const a = argObject(args, "gifProvider");
+    return inboxWrite(ctx, "gifProvider", a, (team) => gifProviderPage(team));
   },
   // A pick in the Inbox pane's GIF picker, once per pick; the host registers it with the
   // provider in the background and refuses it from any other frame.

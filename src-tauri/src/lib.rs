@@ -1198,6 +1198,7 @@ pub fn run() {
             gif::settings::gif_key_save,
             gif::settings::gif_key_remove,
             gif::page::gif_search_page,
+            gif::page::gif_provider_page,
             gif::page::gif_picked,
             #[cfg(not(cs_channel = "internal"))]
             license::commands::license_state,

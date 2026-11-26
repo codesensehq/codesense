@@ -1,6 +1,6 @@
 # Page SDK
 
-Generated from the Rust registry and TypeScript declarations. All 125 verbs and every declared Surface member are listed below. Rust checks each call against its frame grant.
+Generated from the Rust registry and TypeScript declarations. All 126 verbs and every declared Surface member are listed below. Rust checks each call against its frame grant.
 
 [Exact TypeScript declarations](codesense.d.ts) · [Machine reference](page-sdk.json) · [Capabilities](capabilities.md) · [LiveHub](live-hub.md)
 
@@ -919,6 +919,29 @@ metadata · inbox:write
 
 Class: metadata; default grant: inbox:write; MCP twin: Registers the person's pick in the Inbox pane GIF picker with the provider.
 
+## VerbMethods: gifProvider
+
+```ts
+gifProvider(args?: {
+      org?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      provider: "giphy" | "klipy";
+      status: "ok";
+      [key: string]: unknown;
+    } | {
+      error: "noProvider" | "mediaOff";
+      message: string;
+      status: "error";
+      [key: string]: unknown;
+    }>;
+```
+
+read · inbox:write
+
+Class: read; default grant: inbox:write; MCP twin: The Inbox pane GIF picker's provider, read from Settings with no search.
+
 ## VerbMethods: gifSearch
 
 ```ts
@@ -926,6 +949,7 @@ gifSearch(args?: {
       ids?: string[];
       limit?: number;
       org?: string;
+      provider?: "giphy" | "klipy";
       query?: string;
       team?: string;
       [key: string]: unknown;

@@ -1310,6 +1310,86 @@ fn gif_search_audit_names_the_query_length_never_the_text() {
 }
 
 #[test]
+fn gif_provider_is_an_inbox_pane_only_read_with_no_prompt() {
+    use crate::dashboard_stream::frame::FrameCallerKind;
+    let registry = Registry::default();
+    let verb = registry.get("gifProvider").unwrap();
+    assert_eq!(verb.grant, "inbox:write");
+    assert_eq!(verb.class, Class::Read);
+    assert!(verb.inbox_target && verb.audited && verb.action && !verb.confirmable);
+    assert!(verb.mcp_twin.is_none() && verb.presentation_only_reason.is_some());
+    for result in [
+        json!({"status":"ok","provider":"klipy"}),
+        json!({"status":"error","error":"mediaOff","message":"off"}),
+        json!({"status":"error","error":"noProvider","message":"off"}),
+    ] {
+        assert!(jsonschema::is_valid(&verb.result_schema, &result), "{result}");
+    }
+    for result in [
+        json!({"status":"ok"}),
+        json!({"status":"ok","provider":"tenor"}),
+        json!({"status":"error","error":"invalidKey","message":"a key error is the search's"}),
+    ] {
+        assert!(!jsonschema::is_valid(&verb.result_schema, &result), "{result}");
+    }
+    for (kind, inbox) in [
+        (FrameCallerKind::Message, false),
+        (FrameCallerKind::Message, true),
+        (FrameCallerKind::Builtin, false),
+    ] {
+        assert_eq!(
+            Dispatcher::default().dispatch_frame(
+                &review_media_frame(kind, inbox),
+                "gifProvider",
+                json!({}),
+                &Policy::default(),
+                0
+            ),
+            Decision::Deny {
+                reason: "denied: gifProvider requires the Inbox pane".into()
+            },
+            "{kind:?} inbox={inbox}"
+        );
+    }
+    let mut pane = review_media_frame(FrameCallerKind::Builtin, true);
+    assert!(matches!(
+        Dispatcher::default().dispatch_frame(
+            &pane,
+            "gifProvider",
+            json!({}),
+            &Policy::default(),
+            0
+        ),
+        Decision::Admit { .. }
+    ));
+    pane.effective_grant.clear();
+    assert_eq!(
+        Dispatcher::default().dispatch_frame(
+            &pane,
+            "gifProvider",
+            json!({}),
+            &Policy::default(),
+            0
+        ),
+        Decision::Deny {
+            reason: "denied: grant".into()
+        },
+        "the pane still needs inbox:write"
+    );
+}
+
+#[test]
+fn gif_search_takes_the_provider_the_picker_asked_consent_for() {
+    let verb = Registry::default().get("gifSearch").unwrap();
+    for provider in ["giphy", "klipy"] {
+        let args = json!({"query":"cat","provider":provider});
+        assert!(jsonschema::is_valid(&verb.args_schema, &args), "{args}");
+    }
+    let args = json!({"query":"cat","provider":"tenor"});
+    assert!(!jsonschema::is_valid(&verb.args_schema, &args), "{args}");
+}
+
+#[test]
 fn gif_picked_is_an_inbox_pane_only_metadata_write_audited_by_provider_and_id() {
     use crate::dashboard_stream::frame::FrameCallerKind;
     let registry = Registry::default();

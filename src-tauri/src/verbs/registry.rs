@@ -160,6 +160,7 @@ fn spec(
                 | "embedMessage"
                 | "loadMedia"
                 | "gifSearch"
+                | "gifProvider"
                 | "markRead"
                 | "markUnread"
                 | "archive"
@@ -209,8 +210,8 @@ fn capability_for_verb(name: &str) -> &'static str {
         | "watchAgentActivity" | "openMessage" | "embedMessage" | "openAgentInbox"
         | "pins" => "inbox:read:team",
         "inboxRollup" => "inbox:read:all-teams",
-        "loadMedia" | "gifSearch" | "gifPicked" | "archive" | "unarchive" | "markRead"
-        | "markUnread" | "postMessage" | "replyAsHuman" | "react" | "sendAsHuman"
+        "loadMedia" | "gifSearch" | "gifProvider" | "gifPicked" | "archive" | "unarchive"
+        | "markRead" | "markUnread" | "postMessage" | "replyAsHuman" | "react" | "sendAsHuman"
         | "setHumanStatus" | "pin" | "unpin" | "restorePin" | "replacePin" | "reorderPins" => {
             "inbox:write"
         }
@@ -594,6 +595,18 @@ fn register_resources(registry: &mut Registry) {
             false,
             None,
             Some("Inbox pane GIF search with host-fetched stills; agents use gif_search"),
+            true,
+            true,
+        ),
+    );
+    registry.register_existing(
+        "inbox",
+        spec(
+            "gifProvider",
+            Class::Read,
+            false,
+            None,
+            Some("The Inbox pane GIF picker's provider, read from Settings with no search"),
             true,
             true,
         ),

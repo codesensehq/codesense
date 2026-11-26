@@ -1369,10 +1369,26 @@ declare namespace CodesenseSdk {
       [key: string]: unknown;
     }>;
     /** read · inbox:write */
+    gifProvider(args?: {
+      org?: string;
+      team?: string;
+      [key: string]: unknown;
+    }): Promise<{
+      provider: "giphy" | "klipy";
+      status: "ok";
+      [key: string]: unknown;
+    } | {
+      error: "noProvider" | "mediaOff";
+      message: string;
+      status: "error";
+      [key: string]: unknown;
+    }>;
+    /** read · inbox:write */
     gifSearch(args?: {
       ids?: string[];
       limit?: number;
       org?: string;
+      provider?: "giphy" | "klipy";
       query?: string;
       team?: string;
       [key: string]: unknown;

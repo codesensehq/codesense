@@ -261,6 +261,16 @@ export const VERB_REGISTRY = [
     "presentationOnlyReason": "Registers the person's pick in the Inbox pane GIF picker with the provider"
   },
   {
+    "name": "gifProvider",
+    "class": "read",
+    "grant": "inbox:write",
+    "inboxTarget": true,
+    "confirmable": false,
+    "action": true,
+    "mcpTwin": null,
+    "presentationOnlyReason": "The Inbox pane GIF picker's provider, read from Settings with no search"
+  },
+  {
     "name": "gifSearch",
     "class": "read",
     "grant": "inbox:write",

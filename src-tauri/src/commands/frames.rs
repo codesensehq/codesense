@@ -1122,6 +1122,7 @@ pub(crate) mod tests {
                 "sendAsHuman",
                 "replyAsHuman",
                 "gifSearch",
+                "gifProvider",
                 "gifPicked",
                 "commands.run",
             ] {

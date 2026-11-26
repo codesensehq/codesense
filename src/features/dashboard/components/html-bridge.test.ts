@@ -49,6 +49,7 @@ const mockGetHumanStatus = vi.fn();
 const mockSetHumanStatus = vi.fn();
 const mockReplyAsHuman = vi.fn();
 const mockGifSearchPage = vi.fn();
+const mockGifProviderPage = vi.fn();
 const mockGifPicked = vi.fn();
 const mockReactAsHuman = vi.fn();
 const mockAgentPins = vi.fn();
@@ -125,6 +126,7 @@ vi.mock("@/tauri/commands", () => ({
   setHumanStatus: (...a: unknown[]) => mockSetHumanStatus(...a),
   replyAsHuman: (...a: unknown[]) => mockReplyAsHuman(...a),
   gifSearchPage: (...a: unknown[]) => mockGifSearchPage(...a),
+  gifProviderPage: (...a: unknown[]) => mockGifProviderPage(...a),
   gifPicked: (...a: unknown[]) => mockGifPicked(...a),
   reactAsHuman: (...a: unknown[]) => mockReactAsHuman(...a),
   agentPins: (...a: unknown[]) => mockAgentPins(...a),
@@ -304,6 +306,7 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       "getEpicHandle",
       "getWorkspaceStatus",
       "gifPicked",
+      "gifProvider",
       "gifSearch",
       "gotoAgent",
       "humanStatus",
@@ -2613,13 +2616,33 @@ describe("agents read model verbs", () => {
     await expect(runBridgeCommand("gifSearch", { query: "cat", limit: 4 }, DOC)).resolves.toBe(
       found,
     );
-    expect(mockGifSearchPage).toHaveBeenLastCalledWith(TEAM, "cat", null, 4);
+    expect(mockGifSearchPage).toHaveBeenLastCalledWith(TEAM, "cat", null, 4, null);
     await runBridgeCommand("gifSearch", { ids: ["g1"] }, DOC);
-    expect(mockGifSearchPage).toHaveBeenLastCalledWith(TEAM, null, ["g1"], null);
-    for (const bad of [{}, { query: "cat", ids: ["g1"] }, { query: 3 }, { ids: [1] }]) {
+    expect(mockGifSearchPage).toHaveBeenLastCalledWith(TEAM, null, ["g1"], null, null);
+    // The picker names the provider it asked consent for; the host refuses another.
+    await runBridgeCommand("gifSearch", { query: "cat", provider: "klipy" }, DOC);
+    expect(mockGifSearchPage).toHaveBeenLastCalledWith(TEAM, "cat", null, null, "klipy");
+    for (const bad of [
+      {},
+      { query: "cat", ids: ["g1"] },
+      { query: 3 },
+      { ids: [1] },
+      { query: "cat", provider: "KLIPY" },
+    ]) {
       await expect(runBridgeCommand("gifSearch", bad, DOC)).rejects.toThrow(/gifSearch/);
     }
-    expect(mockGifSearchPage).toHaveBeenCalledTimes(2);
+    expect(mockGifSearchPage).toHaveBeenCalledTimes(3);
+
+    // The provider read takes no arguments but the team, and passes the host's answer through.
+    const active = { status: "ok", provider: "klipy" };
+    mockGifProviderPage.mockResolvedValue(active);
+    await expect(runBridgeCommand("gifProvider", undefined, DOC)).resolves.toBe(active);
+    expect(mockGifProviderPage).toHaveBeenLastCalledWith(TEAM);
+    const off = { status: "error", error: "noProvider", message: "GIF search is off." };
+    mockGifProviderPage.mockResolvedValue(off);
+    await expect(runBridgeCommand("gifProvider", {}, DOC)).resolves.toBe(off);
+    await expect(runBridgeCommand("gifProvider", [], DOC)).rejects.toThrow(/gifProvider/);
+    expect(mockGifProviderPage).toHaveBeenCalledTimes(2);
 
     mockGifPicked.mockResolvedValue({ status: "ok" });
     await expect(
