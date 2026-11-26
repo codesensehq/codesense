@@ -2377,6 +2377,16 @@ describe("agents read model verbs", () => {
     expect(writeUi).toHaveBeenCalledTimes(1);
   });
 
+  it("refuses a setUiState topic that is not a string before writing, so ['ui:gif'] never becomes ui:gif", async () => {
+    const writeUi = vi.fn(async () => ({}));
+    const ctx = { liveFrame: async () => ({ writeUi }) as never };
+    for (const topic of [["ui:gif"], { "ui:gif": true }, undefined])
+      await expect(
+        runBridgeCommand("setUiState", { topic, patch: { consent: { giphy: true } } }, ctx),
+      ).rejects.toThrow("invalid: topic must be a string");
+    expect(writeUi).not.toHaveBeenCalled();
+  });
+
   it("uses the projection's team metadata without a roster join", async () => {
     const rows = [
       { id: "Remote", handle: "Remote", state: "idle", team: { org: "acme", team: "remote" } },

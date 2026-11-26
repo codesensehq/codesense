@@ -974,6 +974,8 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
     const a = argObject(args, "setUiState");
     const frame = await ctx?.liveFrame?.();
     if (!frame) throw new Error("unavailable: live frame is starting");
+    // A topic is a string, as the native dispatcher checks it: String() would turn ["ui:gif"] into "ui:gif".
+    if (typeof a.topic !== "string") throw new Error("invalid: topic must be a string");
     // The dock's selected row is the CLI focus: the host writes it; a page calls gotoAgent.
     if (a.topic === "ui:dock" && a.patch && typeof a.patch === "object" && "selected" in a.patch)
       throw new Error("invalid: ui:dock.selected follows the CLI focus; call gotoAgent");

@@ -319,6 +319,12 @@ impl Dispatcher {
         // GIF picker's way to Settings, a write to the picker's consent in ui:gif, and media on
         // the human's send, which is stored as this machine's own. Other frames keep text-only
         // human sends.
+        // The pane-only test below reads the topic as a string, and the bridge writes it as one.
+        if verb == "setUiState" && !args["topic"].is_string() {
+            return Decision::Deny {
+                reason: "invalid: setUiState topic must be a string".into(),
+            };
+        }
         let pane_only = matches!(
             verb,
             "loadMedia" | "gifSearch" | "gifProvider" | "gifPicked" | "openGifSettings"

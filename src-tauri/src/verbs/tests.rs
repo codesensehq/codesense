@@ -1329,10 +1329,29 @@ fn only_the_inbox_pane_writes_the_gif_pickers_consent() {
         Dispatcher::default().dispatch_frame(&pane, "setUiState", consent, &Policy::default(), 0),
         Decision::Admit { .. }
     ));
+    // A topic that is not a string is refused in the pane and out of it: the bridge would write ["ui:gif"] as ui:gif.
+    let page = frame(FrameCallerKind::Builtin, false);
+    for topic in [json!(["ui:gif"]), json!({"ui:gif": true}), json!(null)] {
+        for who in [&pane, &page] {
+            assert_eq!(
+                Dispatcher::default().dispatch_frame(
+                    who,
+                    "setUiState",
+                    json!({"topic":topic.clone(),"patch":{"consent":{"giphy":true}}}),
+                    &Policy::default(),
+                    0
+                ),
+                Decision::Deny {
+                    reason: "invalid: setUiState topic must be a string".into()
+                },
+                "{topic}"
+            );
+        }
+    }
     // Another page keeps its own UI state; only the ui:gif topic is the pane's.
     assert!(matches!(
         Dispatcher::default().dispatch_frame(
-            &frame(FrameCallerKind::Builtin, false),
+            &page,
             "setUiState",
             json!({"topic":"ui:right-pane","patch":{"tab":"inbox"}}),
             &Policy::default(),
