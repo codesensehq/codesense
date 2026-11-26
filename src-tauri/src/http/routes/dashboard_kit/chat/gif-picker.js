@@ -48,6 +48,8 @@ export function gifConsentOf(state){
  if(!consent||typeof consent!=='object'||Array.isArray(consent))return {};
  return Object.fromEntries(GIF_PROVIDERS.filter(p=>consent[p]===true).map(p=>[p,true]));
 }
+// A still the page may draw: only an inline data:image/ URL, so neither the grid nor the stage ever fetches from a provider.
+const gifStill=value=>typeof value==='string'&&value.startsWith('data:image/')?value:null;
 const gifReadState=async uiState=>{try{return gifConsentOf(await (typeof uiState==='function'?uiState():uiState));}catch{return {};}};
 let gifIds=0;
 
@@ -157,11 +159,12 @@ export function mountGifPicker(el,{act,uiState=null,onStage=()=>{},provider:gues
   grid=h('div',{id:ids.grid,class:'gp-grid',role:'listbox',tabindex:'0','aria-label':GIF_COPY.results});
   list.forEach((c,i)=>{
    const title=c.title||GIF_COPY.untitled;
-   const cell=h('div',{id:ids.cell(i),class:'gp-cell',role:'option','aria-selected':'false','aria-label':c.previewData?title:`${title} (${GIF_COPY.failedStill})`,'data-index':String(i)});
+   const still=gifStill(c.previewData);
+   const cell=h('div',{id:ids.cell(i),class:'gp-cell',role:'option','aria-selected':'false','aria-label':still?title:`${title} (${GIF_COPY.failedStill})`,'data-index':String(i)});
    // A still that is missing or fails to draw is an empty tile, never an error.
    const empty=()=>{cell.classList.add('failed');cell.replaceChildren(gifIcon('imageOff'));};
-   if(typeof c.previewData==='string'&&c.previewData.startsWith('data:image/')){
-    const img=h('img',{alt:'',src:c.previewData,draggable:'false'});
+   if(still){
+    const img=h('img',{alt:'',src:still,draggable:'false'});
     img.addEventListener('error',empty);
     cell.append(img);
    }else empty();
@@ -204,7 +207,7 @@ export function mountGifPicker(el,{act,uiState=null,onStage=()=>{},provider:gues
  function pick(index){
   const c=candidates[index];
   if(!c)return;
-  const chosen={provider,id:String(c.id),url:c.url,title:c.title||'',alt:c.title||'',previewData:typeof c.previewData==='string'?c.previewData:null,width:c.width,height:c.height};
+  const chosen={provider,id:String(c.id),url:c.url,title:c.title||'',alt:c.title||'',previewData:gifStill(c.previewData),width:c.width,height:c.height};
   // The provider's terms ask for a registration per pick; it goes out in the background and never blocks the stage.
   Promise.resolve().then(()=>act('gifPicked',{provider:chosen.provider,id:chosen.id})).catch(()=>{});
   close('pick');
@@ -264,12 +267,12 @@ export function mountGifStage(el,{pick,onRemove=()=>{},onChange=()=>{},onEnter=(
  const doc=el.ownerDocument||document;
  if(styles)linkChatStyles(doc);
  const n=++gifIds,altId=`cs-gif-alt-${n}`,helpId=`cs-gif-alt-help-${n}`;
- const words=GIF_PROVIDER_COPY[pick.provider]||GIF_PROVIDER_COPY.giphy;
+ const words=GIF_PROVIDER_COPY[pick.provider]||GIF_PROVIDER_COPY.giphy,still=gifStill(pick.previewData);
  const alt=h('input',{id:altId,class:'gs-in',type:'text',autocomplete:'off',placeholder:GIF_COPY.stage.placeholder,'aria-describedby':helpId,'aria-required':'true'});
  alt.value=pick.alt||'';
  const help=h('div',{id:helpId,class:'gs-help'});
  const removeButton=h('button',{type:'button',class:'gs-x','aria-label':GIF_COPY.stage.remove},gifIcon('x'));
- const thumb=h('div',{class:'gs-thumb',tabindex:'0',role:'img'},pick.previewData?h('img',{alt:'',src:pick.previewData,draggable:'false'}):gifIcon('imageOff'),removeButton);
+ const thumb=h('div',{class:'gs-thumb',tabindex:'0',role:'img'},still?h('img',{alt:'',src:still,draggable:'false'}):gifIcon('imageOff'),removeButton);
  const root=h('div',{class:'cs-gif gs'},
   h('div',{class:'gs-media'},thumb,h('span',{class:'gs-attr',text:words.poweredBy})),
   h('div',{class:'gs-f'},h('label',{for:altId},GIF_COPY.stage.alt,' ',h('span',{class:'gs-req',text:GIF_COPY.stage.required})),alt,help));

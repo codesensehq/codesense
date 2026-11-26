@@ -696,6 +696,21 @@ describe("kit.chat.gifStage", () => {
     });
   });
 
+  it.each([
+    ["a provider URL", "https://media.giphy.com/media/a1/giphy_s.gif"],
+    ["a protocol-relative URL", "//media.giphy.com/media/a1/giphy_s.gif"],
+    ["a non-image data: URL", "data:text/html,<b>hi</b>"],
+    ["no still", undefined],
+  ])(
+    "draws only a data:image/ still: %s is the empty icon, with no <img>",
+    (_label, previewData) => {
+      const s = staged({ pick: { ...pick, previewData } });
+      expect(s.stage.root.querySelector("img")).toBeNull();
+      expect(s.stage.root.querySelector(".gs-thumb svg.gp-i")).not.toBeNull();
+      expect(s.stage.valid()).toBe(true);
+    },
+  );
+
   it("requires alt text: empty, the field is red, says why, and valid() is false", () => {
     const s = staged();
     s.edit("   ");
