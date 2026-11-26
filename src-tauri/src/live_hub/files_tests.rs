@@ -1662,13 +1662,21 @@ fn untracked_folders(content: &std::path::Path, folders: usize) {
     }
 }
 
-fn folders_tinted(folder_rows: &BTreeMap<String, BTreeMap<String, Value>>) -> bool {
+/// How many `folder-N` listings (keyed by their logical path) hold rows that are all
+/// tinted `added`.
+fn tinted_folders(folder_rows: &BTreeMap<String, BTreeMap<String, Value>>) -> usize {
     folder_rows
         .iter()
-        .filter(|(folder, _)| folder.starts_with("folder-"))
-        .all(|(_, children)| {
+        .filter(|(folder, _)| {
+            std::path::Path::new(folder)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("folder-"))
+        })
+        .filter(|(_, children)| {
             !children.is_empty() && children.values().all(|row| row["gitState"] == "added")
         })
+        .count()
 }
 
 #[tokio::test]
@@ -1683,8 +1691,9 @@ async fn one_reset_runs_one_git_status_whatever_the_folder_count() {
         reset(&mut view);
         assert_eq!(TINT_STATUSES.take().len(), 1, "reset at {folders} folders");
         assert_eq!(view.folder_rows.len(), folders);
-        assert!(
-            folders_tinted(&view.folder_rows),
+        assert_eq!(
+            tinted_folders(&view.folder_rows),
+            folders,
             "reset at {folders} folders"
         );
     }
@@ -1710,8 +1719,9 @@ async fn one_reset_runs_one_git_status_whatever_the_folder_count() {
         let model = hub.model.lock().unwrap();
         let view = &model.files.views[&key];
         assert_eq!(view.folder_rows.len(), folders);
-        assert!(
-            folders_tinted(&view.folder_rows),
+        assert_eq!(
+            tinted_folders(&view.folder_rows),
+            folders,
             "first paint at {folders} folders"
         );
         assert_eq!(view.rows["docs/a.md"]["gitState"], "added");
