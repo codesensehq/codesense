@@ -719,11 +719,33 @@ describe("kit.chat.gifPicker: states", () => {
     expect(picker.root.querySelectorAll(".gp-body button")).toHaveLength(0);
   });
 
-  it("never puts a key in the page: the picker shows only what the verbs return", async () => {
-    const w = await opened({});
+  it("never puts a key in the page: a key-shaped field in an answer reaches neither the DOM, a later verb nor the pick", async () => {
+    const KEY = "FAKE".repeat(8);
+    const w = await opened({
+      provider: { status: "ok", provider: "giphy", apiKey: KEY, key: KEY },
+      search: [
+        {
+          status: "ok",
+          provider: "giphy",
+          apiKey: KEY,
+          candidates: [{ ...candidate("a1"), apiKey: KEY, key: KEY, api_key: KEY }],
+        },
+      ],
+    });
     await typeAndWait(w, "cats");
+    expect(document.documentElement.outerHTML).not.toContain(KEY);
+    w.$(".gp-grid [role=option]")!.click();
+    await settle();
+    expect(w.calls("gifPicked")).toHaveLength(1);
     for (const [verb, args] of w.act.mock.calls)
-      expect(JSON.stringify([verb, args])).not.toMatch(/key/i);
+      expect(JSON.stringify([verb, args])).not.toContain(KEY);
+    const [pick] = w.onStage.mock.calls[0];
+    expect(JSON.stringify(pick)).not.toContain(KEY);
+    const box = document.createElement("div");
+    document.body.append(box);
+    const stage = chat().gifStage(box, { pick });
+    expect(document.documentElement.outerHTML).not.toContain(KEY);
+    expect(JSON.stringify(stage.media())).not.toContain(KEY);
   });
 });
 
