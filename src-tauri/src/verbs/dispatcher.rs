@@ -315,16 +315,19 @@ impl Dispatcher {
         policy: &Policy,
         now: u64,
     ) -> Decision {
+        // A topic is a string: the pane-only test below and the capability a topic needs compare it
+        // as one, and the bridge uses it as one.
+        if matches!(verb, "setUiState" | "subscribe" | "unsubscribe" | "page")
+            && !args["topic"].is_string()
+        {
+            return Decision::Deny {
+                reason: format!("invalid: {verb} topic must be a string"),
+            };
+        }
         // Inbox-pane-only work: an image fetch, the GIF provider read, a GIF search or pick, the
         // GIF picker's way to Settings, a write to the picker's consent in ui:gif, and media on
         // the human's send, which is stored as this machine's own. Other frames keep text-only
         // human sends.
-        // The pane-only test below reads the topic as a string, and the bridge writes it as one.
-        if verb == "setUiState" && !args["topic"].is_string() {
-            return Decision::Deny {
-                reason: "invalid: setUiState topic must be a string".into(),
-            };
-        }
         let pane_only = matches!(
             verb,
             "loadMedia" | "gifSearch" | "gifProvider" | "gifPicked" | "openGifSettings"

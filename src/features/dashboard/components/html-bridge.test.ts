@@ -2383,9 +2383,33 @@ describe("agents read model verbs", () => {
     for (const topic of [["ui:gif"], { "ui:gif": true }, undefined])
       await expect(
         runBridgeCommand("setUiState", { topic, patch: { consent: { giphy: true } } }, ctx),
-      ).rejects.toThrow("invalid: topic must be a string");
+      ).rejects.toThrow("invalid: setUiState topic must be a string");
     expect(writeUi).not.toHaveBeenCalled();
   });
+
+  it("writes a near miss of ui:gif to its own topic, never to ui:gif", async () => {
+    const writeUi = vi.fn(async (_topic: string, _patch: unknown) => ({}));
+    const ctx = { liveFrame: async () => ({ writeUi }) as never };
+    const patch = { consent: { giphy: true } };
+    for (const topic of [" ui:gif", "UI:GIF", "ui:gif "])
+      await runBridgeCommand("setUiState", { topic, patch }, ctx);
+    expect(writeUi.mock.calls.map(([topic]) => topic)).toEqual([" ui:gif", "UI:GIF", "ui:gif "]);
+  });
+
+  it.each(["subscribe", "unsubscribe", "page"])(
+    "refuses a %s topic that is not a string, so ['inbox'] or ['pins'] never becomes that topic",
+    async (verb) => {
+      const live = { subscribe: vi.fn(), unsubscribe: vi.fn(), page: vi.fn() };
+      const ctx = { liveFrame: async () => live as never };
+      for (const topic of [["inbox"], ["pins"], { inbox: true }, undefined])
+        await expect(runBridgeCommand(verb, { topic, cursor: "c1" }, ctx)).rejects.toThrow(
+          `invalid: ${verb} topic must be a string`,
+        );
+      expect(live.subscribe).not.toHaveBeenCalled();
+      expect(live.unsubscribe).not.toHaveBeenCalled();
+      expect(live.page).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses the projection's team metadata without a roster join", async () => {
     const rows = [

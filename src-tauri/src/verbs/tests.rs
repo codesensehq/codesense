@@ -1359,6 +1359,67 @@ fn only_the_inbox_pane_writes_the_gif_pickers_consent() {
         ),
         Decision::Admit { .. }
     ));
+    // A near miss is not the picker's topic: it meets no pane test, and its write goes to its own key.
+    for topic in [" ui:gif", "UI:GIF", "ui:gif "] {
+        assert!(
+            matches!(
+                Dispatcher::default().dispatch_frame(
+                    &page,
+                    "setUiState",
+                    json!({"topic":topic,"patch":{"consent":{"giphy":true}}}),
+                    &Policy::default(),
+                    0
+                ),
+                Decision::Admit { .. }
+            ),
+            "{topic:?}"
+        );
+    }
+}
+
+#[test]
+fn a_subscription_topic_must_be_a_string() {
+    // The capability a topic needs compares it as a string: ["inbox"] would pass on sessions:read.
+    let mut page = review_media_frame(
+        crate::dashboard_stream::frame::FrameCallerKind::Builtin,
+        false,
+    );
+    page.effective_grant.push("sessions:read".into());
+    for verb in ["subscribe", "unsubscribe", "page"] {
+        for topic in [
+            json!(["inbox"]),
+            json!(["pins"]),
+            json!({"inbox": true}),
+            json!(null),
+        ] {
+            assert_eq!(
+                Dispatcher::default().dispatch_frame(
+                    &page,
+                    verb,
+                    json!({"topic":topic.clone(),"cursor":"c1"}),
+                    &Policy::default(),
+                    0
+                ),
+                Decision::Deny {
+                    reason: format!("invalid: {verb} topic must be a string")
+                },
+                "{verb} {topic}"
+            );
+        }
+        assert!(
+            matches!(
+                Dispatcher::default().dispatch_frame(
+                    &page,
+                    verb,
+                    json!({"topic":"sessions","cursor":"c1"}),
+                    &Policy::default(),
+                    0
+                ),
+                Decision::Admit { .. }
+            ),
+            "{verb} sessions"
+        );
+    }
 }
 
 #[test]

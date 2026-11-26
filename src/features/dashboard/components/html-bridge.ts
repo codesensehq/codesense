@@ -550,6 +550,12 @@ function argObject(args: unknown, verb: string): Record<string, unknown> {
   return args as Record<string, unknown>;
 }
 
+/** A topic is a string, as the native dispatcher checks it: String() would turn ["inbox"] into "inbox". */
+function topicArg(a: Record<string, unknown>, verb: string): string {
+  if (typeof a.topic !== "string") throw new Error(`invalid: ${verb} topic must be a string`);
+  return a.topic;
+}
+
 function optionalEpochMs(value: unknown, verb: string, field: string): number | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "number" || !Number.isSafeInteger(Math.floor(value))) {
@@ -945,42 +951,42 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
   // The app-root roster is loaded alongside: its changes are what nudge `onSessions`.
   subscribe: async (args, ctx) => {
     const a = argObject(args, "subscribe");
+    const topic = topicArg(a, "subscribe");
     const frame = await ctx?.liveFrame?.();
     if (!frame) throw new Error("unavailable: live frame is starting");
     const view = await subscriptionView(a, ctx);
     return frame.subscribe(
-      String(a.topic),
+      topic,
       typeof a.sinceRev === "number" ? a.sinceRev : undefined,
       Array.isArray(a.window) ? { ...view, window: a.window as [number, number] } : view,
     );
   },
   page: async (args, ctx) => {
     const a = argObject(args, "page");
+    const topic = topicArg(a, "page");
     // A pins view is one short list, never paged; preparing it here would only register a view
     // that no subscription ever releases.
-    if (a.topic === "pins") throw new Error("invalid: the pins topic has no pages");
+    if (topic === "pins") throw new Error("invalid: the pins topic has no pages");
     const frame = await ctx?.liveFrame?.();
     if (!frame) throw new Error("unavailable: live frame is starting");
-    return frame.page(String(a.topic), String(a.cursor), await subscriptionView(a, ctx));
+    return frame.page(topic, String(a.cursor), await subscriptionView(a, ctx));
   },
   unsubscribe: async (args, ctx) => {
     const a = argObject(args, "unsubscribe");
-    await (
-      await ctx?.liveFrame?.()
-    )?.unsubscribe(String(a.topic), await subscriptionView(a, ctx, false));
+    const topic = topicArg(a, "unsubscribe");
+    await (await ctx?.liveFrame?.())?.unsubscribe(topic, await subscriptionView(a, ctx, false));
     return null;
   },
   setUiState: async (args, ctx) => {
     const a = argObject(args, "setUiState");
+    const topic = topicArg(a, "setUiState");
     const frame = await ctx?.liveFrame?.();
     if (!frame) throw new Error("unavailable: live frame is starting");
-    // A topic is a string, as the native dispatcher checks it: String() would turn ["ui:gif"] into "ui:gif".
-    if (typeof a.topic !== "string") throw new Error("invalid: topic must be a string");
     // The dock's selected row is the CLI focus: the host writes it; a page calls gotoAgent.
-    if (a.topic === "ui:dock" && a.patch && typeof a.patch === "object" && "selected" in a.patch)
+    if (topic === "ui:dock" && a.patch && typeof a.patch === "object" && "selected" in a.patch)
       throw new Error("invalid: ui:dock.selected follows the CLI focus; call gotoAgent");
     return frame.writeUi(
-      String(a.topic),
+      topic,
       a.patch as Record<string, unknown>,
       typeof a.requestId === "string" ? a.requestId : undefined,
     );
