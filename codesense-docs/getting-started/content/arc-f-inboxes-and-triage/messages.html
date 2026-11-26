@@ -332,7 +332,7 @@
         </ol>
       </section>
 
-      <section id="send-media" data-search="Send a GIF or image meme media alt path attachFile team config inbox.media gif_search gifSearch gifPicked sendAsHuman replyAsHuman GIPHY search key rating autoLoads KLIPY">
+      <section id="send-media" data-search="Send a GIF or image meme media alt path attachFile team config inbox.media gif_search gifSearch gifPicked gifProvider picker consent sendAsHuman replyAsHuman GIPHY search key rating autoLoads KLIPY">
         <h2>Send a GIF or image</h2>
         <p>An agent can add one image to <code>send_message</code> or <code>reply</code> with
           <code>media</code>. Supply exactly one source, <code>url</code> or <code>path</code>, and
@@ -356,8 +356,8 @@
           <code>id</code> as <code>media.providerId</code>: while GIF search is on, CodeSense registers the send
           with the provider: GIPHY's required send and view pings, with an install id GIPHY issues, or
           KLIPY's share ping, with the words the search used and a random id made for this install.
-          A GIPHY GIF shows “Powered by GIPHY” under it in the pane; a KLIPY GIF names KLIPY only in
-          its details, as “via KLIPY”. Ids match
+          In the Inbox pane a GIPHY GIF shows “Powered By GIPHY” under it; a KLIPY GIF names KLIPY only
+          in its details, as “Powered by KLIPY”. Ids match
           <code>^[A-Za-z0-9_-]{1,128}$</code>.</p>
         <pre><code>gif_search({ query: "ship it", limit: 6 })
 // → { status: "ok", provider: "giphy",
@@ -417,7 +417,21 @@ gif_search({ ids: ["&lt;id&gt;"] })  // the same GIFs again, from ids kept from 
           own: GIPHY and KLIPY copies it cached before this behavior stay until they age out, and a
           picture first shown as ordinary media keeps its browser copy when a GIPHY or KLIPY message
           later shares the same image.</p>
-        <p>The person sends pictures too, from the built-in Inbox pane only. There
+        <p>The person sends GIFs too, from the built-in Inbox pane only. The <strong>GIF</strong>
+          button in the composer opens a search above it; it is hidden when the message goes to a role
+          queue. The first time with each provider the picker asks before anything is searched, since
+          what you type is sent to GIPHY or KLIPY; <strong>Allow search</strong> is remembered for that
+          provider. Type two or more letters, or pick a starter such as “ship it”, and the stills appear
+          in a grid: the arrow keys move through it, and Enter or a click adds the GIF above the message
+          box. The added GIF shows its still frame, never playing, and takes alt text, filled in from the
+          provider's title and required before you send: agents read it instead of the GIF. Remove it
+          with its × or Backspace. A GIF can go alone or with text. When search can't run, the picker
+          says why and what fixes it: <strong>Open Settings</strong> when GIF search is off, has no key or
+          the key was refused; <strong>Try again</strong> when the keychain couldn't be read or the
+          provider isn't answering; and the wait when the hourly limit, shared with your agents, is
+          reached. With the team's remote media off it shows no GIFs at all.</p>
+        <p>Under the button, <code>act('gifProvider')</code> names the provider from Settings alone,
+          with no key read or network call, so consent comes first. Then
           <code>act('gifSearch', {query})</code> (or <code>{ids}</code>) returns the same candidates as
           <code>gif_search</code>, each with its still as <code>previewData</code>, a <code>data:</code>
           URI the host fetched. With the team's <code>inbox.media</code> at <code>off</code> it returns
