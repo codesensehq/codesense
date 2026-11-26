@@ -1323,14 +1323,20 @@ fn gif_provider_is_an_inbox_pane_only_read_with_no_prompt() {
         json!({"status":"error","error":"mediaOff","message":"off"}),
         json!({"status":"error","error":"noProvider","message":"off"}),
     ] {
-        assert!(jsonschema::is_valid(&verb.result_schema, &result), "{result}");
+        assert!(
+            jsonschema::is_valid(&verb.result_schema, &result),
+            "{result}"
+        );
     }
     for result in [
         json!({"status":"ok"}),
         json!({"status":"ok","provider":"tenor"}),
         json!({"status":"error","error":"invalidKey","message":"a key error is the search's"}),
     ] {
-        assert!(!jsonschema::is_valid(&verb.result_schema, &result), "{result}");
+        assert!(
+            !jsonschema::is_valid(&verb.result_schema, &result),
+            "{result}"
+        );
     }
     for (kind, inbox) in [
         (FrameCallerKind::Message, false),
@@ -1376,6 +1382,61 @@ fn gif_provider_is_an_inbox_pane_only_read_with_no_prompt() {
         },
         "the pane still needs inbox:write"
     );
+}
+
+#[test]
+fn open_gif_settings_is_an_inbox_pane_only_read_with_no_args() {
+    use crate::dashboard_stream::frame::FrameCallerKind;
+    let verb = Registry::default().get("openGifSettings").unwrap();
+    assert_eq!(verb.grant, "inbox:write");
+    assert_eq!(verb.class, Class::Read);
+    assert!(!verb.inbox_target && verb.audited && verb.action && !verb.confirmable);
+    assert!(verb.mcp_twin.is_none() && verb.presentation_only_reason.is_some());
+    assert!(jsonschema::is_valid(&verb.args_schema, &json!({})));
+    for args in [
+        json!({"section":"general"}),
+        json!({"org":"acme","team":"core"}),
+        json!([]),
+    ] {
+        assert!(!jsonschema::is_valid(&verb.args_schema, &args), "{args}");
+    }
+    assert!(jsonschema::is_valid(
+        &verb.result_schema,
+        &json!({"opened":true})
+    ));
+    assert!(!jsonschema::is_valid(
+        &verb.result_schema,
+        &json!({"opened":false})
+    ));
+    for (kind, inbox) in [
+        (FrameCallerKind::Message, false),
+        (FrameCallerKind::Message, true),
+        (FrameCallerKind::Builtin, false),
+    ] {
+        assert_eq!(
+            Dispatcher::default().dispatch_frame(
+                &review_media_frame(kind, inbox),
+                "openGifSettings",
+                json!({}),
+                &Policy::default(),
+                0
+            ),
+            Decision::Deny {
+                reason: "denied: openGifSettings requires the Inbox pane".into()
+            },
+            "{kind:?} inbox={inbox}"
+        );
+    }
+    assert!(matches!(
+        Dispatcher::default().dispatch_frame(
+            &review_media_frame(FrameCallerKind::Builtin, true),
+            "openGifSettings",
+            json!({}),
+            &Policy::default(),
+            0
+        ),
+        Decision::Admit { .. }
+    ));
 }
 
 #[test]

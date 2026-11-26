@@ -1124,6 +1124,7 @@ pub(crate) mod tests {
                 "gifSearch",
                 "gifProvider",
                 "gifPicked",
+                "openGifSettings",
                 "commands.run",
             ] {
                 let spec = crate::verbs::builtin_registry().get(verb).unwrap();

@@ -34,6 +34,10 @@ vi.mock("@/shared/lib/send-to-terminal", async (importOriginal) => ({
   canPasteToTerminal: () => mockCanPasteToTerminal(),
   subscribePasteTarget: () => () => {},
 }));
+const mockOpenSettingsTab = vi.fn();
+vi.mock("@/features/settings/lib/open-settings-tab", () => ({
+  openSettingsTab: (...args: unknown[]) => mockOpenSettingsTab(...args),
+}));
 const mockOpenMessageTab = vi.fn();
 vi.mock("@/features/weft/components/inbox-message-dashboard", () => ({
   openMessageTab: (...args: unknown[]) => mockOpenMessageTab(...args),
@@ -328,6 +332,7 @@ describe("HTML_BRIDGE_ALLOWLIST", () => {
       "openAgentInbox",
       "openDiff",
       "openFile",
+      "openGifSettings",
       "openLauncher",
       "openMessage",
       "openRoutineDraft",
@@ -2658,6 +2663,18 @@ describe("agents read model verbs", () => {
       await expect(runBridgeCommand("gifPicked", bad, DOC)).rejects.toThrow(/gifPicked/);
     }
     expect(mockGifPicked).toHaveBeenCalledTimes(2);
+
+    // Open Settings lands on the GIF search row and takes no args, so a page can't aim it.
+    await expect(runBridgeCommand("openGifSettings", undefined, DOC)).resolves.toEqual({
+      opened: true,
+    });
+    expect(mockOpenSettingsTab).toHaveBeenLastCalledWith("messaging", "gifSearch");
+    for (const bad of [{ section: "general" }, { row: "gifKey" }, []]) {
+      await expect(runBridgeCommand("openGifSettings", bad, DOC)).rejects.toThrow(
+        /openGifSettings/,
+      );
+    }
+    expect(mockOpenSettingsTab).toHaveBeenCalledTimes(1);
 
     mockReplyAsHuman.mockResolvedValue({ status: "sent", messageId: 10 });
     await runBridgeCommand("replyAsHuman", { messageId: 9, text: "yes" }, DOC);

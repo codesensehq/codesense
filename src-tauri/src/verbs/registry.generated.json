@@ -3482,6 +3482,34 @@
     "module": "processes"
   },
   {
+    "name": "openGifSettings",
+    "class": "read",
+    "argsSchema": {
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "resultSchema": {
+      "properties": {
+        "opened": {
+          "const": true
+        }
+      },
+      "required": [
+        "opened"
+      ],
+      "type": "object"
+    },
+    "grant": "inbox:write",
+    "inboxTarget": false,
+    "confirmable": false,
+    "mcpTwin": null,
+    "presentationOnlyReason": "Opens Settings at GIF search from the Inbox pane GIF picker",
+    "audited": true,
+    "action": true,
+    "module": "inbox"
+  },
+  {
     "name": "openLauncher",
     "class": "spawn",
     "argsSchema": {

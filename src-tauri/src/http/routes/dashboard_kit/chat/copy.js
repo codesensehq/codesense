@@ -26,3 +26,31 @@ export const failureReason=(failure,copy=CHAT_COPY)=>failure.kind==='busy'?copy.
 export const mergeCopy=(over={})=>Object.fromEntries(Object.entries({...CHAT_COPY,...over}).map(([key,value])=>[key,value&&typeof value==='object'&&!Array.isArray(value)&&CHAT_COPY[key]&&typeof CHAT_COPY[key]==='object'?{...CHAT_COPY[key],...value}:value]));
 export const modelLabel=id=>{const m=/^claude-([a-z]+)-(\d+)(?:-(\d+))?(?:-\d{6,})?$/.exec(String(id||''));return m?`${m[1][0].toUpperCase()+m[1].slice(1)} ${m[2]}${m[3]?'.'+m[3]:''}`:String(id||'');};
 export const timeLabel=ms=>Number.isFinite(ms)?new Date(ms).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}):'';
+// Each GIF provider's words in the picker, the one mirror of src/shared/lib/gif-providers.ts (a parity test keeps them equal): its name, its search box's placeholder and its attribution line.
+export const GIF_PROVIDER_COPY={
+ giphy:{name:'GIPHY',searchPlaceholder:'Search GIPHY',poweredBy:'Powered By GIPHY'},
+ klipy:{name:'KLIPY',searchPlaceholder:'Search KLIPY',poweredBy:'Powered by KLIPY'},
+};
+// The GIF picker's and the staged GIF's words. A provider's name comes in as `name`.
+export const GIF_COPY={
+ dialog:'GIF search',close:'Close GIF search',clear:'Clear search',results:'GIF results',searchLabel:'Search GIFs',
+ start:name=>`Search ${name}, or start with`,starters:['thumbs up','thank you','ship it','on it'],
+ typeMore:'Type 2+ letters',escClose:'Esc close',searching:name=>`Searching ${name}…`,
+ hover:'click to add',focus:'Enter add · Esc close',untitled:'Untitled GIF',failedStill:'Preview unavailable',
+ loading:'Checking GIF search…',
+ consent:{big:name=>`Search GIFs with ${name}?`,body:name=>`What you type in this box is sent to ${name}, a third-party service, to find GIFs. Nothing leaves this Mac until you allow it.`,fine:'Asked once per provider. To turn GIF search off: Settings › Messaging › GIF search.',allow:'Allow search',notNow:'Not now'},
+ settingsPath:'Settings › Messaging › GIF search',openSettings:'Open Settings',tryAgain:'Try again',
+ state:{
+  noProvider:{big:'Turn on GIF search and add a key',body:()=>'GIF search is off, or it has no key yet.'},
+  invalidKey:{big:'The key was refused',body:name=>`${name} didn't accept the key. Replace it in Settings to search again.`},
+  mediaOff:{big:'GIFs are off for this team',body:()=>"This team's remote media is off (media.remote: off in its config/inbox.yml), so no GIFs load."},
+  keychainUnavailable:{big:"Couldn't read the key",body:()=>"The keychain didn't answer, or this Mac has no secret store. If it's locked, unlock it, then try again."},
+  rateLimited:{big:'GIF search limit reached',body:(_name,wait)=>`You and your agents share an hourly limit on GIF searches. Try again in ${wait}.`},
+  providerUnavailable:{big:name=>`${name} isn't answering`,body:()=>"The search didn't go through. Your message is safe."},
+  badQuery:{big:'Try different words',body:name=>`${name} couldn't search for that.`},
+  failed:{big:"Couldn't search for GIFs",body:(_name,_wait,why)=>why},
+ },
+ noResults:{big:query=>`No GIFs for “${query}”`,body:'Try fewer or different words.'},
+ wait:seconds=>seconds>=90?`${Math.ceil(seconds/60)} min`:`${Math.max(1,Math.ceil(seconds))} s`,
+ stage:{remove:'Remove GIF',thumb:alt=>`GIF: ${alt||'no alt text'}. Backspace removes it.`,alt:'Alt text',required:'required',placeholder:'Describe the GIF for agents',help:name=>`From ${name}'s title. Agents read this instead of the GIF.`,missing:'Add alt text to send. Agents only see this text.'},
+};

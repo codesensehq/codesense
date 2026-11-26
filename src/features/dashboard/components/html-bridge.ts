@@ -14,6 +14,7 @@ import {
 } from "@/tauri/commands";
 import { buildTeamKey } from "@/shared/lib/team-key";
 import { openRoutineDraft } from "@/features/routines/routines-virtual-tab";
+import { openSettingsTab } from "@/features/settings/lib/open-settings-tab";
 import { messageDocKey, INITIAL_MESSAGE_HEIGHT } from "@/features/weft/lib/inbox-message-frame";
 import { VERB_REGISTRY } from "../lib/verb-registry.generated";
 import { threadOf } from "@/features/inbox/lib/chat-core";
@@ -1539,6 +1540,15 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
       throw new Error("gifPicked: {id} must be a GIF id from gifSearch");
     }
     return gifPicked(a.provider, a.id);
+  },
+  // The GIF picker's Open Settings: Settings at its GIF search row, where search is turned on
+  // and the key is added. It takes no args, so a page can't aim it elsewhere; the host refuses
+  // it from any frame but the Inbox pane.
+  openGifSettings: async (args) => {
+    const a = argObject(args, "openGifSettings");
+    if (Object.keys(a).length) throw new Error("openGifSettings: takes no args");
+    openSettingsTab("messaging", "gifSearch");
+    return { opened: true };
   },
   replyAsHuman: async (args, ctx) => {
     const a = argObject(args, "replyAsHuman");

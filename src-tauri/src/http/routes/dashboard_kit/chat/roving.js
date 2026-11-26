@@ -108,3 +108,40 @@ export function rovingThread(log){
   release(){watch.disconnect();log.removeEventListener('keydown',onKeyDown);log.removeEventListener('focusin',onFocusIn);},
  };
 }
+// rovingGrid(list, {cols, onMove, onPick}): a grid of [role=option] cells as one Tab stop. The list keeps focus and names the active cell with aria-activedescendant;
+// the arrows move it (Up and Down by a row of `cols`), Home and End go to the first and the last, and Enter or Space picks it. onMove(cell) hears each move.
+export function rovingGrid(list,{cols=1,onMove=()=>{},onPick=()=>{}}={}){
+ let at=-1;
+ const cells=()=>[...list.querySelectorAll('[role=option]')];
+ function moveTo(index){
+  const all=cells();
+  if(!all.length){at=-1;list.removeAttribute('aria-activedescendant');return;}
+  at=Math.max(0,Math.min(all.length-1,index));
+  all.forEach((cell,i)=>cell.setAttribute('aria-selected',String(i===at)));
+  list.setAttribute('aria-activedescendant',all[at].id);
+  if(all[at].scrollIntoView)all[at].scrollIntoView({block:'nearest'});
+  onMove(all[at]);
+ }
+ const onKeyDown=event=>{
+  if(event.altKey||event.ctrlKey||event.metaKey)return;
+  const last=cells().length-1;
+  if(last<0)return;
+  if(event.key==='Enter'||event.key===' '){event.preventDefault();if(at>=0)onPick(cells()[at]);return;}
+  const to=event.key==='ArrowRight'?at+1:event.key==='ArrowLeft'?at-1:event.key==='ArrowDown'?at+cols:event.key==='ArrowUp'?at-cols:event.key==='Home'?0:event.key==='End'?last:null;
+  if(to===null)return;
+  event.preventDefault();
+  // A move off the grid's edge stays on the cell it is on.
+  if(to<0||to>last)return;
+  moveTo(to);
+ };
+ const onFocus=()=>moveTo(at<0?0:at);
+ list.addEventListener('keydown',onKeyDown);
+ list.addEventListener('focus',onFocus);
+ return {
+  active:()=>cells()[at]||null,
+  moveTo,
+  // A new set of cells: nothing is active until the list takes focus again.
+  reset(){at=-1;list.removeAttribute('aria-activedescendant');},
+  release(){list.removeEventListener('keydown',onKeyDown);list.removeEventListener('focus',onFocus);},
+ };
+}

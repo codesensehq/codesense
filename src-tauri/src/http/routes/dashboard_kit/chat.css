@@ -145,3 +145,75 @@
 .cs-chat .pin-chooser .cancel{justify-self:start}
 .cs-chat .pin-chooser .room-pin{margin-left:auto}
 @media (pointer:coarse){.cs-chat .pin-chooser .choice{min-height:44px}}
+/* The GIF picker (chat/gif-picker.js) under its own root, .cs-gif: the popover (.gp) sits on its element's top edge at the element's width, and the staged GIF
+   (.gs) sits in a composer box above the text. Kit tokens only. */
+.cs-gif,.cs-gif *,.cs-gif *::before,.cs-gif *::after{box-sizing:border-box}
+.cs-gif .gp-i{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.cs-gif button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+.cs-gif button:focus-visible{outline:2px solid var(--cs-accent);outline-offset:1px;border-radius:var(--cs-radius-sm)}
+.cs-gif.gp{position:absolute;z-index:30;left:var(--cs-gif-inset,0);right:var(--cs-gif-inset,0);bottom:calc(100% + 4px);height:292px;max-height:calc(100vh - 120px);display:flex;flex-direction:column;overflow:hidden;border-radius:var(--cs-radius-lg);background:var(--cs-bg);color:var(--cs-fg);box-shadow:0 0 0 1px var(--cs-border),var(--cs-shadow);font-size:var(--cs-text-sm)}
+.cs-gif.gp[hidden]{display:none}
+.cs-gif .gp-top{flex:none;display:flex;gap:4px;align-items:center;padding:8px 8px 6px}
+.cs-gif .gp-search{flex:1;min-width:0;display:flex;align-items:center;gap:6px;height:30px;padding:0 4px 0 8px;border-radius:var(--cs-radius);background:var(--cs-inset);box-shadow:inset 0 0 0 1px var(--cs-border);color:var(--cs-muted-fg)}
+.cs-gif .gp-search:focus-within{box-shadow:inset 0 0 0 1px var(--cs-focus-ring),0 0 0 2px color-mix(in srgb,var(--cs-focus-ring) 28%,transparent)}
+.cs-gif.inert .gp-search{opacity:.6}
+.cs-gif .gp-input{flex:1;min-width:0;padding:0;border:0;outline:0;background:none;color:var(--cs-fg);font:inherit;font-size:var(--cs-text-base)}
+.cs-gif .gp-input::placeholder{color:var(--cs-muted-fg)}
+.cs-gif .gp-input::-webkit-search-cancel-button{display:none}
+.cs-gif .gp-clear{display:grid;place-items:center;width:22px;height:22px;border-radius:var(--cs-radius-sm);color:var(--cs-muted-fg)}
+.cs-gif .gp-clear[hidden]{display:none}
+.cs-gif .gp-clear .gp-i{width:12px;height:12px}
+.cs-gif .gp-clear:hover,.cs-gif .gp-close:hover{background:var(--cs-hover);color:var(--cs-fg)}
+.cs-gif .gp-close{display:grid;place-items:center;width:30px;height:30px;border-radius:var(--cs-radius);color:var(--cs-muted-fg)}
+.cs-gif .gp-body{flex:1;min-height:0;overflow-y:auto;padding:0 8px 8px}
+/* Results: uniform cells keep the arrows predictable; the ring sits above the still, an accent line then a background gap. */
+.cs-gif .gp-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-auto-rows:80px;gap:4px;outline:0}
+.cs-gif .gp-cell{position:relative;overflow:hidden;border-radius:var(--cs-radius);background:var(--cs-inset);cursor:pointer}
+.cs-gif .gp-cell img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.cs-gif .gp-cell:hover::after{content:"";position:absolute;inset:0;background:color-mix(in srgb,var(--cs-fg) 8%,transparent)}
+.cs-gif .gp-grid.kbd .gp-cell[aria-selected=true]::after{content:"";position:absolute;inset:0;z-index:2;border-radius:inherit;background:none;box-shadow:inset 0 0 0 2px var(--cs-accent),inset 0 0 0 4px var(--cs-bg)}
+.cs-gif .gp-cell.skel{cursor:default;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--cs-border) 70%,transparent)}
+.cs-gif .gp-cell.skel:nth-child(2n){opacity:.7}
+.cs-gif .gp-cell.failed{display:grid;place-items:center;color:var(--cs-muted-fg);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--cs-border) 70%,transparent)}
+.cs-gif .gp-cell.failed .gp-i{width:16px;height:16px}
+/* The footer: the focused or hovered GIF's title (a polite live region) on the left, the provider's attribution on the right. */
+.cs-gif .gp-foot{flex:none;display:flex;align-items:center;gap:8px;height:30px;padding:0 10px;border-top:1px solid var(--cs-border);font-size:var(--cs-text-xs);color:var(--cs-muted-fg)}
+.cs-gif .gp-now{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cs-gif .gp-now b{color:var(--cs-fg);font-weight:500}
+.cs-gif .gp-attr{flex:none;font-weight:600;letter-spacing:.02em}
+.cs-gif .gp-start{padding:18px 8px;display:grid;gap:10px;justify-items:center;text-align:center;color:var(--cs-muted-fg)}
+.cs-gif .gp-chips{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin-top:4px}
+.cs-gif .gp-chip{display:inline-flex;align-items:center;height:24px;padding:0 9px;border-radius:var(--cs-radius-full);box-shadow:inset 0 0 0 1px var(--cs-border);background:var(--cs-bg);font-size:var(--cs-text-xs);color:var(--cs-fg)}
+.cs-gif .gp-chip:hover{background:var(--cs-hover)}
+/* States (consent, the error codes, no results): the empty-state voice inside the popover. */
+.cs-gif .gp-state{min-height:100%;display:grid;align-content:center;justify-items:center;gap:6px;padding:8px 20px 12px;text-align:center;color:var(--cs-muted-fg)}
+.cs-gif .gp-state>.gp-i{width:20px;height:20px;margin-bottom:2px}
+.cs-gif .gp-state.bad>.gp-i{color:var(--cs-danger)}
+.cs-gif .gp-state.warn>.gp-i{color:var(--cs-warning)}
+.cs-gif .gp-big{font-size:var(--cs-text-base);color:var(--cs-fg);font-weight:600}
+.cs-gif .gp-state p{margin:0;max-width:36ch;font-size:var(--cs-text-sm)}
+.cs-gif .gp-state p.gp-fine{font-size:var(--cs-text-xs)}
+.cs-gif .gp-acts{display:flex;gap:8px;margin-top:8px}
+.cs-gif .gp-btn{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 8px;border-radius:var(--cs-radius);font-size:var(--cs-text-sm);white-space:nowrap}
+.cs-gif .gp-btn.primary{background:var(--cs-accent);color:var(--cs-accent-fg);font-weight:500}
+.cs-gif .gp-btn.outline{box-shadow:inset 0 0 0 1px var(--cs-border)}
+.cs-gif .gp-btn.outline:hover{background:var(--cs-hover)}
+/* The staged GIF: a 112 px still with its own 24 px remove control, and the required alt text beside it. */
+.cs-gif.gs{display:grid;grid-template-columns:112px minmax(0,1fr);gap:10px;align-items:start;padding-bottom:8px;margin-bottom:8px;border-bottom:1px solid var(--cs-border);font-size:var(--cs-text-sm);color:var(--cs-fg)}
+.cs-gif .gs-media{display:grid;gap:4px}
+.cs-gif .gs-thumb{position:relative;width:112px;aspect-ratio:4/3;border-radius:var(--cs-radius);overflow:hidden;background:var(--cs-inset);display:grid;place-items:center;color:var(--cs-muted-fg)}
+.cs-gif .gs-thumb:focus-visible{outline:2px solid var(--cs-accent);outline-offset:1px}
+.cs-gif .gs-thumb img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.cs-gif .gs-x{position:absolute;right:4px;top:4px;display:grid;place-items:center;width:24px;height:24px;border-radius:var(--cs-radius-full);background:color-mix(in srgb,var(--cs-bg) 92%,transparent);box-shadow:0 0 0 1px color-mix(in srgb,var(--cs-fg) 16%,transparent),var(--cs-shadow);color:var(--cs-fg)}
+.cs-gif .gs-x .gp-i{width:12px;height:12px;stroke-width:2.2}
+.cs-gif .gs-attr{font-size:var(--cs-text-xs);font-weight:600;letter-spacing:.02em;color:var(--cs-muted-fg)}
+.cs-gif .gs-f{display:grid;gap:4px;min-width:0}
+.cs-gif .gs-f label{display:flex;align-items:baseline;gap:6px;font-size:var(--cs-text-xs);font-weight:600}
+.cs-gif .gs-req{font-weight:400;color:var(--cs-muted-fg)}
+.cs-gif .gs-in{min-height:28px;padding:4px 8px;border:0;border-radius:var(--cs-radius);background:var(--cs-inset);box-shadow:inset 0 0 0 1px var(--cs-border-control);font:inherit;font-size:var(--cs-text-sm);color:var(--cs-fg);outline:0}
+.cs-gif .gs-in::placeholder{color:var(--cs-muted-fg)}
+.cs-gif .gs-in:focus{box-shadow:inset 0 0 0 1px var(--cs-focus-ring),0 0 0 2px color-mix(in srgb,var(--cs-focus-ring) 28%,transparent)}
+.cs-gif .gs-in.err{box-shadow:inset 0 0 0 1px var(--cs-danger),0 0 0 2px color-mix(in srgb,var(--cs-danger) 22%,transparent)}
+.cs-gif .gs-help{display:flex;gap:4px;align-items:flex-start;font-size:var(--cs-text-xs);color:var(--cs-muted-fg)}
+.cs-gif .gs-help.err{color:var(--cs-danger)}
+.cs-gif .gs-help .gp-i{width:13px;height:13px;margin-top:2px}

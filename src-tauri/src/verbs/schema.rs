@@ -14,6 +14,9 @@ pub fn args_schema(name: &str) -> Value {
     if name == "whyLine" {
         return serde_json::to_value(rmcp::schemars::schema_for!(crate::attribution::why_line::Params)).expect("why line schema");
     }
+    if name == "openGifSettings" {
+        return json!({"type":"object","properties":{},"additionalProperties":false});
+    }
     if name == "sessionRecord" {
         return json!({"type":"object","properties":{"handle":{"type":"string","minLength":1}},"required":["handle"],"additionalProperties":false});
     }
@@ -281,6 +284,9 @@ pub fn result_schema(name: &str) -> Value {
         }
         "showMenu" => {
             json!({"oneOf":[{"type":"object","properties":{"closed":{"const":true}},"required":["closed"]},{"type":"object","properties":{"itemId":{"type":"string"},"row":{},"builtin":{"type":"boolean"}},"required":["itemId","row"]}]})
+        }
+        "openGifSettings" => {
+            json!({"type":"object","properties":{"opened":{"const":true}},"required":["opened"]})
         }
         "showPopover" => {
             json!({"type":"object","properties":{"closed":{"const":true}},"required":["closed"]})

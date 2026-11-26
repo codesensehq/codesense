@@ -481,6 +481,16 @@ export const VERB_REGISTRY = [
     "presentationOnlyReason": "Host presentation or dashboard-local operation"
   },
   {
+    "name": "openGifSettings",
+    "class": "read",
+    "grant": "inbox:write",
+    "inboxTarget": false,
+    "confirmable": false,
+    "action": true,
+    "mcpTwin": null,
+    "presentationOnlyReason": "Opens Settings at GIF search from the Inbox pane GIF picker"
+  },
+  {
     "name": "openLauncher",
     "class": "spawn",
     "grant": "sessions:read",

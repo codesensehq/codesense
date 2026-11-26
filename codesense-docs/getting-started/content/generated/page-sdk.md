@@ -1,6 +1,6 @@
 # Page SDK
 
-Generated from the Rust registry and TypeScript declarations. All 126 verbs and every declared Surface member are listed below. Rust checks each call against its frame grant.
+Generated from the Rust registry and TypeScript declarations. All 127 verbs and every declared Surface member are listed below. Rust checks each call against its frame grant.
 
 [Exact TypeScript declarations](codesense.d.ts) · [Machine reference](page-sdk.json) · [Capabilities](capabilities.md) · [LiveHub](live-hub.md)
 
@@ -1651,6 +1651,19 @@ openFile(args: {
 spawn · context:read
 
 Class: spawn; default grant: context:read; MCP twin: Host presentation or dashboard-local operation.
+
+## VerbMethods: openGifSettings
+
+```ts
+openGifSettings(args?: Record<string, unknown>): Promise<{
+      opened: true;
+      [key: string]: unknown;
+    }>;
+```
+
+read · inbox:write
+
+Class: read; default grant: inbox:write; MCP twin: Opens Settings at GIF search from the Inbox pane GIF picker.
 
 ## VerbMethods: openLauncher
 

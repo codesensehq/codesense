@@ -20,8 +20,8 @@
     "localMachinePhrase"
   ],
   "counts": {
-    "bridgeMethods": 126,
-    "actionVerbs": 68,
+    "bridgeMethods": 127,
+    "actionVerbs": 69,
     "readVerbs": 58,
     "surfaceMembers": 59
   },
@@ -4713,6 +4713,36 @@
       },
       "resultSchema": {
         "description": "JSON result of the existing host handler; see get_live_data_contract for its fields."
+      },
+      "action": true,
+      "confirmable": false,
+      "feature": null
+    },
+    {
+      "name": "openGifSettings",
+      "owner": "VerbMethods",
+      "signature": "openGifSettings(args?: Record<string, unknown>): Promise<{\n      opened: true;\n      [key: string]: unknown;\n    }>;",
+      "description": "read · inbox:write",
+      "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
+      "class": "read",
+      "grant": "inbox:write",
+      "mcpTwin": null,
+      "presentationOnlyReason": "Opens Settings at GIF search from the Inbox pane GIF picker",
+      "argsSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "resultSchema": {
+        "properties": {
+          "opened": {
+            "const": true
+          }
+        },
+        "required": [
+          "opened"
+        ],
+        "type": "object"
       },
       "action": true,
       "confirmable": false,
@@ -13904,6 +13934,34 @@
       "audited": true,
       "action": true,
       "module": "processes"
+    },
+    {
+      "name": "openGifSettings",
+      "class": "read",
+      "argsSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "resultSchema": {
+        "properties": {
+          "opened": {
+            "const": true
+          }
+        },
+        "required": [
+          "opened"
+        ],
+        "type": "object"
+      },
+      "grant": "inbox:write",
+      "inboxTarget": false,
+      "confirmable": false,
+      "mcpTwin": null,
+      "presentationOnlyReason": "Opens Settings at GIF search from the Inbox pane GIF picker",
+      "audited": true,
+      "action": true,
+      "module": "inbox"
     },
     {
       "name": "openLauncher",
@@ -23997,6 +24055,26 @@
       "mcpTwin": null
     },
     {
+      "verb": "openGifSettings",
+      "tier": "read",
+      "args": "{\"additionalProperties\":false,\"properties\":{},\"type\":\"object\"}",
+      "description": "read · inbox:write",
+      "denyExample": "denied: grant",
+      "result": {
+        "properties": {
+          "opened": {
+            "const": true
+          }
+        },
+        "required": [
+          "opened"
+        ],
+        "type": "object"
+      },
+      "grant": "inbox:write",
+      "mcpTwin": null
+    },
+    {
       "verb": "openLauncher",
       "tier": "spawn",
       "args": "{\"additionalProperties\":true,\"properties\":{\"org\":{\"type\":\"string\"},\"task\":{\"type\":\"string\"},\"team\":{\"type\":\"string\"}},\"required\":[\"task\"],\"type\":\"object\"}",
@@ -25767,7 +25845,7 @@
     },
     {
       "tier": "read",
-      "verbs": "commands.run, files.list, files.read, getWorkspaceStatus, gifProvider, gifSearch, readWorkspace, routineResult, routineStatus",
+      "verbs": "commands.run, files.list, files.read, getWorkspaceStatus, gifProvider, gifSearch, openGifSettings, readWorkspace, routineResult, routineStatus",
       "note": "read class; Rust checks the effective grant on every call."
     },
     {
@@ -25787,9 +25865,9 @@
     }
   ],
   "sources": {
-    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "7587919772e19f2f1d85e542e0cf5d94468bb85a48a3e085ee158e14f59bc103",
-    "src-tauri/src/verbs/registry.generated.json": "b1d42a3f4c9dbedd5dee0b588c5292fc394eea607624e4b566e7bc08845fa1c0",
-    "src-tauri/src/verbs/registry.rs": "e0c8544c5adff99aa2433e8f10de56242a030fd219ac753d9fefc76c29d50569",
+    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "5cbffc0c64cef7a82aaa81ea690843d5af9417eaf0329516f8a77006066dc441",
+    "src-tauri/src/verbs/registry.generated.json": "21a4f01b15c216e0fb749e4b95dc8e7ad0f7fc09ddca3fe3f0fb3a29d5ad5e60",
+    "src-tauri/src/verbs/registry.rs": "d601a2313ffe616d7a909537685ff0d770106172173d01efeb8124886a97469f",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29",
     "src-tauri/src/http/routes/viewer.rs": "cb3b267840ff535fcdf4bf56677a6885cd05d5abae2f838e99fc02ce25779657",

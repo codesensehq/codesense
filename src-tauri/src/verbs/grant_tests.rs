@@ -189,7 +189,7 @@ fn open_frame_admits_registered_verbs_except_inbox_media_and_team_safe_denies_te
     for verb in builtin_registry().all() {
         if matches!(
             verb.name.as_str(),
-            "loadMedia" | "gifSearch" | "gifProvider" | "gifPicked"
+            "loadMedia" | "gifSearch" | "gifProvider" | "gifPicked" | "openGifSettings"
         ) {
             assert!(matches!(
                 Dispatcher::default().dispatch_frame(
