@@ -45,7 +45,7 @@ export const GIF_PROVIDERS: Readonly<Record<GifProviderId, GifProviderInfo>> = {
     termsUrl: "https://docs.klipy.com/terms",
     keySource: "your KLIPY partner panel",
     pings:
-      "While GIF search is on, KLIPY gets a share ping for each GIF an agent sends, with the words it searched and a random id CodeSense makes for this install. Turning GIF search off or removing the key stops the pings and deletes the id.",
+      "While GIF search is on, KLIPY gets a share ping for each GIF an agent sends, with the words it searched and a random id CodeSense makes for this install. Turning GIF search off or removing the key stops the pings and deletes the id; replacing the key gives the new key a new id.",
     productionNote:
       "A KLIPY testing key allows 100 requests an hour, so CodeSense stops at 90. A production key has no limit here. Replacing the key clears this.",
   },

@@ -19,6 +19,9 @@ describe("GIF_PROVIDERS", () => {
       expect(new URL(info.termsUrl).protocol).toBe("https:");
       expect(info.keySource).toContain(info.name);
       expect(info.pings).toContain(info.name);
+      expect(info.pings).toContain(
+        "removing the key stops the pings and deletes the id; replacing the key gives the new key a new id.",
+      );
     }
   });
 });
