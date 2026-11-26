@@ -762,11 +762,12 @@ async fn send_message_and_reply_route_by_handle() {
     // The human replies from the panel: the reply goes to the sender and reads the
     // message it answers.
     let human_reply = sent_id(
-        reply_from_human(
+        reply_from_human_with_media(
             &host,
             &launch_team("default"),
             to_human,
             "thanks",
+            None,
             None,
             None,
         )
@@ -1374,11 +1375,12 @@ async fn identity_unbound_mcp_cannot_answer_the_persons_needs_you_mail() {
         "H1"
     );
     let human = sent_id(
-        reply_from_human(
+        reply_from_human_with_media(
             &host,
             &launch_team("default"),
             question,
             "Person's answer",
+            None,
             None,
             None,
         )
@@ -1431,13 +1433,14 @@ async fn a_summary_reaches_every_read_model() {
         .unwrap(),
     );
     let answer = sent_id(
-        reply_from_human(
+        reply_from_human_with_media(
             &host,
             &launch_team("default"),
             to_human,
             "thanks",
             None,
             Some("Thanks"),
+            None,
         )
         .await
         .unwrap(),
@@ -1764,7 +1767,7 @@ async fn the_app_acts_on_the_team_it_names() {
 
     // A reply from the design team's list goes to H1, in design's store.
     let reply_id = sent_id(
-        reply_from_human(&host, &design, in_design, "thanks", None, None)
+        reply_from_human_with_media(&host, &design, in_design, "thanks", None, None, None)
             .await
             .unwrap(),
     );
@@ -3107,9 +3110,17 @@ async fn a_human_reply_goes_only_to_the_sender_and_queues_no_role_delivery() {
         .unwrap(),
     );
     let answer = sent_id(
-        reply_from_human(&host, &launch_team("default"), asked, "yes", None, None)
-            .await
-            .unwrap(),
+        reply_from_human_with_media(
+            &host,
+            &launch_team("default"),
+            asked,
+            "yes",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap(),
     );
     let row = fake.rows().into_iter().find(|m| m.id == answer).unwrap();
     assert_eq!((row.from.as_str(), row.to.as_str()), (HUMAN, "H2"));
@@ -3172,9 +3183,17 @@ async fn reply_preview_and_delivery_share_by_id_lookup_beyond_recent_500() {
         .read_at_ms
         .is_none());
     let answer = sent_id(
-        reply_from_human(&host, &launch_team("default"), asked, "Answer", None, None)
-            .await
-            .unwrap(),
+        reply_from_human_with_media(
+            &host,
+            &launch_team("default"),
+            asked,
+            "Answer",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap(),
     );
     let delivered = inbox::inbox_get(&store, answer).unwrap().unwrap();
     assert_eq!(
@@ -3252,13 +3271,14 @@ async fn a_reply_carries_its_summary_to_a_session_and_to_a_role_queue() {
         .unwrap(),
     );
     let queued = sent_id(
-        reply_from_human(
+        reply_from_human_with_media(
             &host,
             &launch_team("default"),
             to_human,
             "<p>main</p>",
             Some(inbox::MessageContentType::Html),
             Some(" Use\nmain "),
+            None,
         )
         .await
         .unwrap(),
@@ -3304,9 +3324,17 @@ async fn reply_to_a_role_queues_the_answer_for_that_role_after_the_sender_exited
     );
 
     let answer = sent_id(
-        reply_from_human(&host, &launch_team("default"), asked, "main", None, None)
-            .await
-            .unwrap(),
+        reply_from_human_with_media(
+            &host,
+            &launch_team("default"),
+            asked,
+            "main",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap(),
     );
     let row = fake.rows().into_iter().find(|m| m.id == answer).unwrap();
     assert_eq!((row.from.as_str(), row.to.as_str()), (HUMAN, "manager"));
@@ -3388,11 +3416,12 @@ async fn reply_to_a_session_sends_the_answer_to_that_session_only() {
     );
     assert_eq!(fake.rows()[0].reply_to.as_deref(), Some("H1"));
     let answer = sent_id(
-        reply_from_human(
+        reply_from_human_with_media(
             &host,
             &launch_team("default"),
             asked,
             "the first",
+            None,
             None,
             None,
         )
@@ -3776,12 +3805,13 @@ async fn the_humans_reply_reaches_only_the_sender_and_no_role_queue() {
         .unwrap(),
     );
     let reply_id = sent_id(
-        reply_from_human(
+        reply_from_human_with_media(
             &host,
             &launch_team("default"),
             asked,
             "yes",
             Some(inbox::MessageContentType::Plain),
+            None,
             None,
         )
         .await
@@ -3805,12 +3835,12 @@ async fn the_humans_reply_reaches_only_the_sender_and_no_role_queue() {
     assert!(fake.stored_for.lock().unwrap().contains(&"H2".to_string()));
     // Blank and unknown are refused.
     assert!(is_invalid(
-        &reply_from_human(&host, &launch_team("default"), asked, " ", None, None)
+        &reply_from_human_with_media(&host, &launch_team("default"), asked, " ", None, None, None)
             .await
             .unwrap()
     ));
     assert!(is_invalid(
-        &reply_from_human(&host, &launch_team("default"), 999, "hi", None, None)
+        &reply_from_human_with_media(&host, &launch_team("default"), 999, "hi", None, None, None)
             .await
             .unwrap()
     ));
@@ -7483,7 +7513,7 @@ async fn reply_inherits_story_on_the_humans_reply() {
     let host = port(&fake);
     let card = sent_id(send_story(&host, "S2", "human", "decide?", None, Some("DEMO-5"), None).await);
     let answer = sent_id(
-        reply_from_human(&host, &launch_team("default"), card, "go", None, None)
+        reply_from_human_with_media(&host, &launch_team("default"), card, "go", None, None, None)
             .await
             .unwrap(),
     );

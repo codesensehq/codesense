@@ -10,15 +10,18 @@ use base64::Engine as _;
 use futures_util::future::BoxFuture;
 use std::time::Duration;
 
-/// The largest still read, enforced while streaming.
+/// The largest still read. [`read`] enforces it while streaming, the one place it is checked.
 pub(crate) const MAX_BYTES: usize = 256 * 1024;
-/// The most stills one search fetches: the search `limit` cap.
+/// The most stills one search fetches: the search `limit` cap. The search already clamps its
+/// `limit` to this; [`previews`] bounds its own fetches too, on purpose, so no caller's URL list
+/// can make it fetch more.
 pub(crate) const MAX_STILLS: usize = crate::gif::MAX_LIMIT;
 /// One search's stills share this deadline, fetched concurrently.
 pub(crate) const DEADLINE: Duration = Duration::from_secs(3);
 const MAX_REDIRECTS: usize = 3;
 
-/// Fetches one still's bytes, at most [`MAX_BYTES`]. Tests stand in a counting fake.
+/// Fetches one still's bytes, at most [`MAX_BYTES`]: the fetcher holds the cap, since it has to
+/// stop reading past it. Tests stand in a counting fake.
 pub(crate) trait PreviewFetch: Send + Sync {
     fn get<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<Vec<u8>, Failure>>;
 }
@@ -88,9 +91,6 @@ pub(crate) async fn preview(
         return Err(failure("address"));
     }
     let bytes = fetch.get(url).await?;
-    if bytes.len() > MAX_BYTES {
-        return Err(failure("size"));
-    }
     let (mime, _, _) = inspect(&bytes)?;
     Ok(format!(
         "data:{mime};base64,{}",
