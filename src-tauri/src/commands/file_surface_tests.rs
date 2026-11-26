@@ -182,11 +182,24 @@ fn tint_status_options_detect_staged_renames_only() {
         .iter()
         .map(|entry| (entry.path().unwrap().to_owned(), entry.status()))
         .collect();
-    assert!(
-        entries
-            .iter()
-            .any(|(path, status)| path == "content/staged-after.md"
-                && status.contains(git2::Status::INDEX_RENAMED)),
+    // An index rename's entry path is its old path; the delta names both sides.
+    let staged: Vec<_> = statuses
+        .iter()
+        .filter(|entry| entry.status().contains(git2::Status::INDEX_RENAMED))
+        .filter_map(|entry| {
+            let delta = entry.head_to_index()?;
+            Some((
+                delta.old_file().path()?.to_owned(),
+                delta.new_file().path()?.to_owned(),
+            ))
+        })
+        .collect();
+    assert_eq!(
+        staged,
+        vec![(
+            PathBuf::from("content/staged-before.md"),
+            PathBuf::from("content/staged-after.md")
+        )],
         "{entries:?}"
     );
     assert!(
