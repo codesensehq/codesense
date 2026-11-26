@@ -31,13 +31,14 @@ export const GIF_DEBOUNCE_MS=400;
 export const GIF_MIN_QUERY=2;
 export const GIF_LIMIT=10;
 const GIF_COLS=3;
-// Each error code's state: its icon and tone, its action, and whether the field stays inert (typing sends nothing) until that action.
+// Each error code's state: its icon and tone, its action, whether the field stays inert (typing sends nothing) until that action, and whether a
+// search's answer is held across a close (`hold`): only the states where a reopen would re-send a refused or missing key or spend the shared bucket.
 const GIF_STATES={
- noProvider:{icon:'key',action:'settings',inert:true},
- invalidKey:{icon:'key',tone:'bad',action:'settings',inert:true},
+ noProvider:{icon:'key',action:'settings',inert:true,hold:true},
+ invalidKey:{icon:'key',tone:'bad',action:'settings',inert:true,hold:true},
  mediaOff:{icon:'imageOff',action:null,inert:true},
  keychainUnavailable:{icon:'alert',tone:'bad',action:'retry',inert:true},
- rateLimited:{icon:'clock',tone:'warn',action:null,inert:true},
+ rateLimited:{icon:'clock',tone:'warn',action:null,inert:true,hold:true},
  providerUnavailable:{icon:'cloudOff',tone:'bad',action:'retry',inert:false},
  badQuery:{icon:'search',action:null,inert:false},
  failed:{icon:'alert',tone:'bad',action:null,inert:false},
@@ -72,8 +73,9 @@ export function mountGifPicker(el,{act,uiState=null,onStage=()=>{},provider:gues
  el.append(root);
  // provider: the one the host named on this open; allowed: the consent read at open; inert: typing sends nothing; seq: the newest search (a stale answer is dropped).
  let open=false,generation=0,provider=GIF_PROVIDERS.includes(guess)?guess:'giphy',allowed={},inert=true,seq=0,timer=null,wake=null,last='',retried=null,grid=null,rover=null,candidates=[];
- // held: the inert state a search last returned, kept across close so a reopen shows it again rather than send a refused key or spend the shared
- // bucket: {provider, result, query, retried, until}. Its action (Open Settings, Try again), the end of the wait, or a different provider releases it.
+ // held: the last held state (GIF_STATES `hold`) a search returned, kept across close so a reopen shows it again rather than send a refused or missing
+ // key or spend the shared bucket: {provider, result, query, until}. Open Settings, the end of the wait, or a different provider releases it. The other
+ // inert states (keychainUnavailable, mediaOff) send nothing, so a reopen starts fresh from them.
  let held=null;
  const words=()=>GIF_PROVIDER_COPY[provider];
  const later=(fn,ms)=>win.setTimeout(fn,ms);
@@ -92,18 +94,18 @@ export function mountGifPicker(el,{act,uiState=null,onStage=()=>{},provider:gues
   return node;
  }
  function syncClear(){clear.hidden=!input.value||inert;}
- // Each error the verbs return, in its own words. An inert state holds the field until its action: Open Settings, Try again or the end of the wait.
- // A search's inert state is held (`hold`); `until` keeps a held wait's end when it is shown again.
+ // Each error the verbs return, in its own words. Within an open, an inert state holds the field until its action: Open Settings, Try again or the end of the wait.
+ // A search's held state is kept (`hold`); `until` keeps a held wait's end when it is shown again.
  function showError(result,query,{hold=false,until=null}={}){
   const code=GIF_STATES[result&&result.error]?result.error:'failed';
   const kind=GIF_STATES[code],text=GIF_COPY.state[code],name=words().name;
   const given=Number(result&&result.retryAfter),seconds=Number.isFinite(given)&&given>0?given:60;
   const wait=GIF_COPY.wait(seconds);
-  if(hold&&kind.inert)held={provider,result,query,retried,until:code==='rateLimited'?until??Date.now()+seconds*1000:null};
+  if(hold&&kind.hold)held={provider,result,query,until:code==='rateLimited'?until??Date.now()+seconds*1000:null};
   const acts=[];
   if(kind.action==='settings'&&openSettings)acts.push(h('button',{type:'button',class:'gp-btn primary',onclick:()=>{held=null;openSettings();}},gifIcon('open'),GIF_COPY.openSettings));
   // Try again once: a second failure of the same kind keeps the message with no button.
-  if(kind.action==='retry'&&retried!==code)acts.push(h('button',{type:'button',class:'gp-btn outline',onclick:()=>{retried=code;held=null;setInert(false);searchNow(query);}},GIF_COPY.tryAgain));
+  if(kind.action==='retry'&&retried!==code)acts.push(h('button',{type:'button',class:'gp-btn outline',onclick:()=>{retried=code;setInert(false);searchNow(query);}},GIF_COPY.tryAgain));
   const why=result&&typeof result.message==='string'?result.message:String(result&&result.error||'');
   showState({icon:kind.icon,tone:kind.tone,big:typeof text.big==='function'?text.big(name):text.big,line:text.body(name,wait,why),fine:kind.action==='settings'?GIF_COPY.settingsPath:null,acts});
   foot('');
@@ -132,10 +134,10 @@ export function mountGifPicker(el,{act,uiState=null,onStage=()=>{},provider:gues
   if(at!==generation||!open)return;
   ready();
  }
- // The held state again, with the query it answered, the Try again it had left and the rest of its wait.
+ // The held state again, with the query it answered and the rest of its wait.
  function showHeld(){
   const {result,query,until}=held;
-  retried=held.retried;input.value=query;last=query;
+  input.value=query;last=query;
   showError(until===null?result:{...result,retryAfter:Math.ceil((until-Date.now())/1000)},query,{hold:true,until});
  }
  function ready(){if(held){showHeld();return;}setInert(false);input.value='';last='';retried=null;syncClear();showStart();input.focus();}

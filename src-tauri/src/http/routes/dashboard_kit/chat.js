@@ -2159,11 +2159,11 @@
   var GIF_LIMIT = 10;
   var GIF_COLS = 3;
   var GIF_STATES = {
-    noProvider: { icon: "key", action: "settings", inert: true },
-    invalidKey: { icon: "key", tone: "bad", action: "settings", inert: true },
+    noProvider: { icon: "key", action: "settings", inert: true, hold: true },
+    invalidKey: { icon: "key", tone: "bad", action: "settings", inert: true, hold: true },
     mediaOff: { icon: "imageOff", action: null, inert: true },
     keychainUnavailable: { icon: "alert", tone: "bad", action: "retry", inert: true },
-    rateLimited: { icon: "clock", tone: "warn", action: null, inert: true },
+    rateLimited: { icon: "clock", tone: "warn", action: null, inert: true, hold: true },
     providerUnavailable: { icon: "cloudOff", tone: "bad", action: "retry", inert: false },
     badQuery: { icon: "search", action: null, inert: false },
     failed: { icon: "alert", tone: "bad", action: null, inert: false }
@@ -2263,7 +2263,7 @@
       const kind = GIF_STATES[code], text = GIF_COPY.state[code], name = words().name;
       const given = Number(result && result.retryAfter), seconds = Number.isFinite(given) && given > 0 ? given : 60;
       const wait = GIF_COPY.wait(seconds);
-      if (hold && kind.inert) held = { provider, result, query, retried, until: code === "rateLimited" ? until ?? Date.now() + seconds * 1e3 : null };
+      if (hold && kind.hold) held = { provider, result, query, until: code === "rateLimited" ? until ?? Date.now() + seconds * 1e3 : null };
       const acts = [];
       if (kind.action === "settings" && openSettings) acts.push(h("button", { type: "button", class: "gp-btn primary", onclick: () => {
         held = null;
@@ -2271,7 +2271,6 @@
       } }, gifIcon("open"), GIF_COPY.openSettings));
       if (kind.action === "retry" && retried !== code) acts.push(h("button", { type: "button", class: "gp-btn outline", onclick: () => {
         retried = code;
-        held = null;
         setInert(false);
         searchNow(query);
       } }, GIF_COPY.tryAgain));
@@ -2317,7 +2316,6 @@
     }
     function showHeld() {
       const { result, query, until } = held;
-      retried = held.retried;
       input.value = query;
       last = query;
       showError(until === null ? result : { ...result, retryAfter: Math.ceil((until - Date.now()) / 1e3) }, query, { hold: true, until });

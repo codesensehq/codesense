@@ -614,17 +614,31 @@ describe("kit.chat.gifPicker: states", () => {
       expect(w.calls("gifSearch")).toHaveLength(2);
     });
 
-    it("keychainUnavailable: a reopen keeps a used Try again used", async () => {
+    it("keychainUnavailable is not held: after a used Try again, a reopen starts fresh with the field live", async () => {
       const w = await opened(failing("keychainUnavailable"));
       await typeAndWait(w, "cats");
-      await reopen(w);
-      expect(w.text()).toContain("Couldn't read your GIPHY key");
       w.button("Try again")!.click();
       await settle();
       expect(w.calls("gifSearch")).toHaveLength(2);
-      await reopen(w);
-      expect(w.text()).toContain("Couldn't read your GIPHY key");
       expect(w.button("Try again")).toBeUndefined();
+      w.state.search = [{ status: "ok", provider: "giphy", candidates: [candidate("a1")] }];
+      await reopen(w);
+      expect(w.text()).not.toContain("Couldn't read your GIPHY key");
+      expect(w.input().disabled).toBe(false);
+      expect(w.input().value).toBe("");
+      await typeAndWait(w, "dogs");
+      expect(w.calls("gifSearch")).toHaveLength(3);
+    });
+
+    it("mediaOff from a search is not held: a reopen starts fresh with the field live", async () => {
+      const w = await opened(failing("mediaOff"));
+      await typeAndWait(w, "cats");
+      expect(w.text()).toContain("GIFs are off for this team");
+      expect(w.input().disabled).toBe(true);
+      w.state.search = [{ status: "ok", provider: "giphy", candidates: [candidate("a1")] }];
+      await reopen(w);
+      expect(w.text()).not.toContain("GIFs are off for this team");
+      expect(w.input().disabled).toBe(false);
       await typeAndWait(w, "dogs");
       expect(w.calls("gifSearch")).toHaveLength(2);
     });
