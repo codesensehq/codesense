@@ -751,9 +751,7 @@ pub fn start(app: &tauri::AppHandle) {
                 machine_stats::reconcile(&handle);
             }
             if flags & FILES != 0 {
-                if let Err(e) = files::refresh(&handle).await {
-                    log::warn!("files projection: {e}");
-                }
+                spawn_files_refresh(&handle, |app| async move { files::refresh(&app).await });
             }
             if flags & HOSTS != 0 {
                 refresh_hosts(&handle).await;
@@ -777,6 +775,66 @@ pub fn start(app: &tauri::AppHandle) {
             }
         }
     });
+}
+
+/// The files refresh's slot in `Model::reading`. No host key starts with NUL.
+const FILES_REFRESH_KEY: &str = "\u{0}files";
+
+/// Run `step` (the files refresh) as its own task, so the hub loop's other steps never wait
+/// on a slow reset. One runs at a time: a call while one runs queues exactly one rerun,
+/// which takes every path queued meanwhile.
+fn spawn_files_refresh<R, F, Fut>(app: &tauri::AppHandle<R>, step: F)
+where
+    R: tauri::Runtime,
+    F: Fn(tauri::AppHandle<R>) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<(), String>> + Send + 'static,
+{
+    if !app
+        .state::<LiveHub>()
+        .model
+        .lock()
+        .unwrap()
+        .begin_refresh(FILES_REFRESH_KEY)
+    {
+        return;
+    }
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut guard = FilesRefreshGuard(Some(handle.clone()));
+        loop {
+            if let Err(e) = step(handle.clone()).await {
+                log::warn!("files projection: {e}");
+            }
+            let hub = handle.state::<LiveHub>();
+            if !hub.model.lock().unwrap().finish_refresh(FILES_REFRESH_KEY) {
+                break;
+            }
+        }
+        guard.0 = None;
+    });
+}
+
+/// Releases the files refresh when its task unwinds, so a panicking step never wedges
+/// FILES. A rerun queued behind it goes back to the hub loop as a FILES invalidation.
+struct FilesRefreshGuard<R: tauri::Runtime>(Option<tauri::AppHandle<R>>);
+impl<R: tauri::Runtime> Drop for FilesRefreshGuard<R> {
+    fn drop(&mut self) {
+        let Some(app) = self.0.take() else {
+            return;
+        };
+        let hub = app.state::<LiveHub>();
+        let Ok(mut model) = hub.model.lock() else {
+            return;
+        };
+        let again = model.finish_refresh(FILES_REFRESH_KEY);
+        if again {
+            model.finish_refresh(FILES_REFRESH_KEY);
+        }
+        drop(model);
+        if again {
+            hub.invalidate(FILES);
+        }
+    }
 }
 
 /// Evict the views nobody watches or has read lately ([`TopicRegistry::sweep_unwatched`]).
