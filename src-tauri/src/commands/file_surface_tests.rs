@@ -258,3 +258,20 @@ fn a_delta_tint_keeps_its_single_row_pathspec() {
         listed.iter().find(|r| r["name"] == "tracked.md").unwrap()
     );
 }
+
+#[test]
+fn a_staged_rename_edited_since_keeps_its_old_name() {
+    let (_dir, repo, own) =
+        tests::committed_repo(&[("before.md", "identical bytes"), ("other.md", "other")]);
+    tests::stage_move(&repo, &own, "before.md", "after.md");
+    std::fs::write(own.join("after.md"), "identical bytes, then an edit").unwrap();
+    let access = ContentAccess::new(
+        own,
+        None,
+        crate::context_repo::caller_scope::CallerScope::Human,
+    );
+    let rows = access.list_rows(None).unwrap();
+    let renamed = rows.iter().find(|r| r["name"] == "after.md").unwrap();
+    assert_eq!(renamed["gitState"], "renamed", "{renamed}");
+    assert_eq!(renamed["oldName"], "before.md", "{renamed}");
+}

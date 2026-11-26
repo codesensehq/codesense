@@ -136,7 +136,14 @@ impl ContentAccess {
             } else {
                 "modified"
             };
-            let old = delta.and_then(|d| d.old_file().path().map(Path::to_path_buf));
+            // A staged rename's old name is on its index side, even when the file has
+            // unstaged edits too (then `delta` is the workdir side, whose old file is the new).
+            let renamed = if status.contains(git2::Status::INDEX_RENAMED) {
+                entry.head_to_index()
+            } else {
+                delta
+            };
+            let old = renamed.and_then(|d| d.old_file().path().map(Path::to_path_buf));
             let old = old.filter(|old| {
                 let path = workdir.join(old);
                 self.caller.allows(&path)
