@@ -1,0 +1,304 @@
+{
+  "result": true,
+  "data": {
+    "data": [
+      {
+        "id": 8041071659142907,
+        "title": "Thumbs up",
+        "file": {
+          "hd": {
+            "gif": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/07/af/hd7.gif",
+              "width": 498,
+              "height": 280,
+              "size": 4001918
+            },
+            "webp": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/07/af/hd7.webp",
+              "width": 498,
+              "height": 280,
+              "size": 285228
+            },
+            "jpg": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/07/af/hd7.jpg",
+              "width": 498,
+              "height": 280,
+              "size": 19255
+            },
+            "mp4": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/07/af/hd7.mp4",
+              "width": 498,
+              "height": 280,
+              "size": 119294
+            }
+          },
+          "md": {
+            "gif": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/07/af/md7.gif",
+              "width": 498,
+              "height": 280,
+              "size": 3721260
+            },
+            "webp": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/07/af/md7.webp",
+              "width": 498,
+              "height": 280,
+              "size": 243490
+            },
+            "jpg": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/07/af/md7.jpg",
+              "width": 498,
+              "height": 280,
+              "size": 20086
+            }
+          },
+          "sm": {
+            "gif": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/07/af/sm7.gif",
+              "width": 220,
+              "height": 124,
+              "size": 314884
+            },
+            "webp": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/07/af/sm7.webp",
+              "width": 220,
+              "height": 124,
+              "size": 80118
+            },
+            "jpg": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/07/af/sm7.jpg",
+              "width": 220,
+              "height": 124,
+              "size": 8560
+            }
+          },
+          "xs": {
+            "gif": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/07/af/xs7.gif",
+              "width": 90,
+              "height": 51,
+              "size": 71468
+            },
+            "webp": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/07/af/xs7.webp",
+              "width": 90,
+              "height": 51,
+              "size": 25340
+            },
+            "jpg": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/07/af/xs7.jpg",
+              "width": 90,
+              "height": 51,
+              "size": 2949
+            }
+          }
+        },
+        "tags": [
+          "hello"
+        ],
+        "type": "gif",
+        "blur_preview": "data:image/jpeg;base64,/9j/",
+        "slug": "thumbs-up-12"
+      },
+      {
+        "id": 8041071659142901,
+        "title": "Hello",
+        "file": {
+          "hd": {
+            "gif": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/01/af/hd1.gif",
+              "width": 498,
+              "height": 280,
+              "size": 4001918
+            },
+            "webp": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/01/af/hd1.webp",
+              "width": 498,
+              "height": 280,
+              "size": 285228
+            },
+            "jpg": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/01/af/hd1.jpg",
+              "width": 498,
+              "height": 280,
+              "size": 19255
+            },
+            "mp4": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/01/af/hd1.mp4",
+              "width": 498,
+              "height": 280,
+              "size": 119294
+            }
+          },
+          "md": {
+            "gif": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/01/af/md1.gif",
+              "width": 498,
+              "height": 280,
+              "size": 3721260
+            },
+            "webp": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/01/af/md1.webp",
+              "width": 498,
+              "height": 280,
+              "size": 243490
+            },
+            "jpg": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/01/af/md1.jpg",
+              "width": 498,
+              "height": 280,
+              "size": 20086
+            }
+          },
+          "sm": {
+            "gif": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/01/af/sm1.gif",
+              "width": 220,
+              "height": 124,
+              "size": 314884
+            },
+            "webp": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/01/af/sm1.webp",
+              "width": 220,
+              "height": 124,
+              "size": 80118
+            },
+            "jpg": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/01/af/sm1.jpg",
+              "width": 220,
+              "height": 124,
+              "size": 8560
+            }
+          },
+          "xs": {
+            "gif": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/01/af/xs1.gif",
+              "width": 90,
+              "height": 51,
+              "size": 71468
+            },
+            "webp": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/01/af/xs1.webp",
+              "width": 90,
+              "height": 51,
+              "size": 25340
+            },
+            "jpg": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/01/af/xs1.jpg",
+              "width": 90,
+              "height": 51,
+              "size": 2949
+            }
+          }
+        },
+        "tags": [
+          "hello"
+        ],
+        "type": "gif",
+        "blur_preview": "data:image/jpeg;base64,/9j/",
+        "slug": "hello-hi-662"
+      },
+      {
+        "id": 8041071659142905,
+        "title": "Ship it",
+        "file": {
+          "hd": {
+            "gif": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/05/af/hd5.gif",
+              "width": 498,
+              "height": 280,
+              "size": 4001918
+            },
+            "webp": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/05/af/hd5.webp",
+              "width": 498,
+              "height": 280,
+              "size": 285228
+            },
+            "jpg": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/05/af/hd5.jpg",
+              "width": 498,
+              "height": 280,
+              "size": 19255
+            },
+            "mp4": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/05/af/hd5.mp4",
+              "width": 498,
+              "height": 280,
+              "size": 119294
+            }
+          },
+          "md": {
+            "gif": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/05/af/md5.gif",
+              "width": 498,
+              "height": 280,
+              "size": 3721260
+            },
+            "webp": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/05/af/md5.webp",
+              "width": 498,
+              "height": 280,
+              "size": 243490
+            },
+            "jpg": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/05/af/md5.jpg",
+              "width": 498,
+              "height": 280,
+              "size": 20086
+            }
+          },
+          "sm": {
+            "gif": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/05/af/sm5.gif",
+              "width": 220,
+              "height": 124,
+              "size": 314884
+            },
+            "webp": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/05/af/sm5.webp",
+              "width": 220,
+              "height": 124,
+              "size": 80118
+            },
+            "jpg": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/05/af/sm5.jpg",
+              "width": 220,
+              "height": 124,
+              "size": 8560
+            }
+          },
+          "xs": {
+            "gif": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/05/af/xs5.gif",
+              "width": 90,
+              "height": 51,
+              "size": 71468
+            },
+            "webp": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/05/af/xs5.webp",
+              "width": 90,
+              "height": 51,
+              "size": 25340
+            },
+            "jpg": {
+              "url": "https://static.klipy.com/ii/935d7ab9d8c6202580a668421940ec81/05/af/xs5.jpg",
+              "width": 90,
+              "height": 51,
+              "size": 2949
+            }
+          }
+        },
+        "tags": [
+          "hello"
+        ],
+        "type": "gif",
+        "blur_preview": "data:image/jpeg;base64,/9j/",
+        "slug": "ship-it-77"
+      }
+    ],
+    "current_page": 1,
+    "per_page": 24,
+    "has_next": false
+  }
+}

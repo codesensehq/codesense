@@ -336,8 +336,8 @@ a role-queue wake.
 ## Messaging: conversations, role inboxes and progress notes
 
 Find a GIF with `gif_search` (`query`, or `ids` from an earlier result): it searches
-GIPHY with the user's own key from Settings → Messaging and returns candidates in GIPHY's
-order; prefer one with `autoLoads: true` and pass its `url` unchanged. Errors such as
+the provider the user chose in Settings → Messaging (GIPHY or KLIPY) with the user's own
+key and returns candidates in that provider's order, naming it as `provider`; prefer one with `autoLoads: true` and pass its `url` unchanged. Errors such as
 `noProvider` (off or no key) and `rateLimited` (`retryAfter`) say what to fix.
 Send a GIF or meme with `send_message` or `reply`, using `media: {url, alt}` or
 `media: {path, alt}` (exactly one source; alt required). A GIPHY page ending in

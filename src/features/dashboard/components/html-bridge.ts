@@ -1519,8 +1519,8 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
   // provider in the background and refuses it from any other frame.
   gifPicked: async (args) => {
     const a = argObject(args, "gifPicked");
-    if (a.provider !== "giphy") {
-      throw new Error("gifPicked: {provider} must be 'giphy'");
+    if (a.provider !== "giphy" && a.provider !== "klipy") {
+      throw new Error("gifPicked: {provider} must be 'giphy' or 'klipy'");
     }
     if (typeof a.id !== "string" || !a.id) {
       throw new Error("gifPicked: {id} must be a GIF id from gifSearch");

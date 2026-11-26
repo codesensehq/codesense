@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 /**
- * Settings → Messaging: the GIF search card. On or Off, the GIPHY key (kept in the OS keychain,
- * entered only here), whether it is a production key, and the rating ceiling. The key row
- * explains itself through `CapabilityOff` where there is no secret store, and still counts in
- * search and the sidebar.
+ * Settings → Messaging: the GIF search card. Off, GIPHY or KLIPY; the chosen provider's key
+ * (kept in the OS keychain, entered only here), whether it is a production key, and the rating
+ * ceiling. With Off, a Keys row lists each provider's key from files alone, with no keychain
+ * read. The key row explains itself through `CapabilityOff` where there is no secret store, and
+ * still counts in search and the sidebar.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -12,33 +13,42 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Segmented } from "@/components/ui/segmented";
 import { rowMatches, type SettingRowSpec } from "@/features/settings/lib/row-matches";
-import { GIF_KEY_IN_KEYCHAIN } from "@/features/settings/lib/keychain-copy";
+import { gifKeyInKeychain } from "@/features/settings/lib/keychain-copy";
 import { CapabilityOff } from "@/shared/components/capability-off/capability-off";
 import { useCapability } from "@/shared/lib/capabilities";
+import { GIF_PROVIDER_IDS, GIF_PROVIDERS, type GifProviderId } from "@/shared/lib/gif-providers";
 import * as api from "@/tauri/commands";
 import type { GifKeyStatus, GifRating, GifSettings, GifSettingsUpdate } from "@/tauri/commands";
 
 import { SectionHeader } from "./section-header";
 import { SettingRow } from "./setting-row";
 
-export const GIPHY_TERMS_URL =
-  "https://support.giphy.com/hc/en-us/articles/360028134111-GIPHY-API-Terms-of-Service-";
-
 export const MESSAGING_ROW_SPECS: readonly SettingRowSpec[] = [
   {
     key: "gifSearch",
     label: "Provider",
-    keywords: ["gif search", "gif", "giphy", "meme", "messaging", "media"],
+    keywords: ["gif search", "gif", "giphy", "klipy", "meme", "messaging", "media"],
   },
   {
     key: "gifKey",
-    label: "GIPHY key",
-    keywords: ["gif", "giphy", "api key", "keychain", "production", "rate limit"],
+    label: "GIF key",
+    keywords: [
+      "gif",
+      "giphy key",
+      "klipy key",
+      "giphy",
+      "klipy",
+      "api key",
+      "keys",
+      "keychain",
+      "production",
+      "rate limit",
+    ],
   },
   {
     key: "gifRating",
     label: "Rating ceiling",
-    keywords: ["gif", "giphy", "rating", "pg-13", "content rating"],
+    keywords: ["gif", "giphy", "klipy", "rating", "pg-13", "content rating"],
   },
 ];
 
@@ -47,6 +57,8 @@ const RATINGS = [
   { value: "pg", label: "PG" },
   { value: "pg-13", label: "PG-13" },
 ] as const satisfies readonly { value: GifRating; label: string }[];
+
+const UNAVAILABLE: GifKeyStatus = { status: "unavailable", hint: null, production: false };
 
 export function MessagingSection({ query = "" }: { query?: string }) {
   const shown = new Set(
@@ -65,16 +77,22 @@ function GifSearchCard({ shown }: { shown: ReadonlySet<string> }) {
   const secretStore = useCapability("secret-store");
   const [settings, setSettings] = useState<GifSettings | null>(null);
   const [settingsFailed, setSettingsFailed] = useState(false);
-  const [key, setKey] = useState<GifKeyStatus | null>(null);
+  // The chosen provider's key status, with the provider it was read for.
+  const [read, setRead] = useState<{ provider: GifProviderId; status: GifKeyStatus } | null>(null);
+  // With Off: each provider's key status, from files alone.
+  const [offKeys, setOffKeys] = useState<Partial<Record<GifProviderId, GifKeyStatus>>>({});
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const active: GifProviderId | null = settings?.enabled ? settings.provider : null;
+  const key = read && read.provider === active ? read.status : null;
   // Each key read, save and remove takes a number; only the latest may set the key status, so a
-  // slow first read never overwrites a newer save or remove.
+  // slow first read never overwrites a newer save or remove, nor a read for the provider
+  // switched from.
   const keySeq = useRef(0);
-  const keyCall = (call: () => Promise<GifKeyStatus>) => {
+  const keyCall = (provider: GifProviderId, call: () => Promise<GifKeyStatus>) => {
     const seq = ++keySeq.current;
     return call().then((status) => {
-      if (seq === keySeq.current) setKey(status);
+      if (seq === keySeq.current) setRead({ provider, status });
       return status;
     });
   };
@@ -91,20 +109,32 @@ function GifSearchCard({ shown }: { shown: ReadonlySet<string> }) {
     void readSettings();
   }, [readSettings]);
 
-  // The one key read that may raise a keychain access prompt, while the user is here to allow it.
-  const readKey = useCallback(async () => {
+  // The one key read that may raise a keychain access prompt, while the user is here to allow
+  // it. It reads only the chosen provider's entry.
+  const readKey = useCallback(async (provider: GifProviderId) => {
     const seq = ++keySeq.current;
     let status: GifKeyStatus;
     try {
-      status = await api.gifKeyStatus();
+      status = await api.gifKeyStatus(provider);
     } catch {
-      status = { status: "unavailable", hint: null, production: false };
+      status = UNAVAILABLE;
     }
-    if (seq === keySeq.current) setKey(status);
+    if (seq === keySeq.current) setRead({ provider, status });
   }, []);
   useEffect(() => {
-    if (secretStore.on) void readKey();
-  }, [secretStore.on, readKey]);
+    if (secretStore.on && active) void readKey(active);
+  }, [secretStore.on, active, readKey]);
+
+  const readOffKeys = useCallback(async () => {
+    const read = await Promise.all(
+      GIF_PROVIDER_IDS.map((p) => api.gifKeyStatus(p).catch(() => UNAVAILABLE)),
+    );
+    setOffKeys(Object.fromEntries(GIF_PROVIDER_IDS.map((p, i) => [p, read[i]])));
+  }, []);
+  const off = settings !== null && !settings.enabled;
+  useEffect(() => {
+    if (secretStore.on && off) void readOffKeys();
+  }, [secretStore.on, off, readOffKeys]);
 
   const run = async <T,>(call: () => Promise<T>, apply: (value: T) => void) => {
     setBusy(true);
@@ -125,10 +155,19 @@ function GifSearchCard({ shown }: { shown: ReadonlySet<string> }) {
       (next) => {
         setSettings(next);
         const production = update.production;
-        if (production !== undefined) setKey((k) => k && { ...k, production });
+        if (production !== undefined)
+          setRead((r) => r && { ...r, status: { ...r.status, production } });
       },
     );
+  const choose = (value: GifProviderId | "off") =>
+    void change(value === "off" ? { enabled: false } : { enabled: true, provider: value });
 
+  const info = active ? GIF_PROVIDERS[active] : null;
+  const hint = !active
+    ? "Agents get no GIF results and nothing is sent."
+    : key?.status === "missing"
+      ? "Agents get no GIF results until a key is saved."
+      : "Switching keeps each provider's key.";
   return (
     <div
       role="group"
@@ -138,15 +177,20 @@ function GifSearchCard({ shown }: { shown: ReadonlySet<string> }) {
     >
       <div className="pt-3">
         <h3 className="text-sm font-semibold text-foreground">GIF search</h3>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Agents can search GIPHY for a GIF to send with a message. Each search goes from this
-          computer straight to GIPHY with your key.
-        </p>
-        <p className="mt-1 text-sm text-muted-foreground">
-          While GIF search is on, GIPHY gets its required send and view pings for the GIFs agents
-          send, with an install id GIPHY issues. Turning GIF search off or removing the key stops
-          the pings and deletes the id; replacing the key gives the new key a new id.
-        </p>
+        {info ? (
+          <>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Agents can search {info.name} for a GIF to send with a message. Each search goes from
+              this computer straight to {info.name} with your key.
+            </p>
+            <p className="mt-1 text-sm text-muted-foreground">{info.pings}</p>
+          </>
+        ) : (
+          <p className="mt-1 text-sm text-muted-foreground">
+            Agents can search GIPHY or KLIPY for a GIF to send with a message. Choose one to turn
+            GIF search on.
+          </p>
+        )}
         {error && (
           <p role="alert" className="mt-2 text-sm text-destructive">
             {error}
@@ -169,42 +213,64 @@ function GifSearchCard({ shown }: { shown: ReadonlySet<string> }) {
         <SettingRow label="Provider" target="gifSearch">
           <Segmented
             aria-label="GIF search provider"
-            value={settings ? (settings.enabled ? "giphy" : "off") : "giphy"}
-            onValueChange={(v) => void change({ enabled: v === "giphy" })}
+            value={settings ? (active ?? "off") : "off"}
+            onValueChange={choose}
             options={[
-              { value: "giphy", label: "GIPHY", disabled: !settings || busy },
               { value: "off", label: "Off", disabled: !settings || busy },
+              ...GIF_PROVIDER_IDS.map((p) => ({
+                value: p,
+                label: GIF_PROVIDERS[p].name,
+                disabled: !settings || busy,
+              })),
             ]}
           />
           <p className="mt-2 text-xs text-muted-foreground">
-            With Off, agents get no GIF results and nothing is sent to GIPHY.
+            {hint} KLIPY, unlike GIPHY, is also sent the words agents search.
           </p>
         </SettingRow>
       )}
-      {shown.has("gifKey") && (
-        <SettingRow label="GIPHY key" target="gifKey">
-          <CapabilityOff cap="secret-store">
-            <KeyRow
-              status={key}
-              busy={busy}
-              onRetry={() => void readKey()}
-              onSave={(value) =>
-                run(
-                  () => keyCall(() => api.gifKeySave(value)),
-                  () => {},
-                )
-              }
-              onRemove={() =>
-                run(
-                  () => keyCall(api.gifKeyRemove),
-                  () => {},
-                )
-              }
-              onProduction={(production) => void change({ production })}
-            />
-          </CapabilityOff>
-        </SettingRow>
-      )}
+      {shown.has("gifKey") &&
+        (info && active ? (
+          <SettingRow label={`${info.name} key`} target="gifKey">
+            <CapabilityOff cap="secret-store">
+              <KeyRow
+                key={active}
+                provider={active}
+                status={key}
+                busy={busy}
+                onRetry={() => void readKey(active)}
+                onSave={(value) =>
+                  run(
+                    () => keyCall(active, () => api.gifKeySave(active, value)),
+                    () => {},
+                  )
+                }
+                onRemove={() =>
+                  run(
+                    () => keyCall(active, () => api.gifKeyRemove(active)),
+                    () => {},
+                  )
+                }
+                onProduction={(production) => void change({ production })}
+              />
+            </CapabilityOff>
+          </SettingRow>
+        ) : (
+          <SettingRow label="Keys" target="gifKey">
+            <CapabilityOff cap="secret-store">
+              <OffKeys
+                statuses={offKeys}
+                busy={busy || !settings}
+                onRemove={(provider) =>
+                  run(
+                    () => api.gifKeyRemove(provider),
+                    (status) => setOffKeys((keys) => ({ ...keys, [provider]: status })),
+                  )
+                }
+              />
+            </CapabilityOff>
+          </SettingRow>
+        ))}
       {shown.has("gifRating") && (
         <SettingRow label="Rating ceiling" target="gifRating">
           <Segmented
@@ -218,21 +284,126 @@ function GifSearchCard({ shown }: { shown: ReadonlySet<string> }) {
           </p>
         </SettingRow>
       )}
-      <div className="flex flex-wrap items-center justify-between gap-2 py-3 text-xs text-muted-foreground">
-        <span>Powered By GIPHY</span>
-        <button
-          type="button"
-          className="underline underline-offset-4 hover:text-foreground"
-          onClick={() => void openUrl(GIPHY_TERMS_URL)}
+      {info ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 py-3 text-xs text-muted-foreground">
+          <span>{info.poweredBy}</span>
+          <button
+            type="button"
+            className="underline underline-offset-4 hover:text-foreground"
+            onClick={() => void openUrl(info.termsUrl)}
+          >
+            {info.name} API terms
+          </button>
+        </div>
+      ) : (
+        <div className="pb-3" />
+      )}
+    </div>
+  );
+}
+
+/** With Off: each provider's key, saved or not, and a Remove for each saved one. */
+function OffKeys({
+  statuses,
+  busy,
+  onRemove,
+}: {
+  statuses: Partial<Record<GifProviderId, GifKeyStatus>>;
+  busy: boolean;
+  onRemove: (provider: GifProviderId) => Promise<boolean>;
+}) {
+  const [confirming, setConfirming] = useState<GifProviderId | null>(null);
+  return (
+    <div className="space-y-2 text-sm">
+      {GIF_PROVIDER_IDS.map((p) => {
+        const status = statuses[p];
+        const name = GIF_PROVIDERS[p].name;
+        return (
+          <div key={p} data-gif-key={p} className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="w-14 font-medium text-foreground">{name}</span>
+              {!status ? (
+                <span className="text-muted-foreground">Checking…</span>
+              ) : status.status === "saved" ? (
+                <>
+                  <span className="text-foreground">Key saved</span>
+                  {status.hint && (
+                    <span className="font-mono text-xs text-muted-foreground">{status.hint}</span>
+                  )}
+                  <div className="ml-auto">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={busy}
+                      aria-label={`Remove the ${name} key`}
+                      onClick={() => setConfirming(p)}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <span className="text-muted-foreground">No key</span>
+              )}
+            </div>
+            {confirming === p && (
+              <RemoveConfirm
+                provider={p}
+                busy={busy}
+                onRemove={() => onRemove(p)}
+                onDone={() => setConfirming(null)}
+              />
+            )}
+          </div>
+        );
+      })}
+      <p className="text-xs text-muted-foreground">
+        Keys stay in your OS keychain while GIF search is off. Choose a provider to add or replace
+        its key.
+      </p>
+    </div>
+  );
+}
+
+/** Asks before a provider's key is removed, and says the other provider's key stays. */
+function RemoveConfirm({
+  provider,
+  busy,
+  onRemove,
+  onDone,
+}: {
+  provider: GifProviderId;
+  busy: boolean;
+  onRemove: () => Promise<boolean>;
+  onDone: () => void;
+}) {
+  const name = GIF_PROVIDERS[provider].name;
+  const others = GIF_PROVIDER_IDS.filter((p) => p !== provider).map((p) => GIF_PROVIDERS[p].name);
+  return (
+    <div role="alertdialog" aria-label={`Remove the ${name} key`} className="space-y-2">
+      <p>
+        Remove the {name} key? Agents can't search {name} until you add one.
+        {others.map((other) => ` Your ${other} key stays saved.`)}
+      </p>
+      <div className="flex gap-2">
+        <Button
+          size="sm"
+          variant="destructive"
+          disabled={busy}
+          onClick={() => void onRemove().then(onDone)}
         >
-          GIPHY API terms
-        </button>
+          Remove key
+        </Button>
+        <Button size="sm" variant="outline" disabled={busy} onClick={onDone}>
+          Cancel
+        </Button>
       </div>
     </div>
   );
 }
 
 function KeyRow({
+  provider,
   status,
   busy,
   onRetry,
@@ -240,6 +411,7 @@ function KeyRow({
   onRemove,
   onProduction,
 }: {
+  provider: GifProviderId;
   status: GifKeyStatus | null;
   busy: boolean;
   onRetry: () => void;
@@ -252,7 +424,9 @@ function KeyRow({
   const [visible, setVisible] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [empty, setEmpty] = useState(false);
-  if (!status) return <p className="pt-1 text-sm text-muted-foreground">Checking the key…</p>;
+  const info = GIF_PROVIDERS[provider];
+  if (!status)
+    return <p className="pt-1 text-sm text-muted-foreground">Checking the {info.name} key…</p>;
   const saved = status.status === "saved";
   const unavailable = status.status === "unavailable";
   const editing = replacing || status.status === "missing";
@@ -284,7 +458,7 @@ function KeyRow({
       )}
       {status.status === "missing" && (
         <p className="text-muted-foreground">
-          No key yet. Paste the API key from your GIPHY developer dashboard.
+          No key yet. Paste the API key from {info.keySource}.
         </p>
       )}
       {status.status === "unavailable" && (
@@ -303,27 +477,12 @@ function KeyRow({
         </p>
       )}
       {confirming && (
-        <div role="alertdialog" aria-label="Remove the GIPHY key" className="space-y-2">
-          <p>Remove the GIPHY key? Agents can't search GIFs until you add one.</p>
-          <div className="flex gap-2">
-            <Button
-              size="sm"
-              variant="destructive"
-              disabled={busy}
-              onClick={() => void onRemove().then(() => setConfirming(false))}
-            >
-              Remove key
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={busy}
-              onClick={() => setConfirming(false)}
-            >
-              Cancel
-            </Button>
-          </div>
-        </div>
+        <RemoveConfirm
+          provider={provider}
+          busy={busy}
+          onRemove={onRemove}
+          onDone={() => setConfirming(false)}
+        />
       )}
       {editing && (
         <form
@@ -344,11 +503,11 @@ function KeyRow({
           <div className="flex flex-wrap gap-2">
             <Input
               ref={field}
-              aria-label="GIPHY API key"
+              aria-label={`${info.name} API key`}
               type={visible ? "text" : "password"}
               autoComplete="off"
               spellCheck={false}
-              placeholder="Paste your GIPHY API key"
+              placeholder={`Paste your ${info.name} API key`}
               disabled={busy}
               className="min-w-32 flex-1"
             />
@@ -378,12 +537,12 @@ function KeyRow({
           </div>
           {empty && (
             <p role="alert" className="text-destructive">
-              Enter a GIPHY key.
+              Enter a {info.name} key.
             </p>
           )}
         </form>
       )}
-      <p className="text-xs text-muted-foreground">{GIF_KEY_IN_KEYCHAIN}</p>
+      <p className="text-xs text-muted-foreground">{gifKeyInKeychain(info.name)}</p>
       {saved && (
         <div className="space-y-1">
           <label className="flex items-center gap-2">
@@ -395,10 +554,7 @@ function KeyRow({
             />
             This is a production key
           </label>
-          <p className="text-xs text-muted-foreground">
-            A GIPHY beta key allows 100 searches an hour, so CodeSense stops at 90. A production key
-            has no limit here. Replacing the key clears this.
-          </p>
+          <p className="text-xs text-muted-foreground">{info.productionNote}</p>
         </div>
       )}
     </div>

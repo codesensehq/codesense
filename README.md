@@ -278,7 +278,8 @@ Please report vulnerabilities privately, as described in
 ## Privacy
 
 The app has no analytics or telemetry of its own. With GIF search on, it sends
-GIPHY's required send and view pings. [PRIVACY.md](PRIVACY.md) lists every
+the chosen provider's pings: GIPHY's required send and view pings, or KLIPY's
+share ping with the searched words and a random id made on this computer. [PRIVACY.md](PRIVACY.md) lists every
 network call the app makes, and what the website counts.
 
 ## Licence

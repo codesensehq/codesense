@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
-//! The pingback URLs each search returned (GIPHY's `analytics`), with the GIF's URLs, held in
-//! memory for an hour by provider and GIF id, so a later send of that GIF can register it. At
+//! What each search returned for a GIF: its URLs, its pingback URLs (GIPHY's `analytics`), the
+//! rating searched at and the query, held in memory for an hour by provider and GIF id, so a
+//! later send of that GIF can register it and a KLIPY lookup can stay within a rated search. At
 //! most [`MAX_ENTRIES`] are held; the oldest go first.
-use super::{Found, Pingbacks, Provider};
+use super::{Found, Pingbacks, Provider, Rating};
 use std::{
     collections::{HashMap, VecDeque},
     sync::Mutex,
@@ -15,13 +16,16 @@ pub(crate) const MAX_ENTRIES: usize = 2000;
 
 type Key = (Provider, String);
 
-/// What a search returned for one GIF: the URLs a send of it must use to register, and its
-/// pingbacks.
+/// What a search returned for one GIF: the URLs a send of it must use to register, its
+/// pingbacks (none for KLIPY), the rating it was found at and the query that found it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Entry {
     pub url: String,
     pub preview_url: String,
     pub pingbacks: Pingbacks,
+    pub rating: Rating,
+    /// `None` for a GIF a lookup returned.
+    pub query: Option<String>,
 }
 impl Entry {
     /// `url` is one this search returned for the GIF, so a send of it is this GIF. Both sides
@@ -74,18 +78,38 @@ impl Analytics {
         }
     }
 
-    /// Hold each found GIF's pingbacks until an hour from `now_ms`, dropping expired entries and
-    /// then the oldest past the cap.
-    pub(crate) fn record(&self, provider: Provider, found: &[Found], now_ms: i64) {
+    /// Hold each found GIF until an hour from `now_ms`, with the `rating` and `query` it was found
+    /// at, dropping expired entries and then the oldest past the cap. A GIPHY result registers
+    /// through its pingbacks, so one without them is not held; a KLIPY result registers by its
+    /// id and has none.
+    pub(crate) fn record(
+        &self,
+        provider: Provider,
+        found: &[Found],
+        rating: Rating,
+        query: Option<&str>,
+        now_ms: i64,
+    ) {
         let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
         let Held { entries, order, .. } = &mut *held;
         for f in found {
-            if let Some(pingbacks) = &f.pingbacks {
+            let pingbacks = match (&f.pingbacks, provider) {
+                (Some(pingbacks), _) => Some(pingbacks.clone()),
+                (None, Provider::Klipy) => Some(Pingbacks {
+                    onload: None,
+                    onclick: None,
+                    onsent: None,
+                }),
+                (None, Provider::Giphy) => None,
+            };
+            if let Some(pingbacks) = pingbacks {
                 let key = (provider, f.candidate.id.clone());
                 let entry = Entry {
                     url: f.candidate.url.clone(),
                     preview_url: f.candidate.preview_url.clone(),
-                    pingbacks: pingbacks.clone(),
+                    pingbacks,
+                    rating,
+                    query: query.map(str::to_string),
                 };
                 if entries
                     .insert(key.clone(), (now_ms + TTL_MS, entry))

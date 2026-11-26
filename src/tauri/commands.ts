@@ -10303,13 +10303,15 @@ export const dashboardPublisherKeyRemove = () =>
   invoke<DashboardPublisherKeyStatus>("dashboard_publisher_key_remove");
 
 export type GifRating = "g" | "pg" | "pg-13";
+export type GifProvider = "giphy" | "klipy";
 export interface GifSettings {
   enabled: boolean;
-  provider: "giphy";
+  provider: GifProvider;
   ceiling: GifRating;
 }
 export interface GifSettingsUpdate {
   enabled?: boolean;
+  provider?: GifProvider;
   ceiling?: GifRating;
   production?: boolean;
 }
@@ -10321,14 +10323,22 @@ export interface GifKeyStatus {
 export const gifSettingsGet = () => invoke<GifSettings>("gif_settings_get");
 export const gifSettingsSet = (update: GifSettingsUpdate) =>
   invoke<GifSettings>("gif_settings_set", { update });
-export const gifKeyStatus = () => invoke<GifKeyStatus>("gif_key_status");
-export const gifKeySave = (key: string) => invoke<GifKeyStatus>("gif_key_save", { key });
-export const gifKeyRemove = () => invoke<GifKeyStatus>("gif_key_remove");
+/** `provider`'s key status, or the active provider's without one. Only the active provider's
+ *  status reads the keychain; another's, or any while search is Off, never does. */
+export const gifKeyStatus = (provider?: GifProvider) =>
+  invoke<GifKeyStatus>("gif_key_status", { provider: provider ?? null });
+/** Save `key` as `provider`'s key; refused, with nothing changed, unless `provider` is still the
+ *  active one. */
+export const gifKeySave = (provider: GifProvider, key: string) =>
+  invoke<GifKeyStatus>("gif_key_save", { provider, key });
+/** Remove `provider`'s key, production mark and install id, or the active provider's. */
+export const gifKeyRemove = (provider?: GifProvider) =>
+  invoke<GifKeyStatus>("gif_key_remove", { provider: provider ?? null });
 
 /** One GIF the Inbox pane's search found. `previewData` is its still as a `data:` URI,
  *  fetched in the host; it is absent when the still failed or missed the search deadline. */
 export interface GifPageCandidate {
-  provider: "giphy";
+  provider: GifProvider;
   id: string;
   title: string;
   url: string;
@@ -10339,7 +10349,7 @@ export interface GifPageCandidate {
   previewData?: string;
 }
 export type GifSearchPageResult =
-  | { status: "ok"; provider: "giphy"; candidates: GifPageCandidate[] }
+  | { status: "ok"; provider: GifProvider; candidates: GifPageCandidate[] }
   | {
       status: "error";
       error:
@@ -10366,7 +10376,7 @@ export type GifPickedResult =
   | { status: "error"; error: "badQuery"; message: string };
 /** The person picked GIF `id` in the Inbox pane's picker: the host registers the pick with
  *  the provider in the background. */
-export const gifPicked = (provider: "giphy", id: string) =>
+export const gifPicked = (provider: GifProvider, id: string) =>
   invoke<GifPickedResult>("gif_picked", { provider, id });
 
 export const dashboardInventory = (folder?: string, localOnly = false) =>

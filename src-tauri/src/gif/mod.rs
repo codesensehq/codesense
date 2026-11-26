@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: MIT
-//! GIF search for agents: one provider trait and its GIPHY adapter, the machine-local key, the
-//! search rate limit and the user's settings. The key never leaves the OS keychain except in the
-//! provider request itself; no error, log line, file or tool result carries it.
+//! GIF search for agents: one provider trait and its GIPHY and KLIPY adapters, the machine-local
+//! keys, the search rate limit and the user's settings. A key never leaves the OS keychain except
+//! in the provider request itself; no error, log line, file or tool result carries it.
 pub(crate) mod analytics;
 pub(crate) mod bucket;
 pub(crate) mod giphy;
+pub(crate) mod install;
+pub(crate) mod klipy;
 pub(crate) mod page;
 pub(crate) mod register;
 pub(crate) mod settings;
+pub(crate) mod transport;
 
 use crate::commands::credential_store::Secret;
 use futures_util::future::BoxFuture;
@@ -19,7 +22,7 @@ use std::{
 };
 
 /// A provider's GIF id: the one pattern `gif_search` lookups and later send checks share.
-pub const ID_PATTERN: &str = r"^[A-Za-z0-9_-]{1,64}$";
+pub const ID_PATTERN: &str = r"^[A-Za-z0-9_-]{1,128}$";
 /// The longest search query, in characters.
 pub const MAX_QUERY_CHARS: usize = 100;
 /// The most ids one lookup takes.
@@ -80,40 +83,76 @@ impl Rating {
     }
 }
 
-/// A GIF provider. KLIPY joins as a second variant with its own adapter.
+/// A GIF provider, each with its own adapter, key and bucket.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Provider {
     #[default]
     Giphy,
+    Klipy,
 }
 impl Provider {
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "giphy" => Some(Self::Giphy),
+            "klipy" => Some(Self::Klipy),
             _ => None,
         }
     }
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Giphy => "giphy",
+            Self::Klipy => "klipy",
         }
     }
     pub fn display_name(self) -> &'static str {
         match self {
             Self::Giphy => "GIPHY",
+            Self::Klipy => "KLIPY",
         }
     }
     /// The only hosts a candidate's URLs may name.
     pub fn hosts(self) -> &'static [&'static str] {
         match self {
             Self::Giphy => crate::media::GIPHY_HOSTS,
+            Self::Klipy => crate::media::KLIPY_HOSTS,
         }
     }
     /// The Keychain service holding this provider's key; the account is the OS login name.
     pub fn key_service(self) -> &'static str {
         match self {
             Self::Giphy => "ai.codesense.giphy-api-key",
+            Self::Klipy => "ai.codesense.klipy-api-key",
+        }
+    }
+    /// The still rendition a candidate's `previewUrl` prefers.
+    pub fn preferred_still(self) -> &'static str {
+        match self {
+            Self::Giphy => "fixed_width_still",
+            Self::Klipy => "sm.jpg",
+        }
+    }
+    /// Whether a lookup sends the rating, so the provider refuses ids above it. KLIPY's lookup
+    /// takes no rating: its ids are cut to the ones a rated search returned.
+    pub fn rates_lookup(self) -> bool {
+        match self {
+            Self::Giphy => true,
+            Self::Klipy => false,
+        }
+    }
+    /// Whether this provider takes `event`: GIPHY all three, KLIPY a send only.
+    pub(crate) fn registers(self, event: register::Event) -> bool {
+        match self {
+            Self::Giphy => true,
+            Self::Klipy => event == register::Event::Sent,
+        }
+    }
+    /// Whether a registration counts against the search cap: KLIPY's test cap counts every
+    /// call with the key, a share included; GIPHY's pings are outside it.
+    pub(crate) fn registers_in_search_cap(self) -> bool {
+        match self {
+            Self::Giphy => false,
+            Self::Klipy => true,
         }
     }
 }
@@ -201,54 +240,96 @@ impl GifError {
             Self::MediaOff => "mediaOff",
         }
     }
-    /// The tool result for this error.
+    /// The tool result for this error, naming no provider.
     pub fn tool_result(self) -> serde_json::Value {
+        Failed::from(self).tool_result()
+    }
+
+    /// The text for this error with `provider` active when it came; `None` when it came before
+    /// the settings loaded (input checks), with search off or with no provider involved, and the
+    /// text then says "GIF search".
+    pub fn message(self, provider: Option<Provider>) -> String {
+        let name = provider.map(Provider::display_name);
+        let key = match name {
+            Some(name) => format!("{name} key"),
+            None => "GIF search key".to_string(),
+        };
+        match self {
+            Self::NoProvider => match name {
+                Some(name) => format!(
+                    "GIF search has no {name} key. The user can add one in Settings → Messaging."
+                ),
+                None => "GIF search is off or has no key. The user can turn it on and add a key \
+                         in Settings → Messaging."
+                    .to_string(),
+            },
+            Self::KeychainUnavailable => format!(
+                "The {key} could not be read from the OS keychain. The user can open Settings → \
+                 Messaging, where the key is read while they are there to allow it."
+            ),
+            Self::NoSecretStore => format!(
+                "GIF search can't run on this computer: it has no secret store to keep a {key} in."
+            ),
+            Self::InvalidKey => format!(
+                "{} refused the key. The user can replace it in Settings → Messaging.",
+                name.unwrap_or("The GIF search provider")
+            ),
+            Self::RateLimited { retry_after } => format!(
+                "{} search is paused. Try again in {retry_after} seconds.",
+                name.unwrap_or("GIF")
+            ),
+            Self::ProviderUnavailable => format!(
+                "{} is unavailable right now. Try again later.",
+                name.unwrap_or("GIF search")
+            ),
+            Self::BadQuery(reason) => match name {
+                Some(name) if !reason.contains(name) => {
+                    format!("Bad GIF search input: {reason} (the active provider is {name}).")
+                }
+                _ => format!("Bad GIF search input: {reason}."),
+            },
+            Self::MediaOff => {
+                "Remote media is off for this team, so GIF search can't show anything.".to_string()
+            }
+        }
+    }
+}
+impl std::fmt::Display for GifError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message(None))
+    }
+}
+impl std::error::Error for GifError {}
+
+/// A search error with the provider active when it came, which its text names; `None` before
+/// the settings loaded or with search off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Failed {
+    pub provider: Option<Provider>,
+    pub error: GifError,
+}
+impl From<GifError> for Failed {
+    fn from(error: GifError) -> Self {
+        Self {
+            provider: None,
+            error,
+        }
+    }
+}
+impl Failed {
+    /// The tool result: `{status:"error", error, message}`, plus `retryAfter` when rate limited.
+    pub(crate) fn tool_result(self) -> serde_json::Value {
         let mut value = serde_json::json!({
             "status": "error",
-            "error": self.code(),
-            "message": self.to_string(),
+            "error": self.error.code(),
+            "message": self.error.message(self.provider),
         });
-        if let Self::RateLimited { retry_after } = self {
+        if let GifError::RateLimited { retry_after } = self.error {
             value["retryAfter"] = retry_after.into();
         }
         value
     }
 }
-impl std::fmt::Display for GifError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NoProvider => f.write_str(
-                "GIF search is off or has no GIPHY key. The user can turn it on and add a key in \
-                 Settings → Messaging.",
-            ),
-            Self::KeychainUnavailable => f.write_str(
-                "The GIPHY key could not be read from the OS keychain. The user can open Settings → \
-                 Messaging, where the key is read while they are there to allow it.",
-            ),
-            Self::NoSecretStore => f.write_str(
-                "GIF search can't run on this computer: it has no secret store to keep a GIPHY key \
-                 in.",
-            ),
-            Self::InvalidKey => f.write_str(
-                "GIPHY refused the key. The user can replace it in Settings → Messaging.",
-            ),
-            Self::RateLimited { retry_after } => {
-                write!(
-                    f,
-                    "GIF search is paused. Try again in {retry_after} seconds."
-                )
-            }
-            Self::ProviderUnavailable => {
-                f.write_str("GIPHY is unavailable right now. Try again later.")
-            }
-            Self::BadQuery(reason) => write!(f, "Bad gif_search input: {reason}."),
-            Self::MediaOff => f.write_str(
-                "Remote media is off for this team, so GIF search can't show anything.",
-            ),
-        }
-    }
-}
-impl std::error::Error for GifError {}
 
 /// A checked `gif_search` input.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -441,20 +522,25 @@ pub fn pick_animated(renditions: &[Rendition]) -> Option<&Rendition> {
         .map(|(r, _)| *r)
 }
 
-/// The still a candidate's `previewUrl` names: an image within the limits, GIPHY's
-/// `fixed_width_still` first, then the smallest other still.
-pub fn pick_preview(renditions: &[Rendition]) -> Option<&Rendition> {
+/// The still a candidate's `previewUrl` names: an image within the limits, the provider's
+/// [`Provider::preferred_still`] first, then the smallest other still.
+pub fn pick_preview(provider: Provider, renditions: &[Rendition]) -> Option<&Rendition> {
+    let preferred = Provider::preferred_still(provider);
     renditions
         .iter()
         .filter(|r| r.still && r.format != Format::Other)
         .filter_map(|r| r.within_limits().map(|(_, _, bytes)| (r, bytes)))
-        .min_by_key(|(r, bytes)| (r.name != "fixed_width_still", *bytes))
+        .min_by_key(|(r, bytes)| (r.name != preferred, *bytes))
         .map(|(r, _)| r)
 }
 
-/// Whether `url` is https on one of `provider`'s hosts, with no credentials in it.
+/// KLIPY's API host. It is on KLIPY's host list but serves no media, and its URLs hold the key.
+const KLIPY_API_HOST: &str = "api.klipy.com";
+
+/// Whether `url` is https on one of `provider`'s media hosts, with no credentials in it.
 pub fn on_provider_host(provider: Provider, url: &str) -> bool {
     crate::media::on_hosts(Provider::hosts(provider), url)
+        && !(provider == Provider::Klipy && crate::media::on_hosts(&[KLIPY_API_HOST], url))
 }
 
 /// A candidate from one provider result, or `None` when it has no qualifying animated rendition
@@ -469,7 +555,7 @@ pub fn candidate(
         return None;
     }
     let animated = pick_animated(renditions)?;
-    let preview = pick_preview(renditions).map_or(&animated.url, |r| &r.url);
+    let preview = pick_preview(provider, renditions).map_or(&animated.url, |r| &r.url);
     if !on_provider_host(provider, &animated.url) || !on_provider_host(provider, preview) {
         return None;
     }
@@ -515,13 +601,13 @@ pub(crate) async fn search(
     service: &GifService,
     config: Option<&crate::media::Config>,
     args: SearchArgs<'_>,
-) -> Result<(Provider, Vec<Candidate>), GifError> {
+) -> Result<(Provider, Vec<Candidate>), Failed> {
     let request = normalize(args.query, args.ids, args.limit)?;
     let requested = match args.provider {
         None => None,
         Some(name) => Some(Provider::parse(name).ok_or(GifError::BadQuery("unknown provider"))?),
     };
-    let (provider, mut candidates) = service.run(&request, requested, args.rating).await?;
+    let (provider, mut candidates) = service.run_in(&request, requested, args.rating).await?;
     let off = crate::media::Config {
         remote: crate::media::Remote::Off,
         ..Default::default()
@@ -550,8 +636,10 @@ pub(crate) trait GifProvider: Send + Sync {
 /// Milliseconds since the Unix epoch.
 pub(crate) type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 
-/// Makes the adapter for a provider's key; tests stand in a recorded transport.
-pub(crate) type Adapters = Arc<dyn Fn(Provider, Secret, i64) -> Box<dyn GifProvider> + Send + Sync>;
+/// Makes the adapter for a provider's key and, for KLIPY, the install's `customer_id`; tests
+/// stand in a recorded transport.
+pub(crate) type Adapters =
+    Arc<dyn Fn(Provider, Secret, Option<String>, i64) -> Box<dyn GifProvider> + Send + Sync>;
 
 /// Everything `gif_search` needs: the settings and bucket files, the key, the adapter and the
 /// analytics map. One per app, so every search shares the bucket's lock and the key's single read.
@@ -586,40 +674,105 @@ impl GifService {
         &self.data_dir
     }
 
-    /// Run a checked request: settings, key, bucket, then the provider. Every error but the
-    /// provider's returns before any network call. `requested` is the provider the caller named,
-    /// which must be the active one. Returns the provider that ran and its candidates, with
-    /// `auto_loads` unset.
+    /// [`Self::run_in`] without the provider its error came under.
     pub(crate) async fn run(
         &self,
         request: &Request,
         requested: Option<Provider>,
         rating: Option<&str>,
     ) -> Result<(Provider, Vec<Candidate>), GifError> {
-        let epoch = register::install_epoch(&self.data_dir);
+        self.run_in(request, requested, rating)
+            .await
+            .map_err(|failed| failed.error)
+    }
+
+    /// Run a checked request: settings, key, bucket, then the provider. Every error but the
+    /// provider's returns before any network call, and every error after the settings load names
+    /// the active provider. `requested` is the provider the caller named, which must be the
+    /// active one. Returns the provider that ran and its candidates, with `auto_loads` unset.
+    pub(crate) async fn run_in(
+        &self,
+        request: &Request,
+        requested: Option<Provider>,
+        rating: Option<&str>,
+    ) -> Result<(Provider, Vec<Candidate>), Failed> {
+        let epoch = install::install_epoch(&self.data_dir);
         let dir = self.data_dir.clone();
         let current = tokio::task::spawn_blocking(move || settings::load(&dir))
             .await
             .map_err(|_| GifError::ProviderUnavailable)?;
         if !current.enabled {
-            return Err(GifError::NoProvider);
+            return Err(GifError::NoProvider.into());
         }
         let provider = current.provider;
+        let named = |error: GifError| Failed {
+            provider: Some(provider),
+            error,
+        };
         if requested.is_some_and(|p| p != provider) {
-            return Err(GifError::BadQuery(
+            return Err(named(GifError::BadQuery(
                 "provider is not the active GIF provider",
-            ));
+            )));
         }
-        let key = settings::Keys::read_timed(&self.keys, provider).await?;
+        let key = settings::Keys::read_timed(&self.keys, provider)
+            .await
+            .map_err(named)?;
         let fingerprint = fingerprint(&key);
         let production = current.is_production(provider, &fingerprint);
         let bucket_key = self::bucket_key(provider, &fingerprint);
         let rating = Rating::clamp(rating, current.ceiling);
+        // A lookup that takes no rating asks only for GIFs a search within the hour returned at
+        // or under `rating`. With none, nothing is asked and no token is taken.
+        let cut;
+        let request = match request {
+            Request::Lookup { ids } if !Provider::rates_lookup(provider) => {
+                let now = (self.clock)();
+                analytics::Analytics::start_epoch(&self.analytics, epoch);
+                let held: Vec<String> = ids
+                    .iter()
+                    .filter(|id| {
+                        analytics::Analytics::held_entry(&self.analytics, provider, id, now)
+                            .is_some_and(|entry| entry.rating <= rating)
+                    })
+                    .cloned()
+                    .collect();
+                if held.is_empty() {
+                    log::info!(target: "gif", "gif search: no {} search in the last hour returned these ids", provider.display_name());
+                    return Ok((provider, Vec::new()));
+                }
+                cut = Request::Lookup { ids: held };
+                &cut
+            }
+            request => request,
+        };
+        // KLIPY's searches carry the install's customer_id, read or made before any request; one
+        // that can't be saved fails the search, so a share never sends an id the search didn't.
+        let customer_id = match provider {
+            Provider::Giphy => None,
+            Provider::Klipy => {
+                let (dir, fp) = (self.data_dir.clone(), fingerprint.clone());
+                let made =
+                    tokio::task::spawn_blocking(move || install::customer_id(&dir, &fp, epoch))
+                        .await;
+                match made {
+                    Ok(Ok(id)) => Some(id),
+                    Ok(Err(e)) => {
+                        log::warn!(target: "gif", "gif search: KLIPY's customer id could not be saved: {e}");
+                        return Err(named(GifError::ProviderUnavailable));
+                    }
+                    Err(e) => {
+                        log::warn!(target: "gif", "gif search: KLIPY's customer id read stopped: {e}");
+                        return Err(named(GifError::ProviderUnavailable));
+                    }
+                }
+            }
+        };
         let (bucket, counted, now) = (self.bucket.clone(), bucket_key.clone(), (self.clock)());
         tokio::task::spawn_blocking(move || bucket.take(&counted, production, now))
             .await
-            .map_err(|_| GifError::ProviderUnavailable)??;
-        let adapter = (self.adapters)(provider, key, (self.clock)());
+            .map_err(|_| named(GifError::ProviderUnavailable))?
+            .map_err(named)?;
+        let adapter = (self.adapters)(provider, key, customer_id, (self.clock)());
         let result = match request {
             Request::Search { query, limit } => {
                 GifProvider::search_gifs(adapter.as_ref(), query, rating, *limit).await
@@ -631,10 +784,17 @@ impl GifService {
         match result {
             Ok(found) => {
                 // Held only when search stayed On with the same key the whole time, so a new
-                // install id never registers a GIF found under the old one.
-                if register::install_epoch(&self.data_dir) == epoch {
+                // install id never registers a GIF found under the old one. A lookup that took no
+                // rating is never held, so only a rated search can start or extend a hold.
+                let query = match request {
+                    Request::Search { query, .. } => Some(query.as_str()),
+                    Request::Lookup { .. } => None,
+                };
+                let holds = query.is_some() || Provider::rates_lookup(provider);
+                if holds && install::install_epoch(&self.data_dir) == epoch {
                     analytics::Analytics::start_epoch(&self.analytics, epoch);
-                    self.analytics.record(provider, &found, (self.clock)());
+                    let now = (self.clock)();
+                    self.analytics.record(provider, &found, rating, query, now);
                 }
                 Ok((provider, found.into_iter().map(|f| f.candidate).collect()))
             }
@@ -644,11 +804,11 @@ impl GifService {
                     bucket.back_off(&bucket_key, retry_after, now)
                 })
                 .await;
-                Err(GifError::RateLimited {
+                Err(named(GifError::RateLimited {
                     retry_after: blocked.unwrap_or(retry_after.max(1)),
-                })
+                }))
             }
-            Err(error) => Err(error),
+            Err(error) => Err(named(error)),
         }
     }
 }
@@ -662,11 +822,18 @@ pub(crate) fn service<R: tauri::Runtime>(
         return Ok(service.clone());
     }
     let dir = settings::data_dir(app)?;
-    let transport: Arc<dyn giphy::Transport> = Arc::new(giphy::Http::new()?);
+    let transport: Arc<dyn transport::Transport> = Arc::new(transport::Http::new()?);
     let adapters: Adapters = Arc::new(
-        move |provider: Provider, key: Secret, now: i64| -> Box<dyn GifProvider> {
+        move |provider: Provider,
+              key: Secret,
+              customer_id: Option<String>,
+              now: i64|
+              -> Box<dyn GifProvider> {
             match provider {
                 Provider::Giphy => Box::new(giphy::Giphy::new(key, transport.clone(), now)),
+                Provider::Klipy => {
+                    Box::new(klipy::Klipy::new(key, customer_id, transport.clone(), now))
+                }
             }
         },
     );

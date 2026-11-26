@@ -847,12 +847,13 @@
       "additionalProperties": true,
       "properties": {
         "id": {
-          "pattern": "^[A-Za-z0-9_-]{1,64}$",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$",
           "type": "string"
         },
         "provider": {
           "enum": [
-            "giphy"
+            "giphy",
+            "klipy"
           ]
         }
       },
@@ -913,7 +914,7 @@
       "properties": {
         "ids": {
           "items": {
-            "pattern": "^[A-Za-z0-9_-]{1,64}$",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$",
             "type": "string"
           },
           "maxItems": 10,
@@ -965,7 +966,8 @@
                   },
                   "provider": {
                     "enum": [
-                      "giphy"
+                      "giphy",
+                      "klipy"
                     ]
                   },
                   "title": {
@@ -995,7 +997,8 @@
             },
             "provider": {
               "enum": [
-                "giphy"
+                "giphy",
+                "klipy"
               ]
             },
             "status": {
@@ -5984,7 +5987,7 @@
               ]
             },
             "providerId": {
-              "pattern": "^[A-Za-z0-9_-]{1,64}$",
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
               "type": "string"
             },
             "url": {
@@ -6717,7 +6720,7 @@
               ]
             },
             "providerId": {
-              "pattern": "^[A-Za-z0-9_-]{1,64}$",
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
               "type": "string"
             },
             "url": {

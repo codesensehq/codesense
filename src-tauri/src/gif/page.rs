@@ -33,7 +33,7 @@ pub(crate) async fn search_page(
     }
     let (provider, candidates) = match search(service, Some(config), args).await {
         Ok(found) => found,
-        Err(error) => return error.tool_result(),
+        Err(failed) => return failed.tool_result(),
     };
     let urls: Vec<&str> = candidates.iter().map(|c| c.preview_url.as_str()).collect();
     let data = preview::previews(stills, provider.hosts(), &urls, deadline).await;

@@ -113,7 +113,7 @@ pub fn args_schema(name: &str) -> Value {
             "org":string(),"team":string()
         }),
         "gifPicked" => json!({
-            "provider":{"enum":["giphy"]},
+            "provider":{"enum":["giphy","klipy"]},
             "id":{"type":"string","pattern":crate::gif::ID_PATTERN}
         }),
         "react" => {
@@ -247,13 +247,13 @@ pub fn result_schema(name: &str) -> Value {
         }
         "gifSearch" => {
             let candidate = json!({"type":"object","properties":{
-                "provider":{"enum":["giphy"]},"id":{"type":"string"},"title":{"type":"string"},
+                "provider":{"enum":["giphy","klipy"]},"id":{"type":"string"},"title":{"type":"string"},
                 "url":{"type":"string"},"previewUrl":{"type":"string"},
                 "width":{"type":"integer"},"height":{"type":"integer"},"autoLoads":{"type":"boolean"},
                 "previewData":{"type":"string","pattern":"^data:image/(gif|png|webp|jpeg);base64,"}
             },"required":["provider","id","title","url","previewUrl","width","height","autoLoads"]});
             json!({"oneOf":[
-                {"type":"object","properties":{"status":{"const":"ok"},"provider":{"enum":["giphy"]},"candidates":{"type":"array","maxItems":crate::gif::MAX_LIMIT,"items":candidate}},"required":["status","provider","candidates"]},
+                {"type":"object","properties":{"status":{"const":"ok"},"provider":{"enum":["giphy","klipy"]},"candidates":{"type":"array","maxItems":crate::gif::MAX_LIMIT,"items":candidate}},"required":["status","provider","candidates"]},
                 {"type":"object","properties":{"status":{"const":"error"},"error":{"enum":["noProvider","keychainUnavailable","invalidKey","rateLimited","providerUnavailable","badQuery","mediaOff"]},"message":{"type":"string"},"retryAfter":{"type":"integer","minimum":1}},"required":["status","error","message"]}
             ]})
         }
