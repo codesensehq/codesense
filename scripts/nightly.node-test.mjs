@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { LABEL, MARKER, failedLanes, perfPlan, trackNightly } from "./nightly.mjs";
+import { LABEL, MARKER, emptyLane, failedLanes, perfPlan, trackNightly } from "./nightly.mjs";
 
 const script = fileURLToPath(new URL("./nightly.mjs", import.meta.url));
 
@@ -192,4 +192,30 @@ test("no nightly step passes a literal -- through pnpm run", () => {
     ),
     "the pane-harness lane runs only the webkit project",
   );
+});
+
+// --- The @nightly tile lane's summary line when no spec ran.
+
+test("emptyLane names a lane whose report has no runs", () => {
+  assert.equal(emptyLane({ suites: [] }), true);
+  const ran = { suites: [{ title: "a.spec.ts", specs: [{ title: "x", tests: [{}] }] }] };
+  assert.equal(emptyLane(ran), false);
+});
+
+test("the empty-lane CLI writes the summary line, and fails on a missing report", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nightly-empty-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const summary = path.join(dir, "summary.md");
+  const empty = path.join(dir, "empty.json");
+  fs.writeFileSync(empty, JSON.stringify({ suites: [], errors: [] }));
+  const env = { ...process.env, GITHUB_STEP_SUMMARY: summary };
+  const ok = spawnSync(process.execPath, [script, "empty-lane", empty], { encoding: "utf8", env });
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.equal(fs.readFileSync(summary, "utf8"), "tiles-nightly: no @nightly tile specs yet\n");
+  const missing = spawnSync(process.execPath, [script, "empty-lane", path.join(dir, "none.json")], {
+    encoding: "utf8",
+    env,
+  });
+  assert.equal(missing.status, 1);
+  assert.equal(fs.readFileSync(summary, "utf8"), "tiles-nightly: no @nightly tile specs yet\n");
 });

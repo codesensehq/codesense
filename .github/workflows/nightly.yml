@@ -53,12 +53,7 @@ jobs:
           --grep @nightly --pass-with-no-tests --reporter=list,json
       - name: Note an empty lane
         if: ${{ !cancelled() }}
-        run: |
-          node -e '
-            const { stats } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-            if (!(stats.expected + stats.unexpected + stats.flaky + stats.skipped))
-              console.log("tiles-nightly: no @nightly tile specs yet");
-          ' tiles-nightly-report.json | tee -a "$GITHUB_STEP_SUMMARY"
+        run: node scripts/nightly.mjs empty-lane tiles-nightly-report.json
       - name: Upload failure traces
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

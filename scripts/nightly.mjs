@@ -4,6 +4,9 @@
 //       [--record true]
 //     Picks the perf lane's mode: record, compare or skip. Writes mode=<mode> to $GITHUB_OUTPUT and,
 //     on a skip, "perf lane skipped: <reason>" to the job summary.
+//   node scripts/nightly.mjs empty-lane <playwright-report.json>
+//     Writes "tiles-nightly: no @nightly tile specs yet" to the job summary when the @nightly tile
+//     run had no test; a missing or unreadable report fails.
 //   NEEDS='<needs as JSON>' node scripts/nightly.mjs issue --run-url <url> [--date YYYY-MM-DD]
 //     Opens or updates the one nightly issue with gh (GH_TOKEN and GH_REPO set) when a lane failed.
 // The perf lane's contract: the harness measures with MEASURE_PERF_BASELINE=1 into
@@ -12,6 +15,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
+import { reportRuns } from "./lib/playwright-report.mjs";
 
 export const RUNNER = "macos-15";
 export const BASELINE = "tests/fixtures/perf-baseline.json";
@@ -33,6 +37,9 @@ export function perfPlan({ baseline, harness, tool, record = false }) {
     return skip(`no runner: ${RUNNER} set in ${BASELINE}`);
   return { mode: "compare" };
 }
+
+// True when a Playwright JSON report holds no run at all (--pass-with-no-tests passed it).
+export const emptyLane = (report) => reportRuns(report).length === 0;
 
 export const failedLanes = (needs) =>
   Object.entries(needs ?? {})
@@ -123,6 +130,13 @@ function main(argv) {
     }
     return;
   }
+  if (command === "empty-lane" && rest.length === 1) {
+    if (!emptyLane(JSON.parse(fs.readFileSync(rest[0], "utf8")))) return;
+    const line = "tiles-nightly: no @nightly tile specs yet\n";
+    if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, line);
+    process.stdout.write(line);
+    return;
+  }
   if (command === "issue" && option("--run-url")) {
     const lanes = failedLanes(JSON.parse(process.env.NEEDS ?? "{}"));
     if (!lanes.length) return console.log("nightly: no lane failed");
@@ -140,7 +154,7 @@ function main(argv) {
     return;
   }
   throw new Error(
-    "usage: node scripts/nightly.mjs perf-plan [--baseline <json>] [--harness <spec>] [--tool <script>] [--record true] | issue --run-url <url> [--date YYYY-MM-DD]",
+    "usage: node scripts/nightly.mjs perf-plan [--baseline <json>] [--harness <spec>] [--tool <script>] [--record true] | empty-lane <report.json> | issue --run-url <url> [--date YYYY-MM-DD]",
   );
 }
 
