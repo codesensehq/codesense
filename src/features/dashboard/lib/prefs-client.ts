@@ -1,17 +1,10 @@
 // SPDX-License-Identifier: MIT
-import { create } from "zustand";
 import { configurationPrepare } from "@/tauri/commands";
 import { rendererPrincipal } from "@/shared/lib/local-profile-session";
 import { liveHub, type LiveHub, type HubSnapshot } from "./live-hub";
+import { usePrefsStore, type PrefsState } from "./prefs-store";
 
-export type PrefsState = Record<string, unknown> & { viewer?: Record<string, unknown> };
-export const usePrefsStore = create<{
-  principal: string | null;
-  global: PrefsState;
-  owned: PrefsState;
-  globalReady: boolean;
-  ownedReady: boolean;
-}>(() => ({ principal: null, global: {}, owned: {}, globalReady: false, ownedReady: false }));
+export { usePrefsStore, type PrefsState };
 
 export function prefsFromView(view: HubSnapshot): PrefsState {
   const result: PrefsState = {};
@@ -31,7 +24,8 @@ export function connectPrefs(principal: string, hub: LiveHub = liveHub) {
   let disposed = false;
   let shown = true;
   const frames: ReturnType<LiveHub["attach"]>[] = [];
-  usePrefsStore.setState({ principal, owned: {}, ownedReady: false });
+  // A new connection starts shown; `visible` parks it.
+  usePrefsStore.setState({ principal, owned: {}, ownedReady: false, parked: false });
   const live: Promise<unknown>[] = [];
   const warn = (scope: string) => (error: unknown) =>
     console.warn(`prefs live channel failed (${scope})`, error);
@@ -54,6 +48,8 @@ export function connectPrefs(principal: string, hub: LiveHub = liveHub) {
       const apply = (snapshot: HubSnapshot) => {
         if (!shown) return;
         commit(snapshot);
+        // The first owned snapshot after a reveal has caught up: readers may use the store again.
+        if (scope === "principal") usePrefsStore.setState({ parked: false });
       };
       commit(view);
       const frame = hub.attach(
@@ -87,6 +83,9 @@ export function connectPrefs(principal: string, hub: LiveHub = liveHub) {
     live: delivered,
     visible(value: boolean) {
       shown = value;
+      // Readers of the store go to the file while it is parked (dashboard-prefs `liveEntries`),
+      // from the hide until the reveal's catch-up snapshot lands in `apply`.
+      if (!disposed && !value) usePrefsStore.setState({ parked: true });
       for (const frame of frames) frame.visible(value);
     },
     dispose() {
@@ -107,7 +106,7 @@ export function ensurePrefsConnection(principal: string) {
 export function resetPrefsConnection() {
   connection?.value.dispose();
   connection = undefined;
-  usePrefsStore.setState({ principal: null, owned: {}, ownedReady: false });
+  usePrefsStore.setState({ principal: null, owned: {}, ownedReady: false, parked: false });
 }
 export async function readPrefsState(): Promise<PrefsState> {
   const principal = await rendererPrincipal();

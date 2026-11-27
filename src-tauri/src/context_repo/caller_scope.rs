@@ -48,6 +48,15 @@ impl CallerScope {
         }
     }
 
+    /// The org and sharing files that decide what this scope admits: a team view's
+    /// [`TeamView::view_files`], none otherwise.
+    pub(crate) fn admission_files(&self) -> Vec<PathBuf> {
+        match self {
+            Self::Team(view) => TeamView::view_files(view),
+            Self::Human | Self::Unknown => Vec::new(),
+        }
+    }
+
     pub(crate) fn cache_key(&self) -> serde_json::Value {
         match self {
             Self::Human => serde_json::json!(["human"]),

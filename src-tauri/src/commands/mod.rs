@@ -119,6 +119,8 @@ pub mod worktree_editor;
 pub mod route_to_context;
 // The inbox and roles reads' cache of resolved teams.
 pub(crate) mod team_resolution_cache;
+// Kept config reads on the hot paths (synced teams, role configs, media policy).
+pub(crate) mod config_cache;
 // The Routines tab's commands over the routine service.
 pub mod routines;
 pub mod scratch;
@@ -1101,7 +1103,7 @@ pub use async_helpers::await_blocking;
 // +1 `system::get_platform_caps` (which optional features this OS supports). → 517.
 // +2 `workspace_chat::load_workspace_chat_media` / `read_workspace_chat_media` (the app
 // window loads and reads a workspace chat message's image). → 519.
-pub const EXPECTED_COMMAND_COUNT: usize = 519;
+pub const EXPECTED_COMMAND_COUNT: usize = 520;
 
 #[cfg(test)]
 mod tests {

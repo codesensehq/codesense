@@ -57,6 +57,7 @@ import {
   sendRoleMessage,
   agentReadAgent,
   agentReadInbox,
+  agentReadNeedsYouCount,
   inboxReplyRecipient,
   listInboxRollup,
   agentReadRoles,
@@ -384,6 +385,18 @@ async function resolveInboxTeam(ctx: BridgeContext | undefined): Promise<InboxTe
   return { org: activeOrgSlug, team: activeTeamName };
 }
 
+/** The `inbox` arguments that page or filter rows, which a count-only read refuses. */
+const COUNT_ONLY_REFUSED = [
+  "before",
+  "limit",
+  "conversation",
+  "storyId",
+  "story",
+  "agentId",
+  "sessionId",
+  "role",
+  "scope",
+] as const;
 const TEAM_WORKSPACE_MODES = ["headed", "visible-unfocused", "headless"] as const;
 
 /**
@@ -1031,6 +1044,16 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
   },
   inbox: async (args, ctx) => {
     const a = argObject(args, "inbox");
+    // A badge's count: the live projection's pending needs-you mail to the human, no rows.
+    if (a.countOnly !== undefined) {
+      if (a.countOnly !== true) throw new Error("inbox: countOnly must be true");
+      if (a.kind !== "needs-you") throw new Error('inbox: countOnly needs kind: "needs-you"');
+      const listing = COUNT_ONLY_REFUSED.filter((key) => a[key] !== undefined);
+      if (listing.length) {
+        throw new Error(`inbox: countOnly takes no ${listing.join(", ")}; it counts every row`);
+      }
+      return agentReadNeedsYouCount(await inboxTeam(ctx, "inbox", a));
+    }
     const query: InboxQuery = {};
     const scope = optionalInboxScope(a.scope);
     if (scope) query.scope = scope;

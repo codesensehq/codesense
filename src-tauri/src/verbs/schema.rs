@@ -71,7 +71,7 @@ pub fn args_schema(name: &str) -> Value {
             json!({"messageIds":{"type":"array","items":{"type":"integer","minimum":1,"maximum":9_007_199_254_740_991_i64},"minItems":1},"org":string(),"team":string()})
         }
         "inbox" => {
-            json!({"conversation":{"type":"string","minLength":1},"before":{"type":"integer","minimum":1},"agentId":{"type":"string","minLength":1},"storyId":{"type":"string"},"sessionId":{"type":"string","minLength":1},"story":{"type":"string"}})
+            json!({"conversation":{"type":"string","minLength":1},"countOnly":{"type":"boolean"},"before":{"type":"integer","minimum":1},"agentId":{"type":"string","minLength":1},"storyId":{"type":"string"},"sessionId":{"type":"string","minLength":1},"story":{"type":"string"}})
         }
         "unsubscribe" => json!({"topic":string(),"collection":string()}),
         "setUiState" => json!({"topic":string(),"patch":{"type":"object"},"requestId":string()}),

@@ -992,6 +992,14 @@ pub(crate) async fn note_owner(
 #[cfg(test)]
 mod tests;
 
+/// Each team's media policy as [`config_sync`] last read it, by team config folder.
+/// Kept until its `inbox.yml` moves or [`note_config_path`] reports a write to it.
+pub(crate) static CONFIGS: crate::commands::config_cache::ConfigCache<
+    PathBuf,
+    Option<crate::commands::config_cache::FileStamp>,
+    Config,
+> = crate::commands::config_cache::ConfigCache::new();
+
 pub(crate) fn config_sync<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     team: &crate::commands::dashboard_launch::LaunchTeam,
@@ -1005,10 +1013,25 @@ pub(crate) fn config_sync<R: tauri::Runtime>(
             &root, &team.team,
         ))
     })();
-    dir.map(|dir| Config::load(&dir)).unwrap_or_else(|| Config {
+    dir.map(|dir| config_in(&dir)).unwrap_or_else(|| Config {
         remote: Remote::Off,
         ..Config::default()
     })
+}
+
+/// [`Config::load`], kept in [`CONFIGS`].
+fn config_in(dir: &Path) -> Config {
+    let inbox = dir.join("inbox.yml");
+    let loaded = crate::commands::config_cache::ConfigCache::get(
+        &CONFIGS,
+        &dir.to_path_buf(),
+        || crate::commands::config_cache::file_stamp(&inbox),
+        || Ok::<_, std::convert::Infallible>(Config::load(dir)),
+    );
+    match loaded {
+        Ok(config) => config,
+        Err(never) => match never {},
+    }
 }
 
 pub(crate) fn note_config_path<R: tauri::Runtime>(
@@ -1022,6 +1045,7 @@ pub(crate) fn note_config_path<R: tauri::Runtime>(
     if path != team_dir.join("config/inbox.yml") {
         return;
     }
+    crate::commands::config_cache::ConfigCache::invalidate(&CONFIGS);
     let team = crate::commands::dashboard_launch::LaunchTeam {
         org: org.into(),
         team: team.into(),

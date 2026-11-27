@@ -304,8 +304,32 @@ pub(crate) fn resolve_local(
 /// pool via [`await_blocking`] — never on the async runtime worker, so a resolve
 /// cannot stall the app.
 ///
+/// Answered from the app's [`TeamResolutionCache`]: a repeat resolve reads no file, and
+/// a registry, attachment or git change (or a moved file stamp, within
+/// `team_resolution_cache::MAX_AGE`) re-reads it. A caller about to write into the
+/// team's content resolves with [`derive_context_uncached`] instead.
+///
+/// [`TeamResolutionCache`]: super::team_resolution_cache::TeamResolutionCache
+///
 /// Foundational seam consumed by SW-AU-18/19/20.
 pub(crate) async fn derive_context_for<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    org: &str,
+    team: &str,
+) -> Result<ContextResolution, String> {
+    use super::team_resolution_cache::TeamResolutionCache;
+    // App setup always manages the cache (`lib.rs`, with its `listen`); only a test app
+    // built without setup has none and reads uncached.
+    let managed = Option::is_some(&Manager::try_state::<TeamResolutionCache>(app));
+    if !managed {
+        return derive_context_uncached(app, org, team).await;
+    }
+    super::team_resolution_cache::derive_context_cached(app, org, team).await
+}
+
+/// [`derive_context_for`] read from disk every call, for the writers: a team's content
+/// is written only where its registry says now.
+pub(crate) async fn derive_context_uncached<R: tauri::Runtime>(
     app: &AppHandle<R>,
     org: &str,
     team: &str,
@@ -359,17 +383,101 @@ pub(crate) async fn enumerate_orgs_teams(app: &AppHandle) -> Result<Vec<OrgTeamE
 /// team is dropped here (not surfaced as an entry) — callers fire only where a
 /// team's content is readable. It does filesystem reads, so async callers keep it
 /// on the blocking pool.
+///
+/// Kept per home and user ([`SYNCED_CONTEXTS`]) until what it reads moves.
 pub(crate) fn synced_contexts_in(
     codesense_home: &Path,
     user_id: u64,
 ) -> Result<Vec<ActiveContext>, String> {
-    let orgs =
-        crate::commands::org::discover_local_orgs_impl(codesense_home, &Principal::from(user_id))?;
-    let entries = orgs
-        .into_iter()
-        .flat_map(|summary| team_sync_states(&summary.slug, Path::new(&summary.org_root)))
-        .collect();
-    Ok(synced_contexts_from(entries, codesense_home, user_id))
+    super::config_cache::ConfigCache::get(
+        &SYNCED_CONTEXTS,
+        &(codesense_home.to_path_buf(), user_id),
+        || synced_stamp(codesense_home, user_id),
+        || {
+            let orgs = crate::commands::org::discover_local_orgs_impl(
+                codesense_home,
+                &Principal::from(user_id),
+            )?;
+            let entries = orgs
+                .into_iter()
+                .flat_map(|summary| team_sync_states(&summary.slug, Path::new(&summary.org_root)))
+                .collect();
+            Ok(synced_contexts_from(entries, codesense_home, user_id))
+        },
+    )
+}
+
+/// The stamps of the files [`synced_contexts_in`] reads, and whether each folder whose
+/// presence it checks is there.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct SyncedStamp {
+    files: Vec<(PathBuf, Option<super::config_cache::FileStamp>)>,
+    folders: Vec<(PathBuf, bool)>,
+}
+
+/// [`synced_contexts_in`]'s kept answers, per home and user.
+pub(crate) static SYNCED_CONTEXTS: super::config_cache::ConfigCache<
+    (PathBuf, u64),
+    SyncedStamp,
+    Vec<ActiveContext>,
+> = super::config_cache::ConfigCache::new();
+
+/// What [`synced_contexts_in`] reads, stat'ed: the attachment registry, every folder an
+/// org can be in (one or two levels under the user's orgs folder, and each attached
+/// root) with its registry files and whether it is a git clone, and whether each of its
+/// team folders has `content`. Reads one file, the attachment registry, for the
+/// attached roots.
+fn synced_stamp(home: &Path, user_id: u64) -> SyncedStamp {
+    use super::config_cache::file_stamp;
+    let principal = Principal::from(user_id);
+    let subdirs = |dir: &Path| -> Vec<PathBuf> {
+        let mut dirs: Vec<PathBuf> = Result::ok(std::fs::read_dir(dir))
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .filter(|entry| Result::ok(entry.file_type()).is_some_and(|t| t.is_dir()))
+            .map(|entry| std::fs::DirEntry::path(&entry))
+            .collect();
+        dirs.sort();
+        dirs
+    };
+    let mut stamp = SyncedStamp::default();
+    let mut file = |path: PathBuf| {
+        let at = file_stamp(&path);
+        stamp.files.push((path, at));
+    };
+    file(crate::context_repo::context_attachments::registry_path(
+        home, &principal,
+    ));
+    let orgs_dir =
+        crate::context_repo::path_to_user_home(home, &principal).join(crate::context_repo::ORGS_DIR);
+    let mut roots = Vec::new();
+    for first in subdirs(&orgs_dir) {
+        roots.extend(subdirs(&first));
+        roots.push(first);
+    }
+    roots.extend(
+        crate::context_repo::context_attachments::list(home, &principal)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|attachment| attachment.root),
+    );
+    let mut folders = Vec::new();
+    for root in roots {
+        for name in ["org.yml", "people.yml", "teams.yml"] {
+            file(root.join(name));
+        }
+        let git = root.join(".git");
+        let clone = Path::exists(&git);
+        folders.push((git, clone));
+        for team in subdirs(&root) {
+            let content = team.join(crate::context_repo::TEAM_CONTENT_DIR);
+            let synced = content.is_dir();
+            folders.push((content, synced));
+        }
+    }
+    stamp.folders = folders;
+    stamp
 }
 
 /// The pure selection core of [`synced_contexts_in`]: keep the **synced** teams and
@@ -1252,5 +1360,53 @@ teams:
             !backend.synced,
             "a file at the content path is not a synced dir"
         );
+    }
+
+    #[test]
+    fn synced_contexts_second_call_reads_no_file() {
+        let _armed = crate::commands::config_cache::arm_this_thread();
+        let td = TempDir::new().unwrap();
+        let home = td.path().join("home");
+        let uid = 7;
+        let org_root = crate::context_repo::path_to_managed_org_root(
+            &home,
+            &Principal::from(uid),
+            "acme/widgets",
+        );
+        std::fs::create_dir_all(org_root.join(".git")).unwrap();
+        write_au24_org(&org_root, "acme/widgets", &["backend"]);
+        let teams = |home: &Path| -> Vec<String> {
+            synced_contexts_in(home, uid)
+                .unwrap()
+                .into_iter()
+                .filter_map(|c| c.team_name)
+                .collect()
+        };
+        let key = (home.clone(), uid);
+        let reads = || {
+            let r = SYNCED_CONTEXTS.reads(&key);
+            (r.stamps, r.loads)
+        };
+
+        assert_eq!(teams(&home), vec!["backend"]);
+        assert_eq!(teams(&home), vec!["backend"]);
+        assert_eq!(reads(), (1, 1), "second call: no file read");
+
+        std::fs::create_dir_all(crate::context_repo::path_to_team_content_dir(
+            &org_root, "frontend",
+        ))
+        .unwrap();
+        assert_eq!(teams(&home), vec!["backend"], "kept within the window");
+        SYNCED_CONTEXTS.expire();
+        assert_eq!(
+            teams(&home),
+            vec!["backend", "frontend"],
+            "an unreported sync shows once the window closes"
+        );
+        assert_eq!(reads(), (2, 2));
+
+        SYNCED_CONTEXTS.invalidate();
+        teams(&home);
+        assert_eq!(reads(), (3, 3), "an invalidating event reloads");
     }
 }

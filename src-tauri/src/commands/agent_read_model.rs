@@ -1851,6 +1851,24 @@ pub async fn agent_read_inbox(
     app_inbox(&app, &team.into(), &query.unwrap_or_default()).await
 }
 
+/// How many needs-you messages wait for the human in a team.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct NeedsYouCount {
+    pub count: u32,
+}
+
+/// `team`'s pending needs-you mail to the human, counted from the live projection
+/// (the bridge's `inbox({kind: "needs-you", countOnly: true})`). Reads no rows.
+#[tauri::command]
+pub async fn agent_read_needs_you_count(
+    app: tauri::AppHandle,
+    team: InboxTeam,
+) -> Result<NeedsYouCount, String> {
+    let host = AppInboxHost { app };
+    let count = super::agent_inbox::needs_you_count(&host, &team.into()).await?;
+    Ok(NeedsYouCount { count })
+}
+
 /// `team`'s role mailboxes (the bridge's `roles(...)`).
 #[tauri::command]
 pub async fn agent_read_roles(

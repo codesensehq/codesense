@@ -1496,6 +1496,7 @@ declare namespace CodesenseSdk {
       agentId?: string;
       before?: number;
       conversation?: string;
+      countOnly?: boolean;
       sessionId?: string;
       story?: string;
       storyId?: string;

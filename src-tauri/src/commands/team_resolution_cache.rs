@@ -338,7 +338,8 @@ pub(crate) async fn derive_context_cached<R: tauri::Runtime>(
     cache.resolve(home, user_id, org, team).await
 }
 
-/// Drop the app's cached resolutions on each of [`INVALIDATING_EVENTS`].
+/// Drop the app's cached resolutions, and the kept config reads
+/// ([`config_cache`](super::config_cache)), on each of [`INVALIDATING_EVENTS`].
 pub(crate) fn listen<R: tauri::Runtime>(app: &AppHandle<R>) {
     use tauri::{Listener, Manager};
     let Some(cache) = app.try_state::<TeamResolutionCache>() else {
@@ -346,7 +347,10 @@ pub(crate) fn listen<R: tauri::Runtime>(app: &AppHandle<R>) {
     };
     for event in INVALIDATING_EVENTS {
         let cache: TeamResolutionCache = cache.inner().clone();
-        app.listen(*event, move |_| cache.invalidate());
+        app.listen(*event, move |_| {
+            cache.invalidate();
+            super::config_cache::invalidate_all();
+        });
     }
 }
 

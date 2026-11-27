@@ -5,9 +5,11 @@
  * source's preferences until the first write forks its own entry.
  */
 import { serializeAppStateWrite } from "@/shared/lib/app-state-write";
+import { rendererPrincipal } from "@/shared/lib/local-profile-session";
 import { loadAppState, saveAppState } from "@/tauri/commands";
 import type { DashboardRef } from "@/tauri/commands";
 import { dashboardRefKey } from "./dashboard-ref";
+import { usePrefsStore } from "./prefs-store";
 
 /** The app-state key holding every dashboard's prefs. */
 const APP_STATE_KEY = "dashboardPrefs";
@@ -66,6 +68,35 @@ async function loadAll(
   return { state, all };
 }
 
+/** `namespace`'s entries from the live prefs store, which the app keeps current from the
+ *  app-state file, or null until it holds this renderer's principal's storage with them, and
+ *  while the window is hidden, when its live updates are parked (the caller then loads the
+ *  file). */
+async function liveEntries(namespace: string): Promise<Record<string, Entry> | null> {
+  const before = usePrefsStore.getState();
+  if (!before.ownedReady || !before.principal || before.parked) return null;
+  const principal = await rendererPrincipal();
+  const { owned, ownedReady, principal: owner, parked } = usePrefsStore.getState();
+  if (!ownedReady || parked || owner !== principal) return null;
+  const stored = owned[namespace];
+  return isPlainObject(stored) ? (stored as Record<string, Entry>) : null;
+}
+
+/** Show a write in the live store at once, ahead of the file watcher's update, when the store
+ *  still holds the storage of `principal`, whose file the write went to. */
+function keepWritten(namespace: string, all: Record<string, Entry>, principal: string | null) {
+  if (namespace !== APP_STATE_KEY) return;
+  usePrefsStore.setState((s) =>
+    s.ownedReady && principal && s.principal === principal
+      ? { owned: { ...s.owned, [namespace]: all } }
+      : {},
+  );
+}
+
+/** The principal whose app-state file a write goes to; null when it can't be told, and the
+ *  write then waits for the file watcher to show it. */
+const writerPrincipal = () => rendererPrincipal().catch(() => null);
+
 function isPlainObject(v: unknown): v is Prefs {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
@@ -77,18 +108,23 @@ export async function readDashboardPrefs(
   installedFrom?: DashboardRef,
 ): Promise<Prefs> {
   const k = requireKey(key);
-  const { all } = await loadAll(namespace);
+  // Pages' prefs come from the live store; other namespaces' readers keep their file read.
+  const live = namespace === APP_STATE_KEY ? await liveEntries(namespace) : null;
+  const all = live ?? (await loadAll(namespace)).all;
   const { storedKey, entry } = prefsEntry(all, k, installedFrom);
   if (!entry || !isPlainObject(entry.data)) return {};
   // A dashboard that only reads its settings is still in use: refresh its age at
   // most once a day, so set-once settings aren't the first evicted.
   if (Date.now() - (entry.at ?? 0) > PREFS_TOUCH_MS) {
     void serializeAppStateWrite(async () => {
+      const principal = await writerPrincipal();
       const fresh = await loadAll(namespace);
       const e = fresh.all[storedKey];
       if (!e || Date.now() - (e.at ?? 0) <= PREFS_TOUCH_MS) return;
-      fresh.state[namespace] = { ...fresh.all, [storedKey]: { ...e, at: Date.now() } };
+      const touched = { ...fresh.all, [storedKey]: { ...e, at: Date.now() } };
+      fresh.state[namespace] = touched;
       await saveAppState(JSON.stringify(fresh.state));
+      keepWritten(namespace, touched, principal);
     }).catch(() => {});
   }
   return { ...entry.data };
@@ -143,6 +179,7 @@ export function writeDashboardPrefs(
   }
   let result: Prefs = {};
   return serializeAppStateWrite(async () => {
+    const principal = await writerPrincipal();
     const { state, all } = await loadAll(namespace);
     const { entry } = prefsEntry(all, k, installedFrom);
     const next: Prefs = { ...(entry && isPlainObject(entry.data) ? entry.data : {}) };
@@ -176,6 +213,7 @@ export function writeDashboardPrefs(
     }
     state[namespace] = updated;
     await saveAppState(JSON.stringify(state));
+    keepWritten(namespace, updated, principal);
     result = { ...next };
   }).then(() => result);
 }

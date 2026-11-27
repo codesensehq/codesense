@@ -1013,6 +1013,7 @@ inbox(args?: {
       agentId?: string;
       before?: number;
       conversation?: string;
+      countOnly?: boolean;
       sessionId?: string;
       story?: string;
       storyId?: string;

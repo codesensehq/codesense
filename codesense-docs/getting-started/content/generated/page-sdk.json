@@ -2384,7 +2384,7 @@
     {
       "name": "inbox",
       "owner": "VerbMethods",
-      "signature": "inbox(args?: {\n      agentId?: string;\n      before?: number;\n      conversation?: string;\n      sessionId?: string;\n      story?: string;\n      storyId?: string;\n      [key: string]: unknown;\n    }): Promise<unknown>;",
+      "signature": "inbox(args?: {\n      agentId?: string;\n      before?: number;\n      conversation?: string;\n      countOnly?: boolean;\n      sessionId?: string;\n      story?: string;\n      storyId?: string;\n      [key: string]: unknown;\n    }): Promise<unknown>;",
       "description": "read · inbox:read:team · MCP twin inbox_list",
       "sourceRef": "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts",
       "class": "read",
@@ -2405,6 +2405,9 @@
           "conversation": {
             "minLength": 1,
             "type": "string"
+          },
+          "countOnly": {
+            "type": "boolean"
           },
           "sessionId": {
             "minLength": 1,
@@ -11652,6 +11655,9 @@
             "minLength": 1,
             "type": "string"
           },
+          "countOnly": {
+            "type": "boolean"
+          },
           "sessionId": {
             "minLength": 1,
             "type": "string"
@@ -19662,6 +19668,9 @@
             "minLength": 1,
             "type": "string"
           },
+          "countOnly": {
+            "type": "boolean"
+          },
           "sessionId": {
             "minLength": 1,
             "type": "string"
@@ -25865,8 +25874,8 @@
     }
   ],
   "sources": {
-    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "5cbffc0c64cef7a82aaa81ea690843d5af9417eaf0329516f8a77006066dc441",
-    "src-tauri/src/verbs/registry.generated.json": "21a4f01b15c216e0fb749e4b95dc8e7ad0f7fc09ddca3fe3f0fb3a29d5ad5e60",
+    "src-tauri/src/http/routes/dashboard_kit/codesense.d.ts": "3345f7e99f42161582cb5ba096ca14f684ea8bc965aac99933bcd522d351f14f",
+    "src-tauri/src/verbs/registry.generated.json": "65fea72cbaea6c0bbeb94b03039a69c009fd2a8a032d559b16f4165d302aa15d",
     "src-tauri/src/verbs/registry.rs": "d601a2313ffe616d7a909537685ff0d770106172173d01efeb8124886a97469f",
     "src-tauri/src/records/binding.rs": "8952cdcd9bfee677a0ecc60a382d876ecac5fdddcacbcb1508bb01ad9f501fa7",
     "src-tauri/src/records/schema.rs": "36ed3b3ae3547e1e622f007c2480d3fad19c463e3b3636242fb94edcb4286a29",

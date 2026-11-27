@@ -1597,6 +1597,11 @@ export interface InboxQuery {
 export const agentReadInbox = (team: InboxTeam, query: InboxQuery) =>
   invoke<InboxView>("agent_read_inbox", { team, query });
 
+/** `team`'s pending (unread, unarchived) needs-you mail to the human, counted from the
+ *  live inbox projection without reading any rows. */
+export const agentReadNeedsYouCount = (team: InboxTeam) =>
+  invoke<{ count: number }>("agent_read_needs_you_count", { team });
+
 export type RoleDeliveryState = "pending" | "claimed" | "accepted" | "acknowledged";
 
 /** One role's mailbox: its registered instances and its delivery queue (epoch ms). */

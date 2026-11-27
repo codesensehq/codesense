@@ -504,3 +504,75 @@ async fn a_reported_context_sync_reconciles_the_inbox_teams() {
     .unwrap();
     assert_eq!(app.state::<LiveHub>().next_batch().await, FOOTPRINT);
 }
+
+#[tokio::test]
+async fn needs_you_count_tracks_post_read_archive() {
+    use crate::weft::{inbox as ledger, WeftStore};
+    let app = app();
+    let host = CountingHost::new();
+    let store = WeftStore::open(host.path()).unwrap();
+    let ask = |text: &str| {
+        ledger::inbox_insert_with_reply_to(
+            &store,
+            "worker",
+            "human",
+            text,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(ledger::MessageKind::NeedsYou),
+        )
+        .unwrap()
+    };
+    let (read, archived) = (ask("merge?"), ask("ship?"));
+    ask("retry?");
+    ask("rename?");
+    ledger::inbox_insert(&store, "worker", "human", "fyi", None, None, None, None, None).unwrap();
+    set_rows(&app, vec![row("worker", "Worker", SessionState::Idle)]);
+    let hub = app.state::<LiveHub>();
+    assert_eq!(
+        hub.needs_you_count(&team()),
+        Err("inbox projection is loading".into())
+    );
+    refresh_inbox_with_host(app.handle(), &host, false)
+        .await
+        .unwrap();
+    assert_eq!(hub.needs_you_count(&team()), Ok(4), "updates don't count");
+
+    // Each write is reported as the app's inbox event reports it: the ids it touched.
+    let reported = |id: i64| {
+        hub.model
+            .lock()
+            .unwrap()
+            .inbox_pending
+            .entry(inbox::team_key(&team()))
+            .or_insert_with(|| (team(), BTreeSet::new()))
+            .1
+            .insert(id);
+    };
+    ledger::inbox_mark_read(&store, read, "human").unwrap();
+    reported(read);
+    refresh_inbox_with_host(app.handle(), &host, false)
+        .await
+        .unwrap();
+    assert_eq!(hub.needs_you_count(&team()), Ok(3), "a read question is answered");
+
+    ledger::inbox_mark_archived_many(&store, &[archived]).unwrap();
+    reported(archived);
+    refresh_inbox_with_host(app.handle(), &host, false)
+        .await
+        .unwrap();
+    assert_eq!(hub.needs_you_count(&team()), Ok(2), "an archived question is filed");
+
+    // A question posted once the projection is held counts on the next refresh.
+    let posted = ask("deploy?");
+    reported(posted);
+    refresh_inbox_with_host(app.handle(), &host, false)
+        .await
+        .unwrap();
+    assert_eq!(hub.needs_you_count(&team()), Ok(3), "a new question waits");
+}

@@ -1118,6 +1118,12 @@ export function agentTeamInboxHandlers(
         .map(toView);
       return { messages, humanUnread: rows.filter((r) => r.to === "human" && r.unread).length };
     },
+    // The read model's count-only needs-you read: unread, unarchived needs-you mail to human.
+    agent_read_needs_you_count: () => ({
+      count: rows.filter(
+        (r) => r.to === "human" && r.unread && !r.archivedAtMs && r.kind === "needs-you",
+      ).length,
+    }),
     // One session's conversation: everything it sent or received, and its role queue's mail.
     list_session_inbox: (args: Record<string, unknown>) => {
       // A handle or a tab session id, as the real read takes either.

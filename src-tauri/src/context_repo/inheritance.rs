@@ -666,6 +666,17 @@ pub(crate) struct TeamView {
     undeclared: Vec<String>,
 }
 impl TeamView {
+    /// The files [`team_view`] stamps this view by: the org's `teams.yml` and `org.yml`
+    /// and each ancestor's `config/sharing.yml`. An edit to any of them can change what
+    /// the view admits.
+    pub(crate) fn view_files(&self) -> Vec<PathBuf> {
+        let org = ["teams.yml", "org.yml"].map(|name| self.root.join(name));
+        let sharing = self
+            .inherited
+            .iter()
+            .map(|layer| layer.dir.join("config/sharing.yml"));
+        org.into_iter().chain(sharing).collect()
+    }
     /// What a path no tier holds adds when an ancestor shares nothing for want
     /// of a `config/sharing.yml`. The same for every missing path, whether or
     /// not that ancestor holds it, so a denied path still reads as a missing one.
