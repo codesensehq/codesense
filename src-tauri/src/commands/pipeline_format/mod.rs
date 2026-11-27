@@ -443,8 +443,8 @@ pub struct FrontmatterFields {
     ///   the repo default.
     /// - **Story (SW-OR-1b):** the single canonical story branch that supersedes
     ///   the legacy [`branch_name`](Self::branch_name)/[`dev_branch`](Self::dev_branch);
-    ///   drives worktree creation and is auto-stamped to the observed branch on
-    ///   establish/open (`write_story_branch`). Read via `CacheEntry::story_branch()`.
+    ///   drives worktree creation. Linking or opening a worktree never writes it; they
+    ///   report the worktree's branch against it. Read via `CacheEntry::story_branch()`.
     #[serde(default)]
     pub branch: Option<String>,
     /// SLW-UD-2 legacy epic list fields (`scope_context:` / `scope_install:`).

@@ -168,9 +168,9 @@ impl CacheEntry {
     /// `branch` → `branch_name` → `dev_branch` (first present + non-blank). Going
     /// forward a story records just `branch`; the legacy `branch_name` (intended)
     /// and `dev_branch` (observed) are read only as a fallback for docs authored
-    /// before the merge — never written by new code. Drives both worktree
-    /// creation and the reconcile-on-open stamp, so intent and observation
-    /// collapse to one value. `None` when all three are absent/blank ⇒ the
+    /// before the merge — never written by new code. Drives worktree creation and
+    /// is the `from` that the open and link reconciles report against the
+    /// worktree's branch. `None` when all three are absent/blank ⇒ the
     /// resolver falls back to `{branch_prefix}{story_id}`.
     pub fn story_branch(&self) -> Option<&str> {
         [

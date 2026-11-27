@@ -2571,7 +2571,8 @@ const MAX_UNRESOLVED_PATHS: usize = 281;
 /// `SeatWorktreeParam::deserialize`, `start_beside_gone_folder` and `terminal_respawn_tab`;
 /// `.display()` on paths in `seat_worktree_inner` (2), `repin` and `seat_record_fits`; `.ok()`
 /// on results in `resolve_commit`, `catch_up_seat_branch`, `recorded_workspace_folder` and
-/// `stamps_story_branch`; `.is_empty()` in `resolve_commit` (2) and `resumed_launch_home`;
+/// `stamps_story_branch` (since removed with the story `branch` stamp); `.is_empty()` in
+/// `resolve_commit` (2) and `resumed_launch_home`;
 /// `.find(..)` on iterators in `seat_worktree_inner`, `story_base_record` and
 /// `recorded_workspace_folder`; and `.exists()` on a path in `seat_worktree_inner`. They are
 /// std string, path, result and iterator calls; none calls a write primitive.
