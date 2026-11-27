@@ -43,8 +43,8 @@ async function picture(id: number, width: number, height: number): Promise<Uint8
 /**
  * The workspace chat of `?harness=chat-media`: one image post per media state. A read returns
  * the posts as the presented read does; a media read draws the image (the damaged one's bytes
- * don't decode); a load holds the image as loading for a moment, then caches it, sending the
- * chat-media event each time as the host does.
+ * don't decode); a load, like the host's, leaves the post at tap to load while it fetches, then
+ * caches it, sends the chat-media event once and resolves.
  */
 export function workspaceChatMediaHandlers(events: MockEventBus): HandlerRegistry {
   const messages = new Map<number, WorkspaceChatMessage>(
@@ -75,20 +75,18 @@ export function workspaceChatMediaHandlers(events: MockEventBus): HandlerRegistr
       if (a.sha256 === DAMAGED_SHA) return frame("image/gif", new TextEncoder().encode("GIF89a"));
       return frame("image/png", await picture(m.messageId, a.width ?? 480, a.height ?? 270));
     },
-    load_workspace_chat_media: (args) => {
+    load_workspace_chat_media: async (args) => {
       const id = args.messageId as number;
       const m = messages.get(id);
       const a = m?.attachments?.[0];
       if (!m || !a) throw new Error("media unavailable");
-      changed(id, { ...m, mediaState: "pending", attachments: [{ ...a, state: "pending" }] });
-      setTimeout(() => {
-        const cached = { ...a, state: "cached", width: 480, height: 270 } as const;
-        changed(id, {
-          ...m,
-          mediaState: "cached",
-          attachments: [{ ...cached, sha256: id.toString(16).padStart(64, "c") }],
-        });
-      }, LOAD_MS);
+      await new Promise((r) => setTimeout(r, LOAD_MS));
+      const cached = { ...a, state: "cached", width: 480, height: 270 } as const;
+      changed(id, {
+        ...m,
+        mediaState: "cached",
+        attachments: [{ ...cached, sha256: id.toString(16).padStart(64, "c") }],
+      });
       return undefined;
     },
   };
