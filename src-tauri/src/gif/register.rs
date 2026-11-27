@@ -305,6 +305,13 @@ pub(crate) struct Registration {
     /// failed. The wait holds only under the epoch it was set in.
     key_retry_at: Mutex<(u64, i64)>,
     /// Each provider's install epoch what is held here belongs to.
+    ///
+    /// Lock order: `epoch` first, then any of `onloads` (and under it the install file),
+    /// `sent`, `random_retry_at`, `key_retry_at` and the analytics' entries. Nothing is taken
+    /// while the install file or a wait is held, and `epoch` is never taken under another lock:
+    /// [`Self::take_onloads`] holds it across the follow through
+    /// [`Self::follow_epoch_held`], and [`Self::put_back`] takes `onloads`, then the install
+    /// file, never `epoch`.
     epoch: Mutex<Epochs>,
 }
 
