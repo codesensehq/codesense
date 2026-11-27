@@ -112,6 +112,7 @@ export function useWorkspaceChat(
   useLayoutEffect(() => {
     generation.current += 1;
     patches.current = new Map();
+    mediaReads.current = new Map();
     return () => {
       generation.current += 1;
     };
@@ -120,6 +121,8 @@ export function useWorkspaceChat(
   // its message in the same media state (the read has caught up), so an older copy from any
   // later full or incremental read can't undo it.
   const patches = useRef(new Map<number, WorkspaceChatMessage>());
+  // The latest media re-read by message id: an older one that lands after it is dropped.
+  const mediaReads = useRef(new Map<number, number>());
   const stateRef = useRef(state);
   useLayoutEffect(() => {
     stateRef.current = state;
@@ -217,9 +220,12 @@ export function useWorkspaceChat(
   // Re-read message `messageId`, whose image changed, and put it in place of its copy.
   const readMedia = useCallback(async (ws: string, messageId: number) => {
     const requestGeneration = generation.current;
+    const request = (mediaReads.current.get(messageId) ?? 0) + 1;
+    mediaReads.current.set(messageId, request);
     try {
       const result = await workspaceChatRead(ws, messageId - 1, 1);
       if (requestGeneration !== generation.current) return;
+      if (mediaReads.current.get(messageId) !== request) return;
       const message = result.messages.find((m) => m.messageId === messageId);
       if (!message) return;
       patches.current.set(messageId, message);
