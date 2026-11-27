@@ -7,6 +7,7 @@
 // @p0 blocks merge, @p1 blocks a release (tiles-release.yml), @nightly runs in nightly.yml.
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
+import { reportSpecs } from "./lib/playwright-report.mjs";
 
 export const GATE_TAGS = ["@p0", "@p1", "@nightly"];
 export const ENGINES = ["tiles-chromium", "tiles-webkit"];
@@ -15,18 +16,13 @@ export const ENGINES = ["tiles-chromium", "tiles-webkit"];
 // list it. Playwright reports a spec once per project, tags from the title and from `tag` alike.
 function listedSpecs(report) {
   const specs = new Map();
-  const walk = (suite, titles) => {
-    for (const spec of suite.specs ?? []) {
-      const key = [...titles, spec.title].join(" › ");
-      const entry = specs.get(key) ?? { tags: new Set(), projects: new Set() };
-      // The JSON reporter writes a tag without its @ (`p0` for `@p0`).
-      for (const tag of spec.tags ?? []) entry.tags.add(tag.startsWith("@") ? tag : `@${tag}`);
-      for (const run of spec.tests ?? []) entry.projects.add(run.projectName);
-      specs.set(key, entry);
-    }
-    for (const child of suite.suites ?? []) walk(child, [...titles, child.title]);
-  };
-  for (const file of report.suites ?? []) walk(file, [file.file ?? file.title]);
+  for (const { title, spec } of reportSpecs(report)) {
+    const entry = specs.get(title) ?? { tags: new Set(), projects: new Set() };
+    // The JSON reporter writes a tag without its @ (`p0` for `@p0`).
+    for (const tag of spec.tags ?? []) entry.tags.add(tag.startsWith("@") ? tag : `@${tag}`);
+    for (const run of spec.tests ?? []) entry.projects.add(run.projectName);
+    specs.set(title, entry);
+  }
   return specs;
 }
 

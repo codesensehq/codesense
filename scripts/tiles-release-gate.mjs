@@ -5,6 +5,7 @@
 // Writes the result and every failure to the job summary ($GITHUB_STEP_SUMMARY, else stdout).
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
+import { reportRuns } from "./lib/playwright-report.mjs";
 
 export const BAR = 0.95;
 const firstLine = (text) =>
@@ -12,22 +13,13 @@ const firstLine = (text) =>
     .split("\n")[0]
     .trim();
 
-function outcomes(report) {
-  const runs = [];
-  const walk = (suite, titles) => {
-    for (const spec of suite.specs ?? [])
-      for (const run of spec.tests ?? [])
-        runs.push({
-          title: [...titles, spec.title].join(" › "),
-          project: run.projectName,
-          status: run.status,
-          error: firstLine(run.results?.findLast((result) => result.error)?.error?.message),
-        });
-    for (const child of suite.suites ?? []) walk(child, [...titles, child.title]);
-  };
-  for (const file of report.suites ?? []) walk(file, [file.file ?? file.title]);
-  return runs;
-}
+const outcomes = (report) =>
+  reportRuns(report).map(({ title, run }) => ({
+    title,
+    project: run.projectName,
+    status: run.status,
+    error: firstLine(run.results?.findLast((result) => result.error)?.error?.message),
+  }));
 
 export function releaseGate(report, bar = BAR) {
   const runs = outcomes(report);
