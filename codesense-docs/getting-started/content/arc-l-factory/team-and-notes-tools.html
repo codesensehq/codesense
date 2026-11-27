@@ -75,10 +75,10 @@
     &quot;parent&quot;: &quot;platform&quot;
   }
 }</code></pre>
-        <h3 id="tool-set_team_starter_page"><code>set_team_starter_page</code></h3>
-        <p>Sets or clears the file CodeSense opens when the team has nothing open (<code>landing_page:</code> in <code>teams.yml</code>). <code>path</code> is required: pass a path relative to the team's content folder (<code>guide/start.md</code>) or an absolute path inside it, which must be an existing file, not hidden and not outside the folder; pass null to clear it (the team then falls back to README.md, README.html, then index.html). Leaving <code>path</code> out is refused. <code>org</code> and <code>team</code> name the team; omit both for the active team. The edit is a local working-tree change of the context repo; publish it to share it. The read-only CodeSense Docs is refused.</p>
-        <pre data-tool-example="set_team_starter_page"><code>{
-  &quot;tool&quot;: &quot;set_team_starter_page&quot;,
+        <h3 id="tool-set_team_landing_page"><code>set_team_landing_page</code></h3>
+        <p>Sets or clears the team's landing page, the file CodeSense opens when the team has nothing open (<code>landing_page:</code> in <code>teams.yml</code>). <code>path</code> is required: pass a path relative to the team's content folder (<code>guide/start.md</code>) or an absolute path inside it, which must be an existing file, not hidden and not outside the folder; pass null to clear it (the team then falls back to README.md, README.html, then index.html). Leaving <code>path</code> out is refused. <code>org</code> and <code>team</code> name the team; omit both for the active team. The edit is a local working-tree change of the context repo; publish it to share it. The read-only CodeSense Docs is refused. <code>set_team_starter_page</code>, its old name, is still served as an alias: it makes the same edit, and its reply adds <code>alias: true</code> and <code>use: &quot;set_team_landing_page&quot;</code>.</p>
+        <pre data-tool-example="set_team_landing_page"><code>{
+  &quot;tool&quot;: &quot;set_team_landing_page&quot;,
   &quot;arguments&quot;: {
     &quot;org&quot;: &quot;acme/context&quot;,
     &quot;team&quot;: &quot;engineering&quot;,
