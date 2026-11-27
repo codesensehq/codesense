@@ -18961,6 +18961,41 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn canvas_render_dispatch_targets_main_only() {
+        use std::sync::{Arc, Mutex};
+        use tauri::Listener;
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let main = tauri::WebviewWindowBuilder::new(&app, "main", tauri::WebviewUrl::default())
+            .build()
+            .unwrap();
+        let other = tauri::WebviewWindowBuilder::new(&app, "other", tauri::WebviewUrl::default())
+            .build()
+            .unwrap();
+        let received = Arc::new(Mutex::new(Vec::new()));
+        for (label, window) in [("main", main), ("other", other)] {
+            let received = received.clone();
+            window.listen("canvas:render-request", move |event| {
+                received.lock().unwrap().push((
+                    label,
+                    serde_json::from_str::<serde_json::Value>(event.payload()).unwrap(),
+                ));
+            });
+        }
+        dispatch_canvas_render_request(app.handle(), "req-1", "/ctx/a.excalidraw", "{}").unwrap();
+        assert_eq!(
+            *received.lock().unwrap(),
+            vec![(
+                "main",
+                serde_json::json!({
+                    "requestId": "req-1", "path": "/ctx/a.excalidraw", "sceneJson": "{}",
+                })
+            )]
+        );
+    }
+
+    #[test]
     fn rendered_document_dispatch_accepts_team_and_private_pane_paths() {
         use std::sync::{Arc, Mutex};
         use tauri::Listener;
@@ -20968,6 +21003,20 @@ pub struct DismissAgentMarkParams {
     pub request_id: Option<String>,
 }
 
+/// Ask the owning window to render a canvas; no other window is sent the request.
+fn dispatch_canvas_render_request<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    request_id: &str,
+    path: &str,
+    scene_json: &str,
+) -> tauri::Result<()> {
+    crate::windows::emit_to_owner(
+        app,
+        "canvas:render-request",
+        serde_json::json!({ "requestId": request_id, "path": path, "sceneJson": scene_json }),
+    )
+}
+
 /// Complete production boundary: capture admitted bytes before dispatch to the owning window.
 async fn render_canvas_request<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
@@ -21002,12 +21051,7 @@ async fn render_canvas_request<R: tauri::Runtime>(
         .ok_or_else(|| ErrorData::internal_error("canvas render registry not registered", None))?;
     let (request_id, rx) = registry.register();
 
-    crate::windows::emit_to_owner(
-        app,
-        "canvas:render-request",
-        serde_json::json!({ "requestId": request_id, "path": params.path, "sceneJson": scene_json }),
-    )
-    .map_err(|e| {
+    dispatch_canvas_render_request(app, &request_id, &params.path, &scene_json).map_err(|e| {
         // Nothing will reply — reclaim the registry slot before bailing.
         registry.take(&request_id);
         emit_err(e)
