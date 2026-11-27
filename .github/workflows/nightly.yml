@@ -2,7 +2,8 @@
 name: Nightly
 
 # The slow lanes no pull request waits on, each its own job on macos-15: the @nightly tile specs,
-# the pane harness on WebKit, the perf baseline and the tile load tests (tests/e2e-mock/README.md).
+# the pane harness on WebKit, the perf baseline, the tile load tests and the frame media specs that
+# Linux WebKit can't play (tests/e2e-mock/README.md).
 # A failed scheduled run on main opens or updates one issue labelled nightly; a dispatched run
 # never writes one. Dispatch with record to measure and upload a new macos-15 perf set instead of
 # comparing against it.
@@ -248,10 +249,84 @@ jobs:
             echo "load: no load tests yet" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
+  frame-media:
+    name: Frame media specs (WebKit)
+    # The four native audio and video hostile specs, which skip on the PR job's Linux WebKit, as it
+    # lacks Safari's media codecs (the frame-security guard accepts only that skip).
+    # The fixture server compiles as in tests.yml's frame-security job, with load's macOS prep.
+    runs-on: macos-15
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUST_BACKTRACE: "1"
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: ${{ github.event_name != 'merge_group' && 'pnpm' || '' }}
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install WebKit
+        run: pnpm exec playwright install webkit
+      - name: Set up Rust
+        # Matches ci.yml; rustup's proxies read the channel in rust-toolchain.toml.
+        run: rustup toolchain install stable --profile minimal
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: nightly-frame-media
+          save-if: ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - name: Fetch git-ai
+        run: bash scripts/fetch-git-ai.sh
+      - name: Build session-server sidecar
+        # This also builds the bridge sidecar. Native host only.
+        run: bash scripts/build-session-server.sh
+      - name: Generate docs data
+        # As in load: written before the first cargo command, they are current for the build script.
+        run: |
+          scripts=$(sed -n 's/^ *run_docs_generator("\.\.\/\(scripts\/[^"]*\.mjs\)");$/\1/p' src-tauri/build.rs)
+          [[ -n "$scripts" ]] || { echo "::error::no docs generators found in src-tauri/build.rs"; exit 1; }
+          for script in $scripts; do node "$script"; done
+      - name: Compile the frame fixture server
+        id: fixture
+        run: |
+          binary=$(cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --no-run --message-format=json \
+            | jq -r 'select(.reason == "compiler-artifact" and .target.name == "codesense_lib" and .executable != null) | .executable')
+          [[ -x "$binary" ]] || { echo "::error::cargo named no codesense_lib test binary"; exit 1; }
+          echo "binary=$binary" >> "$GITHUB_OUTPUT"
+      - name: Run the native media specs
+        env:
+          CODESENSE_FRAME_TEST_BINARY: ${{ steps.fixture.outputs.binary }}
+        run: >-
+          pnpm exec playwright test -c playwright.frame-security.config.ts --project=webkit
+          tests/frame-security/hostile.spec.ts -g "native (audio|video) loads"
+      - name: Upload failure traces
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: frame-media-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results
+          retention-days: 14
+          if-no-files-found: ignore
+
   nightly-issue:
     name: Track the nightly
     # One issue for every red night, opened or updated only by a scheduled run on main.
-    needs: [tiles-nightly, pane-harness, perf, load]
+    needs: [tiles-nightly, pane-harness, perf, load, frame-media]
     if: ${{ !cancelled() && contains(needs.*.result, 'failure') && github.event_name == 'schedule' && github.ref == 'refs/heads/main' && !github.event.repository.fork }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10

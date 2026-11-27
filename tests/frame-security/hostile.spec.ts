@@ -6,7 +6,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildViewerUrl } from "../../src/shared/lib/viewer-file-type";
-import { resolveFrameFixtureBinary } from "./support/fixture-guard.mjs";
+import { LINUX_WEBKIT_MEDIA_SKIP, resolveFrameFixtureBinary } from "./support/fixture-guard.mjs";
 
 let rust: ChildProcess;
 let host: Server;
@@ -483,7 +483,10 @@ for (const baseline of [false, true]) {
     test(`native ${tag} loads ${baseline ? "baseline" : "default-open live"} media without shim credentials`, async ({
       page,
       context,
+      browserName,
     }) => {
+      // The guard reporter accepts this one skip; nightly.yml runs these on macOS WebKit.
+      test.skip(process.platform === "linux" && browserName === "webkit", LINUX_WEBKIT_MEDIA_SKIP);
       await page.goto(`${hostUrl}/?${baseline ? "baseline=1" : "index=2"}`);
       const frame = page
         .frames()

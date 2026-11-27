@@ -12,7 +12,10 @@ import {
   validEntries,
   quarantineReason,
 } from "./lib/quarantine.mjs";
-import { unexecutedTests } from "../tests/frame-security/support/fixture-guard.mjs";
+import {
+  LINUX_WEBKIT_MEDIA_SKIP,
+  unexecutedTests,
+} from "../tests/frame-security/support/fixture-guard.mjs";
 import { validateInventory } from "./lib/quarantine-inventory.mjs";
 
 test("quarantines have issue URLs and expire after 30 days", () => {
@@ -119,4 +122,39 @@ test("gate and runners agree under the default and overridden issue repository",
       }
     }
   }
+});
+
+test("the guard lets through only the named Linux WebKit media skip", () => {
+  const now = Date.parse("2026-11-27T00:00:00Z");
+  const skipped = ({
+    file = "tests/frame-security/hostile.spec.ts",
+    project = "webkit",
+    title = "native audio loads baseline media without shim credentials",
+    annotation = { type: "skip", description: LINUX_WEBKIT_MEDIA_SKIP },
+  } = {}) => ({
+    outcome: () => "skipped",
+    location: { file: resolve(file) },
+    titlePath: () => ["", project, file.split("/").pop(), title],
+    annotations: annotation ? [annotation] : [],
+  });
+  const missed = (test, platform = "linux") => unexecutedTests([test], [], now, platform).length;
+  for (const title of [
+    "native audio loads default-open live media without shim credentials",
+    "native video loads default-open live media without shim credentials",
+    "native audio loads baseline media without shim credentials",
+    "native video loads baseline media without shim credentials",
+  ])
+    assert.equal(missed(skipped({ title })), 0, title);
+  // Anything else still fails the run: another OS, engine, spec, file or reason, or no reason.
+  assert.equal(missed(skipped(), "darwin"), 1);
+  assert.equal(missed(skipped({ project: "chromium" })), 1);
+  assert.equal(missed(skipped({ title: "native audio loads baseline media" })), 1);
+  assert.equal(missed(skipped({ title: "a: sibling private DOM is isolated" })), 1);
+  assert.equal(missed(skipped({ file: "tests/frame-security/lifecycle.spec.ts" })), 1);
+  assert.equal(missed(skipped({ annotation: { type: "skip", description: "no codecs" } })), 1);
+  assert.equal(
+    missed(skipped({ annotation: { type: "fixme", description: LINUX_WEBKIT_MEDIA_SKIP } })),
+    1,
+  );
+  assert.equal(missed(skipped({ annotation: null })), 1);
 });

@@ -88,6 +88,23 @@ job on `macos-15`:
   `perf lane skipped: <reason>` to its summary.
 - **Tile load tests**: the ignored Rust tests named `tiles_load_*`, and no other
   ignored test.
+- **Frame media specs (WebKit)**: the four `native audio|video loads …` specs
+  in `tests/frame-security/hostile.spec.ts`, on macOS WebKit. See below.
+
+### Frame security specs on Linux WebKit
+
+The pull request job **Frame security specs** runs on `ubuntu-24.04`, and its
+guard reporter fails a run that skipped any spec. One skip is let through:
+Playwright's Linux WebKit build doesn't have Safari's media codecs (Playwright's
+[browser docs](https://playwright.dev/docs/browsers#webkit) recommend WebKit on
+macOS for media playback), and its native audio and video loads end with status
+0 there. So the four native media specs skip on Linux WebKit under the reason
+`LINUX_WEBKIT_MEDIA_SKIP` in
+`tests/frame-security/support/fixture-guard.mjs`. The guard accepts that skip
+only on Linux, only on WebKit, only for those four titles and only with that
+exact reason. Any other skip, including a quarantined hostile spec, still fails
+the run. The nightly's **Frame media specs (WebKit)** job runs the four on
+`macos-15` every night, so they are still proven each night.
 
 When a scheduled run on `main` fails, **Track the nightly** opens one issue
 labelled `nightly`, or comments on it (reopening it if closed) on each later red

@@ -64,7 +64,8 @@ open issues first.
 - **Tile specs** runs the `@p0` browser specs in `tests/e2e-mock/tiles/` on
   WebKit and Chromium, and checks that each one carries one gate tag. **Frame
   security specs** runs `pnpm run test:frame-security`, and fails on a skipped
-  spec too. Where new browser specs go, their tags, the release gate and the
+  spec too (the one exception, native media on Linux WebKit, runs nightly on
+  macOS). Where new browser specs go, their tags, the release gate and the
   nightly run: [`tests/e2e-mock/README.md`](tests/e2e-mock/README.md).
 - **Rust (macOS arm64)** doesn't block a merge. It runs after the merge, on
   each push to `main` and nightly; a red run there is fixed forward in a
