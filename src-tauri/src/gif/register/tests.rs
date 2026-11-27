@@ -36,6 +36,8 @@ pub(crate) struct Wire {
     /// What a search answers, and what runs while it is in flight.
     search_body: Mutex<String>,
     during_search: Mutex<Option<Box<dyn Fn() + Send>>>,
+    /// Runs while a pingback is in flight.
+    during_ping: Mutex<Option<Box<dyn Fn() + Send>>>,
 }
 impl Wire {
     fn new() -> Self {
@@ -48,6 +50,7 @@ impl Wire {
             during_random: Mutex::new(None),
             search_body: Mutex::new(r#"{"data":[]}"#.to_string()),
             during_search: Mutex::new(None),
+            during_ping: Mutex::new(None),
             ping_delay: Mutex::new(None),
         }
     }
@@ -99,6 +102,9 @@ impl Transport for Wire {
             }
             self.random.lock().unwrap().clone()
         } else if url.host_str() == Some("pingback.giphy.com") {
+            if let Some(during) = &*self.during_ping.lock().unwrap() {
+                during();
+            }
             Ok(reply(*self.ping_status.lock().unwrap(), ""))
         } else {
             if let Some(during) = &*self.during_search.lock().unwrap() {
@@ -192,8 +198,12 @@ impl Harness {
             auto_loads: true,
         };
         // As a search does: entries from before an epoch change go first.
-        let epoch = install_epoch(self.dir.path());
-        crate::gif::analytics::Analytics::start_epoch(&self.service.analytics, epoch);
+        let epoch = install_epoch(self.dir.path(), Provider::Giphy);
+        crate::gif::analytics::Analytics::start_epoch(
+            &self.service.analytics,
+            Provider::Giphy,
+            epoch,
+        );
         self.service.analytics.record(
             Provider::Giphy,
             &[Found {
@@ -251,8 +261,12 @@ impl Harness {
             height: 280,
             auto_loads: true,
         };
-        let epoch = install_epoch(self.dir.path());
-        crate::gif::analytics::Analytics::start_epoch(&self.service.analytics, epoch);
+        let epoch = install_epoch(self.dir.path(), Provider::Klipy);
+        crate::gif::analytics::Analytics::start_epoch(
+            &self.service.analytics,
+            Provider::Klipy,
+            epoch,
+        );
         self.service.analytics.record(
             Provider::Klipy,
             &[Found {
@@ -371,7 +385,7 @@ async fn each_skip_sends_nothing() {
     // An unbound send arms no onload, even once its fetch finishes: its serve marks it.
     h.registration.note_fetched(&slot(3), Some(SHA), true);
     let taken = h.registration.take_onloads(SHA);
-    assert!(taken.iter().all(|(_, p)| p.onload.is_none()));
+    assert!(taken.entries.iter().all(|(_, p)| p.onload.is_none()));
     let settled = h.registration.settle_serve(vec![slot(3)], taken).await;
     assert_eq!(settled.marks, vec![slot(3)]);
     assert!(h.wire.urls().is_empty());
@@ -394,7 +408,7 @@ async fn off_or_no_key_makes_no_call_and_turning_off_or_removing_the_key_deletes
     assert!(!h.install_file().exists(), "Off deletes the install id");
     h.send(2, "g1", URL).await;
     let taken = h.registration.take_onloads(SHA);
-    assert!(taken.is_empty(), "Off lets go of pending onloads");
+    assert!(taken.entries.is_empty(), "Off lets go of pending onloads");
     let marks = h
         .registration
         .settle_serve(vec![slot(1)], taken)
@@ -523,7 +537,7 @@ async fn onload_fires_once_within_the_hour_from_the_send_not_the_search() {
     h.registration.note_fetched(&slot(1), Some(SHA), true);
     h.advance(30 * MINUTE);
     let taken = h.registration.take_onloads(SHA);
-    assert_eq!(taken.len(), 1);
+    assert_eq!(taken.entries.len(), 1);
     let marks = h
         .registration
         .settle_serve(vec![slot(1)], taken)
@@ -535,8 +549,10 @@ async fn onload_fires_once_within_the_hour_from_the_send_not_the_search() {
     assert_eq!(pair(seen, "random_id").as_deref(), Some("rid-123"));
     assert!(!seen.as_str().contains("api_key"));
     // A second serve, at another chunk offset, takes nothing.
-    assert!(h.registration.take_onloads(SHA).is_empty());
-    h.registration.settle_serve(Vec::new(), Vec::new()).await;
+    assert!(h.registration.take_onloads(SHA).entries.is_empty());
+    h.registration
+        .settle_serve(Vec::new(), Taken::default())
+        .await;
     assert_eq!(h.wire.actions(), vec!["SENT", "SEEN"]);
 }
 
@@ -560,7 +576,7 @@ async fn a_serve_of_a_shared_sha_fires_and_marks_both_attachments() {
         h.registration.note_fetched(&slot(message), Some(SHA), true);
     }
     let taken = h.registration.take_onloads(SHA);
-    assert_eq!(taken.len(), 2);
+    assert_eq!(taken.entries.len(), 2);
     let marks = h
         .registration
         .settle_serve(vec![slot(1), slot(2)], taken)
@@ -579,7 +595,7 @@ async fn concurrent_serves_take_a_pending_onload_once() {
     let takers: Vec<_> = (0..8)
         .map(|_| {
             let h = h.clone();
-            std::thread::spawn(move || h.registration.take_onloads(SHA).len())
+            std::thread::spawn(move || h.registration.take_onloads(SHA).entries.len())
         })
         .collect();
     let taken: usize = takers.into_iter().map(|t| t.join().unwrap()).sum();
@@ -609,7 +625,7 @@ async fn after_a_restart_the_first_view_marks_without_firing() {
     // Nothing pending in this run: the send was before the restart.
     let marks = h
         .registration
-        .settle_serve(vec![slot(1)], Vec::new())
+        .settle_serve(vec![slot(1)], Taken::default())
         .await
         .marks;
     assert_eq!(marks, vec![slot(1)]);
@@ -622,7 +638,7 @@ async fn a_tag_dropped_by_a_redirect_loses_its_onload() {
     h.found_all("g1");
     h.send(1, "g1", URL).await;
     h.registration.note_fetched(&slot(1), Some(SHA), false);
-    assert!(h.registration.take_onloads(SHA).is_empty());
+    assert!(h.registration.take_onloads(SHA).entries.is_empty());
 }
 
 #[test]
@@ -657,7 +673,7 @@ async fn a_failing_random_id_call_is_retried_at_most_every_fifteen_minutes() {
     }
     // A serve with onloads due asks for no id either, and its onloads stay pending.
     let taken = h.registration.take_onloads(SHA);
-    assert_eq!(taken.len(), 5);
+    assert_eq!(taken.entries.len(), 5);
     let settled = h
         .registration
         .settle_serve((0..5).map(slot).collect(), taken)
@@ -670,7 +686,7 @@ async fn a_failing_random_id_call_is_retried_at_most_every_fifteen_minutes() {
     h.advance(RANDOM_ID_RETRY_MS);
     *h.wire.random.lock().unwrap() = Ok(reply(200, r#"{"data":{"random_id":"rid-1"}}"#));
     let taken = h.registration.take_onloads(SHA);
-    assert_eq!(taken.len(), 5);
+    assert_eq!(taken.entries.len(), 5);
     let settled = h
         .registration
         .settle_serve((0..5).map(slot).collect(), taken)
@@ -717,7 +733,7 @@ async fn turning_search_off_and_on_or_replacing_the_key_forgets_what_the_old_id_
     let calls = h.wire.urls().len();
     // The search entry, the pending onload and the sent record are gone: the GIF needs a new
     // search before it registers again, so no ping repeats the old payload with a new id.
-    assert!(h.registration.take_onloads(SHA).is_empty());
+    assert!(h.registration.take_onloads(SHA).entries.is_empty());
     h.send(1, "g1", URL).await;
     assert_eq!(h.wire.urls().len(), calls);
     assert_eq!(h.service.analytics.held_count(), 0);
@@ -806,7 +822,7 @@ async fn a_failed_fetch_keeps_the_onload_for_a_retry() {
     h.registration.note_fetched(&slot(1), None, true);
     h.registration.note_fetched(&slot(1), Some(SHA), true);
     let taken = h.registration.take_onloads(SHA);
-    assert!(taken[0].1.onload.is_some());
+    assert!(taken.entries[0].1.onload.is_some());
     h.registration.settle_serve(vec![slot(1)], taken).await;
     assert_eq!(h.wire.actions(), vec!["SENT", "SEEN"]);
 }
@@ -820,7 +836,7 @@ async fn a_taken_onload_the_index_did_not_claim_goes_back() {
     let taken = h.registration.take_onloads(SHA);
     let settled = h.registration.settle_serve(Vec::new(), taken).await;
     assert_eq!(settled, Settled::default());
-    assert_eq!(h.registration.take_onloads(SHA).len(), 1);
+    assert_eq!(h.registration.take_onloads(SHA).entries.len(), 1);
 }
 
 #[test]
@@ -875,8 +891,8 @@ async fn an_entry_armed_while_a_serve_settles_is_merged_back_not_lost() {
     let settled = h.registration.settle_serve(vec![slot(1)], taken).await;
     assert_eq!(settled.retry, vec![slot(1)]);
     let taken = h.registration.take_onloads(SHA);
-    assert_eq!(taken.len(), 1);
-    assert!(taken[0].1.onload.is_some() && !taken[0].1.waiting);
+    assert_eq!(taken.entries.len(), 1);
+    assert!(taken.entries[0].1.onload.is_some() && taken.entries[0].1.waiting == Some(false));
     let settled = h.registration.settle_serve(vec![slot(1)], taken).await;
     assert_eq!(settled.marks, vec![slot(1)]);
     assert_eq!(h.wire.actions(), vec!["SENT", "SEEN"]);
@@ -903,6 +919,50 @@ async fn a_search_that_spans_turning_search_off_is_not_held() {
     );
     *h.wire.during_search.lock().unwrap() = None;
     h.service.run(&request, None, None).await.unwrap();
+    assert!(h.service.analytics.held_count() > 0);
+}
+
+/// How many GIFs a GIPHY search holds when `moved`'s key is removed while it is in flight.
+async fn held_after_a_key_removal_mid_giphy_search(moved: Provider) -> usize {
+    let h = Harness::new();
+    *h.wire.search_body.lock().unwrap() = include_str!("../fixtures/search.json").to_string();
+    let request = crate::gif::normalize(Some("cat"), None, None).unwrap();
+    let dir = h.dir.path().to_path_buf();
+    *h.wire.during_search.lock().unwrap() = Some(Box::new(move || {
+        crate::gif::install::forget_install_for(&dir, moved)
+    }));
+    assert!(!h
+        .service
+        .run(&request, None, None)
+        .await
+        .unwrap()
+        .1
+        .is_empty());
+    h.service.analytics.held_count()
+}
+
+#[tokio::test]
+async fn a_giphy_search_is_held_unless_giphys_own_key_changes_mid_search() {
+    assert!(
+        held_after_a_key_removal_mid_giphy_search(Provider::Klipy).await > 0,
+        "KLIPY's key change leaves a GIPHY search held"
+    );
+    assert_eq!(
+        held_after_a_key_removal_mid_giphy_search(Provider::Giphy).await,
+        0,
+        "found under GIPHY's old id: not held"
+    );
+}
+
+#[tokio::test]
+async fn a_klipy_search_after_a_giphy_key_removal_runs_and_is_held() {
+    let h = Harness::klipy();
+    *h.wire.search_body.lock().unwrap() = include_str!("../fixtures/search.json").to_string();
+    crate::gif::install::forget_install_for(h.dir.path(), Provider::Giphy);
+    let request = crate::gif::normalize(Some("cat"), None, None).unwrap();
+    let (provider, found) = h.service.run(&request, None, None).await.unwrap();
+    assert_eq!(provider, Provider::Klipy);
+    assert!(!found.is_empty());
     assert!(h.service.analytics.held_count() > 0);
 }
 
@@ -969,12 +1029,13 @@ async fn after_a_failed_keychain_read_serves_wait_before_reading_it_again() {
         onload: all_pingbacks().onload,
         sha: Some(SHA.into()),
         expires: h.now() + ONLOAD_WINDOW_MS,
-        waiting: false,
+        waiting: Some(false),
     };
-    h.registration.put_back(vec![(slot(1), armed())]);
+    let epoch = install_epoch(h.dir.path(), Provider::Giphy);
+    h.registration.put_back(vec![(slot(1), armed())], epoch);
     for _ in 0..3 {
         let taken = h.registration.take_onloads(SHA);
-        assert_eq!(taken.len(), 1, "the onload stays pending");
+        assert_eq!(taken.entries.len(), 1, "the onload stays pending");
         let settled = h.registration.settle_serve(vec![slot(1)], taken).await;
         assert_eq!(settled.retry, vec![slot(1)]);
     }
@@ -983,6 +1044,31 @@ async fn after_a_failed_keychain_read_serves_wait_before_reading_it_again() {
     let taken = h.registration.take_onloads(SHA);
     h.registration.settle_serve(vec![slot(1)], taken).await;
     assert_eq!(store.gets.load(Ordering::SeqCst), 2);
+    assert!(h.wire.urls().is_empty());
+}
+
+#[tokio::test]
+async fn a_serve_taken_before_a_key_change_marks_without_reading_the_keychain() {
+    let store = Arc::new(DeniedStore::default());
+    let h = Harness::over(store.clone());
+    let armed = Pending {
+        onload: all_pingbacks().onload,
+        sha: Some(SHA.into()),
+        expires: h.now() + ONLOAD_WINDOW_MS,
+        waiting: Some(false),
+    };
+    let epoch = install_epoch(h.dir.path(), Provider::Giphy);
+    h.registration.put_back(vec![(slot(1), armed)], epoch);
+    let taken = h.registration.take_onloads(SHA);
+    crate::gif::install::forget_install_for(h.dir.path(), Provider::Giphy);
+    let settled = h.registration.settle_serve(vec![slot(1)], taken).await;
+    assert_eq!((settled.marks, settled.retry), (vec![slot(1)], Vec::new()));
+    assert_eq!(store.gets.load(Ordering::SeqCst), 0, "no keychain read");
+    assert_eq!(
+        *h.registration.key_retry_at.lock().unwrap(),
+        (0, 0),
+        "no wait set"
+    );
     assert!(h.wire.urls().is_empty());
 }
 
@@ -1395,4 +1481,238 @@ fn a_send_is_once_per_provider_gif_and_message() {
     assert!(!h
         .registration
         .first_send(Provider::Klipy, "same", &message, now));
+}
+
+// The install epoch a serve, a put-back and a retry wait were made under, and each provider's
+// own epoch.
+
+fn strings(actions: &[&str]) -> Vec<String> {
+    actions.iter().map(|a| a.to_string()).collect()
+}
+
+/// A serve's taken list settled after search was turned Off and On: what is left in
+/// `onloads` for `SHA`, by onload URL. `newer` makes a fresh entry for the slot first, as a
+/// fetch finishing after the forget does.
+async fn settle_a_stale_list(newer: bool) -> Vec<Option<String>> {
+    let h = Harness::new();
+    h.found_all("g1");
+    h.send(1, "g1", URL).await;
+    h.registration.note_fetched(&slot(1), Some(SHA), true);
+    let taken = h.registration.take_onloads(SHA);
+    forget_install(h.dir.path());
+    if newer {
+        h.registration.note_fetched(&slot(1), Some(SHA), true);
+    } else {
+        // Follows the new epoch, as any send does, so the next take finds only what was put back.
+        h.registration.expect_send(&slot(9));
+    }
+    h.registration.settle_serve(Vec::new(), taken).await;
+    h.registration
+        .take_onloads(SHA)
+        .entries
+        .into_iter()
+        .map(|(_, p)| p.onload)
+        .collect()
+}
+
+#[tokio::test]
+async fn put_back_after_the_epoch_moved_puts_nothing_back() {
+    let alone = settle_a_stale_list(false).await;
+    let merged = settle_a_stale_list(true).await;
+    assert_eq!(
+        (alone, merged),
+        (Vec::new(), vec![None]),
+        "nothing is put back, and a newer entry keeps no stale onload"
+    );
+}
+
+/// Two GIPHY sends of one GIF, then a serve of both whose install epoch moves during its first
+/// ping, or else between its take and its settle. The pings sent, in order.
+async fn serve_while_the_epoch_moves(during_the_first_ping: bool) -> Vec<String> {
+    let h = Harness::new();
+    h.found_all("g1");
+    for message in [1, 2] {
+        h.send(message, "g1", URL).await;
+        h.registration.note_fetched(&slot(message), Some(SHA), true);
+    }
+    let dir = h.dir.path().to_path_buf();
+    if during_the_first_ping {
+        *h.wire.during_ping.lock().unwrap() = Some(Box::new(move || forget_install(&dir)));
+    }
+    let taken = h.registration.take_onloads(SHA);
+    if !during_the_first_ping {
+        forget_install(h.dir.path());
+        h.registration.expect_send(&slot(9));
+    }
+    let settled = h
+        .registration
+        .settle_serve(vec![slot(1), slot(2)], taken)
+        .await;
+    assert_eq!(settled.marks.len(), 2, "both are marked");
+    h.wire.actions()
+}
+
+#[tokio::test]
+async fn a_serve_stops_pinging_when_the_epoch_moves_mid_loop() {
+    let mid_loop = serve_while_the_epoch_moves(true).await;
+    let after_take = serve_while_the_epoch_moves(false).await;
+    assert_eq!(
+        (mid_loop, after_take),
+        (
+            strings(&["SENT", "SENT", "SEEN"]),
+            strings(&["SENT", "SENT"])
+        ),
+        "one ping in flight may finish; none goes out after the epoch moved"
+    );
+}
+
+#[tokio::test]
+async fn a_wait_set_after_the_epoch_moved_does_not_hold_the_next_send() {
+    let h = Harness::new();
+    h.found_all("g1");
+    *h.wire.random.lock().unwrap() = Ok(reply(500, ""));
+    // Search is turned Off and On while the random id call is in flight, and a send follows
+    // the new epoch before the failed call sets its wait.
+    let (dir, registration) = (h.dir.path().to_path_buf(), h.registration.clone());
+    *h.wire.during_random.lock().unwrap() = Some(Box::new(move || {
+        forget_install(&dir);
+        registration.expect_send(&slot(9));
+    }));
+    h.send(1, "g1", URL).await;
+    *h.wire.during_random.lock().unwrap() = None;
+    assert_eq!(h.wire.random_calls(), 1);
+    h.found_all("g1");
+    *h.wire.random.lock().unwrap() = Ok(reply(200, r#"{"data":{"random_id":"rid-2"}}"#));
+    h.send(2, "g1", URL).await;
+    assert_eq!(
+        h.wire.random_calls(),
+        2,
+        "the old epoch's wait holds no send"
+    );
+    assert_eq!(h.wire.actions(), vec!["SENT"]);
+}
+
+#[tokio::test]
+async fn note_fetched_during_a_serve_keeps_a_registering_send_waiting() {
+    let h = Harness::new();
+    h.found_all("g1");
+    h.registration.expect_send(&slot(1));
+    h.registration.note_fetched(&slot(1), Some(SHA), true);
+    let taken = h.registration.take_onloads(SHA);
+    // A fetch finishing while the serve settles makes a newer entry for the slot.
+    h.registration.note_fetched(&slot(1), Some(SHA), true);
+    let settled = h.registration.settle_serve(vec![slot(1)], taken).await;
+    assert_eq!(settled.retry, vec![slot(1)]);
+    let taken = h.registration.take_onloads(SHA);
+    let settled = h.registration.settle_serve(vec![slot(1)], taken).await;
+    assert_eq!(
+        (settled.marks, settled.retry),
+        (Vec::new(), vec![slot(1)]),
+        "the send is still registering"
+    );
+    h.send(1, "g1", URL).await;
+    let taken = h.registration.take_onloads(SHA);
+    let settled = h.registration.settle_serve(vec![slot(1)], taken).await;
+    assert_eq!(settled.marks, vec![slot(1)]);
+    assert_eq!(h.wire.actions(), vec!["SENT", "SEEN"]);
+}
+
+/// KLIPY's shares after GIPHY's key was removed: one before, then a repeat in the same message
+/// and a send in another.
+async fn klipy_shares_after_a_giphy_key_removal() -> usize {
+    let h = Harness::klipy();
+    h.found_klipy(KLIPY_KEY, SLUG, Some("ship it"));
+    h.send_klipy(1, SLUG, KLIPY_URL).await;
+    crate::gif::install::forget_install_for(h.dir.path(), Provider::Giphy);
+    h.send_klipy(1, SLUG, KLIPY_URL).await;
+    h.send_klipy(2, SLUG, KLIPY_URL).await;
+    h.wire.shares().len()
+}
+
+/// A GIPHY send's serve after KLIPY's key was removed: the onloads taken, the pings sent and
+/// the search entries held.
+async fn giphy_serve_after_a_klipy_key_removal() -> (usize, Vec<String>, usize) {
+    let h = Harness::new();
+    h.found_all("g1");
+    h.send(1, "g1", URL).await;
+    h.registration.note_fetched(&slot(1), Some(SHA), true);
+    crate::gif::install::forget_install_for(h.dir.path(), Provider::Klipy);
+    h.send(1, "g1", URL).await;
+    let taken = h.registration.take_onloads(SHA);
+    let count = taken.entries.len();
+    h.registration.settle_serve(vec![slot(1)], taken).await;
+    (count, h.wire.actions(), h.service.analytics.held_count())
+}
+
+#[tokio::test]
+async fn one_providers_key_change_leaves_the_other_providers_state() {
+    // GIPHY's own key change still lets go of all of GIPHY's state.
+    let store = Arc::new(Lockable::default());
+    store.inner.set(ACCOUNT, &Secret::new(KEY)).unwrap();
+    let h = Harness::over(store.clone());
+    h.found_all("g1");
+    // A failed random id call sets its wait; the send's sent row is kept.
+    *h.wire.random.lock().unwrap() = Ok(reply(500, ""));
+    h.send(1, "g1", URL).await;
+    assert_eq!(h.wire.random_calls(), 1);
+    h.registration.note_fetched(&slot(1), Some(SHA), true);
+    // A failed keychain read sets the serve's wait; the onload stays pending.
+    refuse(&h, &store, Refusal::Locked);
+    let taken = h.registration.take_onloads(SHA);
+    let settled = h.registration.settle_serve(vec![slot(1)], taken).await;
+    assert_eq!(settled.retry, vec![slot(1)]);
+    store.locked.store(false, Ordering::SeqCst);
+    crate::gif::install::forget_install_for(h.dir.path(), Provider::Giphy);
+    *h.wire.random.lock().unwrap() = Ok(reply(200, r#"{"data":{"random_id":"rid-2"}}"#));
+    assert!(
+        h.registration.take_onloads(SHA).entries.is_empty(),
+        "onloads go"
+    );
+    assert_eq!(
+        (
+            h.service.analytics.held_count(),
+            h.service.analytics.order_len()
+        ),
+        (0, 0),
+        "search entries go"
+    );
+    // The sent row and the random id wait went: the same send registers again at once.
+    h.found_all("g1");
+    h.send(1, "g1", URL).await;
+    assert_eq!(h.wire.random_calls(), 2);
+    assert_eq!(h.wire.actions(), vec!["SENT"]);
+    // The key wait went: the next serve reads the key and pings.
+    h.registration.note_fetched(&slot(1), Some(SHA), true);
+    let taken = h.registration.take_onloads(SHA);
+    h.registration.settle_serve(vec![slot(1)], taken).await;
+    assert_eq!(h.wire.actions(), vec!["SENT", "SEEN"]);
+
+    // The other provider's state stays.
+    let klipy = klipy_shares_after_a_giphy_key_removal().await;
+    let giphy = giphy_serve_after_a_klipy_key_removal().await;
+    assert_eq!(
+        (klipy, giphy),
+        (2, (1, strings(&["SENT", "SEEN"]), 1)),
+        "KLIPY keeps its share state; GIPHY keeps its onload, sent row and entry"
+    );
+}
+
+#[tokio::test]
+async fn search_off_still_resets_klipy() {
+    let h = Harness::klipy();
+    h.found_klipy(KLIPY_KEY, SLUG, Some("ship it"));
+    let epoch = install_epoch(h.dir.path(), Provider::Klipy);
+    assert!(h.install_file().exists());
+    let change = |enabled| SettingsUpdate {
+        enabled: Some(enabled),
+        ..SettingsUpdate::default()
+    };
+    settings::set_with(&h.keys(), h.dir.path(), change(false)).unwrap();
+    let fp = crate::gif::fingerprint(&Secret::new(KLIPY_KEY));
+    assert!(crate::gif::install::customer_id(h.dir.path(), &fp, epoch).is_err());
+    assert!(!h.install_file().exists());
+    settings::set_with(&h.keys(), h.dir.path(), change(true)).unwrap();
+    h.send_klipy(1, SLUG, KLIPY_URL).await;
+    assert!(h.wire.shares().is_empty());
+    assert_eq!(h.service.analytics.held_count(), 0);
 }

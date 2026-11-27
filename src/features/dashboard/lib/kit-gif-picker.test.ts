@@ -399,6 +399,24 @@ describe("kit.chat.gifPicker: open, search and pick", () => {
       ["gifSearch", { query: "ship it", limit: 10, provider: "giphy" }],
     ]);
   });
+
+  it("a query cut short while its search is in flight, then retyped, searches again and shows its results", async () => {
+    const w = world();
+    w.picker.open();
+    await settle();
+    const release = held(w);
+    w.type("cat");
+    await pause();
+    expect(w.calls("gifSearch")).toHaveLength(1);
+    w.type("c");
+    await pause();
+    w.type("cat");
+    await pause();
+    expect(w.calls("gifSearch")).toHaveLength(2);
+    release();
+    await settle();
+    expect(w.picker.root.querySelectorAll(".gp-grid [role=option]")).toHaveLength(2);
+  });
 });
 
 describe("kit.chat.gifPicker: consent", () => {

@@ -2765,7 +2765,7 @@ fn install_write_keeps_other_provider_entry_562c80() {
         serde_json::json!({"klipy": {"customerId": "a-customer-id", "key": fp}}).to_string(),
     )
     .unwrap();
-    let epoch = install::install_epoch(dir.path());
+    let epoch = install::install_epoch(dir.path(), Provider::Giphy);
     assert!(install::write_install(dir.path(), Provider::Giphy, &fp, "rid-1", epoch).unwrap());
     let file = install_json(dir.path());
     assert_eq!(file["klipy"]["customerId"], "a-customer-id");
@@ -2784,14 +2784,17 @@ fn install_write_keeps_other_provider_entry_562c80() {
 fn key_removal_drops_only_that_providers_entry() {
     let dir = tempfile::tempdir().unwrap();
     let fp = fingerprint(&Secret::new(KEY));
-    let epoch = install::install_epoch(dir.path());
-    install::write_install(dir.path(), Provider::Giphy, &fp, "rid-1", epoch).unwrap();
-    let customer = install::customer_id(dir.path(), &fp, epoch).unwrap();
+    let epochs = install::install_epochs(dir.path());
+    install::write_install(dir.path(), Provider::Giphy, &fp, "rid-1", epochs.giphy).unwrap();
+    let customer = install::customer_id(dir.path(), &fp, epochs.klipy).unwrap();
     install::forget_install_for(dir.path(), Provider::Giphy);
     assert_eq!(
-        install::install_epoch(dir.path()),
-        epoch + 1,
-        "the epoch moves"
+        install::install_epochs(dir.path()),
+        install::Epochs {
+            giphy: epochs.giphy + 1,
+            klipy: epochs.klipy,
+        },
+        "only GIPHY's epoch moves"
     );
     assert_eq!(
         install::read_install(dir.path(), Provider::Giphy, &fp),
@@ -2812,9 +2815,9 @@ fn key_removal_drops_only_that_providers_entry() {
 fn off_deletes_the_file() {
     let h = harness();
     let fp = fingerprint(&Secret::new(KEY));
-    let epoch = install::install_epoch(h.dir.path());
-    install::write_install(h.dir.path(), Provider::Giphy, &fp, "rid-1", epoch).unwrap();
-    install::customer_id(h.dir.path(), &fp, epoch).unwrap();
+    let epochs = install::install_epochs(h.dir.path());
+    install::write_install(h.dir.path(), Provider::Giphy, &fp, "rid-1", epochs.giphy).unwrap();
+    install::customer_id(h.dir.path(), &fp, epochs.klipy).unwrap();
     let off = SettingsUpdate {
         enabled: Some(false),
         ..Default::default()
@@ -2827,8 +2830,8 @@ fn off_deletes_the_file() {
 fn customer_id_survives_a_giphy_key_save() {
     let h = harness();
     let fp = fingerprint(&Secret::new(KEY));
-    let customer =
-        install::customer_id(h.dir.path(), &fp, install::install_epoch(h.dir.path())).unwrap();
+    let epoch = install::install_epoch(h.dir.path(), Provider::Klipy);
+    let customer = install::customer_id(h.dir.path(), &fp, epoch).unwrap();
     save_active(&h.keys(), h.dir.path(), "a-new-giphy-key-0001").unwrap();
     assert_eq!(
         install::read_install(h.dir.path(), Provider::Klipy, &fp),
@@ -2840,9 +2843,9 @@ fn customer_id_survives_a_giphy_key_save() {
 fn giphy_random_id_survives_klipy_save_and_a_new_klipy_key_gets_a_new_id() {
     let h = klipy_harness();
     let fp = fingerprint(&Secret::new(KEY));
-    let epoch = install::install_epoch(h.dir.path());
-    install::write_install(h.dir.path(), Provider::Giphy, &fp, "rid-1", epoch).unwrap();
-    let old = install::customer_id(h.dir.path(), &fp, epoch).unwrap();
+    let epochs = install::install_epochs(h.dir.path());
+    install::write_install(h.dir.path(), Provider::Giphy, &fp, "rid-1", epochs.giphy).unwrap();
+    let old = install::customer_id(h.dir.path(), &fp, epochs.klipy).unwrap();
     let replacement = "a-new-klipy-key-0001";
     save_active(&h.keys(), h.dir.path(), replacement).unwrap();
     assert_eq!(
@@ -2854,8 +2857,8 @@ fn giphy_random_id_survives_klipy_save_and_a_new_klipy_key_gets_a_new_id() {
         None
     );
     let new_fp = fingerprint(&Secret::new(replacement));
-    let new =
-        install::customer_id(h.dir.path(), &new_fp, install::install_epoch(h.dir.path())).unwrap();
+    let epoch = install::install_epoch(h.dir.path(), Provider::Klipy);
+    let new = install::customer_id(h.dir.path(), &new_fp, epoch).unwrap();
     assert_ne!(new, old);
 }
 
@@ -2911,17 +2914,18 @@ async fn unsaveable_customer_id_fails_search_as_unavailable() {
 fn concurrent_install_writes_keep_both_entries() {
     let dir = tempfile::tempdir().unwrap();
     let fp = fingerprint(&Secret::new(KEY));
-    let epoch = install::install_epoch(dir.path());
+    let epochs = install::install_epochs(dir.path());
     std::thread::scope(|scope| {
         let giphy = scope.spawn(|| {
             for i in 0..50 {
                 let id = format!("rid-{i}");
-                install::write_install(dir.path(), Provider::Giphy, &fp, &id, epoch).unwrap();
+                install::write_install(dir.path(), Provider::Giphy, &fp, &id, epochs.giphy)
+                    .unwrap();
             }
         });
         let klipy = scope.spawn(|| {
             for _ in 0..50 {
-                install::customer_id(dir.path(), &fp, epoch).unwrap();
+                install::customer_id(dir.path(), &fp, epochs.klipy).unwrap();
             }
         });
         giphy.join().unwrap();

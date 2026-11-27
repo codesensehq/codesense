@@ -2238,7 +2238,7 @@
     }
     function alreadyAsked(query) {
       const q = query.trim();
-      return q === last && (flying !== null || grid !== null);
+      return q === last && (flying === seq || grid !== null);
     }
     function chips() {
       return h("div", { class: "gp-chips" }, GIF_COPY.starters.map((text) => h("button", { type: "button", class: "gp-chip", onclick: () => {
@@ -2414,6 +2414,7 @@
       if (inert || !open || !allowed[provider]) return;
       if (q.length < GIF_MIN_QUERY) {
         seq++;
+        last = "";
         showStart();
         return;
       }
@@ -2472,6 +2473,7 @@
       if (q.length < GIF_MIN_QUERY) {
         timer = null;
         seq++;
+        last = "";
         showStart();
         return;
       }

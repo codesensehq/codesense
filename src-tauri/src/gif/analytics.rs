@@ -3,6 +3,7 @@
 //! rating searched at and the query, held in memory for an hour by provider and GIF id, so a
 //! later send of that GIF can register it and a KLIPY lookup can stay within a rated search. At
 //! most [`MAX_ENTRIES`] are held; the oldest go first.
+use super::install::Epochs;
 use super::{Found, Pingbacks, Provider, Rating};
 use std::{
     collections::{HashMap, VecDeque},
@@ -48,8 +49,8 @@ struct Held {
     entries: HashMap<Key, (i64, Entry)>,
     /// Keys in the order they were recorded, oldest first; a key recorded again moves to the end.
     order: VecDeque<Key>,
-    /// The install epoch the entries belong to.
-    epoch: u64,
+    /// Each provider's install epoch its entries belong to.
+    epochs: Epochs,
 }
 
 pub(crate) struct Analytics {
@@ -62,19 +63,29 @@ impl Analytics {
             held: std::sync::Mutex::new(Held {
                 entries: HashMap::new(),
                 order: VecDeque::new(),
-                epoch: 0,
+                epochs: Epochs { giphy: 0, klipy: 0 },
             }),
         }
     }
 
-    /// Drop every entry held for an earlier install epoch (search was turned Off, or the key
-    /// removed or replaced), so a new install id never registers a GIF found under the old one.
-    pub(crate) fn start_epoch(&self, epoch: u64) {
+    /// Drop every entry `provider` holds for an earlier install epoch (search was turned Off,
+    /// or its key removed or replaced), so a new install id never registers a GIF found under
+    /// the old one. The other provider's entries stay.
+    pub(crate) fn start_epoch(&self, provider: Provider, epoch: u64) {
         let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
-        if held.epoch != epoch {
-            held.epoch = epoch;
-            held.entries.clear();
-            held.order.clear();
+        let Held {
+            entries,
+            order,
+            epochs,
+        } = &mut *held;
+        let seen = match provider {
+            Provider::Giphy => &mut epochs.giphy,
+            Provider::Klipy => &mut epochs.klipy,
+        };
+        if *seen != epoch {
+            *seen = epoch;
+            HashMap::retain(entries, |(p, _), _| *p != provider);
+            VecDeque::retain(order, |(p, _)| *p != provider);
         }
     }
 
@@ -156,5 +167,10 @@ impl Analytics {
     #[cfg(test)]
     pub(crate) fn held_count(&self) -> usize {
         self.held.lock().unwrap().entries.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn order_len(&self) -> usize {
+        self.held.lock().unwrap().order.len()
     }
 }
