@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useEffect } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { currentWindow } from "@/shared/lib/current-window";
 import { useOrgStore } from "@/shared/stores/org-store";
 import { logger } from "@/shared/lib/logger";
 
@@ -20,7 +20,7 @@ export function useWindowTitle(): void {
 
   useEffect(() => {
     const title = computeTitle(activeOrgSlug, activeTeamName, orgs);
-    getCurrentWindow()
+    currentWindow()
       .setTitle(title)
       .catch((e) => {
         logger.warn("window-title", `setTitle failed: ${e}`);

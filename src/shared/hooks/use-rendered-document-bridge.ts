@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useEffect } from "react";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { currentWebviewWindow } from "@/shared/lib/current-window";
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
 import {
   admitRenderedDocument,
@@ -75,7 +75,7 @@ export async function runRenderedDocumentRequest(
 
 export function useRenderedDocumentBridge() {
   useEffect(() => {
-    const unlisten = getCurrentWebviewWindow().listen<
+    const unlisten = currentWebviewWindow().listen<
       Parameters<typeof runRenderedDocumentRequest>[0]
     >("document:read-rendered-request", (event) => {
       void runRenderedDocumentRequest(event.payload);

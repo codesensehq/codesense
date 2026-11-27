@@ -19,7 +19,7 @@ import { useShortcutsStore } from "@/shared/stores/shortcuts-store";
 import { useUiStore } from "@/shared/stores/ui-store";
 import { useShortcutHandler } from "@/shared/hooks/use-shortcut-handler";
 import { dispatchMenuAction } from "@/app/menu-action-dispatch";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { currentWindow } from "@/shared/lib/current-window";
 import { startWatching, stopWatching } from "@/tauri/commands";
 import { CONTEXT_FILE_CHANGE_EVENT, type ContextFileChangePayload } from "@/tauri/events";
 import { registerWorkspaceWatchBridge } from "@/app/lib/workspace-watch-bridge";
@@ -825,7 +825,7 @@ function App() {
             }
           }
           // Show window after state is fully loaded — prevents picker flash
-          getCurrentWindow()
+          currentWindow()
             .show()
             .catch(() => {});
         });
@@ -840,7 +840,7 @@ function App() {
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
-    getCurrentWindow()
+    currentWindow()
       .onCloseRequested(async (event) => {
         event.preventDefault();
         try {
@@ -848,7 +848,7 @@ function App() {
         } finally {
           // destroy() bypasses the event system — close() would re-emit
           // closeRequested, creating an infinite loop.
-          getCurrentWindow()
+          currentWindow()
             .destroy()
             .catch(() => {});
         }

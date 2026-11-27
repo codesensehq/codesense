@@ -10,7 +10,13 @@
  * The label is read once, on first use (the mock plants its metadata after the
  * module graph loads), and then kept: it is a constant, never a store or hook,
  * so asking costs nothing and nothing re-renders on it.
+ *
+ * It is also the one place that takes a window, webview or webview-window
+ * handle (`current-window.guard.test.ts`).
  */
+import { getCurrentWebview, type Webview } from "@tauri-apps/api/webview";
+import { getCurrentWebviewWindow, type WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { getCurrentWindow, type Window } from "@tauri-apps/api/window";
 
 /** The label of the app's first window, which owns persistence, MCP and pane-open. */
 export const MAIN_WINDOW_LABEL = "main";
@@ -40,4 +46,19 @@ export function currentWindowLabel(): string {
 /** True in the `main` window, false in a satellite. */
 export function isMainWindow(): boolean {
   return currentWindowLabel() === MAIN_WINDOW_LABEL;
+}
+
+/** This window's handle. Every other module reads it here, never from `@tauri-apps/api/window`. */
+export function currentWindow(): Window {
+  return getCurrentWindow();
+}
+
+/** This window's webview handle (drag and drop). */
+export function currentWebview(): Webview {
+  return getCurrentWebview();
+}
+
+/** This window's webview-window handle (listeners aimed at this webview alone). */
+export function currentWebviewWindow(): WebviewWindow {
+  return getCurrentWebviewWindow();
 }

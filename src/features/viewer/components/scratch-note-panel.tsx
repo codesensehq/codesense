@@ -7,7 +7,7 @@ import type { LanguageFn } from "highlight.js";
 import { Lock, Search, Send, TableOfContents } from "lucide-react";
 import { toast } from "sonner";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { currentWindow } from "@/shared/lib/current-window";
 
 import { agentRefNodeView } from "@/features/notes/components/agent-ref-chip";
 import { ChangeBanner, HistorySheet } from "@/features/notes/components/note-changes";
@@ -392,7 +392,7 @@ function NotesPane() {
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
-    void getCurrentWindow()
+    void currentWindow()
       .onFocusChanged(({ payload: focused }) => {
         if (!focused) void flushNotes();
       })

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { currentWindow } from "@/shared/lib/current-window";
 
 import { revealSlot } from "@/features/shell/slots/reveal-slot";
 
@@ -7,7 +7,7 @@ import { revealSlot } from "@/features/shell/slots/reveal-slot";
  * Window operations are best effort; none may block the reveal. */
 export async function focusAndRevealBoard(): Promise<void> {
   try {
-    const win = getCurrentWindow();
+    const win = currentWindow();
     await win.unminimize().catch(() => {});
     await win.show().catch(() => {});
     await win.setFocus().catch(() => {});
