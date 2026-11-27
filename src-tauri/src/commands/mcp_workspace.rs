@@ -44,6 +44,7 @@ use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
 use super::agent_audit::{self, AuditEvent};
+use super::dashboard_launch::prebind::{AppPreBindPort, PreBindReservation};
 use super::dashboard_launch::{
     DashboardLaunchState, InteractiveCaptureContext, LaunchMeta, LaunchRecord, LaunchTeam,
     RunProvenance, StoryPathResolution, KIND_DASHBOARD_LAUNCHED,
@@ -1835,6 +1836,9 @@ pub(crate) async fn launch_managed_dir_session_typed(
     // Reserve the cap slot. `busy` on saturation; `false` = this handle already
     // has a session (idempotent focus — return it, don't fork a spawn).
     let fresh = state.begin_with_provenance(handle, provenance, record)?;
+    // Until `spawn_and_bind` commits the session, a launch future dropped at any await
+    // below aborts this reservation and kills the tab it opened, if any.
+    let prebind = PreBindReservation::new(AppPreBindPort(app.clone()), handle, fresh);
 
     // SW-AU-96B: stamp the launch's managed worktree dir on the entry (fill-gap, focus-safe, like the
     // control keys below) so the completion path diffs the work-product branch for the
@@ -1921,6 +1925,7 @@ pub(crate) async fn launch_managed_dir_session_typed(
         initial_prompt,
         tab_name,
         &agent,
+        prebind,
     )
     .await;
     if result.is_err() {
@@ -2125,6 +2130,7 @@ async fn spawn_and_bind(
     initial_prompt: Option<&str>,
     tab_name: Option<String>,
     agent: &crate::agents::launch::AgentLaunch,
+    mut prebind: PreBindReservation<AppPreBindPort>,
 ) -> Result<Vec<LaunchWarning>, String> {
     let binary = resolved_binary.path.as_path();
     // SW-WA-F11: open a legibility record FIRST — before product prepare, scope
@@ -2306,6 +2312,8 @@ async fn spawn_and_bind(
     if let Err(e) = product.validate() {
         fail_pre_bind!(telemetry, TelemetryOutcome::SpawnFailed, e);
     }
+    // The tab opens inside the startup below; a drop from its open on kills it.
+    let (opening, opened_session) = (&mut prebind, session_id.as_str());
     let startup = super::role_startup::start_argv(
         &super::agent_inbox::AppInboxHost { app: app.clone() },
         role_meta.as_ref().and_then(|m| m.team.as_ref()),
@@ -2315,6 +2323,7 @@ async fn spawn_and_bind(
         launch_args,
         initial_prompt,
         |prompt_plan| async move {
+            opening.opened(opened_session);
             let spawn = TabSpawn::Cold(Box::new(bound_spawn.into_args(
                 binary,
                 cwd,
@@ -2359,6 +2368,8 @@ async fn spawn_and_bind(
         // `SettleTimeout` variant to classify. The record reads `SpawnFailed`.
         fail_pre_bind!(telemetry, TelemetryOutcome::SpawnFailed, e);
     }
+    // Bound: the registry owns the session now.
+    prebind.commit();
 
     super::dashboard_launch::emit_session_joined_system_message(app, state, story_id, &session_id);
 
@@ -3460,6 +3471,41 @@ mod tests {
         assert!(scope_at < plan_at && plan_at < argv_at);
         assert!(spawn.contains("let (seeded, warnings) = if prompt_plan.in_argv"));
         assert!(spawn.contains("match prompt_plan.pty_prompt"));
+    }
+
+    /// A fresh launch holds its pre-bind guard from the reservation until the commit: armed
+    /// right after `begin_with_provenance`, marked opened before the tab opens, and let go
+    /// only once the claim is committed.
+    #[test]
+    fn the_pre_bind_guard_spans_reservation_to_commit() {
+        let source = include_str!("mcp_workspace.rs");
+        let managed = source
+            .split("pub(crate) async fn launch_managed_dir_session_typed(")
+            .nth(1)
+            .unwrap()
+            .split("fn launch_warnings(")
+            .next()
+            .unwrap();
+        let reserve_at = managed.find("state.begin_with_provenance(").unwrap();
+        let arm_at = managed
+            .find("PreBindReservation::new(AppPreBindPort(app.clone()), handle, fresh)")
+            .unwrap();
+        let first_await_at = managed[reserve_at..].find(".await").unwrap() + reserve_at;
+        assert!(reserve_at < arm_at && arm_at < first_await_at);
+        assert!(managed.contains("        prebind,\n    )\n    .await;"));
+        let spawn = source
+            .split("async fn spawn_and_bind(")
+            .nth(1)
+            .unwrap()
+            .split("pub(crate) struct InitialPromptPlan")
+            .next()
+            .unwrap();
+        let opened_at = spawn.find("opening.opened(opened_session);").unwrap();
+        let open_at = spawn.find("open_layout_tab(").unwrap();
+        let claim_at = spawn.find("commit_local_effect_claim(").unwrap();
+        let commit_at = spawn.find("prebind.commit();").unwrap();
+        assert!(opened_at < open_at && open_at < claim_at && claim_at < commit_at);
+        assert_eq!(spawn.matches("prebind.commit()").count(), 1);
     }
 
     /// SW-WA-F11 — the launch telemetry pipeline is actually wired through
