@@ -1,0 +1,169 @@
+// SPDX-License-Identifier: MIT
+// node --test scripts/nightly.node-test.mjs
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { LABEL, MARKER, failedLanes, perfPlan, trackNightly } from "./nightly.mjs";
+
+const script = fileURLToPath(new URL("./nightly.mjs", import.meta.url));
+
+// --- The perf lane's plan: compare against the runner's own set, never the M1 one.
+
+const harness = "const MODE = process.env.PERF_BASELINE;";
+const m1 = { runner: "m1", engine: "webkit", rows: { switch: { p50: 80, p95: 120 } } };
+const ci = { runner: "macos-15", engine: "webkit", rows: { switch: { p50: 140, p95: 210 } } };
+
+test("a baseline with only M1 rows skips with the summary line", () => {
+  assert.deepEqual(perfPlan({ baseline: { sets: [m1] }, harness }), {
+    mode: "skip",
+    reason: "no runner: macos-15 set in tests/fixtures/perf-baseline.json",
+  });
+});
+
+test("the macos-15 set is selected beside the M1 one, as a list or keyed", () => {
+  assert.deepEqual(perfPlan({ baseline: { sets: [m1, ci] }, harness }), { mode: "compare" });
+  assert.deepEqual(perfPlan({ baseline: { sets: { m1, ci } }, harness }), { mode: "compare" });
+});
+
+test("no harness or no baseline file skips; record mode needs only the harness", () => {
+  assert.deepEqual(perfPlan({ baseline: { sets: [ci] }, harness: null }), {
+    mode: "skip",
+    reason: "no tests/e2e-mock/perf-baseline.spec.ts yet",
+  });
+  assert.deepEqual(perfPlan({ baseline: { sets: [ci] }, harness: "test('x', () => {});" }), {
+    mode: "skip",
+    reason: "the harness reads no PERF_BASELINE mode yet",
+  });
+  assert.deepEqual(perfPlan({ baseline: null, harness }), {
+    mode: "skip",
+    reason: "no tests/fixtures/perf-baseline.json yet",
+  });
+  assert.deepEqual(perfPlan({ baseline: null, harness, record: true }), { mode: "record" });
+  assert.equal(perfPlan({ baseline: null, harness: null, record: true }).mode, "skip");
+});
+
+test("the perf-plan CLI writes the mode output and the skip line to the summary", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nightly-perf-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const baseline = path.join(dir, "perf-baseline.json");
+  const spec = path.join(dir, "perf-baseline.spec.ts");
+  fs.writeFileSync(baseline, JSON.stringify({ sets: [m1] }));
+  fs.writeFileSync(spec, harness);
+  const env = {
+    ...process.env,
+    GITHUB_OUTPUT: path.join(dir, "output"),
+    GITHUB_STEP_SUMMARY: path.join(dir, "summary"),
+  };
+  const plan = (...args) =>
+    spawnSync(
+      process.execPath,
+      [script, "perf-plan", "--baseline", baseline, "--harness", spec, ...args],
+      {
+        encoding: "utf8",
+        env,
+      },
+    );
+  assert.equal(plan().status, 0);
+  assert.equal(fs.readFileSync(env.GITHUB_OUTPUT, "utf8"), "mode=skip\n");
+  assert.equal(
+    fs.readFileSync(env.GITHUB_STEP_SUMMARY, "utf8"),
+    "perf lane skipped: no runner: macos-15 set in tests/fixtures/perf-baseline.json\n",
+  );
+  assert.equal(plan("--record", "true").status, 0);
+  assert.match(fs.readFileSync(env.GITHUB_OUTPUT, "utf8"), /mode=record\n$/);
+  // The dispatch input arrives as text: anything but "true" is a plain run.
+  assert.equal(plan("--record", "false").status, 0);
+  assert.match(fs.readFileSync(env.GITHUB_OUTPUT, "utf8"), /mode=skip\n$/);
+});
+
+// --- The one nightly issue.
+
+const needs = {
+  "tiles-nightly": { result: "success" },
+  "pane-harness": { result: "failure" },
+  perf: { result: "success" },
+  load: { result: "failure" },
+};
+
+test("the failed lanes are read from the needs context", () => {
+  assert.deepEqual(failedLanes(needs), ["pane-harness", "load"]);
+  assert.deepEqual(failedLanes({ perf: { result: "cancelled" } }), []);
+});
+
+function stubGh(issues) {
+  const calls = [];
+  const gh = (args) => {
+    calls.push(args);
+    if (args[0] === "issue" && args[1] === "list") return JSON.stringify(issues);
+    if (args[0] === "issue" && args[1] === "create")
+      return "https://github.com/example/repo/issues/42\n";
+    return "";
+  };
+  return { gh, calls };
+}
+const options = (gh) => ({
+  gh,
+  runUrl: "https://github.com/example/repo/actions/runs/7",
+  date: "2026-11-28",
+});
+
+test("trackNightly opens one labelled issue with the marker when none exists", () => {
+  const { gh, calls } = stubGh([{ number: 3, state: "OPEN", body: "<!-- nightly-other -->" }]);
+  const result = trackNightly(["pane-harness", "load"], options(gh));
+  assert.deepEqual(calls[0], [
+    "issue",
+    "list",
+    "--label",
+    LABEL,
+    "--state",
+    "all",
+    "--limit",
+    "100",
+    "--json",
+    "number,state,body",
+  ]);
+  assert.equal(calls[1][0], "label");
+  assert.deepEqual(calls[1].slice(0, 4), ["label", "create", LABEL, "--force"]);
+  const create = calls[2];
+  assert.deepEqual(create.slice(0, 2), ["issue", "create"]);
+  const body = create[create.indexOf("--body") + 1];
+  assert.ok(body.startsWith(`${MARKER}\n`));
+  assert.match(
+    body,
+    /2026-11-28: pane-harness, load failed: https:\/\/github\.com\/example\/repo\/actions\/runs\/7/,
+  );
+  assert.equal(create[create.indexOf("--label") + 1], LABEL);
+  assert.deepEqual(result, { action: "created", url: "https://github.com/example/repo/issues/42" });
+});
+
+test("trackNightly comments on the open issue, else reopens the newest closed one", () => {
+  const open = stubGh([
+    { number: 4, state: "CLOSED", body: `${MARKER}\nold` },
+    { number: 9, state: "OPEN", body: `${MARKER}\nnow` },
+  ]);
+  assert.deepEqual(trackNightly(["load"], options(open.gh)), { action: "commented", number: 9 });
+  assert.deepEqual(open.calls[1].slice(0, 3), ["issue", "comment", "9"]);
+  assert.match(open.calls[1][4], /2026-11-28: load failed/);
+  const closed = stubGh([
+    { number: 4, state: "CLOSED", body: `${MARKER}\nold` },
+    { number: 8, state: "CLOSED", body: `${MARKER}\nnewer` },
+  ]);
+  assert.deepEqual(trackNightly(["load"], options(closed.gh)), { action: "reopened", number: 8 });
+  assert.deepEqual(closed.calls[1], ["issue", "reopen", "8"]);
+  assert.deepEqual(closed.calls[2].slice(0, 3), ["issue", "comment", "8"]);
+});
+
+test("the issue CLI does nothing when no lane failed, and refuses without a run URL", () => {
+  const env = { ...process.env, NEEDS: JSON.stringify({ perf: { result: "success" } }) };
+  const quiet = spawnSync(process.execPath, [script, "issue", "--run-url", "https://x/runs/1"], {
+    encoding: "utf8",
+    env,
+  });
+  assert.equal(quiet.status, 0, quiet.stderr);
+  assert.match(quiet.stdout, /nightly: no lane failed/);
+  assert.equal(spawnSync(process.execPath, [script, "issue"], { env }).status, 1);
+});
