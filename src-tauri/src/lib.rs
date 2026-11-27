@@ -171,14 +171,24 @@ fn log_sinks() -> Vec<LogSink> {
 }
 
 fn log_targets() -> Vec<Target> {
+    log_targets_for(!cfg!(debug_assertions))
+}
+
+/// Whether a line at `level` is mirrored into the webview console. Each mirrored
+/// line costs a hop through the main run loop, so release builds send only
+/// warnings and errors; the log file and stdout still get every line.
+fn webview_admits(level: log::Level, release: bool) -> bool {
+    !release || level <= log::Level::Warn
+}
+
+fn log_targets_for(release: bool) -> Vec<Target> {
     log_sinks()
         .into_iter()
-        .map(|sink| {
-            Target::new(match sink {
-                LogSink::LogDir => TargetKind::LogDir { file_name: None },
-                LogSink::Stdout => TargetKind::Dispatch(console_log::stdout_dispatch()),
-                LogSink::Webview => TargetKind::Webview,
-            })
+        .map(|sink| match sink {
+            LogSink::LogDir => Target::new(TargetKind::LogDir { file_name: None }),
+            LogSink::Stdout => Target::new(TargetKind::Dispatch(console_log::stdout_dispatch())),
+            LogSink::Webview => Target::new(TargetKind::Webview)
+                .filter(move |metadata| webview_admits(metadata.level(), release)),
         })
         .collect()
 }
