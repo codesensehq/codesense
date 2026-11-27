@@ -214,9 +214,17 @@ jobs:
         # The app's build script needs the bundled sidecars to exist.
         run: bash scripts/build-session-server.sh
       - name: Compile the frame fixture server
-        # The codesense_lib test binary in target/debug/deps, where the specs look for it.
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --no-run
+        # The codesense_lib test binary; cargo names its path, which the specs read from
+        # CODESENSE_FRAME_TEST_BINARY rather than searching target/debug/deps.
+        id: fixture
+        run: |
+          binary=$(cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --no-run --message-format=json \
+            | jq -r 'select(.reason == "compiler-artifact" and .target.name == "codesense_lib" and .executable != null) | .executable')
+          [[ -x "$binary" ]] || { echo "::error::cargo named no codesense_lib test binary"; exit 1; }
+          echo "binary=$binary" >> "$GITHUB_OUTPUT"
       - name: Run the frame security specs
+        env:
+          CODESENSE_FRAME_TEST_BINARY: ${{ steps.fixture.outputs.binary }}
         run: pnpm run test:frame-security
       - name: Upload failure traces
         if: failure()
