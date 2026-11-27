@@ -70,7 +70,7 @@ pub(crate) fn invalidate_all() {
 }
 
 /// One file or folder as stat'ed. A missing one stamps as `None`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct FileStamp {
     len: u64,
     modified: Option<SystemTime>,
@@ -180,7 +180,9 @@ impl<K: Ord + Clone, S: PartialEq + Clone, V: Clone> ConfigCache<K, S, V> {
             }
         };
         #[cfg(test)]
-        self.lock().reads.entry(key.clone()).or_default().stamps += 1;
+        {
+            self.lock().reads.entry(key.clone()).or_default().stamps += 1;
+        }
         let fresh = stamp();
         if let Some((_, value)) = kept.filter(|(before, _)| *before == fresh) {
             let mut inner = self.lock();
@@ -193,7 +195,9 @@ impl<K: Ord + Clone, S: PartialEq + Clone, V: Clone> ConfigCache<K, S, V> {
             }
         }
         #[cfg(test)]
-        self.lock().reads.entry(key.clone()).or_default().loads += 1;
+        {
+            self.lock().reads.entry(key.clone()).or_default().loads += 1;
+        }
         let value = load()?;
         let mut inner = self.lock();
         if inner.generation == generation {
