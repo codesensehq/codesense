@@ -1115,6 +1115,7 @@ fn viewer_detach_requests_hand_the_size_back_to_app() {
     assert!(greeted
         .expect("greeted")
         .supports(&codesense_host_proto::Capability::ViewerDetachV1));
+    assert_eq!(app.call(Request::Listen), Ok(Reply::Done));
     open_entry_running(
         &server,
         &mut app,
