@@ -353,7 +353,9 @@ fn routines_section(routines: &Result<Vec<Value>, String>) -> Value {
     json!({
         "total": rows.len(),
         "enabled": rows.iter().filter(|r| flag(r, "enabled")).count(),
-        "needsYou": rows.iter().filter(|r| flag(r, "needs_you")).count(),
+        // Runs that ended waiting on the person. Not needs-you items: those are the
+        // `needsYou` section's set.
+        "runsAwaiting": rows.iter().filter(|r| flag(r, "needs_you")).count(),
         "lastRunByStatus": count_by(rows, last_status),
         "items": items,
         "truncated": truncated,
@@ -998,7 +1000,8 @@ mod tests {
         let r = &out["routines"];
         assert_eq!(r["total"], 2);
         assert_eq!(r["enabled"], 1);
-        assert_eq!(r["needsYou"], 1);
+        assert_eq!(r["runsAwaiting"], 1);
+        assert_eq!(r.get("needsYou"), None);
         assert_eq!(r["lastRunByStatus"], json!({"failed":1}));
 
         let i = &out["inbox"];
