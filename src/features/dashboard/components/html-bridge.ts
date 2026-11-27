@@ -233,6 +233,7 @@ const preparedRecordsViews = new WeakMap<HubFrame, Map<string, string>>();
 /** Pages name selectors; the host alone resolves them into granted view keys. */
 async function subscriptionView(
   args: Record<string, unknown>,
+  verb: string,
   ctx?: BridgeContext,
   /** False when leaving: name the view without preparing (registering) it. */
   prepare = true,
@@ -242,7 +243,7 @@ async function subscriptionView(
   if (args.topic === "files")
     return { viewKey: await fileSurfacePrepareView(ctx!.frame!.frameId, args) };
   if (args.topic === "records") {
-    const collection = String(args.collection);
+    const collection = collectionArg(args, verb);
     const live = await ctx?.liveFrame?.();
     const views = live ? preparedRecordsViews.get(live) : undefined;
     if (!prepare) {
@@ -585,6 +586,14 @@ function argObject(args: unknown, verb: string): Record<string, unknown> {
 function topicArg(a: Record<string, unknown>, verb: string): string {
   if (typeof a.topic !== "string") throw new Error(`invalid: ${verb} topic must be a string`);
   return a.topic;
+}
+
+/** So is a records collection, as the host checks it; none means notes, as the host reads it. */
+function collectionArg(a: Record<string, unknown>, verb: string): string {
+  if (a.collection === undefined) return "notes";
+  if (typeof a.collection !== "string")
+    throw new Error(`invalid: ${verb} collection must be a string`);
+  return a.collection;
 }
 
 function optionalEpochMs(value: unknown, verb: string, field: string): number | undefined {
@@ -985,7 +994,7 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
     const topic = topicArg(a, "subscribe");
     const frame = await ctx?.liveFrame?.();
     if (!frame) throw new Error("unavailable: live frame is starting");
-    const view = await subscriptionView(a, ctx);
+    const view = await subscriptionView(a, "subscribe", ctx);
     return frame.subscribe(
       topic,
       typeof a.sinceRev === "number" ? a.sinceRev : undefined,
@@ -1000,15 +1009,17 @@ export const HTML_BRIDGE_ALLOWLIST: Record<string, BridgeHandler> = {
     if (topic === "pins") throw new Error("invalid: the pins topic has no pages");
     const frame = await ctx?.liveFrame?.();
     if (!frame) throw new Error("unavailable: live frame is starting");
-    return frame.page(topic, String(a.cursor), await subscriptionView(a, ctx));
+    return frame.page(topic, String(a.cursor), await subscriptionView(a, "page", ctx));
   },
   unsubscribe: async (args, ctx) => {
     const a = argObject(args, "unsubscribe");
     const topic = topicArg(a, "unsubscribe");
-    const view = await subscriptionView(a, ctx, false);
+    const frame = await ctx?.liveFrame?.();
+    if (!frame) return null;
+    const view = await subscriptionView(a, "unsubscribe", ctx, false);
     // A records collection this frame never prepared holds no view to release.
     if (topic === "records" && view === undefined) return null;
-    await (await ctx?.liveFrame?.())?.unsubscribe(topic, view);
+    await frame.unsubscribe(topic, view);
     return null;
   },
   setUiState: async (args, ctx) => {

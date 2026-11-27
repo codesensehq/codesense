@@ -352,6 +352,16 @@ impl Dispatcher {
                 reason: format!("invalid: {verb} topic must be a string"),
             };
         }
+        // So is a records collection: the capability reads a non-string one as notes, so ["care"]
+        // would be admitted on notes' grant. An absent one means notes.
+        if matches!(verb, "subscribe" | "unsubscribe" | "page")
+            && args["topic"] == "records"
+            && args.get("collection").is_some_and(|c| !c.is_string())
+        {
+            return Decision::Deny {
+                reason: format!("invalid: {verb} collection must be a string"),
+            };
+        }
         // Inbox-pane-only work: an image fetch, the GIF provider read, a GIF search or pick, the
         // GIF picker's way to Settings, a write to the picker's consent in ui:gif, and media on
         // the human's send, which is stored as this machine's own. Other frames keep text-only
