@@ -12,10 +12,12 @@ import { serializeAppStateWrite } from "@/shared/lib/app-state-write";
 const mockLoadAppState = vi.fn<() => Promise<string>>();
 const mockSaveAppState = vi.fn<(state: string, patch?: boolean) => Promise<void>>();
 const mockRebuildMenu = vi.fn<(overrides: Record<string, string>) => Promise<void>>();
+const mockPatchAppStateKeys = vi.fn<(patch: string) => Promise<void>>();
 
 vi.mock("@/tauri/commands", () => ({
   loadAppState: () => mockLoadAppState(),
   saveAppState: (state: string, patch?: boolean) => mockSaveAppState(state, patch),
+  patchAppStateKeys: (patch: string) => mockPatchAppStateKeys(patch),
   rebuildMenu: (overrides: Record<string, string>) => mockRebuildMenu(overrides),
 }));
 
@@ -43,6 +45,8 @@ beforeEach(async () => {
   mockLoadAppState.mockReset();
   mockSaveAppState.mockReset();
   mockRebuildMenu.mockReset();
+  mockPatchAppStateKeys.mockReset();
+  mockPatchAppStateKeys.mockResolvedValue(undefined);
   mockLoadAppState.mockResolvedValue("{}");
   mockSaveAppState.mockResolvedValue(undefined);
   mockRebuildMenu.mockResolvedValue(undefined);
@@ -408,6 +412,7 @@ describe("useShortcutsStore — persist / load round-trip", () => {
       });
       expect(mockRebuildMenu).not.toHaveBeenCalled();
       expect(mockSaveAppState).not.toHaveBeenCalled();
+      expect(mockPatchAppStateKeys).not.toHaveBeenCalled();
     });
   });
 
