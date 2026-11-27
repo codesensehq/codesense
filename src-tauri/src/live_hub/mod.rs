@@ -1043,7 +1043,7 @@ async fn refresh_hosts(app: &tauri::AppHandle) {
                     )?;
                     let snapshot = backend
                         .domain()
-                        .layout_snapshot(&crate::commands::pty_layout::app_viewer(), &read_boot)
+                        .layout_snapshot(&crate::commands::pty_viewer::main_viewer(), &read_boot)
                         .map_err(|e| e.to_string())?;
                     let activity = backend
                         .domain()

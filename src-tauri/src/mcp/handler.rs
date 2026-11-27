@@ -8143,8 +8143,9 @@ impl CodesenseHandler {
         use crate::commands::mcp_workspace::{AGENT_COLS, AGENT_ROWS};
         use crate::commands::pty::{AttachWarmArgs, SpawnPtyArgs, SpawnPtySize};
         use crate::commands::pty_layout::{
-            app_viewer, open_layout_tab, parse_team_key, team_key, workspace_key, TabSpawn,
+            open_layout_tab, parse_team_key, team_key, workspace_key, TabSpawn,
         };
+        use crate::commands::pty_viewer::main_viewer;
         use codesense_pty_core::domain::PtySessionId;
         use codesense_pty_core::layout::{OpenTab, Placement, Tags, WorkspaceDescriptor};
 
@@ -8212,7 +8213,7 @@ impl CodesenseHandler {
         let (org, team) = parse_team_key(&ws.team_key);
         let open = OpenTab {
             cwd: None,
-            viewer: app_viewer(),
+            viewer: main_viewer(),
             workspace: workspace_key(&ws.team_key, form),
             session: PtySessionId::new(session_id.clone()),
             descriptor: Some(WorkspaceDescriptor {

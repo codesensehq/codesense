@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use codesense_host_proto::agent_cli::NativeLaunch;
-use codesense_pty_core::domain::{PtySessionId, SubmitOutcome, TerminalText, ViewportId};
+use codesense_pty_core::domain::{PtySessionId, SubmitOutcome, TerminalText};
 use codesense_pty_core::emulator::{TerminalSnapshot, TextMode};
 use codesense_pty_core::spawn::SpawnIntent;
 use codesense_pty_core::{is_warm_safe_cwd, SessionMeta, SessionRegistration};
@@ -15,7 +15,7 @@ use crate::commands::pty_backend::{
     resolve_in_process, resolve_live_session_backend, resolve_session_backend,
     resolve_spawn_backend, spawn_on_session_server, SpawnPlacement,
 };
-use crate::commands::pty_layout::app_viewer;
+use crate::commands::pty_viewer::main_viewer;
 use crate::terminal::warm_pool::WarmPoolState;
 
 pub(crate) fn transfer_fallback_scope<R: tauri::Runtime>(
@@ -289,7 +289,7 @@ pub mod admitted_commands {
         rows: u16,
     ) -> Result<(), String> {
         let remote = super::super::pty_layout::authorize_human_terminal(&app, &session_id).await?;
-        super::resize_session_as(app, session_id, app_viewer(), cols, rows, remote).await
+        super::resize_session_as(app, session_id, main_viewer(), cols, rows, remote).await
     }
 
     #[tauri::command]
@@ -303,7 +303,7 @@ pub mod admitted_commands {
             let result = subscribe_reference_authorized(
                 &app,
                 &pty_id,
-                &ViewportId::new("webview"),
+                &crate::commands::pty_viewer::viewport_for(&main_viewer()),
                 stream,
                 remote,
             )?;

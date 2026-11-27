@@ -90,6 +90,7 @@ pub mod pty_backend;
 pub mod pty_host;
 pub mod pty_layout;
 pub mod pty_runner;
+pub mod pty_viewer;
 pub mod reconcile_workspace;
 pub mod registry;
 pub mod registry_local;

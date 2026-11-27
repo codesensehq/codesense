@@ -912,7 +912,8 @@ pub(crate) fn reopen_local_request(
 ) {
     use crate::commands::mcp_workspace::{AGENT_COLS, AGENT_ROWS};
     use crate::commands::pty::{AttachWarmArgs, SpawnPtySize};
-    use crate::commands::pty_layout::{app_viewer, TabSpawn};
+    use crate::commands::pty_layout::TabSpawn;
+    use crate::commands::pty_viewer::main_viewer;
     use codesense_pty_core::layout::{OpenTab, Placement};
     // A record from before workspace keys were kept names its workspace by id.
     let form = tab
@@ -923,7 +924,7 @@ pub(crate) fn reopen_local_request(
     let open = OpenTab {
         // A tab with a folder of its own (a seat worktree) keeps it in its workspace.
         cwd: tab.tab_dir.as_deref().map(PathBuf::from),
-        viewer: app_viewer(),
+        viewer: main_viewer(),
         workspace: crate::commands::pty_layout::workspace_key(&tab.team_key, &form),
         session: PtySessionId::new(crate::commands::mcp_workspace::mint_session_id()),
         descriptor: tab.descriptor.clone(),

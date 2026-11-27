@@ -568,7 +568,7 @@ time.sleep(600)
         .open_remote_tab(
             codesense_pty_core::layout::OpenTab {
                 cwd: None,
-                viewer: crate::commands::pty_layout::app_viewer(),
+                viewer: crate::commands::pty_viewer::main_viewer(),
                 workspace: crate::commands::pty_layout::workspace_key(&team_key, "objects"),
                 session: codesense_pty_core::domain::PtySessionId::new("desk-if-absent"),
                 descriptor: Some(Default::default()),

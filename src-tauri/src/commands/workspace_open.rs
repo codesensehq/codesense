@@ -2198,7 +2198,7 @@ pub(crate) fn complete_workspace_reveal<R: tauri::Runtime>(
                     &reference,
                     false,
                     |host, session| {
-                        host.set_active(&super::pty_layout::app_viewer(), &key, Some(session))
+                        host.set_active(&super::pty_viewer::main_viewer(), &key, Some(session))
                             .map_err(|error| error.to_string())
                     },
                 )?;

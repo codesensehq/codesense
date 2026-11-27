@@ -1233,7 +1233,7 @@ fn handshake(root: &Path) -> Result<AdmittedSessionTransport, ConnectError> {
     let mut ours = client_hello(
         expected.clone(),
         env!("CARGO_PKG_VERSION"),
-        &crate::commands::pty_layout::app_viewer(),
+        &crate::commands::pty_viewer::main_viewer(),
     );
     ours.client_id = Some(app_client_id().to_string());
     let (greeting, census) = read_host_greeting(&mut transport.reader)

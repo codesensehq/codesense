@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Exact-origin MCP terminal operations. Reads never acquire a writable attachment.
 use crate::commands::{
-    dashboard_launch::DashboardLaunchState,
-    machines::RuntimeSessionReference,
-    pty_backend,
-    pty_layout::{app_viewer, RemoteShellRecord},
+    dashboard_launch::DashboardLaunchState, machines::RuntimeSessionReference, pty_backend,
+    pty_layout::RemoteShellRecord, pty_viewer::main_viewer,
 };
 use crate::terminal::session_server::{
     InputDeliveryError, SessionServerClient, WritableAttachmentFailure,
@@ -266,7 +264,7 @@ fn execute_inner(
     if let Err(error) = revalidate() {
         return refused("staleOrigin", error);
     }
-    let snapshot = match client.layout_snapshot(&app_viewer(), &ClientBootId::new("mcp-remote")) {
+    let snapshot = match client.layout_snapshot(&main_viewer(), &ClientBootId::new("mcp-remote")) {
         Ok(snapshot) => snapshot,
         Err(error) => {
             return json!({"status":"unavailable","code":"unavailable","message":error.to_string()})

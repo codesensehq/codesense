@@ -5847,7 +5847,7 @@ mod tests {
             let client_bytes = codesense_pty_core::protocol::client_hello(
                 hello.instance_id.clone(),
                 env!("CARGO_PKG_VERSION"),
-                &crate::commands::pty_layout::app_viewer(),
+                &crate::commands::pty_viewer::main_viewer(),
             )
             .frame()
             .unwrap()
@@ -6220,7 +6220,7 @@ mod tests {
             let client_bytes = codesense_pty_core::protocol::client_hello(
                 hello.instance_id.clone(),
                 env!("CARGO_PKG_VERSION"),
-                &crate::commands::pty_layout::app_viewer(),
+                &crate::commands::pty_viewer::main_viewer(),
             )
             .frame()
             .unwrap()
