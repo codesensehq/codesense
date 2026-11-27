@@ -3850,19 +3850,9 @@ mod tests {
         let seat = fn_source(workspace, "async fn ensure_seat_worktree(");
         assert!(!seat.contains("establish_worktree_story_link"));
 
+        // `no_caller_stamps_the_canonical_clone` (content_engine.rs) checks the writer and
+        // the stamping variants are gone.
         let engine = include_str!("content_engine.rs");
-        let production = squash(&crate::test_support::source_guard::production_text(engine));
-        for gone in [
-            "establish_worktree_story_link_with(",
-            "establish_worktree_story_link_unstamped(",
-            "stamps_story_branch(",
-            "write_story_branch(",
-        ] {
-            assert!(
-                !production.contains(gone),
-                "{gone} is still in content_engine.rs"
-            );
-        }
         let command = squash(fn_source(
             engine,
             "pub async fn establish_worktree_story_link(",

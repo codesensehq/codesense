@@ -1784,6 +1784,20 @@ mod tests {
     }
 
     #[test]
+    fn entry_at_finds_an_indexed_path_only() {
+        let mut cache = FrontmatterCache::new();
+        let entry = story_branch_entry(Some("feat/x"), None, None);
+        cache.upsert_entry(entry.path.clone(), entry);
+        assert_eq!(
+            cache
+                .entry_at(Path::new("/tmp/s.md"))
+                .and_then(CacheEntry::story_branch),
+            Some("feat/x")
+        );
+        assert!(cache.entry_at(Path::new("/tmp/other.md")).is_none());
+    }
+
+    #[test]
     fn story_branch_resolves_by_precedence() {
         // SW-OR-1b (AC-1): `branch` → `branch_name` → `dev_branch`, first
         // non-blank wins; a story authored with `branch` prefers it.

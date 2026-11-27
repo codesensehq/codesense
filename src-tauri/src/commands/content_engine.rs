@@ -5422,32 +5422,43 @@ pub async fn establish_worktree_story_link(
                 &story_id,
                 &source_repo,
             )?;
-            let from = recorded_story_branch(&app, Path::new(&story_source_path), &story_id);
+            let recorded = recorded_story_branch(&app, Path::new(&story_source_path), &story_id);
             Ok(EstablishLinkResult {
                 setup_complete,
-                reconciled: link_branch_report(from, Path::new(&code_repo_path)),
+                reconciled: recorded
+                    .and_then(|from| link_branch_report(from, Path::new(&code_repo_path))),
             })
         })
     })
     .await
 }
 
-/// The story's recorded branch from the frontmatter cache, by the precedence the open
-/// reconcile reads (`branch` → `branch_name` → `dev_branch`). The story is found by
-/// path, else by id; a miss is `None`.
+/// The story's recorded branch from the app's frontmatter cache; see
+/// [`story_branch_in`]. `None` when there is no cache.
 fn recorded_story_branch(
     app: &tauri::AppHandle,
     story_path: &Path,
     story_id: &str,
-) -> Option<String> {
+) -> Option<Option<String>> {
     use crate::install::frontmatter_cache::{FrontmatterCache, SharedFrontmatterCache};
     let shared = app.try_state::<SharedFrontmatterCache>()?;
-    let cache = FrontmatterCache::snapshot(&shared);
+    story_branch_in(&FrontmatterCache::snapshot(&shared), story_path, story_id)
+}
+
+/// The story's recorded branch, by the precedence the open reconcile reads (`branch` →
+/// `branch_name` → `dev_branch`): `Some(None)` for a story that records none. The story
+/// is found by path, else by id. A miss is `None`, so the link reports no drift for a
+/// story it can't find, as the open does.
+fn story_branch_in(
+    cache: &crate::install::frontmatter_cache::FrontmatterCache,
+    story_path: &Path,
+    story_id: &str,
+) -> Option<Option<String>> {
     let entry = match cache.entry_at(story_path) {
         Some(entry) => entry,
         None => cache.single_by_story_id(story_id).ok()?,
     };
-    entry.story_branch().map(str::to_string)
+    Some(entry.story_branch().map(str::to_string))
 }
 
 /// The branch drift a link reports: the story's recorded branch (`from`) against the
@@ -6592,6 +6603,42 @@ mod tests {
         );
         assert_eq!(porcelain(clone.path()), Vec::<String>::new());
         assert_eq!(std::fs::read_to_string(&story).unwrap(), DOC);
+    }
+
+    /// The link finds the story's recorded branch by path, else by id, and a story the
+    /// cache doesn't know is a miss rather than a story that records no branch.
+    #[test]
+    fn the_link_reads_the_recorded_branch_by_path_then_id() {
+        use crate::install::frontmatter_cache::FrontmatterCache;
+        let tmp = tempfile::tempdir().unwrap();
+        let epic = tmp.path().join("general").join("content").join("epic");
+        std::fs::create_dir_all(&epic).unwrap();
+        let story = epic.join("TR-1-a.md");
+        std::fs::write(
+            &story,
+            "---\ntype: story\nstory_id: TR-1\nstatus: ready\nsource_repo: local/fixture-api\nbranch_name: feat/intended\ndev_branch: feat/observed\n---\n# TR-1\n",
+        )
+        .unwrap();
+        let cold = epic.join("TR-2-b.md");
+        std::fs::write(
+            &cold,
+            "---\ntype: story\nstory_id: TR-2\nstatus: ready\nsource_repo: local/fixture-api\n---\n# TR-2\n",
+        )
+        .unwrap();
+        let shared = FrontmatterCache::shared(FrontmatterCache::new());
+        FrontmatterCache::ensure_story_indexed(&shared, &story, "TR-1").unwrap();
+        FrontmatterCache::ensure_story_indexed(&shared, &cold, "TR-2").unwrap();
+        let cache = FrontmatterCache::snapshot(&shared);
+
+        let intended = Some(Some("feat/intended".to_string()));
+        assert_eq!(story_branch_in(&cache, &story, ""), intended);
+        assert_eq!(
+            story_branch_in(&cache, &epic.join("moved.md"), "TR-1"),
+            intended
+        );
+        assert_eq!(story_branch_in(&cache, &cold, "TR-2"), Some(None));
+        assert_eq!(story_branch_in(&cache, &epic.join("gone.md"), ""), None);
+        assert_eq!(story_branch_in(&cache, &epic.join("gone.md"), "TR-9"), None);
     }
 
     /// No establish path can write the story doc: the writer, the seat check that gated

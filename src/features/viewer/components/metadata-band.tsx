@@ -413,9 +413,12 @@ export function MetadataBand({
   const canonicalBranch = model ? fieldScalarValue(model.fields, "branch") : null;
   const intendedBranch = model ? fieldScalarValue(model.fields, "branch_name") : null;
   const observedBranch = model ? fieldScalarValue(model.fields, "dev_branch") : null;
-  const [reconciledFile, setReconciledFile] = useState<string | null>(null);
+  // The mismatch a successful Reconcile hid: this file with this branch pair.
+  // Another file, or a doc whose branch fields change, shows the chip again.
+  const mismatchKey = JSON.stringify([filePath, intendedBranch, observedBranch]);
+  const [reconciledMismatch, setReconciledMismatch] = useState<string | null>(null);
   const branchMismatch =
-    reconciledFile !== filePath &&
+    reconciledMismatch !== mismatchKey &&
     !canonicalBranch &&
     !!intendedBranch &&
     !!observedBranch &&
@@ -441,8 +444,8 @@ export function MetadataBand({
         } else if (res.mode === "recreate") {
           toast.success(`Worktree rebuilt on ${intendedBranch}`);
         }
-        // The doc's branch fields are unchanged; hide the chip for this file.
-        setReconciledFile(filePath);
+        // The doc's branch fields are unchanged; hide the chip for this mismatch.
+        setReconciledMismatch(mismatchKey);
         editingRef.current = false;
         void load();
       } catch (e) {
@@ -464,7 +467,7 @@ export function MetadataBand({
         setReconciling(false);
       }
     },
-    [orgSlug, team, filePath, intendedBranch, reconciling, load],
+    [orgSlug, team, filePath, intendedBranch, mismatchKey, reconciling, load],
   );
 
   const handleReconcile = useCallback(() => void runReconcile(), [runReconcile]);

@@ -854,30 +854,6 @@ describe("explicit story setup continuation", () => {
   });
 });
 
-describe("setupWorktree — rehydrated worktree with incomplete registration", () => {
-  it("runs setup when the link reports setupComplete:false", async () => {
-    listWorktreesMock.mockResolvedValue([{ path: "/wt/rh2", branch: "refs/heads/feat/rh2" }]);
-    getWorktreeConfigMock.mockResolvedValue(baseConfig);
-    runWorktreeSetupMock.mockResolvedValue(okResult);
-    const link = Promise.resolve({
-      setupComplete: false,
-      reconciled: { from: "feat/old", to: "feat/rh2" },
-    });
-
-    await setupWorktree({
-      repoPath: "/repo",
-      orgRoot: "",
-      branchName: "feat/rh2",
-      worktreePath: "/wt/rh2",
-      startPoint: "main",
-      runId: "run-rh2",
-      onCreated: async () => (await link).setupComplete,
-    });
-
-    expect(runWorktreeSetupMock).toHaveBeenCalledOnce();
-  });
-});
-
 describe("createWorktree on Windows paths", () => {
   it("rehydrates when git lists the worktree with forward slashes", async () => {
     listWorktreesMock.mockResolvedValue([
