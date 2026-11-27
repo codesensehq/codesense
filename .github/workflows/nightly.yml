@@ -3,7 +3,8 @@ name: Nightly
 
 # The slow lanes no pull request waits on, each its own job on macos-15: the @nightly tile specs,
 # the pane harness on WebKit, the perf baseline and the tile load tests (tests/e2e-mock/README.md).
-# Dispatch with record to measure and upload a new macos-15 perf set instead of
+# A failed scheduled run on main opens or updates one issue labelled nightly; a dispatched run
+# never writes one. Dispatch with record to measure and upload a new macos-15 perf set instead of
 # comparing against it.
 on:
   schedule:
@@ -250,3 +251,31 @@ jobs:
             echo "load: no load tests yet" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
+  nightly-issue:
+    name: Track the nightly
+    # One issue for every red night, opened or updated only by a scheduled run on main.
+    needs: [tiles-nightly, pane-harness, perf, load]
+    if: ${{ !cancelled() && contains(needs.*.result, 'failure') && github.event_name == 'schedule' && github.ref == 'refs/heads/main' && !github.event.repository.fork }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    concurrency:
+      group: nightly-issue
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      issues: write # open, comment on and reopen the one nightly issue
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: Open or update the nightly issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NEEDS: ${{ toJSON(needs) }}
+        run: node scripts/nightly.mjs issue --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
