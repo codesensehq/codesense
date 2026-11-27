@@ -43,7 +43,7 @@ import {
   shouldRenderTabGrid,
   selectWorkspaceKey,
 } from "./viewer-store";
-import { buildPresetTree, setNodeSizes, type MosaicNode } from "@/features/viewer/lib/mosaic-tree";
+import { buildPresetTree, setNodeSizes, type MosaicNode } from "@/shared/tiling";
 import { seedTerminalTabs, installTerminalLayoutHarness } from "@/test/terminal-layout-harness";
 import type { Workspace } from "@/features/viewer/lib/cli-workspace/store/viewer-access";
 import * as commands from "@/tauri/commands";
@@ -286,9 +286,10 @@ describe("tab-grid sizes don't outlive what they size", () => {
     seedSizes();
     await useViewerStore.getState().removeTerminalTab(TEAM, "a", WS, { replace: false });
     const root = saved()?.root;
-    expect(
-      root?.kind === "split" && root.children.map((c) => c.kind === "leaf" && c.workspaceId),
-    ).toEqual(["b", "c"]);
+    expect(root?.kind === "split" && root.children.map((c) => c.kind === "leaf" && c.id)).toEqual([
+      "b",
+      "c",
+    ]);
     expect(root?.kind === "split" && root.sizes[0]).toBeCloseTo(37.5);
   });
 

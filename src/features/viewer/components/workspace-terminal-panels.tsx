@@ -53,7 +53,6 @@ import {
 } from "@/features/viewer/lib/cli-workspace/store/terminal-selectors";
 import type { PipelineStatus } from "@/shared/lib/pipeline-graph/types";
 import { ShellTerminalPanel } from "./shell-terminal-panel";
-import { MosaicView } from "./mosaic-view";
 import { MIN_CELL_WIDTH_PX, MIN_CELL_HEIGHT_PX } from "../lib/tab-grid-layout";
 import { TerminalTileChrome } from "./terminal-tile-chrome";
 import type { SelectTabOptions } from "./terminal-tab-bar";
@@ -66,7 +65,14 @@ import { WorktreeEditorSurface } from "./source-editor-inset";
 import { foregroundTilesFor, isSplitActive, epicForegroundTiles } from "../lib/foreground-tiles";
 import { getKindCapabilities } from "@/shared/lib/workspace-kind-capabilities";
 import { workspaceDisplayLabel } from "@/shared/lib/worktree";
-import { findLeafPath, placementChangesLayout, reconcilePresetTree } from "../lib/mosaic-tree";
+import {
+  EDGE_BANDS,
+  MosaicView,
+  findLeafPath,
+  type EdgeBand,
+  placementChangesLayout,
+  reconcilePresetTree,
+} from "@/shared/tiling";
 import { useTerminalLives } from "../hooks/use-active-workspace-terminal-tabs";
 import { type TerminalThemeConfig } from "./terminal-constants";
 import {
@@ -137,9 +143,10 @@ import {
   TERMINAL_GRID_DROPPABLE_ID,
   TILE_EDGE_SIDES,
   tileEdgePlacement,
+  tileFrameId,
   tileZoneId,
   unwrapDragWorkspaceId,
-  type TileDropSide,
+  type TileEdgeSide,
 } from "../lib/terminal-drag";
 
 /** SW-FX-52: stable empty ids array so the not-zoomed `hiddenTileIds` memo keeps
@@ -159,7 +166,7 @@ function useWorkspaceTabs(teamKey: string, workspaceId: string) {
 //
 // Renders the foreground as a MOSAIC TREE (SW-EW-17): a leaf is one workspace,
 // a depth-1 split is the flat columns/rows of SW-EW-3/4 (rendered through the
-// unchanged TerminalTileGroup), a nested split is the 2D mosaic. Membership is
+// unchanged TileGroup), a nested split is the 2D mosaic. Membership is
 // the open-workspace set (derived); the *arrangement* tree is reconciled to it
 // on read via `effectiveMosaicRoot`.
 //
@@ -1077,13 +1084,10 @@ function WorkspaceTileFrame({ workspace: ws, shared }: WorkspaceTileFrameProps) 
 // into a new adjacent pane. There is deliberately NO `center` zone: a tile owns
 // one workspace (a group of tabbed terminals), so you cannot drop a workspace
 // INTO another (no merge) — the center is an inert dead zone (the collision
-// detector returns no hit there, so a center release snaps back).
-const EDGE_ZONES: { side: TileDropSide; className: string }[] = [
-  { side: "left", className: "left-0 top-0 bottom-0 w-1/4" },
-  { side: "right", className: "right-0 top-0 bottom-0 w-1/4" },
-  { side: "top", className: "top-0 left-1/4 right-1/4 h-1/4" },
-  { side: "bottom", className: "bottom-0 left-1/4 right-1/4 h-1/4" },
-];
+// detector returns no hit there, so a center release snaps back). The bands'
+// boxes are the tiling kit's `EDGE_BANDS`, the table the collision reads too.
+
+const pct = (fraction: number) => `${fraction * 100}%`;
 
 function TileEdgeZones({
   workspaceId,
@@ -1102,41 +1106,53 @@ function TileEdgeZones({
   // SW-EW-33: also drop any edge whose placement wouldn't change the arrangement
   // (e.g. dropping a tile onto the edge it already occupies) — a highlighted zone
   // is always a real move.
-  const zones = EDGE_ZONES.filter((z) => !suppressedZoneIds.has(tileZoneId(workspaceId, z.side)));
-  if (zones.length === 0) return null;
+  const disabledSides = TILE_EDGE_SIDES.filter((side) =>
+    suppressedZoneIds.has(tileZoneId(workspaceId, side)),
+  );
+  if (disabledSides.length === TILE_EDGE_SIDES.length) return null;
+  return <TileZoneFrame workspaceId={workspaceId} disabledSides={disabledSides} />;
+}
+
+/** The overlay over one tile while a drag is on: one frame droppable spanning the tile, which
+ *  the collision detection reads (with the sides the tile doesn't offer), and a band per offered
+ *  side, which highlights and receives the drop. */
+function TileZoneFrame({
+  workspaceId,
+  disabledSides,
+}: {
+  workspaceId: string;
+  disabledSides: readonly TileEdgeSide[];
+}) {
+  const { setNodeRef } = useDroppable({
+    id: useCliDndId(tileFrameId(workspaceId)),
+    disabled: useCliDragStale(),
+    data: { disabledSides },
+  });
   return (
-    <div className="absolute inset-0 z-20" data-testid={`tile-zones-${workspaceId}`}>
-      {zones.map((z) => (
-        <TileEdgeZone
-          key={z.side}
-          workspaceId={workspaceId}
-          side={z.side}
-          className={z.className}
-        />
+    <div
+      ref={setNodeRef}
+      className="absolute inset-0 z-20"
+      data-testid={`tile-zones-${workspaceId}`}
+    >
+      {EDGE_BANDS.filter((band) => !disabledSides.includes(band.side)).map((band) => (
+        <TileEdgeZone key={band.side} workspaceId={workspaceId} band={band} />
       ))}
     </div>
   );
 }
 
-function TileEdgeZone({
-  workspaceId,
-  side,
-  className,
-}: {
-  workspaceId: string;
-  side: TileDropSide;
-  className: string;
-}) {
+function TileEdgeZone({ workspaceId, band }: { workspaceId: string; band: EdgeBand }) {
   const { setNodeRef, isOver } = useDroppable({
-    id: useCliDndId(tileZoneId(workspaceId, side)),
+    id: useCliDndId(tileZoneId(workspaceId, band.side)),
     disabled: useCliDragStale(),
   });
   return (
     <div
       ref={setNodeRef}
-      data-drop-side={side}
+      data-drop-side={band.side}
       data-drop-over={isOver ? "true" : "false"}
-      className={`absolute ${className} ${
+      style={{ left: pct(band.x), top: pct(band.y), width: pct(band.w), height: pct(band.h) }}
+      className={`absolute ${
         isOver
           ? "bg-[var(--cs-accent,#388bfd)]/30 outline outline-2 outline-[var(--cs-accent,#388bfd)]"
           : ""

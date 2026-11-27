@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { defaultForegroundLayout, effectiveMosaicRoot } from "@/shared/stores/viewer-store";
-import type { MosaicNode } from "./mosaic-tree";
+import type { MosaicNode } from "@/shared/tiling";
 
 /** Leaf widths of the real mosaic arrangement for `n` tiles in a region. */
 export function tileWidths(n: number, preset: "columns" | "grid", regionWidth: number): number[] {

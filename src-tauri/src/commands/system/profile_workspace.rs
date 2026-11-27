@@ -894,6 +894,43 @@ mod tests {
         }
     }
     #[test]
+    fn mosaic_leaves_in_either_key_form_round_trip_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        // A leaf saved before leaves carried an id, one saved with both keys, and an id-only
+        // leaf (an agent or a doc from any team): the layouts are opaque to the profile copy.
+        let root = serde_json::json!({
+            "kind": "split",
+            "axis": "row",
+            "sizes": [25, 25, 50],
+            "children": [
+                {"kind": "leaf", "workspaceId": "ws-1"},
+                {"kind": "leaf", "id": "ws-2", "workspaceId": "ws-2"},
+                {"kind": "leaf", "id": "agent:acme/widgets:ops/reviewer"}
+            ]
+        });
+        let layout =
+            serde_json::json!({"sizes": [], "direction": "row", "preset": "custom", "root": root});
+        let saved = serde_json::json!({"viewer": {
+            "foregroundLayout": {"acme/widgets:ops": layout},
+            "foregroundLayoutByRail": {"acme/widgets:ops": {"epic": layout}},
+            "terminalTabGridSizes": {"acme/widgets:ops|ws-1": {"preset": "rows", "root": root}}
+        }});
+        save(&path, "41", &saved.to_string()).unwrap();
+        let loaded: Value = serde_json::from_str(&load(&path, Some("41")).unwrap()).unwrap();
+        for field in [
+            "foregroundLayout",
+            "foregroundLayoutByRail",
+            "terminalTabGridSizes",
+        ] {
+            assert_eq!(
+                serde_json::to_string(&loaded["viewer"][field]).unwrap(),
+                serde_json::to_string(&saved["viewer"][field]).unwrap(),
+                "{field} changed on its way through the profile"
+            );
+        }
+    }
+    #[test]
     fn dashboard_prefs_are_scoped_to_their_profile() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("state.json");

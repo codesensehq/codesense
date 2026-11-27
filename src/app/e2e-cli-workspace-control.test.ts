@@ -76,7 +76,7 @@ describe("WebDriver CLI-workspace fixture control", () => {
     const ids = ["qh1-story-a", "qh1-story-b", "qh1-story-c"];
     const layout = createFixtureForegroundLayout(ids);
     const leaves = (node: NonNullable<typeof layout.root>): string[] =>
-      node.kind === "leaf" ? [node.workspaceId] : node.children.flatMap(leaves);
+      node.kind === "leaf" ? [node.id] : node.children.flatMap(leaves);
 
     expect(layout).toMatchObject({ preset: "columns", direction: "row" });
     expect(layout.root).not.toBeNull();

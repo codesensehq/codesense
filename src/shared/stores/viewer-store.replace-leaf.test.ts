@@ -50,7 +50,7 @@ import {
   installTerminalLayoutHarness,
 } from "@/test/terminal-layout-harness";
 import { foregroundTilesFor } from "@/features/viewer/lib/foreground-tiles";
-import { leafWorkspaceIds, findLeafPath } from "@/features/viewer/lib/mosaic-tree";
+import { leafWorkspaceIds, findLeafPath } from "@/shared/tiling";
 
 const TEAM = "acme:default";
 const A = "e-1-a";

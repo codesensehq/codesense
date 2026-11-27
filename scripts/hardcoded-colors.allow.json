@@ -464,7 +464,7 @@
     "#0d1117": 1,
     "#30363d": 2
   },
-  "src/features/viewer/components/terminal-tile-group.tsx": {
+  "src/shared/tiling/tile-group.tsx": {
     "#30363d": 1,
     "#388bfd": 1
   },

@@ -34,7 +34,7 @@ vi.mock("@/shared/lib/logger", () => ({
 }));
 
 import { useViewerStore, effectiveMosaicRoot, type ForegroundLayout } from "./viewer-store";
-import { leafWorkspaceIds, type MosaicNode } from "@/features/viewer/lib/mosaic-tree";
+import { leafWorkspaceIds, type MosaicNode } from "@/shared/tiling";
 
 const TEAM = "acme:default";
 const A = "e-1-a";
@@ -99,9 +99,10 @@ describe("placeWorkspaceTile — directional", () => {
   it("leaves expanded on a directional split", () => {
     useViewerStore.getState().expandWorkspace(TEAM, A);
     expect(useViewerStore.getState().cliExpanded).toBe(true);
+    // Below B: a drop right of B, where C already sits, would be a no-op.
     useViewerStore.getState().placeWorkspaceTile(TEAM, C, {
       targetWorkspaceId: B,
-      axis: "row",
+      axis: "column",
       side: "after",
     });
     expect(useViewerStore.getState().cliExpanded).toBe(false);
@@ -127,12 +128,12 @@ describe("setForegroundNodeSizes", () => {
           kind: "split",
           axis: "row",
           children: [
-            { kind: "leaf", workspaceId: A },
-            { kind: "leaf", workspaceId: B },
+            { kind: "leaf", id: A },
+            { kind: "leaf", id: B },
           ],
           sizes: [50, 50],
         },
-        { kind: "leaf", workspaceId: C },
+        { kind: "leaf", id: C },
       ],
       sizes: [60, 40],
     };
@@ -196,8 +197,8 @@ describe("effectiveMosaicRoot", () => {
         kind: "split",
         axis: "row",
         children: [
-          { kind: "leaf", workspaceId: A },
-          { kind: "leaf", workspaceId: B },
+          { kind: "leaf", id: A },
+          { kind: "leaf", id: B },
         ],
         sizes: [50, 50],
       },

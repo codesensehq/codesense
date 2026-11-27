@@ -245,10 +245,10 @@ describe("setters route through the slot (AC-5)", () => {
       selectedEpicDirName: { [TEAM]: "alpha" },
       railKeyByWorkspaceId: { [TEAM]: RAIL_INDEX },
     });
-    // Split A-2 to the right of A-1 (both in epic alpha).
+    // Split A-2 below A-1 (both in epic alpha; a drop beside it, where it already sits, is a no-op).
     useViewerStore
       .getState()
-      .placeWorkspaceTile(TEAM, "A-2", { targetWorkspaceId: "A-1", axis: "row", side: "after" });
+      .placeWorkspaceTile(TEAM, "A-2", { targetWorkspaceId: "A-1", axis: "column", side: "after" });
     const alpha = useViewerStore.getState().foregroundLayoutByRail[TEAM].alpha;
     expect(alpha.preset).toBe("custom");
     expect(alpha.root).not.toBeNull();

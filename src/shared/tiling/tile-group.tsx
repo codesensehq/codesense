@@ -4,7 +4,7 @@ import { useGroupRef, type Layout } from "react-resizable-panels";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 
 // ---------------------------------------------------------------------------
-// SW-EW-3 — TerminalTileGroup: the reusable split-terminal tiling primitive.
+// TileGroup: the reusable split tiling primitive (one group of a mosaic).
 //
 // Built on `react-resizable-panels` (via @/components/ui/resizable) so the
 // hard parts come for free: conditionally-rendered panels renormalize the
@@ -25,7 +25,7 @@ export interface TileRenderContext {
   index: number;
 }
 
-interface TerminalTileGroupProps<T extends TileLike> {
+interface TileGroupProps<T extends TileLike> {
   /** Ordered foreground tiles. One `ResizablePanel` is rendered per tile. */
   tiles: T[];
   direction: "row" | "column";
@@ -83,7 +83,7 @@ function sameLayout(a: number[], b: number[]): boolean {
   return a.length === b.length && a.every((v, i) => Math.abs(v - b[i]) <= LAYOUT_TOLERANCE_PCT);
 }
 
-export function TerminalTileGroup<T extends TileLike>({
+export function TileGroup<T extends TileLike>({
   tiles,
   direction,
   sizes,
@@ -94,7 +94,7 @@ export function TerminalTileGroup<T extends TileLike>({
   zoomedKey,
   disabled = false,
   resizeIdentity,
-}: TerminalTileGroupProps<T>) {
+}: TileGroupProps<T>) {
   const groupRef = useGroupRef();
   const reconciled = reconcileSizes(sizes, tiles.length);
   const layoutFor = (values: number[]): Layout =>

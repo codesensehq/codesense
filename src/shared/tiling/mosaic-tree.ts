@@ -3,7 +3,7 @@
 // SW-EW-17 — mosaic-tree: the pure, unit-tested layout model for 2D workspace
 // tiling. A `MosaicNode` is the UNIFIED representation of the foreground
 // arrangement: a single leaf is 1-up, a depth-1 split is SW-EW-3/SW-EW-4's flat
-// columns/rows (rendered through the unchanged flat TerminalTileGroup), and a
+// columns/rows (rendered through the unchanged flat TileGroup), and a
 // nested split is the 2D mosaic this story adds.
 //
 // Membership (which workspaces are foreground) stays DERIVED from
@@ -13,16 +13,25 @@
 // split/move/collapse logic is exhaustively testable in isolation.
 // ---------------------------------------------------------------------------
 
-import type { LayoutPreset } from "@/shared/stores/viewer-store";
+/** The pickable arrangement presets, shared by the workspace mosaic and a workspace's tab grid. */
+export type LayoutPreset = "columns" | "rows" | "grid";
 
 export type Axis = "row" | "column";
 export type SplitSide = "before" | "after";
 
-/** A leaf names what fills its region: a workspace in the workspace mosaic, a
- *  terminal tab in a workspace's tab grid. */
+/** A leaf names what fills its region by an opaque id: a workspace in the workspace mosaic, a
+ *  terminal tab in a workspace's tab grid, or any team's agent or doc. The kit never reads into
+ *  it. */
 export type MosaicNode =
-  | { kind: "leaf"; workspaceId: string }
+  | { kind: "leaf"; id: string }
   | { kind: "split"; axis: Axis; children: MosaicNode[]; sizes: number[] };
+
+type MosaicLeaf = Extract<MosaicNode, { kind: "leaf" }>;
+
+/** A leaf as it is saved: both keys, so a build that reads only `workspaceId` still opens it. */
+export type SavedMosaicNode =
+  | { kind: "leaf"; id: string; workspaceId: string }
+  | { kind: "split"; axis: Axis; children: SavedMosaicNode[]; sizes: number[] };
 
 /** A directional placement target: split `targetWorkspaceId`'s region along
  *  `axis`, putting the new/moved tile `before` or `after` it. */
@@ -32,16 +41,27 @@ export interface TilePlacementTarget {
   side: SplitSide;
 }
 
-const leaf = (workspaceId: string): MosaicNode => ({ kind: "leaf", workspaceId });
+const leaf = (id: string): MosaicNode => ({ kind: "leaf", id });
 
-const evenSizes = (n: number): number[] => Array.from({ length: n }, () => 100 / n);
+/** The one reader of a leaf's id; a split has none. */
+export function leafId(node: MosaicLeaf): string;
+export function leafId(node: MosaicNode): string | null;
+export function leafId(node: MosaicNode): string | null {
+  return node.kind === "leaf" ? node.id : null;
+}
+
+const evenSplit = (n: number): number[] => Array.from({ length: n }, () => 100 / n);
+
+/** Two size lists that differ by no more than float noise. */
+const sameSizes = (a: number[], b: number[]) =>
+  a.length === b.length && a.every((v, i) => Math.abs(v - b[i]) < 1e-9);
 
 /** Normalize a sizes array to sum 100 (defends against rounding/removal drift).
  *  An empty or all-zero array falls back to an even split. */
 function normalizeSizes(sizes: number[]): number[] {
   const sum = sizes.reduce((a, b) => a + b, 0);
   if (sizes.length === 0) return [];
-  if (sum <= 0) return evenSizes(sizes.length);
+  if (sum <= 0) return evenSplit(sizes.length);
   return sizes.map((s) => (s / sum) * 100);
 }
 
@@ -60,14 +80,14 @@ export function seedTreeFromFlat(
   const seed =
     sizes && sizes.length === workspaceIds.length
       ? normalizeSizes(sizes)
-      : evenSizes(workspaceIds.length);
+      : evenSplit(workspaceIds.length);
   return { kind: "split", axis: direction, children: workspaceIds.map(leaf), sizes: seed };
 }
 
 /** In-order leaf workspace ids (left→right / top→bottom render order). */
 export function leafWorkspaceIds(root: MosaicNode | null): string[] {
   if (!root) return [];
-  if (root.kind === "leaf") return [root.workspaceId];
+  if (root.kind === "leaf") return [leafId(root)];
   return root.children.flatMap(leafWorkspaceIds);
 }
 
@@ -75,7 +95,7 @@ export function leafWorkspaceIds(root: MosaicNode | null): string[] {
  *  root that IS the target has the empty path. */
 export function findLeafPath(root: MosaicNode | null, workspaceId: string): number[] | null {
   if (!root) return null;
-  if (root.kind === "leaf") return root.workspaceId === workspaceId ? [] : null;
+  if (root.kind === "leaf") return leafId(root) === workspaceId ? [] : null;
   for (let i = 0; i < root.children.length; i++) {
     const sub = findLeafPath(root.children[i], workspaceId);
     if (sub) return [i, ...sub];
@@ -91,6 +111,7 @@ function replaceAt(node: MosaicNode, path: number[], next: MosaicNode | null): M
   const [head, ...rest] = path;
   const child = node.children[head];
   const replaced = replaceAt(child, rest, next);
+  if (replaced === child) return node;
 
   const children: MosaicNode[] = [];
   const sizes: number[] = [];
@@ -194,8 +215,7 @@ export function sameMosaicStructure(a: MosaicNode | null, b: MosaicNode | null):
   if (a === b) return true;
   if (a === null || b === null) return false;
   if (a.kind !== b.kind) return false;
-  if (a.kind === "leaf")
-    return a.workspaceId === (b as Extract<MosaicNode, { kind: "leaf" }>).workspaceId;
+  if (a.kind === "leaf") return leafId(a) === leafId(b as MosaicLeaf);
   const bs = b as Extract<MosaicNode, { kind: "split" }>;
   if (a.axis !== bs.axis || a.children.length !== bs.children.length) return false;
   return a.children.every((c, i) => sameMosaicStructure(c, bs.children[i]));
@@ -212,7 +232,7 @@ export function replaceLeafWorkspaceId(
   oldWorkspaceId: string,
   newWorkspaceId: string,
 ): MosaicNode | null {
-  if (!root) return root;
+  if (!root || oldWorkspaceId === newWorkspaceId) return root;
   const path = findLeafPath(root, oldWorkspaceId);
   if (!path) return root; // absent → unchanged (defensive; F is normally the focused leaf)
   return replaceAt(root, path, leaf(newWorkspaceId));
@@ -239,7 +259,8 @@ export function placementChangesLayout(
 }
 
 /** On-screen rearrange: prune the leaf, then re-split at the target. A move onto
- *  itself (or onto a now-absent target) is a no-op. */
+ *  itself, onto a now-absent target or onto the edge it already holds is a no-op
+ *  and returns `root`. */
 export function moveLeaf(
   root: MosaicNode,
   workspaceId: string,
@@ -249,19 +270,22 @@ export function moveLeaf(
   const pruned = pruneLeaf(root, workspaceId);
   if (!pruned) return root;
   if (!findLeafPath(pruned, target.targetWorkspaceId)) return root;
-  return splitAt(pruned, target.targetWorkspaceId, target.axis, target.side, workspaceId);
+  const next = splitAt(pruned, target.targetWorkspaceId, target.axis, target.side, workspaceId);
+  return sameMosaicStructure(next, root) ? root : next;
 }
 
 /** Append a workspace opened NOT via drop (e.g. from the nav): root null → leaf;
  *  root a leaf → a row split of [existing, new]; root a split → push a child and
- *  renormalize evenly. Matches the pre-EW-17 "append a tile" behavior. */
+ *  renormalize evenly. Matches the pre-EW-17 "append a tile" behavior. An id
+ *  already placed returns `root`. */
 export function appendLeaf(root: MosaicNode | null, workspaceId: string): MosaicNode {
   if (!root) return leaf(workspaceId);
+  if (findLeafPath(root, workspaceId)) return root;
   if (root.kind === "leaf") {
     return { kind: "split", axis: "row", children: [root, leaf(workspaceId)], sizes: [50, 50] };
   }
   const children = [...root.children, leaf(workspaceId)];
-  return { kind: "split", axis: root.axis, children, sizes: evenSizes(children.length) };
+  return { kind: "split", axis: root.axis, children, sizes: evenSplit(children.length) };
 }
 
 /** Reconcile arrangement against the live foreground set: prune leaves whose
@@ -304,19 +328,57 @@ export function dedupeLeaves(root: MosaicNode | null): MosaicNode | null {
 }
 
 /** Commit new sizes for the split node at `path` ([] = root). No-ops on a leaf,
- *  a bad path, or a length mismatch (defends against a stale commit). */
+ *  a bad path, a length mismatch (defends against a stale commit) or sizes that
+ *  equal the current ones once normalized; a no-op returns `root`. */
 export function setNodeSizes(root: MosaicNode, path: number[], sizes: number[]): MosaicNode {
-  if (path.length === 0) {
-    if (root.kind !== "split" || sizes.length !== root.children.length) return root;
-    return { ...root, sizes: normalizeSizes(sizes) };
+  const target = nodeAt(root, path);
+  if (target?.kind !== "split" || sizes.length !== target.children.length) return root;
+  const next = normalizeSizes(sizes);
+  return sameSizes(next, target.sizes) ? root : withNodeAt(root, path, { ...target, sizes: next });
+}
+
+/** Put `next` at `path`, keeping every size and every subtree off the path. */
+function withNodeAt(node: MosaicNode, path: number[], next: MosaicNode): MosaicNode {
+  if (path.length === 0) return next;
+  if (node.kind !== "split") return node;
+  const [head, ...rest] = path;
+  const child = node.children[head];
+  if (!child) return node;
+  const replaced = withNodeAt(child, rest, next);
+  if (replaced === child) return node;
+  const children = [...node.children];
+  children[head] = replaced;
+  return { ...node, children };
+}
+
+/** Exchange two leaves' places, keeping every size. One id twice, or an absent
+ *  id, returns `root`. */
+export function swapLeaves(root: MosaicNode, a: string, b: string): MosaicNode {
+  if (a === b) return root;
+  const pathA = findLeafPath(root, a);
+  const pathB = findLeafPath(root, b);
+  if (!pathA || !pathB) return root;
+  const leafA = nodeAt(root, pathA)!;
+  const leafB = nodeAt(root, pathB)!;
+  return withNodeAt(withNodeAt(root, pathA, leafB), pathB, leafA);
+}
+
+/** Even out the split at `path`, or every split when there is no `path`. An
+ *  already even split, or a `path` that isn't a split, returns its input. */
+export function evenSizes(root: MosaicNode, path?: number[]): MosaicNode {
+  if (path) {
+    const target = nodeAt(root, path);
+    if (!target || target.kind !== "split") return root;
+    const even = evenSplit(target.children.length);
+    if (sameSizes(even, target.sizes)) return root;
+    return withNodeAt(root, path, { ...target, sizes: even });
   }
   if (root.kind !== "split") return root;
-  const [head, ...rest] = path;
-  const child = root.children[head];
-  if (!child) return root;
-  const children = [...root.children];
-  children[head] = setNodeSizes(child, rest, sizes);
-  return { ...root, children };
+  const children = root.children.map((c) => evenSizes(c));
+  const even = evenSplit(children.length);
+  const childrenKept = children.every((c, i) => c === root.children[i]);
+  if (childrenKept && sameSizes(even, root.sizes)) return root;
+  return { ...root, children: childrenKept ? root.children : children, sizes: even };
 }
 
 /** The balanced ⌈√N⌉ column/row split for `n` tiles — the ONE definition of "how
@@ -381,7 +443,7 @@ export function buildPresetTree(
   if (cols === 1) return seedTreeFromFlat(ids, "column");
   const rows: MosaicNode[] = [];
   for (let i = 0; i < n; i += cols) rows.push(seedTreeFromFlat(ids.slice(i, i + cols), "row")!);
-  return { kind: "split", axis: "column", children: rows, sizes: evenSizes(rows.length) };
+  return { kind: "split", axis: "column", children: rows, sizes: evenSplit(rows.length) };
 }
 
 /** The `grid` preset: a balanced ⌈√N⌉ arrangement — a column of rows. Degenerate
@@ -418,21 +480,55 @@ export function reconcilePresetTree(
   return sameMosaicStructure(kept, even) ? kept : even;
 }
 
+const nonEmpty = (v: unknown): v is string => typeof v === "string" && v.length > 0;
+
 /** A mosaic node read back from saved state, or null when it isn't one (a split
- *  needs ≥2 children, one finite size per child). */
+ *  needs ≥2 children, one finite size per child). A leaf reads `workspaceId`, then
+ *  `id`: `workspaceId` wins when both are set, since a build that writes only it
+ *  may have changed the leaf since. A leaf with neither is pruned: its split keeps
+ *  the other children (their sizes renormalized), or becomes its one survivor. A
+ *  split left with no children is pruned the same way from its parent. */
 export function parseMosaicNode(value: unknown): MosaicNode | null {
+  const parsed = parseSavedNode(value);
+  return parsed === PRUNED ? null : parsed;
+}
+
+/** A node pruned away whole: a keyless leaf, or a split holding only those. */
+const PRUNED = Symbol("pruned");
+
+function parseSavedNode(value: unknown): MosaicNode | typeof PRUNED | null {
   if (!value || typeof value !== "object") return null;
   const v = value as Record<string, unknown>;
-  if (v.kind === "leaf") return typeof v.workspaceId === "string" ? leaf(v.workspaceId) : null;
+  if (v.kind === "leaf") {
+    const id = nonEmpty(v.workspaceId) ? v.workspaceId : v.id;
+    return nonEmpty(id) ? leaf(id) : PRUNED;
+  }
   if (v.kind !== "split" || (v.axis !== "row" && v.axis !== "column")) return null;
   if (!Array.isArray(v.children) || !Array.isArray(v.sizes)) return null;
   if (v.children.length < 2 || v.sizes.length !== v.children.length) return null;
   if (!v.sizes.every((n) => typeof n === "number" && Number.isFinite(n) && n >= 0)) return null;
   const children: MosaicNode[] = [];
-  for (const c of v.children) {
-    const child = parseMosaicNode(c);
-    if (!child) return null;
+  const sizes: number[] = [];
+  for (const [i, c] of v.children.entries()) {
+    const child = parseSavedNode(c);
+    if (child === null) return null;
+    if (child === PRUNED) continue;
     children.push(child);
+    sizes.push(v.sizes[i] as number);
   }
-  return { kind: "split", axis: v.axis, children, sizes: normalizeSizes(v.sizes as number[]) };
+  if (children.length === 0) return PRUNED;
+  if (children.length === 1) return children[0];
+  return { kind: "split", axis: v.axis, children, sizes: normalizeSizes(sizes) };
+}
+
+/** The saved form of a tree: every leaf carries both `id` and `workspaceId`. */
+export function serializeMosaicNode(node: MosaicNode | null): SavedMosaicNode | null {
+  if (!node) return null;
+  if (node.kind === "leaf") return { kind: "leaf", id: leafId(node), workspaceId: leafId(node) };
+  return {
+    kind: "split",
+    axis: node.axis,
+    children: node.children.map((c) => serializeMosaicNode(c)!),
+    sizes: node.sizes,
+  };
 }

@@ -22,7 +22,7 @@ import {
   placementChangesLayout,
 } from "./mosaic-tree";
 
-const leaf = (id: string): MosaicNode => ({ kind: "leaf", workspaceId: id });
+const leaf = (id: string): MosaicNode => ({ kind: "leaf", id: id });
 
 describe("seedTreeFromFlat", () => {
   it("0 ids → null", () => {

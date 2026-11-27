@@ -11,7 +11,7 @@ import { PERSISTENT_TOAST_DROP_PX, TOAST_CHIP_HEIGHT_PX } from "@/components/ui/
 import { TERMINAL_FONT_PX_MAP } from "@/shared/lib/font-sizes";
 import { defaultForegroundLayout, effectiveMosaicRoot } from "@/shared/stores/viewer-store";
 
-import type { MosaicNode } from "./mosaic-tree";
+import type { MosaicNode } from "@/shared/tiling";
 
 // Toasts against the real tile arrangement. Each tile carries its controls (tabs,
 // ×, menus) in a chrome bar along its top edge; a toast must never land on one.

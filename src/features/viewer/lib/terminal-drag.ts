@@ -10,6 +10,8 @@
 /** dnd-kit droppable id for the terminal grid. */
 export const TERMINAL_GRID_DROPPABLE_ID = "terminal-grid";
 
+import { TILE_EDGE_SIDES, type TileDropSide, type TileEdgeSide } from "@/shared/tiling";
+
 type DndId = string | number | null | undefined;
 
 // ---------------------------------------------------------------------------
@@ -60,12 +62,8 @@ export function dragEndToReopen(activeId: DndId, overId: DndId): string | null {
 // resolver stays pure (no geometry, no store) like `dragEndToReopen`.
 // ---------------------------------------------------------------------------
 
-export type TileDropSide = "left" | "right" | "top" | "bottom" | "center";
-
-/** The four edge sides (excludes the focus-only `center`) — the only sides that
- *  produce a split. */
-export const TILE_EDGE_SIDES = ["left", "right", "top", "bottom"] as const;
-export type TileEdgeSide = (typeof TILE_EDGE_SIDES)[number];
+// The sides and their bands are the tiling kit's; the drag ids built on them stay here.
+export { TILE_EDGE_SIDES, type TileDropSide, type TileEdgeSide };
 
 const TILE_ZONE_PREFIX = "tile:";
 const TILE_SIDES: readonly TileDropSide[] = [...TILE_EDGE_SIDES, "center"];
@@ -87,6 +85,31 @@ export function tileEdgePlacement(side: TileEdgeSide): {
 /** Build the dnd-kit droppable id for one edge zone of a tile. */
 export function tileZoneId(workspaceId: string, side: TileDropSide): string {
   return `${TILE_ZONE_PREFIX}${workspaceId}:${side}`;
+}
+
+const TILE_FRAME_PREFIX = "tile-frame:";
+
+/** The droppable spanning a whole tile while a drag is on. It carries the tile's disabled sides,
+ *  so the collision detection can resolve every band from one rect per tile. */
+export function tileFrameId(workspaceId: string): string {
+  return `${TILE_FRAME_PREFIX}${workspaceId}`;
+}
+
+/** Whether a droppable id is a tile frame, a stale grid's privately wrapped ones included. Frames
+ *  only report geometry: none is ever a drop target. */
+export function isTileFrameDndId(id: DndId): boolean {
+  return (
+    typeof id === "string" &&
+    (id.startsWith(TILE_FRAME_PREFIX) || id.includes(`:${TILE_FRAME_PREFIX}`))
+  );
+}
+
+/** The tile behind a frame droppable's id, or null for any other id (a stale grid's private ids
+ *  included). */
+export function parseTileFrameId(id: DndId): string | null {
+  return typeof id === "string" && id.startsWith(TILE_FRAME_PREFIX)
+    ? id.slice(TILE_FRAME_PREFIX.length)
+    : null;
 }
 
 /** Parse a tile-zone id back into `{ workspaceId, side }`, or null if it isn't

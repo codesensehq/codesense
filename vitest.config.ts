@@ -74,6 +74,7 @@ export default defineConfig({
       reportsDirectory: "./coverage",
       include: [
         "src/shared/stores/**",
+        "src/shared/tiling/**/*.{ts,tsx}",
         "src/tauri/**",
         "src/shared/lib/**",
         "src/lib/**",
@@ -92,6 +93,13 @@ export default defineConfig({
       // Ratcheted 2026-04-04 — stores at 95/76/93/96 actual
       thresholds: {
         "src/shared/stores/**": {
+          statements: 90,
+          branches: 70,
+          functions: 80,
+          lines: 90,
+        },
+        // The tiling kit holds the stores' floor.
+        "src/shared/tiling/**": {
           statements: 90,
           branches: 70,
           functions: 80,

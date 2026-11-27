@@ -234,8 +234,8 @@ describe("foregroundLayout — expanded (global, D68) + preset", () => {
             kind: "split",
             axis: "row",
             children: [
-              { kind: "leaf", workspaceId: WS_A },
-              { kind: "leaf", workspaceId: WS_B },
+              { kind: "leaf", id: WS_A },
+              { kind: "leaf", id: WS_B },
             ],
             sizes: [50, 50],
           },
