@@ -210,10 +210,18 @@ describe("queue and lifecycle", () => {
 
 describe("progress", () => {
   it("replaces in place by key and counts 6 s from the last update", () => {
-    postStatusLine({ key: "resume", text: "Resuming release-notes · 1 of 4 tiles", kind: "progress" });
+    postStatusLine({
+      key: "resume",
+      text: "Resuming release-notes · 1 of 4 tiles",
+      kind: "progress",
+    });
     postStatusLine({ text: "Queued", kind: "announcement" });
     vi.advanceTimersByTime(5000);
-    postStatusLine({ key: "resume", text: "Resuming release-notes · 3 of 4 tiles", kind: "progress" });
+    postStatusLine({
+      key: "resume",
+      text: "Resuming release-notes · 3 of 4 tiles",
+      kind: "progress",
+    });
     expect(shown()).toBe("Resuming release-notes · 3 of 4 tiles");
     vi.advanceTimersByTime(STATUS_LINE_MS - 1);
     expect(shown()).toBe("Resuming release-notes · 3 of 4 tiles");
