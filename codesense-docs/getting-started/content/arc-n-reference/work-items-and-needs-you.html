@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="cs:type" content="content" />
+    <meta name="codesense:icon" content="git-branch" />
+    <title>CodeSense — Work items, launchers and what needs you</title>
+    <link rel="stylesheet" href="../_shared/cs-docs.css" />
+    <script src="../_shared/nav.js" defer></script>
+  </head>
+  <body class="cs-page cs-docs" data-page="arc-n-reference/work-items-and-needs-you">
+    <nav class="cs-topnav" aria-label="CodeSense docs navigation"></nav>
+    <main class="cs-main">
+      <section data-hero data-search="Work items launched_by needs-you set reference" id="hero">
+        <p><span class="cs-docs-chip" data-arc="N">Arc N · Reference</span></p>
+        <h1>Work items, launchers and what needs you</h1>
+        <p>
+          Every agent session belongs to one piece of work, records who launched it, and anything
+          that waits on you is counted once, from one set.
+        </p>
+      </section>
+
+      <section data-search="Work item wi_ id mint inherit restore shell" id="work-items">
+        <h2>Work items</h2>
+        <p>
+          A <strong>work item</strong> is the one piece of work a lead launch starts. Its id is
+          <code>wi_</code> followed by 16 lowercase hex digits, for example
+          <code>wi_3f9a0c41d27e88b5</code>. Every session below the lead shares it.
+        </p>
+        <ul>
+          <li>
+            An agent launched by a person, the Foreman, a routine, or an agent outside any work
+            item gets a new work item, and so does each routine run.
+          </li>
+          <li>An agent launched by a session that has a work item joins that work item.</li>
+          <li>A session restored after a restart keeps the work item it had and never gets a new one.</li>
+          <li>A plain shell never has a work item, even when an agent opens it.</li>
+        </ul>
+        <p>
+          The work item is written on the session record, so <code>list_sessions</code> and the agent
+          tree can group by it. It is also written on the record of a context worktree that a launch
+          creates, together with its lead's session and agent. A worktree that is reused keeps what it
+          has.
+        </p>
+      </section>
+
+      <section data-search="launched_by launchedBy restoredBy routine launcher values" id="launched-by">
+        <h2>What <code>launched_by</code> records</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Launch</th>
+              <th><code>launched_by</code></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>A person, from the launch sheet, ⌘K or a dashboard</td>
+              <td>empty</td>
+            </tr>
+            <tr>
+              <td>The Foreman, or a durable dispatch</td>
+              <td>empty (the session gets its own work item)</td>
+            </tr>
+            <tr>
+              <td>An agent launching a worker</td>
+              <td>the launching session</td>
+            </tr>
+            <tr>
+              <td>An agent opening a tab with <code>open_terminal_tab</code></td>
+              <td>the calling session (a launcher already recorded is never overwritten)</td>
+            </tr>
+            <tr>
+              <td>A routine run</td>
+              <td><code>routine:&lt;key&gt;</code>, the same id its queue uses</td>
+            </tr>
+            <tr>
+              <td>A restore after a restart</td>
+              <td>the original launcher, unchanged; <code>restoredBy</code> says what restored it</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          A filter on <code>launched_by</code> for a routine matches both <code>routine:&lt;key&gt;</code>
+          and a record saved in the older <code>routine &lt;name&gt;</code> form.
+        </p>
+      </section>
+
+      <section data-search="Needs you set question permission merge capped failed FYI" id="needs-you-set">
+        <h2>The needs-you set</h2>
+        <p>
+          Everything that waits on you is one set, derived in one place. Each item has a
+          <code>kind</code>:
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Kind</th>
+              <th>When</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>question</code></td>
+              <td>An unread needs-you Inbox card that is not a merge card, or an agent's open question</td>
+            </tr>
+            <tr>
+              <td><code>permission</code></td>
+              <td>An agent waiting on a permission ask</td>
+            </tr>
+            <tr>
+              <td><code>merge</code></td>
+              <td>An Inbox card that names a PR and offers to merge it or send it back</td>
+            </tr>
+            <tr>
+              <td><code>capped</code></td>
+              <td>An agent paused at a spend cap</td>
+            </tr>
+            <tr>
+              <td><code>failed</code></td>
+              <td>An agent that failed or crashed</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          FYI cards never count, and neither do read, withdrawn or archived cards. Each item also
+          carries the <code>session</code> it is about and its <code>org</code>, <code>team</code> and
+          <code>workItem</code>, so a team's or a work item's view is the set narrowed by those fields.
+        </p>
+      </section>
+
+      <section data-search="needsYou topic codesense_overview inbox per sender runsAwaiting" id="reading">
+        <h2>Where to read it</h2>
+        <ul>
+          <li>
+            The live <code>needsYou</code> topic publishes the set, scoped by team, and updates on the
+            same events that change it, so there is nothing to poll.
+          </li>
+          <li>
+            <code>codesense_overview</code> has a <code>needsYou</code> section with its
+            <code>total</code>, its count <code>byKind</code> and its items.
+          </li>
+          <li>
+            The Inbox's counts row counts the set's cards per sender; a sender with none drops
+            out.
+          </li>
+          <li>
+            Routine runs that ended waiting on you are not items of the set. The overview reports them
+            as <code>runsAwaiting</code>, and the Schedule row reads "N runs waiting".
+          </li>
+        </ul>
+      </section>
+
+      <p><a href="glossary.html">Back to the glossary</a></p>
+    </main>
+  </body>
+</html>
