@@ -93,7 +93,9 @@ jobs:
       - name: Install WebKit
         run: pnpm exec playwright install webkit
       - name: Run the pane harness
-        run: pnpm run test:pane-harness -- --project=webkit
+        # Not through the package script with a `--` separator: pnpm passes the `--` on, and
+        # Playwright then reads --project=webkit as a file filter that matches nothing.
+        run: pnpm exec playwright test -c playwright.pane-harness.config.ts --project=webkit
       - name: Upload failure traces
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

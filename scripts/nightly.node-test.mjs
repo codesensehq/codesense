@@ -177,3 +177,19 @@ test("the issue CLI does nothing when no lane failed, and refuses without a run 
   assert.match(quiet.stdout, /nightly: no lane failed/);
   assert.equal(spawnSync(process.execPath, [script, "issue"], { env }).status, 1);
 });
+
+// pnpm 10 hands a literal `--` to the script, and Playwright then reads every later flag as a
+// file filter: `pnpm run test:pane-harness -- --project=webkit` finds no tests.
+test("no nightly step passes a literal -- through pnpm run", () => {
+  const workflow = fs.readFileSync(
+    new URL("../.github/workflows/nightly.yml", import.meta.url),
+    "utf8",
+  );
+  assert.equal(workflow.match(/pnpm run [\w:-]+ -- .*/)?.[0], undefined);
+  assert.ok(
+    workflow.includes(
+      "pnpm exec playwright test -c playwright.pane-harness.config.ts --project=webkit",
+    ),
+    "the pane-harness lane runs only the webkit project",
+  );
+});

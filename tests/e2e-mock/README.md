@@ -78,7 +78,8 @@ job on `macos-15`:
 
 - **Nightly tile specs**: the `@nightly` tile specs on WebKit. With none yet, the
   summary says so.
-- **Pane harness (WebKit)**: `pnpm run test:pane-harness -- --project=webkit`.
+- **Pane harness (WebKit)**:
+  `pnpm exec playwright test -c playwright.pane-harness.config.ts --project=webkit`.
 - **Perf baseline**: `perf-baseline.spec.ts` against a production build of the
   mock, then `scripts/perf-baseline.mjs` against the `runner: macos-15` set of
   `tests/fixtures/perf-baseline.json`, never a set measured on another machine.
