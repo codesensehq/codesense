@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>CodeSense — Status line</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="../_shared/cs-docs.css" />
+    <script src="../_shared/nav.js" defer></script>
+    <style>
+      .cs-docs-arcA {
+        max-width: 920px;
+        padding-bottom: var(--cs-docs-space-7);
+      }
+      .cs-docs-arcA h1 {
+        font-size: clamp(30px, 4vw, 44px);
+        line-height: 1.08;
+        letter-spacing: -0.025em;
+        font-weight: 600;
+        margin: 20px 0 var(--cs-docs-space-3);
+      }
+      .cs-docs-arcA .lede {
+        font-size: 16px;
+        line-height: 1.6;
+        max-width: 62ch;
+        margin: 0 0 var(--cs-docs-space-5);
+      }
+      .cs-docs-arcA h2 {
+        font-size: var(--cs-docs-text-xl);
+        margin: var(--cs-docs-space-6) 0 var(--cs-docs-space-3);
+        font-weight: 600;
+      }
+      .cs-docs-arcA p,
+      .cs-docs-arcA li {
+        line-height: 1.55;
+        max-width: 68ch;
+      }
+      .cs-docs-arcA ul {
+        padding-left: 1.1em;
+      }
+      .cs-docs-arcA li {
+        margin: 8px 0;
+      }
+
+      /* The line as it shows in the title bar: static, no animation. */
+      .cs-docs-arcA__bar {
+        display: flex;
+        justify-content: flex-end;
+        border: 1px solid var(--cs-border);
+        border-radius: var(--cs-docs-radius-lg);
+        padding: 10px 14px;
+        background: color-mix(in oklab, var(--cs-surface) 85%, transparent);
+        margin: 0 0 var(--cs-docs-space-3);
+      }
+      .cs-docs-arcA__line {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        height: 26px;
+        padding: 0 6px 0 10px;
+        border-radius: 6px;
+        background: var(--cs-raised);
+        font-size: 13px;
+        white-space: nowrap;
+      }
+      .cs-docs-arcA__line b {
+        color: var(--cs-accent);
+      }
+      .cs-docs-arcA__line kbd {
+        font-size: 10px;
+        border: 1px solid var(--cs-border);
+        border-radius: 4px;
+        padding: 0 4px;
+      }
+    </style>
+  </head>
+  <body class="cs-page cs-docs" data-page="arc-a-first-touch/status-line">
+    <nav class="cs-topnav" aria-label="CodeSense docs navigation"></nav>
+
+    <main class="cs-main cs-docs-arcA">
+      <section data-hero data-search="Status line title bar undo" id="hero">
+        <h1>Status line</h1>
+        <p class="lede">
+          The status line is one line on the right of the title bar where CodeSense and your
+          agents say what they just did: an agent opened a file, a layout change you can undo, a
+          workspace that is still loading. You read it there, act on it there, and it goes away
+          on its own.
+        </p>
+
+        <figure>
+          <div class="cs-docs-arcA__bar" aria-hidden="true">
+            <span class="cs-docs-arcA__line"
+              >design moved critique-log.html beside design <b>Undo</b><kbd>⌥⌘Z</kbd></span
+            >
+          </div>
+          <div class="cs-docs-arcA__bar" aria-hidden="true">
+            <span class="cs-docs-arcA__line"
+              >design opened critique-log.html <b>Show</b> <b>+1 waiting ▾</b></span
+            >
+          </div>
+          <figcaption>
+            An Undo line, then an offer with a second offer waiting behind it. With nothing to
+            say, the title bar shows no status line at all.
+          </figcaption>
+        </figure>
+      </section>
+
+      <section data-search="What shows in the status line" id="what">
+        <h2>What shows there</h2>
+        <ul>
+          <li>
+            <strong>Undo lines</strong>: something just changed and you can take it back, with
+            the key that undoes it shown after the button.
+          </li>
+          <li>
+            <strong>Offers</strong>: an agent did something you may want to look at, with a
+            button such as <em>Show</em>.
+          </li>
+          <li>
+            <strong>Progress</strong>: a line that updates in place while something loads, then
+            ends with its final line.
+          </li>
+          <li>
+            <strong>Announcements and notes</strong>: a short message such as
+            <em>Nothing to undo</em>. These show one after another, in the order they came.
+          </li>
+        </ul>
+      </section>
+
+      <section data-search="How long a status line shows pause hover" id="how-long">
+        <h2>How long it shows</h2>
+        <p>
+          A line shows for 6 seconds; an Undo line shows for 10. Point at the line or move focus
+          into it and it waits; leave it and it carries on with the time it had left.
+        </p>
+      </section>
+
+      <section data-search="Undo first in the status line" id="undo-first">
+        <h2>Undo comes first</h2>
+        <p>
+          An Undo line, from you or from an agent, shows at once, ahead of any offer. A newer
+          Undo line replaces an older one. The offer it covered comes back afterwards with the time it had left.
+        </p>
+      </section>
+
+      <section data-search="waiting offers menu status line" id="waiting">
+        <h2>+N waiting</h2>
+        <p>
+          When more offers arrive than fit, they wait behind <em>+N waiting ▾</em>. Open it to see
+          each waiting offer with its action and a ✕ to dismiss it. Up to three offers wait; a
+          fourth drops the oldest, and an offer that has waited a minute goes away. Each waiting
+          offer gets its full time when it shows.
+        </p>
+      </section>
+
+      <section data-search="keyboard screen reader status line" id="act">
+        <h2>Acting on it</h2>
+        <ul>
+          <li>Press Tab to reach the line's button; it runs once and the line closes.</li>
+          <li>Press Esc inside the line to close it. Focus goes back to where it was.</li>
+          <li>
+            In <em>+N waiting ▾</em>, the arrow keys move between offers and Esc closes the
+            menu.
+          </li>
+          <li>
+            Screen readers hear each line once, when it shows, from one polite live region
+            named "status line".
+          </li>
+        </ul>
+      </section>
+    </main>
+  </body>
+</html>
