@@ -213,6 +213,8 @@ it("reconciles live workspace choices when the current workspace also has runtim
 it("does no hidden consumer recompute and catches up from its revision on reveal", async () => {
   render(<Consumer />);
   connection.visible(false);
+  // Parked: prefs() readers go to the file until the reveal.
+  expect(usePrefsStore.getState().parked).toBe(true);
   await act(async () => advance());
   expect(screen.getByTestId("settings-editor-line-wrap-off")).toHaveAttribute(
     "aria-checked",
@@ -220,6 +222,7 @@ it("does no hidden consumer recompute and catches up from its revision on reveal
   );
   expect(screen.getByRole("combobox", { name: "Dashboard action policy" })).toHaveValue("open");
   await act(async () => connection.visible(true));
+  expect(usePrefsStore.getState().parked).toBe(false);
   await waitFor(() =>
     expect(screen.getByRole("combobox", { name: "Dashboard action policy" })).toHaveValue(
       "team-safe",

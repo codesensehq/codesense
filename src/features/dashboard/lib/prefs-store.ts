@@ -10,4 +10,13 @@ export const usePrefsStore = create<{
   owned: PrefsState;
   globalReady: boolean;
   ownedReady: boolean;
-}>(() => ({ principal: null, global: {}, owned: {}, globalReady: false, ownedReady: false }));
+  /** The window is hidden, so live updates are parked and `owned` may lag the file. */
+  parked: boolean;
+}>(() => ({
+  principal: null,
+  global: {},
+  owned: {},
+  globalReady: false,
+  ownedReady: false,
+  parked: false,
+}));

@@ -31,7 +31,7 @@ import {
 
 beforeEach(() => {
   store.raw = JSON.stringify({ viewer: { keep: true }, repos: ["r"] });
-  usePrefsStore.setState({ principal: null, owned: {}, ownedReady: false });
+  usePrefsStore.setState({ principal: null, owned: {}, ownedReady: false, parked: false });
   vi.mocked(loadAppState).mockClear();
 });
 
@@ -69,6 +69,34 @@ describe("prefs from the live prefs store", () => {
     vi.mocked(loadAppState).mockClear();
     expect(await readDashboardPrefs("doc:/a.html")).toEqual({ sort: "date" });
     expect(loadAppState).toHaveBeenCalledTimes(0);
+  });
+
+  it("while the window is hidden, prefs reads the file instead of the parked store", async () => {
+    live({ "doc:/a.html": { data: { density: "compact" }, at: Date.now() } });
+    usePrefsStore.setState({ parked: true });
+    // Another window's setPrefs, which the parked store has not seen.
+    store.raw = JSON.stringify({
+      dashboardPrefs: { "doc:/a.html": { data: { density: "full" }, at: Date.now() } },
+    });
+    expect(await readDashboardPrefs("doc:/a.html")).toEqual({ density: "full" });
+    expect(loadAppState).toHaveBeenCalledTimes(1);
+
+    // Revealed: the store, caught up, is read again.
+    live({ "doc:/a.html": { data: { density: "full" }, at: Date.now() } });
+    usePrefsStore.setState({ parked: false });
+    expect(await readDashboardPrefs("doc:/a.html")).toEqual({ density: "full" });
+    expect(loadAppState).toHaveBeenCalledTimes(1);
+  });
+
+  it("a write shows in the live store only while it holds the writer's principal", async () => {
+    live({}, "p2");
+    await writeDashboardPrefs("doc:/a.html", { sort: "date" });
+    expect(usePrefsStore.getState().owned).toEqual({ dashboardPrefs: {} });
+
+    live({});
+    await writeDashboardPrefs("doc:/a.html", { sort: "name" });
+    const kept = usePrefsStore.getState().owned.dashboardPrefs as Record<string, { data: unknown }>;
+    expect(kept["doc:/a.html"].data).toEqual({ sort: "name" });
   });
 });
 

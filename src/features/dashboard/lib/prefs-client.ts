@@ -24,7 +24,7 @@ export function connectPrefs(principal: string, hub: LiveHub = liveHub) {
   let disposed = false;
   let shown = true;
   const frames: ReturnType<LiveHub["attach"]>[] = [];
-  usePrefsStore.setState({ principal, owned: {}, ownedReady: false });
+  usePrefsStore.setState({ principal, owned: {}, ownedReady: false, parked: !shown });
   const live: Promise<unknown>[] = [];
   const warn = (scope: string) => (error: unknown) =>
     console.warn(`prefs live channel failed (${scope})`, error);
@@ -80,6 +80,8 @@ export function connectPrefs(principal: string, hub: LiveHub = liveHub) {
     live: delivered,
     visible(value: boolean) {
       shown = value;
+      // Readers of the store go to the file while it is parked (dashboard-prefs `liveEntries`).
+      if (!disposed) usePrefsStore.setState({ parked: !value });
       for (const frame of frames) frame.visible(value);
     },
     dispose() {
@@ -100,7 +102,7 @@ export function ensurePrefsConnection(principal: string) {
 export function resetPrefsConnection() {
   connection?.value.dispose();
   connection = undefined;
-  usePrefsStore.setState({ principal: null, owned: {}, ownedReady: false });
+  usePrefsStore.setState({ principal: null, owned: {}, ownedReady: false, parked: false });
 }
 export async function readPrefsState(): Promise<PrefsState> {
   const principal = await rendererPrincipal();
