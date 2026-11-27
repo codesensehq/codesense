@@ -5,3 +5,4 @@
 // space's exclude call it.
 #![cfg_attr(not(test), allow(dead_code))]
 pub mod leaf_id;
+pub mod shape;
