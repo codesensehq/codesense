@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { buildTauriInternals } from "./tauri-internals";
-import { createMockBackend } from "./mock-backend";
+import { createMockBackend, recordInvokes } from "./mock-backend";
 import { resolveScenario } from "./scenario";
 import { MockEventBus } from "./mock-events";
 import { isAgentTeamWorld, launchedAgentSessions } from "./handlers/agents-team";
@@ -31,8 +31,13 @@ export function installMockBackend(): void {
   if (isAgentTeamWorld(window.location.search))
     for (const session of launchedAgentSessions(window.location.search)) markOpenedAsAgent(session);
   const events = new MockEventBus();
-  const router = createMockBackend(scenario, window.location.search, events);
-  const internals = buildTauriInternals(router);
+  const invokes: string[] = [];
+  const router = recordInvokes(
+    createMockBackend(scenario, window.location.search, events),
+    invokes,
+  );
+  const internals = buildTauriInternals(router, window.location.search);
+  (window as unknown as { __mockInvokes: string[] }).__mockInvokes = invokes;
   events.bind(internals.runCallback);
   (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = internals;
   // `listen`'s unlisten reaches for the event plugin's registry; the mock bus

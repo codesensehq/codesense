@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useCallback, useEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
 import { agentPins, type AgentPin, type InboxTeam } from "@/tauri/commands";
@@ -51,8 +51,9 @@ export function useAgentPins(
   useEffect(() => {
     if (!key) return;
     void reload();
-    const sub = listen<{ org: string; team: string; agentId: string; storyId: string }>(
+    const sub = listenScoped<{ org: string; team: string; agentId: string; storyId: string }>(
       AGENT_PINS_CHANGED_EVENT,
+      "every-window",
       ({ payload: p }) => {
         if (JSON.stringify([p.org, p.team, p.agentId, p.storyId]) === key) void reload();
       },

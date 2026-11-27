@@ -10,7 +10,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import {
   useViewerStore,
@@ -899,7 +899,7 @@ function AgentClisRow() {
         });
     };
     Promise.resolve()
-      .then(() => listen("dep-status-changed", () => void refresh()))
+      .then(() => listenScoped("dep-status-changed", "every-window", () => void refresh()))
       .then((fn) => {
         if (cancelled) safeUnlisten(fn);
         else {

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useEffect, useState } from "react";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { currentWebview } from "@/shared/lib/current-window";
 import { shellEscape, stripControlChars } from "@/shared/lib/shell-escape";
 import { dropPositionHitsElement } from "@/shared/lib/drag-drop-hit-test";
 
@@ -70,7 +70,7 @@ export function useTerminalDragDrop(
       return dropPositionHitsElement(position, el);
     };
 
-    const unlisten = getCurrentWebview().onDragDropEvent((event) => {
+    const unlisten = currentWebview().onDragDropEvent((event) => {
       if (disposedRef.current) return;
       // SW-GS-1 AC-11: input-locked → no highlight, no paste. Read live off the
       // ref so the once-on-mount closure honors the current lock.

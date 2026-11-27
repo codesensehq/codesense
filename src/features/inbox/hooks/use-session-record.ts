@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useCallback, useEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { SESSION_RECORD_EVENTS, sessionIdsOf } from "@/features/dashboard/lib/live-hub";
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
@@ -93,7 +93,7 @@ export function useSessionRecord(
     if (!handle) return;
     void reload();
     const offs = SESSION_RECORD_EVENTS.map((event) =>
-      listen(event, ({ payload }) => {
+      listenScoped(event, "every-window", ({ payload }) => {
         const ids = sessionIdsOf(payload);
         if (ids.some((id) => id === sessionId || known.current.includes(id))) void reload();
         // No event bus (a plain browser, a test): the read still happens once.

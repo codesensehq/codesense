@@ -381,7 +381,7 @@ fn set_tray_visible(app: &AppHandle, visible: bool) {
     }
     let showing = app.clone();
     let _ = app.run_on_main_thread(move || {
-        let Some(window) = showing.get_webview_window("main") else {
+        let Some(window) = showing.get_webview_window(crate::windows::MAIN_LABEL) else {
             return;
         };
         let hidden = !window.is_visible().unwrap_or(true);
@@ -617,7 +617,7 @@ fn run_action(app: &AppHandle, action: MenuAction) {
 fn open_codesense(app: &AppHandle) {
     #[cfg(target_os = "macos")]
     let _ = app.show();
-    if let Some(window) = app.get_webview_window("main") {
+    if let Some(window) = app.get_webview_window(crate::windows::MAIN_LABEL) {
         let _ = window.show();
         let _ = window.set_focus();
     }

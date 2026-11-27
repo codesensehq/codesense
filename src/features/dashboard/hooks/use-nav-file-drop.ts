@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useEffect, useRef, useState } from "react";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { currentWebview } from "@/shared/lib/current-window";
 import { dropPositionHitsElement, type DragPosition } from "@/shared/lib/drag-drop-hit-test";
 import { pickDropDir, type DropCandidate } from "@/features/dashboard/lib/nav-file-drop";
 
@@ -57,7 +57,7 @@ export function useNavFileDrop(opts: {
       return dir ? { dir } : { root: true };
     };
 
-    const unlisten = getCurrentWebview().onDragDropEvent((event) => {
+    const unlisten = currentWebview().onDragDropEvent((event) => {
       if (disabledRef?.current) {
         setHighlight(null);
         return;

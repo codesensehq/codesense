@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import {
   listAttentionBoard,
@@ -176,7 +176,7 @@ function startBoard(): () => void {
   // Warm on start, subscribe to the push nudge — NO poll interval (AC-6).
   reloadBoard();
   const group = createListenerGroup();
-  group.track(listen(WEFT_ATTENTION_CHANGED_EVENT, () => reloadBoard()));
+  group.track(listenScoped(WEFT_ATTENTION_CHANGED_EVENT, "every-window", () => reloadBoard()));
   // The board is read for the backend's active team: whenever the backend takes a team
   // (on a fresh profile that is after the first read, which failed with "no active team
   // yet"), re-read at once rather than wait for the next retry.

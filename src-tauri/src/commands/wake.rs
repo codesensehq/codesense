@@ -48,7 +48,7 @@ impl HumanGesture {
 /// `html-viewer.tsx`) and the bridge allowlist with no timer verb. Agents
 /// reach the app only through MCP, never through these commands. The check
 /// refuses any other window a later change might add.
-const PERSON_WINDOW: &str = "main";
+const PERSON_WINDOW: &str = crate::windows::MAIN_LABEL;
 
 /// The person behind a command from the app window, or a refusal.
 fn person(webview: &Webview) -> Result<Caller, String> {

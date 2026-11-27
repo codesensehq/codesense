@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import {
   cancelWorktreeRun,
   evaluateSetupProvenance,
@@ -219,29 +219,33 @@ export async function runWorktreeSetupPhase(
   // ── stream listener wiring (per-line output + SW-WT-12 step boundaries) ──
   let unlisten: (() => void) | null = null;
   if (onProgress || onStep) {
-    unlisten = await listen<RawWorktreeRunPayload>(`worktree-run-${runId}`, (event) => {
-      const p = event.payload;
-      if (isStepPayload(p)) {
-        onStep?.({
-          kind: p.event === "step-started" ? "started" : "finished",
+    unlisten = await listenScoped<RawWorktreeRunPayload>(
+      `worktree-run-${runId}`,
+      "every-window",
+      (event) => {
+        const p = event.payload;
+        if (isStepPayload(p)) {
+          onStep?.({
+            kind: p.event === "step-started" ? "started" : "finished",
+            phase: p.phase,
+            stepIndex: p.step_index,
+            command: p.command,
+            passed: p.passed,
+            // Normalize absent → null so a signal-killed child (Rust `None`) and a
+            // missing field compare equal downstream (`stepsEqual`).
+            exitCode: p.exit_code ?? null,
+          });
+          return;
+        }
+        onProgress?.({
           phase: p.phase,
           stepIndex: p.step_index,
-          command: p.command,
-          passed: p.passed,
-          // Normalize absent → null so a signal-killed child (Rust `None`) and a
-          // missing field compare equal downstream (`stepsEqual`).
-          exitCode: p.exit_code ?? null,
+          stream: p.stream,
+          line: p.line,
+          tsMs: p.ts_ms,
         });
-        return;
-      }
-      onProgress?.({
-        phase: p.phase,
-        stepIndex: p.step_index,
-        stream: p.stream,
-        line: p.line,
-        tsMs: p.ts_ms,
-      });
-    });
+      },
+    );
   }
 
   // ── cancel wiring ──────────────────────────────────────────────────────

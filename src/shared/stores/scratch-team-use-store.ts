@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useEffect } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import { create } from "zustand";
 
 import { getScratchTeamUse, setScratchTeamUse } from "@/tauri/commands";
@@ -81,9 +81,13 @@ export function useScratchTeamUseState(
   useEffect(() => {
     if (!orgSlug || !team) return;
     void load(orgSlug, team);
-    const unlisten = listen<{ orgSlug: string; team: string }>(SCRATCH_USE_CHANGED_EVENT, (e) => {
-      if (e.payload.orgSlug === orgSlug && e.payload.team === team) void load(orgSlug, team);
-    }).catch(() => null);
+    const unlisten = listenScoped<{ orgSlug: string; team: string }>(
+      SCRATCH_USE_CHANGED_EVENT,
+      "every-window",
+      (e) => {
+        if (e.payload.orgSlug === orgSlug && e.payload.team === team) void load(orgSlug, team);
+      },
+    ).catch(() => null);
     return () => {
       void unlisten.then((off) => {
         if (off) safeUnlisten(off);

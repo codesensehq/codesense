@@ -797,7 +797,7 @@ fn debug_wedge_renderer(app: tauri::AppHandle) {
     log::warn!(target: "webview-watchdog", "debug renderer wedge armed: pid={} delay_ms={delay_ms}", std::process::id());
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-        if let Some(win) = app.get_webview_window("main") {
+        if let Some(win) = app.get_webview_window(crate::windows::MAIN_LABEL) {
             log::warn!(target: "webview-watchdog", "debug renderer wedge dispatching JS busy loop");
             if let Err(e) = win.eval("setTimeout(() => { for (;;) {} }, 0)") {
                 log::error!(target: "webview-watchdog", "debug renderer wedge failed: {e}");

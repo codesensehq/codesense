@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useEffect } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
 import { resolveAskUser } from "@/tauri/commands";
@@ -136,19 +136,23 @@ export async function answerAskUser(
 /** Mount the managed-session listeners once at app root (App.tsx). */
 export function useManagedSessionBridge(): void {
   useEffect(() => {
-    const unAsk = listen<AskUserRequest>("mcp:ask-user", (event) => {
+    const unAsk = listenScoped<AskUserRequest>("mcp:ask-user", "main-only", (event) => {
       receiveAskUser(event.payload);
     });
-    const unClosed = listen<AskUserClosedPayload>("mcp:ask-user-closed", (event) => {
-      receiveAskUserClosed(event.payload);
-    });
-    const unDone = listen<AgentDonePayload>("mcp:agent-done", (event) => {
+    const unClosed = listenScoped<AskUserClosedPayload>(
+      "mcp:ask-user-closed",
+      "main-only",
+      (event) => {
+        receiveAskUserClosed(event.payload);
+      },
+    );
+    const unDone = listenScoped<AgentDonePayload>("mcp:agent-done", "main-only", (event) => {
       receiveAgentDone(event.payload);
     });
     // AC-3 FE leg — the counterpart to the Rust session-death sweep. When a PTY
     // dies, drop its pending asks (so no dead-session question stays answerable)
     // and surface a mid-task death as `needs-attention`.
-    const unExit = listen<{ session_id: string }>("pty-exit", (event) => {
+    const unExit = listenScoped<{ session_id: string }>("pty-exit", "main-only", (event) => {
       const sessionId = event.payload?.session_id;
       if (sessionId) receiveSessionDeath(sessionId);
     });

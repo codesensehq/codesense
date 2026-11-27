@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import { useEffect, useRef } from "react";
 
 import {
@@ -42,11 +42,13 @@ export function useTeamLandingPage(): void {
   useEffect(() => {
     const group = createListenerGroup();
     group.track(
-      listen<ContextFileChangePayload>(CONTEXT_FILE_CHANGE_EVENT, (event) =>
+      listenScoped<ContextFileChangePayload>(CONTEXT_FILE_CHANGE_EVENT, "main-only", (event) =>
         invalidateLandingPages(event.payload?.file_path),
       ),
     );
-    group.track(listen(ORG_REGISTRY_CHANGED_EVENT, () => invalidateLandingPages()));
+    group.track(
+      listenScoped(ORG_REGISTRY_CHANGED_EVENT, "every-window", () => invalidateLandingPages()),
+    );
     return () => group.dispose();
   }, []);
 

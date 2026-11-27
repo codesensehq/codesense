@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { CONTEXT_ATTACHMENTS_REFRESH } from "../lib/context-attachment-events";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -44,7 +44,7 @@ export function useOrgDiscovery() {
     let live = true;
     const refresh = () => setRevision((value) => value + 1);
     window.addEventListener(CONTEXT_ATTACHMENTS_REFRESH, refresh);
-    const subscription = listen("context-attachments-changed", async () => {
+    const subscription = listenScoped("context-attachments-changed", "every-window", async () => {
       try {
         if (live) setRevision((value) => value + 1);
       } catch (error) {

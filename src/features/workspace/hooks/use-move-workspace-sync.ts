@@ -24,7 +24,7 @@
  */
 
 import { useEffect } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import { listMoveIntentsBridge, type MoveIntentView } from "@/tauri/commands";
 import { createListenerGroup } from "@/shared/lib/tauri-listeners";
 import { useViewerStore } from "@/shared/stores/viewer-store";
@@ -206,12 +206,12 @@ export function useMoveWorkspaceSync(): void {
     clearedDuringBootstrap = new Set<string>();
     const group = createListenerGroup();
     group.track(
-      listen<MoveIntentHydratePayload>(HYDRATE_EVENT, ({ payload }) => {
+      listenScoped<MoveIntentHydratePayload>(HYDRATE_EVENT, "main-only", ({ payload }) => {
         if (payload?.teamKey && payload.workspaceId) applyHydrate(payload);
       }),
     );
     group.track(
-      listen<MoveIntentClearedPayload>(CLEARED_EVENT, ({ payload }) => {
+      listenScoped<MoveIntentClearedPayload>(CLEARED_EVENT, "main-only", ({ payload }) => {
         if (!payload?.teamKey || !payload.workspaceId) return;
         if (clearedDuringBootstrap !== null) {
           clearedDuringBootstrap.add(keyOf(payload.teamKey, payload.workspaceId));
@@ -220,7 +220,7 @@ export function useMoveWorkspaceSync(): void {
       }),
     );
     group.track(
-      listen<MoveProgressPayload>(PROGRESS_EVENT, ({ payload }) => {
+      listenScoped<MoveProgressPayload>(PROGRESS_EVENT, "main-only", ({ payload }) => {
         if (payload?.teamKey && payload.workspaceId) applyProgress(payload);
       }),
     );

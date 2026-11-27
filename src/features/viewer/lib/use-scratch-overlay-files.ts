@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useCallback, useEffect, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { listScratchOverlayFiles, type ScratchOverlayFile } from "@/tauri/commands";
 import { SCRATCH_USE_CHANGED_EVENT, SYNC_WAVE_COMPLETED_EVENT } from "@/tauri/events";
@@ -49,8 +49,8 @@ export function useScratchOverlayFiles(cwd: string): {
     if (cwd.trim() === "") return;
     // A missing event bridge (tests, a torn-down window) just means no live re-read.
     const unlisteners: Array<Promise<(() => void) | null>> = [
-      listen(SYNC_WAVE_COMPLETED_EVENT, refresh).catch(() => null),
-      listen(SCRATCH_USE_CHANGED_EVENT, refresh).catch(() => null),
+      listenScoped(SYNC_WAVE_COMPLETED_EVENT, "every-window", refresh).catch(() => null),
+      listenScoped(SCRATCH_USE_CHANGED_EVENT, "every-window", refresh).catch(() => null),
     ];
     return () => {
       for (const u of unlisteners) void u.then((off) => off?.());

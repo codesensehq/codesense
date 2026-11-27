@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { DEFAULT_APP_THEME, type AppTheme } from "@/themes";
 import { warmScopes } from "@/shared/lib/warm-scopes";
+import { isMainWindow } from "@/shared/lib/current-window";
 import { migrateThemeSettings } from "@/themes/settings";
 import { hasLiveFrames, retireAfterFlush } from "@/features/dashboard/lib/frame-lifecycle";
 import {
@@ -6204,9 +6205,11 @@ let pendingSettings: Partial<ViewerSettings> = {};
 let persistedViewer: Record<string, unknown> | undefined;
 const ownedViewerKeys = new Set<string>();
 
+// A satellite window never writes the app state: `main` owns it (and the native mirror below).
 const debouncedPersist = createDebouncedAction(
   () =>
     serializeAppStateWrite(async () => {
+      if (!isMainWindow()) return;
       try {
         const existing: { viewer: Record<string, unknown> } = { viewer: {} };
         const settingsPatch = { ...pendingSettings };

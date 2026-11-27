@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useCallback, useEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import * as api from "@/tauri/commands";
 import { CONTEXT_INDEX_CHANGED_EVENT, type ContextIndexChangedPayload } from "@/tauri/events";
 import type { DashboardDetail, DashboardInventory, InventoryRow } from "./types";
@@ -284,16 +284,20 @@ export function useDashboardManager() {
     let disposed = false;
     let unlisten: (() => void) | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    void listen<ContextIndexChangedPayload>(CONTEXT_INDEX_CHANGED_EVENT, (event) => {
-      const change = event.payload;
-      if (
-        !change ||
-        (!change.truncated && !change.paths.some((path) => dashboardManifestPath.test(path)))
-      )
-        return;
-      clearTimeout(timer);
-      timer = setTimeout(() => void refreshLocal(), 180);
-    }).then((stop) => {
+    void listenScoped<ContextIndexChangedPayload>(
+      CONTEXT_INDEX_CHANGED_EVENT,
+      "every-window",
+      (event) => {
+        const change = event.payload;
+        if (
+          !change ||
+          (!change.truncated && !change.paths.some((path) => dashboardManifestPath.test(path)))
+        )
+          return;
+        clearTimeout(timer);
+        timer = setTimeout(() => void refreshLocal(), 180);
+      },
+    ).then((stop) => {
       if (disposed) stop();
       else unlisten = stop;
     });

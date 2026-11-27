@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { memo, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import { toastFailure } from "@/shared/lib/with-error-toast";
 import type { Attachment, SourceRepoSlug } from "@/shared/types/domain";
 import { checkPathExists, deleteSourceRepoAttachment } from "@/tauri/commands";
@@ -59,15 +59,19 @@ export const SourceRepoPill = memo(function SourceRepoPill({
         // A failed existence probe is not proof of "gone"; leave as-is.
       });
     // Real-time signal: a wave that skipped this path emits it.
-    const unlisten = listen<RepoLooksGonePayload>(SYNC_REPO_LOOKS_GONE_EVENT, (event) => {
-      if (!cancelled && event.payload.code_repo_path === repoPath) {
-        // Ignore a gone event that lands right after a successful Re-clone —
-        // it's a stale signal from a wave that observed the path mid-restore.
+    const unlisten = listenScoped<RepoLooksGonePayload>(
+      SYNC_REPO_LOOKS_GONE_EVENT,
+      "every-window",
+      (event) => {
+        if (!cancelled && event.payload.code_repo_path === repoPath) {
+          // Ignore a gone event that lands right after a successful Re-clone —
+          // it's a stale signal from a wave that observed the path mid-restore.
 
-        eventSaidGone = true;
-        setPathGone(true);
-      }
-    });
+          eventSaidGone = true;
+          setPathGone(true);
+        }
+      },
+    );
     return () => {
       cancelled = true;
       void unlisten.then(safeUnlisten).catch(() => {});

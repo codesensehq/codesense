@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { scanPipelineTree, listContextFiles, type ContextFile } from "@/tauri/commands";
 import { CONTEXT_INDEX_CHANGED_EVENT, type ContextIndexChangedPayload } from "@/tauri/events";
@@ -181,14 +181,18 @@ let indexListening = false;
 
 function attachIndexListener() {
   if (indexListener) return;
-  indexListener = listen<ContextIndexChangedPayload>(CONTEXT_INDEX_CHANGED_EVENT, (event) => {
-    const generation = event.payload?.generation;
-    // Same or older generation: nothing changed that a cached list could miss.
-    if (typeof generation === "number" && generation <= indexGeneration) return;
-    indexGeneration = typeof generation === "number" ? generation : indexGeneration + 1;
-    fileIndexCache.clear();
-    for (const listener of [...generationListeners]) listener(indexGeneration);
-  }).then(
+  indexListener = listenScoped<ContextIndexChangedPayload>(
+    CONTEXT_INDEX_CHANGED_EVENT,
+    "every-window",
+    (event) => {
+      const generation = event.payload?.generation;
+      // Same or older generation: nothing changed that a cached list could miss.
+      if (typeof generation === "number" && generation <= indexGeneration) return;
+      indexGeneration = typeof generation === "number" ? generation : indexGeneration + 1;
+      fileIndexCache.clear();
+      for (const listener of [...generationListeners]) listener(indexGeneration);
+    },
+  ).then(
     (unlisten) => {
       indexListening = true;
       return unlisten;

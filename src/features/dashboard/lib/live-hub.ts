@@ -2,7 +2,8 @@
 import { DEFAULT_APP_THEME, type AppTheme } from "@/themes";
 import { createSessionTextRouter, type SessionTextEvent } from "./session-text";
 import type { ThemeMode } from "@/themes/compiler";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import {
   liveHubSubscribe,
   liveHubPage,
@@ -1564,7 +1565,7 @@ export const liveHub = new LiveHub({
   },
   release: async (...args) => liveHubRelease(...args),
   releaseOwner: async () => liveHubReleaseOwner(),
-  listen,
+  listen: (event, callback) => listenScoped(event, "every-window", callback),
   readUi: readSharedUiState,
   writeUi: writeSharedUiState,
   watchUi: watchSharedUiState,

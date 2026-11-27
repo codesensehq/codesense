@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useEffect, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { AppButton } from "@/shared/components/app-button";
 import { isCodesenseDocs, missingContextRepoDetail } from "@/shared/lib/codesense-docs";
@@ -37,7 +37,9 @@ export function useMissingContextRepos(active: boolean): OrgSummary[] {
     };
     refresh();
     window.addEventListener(CONTEXT_ATTACHMENTS_REFRESH, refresh);
-    const subscription = listen("context-attachments-changed", refresh).catch(() => () => {});
+    const subscription = listenScoped("context-attachments-changed", "every-window", refresh).catch(
+      () => () => {},
+    );
     return () => {
       live = false;
       window.removeEventListener(CONTEXT_ATTACHMENTS_REFRESH, refresh);

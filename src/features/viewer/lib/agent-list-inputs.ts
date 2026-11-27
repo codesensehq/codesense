@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { useAgentListFacts } from "./agent-list-facts";
 import { agentListMirrorInputs } from "./agent-list-mirror";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import { liveHub } from "@/features/dashboard/lib/live-hub";
 import { agentListIdentity, agentListSetIdentity, pushViewerState } from "@/tauri/commands";
 import {
@@ -214,12 +214,16 @@ export function watchAgentListInputs(): () => void {
     if (state.orgs !== previous.orgs) flushMirror();
     mirrorSelected();
   });
-  const identityListener = listen<Identities>("agent-list-identity-changed", ({ payload }) => {
-    if (disposed) return;
-    applying = true;
-    useViewerStore.setState({ agentIdentity: payload });
-    applying = false;
-  });
+  const identityListener = listenScoped<Identities>(
+    "agent-list-identity-changed",
+    "every-window",
+    ({ payload }) => {
+      if (disposed) return;
+      applying = true;
+      useViewerStore.setState({ agentIdentity: payload });
+      applying = false;
+    },
+  );
   const stopDock = liveHub.watch("ui:dock", "all", (snapshot) => {
     const dock = snapshot.snapshot[0];
     if (!initialized || !dock?.arrange || !dock?.pins) return;

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useEffect } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
 import { SYNC_WAVE_COMPLETED_EVENT, type SyncWaveCompletedPayload } from "@/tauri/events";
@@ -43,7 +43,7 @@ export function useSyncWaveRescan(): void {
   useEffect(() => {
     let unlisten: (() => void) | null = null;
     let disposed = false;
-    listen<SyncWaveCompletedPayload>(SYNC_WAVE_COMPLETED_EVENT, (event) => {
+    listenScoped<SyncWaveCompletedPayload>(SYNC_WAVE_COMPLETED_EVENT, "every-window", (event) => {
       const payload = event.payload;
       // SR-0 (Q3): trace EVERY wave's reaction (incl. no-op waves) so the
       // instance-count delta attributes native-backing allocation to the exact

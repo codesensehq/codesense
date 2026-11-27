@@ -91,7 +91,15 @@ fn canvas_request_captures_admitted_scene_before_export_under_reversed_active_te
     let observed = std::sync::Arc::new(std::sync::Mutex::new(Vec::<serde_json::Value>::new()));
     let seen = observed.clone();
     let app = f.app.handle().clone();
-    f.app.listen("canvas:render-request", move |event| {
+    // The request goes to the owning window alone (`windows::emit_to_owner`), so listen on `main`.
+    let main = tauri::WebviewWindowBuilder::new(
+        &f.app,
+        crate::windows::MAIN_LABEL,
+        tauri::WebviewUrl::default(),
+    )
+    .build()
+    .unwrap();
+    main.listen("canvas:render-request", move |event| {
         let payload: serde_json::Value = serde_json::from_str(event.payload()).unwrap();
         app.state::<CanvasRenderRegistry>()
             .take(payload["requestId"].as_str().unwrap())

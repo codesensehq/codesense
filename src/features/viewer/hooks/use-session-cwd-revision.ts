@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useCallback, useSyncExternalStore } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { logger } from "@/shared/lib/logger";
 
@@ -37,7 +37,7 @@ function ensureListener(): void {
   listenPending = true;
   try {
     void Promise.resolve(
-      listen<{ session_id?: string; cwd?: string }>("pty-osc7", (event) => {
+      listenScoped<{ session_id?: string; cwd?: string }>("pty-osc7", "owning-window", (event) => {
         const sid = event.payload?.session_id;
         if (typeof sid === "string" && sid) bump(sid);
       }),

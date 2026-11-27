@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useEffect } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { splitStoryHandle } from "@/features/dashboard/components/dashboard-launch";
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
@@ -113,9 +113,13 @@ export function revealOpenedWorkspace(payload: OpenWorkspaceRevealPayload): Prom
 /** Mount the reveal listener once at app root (App.tsx). */
 export function useOpenWorkspaceReveal(): void {
   useEffect(() => {
-    const unlisten = listen<OpenWorkspaceRevealPayload>(OPEN_WORKSPACE_REVEAL_EVENT, (event) => {
-      void revealOpenedWorkspace(event.payload);
-    });
+    const unlisten = listenScoped<OpenWorkspaceRevealPayload>(
+      OPEN_WORKSPACE_REVEAL_EVENT,
+      "main-only",
+      (event) => {
+        void revealOpenedWorkspace(event.payload);
+      },
+    );
     return () => {
       unlisten.then(safeUnlisten).catch(() => {});
     };

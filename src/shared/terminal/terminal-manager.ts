@@ -42,7 +42,7 @@ import {
 } from "@/shared/terminal/terminal-parser-options";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import "@xterm/xterm/css/xterm.css";
 
@@ -679,7 +679,7 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
     if (globalsInstalled) return;
     globalsInstalled = true;
     installEvictHook();
-    listen<{ session_id: string }>("pty-exit", (event) => {
+    listenScoped<{ session_id: string }>("pty-exit", "owning-window", (event) => {
       const entry = sessions.get(event.payload.session_id);
       if (!entry) return;
       entry.exited = true;
@@ -700,7 +700,7 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
         if (d && !isLiveStreamCurrent(d.stream)) retire(entry, d);
       }
     });
-    listen<TerminalStreamsLost>(TERMINAL_STREAMS_LOST_EVENT, (event) => {
+    listenScoped<TerminalStreamsLost>(TERMINAL_STREAMS_LOST_EVENT, "every-window", (event) => {
       const lost = new Set(event.payload.streams);
       for (const entry of [...sessions.values()]) {
         const stream = entry.display?.stream;
@@ -1313,7 +1313,7 @@ export function createTerminalManager(deps: TerminalManagerDeps = {}): TerminalM
           openLiveStream({
             reserve: reserveTerminalStream,
             listen: (channel, onEvent) =>
-              listen<TerminalStreamEvent>(channel, (event) => {
+              listenScoped<TerminalStreamEvent>(channel, "owning-window", (event) => {
                 if (!currentTerminalDisplay(entry.reference)) return;
                 const epoch = remoteEpoch();
                 if (epoch !== undefined && event.payload.privateAuthorityEpoch !== epoch) return;

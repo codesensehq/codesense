@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useSyncExternalStore } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import { toast } from "sonner";
 import { persistent } from "@/components/ui/persistent-toast";
 import {
@@ -132,8 +132,9 @@ function ensureEventListener() {
   if (eventListenerActive) return;
   eventListenerActive = true;
 
-  listen<{ bytesDownloaded: number; totalBytes: number | null }>(
+  listenScoped<{ bytesDownloaded: number; totalBytes: number | null }>(
     "update-download-progress",
+    "main-only",
     (event) => {
       setState({
         bytesDownloaded: event.payload.bytesDownloaded,

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useEffect } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import { toast } from "sonner";
 
 import { backgroundRestoreHint } from "@/shared/lib/local-machine";
@@ -36,7 +36,7 @@ export function shouldShowBackgroundExplainer(hasSeen: boolean | undefined): boo
 export function useBackgroundModeNotification(): void {
   useEffect(() => {
     let cancelled = false;
-    const unlisten = listen(BACKGROUND_MODE_ENTERED_EVENT, () => {
+    const unlisten = listenScoped(BACKGROUND_MODE_ENTERED_EVENT, "main-only", () => {
       if (cancelled) return;
       const store = useViewerStore.getState();
       if (!shouldShowBackgroundExplainer(store.settings.hasSeenBackgroundExplainer)) {

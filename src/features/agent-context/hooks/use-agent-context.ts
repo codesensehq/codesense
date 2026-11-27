@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import { toast } from "sonner";
 
 import { useAgentsStore, watchAgentList } from "@/features/agents/stores/agents-store";
@@ -180,7 +180,7 @@ export function useAgentContext(teamKey: string, enabled = true): AgentContextPi
     const keep = (p: Promise<() => void>) =>
       void p.then((fn) => (disposed ? fn() : unlisteners.push(fn))).catch(() => {});
     keep(
-      listen<AgentsChangedPayload>(AGENTS_CHANGED_EVENT, (event) => {
+      listenScoped<AgentsChangedPayload>(AGENTS_CHANGED_EVENT, "every-window", (event) => {
         const changed = event.payload?.key;
         if (changed && changed !== agentKey) return;
         // A revision this view already shows (our own save's echo) needs no re-read.
@@ -198,7 +198,7 @@ export function useAgentContext(teamKey: string, enabled = true): AgentContextPi
     );
     let settle: ReturnType<typeof setTimeout> | null = null;
     keep(
-      listen<ContextFileChangePayload>(CONTEXT_FILE_CHANGE_EVENT, (event) => {
+      listenScoped<ContextFileChangePayload>(CONTEXT_FILE_CHANGE_EVENT, "main-only", (event) => {
         const current = viewRef.current;
         if (
           current &&

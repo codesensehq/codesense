@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { currentWindow } from "@/shared/lib/current-window";
 import type { MouseEvent } from "react";
 
 const INTERACTIVE = "button, a, input, select, textarea, [role='button']";
@@ -16,5 +16,5 @@ export function startDragging(e: MouseEvent) {
   // pointer-down reach dnd-kit instead of starting a window move. Empty strip
   // area still falls through to startDragging so the window stays draggable.
   if (target.closest(INTERACTIVE) || target.closest("[data-tray-chip]")) return;
-  getCurrentWindow().startDragging();
+  currentWindow().startDragging();
 }

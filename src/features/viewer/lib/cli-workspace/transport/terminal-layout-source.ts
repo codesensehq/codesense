@@ -11,7 +11,8 @@
  */
 
 import { acceptsPrivateAuthority } from "@/shared/lib/private-terminal-authority";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import {
   TERMINAL_LAYOUT_ADMISSION_CHANGED_EVENT,
   TERMINAL_LAYOUT_RESYNC_EVENT,
@@ -72,11 +73,15 @@ export function onTerminalLayoutChanged(
     privateAuthorityEpoch?: string,
   ) => void,
 ): Promise<UnlistenFn> {
-  return listen<TerminalRuntimeEvent>(TERMINAL_RUNTIME_EVENT, ({ payload }) => {
-    const change = payload.event.LayoutChanged;
-    if (change && acceptsPrivateAuthority(payload.privateAuthorityEpoch))
-      handler(payload.target, change, payload.privateAuthorityEpoch);
-  });
+  return listenScoped<TerminalRuntimeEvent>(
+    TERMINAL_RUNTIME_EVENT,
+    "owning-window",
+    ({ payload }) => {
+      const change = payload.event.LayoutChanged;
+      if (change && acceptsPrivateAuthority(payload.privateAuthorityEpoch))
+        handler(payload.target, change, payload.privateAuthorityEpoch);
+    },
+  );
 }
 
 /** Listen for a member's admission changing (admitted, re-admitted,
@@ -84,8 +89,9 @@ export function onTerminalLayoutChanged(
 export function onTerminalAdmissionChanged(
   handler: (row: RuntimeAdmissionRow) => void,
 ): Promise<UnlistenFn> {
-  return listen<RuntimeAdmissionRow>(
+  return listenScoped<RuntimeAdmissionRow>(
     TERMINAL_LAYOUT_ADMISSION_CHANGED_EVENT,
+    "owning-window",
     (event) =>
       acceptsPrivateAuthority(event.payload.privateAuthorityEpoch) && handler(event.payload),
   );
@@ -95,8 +101,9 @@ export function onTerminalAdmissionChanged(
 export function onTerminalLayoutResync(
   handler: (resync: TerminalLayoutResync) => void,
 ): Promise<UnlistenFn> {
-  return listen<TerminalLayoutResync>(
+  return listenScoped<TerminalLayoutResync>(
     TERMINAL_LAYOUT_RESYNC_EVENT,
+    "every-window",
     (event) =>
       acceptsPrivateAuthority(event.payload.privateAuthorityEpoch) && handler(event.payload),
   );

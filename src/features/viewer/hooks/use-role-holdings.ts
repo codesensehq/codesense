@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import { toast } from "sonner";
 
 import { logger } from "@/shared/lib/logger";
@@ -147,7 +147,7 @@ export function useRoleHoldings(teamKeys: readonly string[], enabled: boolean): 
       pending = setTimeout(() => void reload(), ROLE_READ_DEBOUNCE_MS);
     };
     const timer = setInterval(later, POLL_MS);
-    const unlisten = listen(AGENT_STATE_CHANGED_EVENT, later);
+    const unlisten = listenScoped(AGENT_STATE_CHANGED_EVENT, "every-window", later);
     return () => {
       clearInterval(timer);
       clearTimeout(pending);

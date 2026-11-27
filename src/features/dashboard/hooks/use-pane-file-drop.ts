@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useEffect, type RefObject } from "react";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { currentWebview } from "@/shared/lib/current-window";
 import { dropPositionHitsElement } from "@/shared/lib/drag-drop-hit-test";
 
 /** Route webview-global OS drops to the visible, granted pane under the cursor. */
@@ -26,7 +26,7 @@ export function usePaneFileDrop({
       inside = false;
       drag("leave");
     };
-    const unlisten = getCurrentWebview().onDragDropEvent(({ payload }) => {
+    const unlisten = currentWebview().onDragDropEvent(({ payload }) => {
       if (!active) return;
       if (payload.type === "leave") {
         leave();

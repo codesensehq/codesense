@@ -4,7 +4,7 @@ import {
   requestPermission,
   sendNotification,
 } from "@tauri-apps/plugin-notification";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { currentWindow } from "@/shared/lib/current-window";
 
 import { logger } from "@/shared/lib/logger";
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
@@ -74,7 +74,7 @@ export const tauriOsAttention: OsAttention = {
 
   setBadgeCount(count) {
     try {
-      void getCurrentWindow()
+      void currentWindow()
         .setBadgeCount(count > 0 ? count : undefined)
         .catch((e: unknown) => logger.debug("attention", `badge failed: ${String(e)}`));
     } catch {
@@ -86,7 +86,7 @@ export const tauriOsAttention: OsAttention = {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
     try {
-      const win = getCurrentWindow();
+      const win = currentWindow();
       win
         .isFocused()
         .then((f) => {
@@ -121,7 +121,7 @@ export const tauriOsAttention: OsAttention = {
 
   async bringWindowForward() {
     try {
-      const win = getCurrentWindow();
+      const win = currentWindow();
       await win.unminimize().catch(() => {});
       await win.show().catch(() => {});
       await win.setFocus().catch(() => {});

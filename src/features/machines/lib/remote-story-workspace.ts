@@ -6,7 +6,7 @@
  * Installed into the viewer store as its remote-workspace driver.
  */
 
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import { create } from "zustand";
 import { toast } from "sonner";
 
@@ -160,8 +160,9 @@ const prepare: RemoteWorkspaceDriver["prepare"] = async (input) => {
   input.onProgress({ kind: "step1", phase: "starting", ...names });
   // SW-XS-10: every Step 1 reading becomes the setup line's typed state; a
   // failed phase is the failure line (with Retry), not a label.
-  const stop = await listen<RemoteWorkspaceProgressPayload>(
+  const stop = await listenScoped<RemoteWorkspaceProgressPayload>(
     REMOTE_WORKSPACE_PROGRESS_EVENT,
+    "every-window",
     (event) => {
       if (event.payload.requestId === input.requestId)
         input.onProgress(step1StateFromProgress(event.payload, names));

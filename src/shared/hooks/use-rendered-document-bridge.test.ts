@@ -9,7 +9,15 @@ import {
   runRenderedDocumentRequest,
 } from "./use-rendered-document-bridge";
 
-const { listen, resolveReply } = vi.hoisted(() => ({ listen: vi.fn(), resolveReply: vi.fn() }));
+const { listen, resolveReply, host } = vi.hoisted(() => ({
+  listen: vi.fn(),
+  resolveReply: vi.fn(),
+  host: { main: true },
+}));
+vi.mock("@/shared/lib/current-window", async (importActual) => ({
+  ...(await importActual<typeof import("@/shared/lib/current-window")>()),
+  isMainWindow: () => host.main,
+}));
 vi.mock("@tauri-apps/api/webviewWindow", () => ({ getCurrentWebviewWindow: () => ({ listen }) }));
 vi.mock("@/tauri/commands", () => ({
   resolveRenderedDocument: resolveReply,
@@ -18,6 +26,8 @@ vi.mock("@/tauri/commands", () => ({
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
+  host.main = true;
+  listen.mockReset();
   cleanups.splice(0).forEach((fn) => fn());
   document.body.innerHTML = "";
   vi.restoreAllMocks();
@@ -38,6 +48,13 @@ describe("rendered document bridge", () => {
     await waitFor(() => expect(resolveReply).toHaveBeenCalledWith("through-event", result, null));
     unmount();
     await waitFor(() => expect(unlisten).toHaveBeenCalledOnce());
+  });
+
+  it("a satellite window registers no rendered-document listener", () => {
+    host.main = false;
+    listen.mockResolvedValue(vi.fn());
+    renderHook(useRenderedDocumentBridge);
+    expect(listen).not.toHaveBeenCalled();
   });
 
   it("matches normalized paths, rejects ambiguous registrations and unregisters", async () => {

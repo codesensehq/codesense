@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { useWindowVisible } from "@/shared/hooks/use-window-focused";
 import { trimTrailingSeparators } from "@/shared/lib/path";
@@ -203,7 +203,7 @@ export function useContextGitSource(
     if (!enabled || !orgRoot) return;
     const group = createListenerGroup();
     group.track(
-      listen<ContextGitMovedPayload>(CONTEXT_GIT_MOVED_EVENT, (event) => {
+      listenScoped<ContextGitMovedPayload>(CONTEXT_GIT_MOVED_EVENT, "every-window", (event) => {
         if (
           !samePath(event.payload.repoPath, orgRoot) &&
           (!selectedRoot || !samePath(event.payload.repoPath, selectedRoot))
@@ -223,7 +223,9 @@ export function useContextGitSource(
     window.addEventListener("online", statusChanged);
     window.addEventListener("offline", statusChanged);
     const group = createListenerGroup();
-    group.track(listen(CONTEXT_REPO_STATUS_CHANGED_EVENT, () => statusChanged()));
+    group.track(
+      listenScoped(CONTEXT_REPO_STATUS_CHANGED_EVENT, "every-window", () => statusChanged()),
+    );
     return () => {
       window.removeEventListener("online", statusChanged);
       window.removeEventListener("offline", statusChanged);

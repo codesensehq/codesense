@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 import { mcpNavLens } from "@/shared/lib/nav-lens";
 import { useEffect } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { isMainWindow } from "@/shared/lib/current-window";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
 import { cliChromeOf, cliChromeState, useViewerStore } from "@/shared/stores/viewer-store";
 import { applyCliChromePatch, invalidCliChromePatchFields } from "@/shared/stores/cli-chrome";
@@ -95,12 +96,13 @@ const ALLOWED_MCP_KEYS = new Set([
  */
 export function useMcpActions() {
   useEffect(() => {
-    const unlisten = listen<{
+    if (!isMainWindow()) return;
+    const unlisten = listenScoped<{
       teamKey: string;
       workspaceId: string;
       before?: string;
       after?: string;
-    }>("mcp:reorder-workspace", ({ payload }) => {
+    }>("mcp:reorder-workspace", "main-only", ({ payload }) => {
       const { teamKey, workspaceId, before, after } = payload;
       useViewerStore
         .getState()
@@ -115,6 +117,7 @@ export function useMcpActions() {
     };
   }, []);
   useEffect(() => {
+    if (!isMainWindow()) return;
     let live = true;
     let generation = 0;
     let activating = false;
@@ -135,8 +138,9 @@ export function useMcpActions() {
     const stopWorkspace = useViewerStore.subscribe((next, previous) => {
       if (next.activeWorkspace !== previous.activeWorkspace) supersede();
     });
-    const unlisten = listen<RemoteTerminalRevealPayload>(
+    const unlisten = listenScoped<RemoteTerminalRevealPayload>(
       REMOTE_TERMINAL_REVEAL_EVENT,
+      "main-only",
       ({ payload }) => {
         if (
           !live ||
@@ -212,75 +216,82 @@ export function useMcpActions() {
     };
   }, []);
   useEffect(() => {
-    const unlisten = listen<Record<string, unknown>>("mcp:set-viewer-state", (event) => {
-      logger.debug("mcp", "set-viewer-state received");
-      // Filter to only allowed viewer state keys
-      const filtered: Record<string, unknown> = {};
-      for (const [key, value] of Object.entries(event.payload)) {
-        if (ALLOWED_MCP_KEYS.has(key)) {
-          filtered[key] = value;
-        } else {
-          logger.warn("mcp", `Dropped unsupported viewer state key: ${key}`);
-        }
-      }
-      if (filtered.navLens && typeof filtered.navLens === "object") {
-        for (const [teamKey, value] of Object.entries(filtered.navLens)) {
-          const patch = mcpNavLens(value);
-          if (patch) {
-            useViewerStore.getState().setNavLens(teamKey, patch);
-            useViewerStore.getState().setNavCollapsed(teamKey, false);
+    if (!isMainWindow()) return;
+    const unlisten = listenScoped<Record<string, unknown>>(
+      "mcp:set-viewer-state",
+      "main-only",
+      (event) => {
+        logger.debug("mcp", "set-viewer-state received");
+        // Filter to only allowed viewer state keys
+        const filtered: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(event.payload)) {
+          if (ALLOWED_MCP_KEYS.has(key)) {
+            filtered[key] = value;
+          } else {
+            logger.warn("mcp", `Dropped unsupported viewer state key: ${key}`);
           }
         }
-        delete filtered.navLens;
-      }
-      if (filtered.navCollapsed && typeof filtered.navCollapsed === "object") {
-        for (const [teamKey, collapsed] of Object.entries(filtered.navCollapsed)) {
-          if (typeof collapsed === "boolean")
-            useViewerStore.getState().setNavCollapsed(teamKey, collapsed);
+        if (filtered.navLens && typeof filtered.navLens === "object") {
+          for (const [teamKey, value] of Object.entries(filtered.navLens)) {
+            const patch = mcpNavLens(value);
+            if (patch) {
+              useViewerStore.getState().setNavLens(teamKey, patch);
+              useViewerStore.getState().setNavCollapsed(teamKey, false);
+            }
+          }
+          delete filtered.navLens;
         }
-        delete filtered.navCollapsed;
-      }
-      // SW-RP-1: rightPaneLayout is the one structured key an agent can write —
-      // coerce it (the renderer assumes a well-formed shape). A malformed layout
-      // is dropped rather than crashing RightPaneStack on the next render.
-      // Reconcile to the built-ins like the load path, so an MCP write can't
-      // restore a retired or unregistered panel's section.
-      if ("rightPaneLayout" in filtered) {
-        const coerced = coerceRightPaneLayout(filtered.rightPaneLayout);
-        if (coerced) filtered.rightPaneLayout = reconcileLayoutToBuiltins(coerced);
-        else delete filtered.rightPaneLayout;
-      }
-      // The agent decides the CLI's layout and visibility: its write is honoured as asked,
-      // keeping the pairing `setLayoutMode` keeps. It may leave full screen or fold the CLI.
-      if ("cliChrome" in filtered) {
-        const invalid = invalidCliChromePatchFields(filtered.cliChrome);
-        if (invalid.length) {
-          logger.warn("mcp", `Dropped invalid cliChrome fields: ${invalid.join(", ")}`);
+        if (filtered.navCollapsed && typeof filtered.navCollapsed === "object") {
+          for (const [teamKey, collapsed] of Object.entries(filtered.navCollapsed)) {
+            if (typeof collapsed === "boolean")
+              useViewerStore.getState().setNavCollapsed(teamKey, collapsed);
+          }
+          delete filtered.navCollapsed;
         }
-        const current = cliChromeOf(useViewerStore.getState());
-        const chrome = applyCliChromePatch(current, filtered.cliChrome);
-        if (JSON.stringify(chrome) === JSON.stringify(current)) {
-          logger.warn("mcp", "cliChrome patch changed no fields (invalid or already applied)");
+        // SW-RP-1: rightPaneLayout is the one structured key an agent can write —
+        // coerce it (the renderer assumes a well-formed shape). A malformed layout
+        // is dropped rather than crashing RightPaneStack on the next render.
+        // Reconcile to the built-ins like the load path, so an MCP write can't
+        // restore a retired or unregistered panel's section.
+        if ("rightPaneLayout" in filtered) {
+          const coerced = coerceRightPaneLayout(filtered.rightPaneLayout);
+          if (coerced) filtered.rightPaneLayout = reconcileLayoutToBuiltins(coerced);
+          else delete filtered.rightPaneLayout;
         }
-        delete filtered.cliChrome;
-        Object.assign(filtered, cliChromeState(chrome));
-      }
-      if (filtered.settings && typeof filtered.settings === "object") {
-        filtered.settings = { ...useViewerStore.getState().settings, ...filtered.settings };
-      }
-      if (Object.keys(filtered).length > 0) useViewerStore.setState(filtered);
-      // The backend mirror merged the whole patch, so a save also pushes the real state back
-      // over a value dropped here.
-      useViewerStore.getState().persistState();
-    });
+        // The agent decides the CLI's layout and visibility: its write is honoured as asked,
+        // keeping the pairing `setLayoutMode` keeps. It may leave full screen or fold the CLI.
+        if ("cliChrome" in filtered) {
+          const invalid = invalidCliChromePatchFields(filtered.cliChrome);
+          if (invalid.length) {
+            logger.warn("mcp", `Dropped invalid cliChrome fields: ${invalid.join(", ")}`);
+          }
+          const current = cliChromeOf(useViewerStore.getState());
+          const chrome = applyCliChromePatch(current, filtered.cliChrome);
+          if (JSON.stringify(chrome) === JSON.stringify(current)) {
+            logger.warn("mcp", "cliChrome patch changed no fields (invalid or already applied)");
+          }
+          delete filtered.cliChrome;
+          Object.assign(filtered, cliChromeState(chrome));
+        }
+        if (filtered.settings && typeof filtered.settings === "object") {
+          filtered.settings = { ...useViewerStore.getState().settings, ...filtered.settings };
+        }
+        if (Object.keys(filtered).length > 0) useViewerStore.setState(filtered);
+        // The backend mirror merged the whole patch, so a save also pushes the real state back
+        // over a value dropped here.
+        useViewerStore.getState().persistState();
+      },
+    );
 
     return () => {
       unlisten.then(safeUnlisten).catch(() => {});
     };
   }, []);
   useEffect(() => {
-    const unlisten = listen<import("@/features/viewer/lib/workspace-groups").GroupSnapshot>(
+    if (!isMainWindow()) return;
+    const unlisten = listenScoped<import("@/features/viewer/lib/workspace-groups").GroupSnapshot>(
       "mcp:workspace-groups-changed",
+      "main-only",
       (event) => {
         useViewerStore.getState().applyWorkspaceGroups(event.payload);
       },
@@ -290,22 +301,27 @@ export function useMcpActions() {
     };
   }, []);
   useEffect(() => {
+    if (!isMainWindow()) return;
     // close_workspace dropped the row from the saved state; drop this copy too, or
     // the next save writes it back and the pill returns.
-    const unlisten = listen<RetiredWorkspace>("mcp:workspace-retired", (event) => {
-      const store = useViewerStore.getState();
-      const { open, minimized } = retiredWorkspaceIds(store, event.payload);
-      if (open.length === 0 && minimized.length === 0) return;
-      const { teamKey } = event.payload;
-      // Its sessions already ended; these remove the rows and anything still attached.
-      // The backend retired the row whatever its kind, so the renderer's
-      // user-closable guard does not apply (a root is minted again as usual).
-      for (const id of open) {
-        store.closeWorkspace(teamKey, id, { killTerminals: true, bypassRootGuard: true });
-      }
-      for (const id of minimized) store.killTerminalsForSoftClosedWorkspace(teamKey, id);
-      useViewerStore.getState().persistState();
-    });
+    const unlisten = listenScoped<RetiredWorkspace>(
+      "mcp:workspace-retired",
+      "main-only",
+      (event) => {
+        const store = useViewerStore.getState();
+        const { open, minimized } = retiredWorkspaceIds(store, event.payload);
+        if (open.length === 0 && minimized.length === 0) return;
+        const { teamKey } = event.payload;
+        // Its sessions already ended; these remove the rows and anything still attached.
+        // The backend retired the row whatever its kind, so the renderer's
+        // user-closable guard does not apply (a root is minted again as usual).
+        for (const id of open) {
+          store.closeWorkspace(teamKey, id, { killTerminals: true, bypassRootGuard: true });
+        }
+        for (const id of minimized) store.killTerminalsForSoftClosedWorkspace(teamKey, id);
+        useViewerStore.getState().persistState();
+      },
+    );
 
     return () => {
       unlisten.then(safeUnlisten).catch(() => {});

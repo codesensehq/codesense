@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useCallback, useEffect, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { useEffectiveRefreshKey } from "@/shared/hooks/use-effective-refresh-key";
 import { useWindowVisible } from "@/shared/hooks/use-window-focused";
@@ -76,13 +76,17 @@ export function useFileRedline({
     if (fixed || !privateRoot) return;
     const group = createListenerGroup();
     group.track(
-      listen<ContextGitMovedPayload>(CONTEXT_GIT_MOVED_EVENT, ({ payload }) => {
-        if (
-          payload.repoPath === privateRoot &&
-          payload.kinds.some((kind) => kind === "head" || kind === "refs")
-        )
-          setBaselineMoves((n) => n + 1);
-      }),
+      listenScoped<ContextGitMovedPayload>(
+        CONTEXT_GIT_MOVED_EVENT,
+        "every-window",
+        ({ payload }) => {
+          if (
+            payload.repoPath === privateRoot &&
+            payload.kinds.some((kind) => kind === "head" || kind === "refs")
+          )
+            setBaselineMoves((n) => n + 1);
+        },
+      ),
     );
     return () => group.dispose();
   }, [fixed, privateRoot]);

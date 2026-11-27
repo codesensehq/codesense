@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { useEffect, useMemo } from "react";
 import { create } from "zustand";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 import { userFacingErrorMessage } from "@/shared/lib/error-message";
 import { logger } from "@/shared/lib/logger";
@@ -111,14 +111,14 @@ export function watchAllAgentRows(): () => void {
   watchers += 1;
   if (watchers === 1) {
     listeners = createListenerGroup();
-    listeners.track(listen(AGENTS_CHANGED_EVENT, scheduleRead));
+    listeners.track(listenScoped(AGENTS_CHANGED_EVENT, "every-window", scheduleRead));
     listeners.track(
-      listen<ContextIndexChangedPayload>(CONTEXT_INDEX_CHANGED_EVENT, (e) => {
+      listenScoped<ContextIndexChangedPayload>(CONTEXT_INDEX_CHANGED_EVENT, "every-window", (e) => {
         if (touchesAgents(e.payload)) scheduleRead();
       }),
     );
-    listeners.track(listen(SESSION_STATE_CHANGED_EVENT, scheduleRead));
-    listeners.track(listen(PTY_EXIT_EVENT, scheduleRead));
+    listeners.track(listenScoped(SESSION_STATE_CHANGED_EVENT, "every-window", scheduleRead));
+    listeners.track(listenScoped(PTY_EXIT_EVENT, "every-window", scheduleRead));
   }
   loadAllAgentRows();
   return () => {

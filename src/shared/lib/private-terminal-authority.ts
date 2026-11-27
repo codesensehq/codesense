@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 
 /** A backend presentation fence, never authority for an operation. */
 export interface PrivateAuthorityStatus {
@@ -84,10 +84,14 @@ export function listenForPrivateAuthorityRetirement(): Promise<void> {
       }
       resolve();
     }
-    void listen<PrivateAuthorityStatus>("private-authority-retired", ({ payload }) => {
-      if (abandoned) return;
-      retirePrivateAuthority(payload);
-    }).then(
+    void listenScoped<PrivateAuthorityStatus>(
+      "private-authority-retired",
+      "every-window",
+      ({ payload }) => {
+        if (abandoned) return;
+        retirePrivateAuthority(payload);
+      },
+    ).then(
       (unlisten) => {
         if (settled) {
           unlisten();

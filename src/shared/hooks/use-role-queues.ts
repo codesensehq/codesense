@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { useEffect, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import { agentReadRoles, type RoleQueue } from "@/tauri/commands";
 
 const READ_DEBOUNCE_MS = 250;
@@ -36,7 +36,7 @@ export function useRoleQueues(teamKey: string) {
       clearTimeout(pending);
       pending = setTimeout(() => void load(), READ_DEBOUNCE_MS);
     };
-    const stop = listen("agent-state-changed", later).catch(() => () => {});
+    const stop = listenScoped("agent-state-changed", "every-window", later).catch(() => () => {});
     const timer = setInterval(() => void load(), 20_000);
     return () => {
       current = false;

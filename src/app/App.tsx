@@ -19,11 +19,12 @@ import { useShortcutsStore } from "@/shared/stores/shortcuts-store";
 import { useUiStore } from "@/shared/stores/ui-store";
 import { useShortcutHandler } from "@/shared/hooks/use-shortcut-handler";
 import { dispatchMenuAction } from "@/app/menu-action-dispatch";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { currentWindow } from "@/shared/lib/current-window";
 import { startWatching, stopWatching } from "@/tauri/commands";
 import { CONTEXT_FILE_CHANGE_EVENT, type ContextFileChangePayload } from "@/tauri/events";
 import { registerWorkspaceWatchBridge } from "@/app/lib/workspace-watch-bridge";
-import { listen, emit } from "@tauri-apps/api/event";
+import { emit } from "@tauri-apps/api/event";
+import { listenScoped } from "@/shared/windows/listen-scoped";
 import { safeUnlisten } from "@/shared/lib/tauri-listeners";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { initLogging, logger } from "@/shared/lib/logger";
@@ -536,7 +537,7 @@ function App() {
   useEffect(() => {
     let unlisten: (() => void) | null = null;
     let cancelled = false;
-    listen("dep-status-changed", () => {
+    listenScoped("dep-status-changed", "every-window", () => {
       // SW-OB-12: skip while the git-guidance gate is up (dependenciesReady ===
       // false → DependencyInstallView mounted); that view drives its own
       // detection re-check. Proceed when ready (true) AND on the splash (null) —
@@ -592,7 +593,7 @@ function App() {
     let unlisten: (() => void) | null = null;
     // dispatchMenuAction applies the same scope/Settings/auth gate as the
     // keyboard handler and routes panel toggles — see menu-action-dispatch.ts.
-    listen<string>("menu:action", (e) => dispatchMenuAction(e.payload))
+    listenScoped<string>("menu:action", "main-only", (e) => dispatchMenuAction(e.payload))
       .then((fn) => {
         if (cancelled) {
           safeUnlisten(fn);
@@ -619,10 +620,14 @@ function App() {
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
-    listen<{ wsId: string; changedPath: string }>("worktree-file-change", (e) => {
-      const { wsId, changedPath } = e.payload;
-      useViewerStore.getState().bumpWorktreeChangedPath(wsId, changedPath);
-    })
+    listenScoped<{ wsId: string; changedPath: string }>(
+      "worktree-file-change",
+      "main-only",
+      (e) => {
+        const { wsId, changedPath } = e.payload;
+        useViewerStore.getState().bumpWorktreeChangedPath(wsId, changedPath);
+      },
+    )
       .then((fn) => {
         if (cancelled) safeUnlisten(fn);
         else unlisten = fn;
@@ -637,7 +642,11 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const subscription = listen("local-profiles-changed", () => void initializeAuth());
+    const subscription = listenScoped(
+      "local-profiles-changed",
+      "every-window",
+      () => void initializeAuth(),
+    );
     return () => {
       void subscription.then((unlisten) => unlisten());
     };
@@ -816,7 +825,7 @@ function App() {
             }
           }
           // Show window after state is fully loaded — prevents picker flash
-          getCurrentWindow()
+          currentWindow()
             .show()
             .catch(() => {});
         });
@@ -831,7 +840,7 @@ function App() {
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
-    getCurrentWindow()
+    currentWindow()
       .onCloseRequested(async (event) => {
         event.preventDefault();
         try {
@@ -839,7 +848,7 @@ function App() {
         } finally {
           // destroy() bypasses the event system — close() would re-emit
           // closeRequested, creating an infinite loop.
-          getCurrentWindow()
+          currentWindow()
             .destroy()
             .catch(() => {});
         }
@@ -860,7 +869,7 @@ function App() {
   useEffect(() => {
     let cancelled = false;
     let off: (() => void) | undefined;
-    void listen("app:quit-flush", async () => {
+    void listenScoped("app:quit-flush", "main-only", async () => {
       await flushBeforeQuit();
       await emit("app:quit-flush-ack");
     }).then((unlisten) => {
@@ -959,8 +968,9 @@ function App() {
         { leading: true },
       );
 
-      const unlistenContext = await listen<ContextFileChangePayload>(
+      const unlistenContext = await listenScoped<ContextFileChangePayload>(
         CONTEXT_FILE_CHANGE_EVENT,
+        "main-only",
         (event) => {
           const { file_path } = event.payload;
           // SW-FX-16: the emitted `repo_path` is the surface's `ws.cwd`, which for

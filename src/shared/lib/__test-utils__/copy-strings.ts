@@ -7,14 +7,18 @@ import { readdirSync, readFileSync, statSync } from "fs";
 import { join } from "path";
 import ts from "typescript";
 
-/** Every non-test `.ts`/`.tsx` file under `dir`; test, mock and fixture dirs are skipped. */
-export function sourceFiles(dir: string): string[] {
+const TEST_DIRS = ["__tests__", "mock", "fixtures"] as const;
+
+/**
+ * Every non-test `.ts`/`.tsx` file under `dir`. Directories named in `skipDirs` are skipped
+ * anywhere in the tree; by default the test, mock and fixture dirs. A guard that must reach
+ * those dirs passes its own list (often `[]`) and filters the paths it means to leave out.
+ */
+export function sourceFiles(dir: string, skipDirs: readonly string[] = TEST_DIRS): string[] {
   return readdirSync(dir).flatMap((name) => {
     const path = join(dir, name);
     if (statSync(path).isDirectory()) {
-      return name === "__tests__" || name === "mock" || name === "fixtures"
-        ? []
-        : sourceFiles(path);
+      return skipDirs.includes(name) ? [] : sourceFiles(path, skipDirs);
     }
     return /\.tsx?$/.test(name) && !/\.(test|spec)\.tsx?$/.test(name) && !name.endsWith(".d.ts")
       ? [path]

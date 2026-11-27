@@ -42,6 +42,17 @@ import type { LoadedOrg } from "@/shared/types/registry";
 import { pathToTeamContentDirSync } from "@/shared/lib/team-content-path";
 
 /**
+ * Log every command name `router` is asked for, in order, so a spec can assert what the app
+ * invoked (a satellite window's boot must not save the app state, for one).
+ */
+export function recordInvokes(router: InvokeRouter, log: string[]): InvokeRouter {
+  return (cmd, args) => {
+    log.push(cmd);
+    return router(cmd, args);
+  };
+}
+
+/**
  * Assemble the mock backend for the carved onboarding/config surface: one
  * session-scoped in-memory state, every command-handler group wired to it,
  * folded into a single `invoke` router. The router is what the
