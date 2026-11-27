@@ -20,7 +20,14 @@ import { LISTENER_INVENTORY, type ListenerRow } from "./listener-inventory";
 
 const SRC = resolve(__dirname, "../..");
 const EVENT_MODULE = "@tauri-apps/api/event";
+const BARREL_MODULE = "@tauri-apps/api";
 const HELPER = "shared/windows/listen-scoped.ts";
+/** The raw registrations from the event module that bypass `listenScoped`. */
+const RAW_LISTENERS = new Set(["listen", "once"]);
+/** The `current-window.ts` handle getters whose `.listen`/`.once` register on that webview alone. */
+const HANDLE_GETTERS = new Set(["currentWindow", "currentWebview", "currentWebviewWindow"]);
+/** The files that may register on a handle: webview-scoped, and gated to `main` by hand. */
+const HANDLE_LISTENERS = new Set(["shared/hooks/use-rendered-document-bridge.ts"]);
 
 interface Site {
   file: string;
@@ -45,8 +52,19 @@ function eventKey(arg: ts.Expression | undefined, source: ts.SourceFile): string
   return /^[A-Z][A-Z0-9_]*$/.test(text) ? text : `{${text}}`;
 }
 
-function isCallee(node: ts.Identifier): boolean {
-  return ts.isCallExpression(node.parent) && node.parent.expression === node;
+/** The call `node` is the callee of, directly or as the member of `ns.node(..)`. */
+function calleeCall(node: ts.Identifier): ts.CallExpression | null {
+  const parent = node.parent;
+  if (ts.isCallExpression(parent) && parent.expression === node) return parent;
+  if (
+    ts.isPropertyAccessExpression(parent) &&
+    parent.name === node &&
+    ts.isCallExpression(parent.parent) &&
+    parent.parent.expression === parent
+  ) {
+    return parent.parent;
+  }
+  return null;
 }
 
 /** The listener sites in one file, and what breaks the rules. `file` is relative to `src/`. */
@@ -65,28 +83,47 @@ function scanFile(file: string, text: string): Scan {
   const isHelper = file === HELPER;
   const rawListen = new Set<string>();
 
+  // The local names `listenScoped` is imported under, so an alias is still a site.
+  const scopedNames = new Set(["listenScoped"]);
+
   for (const statement of source.statements) {
-    const fromEvent =
-      (ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement)) &&
-      statement.moduleSpecifier !== undefined &&
-      ts.isStringLiteral(statement.moduleSpecifier) &&
-      statement.moduleSpecifier.text === EVENT_MODULE;
-    if (!fromEvent) continue;
-    if (ts.isExportDeclaration(statement)) {
-      if (!statement.isTypeOnly) violations.push(`${at(statement)}: re-exports ${EVENT_MODULE}`);
+    if (!ts.isImportDeclaration(statement) && !ts.isExportDeclaration(statement)) continue;
+    const specifier = statement.moduleSpecifier;
+    if (!specifier || !ts.isStringLiteral(specifier)) continue;
+    if (/(^|\/)listen-scoped$/.test(specifier.text) && ts.isImportDeclaration(statement)) {
+      const named = statement.importClause?.namedBindings;
+      if (named && ts.isNamedImports(named)) {
+        for (const element of named.elements) {
+          if ((element.propertyName ?? element.name).text === "listenScoped") {
+            scopedNames.add(element.name.text);
+          }
+        }
+      }
       continue;
     }
-    const clause = (statement as ts.ImportDeclaration).importClause;
+    const fromBarrel = specifier.text === BARREL_MODULE;
+    if (specifier.text !== EVENT_MODULE && !fromBarrel) continue;
+    if (ts.isExportDeclaration(statement)) {
+      if (!statement.isTypeOnly) violations.push(`${at(statement)}: re-exports ${specifier.text}`);
+      continue;
+    }
+    const clause = statement.importClause;
     if (!clause || clause.isTypeOnly) continue;
     const bindings = clause.namedBindings;
     if (bindings && ts.isNamespaceImport(bindings)) {
-      violations.push(`${at(statement)}: namespace import of ${EVENT_MODULE}`);
+      violations.push(`${at(statement)}: namespace import of ${specifier.text}`);
     } else if (bindings) {
       for (const element of bindings.elements) {
-        if (element.isTypeOnly || (element.propertyName ?? element.name).text !== "listen")
-          continue;
-        if (isHelper) rawListen.add(element.name.text);
-        else violations.push(`${at(element)}: imports listen from ${EVENT_MODULE}`);
+        if (element.isTypeOnly) continue;
+        const imported = (element.propertyName ?? element.name).text;
+        if (fromBarrel) {
+          if (imported === "event") {
+            violations.push(`${at(element)}: imports the event namespace from ${BARREL_MODULE}`);
+          }
+        } else if (RAW_LISTENERS.has(imported)) {
+          if (isHelper && imported === "listen") rawListen.add(element.name.text);
+          else violations.push(`${at(element)}: imports ${imported} from ${EVENT_MODULE}`);
+        }
       }
     }
   }
@@ -101,13 +138,22 @@ function scanFile(file: string, text: string): Scan {
       violations.push(`${at(node)}: dynamic import of ${EVENT_MODULE}`);
     }
     if (ts.isIdentifier(node) && rawListen.has(node.text) && !ts.isImportSpecifier(node.parent)) {
-      if (!isCallee(node)) violations.push(`${at(node)}: listen passed by reference`);
+      if (!calleeCall(node)) violations.push(`${at(node)}: listen passed by reference`);
     }
-    if (ts.isIdentifier(node) && node.text === "listenScoped") {
+    const member =
+      node.parent !== undefined &&
+      ts.isPropertyAccessExpression(node.parent) &&
+      node.parent.name === node;
+    if (
+      ts.isIdentifier(node) &&
+      scopedNames.has(node.text) &&
+      (node.text === "listenScoped" || !member) &&
+      !ts.isImportSpecifier(node.parent)
+    ) {
       const parent = node.parent;
       const declared = isHelper && ts.isFunctionDeclaration(parent) && parent.name === node;
-      if (isCallee(node)) {
-        const call = parent as ts.CallExpression;
+      const call = calleeCall(node);
+      if (call) {
         const scope = call.arguments[1];
         sites.push({
           file,
@@ -115,9 +161,22 @@ function scanFile(file: string, text: string): Scan {
           scope: scope && ts.isStringLiteral(scope) ? scope.text : null,
           line: source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1,
         });
-      } else if (!ts.isImportSpecifier(parent) && !declared) {
+      } else if (!declared) {
         violations.push(`${at(node)}: listenScoped passed by reference`);
       }
+    }
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      RAW_LISTENERS.has(node.expression.name.text) &&
+      ts.isCallExpression(node.expression.expression) &&
+      ts.isIdentifier(node.expression.expression.expression) &&
+      HANDLE_GETTERS.has(node.expression.expression.expression.text) &&
+      !HANDLE_LISTENERS.has(file)
+    ) {
+      violations.push(
+        `${at(node)}: registers on a window handle with .${node.expression.name.text}`,
+      );
     }
     ts.forEachChild(node, visit);
   };
@@ -151,7 +210,7 @@ function checkInventory(sites: Site[], rows: readonly ListenerRow[]): string[] {
 }
 
 function scanSrc(): Scan {
-  const files = sourceFiles(SRC)
+  const files = sourceFiles(SRC, [])
     .map((path) => relative(SRC, path).split(sep).join("/"))
     .filter((file) => !file.split("/").includes("__test-utils__") && !file.startsWith("app/mock/"));
   const scans = files.map((file) => scanFile(file, readFileSync(join(SRC, file), "utf8")));
@@ -253,6 +312,54 @@ describe("every global listener registers through listenScoped with an inventory
       const { sites, violations } = scanFile("planted.ts", planted);
       expect(violations).toEqual(["planted.ts:2: listenScoped passed by reference"]);
       expect(sites.map((site) => site.event)).toEqual(["{run-*}", "{name}"]);
+    });
+
+    it("sees an aliased listenScoped call as a site, and an aliased or member call too", () => {
+      const planted = [
+        'import { listenScoped as on } from "./listen-scoped";',
+        'on("aliased", "every-window", () => {});',
+        'import * as scoped from "@/shared/windows/listen-scoped";',
+        'scoped.listenScoped("member", "main-only", () => {});',
+        'other.on("not-a-site", () => {});',
+      ].join("\n");
+      const { sites, violations } = scanFile("planted.ts", planted);
+      expect(violations).toEqual([]);
+      expect(sites.map((site) => `${site.event}:${site.scope}`)).toEqual([
+        "aliased:every-window",
+        "member:main-only",
+      ]);
+    });
+
+    it("fails an aliased listenScoped passed by reference", () => {
+      const planted = [
+        'import { listenScoped as on } from "./listen-scoped";',
+        "const deps = { listen: on };",
+      ].join("\n");
+      expect(scanFile("planted.ts", planted).violations).toEqual([
+        "planted.ts:2: listenScoped passed by reference",
+      ]);
+    });
+
+    it("fails once, the event namespace of the barrel and a handle listener", () => {
+      const planted = [
+        'import { once } from "@tauri-apps/api/event";',
+        'import { event } from "@tauri-apps/api";',
+        'import { currentWebviewWindow } from "@/shared/lib/current-window";',
+        'currentWebviewWindow().listen("x", () => {});',
+        'currentWindow().once("y", () => {});',
+      ].join("\n");
+      expect(scanFile("planted.ts", planted).violations).toEqual([
+        "planted.ts:1: imports once from @tauri-apps/api/event",
+        "planted.ts:2: imports the event namespace from @tauri-apps/api",
+        "planted.ts:4: registers on a window handle with .listen",
+        "planted.ts:5: registers on a window handle with .once",
+      ]);
+      expect(
+        scanFile(
+          "shared/hooks/use-rendered-document-bridge.ts",
+          'currentWebviewWindow().listen("x", () => {});',
+        ).violations,
+      ).toEqual([]);
     });
 
     it("allows type-only imports and emit", () => {
