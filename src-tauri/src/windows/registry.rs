@@ -245,6 +245,99 @@ impl WindowRegistry {
         Ok(SetLayoutOutcome { focused: None })
     }
 
+    /// Creates a satellite entry with no items, no Layout and `pending` set, and sends it
+    /// its first slice. Bumps no other window.
+    #[cfg_attr(not(test), allow(dead_code))] // Called when a window opens; nothing opens one yet.
+    pub fn add_satellite(
+        &self,
+        host: &impl WindowHost,
+        label: &str,
+    ) -> Result<WindowSlice, String> {
+        let mut state = self.lock();
+        if state.entries.contains_key(label) {
+            return Err(format!("window {label:?} already exists"));
+        }
+        state.entries.insert(
+            label.to_owned(),
+            WindowEntry::new(label, WindowKind::Satellite, true),
+        );
+        let slice = state.slice(label)?;
+        host.send_slice(&slice);
+        Ok(slice)
+    }
+
+    /// Sets `label`'s `pending` flag. Bumps only that window.
+    #[cfg_attr(not(test), allow(dead_code))] // Called by the move; nothing moves an item yet.
+    pub fn set_pending(
+        &self,
+        host: &impl WindowHost,
+        label: &str,
+        pending: bool,
+    ) -> Result<(), String> {
+        let mut state = self.lock();
+        let entry = state
+            .entries
+            .get_mut(label)
+            .ok_or_else(|| format!("no window {label:?}"))?;
+        if entry.pending != pending {
+            entry.pending = pending;
+            state.bump(host, label);
+        }
+        Ok(())
+    }
+
+    /// Moves `key` from its owner to `to` in one step; with `to` = `main` the key leaves
+    /// every satellite. `main`'s new owner map is sent (a bump of `main`'s slice) before
+    /// the satellites' slices and before this returns, so an item event a caller sends
+    /// afterwards reaches `main` after the map. Returns whether anything changed.
+    #[cfg_attr(not(test), allow(dead_code))] // Called by the move; nothing moves an item yet.
+    pub fn transfer(
+        &self,
+        host: &impl WindowHost,
+        key: &ItemKey,
+        to: &str,
+    ) -> Result<bool, String> {
+        let mut state = self.lock();
+        state.entry(to)?;
+        let holders: Vec<String> = state
+            .entries
+            .values()
+            .filter(|e| e.items.contains(key))
+            .map(|e| e.label.clone())
+            .collect();
+        let to_main = to == MAIN_LABEL;
+        if (holders.is_empty() && to_main) || (holders.len() == 1 && holders[0] == to) {
+            return Ok(false);
+        }
+        let mut changed: Vec<String> = Vec::new();
+        for label in &holders {
+            if label != to {
+                if let Some(e) = state.entries.get_mut(label) {
+                    e.items.remove(key);
+                }
+                changed.push(label.clone());
+            }
+        }
+        if !to_main {
+            if let Some(e) = state.entries.get_mut(to) {
+                if e.items.insert(key.clone()) {
+                    changed.push(to.to_owned());
+                }
+            }
+        }
+        state.bump(host, MAIN_LABEL);
+        for label in changed {
+            state.bump(host, &label);
+        }
+        Ok(true)
+    }
+
+    /// Returns `key` to `main`: it leaves its satellite. Returns whether it was held.
+    #[cfg_attr(not(test), allow(dead_code))] // Called by the return path; nothing holds an item yet.
+    pub fn return_to_main(&self, host: &impl WindowHost, key: &ItemKey) -> Result<bool, String> {
+        self.transfer(host, key, MAIN_LABEL)
+    }
+
     /// Focuses the satellite that owns `key`; a no-op for a key `main` owns. Returns the
     /// focused label.
     pub fn focus_owner(&self, host: &impl WindowHost, key: &ItemKey) -> Option<String> {
@@ -302,6 +395,26 @@ pub(crate) mod test_host {
         }
     }
 
+    /// A window's receiving side: keeps the newest slice and ignores older ones.
+    #[derive(Default)]
+    pub struct Holder {
+        pub held: Option<WindowSlice>,
+    }
+
+    impl Holder {
+        pub fn accept(&mut self, slice: WindowSlice) -> bool {
+            if self
+                .held
+                .as_ref()
+                .is_some_and(|h| h.version >= slice.version)
+            {
+                return false;
+            }
+            self.held = Some(slice);
+            true
+        }
+    }
+
     impl WindowHost for Recorder {
         fn send_slice(&self, slice: &WindowSlice) {
             self.effects.borrow_mut().push(Effect::Sent(slice.clone()));
@@ -317,30 +430,10 @@ pub(crate) mod test_host {
 
 #[cfg(test)]
 mod slices {
-    use super::test_host::Recorder;
+    use super::test_host::{Holder, Recorder};
     use super::*;
     use std::sync::{Arc, Mutex as StdMutex};
     use tauri::Listener;
-
-    /// A window's receiving side: keeps the newest slice and ignores older ones.
-    #[derive(Default)]
-    struct Holder {
-        held: Option<WindowSlice>,
-    }
-
-    impl Holder {
-        fn accept(&mut self, slice: WindowSlice) -> bool {
-            if self
-                .held
-                .as_ref()
-                .is_some_and(|h| h.version >= slice.version)
-            {
-                return false;
-            }
-            self.held = Some(slice);
-            true
-        }
-    }
 
     fn with_satellites(labels: &[&str]) -> WindowRegistry {
         let reg = WindowRegistry::new();
@@ -599,5 +692,239 @@ mod layout {
         assert!(reg
             .set_layout(&host, MAIN_LABEL, "nope", Some("grp_a".into()))
             .is_err());
+    }
+}
+
+#[cfg(test)]
+mod owners {
+    use super::test_host::{Effect, Holder, Recorder};
+    use super::*;
+
+    fn key(id: &str) -> ItemKey {
+        ItemKey {
+            kind: "tab".into(),
+            team: "acme:docs".into(),
+            id: id.into(),
+        }
+    }
+
+    fn reg(host: &Recorder, labels: &[&str]) -> WindowRegistry {
+        let reg = WindowRegistry::new();
+        for l in labels {
+            reg.add_satellite(host, l).unwrap();
+            reg.ready(host, l).unwrap();
+        }
+        host.clear();
+        reg
+    }
+
+    fn version(reg: &WindowRegistry, label: &str) -> u64 {
+        reg.get_slice(MAIN_LABEL, label).unwrap().version
+    }
+
+    fn owners(reg: &WindowRegistry) -> BTreeMap<String, String> {
+        reg.get_slice(MAIN_LABEL, MAIN_LABEL)
+            .unwrap()
+            .owners
+            .unwrap()
+    }
+
+    #[test]
+    fn main_owns_every_key_no_satellite_holds() {
+        let host = Recorder::default();
+        let reg = reg(&host, &["sat-1"]);
+        assert_eq!(reg.owner(&key("a.md")), MAIN_LABEL);
+        reg.transfer(&host, &key("a.md"), "sat-1").unwrap();
+        assert_eq!(reg.owner(&key("a.md")), "sat-1");
+        assert_eq!(reg.owner(&key("A.md")), MAIN_LABEL);
+    }
+
+    #[test]
+    fn main_s_slice_carries_the_map_and_satellites_get_none() {
+        let host = Recorder::default();
+        let reg = reg(&host, &["sat-1"]);
+        reg.transfer(&host, &key("a.md"), "sat-1").unwrap();
+        assert_eq!(
+            owners(&reg),
+            BTreeMap::from([(key("a.md").canonical(), "sat-1".to_owned())])
+        );
+        for effect in host.effects.borrow().iter() {
+            let Effect::Sent(slice) = effect else {
+                continue;
+            };
+            assert_eq!(
+                slice.owners.is_some(),
+                slice.label == MAIN_LABEL,
+                "{slice:?}"
+            );
+        }
+        let sat = reg.get_slice("sat-1", "sat-1").unwrap();
+        assert_eq!((sat.owners, sat.items), (None, vec![key("a.md")]));
+    }
+
+    #[test]
+    fn transfer_from_main_bumps_main_first_then_the_satellite() {
+        let host = Recorder::default();
+        let reg = reg(&host, &["sat-1", "sat-2"]);
+        assert!(reg.transfer(&host, &key("a.md"), "sat-1").unwrap());
+        assert_eq!(
+            host.sent_to(),
+            vec![(MAIN_LABEL.into(), 2), ("sat-1".into(), 3)]
+        );
+        assert_eq!(version(&reg, "sat-2"), 2);
+    }
+
+    #[test]
+    fn transfer_between_satellites_changes_only_main_s_map_in_main() {
+        let host = Recorder::default();
+        let reg = reg(&host, &["sat-1", "sat-2", "sat-3"]);
+        reg.transfer(&host, &key("a.md"), "sat-1").unwrap();
+        let before = reg.get_slice(MAIN_LABEL, MAIN_LABEL).unwrap();
+        host.clear();
+        assert!(reg.transfer(&host, &key("a.md"), "sat-2").unwrap());
+        let after = reg.get_slice(MAIN_LABEL, MAIN_LABEL).unwrap();
+        assert_eq!(after.version, before.version + 1);
+        assert_eq!(
+            (&after.items, &after.layout_ref, after.pending),
+            (&before.items, &before.layout_ref, before.pending)
+        );
+        assert_eq!(after.owners.unwrap()[&key("a.md").canonical()], "sat-2");
+        let sent: Vec<String> = host.sent_to().into_iter().map(|(l, _)| l).collect();
+        assert_eq!(sent, vec![MAIN_LABEL, "sat-1", "sat-2"]);
+        assert!(reg.get_slice("sat-1", "sat-1").unwrap().items.is_empty());
+        assert_eq!(
+            reg.get_slice("sat-2", "sat-2").unwrap().items,
+            vec![key("a.md")]
+        );
+        assert_eq!(version(&reg, "sat-3"), 2);
+    }
+
+    #[test]
+    fn transfer_to_main_takes_the_key_out_of_every_satellite() {
+        let host = Recorder::default();
+        let reg = reg(&host, &["sat-1", "sat-2"]);
+        reg.transfer(&host, &key("a.md"), "sat-1").unwrap();
+        host.clear();
+        assert!(reg.transfer(&host, &key("a.md"), MAIN_LABEL).unwrap());
+        assert_eq!(reg.owner(&key("a.md")), MAIN_LABEL);
+        assert!(owners(&reg).is_empty());
+        let sent: Vec<String> = host.sent_to().into_iter().map(|(l, _)| l).collect();
+        assert_eq!(sent, vec![MAIN_LABEL, "sat-1"]);
+    }
+
+    #[test]
+    fn a_transfer_that_changes_nothing_sends_nothing() {
+        let host = Recorder::default();
+        let reg = reg(&host, &["sat-1"]);
+        assert!(!reg.transfer(&host, &key("a.md"), MAIN_LABEL).unwrap());
+        reg.transfer(&host, &key("a.md"), "sat-1").unwrap();
+        host.clear();
+        assert!(!reg.transfer(&host, &key("a.md"), "sat-1").unwrap());
+        assert!(host.sent_to().is_empty());
+        assert!(reg.transfer(&host, &key("a.md"), "nope").is_err());
+    }
+
+    #[test]
+    fn return_to_main_removes_the_key_from_its_satellite() {
+        let host = Recorder::default();
+        let reg = reg(&host, &["sat-1", "sat-2"]);
+        reg.transfer(&host, &key("a.md"), "sat-1").unwrap();
+        host.clear();
+        assert!(reg.return_to_main(&host, &key("a.md")).unwrap());
+        assert_eq!(reg.owner(&key("a.md")), MAIN_LABEL);
+        let sent: Vec<String> = host.sent_to().into_iter().map(|(l, _)| l).collect();
+        assert_eq!(sent, vec![MAIN_LABEL, "sat-1"]);
+        assert!(!reg.return_to_main(&host, &key("a.md")).unwrap());
+    }
+
+    #[test]
+    fn set_pending_bumps_only_its_own_window() {
+        let host = Recorder::default();
+        let reg = reg(&host, &["sat-1", "sat-2"]);
+        reg.set_pending(&host, "sat-1", true).unwrap();
+        assert_eq!(host.sent_to(), vec![("sat-1".into(), 3)]);
+        assert!(reg.get_slice("sat-1", "sat-1").unwrap().pending);
+        host.clear();
+        reg.set_pending(&host, "sat-1", true).unwrap();
+        assert!(host.sent_to().is_empty());
+    }
+
+    #[test]
+    fn add_satellite_creates_a_pending_entry_and_bumps_no_other_window() {
+        let host = Recorder::default();
+        let reg = reg(&host, &[]);
+        let slice = reg.add_satellite(&host, "sat-1").unwrap();
+        assert_eq!(slice.kind, WindowKind::Satellite);
+        assert_eq!((slice.layout_ref, slice.pending), (None, true));
+        assert!(slice.items.is_empty());
+        assert_eq!(host.sent_to(), vec![("sat-1".into(), 1)]);
+        assert_eq!(version(&reg, MAIN_LABEL), 1);
+        assert!(reg.add_satellite(&host, "sat-1").is_err());
+        assert!(reg.add_satellite(&host, MAIN_LABEL).is_err());
+    }
+
+    #[test]
+    fn add_satellite_then_ready_leaves_it_not_pending() {
+        let host = Recorder::default();
+        let reg = reg(&host, &[]);
+        reg.add_satellite(&host, "sat-1").unwrap();
+        reg.ready(&host, "sat-1").unwrap();
+        assert!(!reg.get_slice("sat-1", "sat-1").unwrap().pending);
+    }
+
+    #[test]
+    fn a_stale_hydrate_pull_reply_is_ignored() {
+        let host = Recorder::default();
+        let reg = reg(&host, &["sat-1"]);
+        // `main` pulls; the reply is still in flight when a transfer pushes a newer map.
+        let pulled = reg.get_slice(MAIN_LABEL, MAIN_LABEL).unwrap();
+        reg.transfer(&host, &key("a.md"), "sat-1").unwrap();
+        let pushed = match host.effects.borrow().first() {
+            Some(Effect::Sent(slice)) if slice.label == MAIN_LABEL => slice.clone(),
+            other => panic!("main's map was not sent first: {other:?}"),
+        };
+        let mut main = Holder::default();
+        assert!(main.accept(pushed));
+        assert!(!main.accept(pulled));
+        assert_eq!(main.held.unwrap().owners.unwrap().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod focus {
+    use super::test_host::Recorder;
+    use super::*;
+
+    fn key(id: &str) -> ItemKey {
+        ItemKey {
+            kind: "tab".into(),
+            team: "acme:docs".into(),
+            id: id.into(),
+        }
+    }
+
+    #[test]
+    fn focus_owner_focuses_the_satellite_that_holds_the_key() {
+        let host = Recorder::default();
+        let reg = WindowRegistry::new();
+        reg.add_satellite(&host, "sat-1").unwrap();
+        reg.transfer(&host, &key("a.md"), "sat-1").unwrap();
+        host.clear();
+        assert_eq!(
+            reg.focus_owner(&host, &key("a.md")).as_deref(),
+            Some("sat-1")
+        );
+        assert_eq!(host.focused(), vec!["sat-1".to_owned()]);
+        assert!(host.sent_to().is_empty());
+    }
+
+    #[test]
+    fn focus_owner_is_a_no_op_for_a_key_main_owns() {
+        let host = Recorder::default();
+        let reg = WindowRegistry::new();
+        reg.add_satellite(&host, "sat-1").unwrap();
+        host.clear();
+        assert_eq!(reg.focus_owner(&host, &key("a.md")), None);
+        assert!(host.effects.borrow().is_empty());
     }
 }
