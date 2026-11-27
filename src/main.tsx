@@ -225,9 +225,13 @@ function renderApp(): void {
   // A satellite window renders its registry slice, never `App`: neither `App`'s
   // module scope nor its effects run there (`boot-inventory.ts`).
   if (!isMainWindow()) {
-    void import("@/shared/windows/satellite-root").then(({ SatelliteRoot }) =>
-      mountRoot(<SatelliteRoot />),
-    );
+    void Promise.all([
+      import("@/shared/windows/satellite-root"),
+      import("@/shared/windows/satellite-registry"),
+    ]).then(([{ SatelliteRoot }, { startSatelliteRegistry }]) => {
+      const registry = startSatelliteRegistry();
+      mountRoot(<SatelliteRoot source={registry.source} released={registry.released} />);
+    });
     return;
   }
   void import("./app/App").then(({ default: App }) => mountRoot(<App />));
