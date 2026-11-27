@@ -392,7 +392,7 @@ describe("ensureWorktree — on-disk detection", () => {
 
   it("recovers incomplete setup on an existing worktree without recreating it", async () => {
     findOnDiskMock.mockResolvedValue({ path: "/wt/retry-setup", branch: "feat/retry" });
-    establishLinkMock.mockResolvedValue(false);
+    establishLinkMock.mockResolvedValue({ setupComplete: false, reconciled: null });
     runSetupPhaseMock
       .mockRejectedValueOnce(new Error("setup failed"))
       .mockResolvedValueOnce({ worktreePath: "/wt/retry-setup", results: [] });
@@ -732,6 +732,24 @@ describe("ensureWorktree — SW-TS-4 establish link", () => {
       "SW-TS-4",
       teamFallbackSlug,
     );
+  });
+
+  it("hands setupWorktree the link's setupComplete, so a rehydrated worktree still runs setup", async () => {
+    findOnDiskMock.mockResolvedValue(null);
+    probeMock.mockResolvedValue({ status: { kind: "present" }, config: baseConfig });
+    establishLinkMock.mockResolvedValue({
+      setupComplete: false,
+      reconciled: { from: "feat/old", to: "feat/34-9-worktree-gate" },
+    });
+    let created: unknown;
+    setupMock.mockImplementation(async (options: { onCreated?: () => unknown }) => {
+      created = await options.onCreated?.();
+      return { worktreePath: "/wt/feat-34-9-worktree-gate", results: [] };
+    });
+
+    await useViewerStore.getState().ensureWorktree(repo, storyFile);
+
+    expect(created).toBe(false);
   });
 
   it("re-asserts the link + re-derives for an already-on-disk worktree (AC-4)", async () => {
@@ -2813,6 +2831,17 @@ describe("reconcileWorktreeBranch (SW-WB-1)", () => {
     // Re-stamps dev_branch even on noop so a stale frontmatter value (e.g. an
     // out-of-band `git switch`) is corrected and the chip clears.
     expect(establishLinkMock).toHaveBeenCalled();
+  });
+
+  it("reports the worktree branch without re-stamping", async () => {
+    seedWorkspace();
+    listWorktreesMock.mockResolvedValue([{ path: OLD_PATH, branch: INTENT, head_sha: "abc" }]);
+    const reconciled = { from: "feat/old", to: INTENT };
+    establishLinkMock.mockResolvedValue({ setupComplete: true, reconciled });
+
+    const res = await useViewerStore.getState().reconcileWorktreeBranch(repo, storyFile);
+
+    expect(res).toEqual({ path: OLD_PATH, mode: "noop", reconciled });
   });
 
   it("finds the worktree when git spells its path C:/x/ and the workspace has C:\\x", async () => {

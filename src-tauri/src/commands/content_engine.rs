@@ -6641,6 +6641,75 @@ mod tests {
         assert!(!stamps_story_branch(home.path(), &principal, seat.path()));
     }
 
+    /// Linking a worktree from the UI to a story whose `branch` differs reports the
+    /// drift and leaves the story doc in the canonical clone byte for byte as it was.
+    #[test]
+    fn ui_link_leaves_the_canonical_clone_clean() {
+        use crate::commands::mcp_workspace::BranchReconcile;
+        use crate::test_support::git_fixture::{committed_repo, porcelain};
+        const DOC: &str = "---\nstatus: todo\nbranch: feat/old\n---\n# Story\n";
+        let clone = tempfile::tempdir().unwrap();
+        committed_repo(clone.path(), "main", &[("S-1.md", DOC)]);
+        let story = clone.path().join("S-1.md");
+        let worktree = tempfile::tempdir().unwrap();
+        let oid = committed_repo(worktree.path(), "feat/new", &[]);
+
+        // A repeat link reports the drift again: nothing wrote `branch:` in between.
+        for _ in 0..2 {
+            assert_eq!(
+                link_branch_report(Some("feat/old".into()), worktree.path()),
+                Some(BranchReconcile {
+                    from: Some("feat/old".into()),
+                    to: "feat/new".into(),
+                })
+            );
+        }
+        assert_eq!(
+            link_branch_report(None, worktree.path()),
+            Some(BranchReconcile {
+                from: None,
+                to: "feat/new".into(),
+            })
+        );
+        assert_eq!(
+            link_branch_report(Some("feat/new".into()), worktree.path()),
+            None
+        );
+        git2::Repository::open(worktree.path())
+            .unwrap()
+            .set_head_detached(oid)
+            .unwrap();
+        assert_eq!(
+            link_branch_report(Some("feat/old".into()), worktree.path()),
+            None
+        );
+        assert_eq!(porcelain(clone.path()), Vec::<String>::new());
+        assert_eq!(std::fs::read_to_string(&story).unwrap(), DOC);
+    }
+
+    /// No establish path can write the story doc: the writer, the seat check that gated
+    /// it and the flag that chose it are gone from the production source.
+    #[test]
+    fn no_caller_stamps_the_canonical_clone() {
+        let production =
+            crate::test_support::source_guard::production_text(include_str!("content_engine.rs"));
+        let squash = crate::test_support::source_guard::squashed;
+        let code = squash(&production);
+        for gone in [
+            "fn write_story_branch(",
+            "fn story_branch_rewrite(",
+            "fn stamps_story_branch(",
+            "stamp: bool",
+            "establish_worktree_story_link_with(",
+            "establish_worktree_story_link_unstamped(",
+        ] {
+            assert!(
+                !code.contains(&squash(gone)),
+                "{gone} is still in content_engine.rs"
+            );
+        }
+    }
+
     #[test]
     fn delayed_old_profile_team_activation_is_rejected_before_mutation() {
         let home = tempfile::tempdir().unwrap();
