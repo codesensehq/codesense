@@ -28,7 +28,8 @@ import { expect, test, type Browser, type Page } from "@playwright/test";
  * listener, so before the app handles it) and read once per animation frame until the end
  * check holds. A click on an agent in the left bar ends at the first frame where exactly one
  * `END_STATES` row matches that agent: none within 5 s fails "no end state matched", two fail
- * "ambiguous". A change that moves where that click lands adds its row here, in the same change.
+ * "ambiguous", and one that already holds before the click fails the sample rather than timing a
+ * frame. A change that moves where that click lands adds its row here, in the same change.
  */
 
 const ENABLED = process.env.MEASURE_PERF_BASELINE === "1";
@@ -180,7 +181,10 @@ function installClock(page: Page) {
   );
 }
 
-/** Times one click on `trigger`, until `ends(arg)` names the end state it stopped on. */
+/**
+ * Times one click on `trigger`, until `ends(arg)` names the end state it stopped on. A sample whose
+ * end state already holds when the click lands is refused: it would time about one frame.
+ */
 async function timedClick(page: Page, trigger: string, ends: Ends, arg: string): Promise<Sample> {
   await page.locator(trigger).scrollIntoViewIfNeeded();
   await page.evaluate(
@@ -189,6 +193,17 @@ async function timedClick(page: Page, trigger: string, ends: Ends, arg: string):
       const onClick = (event: Event) => {
         if (!(event.target as Element | null)?.closest(trigger)) return;
         document.removeEventListener("click", onClick, true);
+        const refuse = (err: unknown) => {
+          window.__perf.done = Promise.reject(err);
+          window.__perf.done.catch(() => {});
+        };
+        let before: string | null;
+        try {
+          before = window.__perf.ends[ends](arg);
+        } catch (err) {
+          return refuse(err);
+        }
+        if (before) return refuse(new Error(`end state ${before} already shown before the click`));
         const start = performance.now();
         window.__perf.done = new Promise((resolve, reject) => {
           const frame = () => {
@@ -289,6 +304,9 @@ test.describe("perf baseline (measurement)", () => {
         await page.locator(agentRow(HOME_TEAM, HOME_AGENT)).scrollIntoViewIfNeeded();
         await page.locator(agentRow(HOME_TEAM, HOME_AGENT)).click();
         await expect(page.getByTestId("identity-menu-team")).toHaveText("default");
+        // The label alone isn't enough once agents open without a team switch: wait until no
+        // view of the other agent is left on screen.
+        await page.waitForFunction((session) => !window.__perf.ends.agent(session), OTHER_SESSION);
         record("open_other_team_agent_warm", await timedClick(page, other, "agent", OTHER_SESSION));
       } finally {
         await context.close();
@@ -329,6 +347,20 @@ test.describe("perf baseline (measurement)", () => {
       } finally {
         await context.close();
       }
+    }
+  });
+
+  // Last, so a failure here never skips a measured case.
+  test("a click whose end state already shows is refused, not timed", async ({ browser }) => {
+    const { context, page } = await freshPage(browser);
+    try {
+      const other = agentRow(OTHER_TEAM, OTHER_AGENT);
+      await timedClick(page, other, "agent", OTHER_SESSION);
+      await expect(timedClick(page, other, "agent", OTHER_SESSION)).rejects.toThrow(
+        "end state team-switch already shown before the click",
+      );
+    } finally {
+      await context.close();
     }
   });
 });
