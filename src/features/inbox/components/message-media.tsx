@@ -16,8 +16,9 @@ export interface MediaLoader {
   read: (sha256: string) => Promise<Blob>;
   /** Load the message's held or failed image; the stored row changes once it lands. */
   load: () => Promise<void>;
-  /** The team whose media config governs the image, as the cards name it. */
-  teamLabel: string;
+  /** The team whose media config governs the image, as the cards name it; null when the
+   *  message names no team. */
+  teamLabel: string | null;
   /** The machine a remote sender runs on, when its row names one. */
   machine?: string | null;
 }
@@ -65,11 +66,13 @@ export function attributionOf(a: InboxMediaAttachment): "giphy" | "klipy" | null
 /** Why an image isn't shown, in the pane's words. `machine` names a remote sender's machine. */
 export function mediaReason(
   a: InboxMediaAttachment,
-  team: string,
+  team: string | null,
   machine?: string | null,
 ): string {
   if (a.state === "blocked" || a.reason === "off") {
-    return `GIF · media is off in ${team}'s team config`;
+    return team
+      ? `GIF · media is off in ${team}'s team config`
+      : "GIF · media is off in the team config";
   }
   if (a.state === "failed") {
     return (
@@ -81,7 +84,7 @@ export function mediaReason(
       ? `GIF · sent from ${machine}, not loaded here yet`
       : "GIF · from another person's machine";
   }
-  if (a.reason === "ask") return `GIF · ${team} asks before loading`;
+  if (a.reason === "ask") return `GIF · ${team ?? "the team"} asks before loading`;
   return "GIF · not on your auto-load list";
 }
 

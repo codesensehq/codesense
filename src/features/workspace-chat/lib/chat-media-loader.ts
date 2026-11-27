@@ -16,7 +16,7 @@ export function chatMediaLoader(
   return {
     read: (sha256) => readWorkspaceChatMedia(message.workspaceId, message.messageId, sha256),
     load: () => loadWorkspaceChatMedia(message.workspaceId, message.messageId),
-    teamLabel: message.mediaTeam?.team ?? "this",
+    teamLabel: message.mediaTeam?.team ?? null,
     machine,
   };
 }
