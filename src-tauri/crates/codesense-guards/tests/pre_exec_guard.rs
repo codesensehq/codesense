@@ -370,7 +370,7 @@ fn violations(sources: &[(String, Vec<u8>)], allowed: Allowed, callers: Callers)
             }
             sites_seen.insert((site.file, site.function));
         }
-        for (allowed_file, _, helper) in allowed {
+        for (allowed_file, helper, _) in allowed {
             let own_stub = file.as_str() != *allowed_file
                 && idents(code, helper).into_iter().any(|at| is_definition(code, at));
             let (uses, renames) = helper_uses(file, code, helper, own_stub);
