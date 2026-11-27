@@ -13,10 +13,16 @@
 //!   modules included, except `crates/codesense-session-server/src/`: the
 //!   session server is its own small process, where a fork is cheap.
 //!   Integration tests (`tests/`) are not scanned.
-//! - **A site** is the identifier `pre_exec` followed by `(`, outside comments
-//!   and string or char literals, named by its file and the function it is in.
-//! - **Fails** on a site that is not in [`ALLOWED`], and on an [`ALLOWED`] row
-//!   with no site left (remove the row).
+//! - **A site** is the identifier `pre_exec` or its deprecated alias
+//!   `before_exec` followed by `(`, outside comments and string or char
+//!   literals, named by its file and the function it is in.
+//! - **A helper use.** An [`ALLOWED`] site's function installs the hook for
+//!   whoever calls it, so every mention of that function's name outside its
+//!   definition and `use` items (a call through any re-export path, or a
+//!   function pointer) is a use, named the same way.
+//! - **Fails** on a site not in [`ALLOWED`], a helper use not in [`CALLERS`],
+//!   a `use` that renames a helper (it would hide its callers), and an
+//!   [`ALLOWED`] or [`CALLERS`] row with nothing left (remove the row).
 //!
 //! Std-only, like the other guards: point `CODESENSE_GUARD_ROOT` at another
 //! `src-tauri` to run it on that tree.
@@ -42,6 +48,31 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "restores the original open-file rlimit, which posix_spawn cannot set; once per sidecar start",
     ),
 ];
+
+/// `(helper, file, function, reason)`: the callers of an [`ALLOWED`] helper.
+const CALLERS: &[(&str, &str, &str, &str)] = &[
+    (
+        "in_new_session",
+        "src/commands/deps.rs",
+        "capture_stdout_within",
+        "the deps check's login-shell probe, so its timeout can kill the whole session",
+    ),
+    (
+        "inherit_original_limit",
+        "src/terminal/session_server.rs",
+        "sidecar_command",
+        "the sidecar starts with the open-file limit the app had before its raise",
+    ),
+    (
+        "inherit_original_limit",
+        "crates/codesense-platform/src/limits/windows.rs",
+        "every_entry_point_is_a_no_op",
+        "the Windows stub's own test; the stub installs no hook",
+    ),
+];
+
+/// The spawn hooks that force a fork.
+const HOOKS: [&str; 2] = ["pre_exec", "before_exec"];
 
 /// Files whose spawns moved off `pre_exec`; they must stay at zero sites.
 const NO_SITES: &[&str] = &[
@@ -176,27 +207,88 @@ fn enclosing_fn(code: &[u8], at: usize) -> String {
     found.unwrap_or_else(|| "<top level>".into())
 }
 
-/// Every `pre_exec(` site in one file's source.
-fn sites_in(file: &str, src: &str) -> Vec<Site> {
-    let code = blank(src);
-    let needle = b"pre_exec";
-    let mut sites = Vec::new();
+/// The offsets of the identifier `ident` in blanked `code`.
+fn idents(code: &[u8], ident: &str) -> Vec<usize> {
+    let needle = ident.as_bytes();
+    let mut found = Vec::new();
     let mut i = 0;
     while let Some(n) = code[i..].windows(needle.len()).position(|w| w == needle) {
         let start = i + n;
         let end = start + needle.len();
-        let before_ok = start == 0 || !is_ident(code[start - 1]);
-        let after = code[end..].iter().position(|c| !c.is_ascii_whitespace());
-        if before_ok && after.is_some_and(|k| code[end + k] == b'(') {
-            sites.push(Site {
-                file: file.to_owned(),
-                function: enclosing_fn(&code, start),
-                line: 1 + code[..start].iter().filter(|&&c| c == b'\n').count(),
-            });
+        let bounded = (start == 0 || !is_ident(code[start - 1]))
+            && code.get(end).is_none_or(|&c| !is_ident(c));
+        if bounded {
+            found.push(start);
         }
         i = end;
     }
+    found
+}
+
+/// The first non-whitespace byte at or after `at`.
+fn next_byte(code: &[u8], at: usize) -> Option<u8> {
+    code[at..].iter().copied().find(|c| !c.is_ascii_whitespace())
+}
+
+fn site(file: &str, code: &[u8], at: usize) -> Site {
+    Site {
+        file: file.to_owned(),
+        function: enclosing_fn(code, at),
+        line: 1 + code[..at].iter().filter(|&&c| c == b'\n').count(),
+    }
+}
+
+/// Every spawn-hook site (`pre_exec(`, `before_exec(`) in blanked `code`.
+fn hook_sites(file: &str, code: &[u8]) -> Vec<Site> {
+    let mut sites: Vec<_> = HOOKS
+        .iter()
+        .flat_map(|hook| {
+            idents(code, hook)
+                .into_iter()
+                .filter(|&at| next_byte(code, at + hook.len()) == Some(b'('))
+                .map(|at| site(file, code, at))
+        })
+        .collect();
+    sites.sort();
     sites
+}
+
+/// Every spawn-hook site in one file's source.
+fn sites_in(file: &str, src: &str) -> Vec<Site> {
+    hook_sites(file, &blank(src))
+}
+
+/// Whether the identifier at `at` is the name in its own `fn` definition.
+fn is_definition(code: &[u8], at: usize) -> bool {
+    let before = code[..at].trim_ascii_end();
+    before.ends_with(b"fn") && (before.len() == 2 || !is_ident(before[before.len() - 3]))
+}
+
+/// Whether `at` is inside a `use` item: a `use` keyword with no `;` since.
+fn in_use_item(code: &[u8], at: usize) -> bool {
+    idents(&code[..at], "use")
+        .last()
+        .is_some_and(|&start| !code[start..at].contains(&b';'))
+}
+
+/// Uses of `helper` in blanked `code`, and the `use` items that rename it.
+fn helper_uses(file: &str, code: &[u8], helper: &str) -> (Vec<Site>, Vec<Site>) {
+    let (mut uses, mut renames) = (Vec::new(), Vec::new());
+    for at in idents(code, helper) {
+        if is_definition(code, at) {
+            continue;
+        }
+        if !in_use_item(code, at) {
+            uses.push(site(file, code, at));
+            continue;
+        }
+        let after = at + helper.len();
+        let renamed = code[after..].trim_ascii_start();
+        if renamed.starts_with(b"as") && renamed.get(2).is_none_or(|&c| !is_ident(c)) {
+            renames.push(site(file, code, at));
+        }
+    }
+    (uses, renames)
 }
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -221,7 +313,8 @@ fn label(app: &Path, file: &Path) -> String {
         .replace('\\', "/")
 }
 
-fn census(app: &Path) -> Vec<Site> {
+/// Every scanned source as `(label, blanked code)`.
+fn sources(app: &Path) -> Vec<(String, Vec<u8>)> {
     let mut roots = vec![app.join("src")];
     let mut crates: Vec<_> = fs::read_dir(app.join("crates"))
         .expect("read crates")
@@ -235,50 +328,89 @@ fn census(app: &Path) -> Vec<Site> {
         rust_files(root, &mut files);
     }
     files.sort();
-    let mut sites = Vec::new();
-    for file in files {
-        let src = fs::read_to_string(&file)
-            .unwrap_or_else(|e| panic!("read {}: {e}", file.display()));
-        sites.extend(sites_in(&label(app, &file), &src));
-    }
-    sites
+    files
+        .into_iter()
+        .map(|file| {
+            let src = fs::read_to_string(&file)
+                .unwrap_or_else(|e| panic!("read {}: {e}", file.display()));
+            (label(app, &file), blank(&src))
+        })
+        .collect()
 }
 
-/// Each failure as one line: unlisted sites, then rows with no site left.
-fn violations(sites: &[Site], allowed: &[(&str, &str, &str)]) -> Vec<String> {
+type Allowed<'a> = &'a [(&'a str, &'a str, &'a str)];
+type Callers<'a> = &'a [(&'a str, &'a str, &'a str, &'a str)];
+
+/// Each failure as one line: unlisted sites and helper uses, renamed helpers,
+/// then rows with nothing left.
+fn violations(sources: &[(String, Vec<u8>)], allowed: Allowed, callers: Callers) -> Vec<String> {
     let mut out = Vec::new();
-    for site in sites {
-        let listed = allowed
-            .iter()
-            .any(|(file, function, _)| *file == site.file && *function == site.function);
-        if !listed {
+    let mut sites_seen = BTreeSet::new();
+    let mut callers_seen = BTreeSet::new();
+    for (file, code) in sources {
+        for site in hook_sites(file, code) {
+            let listed = allowed
+                .iter()
+                .any(|(f, function, _)| *f == site.file && *function == site.function);
+            if !listed {
+                out.push(format!(
+                    "{}:{} spawn hook in fn {}: it forks the whole app; spawn with \
+                     process_group(0) or a /bin/sh wrapper, or list it in ALLOWED with the reason",
+                    site.file, site.line, site.function
+                ));
+            }
+            sites_seen.insert((site.file, site.function));
+        }
+        for (_, _, helper) in allowed {
+            let (uses, renames) = helper_uses(file, code, helper);
+            for site in renames {
+                out.push(format!(
+                    "{}:{} renames {helper} in a use: call it by its name so CALLERS sees it",
+                    site.file, site.line
+                ));
+            }
+            for site in uses {
+                let listed = callers.iter().any(|(h, f, function, _)| {
+                    h == helper && *f == site.file && *function == site.function
+                });
+                if !listed {
+                    out.push(format!(
+                        "{}:{} uses {helper} in fn {}: it installs a pre_exec hook; spawn \
+                         without it, or list the caller in CALLERS with the reason",
+                        site.file, site.line, site.function
+                    ));
+                }
+                callers_seen.insert((helper.to_string(), site.file, site.function));
+            }
+        }
+    }
+    for (file, function, reason) in allowed {
+        assert!(!reason.trim().is_empty(), "ALLOWED row {file} {function} has no reason");
+        if !sites_seen.contains(&(file.to_string(), function.to_string())) {
             out.push(format!(
-                "{}:{} `pre_exec(` in fn {}: it forks the whole app; spawn with \
-                 process_group(0) or a /bin/sh wrapper, or list it in ALLOWED with the reason",
-                site.file, site.line, site.function
+                "ALLOWED row {file} fn {function} has no spawn hook left: remove the row"
             ));
         }
     }
-    let present: BTreeSet<_> = sites
-        .iter()
-        .map(|s| (s.file.as_str(), s.function.as_str()))
-        .collect();
-    for (file, function, reason) in allowed {
-        assert!(!reason.trim().is_empty(), "ALLOWED row {file} {function} has no reason");
-        if !present.contains(&(*file, *function)) {
+    for (helper, file, function, reason) in callers {
+        assert!(!reason.trim().is_empty(), "CALLERS row {file} {function} has no reason");
+        let key = (helper.to_string(), file.to_string(), function.to_string());
+        if !callers_seen.contains(&key) {
             out.push(format!(
-                "ALLOWED row {file} fn {function} has no `pre_exec(` left: remove the row"
+                "CALLERS row {helper} {file} fn {function} no longer uses it: remove the row"
             ));
         }
     }
     out
 }
 
+fn blanked(file: &str, src: &str) -> (String, Vec<u8>) {
+    (file.to_owned(), blank(src))
+}
+
 #[test]
 fn pre_exec_only_at_allowlisted_sites() {
-    let app = app_root();
-    let sites = census(&app);
-    let failures = violations(&sites, ALLOWED);
+    let failures = violations(&sources(&app_root()), ALLOWED, CALLERS);
     assert!(failures.is_empty(), "pre_exec census:\n{}", failures.join("\n"));
 }
 
@@ -298,9 +430,9 @@ fn moved_spawns_stay_without_pre_exec() {
 fn the_session_server_is_outside_the_census() {
     let app = app_root();
     assert!(app.join(EXEMPT_ROOT).is_dir(), "{EXEMPT_ROOT} moved: update the guard");
-    assert!(census(&app)
+    assert!(sources(&app)
         .iter()
-        .all(|s| !s.file.starts_with(EXEMPT_ROOT)));
+        .all(|(file, _)| !file.starts_with(EXEMPT_ROOT)));
 }
 
 #[test]
@@ -318,20 +450,46 @@ fn first() {
 }
 fn second<'a>(x: &'a str) {
     CommandExt::pre_exec (command, || Ok(()));
+    command.before_exec(|| Ok(()));
 }
 "##;
     let sites = sites_in("src/x.rs", src);
     let named: Vec<_> = sites.iter().map(|s| (s.function.as_str(), s.line)).collect();
-    assert_eq!(named, [("first", 10), ("second", 13)]);
+    assert_eq!(named, [("first", 10), ("second", 13), ("second", 14)]);
 }
 
 #[test]
 fn an_unlisted_site_and_a_stale_row_both_fail() {
-    let sites = sites_in("src/a.rs", "fn spawn_it() { c.pre_exec(|| Ok(())); }");
-    let failures = violations(&sites, &[("src/b.rs", "gone", "a reason")]);
+    let sources = [blanked("src/a.rs", "fn spawn_it() { c.pre_exec(|| Ok(())); }")];
+    let failures = violations(&sources, &[("src/b.rs", "gone", "a reason")], &[]);
     assert_eq!(failures.len(), 2, "{failures:?}");
-    assert!(failures[0].starts_with("src/a.rs:1 `pre_exec(` in fn spawn_it"));
-    assert!(failures[1].contains("src/b.rs fn gone has no `pre_exec(` left"));
-    let listed = violations(&sites, &[("src/a.rs", "spawn_it", "a reason")]);
+    assert!(failures[0].starts_with("src/a.rs:1 spawn hook in fn spawn_it"));
+    assert!(failures[1].contains("src/b.rs fn gone has no spawn hook left"));
+    let listed = violations(&sources, &[("src/a.rs", "spawn_it", "a reason")], &[]);
     assert!(listed.is_empty(), "{listed:?}");
+}
+
+#[test]
+fn a_new_caller_of_an_allowed_helper_fails() {
+    let helper = "pub fn limit(c: &mut Command) { unsafe { c.pre_exec(|| Ok(())) }; }";
+    let allowed = [("crates/p/src/l.rs", "limit", "a reason")];
+    let callers = [("limit", "src/s.rs", "sidecar", "a reason")];
+    let listed_caller = "use p::{limit, other};\nfn sidecar() { p::l::limit(&mut c); }";
+    let base = [blanked("crates/p/src/l.rs", helper), blanked("src/s.rs", listed_caller)];
+    let clean = violations(&base, &allowed, &callers);
+    assert!(clean.is_empty(), "{clean:?}");
+    for (mutant, expected) in [
+        ("fn spawn() { host_proto::nofile::limit(&mut c); }", "src/n.rs:1 uses limit in fn spawn"),
+        ("fn spawn() { commands.iter_mut().for_each(limit); }", "src/n.rs:1 uses limit in fn spawn"),
+        ("use p::limit as quiet;\nfn spawn() { quiet(&mut c); }", "src/n.rs:1 renames limit"),
+    ] {
+        let mut sources = base.to_vec();
+        sources.push(blanked("src/n.rs", mutant));
+        let failures = violations(&sources, &allowed, &callers);
+        assert_eq!(failures.len(), 1, "{mutant}: {failures:?}");
+        assert!(failures[0].starts_with(expected), "{mutant}: {failures:?}");
+    }
+    let gone = violations(&base[..1], &allowed, &callers);
+    assert_eq!(gone.len(), 1, "{gone:?}");
+    assert!(gone[0].contains("CALLERS row limit src/s.rs fn sidecar no longer uses it"));
 }
