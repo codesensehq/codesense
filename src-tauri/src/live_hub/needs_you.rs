@@ -144,6 +144,15 @@ pub fn needs_you(inputs: &NeedsYouInputs) -> Vec<NeedsYouItem> {
     items.into_values().collect()
 }
 
+/// The set's Inbox cards counted per sender: the Inbox counts row's `needsYouBySender`.
+pub fn cards_by_sender(items: &[NeedsYouItem]) -> BTreeMap<String, usize> {
+    let mut by_sender = BTreeMap::new();
+    for item in items.iter().filter(|item| item.message_id.is_some()) {
+        *by_sender.entry(item.session.clone()).or_default() += 1;
+    }
+    by_sender
+}
+
 /// A PR link, in full or as `owner/repo#123`.
 static PR_LINK: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(

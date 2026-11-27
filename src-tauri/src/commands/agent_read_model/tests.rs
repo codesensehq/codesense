@@ -2198,7 +2198,8 @@ async fn role_registration_and_zero_claim_release_reproject_inferred_kind() {
         .await
         .unwrap();
     projection.apply_batch(&*host, &sessions, &team, batch, &ids);
-    assert_eq!(projection.counts(&team)["needsYouBySender"]["H1"], 0);
+    // A sender with nothing waiting drops out of the count.
+    assert_eq!(projection.counts(&team)["needsYouBySender"].get("H1"), None);
     assert_eq!(
         projection.bridge_rows["team:acme/default"][&id].kind,
         inbox::MessageKind::Update
