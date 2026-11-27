@@ -1,0 +1,45 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: MIT -->
+<html>
+  <head>
+    <title>Probe dashboard</title>
+    <meta name="color-scheme" content="light dark" />
+  </head>
+  <body style="font: 13px system-ui; margin: 12px">
+    <h3>Probe dashboard</h3>
+    <p>Loads this document: <output id="in-frame">0</output>; loads stored for this frame: <output id="stored">0</output></p>
+    <script>
+      // A test fixture (tests/e2e-mock/tiles/fixtures/probe.ts): it counts its own loads three ways.
+      //  - inFrame: a counter in this document, so it reads 1 again after any reload or remount;
+      //  - stored: sessionStorage, per origin, so it survives a reload of the same frame but not a
+      //    remount (each frame gets its own origin, whose storage starts empty);
+      //  - the host page: each load posts probe:load with the pane's key to window.top, where
+      //    probe.ts counts it, so a remount is caught too.
+      // It records every message it receives, other than its own count request, and answers that
+      // request with all three.
+      (() => {
+        const key = `probe:${location.pathname}`;
+        const received = [];
+        let inFrame = 0;
+        const stored = () => Number(sessionStorage.getItem(key) ?? 0);
+        addEventListener("message", (event) => {
+          if (event.data?.type === "probe:count") {
+            event.source?.postMessage(
+              { type: "probe:counts", key, inFrame, stored: stored(), received },
+              "*",
+            );
+            return;
+          }
+          received.push({ origin: event.origin, data: event.data });
+        });
+        addEventListener("load", () => {
+          inFrame += 1;
+          sessionStorage.setItem(key, String(stored() + 1));
+          document.getElementById("in-frame").textContent = String(inFrame);
+          document.getElementById("stored").textContent = String(stored());
+          window.top.postMessage({ type: "probe:load", key }, "*");
+        });
+      })();
+    </script>
+  </body>
+</html>
