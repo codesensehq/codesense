@@ -1713,7 +1713,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9960"
+      "sourceRef": "handler.rs:9985"
     },
     {
       "name": "agent_create",
@@ -3161,7 +3161,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9875"
+      "sourceRef": "handler.rs:9900"
     },
     {
       "name": "ask_user",
@@ -3312,7 +3312,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9985"
+      "sourceRef": "handler.rs:10010"
     },
     {
       "name": "avatar_add",
@@ -3795,7 +3795,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:10015"
+      "sourceRef": "handler.rs:10040"
     },
     {
       "name": "close_terminal_tab",
@@ -3890,7 +3890,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8622"
+      "sourceRef": "handler.rs:8647"
     },
     {
       "name": "codesense_call_tool",
@@ -3935,7 +3935,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:10339"
+      "sourceRef": "handler.rs:10364"
     },
     {
       "name": "codesense_get_tool_schema",
@@ -3971,7 +3971,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:10318"
+      "sourceRef": "handler.rs:10343"
     },
     {
       "name": "codesense_overview",
@@ -4049,7 +4049,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:10281"
+      "sourceRef": "handler.rs:10306"
     },
     {
       "name": "command_list",
@@ -4874,7 +4874,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9715"
+      "sourceRef": "handler.rs:9740"
     },
     {
       "name": "create_content_file",
@@ -5008,7 +5008,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:12184"
+      "sourceRef": "handler.rs:12209"
     },
     {
       "name": "create_local_organization",
@@ -5100,7 +5100,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9837"
+      "sourceRef": "handler.rs:9862"
     },
     {
       "name": "delete_content_file",
@@ -5179,7 +5179,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9886"
+      "sourceRef": "handler.rs:9911"
     },
     {
       "name": "describe_setup",
@@ -5204,7 +5204,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9829"
+      "sourceRef": "handler.rs:9854"
     },
     {
       "name": "detach_context_repository",
@@ -5318,7 +5318,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:10379"
+      "sourceRef": "handler.rs:10404"
     },
     {
       "name": "end_unowned_terminal_session",
@@ -6055,7 +6055,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:10266"
+      "sourceRef": "handler.rs:10291"
     },
     {
       "name": "health_ping",
@@ -7039,7 +7039,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9654"
+      "sourceRef": "handler.rs:9679"
     },
     {
       "name": "list_hydrated",
@@ -7214,7 +7214,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9062"
+      "sourceRef": "handler.rs:9087"
     },
     {
       "name": "list_out_of_date_terminal_servers",
@@ -7712,7 +7712,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9704"
+      "sourceRef": "handler.rs:9729"
     },
     {
       "name": "move_content_file",
@@ -9686,7 +9686,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:12239"
+      "sourceRef": "handler.rs:12264"
     },
     {
       "name": "query_context",
@@ -9784,7 +9784,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9046"
+      "sourceRef": "handler.rs:9071"
     },
     {
       "name": "react",
@@ -12114,7 +12114,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9726"
+      "sourceRef": "handler.rs:9751"
     },
     {
       "name": "remove_machine",
@@ -12196,7 +12196,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:10207"
+      "sourceRef": "handler.rs:10232"
     },
     {
       "name": "rename_team",
@@ -12240,7 +12240,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9864"
+      "sourceRef": "handler.rs:9889"
     },
     {
       "name": "rename_terminal_tab",
@@ -12346,7 +12346,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9949"
+      "sourceRef": "handler.rs:9974"
     },
     {
       "name": "render_canvas",
@@ -16579,7 +16579,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9781"
+      "sourceRef": "handler.rs:9806"
     },
     {
       "name": "set_epic_repos",
@@ -16891,7 +16891,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9791"
+      "sourceRef": "handler.rs:9816"
     },
     {
       "name": "set_team_parent",
@@ -16938,7 +16938,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9897"
+      "sourceRef": "handler.rs:9922"
     },
     {
       "name": "set_team_starter_page",
@@ -16989,7 +16989,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9919"
+      "sourceRef": "handler.rs:9944"
     },
     {
       "name": "set_viewer_state",
@@ -17077,7 +17077,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:12280"
+      "sourceRef": "handler.rs:12305"
     },
     {
       "name": "signal_done",
@@ -18267,7 +18267,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:12262"
+      "sourceRef": "handler.rs:12287"
     },
     {
       "name": "unroute_file_from_context",
@@ -18851,7 +18851,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:10253"
+      "sourceRef": "handler.rs:10278"
     },
     {
       "name": "workspace_chat_send",
@@ -18982,7 +18982,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:10240"
+      "sourceRef": "handler.rs:10265"
     },
     {
       "name": "workspace_group_add",
@@ -19057,7 +19057,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8871"
+      "sourceRef": "handler.rs:8896"
     },
     {
       "name": "workspace_group_create",
@@ -19132,7 +19132,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8835"
+      "sourceRef": "handler.rs:8860"
     },
     {
       "name": "workspace_group_delete",
@@ -19207,7 +19207,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8893"
+      "sourceRef": "handler.rs:8918"
     },
     {
       "name": "workspace_group_list",
@@ -19282,7 +19282,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8823"
+      "sourceRef": "handler.rs:8848"
     },
     {
       "name": "workspace_group_remove",
@@ -19357,7 +19357,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8882"
+      "sourceRef": "handler.rs:8907"
     },
     {
       "name": "workspace_group_rename",
@@ -19432,7 +19432,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8847"
+      "sourceRef": "handler.rs:8872"
     },
     {
       "name": "workspace_group_set_members",
@@ -19507,7 +19507,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:8859"
+      "sourceRef": "handler.rs:8884"
     },
     {
       "name": "write_worktree_config",
@@ -19588,7 +19588,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9594"
+      "sourceRef": "handler.rs:9619"
     },
     {
       "name": "wv_audit_query",
@@ -19673,7 +19673,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9567"
+      "sourceRef": "handler.rs:9592"
     },
     {
       "name": "wv_check_t2_window",
@@ -19818,7 +19818,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9113"
+      "sourceRef": "handler.rs:9138"
     },
     {
       "name": "wv_classify_action",
@@ -19985,7 +19985,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9320"
+      "sourceRef": "handler.rs:9345"
     },
     {
       "name": "wv_coord_read",
@@ -20029,7 +20029,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9447"
+      "sourceRef": "handler.rs:9472"
     },
     {
       "name": "wv_dispatch_state",
@@ -20139,7 +20139,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9081"
+      "sourceRef": "handler.rs:9106"
     },
     {
       "name": "wv_escalate",
@@ -20191,7 +20191,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9515"
+      "sourceRef": "handler.rs:9540"
     },
     {
       "name": "wv_handoff_state",
@@ -20270,7 +20270,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9614"
+      "sourceRef": "handler.rs:9639"
     },
     {
       "name": "wv_mark_dispatched",
@@ -20328,7 +20328,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9256"
+      "sourceRef": "handler.rs:9281"
     },
     {
       "name": "wv_open_t2_window",
@@ -20458,7 +20458,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9482"
+      "sourceRef": "handler.rs:9507"
     },
     {
       "name": "wv_post_assertion",
@@ -20555,7 +20555,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9368"
+      "sourceRef": "handler.rs:9393"
     },
     {
       "name": "wv_read_posture",
@@ -20659,7 +20659,7 @@
           "arguments": {}
         }
       ],
-      "sourceRef": "handler.rs:9399"
+      "sourceRef": "handler.rs:9424"
     },
     {
       "name": "wv_report_handoff",
@@ -20776,7 +20776,7 @@
           }
         }
       ],
-      "sourceRef": "handler.rs:9185"
+      "sourceRef": "handler.rs:9210"
     },
     {
       "name": "wv_resume_t2_windows",

@@ -202,6 +202,11 @@ struct Model {
     hosts: BTreeMap<String, (crate::commands::machines::RuntimeLayoutReply, ActivityRead)>,
     reading: HashSet<String>,
     refresh_again: HashSet<String>,
+    /// Hosts whose timed-out layout read still holds its blocking thread: no new read
+    /// starts for one until that thread returns.
+    stranded: HashSet<String>,
+    /// Hosts already warned about a timed-out read, until one of their reads succeeds.
+    stall_warned: HashSet<String>,
     labels: BTreeMap<String, String>,
 }
 impl Model {
@@ -239,6 +244,37 @@ impl Model {
         self.reading.remove(key);
         false
     }
+    /// [`Self::begin_refresh`] for a host, refused while its last read is stranded.
+    fn begin_host_read(&mut self, key: &str) -> bool {
+        !self.stranded.contains(key) && self.begin_refresh(key)
+    }
+    /// A host read outlived [`HOST_READ_TIMEOUT`]: free its slot and drop any rerun
+    /// queued behind it (a wedged host is not retried in this wake), keep its old tabs,
+    /// and mark it stranded until its blocking thread returns. True when the caller should
+    /// warn: the host's first timeout since its last successful read.
+    fn host_read_timed_out(&mut self, key: &str) -> bool {
+        self.reading.remove(key);
+        self.refresh_again.remove(key);
+        self.stranded.insert(key.to_owned());
+        self.stall_warned.insert(key.to_owned())
+    }
+    /// The blocking thread of a timed-out read returned: the host may be read again.
+    fn host_read_returned(&mut self, key: &str) {
+        self.stranded.remove(key);
+    }
+}
+
+/// How long the hub waits on one host's layout read before it keeps the old tabs and
+/// frees the read slot, so a wedged host never holds the slot forever.
+pub(crate) const HOST_READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// `read`, or `Elapsed` once `limit` passes first. The read itself is not cancelled: a
+/// blocking thread under it keeps running.
+async fn read_with_timeout<T>(
+    read: impl std::future::Future<Output = T>,
+    limit: Duration,
+) -> Result<T, tokio::time::error::Elapsed> {
+    tokio::time::timeout(limit, read).await
 }
 pub struct LiveHub {
     model: Mutex<Model>,
@@ -974,7 +1010,7 @@ async fn refresh_hosts(app: &tauri::AppHandle) {
                 Ok(vec![]),
             )
         });
-        if !model.begin_refresh(&key) {
+        if !model.begin_host_read(&key) {
             continue;
         }
         let target = RuntimeMemberTarget {
@@ -989,7 +1025,7 @@ async fn refresh_hosts(app: &tauri::AppHandle) {
                 let read_app = handle.clone();
                 let read_target = target.clone();
                 let read_boot = boot.clone();
-                let result = crate::commands::await_blocking("live_hub.host", move || {
+                let mut read = Box::pin(crate::commands::await_blocking("live_hub.host", move || {
                     let backend = crate::commands::pty_backend::resolve_member_backend(
                         &read_app,
                         &read_target,
@@ -1010,12 +1046,31 @@ async fn refresh_hosts(app: &tauri::AppHandle) {
                         &backend, &read_app,
                     )?;
                     Ok((snapshot, activity))
-                })
-                .await;
+                }));
+                let Ok(result) = read_with_timeout(read.as_mut(), HOST_READ_TIMEOUT).await else {
+                    let hub = handle.state::<LiveHub>();
+                    if hub.model.lock().unwrap().host_read_timed_out(&key) {
+                        log::warn!(
+                            "host {key}: layout read timed out after {}s; keeping its last tabs",
+                            HOST_READ_TIMEOUT.as_secs()
+                        );
+                    }
+                    LiveHub::invalidate(&hub, REBUILD);
+                    // The stranded thread frees the host for the next read when it returns.
+                    let stranded = handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let _ = read.await;
+                        let hub = stranded.state::<LiveHub>();
+                        hub.model.lock().unwrap().host_read_returned(&key);
+                        LiveHub::invalidate(&hub, HOSTS);
+                    });
+                    break;
+                };
                 let hub = handle.state::<LiveHub>();
                 let mut model = hub.model.lock().unwrap();
                 let again = model.finish_refresh(&key);
                 if let Ok((snapshot, activity)) = result {
+                    model.stall_warned.remove(&key);
                     if let Ok(current) = &activity {
                         for ended in current.iter().filter(|snapshot| snapshot.exit.is_some()) {
                             let already_seen = model

@@ -3437,6 +3437,88 @@ mod call_time_read {
         assert_eq!(source.running("headless-1"), Ok(()));
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn a_host_read_that_never_answers_times_out() {
+        let started = tokio::time::Instant::now();
+        let read = read_with_timeout(std::future::pending::<()>(), HOST_READ_TIMEOUT).await;
+        assert!(read.is_err(), "a read that never answers elapses");
+        assert_eq!(started.elapsed(), HOST_READ_TIMEOUT);
+        // A read that answers in time is returned as it is.
+        assert_eq!(
+            read_with_timeout(async { 7 }, HOST_READ_TIMEOUT).await,
+            Ok(7)
+        );
+    }
+
+    #[test]
+    fn a_timed_out_host_read_frees_its_slot_keeps_its_tabs_and_strands_the_host() {
+        let mut model = Model::default();
+        model
+            .hosts
+            .insert("local".into(), (local_reply("s-old"), Ok(Vec::new())));
+        assert!(model.begin_host_read("local"));
+        // An invalidation during the read queues a rerun.
+        assert!(!model.begin_host_read("local"));
+        assert!(model.refresh_again.contains("local"));
+
+        assert!(model.host_read_timed_out("local"), "the first timeout warns");
+        assert!(!model.reading.contains("local"), "the read slot is free");
+        assert!(
+            !model.refresh_again.contains("local"),
+            "the rerun is dropped, not retried in this wake"
+        );
+        let live = model.live_tabs();
+        assert!(
+            live.tabs.iter().any(|tab| tab.session == "s-old"),
+            "the old tabs stay"
+        );
+
+        // While its blocking thread runs, the host starts no new read.
+        assert!(!model.begin_host_read("local"));
+        assert!(!model.reading.contains("local"));
+        assert!(!model.refresh_again.contains("local"));
+
+        // Its thread returns: the host is read again, and a second stall does not warn.
+        model.host_read_returned("local");
+        assert!(model.begin_host_read("local"));
+        assert!(!model.host_read_timed_out("local"), "one warning per host");
+        model.host_read_returned("local");
+        // A read that succeeds re-arms the warning (refresh_hosts clears it there).
+        model.stall_warned.remove("local");
+        assert!(model.begin_host_read("local"));
+        assert!(model.host_read_timed_out("local"));
+    }
+
+    /// `refresh_hosts` reads each host through the timeout, in order: it starts a read only
+    /// for a host that is not stranded, frees the slot and rebuilds on elapsed, leaves the
+    /// stranded read to clear its host when it returns, and re-arms the warning on success.
+    #[test]
+    fn refresh_hosts_reads_each_host_through_the_timeout() {
+        let source = include_str!("mod.rs");
+        let body = source
+            .split_once("async fn refresh_hosts(")
+            .expect("refresh_hosts")
+            .1;
+        let body = body.split_once("\n}\n").expect("the end of refresh_hosts").0;
+        let mut at = 0;
+        for step in [
+            "model.begin_host_read(&key)",
+            "read_with_timeout(read.as_mut(), HOST_READ_TIMEOUT).await",
+            ".host_read_timed_out(&key)",
+            "LiveHub::invalidate(&hub, REBUILD);",
+            "let _ = read.await;",
+            ".host_read_returned(&key);",
+            "LiveHub::invalidate(&hub, HOSTS);",
+            "break;",
+            "model.stall_warned.remove(&key);",
+        ] {
+            at += body[at..]
+                .find(step)
+                .unwrap_or_else(|| panic!("refresh_hosts lost `{step}` in order"));
+        }
+        assert!(!body.contains("model.begin_refresh(&key)"), "{body}");
+    }
+
     #[test]
     fn a_closed_tab_reads_exited_while_its_host_read_is_in_flight() {
         use crate::commands::pty_backend::Liveness;

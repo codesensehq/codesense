@@ -8520,6 +8520,9 @@ impl CodesenseHandler {
             // NEVER-KNOWN (the handle is forged or belongs to another install).
             // Both close cleanly but a caller should be able to tell them apart.
             if resolved_session.is_some() || known_remote {
+                if let Some(session) = resolved_session.filter(|_| !known_remote) {
+                    self.release_closed_session(session).await;
+                }
                 let reply = serde_json::json!({
                     "closed": true,
                     "alreadyClosed": true,
@@ -8571,6 +8574,9 @@ impl CodesenseHandler {
                 Err(error) if is_already_closed_error(&error) => {
                     // An already-gone session reads as a benign idempotent
                     // close (we HAD it, it's now gone).
+                    if !is_remote {
+                        self.release_closed_session(tab.session.clone()).await;
+                    }
                     serde_json::json!({
                         "closed": true,
                         "alreadyClosed": true,
@@ -8580,6 +8586,25 @@ impl CodesenseHandler {
                 Err(error) => return Err(invalid_err("close_terminal_tab", error)),
             };
         Ok(self.with_seat_cleanup(handle, is_remote, reply).await)
+    }
+
+    /// Close of a local session that is already gone releases its registry entry, so its
+    /// row does not outlive the tab ([`release_if_gone`] keeps anything that may still
+    /// run). The probe asks the terminal hosts, so it runs off the async runtime.
+    ///
+    /// [`release_if_gone`]: crate::commands::dashboard_launch::release_if_gone
+    async fn release_closed_session(&self, session: String) {
+        use crate::commands::dashboard_launch::{
+            liveness::HostProbe, release_if_gone, DashboardLaunchState,
+        };
+        let app = self.app_handle.clone();
+        let _ = crate::commands::await_blocking("close_terminal_tab.release", move || {
+            if let Some(state) = app.try_state::<DashboardLaunchState>() {
+                release_if_gone(&app, &state, &HostProbe(&app), &session);
+            }
+            Ok(())
+        })
+        .await;
     }
 
     /// Once the tab of the story seat `handle` names is closed, clean up its seat
@@ -19430,6 +19455,20 @@ pub(crate) mod tests {
         let cleanup = workspace.find("reap_story_seats(").unwrap();
         assert!(teardown < cleanup);
         assert!(workspace[cleanup..].contains("\"seatWorktreesRemoved\": seats_removed"));
+    }
+
+    /// Both already-closed branches of a tab close release a local session that is gone,
+    /// through the one seam that keeps anything that may still run.
+    #[test]
+    fn both_already_closed_branches_release_a_gone_local_session() {
+        let source = include_str!("handler.rs");
+        let at = source.find("    async fn close_tab_by_handle(").unwrap();
+        let end = at + 1 + source[at + 1..].find("\n    async fn ").unwrap();
+        let body = &source[at..end];
+        assert_eq!(body.matches("self.release_closed_session(").count(), 2);
+        let release = source.find("    async fn release_closed_session(").unwrap();
+        let next = release + 1 + source[release + 1..].find("\n    async fn ").unwrap();
+        assert!(source[release..next].contains("release_if_gone(&app, &state, &HostProbe(&app)"));
     }
 
     #[test]
