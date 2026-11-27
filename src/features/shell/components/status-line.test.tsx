@@ -20,19 +20,27 @@ const line = () => screen.queryByTestId("status-line");
 const region = () => screen.getByRole("status", { name: "status line" });
 
 /** Every text the live region gains, in order, as a screen reader hears it. */
-function recordRegion(): string[] {
+function recordRegion(): () => string[] {
   const heard: string[] = [];
-  new MutationObserver((records) => {
+  const collect = (records: MutationRecord[]) => {
     for (const r of records)
       for (const n of r.addedNodes) if (n.textContent) heard.push(n.textContent);
-  }).observe(region(), { childList: true, subtree: true });
-  return heard;
+  };
+  const observer = new MutationObserver(collect);
+  observer.observe(region(), { childList: true, subtree: true });
+  return () => {
+    collect(observer.takeRecords());
+    return heard;
+  };
 }
 
 let user: ReturnType<typeof userEvent.setup>;
 
 beforeEach(() => {
   vi.useFakeTimers();
+  // Testing Library ends each user event with a setTimeout(0), which it only runs on a fake
+  // clock it knows as Jest's.
+  vi.stubGlobal("jest", { advanceTimersByTime: (ms: number) => vi.advanceTimersByTime(ms) });
   resetStatusLineForTests();
   user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
 });
@@ -41,6 +49,7 @@ afterEach(() => {
   cleanup();
   resetStatusLineForTests();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe("the line", () => {
@@ -206,6 +215,9 @@ describe('"+N waiting ▾"', () => {
     tick(30_000);
     expect(line()).toHaveTextContent("Offer 1");
     await user.keyboard("{Escape}");
+    // Hover and focus still pause it; leaving both lets it run out.
+    await user.unhover(line()!);
+    act(() => (document.activeElement as HTMLElement).blur());
     tick(STATUS_LINE_MS);
     expect(line()).toHaveTextContent("Offer 2");
   });
@@ -233,10 +245,11 @@ describe("the live region", () => {
     post({ text: "3 need you", kind: "announcement" });
     tick(STATUS_LINE_MS);
     expect(line()).toHaveTextContent("3 need you");
-    const count = (t: string) => heard.filter((h) => h === t).length;
+    const texts = heard();
+    const count = (t: string) => texts.filter((h) => h === t).length;
     expect(count("review agent opened Routines")).toBe(1);
     expect(count("design moved a tile")).toBe(1);
-    expect(heard.filter((h) => h.startsWith("Resuming"))).toHaveLength(1);
+    expect(texts.filter((h) => h.startsWith("Resuming"))).toHaveLength(1);
     expect(count("3 need you")).toBe(1);
   });
 
@@ -252,7 +265,7 @@ describe("the live region", () => {
       releaseStatusLine();
     });
     post({ text: "Moved critique-log.html beside design", kind: "undo" });
-    expect(heard).toEqual([
+    expect(heard()).toEqual([
       "Drop to move below design",
       "Drop to move beside design",
       "Moved critique-log.html beside design",
