@@ -410,7 +410,7 @@ impl WindowRegistry {
 
     /// The window's listeners have mounted and it holds its slice. Clears `pending`, except
     /// on a move's target, which stays pending until the move commits or aborts.
-    #[cfg_attr(not(test), allow(dead_code))] // `window_ready` readies through `moves`.
+    #[cfg(test)]
     pub fn ready(&self, host: &impl WindowHost, label: &str) -> Result<(), String> {
         State::ready(&mut self.lock(), host, label)
     }
@@ -453,7 +453,7 @@ impl WindowRegistry {
 
     /// Creates a satellite entry with no items, no Layout and `pending` set, and sends it
     /// its first slice. Bumps no other window.
-    #[cfg_attr(not(test), allow(dead_code))] // A move adds its target through `Locked`.
+    #[cfg(test)]
     pub fn add_satellite(
         &self,
         host: &impl WindowHost,
@@ -463,7 +463,7 @@ impl WindowRegistry {
     }
 
     /// Sets `label`'s `pending` flag. Bumps only that window.
-    #[cfg_attr(not(test), allow(dead_code))] // A move clears its target's flag through `Locked`.
+    #[cfg(test)]
     pub fn set_pending(
         &self,
         host: &impl WindowHost,
@@ -477,7 +477,7 @@ impl WindowRegistry {
     /// every satellite. `main`'s new owner map is sent (a bump of `main`'s slice) before
     /// the satellites' slices and before this returns, so an item event a caller sends
     /// afterwards reaches `main` after the map. Returns whether anything changed.
-    #[cfg_attr(not(test), allow(dead_code))] // A move reassigns through `Locked`.
+    #[cfg(test)]
     pub fn reassign_item(
         &self,
         host: &impl WindowHost,
@@ -488,7 +488,7 @@ impl WindowRegistry {
     }
 
     /// Returns `key` to `main`: it leaves its satellite. Returns whether it was held.
-    #[cfg_attr(not(test), allow(dead_code))] // Called by the return path; nothing holds an item yet.
+    #[cfg(test)]
     pub fn return_to_main(&self, host: &impl WindowHost, key: &ItemKey) -> Result<bool, String> {
         self.reassign_item(host, key, MAIN_LABEL)
     }

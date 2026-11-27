@@ -21,6 +21,7 @@ import { useRetiringFrames } from "@/features/dashboard/components/use-retiring-
 import type { LiveFrame } from "@/features/dashboard/lib/frame-lifecycle";
 import { frameOf } from "@/features/dashboard/lib/frame-of";
 import { closeCurrentWindow } from "@/shared/lib/current-window";
+import { logger } from "@/shared/lib/logger";
 import { renderViewer } from "@/shared/lib/render-viewer";
 
 import { BOOT_EXPORTS, BootRows, SATELLITE_ROWS } from "./boot-inventory";
@@ -139,8 +140,9 @@ export function satelliteRenderer(actions: SatelliteActions): SatelliteRenderer 
   return (content) => <DefaultSatelliteContent content={content} actions={actions} />;
 }
 
-const defaultSatelliteRenderer: SatelliteRenderer = satelliteRenderer({
-  closeWindow: () => void closeCurrentWindow(),
+export const defaultSatelliteRenderer: SatelliteRenderer = satelliteRenderer({
+  closeWindow: () =>
+    void closeCurrentWindow().catch((e) => logger.warn("windows", `close window failed: ${e}`)),
 });
 
 export interface SatelliteRootProps {

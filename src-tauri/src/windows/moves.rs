@@ -13,7 +13,8 @@
 //! - **committed:** ownership moves through the registry's `reassign_item`, which sends `main`'s
 //!   owner map first. A satellite target mounts the item from its next slice; `main` as
 //!   target gets `window:items-returned`. The target is focused after the lock is released.
-//! - **aborted:** a dirty ack, a source that is gone, the pending timeout or no ack within
+//! - **aborted:** a dirty ack, a source or target that is gone (a target's window is checked
+//!   at the move and again at the ack), a failed transfer, the pending timeout or no ack within
 //!   [`HAND_OFF_MS`]. The source gets `window:move-aborted {key, moveId, reason}` and keeps
 //!   or reopens its item; a half-made target is dropped from the registry and its window
 //!   destroyed after the lock is released.
@@ -154,7 +155,7 @@ impl MoveBook {
         self.moves.remove(id)
     }
 
-    #[cfg_attr(not(test), allow(dead_code))] // Read by `abort_all_moves_locked`.
+    #[cfg(test)]
     fn ids(&self) -> Vec<String> {
         BTreeMap::keys(&self.moves).cloned().collect()
     }
@@ -257,21 +258,25 @@ fn refused(reason: &str) -> MoveStart {
 /// What runs after the lock is released.
 #[derive(Debug, Default)]
 struct After {
-    create: Option<String>,
     timers: Vec<(u64, MoveTimer)>,
     focus: Option<String>,
     destroy: Vec<String>,
 }
 
 fn run_after(host: &impl MoveHost, after: After) {
-    for label in after.destroy {
-        host.destroy_window(&label);
-    }
+    destroy_after(host, after.destroy);
     if let Some(label) = after.focus {
-        host.focus(&label);
+        WindowHost::focus(host, &label);
     }
     for (ms, timer) in after.timers {
-        host.schedule(ms, timer);
+        MoveHost::schedule(host, ms, timer);
+    }
+}
+
+/// Destroys the windows an abort left, once the lock is released.
+fn destroy_after(host: &impl MoveHost, labels: Vec<String>) {
+    for label in labels {
+        MoveHost::destroy_window(host, &label);
     }
 }
 
@@ -304,12 +309,16 @@ pub fn move_item(
         return refused(reason::UNKNOWN_TARGET);
     } else if Locked::is_pending(&locked, to) {
         return refused(reason::PENDING_TARGET);
+    } else if !MoveHost::window_exists(host, to) {
+        // The entry outlives a closed window until the registry drops it on close.
+        return refused(reason::UNKNOWN_TARGET);
     }
     if let Some(why) = kind_check(key) {
         return refused(why);
     }
 
     let mut after = After::default();
+    let mut create = None;
     let started = if new {
         let label = format!("pane-{}", uuid::Uuid::new_v4());
         let incoming = Incoming {
@@ -328,7 +337,7 @@ pub fn move_item(
             true,
             Phase::Pending,
         );
-        after.create = Some(label);
+        create = Some(label);
         after
             .timers
             .push((PENDING_TIMEOUT_MS, MoveTimer::Pending(m.id.clone())));
@@ -350,10 +359,16 @@ pub fn move_item(
     };
     drop(locked);
 
-    if let Some(label) = after.create.take() {
-        if let Err(e) = host.create_window(&label) {
+    if let Some(label) = create {
+        if let Err(e) = MoveHost::create_window(host, &label) {
             log::warn!(target: "windows", "move window {label} not built: {e}");
-            abort(host, registry, &started.id, reason::WINDOW_FAILED);
+            // The caller gets the refusal; the source never heard of this move, so no
+            // `window:move-aborted` follows it.
+            let mut locked = registry.locked();
+            MoveBook::close(Locked::book(&mut locked), &started.id);
+            if let Err(e) = Locked::remove_empty_satellite(&mut locked, &label) {
+                log::warn!(target: "windows", "move target {label} not removed: {e}");
+            }
             return refused(reason::WINDOW_FAILED);
         }
     }
@@ -365,7 +380,8 @@ pub fn move_item(
 }
 
 fn send_hand_off(host: &impl MoveHost, m: &Move) {
-    host.send_event(
+    MoveHost::send_event(
+        host,
         &m.source,
         HAND_OFF_EVENT,
         serde_json::json!({ "key": m.key, "moveId": m.id, "budgetMs": FLUSH_ACK_MS }),
@@ -388,7 +404,7 @@ pub fn window_ready(
     let m = MoveBook::by_id(Locked::book_ref(&locked), &id)
         .cloned()
         .expect("pending_for names a move in the book");
-    if !host.window_exists(&m.source) {
+    if !MoveHost::window_exists(host, &m.source) {
         after.destroy = abort_locked(&mut locked, host, &id, reason::GONE);
     } else {
         MoveBook::set_phase(Locked::book(&mut locked), &id, Phase::HandingOff);
@@ -435,28 +451,40 @@ pub fn hand_off_ack(
         return AckOutcome::Ignored;
     }
     let mut after = After::default();
-    let outcome = if ack.ok {
-        commit_locked(&mut locked, host, &m);
-        after.focus = Some(m.target.clone());
-        AckOutcome::Committed
+    let abort_why = if !ack.ok {
+        Some(ack.reason.as_deref().unwrap_or(reason::DIRTY))
+    } else if !MoveHost::window_exists(host, &m.target) {
+        // The target closed after the move began: the source keeps or reopens the item.
+        Some(reason::GONE)
+    } else if let Err(e) = commit_locked(&mut locked, host, &m) {
+        log::warn!(target: "windows", "move {} not transferred: {e}", m.id);
+        Some(reason::GONE)
     } else {
-        let why = ack.reason.as_deref().unwrap_or(reason::DIRTY);
-        after.destroy = abort_locked(&mut locked, host, &m.id, why);
-        AckOutcome::Aborted
+        None
+    };
+    let outcome = match abort_why {
+        None => {
+            after.focus = Some(m.target.clone());
+            AckOutcome::Committed
+        }
+        Some(why) => {
+            after.destroy = abort_locked(&mut locked, host, &m.id, why);
+            AckOutcome::Aborted
+        }
     };
     drop(locked);
     run_after(host, after);
     outcome
 }
 
-fn commit_locked(locked: &mut Locked<'_>, host: &impl MoveHost, m: &Move) {
+/// Transfers the item and closes the move. On an error the move stays open, for the
+/// caller to abort.
+fn commit_locked(locked: &mut Locked<'_>, host: &impl MoveHost, m: &Move) -> Result<(), String> {
+    Locked::reassign_item(locked, host, &m.key, &m.target)?;
     MoveBook::close(Locked::book(locked), &m.id);
-    if let Err(e) = Locked::reassign_item(locked, host, &m.key, &m.target) {
-        log::warn!(target: "windows", "move {} not transferred: {e}", m.id);
-        return;
-    }
     if m.target == MAIN_LABEL {
-        host.send_event(
+        MoveHost::send_event(
+            host,
             MAIN_LABEL,
             ITEMS_RETURNED_EVENT,
             serde_json::json!({ "items": [m.key], "reason": "move" }),
@@ -467,6 +495,7 @@ fn commit_locked(locked: &mut Locked<'_>, host: &impl MoveHost, m: &Move) {
             log::warn!(target: "windows", "move target {} not cleared: {e}", m.target);
         }
     }
+    Ok(())
 }
 
 /// Ends move `id` without a commit, under the lock. Returns the windows to destroy once
@@ -482,25 +511,13 @@ fn abort_locked(locked: &mut Locked<'_>, host: &impl MoveHost, id: &str, why: &s
         }
         destroy.push(m.target.clone());
     }
-    host.send_event(
+    MoveHost::send_event(
+        host,
         &m.source,
         MOVE_ABORTED_EVENT,
         serde_json::json!({ "key": m.key, "moveId": m.id, "reason": why }),
     );
     destroy
-}
-
-fn abort(host: &impl MoveHost, registry: &WindowRegistry, id: &str, why: &str) {
-    let mut locked = registry.locked();
-    let destroy = abort_locked(&mut locked, host, id, why);
-    drop(locked);
-    run_after(
-        host,
-        After {
-            destroy,
-            ..After::default()
-        },
-    );
 }
 
 /// A move timer fired. It aborts its move only if the move is still in the phase the
@@ -517,13 +534,7 @@ pub fn on_timer(host: &impl MoveHost, registry: &WindowRegistry, timer: &MoveTim
     }
     let destroy = abort_locked(&mut locked, host, id, why);
     drop(locked);
-    run_after(
-        host,
-        After {
-            destroy,
-            ..After::default()
-        },
-    );
+    destroy_after(host, destroy);
 }
 
 /// `label`'s window is gone: every move it is the source or target of aborts as `gone`.
@@ -537,18 +548,12 @@ pub fn window_gone(host: &impl MoveHost, registry: &WindowRegistry, label: &str)
         );
     }
     drop(locked);
-    run_after(
-        host,
-        After {
-            destroy,
-            ..After::default()
-        },
-    );
+    destroy_after(host, destroy);
 }
 
 /// Aborts every move in flight with `why`, under the caller's lock. Returns the windows
 /// to destroy once the caller releases it.
-#[cfg_attr(not(test), allow(dead_code))] // Called by the profile switch and quit, which land later.
+#[cfg(test)]
 pub fn abort_all_moves_locked(
     locked: &mut Locked<'_>,
     host: &impl MoveHost,
@@ -562,18 +567,12 @@ pub fn abort_all_moves_locked(
 }
 
 /// Aborts every move in flight with `why`.
-#[cfg_attr(not(test), allow(dead_code))] // Called by the profile switch and quit, which land later.
+#[cfg(test)]
 pub fn abort_all_moves(host: &impl MoveHost, registry: &WindowRegistry, why: &str) {
     let mut locked = registry.locked();
     let destroy = abort_all_moves_locked(&mut locked, host, why);
     drop(locked);
-    run_after(
-        host,
-        After {
-            destroy,
-            ..After::default()
-        },
-    );
+    destroy_after(host, destroy);
 }
 
 /// Moves `key` from the calling window to `to`: `"new"`, `"main"` or a window's label.
@@ -941,7 +940,10 @@ mod call {
             ..tab("a.md")
         };
         assert_eq!(kind_check_in(checks, &other), None);
-        assert!(KIND_CHECKS.is_empty(), "no kind registers a check yet");
+        assert!(
+            std::hint::black_box(KIND_CHECKS).is_empty(),
+            "no kind registers a check yet"
+        );
         assert_eq!(kind_check(&tab("a.md")), None);
     }
 
@@ -1296,6 +1298,62 @@ mod abort {
     }
 
     #[test]
+    fn a_target_whose_window_is_gone_is_refused_though_its_entry_remains() {
+        let reg = WindowRegistry::new();
+        let rec = Rec::new(&reg);
+        satellite(&rec, "sat-1", &[]);
+        rec.windows.borrow_mut().remove("sat-1");
+        rec.clear();
+        let out = move_item(&rec, &reg, MAIN_LABEL, &tab("a.md"), "sat-1", true);
+        assert_eq!(reason_of(out), reason::UNKNOWN_TARGET);
+        assert!(rec.fx.borrow().is_empty());
+        assert_eq!(reg.owner(&tab("a.md")), MAIN_LABEL);
+    }
+
+    #[test]
+    fn an_ack_for_a_target_that_closed_aborts_as_gone_and_the_source_keeps_the_item() {
+        let reg = WindowRegistry::new();
+        let rec = Rec::new(&reg);
+        let key = tab("a.md");
+        satellite(&rec, "sat-1", &[]);
+        let (move_id, _) = started(move_item(&rec, &reg, MAIN_LABEL, &key, "sat-1", true));
+        rec.windows.borrow_mut().remove("sat-1");
+        let out = hand_off_ack(&rec, &reg, MAIN_LABEL, &ack(&move_id, true, None));
+        assert_eq!(out, AckOutcome::Aborted);
+        assert_eq!(reg.owner(&key), MAIN_LABEL);
+        assert_eq!(aborted(&rec)[0].1["reason"], "gone");
+        assert!(slice(&reg, "sat-1").items.is_empty());
+        assert!(!rec
+            .fx
+            .borrow()
+            .iter()
+            .any(|f| matches!(f, Fx::Focused { .. })));
+    }
+
+    #[test]
+    fn a_failed_transfer_aborts_the_move_instead_of_reporting_a_commit() {
+        let reg = WindowRegistry::new();
+        let rec = Rec::new(&reg);
+        let key = tab("a.md");
+        satellite(&rec, "sat-1", &[]);
+        let (move_id, _) = started(move_item(&rec, &reg, MAIN_LABEL, &key, "sat-1", true));
+        // The window is alive but its entry is gone, so the transfer has no target.
+        {
+            let mut locked = reg.locked();
+            Locked::remove_empty_satellite(&mut locked, "sat-1").unwrap();
+        }
+        let out = hand_off_ack(&rec, &reg, MAIN_LABEL, &ack(&move_id, true, None));
+        assert_eq!(out, AckOutcome::Aborted);
+        assert_eq!(reg.owner(&key), MAIN_LABEL);
+        assert_eq!(aborted(&rec)[0].1["reason"], "gone");
+        assert_eq!(
+            hand_off_ack(&rec, &reg, MAIN_LABEL, &ack(&move_id, true, None)),
+            AckOutcome::Ignored,
+            "the move is closed"
+        );
+    }
+
+    #[test]
     fn a_window_that_fails_to_build_aborts_the_move() {
         let reg = WindowRegistry::new();
         let mut rec = Rec::new(&reg);
@@ -1305,6 +1363,10 @@ mod abort {
         assert_eq!(reason_of(out), reason::WINDOW_FAILED);
         assert_eq!(slice(&reg, MAIN_LABEL).owners, Some(Default::default()));
         assert!(rec.timers().is_empty());
+        assert!(
+            aborted(&rec).is_empty(),
+            "the caller gets the refusal alone; no move-aborted for a move it never heard of"
+        );
         let again = move_item(&rec, &reg, MAIN_LABEL, &key, NEW_WINDOW, true);
         assert_eq!(
             reason_of(again),

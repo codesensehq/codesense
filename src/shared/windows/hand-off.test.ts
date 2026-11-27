@@ -21,6 +21,13 @@ vi.mock("@/tauri/commands", () => ({
   windowHandOffAck: vi.fn(),
 }));
 
+const closeCurrentWindow = vi.hoisted(() => vi.fn());
+vi.mock("@/shared/lib/current-window", () => ({ closeCurrentWindow }));
+const warn = vi.hoisted(() => vi.fn());
+vi.mock("@/shared/lib/logger", () => ({
+  logger: { warn, info: vi.fn(), debug: vi.fn(), error: vi.fn() },
+}));
+
 // The real root, without the satellite's boot rows.
 vi.mock("./boot-inventory", () => ({
   BOOT_EXPORTS: {},
@@ -46,9 +53,11 @@ import { useOrgStore } from "@/shared/stores/org-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 
 import { createHandOff, createReleasedItems, mainTabSide } from "./hand-off";
+import { resetWaitingItemsForTests } from "./items-returned";
 import { itemKeyForTab, type ItemKey } from "./item-key";
 import {
   SatelliteRoot,
+  defaultSatelliteRenderer,
   satelliteContent,
   satelliteRenderer,
   type SatelliteContent,
@@ -111,6 +120,7 @@ const request = (key: ItemKey, moveId = "mv-1") => ({ key, moveId, budgetMs: 200
 
 beforeEach(() => {
   log = [];
+  resetWaitingItemsForTests();
   useOrgStore.setState({
     orgs: [
       {
@@ -224,6 +234,46 @@ describe("main as the source", () => {
     act(() => handOff.onAborted({ key: K_KEY, moveId: "mv-1", reason: "timeout" }));
     expect(paths()).toEqual([A, K, B]);
     expect(active()).toBe(B);
+  });
+
+  const READY_ORGS = () => useOrgStore.getState().orgs;
+
+  it("reopens the tab through the repo recorded at hand-off when its team stops being ready", async () => {
+    const handOff = createHandOff(mainTabSide(), acker("ignored"));
+    await handOff.onHandOff(request(K_KEY));
+    useOrgStore.setState({ orgs: [], discoveryComplete: false });
+    act(() => handOff.onAborted({ key: K_KEY, moveId: "mv-1", reason: "no_ack" }));
+    expect(paths()).toEqual([A, K, B]);
+  });
+
+  it("queues the reopen of a tab whose team was never ready, then opens it", async () => {
+    const orgs = READY_ORGS();
+    useOrgStore.setState({ orgs: [], discoveryComplete: false });
+    const handOff = createHandOff(mainTabSide(), acker("ignored"));
+    await handOff.onHandOff(request(K_KEY));
+    act(() => handOff.onAborted({ key: K_KEY, moveId: "mv-1", reason: "no_ack" }));
+    expect(open()).toBe(false);
+    act(() => useOrgStore.setState({ orgs, discoveryComplete: true }));
+    expect(open()).toBe(true);
+  });
+
+  it("appends the tab on an abort when it was not open at hand-off", async () => {
+    useViewerStore.setState({ openTabs: { [TEAM]: [tab(A), tab(B)] }, activeTab: { [TEAM]: A } });
+    const handOff = createHandOff(mainTabSide(), acker("ignored"));
+    await handOff.onHandOff(request(K_KEY));
+    act(() => handOff.onAborted({ key: K_KEY, moveId: "mv-1", reason: "no_ack" }));
+    expect(paths()).toEqual([A, B, K]);
+  });
+
+  it("keeps the preview flag when it reopens a preview tab", async () => {
+    useViewerStore.setState({
+      openTabs: { [TEAM]: [tab(A), { ...tab(K), preview: true }, tab(B)] },
+    });
+    const handOff = createHandOff(mainTabSide(), acker("ignored"));
+    await handOff.onHandOff(request(K_KEY));
+    act(() => handOff.onAborted({ key: K_KEY, moveId: "mv-1", reason: "no_ack" }));
+    expect(paths()).toEqual([A, K, B]);
+    expect(useViewerStore.getState().openTabs[TEAM]?.find((t) => t.path === K)?.preview).toBe(true);
   });
 
   it("ignores an abort for a move it is not the source of, or after the commit", async () => {
@@ -381,6 +431,21 @@ describe("the move states a satellite's renderer gets", () => {
     expect(screen.queryByRole("button", { name: "Go to main window" })).toBeNull();
     screen.getByRole("button", { name: "Close window" }).click();
     expect(closeWindow).toHaveBeenCalledOnce();
+  });
+
+  it("closes the window through the current window, and logs a close that fails", async () => {
+    closeCurrentWindow.mockRejectedValueOnce(new Error("close not allowed"));
+    render(
+      createElement(SatelliteRoot, {
+        source: stubSource(view({ items: [] })).source,
+        renderer: defaultSatelliteRenderer,
+      }),
+    );
+    screen.getByRole("button", { name: "Close window" }).click();
+    expect(closeCurrentWindow).toHaveBeenCalledOnce();
+    await vi.waitFor(() =>
+      expect(warn).toHaveBeenCalledWith("windows", expect.stringContaining("close not allowed")),
+    );
   });
 
   it("draws Go to main window when a focus-main action is passed", () => {

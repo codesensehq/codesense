@@ -8,17 +8,23 @@
  * item is never let go, and one after it takes the item back.
  *
  * `main` lets a tab go through `closeTab`, which refuses a tab that became dirty during
- * the flush and retires every frame the tab hosts; an abort reopens it where it was. A
+ * the flush and retires every frame the tab hosts; an abort reopens it where it was (a tab
+ * that was not open appends), as the preview tab if it was one. A
  * satellite hands its renderer `handed-off`, which retires the frame; an abort renders
  * the item again.
  */
 import { flushFramesWhere } from "@/features/dashboard/lib/frame-lifecycle";
 import { frameOf } from "@/features/dashboard/lib/frame-of";
 import { logger } from "@/shared/lib/logger";
-import { readTeamKeyed, useViewerStore, type TabState } from "@/shared/stores/viewer-store";
+import {
+  readTeamKeyed,
+  updateTeamKeyed,
+  useViewerStore,
+  type TabState,
+} from "@/shared/stores/viewer-store";
 
 import { canonicalItemKey, type ItemKey } from "./item-key";
-import { repoPathForItem } from "./items-returned";
+import { openItemTab, openWhenTeamReady, repoPathForItem } from "./items-returned";
 import type { AckOutcome, HandOffAck, HandOffRequest, MoveAborted } from "./window-slice";
 
 /** How a window lets an item go and takes it back. `R` is what `record` keeps for a
@@ -27,7 +33,7 @@ export interface HandOffSide<R = unknown> {
   /** Runs when the hand-off arrives, before the flush. */
   record?(key: ItemKey): R;
   /** Lets the flushed item go; returns whether it is gone. */
-  letGo(key: ItemKey): boolean;
+  letGo(key: ItemKey, recorded: R | undefined): boolean;
   /** The move aborted after `letGo`: show the item again. */
   takeBack(key: ItemKey, recorded: R | undefined): void;
 }
@@ -64,7 +70,7 @@ export function createHandOff<R>(
       await flushFramesWhere((f) => frameOf(f, key.team, key.id), budgetMs);
       // An abort during the flush ends the move: the item stays.
       if (moves.get(moveId) !== move) return;
-      if (!side.letGo(key)) return answer({ moveId, ok: false, reason: "dirty" });
+      if (!side.letGo(key, move.recorded)) return answer({ moveId, ok: false, reason: "dirty" });
       move.released = true;
       return answer({ moveId, ok: true });
     },
@@ -84,32 +90,58 @@ const tabsOf = (team: string): TabState[] =>
 interface TabPlace {
   index: number;
   activePath: string | undefined;
+  /** The team's content repo when the hand-off arrived, so a team that stops being ready
+   *  before an abort still gets its tab back. */
+  repoPath: string | null;
+  /** The tab was the preview tab. */
+  preview: boolean;
+}
+
+/** Marks `key`'s tab as the preview tab again. */
+function repreview(key: ItemKey): void {
+  useViewerStore.setState((s) => ({
+    openTabs: updateTeamKeyed(
+      s.openTabs,
+      key.team,
+      tabsOf(key.team).map((t) => (t.path === key.id ? { ...t, preview: true } : t)),
+    ),
+  }));
 }
 
 /** `main`'s side: the item is a viewer tab. */
 export function mainTabSide(): HandOffSide<TabPlace> {
   return {
-    record: (key) => ({
-      index: tabsOf(key.team).findIndex((t) => t.path === key.id),
-      activePath: useViewerStore.getState().activeTab[key.team],
-    }),
-    letGo(key) {
-      useViewerStore.getState().closeTab(key.team, repoPathForItem(key) ?? "", key.id);
+    record(key) {
+      const tabs = tabsOf(key.team);
+      const index = tabs.findIndex((t) => t.path === key.id);
+      return {
+        index,
+        activePath: useViewerStore.getState().activeTab[key.team],
+        repoPath: repoPathForItem(key),
+        preview: tabs[index]?.preview === true,
+      };
+    },
+    letGo(key, place) {
+      const repoPath = place?.repoPath ?? repoPathForItem(key) ?? "";
+      useViewerStore.getState().closeTab(key.team, repoPath, key.id);
       return !tabsOf(key.team).some((t) => t.path === key.id);
     },
     takeBack(key, place) {
-      const repoPath = repoPathForItem(key);
+      const repoPath = place?.repoPath ?? repoPathForItem(key);
       if (repoPath === null) {
-        logger.warn("windows", `tab ${key.id} not reopened: ${key.team} is not ready`);
+        // Queued until the team is ready; it comes back without its old position.
+        openWhenTeamReady(key, place?.preview);
         return;
       }
+      openItemTab(key, repoPath, place?.preview);
       const store = useViewerStore.getState();
-      store.openFile(key.team, repoPath, key.id, { keepLayout: true });
       if (!place) return;
       const tabs = tabsOf(key.team);
       const from = tabs.findIndex((t) => t.path === key.id);
       if (place.index >= 0 && from >= 0 && from !== place.index) {
         store.reorderTab(key.team, from, Math.min(place.index, tabs.length - 1));
+        // A reorder pins a preview tab; this one is going back as it was.
+        if (place.preview) repreview(key);
       }
       const active = place.activePath;
       if (active !== undefined && active !== key.id && tabs.some((t) => t.path === active)) {

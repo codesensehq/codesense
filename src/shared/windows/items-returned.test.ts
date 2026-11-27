@@ -17,7 +17,7 @@ import { useOrgStore } from "@/shared/stores/org-store";
 import { useViewerStore } from "@/shared/stores/viewer-store";
 
 import { canonicalItemKey, itemKeyForTab } from "./item-key";
-import { openReturnedItems, repoPathForItem } from "./items-returned";
+import { openReturnedItems, repoPathForItem, resetWaitingItemsForTests } from "./items-returned";
 import { applyOwnerMap, resetOwnerMapForTests } from "./owner-map";
 
 const ACTIVE = "acme:general";
@@ -31,6 +31,7 @@ const tabs = (teamKey: string) =>
 
 beforeEach(() => {
   resetOwnerMapForTests();
+  resetWaitingItemsForTests();
   useOrgStore.setState({
     orgs: [
       {
@@ -90,5 +91,15 @@ describe("items returned to main", () => {
     expect(repoPathForItem(KEY)).toBeNull();
     openReturnedItems({ items: [KEY], reason: "move" });
     expect(tabs(ORIGIN)).toEqual([]);
+  });
+
+  it("queues an item whose team is not ready and opens it once the team is", () => {
+    const ready = useOrgStore.getState().orgs;
+    useOrgStore.setState({ orgs: [], discoveryComplete: false });
+    openReturnedItems({ items: [KEY, KEY], reason: "move" });
+    expect(tabs(ORIGIN)).toEqual([]);
+    useOrgStore.setState({ orgs: ready, discoveryComplete: true });
+    expect(tabs(ORIGIN)).toEqual([DOC]);
+    expect(getActiveTeamKey()).toBe(ACTIVE);
   });
 });
