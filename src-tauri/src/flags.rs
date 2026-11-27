@@ -29,9 +29,6 @@ use serde::{Deserialize, Serialize};
 /// The remote overrides the last manifest read carried, in the app data folder.
 pub const CACHE_FILE: &str = "flags-cache.json";
 
-/// The app state file the local setting is read from, in the app data folder.
-const APP_STATE_FILE: &str = "app-state.json";
-
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Cache {
@@ -51,11 +48,21 @@ pub fn cached_kill(app_dir: &Path) -> bool {
 // Only the beta channels' update check writes the cache.
 #[cfg_attr(all(cs_channel = "internal", not(test)), allow(dead_code))]
 pub fn write_kill(app_dir: &Path, kill: bool) {
+    // A manifest read about hourly repeats the value; skip the write when nothing changed.
+    if cached_kill(app_dir) == kill && app_dir.join(CACHE_FILE).is_file() {
+        return;
+    }
     let written = serde_json::to_vec(&Cache { tiles_kill: kill })
         .map_err(std::io::Error::other)
         .and_then(|body| {
             std::fs::create_dir_all(app_dir)?;
-            std::fs::write(app_dir.join(CACHE_FILE), body)
+            // Write beside the cache and rename into place, so a crash mid-write can't leave a
+            // truncated cache that reads as no kill.
+            let tmp = app_dir.join(format!("{CACHE_FILE}.tmp"));
+            std::fs::write(&tmp, body)?;
+            std::fs::rename(&tmp, app_dir.join(CACHE_FILE)).inspect_err(|_| {
+                let _ = std::fs::remove_file(&tmp);
+            })
         });
     if let Err(e) = written {
         log::warn!(target: "flags", "could not cache the release flag overrides: {e}");
@@ -71,7 +78,7 @@ fn decide(local: bool, app_dir: &Path, internal: bool) -> bool {
 /// The tiles flag for a launch from the app data folder: the local setting AND NOT a cached
 /// kill (the local setting alone in an internal build).
 pub fn tiles_at_boot(app_dir: &Path) -> bool {
-    let local = std::fs::read_to_string(app_dir.join(APP_STATE_FILE))
+    let local = std::fs::read_to_string(crate::commands::system::app_state_file_in(app_dir))
         .is_ok_and(|json| crate::commands::system::parse_tiles_setting(&json));
     decide(local, app_dir, cfg!(cs_channel = "internal"))
 }
@@ -97,16 +104,16 @@ pub fn tiles_enabled(flag: tauri::State<'_, TilesFlag>) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn kill_cached(dir: &Path) {
         std::fs::write(dir.join(CACHE_FILE), r#"{"tilesKill":true}"#).unwrap();
     }
 
-    fn local_tiles(dir: &Path, on: bool) {
+    pub(crate) fn local_tiles(dir: &Path, on: bool) {
         let state = serde_json::json!({ "viewer": { "settings": { "tiles": on } } });
-        std::fs::write(dir.join(APP_STATE_FILE), state.to_string()).unwrap();
+        std::fs::write(crate::commands::system::app_state_file_in(dir), state.to_string()).unwrap();
     }
 
     #[test]
@@ -145,6 +152,21 @@ mod tests {
         assert!(cached_kill(dir.path()));
         write_kill(dir.path(), false);
         assert!(!cached_kill(dir.path()));
+    }
+
+    #[test]
+    fn an_unchanged_override_is_not_rewritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join(CACHE_FILE);
+        write_kill(dir.path(), true);
+        // Marker bytes that still parse as a kill: a rewrite would replace them.
+        let marker = r#"{ "tilesKill": true }"#;
+        std::fs::write(&cache, marker).unwrap();
+        write_kill(dir.path(), true);
+        assert_eq!(std::fs::read_to_string(&cache).unwrap(), marker);
+        write_kill(dir.path(), false);
+        assert!(!cached_kill(dir.path()), "a changed value is written");
+        assert!(!dir.path().join(format!("{CACHE_FILE}.tmp")).exists());
     }
 
     #[test]

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 /**
  * The tiles release flag guards every tile path. Each file that writes a tile file or mounts
- * the tile host is listed in `tiles-flag-sites.json`, and each listed file must call
+ * the tile host is listed in `tiles-flag-sites.json`, and each listed file must await
  * `tilesEnabled()` in code: a mention in a comment or a string doesn't count. With the flag off
  * the app is today's app and no tile code writes any file.
  */
@@ -13,8 +13,12 @@ import { describe, expect, it } from "vitest";
 const ROOT = resolve(__dirname, "../../..");
 const SITES = join(ROOT, "src/shared/lib/tiles-flag-sites.json");
 
-/** Whether the source calls `tilesEnabled()`; comments and strings are not calls. */
-function callsTilesEnabled(file: string, text: string): boolean {
+/**
+ * Whether the source awaits `tilesEnabled()` (or chains `.then` on it). The call returns a
+ * Promise, so a bare `if (!tilesEnabled())` is always false and guards nothing. Comments and
+ * strings are not calls.
+ */
+function awaitsTilesEnabled(file: string, text: string): boolean {
   const source = ts.createSourceFile(
     file,
     text,
@@ -23,11 +27,19 @@ function callsTilesEnabled(file: string, text: string): boolean {
     file.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
   );
   let found = false;
+  const unwrap = (node: ts.Expression): ts.Expression =>
+    ts.isParenthesizedExpression(node) ? unwrap(node.expression) : node;
+  const isCall = (node: ts.Node): boolean =>
+    ts.isCallExpression(node) &&
+    ts.isIdentifier(node.expression) &&
+    node.expression.text === "tilesEnabled";
   const visit = (node: ts.Node) => {
+    if (ts.isAwaitExpression(node) && isCall(unwrap(node.expression))) found = true;
     if (
       ts.isCallExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      node.expression.text === "tilesEnabled"
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === "then" &&
+      isCall(unwrap(node.expression.expression))
     ) {
       found = true;
     }
@@ -38,7 +50,7 @@ function callsTilesEnabled(file: string, text: string): boolean {
 }
 
 /**
- * What is wrong with the list: its format, then each site that is missing or doesn't call the
+ * What is wrong with the list: its format, then each site that is missing or doesn't await the
  * flag. `read` returns a listed file's text, or null when it doesn't exist.
  */
 function siteProblems(list: unknown, read: (file: string) => string | null): string[] {
@@ -72,7 +84,8 @@ function siteProblems(list: unknown, read: (file: string) => string | null): str
     seen.add(file);
     const text = read(file);
     if (text === null) problems.push(`${file}: listed but missing`);
-    else if (!callsTilesEnabled(file, text)) problems.push(`${file}: doesn't call tilesEnabled()`);
+    else if (!awaitsTilesEnabled(file, text))
+      problems.push(`${file}: doesn't await tilesEnabled()`);
   });
   return problems;
 }
@@ -83,19 +96,22 @@ function readSite(file: string): string | null {
 }
 
 describe("every tile writer and the tile host check the tiles flag", () => {
-  it("the list exists and every listed site calls tilesEnabled()", () => {
+  it("the list exists and every listed site awaits tilesEnabled()", () => {
     expect(existsSync(SITES)).toBe(true);
     const list: unknown = JSON.parse(readFileSync(SITES, "utf8"));
     expect(siteProblems(list, readSite)).toEqual([]);
   });
 
-  it("fails a listed site that only mentions the flag in a comment or a string", () => {
+  it("fails a listed site that only mentions the flag, or calls it without awaiting", () => {
     const planted: Record<string, string> = {
       "src/planted-writer.ts": [
         "// tilesEnabled() is checked by the caller",
         'const note = "tilesEnabled()";',
         "export const write = () => saveTile(note);",
       ].join("\n"),
+      "src/planted-sync.ts": "export function write() { if (!tilesEnabled()) return; }",
+      "src/planted-then.ts":
+        "export const write = () => tilesEnabled().then((on) => on && save());",
       "src/planted-host.tsx": [
         'import { tilesEnabled } from "@/shared/lib/tiles-enabled";',
         "export async function mount() { if (!(await tilesEnabled())) return; }",
@@ -104,9 +120,12 @@ describe("every tile writer and the tile host check the tiles flag", () => {
     const list = [
       { file: "src/planted-writer.ts", what: "writes a tile file" },
       { file: "src/planted-host.tsx", what: "mounts the tile host" },
+      { file: "src/planted-sync.ts", what: "writes a tile file" },
+      { file: "src/planted-then.ts", what: "writes a tile file" },
     ];
     expect(siteProblems(list, (file) => planted[file] ?? null)).toEqual([
-      "src/planted-writer.ts: doesn't call tilesEnabled()",
+      "src/planted-writer.ts: doesn't await tilesEnabled()",
+      "src/planted-sync.ts: doesn't await tilesEnabled()",
     ]);
   });
 

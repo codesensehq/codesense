@@ -1297,8 +1297,7 @@ mod tests {
     #[test]
     fn on_a_beta_channel_a_cached_kill_turns_tiles_off_at_boot() {
         let dir = tempfile::tempdir().unwrap();
-        let state = serde_json::json!({ "viewer": { "settings": { "tiles": true } } });
-        std::fs::write(dir.path().join("app-state.json"), state.to_string()).unwrap();
+        crate::flags::tests::local_tiles(dir.path(), true);
         assert!(crate::flags::tiles_at_boot(dir.path()), "no kill: on");
         crate::flags::write_kill(dir.path(), true);
         assert!(

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tauri::Manager;
 
@@ -27,11 +27,16 @@ pub(crate) fn app_state_path<R: tauri::Runtime>(
 pub(crate) fn app_state_file<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
 ) -> Result<PathBuf, String> {
-    Ok(app
+    let dir = app
         .path()
         .app_data_dir()
-        .map_err(|e| format!("failed to resolve app data dir: {}", e))?
-        .join("app-state.json"))
+        .map_err(|e| format!("failed to resolve app data dir: {}", e))?;
+    Ok(app_state_file_in(&dir))
+}
+
+/// The app state file inside an app data folder.
+pub(crate) fn app_state_file_in(dir: &Path) -> PathBuf {
+    dir.join("app-state.json")
 }
 
 /// SW-MCP-11: synchronously read the configured summary-section headings from
