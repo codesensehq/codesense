@@ -10,7 +10,10 @@ import { RemoteTerminalPane } from "./remote-terminal-pane";
 import { PendingRemoteOpens } from "./pending-remote-opens";
 import { workspaceKey } from "@/shared/lib/workspace-key";
 import {
+  Profiler,
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useId,
   useMemo,
@@ -175,7 +178,41 @@ function useWorkspaceTabs(teamKey: string, workspaceId: string) {
 // a remounted slot re-attaches the SAME display (nothing is rebuilt).
 // ---------------------------------------------------------------------------
 
+/** Test-only seam: told each time a tile frame or a tab-grid cell commits a render and each time one
+ *  mounts. Frame ids read `tile:{workspaceId}`, cell ids `cell:{workspaceId}/{tabId}`. Nothing
+ *  renders for it when absent. */
+export interface FrameProbe {
+  /** A `React.Profiler` commit of the frame or cell (its first commit is `mount`). */
+  render: (frameId: string, phase: "mount" | "update" | "nested-update") => void;
+  /** The frame or cell mounted (a remount counts again). */
+  mount: (frameId: string) => void;
+}
+
+const FrameProbeContext = createContext<FrameProbe | undefined>(undefined);
+
+/** Wraps `children` in the probe's `React.Profiler` and mount counter. */
+function ProbedFrame({
+  probe,
+  frameId,
+  children,
+}: {
+  probe: FrameProbe;
+  frameId: string;
+  children: ReactNode;
+}) {
+  useEffect(() => {
+    probe.mount(frameId);
+  }, [probe, frameId]);
+  return (
+    <Profiler id={frameId} onRender={(_id, phase) => probe.render(frameId, phase)}>
+      {children}
+    </Profiler>
+  );
+}
+
 interface WorkspaceTerminalPanelsProps {
+  /** Test-only: see {@link FrameProbe}. */
+  frameProbe?: FrameProbe;
   /** The team whose workspaces the CLI shows. It can differ from the active team:
    *  the CLI keeps the team it last moved to when the active team changes. */
   teamKey: string;
@@ -254,6 +291,7 @@ export function WorkspaceTerminalPanels({
   repoPath,
   onOpenStoryDoc,
   onStoryStatusChange,
+  frameProbe,
 }: WorkspaceTerminalPanelsProps) {
   const workspaces = useTeamWorkspaces(teamKey);
   const shownByStore = useTerminalVisible();
@@ -417,26 +455,36 @@ export function WorkspaceTerminalPanels({
   });
 
   return (
-    <div
-      ref={setNodeRef}
-      className={`flex-1 min-h-0 relative${isOver ? " outline outline-2 outline-accent outline-offset-[-2px] rounded" : ""}`}
-      data-drop-active={isOver ? "true" : "false"}
-    >
-      {/* Frame layer: the mosaic tree (resizable panels + chrome + drop zones).
+    <FrameProbeContext.Provider value={frameProbe}>
+      <div
+        ref={setNodeRef}
+        className={`flex-1 min-h-0 relative${isOver ? " outline outline-2 outline-accent outline-offset-[-2px] rounded" : ""}`}
+        data-drop-active={isOver ? "true" : "false"}
+      >
+        {/* Frame layer: the mosaic tree (resizable panels + chrome + drop zones).
           Split-vs-1-up now rides in `shared.split`. */}
-      <MosaicView
-        resizeIdentity={teamKey}
-        node={root}
-        zoomPath={zoomPath}
-        onSizesCommit={(path, sizes) => setForegroundNodeSizes(teamKey, path, sizes)}
-        renderLeaf={(id) => {
-          const ws = workspaceById.get(id);
-          // Each team's grid is its own subtree (the CLI keeps one per warm team), so the
-          // workspace id alone identifies a tile and a team switch never remounts it.
-          return ws ? <WorkspaceTileFrame key={id} workspace={ws} shared={shared} /> : null;
-        }}
-      />
-    </div>
+        <MosaicView
+          resizeIdentity={teamKey}
+          node={root}
+          zoomPath={zoomPath}
+          onSizesCommit={(path, sizes) => setForegroundNodeSizes(teamKey, path, sizes)}
+          renderLeaf={(id) => {
+            const ws = workspaceById.get(id);
+            // Each team's grid is its own subtree (the CLI keeps one per warm team), so the
+            // workspace id alone identifies a tile and a team switch never remounts it.
+            if (!ws) return null;
+            const frame = <WorkspaceTileFrame key={id} workspace={ws} shared={shared} />;
+            return frameProbe ? (
+              <ProbedFrame key={id} probe={frameProbe} frameId={`tile:${id}`}>
+                {frame}
+              </ProbedFrame>
+            ) : (
+              frame
+            );
+          }}
+        />
+      </div>
+    </FrameProbeContext.Provider>
   );
 }
 
@@ -1342,6 +1390,7 @@ function WorkspaceTerminalBody({
   terminalFontPx,
   themeConfig,
 }: WorkspaceTerminalBodyProps) {
+  const frameProbe = useContext(FrameProbeContext);
   const { tabs, activeTabId } = useWorkspaceTabs(teamKey, ws.id);
   const [selection, setSelection] = useState<{ current: string | undefined; previous?: string }>({
     current: activeTabId,
@@ -1687,7 +1736,15 @@ function WorkspaceTerminalBody({
             maxRows={maxRows}
             renderCell={(tabId) => {
               const index = tabs.findIndex((t) => t.id === tabId);
-              return index === -1 ? null : renderPane(index, true);
+              if (index === -1) return null;
+              const pane = renderPane(index, true);
+              return frameProbe ? (
+                <ProbedFrame key={tabId} probe={frameProbe} frameId={`cell:${ws.id}/${tabId}`}>
+                  {pane}
+                </ProbedFrame>
+              ) : (
+                pane
+              );
             }}
           />
         ) : (
