@@ -31,6 +31,17 @@ vi.mock("@tauri-apps/api/window", () => ({
 // This suite exercises other inputs; ActivityV1 recovery has its own seam tests.
 vi.mock("@/shared/hooks/use-terminal-activity", () => ({ useTerminalActivity: () => {} }));
 vi.mock("@/tauri/commands", () => ({
+  // The window registry: main pulls its slice on mount, then reports ready.
+  windowGetSlice: vi.fn().mockResolvedValue({
+    label: "main",
+    kind: "main",
+    version: 1,
+    layoutRef: null,
+    items: [],
+    pending: false,
+    owners: {},
+  }),
+  windowReady: vi.fn(() => Promise.resolve()),
   // Custom right panes: the app-wide pane registration lists them.
   listPanes: vi.fn().mockResolvedValue({ contentRoot: "", chain: [], panes: [] }),
   // Agent tabs follow their agents' names: the app reads the agents on mount.
