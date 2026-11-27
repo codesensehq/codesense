@@ -142,7 +142,10 @@ pub(crate) async fn prepare(
             let team = team.clone().ok_or(MediaRefusal::NoTeam)?;
             let team = team_inbox(host, team)
                 .await
-                .map_err(|_| MediaRefusal::NoTeam)?
+                .map_err(|e| {
+                    log::warn!(target: "workspace_chat", "chat media: team inbox unavailable: {e:?}");
+                    MediaRefusal::NoTeam
+                })?
                 .team;
             if input.alt.trim().is_empty() {
                 return Err(MediaRefusal::NoAlt);

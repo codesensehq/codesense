@@ -16,7 +16,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use super::index::ChatIndexEntry;
 use super::media::{ChatSender, MediaRefusal};
-use super::model::{MessageContentType, MessageKind, MessageOnClick, WorkspaceChatMessage, HUMAN};
+use super::model::{MessageContentType, MessageKind, MessageOnClick, WorkspaceChatMessage};
 use super::send::{ChatPost, SendRefusal};
 use super::store::{ChatAppend, ChatStoreError, WorkspaceChatStore};
 
@@ -74,22 +74,21 @@ fn is_archived(app: &AppHandle, workspace_id: &str) -> bool {
 /// 2. The principal id as resolved from the ambient auth state.
 /// 3. `USER` / `USERNAME` env var.
 /// 4. The literal `"you"`.
-async fn resolve_human_from(app: &AppHandle) -> (String, String) {
+async fn resolve_human_from(app: &AppHandle) -> String {
     let principal_display = super::super::route_to_context::resolve_ambient(app)
         .await
         .ok()
         .map(|(_, user_id)| crate::domain::Principal::from(user_id).as_str().to_string());
 
     // Prefer the active profile's display name.
-    let display = super::super::local_profile::peek_active(app)
+    super::super::local_profile::peek_active(app)
         .map(|p| p.display_name)
         .filter(|s| !s.trim().is_empty())
         .or(principal_display)
         .or_else(|| std::env::var("USER").ok())
         .or_else(|| std::env::var("USERNAME").ok())
         .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "you".to_string());
-    (HUMAN.to_string(), display)
+        .unwrap_or_else(|| "you".to_string())
 }
 
 /// A committed post updates every view and offers native notices to its bound recipients.
@@ -303,7 +302,7 @@ pub async fn workspace_chat_send(
     if !store.is_installed() {
         return Err("workspace chat engine not installed".to_string());
     }
-    let (_, from_name) = resolve_human_from(&app).await;
+    let from_name = resolve_human_from(&app).await;
     let with_media = media.is_some();
     let sender = ChatSender::Human {
         team: team.filter(|_| with_media).map(Into::into),
