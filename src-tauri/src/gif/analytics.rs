@@ -84,8 +84,8 @@ impl Analytics {
         };
         if *seen != epoch {
             *seen = epoch;
-            entries.retain(|(p, _), _| *p != provider);
-            order.retain(|(p, _)| *p != provider);
+            HashMap::retain(entries, |(p, _), _| *p != provider);
+            VecDeque::retain(order, |(p, _)| *p != provider);
         }
     }
 

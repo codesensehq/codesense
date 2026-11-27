@@ -358,7 +358,7 @@ impl Registration {
     fn follow_epoch_held(&self, seen: &mut Epochs) -> Epochs {
         let now = install_epochs(self.service.data_dir());
         for provider in [Provider::Giphy, Provider::Klipy] {
-            if seen.of(provider) == now.of(provider) {
+            if Epochs::of(*seen, provider) == Epochs::of(now, provider) {
                 continue;
             }
             HashMap::retain(&mut lock(&self.sent), |(sent, ..), _| *sent != provider);
@@ -370,7 +370,11 @@ impl Registration {
         }
         *seen = now;
         for provider in [Provider::Giphy, Provider::Klipy] {
-            analytics::Analytics::start_epoch(&self.service.analytics, provider, now.of(provider));
+            analytics::Analytics::start_epoch(
+                &self.service.analytics,
+                provider,
+                Epochs::of(now, provider),
+            );
         }
         now
     }
@@ -752,7 +756,7 @@ impl Registration {
             log::info!(target: "gif", "gif registration: {:?} sends are not registered", sent.provider);
             return;
         };
-        let epoch = self.follow_epoch().of(provider);
+        let epoch = Epochs::of(self.follow_epoch(), provider);
         let now = (self.clock)();
         let gif = Some((sent.provider_id.as_str(), Some(sent.url.as_str())));
         let Some(Admitted { entry: Some(entry) }) = self.admit(provider, Event::Sent, gif, now)
@@ -811,7 +815,7 @@ impl Registration {
     /// logged: not GIPHY, no search entry, no onclick URL, search Off or no key, the install id
     /// changed meanwhile, no install id.
     pub(crate) async fn register_click(&self, provider: Provider, id: &str) {
-        let epoch = self.follow_epoch().of(provider);
+        let epoch = Epochs::of(self.follow_epoch(), provider);
         let now = (self.clock)();
         let gif = Some((id, None));
         let Some(Admitted { entry: Some(entry) }) = self.admit(provider, Event::Click, gif, now)
@@ -865,7 +869,7 @@ impl Registration {
     /// state the entries came from.
     pub(crate) fn take_onloads(&self, sha: &str) -> Taken {
         let mut seen = lock(&self.epoch);
-        let epoch = self.follow_epoch_held(&mut seen).of(ONLOAD_PROVIDER);
+        let epoch = Epochs::of(self.follow_epoch_held(&mut seen), ONLOAD_PROVIDER);
         let mut onloads = lock(&self.onloads);
         let slots: Vec<Slot> = onloads
             .iter()

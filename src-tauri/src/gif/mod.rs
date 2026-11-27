@@ -706,7 +706,7 @@ impl GifService {
             return Err(GifError::NoProvider.into());
         }
         let provider = current.provider;
-        let epoch = epochs.of(provider);
+        let epoch = install::Epochs::of(epochs, provider);
         let named = |error: GifError| Failed {
             provider: Some(provider),
             error,

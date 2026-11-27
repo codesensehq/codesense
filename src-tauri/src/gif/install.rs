@@ -121,7 +121,7 @@ pub(crate) fn write_install(
     epoch: u64,
 ) -> std::io::Result<bool> {
     let epochs = lock(&INSTALL_FILE);
-    if epochs_in(&epochs, dir).of(provider) != epoch {
+    if Epochs::of(epochs_in(&epochs, dir), provider) != epoch {
         return Ok(false);
     }
     let mut entries = entries(dir);
@@ -140,7 +140,7 @@ pub(crate) fn write_install(
 /// would not.
 pub(crate) fn customer_id(dir: &Path, fp: &str, epoch: u64) -> std::io::Result<String> {
     let epochs = lock(&INSTALL_FILE);
-    if epochs_in(&epochs, dir).of(Provider::Klipy) != epoch {
+    if Epochs::of(epochs_in(&epochs, dir), Provider::Klipy) != epoch {
         return Err(std::io::Error::other("the install epoch moved"));
     }
     if let Some(id) = read_install(dir, Provider::Klipy, fp) {
@@ -159,7 +159,7 @@ pub(crate) fn customer_id(dir: &Path, fp: &str, epoch: u64) -> std::io::Result<S
 
 /// `provider`'s install epoch in `dir` (see [`INSTALL_FILE`]).
 pub(crate) fn install_epoch(dir: &Path, provider: Provider) -> u64 {
-    install_epochs(dir).of(provider)
+    Epochs::of(install_epochs(dir), provider)
 }
 
 /// Both providers' install epochs in `dir`.
