@@ -19,7 +19,9 @@
 //! - **A helper use.** An [`ALLOWED`] site's function installs the hook for
 //!   whoever calls it, so every mention of that function's name outside its
 //!   definition and `use` items (a call through any re-export path, or a
-//!   function pointer) is a use, named the same way.
+//!   function pointer) is a use, named the same way. A file with its own
+//!   same-named function (another platform's stub) reaches that one through a
+//!   bare, `self::` or `super::` path, so those uses are not counted.
 //! - **Fails** on a site not in [`ALLOWED`], a helper use not in [`CALLERS`],
 //!   a `use` that renames a helper (it would hide its callers), and an
 //!   [`ALLOWED`] or [`CALLERS`] row with nothing left (remove the row).
@@ -62,12 +64,6 @@ const CALLERS: &[(&str, &str, &str, &str)] = &[
         "src/terminal/session_server.rs",
         "sidecar_command",
         "the sidecar starts with the open-file limit the app had before its raise",
-    ),
-    (
-        "inherit_original_limit",
-        "crates/codesense-platform/src/limits/windows.rs",
-        "every_entry_point_is_a_no_op",
-        "the Windows stub's own test; the stub installs no hook",
     ),
 ];
 
@@ -271,11 +267,24 @@ fn in_use_item(code: &[u8], at: usize) -> bool {
         .is_some_and(|&start| !code[start..at].contains(&b';'))
 }
 
+/// Whether the path before `at` is empty, `self::` or `super::`: it names an
+/// item of this file's own module tree.
+fn local_path(code: &[u8], at: usize) -> bool {
+    let Some(before) = code[..at].trim_ascii_end().strip_suffix(b"::") else {
+        return true;
+    };
+    let before = before.trim_ascii_end();
+    let segment = before.len() - before.iter().rev().take_while(|&&c| is_ident(c)).count();
+    matches!(&before[segment..], b"self" | b"super")
+}
+
 /// Uses of `helper` in blanked `code`, and the `use` items that rename it.
-fn helper_uses(file: &str, code: &[u8], helper: &str) -> (Vec<Site>, Vec<Site>) {
+/// `own_stub`: this file defines a same-named function that is not the
+/// allowed one, so local paths reach the stub.
+fn helper_uses(file: &str, code: &[u8], helper: &str, own_stub: bool) -> (Vec<Site>, Vec<Site>) {
     let (mut uses, mut renames) = (Vec::new(), Vec::new());
     for at in idents(code, helper) {
-        if is_definition(code, at) {
+        if is_definition(code, at) || (own_stub && local_path(code, at)) {
             continue;
         }
         if !in_use_item(code, at) {
@@ -361,8 +370,10 @@ fn violations(sources: &[(String, Vec<u8>)], allowed: Allowed, callers: Callers)
             }
             sites_seen.insert((site.file, site.function));
         }
-        for (_, _, helper) in allowed {
-            let (uses, renames) = helper_uses(file, code, helper);
+        for (allowed_file, _, helper) in allowed {
+            let own_stub = file.as_str() != *allowed_file
+                && idents(code, helper).into_iter().any(|at| is_definition(code, at));
+            let (uses, renames) = helper_uses(file, code, helper, own_stub);
             for site in renames {
                 out.push(format!(
                     "{}:{} renames {helper} in a use: call it by its name so CALLERS sees it",
@@ -489,6 +500,18 @@ fn a_new_caller_of_an_allowed_helper_fails() {
         assert_eq!(failures.len(), 1, "{mutant}: {failures:?}");
         assert!(failures[0].starts_with(expected), "{mutant}: {failures:?}");
     }
+    let stub = "pub fn limit(_: &mut Command) {}\nfn t() { super::limit(&mut c); limit(&mut c); }";
+    let mut with_stub = base.to_vec();
+    with_stub.push(blanked("crates/p/src/stub.rs", stub));
+    let stub_only = violations(&with_stub, &allowed, &callers);
+    assert!(stub_only.is_empty(), "a stub's own calls reach the stub: {stub_only:?}");
+    with_stub.push(blanked(
+        "crates/p/src/other.rs",
+        "pub fn limit() {}\nfn t() { p::l::limit(&mut c); }",
+    ));
+    let through_path = violations(&with_stub, &allowed, &callers);
+    assert_eq!(through_path.len(), 1, "{through_path:?}");
+    assert!(through_path[0].starts_with("crates/p/src/other.rs:2 uses limit in fn t"));
     let gone = violations(&base[..1], &allowed, &callers);
     assert_eq!(gone.len(), 1, "{gone:?}");
     assert!(gone[0].contains("CALLERS row limit src/s.rs fn sidecar no longer uses it"));
