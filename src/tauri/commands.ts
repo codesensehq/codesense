@@ -264,8 +264,15 @@ export const initWatchedCache = (orgRoot: string, cachePath: string) =>
 
 // === App state operations ===
 
-export const saveAppState = async (state: string, patch = false) =>
-  invoke<void>("save_app_state", { state, patch, expectedPrincipal: await rendererPrincipal() });
+/** The app state is `main`'s to write; a satellite window's stores save nothing. */
+export const saveAppState = async (state: string, patch = false) => {
+  if (!isMainWindow()) return;
+  return invoke<void>("save_app_state", {
+    state,
+    patch,
+    expectedPrincipal: await rendererPrincipal(),
+  });
+};
 
 export const loadAppState = async () =>
   invoke<string>("load_app_state", { expectedPrincipal: await rendererPrincipal() });

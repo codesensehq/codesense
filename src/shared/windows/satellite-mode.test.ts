@@ -42,7 +42,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 import { subscribeContext } from "@/shared/lib/context-query/subscribe-context";
 import { useViewerStore } from "@/shared/stores/viewer-store";
-import { pushViewerState } from "@/tauri/commands";
+import { pushViewerState, saveAppState } from "@/tauri/commands";
 import { CONTEXT_FILE_CHANGE_EVENT, CONTEXT_INDEX_CHANGED_EVENT } from "@/tauri/events";
 
 import { listenScoped } from "./listen-scoped";
@@ -95,6 +95,8 @@ describe("a satellite writes nothing a main window owns", () => {
   it("a satellite makes no save_app_state and no push_viewer_state invoke after a tab change", async () => {
     host.main = false;
     await changeTabs();
+    // The org, config, shortcut and dashboard stores save through the same command at boot.
+    await saveAppState("{}", true);
     await pushViewerState({ openTabs: {} });
     expect(invoked.filter((name) => name === "save_app_state")).toEqual([]);
     expect(invoked.filter((name) => name === "push_viewer_state")).toEqual([]);
