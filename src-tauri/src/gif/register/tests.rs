@@ -1072,6 +1072,78 @@ async fn a_serve_taken_before_a_key_change_marks_without_reading_the_keychain() 
     assert!(h.wire.urls().is_empty());
 }
 
+/// A keychain whose reads fail and are counted, running `during` first once a test sets it.
+#[derive(Default)]
+struct DeniedWhile {
+    gets: std::sync::atomic::AtomicUsize,
+    during: Mutex<Option<Box<dyn Fn() + Send>>>,
+}
+impl CredentialStore for DeniedWhile {
+    fn get(
+        &self,
+        _: &str,
+    ) -> Result<Option<Secret>, crate::commands::credential_store::CredentialError> {
+        self.gets.fetch_add(1, Ordering::SeqCst);
+        if let Some(during) = &*self.during.lock().unwrap() {
+            during();
+        }
+        Err("keychain read failed: denied".into())
+    }
+    fn set(
+        &self,
+        _: &str,
+        _: &Secret,
+    ) -> Result<(), crate::commands::credential_store::CredentialError> {
+        Ok(())
+    }
+    fn delete(&self, _: &str) -> Result<(), crate::commands::credential_store::CredentialError> {
+        Ok(())
+    }
+}
+
+/// Catches a keychain wait checked by its time alone: the wait a failed read set under the old
+/// epoch would hold the new epoch's first read.
+#[tokio::test]
+async fn a_keychain_wait_set_under_an_old_epoch_holds_nothing_after_forget_install() {
+    let store = Arc::new(DeniedWhile::default());
+    let h = Harness::over(store.clone());
+    let armed = || Pending {
+        onload: all_pingbacks().onload,
+        sha: Some(SHA.into()),
+        expires: h.now() + ONLOAD_WINDOW_MS,
+        waiting: Some(false),
+    };
+    let old = install_epoch(h.dir.path(), Provider::Giphy);
+    h.registration.put_back(vec![(slot(1), armed())], old);
+    let taken = h.registration.take_onloads(SHA);
+    // Search is turned Off and On while the keychain read is in flight, and a send follows the
+    // new epoch before the failed read sets its wait.
+    let (dir, registration) = (h.dir.path().to_path_buf(), h.registration.clone());
+    *store.during.lock().unwrap() = Some(Box::new(move || {
+        forget_install(&dir);
+        registration.expect_send(&slot(9));
+    }));
+    h.registration.settle_serve(vec![slot(1)], taken).await;
+    *store.during.lock().unwrap() = None;
+    assert_eq!(store.gets.load(Ordering::SeqCst), 1);
+    let (set_in, until) = *h.registration.key_retry_at.lock().unwrap();
+    assert_eq!(
+        set_in, old,
+        "the failed read set its wait under the old epoch"
+    );
+    assert!(until > h.now(), "and the wait has time left");
+    let new = install_epoch(h.dir.path(), Provider::Giphy);
+    assert_ne!(new, old);
+    h.registration.put_back(vec![(slot(1), armed())], new);
+    let taken = h.registration.take_onloads(SHA);
+    h.registration.settle_serve(vec![slot(1)], taken).await;
+    assert_eq!(
+        store.gets.load(Ordering::SeqCst),
+        2,
+        "the old epoch's wait holds no read"
+    );
+}
+
 // The person's pick in the Inbox pane's picker: onclick, once per pick.
 
 #[tokio::test]
@@ -1526,9 +1598,12 @@ async fn put_back_after_the_epoch_moved_puts_nothing_back() {
     );
 }
 
-/// Two GIPHY sends of one GIF, then a serve of both whose install epoch moves during its first
-/// ping, or else between its take and its settle. The pings sent, in order.
-async fn serve_while_the_epoch_moves(during_the_first_ping: bool) -> Vec<String> {
+/// Two GIPHY sends of one GIF, then a serve of both whose install epoch moves (by `change`)
+/// during its first ping, or else between its take and its settle. The pings sent, in order.
+async fn serve_while_the_epoch_moves(
+    during_the_first_ping: bool,
+    change: fn(&std::path::Path),
+) -> Vec<String> {
     let h = Harness::new();
     h.found_all("g1");
     for message in [1, 2] {
@@ -1537,11 +1612,11 @@ async fn serve_while_the_epoch_moves(during_the_first_ping: bool) -> Vec<String>
     }
     let dir = h.dir.path().to_path_buf();
     if during_the_first_ping {
-        *h.wire.during_ping.lock().unwrap() = Some(Box::new(move || forget_install(&dir)));
+        *h.wire.during_ping.lock().unwrap() = Some(Box::new(move || change(&dir)));
     }
     let taken = h.registration.take_onloads(SHA);
     if !during_the_first_ping {
-        forget_install(h.dir.path());
+        change(h.dir.path());
         h.registration.expect_send(&slot(9));
     }
     let settled = h
@@ -1554,8 +1629,8 @@ async fn serve_while_the_epoch_moves(during_the_first_ping: bool) -> Vec<String>
 
 #[tokio::test]
 async fn a_serve_stops_pinging_when_the_epoch_moves_mid_loop() {
-    let mid_loop = serve_while_the_epoch_moves(true).await;
-    let after_take = serve_while_the_epoch_moves(false).await;
+    let mid_loop = serve_while_the_epoch_moves(true, forget_install).await;
+    let after_take = serve_while_the_epoch_moves(false, forget_install).await;
     assert_eq!(
         (mid_loop, after_take),
         (
@@ -1563,6 +1638,22 @@ async fn a_serve_stops_pinging_when_the_epoch_moves_mid_loop() {
             strings(&["SENT", "SENT"])
         ),
         "one ping in flight may finish; none goes out after the epoch moved"
+    );
+}
+
+/// GIPHY's key replaced: only GIPHY's install epoch moves.
+fn replace_giphys_key(dir: &std::path::Path) {
+    crate::gif::install::forget_install_for(dir, Provider::Giphy);
+}
+
+/// Catches a serve loop that checks the other provider's epoch before each ping: KLIPY's
+/// doesn't move here, so that loop would ping on.
+#[tokio::test]
+async fn a_serve_stops_pinging_when_giphys_key_is_replaced_mid_loop() {
+    assert_eq!(
+        serve_while_the_epoch_moves(true, replace_giphys_key).await,
+        strings(&["SENT", "SENT", "SEEN"]),
+        "one ping in flight may finish; none goes out after GIPHY's epoch moved"
     );
 }
 
@@ -1695,6 +1786,40 @@ async fn one_providers_key_change_leaves_the_other_providers_state() {
         (2, (1, strings(&["SENT", "SEEN"]), 1)),
         "KLIPY keeps its share state; GIPHY keeps its onload, sent row and entry"
     );
+}
+
+/// Catches a follow that lets go of GIPHY's waits on any provider's key change, not only
+/// GIPHY's own.
+#[tokio::test]
+async fn a_klipy_key_change_keeps_giphys_retry_waits() {
+    let store = Arc::new(Lockable::default());
+    store.inner.set(ACCOUNT, &Secret::new(KEY)).unwrap();
+    let h = Harness::over(store.clone());
+    h.found_all("g1");
+    // A failed random id call sets its wait.
+    *h.wire.random.lock().unwrap() = Ok(reply(500, ""));
+    h.send(1, "g1", URL).await;
+    assert_eq!(h.wire.random_calls(), 1);
+    h.registration.note_fetched(&slot(1), Some(SHA), true);
+    // A failed keychain read sets the serve's wait.
+    refuse(&h, &store, Refusal::Locked);
+    let taken = h.registration.take_onloads(SHA);
+    let settled = h.registration.settle_serve(vec![slot(1)], taken).await;
+    assert_eq!(settled.retry, vec![slot(1)]);
+    let waits = || {
+        (
+            *h.registration.random_retry_at.lock().unwrap(),
+            *h.registration.key_retry_at.lock().unwrap(),
+        )
+    };
+    let set = waits();
+    assert!(
+        set.0 .1 > h.now() && set.1 .1 > h.now(),
+        "both waits are set"
+    );
+    crate::gif::install::forget_install_for(h.dir.path(), Provider::Klipy);
+    h.registration.expect_send(&slot(9));
+    assert_eq!(waits(), set, "KLIPY's key change keeps GIPHY's waits");
 }
 
 #[tokio::test]

@@ -610,6 +610,26 @@ fn the_pingback_map_holds_at_most_2000_entries_and_drops_the_oldest() {
         .is_none());
 }
 
+/// A GIPHY result `id` with an onsent pingback, as a search holds it.
+fn giphy_found(id: &str) -> Found {
+    Found {
+        candidate: Candidate {
+            provider: Provider::Giphy,
+            id: id.to_string(),
+            title: String::new(),
+            url: format!("https://media.giphy.com/media/{id}/giphy.gif"),
+            preview_url: format!("https://media.giphy.com/media/{id}/200w_s.gif"),
+            width: 1,
+            height: 1,
+            auto_loads: false,
+        },
+        pingbacks: Some(Pingbacks {
+            onsent: Some(format!("https://giphy-analytics.giphy.com/{id}")),
+            ..Default::default()
+        }),
+    }
+}
+
 /// A provider that answers from memory, to show the service runs any adapter through the trait.
 struct Canned(Vec<Found>);
 impl GifProvider for Canned {
@@ -628,6 +648,73 @@ impl GifProvider for Canned {
     ) -> BoxFuture<'a, Result<Vec<Found>, GifError>> {
         Box::pin(async move { Ok(self.0.clone()) })
     }
+}
+
+/// A GIPHY search that answers `found` after GIPHY's key is replaced while it is in flight,
+/// which moves GIPHY's install epoch on disk and nowhere else.
+struct KeyReplacedMidSearch {
+    dir: std::path::PathBuf,
+    found: Vec<Found>,
+}
+impl GifProvider for KeyReplacedMidSearch {
+    fn search_gifs<'a>(
+        &'a self,
+        _: &'a str,
+        _: Rating,
+        _: usize,
+    ) -> BoxFuture<'a, Result<Vec<Found>, GifError>> {
+        install::forget_install_for(&self.dir, Provider::Giphy);
+        Box::pin(async move { Ok(self.found.clone()) })
+    }
+    fn lookup_gifs<'a>(
+        &'a self,
+        _: &'a [String],
+        _: Rating,
+    ) -> BoxFuture<'a, Result<Vec<Found>, GifError>> {
+        Box::pin(async move { Ok(Vec::new()) })
+    }
+}
+
+/// Catches a search recorded without its disk-epoch check. The analytics' held epoch lags the
+/// disk until something follows the new one, so a record checked against the held epoch alone
+/// would hold a search that spanned a key change.
+#[tokio::test]
+async fn a_search_whose_disk_epoch_moved_is_not_recorded() {
+    let dir = tempfile::tempdir().unwrap();
+    pin_giphy(dir.path());
+    let store = Arc::new(FakeStore::default());
+    store.set(ACCOUNT, &Secret::new(KEY)).unwrap();
+    let moved = dir.path().to_path_buf();
+    let adapters: Adapters = Arc::new(
+        move |_: Provider, _: Secret, _: Option<String>, _: i64| -> Box<dyn GifProvider> {
+            Box::new(KeyReplacedMidSearch {
+                dir: moved.clone(),
+                found: vec![giphy_found("g1")],
+            })
+        },
+    );
+    let service = GifService::new(
+        dir.path().to_path_buf(),
+        Keys::new(store, true, Some(ACCOUNT), Duration::from_secs(3)),
+        adapters,
+        Arc::new(|| START_MS),
+    );
+    let before = install::install_epoch(dir.path(), Provider::Giphy);
+    let (_, found) = service
+        .run(&normalize(Some("x"), None, Some(2)).unwrap(), None, None)
+        .await
+        .unwrap();
+    assert_eq!(ids(&found), vec!["g1"], "the search still answers");
+    assert_eq!(
+        install::install_epoch(dir.path(), Provider::Giphy),
+        before + 1,
+        "the disk epoch moved mid-search"
+    );
+    assert_eq!(
+        service.analytics.held_count(),
+        0,
+        "found under the old key: not held"
+    );
 }
 
 #[tokio::test]
