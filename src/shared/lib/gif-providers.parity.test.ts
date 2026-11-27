@@ -2,8 +2,8 @@
 /**
  * The GIF providers' strings are written once, in gif-providers.ts. Two copies can't import it: the
  * kit chat bundle's table (`GIF_PROVIDER_COPY` in chat/copy.js, which the GIF picker reads) and the
- * Inbox pane's attribution map (`GIF_POWERED_BY`, under sent GIFs and in the lightbox). Any drift
- * in either fails here.
+ * Inbox pane's attribution map (`GIF_POWERED_BY`, under sent GIFs and in the lightbox); a third,
+ * the dashboard catalog's inbox description, quotes the attributions. Any drift in any fails here.
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -14,6 +14,7 @@ import { GIF_PROVIDER_IDS, GIF_PROVIDERS } from "./gif-providers";
 
 const ROOT = resolve(__dirname, "../../..");
 const COPY_JS = resolve(ROOT, "src-tauri/src/http/routes/dashboard_kit/chat/copy.js");
+const CATALOG_RS = resolve(ROOT, "src-tauri/src/dashboard_publish/catalog.rs");
 const PANE = readFileSync(
   resolve(ROOT, "src/features/shell/right-pane/__fixtures__/inbox-pane.html"),
   "utf8",
@@ -43,6 +44,14 @@ describe("GIF provider strings", () => {
   it("the Inbox pane's attribution map is gif-providers.ts's poweredBy, for every provider", () => {
     expect(panePoweredBy()).toEqual(
       Object.fromEntries(GIF_PROVIDER_IDS.map((id) => [id, GIF_PROVIDERS[id].poweredBy])),
+    );
+  });
+
+  it("the dashboard catalog quotes each provider's poweredBy, and no other attribution", () => {
+    const catalog = readFileSync(CATALOG_RS, "utf8");
+    const quoted = [...catalog.matchAll(/powered by \w+/gi)].map((m) => m[0]);
+    expect([...new Set(quoted)].sort()).toEqual(
+      GIF_PROVIDER_IDS.map((id) => GIF_PROVIDERS[id].poweredBy).sort(),
     );
   });
 

@@ -565,22 +565,7 @@ async fn pingbacks_are_held_an_hour_then_dropped() {
 #[test]
 fn the_pingback_map_holds_at_most_2000_entries_and_drops_the_oldest() {
     let held = analytics::Analytics::new();
-    let found = |i: usize| Found {
-        candidate: Candidate {
-            provider: Provider::Giphy,
-            id: format!("id{i}"),
-            title: String::new(),
-            url: String::new(),
-            preview_url: String::new(),
-            width: 1,
-            height: 1,
-            auto_loads: false,
-        },
-        pingbacks: Some(Pingbacks {
-            onsent: Some(format!("https://giphy-analytics.giphy.com/{i}")),
-            ..Default::default()
-        }),
-    };
+    let found = |i: usize| giphy_found(&format!("id{i}"));
     let batch: Vec<Found> = (0..2100).map(found).collect();
     held.record(Provider::Giphy, &batch, Rating::Pg, None, START_MS, 0);
     assert_eq!(held.held_count(), analytics::MAX_ENTRIES);

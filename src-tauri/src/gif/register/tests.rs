@@ -998,10 +998,12 @@ async fn a_random_id_that_could_not_be_saved_waits_like_a_failed_call() {
     assert_eq!(h.wire.random_calls(), 2);
 }
 
-/// A keychain whose reads fail, as a locked one or a denied prompt does, and are counted.
+/// A keychain whose reads fail, as a locked one or a denied prompt does, and are counted. A test
+/// may set `during` to run first in each read.
 #[derive(Default)]
 struct DeniedStore {
     gets: std::sync::atomic::AtomicUsize,
+    during: Mutex<Option<Box<dyn Fn() + Send>>>,
 }
 impl CredentialStore for DeniedStore {
     fn get(
@@ -1009,6 +1011,9 @@ impl CredentialStore for DeniedStore {
         _: &str,
     ) -> Result<Option<Secret>, crate::commands::credential_store::CredentialError> {
         self.gets.fetch_add(1, Ordering::SeqCst);
+        if let Some(during) = &*self.during.lock().unwrap() {
+            during();
+        }
         Err("keychain read failed: denied".into())
     }
     fn set(
@@ -1074,40 +1079,11 @@ async fn a_serve_taken_before_a_key_change_marks_without_reading_the_keychain() 
     assert!(h.wire.urls().is_empty());
 }
 
-/// A keychain whose reads fail and are counted, running `during` first once a test sets it.
-#[derive(Default)]
-struct DeniedWhile {
-    gets: std::sync::atomic::AtomicUsize,
-    during: Mutex<Option<Box<dyn Fn() + Send>>>,
-}
-impl CredentialStore for DeniedWhile {
-    fn get(
-        &self,
-        _: &str,
-    ) -> Result<Option<Secret>, crate::commands::credential_store::CredentialError> {
-        self.gets.fetch_add(1, Ordering::SeqCst);
-        if let Some(during) = &*self.during.lock().unwrap() {
-            during();
-        }
-        Err("keychain read failed: denied".into())
-    }
-    fn set(
-        &self,
-        _: &str,
-        _: &Secret,
-    ) -> Result<(), crate::commands::credential_store::CredentialError> {
-        Ok(())
-    }
-    fn delete(&self, _: &str) -> Result<(), crate::commands::credential_store::CredentialError> {
-        Ok(())
-    }
-}
-
 /// Catches a keychain wait checked by its time alone: the wait a failed read set under the old
 /// epoch would hold the new epoch's first read.
 #[tokio::test]
 async fn a_keychain_wait_set_under_an_old_epoch_holds_nothing_after_forget_install() {
-    let store = Arc::new(DeniedWhile::default());
+    let store = Arc::new(DeniedStore::default());
     let h = Harness::over(store.clone());
     let armed = || Pending {
         onload: all_pingbacks().onload,

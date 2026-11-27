@@ -18,6 +18,7 @@ vi.mock("@/tauri/commands", async (original) => ({
 
 import type { InboxMediaAttachment, WorkspaceChatMessage } from "@/tauri/commands";
 import { chatMediaLoader } from "@/features/workspace-chat/lib/chat-media-loader";
+import { cssRules } from "@/test/css-rules";
 import { fixtureMessages } from "../fixtures";
 import { formatClock } from "../model";
 import { isCachedImage, mediaReason, MessageMedia, type MediaLoader } from "./message-media";
@@ -265,28 +266,8 @@ describe("MessageMedia loading shimmer", () => {
 });
 
 describe("chip target size", () => {
-  /** Each top-level rule's declarations, keyed by every selector in its list. */
-  function rules(css: string): Map<string, Record<string, string>> {
-    const out = new Map<string, Record<string, string>>();
-    const flat = css.replace(/\/\*[\s\S]*?\*\//g, "");
-    for (const [, selectors, body] of flat.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-      const decls = Object.fromEntries(
-        body!
-          .split(";")
-          .map((d) => d.split(":").map((x) => x.trim()))
-          .filter(([k, v]) => k && v)
-          .map(([k, ...v]) => [k!, v.join(":")]),
-      );
-      for (const sel of selectors!.split(",")) {
-        const key = sel.trim();
-        out.set(key, { ...out.get(key), ...decls });
-      }
-    }
-    return out;
-  }
-
   it("inbox.css gives interactive chips a 24px hit area", () => {
-    const css = rules(readFileSync(resolve(__dirname, "../inbox.css"), "utf-8"));
+    const css = cssRules(readFileSync(resolve(__dirname, "../inbox.css"), "utf-8"));
     const chip = css.get(".ibx-chip")!;
     // The drawn chip stays as it is.
     expect(chip.height).toBe("22px");
