@@ -5387,6 +5387,7 @@ fn build_link_record(
 
 /// Register durable story ownership and essential wiring without hydrating context.
 /// Reopen preserves existing bytes, setup state, baselines, and receipts.
+/// Stamps the story doc's `branch` from the worktree's HEAD, as the frontend expects.
 #[tauri::command]
 pub async fn establish_worktree_story_link(
     app: tauri::AppHandle,
@@ -5394,6 +5395,47 @@ pub async fn establish_worktree_story_link(
     story_source_path: String,
     story_id: String,
     source_repo: String,
+) -> Result<bool, String> {
+    establish_worktree_story_link_with(
+        app,
+        code_repo_path,
+        story_source_path,
+        story_id,
+        source_repo,
+        true,
+    )
+    .await
+}
+
+/// [`establish_worktree_story_link`] without the `branch` stamp, for the MCP open path:
+/// the story doc lives in the canonical context clone, which an open leaves unchanged.
+pub(crate) async fn establish_worktree_story_link_unstamped(
+    app: tauri::AppHandle,
+    code_repo_path: String,
+    story_source_path: String,
+    story_id: String,
+    source_repo: String,
+) -> Result<bool, String> {
+    establish_worktree_story_link_with(
+        app,
+        code_repo_path,
+        story_source_path,
+        story_id,
+        source_repo,
+        false,
+    )
+    .await
+}
+
+/// The one offload both registrations share; `stamp` says whether the story doc's
+/// `branch` is written.
+async fn establish_worktree_story_link_with(
+    app: tauri::AppHandle,
+    code_repo_path: String,
+    story_source_path: String,
+    story_id: String,
+    source_repo: String,
+    stamp: bool,
 ) -> Result<bool, String> {
     // Keep all registration and essential wiring I/O off the command executor.
     crate::commands::async_helpers::await_blocking("establish_worktree_story_link", move || {
@@ -5409,6 +5451,7 @@ pub async fn establish_worktree_story_link(
                 &story_source_path,
                 &story_id,
                 &source_repo,
+                stamp,
             )
         })
     })
@@ -5492,6 +5535,7 @@ fn establish_worktree_story_link_blocking(
     story_source_path: &str,
     story_id: &str,
     source_repo: &str,
+    stamp: bool,
 ) -> Result<bool, String> {
     let story_path = PathBuf::from(story_source_path);
     let code_path = PathBuf::from(code_repo_path);
@@ -5506,7 +5550,7 @@ fn establish_worktree_story_link_blocking(
     let principal = Principal::from(user_id);
     let setup_complete = register_story_workspace(&codesense_home, &principal, record)?;
     crate::commands::managed_worktree_config::write(&code_path, &codesense_home);
-    if stamps_story_branch(&codesense_home, &principal, &code_path) {
+    if stamp && stamps_story_branch(&codesense_home, &principal, &code_path) {
         let _ = write_story_branch(app, &story_path, &code_path);
     }
 
@@ -5538,13 +5582,11 @@ fn story_branch_rewrite(
 /// doc's **canonical `branch`** frontmatter — byte-preservingly — so a *pulled*
 /// story is self-describing and a reviewer sees the branch to check out without
 /// asking the author. The value then rides the normal publish/pull path (it's
-/// plain frontmatter). Shared by the establish/derive wave (its original SW-GS-35
-/// caller) and the SW-OR-1b `open_workspace` reconcile hook — one stamp, one
-/// field, everywhere.
+/// plain frontmatter). Its one caller is the frontend's establish command; the MCP
+/// open path registers without it and never writes the story doc.
 ///
 /// Returns `Some(branch)` (the value written) when a write actually happened, and
-/// `None` when nothing was written — the caller uses this to report an honest
-/// reconcile result.
+/// `None` when nothing was written.
 ///
 /// Three guarantees baked in:
 /// - **Idempotent:** a byte-identical rewrite performs NO write — no mtime bump,
@@ -5555,7 +5597,7 @@ fn story_branch_rewrite(
 ///   a watched content dir; an un-suppressed write would enqueue a redundant
 ///   team-wide fan-out). Best-effort: a read/write failure is logged, never fatal
 ///   to the caller (the branch stamp is an additive convenience).
-pub(crate) fn write_story_branch(
+fn write_story_branch(
     app: &tauri::AppHandle,
     story_path: &Path,
     code_path: &Path,

@@ -509,8 +509,10 @@ async fn establish_story_worktree(
             )
         })?;
 
-    // Use the same idempotent ownership registration as interactive opens.
-    crate::commands::content_engine::establish_worktree_story_link(
+    // The same idempotent ownership registration as interactive opens, without the
+    // `branch` stamp: the story doc lives in the canonical clone, which an open leaves
+    // unchanged.
+    crate::commands::content_engine::establish_worktree_story_link_unstamped(
         app.clone(),
         dir.to_string_lossy().to_string(),
         record.story_source_path.to_string_lossy().to_string(),
