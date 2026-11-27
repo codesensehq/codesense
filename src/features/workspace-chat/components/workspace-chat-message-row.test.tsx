@@ -36,7 +36,7 @@ const gif = (over: Partial<InboxMediaAttachment> = {}): InboxMediaAttachment => 
   ...over,
 });
 
-/** A held GIF as SV-INP-59's read presents it: stored `tapToLoad`, attachment `pending`. */
+/** A held GIF as the chat read presents it: stored `tapToLoad`, attachment `pending`. */
 const held = (over: Partial<InboxMediaAttachment> = {}) => ({
   attachments: [gif({ state: "pending", sha256: undefined, reason: "sender", ...over })],
   mediaState: "tapToLoad" as const,
