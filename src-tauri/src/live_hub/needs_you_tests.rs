@@ -357,3 +357,165 @@ fn the_overview_and_the_topic_hold_the_same_set() {
         ["story-431", "design-431", "architect-431", "story-418"]
     );
 }
+
+/// What one hub recompute after a session or viewer event publishes, as `rebuild` runs it:
+/// the roster resolved against the viewer, `sessions` replaced, then the agent views and the
+/// set. One entry per delta that says anything: topic, view, upserted ids, removed ids.
+fn recompute(
+    hub: &crate::live_hub::LiveHub,
+    viewer: &Value,
+    roster: &[Value],
+) -> Vec<(String, String, Vec<String>, Vec<String>)> {
+    use crate::live_hub::{agent_list, projection::TopicRegistry};
+    let live = crate::mcp::terminal_tabs::LiveTabs {
+        tabs: vec![],
+        offline: vec![],
+        live: vec![],
+        labels: Default::default(),
+        activity: vec![],
+    };
+    let mut resolved = agent_list::resolve(
+        viewer,
+        roster.to_vec(),
+        &live,
+        serde_json::json!({}),
+        &serde_json::json!({}),
+        &Default::default(),
+        &Default::default(),
+        agent_list::home_team(viewer, "acme:delivery".into()),
+        None,
+        &|_| None,
+    );
+    let wire = agent_list::sessions::project(
+        &resolved.sessions,
+        &[],
+        &mut resolved.rows,
+        &hub.providers,
+    );
+    let mut model = hub.model.lock().unwrap();
+    model.agent_home_team = resolved.home_team;
+    model.agent_team_order = resolved.team_order;
+    model.agent_pane = resolved.pane;
+    model.agent_rows = resolved.rows;
+    let mut deltas =
+        TopicRegistry::replace(&mut model.projections, "sessions", wire, None).unwrap();
+    deltas.extend(crate::live_hub::project_agent_views(&mut model).unwrap());
+    deltas
+        .into_iter()
+        .filter(|d| !d.upserts.is_empty() || !d.removes.is_empty())
+        .map(|d| {
+            let upserts = d
+                .upserts
+                .iter()
+                .map(|r| r["id"].as_str().unwrap().to_string());
+            (d.topic, d.view_key, upserts.collect(), d.removes)
+        })
+        .collect()
+}
+
+/// Opening another team's workspace patches only the agent list's state row, a doc tab opened
+/// there patches nothing, and launching one agent there (minting its work item) patches only
+/// that agent's `sessions` and `agentList` rows: `needsYou` emits nothing, in `all` or in
+/// another place's view.
+#[test]
+fn another_teams_workspace_doc_and_quiet_launch_patch_only_their_own_rows() {
+    use crate::live_hub::inbox_gate_tests::row;
+    use crate::mcp::session_list::SessionState;
+    let hub = crate::live_hub::LiveHub::default();
+    {
+        let mut model = hub.model.lock().unwrap();
+        model.agent_views.insert("all".into());
+        model.agent_views.insert("team:acme/delivery".into());
+        model.rows = vec![row("lead", "Lead", SessionState::Running)];
+    }
+    let mut viewer = serde_json::json!({
+        "openedTeams": ["acme:delivery"],
+        "workspaces": {
+            "acme:delivery": [{"id": "d", "kind": "generic", "status": "ready", "cwd": "/d"}]
+        }
+    });
+    let mut roster = vec![serde_json::json!({
+        "handle": "lead", "sessionId": "tab-lead", "kind": "dashboard-launched",
+        "alive": true, "workspace": "/d"
+    })];
+    recompute(&hub, &viewer, &roster);
+    // A subscriber holds this team's view of the set.
+    hub.model
+        .lock()
+        .unwrap()
+        .projections
+        .snapshot(TOPIC, "team:acme/delivery")
+        .unwrap();
+    assert!(recompute(&hub, &viewer, &roster).is_empty(), "nothing changed");
+
+    // Another team's workspace opens beside this one.
+    viewer["openedTeams"] = serde_json::json!(["acme:delivery", "acme:quick-fix"]);
+    viewer["workspaces"]["acme:quick-fix"] =
+        serde_json::json!([{"id": "q", "kind": "generic", "status": "ready", "cwd": "/q"}]);
+    let opened = recompute(&hub, &viewer, &roster);
+    assert!(
+        opened
+            .iter()
+            .all(|(topic, _, upserts, removes)| topic == "agentList"
+                && upserts.iter().all(|id| id == "agentList:state")
+                && removes.is_empty()),
+        "only the agent list's state row moves: {opened:?}"
+    );
+
+    // A doc tab opened in that team's workspace reaches no hub row.
+    viewer["openTabs"] = serde_json::json!({
+        "acme:quick-fix": [{"path": "content/plan.md", "name": "plan.md"}]
+    });
+    viewer["activeTab"] = serde_json::json!({"acme:quick-fix": "content/plan.md"});
+    let doc = recompute(&hub, &viewer, &roster);
+    assert!(doc.is_empty(), "sessions, agentList and needsYou stay silent: {doc:?}");
+
+    // One agent launched there, minting its work item, with no ask of its own.
+    roster.push(serde_json::json!({
+        "handle": "fixer", "sessionId": "tab-fixer", "kind": "dashboard-launched",
+        "alive": true, "workspace": "/q"
+    }));
+    {
+        let mut model = hub.model.lock().unwrap();
+        model.rows.push(row("fixer", "Fixer", SessionState::Running));
+        model
+            .work_items
+            .insert("fixer".into(), "wi_00000000000000e6".into());
+    }
+    let launched = recompute(&hub, &viewer, &roster);
+    assert!(
+        !launched.iter().any(|(topic, ..)| topic == TOPIC),
+        "needsYou emits nothing: {launched:?}"
+    );
+    let sessions: Vec<_> = launched
+        .iter()
+        .filter(|(topic, ..)| topic == "sessions")
+        .collect();
+    assert_eq!(
+        sessions,
+        [&(
+            "sessions".to_string(),
+            "all".to_string(),
+            vec!["tab-fixer".to_string()],
+            vec![]
+        )]
+    );
+    let model = hub.model.lock().unwrap();
+    let fixer = Iterator::find(&mut model.agent_rows.iter(), |r| r.session_ref == "tab-fixer")
+        .unwrap()
+        .id
+        .clone();
+    let agent_list: Vec<_> = launched
+        .iter()
+        .filter(|(topic, ..)| topic == "agentList")
+        .map(|(_, view, upserts, removes)| {
+            let rows: Vec<_> = upserts
+                .iter()
+                .filter(|id| *id != "agentList:state")
+                .cloned()
+                .collect();
+            (view.as_str(), rows, removes.len())
+        })
+        .collect();
+    assert_eq!(agent_list, [("all", vec![fixer], 0)], "{launched:?}");
+}
