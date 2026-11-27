@@ -69,11 +69,17 @@ test("zero tests fails closed", () => {
   assert.match(gate.markdown, /No @p1 test ran/);
 });
 
-test("a flaky pass counts as passed; skips are listed but leave the bar's count", () => {
-  const gate = releaseGate(report([...passing(18), ["flaky"], ["skipped"], ["skipped"]]));
+test("a flaky pass counts as passed; a skip counts as not passed", () => {
+  const gate = releaseGate(report([...passing(18), ["flaky"], ["skipped"]]));
   assert.equal(gate.ok, true);
-  assert.equal(gate.total, 19);
-  assert.match(gate.markdown, /2 skipped/);
+  assert.equal(gate.passed, 19);
+  assert.equal(gate.total, 20);
+  assert.match(gate.markdown, /19 of 20 passed \(95\.0%\)\. 1 skipped\./);
+  assert.match(gate.markdown, /case 19 @p1.*tiles-webkit \| skipped \|$/m);
+  // A mostly skipped run never reads as green.
+  const skipped = releaseGate(report([...passing(1), ...Array(99).fill(["skipped"])]));
+  assert.equal(skipped.ok, false);
+  assert.match(skipped.markdown, /1 of 100 passed \(1\.0%\)/);
   assert.equal(releaseGate(report([["skipped"]])).ok, false);
 });
 

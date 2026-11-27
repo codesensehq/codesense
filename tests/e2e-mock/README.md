@@ -68,8 +68,9 @@ shrink: moving a spec into `tiles/` or deleting it, remove its line too.
 
 `.github/workflows/tiles-release.yml` runs the `@p1` tile specs on both engines
 when dispatched for a release candidate (Actions → Tile release gate → Run
-workflow). It fails when fewer than 95% of the specs that ran passed, or when
-none ran, and lists each failure in the job summary.
+workflow). It fails when fewer than 95% of the specs passed (a skipped spec
+counts as not passed) or when none ran, and lists each failure and skip in the
+job summary.
 
 ## The nightly run
 

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-// The @p1 release gate (tiles-release.yml): at least 95% of the tile specs that ran must pass, on
-// both engines together. No test at all fails, so an empty or broken run never reads as green.
+// The @p1 release gate (tiles-release.yml): at least 95% of the tile specs must pass, on both
+// engines together; a skipped spec counts as not passed. No test at all fails, so an empty or
+// broken run never reads as green.
 //   node scripts/tiles-release-gate.mjs <playwright-report.json>
 // Writes the result and every failure to the job summary ($GITHUB_STEP_SUMMARY, else stdout).
 import fs from "node:fs";
@@ -23,12 +24,12 @@ const outcomes = (report) =>
 
 export function releaseGate(report, bar = BAR) {
   const runs = outcomes(report);
+  // A skip counts as not passed, so a mostly skipped run can't clear the bar.
   const skipped = runs.filter((run) => run.status === "skipped").length;
-  const counted = runs.filter((run) => run.status !== "skipped");
-  const passed = counted.filter((run) => ["expected", "flaky"].includes(run.status)).length;
-  const failures = counted.filter((run) => !["expected", "flaky"].includes(run.status));
+  const passed = runs.filter((run) => ["expected", "flaky"].includes(run.status)).length;
+  const failures = runs.filter((run) => !["expected", "flaky"].includes(run.status));
   const errors = (report.errors ?? []).map((error) => firstLine(error.message ?? error));
-  const total = counted.length;
+  const total = runs.length;
   const ok = total > 0 && passed / total >= bar && !errors.length;
   const lines = ["## Tile release gate (@p1)", ""];
   if (!total) lines.push("No @p1 test ran, so the gate fails closed.");
