@@ -220,6 +220,27 @@ test("case 9: too few samples or another engine is an input error", () => {
   );
 });
 
+test("case 9: a bad shape in either file is an input error, never a silent pass", () => {
+  const textP50 = baseline();
+  textP50.sets[1].keys.open_cold.p50 = "300";
+  assert.throws(
+    () => compare(textP50, current({ open_cold: ms([999, 999, 999]) }), { runner: "macos-15" }),
+    (err) => err.exitCode === 2 && /p50/.test(err.message),
+  );
+  const nullSet = baseline({ sets: [null, baseline().sets[1]] });
+  assert.throws(
+    () => compare(nullSet, current({ open_cold: ms([300, 300, 300]) }), { runner: "macos-15" }),
+    (err) => err.exitCode === 2 && /runner/.test(err.message),
+  );
+  assert.throws(
+    () =>
+      compare(baseline(), current({ open_cold: { unit: "ms", samples: { ms: 300 } } }), {
+        runner: "macos-15",
+      }),
+    (err) => err.exitCode === 2 && /not a list/.test(err.message),
+  );
+});
+
 // --- CLI -------------------------------------------------------------------------------------
 
 function tmp(t) {
@@ -268,6 +289,20 @@ test("case 9: a malformed or missing file exits 2", (t) => {
     2,
   );
   assert.equal(run(["compare", "--runner", "macos-15", "--baseline", base], c.io), 2);
+});
+
+test("case 9: an unexpected error exits 2, not 1", (t) => {
+  const { write, dir } = tmp(t);
+  const base = write("base.json", baseline());
+  const cur = write("cur.json", current({ open_cold: ms([300, 300, 300, 300, 300]) }));
+  const c = capture();
+  // A directory as the step summary makes the append throw a plain (non-input) error.
+  c.io.env.GITHUB_STEP_SUMMARY = dir;
+  assert.equal(
+    run(["compare", "--current", cur, "--runner", "macos-15", "--baseline", base], c.io),
+    2,
+  );
+  assert.match(c.err.join("\n"), /^perf-baseline: unexpected: /);
 });
 
 test("case 10: tolerance and floor come only from the file; an override flag is refused", (t) => {

@@ -18,8 +18,8 @@
  * median < p50 × (1 − tol) and p50 − median > floor.fps. Tolerance and floor come only from the
  * file. Prints one `PASS|FAIL` line per key and a verdict; with `$GITHUB_STEP_SUMMARY` set it
  * appends the verdict and a table there. Exit 0 when every key passes or the runner has no set,
- * 1 on any regression, 2 on an input error (a bad file, a missing key, fewer than 3 samples, an
- * engine mismatch, a bad argument).
+ * 1 on any regression, 2 on an input error (a bad file or shape, a missing key, fewer than 3
+ * samples, an engine mismatch, a bad argument) or any unexpected error.
  *
  * record: replaces (or adds) only that runner's set; every other set keeps its bytes. A runner
  * other than m1 never records the `M1_ONLY_KEYS` (`team_switch`): they are dropped. A key of the
@@ -71,8 +71,9 @@ const round1 = (value) => Math.round(value * 10) / 10;
 function measuredKey(file, key) {
   const entry = file.keys?.[key];
   if (!entry) throw new InputError(`${key}: not in the current file`);
+  if (!Array.isArray(entry.samples)) throw new InputError(`${key}: samples is not a list`);
   const field = higherIsBetter(entry.unit) ? "fps" : "ms";
-  const values = (entry.samples ?? []).map((sample) => sample?.[field]);
+  const values = entry.samples.map((sample) => sample?.[field]);
   if (values.some((value) => typeof value !== "number" || !Number.isFinite(value))) {
     throw new InputError(`${key}: a sample has no ${field} value`);
   }
@@ -103,6 +104,9 @@ function checkBaseline(file) {
     throw new InputError(
       "the baseline file needs sets[] and compare {keys, tolerancePercent, floor}",
     );
+  }
+  if (file.sets.some((set) => !set || typeof set !== "object" || typeof set.runner !== "string")) {
+    throw new InputError("every baseline set needs a runner");
   }
 }
 
@@ -172,6 +176,9 @@ export function compare(baseline, measured, { runner }) {
   const rows = baseline.compare.keys.map((key) => {
     const base = set.keys?.[key];
     if (!base) throw new InputError(`${key}: not in the ${runner} set`);
+    if (!Number.isFinite(base.p50) || base.p50 <= 0) {
+      throw new InputError(`${key}: the ${runner} set's p50 is not a positive number`);
+    }
     const { unit, values, endState } = measuredKey(measured, key);
     if (unit !== base.unit) throw new InputError(`${key}: unit ${unit}, the set has ${base.unit}`);
     const median = percentile(values, 0.5);
@@ -290,8 +297,10 @@ export function run(argv, io = { log: console.log, error: console.error, env: pr
     }
     return 0;
   } catch (err) {
-    if (!(err instanceof InputError)) throw err;
-    io.error(`perf-baseline: ${err.message}`);
+    // Anything unexpected is an input or setup problem too, never a regression (exit 1).
+    io.error(
+      `perf-baseline: ${err instanceof InputError ? err.message : `unexpected: ${err.stack ?? err}`}`,
+    );
     return 2;
   }
 }
