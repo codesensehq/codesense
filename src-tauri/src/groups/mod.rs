@@ -4,5 +4,7 @@
 // The store's writers arrive in a later change; until then only its tests and the Scratch
 // space's exclude call it.
 #![cfg_attr(not(test), allow(dead_code))]
+
 pub mod leaf_id;
 pub mod shape;
+pub mod store;

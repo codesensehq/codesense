@@ -78,6 +78,13 @@ pub(crate) fn configuration_path_changed<R: tauri::Runtime>(
     }
 }
 
+/// Whether `path` is in a space's group folder under the scratch repo `root`.
+pub(crate) fn is_group_file(root: &Path, path: &Path) -> bool {
+    std::result::Result::ok(path.strip_prefix(root))
+        .and_then(segments)
+        .is_some_and(|parts| crate::groups::store::is_group_path(&parts))
+}
+
 /// The scratch repo currently watched (one profile at a time).
 static WATCHED: Mutex<Option<PathBuf>> = Mutex::new(None);
 
@@ -152,6 +159,10 @@ pub fn register_scratch_watch<R: tauri::Runtime>(
         let coalescer = crate::panes::watch::app_coalescer(app);
         Arc::new(move |change| coalescer.note(change))
     };
+    // Group files are private-layer state, never in the repo's status.
+    let tiles = tauri::Manager::try_state::<crate::flags::TilesFlag>(app)
+        .is_some_and(|flag| crate::flags::TilesFlag::is_on(&flag));
+    crate::context_repo::scratch_space::exclude_group_files(&root, tiles);
     super::context_git_watch::register_private_git_watch(app, state, &root);
     let canonical_root = root.canonicalize().ok();
     let pane_root = root.clone();
@@ -165,6 +176,11 @@ pub fn register_scratch_watch<R: tauri::Runtime>(
             .and_then(|root| path.strip_prefix(root).ok())
             .map(|relative| pane_root.join(relative))
             .unwrap_or_else(|| path.to_path_buf());
+        // The group store writes its files and keeps them out of the repo's status; a move or a
+        // resize is no content change, footprint or pane edit.
+        if is_group_file(&pane_root, &registered) {
+            return;
+        }
         // A coalesced scratch/org root can hide both content and pane changes.
         if Result::ok(registered.strip_prefix(&pane_root))
             .and_then(segments)
@@ -245,6 +261,27 @@ mod tests {
         for real in ["guide.md", "teams.yml", "v2.md", ""] {
             assert!(!is_noise(real), "{real} is not noise");
         }
+    }
+
+    /// A group write under the scratch repo is dropped before any ingestion: no content change,
+    /// footprint or pane edit.
+    #[test]
+    fn the_handler_drops_group_files_before_ingesting_them() {
+        let root = Path::new("/home/users/42/scratch");
+        let group = root.join("orgs/acme/plans/config/groups/main.json");
+        assert!(is_group_file(root, &group));
+        assert!(is_group_file(root, &root.join("orgs/acme/plans/config/groups/.gitignore")));
+        assert!(is_group_file(root, &root.join("orgs/acme/plans/config/groups")));
+        assert!(content_change_payload(&group).is_none());
+        for other in [
+            "orgs/acme/plans/config/profile.json",
+            "orgs/acme/plans/content/groups/main.json",
+            "orgs/acme/plans/config/groupsx/main.json",
+            "all-orgs/config/groups/main.json",
+        ] {
+            assert!(!is_group_file(root, &root.join(other)), "{other}");
+        }
+        assert!(!is_group_file(root, Path::new("/elsewhere/orgs/a/b/config/groups/x.json")));
     }
 
     #[test]

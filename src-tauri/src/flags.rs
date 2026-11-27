@@ -95,12 +95,17 @@ impl TilesFlag {
         log::info!(target: "flags", "tiles release flag: {}", if on { "on" } else { "off" });
         Self(on)
     }
+
+    /// Whether tiles are on for this session: the Rust side's `tiles_enabled()`.
+    pub fn is_on(&self) -> bool {
+        self.0
+    }
 }
 
 /// The tiles flag's boot value, the same for the whole session.
 #[tauri::command]
 pub fn tiles_enabled(flag: tauri::State<'_, TilesFlag>) -> bool {
-    flag.0
+    flag.is_on()
 }
 
 #[cfg(test)]
